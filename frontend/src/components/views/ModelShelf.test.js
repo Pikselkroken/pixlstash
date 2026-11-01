@@ -5060,6 +5060,47 @@ describe("the sidebar's requests reach their dialog (#2168)", () => {
   );
 });
 
+describe("going to a model by link (?model=)", () => {
+  afterEach(() => {
+    nav.route.query = {};
+  });
+
+  it("leaves Sets for All models and picks the row", async () => {
+    // Sets draws the grid, which has no row to land on: Go to model from a
+    // training run used to open there and do nothing.
+    const wrapper = await mountShelf(
+      [adapter({ id: 1 }), adapter({ id: 2 })],
+      [],
+      [],
+      { attachTo: document.body },
+    );
+    const store = useModelShelfStore();
+    store.setPlace("sets");
+    await wrapper.vm.$nextTick();
+    nav.route.query = { model: "2" };
+    await flushPromises();
+    expect(store.place).toBe("all");
+    expect([...store.selectedIds]).toEqual([2]);
+    const rows = wrapper.findAll(".shelf-row");
+    expect(document.activeElement).toBe(rows[1].element);
+    wrapper.unmount();
+  });
+
+  it("does not pin the reader to All models for a model it never finds", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    nav.route.query = { model: "999" };
+    await flushPromises();
+    expect(store.place).toBe("all");
+    store.setPlace("sets");
+    // A refresh recomputes the drawn rows, which re-runs the link's watcher.
+    store.rows = [...store.rows, adapter({ id: 3 })];
+    await flushPromises();
+    expect(store.place).toBe("sets");
+    wrapper.unmount();
+  });
+});
+
 describe("the list's Type, favourite and Sets columns (#2168)", () => {
   it("says an empty shelf is empty on In no set yet, not that all is in a set", async () => {
     const wrapper = await mountShelf([]);

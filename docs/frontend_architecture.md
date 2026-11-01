@@ -6634,7 +6634,8 @@ click here always picks. Right-click, the ContextMenu key or Shift+F10 opens a m
 the pointer: the card becomes the selection unless it is already in it, and the
 menu offers **Open run**, **Go to model** (a run PixlStash trained that put a
 model on the shelf: `/models?model=` on `model_ids[0]` of the job listing, a
-stack cover), the pill's **Import** verb, **Stop
+stack cover; the shelf answers any `?model=` by opening All models, never Sets'
+grid, and selecting that row), the pill's **Import** verb, **Stop
 training** (a run still training; Skip previews stays on the rail, which polls
 the phase the job list lacks) and Select all / Clear selection. It reads its
 card by key from the live list, so a reload while it is open acts on the job as

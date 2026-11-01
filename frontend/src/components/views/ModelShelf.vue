@@ -3431,23 +3431,33 @@ function focusDrawnRow(key) {
 //
 // `?model=<id>` picks that model and puts the cursor on it, so a chip clicked
 // in the lightbox lands on the file the picture used rather than at the top of
-// a shelf of a couple of thousand rows. A model the shelf is not drawing - a
-// filter hides it, its group is collapsed, its stack is closed - is left alone
-// rather than forced into view: the row the link names is a fact, and what the
-// reader has filtered the shelf down to is a decision of theirs.
+// a shelf of a couple of thousand rows. It opens All models first: Sets draws
+// a grid with no row to land on, and Favourites, Recently added, In no set yet
+// or a folder may not hold the model at all. A model All models is still not
+// drawing - a filter hides it, its group is collapsed, its stack is closed - is
+// left alone rather than forced into view: the row the link names is a fact,
+// and what the reader has filtered the shelf down to is a decision of theirs.
 //
 // Honoured once per value, because `drawnRows` recomputes on every filter,
 // sort and refresh while the query string stays put, and applying it twice
-// would take focus back off whatever the reader had moved to.
+// would take focus back off whatever the reader had moved to. The place is
+// switched once per value too, apart from the row: a model never found would
+// otherwise pull the reader back to All models on every refresh.
 let honouredModel = null;
+let placedModel = null;
 
 function honourModelQuery() {
   const wanted = route?.query?.model;
   if (!wanted) {
     honouredModel = null;
+    placedModel = null;
     return;
   }
   if (honouredModel === wanted) return;
+  if (placedModel !== wanted) {
+    placedModel = wanted;
+    if (store.place !== "all") store.setPlace("all");
+  }
   const row = drawnRows.value.find(
     (entry) => String(entry.id) === String(wanted),
   );
