@@ -90,11 +90,23 @@
         </div>
       </div>
 
-      <div class="trl-body">
-        <div class="trl-scroll">
+      <!-- The page scrolls down only when the tips are opened on a window too
+           short for them: the board is never squeezed to make room. -->
+      <div ref="bodyRef" class="trl-body">
+        <div
+          ref="scrollRef"
+          class="trl-scroll"
+          :class="{ 'trl-scroll--moved': scrolledLeft }"
+          @scroll="onBoardScroll"
+        >
           <div
+            ref="boardRef"
             class="trl-board"
-            :style="{ '--trl-cols': columns.length }"
+            :style="{
+              '--trl-cols': columns.length,
+              '--trl-pitch': `${pitch}px`,
+              '--trl-chart-h': `${chartHeight}px`,
+            }"
             @mouseleave="hoverColumn = null"
           >
             <!-- Painted in DOM order: the prompt rows' tint first, then the
@@ -141,6 +153,19 @@
                 <v-icon size="14">mdi-alert</v-icon>
                 Stopped at {{ PHASE_LABELS[lastPhase] || "setup" }}
               </span>
+              <!-- The prompts stay pinned while a long run scrolls sideways;
+                   this brings the view back to the start. -->
+              <AppButton
+                v-if="scrolledLeft"
+                class="trl-to-start"
+                size="sm"
+                variant="outline"
+                icon-left="chevron-left"
+                data-testid="trl-to-start"
+                @click="scrollToStart"
+              >
+                Step 0
+              </AppButton>
             </div>
             <div
               class="trl-track"
@@ -188,6 +213,7 @@
                 >
                   Use this step
                 </button>
+                <span v-else-if="dueIn(column)">{{ dueIn(column) }}</span>
               </span>
             </div>
             <!-- Where the track ends: the final save and the import. A run
@@ -195,6 +221,7 @@
                  its folder was not trained here. -->
             <div
               v-if="!fromFolder && !['error', 'stopped'].includes(live.status)"
+              ref="endRef"
               class="trl-endph"
               :style="{ gridRow: 1, gridColumn: columns.length + 2 }"
             >
@@ -218,6 +245,7 @@
               </span>
             </div>
             <div
+              ref="chartRowRef"
               class="trl-chart"
               :style="{ gridRow: 2, gridColumn: `2 / span ${columns.length}` }"
             >
@@ -226,24 +254,31 @@
                 :curve="live.loss_curve"
                 :x-scale="stepFraction"
                 :markers="markers"
-                :height="92"
+                :height="chartHeight"
+                :empty-text="chartEmptyText"
                 smooth
                 compact
               />
             </div>
 
-            <template v-for="group in groups" :key="group.key">
+            <template v-for="(group, g) in groups" :key="group.key">
               <div class="trl-gline" :style="{ gridRow: group.row }">
                 <span class="section-label">{{ group.title }}</span>
                 <span class="trl-hint">{{ group.hint }}</span>
               </div>
               <template v-for="(row, r) in group.rows" :key="`r${row.index}`">
-                <div class="trl-lab trl-prompt" :style="{ gridRow: group.row + 1 + r }">
-                  <template v-for="(part, p) in promptParts(row.prompt)" :key="p">
-                    <span v-if="part.trigger" class="trl-trig">{{ part.text }}</span>
-                    <template v-else>{{ part.text }}</template>
-                  </template>
-                  <span v-if="!row.prompt" class="trl-muted">Prompt {{ row.index + 1 }}</span>
+                <div
+                  class="trl-lab trl-prompt"
+                  :class="{ 'trl-lab--z': (r + g) % 2 === 0 }"
+                  :style="{ gridRow: group.row + 1 + r }"
+                >
+                  <span>
+                    <template v-for="(part, p) in promptParts(row.prompt)" :key="p">
+                      <span v-if="part.trigger" class="trl-trig">{{ part.text }}</span>
+                      <template v-else>{{ part.text }}</template>
+                    </template>
+                    <span v-if="!row.prompt" class="trl-muted">Prompt {{ row.index + 1 }}</span>
+                  </span>
                 </div>
                 <div
                   v-for="(cell, i) in row.cells"
@@ -279,7 +314,11 @@
                   <!-- A step the run never reached stays a quiet empty cell; only
                        one it passed without a picture says so. -->
                   <span v-else class="trl-cell trl-cell--future">{{
-                    cell.state !== "future" && columns[i] <= live.step ? "not drawn" : ""
+                    cell.state !== "future" && columns[i] <= live.step
+                      ? "not drawn"
+                      : columns[i] === 0 && settingUp
+                        ? "after set-up"
+                        : ""
                   }}</span>
                 </div>
               </template>
@@ -287,6 +326,29 @@
           </div>
         </div>
 
+        <!-- What to look for: open by itself when it fits under the board,
+             folded to its header when it does not, and left as the owner
+             left it once they have toggled it. A run read from its folder
+             was not watched and has no step to pick. -->
+        <section v-if="!fromFolder" ref="tipsRef" class="trl-tips" aria-label="Tips">
+          <SectionHeader
+            label="Tips"
+            :count="tipsOpen ? 'what to look for while it runs' : `${TIPS.length} tips on what to look for while it runs`"
+            :collapsed="!tipsOpen"
+            data-testid="trl-tips-toggle"
+            @update:collapsed="toggleTips"
+          />
+          <!-- Folded by height, not v-if, so fit() can still measure the tips
+               at the current width. -->
+          <div class="trl-tips-fold" :class="{ 'trl-tips-fold--shut': !tipsOpen }">
+            <div class="trl-tips-body" data-testid="trl-tips">
+              <div v-for="tip in TIPS" :key="tip.title">
+                <b>{{ tip.title }}</b>
+                <p>{{ tip.text }}</p>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
 
       <!-- Memory and speed describe now, not a step: a status bar. A run
@@ -372,6 +434,7 @@ import {
   defineComponent,
   h,
   inject,
+  nextTick,
   onBeforeUnmount,
   onMounted,
   ref,
@@ -382,6 +445,7 @@ import { VIcon } from "vuetify/components";
 
 import AppButton from "../widgets/AppButton.vue";
 import LoraLossChart from "../widgets/LoraLossChart.vue";
+import SectionHeader from "../widgets/SectionHeader.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import TrainingSampleDialog from "../widgets/TrainingSampleDialog.vue";
 import ViewBackButton from "../widgets/ViewBackButton.vue";
@@ -421,7 +485,7 @@ const POLL_MS = 2000;
 const PHASE_LABELS = {
   waiting_gpu: "Waiting for the GPU",
   checking: "Checking memory and speed",
-  loading: "Loading",
+  loading: "Loading the model",
   caching: "Caching captions",
   training: "Training",
   previews: "Generating previews",
@@ -451,6 +515,12 @@ const choosing = ref(false);
 const stopping = ref(false);
 const showFull = ref(false);
 const chartRef = ref(null);
+const bodyRef = ref(null);
+const scrollRef = ref(null);
+const boardRef = ref(null);
+const chartRowRef = ref(null);
+const endRef = ref(null);
+const tipsRef = ref(null);
 
 // ── The shape-coded provenance mark and the meter ────────────────────────────
 
@@ -507,6 +577,12 @@ const canStop = computed(
   () => LIVE_STATUSES.includes(live.value?.status) || live.value?.phase === "previews",
 );
 const busy = computed(() => ["previews", "saving", "importing"].includes(live.value?.phase));
+// Before training starts: the corner names the step, step 0 says it comes next.
+const settingUp = computed(
+  () =>
+    !setupDone.value &&
+    (SETUP.includes(live.value?.phase) || live.value?.status === "queued"),
+);
 
 /** A step's position on the column axis: column i's centre is i + 0.5. */
 function stepPosition(step) {
@@ -603,7 +679,7 @@ const groups = computed(() => {
     out.push({
       key: "without",
       title: "Without it",
-      hint: "should not change from step 0",
+      hint: "should change little from step 0",
       rows: without,
       row: next,
     });
@@ -687,7 +763,8 @@ const headline = computed(() => {
     case FOLDER_RUN_STATUS:
       return stepsOf({ run: props.run, job: null, live: false });
     default:
-      return SETUP.includes(run.phase) ? PHASE_LABELS[run.phase] : progress;
+      // The board's corner names the set-up step; the bar only says which part.
+      return SETUP.includes(run.phase) ? "Setting up" : progress;
   }
 });
 
@@ -765,6 +842,26 @@ const notice = computed(() => {
   }
   return null;
 });
+
+// Undefined keeps the chart's own sentence for a run with no curve to show.
+const chartEmptyText = computed(() =>
+  isLive.value && !live.value?.step
+    ? "The curve starts with the first training step."
+    : undefined,
+);
+
+/**
+ * When a future column is due, from the same estimate as the status bar's
+ * "left", spread over the steps still to train: "~6 min".
+ */
+function dueIn(column) {
+  const run = live.value;
+  const { remaining_low_s: low, remaining_high_s: high } = run?.speed ?? {};
+  if (!run || !isLive.value || low == null || high == null) return "";
+  const left = (run.total_steps ?? 0) - run.step;
+  if (column <= run.step || left <= 0) return "";
+  return `~${minutes(((low + high) / 2) * ((column - run.step) / left))}`;
+}
 
 const lossValue = computed(() => {
   const value = chartRef.value?.latestSmoothed;
@@ -927,6 +1024,169 @@ async function copyFull(text) {
   );
 }
 
+// ── Fitting the board to the window ─────────────────────────────────────────
+
+// The pitch, and the samples with it, come from the width the board has;
+// past PITCH_MIN the board scrolls sideways instead. The loss chart takes the
+// height the board and the tips leave, between CHART_MIN and CHART_MAX.
+const LABEL_W = 224;
+const PITCH_MIN = 124;
+const PITCH_MAX = 240;
+const CHART_MIN = 92;
+const CHART_MAX = 280;
+// The cells keep 104 x 76 at the pitch less this gutter (the CSS's
+// --trl-cell-w and --trl-cell-h say the same).
+const CELL_GUTTER = 20;
+const cellHeightAt = (p) => ((p - CELL_GUTTER) * 76) / 104;
+const pitch = ref(PITCH_MIN);
+const chartHeight = ref(CHART_MIN);
+
+const TIPS = [
+  {
+    title: "With the trigger word",
+    text: "The subject should show up over the first checkpoints. Step 0 is the base model on its own: the before picture.",
+  },
+  {
+    title: "Without it",
+    text: "These rows should stay close to step 0. If they drift toward the subject, the LoRA is leaking into everything and an earlier step is the better one.",
+  },
+  {
+    title: "Loss",
+    text: "Noisy is normal. Read the smoothed line's trend, not single dips. A flat curve does not mean training can stop.",
+  },
+  {
+    title: "Pick the step",
+    text: "The Use this step button under a column makes that step the cover: the checkpoint the set or character uses. With none picked, it is the last step.",
+  },
+];
+
+// "open" or "shut" once toggled by hand; until then, whether they fit.
+const TIPS_KEY = "pixlstash.trainingRunTips";
+const tipsChoice = ref(readTipsChoice());
+const tipsFit = ref(true);
+const tipsOpen = computed(() =>
+  tipsChoice.value ? tipsChoice.value === "open" : tipsFit.value,
+);
+// The open tips' height, measured folded or not, to judge whether they fit.
+let tipsBodyHeight = 0;
+
+function readTipsChoice() {
+  try {
+    const value = window.localStorage?.getItem(TIPS_KEY);
+    return value === "open" || value === "shut" ? value : null;
+  } catch (err) {
+    console.warn("Could not read whether the training run tips were left open", err);
+    return null;
+  }
+}
+
+function toggleTips(collapsed) {
+  tipsChoice.value = collapsed ? "shut" : "open";
+  try {
+    window.localStorage?.setItem(TIPS_KEY, tipsChoice.value);
+  } catch (err) {
+    console.warn("Could not remember the training run tips' state; it resets next time", err);
+  }
+  if (!collapsed) {
+    nextTick(() => tipsRef.value?.scrollIntoView?.({ block: "nearest" }));
+  }
+}
+
+function fit() {
+  const body = bodyRef.value;
+  const scroll = scrollRef.value;
+  const board = boardRef.value;
+  const row = chartRowRef.value;
+  if (!body || !scroll || !board || !row) return;
+  const n = columns.value.length || 1;
+  const pad = getComputedStyle(scroll);
+  const tipsFold = tipsRef.value?.querySelector(".trl-tips-fold");
+  tipsBodyHeight = tipsRef.value?.querySelector(".trl-tips-body")?.offsetHeight ?? 0;
+  const tipsHead = (tipsRef.value?.offsetHeight ?? 0) - (tipsFold?.offsetHeight ?? 0);
+  // The scroller's own padding and its sideways scrollbar.
+  const frame =
+    scroll.offsetHeight -
+    scroll.clientHeight +
+    parseFloat(pad.paddingTop) +
+    parseFloat(pad.paddingBottom);
+  // Everything in the page but the chart, with the tips folded.
+  const rest =
+    board.offsetHeight - chartHeight.value + frame + tipsHead;
+
+  const width =
+    scroll.clientWidth -
+    parseFloat(pad.paddingLeft) -
+    parseFloat(pad.paddingRight) -
+    LABEL_W -
+    (endRef.value?.offsetWidth ?? 0);
+  // Nor so tall that the prompt rows push the page past the window: a wide,
+  // short window would otherwise scroll down.
+  const rows = live.value?.rows?.length ?? 0;
+  const cellsNow = rows * cellHeightAt(pitch.value);
+  const tallest = rows
+    ? Math.floor(((body.clientHeight - (rest - cellsNow) - CHART_MIN) / rows) * (104 / 76)) +
+      CELL_GUTTER
+    : PITCH_MAX;
+  pitch.value = Math.max(
+    PITCH_MIN,
+    Math.min(PITCH_MAX, Math.floor(width / n), tallest),
+  );
+
+  // The height left for the chart with the tips folded.
+  const room = body.clientHeight - rest;
+  tipsFit.value = room - tipsBodyHeight >= CHART_MIN;
+  const left = room - (tipsOpen.value ? tipsBodyHeight : 0);
+  chartHeight.value = Math.max(CHART_MIN, Math.min(CHART_MAX, left));
+}
+
+// The tips are watched too: opening them by themselves resizes nothing else,
+// and the chart must give back their height.
+let resizer = null;
+watch([bodyRef, scrollRef, boardRef, tipsRef], ([body, scroll, board, tips]) => {
+  resizer?.disconnect();
+  resizer = null;
+  if (!body || !scroll || !board || typeof ResizeObserver === "undefined") return;
+  resizer = new ResizeObserver(() => fit());
+  [body, scroll, board, tips].filter(Boolean).forEach((el) => resizer.observe(el));
+});
+
+// A long run scrolls sideways under the pinned prompts. The view follows the
+// newest checkpoint until the owner scrolls it themselves, and again once they
+// scroll back to the end.
+const scrolledLeft = ref(false);
+let following = true;
+let placedAt = null;
+
+function onBoardScroll() {
+  const el = scrollRef.value;
+  if (!el) return;
+  scrolledLeft.value = el.scrollLeft > 0;
+  if (placedAt !== null && Math.abs(el.scrollLeft - placedAt) <= 1) return;
+  placedAt = null;
+  following = el.scrollLeft + el.clientWidth >= el.scrollWidth - 1;
+}
+
+function followNewest() {
+  const el = scrollRef.value;
+  if (!el || !following || el.scrollWidth <= el.clientWidth) return;
+  // The newest checkpoint and the one after it, at the right edge.
+  // The board starts after the scroller's own left padding.
+  const shown = Math.min(columns.value.length, drawingIndex.value + 2);
+  const padLeft = parseFloat(getComputedStyle(el).paddingLeft) || 0;
+  const target = Math.max(0, padLeft + LABEL_W + shown * pitch.value - el.clientWidth);
+  if (Math.abs(el.scrollLeft - target) <= 1) return;
+  placedAt = Math.min(target, el.scrollWidth - el.clientWidth);
+  el.scrollLeft = target;
+}
+
+function scrollToStart() {
+  following = false;
+  placedAt = null;
+  scrollRef.value?.scrollTo({ left: 0, behavior: "smooth" });
+}
+
+watch([drawingIndex, pitch, () => columns.value.length], () => nextTick(followNewest));
+
 // ── Polling ─────────────────────────────────────────────────────────────────
 
 let timer = null;
@@ -982,6 +1242,10 @@ watch(
     error.value = "";
     showFull.value = false;
     notFound = false;
+    // Another run's board starts at its newest checkpoint again.
+    scrolledLeft.value = false;
+    following = true;
+    placedAt = null;
     load().then(schedule);
   },
 );
@@ -1026,6 +1290,7 @@ onBeforeUnmount(() => {
   clearTimeout(timer);
   document.removeEventListener("visibilitychange", onVisible);
   window.removeEventListener("keydown", onKeydown, true);
+  resizer?.disconnect();
 });
 </script>
 
@@ -1035,8 +1300,6 @@ onBeforeUnmount(() => {
 .trl {
   --trl-label-w: 224px;
   --trl-pitch: 124px;
-  --trl-cell-w: 104px;
-  --trl-cell-h: 76px;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -1190,19 +1453,27 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   display: flex;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-3) 0;
+  flex-direction: column;
+  overflow-y: auto;
 }
 
 /* Long runs scroll sideways rather than shrinking the samples, so cells stay
-   comparable (the design's "not decided" item, settled on its own advice). */
+   comparable (the design's "not decided" item, settled on its own advice).
+   It fills the height the tips leave, so the tips sit at the bottom. */
 .trl-scroll {
-  flex: 1;
+  flex: 1 0 auto;
   min-width: 0;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: var(--space-3) var(--space-3) 0;
 }
 
+/* The pitch is set on the board from the window (fit()); the samples grow
+   with it at today's 104 x 76 shape, keeping the same gutter between columns.
+   Declared here, not on .trl, so they read the board's pitch. */
 .trl-board {
+  --trl-cell-w: calc(var(--trl-pitch) - var(--space-4) - var(--space-3));
+  --trl-cell-h: calc(var(--trl-cell-w) * 76 / 104);
   position: relative;
   display: grid;
   grid-template-columns: var(--trl-label-w) repeat(var(--trl-cols), var(--trl-pitch)) auto;
@@ -1228,8 +1499,14 @@ onBeforeUnmount(() => {
   background: var(--hover-wash);
 }
 
+/* The labels stay pinned while a long run scrolls sideways: opaque, over the
+   columns passing under them, with a divider once the view has moved. */
 .trl-lab {
   grid-column: 1;
+  position: sticky;
+  left: calc(-1 * var(--space-3));
+  z-index: var(--z-sticky);
+  background: rgb(var(--v-theme-background));
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -1237,6 +1514,23 @@ onBeforeUnmount(() => {
   padding: 0 var(--space-3) 0 var(--space-2);
   font-size: var(--text-xs);
   line-height: var(--leading-snug);
+}
+
+.trl-lab--z {
+  background:
+    linear-gradient(
+      color-mix(in srgb, rgb(var(--v-theme-on-background)) 4.5%, transparent),
+      color-mix(in srgb, rgb(var(--v-theme-on-background)) 4.5%, transparent)
+    ),
+    rgb(var(--v-theme-background));
+}
+
+.trl-scroll--moved .trl-lab {
+  box-shadow: inset -1px 0 0 rgb(var(--v-theme-divider));
+}
+
+.trl-to-start {
+  align-self: flex-start;
 }
 
 .trl-setup {
@@ -1409,13 +1703,26 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
+/* Exactly the chart's height, so fit() can tell the chart from the rest. */
 .trl-chart {
   align-self: center;
+  box-sizing: content-box;
+  height: var(--trl-chart-h);
   padding: var(--space-2) 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.trl-chart :deep(.lora-loss-empty) {
+  text-align: center;
 }
 
 .trl-gline {
   grid-column: 1 / -1;
+  justify-self: start;
+  position: sticky;
+  left: calc(-1 * var(--space-3));
   display: flex;
   align-items: flex-end;
   gap: var(--space-3);
@@ -1439,9 +1746,8 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, rgb(var(--v-theme-on-background)) 4.5%, transparent);
 }
 
+/* Full row height, so the pinned label's own background covers its row. */
 .trl-prompt {
-  display: block;
-  align-self: center;
   font-size: var(--text-sm);
 }
 
@@ -1527,6 +1833,38 @@ img.trl-cell {
     animation-duration: 2s !important;
     animation-iteration-count: infinite !important;
   }
+}
+
+/* ── the tips ── */
+.trl-tips {
+  flex: none;
+  padding: 0 var(--space-4);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+/* Folded: no height and out of the accessibility tree, still laid out. */
+.trl-tips-fold--shut {
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+
+.trl-tips-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-4) var(--space-6);
+  padding: 0 0 var(--space-5) var(--space-6);
+  font-size: var(--text-sm);
+}
+
+.trl-tips-body b {
+  font-weight: var(--weight-semibold);
+}
+
+.trl-tips-body p {
+  margin: var(--space-1) 0 0;
+  line-height: var(--leading-snug);
+  color: rgba(var(--v-theme-on-background), var(--opacity-text-secondary));
 }
 
 /* ── the status bar ── */
