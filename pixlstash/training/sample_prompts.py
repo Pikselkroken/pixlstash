@@ -163,8 +163,6 @@ _OTHER_SEX = {
     "lady": "man",
     "gentleman": "woman",
     "guy": "woman",
-    "boy": "girl",
-    "girl": "boy",
 }
 _CHILD_NOUNS = {"boy", "girl", "child", "kid", "baby", "teenager"}
 _OLD_WORDS = {"elderly", "old", "older", "senior", "aged", "middle-aged"}
@@ -397,8 +395,10 @@ def preservation(generated: dict) -> dict:
     draws, and trains the LoRA to draw the same: the description stays what
     the base model knew, instead of turning into the person. A sample prompt
     swapped the same way is the lookalike, so the run screen shows what
-    training protected. The description itself is read from the pictures'
-    descriptions (:func:`describe`), not from the tags.
+    training protected. The description is the one :func:`describe` picks:
+    from the pictures' descriptions, else from their tags. A description from
+    the tags is still written as the class word, but the switch stays off,
+    since ``keep_generic`` counts only descriptions that use it.
 
     Args:
         generated: A :func:`generate` result.
