@@ -635,15 +635,15 @@ def parse_tag_file(filename: str, data: bytes) -> list[tuple[str, str, str]]:
         except UnicodeDecodeError:
             raise TagGroupError(400, "The .csv file is not UTF-8 text") from None
         try:
-            raw_rows = [
-                row
-                for row in csv.reader(io.StringIO(text))
-                if any(cell.strip() for cell in row)
-            ]
+            raw_rows = list(csv.reader(io.StringIO(text)))
         except csv.Error as exc:
             raise TagGroupError(400, f"Could not read the .csv file: {exc}") from None
     else:
         raise TagGroupError(400, "Upload a .xlsx or .csv tag file")
+    # Both formats alike: a blank row (a common Excel artefact above the
+    # header, or a styled but empty row) is not a row, so the first row with
+    # something in it is the header.
+    raw_rows = [row for row in raw_rows if any(str(c).strip() for c in row)]
     if not raw_rows:
         raise TagGroupError(400, "The tag file is empty")
 

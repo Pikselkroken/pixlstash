@@ -1586,3 +1586,14 @@ def test_categories_whose_tags_are_all_kept_do_not_count_against_the_cap(
     moved = _import(client, _csv(rows), "kept.csv", dry_run=True, overwrite=True)
     assert moved.status_code == 400, moved.text
     assert "51 categories" in moved.json()["detail"]
+
+
+def test_a_blank_row_above_the_header_is_skipped_in_xlsx_as_in_csv(
+    client, server, use_defaults
+):
+    use_defaults({})
+    rows = [["", ""], ["english", "category"], ["blank-top-tag", "Saga Blank"]]
+    for data, name in ((_xlsx(rows), "blank.xlsx"), (_csv(rows), "blank.csv")):
+        resp = _import(client, data, name, dry_run=True)
+        assert resp.status_code == 200, (name, resp.text)
+        assert resp.json()["plan"]["filed"] == 1, name

@@ -48,6 +48,7 @@
         v-show="items.length"
         :id="listId"
         class="ftf-list"
+        :class="{ 'ftf-list--browse': browsing }"
         role="listbox"
         :aria-label="browsing ? 'By group' : `${title} suggestions`"
       >
@@ -331,6 +332,16 @@ function move(step) {
   highlight.value = Math.max(0, Math.min(last, highlight.value + step));
 }
 
+// The BY GROUP list scrolls in its own box, so the row the arrows reach is
+// brought into it.
+watch(highlight, (idx) => {
+  nextTick(() =>
+    document
+      .getElementById(`${listId}-${idx}`)
+      ?.scrollIntoView?.({ block: "nearest" }),
+  );
+});
+
 function add(tag, second) {
   emit("add", tag, props.rows[second ? 1 : 0].id);
   query.value = "";
@@ -470,6 +481,14 @@ onMounted(() => nextTick(() => fieldRef.value?.focus()));
 /* --space-3: clear of the field's focus ring, as the checklist's list is. */
 .ftf-list {
   margin-top: var(--space-3);
+}
+/* Every library has its default groups, more than a menu can show at once:
+   the BY GROUP list is a box of about six rows that scrolls, so the Has and
+   Lacks rows under it stay on screen. */
+.ftf-list--browse {
+  max-height: calc(6 * var(--control-h-bar));
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .ftf-list .fm-check {
   align-items: center;

@@ -3,7 +3,7 @@
 // `ShelfShowPanel`): a root list of rows, each opening one submenu beside it,
 // so somebody who has learnt one knows the others.
 
-import { nextTick, reactive, ref, watch } from "vue";
+import { getCurrentInstance, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 
 /**
  * @param {() => boolean} isOpen - the v-menu keeps its content mounted, so a
@@ -17,20 +17,41 @@ export function useCascadeMenu(isOpen, focusIn) {
   const rootRef = ref(null);
   const subRef = ref(null);
   const rowRefs = reactive({});
+  // The open submenu's row, which it lines up with when it can.
+  let rowTop = 0;
+  let resizeObserver = null;
+
+  // Line the submenu up with its row, but no lower than keeps its bottom
+  // level with the root menu's: a tall submenu (Score) hanging below the
+  // root made the whole cascade too tall and the menu jumped up over the
+  // toolbar to fit.
+  function place() {
+    const rootHeight = rootRef.value?.offsetHeight ?? 0;
+    const subHeight = subRef.value?.offsetHeight ?? 0;
+    subTop.value = Math.max(0, Math.min(rowTop, rootHeight - subHeight));
+  }
+
+  // A submenu can grow after it opens (the Tags field lists the tag groups
+  // once they have been read), so it is placed again whenever its size
+  // changes, not only on the tick it opened.
+  function watchSize() {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    if (typeof ResizeObserver === "undefined" || !subRef.value) return;
+    resizeObserver = new ResizeObserver(() => {
+      if (sub.value) place();
+    });
+    resizeObserver.observe(subRef.value);
+  }
 
   function openKind(kind) {
     sub.value = kind;
     const row = rowRefs[kind];
-    const rowTop = row ? Math.max(0, row.offsetTop - 8) : 0;
+    rowTop = row ? Math.max(0, row.offsetTop - 8) : 0;
     subTop.value = rowTop;
     nextTick(() => {
-      // Line the submenu up with its row, but no lower than keeps its bottom
-      // level with the root menu's: a tall submenu (Score) hanging below the
-      // root made the whole cascade too tall and the menu jumped up over the
-      // toolbar to fit.
-      const rootHeight = rootRef.value?.offsetHeight ?? 0;
-      const subHeight = subRef.value?.offsetHeight ?? 0;
-      subTop.value = Math.max(0, Math.min(rowTop, rootHeight - subHeight));
+      place();
+      watchSize();
       focusIn(subRef.value);
     });
   }
@@ -69,6 +90,17 @@ export function useCascadeMenu(isOpen, focusIn) {
   watch(isOpen, (open) => {
     if (!open) sub.value = null;
   });
+
+  watch(sub, (kind) => {
+    if (!kind) {
+      resizeObserver?.disconnect();
+      resizeObserver = null;
+    }
+  });
+
+  if (getCurrentInstance()) {
+    onBeforeUnmount(() => resizeObserver?.disconnect());
+  }
 
   return {
     sub,
