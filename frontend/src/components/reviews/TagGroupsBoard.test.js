@@ -622,6 +622,20 @@ describe("TagGroupsBoard: new group", () => {
     expect(tagGroupsApi.createTagGroup).toHaveBeenCalledWith("Wildlife");
   });
 
+  it("a refused name stays typed in the open field, to be corrected", async () => {
+    tagGroupsApi.createTagGroup.mockRejectedValueOnce(
+      Object.assign(new Error("409"), { response: { status: 409, data: { detail: "taken" } } }),
+    );
+    const wrapper = await mountBoard();
+    await wrapper.find('button[aria-label="New group"]').trigger("click");
+    const input = wrapper.find(".tgb-input");
+    await input.setValue("Character");
+    await input.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(wrapper.find(".tgb-input").exists()).toBe(true);
+    expect(wrapper.find(".tgb-input").element.value).toBe("Character");
+  });
+
   it("Esc cancels without creating", async () => {
     const wrapper = await mountBoard();
     await wrapper.find('button[aria-label="New group"]').trigger("click");

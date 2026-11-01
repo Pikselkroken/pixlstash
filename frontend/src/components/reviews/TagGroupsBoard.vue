@@ -719,13 +719,16 @@ function cancelNew() {
   newName.value = "";
 }
 
+// The field closes only once the group exists: a refused name (a duplicate)
+// stays typed, with the caret in it, beside the store's notice saying why.
 async function commitNew() {
   const name = newName.value.trim();
+  if (!name) return cancelNew();
+  const group = await tagGroups.createGroup(name);
+  if (!group) return void newRef.value?.focus();
   creating.value = false;
   newName.value = "";
-  if (!name) return;
-  const group = await tagGroups.createGroup(name);
-  if (group) choose(group.id);
+  choose(group.id);
 }
 
 // --- Import a Danbooru tag file --------------------------------------------
