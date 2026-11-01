@@ -1,0 +1,97 @@
+name: Rebuild release
+
+# Re-runs a whole release for a tag that already exists, using main's current
+# workflows: everything a tag push starts that produces or publishes something
+# (installers, desktop app, Docker images, PyPI, install smoke). For when a
+# release build failed for a CI reason - a retired runner image, a signing
+# outage - and the fix landed on main, where re-running the tag's own runs
+# would only replay the tag's broken copies of the workflows.
+#
+# Each workflow is dispatched as its own ordinary run with release_tag set, so
+# it keeps its own environment protection, PyPI trusted publishing and the
+# shared SimplySign concurrency group exactly as on a tag push. The rebuilds
+# check out the tag's source, attach to the tag's existing release, and skip
+# whatever is already published: PyPI files (skip-existing) and Docker tags
+# (unless docker-publish is dispatched by hand with overwrite).
+#
+# Not dispatched: ci.yml (the tag's commit already passed its own gate, and
+# main's test file list need not exist in an old tree) and release-version.yml
+# (the website update; it already takes a tag when run by hand).
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to rebuild (e.g. v1.13.2)"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    permissions:
+      # gh workflow run: GITHUB_TOKEN may start workflow_dispatch runs.
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      DISPATCH_REF: ${{ github.ref }}
+    steps:
+      - name: Check the request
+        run: |
+          set -euo pipefail
+          # main's workflows are the point of a rebuild; from another branch
+          # the dispatched runs would refuse anyway, so fail here, once.
+          if [ "$DISPATCH_REF" != "refs/heads/main" ]; then
+            echo "::error::Run this from main, not $DISPATCH_REF" >&2
+            exit 1
+          fi
+          # Same release-tag shape as scripts/check_release_tag.py; each
+          # dispatched run re-checks the tag against its pyproject version.
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+|[.-]dev[.-]?[0-9]+)?$ ]]; then
+            echo "::error::Not a release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq .ref >/dev/null || {
+            echo "::error::Tag $RELEASE_TAG does not exist" >&2
+            exit 1
+          }
+          gh release view "$RELEASE_TAG" --json tagName >/dev/null || {
+            echo "::error::Tag $RELEASE_TAG has no GitHub release to attach to; publish the release first" >&2
+            exit 1
+          }
+      # Every workflow is dispatched even if another's dispatch is refused, and
+      # PyPI goes last and never fails this job: it is the part most likely to
+      # fail (the version is usually already published) and nothing else
+      # consumes it - Docker installs from source, the installers and the smoke
+      # test build their own wheel. Each dispatched run succeeds or fails on
+      # its own, so a red PyPI run never holds up the rest either.
+      - name: Dispatch the release workflows
+        run: |
+          set -uo pipefail
+          {
+            echo "## Rebuilding $RELEASE_TAG with main's workflows"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          failed=()
+          for wf in windows-installer.yml electron.yml docker-publish.yml install-smoke.yml publish-pypi.yml; do
+            link="[$wf](${GITHUB_SERVER_URL}/${GH_REPO}/actions/workflows/$wf?query=event%3Aworkflow_dispatch)"
+            if gh workflow run "$wf" --ref main -f release_tag="$RELEASE_TAG"; then
+              echo "Dispatched $wf"
+              echo "- $link" >> "$GITHUB_STEP_SUMMARY"
+            elif [ "$wf" = publish-pypi.yml ]; then
+              echo "::warning title=PyPI not dispatched::gh workflow run $wf failed; the rest of the rebuild is unaffected."
+              echo "- $link: **not dispatched** (does not affect the rest)" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error title=Not dispatched::gh workflow run $wf failed"
+              echo "- $link: **not dispatched**" >> "$GITHUB_STEP_SUMMARY"
+              failed+=("$wf")
+            fi
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::Not dispatched: ${failed[*]}" >&2
+            exit 1
+          fi

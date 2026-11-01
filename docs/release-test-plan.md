@@ -198,6 +198,15 @@ Context: the overlay fallback, per-accel ORT pin, and backend-list dedup all
 shipped after live incidents verified **on Linux only**; Windows and macOS
 have never been manually exercised and are the priority columns.
 
+If a release build failed for a CI reason (a retired runner image, a signing
+outage), fix the workflow on `main` and rebuild the release without a new tag:
+Actions → *Rebuild release* → **Run workflow** from `main` with `release_tag`
+set to the tag. It dispatches the Windows installer, desktop app, Docker,
+PyPI and install-smoke workflows with `main`'s current definitions; each
+builds the tag's source, attaches to the tag's existing release, and skips
+what is already published. Each of those workflows also takes `release_tag`
+on its own, to rebuild just one part.
+
 Overlay expectations per OS: **Windows/Linux** offer the cu128 (CUDA) overlay
 from Settings (ROCm where applicable on Linux); **macOS has no overlay UI at
 all** — Metal is bundled in the runtime.
