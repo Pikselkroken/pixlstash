@@ -11748,15 +11748,18 @@ the dataset builder writes).
 - **A person's two controls are a lookalike and a stranger.** The first
   scene's prompt without the word names the description; the second names its
   opposite (`stranger`: the other sex, the other end of life, "an elderly man"
-  is "a young woman"). The lookalike drifts toward the person when every
-  caption binds the description to them; the stranger should never change.
+  is "a young woman"). The lookalike drifts toward the person as the LoRA
+  learns them as what the description means; the stranger should never change.
 - **Keeping the description generic.** When most of a person's non-empty
   captions use the description (`keep_generic`), `preservation()` turns on
   ai-toolkit's `train.diff_output_preservation` with the description as
   `train.diff_output_preservation_class` (both tunable, source `captions`,
-  pins win). The trainer swaps the trigger word in each caption for the
+  pins win). The trainer swaps the trigger word in each training caption (the
+  trigger word and the picture's tags, not its description) for the
   description, asks the model with the LoRA off what that draws, and trains the
-  LoRA to match, so the lookalike prompt is exactly what training protected.
+  LoRA to match, so the lookalike prompt is what training protected. Pinned on
+  with no description (a style or a thing) it is refused, since the template's
+  own class word would stand in.
   `resolve` turns it off beside a text encoder that trains (ai-toolkit refuses
   the pair) and refuses it pinned on there. The measurement fingerprint names
   it only while on (`measurements.ON_FINGERPRINT_KEYS`), so a run with it on is
@@ -11814,9 +11817,10 @@ calls except each run's last swap counters.
 - **The grid.** Columns are step 0, every `sample.sample_every` and the last
   step, plus any step a sample on disk names. Rows are the rendered config's
   `sample.samples` in index order, marked `with_trigger` by a whole-word match;
-  a person's run carries `preservation` (`{on, description}`, read from its
-  resolution) and each row without the word a `role`, `lookalike` when it names
-  the description and `stranger` otherwise (null for a run from before);
+  a person's run carries `preservation` (`{on, description, stranger}`, read
+  from its resolution) and each row without the word a `role`, `lookalike` when
+  it names the description and `stranger` when it names the stranger (null for
+  any other prompt, any other run, and a run queued before the choice);
   each cell is `sample` (with its filename, served by the existing
   `/model-folders/{id}/runs/{name}/samples/{file}`), `drawing`, `queued`,
   `deferred`, `future` or `missing`.

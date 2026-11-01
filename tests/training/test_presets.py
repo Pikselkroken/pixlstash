@@ -335,6 +335,13 @@ def test_a_text_encoder_that_trains_turns_preservation_off_or_refuses_it():
         )
 
 
+def test_preservation_pinned_on_without_a_description_is_refused():
+    # A style or thing has no description; the template's class word would
+    # otherwise stand in for the trigger word.
+    with pytest.raises(TunableOverrideError, match="description"):
+        _resolve(pins={presets.PRESERVATION_KEY: True})
+
+
 def test_pins_win_over_every_derived_value():
     values = _resolve(pins={"network.linear": 8, "train.steps": 777})["values"]
     assert values["train.steps"] == {"value": 777, "source": "pinned"}

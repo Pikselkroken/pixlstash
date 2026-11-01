@@ -268,6 +268,7 @@ describe("the control prompts' roles", () => {
     expect(promptRole("A young woman at a cafe", info)).toBe("stranger");
     expect(promptRole("{{TRIGGER_WORD}} reading", info)).toBeNull();
     expect(promptRole("a dog in a park", info)).toBeNull();
+    expect(promptRole("a mango", { description: "a man", stranger: "a woman" })).toBeNull();
     // A thing's prompts carry no stranger, so no roles.
     expect(promptRole("a red bicycle", { description: "a red bicycle" })).toBeNull();
   });

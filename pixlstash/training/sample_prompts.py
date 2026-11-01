@@ -391,11 +391,14 @@ def preservation(generated: dict) -> dict:
     """The trainer settings that keep a person's description generic.
 
     ai-toolkit's differential output preservation swaps the trigger word in
-    each caption for the class word ("skpr reading" becomes "an elderly man
-    reading"), asks the model with the LoRA off what that draws, and trains the
-    LoRA to draw the same: the description stays what the base model knew,
-    instead of turning into the person. That swapped prompt is the lookalike
-    sample prompt, so the run screen shows what training protected.
+    each training caption for the class word (the dataset's captions are the
+    trigger word and the picture's tags, so "skpr, beard, glasses" becomes "an
+    elderly man, beard, glasses"), asks the model with the LoRA off what that
+    draws, and trains the LoRA to draw the same: the description stays what
+    the base model knew, instead of turning into the person. A sample prompt
+    swapped the same way is the lookalike, so the run screen shows what
+    training protected. The description itself is read from the pictures'
+    descriptions (:func:`describe`), not from the tags.
 
     Args:
         generated: A :func:`generate` result.

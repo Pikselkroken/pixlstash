@@ -979,9 +979,11 @@ const keepGeneric = computed(() => {
   const count = info.description_count;
   const total = info.caption_count;
   const headline =
-    count === total
-      ? `All ${formatCount(total)} captions call ${name} “${description}”.`
-      : `${formatCount(count)} of ${formatCount(total)} captions call ${name} “${description}”.`;
+    total === 1
+      ? `The caption calls ${name} “${description}”.`
+      : count === total
+        ? `All ${formatCount(total)} captions call ${name} “${description}”.`
+        : `${formatCount(count)} of ${formatCount(total)} captions call ${name} “${description}”.`;
   let example = null;
   if (info.description_example) {
     const text = info.description_example;
@@ -1690,9 +1692,7 @@ function goToSettings() {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .tld-keep__cap mark {
@@ -1723,7 +1723,6 @@ function goToSettings() {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  margin-top: calc(-1 * var(--space-2));
 }
 
 .tld-role {

@@ -500,9 +500,11 @@ export function pronounOf(description) {
  */
 export function promptRole(text, info) {
   if (!info?.description || !info?.stranger || text.includes(TRIGGER_TOKEN)) return null;
-  const lower = text.toLowerCase();
-  if (lower.includes(info.description.toLowerCase())) return "lookalike";
-  if (lower.includes(info.stranger.toLowerCase())) return "stranger";
+  // Whole words, as the run screen matches them: "a man" is not "a mango".
+  const names = (phrase) =>
+    new RegExp(`(?<![\\w])${escapeRegExp(phrase)}(?![\\w])`, "i").test(text);
+  if (names(info.description)) return "lookalike";
+  if (names(info.stranger)) return "stranger";
   return null;
 }
 

@@ -738,15 +738,16 @@ def create_router(server) -> APIRouter:
             description=(
                 "One per sample prompt: {index, prompt, with_trigger, role, "
                 "cells}, each cell {state, filename} in column order. role is "
-                "lookalike or stranger on a prompt without the trigger word "
-                "when the run knows its person's description, else null."
+                "lookalike or stranger on a written prompt without the trigger "
+                "word of a person's run, else null."
             ),
         )
         preservation: Optional[dict] = Field(
             default=None,
             description=(
-                "{on, description} for a person's run: whether training kept "
-                "the description generic. Null for a run that did not decide."
+                "{on, description, stranger} for a person's run: whether "
+                "training kept the description generic. Null for any other run "
+                "and for one queued before the choice existed."
             ),
         )
 
@@ -1387,6 +1388,7 @@ def create_router(server) -> APIRouter:
             settings["prompts"],
             job["trigger_word"],
             (preservation or {}).get("description"),
+            (preservation or {}).get("stranger"),
         )
         if not rows:
             rows = [

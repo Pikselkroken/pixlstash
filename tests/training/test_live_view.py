@@ -149,8 +149,13 @@ def test_prompt_rows_tell_the_lookalike_from_the_stranger():
         "skpr at a cafe",
         "a young woman at a cafe",
     ]
-    rows = live_view.prompt_rows(prompts, "skpr", "an elderly man")
+    rows = live_view.prompt_rows(prompts, "skpr", "an elderly man", "a young woman")
     assert [row["role"] for row in rows] == [None, "lookalike", None, "stranger"]
+    # A prompt the owner wrote about something else makes no claim.
+    edited = live_view.prompt_rows(
+        ["a dog in a park"], "skpr", "an elderly man", "a young woman"
+    )
+    assert edited[0]["role"] is None
     # Without the description the run makes no claim about either.
     assert {row["role"] for row in live_view.prompt_rows(prompts, "skpr")} == {None}
 
@@ -170,6 +175,7 @@ def test_preservation_is_read_from_the_resolved_values():
     assert live_view.preservation(resolution(True)) == {
         "on": True,
         "description": "an elderly man",
+        "stranger": "a young woman",
     }
     assert live_view.preservation(resolution(False))["on"] is False
     # A run from before the switch, or not of a person, never decided.

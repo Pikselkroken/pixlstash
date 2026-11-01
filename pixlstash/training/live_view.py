@@ -21,6 +21,7 @@ import statistics
 from datetime import datetime
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.training import sample_prompts
 from pixlstash.utils.sqlite_uri import sqlite_file_uri
 
 logger = get_logger(__name__)
@@ -294,6 +295,7 @@ def preservation(resolution: dict | None) -> dict | None:
     return {
         "on": bool(isinstance(kept, dict) and kept.get("value")),
         "description": str(described["value"]),
+        "stranger": sample_prompts.stranger(str(described["value"])),
     }
 
 
@@ -302,24 +304,32 @@ def _words(phrase: str) -> re.Pattern:
 
 
 def prompt_rows(
-    prompts: list[str], trigger_word: str | None, description: str | None = None
+    prompts: list[str],
+    trigger_word: str | None,
+    description: str | None = None,
+    stranger: str | None = None,
 ) -> list[dict]:
     """The view's rows: each prompt by its sample index, and whether it has the word.
 
     ai-toolkit numbers a step's samples in prompt order, so a row's ``index`` is
     the ``_<index>`` of its samples' filenames. With the person's *description*
-    a prompt without the word is a ``lookalike`` when it names the description
-    and a ``stranger`` when it does not; otherwise its ``role`` is None.
+    and its *stranger*, a prompt without the word is a ``lookalike`` when it
+    names the description and a ``stranger`` when it names the stranger; any
+    other prompt (one the owner wrote) has no ``role``.
     """
     word = (trigger_word or "").strip()
     pattern = _words(word) if word else None
     described = _words(description) if description else None
+    other = _words(stranger) if stranger else None
     rows = []
     for index, prompt in enumerate(prompts):
         with_trigger = bool(pattern and pattern.search(prompt))
         role = None
         if described is not None and not with_trigger:
-            role = "lookalike" if described.search(prompt) else "stranger"
+            if described.search(prompt):
+                role = "lookalike"
+            elif other is not None and other.search(prompt):
+                role = "stranger"
         rows.append(
             {
                 "index": index,

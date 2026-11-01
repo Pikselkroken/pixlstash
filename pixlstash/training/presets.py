@@ -589,7 +589,8 @@ def resolve(
 
     Raises:
         TunableOverrideError: Preservation pinned on beside a text encoder
-            that trains.
+            that trains, or with no description to keep generic (a style or
+            a thing).
         ValueError: An unknown choice.
         NoProfileFits: Nothing in the fit choice fits; says which budget.
     """
@@ -633,6 +634,11 @@ def resolve(
     )
     put("pinned", pins)
     kept = values.get(PRESERVATION_KEY)
+    if kept and kept["value"] and not values.get(PRESERVATION_CLASS_KEY):
+        raise TunableOverrideError(
+            "Keeping the description generic needs a person's description; "
+            "this run has none."
+        )
     if (
         kept
         and kept["value"]
