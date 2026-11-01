@@ -113,7 +113,7 @@ const text = computed(() => {
     const keptMb = bar.value.segments
       .filter((segment) => segment.kind === "spare" || segment.reserved)
       .reduce((sum, segment) => sum + segment.mb, 0);
-    const kept = keptMb > 0 ? ` even counting the ${formatGb(keptMb)} PixlStash keeps spare` : "";
+    const kept = keptMb > 0 ? ` even counting the ${formatGb(keptMb)} held back from new requests` : "";
     return `That is more memory than this GPU has${kept}. This run or the other job can run out of GPU memory and fail.`;
   }
   return "Starting it now may run out of GPU memory, and this run or the other job could fail.";

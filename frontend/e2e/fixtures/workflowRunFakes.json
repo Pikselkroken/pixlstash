@@ -81,6 +81,7 @@
         "used_mb": 12000,
         "free_mb": 12576,
         "reserved_mb": 0,
+        "reserved_by": {},
         "budget_mb": 11348,
         "measurable": true,
         "pixlstash": true

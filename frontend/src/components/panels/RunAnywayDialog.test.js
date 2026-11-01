@@ -49,7 +49,7 @@ describe("the Run anyway dialog", () => {
     expect(wrapper.find('[data-testid="ra-over"]').text()).toContain("4.6 GB over");
     expect(wrapper.find('[data-testid="ra-text"]').text()).toContain("more memory than this GPU has");
     // It names the spare margin PixlStash keeps, so the reader can check the sum.
-    expect(wrapper.find('[data-testid="ra-text"]').text()).toContain("PixlStash keeps spare");
+    expect(wrapper.find('[data-testid="ra-text"]').text()).toContain("held back from new requests");
   });
 
   it("draws no red part when the request fits the free memory", () => {
