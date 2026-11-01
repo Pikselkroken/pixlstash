@@ -5,3 +5,5 @@
 - Fixed: the desktop app now checks that it is talking to the backend it
   started before signing in, refuses web permissions such as camera and
   location, and lets only the PixlStash window use its desktop features.
+- Fixed: watched folders and the workflow inbox could stop noticing new
+  files after a library snapshot, until PixlStash was restarted.
