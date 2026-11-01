@@ -498,14 +498,21 @@ function onDragLeave(key, event) {
   if (groupTarget.value === key) groupTarget.value = null;
 }
 
+// Every dragged tag is filed under `key` already: nothing would move, so
+// no wash, no label and no drop (the rail's group drop does the same).
+function alreadyThere(key) {
+  const target = key === NONE ? null : key;
+  return dragging.value.every((n) => (tagGroups.groupFor(n)?.id ?? null) === target);
+}
+
 function onTagsDragOver(key, event) {
-  if (!canDrop.value) return;
+  if (!canDrop.value || alreadyThere(key)) return;
   event.preventDefault();
   dropKey.value = key;
 }
 
 async function onTagsDrop(key, event) {
-  if (!canDrop.value) return;
+  if (!canDrop.value || alreadyThere(key)) return;
   event.preventDefault();
   const names = [...dragging.value];
   onDragEnd();
@@ -694,7 +701,7 @@ defineExpose({ clearSelection, escape, selected });
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   background: transparent;
-  color: rgba(var(--v-theme-on-dark-surface), 0.7);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
   cursor: pointer;
 }
 .tgb-icon-btn:hover {
@@ -816,7 +823,7 @@ defineExpose({ clearSelection, escape, selected });
 .tgb-empty {
   margin: 0 0 var(--space-3);
   font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-dark-surface), 0.7);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
 }
 .tgb-tag-list {
   display: grid;

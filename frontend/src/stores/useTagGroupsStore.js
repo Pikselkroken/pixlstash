@@ -86,6 +86,9 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
   const loaded = ref(false);
   let fetchedAt = 0;
   let inflight = null;
+  // Bumped on a session reset: a read that started under the previous
+  // library must not fill the new one's map when it lands.
+  let generation = 0;
 
   const hasGroups = computed(() => groups.value.length > 0);
   const byId = computed(() => new Map(groups.value.map((g) => [g.id, g])));
@@ -107,19 +110,23 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
   async function fetch({ force = false } = {}) {
     if (!force && fetchedAt && Date.now() - fetchedAt < STALE_MS) return;
     if (inflight) return inflight;
+    const started = generation;
     inflight = (async () => {
       try {
-        apply(await getTagGroups());
+        const body = await getTagGroups();
+        if (started !== generation) return;
+        apply(body);
       } catch (e) {
+        if (started !== generation) return;
         // A refusal (a share session) is not retried on every rail mount.
         fetchedAt = Date.now();
         if (!isReadOnly.value) {
           console.warn("Couldn't read the tag groups; tags show ungrouped", e);
         }
-      } finally {
-        inflight = null;
       }
-    })();
+    })().finally(() => {
+      if (started === generation) inflight = null;
+    });
     return inflight;
   }
 
@@ -253,6 +260,8 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
     groupOf.value = new Map();
     loaded.value = false;
     fetchedAt = 0;
+    generation += 1;
+    inflight = null;
   });
 
   return {

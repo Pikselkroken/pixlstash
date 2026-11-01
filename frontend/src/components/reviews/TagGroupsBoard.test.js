@@ -351,6 +351,21 @@ describe("TagGroupsBoard: drag", () => {
     expect(tagGroupsApi.assignTagsToGroup).toHaveBeenCalledWith(["moss"], 2);
   });
 
+  it("a drop on the group the tags are already in is no drop", async () => {
+    const wrapper = await mountBoard();
+    // moss is Ungrouped: the Ungrouped row takes no wash and sends nothing.
+    await tagRow(wrapper, "moss").trigger("dragstart", {
+      dataTransfer: dataTransfer(),
+    });
+    const ungrouped = wrapper.findAll(".tgb-groups > .tgb-row")[1];
+    expect(ungrouped.text()).toContain("Ungrouped");
+    await ungrouped.trigger("dragover");
+    expect(ungrouped.classes()).not.toContain("tgb-row--drop");
+    await ungrouped.trigger("drop");
+    await flushPromises();
+    expect(tagGroupsApi.assignTagsToGroup).not.toHaveBeenCalled();
+  });
+
   it("All tags is not a drop target", async () => {
     const wrapper = await mountBoard();
     await tagRow(wrapper, "moss").trigger("dragstart", {

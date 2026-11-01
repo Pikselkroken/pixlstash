@@ -3,12 +3,16 @@ import { createPinia, setActivePinia } from "pinia";
 import { ref } from "vue";
 
 const isReadOnly = ref(false);
+const resetHandlers = [];
 vi.mock("../utils/apiClient", () => ({
   API_BASE_URL: "/api/v1",
   get isReadOnly() {
     return isReadOnly;
   },
-  onSessionReset: () => () => {},
+  onSessionReset: (handler) => {
+    resetHandlers.push(handler);
+    return () => {};
+  },
 }));
 vi.mock("../api/tagGroups", () => ({
   getTagGroups: vi.fn(),
@@ -100,6 +104,24 @@ describe("the map", () => {
     reorderTagGroups.mockRejectedValue(new Error("boom"));
     expect(await store.reorder([1, 2])).toBe(false);
     expect(store.groups.map((g) => g.id)).toEqual([2, 1]);
+  });
+});
+
+describe("a library switch", () => {
+  it("drops a read that started under the previous library", async () => {
+    let answer;
+    getTagGroups.mockReturnValueOnce(new Promise((r) => (answer = r)));
+    const store = useTagGroupsStore();
+    const old = store.fetch();
+    resetHandlers.at(-1)();
+    getTagGroups.mockResolvedValueOnce({ groups: [], tags: {} });
+    const fresh = store.fetch();
+    answer(MAP);
+    await old;
+    await fresh;
+    expect(getTagGroups).toHaveBeenCalledTimes(2);
+    expect(store.hasGroups).toBe(false);
+    expect(store.groupFor("red hood")).toBeNull();
   });
 });
 
