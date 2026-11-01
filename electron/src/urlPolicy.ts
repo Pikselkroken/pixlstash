@@ -52,7 +52,10 @@ export function redactUrl(target: string): string {
   }
   let rendered: string;
   if (url.origin !== 'null') {
-    rendered = url.origin + url.pathname;
+    // A share link's file name IS its token.
+    rendered = url.pathname.startsWith('/share/')
+      ? `${url.origin}/share/<redacted>`
+      : url.origin + url.pathname;
   } else if (url.protocol === 'file:') {
     rendered = `file://${url.pathname}`;
   } else if (url.protocol === 'data:') {

@@ -8,6 +8,7 @@ import uuid
 import zipfile
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -1109,6 +1110,16 @@ def create_router(server) -> APIRouter:
         title = (body.title or "").strip() or url
         if not url:
             raise HTTPException(status_code=400, detail="url is required")
+        # Every viewer of the project opens this link, so a javascript: or
+        # data: URL would run in their session (stored XSS). Web links only.
+        try:
+            scheme = urlsplit(url).scheme.lower()
+        except ValueError:
+            scheme = ""
+        if scheme not in ("http", "https"):
+            raise HTTPException(
+                status_code=400, detail="url must start with http:// or https://"
+            )
 
         def check_and_insert(session: Session):
             if session.get(Project, project_id) is None:

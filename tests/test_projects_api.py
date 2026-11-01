@@ -192,6 +192,31 @@ def test_project_attachment_upload_list_delete():
         resp = client.get(f"/projects/{project_id}/attachments")
         assert resp.status_code == 200
         assert not any(a["id"] == att_id for a in resp.json())
+
+        # URL bookmarks: every viewer opens these, so only web links are stored.
+        # Same server, to avoid paying for another environment.
+        resp = client.post(
+            f"/projects/{project_id}/attachments/url",
+            json={"url": "https://example.com/ref", "title": "Ref"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["url"] == "https://example.com/ref"
+        for bad in (
+            "javascript:alert(1)",
+            " JavaScript:alert(1)",
+            "java\tscript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "//example.com/no-scheme",
+            "http://[::1",  # urlsplit raises on this; must be a 400, not a 500
+        ):
+            resp = client.post(
+                f"/projects/{project_id}/attachments/url", json={"url": bad}
+            )
+            assert resp.status_code == 400, bad
+        resp = client.get(f"/projects/{project_id}/attachments")
+        assert [a["url"] for a in resp.json() if a.get("url")] == [
+            "https://example.com/ref"
+        ]
     finally:
         server.close()
         temp_dir.cleanup()

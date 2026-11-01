@@ -253,6 +253,12 @@ async function onDrop(e) {
 
 function openFile(file) {
   if (file.url) {
+    // Links saved before the backend checked the scheme may still hold a
+    // javascript: URL, which would run in this viewer's session.
+    if (!/^https?:\/\//i.test(file.url)) {
+      console.warn("Refusing to open a non-web project link", file.id);
+      return;
+    }
     window.open(file.url, "_blank", "noopener,noreferrer");
   } else {
     downloadFile(file);
