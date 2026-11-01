@@ -29,11 +29,19 @@ const VERSION_OVERRIDE = process.env.PIXLSTASH_VERSION_OVERRIDE || ''
 // The routes that report a drive's size and free space.
 const DRIVE_ROUTES = /\/api\/v1\/(libraries|model-folders\/devices)(\?|$)/
 
-/** Every `{ total_bytes, free_bytes }` in a response, set to 60% free. */
+// A stand-in drive: 2 TB, 40% used. Both numbers, not just the free space: a
+// published total is a fact about the capture machine.
+const DRIVE_TOTAL = 2_000_000_000_000
+const DRIVE_FREE = 1_200_000_000_000
+
+/** Every `{ total_bytes, free_bytes }` in a response, set to the stand-in. */
 function easeDrives(value) {
   if (Array.isArray(value)) value.forEach(easeDrives)
   else if (value && typeof value === 'object') {
-    if (value.total_bytes) value.free_bytes = Math.round(value.total_bytes * 0.6)
+    if (value.total_bytes) {
+      value.total_bytes = DRIVE_TOTAL
+      value.free_bytes = DRIVE_FREE
+    }
     Object.values(value).forEach(easeDrives)
   }
   return value
@@ -76,7 +84,7 @@ export const test = base.extend({
       await app.context().route(PRODUCTION_HOST_PATTERN, (route) => route.abort())
       // The drive meters (the title bar's, the model shelf's) read the capture
       // machine's own disk. A marketing shot of a nearly full drive says
-      // nothing about the product, so every drive reports 40% used.
+      // nothing about the product, so every drive reports the stand-in.
       await app.context().route(DRIVE_ROUTES, async (route) => {
         if (route.request().method() !== 'GET') return route.continue()
         const response = await route.fetch()
