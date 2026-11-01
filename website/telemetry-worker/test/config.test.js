@@ -17,7 +17,7 @@ function parseJsonc(source) {
 }
 
 describe("release configuration", () => {
-  it("has no tracked placeholder resource id and enables bounded observability", async () => {
+  it("has no tracked placeholder resource id and logs nothing about the request", async () => {
     const source = await text("../wrangler.jsonc");
     const config = parseJsonc(source);
 
@@ -26,8 +26,10 @@ describe("release configuration", () => {
     assert.equal(config.limits.cpu_ms, 30_000);
     assert.deepEqual(config.triggers.crons, ["*/5 * * * *"]);
     assert.equal(config.observability.enabled, true);
-    assert.equal(config.observability.logs.invocation_logs, true);
-    assert.ok(config.observability.traces.head_sampling_rate > 0);
+    // Invocation logs and traces store request metadata (headers, client geo,
+    // timestamps), which the README and PRIVACY.md promise is never stored.
+    assert.equal(config.observability.logs.invocation_logs, false);
+    assert.equal(config.observability.traces.enabled, false);
   });
 
   it("fails deployment closed and documents EU creation evidence", async () => {

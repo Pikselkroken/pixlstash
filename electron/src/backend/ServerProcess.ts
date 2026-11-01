@@ -124,17 +124,46 @@ async function stableLoopbackPort(): Promise<number> {
   return findFreePort();
 }
 
-function pollHealth(url: string, timeoutMs: number): Promise<void> {
+/**
+ * Wait until the backend WE started answers /version.
+ *
+ * A 200 alone is not enough: the port is predictable and released between the
+ * free-port probe and the child's bind, so another local process can answer
+ * first. Whatever passes this check receives the session cookie and the
+ * window with its preload bridge, so it must echo the per-launch nonce that
+ * only our child was given in its environment.
+ */
+export function pollHealth(url: string, timeoutMs: number, nonce: string): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const attempt = () => {
       const req = httpGet(url, (res) => {
-        res.resume();
-        if (res.statusCode === 200) {
-          resolve();
-        } else {
+        if (res.statusCode !== 200) {
+          res.resume();
           retry();
+          return;
         }
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk: string) => {
+          body += chunk;
+          if (body.length > 64 * 1024) req.destroy();
+        });
+        res.on('end', () => {
+          let echoed: unknown;
+          try {
+            echoed = JSON.parse(body)?.desktop_nonce;
+          } catch {
+            echoed = undefined;
+          }
+          if (echoed === nonce) {
+            resolve();
+          } else {
+            console.warn(`[backend] ${url} answered without this launch's nonce; not trusting it`);
+            retry();
+          }
+        });
+        res.on('error', retry);
       });
       req.on('error', retry);
       req.setTimeout(2000, () => req.destroy());
@@ -304,6 +333,7 @@ export class ServerProcess {
 
     const port = await stableLoopbackPort();
     const sessionToken = randomBytes(32).toString('hex');
+    const healthNonce = randomBytes(16).toString('hex');
     const url = `http://127.0.0.1:${port}`;
 
     await mkdir(dirname(serverLogPath()), { recursive: true });
@@ -334,6 +364,8 @@ export class ServerProcess {
       // declare itself. See Server.DEV_MACHINE_ENV_VAR.
       ...(isDevBackend() ? { PIXLSTASH_TELEMETRY_DEV: '1' } : {}),
       PIXLSTASH_DESKTOP_SESSION: sessionToken,
+      // Echoed by /version so pollHealth can tell our backend from a squatter.
+      PIXLSTASH_DESKTOP_HEALTH_NONCE: healthNonce,
       // Set only after the user accepts the native repair dialog. An explicit
       // value prevents a parent-shell variable from authorising it accidentally.
       PIXLSTASH_REPAIR_PERMISSIONS: recovery.repairPermissions ? '1' : '0',
@@ -406,7 +438,7 @@ export class ServerProcess {
       // window. /version is auth-excluded so it answers as soon as uvicorn
       // binds. Race it against an early exit so a crashing backend reports at
       // once rather than after the full timeout.
-      await Promise.race([pollHealth(`${url}/version`, 120_000), startupCrash]);
+      await Promise.race([pollHealth(`${url}/version`, 120_000, healthNonce), startupCrash]);
     } catch (e) {
       failStartup = null; // the kill below must not re-reject settled startup
       void this.stop(); // best-effort cleanup; don't delay surfacing the error

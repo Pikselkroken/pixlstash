@@ -267,6 +267,15 @@ class VersionResponse(BaseModel):
         ),
         examples=["gpu", "cpu"],
     )
+    desktop_nonce: str | None = Field(
+        default=None,
+        description=(
+            "Desktop app only: echoes `PIXLSTASH_DESKTOP_HEALTH_NONCE`, a "
+            "per-launch value the Electron shell uses to confirm it is talking "
+            "to the backend it started before handing over its session cookie. "
+            "Absent on every other install."
+        ),
+    )
 
 
 class SessionStatusResponse(BaseModel):
@@ -450,6 +459,23 @@ class Server(
     #: Set to 1 by the shell for a dev backend (``PIXLSTASH_DESKTOP_DEV``); a
     #: developer running a *bundled* desktop build can export it by hand.
     DEV_MACHINE_ENV_VAR = "PIXLSTASH_TELEMETRY_DEV"
+
+    @staticmethod
+    def _desktop_nonce_for(request: Request) -> str | None:
+        """The desktop launch nonce, answered only on the loopback listener.
+
+        The Electron shell checks it before trusting a port with its session
+        cookie. The same app also serves the optional LAN listener, which must
+        not hand the nonce to anyone who can reach it.
+        """
+        nonce = os.environ.get("PIXLSTASH_DESKTOP_HEALTH_NONCE")
+        port = os.environ.get("PIXLSTASH_PORT", "").strip()
+        if not nonce or not port.isdigit():
+            return None
+        served_on = request.scope.get("server") or (None, None)
+        if served_on[0] != "127.0.0.1" or served_on[1] != int(port):
+            return None
+        return nonce
 
     @staticmethod
     def detect_install_type() -> str:
@@ -1799,7 +1825,7 @@ class Server(
             return {"message": "PixlStash REST API", "version": version}
 
         @self.api.get("/version", tags=["server"], response_model=VersionResponse)
-        async def read_version():
+        async def read_version(request: Request):
             version = self._get_version()
             install_type = Server.detect_install_type()
             # Defensive guard: detect_install_type() already constrains its
@@ -1826,6 +1852,7 @@ class Server(
                 "version": version,
                 "install_type": install_type,
                 "docker_variant": docker_variant,
+                "desktop_nonce": Server._desktop_nonce_for(request),
             }
 
         @self.api.get("/scalar", include_in_schema=False)

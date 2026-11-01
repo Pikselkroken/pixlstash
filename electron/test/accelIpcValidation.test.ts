@@ -72,7 +72,7 @@ describe('the accel:* IPC handlers validate before they use the value', () => {
       const body = main.slice(start, next === -1 ? undefined : next);
       assert.match(
         body,
-        /\(_e,\s*raw:\s*unknown\)/,
+        /\((?:_e|event),\s*raw:\s*unknown\)/,
         `${channel} must accept the renderer's value as unknown, not as a bare Accel`,
       );
       assert.match(body, /requireAccel\(raw\)/, `${channel} must narrow via requireAccel`);
@@ -82,7 +82,7 @@ describe('the accel:* IPC handlers validate before they use the value', () => {
   it('no accel:* handler still declares its parameter as an Accel', () => {
     assert.doesNotMatch(
       main,
-      /ipcMain\.handle\('accel:[a-z]+',\s*async\s*\(_e,\s*\w+:\s*Accel/,
+      /ipcMain\.handle\('accel:[a-z]+',\s*async\s*\((?:_e|event),\s*\w+:\s*Accel/,
       'a renderer-supplied accelerator must never be typed straight into the handler',
     );
   });

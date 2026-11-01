@@ -238,7 +238,7 @@ describe('the path-taking IPC handlers validate before they use the value', () =
     const start = main.indexOf("ipcMain.handle('backend:setLocation'");
     assert.ok(start >= 0, 'backend:setLocation handler not found');
     const body = main.slice(start, main.indexOf('ipcMain.handle(', start + 1));
-    assert.match(body, /\(_e,\s*raw:\s*unknown\)/);
+    assert.match(body, /\((?:_e|event),\s*raw:\s*unknown\)/);
     assert.match(body, /requireOfferedPath\(raw, 'backends',/);
     assert.doesNotMatch(
       body,

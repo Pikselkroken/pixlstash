@@ -987,6 +987,21 @@ def test_read_version(server):
     assert data["install_type"] in set(Server.INSTALL_TYPES)
 
 
+def test_read_version_echoes_desktop_nonce(server, monkeypatch):
+    """The Electron shell only trusts a backend that echoes its launch nonce."""
+    loopback = TestClient(server.api, base_url="http://127.0.0.1:61234")
+    monkeypatch.setenv("PIXLSTASH_PORT", "61234")
+    monkeypatch.delenv("PIXLSTASH_DESKTOP_HEALTH_NONCE", raising=False)
+    assert loopback.get("/version").json().get("desktop_nonce") is None
+    monkeypatch.setenv("PIXLSTASH_DESKTOP_HEALTH_NONCE", "test-nonce-1234")
+    assert loopback.get("/version").json()["desktop_nonce"] == "test-nonce-1234"
+    # The LAN listener serves the same app on another socket; it must not leak it.
+    lan = TestClient(server.api, base_url="http://192.0.2.10:8080")
+    assert lan.get("/version").json().get("desktop_nonce") is None
+    other_loopback = TestClient(server.api, base_url="http://127.0.0.1:8080")
+    assert other_loopback.get("/version").json().get("desktop_nonce") is None
+
+
 def test_read_version_install_type_docker(server, monkeypatch, isolate_the_machine):
     """The env flag makes /version report the reliable ``docker`` signal."""
     monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")

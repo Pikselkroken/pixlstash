@@ -1,6 +1,8 @@
 import logging as logging_
+import re
 import threading
 from contextlib import contextmanager
+from urllib.parse import unquote_plus
 
 from uvicorn.logging import ColourizedFormatter as ColourisedFormatter
 
@@ -22,6 +24,38 @@ class _SuppressFilter(logging_.Filter):
     def filter(self, record: logging_.LogRecord) -> bool:
         msg = record.getMessage()
         return not any(msg.startswith(p) for p in _UVICORN_NOISE_PREFIXES)
+
+
+# /share/<token>.<ext> carries the raw token as the file name.
+_SHARE_PATH = re.compile(r"(/share/)[^/?#\s\"]+")
+_QUERY_PAIR = re.compile(r"([?&])([^=&#\s\"]+)=([^&#\s\"]*)")
+
+
+def _redact_query_token(match: re.Match) -> str:
+    # Starlette decodes the key, so ?%74oken= authenticates exactly like ?token=.
+    if unquote_plus(match[2]).lower() != "token":
+        return match[0]
+    return f"{match[1]}{match[2]}=<redacted>"
+
+
+class RedactTokenFilter(logging_.Filter):
+    """Blank share tokens in uvicorn's request log lines.
+
+    Share tokens travel in the URL (``?token=``, because image URLs and
+    WebSockets cannot set a header, and ``/share/<token>.<ext>`` links), and
+    uvicorn's access and WebSocket lines print the full path with its query
+    string, so without this every share token lands in the log.
+    """
+
+    def filter(self, record: logging_.LogRecord) -> bool:
+        msg = record.getMessage()
+        redacted = _QUERY_PAIR.sub(
+            _redact_query_token, _SHARE_PATH.sub(r"\1<redacted>", msg)
+        )
+        if redacted != msg:
+            record.msg = redacted
+            record.args = ()
+        return True
 
 
 class PixlStashColourisedHandler(logging_.StreamHandler):
@@ -119,6 +153,7 @@ def get_logger(name=None):
 uvicorn_log_config = {
     "version": 1,
     "disable_existing_loggers": False,
+    "filters": {"redact_token": {"()": RedactTokenFilter}},
     "formatters": {
         "default": {
             "()": ColourisedFormatter,
@@ -135,15 +170,18 @@ uvicorn_log_config = {
     },
     "loggers": {
         "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+        # uvicorn.error carries the "WebSocket <path>" lines, query string included.
         "uvicorn.error": {
             "handlers": ["default"],
             "level": "INFO",
             "propagate": False,
+            "filters": ["redact_token"],
         },
         "uvicorn.access": {
             "handlers": ["default"],
             "level": "INFO",
             "propagate": False,
+            "filters": ["redact_token"],
         },
         "alembic.runtime.plugins": {"level": "WARNING", "propagate": True},
         "alembic.runtime.migration": {"level": "WARNING", "propagate": True},

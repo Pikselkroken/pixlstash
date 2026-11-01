@@ -34,13 +34,16 @@
   // explicit limit makes Workers Paid a deployment prerequisite.
   "limits": { "cpu_ms": 30000 },
 
+  // Our own console.* lines only. Invocation logs and traces record the
+  // request itself (headers, client geo, timestamp) in this account, which the
+  // README's "never stored anywhere" and PRIVACY.md do not allow.
   "observability": {
     "enabled": true,
     "logs": {
       "enabled": true,
-      "invocation_logs": true,
+      "invocation_logs": false,
       "head_sampling_rate": 1
     },
-    "traces": { "enabled": true, "head_sampling_rate": 0.05 }
+    "traces": { "enabled": false }
   }
 }

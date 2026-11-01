@@ -306,9 +306,6 @@ const DELIBERATELY_OPEN: Record<string, string> = {
   // ---- Read-only reports about this install ----
   'app:bootstrap': 'read-only: version, detected hardware, bundled/active accel',
   'permissions:request': 'read-only: hands back the repair report main already built',
-  'accel:list': 'read-only: which overlays are installed and which is active',
-  'backend:getLocation': 'read-only: where overlays are installed, and the default',
-  'desktop:getPrefs': "read-only: the shell's own prefs (tray-on-close, shim state)",
 
   // ---- Registered only while something is waiting for the answer ----
   'permissions:resolve':
@@ -319,37 +316,44 @@ const DELIBERATELY_OPEN: Record<string, string> = {
   'startup:takePendingTelemetry': 'take-once handback of an answer main parked; writes nothing',
   'startup:takePendingMapping': 'take-once handback of an answer main parked; writes nothing',
 
-  // ---- No argument: the target is one PixlStash chose itself ----
-  'desktop:openLibraryFolder': 'no argument: opens the library folder main already knows',
-  'desktop:showLogs': 'no argument: opens our own log file',
+  // ---- Title-bar controls, used by the bundled pages and the app alike ----
   'window:minimize': 'frameless-window title-bar control; changes no state but the window',
   'window:toggleMaximize': 'frameless-window title-bar control; changes no state but the window',
   'window:close': 'frameless-window title-bar control; changes no state but the window',
 
-  // ---- The person at the keyboard is the gate ----
-  'media:beginSaveAs':
-    'the destination comes from a native Save dialog, never from the caller; the ' +
-    'pending save is keyed to the sending webContents',
-  'media:completeSaveAs': 'writes only to a path beginSaveAs got from the dialog, same sender',
+  // ---- Bound to a save that the app-gated media:beginSaveAs started ----
+  'media:completeSaveAs':
+    'writes only to a path beginSaveAs (app-gated) got from the dialog, same sender and saveId',
   'media:cancelSaveAs': 'drops a pending save, same-sender checked; touches no file',
-  'media:copyPng': 'writes the clipboard from bytes the calling page already holds',
-  'backend:pickLocation':
-    'opens a folder dialog; the answer is only OFFERED, and backend:setLocation ' +
-    'independently re-checks it through requireOfferedPath',
 
-  // ---- Shell preferences, no library and no listener ----
-  'desktop:setPrefs': "the shell's own prefs (tray-on-close, the `pixlstash` shim); no path, no listener",
-
-  // ---- Both audiences call these, so neither gate fits: the ARGUMENT is narrowed ----
+  // ---- Both audiences call it, so neither gate fits ----
   // The first-run wizard (a file:// page, electron/src/renderer/setup.js) and
-  // the app's Settings (ComputeSection.vue, backend-served) both call all four.
-  // requireAppRenderer would break first-run setup outright; requireSetupRenderer
-  // would break Settings. The value is what is checked instead, at the boundary.
-  'backend:setLocation': 'wizard AND Settings both call it; narrowed by requireOfferedPath',
-  'accel:install': 'wizard AND Settings both call it; narrowed by requireAccel',
-  'accel:use': 'wizard AND Settings both call it; narrowed by requireAccel',
-  'accel:remove': 'wizard AND Settings both call it; narrowed by requireAccel',
+  // the app's Settings (ComputeSection.vue) both call it.
+  'backend:pickLocation':
+    'wizard AND Settings call it; opens a folder dialog and the answer is only OFFERED, ' +
+    'backend:setLocation (app-gated) re-checks it through requireOfferedPath',
 };
+
+/**
+ * Channels that install, delete, restart, write files or put a shim on PATH.
+ * Only the app window may call them (the wizard reaches the accelerator install
+ * through setup:commit, not these). Listed so that moving one back into
+ * DELIBERATELY_OPEN is a visible edit to this test, not a quiet one.
+ */
+const APP_ONLY = [
+  'accel:list',
+  'accel:install',
+  'accel:use',
+  'accel:remove',
+  'backend:getLocation',
+  'backend:setLocation',
+  'desktop:getPrefs',
+  'desktop:setPrefs',
+  'desktop:openLibraryFolder',
+  'desktop:showLogs',
+  'media:beginSaveAs',
+  'media:copyPng',
+];
 
 /**
  * `server:setSettings` decides whether this machine listens on the network:
@@ -510,6 +514,19 @@ describe('IPC gating is complete, not opt-in', () => {
     }
   });
 
+  it('EVERY privileged desktop channel is gated on the app window', () => {
+    const byChannel = new Map(handlers);
+    for (const channel of APP_ONLY) {
+      const body = byChannel.get(channel);
+      assert.ok(body, `${channel} not found`);
+      assert.match(
+        body,
+        new RegExp(`requireAppRenderer\\(event, '${channel}'\\)`),
+        `${channel} must be gated on the app window`,
+      );
+    }
+  });
+
   it('permissions:resolve exists only while the repair screen waits', () => {
     // Its DELIBERATELY_OPEN reason is the registration window itself, so pin
     // that window rather than take the reason's word for it: registered inside
@@ -601,6 +618,13 @@ describe('redactUrl', () => {
     assert.equal(redactUrl('not a url'), '<unparseable URL>');
   });
 
+  it('never logs a share token, which is the file name of a share link', () => {
+    assert.equal(
+      redactUrl('http://127.0.0.1:8723/share/test-secret-token.jpg'),
+      'http://127.0.0.1:8723/share/<redacted>',
+    );
+  });
+
   it('never echoes a page-authored payload back into the log', () => {
     assert.equal(redactUrl('data:text/plain,' + 'a'.repeat(500)), 'data:text/plain,<redacted>');
     assert.equal(redactUrl('javascript:alert(document.cookie)'), 'javascript:<redacted>');
@@ -620,6 +644,19 @@ describe('main.ts window-open wiring', () => {
   it('routes setWindowOpenHandler through the shared origin policy', () => {
     assert.match(source, /const openHandler[\s\S]{0,200}?isAllowedTarget\(url\)/);
     assert.match(source, /setWindowOpenHandler\(openHandler\)/);
+  });
+
+  it('guards subframe navigation, which will-navigate does not see', () => {
+    assert.match(source, /mainWindow\.webContents\.on\('will-frame-navigate', guardFrameNavigation\)/);
+    assert.match(source, /child\.webContents\.on\('will-frame-navigate', guardFrameNavigation\)/);
+    assert.match(source, /const guardFrameNavigation[\s\S]{0,300}?isAllowedTarget\(event\.url\)/);
+  });
+
+  it('denies web permissions by default and grants only to the app origin', () => {
+    assert.match(source, /setPermissionRequestHandler\(/);
+    assert.match(source, /setPermissionCheckHandler\(/);
+    assert.match(source, /registerPermissionPolicy\(\);/);
+    assert.match(source, /GRANTED_PERMISSIONS\.has\(permission\) && fromApp\(/);
   });
 
   it('never classifies a target by the loopback string prefix (#1020)', () => {
