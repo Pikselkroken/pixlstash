@@ -21,7 +21,7 @@ from sqlalchemy import (
 )
 from pydantic import BaseModel, ConfigDict
 from sqlmodel import select, Session
-from typing import Optional
+from typing import Literal, Optional
 
 from pixlstash.database import DBPriority
 
@@ -196,6 +196,18 @@ class StagingCommitResponse(BaseModel):
     staged_count: int
 
 
+class StagingOutcome(BaseModel):
+    """What the import decided for one staged file (#2512)."""
+
+    key: Optional[str] = None
+    """The ``key`` form field the file was streamed with, or ``None``."""
+
+    outcome: Literal["new", "duplicate", "scrapheaped", "failed"]
+
+    picture_id: Optional[int] = None
+    """The picture a duplicate or scrapheaped file matched, when known."""
+
+
 class StagingStatusResponse(BaseModel):
     """Progress/status for a staging session and its background import."""
 
@@ -239,7 +251,7 @@ class StagingStatusResponse(BaseModel):
 
     error: Optional[str] = None
 
-    outcomes: list[dict] = []
+    outcomes: list[StagingOutcome] = []
     """Per-file outcomes the import has decided so far, in the order it decided
     them, starting at the ``outcomes_from`` the caller asked for. Each is
     ``{"key", "outcome", "picture_id"}``: ``key`` is the ``key`` form field the

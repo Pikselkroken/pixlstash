@@ -342,21 +342,25 @@ async function startImport(files, options = {}) {
   armGuard();
   // The Tasks row from the drop, not from the commit: it is the record for
   // anyone who leaves the grid, and while bytes are in flight it can cancel.
-  const reportUpload = () =>
+  // Reported on every whole percent, so a large batch moves the row while it
+  // uploads rather than jumping at its end.
+  let reportedPercent = -1;
+  const reportUpload = () => {
+    const percent = uploadBytesTotal.value
+      ? Math.min(100, (uploadBytesUploaded.value / uploadBytesTotal.value) * 100)
+      : 0;
+    if (Math.floor(percent) === reportedPercent) return;
+    reportedPercent = Math.floor(percent);
     tasksStore.setImportRun(importRunId, {
       status: "running",
-      percent: uploadBytesTotal.value
-        ? Math.min(
-            100,
-            (uploadBytesUploaded.value / uploadBytesTotal.value) * 100,
-          )
-        : 0,
+      percent,
       current: 0,
       total: importTotal.value,
       message: "Uploading - keep this tab open",
       label: "Uploading pictures",
       abortable: true,
     });
+  };
   reportUpload();
   emit("import-started", {
     fileCount: files.length,
@@ -467,6 +471,7 @@ async function startImport(files, options = {}) {
                 uploadedBytesAccum + loaded,
               );
               arrivals.setBytesSent(importRunId, uploadBytesUploaded.value);
+              reportUpload();
             },
           });
           arrivals.markSkipped(
