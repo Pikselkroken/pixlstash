@@ -140,7 +140,9 @@ jobs:
           # only an exact validated release tag can reach the Apple signing step.
           # If the tag is valid but signing secrets are absent, the artifact still
           # receives the explicit "-unsigned" suffix.
-          - runner: macos-14
+          # macos-15, not macos-14: GitHub retired the macos-14 image on
+          # 2026-11-02, and its brownouts cancelled this leg before it started.
+          - runner: macos-15
             os: mac
             arch: arm64
             accel: metal
