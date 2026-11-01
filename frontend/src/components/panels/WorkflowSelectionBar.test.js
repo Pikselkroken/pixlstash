@@ -966,6 +966,53 @@ describe("Download missing models", () => {
     wrapper.unmount();
   });
 
+  it("stays offered when there was no graph to judge", async () => {
+    preflightWorkflowRun.mockReset().mockResolvedValue({
+      groups: [{ source: null, reasons: [{ code: "ui_format" }] }],
+    });
+    const wrapper = await opened(["a"]);
+    expect(rowOf(wrapper).attributes("aria-disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("says a file the pre-flight reports on its way is downloading, and rechecks when it stops", async () => {
+    const downloading = {
+      groups: [
+        {
+          reasons: [
+            {
+              code: "models_downloading",
+              models: [{ file: "vae.safetensors", percent: 40 }],
+            },
+          ],
+        },
+      ],
+    };
+    preflightWorkflowRun
+      .mockReset()
+      .mockResolvedValueOnce(downloading)
+      .mockResolvedValueOnce(answer("vae.safetensors"));
+    const tasks = useTasksStore();
+    tasks.modelDownloads = [
+      { id: "d1", file: "vae.safetensors", status: "running" },
+    ];
+    const wrapper = await opened(["a"]);
+    let row = rowOf(wrapper);
+    expect(row.attributes("aria-disabled")).toBe("true");
+    expect(row.find(".tip").attributes("data-text")).toBe(
+      "Already downloading: the Tasks list in the title bar shows how far",
+    );
+    // It failed: off the running list, and the pre-flight offers it again.
+    tasks.modelDownloads = [
+      { id: "d1", file: "vae.safetensors", status: "failed" },
+    ];
+    await flushPromises();
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(2);
+    row = rowOf(wrapper);
+    expect(row.attributes("aria-disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
   it("is refused while everything it lacks is already downloading", async () => {
     preflightWorkflowRun
       .mockReset()

@@ -7394,11 +7394,12 @@ unchanged by the tab's existence.
   carry the same row; there `downloadableInWorkflows` asks the run pre-flight
   (cached) of each selected non-draft workflow, as the Workflow tab does, and
   the press downloads what `downloadableInPreflight` reads off the answers. The
-  menu asks too, each time it opens (and again when a download lands), and
-  refuses the row once every answer says nothing is left to fetch. An answer
-  ComfyUI did not give (`comfyui_unreachable`, `comfyui_not_configured`) counts
-  as not asked, so the row stays offered. So does a selection over 12, which
-  is not checked.
+  menu asks too, each time it opens (and again when a running download ends,
+  however it ends), and refuses the row once every answer says nothing is left
+  to fetch or all of it is downloading (`models_downloading`). A graph that was
+  never judged (`comfyui_unreachable`, `comfyui_not_configured`, `ui_format`,
+  `no_runnable_source`) counts as not asked, so the row stays offered. So does
+  a selection over 12, which is not checked.
 
 ---
 

@@ -673,8 +673,11 @@ const downloadable = computed(
   () => !isReadOnly.value && cards.value.some((card) => !card.draft),
 );
 const tasksStore = useTasksStore();
-/** The selection's downloadable files, or null while not known. */
-const missingFiles = ref(null);
+/**
+ * The selection's answer, or null while not known: `files` it can fetch and
+ * `downloading`, the missing ones already on their way.
+ */
+const missing = ref(null);
 // ponytail: one pre-flight per card, serially, on every open; past this many
 // the row stays offered unchecked. A batched pre-flight would lift the cap.
 const MISSING_CHECK_LIMIT = 12;
@@ -683,24 +686,28 @@ watch(
   () => [
     contextOpen.value || moreMenuOpen.value,
     store.selectedKeys.join("\n"),
-    // A landed file leaves the running list; ask again rather than re-offer it.
-    tasksStore.downloadsLanded,
+    // A download landing, failing or cancelled leaves the running list, and
+    // only a fresh answer says whether that file is now there or fetchable.
+    [...tasksStore.runningDownloadFiles].sort().join("\n"),
   ],
   async ([open]) => {
     const check = ++missingCheck;
-    missingFiles.value = null;
+    missing.value = null;
     const asked = cards.value.filter((card) => !card.draft);
     if (!open || !downloadable.value || asked.length > MISSING_CHECK_LIMIT) {
       return;
     }
-    const { files, unasked } = await downloadableInWorkflows(asked);
-    if (check === missingCheck && !unasked) missingFiles.value = files;
+    const { files, downloading, unasked } =
+      await downloadableInWorkflows(asked);
+    if (check === missingCheck && !unasked) {
+      missing.value = { files, downloading };
+    }
   },
 );
 /** Of those, the ones not already downloading; null while not known. */
 const toDownload = computed(
   () =>
-    missingFiles.value?.filter(
+    missing.value?.files.filter(
       (file) => !tasksStore.runningDownloadFiles.has(modelBaseName(file)),
     ) ?? null,
 );
@@ -710,7 +717,7 @@ const downloadTitle = computed(() => {
     return "A draft has no graph to check yet: open it in ComfyUI and save it";
   }
   if (toDownload.value?.length === 0) {
-    if (missingFiles.value.length) {
+    if (missing.value.files.length || missing.value.downloading.length) {
       return "Already downloading: the Tasks list in the title bar shows how far";
     }
     return single.value

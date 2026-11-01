@@ -10,7 +10,7 @@ import { DEFAULT_TIMEOUTS, useNoticeStore } from "../stores/useNoticeStore";
 import { useSidebarStore } from "../stores/useSidebarStore";
 import { useTasksStore } from "../stores/useTasksStore";
 import { errorDetail } from "../utils/apiError";
-import { UNCHECKED_CODES } from "../utils/runReasons";
+import { MODELS_DOWNLOADING, UNCHECKED_CODES } from "../utils/runReasons";
 
 /** A loader's name without the subfolder it may put in front. */
 export function modelBaseName(file) {
@@ -41,16 +41,22 @@ export function downloadableInPreflight(answer) {
   return [...models, ...loras];
 }
 
+// A group whose graph was never judged: ComfyUI did not answer, or there was
+// no graph to judge. Its empty model list means unknown, not nothing.
+const UNJUDGED_CODES = [...UNCHECKED_CODES, "ui_format", "no_runnable_source"];
+
 /**
  * What *cards* lack that PixlStash knows where to get, by asking each one's
  * run pre-flight (cached: ComfyUI's node list as last read).
  *
  * @param {Object[]} cards - workflow cards; not drafts, which have no graph.
- * @returns {Promise<{files: string[], unasked: number}>} the files, and how
- *   many cards could not be asked or ComfyUI did not answer for (logged).
+ * @returns {Promise<{files: string[], downloading: string[], unasked: number}>}
+ *   the files, the missing ones already on their way, and how many cards
+ *   could not be asked or had no graph judged (logged).
  */
 export async function downloadableInWorkflows(cards) {
   const files = [];
+  const downloading = [];
   let unasked = 0;
   for (const card of cards) {
     try {
@@ -58,25 +64,32 @@ export async function downloadableInWorkflows(cards) {
         { workflow_id: card.id, values: [] },
         { cached: true },
       );
-      // ComfyUI never answered: an empty list means unknown, not nothing.
-      const unchecked = (answer?.groups ?? [])
-        .flatMap((group) => group.reasons ?? [])
-        .some((reason) => UNCHECKED_CODES.includes(reason.code));
-      if (unchecked) {
+      const reasons = (answer?.groups ?? []).flatMap(
+        (group) => group.reasons ?? [],
+      );
+      if (reasons.some((reason) => UNJUDGED_CODES.includes(reason.code))) {
         unasked += 1;
         console.warn(
-          "Could not check what a workflow is missing: ComfyUI did not answer",
+          "Could not check what a workflow is missing: its graph was not judged",
           card.id,
+          reasons.map((reason) => reason.code),
         );
         continue;
       }
       files.push(...downloadableInPreflight(answer));
+      downloading.push(
+        ...reasons
+          .filter((reason) => reason.code === MODELS_DOWNLOADING)
+          .flatMap((reason) => reason.models ?? [])
+          .filter((model) => model?.file)
+          .map((model) => String(model.file)),
+      );
     } catch (err) {
       unasked += 1;
       console.warn("Could not check what a workflow is missing", card.id, err);
     }
   }
-  return { files, unasked };
+  return { files, downloading, unasked };
 }
 
 /**
