@@ -3086,6 +3086,14 @@ function projectInitial(project) {
 /** A Folders node's flyout: all of it (the owner's own folder, which names
  * nothing, opens in the file manager instead), then the people and sets
  * filed in it, each labelled by its path below the node. */
+const RAIL_ICONS = {
+  global: "mdi-earth",
+  unassigned: "mdi-folder-question-outline",
+  folder: "mdi-folder-outline",
+  character: "mdi-account-outline",
+  set: "mdi-image-album",
+};
+
 function folderNodeItems(node) {
   const below = `${node.row.path}/`;
   const kids = folderTreeRows({
@@ -3100,15 +3108,23 @@ function folderNodeItems(node) {
   );
   return [
     node.row.kind !== "folder"
-      ? { key: "all", label: `All of ${node.label}`, run: () => openFolderRow(node.row) }
+      ? {
+          key: "all",
+          label: `All of ${node.label}`,
+          icon: "mdi-image-multiple-outline",
+          run: () => openFolderRow(node.row),
+        }
       : {
           key: "open",
           label: "Open in file manager",
+          icon: "mdi-folder-open-outline",
           run: () => openFolderInFileManager(node.row),
         },
+    ...(kids.length ? [{ key: "sep", sep: true }] : []),
     ...kids.map((row) => ({
       key: row.key,
       label: row.path.slice(below.length).split("/").join(" › "),
+      icon: RAIL_ICONS[row.kind],
       run: () => openFolderRow(row),
     })),
   ];
@@ -3124,18 +3140,27 @@ function libraryNodeItems() {
   const people = list.characters.map((c) => ({
     key: `c-${c.id}`,
     label: c.name,
+    icon: RAIL_ICONS.character,
     run: () => selectCharacter(c.id, c.name),
   }));
   const sets = list.sets.map((pset) => ({
     key: `s-${pset.id}`,
     label: pset.name,
+    icon: RAIL_ICONS.set,
     run: () => selectSet(pset.id, pset.name),
   }));
   const project = scopedProjectObj.value;
   return [
     // As the design opens it: all of the project in view comes first.
     ...(project
-      ? [{ key: "all", label: `All of ${project.name}`, run: () => chooseScope(project.id) }]
+      ? [
+          {
+            key: "all",
+            label: `All of ${project.name}`,
+            icon: "mdi-image-multiple-outline",
+            run: () => chooseScope(project.id),
+          },
+        ]
       : []),
     ...(scopedResourceType.value === "project" ? [] : scopeItems(scope)),
     ...(people.length ? [{ key: "hp", section: "People" }, ...people] : []),
@@ -3146,14 +3171,27 @@ function libraryNodeItems() {
 function scopeItems(scope) {
   return [
     { key: "h", section: "Limit view to" },
-    { key: "any", label: "Any project", checked: scope === undefined, run: () => chooseScope("any") },
+    {
+      key: "any",
+      label: "Any project",
+      icon: "mdi-folder-multiple-outline",
+      checked: scope === undefined,
+      run: () => chooseScope("any"),
+    },
     ...sortedProjects.value.map((p) => ({
       key: `p-${p.id}`,
       label: p.name,
+      icon: RAIL_ICONS.folder,
       checked: scope === p.id,
       run: () => chooseScope(p.id),
     })),
-    { key: "none", label: "Not in a project", checked: scope === null, run: () => chooseScope("none") },
+    {
+      key: "none",
+      label: "Not in a project",
+      icon: "mdi-folder-off-outline",
+      checked: scope === null,
+      run: () => chooseScope("none"),
+    },
   ];
 }
 
@@ -3182,13 +3220,6 @@ const railNodes = computed(() => {
     ];
   }
   // Folders: one button per top-level folder.
-  const icons = {
-    global: "mdi-earth",
-    unassigned: "mdi-folder-question-outline",
-    folder: "mdi-folder-outline",
-    character: "mdi-account-outline",
-    set: "mdi-image-album",
-  };
   return folderTreeRows({
     folders: libraryFolders.value,
     projects: sortedProjects.value,
@@ -3202,7 +3233,7 @@ const railNodes = computed(() => {
       projectId: row.projectId,
       project: row.kind === "project" ? row.entity : undefined,
       label: row.name,
-      icon: icons[row.kind],
+      icon: RAIL_ICONS[row.kind],
       leaf: row.kind === "unassigned",
       row,
     };
@@ -4739,7 +4770,14 @@ defineExpose({
               :style="{ top: railFlyout.top + 'px', left: railFlyout.left + 'px' }"
               @keydown="onRailFlyoutKeydown"
             >
-              <template v-for="item in railFlyout.items" :key="item.key">
+              <!-- A rule above every group and a glyph on every row, so the
+                   rows sit in under their heading and the groups read apart. -->
+              <template v-for="(item, i) in railFlyout.items" :key="item.key">
+                <div
+                  v-if="item.sep || (item.section && i > 0)"
+                  class="ctx-sep"
+                  role="separator"
+                ></div>
                 <div
                   v-if="item.section"
                   class="section-label ctx-label"
@@ -4748,7 +4786,7 @@ defineExpose({
                   {{ item.section }}
                 </div>
                 <button
-                  v-else
+                  v-else-if="!item.sep"
                   type="button"
                   :role="item.checked === undefined ? 'menuitem' : 'menuitemradio'"
                   :aria-checked="
@@ -4758,6 +4796,7 @@ defineExpose({
                   class="ctx-item"
                   @click="pickRailEntry(item.run)"
                 >
+                  <v-icon class="ctx-icon" aria-hidden="true">{{ item.icon }}</v-icon>
                   <span class="ctx-label-text">{{ item.label }}</span>
                   <v-icon v-if="item.checked" class="ctx-check">mdi-check</v-icon>
                 </button>

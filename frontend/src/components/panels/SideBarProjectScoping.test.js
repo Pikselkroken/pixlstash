@@ -210,7 +210,11 @@ describe("the docked rail (#2448)", () => {
     );
     expect(railNames(wrapper)).not.toContain("Cards");
     const book = wrapper.vm.railNodes.find((n) => n.label === "Book");
-    expect(book.items().map((i) => i.label)).toEqual(["All of Book", "Ada"]);
+    expect(book.items().map((i) => i.label ?? (i.sep && "—"))).toEqual([
+      "All of Book",
+      "—",
+      "Ada",
+    ]);
     expect(railNames(wrapper)).not.toContain("Any project");
     wrapper.vm.setTreeMode("library");
     wrapper.unmount();

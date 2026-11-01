@@ -324,11 +324,20 @@ describe("the docked rail's node flyout (#2448)", () => {
     // Limit view to (radios), then the people of its scope (Any project:
     // everyone) as plain items.
     const people = Array.from(menu.querySelectorAll('[role="menuitem"]'));
-    expect(people.map((item) => item.textContent.trim())).toEqual(
+    const labels = people.map((item) => item.querySelector(".ctx-label-text").textContent);
+    expect(labels).toEqual(
       expect.arrayContaining(["Ada", "Grace"]),
     );
     const items = Array.from(menu.querySelectorAll(".ctx-item"));
     expect(items[0].getAttribute("role")).toBe("menuitemradio");
+    // Every row carries a glyph and every heading after the first a rule, so
+    // the groups do not run together as one flat list.
+    expect(items.every((item) => item.querySelector(".ctx-icon")?.textContent.trim())).toBe(true);
+    const later = Array.from(menu.querySelectorAll(".section-label")).slice(1);
+    expect(later.length).toBeGreaterThan(0);
+    expect(
+      later.every((label) => label.previousElementSibling?.classList.contains("ctx-sep")),
+    ).toBe(true);
     expect(document.activeElement).toBe(items[0]);
 
     items[0].dispatchEvent(
