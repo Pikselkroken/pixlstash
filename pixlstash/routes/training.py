@@ -569,6 +569,13 @@ def create_router(server) -> APIRouter:
                 "with ?set_id= names the LoRAs trained from that set."
             ),
         )
+        phase: Optional[str] = Field(
+            default=None,
+            description=(
+                "'checking' while a queued run's memory and speed are checked; "
+                "otherwise null (the live view names every phase)."
+            ),
+        )
 
     class JobDetailResponse(BaseModel):
         """Full detail for a single job."""
@@ -1119,13 +1126,35 @@ def create_router(server) -> APIRouter:
             models.setdefault(row["training_run_id"], []).append(row["id"])
         return models
 
-    def _job_to_summary(job: dict, model_ids: list[int]) -> dict:
+    def _checking_uuids() -> set[str]:
+        """The runs whose granted lease the worker shows as checking (#2120)."""
+        try:
+            leases = arbiter().snapshot()["leases"]
+        except Exception as exc:
+            logger.warning("Could not read the leases for the job list: %s", exc)
+            return set()
+        return {
+            row.get("job_id")
+            for row in leases
+            if row.get("state") == "granted"
+            and (row.get("progress") or {}).get("shown_as") == "checking"
+        }
+
+    def _job_to_summary(
+        job: dict, model_ids: list[int], checking: set[str] = frozenset()
+    ) -> dict:
         return _redact_job(
             {
                 "id": job["id"],
                 "uuid": job["uuid"],
                 "name": job["name"],
                 "status": job["status"],
+                # A probe runs while the row is still queued.
+                "phase": (
+                    "checking"
+                    if job["status"] == "queued" and job["uuid"] in checking
+                    else None
+                ),
                 "set_id": job["set_id"],
                 "character_id": job["character_id"],
                 "base_model": job["base_model"],
@@ -1657,7 +1686,10 @@ def create_router(server) -> APIRouter:
             hub, library_uuid, set_id=set_id, character_id=character_id
         )
         models = _models_by_run([run["id"] for run in runs])
-        return [_job_to_summary(run, models.get(run["id"], [])) for run in runs]
+        checking = _checking_uuids()
+        return [
+            _job_to_summary(run, models.get(run["id"], []), checking) for run in runs
+        ]
 
     @router.get(
         "/training/jobs/{job_id}",

@@ -269,6 +269,7 @@ def test_a_malformed_step_time_is_skipped_not_fatal(tmp_path):
             False,
         ),
         ("Loading weights: 100%|##########| 398/398\n", False),
+        ("Loading model from /home/me/Downloads/zimage\n", False),
         ("", False),
     ],
 )

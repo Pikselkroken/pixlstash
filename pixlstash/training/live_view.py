@@ -50,7 +50,8 @@ _PREVIEWS_RE = re.compile(r"generating images\s*-\s*(\d+)\s*/\s*(\d+)", re.I)
 # "Downloading bytes", "<file>: reconstructing file" and "Fetching n files",
 # or a plain "<file>.safetensors:  12%|" bar.
 _DOWNLOAD_RE = re.compile(
-    r"download|reconstruct|fetching \d+ files|\.(?:safetensors|bin|gguf|pth?)\S*:\s+\d+%",
+    r"\bdownloading\b|reconstructing|fetching \d+ files"
+    r"|\.(?:safetensors|bin|gguf|pth?)\S*:\s+\d+%",
     re.I,
 )
 _DOWNLOAD_DONE_RE = re.compile(r"complete|100%")

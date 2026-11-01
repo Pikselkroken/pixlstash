@@ -1025,6 +1025,14 @@ describe("the runs PixlStash trains (#2118)", () => {
     expect(useTrainingRunsStore().chosenCards[0].job.uuid).toBe("abcd1234ef");
   });
 
+  it("says a queued run whose memory is being checked is checking, not waiting", async () => {
+    listTrainingJobs.mockResolvedValue([job({ status: "queued", step: 0, phase: "checking" })]);
+    const wrapper = await openWith([]);
+    const card = wrapper.find(".tr-card");
+    expect(card.text()).toContain("Checking memory and speed");
+    expect(card.text()).not.toContain("Waiting for the GPU");
+  });
+
   it("draws the run's page for ?run=, and says so when it is not here", async () => {
     listTrainingJobs.mockResolvedValue([job()]);
     nav.route.query = { run: "abcd1234ef" };

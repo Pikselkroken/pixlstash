@@ -761,6 +761,9 @@ def test_a_run_that_ended_without_a_finish_time_has_no_growing_last_phase():
             live = owner.get(f"/training/jobs/{queued_id}/live").json()
             assert live["phase"] == "checking"
             assert live["downloading"] is False  # the probe has no log yet
+            # The job list says so too, for the runs grid's card.
+            listed = {j["uuid"]: j for j in owner.get("/training/jobs").json()}
+            assert listed[queued_uuid]["phase"] == "checking"
             # The probe's log ends on a model download: the view says so, and
             # stops once the download is complete.
             probe_log = LocalAiToolkit.handle_for(
@@ -785,6 +788,8 @@ def test_a_run_that_ended_without_a_finish_time_has_no_growing_last_phase():
         assert owner.get(f"/training/jobs/{queued_id}/live").json()["phase"] == (
             "waiting_gpu"
         )
+        listed = {j["uuid"]: j for j in owner.get("/training/jobs").json()}
+        assert listed[queued_uuid]["phase"] is None
     finally:
         _teardown(temp_dir, server)
 
