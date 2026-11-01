@@ -176,16 +176,11 @@
           :verdict="card.verdict"
           :label="`Your verdict: ${setVerdictText(card.verdict)}`"
         />
-        <!-- A set from pictures is read off the library, so it is hidden rather
-             than deleted (the next read would only draw it again). A hand-made
-             set is the owner's own and can be deleted, and hiding it is the
-             same view choice on top: out of the way in THIS library only.
-             Mouse-only: the grid owns Tab, and Delete on the card deletes a
-             hand-made set, hides a derived one; the selection pill's Hide set
-             does the same from the keyboard. -->
         <!-- Edit is the double-click on a button: it opens (or closes) this
              set's tray and a shut Models rail. Mouse-only, like Hide: Enter
-             on the card does the same from the keyboard. -->
+             on the card does the same from the keyboard. A second press of a
+             double click is dropped: the first already toggled the tray, and
+             the button is still under the pointer. -->
         <AppButton
           class="msc__edit"
           variant="ghost"
@@ -195,9 +190,16 @@
           tabindex="-1"
           :tooltip="expanded ? 'Close this set' : 'Open this set to edit it'"
           data-testid="set-edit"
-          @click.stop="emit('edit')"
+          @click.stop="$event.detail > 1 || emit('edit')"
           @dblclick.stop
         />
+        <!-- A set from pictures is read off the library, so it is hidden rather
+             than deleted (the next read would only draw it again). A hand-made
+             set is the owner's own and can be deleted, and hiding it is the
+             same view choice on top: out of the way in THIS library only.
+             Mouse-only: the grid owns Tab, and Delete on the card deletes a
+             hand-made set, hides a derived one; the selection pill's Hide set
+             does the same from the keyboard. -->
         <AppButton
           class="msc__hide"
           variant="ghost"

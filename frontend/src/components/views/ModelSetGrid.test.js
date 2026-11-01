@@ -826,6 +826,20 @@ describe("the cards", () => {
 
     await edit().trigger("click");
     expect(store.openSetKey).toBe("");
+
+    // A double click on the button opens once: its second press, still over
+    // the button, must not shut the tray the first one opened.
+    for (const [type, detail] of [
+      ["click", 1],
+      ["click", 2],
+      ["dblclick", 2],
+    ]) {
+      edit().element.dispatchEvent(
+        new MouseEvent(type, { detail, bubbles: true }),
+      );
+      await wrapper.vm.$nextTick();
+    }
+    expect(store.openSetKey).toBe("model:1");
     wrapper.unmount();
   });
 

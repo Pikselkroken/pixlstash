@@ -1682,7 +1682,8 @@ proves ran together, with a model free to appear in more than one.
 - **With a tray open, a plain click on another card moves the tray to it**
   (`followWithTray`), as well as selecting it, whichever kind of card it is
   (hand-made, from pictures, or named after a missing file). Opening the first tray is still a
-  double click, Enter or the rail's *Edit set…*, and Ctrl and Shift clicks leave the tray alone
+  double click, Enter, the card's pencil *Edit* button (the double click's
+  twin, which drops a double click's second press) or the rail's *Edit set…*, and Ctrl and Shift clicks leave the tray alone
   because they build a selection across cards. Moving the tray moves every row
   below it, so the second press of a double click lands on whatever slid under
   the pointer: `swallowAfterTrayMove`, a capture listener on the scroller, stops
