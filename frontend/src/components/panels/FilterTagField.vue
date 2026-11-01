@@ -347,6 +347,12 @@ function toggleGroup(item) {
   if (next.has(item.groupKey)) next.delete(item.groupKey);
   else next.add(item.groupKey);
   openGroups.value = next;
+  // Folding can take away the rows under the highlight: it lands on the
+  // group's own row, so Enter and → never act on a row that is gone.
+  const at = items.value.findIndex(
+    (row) => row.kind === "group" && row.groupKey === item.groupKey,
+  );
+  highlight.value = Math.max(0, at);
 }
 
 // → opens the highlighted group in the BY GROUP list, and a second → steps

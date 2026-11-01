@@ -366,6 +366,20 @@ describe("TagGroupsBoard: drag", () => {
     expect(tagGroupsApi.assignTagsToGroup).not.toHaveBeenCalled();
   });
 
+  it("a group row takes no drop of tags already filed there", async () => {
+    const wrapper = await mountBoard();
+    await wrapper.findAll(".tgb-groups > .tgb-row")[0].trigger("click");
+    await tagRow(wrapper, "red hood").trigger("dragstart", {
+      dataTransfer: dataTransfer(),
+    });
+    await groupRow(wrapper, 1).trigger("dragover");
+    expect(groupRow(wrapper, 1).classes()).not.toContain("tgb-row--drop");
+    expect(groupRow(wrapper, 1).find(".tgb-droplabel").exists()).toBe(false);
+    await groupRow(wrapper, 1).trigger("drop");
+    await flushPromises();
+    expect(tagGroupsApi.assignTagsToGroup).not.toHaveBeenCalled();
+  });
+
   it("All tags is not a drop target", async () => {
     const wrapper = await mountBoard();
     await tagRow(wrapper, "moss").trigger("dragstart", {

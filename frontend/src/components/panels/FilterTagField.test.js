@@ -160,6 +160,21 @@ describe("FilterTagField: BY GROUP", () => {
     expect(wrapper.emitted("add")).toHaveLength(2);
   });
 
+  it("folding a group under the highlight moves the highlight onto its row", async () => {
+    filedGroups();
+    const wrapper = mountField();
+    const field = wrapper.find("input");
+    // Open Character, step into its tags and down to its third one.
+    await field.trigger("keydown", { key: "ArrowRight" });
+    await field.trigger("keydown", { key: "ArrowRight" });
+    await field.trigger("keydown", { key: "ArrowDown" });
+    await field.trigger("keydown", { key: "ArrowDown" });
+    // Fold it with the mouse: the rows under the highlight are gone.
+    await rowNamed(wrapper, "Character").find(".ftf-twist").trigger("click");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(wrapper.emitted("add")).toEqual([["__group:1", "has"]]);
+  });
+
   it("shows no BY GROUP list when the library has no groups", () => {
     const wrapper = mountField();
     expect(wrapper.text()).not.toContain("By group");

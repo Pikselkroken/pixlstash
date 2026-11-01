@@ -558,7 +558,7 @@ function onGroupDragOver(group, event) {
     groupTarget.value = group.id;
     return;
   }
-  if (canDrop.value) {
+  if (canDrop.value && !alreadyThere(group.id)) {
     event.preventDefault();
     dropKey.value = group.id;
   }
