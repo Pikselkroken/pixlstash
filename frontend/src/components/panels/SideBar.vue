@@ -3114,9 +3114,10 @@ function folderNodeItems(node) {
   ];
 }
 
-/** Library's one rail button: Limit view to, as the expanded dropdown offers
- * it, then the People and Sets it narrows. A token for one project has no
- * dropdown, so only the lists. */
+/** Library's one rail button: All of the project in view, Limit view to as
+ * the expanded dropdown offers it, then the People and Sets it narrows. A
+ * token for one project has no dropdown: it keeps All of its own project,
+ * its only way back to the whole of it from a person or set, and the lists. */
 function libraryNodeItems() {
   const scope = libraryScope.value;
   const [list] = libraryBranches.value;
