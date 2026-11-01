@@ -3941,7 +3941,7 @@ function acceptDrop(event, kinds) {
     (kinds.includes("files") && isFileDrag(dt));
   if (accepted) {
     event.preventDefault();
-    // A file drag is copied in, never moved out of where it came from.
+    // A file drag asks to copy where the drag lets it: the import copies.
     if (dt) dt.dropEffect = dropEffectFor(dt, isFileDrag(dt) ? "copy" : "move");
     return "accept";
   }

@@ -319,6 +319,17 @@ describe("sidebar rows take a desktop drag-out", () => {
     wrapper.unmount();
   });
 
+  it("asks only for an effect the drag allows", async () => {
+    const wrapper = await mountSidebar();
+    const row = rowByTitle(wrapper, `${ADA.name} (`);
+
+    const moveOnly = { ...fileTransfer(), effectAllowed: "move" };
+    await fire(row, "dragover", moveOnly);
+
+    expect(moveOnly.dropEffect).toBe("move");
+    wrapper.unmount();
+  });
+
   it("assigns the pictures to a person on drop", async () => {
     const wrapper = await mountSidebar();
     const row = rowByTitle(wrapper, `${ADA.name} (`);
