@@ -63,15 +63,35 @@ jobs:
             echo "::error::Tag $RELEASE_TAG has no GitHub release to attach to; publish the release first" >&2
             exit 1
           }
+      # Every workflow is dispatched even if another's dispatch is refused, and
+      # PyPI goes last and never fails this job: it is the part most likely to
+      # fail (the version is usually already published) and nothing else
+      # consumes it - Docker installs from source, the installers and the smoke
+      # test build their own wheel. Each dispatched run succeeds or fails on
+      # its own, so a red PyPI run never holds up the rest either.
       - name: Dispatch the release workflows
         run: |
-          set -euo pipefail
+          set -uo pipefail
           {
             echo "## Rebuilding $RELEASE_TAG with main's workflows"
             echo
           } >> "$GITHUB_STEP_SUMMARY"
-          for wf in windows-installer.yml electron.yml docker-publish.yml publish-pypi.yml install-smoke.yml; do
-            gh workflow run "$wf" --ref main -f release_tag="$RELEASE_TAG"
-            echo "Dispatched $wf"
-            echo "- [$wf](${GITHUB_SERVER_URL}/${GH_REPO}/actions/workflows/$wf?query=event%3Aworkflow_dispatch)" >> "$GITHUB_STEP_SUMMARY"
+          failed=()
+          for wf in windows-installer.yml electron.yml docker-publish.yml install-smoke.yml publish-pypi.yml; do
+            link="[$wf](${GITHUB_SERVER_URL}/${GH_REPO}/actions/workflows/$wf?query=event%3Aworkflow_dispatch)"
+            if gh workflow run "$wf" --ref main -f release_tag="$RELEASE_TAG"; then
+              echo "Dispatched $wf"
+              echo "- $link" >> "$GITHUB_STEP_SUMMARY"
+            elif [ "$wf" = publish-pypi.yml ]; then
+              echo "::warning title=PyPI not dispatched::gh workflow run $wf failed; the rest of the rebuild is unaffected."
+              echo "- $link: **not dispatched** (does not affect the rest)" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error title=Not dispatched::gh workflow run $wf failed"
+              echo "- $link: **not dispatched**" >> "$GITHUB_STEP_SUMMARY"
+              failed+=("$wf")
+            fi
           done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::Not dispatched: ${failed[*]}" >&2
+            exit 1
+          fi
