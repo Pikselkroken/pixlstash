@@ -1739,7 +1739,7 @@ onBeforeUnmount(() => {
   grid-column: 1 / -1;
   justify-self: start;
   position: sticky;
-  left: calc(-1 * var(--space-3));
+  left: 0;
   display: flex;
   align-items: flex-end;
   gap: var(--space-3);
