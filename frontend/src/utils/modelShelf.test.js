@@ -1449,6 +1449,24 @@ describe("movableCopies", () => {
     ).toEqual([{ folder_id: 1, relpath: "a.st" }]);
   });
 
+  it("counts the rows it leaves behind, not their copies", () => {
+    // The drag tip says how many selected models stay; a row with one movable
+    // copy of two is carried, and a row with none is left.
+    const { items, stays } = movableCopies(
+      [
+        locRow([
+          { folder_id: 1, relpath: "a.st", state: "present" },
+          { folder_id: 3, relpath: "a.st", state: "present" },
+        ]),
+        locRow([{ folder_id: 3, relpath: "b.st", state: "present" }]),
+        locRow([{ folder_id: 1, relpath: "c.st", state: "missing" }]),
+      ],
+      folders,
+    );
+    expect(items).toEqual([{ folder_id: 1, relpath: "a.st" }]);
+    expect(stays).toBe(2);
+  });
+
   it("applies only the present rule when no folder map is given", () => {
     const { items } = movableCopies([
       locRow([{ folder_id: 2, relpath: "tagger.onnx", state: "present" }]),

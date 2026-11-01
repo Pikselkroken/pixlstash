@@ -1244,16 +1244,19 @@ export function importReceipt(report) {
  *   the open folder, or null for every copy.
  * @returns {{items: Array<{folder_id: number, relpath: string}>,
  *   totalBytes: number, bytesByFolderId: Map<number, number>,
- *   kinds: Map<string, string>}} `kinds` is each copy's Type by
- *   {@link copyKey}, for the drop tip's ComfyUI name; the items stay bare
- *   because the move route refuses any other field.
+ *   kinds: Map<string, string>, stays: number}} `kinds` is each copy's Type
+ *   by {@link copyKey}, for the drop tip's ComfyUI name; the items stay bare
+ *   because the move route refuses any other field. `stays` counts the rows
+ *   with no copy that can move, so a drag can say what it leaves behind.
  */
 export function movableCopies(rows, foldersById = null, scope = null) {
   const items = [];
   const kinds = new Map();
   const bytesByFolderId = new Map();
   let totalBytes = 0;
+  let stays = 0;
   for (const row of Array.isArray(rows) ? rows : []) {
+    const before = items.length;
     for (const loc of row?.locations || []) {
       if (loc?.state !== "present") continue;
       if (scope && !inFolderScopeOf(loc, scope)) continue;
@@ -1272,8 +1275,9 @@ export function movableCopies(rows, foldersById = null, scope = null) {
       );
       totalBytes += bytes;
     }
+    if (items.length === before) stays += 1;
   }
-  return { items, totalBytes, bytesByFolderId, kinds };
+  return { items, totalBytes, bytesByFolderId, kinds, stays };
 }
 
 /**
