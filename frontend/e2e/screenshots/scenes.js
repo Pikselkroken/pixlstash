@@ -146,6 +146,39 @@ async function addSecondLibrary(api) {
   expect(res.ok(), `could not add the second library: ${res.status()}`).toBe(true)
 }
 
+/**
+ * Replace what a capture must not publish with a stand-in, just before the
+ * shot. The values on screen were minted on the throwaway capture backend, but
+ * a token, a share link or a work-dir path in a public image reads as real, and
+ * the stand-ins say they are not (`example-`, `/home/me/`, 192.0.2.x).
+ */
+async function mask(page, selector, values) {
+  await page.locator(selector).first().waitFor()
+  await page.locator(selector).evaluateAll((nodes, texts) => {
+    nodes.forEach((node, i) => {
+      node.textContent = texts[Math.min(i, texts.length - 1)]
+    })
+  }, values)
+}
+
+const LIBRARY_PATHS = ['/home/me/Pictures/PixlStash', '/home/me/Pictures/Client work']
+
+/** Scroll the grid until picture `id` is drawn, then open it in the lightbox. */
+async function openPicture({ grid, lightbox, page }, id) {
+  const thumb = page.locator(`.thumbnail-img[src*="/thumbnails/${id}."]`).first()
+  for (let i = 0; i < 200 && !(await thumb.count()); i++) {
+    await grid.scrollWrapper.evaluate((el) => el.scrollBy(0, el.clientHeight * 0.8))
+    await page.waitForTimeout(120)
+  }
+  await thumb.scrollIntoViewIfNeeded()
+  await thumb.dblclick()
+  await expect(lightbox.mainImage).toBeVisible()
+}
+
+// A demo-data picture with Florence-2 object detections already stored: a
+// woman with a burger in a diner, six labelled boxes.
+const DETECTIONS_PICTURE = 1040
+
 async function readyGrid(grid) {
   await grid.goto()
   await grid.waitForThumbnailLoaded()
@@ -368,6 +401,7 @@ export const scenes = [
       await settings.open()
       await settings.openTab('Libraries & imports')
       await expect(page.locator('.library-row')).toHaveCount(2)
+      await mask(page, '.library-row__path', LIBRARY_PATHS)
       await page.waitForTimeout(300)
       return settings.card
     },
@@ -388,6 +422,7 @@ export const scenes = [
       await expect(
         page.getByRole('menuitem', { name: 'Open this library' }),
       ).toBeVisible()
+      await mask(page, '.library-row__path', LIBRARY_PATHS)
       await page.waitForTimeout(300)
       return settings.card
     },
@@ -575,6 +610,7 @@ export const scenes = [
       await expect(card).toBeVisible()
       await card.getByRole('button', { name: 'Create link' }).click()
       await expect(page.locator('.share-dialog-url')).toBeVisible()
+      await mask(page, '.share-dialog-url', ['http://192.0.2.10:9537/share/example-share-link.jpg'])
       await page.waitForTimeout(300)
       return card
     },
@@ -609,6 +645,91 @@ export const scenes = [
       await expect(reviews.boardRows.first()).toBeVisible()
       await reviews.createReview(REVIEW_TAG)
       await expect(reviews.card).toBeVisible()
+      await page.waitForTimeout(800)
+      return null
+    },
+  },
+  {
+    id: 'demo',
+    assets: ['ScreenshotDemo.jpg'],
+    title: 'Features page banner: the app at a glance (a 3:1 strip)',
+    async setup({ grid }) {
+      await readyGrid(grid)
+      // The left of the window, sidebar and grid, as the demo shows them.
+      return { clip: { x: 0, y: 0, width: 1200, height: 400 } }
+    },
+  },
+  {
+    id: 'object-detection',
+    assets: ['ScreenshotSegmentation.jpg'],
+    title: 'Object detection boxes in the lightbox',
+    async setup(ctx) {
+      await readyGrid(ctx.grid)
+      await openPicture(ctx, DETECTIONS_PICTURE)
+      const toggle = ctx.page.locator('.lightbox-segmentation-btn')
+      await toggle.click()
+      await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+      await ctx.page.waitForTimeout(800)
+      return ctx.lightbox.root
+    },
+  },
+  {
+    id: 'set-operations',
+    assets: ['ScreenshotOverlapNew.jpg'],
+    title: 'Boolean set operations: two sets combined',
+    async setup({ grid, sidebar, page }) {
+      await readyGrid(grid)
+      // Two demo-data sets that share pictures, combined as a union.
+      await sidebar.setItems.filter({ hasText: 'AI Characters' }).first().click()
+      await sidebar.setItems
+        .filter({ hasText: 'Website' })
+        .first()
+        .click({ modifiers: ['ControlOrMeta'] })
+      await expect(grid.multiSelectToolbar).toBeVisible()
+      // The mode the store restores can land after a first pick; pick until
+      // it holds.
+      await expect(async () => {
+        await grid.multiSelectMode.selectOption('union')
+        await expect(grid.multiSelectMode).toHaveValue('union', { timeout: 500 })
+      }).toPass()
+      await grid.waitForThumbnailLoaded()
+      await page.waitForTimeout(900)
+      return null
+    },
+  },
+  {
+    id: 'workflows',
+    assets: ['ScreenshotComfyUi.jpg'],
+    title: 'ComfyUI integration: the Workflows page',
+    async setup({ page }) {
+      await page.goto('/workflows')
+      const card = page.locator('.wf-card').first()
+      await expect(card).toBeVisible()
+      // Selected, so the inspector shows what the workflow is made of.
+      await card.click()
+      await page.waitForTimeout(1200)
+      return null
+    },
+  },
+  {
+    id: 'model-shelf',
+    assets: ['ScreenshotModelShelf.jpg'],
+    title: 'The model shelf (the seeded stand-in models only)',
+    async setup({ page }) {
+      // Rows, not the sets grid. The shelf also lists the capture machine's
+      // own folders (PixlStash's engines, its Hugging Face cache), so the shot
+      // is of the seeded folder alone: serve_e2e_backend.py's stand-ins.
+      await page.evaluate(() =>
+        localStorage.setItem('pixlstash:modelShelfView', JSON.stringify({ v: 3, groupBy: 'none' })),
+      )
+      await page.goto('/models')
+      const folder = page
+        .getByTestId('model-folder-tree')
+        .first()
+        .locator('.mft-row', { hasText: 'model-shelf' })
+        .first()
+      await folder.click()
+      await expect(page.locator('.shelf-row').first()).toBeVisible()
       await page.waitForTimeout(800)
       return null
     },
@@ -665,6 +786,7 @@ export const scenes = [
       await settings.tokenDescription.fill('LM Studio')
       await settings.createTokenButton.click()
       await expect(page.getByText(/only once|won.t be able to see it again/i).first()).toBeVisible()
+      await mask(page, '.account-token-value', ['example-api-token-shown-only-once'])
       await page.waitForTimeout(300)
       return settings.card
     },
@@ -753,10 +875,6 @@ export const scenes = [
 ]
 
 export const manual = {
-  'ScreenshotModelShelf.jpg':
-    'The model shelf — the shelf also lists the capture machine\'s own model folders, ' +
-    'so a capture would publish its owner\'s model inventory; needs a manual capture ' +
-    'on a machine whose shelf is fit to show',
   // ComfyUI illustrations. The 1.11 run overwrote these two with the SPA's
   // search box from a "search" scene; the originals are the ComfyUI nodes.
   'SemanticSearch.jpg': 'ComfyUI Semantic Search node — external app',
@@ -815,8 +933,6 @@ export const manual = {
     'Tag health table (1.7) — hand-shot; needs review history to populate the rankings',
   'ScreenshotLockSets.jpg':
     'Set context menu with Lock set (1.7) — hand-shot against a curated library',
-  'ScreenshotSegmentation.jpg':
-    'Object-detection boxes (1.7) — hand-shot; needs a segmented picture fixture',
   'ScreenshotSettings.jpg':
     'Refreshed settings dialog (1.7) — hand-shot; replaceable by a settings-tab scene later',
   'ComfyWorkflow.png': 'ComfyUI graph — external app, not the PixlStash SPA',
@@ -827,7 +943,6 @@ export const manual = {
   'ComfyInstallation.jpg': 'ComfyUI Manager UI — external app',
   'ComfyFaceLikenessGate.jpg': 'ComfyUI graph — external app',
   'ComfyFaceLikenessGateUpscale.jpg': 'ComfyUI graph — external app',
-  'ScreenshotComfyUi.jpg': 'ComfyUI integration shown in ComfyUI — external app',
   'ScreenshotPhotographySaver.jpg': 'ComfyUI custom node — external app',
   'ScreenshotLmStudio.jpg': 'LM Studio app — external',
   'ScreenshotChat1.jpg': 'LM Studio chat — external app',
@@ -835,15 +950,12 @@ export const manual = {
   'ScreenshotChat3.jpg': 'LM Studio chat — external app',
   'ScreenshotJoyCaption.jpg': 'Historical (1.3) tagger settings — needs a settings-tab scene + matching plugins',
   'ScreenshotTaggers.jpg': 'Historical (1.3) tagger settings — needs a settings-tab scene',
-  'ScreenshotDemo.jpg': 'The public demo site itself (pixlstash.dev demo), not a local app state',
   'ScreenshotUrl.jpg': 'Browser URL bar — outside the app viewport',
   'ScreenshotWhatsNew1_2.jpg': 'Historical composite from the 1.2 release notes',
   'ScreenshotIconColor.jpg': 'Custom set icon/colour picker — needs a set-edit fixture scene',
   'ScreenshotOverlap.jpg': 'Boolean Overlap mode — needs ≥2 selected people with shared pictures',
-  'ScreenshotOverlapNew.jpg': 'Boolean set operations — needs ≥2 selected entities',
   'ScreenshotMutuallyExclusive.jpg': 'Mutually-exclusive tag setup — needs a specific tag fixture',
   'ScreenshotReferenceFolders.jpg': 'the sidebar no longer lists reference folders',
-  'ScreenshotReferenceFoldersNew.jpg': 'demo-data has no reference folders',
   'FaceLikenessSearch.jpg': 'Face-likeness search — needs a face-search fixture + indexed faces',
   'MultiLikenessSearch.jpg': 'Multi-face likeness search — needs a face-search fixture',
   'ScreenshotShare2.jpg': 'Recipient share view — needs a minted public share link',

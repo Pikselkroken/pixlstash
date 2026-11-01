@@ -26,6 +26,19 @@ const PRODUCTION_HOST_PATTERN = 'https://pixlstash.dev/**'
 // runtime GET /version, so no capture can show two different versions.
 const VERSION_OVERRIDE = process.env.PIXLSTASH_VERSION_OVERRIDE || ''
 
+// The routes that report a drive's size and free space.
+const DRIVE_ROUTES = /\/api\/v1\/(libraries|model-folders\/devices)(\?|$)/
+
+/** Every `{ total_bytes, free_bytes }` in a response, set to 60% free. */
+function easeDrives(value) {
+  if (Array.isArray(value)) value.forEach(easeDrives)
+  else if (value && typeof value === 'object') {
+    if (value.total_bytes) value.free_bytes = Math.round(value.total_bytes * 0.6)
+    Object.values(value).forEach(easeDrives)
+  }
+  return value
+}
+
 /**
  * Point a page's relative navigations at the backend. Electron windows have no
  * baseURL, and every page object navigates with paths ('/', '/duplicates').
@@ -61,17 +74,14 @@ export const test = base.extend({
         timeout: 120_000,
       })
       await app.context().route(PRODUCTION_HOST_PATTERN, (route) => route.abort())
-      // The title bar's drive meter reads the capture machine's own disk. A
-      // marketing shot of a nearly full drive says nothing about the product,
-      // so every library reports a drive 40% used.
-      await app.context().route('**/api/v1/libraries', async (route) => {
+      // The drive meters (the title bar's, the model shelf's) read the capture
+      // machine's own disk. A marketing shot of a nearly full drive says
+      // nothing about the product, so every drive reports 40% used.
+      await app.context().route(DRIVE_ROUTES, async (route) => {
         if (route.request().method() !== 'GET') return route.continue()
         const response = await route.fetch()
         const body = await response.json()
-        for (const library of body.libraries ?? []) {
-          if (library.total_bytes) library.free_bytes = Math.round(library.total_bytes * 0.6)
-        }
-        await route.fulfill({ response, json: body })
+        await route.fulfill({ response, json: easeDrives(body) })
       })
       if (VERSION_OVERRIDE) {
         await app.context().route('**/version', async (route) => {
