@@ -77,7 +77,8 @@ const globalOpts = {
         template: "<div><slot name='activator' :props='{}' /><slot /></div>",
       },
       AppButton: {
-        template: "<button :disabled='disabled'><slot /></button>",
+        template:
+          "<button :disabled='disabled' :aria-busy='loading ? `true` : undefined'><slot /></button>",
         props: ["disabled", "loading", "variant", "iconLeft", "size"],
       },
     },
@@ -347,6 +348,29 @@ describe("drawing the grid", () => {
     release([run(), run("Foxglove")]);
     await settle(wrapper);
     expect(wrapper.findAll(".tr-card")).toHaveLength(2);
+  });
+
+  it("spins the reload button only for a reload it started", async () => {
+    // Focus, and the poll while a run trains, reload unprompted; the button
+    // spinning for those made it blink every few seconds.
+    const wrapper = await openWith([run()]);
+    const button = () =>
+      wrapper.find("button[aria-label='Reload the training runs']");
+    let release;
+    listRuns.mockReturnValue(new Promise((r) => (release = r)));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await wrapper.vm.$nextTick();
+    expect(useTrainingRunsStore().loading).toBe(true);
+    expect(button().attributes("aria-busy")).toBeUndefined();
+    release([run()]);
+    await settle(wrapper);
+
+    listRuns.mockReturnValue(new Promise((r) => (release = r)));
+    await button().trigger("click");
+    expect(button().attributes("aria-busy")).toBe("true");
+    release([run()]);
+    await settle(wrapper);
+    expect(button().attributes("aria-busy")).toBeUndefined();
   });
 
   it("still finds a destination when the registry lands after mount", async () => {

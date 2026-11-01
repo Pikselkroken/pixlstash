@@ -46,15 +46,17 @@
            focus never changes and nothing fires. No badge on it: the only way
            to know a run had appeared would be to poll the listing, and polling
            every run's checkpoints and samples to light a dot costs more than
-           the button it would save. -->
+           the button it would save. It spins only for a reload it started:
+           the unprompted ones (focus, and every few seconds while a run
+           trains) made it blink on its own. -->
       <AppButton
         size="sm"
         variant="ghost"
         icon-left="refresh"
-        :loading="loading"
+        :loading="reloadingByHand"
         tooltip="Look for runs that have appeared since this list was read"
         aria-label="Reload the training runs"
-        @click="reload"
+        @click="reloadByHand"
       />
     </div>
 
@@ -911,10 +913,20 @@ async function loadRuns() {
   if (gridEl.value) gridEl.value.scrollTop = scrollTop;
 }
 
-/** The button, and the auto-reload, are the same act. */
+/** The button and the auto-reload read the same; only the button shows it. */
 function reload() {
-  loadRuns();
-  runsStore.loadJobs();
+  return Promise.all([loadRuns(), runsStore.loadJobs()]);
+}
+
+/** Only the button's own reload shows on the button. */
+const reloadingByHand = ref(false);
+async function reloadByHand() {
+  reloadingByHand.value = true;
+  try {
+    await reload();
+  } finally {
+    reloadingByHand.value = false;
+  }
 }
 
 /**
