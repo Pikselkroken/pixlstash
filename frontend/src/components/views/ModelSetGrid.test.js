@@ -1319,6 +1319,24 @@ describe("selection and the verbs", () => {
       await press(cards[1], "dblclick", 2);
       expect(store.openSetKey).toBe("");
     });
+
+    it("swallows the rest of a double click on Edit that moved the tray", async () => {
+      const { wrapper, store, cards, key } = await twoCards();
+      const press = async (el, type, detail) => {
+        el.element.dispatchEvent(
+          new MouseEvent(type, { bubbles: true, cancelable: true, detail }),
+        );
+        await wrapper.vm.$nextTick();
+      };
+      store.toggleSet(key(cards[0]));
+
+      // Edit on the second card closes the first card's tray above it, so the
+      // second press lands on the first card, not on the button.
+      await press(cards[1].find('[data-testid="set-edit"]'), "click", 1);
+      await press(cards[0], "click", 2);
+      await press(cards[0], "dblclick", 2);
+      expect(store.openSetKey).toBe(key(cards[1]));
+    });
   });
 
   it("adds an unlit card with Ctrl or Space rather than toggling its model out", async () => {

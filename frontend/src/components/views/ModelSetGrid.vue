@@ -246,7 +246,7 @@
                 @keep-separate="answerOffer(entry, false)"
                 @hide="hideCard(entry)"
                 @unhide="unhideCard(entry)"
-                @edit="onCardDblClick(entry)"
+                @edit="onCardEdit(entry)"
               />
             </div>
           </div>
@@ -819,6 +819,20 @@ function toggle(entry) {
 function onCardDblClick(entry) {
   toggle(entry);
   sidebarStore.showCardInInspector("models");
+}
+
+/**
+ * A card's Edit button: the double-click's work, on one press.
+ *
+ * Moving a tray that is open on another card moves the rows, so a double
+ * click's second press lands on whatever slid under the pointer; arm the same
+ * guard a click that moves the tray does (`swallowAfterTrayMove`).
+ */
+function onCardEdit(entry) {
+  if (store.openSetKey && store.openSetKey !== entry.key) {
+    trayMovedByClick = true;
+  }
+  onCardDblClick(entry);
 }
 
 /**

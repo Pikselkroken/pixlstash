@@ -179,8 +179,10 @@
         <!-- Edit is the double-click on a button: it opens (or closes) this
              set's tray and a shut Models rail. Mouse-only, like Hide: Enter
              on the card does the same from the keyboard. A second press of a
-             double click is dropped: the first already toggled the tray, and
-             the button is still under the pointer. -->
+             double click is dropped: the first already toggled the tray. When
+             that press moved a tray open on another card, the rows shift and
+             the second press lands elsewhere; the grid's `onCardEdit` arms its
+             reflow guard for that. -->
         <AppButton
           class="msc__edit"
           variant="ghost"
