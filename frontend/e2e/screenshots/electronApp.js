@@ -151,7 +151,6 @@ export const test = base.extend({
         },
         timeout: 120_000,
       })
-      await app.context().route(PRODUCTION_HOST_PATTERN, (route) => route.abort())
       // Downloads (an exported ZIP) land in the work dir, not ~/Downloads.
       const downloads = join(info.userData, 'downloads')
       mkdirSync(downloads, { recursive: true })
@@ -170,12 +169,17 @@ export const test = base.extend({
         await route.fulfill({ response, json: standInHardware(await response.json()) })
       })
       if (VERSION_OVERRIDE) {
-        await app.context().route('**/version', async (route) => {
+        // The backend's own /version only: the shell's file:// pages and any
+        // other host pass untouched.
+        await app.context().route('http://127.0.0.1:*/version', async (route) => {
           const response = await route.fetch()
           const body = await response.json()
           await route.fulfill({ json: { ...body, version: VERSION_OVERRIDE } })
         })
       }
+      // Registered last on purpose: Playwright tries the newest route first,
+      // so this abort runs before any rewrite above can fetch production.
+      await app.context().route(PRODUCTION_HOST_PATTERN, (route) => route.abort())
       await use(app)
       await app.close()
     },
