@@ -16,6 +16,7 @@ Status:
 - **external**: not PixlStash's UI (ComfyUI, LM Studio, Windows, a terminal).
 - **unreferenced**: no page links it. Left alone; a candidate for deletion.
 - **current**: branding.
+- **deleted**: removed with the page section that showed it.
 
 Pages are those that link the file; README is the repository README.
 
@@ -89,10 +90,10 @@ Pages are those that link the file; README is the repository README.
 | `website/assets/ScreenshotCli.jpg` | 2026-08-18 | v1.10.0-dev.4 | whatsnew | external | ComfyUI / LM Studio / Windows / terminal, not the app |
 | `website/assets/ScreenshotCliLibraries.jpg` | 2026-08-18 | v1.10.0-dev.4 | whatsnew | external | ComfyUI / LM Studio / Windows / terminal, not the app |
 | `website/assets/ScreenshotCliPlugins.jpg` | 2026-08-18 | v1.10.0-dev.4 | whatsnew | external | ComfyUI / LM Studio / Windows / terminal, not the app |
-| `website/assets/ScreenshotComfyUi.jpg` | 2026-05-15 | v1.2.0rc4 | features, index | stale, manual | needs a live ComfyUI |
+| `website/assets/ScreenshotComfyUi.jpg` | 2026-05-15 | v1.2.0rc4 | features, index | regenerated | the 2.0 Workflows page, with the capture's seeded workflows; no ComfyUI connected |
 | `website/assets/ScreenshotContext.jpg` | 2026-09-02 | v1.11.0rc1 | features, whatsnew | regenerated | captured from the 2.0 Electron app |
 | `website/assets/ScreenshotDeleteLora.jpg` | 2026-08-18 | v1.10.0-dev.4 | whatsnew | historical | only in What's New, beside the release it shows |
-| `website/assets/ScreenshotDemo.jpg` | 2026-05-16 | v1.2.0 | features | stale, manual | the public demo site, re-shoot once it runs 2.0 |
+| `website/assets/ScreenshotDemo.jpg` | 2026-05-16 | v1.2.0 | features | regenerated | captured from the 2.0 Electron app |
 | `website/assets/ScreenshotDragCharacters.jpg` | 2026-05-31 | v1.5.0.dev0 | whatsnew | historical | only in What's New, beside the release it shows |
 | `website/assets/ScreenshotDuplicates.jpg` | 2026-08-03 | v1.9.0-dev.2 | features, whatsnew | stale, manual | needs a finished duplicate scan with useful groups |
 | `website/assets/ScreenshotEmptyLibrary.jpg` | 2026-09-02 | v1.11.0rc1 | whatsnew | historical | only in What's New, beside the release it shows |
@@ -120,11 +121,11 @@ Pages are those that link the file; README is the repository README.
 | `website/assets/ScreenshotMapPreview.jpg` | 2026-09-02 | v1.11.0rc1 | whatsnew | historical | only in What's New, beside the release it shows |
 | `website/assets/ScreenshotMapTree.jpg` | 2026-09-02 | v1.11.0rc1 | whatsnew | historical | only in What's New, beside the release it shows |
 | `website/assets/ScreenshotMixedStacks.jpg` | 2026-09-02 | v1.11.0rc1 | whatsnew | historical | only in What's New, beside the release it shows |
-| `website/assets/ScreenshotModelShelf.jpg` | 2026-08-18 | v1.10.0-dev.4 | features, whatsnew | stale, manual | the shelf lists the capture machine's own models; shoot by hand on a shelf fit to publish |
+| `website/assets/ScreenshotModelShelf.jpg` | 2026-08-18 | v1.10.0-dev.4 | features, whatsnew | regenerated | captured from the 2.0 Electron app; the shelf shows the capture's stand-in models only |
 | `website/assets/ScreenshotMultiProject.jpg` | 2026-08-03 | v1.9.0-dev.2 | features, whatsnew | stale, manual | needs a person in two projects |
 | `website/assets/ScreenshotMutuallyExclusive.jpg` | 2026-04-01 | v1.0.0rc1 |  | unreferenced | no page links it |
 | `website/assets/ScreenshotOverlap.jpg` | 2026-04-27 | v1.1.0rc10 | whatsnew | historical | only in What's New, beside the release it shows |
-| `website/assets/ScreenshotOverlapNew.jpg` | 2026-05-15 | v1.2.0rc4 | features | stale, manual | needs two people selected with shared pictures |
+| `website/assets/ScreenshotOverlapNew.jpg` | 2026-05-15 | v1.2.0rc4 | features | regenerated | captured from the 2.0 Electron app |
 | `website/assets/ScreenshotPermissionRepair.jpg` | 2026-08-18 | v1.10.0-dev.4 | whatsnew | historical | only in What's New, beside the release it shows |
 | `website/assets/ScreenshotPhotographySaver.jpg` | 2026-05-30 | v1.4.1 | api | external | ComfyUI / LM Studio / Windows / terminal, not the app |
 | `website/assets/ScreenshotPictureStatistics.jpg` | 2026-09-02 | v1.11.0rc1 | features, whatsnew | regenerated | captured from the 2.0 Electron app |
@@ -133,12 +134,12 @@ Pages are those that link the file; README is the repository README.
 | `website/assets/ScreenshotProject.jpg` | 2026-09-02 | v1.11.0rc1 | features | regenerated | captured from the 2.0 Electron app |
 | `website/assets/ScreenshotProject.png` | 2026-04-01 | v1.0.0rc1 |  | unreferenced | no page links it |
 | `website/assets/ScreenshotReferenceFolders.jpg` | 2026-04-27 | v1.1.0rc10 | whatsnew | historical | only in What's New, beside the release it shows |
-| `website/assets/ScreenshotReferenceFoldersNew.jpg` | 2026-05-15 | v1.2.0rc4 | features | stale, manual | needs a reference folder; demo-data has none |
+| `website/assets/ScreenshotReferenceFoldersNew.jpg` | 2026-05-15 | v1.2.0rc4 | (features) | deleted | the Reference folders card was dropped from the features page |
 | `website/assets/ScreenshotReview1.jpg` | 2026-07-20 | v1.7.0rc5 | features, whatsnew | regenerated | captured from the 2.0 Electron app |
 | `website/assets/ScreenshotReview2.jpg` | 2026-07-20 | v1.7.0rc5 |  | unreferenced | no page links it |
 | `website/assets/ScreenshotReview3.jpg` | 2026-07-20 | v1.7.0rc5 | whatsnew | historical | only in What's New, beside the release it shows |
 | `website/assets/ScreenshotSearchEdit.jpg` | 2026-09-02 | v1.11.0rc1 | comfyui | restored | v1.4.1 original restored (the 1.11 run had overwritten it with the search box) |
-| `website/assets/ScreenshotSegmentation.jpg` | 2026-07-20 | v1.7.0rc5 | features, whatsnew | stale, manual | needs object-detection boxes on a picture |
+| `website/assets/ScreenshotSegmentation.jpg` | 2026-07-20 | v1.7.0rc5 | features, whatsnew | regenerated | captured from the 2.0 Electron app |
 | `website/assets/ScreenshotSelectiveRestore.jpg` | 2026-09-02 | v1.11.0rc1 | features, whatsnew | regenerated | captured from the 2.0 Electron app |
 | `website/assets/ScreenshotSettings.jpg` | 2026-07-20 | v1.7.0rc5 | whatsnew | historical | only in What's New, beside the release it shows |
 | `website/assets/ScreenshotShare1.jpg` | 2026-05-15 | v1.2.0rc4 | features, whatsnew | regenerated | captured from the 2.0 Electron app |

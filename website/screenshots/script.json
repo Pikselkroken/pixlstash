@@ -745,14 +745,6 @@
   },
   {
     "page": "features.html",
-    "asset": "ScreenshotReferenceFoldersNew.jpg",
-    "label": "Reference folders",
-    "alt": "PixlStash reference folders and import folders",
-    "caption": "Keep your existing folder structure while still benefiting from PixlStash's organisation and metadata features. Manage reference and import folders directly from the UI.",
-    "kind": "image"
-  },
-  {
-    "page": "features.html",
     "asset": "ScreenshotReview1.jpg",
     "label": "Tag review",
     "alt": "PixlStash tag review card asking whether a picture should have a tag",

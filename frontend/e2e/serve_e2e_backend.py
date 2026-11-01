@@ -156,6 +156,46 @@ def _seed_model_folder(root: Path) -> None:
     (root / "Empty").mkdir()
 
 
+# The website captures' stand-ins for a real shelf: (name, base model, size),
+# at the folder's root so the folder's own view lists them beside the seed.
+# Header-only like the specs' stubs, but each file is extended to a believable
+# size as a sparse file, so the shelf reads like a real one and the disk pays
+# nothing. Every name is a public model's or an invented one.
+SHOWCASE_MODELS = (
+    # Overwrites the specs' 255-byte stub, which would read as a broken file.
+    ("Clementine_Portrait.safetensors", "sdxl_base_v1-0", 144_000_000),
+    ("juggernautXL_v9.safetensors", "sdxl_base_v1-0", 6_938_000_000),
+    ("flux1-dev-fp8.safetensors", "flux1d", 17_200_000_000),
+    ("GoldenHour_Light.safetensors", "sdxl_base_v1-0", 228_000_000),
+    ("AnalogFilm_Grain.safetensors", "sdxl_base_v1-0", 171_000_000),
+    ("Watercolor_Wash.safetensors", "flux1d", 306_000_000),
+)
+
+# The demo-data pictures the website captures use as workflow covers: three
+# portraits and a picture for the one-off. Named rather than picked, so every
+# capture shows the same cards.
+WORKFLOW_COVERS = (
+    "10b5ff14-d6e1-4bb6-9b9f-b52c60a5337a.png",
+    "10341a3a-022b-4f21-80ce-404e8ea95935.png",
+    "13dc5f0e-3004-4d84-8685-97188603a9ad.png",
+    "0e9679da-4b71-45a2-9821-917156675f9c.png",
+)
+
+
+def _seed_showcase_models(root: Path) -> None:
+    """Add :data:`SHOWCASE_MODELS` to the seeded model folder."""
+    lora = {"blocks.0.lora_A.weight": [8, 16], "blocks.0.lora_B.weight": [16, 8]}
+    for name, base, size in SHOWCASE_MODELS:
+        path = root / name
+        # Shaped like the seed's checkpoint and LoRAs, which the scanner tells apart.
+        tensors = {"model.weight": [40000, 40000]} if size > 1_000_000_000 else lora
+        _write_stub_model(
+            path, tensors, {"format": "pt", "ss_base_model_version": base}
+        )
+        with path.open("r+b") as handle:
+            handle.truncate(size)
+
+
 def _seed_reference_folder(root: Path) -> None:
     """Lay out a small reference folder for the Media specs, under the work dir.
 
@@ -274,7 +314,9 @@ def _median_picture_date(db_path: Path) -> str:
     return dated
 
 
-def _seed_workflows(root: Path, picture_date: str) -> None:
+def _seed_workflows(
+    root: Path, picture_date: str, covers: list[Path] | None = None
+) -> None:
     """Lay out the Workflows specs' seed, under the work dir.
 
     ``seed.json`` names the stored workflows, the pictures and the recipes; the
@@ -291,6 +333,10 @@ def _seed_workflows(root: Path, picture_date: str) -> None:
     The pictures are dated *picture_date*, the fixture's median, so they sit
     mid-grid whichever way it sorts by date: the specs that open the first or
     the last few pictures, and rate or tag them, still get fixture ones.
+
+    *covers* (the website captures) replaces the four flat colours with real
+    pictures, cropped so none is a byte-for-byte copy of its fixture original,
+    and drops the "Seeded " prefix the specs find their rows by.
     """
     root.mkdir(parents=True)
     loras = ("Clementine_Portrait.safetensors", "DetailTweaker_v2.safetensors")
@@ -306,7 +352,20 @@ def _seed_workflows(root: Path, picture_date: str) -> None:
         name = "seed-one-off.png" if one_off else f"seed-portrait-{i + 1}.png"
         info = PngInfo()
         info.add_text("prompt", json.dumps(graph))
-        Image.new("RGB", (512, 512), colour).save(root / name, pnginfo=info)
+        if covers:
+            with Image.open(covers[i]) as cover:
+                width, height = cover.size
+                picture = cover.convert("RGB").crop(
+                    (
+                        width // 20,
+                        height // 20,
+                        width - width // 20,
+                        height - height // 20,
+                    )
+                )
+        else:
+            picture = Image.new("RGB", (512, 512), colour)
+        picture.save(root / name, pnginfo=info)
         pictures.append(name)
     manifest = {
         "workflows": [
@@ -340,7 +399,10 @@ def _seed_workflows(root: Path, picture_date: str) -> None:
             },
         ],
     }
-    (root / "seed.json").write_text(json.dumps(manifest, indent=2))
+    text = json.dumps(manifest, indent=2)
+    if covers:
+        text = text.replace('"Seeded ', '"')
+    (root / "seed.json").write_text(text)
 
 
 def _seed_fake_ai_toolkit(root: Path) -> None:
@@ -465,10 +527,16 @@ def main() -> int:
     print(f"[e2e-backend] copying fixture -> {work_images}")
     shutil.copytree(SRC_IMAGES, work_images, ignore=_ignore_backups)
     _strip_credentials(work_images / "vault.db")
+    screenshots = "--screenshots" in sys.argv
     _seed_model_folder(MODEL_FOLDER)
+    if screenshots:
+        _seed_showcase_models(MODEL_FOLDER)
     _seed_reference_folder(REFERENCE_FOLDER)
     _stub_host_openers(WORK_DIR / "bin")
-    _seed_workflows(WORKFLOW_SEED, _median_picture_date(work_images / "vault.db"))
+    covers = [SRC_IMAGES / name for name in WORKFLOW_COVERS] if screenshots else None
+    _seed_workflows(
+        WORKFLOW_SEED, _median_picture_date(work_images / "vault.db"), covers
+    )
     _seed_fake_ai_toolkit(AI_TOOLKIT)
     # Inherited by the trainer: slow enough for a spec to see a run in
     # progress, fast enough that a short run costs about a second.
@@ -483,15 +551,14 @@ def main() -> int:
 
     _harden_permissions(WORK_DIR)
 
-    if "--screenshots" in sys.argv:
+    if screenshots:
         # The website captures: the Electron shell starts this server itself
         # (with its own port and desktop session), so only the work dir is
-        # needed. The reference folder and workflow seeds are flat colour
-        # squares the specs count on; on the marketing site they would be the
-        # first row of the grid, so they stay out. The last line printed is the
-        # config path, for the caller.
-        for key in ("e2e_reference_folder", "e2e_workflow_seed"):
-            base_config.pop(key)
+        # needed. The reference folder seed is three flat colour squares the
+        # specs count on; on the marketing site they would be the first row of
+        # the grid, so it stays out. The last line printed is the config path,
+        # for the caller.
+        base_config.pop("e2e_reference_folder", None)
         config_path.write_text(json.dumps(base_config, indent=2))
         print(config_path)
         return 0
