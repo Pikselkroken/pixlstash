@@ -882,6 +882,9 @@ export const scenes = [
       return null
     },
     async teardown({ api, grid }) {
+      // Setup failed before it switched: nothing to undo, and the real error
+      // is the one to report.
+      if (!demoLibrary) return
       const back = await api.post('/api/v1/libraries/active', { data: { uuid: demoLibrary } })
       expect(back.ok(), `could not switch back to demo-data: ${back.status()}`).toBe(true)
       // The switch reloads the window; wait for demo-data's grid to be back.

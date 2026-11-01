@@ -58,10 +58,13 @@ function standInHardware(body) {
   const resources = body?.resources
   if (resources) {
     for (const device of resources.devices ?? []) {
-      const used = device.used_mb ?? 0
+      // A bigger card can have more in use than the stand-in holds.
+      const used = Math.min(device.used_mb ?? 0, STAND_IN_GPU.total_mb)
       Object.assign(device, STAND_IN_GPU)
       device.free_mb = STAND_IN_GPU.total_mb - used
-      if (device.budget_mb != null) device.budget_mb = Math.min(device.budget_mb, device.free_mb)
+      if (device.budget_mb != null) {
+        device.budget_mb = Math.max(0, Math.min(device.budget_mb, device.free_mb))
+      }
     }
     for (const holder of resources.holders ?? []) holder.device = STAND_IN_GPU.uuid
     if (resources.ram) {

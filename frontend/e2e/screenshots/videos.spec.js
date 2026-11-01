@@ -117,42 +117,47 @@ async function record(page, name, body) {
   rmSync(framesDir, { recursive: true, force: true })
   mkdirSync(framesDir, { recursive: true })
   const frames = []
-  const cdp = await page.context().newCDPSession(page)
-  cdp.on('Page.screencastFrame', ({ data, metadata, sessionId }) => {
-    const file = join(framesDir, `${String(frames.length).padStart(5, '0')}.jpg`)
-    writeFileSync(file, Buffer.from(data, 'base64'))
-    frames.push({ file, t: metadata.timestamp })
-    cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {})
-  })
-  await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 92, everyNthFrame: 1 })
   try {
-    await body()
-    await page.waitForTimeout(400)
-  } finally {
-    await cdp.send('Page.stopScreencast')
-    await cdp.detach()
-  }
-  expect(frames.length, `the screencast of ${name} sent no frames`).toBeGreaterThan(1)
+    const cdp = await page.context().newCDPSession(page)
+    cdp.on('Page.screencastFrame', ({ data, metadata, sessionId }) => {
+      const file = join(framesDir, `${String(frames.length).padStart(5, '0')}.jpg`)
+      writeFileSync(file, Buffer.from(data, 'base64'))
+      frames.push({ file, t: metadata.timestamp })
+      cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {})
+    })
+    await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 92, everyNthFrame: 1 })
+    try {
+      await body()
+      await page.waitForTimeout(400)
+    } finally {
+      await cdp.send('Page.stopScreencast')
+      await cdp.detach()
+    }
+    expect(frames.length, `the screencast of ${name} sent no frames`).toBeGreaterThan(1)
 
-  const list = []
-  frames.forEach((frame, i) => {
-    const next = frames[i + 1]
-    const seconds = next ? Math.max(1 / 60, next.t - frame.t) : FINAL_HOLD_S
-    list.push(`file '${frame.file}'`, `duration ${seconds.toFixed(4)}`)
-  })
-  // The concat demuxer ignores the last entry's duration unless it is repeated.
-  list.push(`file '${frames.at(-1).file}'`)
-  const listFile = join(framesDir, 'frames.txt')
-  writeFileSync(listFile, list.join('\n') + '\n')
-  execFileSync('ffmpeg', [
-    '-v', 'error', '-y',
-    '-f', 'concat', '-safe', '0', '-i', listFile,
-    '-vf', `fps=30,scale=${VIDEO_SIZE}:flags=lanczos,format=yuv420p`,
-    '-c:v', 'libx264', '-preset', 'slow', '-crf', '20',
-    '-movflags', '+faststart', '-an',
-    join(OUT_DIR, `${name}.mp4`),
-  ])
-  rmSync(framesDir, { recursive: true, force: true })
+    const list = []
+    frames.forEach((frame, i) => {
+      const next = frames[i + 1]
+      const seconds = next ? Math.max(1 / 60, next.t - frame.t) : FINAL_HOLD_S
+      list.push(`file '${frame.file}'`, `duration ${seconds.toFixed(4)}`)
+    })
+    // The concat demuxer ignores the last entry's duration unless it is repeated.
+    list.push(`file '${frames.at(-1).file}'`)
+    const listFile = join(framesDir, 'frames.txt')
+    writeFileSync(listFile, list.join('\n') + '\n')
+    execFileSync('ffmpeg', [
+      '-v', 'error', '-y',
+      '-f', 'concat', '-safe', '0', '-i', listFile,
+      '-vf', `fps=30,scale=${VIDEO_SIZE}:flags=lanczos,format=yuv420p`,
+      '-c:v', 'libx264', '-preset', 'slow', '-crf', '20',
+      '-movflags', '+faststart', '-an',
+      join(OUT_DIR, `${name}.mp4`),
+    ])
+  } finally {
+    // Also when the recording or the encode fails: hundreds of frames would
+    // otherwise stay behind in output/.
+    rmSync(framesDir, { recursive: true, force: true })
+  }
 }
 
 /** The grid, settled, with the pointer installed and parked mid-window. */
