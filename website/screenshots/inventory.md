@@ -8,7 +8,11 @@ and the newest release tag at that commit, which is the UI it shows.
 Status:
 
 - **regenerated**: re-captured from the 2.0 Electron app by `npm run screenshots 2.0.0`
-  (`frontend/e2e/screenshots/scenes.js` names the scene).
+  (`frontend/e2e/screenshots/scenes.js` names the scene). A run writes every
+  scene to the gitignored `website/screenshots/output/`; nothing reaches
+  `website/assets/` until it is copied there, and this table is what says which
+  files to copy. Scenes for **historical** files still run, so a release that
+  shows one again has a current capture ready.
 - **restored**: put back from git; an earlier harness run had overwritten it.
 - **stale, manual**: on a current page, shows an older UI, and needs a person to
   capture it (the reason says why).
@@ -204,8 +208,9 @@ Pages are those that link the file; README is the repository README.
 
 ## Versioned API docs
 
-`website/api/v1.3/` to `website/api/v1.12/` each hold a copy of the five
-`scalar-assets` images as they were when that version's docs were published.
+`website/api/v1.3/` to `website/api/v1.12/` each hold a copy of
+`scalar-assets` as it was when that version's docs were published: the four
+screenshots above and `logo.png` (branding, not listed).
 They are **historical** and unchanged: each documents its own version. The 2.0
 docs (`scripts/generate_openapi_docs.py`) will copy the regenerated set above.
 

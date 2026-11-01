@@ -393,8 +393,7 @@ Tokens have one of two access types:
 
 **3. Create the token** - in the **API Tokens** section, click **New token**, type a
 description, choose an access type (*Full access* or *Read-only*), optionally set an expiry
-date, then click **Create token**. To watermark what a token downloads, switch on its
-**Mark** column in the token list afterwards.
+date and, for a read-only token, tick *Apply watermark*, then click **Create token**.
 
 ![The New API token dialog over Account & tokens](scalar-assets/ScreenshotTokens.jpg)
 

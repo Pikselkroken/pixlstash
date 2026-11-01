@@ -46,6 +46,8 @@ from pathlib import Path
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
+from pixlstash.utils.service.share_copies import SHARE_LINKS_DIRNAME
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DATA = Path(os.environ.get("PIXLSTASH_E2E_DATA") or (REPO_ROOT / "test-data"))
 SRC_IMAGES = SRC_DATA / "images"
@@ -80,12 +82,11 @@ FAKE_RUN = REPO_ROOT / "tests" / "training" / "fake_run.py"
 def _ignore_backups(_dir, names):
     """Skip backup / sidecar DB files when copying the fixture images.
 
-    Also the share-copy staging folder a desktop session leaves in a library
-    (``share_copies.SHARE_LINKS_DIRNAME``): its files are hard links to the
-    originals, which ``copytree`` writes out in full (20 GB from a 1.7 GB
-    demo-data), and nothing reads it back.
+    Also the share-copy staging folder a desktop session leaves in a library:
+    its files are hard links to the originals, which ``copytree`` writes out in
+    full (20 GB from a 1.7 GB demo-data), and nothing reads it back.
     """
-    return [n for n in names if ".bck" in n or n == ".pixlstash-share"]
+    return [n for n in names if ".bck" in n or n == SHARE_LINKS_DIRNAME]
 
 
 def _strip_credentials(db_path: Path) -> None:
