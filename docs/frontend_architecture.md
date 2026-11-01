@@ -1208,6 +1208,8 @@ Import source selection dialog. Sources: local file picker, Google Photos (OAuth
 #### `ImageImporter.vue` (1185 lines)
 Actual file upload engine. Props: `backendUrl`, `selectedCharacterId`, `allPicturesId`, `unassignedPicturesId`. Emits: `import-started`, `import-finished`, `import-cancelled`, `import-error`. Handles chunked multipart upload with progress tracking.
 
+**It draws nothing itself (#2512).** The import happens in the grid: `ImageImporter` writes each run to `useImportArrivalsStore` (a tile per dropped picture, keyed, with its state: uploading → checking → new / duplicate / scrapheaped / unsupported / failed → landed) and `ArrivingTiles.vue`, mounted by `ImageGrid` above its scroller (the scroller's `top` grows by the group's measured height, so the virtual row maths never sees it), draws the band and tiles. Previews are `URL.createObjectURL` of the dropped files, revoked when the run leaves. The keys stream beside the files and come back in the staging status `outcomes[]` (integration §10.1). The Tasks-tab row starts at the drop (cancellable while uploading) and is the record when no grid is on screen. The receipt stays until Done or a route `path` change. The old modal dialog and its chip flight are gone.
+
 **The Scrapheap restore offer.** A staged file whose content matches a soft-deleted picture is reported by the backend in its own bucket (`scrapheaped_count` / `scrapheaped_picture_ids`, integration §10.1): it is not imported again and not restored behind the user's back. On completion the component pushes ONE sticky `useNoticeStore` notice whose single action calls `restoreScrapheap` from `api/pictures.js`, the shipped route, not a second restore path, and reports `restored_count` honestly, because retention can sweep a match away between the import and the click. The completion headline is built from the buckets it names, so a run of scrapheap matches can no longer print "All files were duplicates".
 
 ---
@@ -1375,7 +1377,7 @@ stay all-media.
 **Paste imports — and the picker deliberately handles none of it.**
 `useWindowFileImport` already claims a pasted image anywhere in the window, and
 `ImageImporter` — what it hands off to — announces the import from inside the
-import, where the truth is: its progress dialog opens on the same keystroke and
+import, where the truth is: its arriving tiles appear on the same keystroke and
 it reports the buckets at the end. The picker shows the `Ctrl` `V` affordance
 and nothing else, because a second announcement from outside could only be a
 guess, and was wrong three ways: `startImport` refuses outright while another

@@ -414,6 +414,19 @@
       anchor="top"
     />
 
+    <!-- An import's arriving tiles sit above the grid's scroller, pinned
+         whatever the sort or filter, and the scroller starts below them, so
+         the virtual grid's row maths never sees them (#2512). -->
+    <div
+      ref="arrivingWrapper"
+      class="grid-arriving"
+      :style="arrivingWrapperStyle"
+    >
+      <ArrivingTiles
+        :columns="gridStore.columns"
+        @show-picture="(id) => openLightbox({ id })"
+      />
+    </div>
     <div
       class="grid-scroll-wrapper"
       ref="scrollWrapper"
@@ -421,7 +434,7 @@
       @dragenter.prevent="handleGridDragEnter"
       @dragover.prevent="handleGridDragOver"
       @dragleave.prevent="handleGridDragLeave"
-      @drop.capture.prevent="handleGridDrop"
+      @drop.capture.prevent="handleArrivingGridDrop"
       :style="scrollWrapperStyle"
     >
       <div
@@ -1280,7 +1293,12 @@ import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import LibraryEmptyState from "./LibraryEmptyState.vue";
-import { isSupportedImportFile } from "../../utils/media";
+import {
+  isFileDrag,
+  isInternalImageDrag,
+  isModelFile,
+  isSupportedImportFile,
+} from "../../utils/media";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -1335,6 +1353,8 @@ import {
   pictureGridTabIndex,
 } from "../../utils/gridAccessibility.js";
 import ImageImporter from "../io/ImageImporter.vue";
+import ArrivingTiles from "./ArrivingTiles.vue";
+import { useImportArrivalsStore } from "../../stores/useImportArrivalsStore";
 import Lightbox from "./Lightbox.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
 import { inboxEmptyState, useInboxStore } from "../../stores/useInboxStore";
@@ -5496,15 +5516,26 @@ const wrapperStyle = computed(() => ({
   "--filter-strip-h": filterStripVisible.value
     ? "var(--toolbar-height)"
     : "0px",
+  // The grid body starts below an import's arriving tiles (#2512).
+  "--arriving-h": `${arrivingHeight.value}px`,
 }));
+const gridBodyTop = computed(() =>
+  showScrapheapBar.value
+    ? `var(--selbar-height, 48px) + var(--filter-strip-h, 0px) + ${SCRAPHEAP_BAR_HEIGHT_PX}px`
+    : "var(--selbar-height, 48px) + var(--filter-strip-h, 0px)",
+);
 const scrollWrapperStyle = computed(() => ({
   position: "absolute",
-  top: showScrapheapBar.value
-    ? `calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px) + ${SCRAPHEAP_BAR_HEIGHT_PX}px)`
-    : "calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px))",
+  top: `calc(${gridBodyTop.value} + ${arrivingHeight.value}px)`,
   left: "0",
   right: "0",
   bottom: "0",
+}));
+const arrivingWrapperStyle = computed(() => ({
+  position: "absolute",
+  top: `calc(${gridBodyTop.value})`,
+  left: "0",
+  right: "0",
 }));
 const scrapheapEmptyDisabled = computed(() => {
   return (
@@ -5898,6 +5929,59 @@ async function handleImagesUploaded(payload) {
     updateVisibleThumbnails();
   });
   emit("refresh-sidebar");
+}
+
+// ── Arriving tiles (#2512) ──
+const importArrivals = useImportArrivalsStore();
+const arrivingWrapper = ref(null);
+const arrivingHeight = ref(0);
+let arrivingResizeObserver = null;
+onMounted(() => {
+  if (typeof ResizeObserver === "undefined" || !arrivingWrapper.value) return;
+  arrivingResizeObserver = new ResizeObserver(() => {
+    arrivingHeight.value = arrivingWrapper.value?.offsetHeight ?? 0;
+  });
+  arrivingResizeObserver.observe(arrivingWrapper.value);
+});
+onUnmounted(() => {
+  arrivingResizeObserver?.disconnect();
+  arrivingResizeObserver = null;
+});
+// The receipt stays until Done or the next navigation. The path, not the
+// whole URL: opening the lightbox from a duplicate tile is not navigating.
+const arrivalsRoute = useRoute();
+watch(
+  () => arrivalsRoute.path,
+  () => importArrivals.dismissFinished(),
+);
+
+/**
+ * Acknowledge an external file drop on the frame it lands, before the drop's
+ * folders are walked: the band says it is reading, and the dropped files
+ * already refused by name are held for the run as "not supported" tiles. Read
+ * synchronously, because the drop's payload is gone after the first await.
+ */
+async function handleArrivingGridDrop(event) {
+  const dataTransfer = event?.dataTransfer;
+  const external =
+    dataTransfer &&
+    isFileDrag(dataTransfer) &&
+    !isInternalImageDrag(dataTransfer);
+  if (external) {
+    importArrivals.beginReading(
+      Array.from(dataTransfer.files || []).filter(
+        (file) =>
+          /\.[^./\\]+$/.test(file.name) &&
+          !isSupportedImportFile(file) &&
+          !isModelFile(file),
+      ),
+    );
+  }
+  try {
+    await handleGridDrop(event);
+  } finally {
+    if (external) importArrivals.endReading();
+  }
 }
 
 function handleImportStarted() {

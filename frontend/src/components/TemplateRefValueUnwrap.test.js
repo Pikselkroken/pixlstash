@@ -38,6 +38,7 @@ const VALUE_WRITE = /\.value\.value\s*=[^=]/;
 // Listed rather than silently dropped, so the walk cannot quietly stop covering
 // a file that grows a template later.
 const NOTHING_TO_CHECK = [
+  "/components/io/ImageImporter.vue",
   "/components/settings/SettingsTwoCol.vue",
   "/components/widgets/FieldLabel.vue",
   "/components/widgets/MemoBlock.vue",
