@@ -848,6 +848,11 @@ def test_a_training_run_wears_its_base_models_release_tile():
         True,
     )
     assert training_base_tile("Tongyi-MAI/Z-Image-Turbo")["label"] == "Z-Image Turbo"
+    # No tab: free text claims no role, and an undistilled base no bolt.
+    assert tile["mark_tab"] is None
+    assert training_base_tile("someone/my-sdxl-anime-lora")["mark_tab"] is None
+    # A re-branded fine-tune wears its own mark, with no canonical label.
+    assert training_base_tile("RunDiffusion/Juggernaut-XL")["label"] is None
     assert training_base_tile("/home/me/models/flux1-dev.safetensors")["mark"] == [
         "Dev",
         "1",
@@ -855,4 +860,5 @@ def test_a_training_run_wears_its_base_models_release_tile():
     # An unknown base, or none, keeps the generated mark.
     assert training_base_tile("someone/my-private-base") is None
     assert training_base_tile("") is None
+    assert training_base_tile("   ") is None
     assert training_base_tile(None) is None

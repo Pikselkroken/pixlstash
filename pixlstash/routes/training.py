@@ -541,8 +541,9 @@ def create_router(server) -> APIRouter:
             description=(
                 "The tile the base model wears, as `mark`, `mark_tab`, "
                 "`mark_colors`, `mark_icon`, `mark_letters` and `mark_band` on a "
-                "shelf row, plus `label`, its canonical name. Null for a base "
-                "model no known one matches."
+                "shelf row (no tab), plus `label`, its canonical name (null for "
+                "a re-branded fine-tune). Null for a base model no known one "
+                "matches."
             ),
         )
         trigger_word: Optional[str] = Field(

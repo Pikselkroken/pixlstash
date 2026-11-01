@@ -6656,11 +6656,13 @@ anything.
 **A run wears its base model's tile.** `GET /training/jobs`, the live view
 and the folder listing carry `base_tile` beside `base_model`: the server's
 `known_base_models.training_base_tile`, the tile a workflow card draws that
-base's release with (the `mark*` fields plus `label`), or null for a base the
-table does not know. `baseMarkOf` (`utils/trainingRuns.js`) turns it into a
+base's release with (the `mark*` fields with no tab, since the id is free text
+and a role or bolt read from it would overclaim, plus `label`, null for a
+re-branded fine-tune), or null for a base the table does not know. `baseMarkOf` (`utils/trainingRuns.js`) turns it into a
 `ModelMark` row (`named`), which the card puts before its name and the run
 page's bar after the run's name, with the label (else the id's last segment)
-beside it and the trainer's own id in its tooltip. An unknown base wears the
+beside it (less a model file's extension) and the trainer's own id in its
+tooltip. An unknown base wears the
 generated mark; no base model, no mark.
 
 #### Watching a run train (#2118)

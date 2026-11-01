@@ -118,7 +118,8 @@ class RunResponse(BaseModel):
         default=None,
         description=(
             "The tile the base model wears (`mark`, `mark_icon`, ... as on a "
-            "shelf row, plus `label`), or null for a base no known one matches."
+            "shelf row, no tab, plus `label`), or null for a base no known one "
+            "matches."
         ),
     )
     trigger_words: list[str] = Field(default_factory=list)

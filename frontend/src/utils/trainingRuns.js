@@ -195,13 +195,20 @@ export function baseOf(card) {
  * The row `ModelMark` draws a run's base model from, or null with none
  * recorded. `source` is a job, a folder run or a live view: anything with
  * `base_model` and the server's `base_tile` (null for a base it does not
- * know, which then wears the generated mark, named by its last segment).
+ * know, which then wears the generated mark, named by its last segment less
+ * a model file's extension).
  */
 export function baseMarkOf(source) {
-  const raw = source?.base_model;
+  const raw = String(source?.base_model || "").trim();
   if (!raw) return null;
   const tile = source.base_tile || {};
-  const name = tile.label || raw.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  const name =
+    tile.label ||
+    raw
+      .replace(/[\\/]+$/, "")
+      .split(/[\\/]/)
+      .pop()
+      .replace(/\.(safetensors|sft|ckpt|pt|pth|bin|gguf)$/i, "");
   return { ...tile, display_name: name, base_model: tile.label || raw };
 }
 

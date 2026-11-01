@@ -179,9 +179,11 @@ describe("the base model's mark", () => {
 
   it("names an unknown base by its id's last segment", () => {
     expect(baseMarkOf({ base_model: "C:\\models\\my_base.safetensors" }).display_name).toBe(
-      "my_base.safetensors",
+      "my_base",
     );
+    expect(baseMarkOf({ base_model: "someone/my-base " }).display_name).toBe("my-base");
     expect(baseMarkOf({ base_model: null })).toBeNull();
+    expect(baseMarkOf({ base_model: "   " })).toBeNull();
   });
 
   it("reads a card's folder run before its job, as its base fact does", () => {
