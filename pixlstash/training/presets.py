@@ -64,6 +64,9 @@ FITS = ("auto", "save_memory", "best_quality")
 EVIDENCE = ("measured", "reported", "derived", "none")
 
 PROMPTS_KEY = "sample.samples[*].prompt"
+#: Keeping the description generic (``sample_prompts.preservation``).
+PRESERVATION_KEY = "train.diff_output_preservation"
+PRESERVATION_CLASS_KEY = "train.diff_output_preservation_class"
 _MAX_PROMPTS = 16
 SAMPLING_KEY = "train.disable_sampling"
 #: The preview size the Previews question offers (#2415), when drawing at it is
@@ -533,6 +536,7 @@ def resolve(
     ram_mb: int | None,
     pins: dict | None = None,
     prompts: list[str] | None = None,
+    preservation: dict | None = None,
     lookup: Callable[[dict], tuple[str, dict | None]] | None = None,
     profile: str | None = None,
 ) -> dict:
@@ -554,6 +558,11 @@ def resolve(
         prompts: The sample prompts written from the dataset's captions
             (:func:`pixlstash.training.sample_prompts.generate`), checked
             like a pin; pinned prompts win over them.
+        preservation: Whether to keep the person's description generic, and
+            that description (:func:`pixlstash.training.sample_prompts.preservation`),
+            source ``captions``; pins win over them. Left on beside a text
+            encoder that trains it is turned off, as ai-toolkit refuses the
+            two together; pinned on, that is an error.
         lookup: Answers ``(fingerprint, measurement or None)`` for a profile's
             full ``{key: value}`` (:func:`measurements.make_lookup`). A
             measured profile is admitted on its measured peaks instead of the
@@ -579,6 +588,9 @@ def resolve(
         ``effort``, ``pictures``, ``captions``, ``gpu`` or ``pinned``.
 
     Raises:
+        TunableOverrideError: Preservation pinned on beside a text encoder
+            that trains, or with no description to keep generic (a style or
+            a thing).
         ValueError: An unknown choice.
         NoProfileFits: Nothing in the fit choice fits; says which budget.
     """
@@ -602,6 +614,10 @@ def resolve(
     if prompts:
         check_tunable(PROMPTS_KEY, list(prompts))
         put("captions", {PROMPTS_KEY: list(prompts)})
+    if preservation:
+        for key, value in preservation.items():
+            check_tunable(key, value)
+        put("captions", preservation)
     row = preset["effort"][effort]
     put("effort", {k: v for k, v in row.items() if k not in EFFORT_STEP_KEYS})
     steps = math.ceil(row["steps_per_picture"] * max(0, picture_count))
@@ -617,6 +633,24 @@ def resolve(
         else None
     )
     put("pinned", pins)
+    kept = values.get(PRESERVATION_KEY)
+    described = str(values.get(PRESERVATION_CLASS_KEY, {}).get("value") or "")
+    if kept and kept["value"] and not described.strip():
+        raise TunableOverrideError(
+            "Keeping the description generic needs a person's description; "
+            "this run has none."
+        )
+    if (
+        kept
+        and kept["value"]
+        and values.get("train.train_text_encoder", {}).get("value")
+    ):
+        if kept["source"] == "pinned":
+            raise TunableOverrideError(
+                "Keeping the description generic cannot be combined with "
+                "training the text encoder."
+            )
+        values[PRESERVATION_KEY] = {"value": False, "source": kept["source"]}
     if "network.linear_alpha" not in pins and "network.linear" in values:
         values["network.linear_alpha"] = dict(values["network.linear"])
 

@@ -89,6 +89,10 @@ TUNABLE_KEYS: dict[str, _Rule] = {
     "train.cache_text_embeddings": _flag(),
     "train.disable_sampling": _flag(),
     "train.audio_loss_multiplier": _floats(0, 10),
+    # Keeps the words that describe a person what the base model drew for them
+    # (sample_prompts.preservation); the class word is that description.
+    "train.diff_output_preservation": _flag(),
+    "train.diff_output_preservation_class": _text(200),
     "network.linear": _ints(1, 512),
     "network.linear_alpha": _floats(0, 1024),
     "network.conv": _ints(0, 512),

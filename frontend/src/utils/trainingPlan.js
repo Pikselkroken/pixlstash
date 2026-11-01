@@ -10,6 +10,10 @@ export const PROMPTS_KEY = "sample.samples[*].prompt";
 /** Whether a clip recipe's run learns the clips' sound: the dialog's Sound choice. */
 export const AUDIO_KEY = "datasets[*].do_audio";
 
+/** Keep the person's description generic, and that description (the class word). */
+export const PRESERVATION_KEY = "train.diff_output_preservation";
+export const PRESERVATION_CLASS_KEY = "train.diff_output_preservation_class";
+
 export const SUBJECT_LABELS = {
   person: "A person",
   style: "A style",
@@ -100,6 +104,8 @@ const KEY_LABELS = {
   "train.audio_loss_multiplier": "Sound weight",
   "sample.num_frames": "Sample frames",
   "sample.fps": "Sample frame rate",
+  [PRESERVATION_KEY]: "Keep the description generic",
+  [PRESERVATION_CLASS_KEY]: "Description kept generic",
 };
 
 /** The sizes the "Train at sizes" chips offer (all multiples of 16). */
@@ -473,4 +479,55 @@ export function promptTexts(lines) {
 /** Whether the owner's lines differ from the written ones (so they are a pin). */
 export function promptsEdited(lines, defaults) {
   return !sameValue(promptTexts(lines), promptTexts(defaults));
+}
+
+/** "him", "her" or "them": a person, by the noun of their description. */
+export function pronounOf(description) {
+  const noun = String(description || "").trim().split(/\s+/).pop().toLowerCase();
+  if (["man", "boy", "gentleman", "guy"].includes(noun)) return "him";
+  if (["woman", "girl", "lady"].includes(noun)) return "her";
+  return "them";
+}
+
+/**
+ * What a sample prompt without the trigger word controls for: `lookalike`
+ * when it names the person's description, `stranger` when it names someone
+ * they are not, else null (a prompt with the word, or one the owner rewrote).
+ *
+ * @param {string} text The prompt, `{{TRIGGER_WORD}}` form.
+ * @param {{description?: string, stranger?: string}} info From GET
+ *   /training/sample-prompts; a person's alone carries `stranger`.
+ */
+export function promptRole(text, info) {
+  if (!info?.description || !info?.stranger || text.includes(TRIGGER_TOKEN)) return null;
+  // Whole words, as the run screen matches them: "a man" is not "a mango".
+  const names = (phrase) =>
+    new RegExp(`(?<![\\w])${escapeRegExp(phrase)}(?![\\w])`, "i").test(text);
+  if (names(info.description)) return "lookalike";
+  if (names(info.stranger)) return "stranger";
+  return null;
+}
+
+/**
+ * A control row's label and what it should do, as the dialog and the run
+ * screen word them. The lookalike holds still only while the description is
+ * kept generic; the stranger always should.
+ *
+ * @returns {{label: string, expect: string, detail: string} | null}
+ */
+export function roleText(role, { kept, description }) {
+  const who = pronounOf(description);
+  if (role === "lookalike") {
+    return kept
+      ? { label: `Like ${who}`, expect: "Should not change", detail: "kept generic" }
+      : {
+          label: `Like ${who}`,
+          expect: "Expected to drift",
+          detail: `the words that describe ${who}`,
+        };
+  }
+  if (role === "stranger") {
+    return { label: "Someone else", expect: "Should not change", detail: "from step 0" };
+  }
+  return null;
 }

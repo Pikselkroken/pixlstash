@@ -55,6 +55,14 @@ def test_fingerprint_follows_what_moves_memory_and_speed_only():
         assert changed != base
 
 
+def test_keeping_the_description_generic_is_a_setup_only_while_on():
+    """It slows every step, so it is measured apart; off, a run keeps the key
+    it was measured under before the switch existed."""
+    base = _key()
+    assert _key(_values(**{"train.diff_output_preservation": False})) == base
+    assert _key(_values(**{"train.diff_output_preservation": True})) != base
+
+
 def test_a_setup_measured_by_polling_alone_is_measured_again(monkeypatch):
     """Polls missed a preview's VAE decode, so a measurement taken that way
     must not admit a run: reading the allocator's peaks is a new setup."""

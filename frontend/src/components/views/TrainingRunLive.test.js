@@ -773,3 +773,49 @@ describe("leaving the run with Escape, as the back button's keycap says", () => 
     window.localStorage.removeItem("pixlstash.trainingRunTips");
   });
 });
+
+describe("a person's run with a lookalike and a stranger", () => {
+  const spaced = (el) => el.findAll("span").map((t) => t.text()).join(" ");
+  function controls(on) {
+    const base = payload();
+    return payload({
+      preservation: { on, description: "an elderly man" },
+      rows: [
+        base.rows[0],
+        { ...base.rows[1], index: 1, prompt: "an elderly man reading", role: "lookalike" },
+        { ...base.rows[1], index: 2, prompt: "a young woman at a cafe", role: "stranger" },
+      ],
+    });
+  }
+
+  it("kept generic, both controls should hold still", async () => {
+    const wrapper = await open(controls(true));
+    expect(wrapper.find('[data-testid="trl-mode"]').text()).toBe(
+      "“an elderly man” kept generic",
+    );
+    expect(wrapper.text()).toContain("one person like him, one who is not");
+    expect(wrapper.findAll('[data-testid="trl-role"]').map((r) => r.text())).toEqual([
+      "Like him",
+      "Someone else",
+    ]);
+    expect(wrapper.findAll('[data-testid="trl-expect"]').map(spaced)).toEqual([
+      "Should not change kept generic",
+      "Should not change from step 0",
+    ]);
+  });
+
+  it("with the words left free, the lookalike is expected to drift", async () => {
+    const wrapper = await open(controls(false));
+    expect(wrapper.find('[data-testid="trl-mode"]').text()).toBe("words left free");
+    expect(spaced(wrapper.findAll('[data-testid="trl-expect"]')[0])).toBe(
+      "Expected to drift the words that describe him",
+    );
+  });
+
+  it("a run that never decided keeps the old promise and no labels", async () => {
+    const wrapper = await open(payload());
+    expect(wrapper.text()).toContain("should change little from step 0");
+    expect(wrapper.find('[data-testid="trl-mode"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="trl-role"]').exists()).toBe(false);
+  });
+});

@@ -265,6 +265,9 @@
               <div class="trl-gline" :style="{ gridRow: group.row }">
                 <span class="section-label">{{ group.title }}</span>
                 <span class="trl-hint">{{ group.hint }}</span>
+                <span v-if="group.badge" class="trl-mode" data-testid="trl-mode">{{
+                  group.badge
+                }}</span>
               </div>
               <template v-for="(row, r) in group.rows" :key="`r${row.index}`">
                 <div
@@ -273,6 +276,9 @@
                   :style="{ gridRow: group.row + 1 + r }"
                 >
                   <span>
+                    <span v-if="roleOf(row)" class="trl-role" data-testid="trl-role">{{
+                      roleOf(row).label
+                    }}</span>
                     <template v-for="(part, p) in promptParts(row.prompt)" :key="p">
                       <span v-if="part.trigger" class="trl-trig">{{ part.text }}</span>
                       <template v-else>{{ part.text }}</template>
@@ -320,6 +326,16 @@
                         ? "after set-up"
                         : ""
                   }}</span>
+                </div>
+                <!-- What a control row should do, after its last column. -->
+                <div
+                  v-if="roleOf(row)"
+                  class="trl-expect"
+                  data-testid="trl-expect"
+                  :style="{ gridRow: group.row + 1 + r, gridColumn: columns.length + 2 }"
+                >
+                  <span>{{ roleOf(row).expect }}</span>
+                  <span class="trl-muted">{{ roleOf(row).detail }}</span>
                 </div>
               </template>
             </template>
@@ -460,6 +476,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { errorDetail } from "../../utils/apiError";
 import { copyText } from "../../utils/clipboard";
 import { isTypingTarget } from "../../utils/dom.js";
+import { pronounOf, roleText } from "../../utils/trainingPlan.js";
 import {
   failureText,
   FOLDER_RUN_STATUS,
@@ -676,10 +693,21 @@ const groups = computed(() => {
     next += 1 + withWord.length;
   }
   if (without.length) {
+    // A person's run says which control is a lookalike and which a stranger,
+    // and whether it kept the words that describe them generic.
+    const kept = live.value?.preservation;
+    const roles = kept && without.some((row) => row.role);
     out.push({
       key: "without",
       title: "Without it",
-      hint: "should change little from step 0",
+      hint: roles
+        ? `one person like ${pronounOf(kept.description)}, one who is not`
+        : "should change little from step 0",
+      badge: roles
+        ? kept.on
+          ? `“${kept.description}” kept generic`
+          : "words left free"
+        : null,
       rows: without,
       row: next,
     });
@@ -696,6 +724,13 @@ const groups = computed(() => {
   }
   return out;
 });
+
+/** A control row's label and what it should do; null for any other row. */
+function roleOf(row) {
+  const kept = live.value?.preservation;
+  if (!kept || !row.role) return null;
+  return roleText(row.role, { kept: kept.on, description: kept.description });
+}
 
 /** Every grid row: the timeline, the loss, each group's heading and prompts. */
 const rowCount = computed(() =>
@@ -1767,6 +1802,33 @@ onBeforeUnmount(() => {
 /* Full row height, so the pinned label's own background covers its row. */
 .trl-prompt {
   font-size: var(--text-sm);
+}
+
+/* The run's mode and a control row's role: neutral count badges. */
+.trl-mode,
+.trl-role {
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, rgb(var(--v-theme-on-background)) 12%, transparent);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: var(--badge-size);
+  white-space: nowrap;
+}
+
+.trl-role {
+  display: inline-block;
+  margin-right: var(--space-2);
+}
+
+.trl-expect {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-left: var(--space-4);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  white-space: nowrap;
 }
 
 .trl-trig {

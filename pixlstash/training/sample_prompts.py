@@ -12,6 +12,12 @@ not asked for.
   plainly ("an elderly man"), taken from the captions, else the tags, else the
   subject's generic noun, so the pair differs only by the trigger. For a style
   the ``<trigger> style`` suffix is dropped.
+- For a person the second scene's prompt without the word names someone else
+  instead (:func:`stranger`: "a young woman"), so one control is a lookalike,
+  which drifts unless training keeps the description generic, and the other a
+  stranger, which should never change.
+- :func:`preservation` turns a person's description into the trainer's
+  output-preservation settings, switched on when most captions use it.
 
 The trigger word is written as the ``{{TRIGGER_WORD}}`` placeholder, which the
 config render fills in, so the prompts follow an edited trigger word. Nothing
@@ -142,6 +148,25 @@ _WORD = re.compile(r"[a-z][a-z'-]*|[,.;:!?()]")
 _PLAIN_TAG = re.compile(r"[a-z][a-z' -]*")
 _MAX_TAG_WORDS = 4
 _MAX_MODIFIERS = 2
+# A caption longer than this is cut where the dialog quotes it.
+_MAX_EXAMPLE = 200
+
+# The settings :func:`preservation` writes, relative to ``config.process[0]``.
+PRESERVATION_KEY = "train.diff_output_preservation"
+PRESERVATION_CLASS_KEY = "train.diff_output_preservation_class"
+
+# What :func:`stranger` turns a person's description into: the other sex, the
+# other end of life. A child becomes an elderly adult.
+_OTHER_SEX = {
+    "man": "woman",
+    "woman": "man",
+    "lady": "man",
+    "gentleman": "woman",
+    "guy": "woman",
+}
+_CHILD_NOUNS = {"boy", "girl", "child", "kid", "baby", "teenager"}
+_OLD_WORDS = {"elderly", "old", "older", "senior", "aged", "middle-aged"}
+_YOUNG_WORDS = {"young", "younger", "teenage", "little"}
 
 
 def _article(phrase: str) -> str:
@@ -240,6 +265,44 @@ def describe(
     return _GENERIC[subject], "generic"
 
 
+def stranger(description: str) -> str | None:
+    """Somebody a person's description does not fit: its opposite.
+
+    The noun takes the other sex and an age word the other end of life
+    ("an elderly man" is "a young woman"); any other modifier is dropped, as
+    it could be the subject's own ("a blonde woman" is "a man"). A child is
+    "an elderly" adult, and a description with no sex and no age ("a person")
+    is "a child". A description typed in by hand may carry no article or no
+    words at all ("person", ""): the first is read the same, the second has
+    no opposite and answers None.
+    """
+    words = description.lower().split()
+    if words and words[0] in ("a", "an"):
+        words = words[1:]
+    if not words:
+        return None
+    noun, modifiers = words[-1], set(words[:-1])
+    if noun in _CHILD_NOUNS:
+        return _article(
+            "elderly " + {"boy": "woman", "girl": "man"}.get(noun, "person")
+        )
+    other = _OTHER_SEX.get(noun, noun)
+    if modifiers & _OLD_WORDS:
+        return _article(f"young {other}")
+    if modifiers & _YOUNG_WORDS:
+        return _article(f"elderly {other}")
+    return _article(other) if other != noun else "a child"
+
+
+def _shared(description: str, captions: list[str], skip: set[str]) -> list[str]:
+    """The captions that call a person *description*, in order."""
+    return [
+        caption
+        for caption in captions
+        if caption and description in _phrases(caption, _PERSON_NOUNS, skip)
+    ]
+
+
 def _seen(text: str, words: tuple[str, ...]) -> int:
     """How many of *words* occur in *text*, alone or plural ("outdoors")."""
     return sum(1 for w in words if re.search(rf"\b{re.escape(w)}(?:e?s)?\b", text))
@@ -260,11 +323,18 @@ def generate(
         trigger_word: Kept out of the description (:func:`describe`).
 
     Returns:
-        ``{"prompts", "description", "description_source"}``. ``prompts`` is
-        four ``{"prompt", "with_trigger", "without_trigger"}`` in pairs, the
-        one with the word first; ``prompt`` is the form the run uses, and the
-        other is what clicking the word in the dialog turns it into.
-        ``description`` and its source are None for a style.
+        ``{"prompts", "description", "description_source", "stranger",
+        "description_count", "caption_count", "description_example",
+        "keep_generic"}``. ``prompts`` is four ``{"prompt", "with_trigger",
+        "without_trigger"}`` in pairs, the one with the word first; ``prompt``
+        is the form the run uses, and the other is what clicking the word in
+        the dialog turns it into. ``description`` and its source are None for
+        a style. The rest are a person's alone (None otherwise):
+        ``stranger`` is who the second scene's prompt without the word names;
+        ``description_count`` of the ``caption_count`` captions that are not
+        empty call the person the description, ``description_example`` being
+        the first of them; ``keep_generic`` is whether most do, which turns
+        :func:`preservation` on.
 
     Raises:
         ValueError: An unknown subject.
@@ -283,16 +353,24 @@ def generate(
     )
     scenes = [_SCENES[subject][i][0] for i in sorted(ranked[:SCENE_COUNT])]
 
-    description = source = None
+    description = source = other = None
+    count = total = example = keep_generic = None
     if subject != "style":
         description, source = describe(subject, captions, tags, trigger_word)
+    if subject == "person":
+        other = stranger(description)
+        skip = set(_WORD.findall((trigger_word or "").lower()))
+        shared = _shared(description, captions, skip) if source == "captions" else []
+        count, total = len(shared), sum(1 for c in captions if c)
+        example = shared[0][:_MAX_EXAMPLE] if shared else None
+        keep_generic = count * 2 > total
     prompts = []
-    for scene in scenes:
+    for n, scene in enumerate(scenes):
         if subject == "style":
             with_trigger, without = f"{scene}, {TRIGGER} style", scene
         else:
             with_trigger = scene.format(s=TRIGGER)
-            without = scene.format(s=description)
+            without = scene.format(s=other if other and n == 1 else description)
         for prompt in (with_trigger, without):
             prompts.append(
                 {
@@ -305,6 +383,41 @@ def generate(
         "prompts": prompts,
         "description": description,
         "description_source": source,
+        "stranger": other,
+        "description_count": count,
+        "caption_count": total,
+        "description_example": example,
+        "keep_generic": keep_generic,
+    }
+
+
+def preservation(generated: dict) -> dict:
+    """The trainer settings that keep a person's description generic.
+
+    ai-toolkit's differential output preservation swaps the trigger word in
+    each training caption for the class word (the dataset's captions are the
+    trigger word and the picture's tags, so "skpr, beard, glasses" becomes "an
+    elderly man, beard, glasses"), asks the model with the LoRA off what that
+    draws, and trains the LoRA to draw the same: the description stays what
+    the base model knew, instead of turning into the person. A sample prompt
+    swapped the same way is the lookalike, so the run screen shows what
+    training protected. The description is the one :func:`describe` picks:
+    from the pictures' descriptions, else from their tags. A description from
+    the tags is still written as the class word, but the switch stays off,
+    since ``keep_generic`` counts only descriptions that use it.
+
+    Args:
+        generated: A :func:`generate` result.
+
+    Returns:
+        ``{PRESERVATION_KEY: on, PRESERVATION_CLASS_KEY: description}`` for a
+        person, on when most captions use the description; ``{}`` otherwise.
+    """
+    if generated.get("keep_generic") is None:
+        return {}
+    return {
+        PRESERVATION_KEY: bool(generated["keep_generic"]),
+        PRESERVATION_CLASS_KEY: generated["description"],
     }
 
 

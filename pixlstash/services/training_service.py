@@ -1237,15 +1237,25 @@ class TrainingService:
     ) -> dict:
         """The run resolved again on *profile* alone, measurements included.
 
-        The same choices, pictures, room, pins and prompts as at enqueue.
+        The same choices, pictures, room, pins, prompts and preservation as at
+        enqueue.
         """
         try:
             pins = json.loads(info.get("advanced_pins") or "{}")
         except ValueError as exc:
             logger.warning("Job %s has unreadable pins: %s", info["uuid"], exc)
             pins = {}
-        entry = (resolution.get("values") or {}).get(presets.PROMPTS_KEY) or {}
-        prompts = entry.get("value") if entry.get("source") == "captions" else None
+        written = {
+            key: entry.get("value")
+            for key, entry in (resolution.get("values") or {}).items()
+            if isinstance(entry, dict) and entry.get("source") == "captions"
+        }
+        prompts = written.get(presets.PROMPTS_KEY)
+        preservation = {
+            key: written[key]
+            for key in (presets.PRESERVATION_KEY, presets.PRESERVATION_CLASS_KEY)
+            if key in written
+        }
         room = resolution.get("room") or {}
         try:
             return presets.resolve(
@@ -1258,6 +1268,7 @@ class TrainingService:
                 ram_mb=room.get("ram_mb"),
                 pins=pins,
                 prompts=prompts,
+                preservation=preservation,
                 lookup=lookup,
                 profile=profile,
             )
