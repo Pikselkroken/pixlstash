@@ -1621,6 +1621,17 @@ describe("resizing the columns", () => {
     ).toBe(180);
   });
 
+  it("hands the stylesheet the same floors the grips stop at", async () => {
+    // A narrow panel shrinks the columns to these and holds Name at its own.
+    // Without them `min-width` falls back to each cell's content, and the
+    // rows stop agreeing with each other and with the headings.
+    const wrapper = await mountShelf([adapter()]);
+    const style = wrapper.find(".shelf").element.style;
+    expect(style.getPropertyValue("--shelf-col-base-min")).toBe("72px");
+    expect(style.getPropertyValue("--shelf-col-sets-min")).toBe("44px");
+    expect(style.getPropertyValue("--shelf-name-min")).toBe("200px");
+  });
+
   it("stops widening where the Name track would go under its floor", async () => {
     // The ceiling a drag actually meets is the panel, not the store's bound:
     // every pixel a fixed column takes comes out of Name, and past 200px of it
