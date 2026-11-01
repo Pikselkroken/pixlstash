@@ -5086,7 +5086,7 @@ describe("going to a model by link (?model=)", () => {
     wrapper.unmount();
   });
 
-  it("does not pin the reader to All models for a model it never finds", async () => {
+  it("switches to All models once for a model it never finds, then lets the reader leave", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const store = useModelShelfStore();
     nav.route.query = { model: "999" };
