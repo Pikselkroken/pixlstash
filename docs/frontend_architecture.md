@@ -2407,8 +2407,8 @@ own row.
   once per address (the server reads ComfyUI's `/extensions` for the node's
   `open_workflow.js`) and refuses the button with a reason on a definite no.
   A ComfyUI the server cannot reach (all `null`) refuses it too, *ComfyUI is
-  not running at <address>*, and is asked again every 5 s until it answers
-  and on window focus, so starting ComfyUI wakes the button where it is; a
+  not running at <address>*, and is asked again until it answers, backing
+  off from 5 s to 30 s, and on window focus (which starts the back-off over), so starting ComfyUI wakes the button where it is; a
   failed ask of PixlStash itself changes nothing (an open button stays open,
   a refused one keeps being re-asked). The reason links `ComfyUI-PixlStash`
   to the pack's repo (`PIXLSTASH_PACK_URL`), an `https:` `target="_blank"` link

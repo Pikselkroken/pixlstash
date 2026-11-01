@@ -115,17 +115,24 @@ export async function openHeldInComfyui(hold, failText) {
   }
 }
 
-/** How often a ComfyUI that did not answer is asked again, in ms. */
+/**
+ * How soon a ComfyUI that did not answer is asked again, in ms: doubling from
+ * the first to the most while it stays down, since each ask costs the server
+ * a request to ComfyUI and a log line.
+ */
 export const COMFYUI_RECHECK_MS = 5000;
+export const COMFYUI_RECHECK_MAX_MS = 30000;
 
 /**
  * Whether a workflow can be opened in ComfyUI from here, and what opens.
  *
  * Asks ComfyUI for the PixlStash node once per mount and again when the
  * address in Settings changes. A ComfyUI that does not answer is asked again
- * every `COMFYUI_RECHECK_MS` until it does, so starting it wakes the buttons
- * without leaving the screen; and once more whenever the window regains focus,
- * which is when the owner comes back from starting or stopping it.
+ * until it does, backing off from `COMFYUI_RECHECK_MS` to
+ * `COMFYUI_RECHECK_MAX_MS`, so starting it wakes the buttons without leaving
+ * the screen; and once more whenever the window regains focus, which is when
+ * the owner comes back from starting or stopping it, and which starts the
+ * back-off over, since ComfyUI is then likely still loading.
  */
 export function useComfyuiOpen() {
   const filterStore = useFilterStore();
@@ -167,6 +174,11 @@ export function useComfyuiOpen() {
 
   let nodeCheck = 0;
   let recheck = null;
+  let delay = COMFYUI_RECHECK_MS;
+  function askLater(url) {
+    recheck = setTimeout(() => ask(url), delay);
+    delay = Math.min(delay * 2, COMFYUI_RECHECK_MAX_MS);
+  }
   async function ask(url) {
     const check = ++nodeCheck;
     clearTimeout(recheck);
@@ -183,15 +195,12 @@ export function useComfyuiOpen() {
       comfyuiLacksNode.value = canOpen === false;
       comfyuiOpensACopy.value = canOpen === true && savesBack === false;
       comfyuiOpensNoRuns.value = opensRuns === false;
-      if (comfyuiDown.value) {
-        recheck = setTimeout(() => ask(url), COMFYUI_RECHECK_MS);
-      }
+      if (comfyuiDown.value) askLater(url);
+      else delay = COMFYUI_RECHECK_MS;
     } catch (err) {
       console.warn("[workflows] could not ask ComfyUI for the PixlStash node", err);
       // A refusal already standing keeps being re-asked, or it would stick.
-      if (check === nodeCheck && comfyuiDown.value) {
-        recheck = setTimeout(() => ask(url), COMFYUI_RECHECK_MS);
-      }
+      if (check === nodeCheck && comfyuiDown.value) askLater(url);
     }
   }
 
@@ -206,11 +215,15 @@ export function useComfyuiOpen() {
       comfyuiLacksNode.value = false;
       comfyuiOpensACopy.value = false;
       comfyuiOpensNoRuns.value = false;
+      delay = COMFYUI_RECHECK_MS;
       void ask(url);
     },
     { immediate: true },
   );
-  const onFocus = () => void ask(currentUrl());
+  const onFocus = () => {
+    delay = COMFYUI_RECHECK_MS;
+    void ask(currentUrl());
+  };
   if (typeof window !== "undefined") window.addEventListener("focus", onFocus);
   onScopeDispose(() => {
     nodeCheck += 1;

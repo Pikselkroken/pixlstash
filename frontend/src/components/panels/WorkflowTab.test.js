@@ -111,7 +111,10 @@ import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
-import { COMFYUI_RECHECK_MS } from "../../composables/useComfyuiOpen";
+import {
+  COMFYUI_RECHECK_MAX_MS,
+  COMFYUI_RECHECK_MS,
+} from "../../composables/useComfyuiOpen";
 
 /** Called with the workflow id when *Change model set…* is opened from outside. */
 const useSetOpened = vi.fn();
@@ -3251,19 +3254,36 @@ describe("Open in ComfyUI", () => {
       await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MS);
       expect(getPixlstashNode).toHaveBeenCalledTimes(2);
 
+      // Backing off: the next ask is twice as far away.
+      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MS * 2 - 1);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(2);
       // A failed ask of PixlStash itself does not end the asking.
       vi.spyOn(console, "warn").mockImplementation(() => {});
       getPixlstashNode.mockRejectedValueOnce(new Error("network down"));
-      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MS);
+      await vi.advanceTimersByTimeAsync(1);
       expect(getPixlstashNode).toHaveBeenCalledTimes(3);
       expect(openButton(wrapper).attributes("aria-disabled")).toBe("true");
 
+      // Never further apart than the most.
+      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MS * 4);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MAX_MS);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(5);
+      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MAX_MS);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(6);
+
+      // Focus starts the back-off over.
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(7);
+
       getPixlstashNode.mockResolvedValue({ can_open_workflows: true });
       await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MS);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(8);
       expect(openButton(wrapper).attributes("aria-disabled")).toBeUndefined();
       // Answered: no more asking.
-      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MS * 3);
-      expect(getPixlstashNode).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MAX_MS * 3);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(8);
     } finally {
       vi.useRealTimers();
     }
