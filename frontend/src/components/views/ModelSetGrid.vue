@@ -246,6 +246,7 @@
                 @keep-separate="answerOffer(entry, false)"
                 @hide="hideCard(entry)"
                 @unhide="unhideCard(entry)"
+                @edit="onCardDblClick(entry)"
               />
             </div>
           </div>

@@ -183,6 +183,21 @@
              Mouse-only: the grid owns Tab, and Delete on the card deletes a
              hand-made set, hides a derived one; the selection pill's Hide set
              does the same from the keyboard. -->
+        <!-- Edit is the double-click on a button: it opens (or closes) this
+             set's tray and a shut Models rail. Mouse-only, like Hide: Enter
+             on the card does the same from the keyboard. -->
+        <AppButton
+          class="msc__edit"
+          variant="ghost"
+          size="sm"
+          icon-left="pencil-outline"
+          icon-only
+          tabindex="-1"
+          :tooltip="expanded ? 'Close this set' : 'Open this set to edit it'"
+          data-testid="set-edit"
+          @click.stop="emit('edit')"
+          @dblclick.stop
+        />
         <AppButton
           class="msc__hide"
           variant="ghost"
@@ -242,7 +257,7 @@
 // **A card is one base model** - a checkpoint, or the diffusion file a Flux or
 // Wan graph loads instead - and opening its tray shows the models that have run
 // with it. The tray is opened by the grid's own gestures (Enter, double-click),
-// and by the rail's Edit set; the card carries no button for it.
+// by the card's Edit button (the double-click's twin), and by the rail's Edit set.
 //
 // **Deliberately not `WorkflowCard`.** The shape is the same on purpose - the
 // cover mosaic, the scrim badges, the layered count, the rhythm of its meta rows
@@ -303,6 +318,7 @@ const emit = defineEmits([
   "keep-separate",
   "hide",
   "unhide",
+  "edit",
 ]);
 
 /** An evidence card is automatic by definition; a hand-made one says. */
@@ -537,10 +553,15 @@ const accessibleName = computed(() => {
   opacity: var(--opacity-disabled);
 }
 
+.msc__edit,
 .msc__hide {
   flex-shrink: 0;
-  margin-left: auto;
   color: rgb(var(--v-theme-on-surface));
+}
+
+/* Edit leads the pair to the row's end; Hide sits right after it. */
+.msc__edit {
+  margin-left: auto;
 }
 
 .msc__cover--hand {
