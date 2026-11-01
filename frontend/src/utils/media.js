@@ -582,6 +582,21 @@ export function isPictureDrag(dataTransfer) {
   );
 }
 
+/**
+ * The drop effect a target should set: `preferred` where the drag allows it,
+ * else one it does allow. A dropEffect outside `effectAllowed` makes the
+ * browser refuse the drop without a drop event, and a desktop drag-out
+ * (utils/shareDrag.js) allows only copy and link, never move.
+ */
+export function dropEffectFor(dataTransfer, preferred = "move") {
+  const allowed = String(dataTransfer?.effectAllowed || "all").toLowerCase();
+  if (allowed === "all" || allowed === "uninitialized") return preferred;
+  return (
+    [preferred, "copy", "link", "move"].find((e) => allowed.includes(e)) ||
+    "none"
+  );
+}
+
 /** True when the drag carries face bounding boxes. */
 export function isFaceDrag(dataTransfer) {
   if (!dataTransfer) return false;
