@@ -1285,6 +1285,11 @@
   background: var(--wash, transparent);
 }
 
+/* Headed by the project dropdown: the gap above it stays outside the wash. */
+.sidebar-branch--headed {
+  margin-top: var(--space-3);
+}
+
 .sidebar-project-tile {
   display: inline-flex;
   align-items: center;

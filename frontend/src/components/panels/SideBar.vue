@@ -2696,6 +2696,10 @@ const allOfScopeLabel = computed(() =>
     : `All of ${scopedProjectObj.value?.name ?? "this project"}`,
 );
 const dragOverScopeRow = ref(false);
+// The dropdown heads the box it scopes; a project token has no dropdown.
+const showsScopeSlot = computed(
+  () => showsTree.value && scopedResourceType.value !== "project",
+);
 
 // Only a project takes a drop: Not in a project names nowhere to add to.
 function dragOverScopeItem(event) {
@@ -5070,24 +5074,26 @@ defineExpose({
                it narrows. A project token has one project to see, so no
                dropdown; a person or set token has no switch either. -->
           <template v-if="!foldersMode">
-            <SidebarScopeSlot
-              v-if="showsTree && scopedResourceType !== 'project'"
-              :projects="sortedProjects"
-              :mode="projectViewMode"
-              :project-id="selectedProjectId"
-              :counts="scopeCounts"
-              :read-only="isReadOnly"
-              @choose="chooseScope"
-              @new-project="createProject"
-              @edit-project="openProjectEditor"
-              @project-menu="(p, e) => openSidebarCtxMenu('project', p, e)"
-            />
             <div
               v-for="branch in libraryBranches"
               :key="branch.key"
-              class="sidebar-branch"
+              :class="['sidebar-branch', { 'sidebar-branch--headed': showsScopeSlot }]"
               :style="scopeWashStyle"
             >
+              <!-- The dropdown is the box's top band, so it plainly owns the
+                   rows under it. -->
+              <SidebarScopeSlot
+                v-if="showsScopeSlot"
+                :projects="sortedProjects"
+                :mode="projectViewMode"
+                :project-id="selectedProjectId"
+                :counts="scopeCounts"
+                :read-only="isReadOnly"
+                @choose="chooseScope"
+                @new-project="createProject"
+                @edit-project="openProjectEditor"
+                @project-menu="(p, e) => openSidebarCtxMenu('project', p, e)"
+              />
               <!-- The whole scope as a row: the view choosing a project lands
                    on, lit while it is up, and the way back to it from a person
                    or set. Any project has none; All media is the library. -->
