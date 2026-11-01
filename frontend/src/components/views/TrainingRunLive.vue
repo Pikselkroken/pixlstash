@@ -140,7 +140,7 @@
               <span v-if="setupDone" class="trl-setup">
                 <Tooltip :text="setupTooltip" activator="parent" />
                 <v-icon size="14">mdi-check</v-icon>
-                Set up in {{ clock(setupSeconds) }}
+                Started training after {{ clock(setupSeconds) }}
               </span>
               <span
                 v-else-if="live.phase"
@@ -1500,11 +1500,13 @@ onBeforeUnmount(() => {
 }
 
 /* The labels stay pinned while a long run scrolls sideways: opaque, over the
-   columns passing under them, with a divider once the view has moved. */
+   columns passing under them, with a divider once the view has moved. They pin
+   where they already sit, so they never slide; the ::before covers the
+   scroller's left padding the columns would otherwise show through. */
 .trl-lab {
   grid-column: 1;
   position: sticky;
-  left: calc(-1 * var(--space-3));
+  left: 0;
   z-index: var(--z-sticky);
   background: rgb(var(--v-theme-background));
   display: flex;
@@ -1514,6 +1516,21 @@ onBeforeUnmount(() => {
   padding: 0 var(--space-3) 0 var(--space-2);
   font-size: var(--text-xs);
   line-height: var(--leading-snug);
+}
+
+.trl-lab::before {
+  content: "";
+  position: absolute;
+  inset: 0 100% 0 auto;
+  width: var(--space-3);
+  background: rgb(var(--v-theme-background));
+}
+
+/* Top-aligned with the step numbers, so the Step 0 button appearing below
+   never moves the line above it. */
+.trl-lab--setup {
+  justify-content: flex-start;
+  padding-top: var(--space-2);
 }
 
 .trl-lab--z {

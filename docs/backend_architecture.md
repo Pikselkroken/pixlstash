@@ -11790,7 +11790,7 @@ calls except each run's last swap counters.
   trainer's whole text stays in `report`.
 - **Phase log.** `training_run.phase_log` is the JSON list of `{phase, at}` the
   worker appends when the run enters a new phase (`TrainingService._note_phase`:
-  at enqueue, at launch, and on each poll), so setup folds to "Set up in 2:35"
+  at enqueue, at launch, and on each poll), so setup folds to "Started training after 2:35"
   with each phase's time. `finished_unwatched` is set by the startup reconcile
   when it finalizes a run whose trainer had already exited.
 - **The grid.** Columns are step 0, every `sample.sample_every` and the last
