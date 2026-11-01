@@ -1118,13 +1118,15 @@ function fit() {
   chartHeight.value = Math.max(CHART_MIN, Math.min(CHART_MAX, left));
 }
 
+// The tips are watched too: opening them by themselves resizes nothing else,
+// and the chart must give back their height.
 let resizer = null;
-watch([bodyRef, scrollRef, boardRef], (elements) => {
+watch([bodyRef, scrollRef, boardRef, tipsRef], ([body, scroll, board, tips]) => {
   resizer?.disconnect();
   resizer = null;
-  if (elements.some((el) => !el) || typeof ResizeObserver === "undefined") return;
+  if (!body || !scroll || !board || typeof ResizeObserver === "undefined") return;
   resizer = new ResizeObserver(() => fit());
-  elements.forEach((el) => resizer.observe(el));
+  [body, scroll, board, tips].filter(Boolean).forEach((el) => resizer.observe(el));
 });
 
 // A long run scrolls sideways under the pinned prompts. The view follows the
@@ -1217,6 +1219,10 @@ watch(
     error.value = "";
     showFull.value = false;
     notFound = false;
+    // Another run's board starts at its newest checkpoint again.
+    scrolledLeft.value = false;
+    following = true;
+    placedAt = null;
     load().then(schedule);
   },
 );
