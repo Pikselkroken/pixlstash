@@ -278,6 +278,14 @@
   overflow-y: auto;
 }
 
+/* Its group headings in full ink on the flyout header's band, so a heading
+   never reads as one more row. */
+.sidebar-rail-flyout .ctx-label {
+  padding-block: var(--space-2);
+  color: rgb(var(--v-theme-on-surface));
+  background: rgba(var(--v-theme-tertiary), 0.2);
+}
+
 .sidebar-collapsed-flyout-menu {
   position: fixed;
   z-index: var(--z-dropdown);
