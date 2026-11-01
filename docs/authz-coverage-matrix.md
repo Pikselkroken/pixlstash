@@ -534,6 +534,7 @@ and the declarations themselves are pinned by
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
 | GET | `/api/v1/tag_groups` | owner_only |  | Library-wide tag name -> group map; not a picture fact, so a share token's scope cannot narrow it meaningfully (same reasoning as tag_health). Also on READ_BLOCKED_GET_PATHS |
+| GET | `/api/v1/tag_groups/tags` | owner_only |  | Paged listing of tags by group, with library picture counts; not a picture fact (same reasoning as tag_health). Also on READ_BLOCKED_GET_PATHS |
 | POST | `/api/v1/tag_groups` | owner_only |  | Creates a library-wide group; owner-only write |
 | PUT | `/api/v1/tag_groups/order` | owner_only |  | Reorders the library-wide groups; owner-only write |
 | POST | `/api/v1/tag_groups/assign` | owner_only |  | Files tag names under a group across the whole library; owner-only write, recorded as one undoable operation |

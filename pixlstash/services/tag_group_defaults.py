@@ -11,10 +11,18 @@ Two things share one mapping so they can never disagree:
 
 A tag goes in exactly one group. Anomaly comes first and wins over any semantic
 group: a defect tag is filed as a defect even where the database calls it
-clothing or a body part. Adult subcategories map to no group at all: the
-defaults cover SFW tags only, and an import leaves those tags Ungrouped too.
+clothing or a body part.
+
+Adult subcategories have two uses, and the mapping serves both. The shipped
+defaults are SFW only (the build script drops adult rows, and its keyword guard
+drops explicit tags), so the build passes no adult group and an adult row gives no
+group. An import files the user's own file as given: an adult row goes into the
+:data:`ADULT_GROUP` ("Adult") group, which is created on demand and is never a
+default group. The filter exists so PixlStash never distributes such tags, not so
+a user's library drops them.
 """
 
+import re
 from functools import lru_cache
 from typing import Optional
 
@@ -24,11 +32,17 @@ from pixlstash.db_models.tag import (
 )
 
 ANOMALY = "Anomaly"
+CHARACTER = "Character"
+COPYRIGHT = "Copyright"
+ARTIST = "Artist"
 
 # Rail order. The names are the groups' names in every new library.
 DEFAULT_GROUP_NAMES: tuple[str, ...] = (
     ANOMALY,
     "People",
+    CHARACTER,
+    COPYRIGHT,
+    ARTIST,
     "Hair",
     "Face & expression",
     "Body",
@@ -42,8 +56,12 @@ DEFAULT_GROUP_NAMES: tuple[str, ...] = (
     "Style & meta",
 )
 
-# Returned by :func:`group_for` for an adult subcategory: left Ungrouped.
+# Returned by :func:`group_for` for an adult subcategory when no adult group is
+# asked for: the defaults build leaves such a row ungrouped.
 ADULT = None
+# The group an import files an adult subcategory under. Not a default group: it is
+# created by an import that needs it, like any other, and never seeded.
+ADULT_GROUP = "Adult"
 
 # (category, subcategory), English names as the toolkit's ``*_en`` columns spell
 # them, onto a default group, or ADULT.
@@ -138,6 +156,44 @@ SUBCATEGORY_GROUPS: dict[tuple[str, str], Optional[str]] = {
     ("Artwork", "Art Genre"): "Style & meta",
     ("Artwork", "Artist Style"): "Style & meta",
 }
+
+# A whole category, any subcategory, onto a default group. Characters and artists
+# carry no subcategory in the toolkit (or a stray one), so they are keyed by category.
+CATEGORY_GROUPS: dict[str, str] = {
+    "Anime Character": CHARACTER,
+    "Artist": ARTIST,
+}
+
+# A character's trailing parenthetical names its franchise ("raiden shogun (genshin
+# impact)"). These parentheticals name a form or an age, not a franchise, so they
+# never become a Copyright tag. Keep this list short and explicit.
+COPYRIGHT_QUALIFIERS: frozenset[str] = frozenset(
+    {
+        "1st costume",
+        "2nd costume",
+        "3rd costume",
+        "adult",
+        "alt",
+        "alter",
+        "alter ego",
+        "alternate",
+        "alternative",
+        "append",
+        "cat",
+        "character",
+        "chibi",
+        "cosplay",
+        "dangerous beast",
+        "dog",
+        "female",
+        "full",
+        "human",
+        "male",
+        "old",
+        "young",
+    }
+)
+_TRAILING_PARENTHETICAL = re.compile(r"\(([^()]*)\)\s*$")
 
 # A database's own "no category" bucket is not a group. "Ungrouped" is the name
 # the service gives a tag with no group, so a category of that name must not
@@ -238,26 +294,58 @@ def anomaly_tags() -> frozenset[str]:
     return frozenset(normalise_tag(n) for n in names)
 
 
-def group_for(tag: str, category: str, subcategory: str) -> Optional[str]:
-    """The default group a Danbooru database row files *tag* under.
+def group_for(
+    tag: str,
+    category: str,
+    subcategory: str,
+    *,
+    adult_group: Optional[str] = None,
+) -> Optional[str]:
+    """The group a Danbooru database row files *tag* under.
 
     Args:
         tag: The row's tag, any spelling (normalised here).
         category: The row's category, English when the file has it.
         subcategory: The row's subcategory, likewise.
+        adult_group: What an adult subcategory files under. ``None`` (the
+            default, used by the defaults build) leaves it ungrouped; an import
+            passes :data:`ADULT_GROUP`.
 
     Returns:
         ``"Anomaly"`` for a known defect; the mapped default group for a known
-        (category, subcategory); ``None`` for an adult subcategory, a row with
-        no category (empty, or "Uncategorized" / "Ungrouped" in any case);
-        otherwise the file's own category name, so an import of a database with
-        categories this mapping does not know still groups them.
+        (category, subcategory); *adult_group* for an adult subcategory; ``None``
+        for a row with no category (empty, or "Uncategorized" / "Ungrouped" in any
+        case); otherwise the file's own category name, so an import of a database
+        with categories this mapping does not know still groups them.
     """
     if normalise_tag(tag) in anomaly_tags():
         return ANOMALY
     key = (str(category or "").strip(), str(subcategory or "").strip())
     if key in SUBCATEGORY_GROUPS:
-        return SUBCATEGORY_GROUPS[key]
+        group = SUBCATEGORY_GROUPS[key]
+        return adult_group if group is ADULT else group
+    if key[0] in CATEGORY_GROUPS:
+        return CATEGORY_GROUPS[key[0]]
     if key[0].casefold() in UNGROUPED_CATEGORIES:
         return None
     return key[0] or None
+
+
+def franchise_of(tag: str) -> Optional[str]:
+    """The Copyright tag a Character tag implies, or ``None``.
+
+    Only the LAST parenthetical counts, and only when something precedes it:
+    ``"raiden shogun (genshin impact)"`` gives ``"genshin impact"``. A qualifier in
+    :data:`COPYRIGHT_QUALIFIERS` gives ``None``, as does a name that is itself an
+    Anomaly tag. Used by the default build and by an import, so both agree.
+    """
+    name = normalise_tag(tag)
+    match = _TRAILING_PARENTHETICAL.search(name)
+    if match is None or not name[: match.start()].strip():
+        return None
+    franchise = normalise_tag(match.group(1))
+    if not franchise or franchise in COPYRIGHT_QUALIFIERS:
+        return None
+    if franchise in anomaly_tags():
+        return None
+    return franchise

@@ -84,10 +84,20 @@ function readCollapsed() {
 }
 
 export const useTagGroupsStore = defineStore("tagGroups", () => {
-  /** Groups in rail order: `{ id, name, position }`. */
+  /** Groups in rail order: `{ id, name, position, tag_count }`. `tag_count`
+   * counts every tag filed in the group, known to the library or not. */
   const groups = ref([]);
-  /** Tag name -> group id. A tag missing here is Ungrouped. */
+  /**
+   * Tag name -> group id, for the tags on some picture in the library only. A
+   * tag missing here is Ungrouped, which is right for a library tag with no
+   * filing. A filed tag the library does not hold is not here; the Groups
+   * board reads those from the server's paged list instead.
+   */
   const groupOf = ref(new Map());
+  /** Library tags with no filing. */
+  const ungroupedCount = ref(0);
+  /** Distinct known tags: the library's plus every filed one. */
+  const allCount = ref(0);
   const loaded = ref(false);
   /**
    * Bumped whenever a move or its undo changed which tags a group holds, so a
@@ -114,6 +124,8 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
       (a, b) => a.position - b.position || a.id - b.id,
     );
     groupOf.value = new Map(Object.entries(body.tags || {}));
+    ungroupedCount.value = Number(body.ungrouped_count) || 0;
+    allCount.value = Number(body.all_count) || 0;
     loaded.value = true;
     fetchedAt = Date.now();
   }
@@ -351,6 +363,8 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
   onSessionReset(() => {
     groups.value = [];
     groupOf.value = new Map();
+    ungroupedCount.value = 0;
+    allCount.value = 0;
     loaded.value = false;
     fetchedAt = 0;
     generation += 1;
@@ -361,6 +375,8 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
   return {
     groups,
     groupOf,
+    ungroupedCount,
+    allCount,
     loaded,
     revision,
     hasGroups,

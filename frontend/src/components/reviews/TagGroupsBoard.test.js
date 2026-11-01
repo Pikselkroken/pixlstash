@@ -22,14 +22,11 @@ vi.mock("../../utils/apiClient", () => ({
 
 vi.mock("../../api/tagGroups", () => ({
   getTagGroups: vi.fn(),
+  listGroupTags: vi.fn(),
   createTagGroup: vi.fn(),
   reorderTagGroups: vi.fn(),
   assignTagsToGroup: vi.fn(),
   importTagGroups: vi.fn(),
-}));
-
-vi.mock("../../api/tags", () => ({
-  listTags: vi.fn(),
 }));
 
 // moveTags refreshes the history control after a filing; that is not under test.
@@ -54,7 +51,6 @@ vi.mock("vuetify/components", () => ({
 import TagGroupsBoard from "./TagGroupsBoard.vue";
 import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 import * as tagGroupsApi from "../../api/tagGroups";
-import * as tagsApi from "../../api/tags";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 
 const VIcon = {
@@ -80,13 +76,17 @@ const TooltipStub = {
 const globalOpts = { stubs: { Tooltip: TooltipStub, "v-icon": VIcon } };
 
 // Rail order is by `position`, so Meta (position 0) comes before Character.
+// `tag_count` counts every tag filed in a group, the two unknown ones too, and
+// the counts on the left come from these fields, never from the rows loaded.
 const GROUPS = [
-  { id: 2, name: "Meta", position: 0 },
-  { id: 1, name: "Character", position: 1 },
+  { id: 2, name: "Meta", position: 0, tag_count: 1 },
+  { id: 1, name: "Character", position: 1, tag_count: 3 },
 ];
 const GROUP_MAP = {
   groups: GROUPS,
   tags: { "red hood": 1, "film grain": 2 },
+  ungrouped_count: 3,
+  all_count: 7,
 };
 
 // Picture counts: pine 133, aiko 212 - so the Pictures order is
@@ -101,6 +101,34 @@ const TAGS = [
 ];
 
 let store;
+
+// The server's paged list, for the library's tags above: filtered by group, q
+// and sort as the route does, then cut to the page asked for.
+function groupOfTag(name) {
+  return GROUP_MAP.tags[name] ?? null;
+}
+function serverPage(params = {}) {
+  let rows = TAGS.map((t) => ({ ...t, group_id: groupOfTag(t.tag) }));
+  if (params.group === "none") rows = rows.filter((r) => r.group_id == null);
+  else if (params.group !== "all" && params.group != null) {
+    rows = rows.filter((r) => r.group_id === Number(params.group));
+  }
+  if (params.q) rows = rows.filter((r) => r.tag.includes(params.q));
+  rows = rows.slice().sort((a, b) =>
+    params.sort === "name"
+      ? a.tag.localeCompare(b.tag)
+      : b.count - a.count || a.tag.localeCompare(b.tag),
+  );
+  const offset = params.offset ?? 0;
+  const limit = params.limit ?? 200;
+  return { total: rows.length, tags: rows.slice(offset, offset + limit) };
+}
+
+// The debounce on the filter field is 250 ms; wait it out, then let the page land.
+async function settle() {
+  await new Promise((r) => setTimeout(r, 280));
+  await flushPromises();
+}
 
 async function mountBoard(props = {}) {
   const wrapper = mount(TagGroupsBoard, { props, global: globalOpts });
@@ -143,7 +171,7 @@ beforeEach(async () => {
   session.readOnly.value = false;
   vi.clearAllMocks();
   tagGroupsApi.getTagGroups.mockResolvedValue(GROUP_MAP);
-  tagsApi.listTags.mockResolvedValue(TAGS);
+  tagGroupsApi.listGroupTags.mockImplementation(async (p) => serverPage(p));
   tagGroupsApi.assignTagsToGroup.mockResolvedValue(GROUP_MAP);
   tagGroupsApi.reorderTagGroups.mockResolvedValue(GROUP_MAP);
   tagGroupsApi.createTagGroup.mockResolvedValue({
@@ -155,7 +183,7 @@ beforeEach(async () => {
 });
 
 describe("TagGroupsBoard: the chooser", () => {
-  it("lists All, Ungrouped and the groups in rail order with their counts", async () => {
+  it("lists All, Ungrouped and the groups in rail order, counted from the map", async () => {
     const wrapper = await mountBoard();
     const rows = wrapper.findAll(".tgb-groups > .tgb-row");
     expect(rows.map((r) => r.find(".tgb-row-name").text())).toEqual([
@@ -164,24 +192,55 @@ describe("TagGroupsBoard: the chooser", () => {
       "Meta",
       "Character",
     ]);
+    // 7 is all_count (two known tags nobody has, plus the five in the library);
+    // Character's 3 is its tag_count, unknown tags included.
     expect(rows.map((r) => r.find(".tgb-row-count").text())).toEqual([
-      "5",
+      "7",
       "3",
       "1",
-      "1",
+      "3",
     ]);
   });
 
-  it("choosing a group lists only its tags, with the Ungrouped hint on Ungrouped", async () => {
+  it("a known tag with no picture shows 0", async () => {
+    const wrapper = await mountBoard();
+    tagGroupsApi.listGroupTags.mockResolvedValueOnce({
+      total: 1,
+      tags: [{ tag: "unknown a", count: 0, group_id: 1 }],
+    });
+    await groupRow(wrapper, 1).trigger("click");
+    await flushPromises();
+    expect(tagRow(wrapper, "unknown a").find(".tgb-tag-count").text()).toBe("0");
+  });
+
+  it("choosing a group requests that group and lists only its tags, with the Ungrouped hint on Ungrouped", async () => {
     const wrapper = await mountBoard();
     await groupRow(wrapper, 2).trigger("click");
+    await flushPromises();
+    expect(tagGroupsApi.listGroupTags).toHaveBeenLastCalledWith(
+      expect.objectContaining({ group: "2", offset: 0, limit: 200 }),
+    );
     expect(visibleNames(wrapper)).toEqual(["film grain"]);
     expect(wrapper.find(".tgb-hint").exists()).toBe(false);
 
     await wrapper.find(".tgb-groups > .tgb-row:nth-child(2)").trigger("click");
+    await flushPromises();
+    expect(tagGroupsApi.listGroupTags).toHaveBeenLastCalledWith(
+      expect.objectContaining({ group: "none" }),
+    );
     expect(visibleNames(wrapper)).toEqual(["aiko", "pine", "moss"]);
     expect(wrapper.find(".tgb-hint").text()).toContain(
       "Tags no group claims yet",
+    );
+  });
+
+  it("All asks for group all", async () => {
+    const wrapper = await mountBoard();
+    await groupRow(wrapper, 1).trigger("click");
+    await wrapper.find(".tgb-groups > .tgb-row").trigger("click");
+    await flushPromises();
+    expect(tagGroupsApi.listGroupTags).toHaveBeenLastCalledWith(
+      expect.objectContaining({ group: "all" }),
     );
   });
 
@@ -195,6 +254,10 @@ describe("TagGroupsBoard: the chooser", () => {
       "red hood",
     ]);
     await wrapper.find(".tgb-sort").setValue("name");
+    await flushPromises();
+    expect(tagGroupsApi.listGroupTags).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sort: "name" }),
+    );
     expect(visibleNames(wrapper)).toEqual([
       "aiko",
       "film grain",
@@ -204,9 +267,66 @@ describe("TagGroupsBoard: the chooser", () => {
     ]);
   });
 
-  it("the filter narrows the tag list here too", async () => {
-    const wrapper = await mountBoard({ filter: "pin" });
+  it("the filter text is sent as q, after the debounce", async () => {
+    const wrapper = await mountBoard();
+    tagGroupsApi.listGroupTags.mockClear();
+    await wrapper.setProps({ filter: "pin" });
+    await flushPromises();
+    expect(tagGroupsApi.listGroupTags).not.toHaveBeenCalled();
+    await settle();
+    expect(tagGroupsApi.listGroupTags).toHaveBeenCalledTimes(1);
+    expect(tagGroupsApi.listGroupTags).toHaveBeenLastCalledWith(
+      expect.objectContaining({ q: "pin", offset: 0 }),
+    );
     expect(visibleNames(wrapper)).toEqual(["pine"]);
+  });
+
+  it("Show more asks for the next offset and appends the page", async () => {
+    const big = Array.from({ length: 450 }, (_, i) => ({
+      tag: `tag ${String(i).padStart(3, "0")}`,
+      count: 450 - i,
+      group_id: null,
+    }));
+    tagGroupsApi.listGroupTags.mockImplementation(async (p) => ({
+      total: big.length,
+      tags: big.slice(p.offset ?? 0, (p.offset ?? 0) + (p.limit ?? 200)),
+    }));
+    const wrapper = await mountBoard();
+    expect(tagRows(wrapper)).toHaveLength(200);
+    await wrapper.find(".tgb-more .app-btn").trigger("click");
+    await flushPromises();
+    expect(tagGroupsApi.listGroupTags).toHaveBeenLastCalledWith(
+      expect.objectContaining({ offset: 200, limit: 200 }),
+    );
+    expect(tagRows(wrapper)).toHaveLength(400);
+    await wrapper.find(".tgb-more .app-btn").trigger("click");
+    await flushPromises();
+    expect(tagRows(wrapper)).toHaveLength(450);
+    expect(wrapper.find(".tgb-more").exists()).toBe(false);
+  });
+
+  it("drops a page that lands after the choice moved on", async () => {
+    const pending = {};
+    tagGroupsApi.listGroupTags.mockImplementation(
+      (p) => new Promise((resolve) => (pending[p.group] = resolve)),
+    );
+    const wrapper = await mountBoard();
+    // All is in flight; then Meta is chosen and answers first.
+    await groupRow(wrapper, 2).trigger("click");
+    pending["2"]({ total: 1, tags: [{ tag: "film grain", count: 118, group_id: 2 }] });
+    await flushPromises();
+    expect(visibleNames(wrapper)).toEqual(["film grain"]);
+    // The old All page lands late: it must not overwrite Meta's list.
+    pending["all"]({ total: 5, tags: TAGS });
+    await flushPromises();
+    expect(visibleNames(wrapper)).toEqual(["film grain"]);
+  });
+
+  it("a read that fails says so, and the board keeps its other controls", async () => {
+    tagGroupsApi.listGroupTags.mockRejectedValueOnce(new Error("down"));
+    const wrapper = await mountBoard();
+    expect(wrapper.find('[role="alert"]').text()).toBe("Couldn't read the tags.");
+    expect(wrapper.find(".tgb-groups").exists()).toBe(true);
   });
 
   it("says the groups cover the whole library, not the board's scope", async () => {
@@ -272,6 +392,19 @@ describe("TagGroupsBoard: selection", () => {
 });
 
 describe("TagGroupsBoard: the pill", () => {
+  it("a move re-reads the chosen list", async () => {
+    const wrapper = await mountBoard();
+    await groupRow(wrapper, 2).trigger("click");
+    await flushPromises();
+    tagGroupsApi.listGroupTags.mockClear();
+    await tagRow(wrapper, "film grain").trigger("click");
+    await wrapper.find(".tgb-move > .tgb-pill-verb").trigger("click");
+    await wrapper.findAll(".tgb-move-menu [role='menuitem']")[1].trigger("click");
+    await flushPromises();
+    expect(tagGroupsApi.assignTagsToGroup).toHaveBeenCalledWith(["film grain"], 1);
+    expect(tagGroupsApi.listGroupTags).toHaveBeenCalledTimes(1);
+  });
+
   it("Move to group files the selection under the chosen group", async () => {
     const wrapper = await mountBoard();
     await tagRow(wrapper, "aiko").trigger("click");
@@ -515,8 +648,7 @@ describe("TagGroupsBoard: import a tag file", () => {
     user_conflict_sample: [],
     user_overwritten: 0,
     groups_created: ["Wildlife", "Mood"],
-    skipped_adult_or_uncategorised: 5,
-    skipped_not_in_library: 900,
+    skipped_uncategorised: 5,
   };
   const PLAN_CONFLICT = {
     ...PLAN,
@@ -574,8 +706,9 @@ describe("TagGroupsBoard: import a tag file", () => {
     });
     expect(questionText(wrapper).exists()).toBe(false);
     expect(notices()).toEqual([
-      "Filed 42 tags from danbooru_tags.xlsx · 2 new groups · 900 not in your library",
+      "Filed 42 tags from danbooru_tags.xlsx · 2 new groups",
     ]);
+    expect(notices().join(" ")).not.toMatch(/not in your library/);
   });
 
   it("with tags the user filed by hand, asks first; Keep my filing commits without moving them", async () => {

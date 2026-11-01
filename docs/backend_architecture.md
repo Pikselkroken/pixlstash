@@ -838,6 +838,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/tag_groups/assign                                                     | tag_groups      | File tags under a group (or make them Ungrouped)              |
 | POST   | /api/v1/tag_groups/import                                                     | tag_groups      | Import a Danbooru tag file (.xlsx or .csv) as tag groups      |
 | PUT    | /api/v1/tag_groups/order                                                      | tag_groups      | Reorder the tag groups                                        |
+| GET    | /api/v1/tag_groups/tags                                                       | tag_groups      | Page through tags by group, with library picture counts       |
 | GET    | /api/v1/tag_health                                                            | tag_health      | Tag health board rows                                         |
 | POST   | /api/v1/tag_health/rebuild                                                    | tag_health      | Rebuild the tag health cache                                  |
 | GET    | /api/v1/tag_suggestions                                                       | tag_suggestions | List ranked tag-fix suggestions                               |
@@ -1087,7 +1088,10 @@ LibrarySettings.tag_groups_seeded_version (NULL = never seeded)
 
 A group belongs to the tag, not to a picture: filing `film grain` under Meta files
 it on every picture carrying it, and a tag need not exist on any picture to be
-filed. The map is user vocabulary, so nothing is derived from it. Migration
+filed. The map is user vocabulary, so nothing is derived from it. It is not sent
+whole: `GET /tag_groups` carries only the filings of tags a picture carries, and the
+rest of the vocabulary (which an import can make 200 000 names) is paged by
+`GET /tag_groups/tags` (§2.6 of the integration doc). Migration
 `0141_add_tag_groups` creates both tables only when absent (the baseline builds them
 with `create_all`) and adds each new column only when absent.
 
@@ -1109,14 +1113,31 @@ caller and the library still opens. Cost, measured on an in-memory database:
 about 0.05 s to file 8 000 default tags into a fresh library, and under 2 ms for a
 re-seed that does nothing.
 
+**Defaults content (version 2).** The rail is Anomaly, People, Character, Copyright,
+Artist, then the visual groups. The file holds the tagger vocabularies (the anomaly
+tagger's labels, WD14 general tags) and WD14's character tags, which file under
+Character; each character's franchise (`tag_group_defaults.franchise_of`, the last
+parenthetical of `raiden shogun (genshin impact)`) files under Copyright. A
+franchise wins over a Character placement of the same name, so `nier:automata` is
+Copyright. `franchise_of` skips a short, explicit list of qualifiers that name a form
+or an age, not a franchise (`COPYRIGHT_QUALIFIERS`). The build is
+`scripts/build_default_tag_groups.py`; version 1 libraries seed the three new groups
+at the foot of the rail on their next open, since seeding never reorders.
+
 **Provenance.** `is_default` is True for a seeded filing and False for one the user
 made. A move (`assign`) and an import both write False.
 
 - **Service** [`services/tag_group_service.py`](../pixlstash/services/tag_group_service.py):
   `*_in_session` functions take the writer's session; the public wrappers take the
   `db` handle (§10.1). The route module only translates requests and maps
-  `TagGroupError` to a status code. Every route returns the whole map.
-- **Undo.** `assign` writes only the tags whose group changes (a tag already in the
+  `TagGroupError` to a status code. Every route that answers with the map returns
+  `read_map_in_session`: groups with `tag_count`, the filings of library tags, and
+  `ungrouped_count` and `all_count`. `list_tags_in_session` serves the listing.
+  Its `none` and `all` modes count library pictures per tag; a group id counts only
+  that group's tags, so the cost follows the group, not the vocabulary.
+- **Undo.** Every write goes through `_write_members`, which sets a whole batch of
+  filings in chunks (one DELETE, one UPDATE per (group, provenance) pair, one
+  executemany INSERT) rather than a statement per tag. `assign` writes only the tags whose group changes (a tag already in the
   target group keeps its provenance, so it is not a change) and records one
   `tag_groups.move` operation in the same transaction: `target_type` is
   `tag_group` (`TARGET_TAG_GROUP`), `target_ids` is empty, and the payload is
@@ -1126,25 +1147,33 @@ made. A move (`assign`) and an import both write False.
   sorts its operations itself, so the oldest recorded "before" wins on undo and the
   newest "after" on redo whatever order the restore hands them in. The hook also
   accepts the older bare `id_or_null` value, read as a user filing. A recorded group
-  that no longer exists leaves the tag Ungrouped and logs a warning.
+  that no longer exists leaves the tag Ungrouped and logs a warning. An import's
+  payload is compact: `before` names the tags that had no row as one `unfiled` list
+  and the tags that had a row under `tags`; `after` is one list of tag names per
+  group, under `groups`. The hook reads all three shapes.
 - **Import.** `POST /tag_groups/import` (§2.6 of the integration doc) parses an
-  uploaded `.xlsx` or `.csv` off the writer and files it in one writer task. The
-  `.xlsx` is read by `utils/xlsx_reader.py`, a stdlib reader over the first sheet
-  only. Every part must be UTF-8 XML (a UTF-16/32 byte order mark, a NUL byte or
-  another declared encoding is refused first), then each part is scanned for a DTD
-  before parsing. All parts read draw on one 512 MB uncompressed budget, the archive
-  is limited to 256 entries, the sheet to 2 000 000 rows and 10 000 000 padded cells,
-  and corrupt or encrypted members are a 400. Nothing is written to disk. A 13 MB,
-  221 789-row sample parses in about 5 s at 53 MB peak (off the writer; measured
-  before the row and cell caps), and its filing step takes about 0.4 s dry and
-  0.8 s real against a 30 000-tag library.
-  Each row files its tag under `tag_group_defaults.group_for`; `None` (adult,
-  uncategorised, or an empty or "Ungrouped" category) is skipped. A file naming more
+  uploaded `.xlsx` or `.csv` off the writer and files it in one writer task. Every
+  row with a category is filed, whether or not a picture carries its tag; the
+  file is the vocabulary. A Character row also files its franchise under Copyright.
+  The `.xlsx` is read by `utils/xlsx_reader.py`, a stdlib reader over the first
+  sheet only. Every part must be UTF-8 XML (a UTF-16/32 byte order mark, a NUL byte
+  or another declared encoding is refused first), then each part is scanned for a
+  DTD before parsing. All parts read draw on one 512 MB uncompressed budget, the
+  archive is limited to 256 entries, the sheet to 2 000 000 rows and 10 000 000
+  padded cells, and corrupt or encrypted members are a 400. Nothing is written to
+  disk. Measured on the 221 789-row toolkit file: parse 6–7 s; a real run files
+  about 200 000 tags in 2.0 s, a dry run 0.7 s; undo 0.8 s, redo 1.2 s; the undo
+  record is 7.1 MB (3.5 MB each way). Peak process memory rose by about 175 MB
+  during the parse.
+  Each row files its tag under `tag_group_defaults.group_for(..., adult_group=ADULT_GROUP)`.
+  An adult subcategory files under `Adult`, which is never a default group. The
+  defaults build passes no adult group, so its adult rows stay ungrouped; the
+  keyword guard (`NSFW_WORDS`) belongs to the shipped defaults only, and an import
+  applies no keyword filter. A `None` result (an empty, "Uncategorized" or
+  "Ungrouped" category) is skipped and counted as `skipped_uncategorised`. A file naming more
   than 50 categories that are not groups yet is refused with 400, so one upload
   cannot create unbounded groups. A tag already under the file's group is left alone,
-  default or not. A tag is filed only if the library holds it (outside
-  the pending-retag sentinels) or the default file names it. The file wins over
-  defaults and Ungrouped tags. A tag the user filed under another group is a
+  default or not. The file wins over defaults and Ungrouped tags. A tag the user filed under another group is a
   conflict, kept unless `overwrite_user`. A dry run returns the plan and changes
   nothing. A real run creates the groups it needs (they stay, empty, after an undo)
   and records one `tag_groups.move` operation, summary `Import N tags from <file>`.
@@ -1158,8 +1187,9 @@ made. A move (`assign`) and an import both write False.
   `PredicateFilter` (listing, search, stats, set listing, counts) reads a
   group term identically. A malformed `__group:abc` stays a literal tag name.
   `hidden_tag` and the tag-confidence params take no group terms.
-- **Authorization.** All five routes are `OWNER_ONLY`; `GET /tag_groups` is also on
-  `READ_BLOCKED_GET_PATHS`. Tests: `tests/test_tag_groups.py`.
+- **Authorization.** All six routes are `OWNER_ONLY`; `GET /tag_groups` and
+  `GET /tag_groups/tags` are also on `READ_BLOCKED_GET_PATHS`. Tests:
+  `tests/test_tag_groups.py`.
 
 ### Operation log (append-only)
 

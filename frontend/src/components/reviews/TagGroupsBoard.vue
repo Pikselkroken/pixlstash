@@ -19,7 +19,7 @@
           @click="choose(ALL)"
         >
           <span class="tgb-row-name">All tags</span>
-          <span class="tgb-row-count">{{ fmt(tags.length) }}</span>
+          <span class="tgb-row-count">{{ fmt(tagGroups.allCount) }}</span>
         </button>
 
         <button
@@ -36,7 +36,7 @@
           @drop="onTagsDrop(NONE, $event)"
         >
           <span class="tgb-row-name">Ungrouped</span>
-          <span class="tgb-row-count">{{ fmt(ungroupedCount) }}</span>
+          <span class="tgb-row-count">{{ fmt(tagGroups.ungroupedCount) }}</span>
           <span
             v-if="canDrop && dropKey === NONE"
             class="tgb-droplabel"
@@ -132,7 +132,7 @@
           @drop="onGroupDrop(g, $event)"
         >
           <span class="tgb-row-name">{{ g.name }}</span>
-          <span class="tgb-row-count">{{ fmt(groupCounts.get(g.id) || 0) }}</span>
+          <span class="tgb-row-count">{{ fmt(g.tag_count || 0) }}</span>
           <span
             v-if="canDrop && dropKey === g.id"
             class="tgb-droplabel"
@@ -171,10 +171,22 @@
         <div v-if="loadError" class="tgb-empty" role="alert">
           {{ loadError }}
         </div>
-        <div v-else-if="!visibleTags.length" class="tgb-empty">
-          {{ needle ? "No tags match the filter." : "No tags here." }}
+        <div
+          v-if="!visibleTags.length && loading"
+          class="tgb-empty"
+          role="status"
+        >
+          Loading tags…
         </div>
-        <div v-else class="tgb-tag-list" role="group" aria-label="Tags">
+        <div v-else-if="!visibleTags.length && !loadError" class="tgb-empty">
+          {{ q ? "No tags match the filter." : "No tags here." }}
+        </div>
+        <div
+          v-if="visibleTags.length"
+          class="tgb-tag-list"
+          role="group"
+          aria-label="Tags"
+        >
           <button
             v-for="t in visibleTags"
             :key="t.tag"
@@ -193,6 +205,16 @@
             <span class="tgb-tag-name" :title="t.tag">{{ t.tag }}</span>
             <span class="tgb-tag-count">{{ fmt(t.count) }}</span>
           </button>
+        </div>
+
+        <div v-if="hasMore" class="tgb-more">
+          <AppButton
+            variant="secondary"
+            size="sm"
+            :loading="loading"
+            @click="loadMore"
+            >Show more</AppButton
+          >
         </div>
       </section>
     </div>
@@ -288,14 +310,25 @@
 // counts on the right, and a selection that can be dragged onto a group, moved
 // from the pill, or reviewed (one tag at a time - a review covers one tag).
 //
-// Tags come from listTags(), the whole library. The board's Project and
-// Character scope does not narrow this view; the filter field does.
-import { computed, nextTick, onMounted, ref } from "vue";
-import { listTags } from "../../api/tags";
+// The chosen group's tags come from the server a page at a time (listGroupTags)
+// and the counts on the left from the map, both over the whole known vocabulary:
+// a Danbooru import files far more tags than the library holds. The board's
+// Project and Character scope does not narrow this view; the filter field does.
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
+import { listGroupTags } from "../../api/tagGroups";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 import { isReadOnly } from "../../utils/apiClient";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+import { debounce } from "../../utils/utils";
+import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import TagImportDialog from "./TagImportDialog.vue";
 
@@ -324,8 +357,6 @@ const readOnly = computed(() => isReadOnly.value);
 const ALL = "all";
 const NONE = "none";
 
-const tags = ref([]); // [{ tag, count }], the whole library
-const loadError = ref("");
 const choice = ref(ALL);
 const sortKey = ref("pictures");
 
@@ -344,20 +375,7 @@ function fmt(n) {
   return Number(n || 0).toLocaleString();
 }
 
-// --- Counts -----------------------------------------------------------------
-
-// Group id -> number of library tags filed there; the Ungrouped count too.
-const groupCounts = computed(() => {
-  const counts = new Map();
-  for (const t of tags.value) {
-    const g = tagGroups.groupFor(t.tag);
-    if (g) counts.set(g.id, (counts.get(g.id) || 0) + 1);
-  }
-  return counts;
-});
-const ungroupedCount = computed(
-  () => tags.value.filter((t) => !tagGroups.groupFor(t.tag)).length,
-);
+// --- Counts: the map's, never a count of rows loaded ------------------------
 
 const currentName = computed(() => {
   if (current.value === ALL) return "All tags";
@@ -365,52 +383,88 @@ const currentName = computed(() => {
   return tagGroups.byId.get(current.value)?.name || "Group";
 });
 const currentTotal = computed(() => {
-  if (current.value === ALL) return tags.value.length;
-  if (current.value === NONE) return ungroupedCount.value;
-  return groupCounts.value.get(current.value) || 0;
+  if (current.value === ALL) return tagGroups.allCount;
+  if (current.value === NONE) return tagGroups.ungroupedCount;
+  return tagGroups.byId.get(current.value)?.tag_count || 0;
 });
 
-// --- The list ---------------------------------------------------------------
+// --- The list: one page at a time -------------------------------------------
 
-const needle = computed(() => props.filter.trim().toLowerCase());
+const PAGE = 200;
+// The filter text the server sees: the board's field, debounced.
+const q = ref("");
+const applyQ = debounce((text) => {
+  q.value = String(text ?? "").trim();
+}, 250);
 
-const visibleTags = computed(() => {
-  const inChoice = tags.value.filter((t) => {
-    if (current.value === ALL) return true;
-    const g = tagGroups.groupFor(t.tag);
-    return current.value === NONE ? !g : g?.id === current.value;
-  });
-  const matched = needle.value
-    ? inChoice.filter((t) => t.tag.toLowerCase().includes(needle.value))
-    : inChoice;
-  return matched.slice().sort((a, b) => {
-    if (sortKey.value === "name") return a.tag.localeCompare(b.tag);
-    return b.count - a.count || a.tag.localeCompare(b.tag);
-  });
-});
+const visibleTags = ref([]); // [{ tag, count, group_id }], the pages so far
+const total = ref(0); // the choice's count under the filter and sort
+const loading = ref(false);
+const loadError = ref("");
+// Each request takes the next number; an answer for an older one is dropped,
+// so a slow page for a previous choice cannot overwrite the current list.
+let reqSeq = 0;
+// Picture counts of every tag a page has shown: the drop label reads them.
+// Plain, not reactive: it only changes as the pages do.
+const knownCounts = new Map();
+
+const hasMore = computed(() => visibleTags.value.length < total.value);
+
+function choiceParam(key) {
+  if (key === ALL) return "all";
+  if (key === NONE) return "none";
+  return String(key);
+}
+
+async function readPage(offset) {
+  const seq = ++reqSeq;
+  if (!offset) visibleTags.value = [];
+  loading.value = true;
+  try {
+    const page = await listGroupTags({
+      group: choiceParam(current.value),
+      q: q.value || undefined,
+      sort: sortKey.value,
+      offset,
+      limit: PAGE,
+    });
+    if (seq !== reqSeq) return;
+    const rows = Array.isArray(page?.tags) ? page.tags : [];
+    for (const t of rows) knownCounts.set(t.tag, t.count);
+    visibleTags.value = offset ? [...visibleTags.value, ...rows] : rows;
+    total.value = Number(page?.total) || 0;
+    loadError.value = "";
+  } catch (e) {
+    if (seq !== reqSeq) return;
+    console.error("Couldn't read the tags for the Groups view", e);
+    loadError.value = "Couldn't read the tags.";
+  } finally {
+    if (seq === reqSeq) loading.value = false;
+  }
+}
+
+function loadMore() {
+  if (!loading.value && hasMore.value) readPage(visibleTags.value.length);
+}
 
 function pickSort(event) {
   sortKey.value = event.target.value === "name" ? "name" : "pictures";
   event.target.blur();
 }
 
-// --- Loading ----------------------------------------------------------------
+watch(
+  () => props.filter,
+  (text) => applyQ(text),
+);
+// A new choice, filter or sort starts again from the first page; so does a
+// move, an import or an undo, which bump the store's revision.
+watch([current, q, sortKey, () => tagGroups.revision], () => readPage(0));
 
-async function loadTags() {
-  try {
-    const rows = await listTags();
-    tags.value = Array.isArray(rows) ? rows : [];
-    loadError.value = "";
-  } catch (e) {
-    console.error("Couldn't read the tag list for the Groups view", e);
-    loadError.value = "Couldn't read the tags.";
-  }
-}
-
-onMounted(async () => {
-  await tagGroups.fetch();
-  await loadTags();
+onMounted(() => {
+  void tagGroups.fetch();
+  void readPage(0);
 });
+onBeforeUnmount(() => applyQ.cancel());
 
 // --- Selection --------------------------------------------------------------
 
@@ -585,10 +639,7 @@ const dropLabel = computed(() => {
   if (!names.length) return "";
   const target = dropKey.value === NONE ? null : dropKey.value;
   const where = tagGroups.nameOf(target);
-  const pictures = names.reduce(
-    (sum, n) => sum + (tags.value.find((t) => t.tag === n)?.count || 0),
-    0,
-  );
+  const pictures = names.reduce((sum, n) => sum + (knownCounts.get(n) || 0), 0);
   if (names.length === 1) {
     return `${names[0]} → ${where} · on ${fmt(pictures)} pictures`;
   }
@@ -757,9 +808,6 @@ function importSummary(plan, name) {
   if (made) parts.push(`${fmt(made)} new group${made === 1 ? "" : "s"}`);
   if (plan.user_overwritten) {
     parts.push(`${fmt(plan.user_overwritten)} of your own filings moved`);
-  }
-  if (plan.skipped_not_in_library) {
-    parts.push(`${fmt(plan.skipped_not_in_library)} not in your library`);
   }
   return parts.join(" · ");
 }
@@ -1019,6 +1067,9 @@ defineExpose({ clearSelection, escape, selected });
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.tgb-more {
+  margin-top: var(--space-3);
 }
 .tgb-tag-count {
   flex-shrink: 0;

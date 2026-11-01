@@ -6,9 +6,9 @@ meaningful. Logic lives in :mod:`pixlstash.services.tag_group_service`; the hand
 translate requests and map :class:`TagGroupError` onto HTTP status codes.
 """
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
@@ -23,20 +23,43 @@ logger = get_logger(__name__)
 
 
 class TagGroupItem(BaseModel):
-    """One group."""
+    """One group. ``tag_count`` is every tag filed in it, library or not."""
 
     id: int
     name: str
     position: int
+    tag_count: int = 0
 
 
 class TagGroupMapResponse(BaseModel):
-    """The whole map: groups in position order, and tag name -> group id."""
+    """The map: groups in position order, the filings of library tags, two totals.
+
+    ``tags`` holds only tags some picture carries; ``ungrouped_count`` counts the
+    library's tags with no filing and ``all_count`` every known tag. The rest of the
+    vocabulary is paged by ``GET /tag_groups/tags``.
+    """
 
     model_config = ConfigDict(extra="allow")
 
     groups: list[TagGroupItem] = []
     tags: dict[str, int] = {}
+    ungrouped_count: int = 0
+    all_count: int = 0
+
+
+class TagListItem(BaseModel):
+    """One tag in the listing: its library picture count and its group (None = none)."""
+
+    tag: str
+    count: int
+    group_id: Optional[int] = None
+
+
+class TagListResponse(BaseModel):
+    """One page of the listing; ``total`` counts every match, not the page."""
+
+    total: int
+    tags: list[TagListItem]
 
 
 class CreateTagGroupRequest(BaseModel):
@@ -57,11 +80,13 @@ class AssignTagGroupRequest(BaseModel):
 
 
 class TagImportResponse(BaseModel):
-    """The import's plan, plus the whole map on a real (not dry) run."""
+    """The import's plan, plus the map on a real (not dry) run."""
 
     plan: dict[str, Any]
     groups: Optional[list[TagGroupItem]] = None
     tags: Optional[dict[str, int]] = None
+    ungrouped_count: Optional[int] = None
+    all_count: Optional[int] = None
 
 
 def _refuse(exc: TagGroupError) -> HTTPException:
@@ -96,6 +121,47 @@ def create_router(server) -> APIRouter:
             return tag_group_service.list_tag_groups(server.vault.db)
         except Exception:
             logger.exception("tag_groups: could not read the tag group map")
+            raise
+
+    @router.get(
+        "/tag_groups/tags",
+        summary="Page through tags by group, with library picture counts",
+        description=(
+            "``group`` is a group id (every tag filed there), ``none`` (library tags "
+            "with no filing) or ``all`` (filed tags and library tags). ``q`` matches "
+            "a case-insensitive substring. ``sort`` is ``pictures`` (most pictures "
+            "first, then name) or ``name``. ``count`` is the pictures in the library "
+            "carrying the tag, 0 when none."
+        ),
+        response_model=TagListResponse,
+    )
+    def list_tag_group_tags(
+        request: Request,
+        group: str = Query(..., max_length=32),
+        q: Optional[str] = Query(None, max_length=200),
+        sort: Literal["pictures", "name"] = "pictures",
+        offset: int = Query(0, ge=0, le=10_000_000),
+        limit: int = Query(200, ge=1, le=500),
+    ) -> dict[str, Any]:
+        try:
+            return tag_group_service.list_tags(
+                server.vault.db,
+                group=group,
+                q=q,
+                sort=sort,
+                offset=offset,
+                limit=limit,
+            )
+        except TagGroupError as exc:
+            raise _refuse(exc)
+        except Exception:
+            logger.exception(
+                "tag_groups: could not list tags group=%r q=%r sort=%r offset=%d",
+                group,
+                q,
+                sort,
+                offset,
+            )
             raise
 
     @router.post(
@@ -169,8 +235,10 @@ def create_router(server) -> APIRouter:
         "/tag_groups/import",
         summary="Import a Danbooru tag file (.xlsx or .csv) as tag groups",
         description=(
-            "Files each tag by its ``category`` / ``subcategory`` (the ``*_en`` "
-            "columns when present), the way the defaults are filed. The file wins "
+            "Files every row by its ``category`` / ``subcategory`` (the ``*_en`` "
+            "columns when present), whether or not a picture carries the tag yet. "
+            "An adult row files under Adult; a row with no category is skipped. "
+            "A Character row also files its franchise under Copyright. The file wins "
             "over defaults and Ungrouped tags. A tag the user filed under another "
             "group is a conflict: kept unless ``overwrite_user`` is true. ``dry_run`` "
             "reports the plan and changes nothing. A real run is one undoable "

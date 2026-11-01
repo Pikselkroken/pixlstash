@@ -2,19 +2,42 @@
 // is filed under (Character, Copyright, Meta, …). A group belongs to the tag,
 // not to a picture: filing "film grain" under Meta files it on every picture.
 //
-// Every call answers with the whole map, `{ groups, tags }`: `groups` in rail
-// order, `tags` as `{ "<tag>": <group id> }`. A tag missing from `tags` is
-// Ungrouped.
+// Every call answers with the map: `{ groups, tags, ungrouped_count,
+// all_count }`. `groups` is in rail order; `tags` as `{ "<tag>": <group id> }`
+// covers only the tags on some picture in the library. A tag missing from
+// `tags` is Ungrouped. The Groups board pages its tag lists from
+// `listGroupTags`, since a Danbooru import files far more tags than the
+// library holds.
 
 import { apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
  * Read the groups and which tag sits in which.
- * @returns {Promise<{groups: Array<{id:number,name:string,position:number}>, tags: Object<string, number>}>}
+ * @returns {Promise<{groups: Array<{id:number,name:string,position:number,tag_count:number}>, tags: Object<string, number>, ungrouped_count: number, all_count: number}>}
  */
 export async function getTagGroups() {
   return unwrap(apiClient.get(`/tag_groups`));
+}
+
+/**
+ * One page of the tags a choice holds, with each tag's picture count in the
+ * library (0 for a known tag nobody has). Every known tag is listed, so a
+ * group's page can run past the library's tags.
+ * @param {Object} options
+ * @param {string} options.group - a group id, `none` (Ungrouped) or `all`.
+ * @param {string} [options.q] - a substring of the tag name.
+ * @param {"pictures"|"name"} [options.sort]
+ * @param {number} [options.offset]
+ * @param {number} [options.limit] - at most 500.
+ * @returns {Promise<{total: number, tags: Array<{tag: string, count: number, group_id: number|null}>}>}
+ */
+export async function listGroupTags({ group, q, sort, offset, limit } = {}) {
+  return unwrap(
+    apiClient.get(`/tag_groups/tags`, {
+      params: { group, q, sort, offset, limit },
+    }),
+  );
 }
 
 /**

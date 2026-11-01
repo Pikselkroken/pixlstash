@@ -176,6 +176,16 @@ def _map(server):
     return server.vault.db.run_task(_read)
 
 
+def _library_tags(server):
+    """Every distinct tag a picture carries, sentinels excluded: the library's set."""
+
+    def _read(session):
+        names = session.exec(select(Tag.tag).distinct()).all()
+        return {n for n in names if not n.startswith("__tag")}
+
+    return server.vault.db.run_task(_read)
+
+
 def _operations(server):
     return operation_log_service.list_operations(server.vault, limit=100)
 
@@ -199,6 +209,11 @@ def _provenance(server):
         return {"groups": groups, "members": members}
 
     return server.vault.db.run_task(_read)
+
+
+def _listing(client, **params):
+    """``GET /tag_groups/tags`` with *params*; the response, unchecked."""
+    return client.get(f"{API}/tag_groups/tags", params=params)
 
 
 def _seed(server):
@@ -300,7 +315,12 @@ def test_create_trims_appends_and_refuses_bad_or_duplicate_names(client):
     resp = client.post(f"{API}/tag_groups", json={"name": "  Meta  "})
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["group"] == {"id": body["group"]["id"], "name": "Meta", "position": 0}
+    assert body["group"] == {
+        "id": body["group"]["id"],
+        "name": "Meta",
+        "position": 0,
+        "tag_count": 0,
+    }
     assert body["groups"] == [body["group"]]
 
     general = client.post(f"{API}/tag_groups", json={"name": "General"}).json()
@@ -339,19 +359,21 @@ def test_reorder_requires_exactly_the_existing_ids(client):
     assert [g["id"] for g in resp.json()["groups"]] == [general, meta]
 
 
-def test_assign_files_reassigns_ungroups_and_refuses_bad_input(client):
+def test_assign_files_reassigns_ungroups_and_refuses_bad_input(client, server):
+    # The endpoint lists library tags only; these names are on no picture, so the
+    # filing is read from the stored map.
     meta = _create(client, "Meta")
     general = _create(client, "General")
 
     resp = _assign(client, ["film grain", " bokeh ", "bokeh", ""], meta)
     assert resp.status_code == 200, resp.text
-    assert resp.json()["tags"] == {"film grain": meta, "bokeh": meta}
+    assert _map(server)["tags"] == {"film grain": meta, "bokeh": meta}
 
     resp = _assign(client, ["film grain"], general)
-    assert resp.json()["tags"] == {"film grain": general, "bokeh": meta}
+    assert _map(server)["tags"] == {"film grain": general, "bokeh": meta}
 
     resp = _assign(client, ["bokeh"], None)
-    assert resp.json()["tags"] == {"film grain": general}
+    assert _map(server)["tags"] == {"film grain": general}
 
     # A group that does not exist, a pending-retag marker, and an over-long list.
     assert _assign(client, ["x"], 999999).status_code == 404
@@ -366,13 +388,13 @@ def test_undo_and_redo_restore_the_exact_previous_groups(client, server):
     meta = _create(client, "Meta")
     general = _create(client, "General")
     _assign(client, ["grain"], meta)
-    before = client.get(f"{API}/tag_groups").json()
+    before = _map(server)
     assert before["tags"] == {"grain": meta}
 
     # One gesture: "grain" moves Meta -> General, "rain" moves Ungrouped -> General.
     resp = _assign(client, ["grain", "rain"], general)
     assert resp.status_code == 200
-    after = resp.json()
+    after = _map(server)
     assert after["tags"] == {"grain": general, "rain": general}
 
     operations = [
@@ -387,24 +409,24 @@ def test_undo_and_redo_restore_the_exact_previous_groups(client, server):
     undone = client.post(f"{API}/operations/undo", json={})
     assert undone.status_code == 200, undone.text
     assert undone.json()["operations"][0]["target_type"] == "tag_group"
-    assert client.get(f"{API}/tag_groups").json() == before
+    assert _map(server) == before
 
     redone = client.post(f"{API}/operations/redo")
     assert redone.status_code == 200, redone.text
-    assert client.get(f"{API}/tag_groups").json() == after
+    assert _map(server) == after
 
 
 def test_undo_of_a_single_move_names_it_and_restores_ungrouped(client, server):
     meta = _create(client, "Meta")
     _assign(client, ["film grain"], meta)
-    assert client.get(f"{API}/tag_groups").json()["tags"] == {"film grain": meta}
+    assert _map(server)["tags"] == {"film grain": meta}
 
     _assign(client, ["film grain"], None)
     newest = [op for op in _operations(server) if op["op_type"] == "tag_groups.move"][0]
     assert newest["summary"] == "Move “film grain” to Ungrouped"
 
     assert client.post(f"{API}/operations/undo", json={}).status_code == 200
-    assert client.get(f"{API}/tag_groups").json()["tags"] == {"film grain": meta}
+    assert _map(server)["tags"] == {"film grain": meta}
 
 
 def test_a_no_op_assign_records_no_operation(client, server):
@@ -414,7 +436,7 @@ def test_a_no_op_assign_records_no_operation(client, server):
 
     resp = _assign(client, ["grain"], meta)
     assert resp.status_code == 200
-    assert resp.json()["tags"] == {"grain": meta}
+    assert _map(server)["tags"] == {"grain": meta}
     assert len(_operations(server)) == recorded
 
     # Ungrouping a tag that is already Ungrouped is also a no-op.
@@ -513,16 +535,16 @@ def test_one_batch_of_moves_on_the_same_tag_undoes_and_redoes_in_order(client, s
         headers=headers,
     )
     assert second.status_code == 200, second.text
-    assert second.json()["tags"] == {}
+    assert _map(server)["tags"] == {}
 
     undone = client.post(f"{API}/operations/undo", json={})
     assert undone.status_code == 200, undone.text
     assert len(undone.json()["operations"]) == 2
-    assert client.get(f"{API}/tag_groups").json()["tags"] == {"grain": meta}
+    assert _map(server)["tags"] == {"grain": meta}
 
     redone = client.post(f"{API}/operations/redo")
     assert redone.status_code == 200, redone.text
-    assert client.get(f"{API}/tag_groups").json()["tags"] == {}
+    assert _map(server)["tags"] == {}
 
 
 def test_a_group_term_of_any_length_never_fails(client, server):
@@ -698,8 +720,7 @@ def test_dry_run_reports_the_plan_and_changes_nothing(client, server, use_defaul
             "user_conflict_sample": [],
             "user_overwritten": 0,
             "groups_created": ["People", "Clothing"],
-            "skipped_adult_or_uncategorised": 0,
-            "skipped_not_in_library": 0,
+            "skipped_uncategorised": 0,
         }
     }
     assert _provenance(server) == before
@@ -723,7 +744,7 @@ def test_real_run_files_creates_groups_and_records_one_operation(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     names = {g["name"]: g["id"] for g in body["groups"]}
-    assert body["tags"] == {
+    assert _map(server)["tags"] == {
         "real-girl": names["People"],
         "real-shirt": names["Clothing"],
     }
@@ -809,9 +830,8 @@ def test_a_user_filing_is_a_conflict_kept_unless_overwritten(
     assert len(_operations(server)) == recorded + 1
 
 
-def test_tags_outside_the_library_and_vocabulary_are_skipped(
-    client, server, use_defaults
-):
+def test_tags_outside_the_library_are_filed_too(client, server, use_defaults):
+    """The file is the vocabulary: a row no picture carries is filed like any other."""
     use_defaults({"People": ["skip-girl"]})
     rows = [
         ["english", "category", "subcategory"],
@@ -819,27 +839,53 @@ def test_tags_outside_the_library_and_vocabulary_are_skipped(
         ["skip-hat-nowhere", "Clothing", "Head Accessories"],
     ]
 
-    plan = _import(client, _csv(rows), "skip.csv", dry_run=True).json()["plan"]
+    dry = _import(client, _csv(rows), "skip.csv", dry_run=True).json()["plan"]
+    assert "skipped_not_in_library" not in dry
+    assert dry["filed"] == 2
 
-    assert plan["skipped_not_in_library"] == 1
-    assert plan["filed"] == 1
+    real = _import(client, _csv(rows), "skip.csv")
+    assert real.status_code == 200, real.text
+    assert _map(server)["tags"]["skip-hat-nowhere"] == real.json()["groups"][-1]["id"]
+    library = _library_tags(server)
+    filed = set(_map(server)["tags"])
+    assert real.json()["ungrouped_count"] == len(library - filed)
+    assert real.json()["all_count"] == len(library | filed)
+    # Not on a picture, so the map answer does not list it.
+    assert "skip-hat-nowhere" not in real.json()["tags"]
 
 
-def test_adult_rows_are_skipped_and_stay_ungrouped(client, server, use_defaults):
+def test_adult_rows_file_under_adult_and_nothing_in_the_import_drops_them(
+    client, server, use_defaults
+):
+    """The filter protects the shipped defaults only; a user's file is filed whole."""
     use_defaults({"People": ["adult-girl"]})
     pic = _upload(client)
     _seed_tags(server, pic, ["adult-chest-tag"])
     rows = [
         ["english", "category", "subcategory"],
         ["adult-chest-tag", "Person", "Chest"],
+        ["adult-toy", "Items", "Adult Toys"],
+        ["adult-sex", "Expressions & Actions", "Sexual Actions"],
         ["adult-girl", "Person", "Subject"],
+        # A keyword the defaults guard would drop: the import keeps it.
+        ["nude study", "Person", "Subject"],
     ]
 
-    resp = _import(client, _csv(rows), "adult.csv")
+    dry = _import(client, _csv(rows), "adult.csv", dry_run=True).json()["plan"]
+    assert dry["skipped_uncategorised"] == 0
+    assert "Adult" in dry["groups_created"]
+    assert "skipped_adult_or_uncategorised" not in dry
 
-    plan = resp.json()["plan"]
-    assert plan["skipped_adult_or_uncategorised"] == 1
-    assert "adult-chest-tag" not in resp.json()["tags"]
+    resp = _import(client, _csv(rows), "adult.csv")
+    assert resp.status_code == 200, resp.text
+    names = {g["name"]: g["id"] for g in resp.json()["groups"]}
+    filed = _map(server)["tags"]
+    assert filed["adult-chest-tag"] == names["Adult"]
+    assert filed["adult-toy"] == names["Adult"]
+    assert filed["adult-sex"] == names["Adult"]
+    assert filed["nude study"] == names["People"]
+    # Adult is not a default group: a fresh seeding never creates it.
+    assert "Adult" not in DEFAULT_GROUP_NAMES
 
 
 def test_an_unknown_category_creates_its_group_and_a_dry_run_only_names_it(
@@ -1219,8 +1265,207 @@ def test_an_ungrouped_or_blank_category_creates_no_group(client, server, use_def
 
     plan = _import(client, _csv(rows), "loose.csv", dry_run=True).json()["plan"]
     assert plan["groups_created"] == []
-    assert plan["skipped_adult_or_uncategorised"] == 2
+    assert plan["skipped_uncategorised"] == 2
 
     real = _import(client, _csv(rows), "loose.csv").json()
     assert "Ungrouped" not in [g["name"] for g in real["groups"]]
     assert real["tags"] == {}
+
+
+# ---------------------------------------------------------------------------
+# The map is library-limited; the Tags listing pages the rest
+# ---------------------------------------------------------------------------
+
+
+def test_the_map_lists_library_tags_and_counts_the_rest(client, server):
+    meta = _create(client, "Meta")
+    general = _create(client, "General")
+    pic = _upload(client)
+    _seed_tags(server, pic, ["lib-grain", "lib-rain"])
+    _assign(client, ["lib-grain", "filed-only-grain"], meta)
+    _assign(client, ["lib-rain"], general)
+
+    body = client.get(f"{API}/tag_groups").json()
+    library = _library_tags(server)
+    filed = _map(server)["tags"]
+    # Only filings of tags a picture carries travel in the map answer.
+    assert body["tags"] == {t: g for t, g in filed.items() if t in library}
+    assert body["tags"]["lib-grain"] == meta
+    assert "filed-only-grain" not in body["tags"]
+    # tag_count counts every tag filed in the group, library or not.
+    counts = {g["id"]: g["tag_count"] for g in body["groups"]}
+    assert counts[meta] == 2 and counts[general] == 1
+    assert body["ungrouped_count"] == len(library - set(filed))
+    assert body["all_count"] == len(library | set(filed))
+
+
+def test_the_listing_answers_by_group_none_and_all(client, server):
+    meta = _create(client, "Meta")
+    first = _upload(client)
+    second = _upload(client)
+    _seed_tags(server, first, ["ls-grain", "ls-loose"])
+    _seed_tags(server, second, ["ls-grain"])
+    _assign(client, ["ls-grain", "ls-ghost"], meta)
+    library = _library_tags(server)
+    filed = _map(server)["tags"]
+
+    by_meta = _listing(client, group=str(meta)).json()
+    assert by_meta["total"] == 2
+    assert by_meta["tags"] == [
+        {"tag": "ls-grain", "count": 2, "group_id": meta},
+        {"tag": "ls-ghost", "count": 0, "group_id": meta},
+    ]
+
+    unfiled = _listing(client, group="none", sort="name", limit=500).json()
+    assert [t["tag"] for t in unfiled["tags"]] == sorted(library - set(filed))
+    assert unfiled["total"] == len(library - set(filed))
+    assert {"tag": "ls-loose", "count": 1, "group_id": None} in unfiled["tags"]
+
+    everything = _listing(client, group="all", sort="name", limit=500).json()
+    assert everything["total"] == len(library | set(filed))
+    by_name = {t["tag"]: t for t in everything["tags"]}
+    assert by_name["ls-ghost"] == {"tag": "ls-ghost", "count": 0, "group_id": meta}
+    assert by_name["ls-loose"]["group_id"] is None
+    assert by_name["ls-grain"] == {"tag": "ls-grain", "count": 2, "group_id": meta}
+
+
+def test_the_listing_pages_sorts_and_matches_a_substring(client, server):
+    group = _create(client, "Paging")
+    first = _upload(client)
+    second = _upload(client)
+    _seed_tags(server, first, ["pg-d", "pg-b", "pg-e"])
+    _seed_tags(server, second, ["pg-d"])
+    _assign(client, ["pg-a", "pg-b", "pg-c", "pg-d", "pg-e"], group)
+
+    def names(**params):
+        resp = _listing(client, group=str(group), **params)
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    # Most pictures first, then name: d (2), then b and e (1), then a and c (0).
+    by_pictures = names(sort="pictures")
+    assert [t["tag"] for t in by_pictures["tags"]] == [
+        "pg-d",
+        "pg-b",
+        "pg-e",
+        "pg-a",
+        "pg-c",
+    ]
+    assert by_pictures["total"] == 5
+    assert [t["tag"] for t in names(sort="name")["tags"]] == [
+        "pg-a",
+        "pg-b",
+        "pg-c",
+        "pg-d",
+        "pg-e",
+    ]
+    # Pages join up to the whole list, with no repeat and no gap.
+    paged = []
+    for offset in (0, 2, 4):
+        page = names(sort="pictures", limit=2, offset=offset)
+        assert page["total"] == 5
+        paged += [t["tag"] for t in page["tags"]]
+    assert paged == [t["tag"] for t in by_pictures["tags"]]
+    # Case-insensitive substring; a miss is an empty page, not an error.
+    assert names(q="PG-")["total"] == 5
+    assert [t["tag"] for t in names(q="pg-d")["tags"]] == ["pg-d"]
+    assert names(q="no-such-tag")["total"] == 0
+
+
+def test_the_listing_refuses_unknown_groups_and_bad_parameters(client, server):
+    assert _listing(client, group="999999").status_code == 404
+    # Past SQLite's 64-bit id range: no group can have it, so it is a 404, not a 500.
+    assert _listing(client, group="99999999999999999999999").status_code == 404
+    assert _listing(client, group="abc").status_code == 400
+    assert _listing(client, group="-1").status_code == 400
+    assert _listing(client, group="all", limit=0).status_code == 422
+    assert _listing(client, group="all", limit=501).status_code == 422
+    assert _listing(client, group="all", offset=-1).status_code == 422
+    assert _listing(client, group="all", sort="bogus").status_code == 422
+    assert _listing(client, group="all").status_code == 200
+
+
+def test_a_read_token_is_refused_on_the_listing_and_the_owner_is_not(client, server):
+    token = mint_read_token(client, "tag-listing-reader")
+    reader = bearer_client(server, token)
+    meta = _create(client, "Meta")
+    _assign(client, ["listed-grain"], meta)
+
+    # Owner control first: the path resolves, so the 403 below is the refusal.
+    assert _listing(client, group="all").status_code == 200
+    assert (
+        reader.get(f"{API}/tag_groups/tags", params={"group": "all"}).status_code == 403
+    )
+
+
+# ---------------------------------------------------------------------------
+# Import: every row is filed; a character brings its franchise
+# ---------------------------------------------------------------------------
+
+
+def test_a_character_row_files_its_franchise_under_copyright(
+    client, server, use_defaults
+):
+    use_defaults({"People": ["chr-seed-girl"]})
+    rows = [
+        ["english", "category", "subcategory"],
+        ["raiden shogun (genshin impact)", "Anime Character", ""],
+        ["lucy (young)", "Anime Character", ""],
+        ["some artist", "Artist", ""],
+        # A franchise that a row also lists as a character is Copyright, as in the defaults.
+        ["nier:automata", "Anime Character", ""],
+        ["2b (nier:automata)", "Anime Character", ""],
+    ]
+
+    resp = _import(client, _csv(rows), "chars.csv")
+
+    assert resp.status_code == 200, resp.text
+    names = {g["name"]: g["id"] for g in resp.json()["groups"]}
+    filed = _map(server)["tags"]
+    assert filed["raiden shogun (genshin impact)"] == names["Character"]
+    assert filed["genshin impact"] == names["Copyright"]
+    assert filed["some artist"] == names["Artist"]
+    assert filed["nier:automata"] == names["Copyright"]
+    assert filed["2b (nier:automata)"] == names["Character"]
+    # A qualifier on the list is a form, not a franchise: lucy is a character only.
+    assert filed["lucy (young)"] == names["Character"]
+    assert "young" not in filed
+    assert {"Character", "Copyright", "Artist"} <= set(
+        resp.json()["plan"]["groups_created"]
+    )
+
+
+def test_a_big_import_undoes_and_redoes_exactly(client, server, use_defaults):
+    """A few thousand rows, with a default moved, a user filing overwritten and
+    a franchise shared by many characters: undo and redo restore exactly."""
+    use_defaults({"People": ["big-girl"]})
+    _seed(server)
+    meta = _create(client, "Meta")
+    _assign(client, ["big-user"], meta)
+    rows = [
+        ["english", "category", "subcategory"],
+        ["big-girl", "Clothing", "Clothing Styles"],
+        ["big-user", "Clothing", "Clothing Styles"],
+    ]
+    rows += [
+        [f"big-chr-{i} (big-franchise-{i % 40})", "Anime Character", ""]
+        for i in range(3000)
+    ]
+    rows += [[f"big-tag-{i}", "Items", "Other Items"] for i in range(2000)]
+    before = _provenance(server)
+
+    resp = _import(client, _csv(rows), "big.csv", overwrite=True)
+
+    assert resp.status_code == 200, resp.text
+    plan = resp.json()["plan"]
+    assert plan["filed"] == 5000 + 40 + 2
+    assert plan["user_overwritten"] == 1 and plan["from_defaults"] == 1
+    after = _provenance(server)
+    assert after["members"]["big-chr-7 (big-franchise-7)"][0] is not None
+
+    assert client.post(f"{API}/operations/undo", json={}).status_code == 200
+    assert _provenance(server) == before
+    assert client.post(f"{API}/operations/redo").status_code == 200
+    assert _provenance(server) == after
+    assert client.post(f"{API}/operations/undo", json={}).status_code == 200
+    assert _provenance(server) == before

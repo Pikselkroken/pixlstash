@@ -13,6 +13,10 @@ value. The route module imports this module, which registers the hook at start-u
 Provenance: ``is_default`` is True for a filing seeding made and False for one the
 user made. A user move and an import both write False. Seeding never rewrites an
 existing row.
+
+The map answer carries only the filings of tags a picture carries; the rest of the
+vocabulary is paged by :func:`list_tags_in_session`. An import's undo payload names
+its tags compactly (see :func:`restore_tag_group_moves_in_session`).
 """
 
 import csv
@@ -22,13 +26,13 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-from sqlalchemy import func
+from sqlalchemy import delete, desc, func, null, union_all, update
 from sqlmodel import Session, select
 
 from pixlstash.db_models import TagGroup, TagGroupMember
 from pixlstash.db_models.library_settings import LibrarySettings
 from pixlstash.db_models.operation import TARGET_TAG_GROUP
-from pixlstash.db_models.tag import Tag, is_tag_sentinel
+from pixlstash.db_models.tag import TAG_PENDING_SENTINEL, Tag, is_tag_sentinel
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import operation_log_service
 from pixlstash.services.operation_log_service import (
@@ -36,7 +40,11 @@ from pixlstash.services.operation_log_service import (
     record_payload_operation_in_session,
 )
 from pixlstash.services.tag_group_defaults import (
+    ADULT_GROUP,
+    CHARACTER,
+    COPYRIGHT,
     DEFAULT_GROUP_NAMES,
+    franchise_of,
     group_for,
     normalise_tag,
 )
@@ -64,6 +72,8 @@ IMPORT_CONFLICT_SAMPLE = 10
 # An import may name at most this many categories that are not groups yet; a file
 # with more is refused, so one upload cannot create an unbounded number of groups.
 MAX_IMPORT_NEW_GROUPS = 50
+# SQLite's INTEGER is 64-bit; a larger group id names no group.
+_SQLITE_MAX_INT = 2**63 - 1
 
 
 class TagGroupError(Exception):
@@ -75,23 +85,179 @@ class TagGroupError(Exception):
         self.detail = detail
 
 
+def _library_tags_stmt():
+    """Every distinct tag some picture carries, pending-retag sentinels excluded."""
+    return (
+        select(Tag.tag)
+        .distinct()
+        .where(~Tag.tag.startswith(TAG_PENDING_SENTINEL, autoescape=True))
+    )
+
+
 def read_map_in_session(session: Session) -> dict[str, Any]:
-    """The whole map: groups in position order and every filed tag name."""
+    """The map as the browser reads it, not the whole vocabulary.
+
+    The vocabulary can run to hundreds of thousands of names, so only the filings
+    of tags a picture carries travel here (``tags``). ``ungrouped_count`` counts
+    the library's tags with no filing; ``all_count`` the distinct known tags, filed
+    or in the library. ``tag_count`` on each group counts every tag filed there.
+    :func:`list_tags_in_session` pages through the rest.
+    """
     groups = session.exec(
         select(TagGroup).order_by(TagGroup.position, TagGroup.id)
     ).all()
-    members = session.exec(select(TagGroupMember)).all()
+    tag_counts = dict(
+        session.exec(
+            select(TagGroupMember.group_id, func.count()).group_by(
+                TagGroupMember.group_id
+            )
+        ).all()
+    )
+    library_filings = session.exec(
+        select(TagGroupMember.tag, TagGroupMember.group_id).where(
+            TagGroupMember.tag.in_(_library_tags_stmt())
+        )
+    ).all()
+    library_total = int(
+        session.exec(
+            select(func.count()).select_from(_library_tags_stmt().subquery())
+        ).one()
+    )
+    ungrouped = library_total - len(library_filings)
     return {
         "groups": [
-            {"id": g.id, "name": g.name, "position": g.position} for g in groups
+            {
+                "id": g.id,
+                "name": g.name,
+                "position": g.position,
+                "tag_count": int(tag_counts.get(g.id, 0)),
+            }
+            for g in groups
         ],
-        "tags": {m.tag: m.group_id for m in members},
+        "tags": {tag: group_id for tag, group_id in library_filings},
+        "ungrouped_count": ungrouped,
+        "all_count": sum(tag_counts.values()) + ungrouped,
     }
 
 
 def list_tag_groups(db) -> dict[str, Any]:
-    """Read the whole map on the read queue (``GET /tag_groups``)."""
+    """Read the map on the read queue (``GET /tag_groups``)."""
     return db.run_immediate_read_task(read_map_in_session)
+
+
+def _picture_counts(*, within=None, unfiled_only: bool = False):
+    """A subquery of (tag, pictures) for library tags, optionally narrowed.
+
+    *within* limits it to the tags of a select; *unfiled_only* to tags no
+    member row names. Pending-retag sentinels never count.
+    """
+    stmt = select(Tag.tag.label("tag"), func.count().label("pictures")).where(
+        ~Tag.tag.startswith(TAG_PENDING_SENTINEL, autoescape=True)
+    )
+    if within is not None:
+        stmt = stmt.where(Tag.tag.in_(within))
+    if unfiled_only:
+        stmt = stmt.where(~Tag.tag.in_(select(TagGroupMember.tag)))
+    return stmt.group_by(Tag.tag).subquery()
+
+
+def list_tags_in_session(
+    session: Session,
+    *,
+    group: str,
+    q: Optional[str],
+    sort: str,
+    offset: int,
+    limit: int,
+) -> dict[str, Any]:
+    """One page of tags for the Tags view (``GET /tag_groups/tags``).
+
+    Args:
+        session: A read session.
+        group: A group id; ``"none"`` for library tags with no filing; ``"all"``
+            for every filed tag and every library tag.
+        q: Substring to match, folded for ASCII only (SQLite ``LIKE``; tags are
+            stored in lower case by :func:`normalise_tag`), or ``None``.
+        sort: ``"pictures"`` (most pictures first, then name) or ``"name"``.
+        offset: Rows to skip.
+        limit: Rows to return.
+
+    Returns:
+        ``{"total": matches, "tags": [{"tag", "count", "group_id"}, ...]}``, where
+        ``count`` is the pictures in the library carrying the tag (0 when none) and
+        ``group_id`` is ``None`` for an unfiled tag.
+
+    Raises:
+        TagGroupError: 400 for a malformed group; 404 for an unknown group id.
+    """
+    group_id: Optional[int] = None
+    if group not in ("all", "none"):
+        if not group.isascii() or not group.isdigit():
+            raise TagGroupError(400, "group must be a group id, none or all")
+        group_id = int(group)
+        if group_id > _SQLITE_MAX_INT or session.get(TagGroup, group_id) is None:
+            raise TagGroupError(404, f"No tag group with id {group}")
+
+    branches = []
+    if group != "none":
+        if group_id is None:
+            counts = _picture_counts()
+        else:
+            counts = _picture_counts(
+                within=select(TagGroupMember.tag).where(
+                    TagGroupMember.group_id == group_id
+                )
+            )
+        filed = select(
+            TagGroupMember.tag.label("tag"),
+            TagGroupMember.group_id.label("group_id"),
+            func.coalesce(counts.c.pictures, 0).label("pictures"),
+        ).select_from(
+            TagGroupMember.__table__.outerjoin(
+                counts, counts.c.tag == TagGroupMember.tag
+            )
+        )
+        if group_id is not None:
+            filed = filed.where(TagGroupMember.group_id == group_id)
+        branches.append(filed)
+    if group in ("all", "none"):
+        unfiled = _picture_counts(unfiled_only=True)
+        branches.append(
+            select(
+                unfiled.c.tag.label("tag"),
+                null().label("group_id"),
+                unfiled.c.pictures.label("pictures"),
+            )
+        )
+    source = (
+        branches[0].subquery()
+        if len(branches) == 1
+        else union_all(*branches).subquery()
+    )
+    matches = select(source.c.tag, source.c.group_id, source.c.pictures).select_from(
+        source
+    )
+    if q:
+        matches = matches.where(source.c.tag.contains(q, autoescape=True))
+    total = session.exec(select(func.count()).select_from(matches.subquery())).one()
+    order = (
+        (desc(source.c.pictures), source.c.tag)
+        if sort == "pictures"
+        else (source.c.tag,)
+    )
+    page = session.exec(matches.order_by(*order).offset(offset).limit(limit)).all()
+    return {
+        "total": int(total),
+        "tags": [
+            {"tag": row.tag, "count": int(row.pictures), "group_id": row.group_id}
+            for row in page
+        ],
+    }
+
+
+def list_tags(db, **params) -> dict[str, Any]:
+    """Page through tags on the read queue; see :func:`list_tags_in_session`."""
+    return db.run_immediate_read_task(list_tags_in_session, **params)
 
 
 def _group_dict(group: TagGroup) -> dict[str, Any]:
@@ -508,25 +674,27 @@ def _import_summary(count: int, filename: str) -> str:
 def import_tags_in_session(
     session: Session,
     rows: list[tuple[str, str, str]],
-    default_tags: frozenset[str],
     *,
     filename: str,
     dry_run: bool,
     overwrite_user: bool,
     request_context: dict[str, Any],
 ) -> dict[str, Any]:
-    """File an imported tag table on the writer; one undoable operation.
+    """File every row of an imported tag table on the writer; one undoable operation.
 
-    The file wins over PixlStash's defaults and over Ungrouped tags. A tag the
-    user filed (``is_default`` False) under a different group is a conflict: it is
-    kept unless *overwrite_user* is set. Only tags the library holds or the
-    default vocabulary names are filed; the rest are counted and ignored. Groups
-    the import needs are created, and they stay (empty) after an undo.
+    Every row with a category is filed, whether or not a picture carries the tag
+    yet: the file is the user's vocabulary. An adult row files under the "Adult"
+    group, not dropped; only a row with no usable category is skipped and counted
+    as ``skipped_uncategorised``. A Character row also files its
+    franchise (:func:`franchise_of`) under Copyright, unless a row of the file
+    names that tag itself. The file wins over defaults and Ungrouped tags. A tag
+    the user filed (``is_default`` False) under a different group is a conflict:
+    it is kept unless *overwrite_user* is set. Groups the import needs are
+    created, and they stay (empty) after an undo.
 
     Args:
         session: The writer's session.
         rows: ``(english, category, subcategory)`` from :func:`parse_tag_file`.
-        default_tags: Tag names of the default vocabulary.
         filename: The uploaded name, for the undo summary.
         dry_run: Report the plan and change nothing.
         overwrite_user: Re-file tags the user filed, instead of keeping them.
@@ -537,33 +705,36 @@ def import_tags_in_session(
     """
     try:
         targets: dict[str, str] = {}
-        adult: set[str] = set()
+        franchises: dict[str, str] = {}
+        uncategorised: set[str] = set()
         for english, category, subcategory in rows:
             tag = normalise_tag(english)
             if not tag:
                 continue
-            group = group_for(tag, category, subcategory)
+            group = group_for(tag, category, subcategory, adult_group=ADULT_GROUP)
             if group is None:
-                adult.add(tag)
-            elif tag not in targets:
-                # Names are capped to the column's length; a longer category
-                # would otherwise be a group no UI can show whole.
-                targets[tag] = group[:NAME_MAX_LENGTH]
-        skipped_adult = len(adult.difference(targets))
+                uncategorised.add(tag)
+                continue
+            # Names are capped to the column's length; a longer category would
+            # otherwise be a group no UI can show whole.
+            targets.setdefault(tag, group[:NAME_MAX_LENGTH])
+            franchise = franchise_of(tag) if group == CHARACTER else None
+            if franchise is not None:
+                franchises.setdefault(franchise, COPYRIGHT)
+        for franchise, group in franchises.items():
+            # Same rule as the defaults: a franchise is Copyright even where a row
+            # of the file lists it as a character; any other filing stands.
+            if targets.get(franchise, CHARACTER) == CHARACTER:
+                targets[franchise] = group
+        skipped_uncategorised = len(uncategorised.difference(targets))
 
-        library_tags = {
-            t
-            for t in session.exec(select(Tag.tag).distinct()).all()
-            if not is_tag_sentinel(t)
-        }
         groups = session.exec(
             select(TagGroup).order_by(TagGroup.position, TagGroup.id)
         ).all()
+        # Keyed by casefold: "Artist" and "artist" are one group, not two.
         by_key = {g.name.casefold(): g for g in groups}
-        members = {m.tag: m for m in session.exec(select(TagGroupMember)).all()}
-
-        # Counted over the whole file, before the library filter, so the refusal
-        # names every category the file asks for.
+        # Counted over the whole file, so the refusal names every category the
+        # file asks for.
         unknown = {
             name.casefold()
             for name in targets.values()
@@ -576,37 +747,29 @@ def import_tags_in_session(
                 f"an import may create at most {MAX_IMPORT_NEW_GROUPS}",
             )
 
-        skipped_not_in_library = 0
-        changes: list[tuple[str, str, Optional[TagGroupMember]]] = []
+        filings = _filings_of(session, sorted(targets))
+        changes: list[tuple[str, str, Optional[tuple[int, bool]]]] = []
         conflicts: list[str] = []
         from_defaults = from_ungrouped = overwritten = 0
         for tag in sorted(targets):
-            if tag not in library_tags and tag not in default_tags:
-                skipped_not_in_library += 1
-                continue
             name = targets[tag]
-            member = members.get(tag)
+            before = filings.get(tag)
             target = by_key.get(name.casefold())
-            if (
-                member is not None
-                and target is not None
-                and member.group_id == target.id
-            ):
+            if before is not None and target is not None and before[0] == target.id:
                 # Already filed under the file's group: left alone, default or not.
                 continue
-            if member is None:
+            if before is None:
                 changes.append((tag, name, None))
                 from_ungrouped += 1
-            elif member.is_default:
-                changes.append((tag, name, member))
+            elif before[1]:
+                changes.append((tag, name, before))
                 from_defaults += 1
             else:
                 conflicts.append(tag)
                 if overwrite_user:
-                    changes.append((tag, name, member))
+                    changes.append((tag, name, before))
                     overwritten += 1
 
-        # Keyed by casefold: "Artist" and "artist" are one group, not two.
         groups_created: list[str] = []
         created_keys: set[str] = set()
         for _, name, _ in changes:
@@ -623,8 +786,7 @@ def import_tags_in_session(
             "user_conflict_sample": conflicts[:IMPORT_CONFLICT_SAMPLE],
             "user_overwritten": overwritten,
             "groups_created": groups_created,
-            "skipped_adult_or_uncategorised": skipped_adult,
-            "skipped_not_in_library": skipped_not_in_library,
+            "skipped_uncategorised": skipped_uncategorised,
         }
         if dry_run:
             return {"plan": plan}
@@ -638,31 +800,29 @@ def import_tags_in_session(
                 session.flush()
                 by_key[name.casefold()] = group
 
-            before_map: dict[str, Any] = {}
-            after_map: dict[str, Any] = {}
-            inserts: list[dict[str, Any]] = []
-            for tag, name, member in changes:
+            # Undo of a big import must not carry every tag. A tag with no row
+            # before is listed by name under "unfiled", and the after state is
+            # one list per group; only a tag that already had a row keeps its
+            # provenance in "tags".
+            before_tags: dict[str, Any] = {}
+            before_unfiled: list[str] = []
+            after_groups: dict[str, list[str]] = {}
+            writes: dict[str, tuple[Optional[int], bool]] = {}
+            for tag, name, before in changes:
                 target = by_key[name.casefold()]
-                if member is None:
-                    before_map[tag] = _payload(None, False)
-                    inserts.append(
-                        {"tag": tag, "group_id": target.id, "is_default": False}
-                    )
+                if before is None:
+                    before_unfiled.append(tag)
                 else:
-                    before_map[tag] = _payload(member.group_id, member.is_default)
-                    member.group_id = target.id
-                    member.is_default = False
-                    session.add(member)
-                after_map[tag] = _payload(target.id, False)
-            if inserts:
-                session.execute(TagGroupMember.__table__.insert(), inserts)
-            session.flush()
+                    before_tags[tag] = _payload(*before)
+                writes[tag] = (target.id, False)
+                after_groups.setdefault(str(target.id), []).append(tag)
+            _write_members(session, writes)
             record_payload_operation_in_session(
                 session,
                 op_type=OP_TYPE_MOVE,
                 target_type=TARGET_TAG_GROUP,
-                before={"tags": before_map},
-                after={"tags": after_map},
+                before={"tags": before_tags, "unfiled": before_unfiled},
+                after={"groups": after_groups},
                 summary=_import_summary(len(changes), filename),
                 actor=request_context.get("actor"),
                 source=request_context.get("source", "external"),
@@ -689,16 +849,9 @@ def import_tag_file(
 ) -> dict[str, Any]:
     """Parse off the writer, then file on the writer; see :func:`import_tags_in_session`."""
     rows = parse_tag_file(filename, data)
-    defaults = load_default_tags()
-    default_tags = (
-        frozenset(tag for _, tags in defaults["groups"] for tag in tags)
-        if defaults
-        else frozenset()
-    )
     return db.run_task(
         import_tags_in_session,
         rows,
-        default_tags,
         filename=filename,
         dry_run=dry_run,
         overwrite_user=overwrite_user,
@@ -711,35 +864,98 @@ def import_tag_file(
 # ---------------------------------------------------------------------------
 
 
-def _write_member(
+def _filings_of(session: Session, tags: list[str]) -> dict[str, tuple[int, bool]]:
+    """``{tag: (group_id, is_default)}`` for the member rows among *tags*.
+
+    Reads columns, not ORM objects, so a 200 000-tag import never holds them.
+    """
+    found: dict[str, tuple[int, bool]] = {}
+    for chunk in chunked(tags):
+        for tag, group_id, is_default in session.exec(
+            select(
+                TagGroupMember.tag, TagGroupMember.group_id, TagGroupMember.is_default
+            ).where(TagGroupMember.tag.in_(chunk))
+        ).all():
+            found[tag] = (int(group_id), bool(is_default))
+    return found
+
+
+def _write_members(
     session: Session,
-    tag: str,
-    group_id: Optional[int],
-    is_default: bool,
-    operation_id: Optional[int],
+    writes: dict[str, tuple[Optional[int], bool]],
+    *,
+    operation_id: Optional[int] = None,
 ) -> None:
-    """Set one tag's filing, or make it Ungrouped. A vanished group is Ungrouped."""
-    if group_id is not None and session.get(TagGroup, int(group_id)) is None:
+    """Set each tag's filing in bulk: ``(group_id, is_default)``, or ``None`` = Ungrouped.
+
+    A group that no longer exists leaves its tags Ungrouped, with one warning. The
+    writes go out in chunks: one DELETE, one UPDATE per distinct (group, provenance)
+    pair and one executemany INSERT, rather than a statement per tag. Does not commit.
+    """
+    group_ids = {gid for gid, _ in writes.values() if gid is not None}
+    live: set[int] = set()
+    for chunk in chunked(sorted(group_ids)):
+        live.update(
+            session.exec(select(TagGroup.id).where(TagGroup.id.in_(chunk))).all()
+        )
+    vanished = sorted(group_ids - live)
+    if vanished:
         logger.warning(
-            "tag_groups: operation %s restores %r into group %s, which no longer "
-            "exists; leaving the tag Ungrouped",
+            "tag_groups: operation %s restores tags into group(s) %s, which no "
+            "longer exist; those tags are left Ungrouped",
             operation_id,
-            tag,
-            group_id,
+            vanished,
         )
-        group_id = None
-    member = session.get(TagGroupMember, tag)
-    if group_id is None:
-        if member is not None:
-            session.delete(member)
-    elif member is not None:
-        member.group_id = int(group_id)
-        member.is_default = bool(is_default)
-        session.add(member)
-    else:
-        session.add(
-            TagGroupMember(tag=tag, group_id=int(group_id), is_default=bool(is_default))
-        )
+
+    tags = sorted(writes)
+    current = _filings_of(session, tags)
+    deletes: list[str] = []
+    updates: dict[tuple[int, bool], list[str]] = {}
+    inserts: list[dict[str, Any]] = []
+    for tag in tags:
+        group_id, is_default = writes[tag]
+        if group_id is not None and group_id not in live:
+            group_id = None
+        state = current.get(tag)
+        if group_id is None:
+            if state is not None:
+                deletes.append(tag)
+        elif state is None:
+            inserts.append(
+                {"tag": tag, "group_id": int(group_id), "is_default": bool(is_default)}
+            )
+        elif state != (int(group_id), bool(is_default)):
+            updates.setdefault((int(group_id), bool(is_default)), []).append(tag)
+
+    for chunk in chunked(deletes):
+        session.execute(delete(TagGroupMember).where(TagGroupMember.tag.in_(chunk)))
+    for (group_id, is_default), names in updates.items():
+        for chunk in chunked(names):
+            session.execute(
+                update(TagGroupMember)
+                .where(TagGroupMember.tag.in_(chunk))
+                .values(group_id=group_id, is_default=is_default)
+            )
+    if inserts:
+        session.execute(TagGroupMember.__table__.insert(), inserts)
+    session.flush()
+
+
+def _payload_writes(payload: dict[str, Any]) -> dict[str, tuple[Optional[int], bool]]:
+    """Every tag a recorded state names, as ``{tag: (group_id, is_default)}``.
+
+    Reads the older shapes too: ``tags`` with ``{group, default}`` or a bare group
+    id, the import's ``unfiled`` list (no row before), and its ``groups`` lists.
+    """
+    writes: dict[str, tuple[Optional[int], bool]] = {}
+    for tag, value in (payload.get("tags") or {}).items():
+        writes[tag] = _decode_payload(value)
+    for tag in payload.get("unfiled") or []:
+        writes[tag] = (None, False)
+    for group_id, tags in (payload.get("groups") or {}).items():
+        for tag in tags:
+            writes[tag] = (int(group_id), False)
+    return writes
 
 
 def restore_tag_group_moves_in_session(
@@ -767,9 +983,7 @@ def restore_tag_group_moves_in_session(
                 exc,
             )
             raise
-        for tag, value in (payload.get("tags") or {}).items():
-            group_id, is_default = _decode_payload(value)
-            _write_member(session, tag, group_id, is_default, operation.id)
+        _write_members(session, _payload_writes(payload), operation_id=operation.id)
 
 
 operation_log_service.register_post_restore_hook(

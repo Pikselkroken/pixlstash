@@ -5,9 +5,9 @@ Usage::
     python scripts/build_default_tag_groups.py TAGGER_META_JSON WD14_SELECTED_TAGS_CSV TOOLKIT_CSV
 
 The three inputs are the PixlStash anomaly tagger's ``*_meta.json`` (its
-``labels``), the WD14 ``selected_tags.csv`` (general tags, category 0), and the
-ComfyUI-Danbooru-Tag-Toolkit database as CSV (``english`` / ``category_en`` /
-``subcategory_en`` columns). The output is written to
+``labels``), the WD14 ``selected_tags.csv`` (general tags, category 0, and
+character tags, category 4), and the ComfyUI-Danbooru-Tag-Toolkit database as CSV
+(``english`` / ``category_en`` / ``subcategory_en`` columns). The output is written to
 ``pixlstash/data/tag_groups/default_tag_groups.json``. The build is
 deterministic: the tags are sorted and the output does not depend on the paths.
 
@@ -15,9 +15,12 @@ Each tag of the union goes through, in order:
 
 1. Anomaly, for every tag of :func:`anomaly_tags` and for the defect tags of the
    database (``group_for`` decides both).
-2. The database row, through :func:`group_for`. Adult subcategories, the
-   database's "Uncategorized" bucket and the character / artist categories give
-   no group.
+2. The database row, through :func:`group_for`. Adult subcategories and the
+   database's "Uncategorized" bucket give no group; the character and artist
+   categories file under Character and Artist.
+2a. The WD14 character tags, under Character where the database did not place
+   them. Each character's franchise (:func:`franchise_of`, its trailing
+   parenthetical) files under Copyright, unless an earlier step placed it.
 3. :data:`MANUAL_PLACEMENTS`, a hand classification of the tags the database
    cannot place. Every entry must be a tag the earlier steps left ungrouped.
 4. :data:`NSFW_DROP` and :data:`NSFW_WORDS`: explicit, sexual, nudity, genital
@@ -38,8 +41,12 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from pixlstash.services.tag_group_defaults import (  # noqa: E402
     ANOMALY,
+    ARTIST,
+    CHARACTER,
+    COPYRIGHT,
     DEFAULT_GROUP_NAMES,
     anomaly_tags,
+    franchise_of,
     group_for,
     normalise_tag,
 )
@@ -56,6 +63,35 @@ SOURCE = (
 # Tags the toolkit cannot place (no row, or an "Uncategorized" row), classified by
 # hand. Only SFW tags are listed; anything not listed stays Ungrouped (characters,
 # artists, series, adult material, and tags whose meaning is unclear).
+# The database files these vocabulary tags as artist rows, and none of them is an
+# artist the taggers can see: meta labels, a setting, clothing, and characters.
+# Every artist row in the vocabulary must be placed here, so a new one is read by
+# a person rather than filed under Artist; the Artist group itself starts empty
+# and fills from an import.
+ARTIST_ROW_OVERRIDES: dict[str, str] = {
+    "abe nana": "Character",
+    "artist logo": "Style & meta",
+    "artist name": "Style & meta",
+    "artist self-insert": "People",
+    "bokukawauso": "Character",
+    "creator connection": "Style & meta",
+    "deviantart username": "Style & meta",
+    "egasumi": "Clothing",
+    "enpera": "Clothing",
+    "kariya masaki": "Character",
+    "lain paterson": "Character",
+    "oomori yuuko": "Character",
+    "oyama mahiro": "Character",
+    "patreon username": "Style & meta",
+    "pixiv username": "Style & meta",
+    "reference sheet": "Style & meta",
+    "sato shin": "Character",
+    "scenery": "Setting",
+    "signature": "Style & meta",
+    "takei hisa": "Character",
+    "yorita yoshino": "Character",
+}
+
 MANUAL_PLACEMENTS: dict[str, tuple[str, ...]] = {
     "People": (
         "3people",
@@ -430,7 +466,6 @@ MANUAL_PLACEMENTS: dict[str, tuple[str, ...]] = {
         "room",
         "sand on ground",
         "sandcastle",
-        "scenery",
         "shopping street",
         "sunlight through-window",
         "silhouette against window",
@@ -518,7 +553,6 @@ MANUAL_PLACEMENTS: dict[str, tuple[str, ...]] = {
         "meta:photoshop",
         "meta:photoshop (medium)",
         "merry christmas",
-        "miku day",
         "real image",
         "shiny",
         "silhouette profile",
@@ -969,13 +1003,13 @@ def load_tagger_labels(path: Path) -> set[str]:
     return {normalise_tag(label) for label in meta["labels"]}
 
 
-def load_wd14_general(path: Path) -> set[str]:
-    """The WD14 general tags (category 0), normalised."""
+def load_wd14_category(path: Path, category: str) -> set[str]:
+    """The WD14 tags of one category ("0" general, "4" character), normalised."""
     with path.open(encoding="utf-8", newline="") as handle:
         return {
             normalise_tag(row["name"])
             for row in csv.DictReader(handle)
-            if row["category"] == "0"
+            if row["category"] == category
         }
 
 
@@ -998,12 +1032,15 @@ def load_toolkit(path: Path) -> dict[str, tuple[str, str]]:
 
 
 def build_groups(
-    union: set[str], toolkit: dict[str, tuple[str, str]]
+    union: set[str],
+    toolkit: dict[str, tuple[str, str]],
+    characters: set[str],
 ) -> dict[str, set[str]]:
     """Group every tag of *union* as the module docstring describes."""
     anomaly = anomaly_tags()
     groups: dict[str, set[str]] = {name: set() for name in DEFAULT_GROUP_NAMES}
     automatic: dict[str, str] = {}
+    unplaced_artists: list[str] = []
     for tag in union:
         if tag in anomaly:
             automatic[tag] = ANOMALY
@@ -1011,10 +1048,19 @@ def build_groups(
         if tag in toolkit:
             category, subcategory = toolkit[tag]
             group = group_for(tag, category, subcategory)
+            if group == ARTIST:
+                group = ARTIST_ROW_OVERRIDES.get(tag)
+                if group is None:
+                    unplaced_artists.append(tag)
             if group in DEFAULT_GROUP_NAMES:
                 automatic[tag] = group
+        if tag not in automatic and tag in characters:
+            automatic[tag] = CHARACTER
 
-    problems: list[str] = []
+    problems: list[str] = [
+        f"{tag!r} is an artist row in the database: place it in ARTIST_ROW_OVERRIDES"
+        for tag in sorted(unplaced_artists)
+    ]
     for group, tags in MANUAL_PLACEMENTS.items():
         if group not in DEFAULT_GROUP_NAMES:
             problems.append(f"unknown group {group!r}")
@@ -1031,6 +1077,14 @@ def build_groups(
                 automatic[tag] = group
     if problems:
         raise SystemExit("MANUAL_PLACEMENTS: " + "; ".join(problems))
+
+    # A franchise is a Copyright tag even where the vocabulary also lists it as a
+    # character ("nier:automata"). Any other placement above, a database category
+    # or a manual one, stands.
+    for tag in sorted(characters):
+        franchise = franchise_of(tag)
+        if franchise is not None and automatic.get(franchise, CHARACTER) == CHARACTER:
+            automatic[franchise] = COPYRIGHT
 
     for tag, group in automatic.items():
         if tag in NSFW_DROP or (group != ANOMALY and NSFW_WORDS.search(tag)):
@@ -1049,10 +1103,12 @@ def main(argv: list[str]) -> int:
         return 2
     tagger_path, wd14_path, toolkit_path = (Path(arg) for arg in argv)
     labels = load_tagger_labels(tagger_path)
-    general = load_wd14_general(wd14_path)
+    general = load_wd14_category(wd14_path, "0")
+    characters = load_wd14_category(wd14_path, "4")
     toolkit = load_toolkit(toolkit_path)
-    union = labels | general
-    groups = build_groups(union, toolkit)
+    franchises = {franchise_of(tag) for tag in characters} - {None}
+    union = labels | general | characters | franchises
+    groups = build_groups(union, toolkit, characters)
 
     for tag in NSFW_DROP:
         if tag not in union and tag not in anomaly_tags():
@@ -1062,7 +1118,7 @@ def main(argv: list[str]) -> int:
             )
 
     payload = {
-        "version": 1,
+        "version": 2,
         "source": SOURCE,
         "groups": [
             {"name": name, "tags": sorted(groups[name])} for name in DEFAULT_GROUP_NAMES

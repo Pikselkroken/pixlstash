@@ -114,6 +114,40 @@ describe("the map", () => {
   });
 });
 
+describe("the counts the map carries", () => {
+  it("takes the library's ungrouped count and the known total, and keeps each group's tag_count", async () => {
+    getTagGroups.mockResolvedValueOnce({
+      groups: [{ id: 2, name: "Character", position: 0, tag_count: 40 }],
+      tags: { "red hood": 2 },
+      ungrouped_count: 312,
+      all_count: 1284,
+    });
+    const store = useTagGroupsStore();
+    await store.fetch();
+    expect(store.ungroupedCount).toBe(312);
+    expect(store.allCount).toBe(1284);
+    expect(store.groups[0].tag_count).toBe(40);
+  });
+
+  it("holds no counts for a map that lacks them, and clears them on a library switch", async () => {
+    const store = useTagGroupsStore();
+    await store.fetch();
+    expect(store.ungroupedCount).toBe(0);
+    expect(store.allCount).toBe(0);
+    getTagGroups.mockResolvedValueOnce({
+      groups: [],
+      tags: {},
+      ungrouped_count: 5,
+      all_count: 9,
+    });
+    await store.fetch({ force: true });
+    expect(store.allCount).toBe(9);
+    resetHandlers.at(-1)();
+    expect(store.ungroupedCount).toBe(0);
+    expect(store.allCount).toBe(0);
+  });
+});
+
 describe("a library switch", () => {
   it("drops a read that started under the previous library", async () => {
     let answer;

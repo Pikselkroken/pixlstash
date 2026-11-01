@@ -9,10 +9,22 @@ vi.mock("../utils/apiClient", () => ({
 }));
 
 import { apiClient } from "../utils/apiClient";
-import { importTagGroups } from "./tagGroups";
+import { importTagGroups, listGroupTags } from "./tagGroups";
 
 beforeEach(() => {
+  apiClient.get.mockReset();
   apiClient.post.mockReset();
+});
+
+describe("api/tagGroups: the paged tag list", () => {
+  it("gets one page with the choice, filter, sort and offset as query params", async () => {
+    apiClient.get.mockResolvedValue({ data: { total: 2, tags: [] } });
+    const body = await listGroupTags({ group: "none", q: "pin", sort: "name", offset: 200, limit: 200 });
+    expect(apiClient.get).toHaveBeenCalledWith("/tag_groups/tags", {
+      params: { group: "none", q: "pin", sort: "name", offset: 200, limit: 200 },
+    });
+    expect(body).toEqual({ total: 2, tags: [] });
+  });
 });
 
 describe("api/tagGroups: import", () => {

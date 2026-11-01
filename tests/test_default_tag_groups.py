@@ -8,10 +8,19 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 from pixlstash.services.tag_group_defaults import (
+    ADULT_GROUP,
     ANOMALY,
+    ARTIST,
+    CHARACTER,
+    COPYRIGHT,
+    COPYRIGHT_QUALIFIERS,
     DEFAULT_GROUP_NAMES,
     anomaly_tags,
+    franchise_of,
+    group_for,
     normalise_tag,
 )
 
@@ -441,3 +450,92 @@ def test_the_guard_words_match_their_phrases_and_not_their_neighbours():
     # Whole words only, and a minor on its own is not a sexual phrase.
     for neighbour in ("class", "glass", "passage", "butterfly", "holding child"):
         assert not words.search(neighbour), neighbour
+
+
+def test_the_character_and_copyright_groups_follow_people_in_rail_order():
+    assert DEFAULT_GROUP_NAMES[:5] == (ANOMALY, "People", CHARACTER, COPYRIGHT, ARTIST)
+    assert (CHARACTER, COPYRIGHT, ARTIST) == ("Character", "Copyright", "Artist")
+
+
+def test_the_shipped_defaults_are_version_two_with_character_and_copyright():
+    assert _load()["version"] >= 2
+    groups = _groups()
+    assert groups[CHARACTER] and groups[COPYRIGHT]
+    # The taggers see no artist: the database's artist rows in their vocabulary
+    # are meta labels, a setting and characters, placed by hand. Artist fills
+    # from an import.
+    assert groups[ARTIST] == []
+    assert "scenery" in groups["Setting"]
+    assert "signature" in groups["Style & meta"]
+    assert "2b (nier:automata)" in groups[CHARACTER]
+    # A franchise is Copyright even where the vocabulary also lists it as a character.
+    assert "nier:automata" in groups[COPYRIGHT]
+    assert "nier:automata" not in groups[CHARACTER]
+
+
+@pytest.mark.parametrize(
+    ("tag", "franchise"),
+    [
+        ("raiden shogun (genshin impact)", "genshin impact"),
+        ("abigail williams (swimsuit foreigner) (fate)", "fate"),
+        ("2b (nier:automata)", "nier:automata"),
+        ("Rem (Re:Zero)", "re:zero"),
+        ("tiki (young) (fire emblem)", "fire emblem"),
+    ],
+)
+def test_franchise_is_the_last_parenthetical(tag, franchise):
+    assert franchise_of(tag) == franchise
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "absol",  # no parenthetical
+        "(fate)",  # nothing precedes the franchise
+        "lucy (young)",
+        "saber (alter)",
+        "miku (cosplay)",
+        "bunny girl (cat)",
+        "x (bad anatomy)",  # an Anomaly tag is never a Copyright tag
+        "x ()",
+    ],
+)
+def test_qualifiers_and_plain_names_give_no_copyright(tag):
+    assert franchise_of(tag) is None
+
+
+def test_every_listed_qualifier_is_refused_as_a_franchise():
+    for qualifier in sorted(COPYRIGHT_QUALIFIERS):
+        assert franchise_of(f"someone ({qualifier})") is None, qualifier
+
+
+def test_a_character_row_with_a_franchise_is_not_refused_by_the_qualifier_list():
+    # The list is a set of qualifiers, not a filter on every name: a franchise
+    # that merely contains a qualifier word is still a franchise.
+    assert franchise_of("kid (young tigers series)") == "young tigers series"
+
+
+def test_artist_and_character_categories_map_to_their_groups():
+    assert group_for("some character", "Anime Character", "") == CHARACTER
+    assert group_for("some character", "Anime Character", "Anything") == CHARACTER
+    assert group_for("some artist", "Artist", "") == ARTIST
+    assert group_for("some artist", "Artist", "Lore") == ARTIST
+    # Anomaly still comes first, whatever the category says.
+    assert group_for("bad anatomy", "Anime Character", "") == ANOMALY
+
+
+def test_adult_rows_are_ungrouped_in_the_build_and_filed_when_an_import_asks():
+    # The defaults build passes no adult group, so an adult row gives no group.
+    assert group_for("x", "Person", "Chest") is None
+    assert group_for("x", "Items", "Adult Toys") is None
+    # An import passes ADULT_GROUP and files the row there.
+    assert group_for("x", "Person", "Chest", adult_group=ADULT_GROUP) == ADULT_GROUP
+    assert group_for("x", "Items", "Adult Toys", adult_group=ADULT_GROUP) == ADULT_GROUP
+    # Uncategorised rows stay ungrouped, and Anomaly still comes first.
+    assert group_for("x", "Uncategorized", "", adult_group=ADULT_GROUP) is None
+    assert (
+        group_for("bad anatomy", "Person", "Chest", adult_group=ADULT_GROUP) == ANOMALY
+    )
+    # Adult is never a default group, and the shipped file holds no Adult group.
+    assert ADULT_GROUP not in DEFAULT_GROUP_NAMES
+    assert ADULT_GROUP not in _groups()
