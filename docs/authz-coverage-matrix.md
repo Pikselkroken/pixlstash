@@ -529,6 +529,17 @@ and the declarations themselves are pinned by
 | GET | `/api/v1/tag_health` | owner_only |  | Vault-wide aggregates; inline _reject_scoped_tokens; owner/full only |
 | POST | `/api/v1/tag_health/rebuild` | owner_only |  | Vault-wide rebuild; inline _reject_scoped_tokens; owner/full only |
 
+### tag_groups.py (added 2026-11-01 — tag groups, issue #2469)
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/tag_groups` | owner_only |  | Library-wide tag name -> group map; not a picture fact, so a share token's scope cannot narrow it meaningfully (same reasoning as tag_health). Also on READ_BLOCKED_GET_PATHS |
+| GET | `/api/v1/tag_groups/tags` | owner_only |  | Paged listing of tags by group, with library picture counts; not a picture fact (same reasoning as tag_health). Also on READ_BLOCKED_GET_PATHS |
+| POST | `/api/v1/tag_groups` | owner_only |  | Creates a library-wide group; owner-only write |
+| PUT | `/api/v1/tag_groups/order` | owner_only |  | Reorders the library-wide groups; owner-only write |
+| POST | `/api/v1/tag_groups/assign` | owner_only |  | Files tag names under a group across the whole library; owner-only write, recorded as one undoable operation |
+| POST | `/api/v1/tag_groups/import` | owner_only |  | Files a whole uploaded tag table (xlsx/csv) into the library-wide map; owner-only write, recorded as one undoable operation |
+
 ### tag_suggestions.py
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |

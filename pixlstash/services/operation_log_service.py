@@ -99,6 +99,7 @@ from pixlstash.utils.service.smart_score_invalidation import (
     InteractiveRescoreRegistry,
     invalidate_on_anomaly_change,
 )
+from pixlstash.utils.service.picture_stats import clear_stats_cache
 from pixlstash.utils.service.scope_table import scope_id_subquery
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
@@ -700,6 +701,44 @@ def record_operation_in_session(
             {int(pid) for pid in after_delta} | {int(pid) for pid in before_delta}
         )
 
+    return _append_operation_row(
+        session,
+        op_type=op_type,
+        target_type=target_type,
+        target_ids=target_ids,
+        before_payload=before_delta,
+        after_payload=after_delta,
+        actor=actor,
+        source=source,
+        origin_client_id=origin_client_id,
+        batch_id=batch_id,
+        summary=summary,
+        undoable=undoable,
+        commit=commit,
+    )
+
+
+def _append_operation_row(
+    session: Session,
+    *,
+    op_type: str,
+    target_type: str,
+    target_ids: list[int],
+    before_payload: dict,
+    after_payload: dict,
+    actor: Optional[str],
+    source: str,
+    origin_client_id: Optional[str],
+    batch_id: Optional[str],
+    summary: Optional[str],
+    undoable: bool,
+    commit: bool,
+) -> Operation:
+    """Insert one ``Operation`` row, superseding the redo stack first.
+
+    Shared by the picture-diff recorder and :func:`record_payload_operation_in_session`,
+    so a non-picture operation invalidates redo exactly as a picture one does.
+    """
     # A new operation invalidates the redo stack: anything previously undone can
     # no longer be replayed onto a history that has moved on. The rows stay -
     # this is an append-only audit log - only their status marker advances.
@@ -718,8 +757,8 @@ def record_operation_in_session(
         target_type=target_type,
         target_ids=json.dumps(target_ids),
         target_count=len(target_ids),
-        before_state=json.dumps(before_delta),
-        after_state=json.dumps(after_delta),
+        before_state=json.dumps(before_payload),
+        after_state=json.dumps(after_payload),
         source=source,
         origin_client_id=origin_client_id,
         undoable=bool(undoable),
@@ -740,6 +779,52 @@ def record_operation_in_session(
         undoable,
     )
     return operation
+
+
+def record_payload_operation_in_session(
+    session: Session,
+    *,
+    op_type: str,
+    target_type: str,
+    before: dict,
+    after: dict,
+    summary: str,
+    actor: Optional[str] = None,
+    source: str = "external",
+    origin_client_id: Optional[str] = None,
+    batch_id: Optional[str] = None,
+) -> Operation:
+    """Append one operation whose before/after are NOT picture facets.
+
+    For a domain whose reversible state is its own payload (the tag-group map).
+    The caller has already computed the changed payload and must only call this
+    when it is non-empty; a no-op records nothing. ``_restore`` never feeds such
+    a row to :func:`apply_state_in_session`; its registered post-restore hook
+    writes the payload back.
+
+    Args:
+        session: The caller's session; the row commits with the caller's change.
+        op_type: Dotted verb, registered with :func:`register_post_restore_hook`.
+        target_type: Kind of object (never :data:`TARGET_PICTURE` here).
+        before: JSON-serialisable state before the change (undo writes it back).
+        after: JSON-serialisable state after the change (redo writes it back).
+        summary: Human sentence for the undo toast.
+    """
+    return _append_operation_row(
+        session,
+        op_type=op_type,
+        target_type=target_type,
+        target_ids=[],
+        before_payload=before,
+        after_payload=after,
+        actor=actor,
+        source=source,
+        origin_client_id=origin_client_id,
+        batch_id=batch_id,
+        summary=summary,
+        undoable=True,
+        commit=False,
+    )
 
 
 def run_recorded_metadata_task(
@@ -1908,6 +1993,12 @@ def _restore(
     restored: set[int] = set()
     vacated_stack_ids: set[int] = set()
     for operation in operations:
+        if operation.target_type != TARGET_PICTURE:
+            # A non-picture operation (a tag-group move) carries its own payload,
+            # which is not a ``{picture_id: facets}`` map: feeding it to
+            # ``apply_state_in_session`` would read the payload's keys as picture
+            # ids. Its registered post-restore hook restores it, below.
+            continue
         state = _loads(
             operation.before_state if to_before else operation.after_state, {}
         )
@@ -2340,6 +2431,11 @@ def _finish(
     vault: "Vault", members, touched, facets, lifecycle, origin_client_id
 ) -> dict:
     _emit(vault, touched, set(facets), origin_client_id, lifecycle)
+    # A restore of a non-picture operation (a tag-group move) announces no
+    # picture, so no event clears the stats cache, yet a stats query narrowed
+    # by a group term now counts different pictures. Runs after the commit.
+    if any(member.get("target_type") != TARGET_PICTURE for member in members):
+        clear_stats_cache()
     return {
         "operations": members,
         "picture_ids": touched,

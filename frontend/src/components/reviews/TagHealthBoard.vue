@@ -30,7 +30,18 @@
           }}
         </button>
         <span class="rs-board-controls-sep" aria-hidden="true"></span>
-        <Tooltip text="Only count pictures in this project">
+        <!-- Groups (the default) or Health, the app's boxed switch. Read-only sessions have no
+             groups to show, so the board stays the health list for them. -->
+        <div v-if="showViewSwitch" class="rs-board-view">
+          <Segmented
+            :options="BOARD_VIEWS"
+            :model-value="boardView"
+            aria-label="Tag board view"
+            @update:model-value="tagGroups.setBoardView($event)"
+          />
+        </div>
+        <span class="rs-board-controls-sep" aria-hidden="true"></span>
+        <Tooltip v-if="!isGroups" text="Only count pictures in this project">
           <template #activator="{ props: tipProps }">
             <select
               class="rs-board-scope"
@@ -46,7 +57,7 @@
             </select>
           </template>
         </Tooltip>
-        <Tooltip text="Only count pictures in this set">
+        <Tooltip v-if="!isGroups" text="Only count pictures in this set">
           <template #activator="{ props: tipProps }">
             <select
               class="rs-board-scope"
@@ -66,7 +77,7 @@
             </select>
           </template>
         </Tooltip>
-        <Tooltip text="Only count pictures of this character">
+        <Tooltip v-if="!isGroups" text="Only count pictures of this character">
           <template #activator="{ props: tipProps }">
             <select
               class="rs-board-scope"
@@ -79,6 +90,27 @@
               <option value="UNASSIGNED">Unassigned</option>
               <option v-for="c in store.characters" :key="c.id" :value="c.id">
                 {{ c.name || `Character ${c.id}` }}
+              </option>
+            </select>
+          </template>
+        </Tooltip>
+        <Tooltip
+          v-if="!isGroups && tagGroups.hasGroups"
+          text="Only show tags in this group"
+        >
+          <template #activator="{ props: tipProps }">
+            <select
+              class="rs-board-scope"
+              :class="{ 'rs-board-scope--set': groupScope != null }"
+              :value="groupScope ?? ''"
+              aria-label="Tag group"
+              v-bind="tipProps"
+              @change="pickGroup($event)"
+            >
+              <option value="">Group: Any</option>
+              <option value="none">Ungrouped</option>
+              <option v-for="g in tagGroups.groups" :key="g.id" :value="g.id">
+                {{ g.name }}
               </option>
             </select>
           </template>
@@ -96,6 +128,7 @@
           />
         </div>
         <button
+          v-if="!isGroups"
           class="rs-board-anomaly-toggle"
           :class="{ 'rs-board-anomaly-toggle--on': anomalyOnly }"
           type="button"
@@ -109,7 +142,7 @@
           <v-icon size="16">mdi-alert-octagon-outline</v-icon>
           Anomalies
         </button>
-        <Tooltip text="Sort the board">
+        <Tooltip v-if="!isGroups" text="Sort the board">
           <template #activator="{ props: tipProps }">
             <select
               class="rs-board-sort"
@@ -126,7 +159,7 @@
       </div>
       </Teleport>
 
-      <p class="rs-board-subtitle">{{ subtitle }}</p>
+      <p v-if="!isGroups" class="rs-board-subtitle">{{ subtitle }}</p>
 
       <!-- Terminal state: the board is scoped to a LOCKED set. A locked set's
            pictures are read-only, so no tag on them can be reviewed - showing
@@ -134,9 +167,10 @@
            (the backend 423s it). Replace the whole body with the explanation
            instead; the controls above stay mounted so the user can scope back
            out. Follows ReviewSessionView.vue's `.rs-state` terminal-state
-           pattern (centred column, display icon, headline, sub-line). -->
+           pattern (centred column, display icon, headline, sub-line). Groups
+           ignores the scope, so the explanation does not replace it. -->
       <div
-        v-if="scopedSetLocked"
+        v-if="!isGroups && scopedSetLocked"
         ref="lockedRef"
         class="rs-board-locked"
         role="status"
@@ -149,6 +183,13 @@
           Pick another set - or “Set: Any” - to get the board back.
         </p>
       </div>
+
+      <TagGroupsBoard
+        v-else-if="isGroups"
+        ref="groupsRef"
+        :filter="filter"
+        @start-review="emit('start-review', $event)"
+      />
 
       <template v-else>
         <!-- Cache (re)build in progress, OR a board-scope refetch in flight: show
@@ -387,7 +428,7 @@
       <!-- Below the table: the open reviews with their scope and Abort, the
            archived receipts, and the sticker shelf. The sidebar lists the open
            reviews for getting to them; this is where they are managed. -->
-      <ReviewRail class="rs-board-reviews" @new-review="emit('new-review')" />
+      <ReviewRail class="rs-board-reviews" />
     </div>
   </div>
 </template>
@@ -398,13 +439,17 @@
 // health bar, "Why it ranks here" shown, wide table. Tags outside the tagger
 // vocabulary keep an ENABLED "Start review" (kNN review still works) plus a
 // "no model signal" chip.
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
+import { isReadOnly } from "../../utils/apiClient";
 // Same words as NewReviewDialog's locked set option/trigger tooltip - one
 // source so the two surfaces can't drift apart.
 import { LOCKED_SET_HEADLINE, lockedSetTitle } from "./lockedSetCopy";
+import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import ReviewRail from "./ReviewRail.vue";
+import TagGroupsBoard from "./TagGroupsBoard.vue";
 // relativeDate already solves the "naive ISO string = UTC" quirk backend
 // timestamps carry (computed_at is the same shape as the snapshot timestamps
 // this helper was written for) - reuse it rather than re-deriving the same
@@ -426,13 +471,69 @@ defineProps({
   // Where the controls draw: the view's toolbar line. Null draws them in place.
   toolbarTarget: { type: String, default: null },
 });
-const emit = defineEmits(["start-review", "new-review"]);
+const emit = defineEmits(["start-review"]);
 const store = useReviewSessionsStore();
+const tagGroups = useTagGroupsStore();
 
 const anomalyOnly = ref(false);
 const filter = ref("");
 const filterRef = ref(null);
 const sort = ref({ key: "score", dir: "desc" });
+
+// --- Health | Groups -------------------------------------------------------
+// The switch is this machine's choice (tagGroups.boardView). A read-only
+// session cannot read the groups, so it has no switch and stays on Health.
+const BOARD_VIEWS = [
+  { id: "groups", label: "Groups" },
+  { id: "health", label: "Health" },
+];
+const showViewSwitch = computed(() => !isReadOnly.value);
+const boardView = computed(() =>
+  isReadOnly.value ? "health" : tagGroups.boardView,
+);
+const isGroups = computed(() => boardView.value === "groups");
+
+// Health's "Group: Any" scope: null (any), "none" (Ungrouped) or a group id.
+// It narrows the rows client-side, so it needs no server round trip.
+const groupScope = ref(null);
+
+function pickGroup(event) {
+  const raw = event.target.value;
+  groupScope.value = raw === "" ? null : raw === "none" ? "none" : Number(raw);
+  event.target.blur();
+}
+
+// A chosen group that leaves the map (another library, a reload without it)
+// would narrow the board to nothing with no word why: it falls back to Any.
+// Ungrouped stays meaningful while any group exists, and goes with the last.
+watch(
+  () => tagGroups.groups,
+  (groups) => {
+    const scope = groupScope.value;
+    if (scope == null) return;
+    const gone =
+      scope === "none" ? !groups.length : !groups.some((g) => g.id === scope);
+    if (gone) groupScope.value = null;
+  },
+);
+
+function inGroupScope(tag) {
+  if (groupScope.value == null) return true;
+  const group = tagGroups.groupFor(tag);
+  return groupScope.value === "none" ? !group : group?.id === groupScope.value;
+}
+
+onMounted(() => {
+  tagGroups.fetch();
+});
+
+const groupsRef = ref(null);
+
+// The overlay's Escape: the Groups view clears its selection first. Returns
+// whether it did, so the overlay knows the key was spent.
+function handleEscape() {
+  return groupsRef.value?.escape() ?? false;
+}
 
 // --- Persistent rebuild control (Spec B) ------------------------------------
 
@@ -448,7 +549,7 @@ const rebuildTitle = computed(() => {
 function focusFilter() {
   filterRef.value?.focus();
 }
-defineExpose({ focusFilter });
+defineExpose({ focusFilter, handleEscape });
 
 function clearFilter() {
   filter.value = "";
@@ -556,6 +657,7 @@ const filteredRows = computed(() => {
   const needle = filter.value.trim().toLowerCase();
   return store.healthRows
     .filter((r) => !anomalyOnly.value || isAnomaly(r))
+    .filter((r) => inGroupScope(r.tag))
     .filter((r) => !needle || r.tag.toLowerCase().includes(needle));
 });
 
@@ -837,6 +939,17 @@ const TAIL_TOGGLE_TITLE =
 }
 .rs-board-controls-spacer {
   flex: 1;
+}
+/* The Health | Groups switch sits on the dark toolbar: the theme's ink is
+   remapped onto the dark surface's, as PaintOptionsBar does, so the Segmented
+   track and its labels read here. */
+.rs-board-view {
+  --v-theme-on-surface: var(--v-theme-on-dark-surface);
+  --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
+  --track-trough: rgba(var(--v-theme-scrim), 0.34);
+  --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
+  display: inline-flex;
+  flex-shrink: 0;
 }
 .rs-board-reviews {
   margin-top: var(--space-6);

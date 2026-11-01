@@ -201,6 +201,7 @@ import {
   formatCount,
   modelLabel,
 } from "../../utils/filterChips";
+import { isGroupToken } from "../../stores/useTagGroupsStore";
 
 const props = defineProps({
   // "No character" and "In no set" only exist in All Pictures.
@@ -266,8 +267,8 @@ const tokens = computed(() =>
         key: chip.key,
         label: tagLabel ?? chip.kind,
         value: chip.value,
-        // Only a tag token copies: the Clipboard holds tags.
-        tag: tagLabel ? chip.value : null,
+        // Only a tag token copies: the Clipboard holds tags, not a group's words.
+        tag: tagLabel && !isGroupToken(chip.term) ? chip.term : null,
         style: tagLabel === "lacks" ? "lacks" : "has",
         remove: chip.remove,
       };

@@ -1893,6 +1893,82 @@ desktop shell or on a loopback page (`utils/serverLocation.js`), never for a
 video, a read-only session or a multi-selection. Backend:
 `docs/backend_architecture.md` §5, the *Open with* paragraph.
 
+### 2.6 The `/tag_groups` contract (#2469)
+
+The library-wide map from a tag **name** to a group (Character, Copyright, Meta…). All six
+routes are `OWNER_ONLY`; `GET /tag_groups` and `GET /tag_groups/tags` are on the
+read-blocked belt. Backend: `docs/backend_architecture.md` §6.1.
+
+| Method | Path | Body | Answer |
+|---|---|---|---|
+| `GET` | `/api/v1/tag_groups` | — | the map (shape below) |
+| `GET` | `/api/v1/tag_groups/tags` | query: `group`, `q`, `sort`, `offset`, `limit` | one page of the listing (shape below). `group` is a group id, `none` or `all`; unknown id → 404; malformed `group` → 400; `limit` 1–500 (default 200), `offset` ≥ 0, `sort` `pictures` (default) or `name` → 422 otherwise |
+| `POST` | `/api/v1/tag_groups` | `{"name": str}` | the map plus `"group": {id, name, position, tag_count}`; new group last. Name trimmed, 1–64 chars (else 400); case-insensitive duplicate → 409 |
+| `PUT` | `/api/v1/tag_groups/order` | `{"ids": [int]}` | the map; `ids` must be exactly the existing group ids (else 400) |
+| `POST` | `/api/v1/tag_groups/assign` | `{"tags": [str], "group_id": int \| null}` | the map; `null` makes the tags Ungrouped; unknown `group_id` → 404; pending-retag markers → 400; over 5000 tags → 400 |
+| `POST` | `/api/v1/tag_groups/import` | multipart: `file` (`.xlsx` or `.csv`, ≤ 64 MB), `dry_run` (bool), `overwrite_user` (bool) | a dry run: `{"plan": {...}}` only. A real run: `{"plan", "groups", "tags", "ungrouped_count", "all_count"}`. Wrong type or unreadable → 400; missing `english`/`category` column → 400 naming it; DTD in the workbook → 400; over 64 MB → 413; more than 50 new categories → 400 |
+
+**The map** (`GET /tag_groups`, and the answer of every write above):
+
+```json
+{
+  "groups": [{"id": 3, "name": "Character", "position": 2, "tag_count": 114066}],
+  "tags": {"arisel uwu": 3},
+  "ungrouped_count": 3728,
+  "all_count": 214134
+}
+```
+
+- `groups`: position order. `tag_count` counts every tag filed in the group, library or not.
+- `tags`: **only** tags some picture carries (sentinels excluded), name → group id. A
+  filed tag no picture carries is not here; read it from the listing.
+- `ungrouped_count`: library tags with no filing. `all_count`: distinct known tags,
+  filed or in the library.
+
+**The listing** (`GET /tag_groups/tags`):
+
+```json
+{"total": 114066, "tags": [{"tag": "arisel uwu", "count": 18, "group_id": 3}]}
+```
+
+- `group=<id>`: every tag filed there; `count` is the library's pictures carrying the
+  tag (0 when none). `group=none`: library tags with no filing (`group_id` null).
+  `group=all`: the union, with `group_id` null for an unfiled tag.
+- `q`: case-insensitive substring (max 200 characters). `total` counts every match,
+  not the page. `sort=pictures`: count descending, then name; `sort=name`: name ascending.
+- Measured on the 221 789-row file (214 134 known tags, 20 000 pictures): a page of 200
+  is 175–210 ms; the map 310 ms.
+
+**Import plan.** `plan` is `{rows, filed, from_defaults, from_ungrouped, user_conflicts,
+user_conflict_sample (≤10 names), user_overwritten, groups_created (names),
+skipped_uncategorised}`. Every row with a category is filed, whether or not
+a picture carries its tag. An adult subcategory (Chest, Genitals, Sexual Actions,
+Adult Toys) files under **Adult**, a group the import creates when it needs it and
+the defaults never hold: the user's file is filed whole, and nothing in the import
+drops a row for its words. Only a row with no usable category is skipped. A Character row also files its franchise (the last
+parenthetical of its name) under Copyright. Counts are distinct tags except `rows`.
+The `*_en` columns are preferred when non-empty.
+
+**Default groups.** Each library is seeded once per defaults version on open (not an
+endpoint): the default groups in their order (Anomaly, People, Character, Copyright,
+Artist, then the visual groups), their tags filed with `is_default` true. The map
+answer carries no provenance flag; a filing made by the user is the same shape as a
+default one.
+
+A move that changes something is one undoable operation: `op_type` `tag_groups.move`,
+`target_type` `tag_group`, `target_ids` `[]`. An import is the same op type, with
+the summary `Import N tags from <file>`. Undo and redo answer with that `target_type`,
+which is the signal to re-read `GET /tag_groups` (no picture events are sent for it). A move
+that changes nothing records nothing.
+
+**Filter terms** travel inside the existing picture-listing params, not new ones:
+
+- `tag=__group:<id>`: the picture has any tag filed in that group.
+- `rejected_tag=__group:<id>`: the picture lacks every tag filed in that group.
+- `tag=__group:none` / `rejected_tag=__group:none`: the picture has / lacks any tag filed nowhere.
+
+Any other value, including a malformed `__group:abc`, is a literal tag name as before.
+
 ---
 
 

@@ -2,9 +2,11 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 
 import { useFilterStore } from "../stores/useFilterStore";
+import { useTagGroupsStore } from "../stores/useTagGroupsStore";
 import {
   filterChips,
   scoreChipValue,
+  tagTermLabel,
   workflowFilterChips,
 } from "./filterChips";
 
@@ -233,5 +235,46 @@ describe("workflowFilterChips", () => {
   it("uses the label it has", () => {
     const chips = workflowFilterChips({ origin: "comfyui" }, [], () => {});
     expect(chips.find((chip) => chip.key === "origin").value).toBe("ComfyUI");
+  });
+});
+
+describe("filterChips: a group term reads as its words (#2469)", () => {
+  it("names a group term by its group, and a tag by its own name", () => {
+    const groups = useTagGroupsStore();
+    groups.groups = [{ id: 3, name: "Character", position: 0 }];
+    const s = useFilterStore();
+    s.tagFilter = ["__group:3", "hat"];
+    s.tagRejectedFilter = ["__group:none"];
+    const chips = filterChips(s);
+    expect(chips.map((c) => `${c.kind} ${c.value}`)).toEqual([
+      "Has tag any Character tag",
+      "Has tag hat",
+      "Lacks tag any Ungrouped tag",
+    ]);
+    // The raw term rides on the chip for the copy and the remove.
+    expect(chips.map((c) => c.term)).toEqual(["__group:3", "hat", "__group:none"]);
+    chips[0].remove();
+    expect(s.tagFilter).toEqual(["hat"]);
+  });
+
+  it("names a group that is gone, or not loaded, without crashing", () => {
+    const s = useFilterStore();
+    s.tagFilter = ["__group:9"];
+    expect(chipText(s)).toEqual(["Has tag any tag in a group"]);
+  });
+
+  it("keeps a malformed term as the literal tag the server reads it as", () => {
+    const s = useFilterStore();
+    s.tagFilter = ["__group:x", "__group:", "__group:3a"];
+    expect(chipText(s)).toEqual([
+      "Has tag __group:x",
+      "Has tag __group:",
+      "Has tag __group:3a",
+    ]);
+  });
+
+  it("labels a term directly", () => {
+    expect(tagTermLabel("hat")).toBe("hat");
+    expect(tagTermLabel("__group:none")).toBe("any Ungrouped tag");
   });
 });

@@ -36,6 +36,8 @@ import ReviewSessionsOverlay from "../views/ReviewSessionsOverlay.vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useOperationStore } from "../../stores/useOperationStore";
+import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 
 
 const VIcon = {
@@ -129,6 +131,9 @@ function mountSession() {
 }
 
 beforeEach(() => {
+  // The board opens on Groups by default; these tests are about the health
+  // board and the review, and the Groups cases choose Groups themselves.
+  window.localStorage.setItem("pixlstash.tagReview.view", "health");
   setActivePinia(createPinia());
 });
 
@@ -333,6 +338,62 @@ describe("ReviewSessionsOverlay - Ctrl+Z is no longer dead", () => {
       "Nothing to undo here",
     );
     w.unmount();
+  });
+
+  it("on the Groups board, sends the chords to the app-wide stack a tag move is on", async () => {
+    const notices = useNoticeStore();
+    const tagGroups = useTagGroupsStore();
+    tagGroups.setBoardView("groups");
+    const ops = useOperationStore();
+    const undo = vi.spyOn(ops, "undo").mockResolvedValue(null);
+    const redo = vi.spyOn(ops, "redo").mockResolvedValue(null);
+    try {
+      const w = mount(ReviewSessionsOverlay, overlayOpts);
+      await flushPromises();
+      expect(press("z", { ctrlKey: true }).defaultPrevented).toBe(true);
+      expect(press("y", { ctrlKey: true }).defaultPrevented).toBe(true);
+      expect(undo).toHaveBeenCalledTimes(1);
+      expect(redo).toHaveBeenCalledTimes(1);
+      expect(notices.notices.map((n) => n.text).join(" ")).not.toContain(
+        "Nothing to",
+      );
+      w.unmount();
+    } finally {
+      tagGroups.setBoardView("health");
+    }
+  });
+
+  it("keeps a review's own undo when a review is open over the Groups board", async () => {
+    const tagGroups = useTagGroupsStore();
+    tagGroups.setBoardView("groups");
+    const undo = vi.spyOn(useOperationStore(), "undo").mockResolvedValue(null);
+    try {
+      const { w } = await mountOverlayWithSession();
+      press("z", { ctrlKey: true });
+      expect(SessionStub.lastHandleKey).toHaveBeenCalledWith("undo");
+      expect(undo).not.toHaveBeenCalled();
+      w.unmount();
+    } finally {
+      tagGroups.setBoardView("health");
+    }
+  });
+
+  it("stands down while the sidebar's abort dialog is up: Esc does not leave the review", async () => {
+    const { store, w } = await mountOverlayWithSession();
+    // The abort dialog is an AppDialog: a v-dialog overlay that is active.
+    const dialog = document.createElement("div");
+    dialog.className = "v-overlay v-overlay--active v-dialog";
+    document.body.appendChild(dialog);
+    try {
+      press("Escape");
+      press("z", { ctrlKey: true });
+      await nextTick();
+      expect(store.view.type).toBe("session");
+      expect(SessionStub.lastHandleKey).not.toHaveBeenCalled();
+    } finally {
+      dialog.remove();
+      w.unmount();
+    }
   });
 
   it("teaches both keys, and the scope, in the cheat-sheet", async () => {

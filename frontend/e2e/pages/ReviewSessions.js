@@ -1,9 +1,10 @@
 import { expect } from '@playwright/test'
 
 /**
- * The Tags to review view: the tag-health board (its controls on the view's
+ * The Tags view: the tag-health board (its controls on the view's
  * toolbar line), the new-review dialog, the open reviews nested under the
- * sidebar's "Tags to review" row, and the binary/pair decision cards. The view
+ * sidebar's "Tags" row (each with its Abort and Archive menu), and the
+ * binary/pair decision cards. The view
  * replaces the grid in the centre column.
  * Thin wrapper around the stable selectors verified in
  * ReviewSessionsOverlay.vue + components/reviews/*.vue. Holds no assertions of
@@ -52,18 +53,21 @@ export class ReviewSessions {
     this.dialogCreate = page.locator('.rs-dialog-btn--go')
     this.dialogCancel = page.locator('.rs-dialog-btn', { hasText: 'Cancel' })
 
-    // The board's footer: open reviews (scope, Abort), archived, stickers
+    // The board's footer: archived receipts and the sticker shelf. The open
+    // reviews and their Abort / Archive live in the sidebar (below).
     this.rail = page.locator('.rs-rail')
-    this.railSessions = page.locator('.rs-rail-session')
-    this.railNewReview = page.locator('.rs-rail-new')
     this.railArchived = page.locator('.rs-rail-archived')
     this.shelf = page.locator('.rs-shelf')
     this.shelfStickers = page.locator('.rs-shelf .rs-sticker')
 
-    // The sidebar: "Tags to review" and the open reviews nested under it
-    this.sidebarRow = page.locator('.sidebar-list-item', { hasText: 'Tags to review' })
+    // The sidebar: "Tags" and the open reviews nested under it
+    this.sidebarRow = page.locator('.sidebar-list-item', { has: page.locator('.sidebar-list-label', { hasText: /^Tags$/ }) })
     this.sidebarSessions = page.locator('.sidebar-review-session:not(.sidebar-review-new)')
     this.sidebarNewReview = page.locator('.sidebar-review-new')
+    // A review row's menu (right-click, Menu key or Shift+F10): its verbs.
+    this.sidebarCtxMenu = page.locator('.sidebar-ctx-menu')
+    this.sidebarAbortItem = this.sidebarCtxMenu.locator('.ctx-item', { hasText: 'Abort review' })
+    this.sidebarArchiveItem = this.sidebarCtxMenu.locator('.ctx-item', { hasText: 'Archive review' })
 
     // Session view
     this.session = page.locator('.rs-session')
@@ -104,11 +108,12 @@ export class ReviewSessions {
     this.tagApplyButton = page.locator('.rs-tag-apply-btn')
     this.tagApplyPanel = page.locator('.rs-tag-apply-panel')
 
-    // Abort dialog
-    this.abortDialog = page.locator('.rs-abort[role="dialog"]')
-    this.abortKeep = page.locator('.rs-abort-btn--keep')
-    this.abortUndo = page.locator('.rs-abort-btn--undo')
-    this.abortCancel = page.locator('.rs-abort', { hasText: 'Cancel' }).locator('.rs-abort-btn', { hasText: 'Cancel' })
+    // Abort dialog (ReviewAbortDialog, teleported to the body)
+    // The abort dialog is AppDialog: a v-dialog overlay, shown while active.
+    this.abortDialog = page.locator('.v-overlay--active .app-dialog')
+    this.abortKeep = this.abortDialog.locator('.app-dialog__footer button', { hasText: 'Keep' })
+    this.abortUndo = this.abortDialog.locator('.app-dialog__footer button', { hasText: 'Undo' })
+    this.abortCancel = this.abortDialog.locator('.app-dialog__footer button', { hasText: 'Cancel' })
 
     // Archived receipt
     this.archived = page.locator('.rs-archived')
@@ -117,12 +122,34 @@ export class ReviewSessions {
     this.archivedBack = page.locator('.rs-archived-back')
   }
 
-  /** Open the overlay on the board through its URL and wait for the shell. */
+  /**
+   * Open the overlay on the board through its URL and wait for the shell. The
+   * board opens on its Groups view by default, so the health table this page
+   * object reads is chosen first, through the view's own storage key.
+   */
   async open() {
+    await this.page.addInitScript(() => {
+      try {
+        window.localStorage.setItem('pixlstash.tagReview.view', 'health')
+      } catch {
+        // Storage blocked: the board falls back to its default view.
+      }
+    })
     const url = new URL(this.page.url())
     url.searchParams.set('review', 'board')
     await this.page.goto(url.toString())
     await expect(this.overlay).toBeVisible()
+  }
+
+  /** The sidebar row of an open review, by tag. */
+  sidebarSession(tag) {
+    return this.sidebarSessions.filter({ hasText: tag }).first()
+  }
+
+  /** Open a review row's menu with the mouse (right-click). */
+  async openSidebarMenu(tag) {
+    await this.sidebarSession(tag).click({ button: 'right' })
+    await expect(this.sidebarAbortItem).toBeVisible()
   }
 
   /** Leave through the toolbar's back button (from the board). */
@@ -154,9 +181,9 @@ export class ReviewSessions {
     return this.boardRows.filter({ has: this.page.locator('.rs-board-tag-name', { hasText: tag }) }).first()
   }
 
-  /** Open the new-review dialog from the board's footer. */
+  /** Open the new-review dialog from the sidebar's "New review" row. */
   async openNewReview() {
-    await this.railNewReview.click()
+    await this.sidebarNewReview.click()
     await expect(this.dialog).toBeVisible()
   }
 

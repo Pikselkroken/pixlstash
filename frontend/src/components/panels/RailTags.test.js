@@ -23,21 +23,35 @@ vi.mock("../../api/tags", () => ({
     { tag: "filing cabinet", count: 3 },
     { tag: "film grain", count: 412 },
     { tag: "rain", count: 9 },
+    // Another tag that differs only in case: the drop label must not mix
+    // their counts ("rain" stays on 9 pictures).
+    { tag: "Rain", count: 77 },
   ]),
 }));
 vi.mock("../../api/config", () => ({
   getUserConfig: vi.fn(async () => ({
-    smart_score_penalised_tags: ["watermark"],
+    smart_score_penalised_tags: ["watermark", "red flag"],
   })),
 }));
 vi.mock("../../api/users", () => ({ getPenalisedTags: vi.fn() }));
 vi.mock("../../api/taggers", () => ({ listTaggers: vi.fn(async () => ({})) }));
 vi.mock("../../api/pictures", () => ({ resetPicturesTags: vi.fn() }));
+// No groups unless a test files some: the rail is a plain list by default.
+const getTagGroups = vi.fn(async () => ({ groups: [], tags: {} }));
+const createTagGroup = vi.fn();
+const assignTagsToGroup = vi.fn(async () => ({ groups: [], tags: {} }));
+vi.mock("../../api/tagGroups", () => ({
+  getTagGroups: (...a) => getTagGroups(...a),
+  createTagGroup: (...a) => createTagGroup(...a),
+  reorderTagGroups: vi.fn(),
+  assignTagsToGroup: (...a) => assignTagsToGroup(...a),
+}));
 
 import RailTags from "./RailTags.vue";
 import { useTagClipboardStore } from "../../stores/useTagClipboardStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { useOperationStore } from "../../stores/useOperationStore";
 
 enableAutoUnmount(afterEach);
 
@@ -574,5 +588,435 @@ describe("selecting several pictures' tags", () => {
     expect(chip(wrapper, "photo").classes()).toContain("rail-chip--selected");
     await chip(wrapper, "man").find(".rail-chip__label").trigger("click");
     expect(wrapper.find(".rail-tags__selbar").text()).toContain("2 selected");
+  });
+});
+
+describe("tags by group", () => {
+  // Picture 5: watermark (Character, an anomaly), rain (Meta), coat and desk
+  // (General), lamp (filed nowhere: Ungrouped).
+  const GROUP_BODY = {
+    groups: [
+      { id: 1, name: "Character", position: 0 },
+      { id: 2, name: "Meta", position: 1 },
+      { id: 3, name: "General", position: 2 },
+    ],
+    tags: { watermark: 1, rain: 2, coat: 3, desk: 3 },
+  };
+  const MenuStub = {
+    props: ["modelValue", "target"],
+    template: '<div v-if="modelValue" class="v-menu-stub"><slot /></div>',
+  };
+  const groupStubs = { ...STUBS, "v-menu": MenuStub };
+
+  const names = (wrapper) =>
+    wrapper.findAll(".rail-tags__chips .rail-chip").map((c) => c.attributes("data-tag"));
+  const headings = (wrapper) =>
+    wrapper.findAll(".rail-tags__group-name").map((h) => h.text());
+  const tabs = (wrapper) => wrapper.findAll('[role="tab"]');
+  const groupBlock = (wrapper, key) => wrapper.find(`[data-group="${key}"]`);
+  const menuItems = (wrapper) =>
+    wrapper.findAll(".v-menu-stub .ctx-item").map((b) => b.find(".ctx-label-text").text());
+  const itemNamed = (wrapper, text) =>
+    wrapper.findAll(".v-menu-stub .ctx-item").find((b) => b.text().includes(text));
+  const dropTip = () => document.querySelector(".rail-tags__droptip")?.textContent.trim();
+  const press = (key, init = {}) => {
+    const event = new KeyboardEvent("keydown", {
+      key,
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    });
+    window.dispatchEvent(event);
+    return event;
+  };
+
+  async function mountGrouped(ids = [5], props = {}) {
+    const wrapper = mount(RailTags, {
+      props: { ids, ...props },
+      global: { stubs: groupStubs },
+      attachTo: document.body,
+    });
+    await flush();
+    return wrapper;
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    bulkFetchTags.mockReset().mockResolvedValue([
+      {
+        id: 5,
+        tags: [
+          { id: 51, tag: "rain" },
+          { id: 52, tag: "coat" },
+          { id: 53, tag: "desk" },
+          { id: 54, tag: "watermark" },
+          { id: 55, tag: "lamp" },
+        ],
+      },
+    ]);
+    getTagGroups.mockReset().mockResolvedValue(GROUP_BODY);
+    assignTagsToGroup.mockReset().mockResolvedValue(GROUP_BODY);
+    createTagGroup.mockReset().mockResolvedValue({
+      ...GROUP_BODY,
+      groups: [...GROUP_BODY.groups, { id: 9, name: "Mood", position: 3 }],
+      group: { id: 9, name: "Mood", position: 3 },
+    });
+    useOperationStore().refresh = vi.fn(async () => {});
+  });
+
+  it("draws no tabs and no box while the library has no groups", async () => {
+    getTagGroups.mockResolvedValue({ groups: [], tags: {} });
+    const wrapper = await mountGrouped();
+    expect(wrapper.find('[role="tablist"]').exists()).toBe(false);
+    expect(wrapper.find(".rail-tags__body--boxed").exists()).toBe(false);
+    expect(wrapper.find(".rail-sec__label").text()).toBe("Tags");
+    // Anomalies first, then by name: the applied order the rail always had.
+    expect(names(wrapper)).toEqual(["watermark", "coat", "desk", "lamp", "rain"]);
+  });
+
+  it("shows Tags and By group tabs, and the box, once a group exists", async () => {
+    const wrapper = await mountGrouped();
+    expect(wrapper.find('[role="tablist"]').exists()).toBe(true);
+    const [list, byGroup] = tabs(wrapper);
+    expect(list.text()).toContain("Tags");
+    expect(list.text()).toContain("5");
+    expect(byGroup.text()).toContain("By group");
+    // Ungrouped counts as a heading: Character, Meta, General and Ungrouped.
+    expect(byGroup.text()).toContain("4");
+    expect(list.attributes("aria-selected")).toBe("true");
+    expect(byGroup.attributes("aria-selected")).toBe("false");
+    expect(list.attributes("tabindex")).toBe("0");
+    expect(byGroup.attributes("tabindex")).toBe("-1");
+    expect(wrapper.find(".rail-tags__body--boxed").attributes("role")).toBe("tabpanel");
+    expect(wrapper.find(".rail-tags__body--boxed").attributes("aria-labelledby")).toBe(
+      list.attributes("id"),
+    );
+    expect(wrapper.findAll(".rail-tags__group-head")).toHaveLength(0);
+  });
+
+  it("By group lists the headings in group order with Ungrouped last, and remembers the choice", async () => {
+    const wrapper = await mountGrouped();
+    await tabs(wrapper)[1].trigger("click");
+    await flush();
+    expect(tabs(wrapper)[1].attributes("aria-selected")).toBe("true");
+    expect(headings(wrapper)).toEqual(["Character", "Meta", "General", "Ungrouped"]);
+    expect(
+      wrapper.findAll(".rail-tags__group").map((g) => g.find(".rail-tags__chips").exists()),
+    ).toEqual([true, true, true, true]);
+    expect(names(wrapper)).toEqual(["watermark", "rain", "coat", "desk", "lamp"]);
+    expect(window.localStorage.getItem("pixlstash.railTags.view")).toBe("groups");
+
+    // The next rail opens on the same tab.
+    wrapper.unmount();
+    setActivePinia(createPinia());
+    useOperationStore().refresh = vi.fn(async () => {});
+    const again = await mountGrouped();
+    expect(headings(again)).toEqual(["Character", "Meta", "General", "Ungrouped"]);
+  });
+
+  it("moves between the tabs with the arrow keys and takes the one it lands on", async () => {
+    const wrapper = await mountGrouped();
+    await tabs(wrapper)[0].trigger("keydown", { key: "ArrowRight" });
+    await flush();
+    expect(headings(wrapper)).toHaveLength(4);
+    await tabs(wrapper)[1].trigger("keydown", { key: "ArrowLeft" });
+    await flush();
+    expect(wrapper.findAll(".rail-tags__group-head")).toHaveLength(0);
+  });
+
+  it("a heading's copy button copies that group's tags, and says what", async () => {
+    const wrapper = await mountGrouped();
+    await tabs(wrapper)[1].trigger("click");
+    await flush();
+    const copy = groupBlock(wrapper, "3").find(".rail-tags__group-head .rail-ib");
+    expect(copy.attributes("aria-label")).toBe("Copy the 2 General tags");
+    await copy.trigger("click");
+    expect(useTagClipboardStore().clipboardTags).toEqual(["coat", "desk"]);
+    expect(groupBlock(wrapper, "1").find(".rail-ib").attributes("aria-label")).toBe(
+      "Copy the 1 Character tag",
+    );
+  });
+
+  it("folding hides a group's chips, keeps its copy button, shows the warning, and remembers it", async () => {
+    const wrapper = await mountGrouped();
+    await tabs(wrapper)[1].trigger("click");
+    await flush();
+    const toggle = groupBlock(wrapper, "1").find(".rail-tags__group-toggle");
+    expect(toggle.attributes("aria-expanded")).toBe("true");
+    expect(groupBlock(wrapper, "1").find(".rail-tags__group-head .rail-chip__warn").exists()).toBe(false);
+
+    await toggle.trigger("click");
+    await flush();
+    expect(toggle.attributes("aria-expanded")).toBe("false");
+    expect(names(wrapper)).not.toContain("watermark");
+    expect(groupBlock(wrapper, "1").find(".rail-tags__group-head .rail-chip__warn").exists()).toBe(true);
+    expect(groupBlock(wrapper, "1").find(".rail-ib").exists()).toBe(true);
+    expect(window.localStorage.getItem("pixlstash.railTags.collapsed")).toBe('["1"]');
+  });
+
+  it("a folded group still takes a drop, and Move to group files the chip there", async () => {
+    const wrapper = await mountGrouped();
+    await tabs(wrapper)[1].trigger("click");
+    await flush();
+    await groupBlock(wrapper, "1").find(".rail-tags__group-toggle").trigger("click");
+    await chip(wrapper, "rain").trigger("dragstart", { dataTransfer: { setData: vi.fn() } });
+    await groupBlock(wrapper, "1").trigger("dragover");
+    expect(groupBlock(wrapper, "1").classes()).toContain("rail-tags__group--drop");
+    await groupBlock(wrapper, "1").trigger("drop");
+    await flush();
+    expect(assignTagsToGroup).toHaveBeenCalledWith(["rain"], 1);
+  });
+
+  it("the chip menu's Move to group files the selection under the chosen group", async () => {
+    const wrapper = await mountGrouped();
+    await chip(wrapper, "coat").find(".rail-chip__label").trigger("click");
+    await chip(wrapper, "desk").find(".rail-chip__label").trigger("click");
+    await chip(wrapper, "desk").trigger("contextmenu", { clientX: 40, clientY: 60 });
+    await flush();
+    expect(menuItems(wrapper)).toEqual([
+      "Copy",
+      "Select all in group",
+      "Move to group",
+      "Remove 2 tags from picture",
+    ]);
+    await itemNamed(wrapper, "Move to group").trigger("click");
+    await flush();
+    const meta = wrapper.findAll(".v-menu-stub .ctx-submenu [role='menuitemradio']").find(
+      (b) => b.text().includes("Meta"),
+    );
+    await meta.trigger("click");
+    await flush();
+    expect(assignTagsToGroup).toHaveBeenCalledWith(["coat", "desk"], 2);
+  });
+
+  it("the Menu key on a focused chip opens its menu, as the right-click does", async () => {
+    const wrapper = await mountGrouped();
+    await chip(wrapper, "rain").find(".rail-chip__label").trigger("keydown", { key: "ContextMenu" });
+    await flush();
+    expect(menuItems(wrapper)).toContain("Select all in group");
+    expect(useTagClipboardStore().clipboardTags).toEqual([]);
+  });
+
+  it("Select all in group selects every shown chip in that tag's group", async () => {
+    const wrapper = await mountGrouped();
+    await chip(wrapper, "coat").trigger("contextmenu", { clientX: 1, clientY: 1 });
+    await flush();
+    await itemNamed(wrapper, "Select all in group").trigger("click");
+    await flush();
+    expect(
+      wrapper.findAll(".rail-chip--selected").map((c) => c.attributes("data-tag")),
+    ).toEqual(["coat", "desk"]);
+  });
+
+  it("New group names one in place, then files the chip under it", async () => {
+    const wrapper = await mountGrouped();
+    await chip(wrapper, "rain").trigger("contextmenu", { clientX: 1, clientY: 1 });
+    await flush();
+    await itemNamed(wrapper, "Move to group").trigger("click");
+    await flush();
+    const newRow = wrapper
+      .findAll(".v-menu-stub .ctx-submenu .ctx-item")
+      .find((b) => b.text().includes("New group"));
+    await newRow.trigger("click");
+    await flush();
+    const input = wrapper.find(".rail-tags__naming-input");
+    await input.setValue("Mood");
+    await wrapper.find(".rail-tags__naming").trigger("submit");
+    await flush();
+    expect(createTagGroup).toHaveBeenCalledWith("Mood");
+    expect(assignTagsToGroup).toHaveBeenCalledWith(["rain"], 9);
+  });
+
+  it("Escape cancels the naming and leaves the menu open", async () => {
+    const wrapper = await mountGrouped();
+    await chip(wrapper, "rain").trigger("contextmenu", { clientX: 1, clientY: 1 });
+    await flush();
+    await itemNamed(wrapper, "Move to group").trigger("click");
+    await flush();
+    await wrapper
+      .findAll(".v-menu-stub .ctx-submenu .ctx-item")
+      .find((b) => b.text().includes("New group"))
+      .trigger("click");
+    await flush();
+    await wrapper.find(".rail-tags__naming-input").trigger("keydown", { key: "Escape" });
+    await flush();
+    expect(wrapper.find(".rail-tags__naming-input").exists()).toBe(false);
+    expect(wrapper.find(".v-menu-stub").exists()).toBe(true);
+    expect(createTagGroup).not.toHaveBeenCalled();
+  });
+
+  it("with the menu open, Ctrl+C is the menu's, not the rail's", async () => {
+    const wrapper = await mountGrouped();
+    await chip(wrapper, "rain").trigger("contextmenu", { clientX: 1, clientY: 1 });
+    await flush();
+    const event = press("c", { ctrlKey: true });
+    expect(event.defaultPrevented).toBe(false);
+    expect(useTagClipboardStore().clipboardTags).toEqual([]);
+  });
+
+  it("a read-only picture's menu offers Copy and Select all in group only", async () => {
+    const wrapper = await mountGrouped([5], { locked: true, lockNote: "Locked" });
+    await chip(wrapper, "rain").trigger("contextmenu", { clientX: 1, clientY: 1 });
+    await flush();
+    expect(menuItems(wrapper)).toEqual(["Copy", "Select all in group"]);
+  });
+
+  it("a drop on a heading files the tag there, and the label says what will happen", async () => {
+    const wrapper = await mountGrouped();
+    await tabs(wrapper)[1].trigger("click");
+    await flush();
+    const dataTransfer = { setData: vi.fn(), effectAllowed: "" };
+    await chip(wrapper, "rain").trigger("dragstart", { dataTransfer });
+    await groupBlock(wrapper, "1").trigger("dragover");
+    expect(dropTip()).toBe("Move rain to Character · on all 9 pictures");
+    expect(groupBlock(wrapper, "1").classes()).toContain("rail-tags__group--drop");
+    await groupBlock(wrapper, "1").trigger("drop");
+    await flush();
+    expect(assignTagsToGroup).toHaveBeenCalledWith(["rain"], 1);
+    expect(dropTip()).toBeUndefined();
+  });
+
+  it("a drop says it cannot count a tag the library does not list", async () => {
+    const wrapper = await mountGrouped();
+    await tabs(wrapper)[1].trigger("click");
+    await flush();
+    await chip(wrapper, "coat").trigger("dragstart", { dataTransfer: { setData: vi.fn() } });
+    await groupBlock(wrapper, "2").trigger("dragover");
+    expect(dropTip()).toBe("Move coat to Meta · on every picture that carries it");
+  });
+
+  it("a drop on the group a tag is already in is no drop", async () => {
+    const wrapper = await mountGrouped();
+    await tabs(wrapper)[1].trigger("click");
+    await flush();
+    await chip(wrapper, "rain").trigger("dragstart", { dataTransfer: { setData: vi.fn() } });
+    await groupBlock(wrapper, "2").trigger("dragover");
+    expect(groupBlock(wrapper, "2").classes()).not.toContain("rail-tags__group--drop");
+    expect(dropTip()).toBeUndefined();
+    await groupBlock(wrapper, "2").trigger("drop");
+    await flush();
+    expect(assignTagsToGroup).not.toHaveBeenCalled();
+  });
+
+  it("a selection dragged onto a heading carries every selected tag", async () => {
+    const wrapper = await mountGrouped();
+    await tabs(wrapper)[1].trigger("click");
+    await flush();
+    await chip(wrapper, "coat").find(".rail-chip__label").trigger("click");
+    await chip(wrapper, "rain").find(".rail-chip__label").trigger("click");
+    await chip(wrapper, "rain").trigger("dragstart", { dataTransfer: { setData: vi.fn() } });
+    await groupBlock(wrapper, "1").trigger("dragover");
+    // coat is not in the library list, so the label cannot count them.
+    expect(dropTip()).toBe("Move 2 tags to Character · on every picture that carries them");
+    await groupBlock(wrapper, "1").trigger("drop");
+    await flush();
+    expect(assignTagsToGroup).toHaveBeenCalledWith(["coat", "rain"], 1);
+  });
+
+  it("the dragged chip leaves a dashed place where it was", async () => {
+    const wrapper = await mountGrouped();
+    await chip(wrapper, "rain").trigger("dragstart", { dataTransfer: { setData: vi.fn() } });
+    await flush();
+    expect(chip(wrapper, "rain").classes()).toContain("rail-chip--source");
+    await chip(wrapper, "rain").trigger("dragend");
+    await flush();
+    expect(chip(wrapper, "rain").classes()).not.toContain("rail-chip--source");
+  });
+
+  it("a rejected chip dropped on a heading accepts it, and is no group move", async () => {
+    listTagPredictions.mockResolvedValue({
+      tag_predictions: [
+        { tag: "umbrella", confidence: 0.6, status: "REJECTED", model_version: "t" },
+      ],
+      meta: {},
+    });
+    const wrapper = await mountGrouped();
+    await tabs(wrapper)[1].trigger("click");
+    await flush();
+    const dataTransfer = { setData: vi.fn(), effectAllowed: "" };
+    await wrapper.find('.rail-tags__rejected [data-tag="umbrella"]').trigger("dragstart", { dataTransfer });
+    await groupBlock(wrapper, "1").trigger("drop");
+    await flush();
+    expect(assignTagsToGroup).not.toHaveBeenCalled();
+    expect(confirmTagPrediction).toHaveBeenCalledWith(5, "umbrella", expect.anything());
+  });
+
+  it("the menu's removal says how many pictures it takes the tag from", async () => {
+    bulkFetchTags.mockResolvedValue([
+      { id: 5, tags: [{ id: 51, tag: "rain" }] },
+      { id: 6, tags: [{ id: 61, tag: "rain" }] },
+    ]);
+    const wrapper = mount(RailTags, {
+      props: { ids: [5, 6] },
+      global: { stubs: groupStubs },
+      attachTo: document.body,
+    });
+    await new Promise((r) => setTimeout(r, 260));
+    await flush();
+    await chip(wrapper, "rain").trigger("contextmenu", { clientX: 1, clientY: 1 });
+    await flush();
+    expect(menuItems(wrapper)).toContain("Remove from all 2");
+  });
+});
+
+describe("colour-named tags", () => {
+  beforeEach(() => {
+    bulkFetchTags.mockReset().mockResolvedValue([
+      {
+        id: 1,
+        tags: [
+          { id: 11, tag: "blue eyes" },
+          { id: 12, tag: "red flag" },
+          { id: 13, tag: "black hair" },
+          { id: 14, tag: "rain" },
+        ],
+      },
+    ]);
+  });
+
+  it("fills a colour-named chip with its token and leaves the rest alone", async () => {
+    const wrapper = await mountTags([1]);
+    expect(chip(wrapper, "blue eyes").attributes("style")).toContain(
+      "--ink: var(--tag-blue)",
+    );
+    expect(chip(wrapper, "rain").attributes("style")).not.toContain("--ink");
+    expect(chip(wrapper, "rain").attributes("style")).not.toContain("--chip-ink");
+  });
+
+  it("keeps an anomaly chip on its own look, colour word and all", async () => {
+    const wrapper = await mountTags([1]);
+    const anomaly = chip(wrapper, "red flag");
+    expect(anomaly.classes()).toContain("rail-chip--anomaly");
+    expect(anomaly.attributes("style")).not.toContain("--tag-red");
+    expect(anomaly.attributes("style")).not.toContain("--chip-ink");
+  });
+
+  it("marks black with the neutral edge", async () => {
+    const wrapper = await mountTags([1]);
+    expect(chip(wrapper, "black hair").classes()).toContain("rail-chip--neutral");
+    expect(chip(wrapper, "blue eyes").classes()).not.toContain("rail-chip--neutral");
+  });
+
+  it("chooses the ink from the surface behind the chip", async () => {
+    // Full-confidence blue: white on a black host, black on the light rail.
+    const dark = document.createElement("div");
+    dark.style.background = "rgb(0, 0, 0)";
+    document.body.append(dark);
+    const onDark = mount(RailTags, {
+      props: { ids: [1] },
+      global: { stubs: STUBS },
+      attachTo: dark,
+    });
+    await flush();
+    expect(chip(onDark, "blue eyes").attributes("style")).toContain(
+      "--chip-ink: 255, 255, 255",
+    );
+    onDark.unmount();
+    dark.remove();
+
+    const wrapper = await mountTags([1]);
+    expect(chip(wrapper, "blue eyes").attributes("style")).toContain(
+      "--chip-ink: 0, 0, 0",
+    );
   });
 });

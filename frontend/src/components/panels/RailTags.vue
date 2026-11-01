@@ -72,11 +72,49 @@
       </p>
     </div>
 
-    <div class="rail-sec">
-      <span class="rail-sec__label">Tags</span>
-      <span v-if="applied.length" class="rail-sec__count">{{
-        applied.length.toLocaleString()
-      }}</span>
+    <div class="rail-sec" :class="{ 'rail-sec--tabs': showTabs }">
+      <div
+        v-if="showTabs"
+        class="rail-tags__tabs"
+        role="tablist"
+        aria-label="Tags or tags by group"
+        @keydown="onTabKey"
+      >
+        <button
+          :id="listTabId"
+          ref="listTabRef"
+          class="rail-tags__tab"
+          type="button"
+          role="tab"
+          :aria-selected="showGroups ? 'false' : 'true'"
+          :aria-controls="tagsPanelId"
+          :tabindex="showGroups ? -1 : 0"
+          @click="tagGroups.setRailView('list')"
+        >
+          Tags
+          <span class="rail-sec__count">{{ applied.length.toLocaleString() }}</span>
+        </button>
+        <button
+          :id="groupsTabId"
+          ref="groupsTabRef"
+          class="rail-tags__tab"
+          type="button"
+          role="tab"
+          :aria-selected="showGroups ? 'true' : 'false'"
+          :aria-controls="tagsPanelId"
+          :tabindex="showGroups ? 0 : -1"
+          @click="tagGroups.setRailView('groups')"
+        >
+          By group
+          <span class="rail-sec__count">{{ groupBlocks.length.toLocaleString() }}</span>
+        </button>
+      </div>
+      <template v-else>
+        <span class="rail-sec__label">Tags</span>
+        <span v-if="applied.length" class="rail-sec__count">{{
+          applied.length.toLocaleString()
+        }}</span>
+      </template>
       <span class="rail-sec__sp"></span>
       <button
         v-if="!many && applied.length"
@@ -175,8 +213,14 @@
     <!-- A rejected chip dropped here is accepted; a tag dropped on Rejected
          below is removed and rejected: the ✓ and × as one drag. -->
     <div
+      :id="showTabs ? tagsPanelId : undefined"
       class="rail-tags__body rail-tags__applied"
-      :class="{ 'rail-tags__body--drop': dropOn === 'applied' }"
+      :class="{
+        'rail-tags__body--drop': dropOn === 'applied',
+        'rail-tags__body--boxed': showTabs,
+      }"
+      :role="showTabs ? 'tabpanel' : undefined"
+      :aria-labelledby="showTabs ? (showGroups ? groupsTabId : listTabId) : undefined"
       @dragover="onDragOver('applied', $event)"
       @dragleave="onDragLeave('applied', $event)"
       @drop.prevent="onDrop('applied')"
@@ -191,70 +235,127 @@
         Couldn't read {{ many ? "these pictures'" : "this picture's" }} tags.
       </p>
       <p v-else-if="!applied.length" class="rail-tags__note">No tags yet.</p>
-      <div v-else class="rail-tags__chips">
-        <span
-          v-for="t in shownApplied"
-          :key="t.name"
-          class="rail-chip"
-          :class="{
-            'rail-chip--conf': !many && !t.anomaly,
-            'rail-chip--anomaly': t.anomaly,
-            'rail-chip--selected': isSelected(t.name),
-            'rail-chip--remove-hot': removeHot && isSelected(t.name),
-          }"
-          :style="{ '--tint': t.tint }"
-          :data-tag="t.name"
-          :draggable="readOnly ? undefined : 'true'"
-          @dragstart="onDragStart('applied', t.name, $event)"
-          @dragend="onDragEnd"
-          @contextmenu="onChipContextMenu(t.name, $event)"
-          @mouseenter="hoverTag(t.name)"
-          @mouseleave="hoverTag(null)"
+      <div v-else class="rail-tags__groups">
+        <!-- Flat: one block with no heading. By group: one block per heading,
+             folded ones keep theirs and drop their chips. -->
+        <div
+          v-for="block in shownBlocks"
+          :key="block.key"
+          class="rail-tags__group"
+          :class="{ 'rail-tags__group--drop': block.heading && dropOn === groupDropKey(block) }"
+          :data-group="block.heading ? block.key : undefined"
+          @dragover="onGroupDragOver(block, $event)"
+          @dragleave="onGroupDragLeave(block, $event)"
+          @drop="onGroupDrop(block, $event)"
         >
-          <Tooltip :text="chipTip(t)" activator="parent" />
-          <v-icon v-if="t.anomaly" class="rail-chip__warn" size="13"
-            >mdi-alert-outline</v-icon
+          <div v-if="block.heading" class="rail-tags__group-head">
+            <button
+              class="rail-tags__group-toggle"
+              type="button"
+              :aria-expanded="tagGroups.isCollapsed(block.id) ? 'false' : 'true'"
+              :aria-controls="tagGroups.isCollapsed(block.id) ? undefined : `${tagsPanelId}-${block.key}`"
+              @click="tagGroups.toggleCollapsed(block.id)"
+            >
+              <v-icon size="12" aria-hidden="true">{{
+                tagGroups.isCollapsed(block.id) ? "mdi-chevron-right" : "mdi-chevron-down"
+              }}</v-icon>
+              <span class="rail-tags__group-name">{{ block.name }}</span>
+              <span class="rail-sec__count">{{ block.all.length.toLocaleString() }}</span>
+            </button>
+            <span
+              v-if="tagGroups.isCollapsed(block.id) && block.all.some((t) => t.anomaly)"
+              class="rail-chip__warn-wrap"
+            >
+              <Tooltip text="Holds an anomaly tag" activator="parent" :describe="false" />
+              <v-icon class="rail-chip__warn" size="13" aria-hidden="true"
+                >mdi-alert-outline</v-icon
+              >
+            </span>
+            <span class="rail-sec__sp"></span>
+            <button
+              class="rail-ib"
+              type="button"
+              :aria-label="copyGroupLabel(block)"
+              @click="tagClipboard.copyTags(block.all.map((t) => t.name))"
+            >
+              <Tooltip :text="copyGroupLabel(block)" activator="parent" :describe="false" />
+              <v-icon size="16">mdi-content-copy</v-icon>
+            </button>
+          </div>
+          <div
+            v-if="!(block.heading && tagGroups.isCollapsed(block.id))"
+            :id="block.heading ? `${tagsPanelId}-${block.key}` : undefined"
+            class="rail-tags__chips"
           >
-          <!-- The object detector found it: pointing at it draws its box. -->
-          <v-icon
-            v-if="isBoxed(t.name)"
-            class="rail-chip__box"
-            size="12"
-            aria-hidden="true"
-            >mdi-vector-square</v-icon
-          >
-          <!-- A click selects the chip, except on a part-tinted one, where
-               it adds the tag to the rest; a modifier selects there too. -->
-          <button
-            class="rail-chip__label"
-            type="button"
-            :aria-label="
-              addsToRest(t)
-                ? `Add ${t.label} to the other ${totalWithTagData - t.count}`
-                : undefined
-            "
-            :aria-pressed="addsToRest(t) ? undefined : String(isSelected(t.name))"
-            :disabled="addsToRest(t) && tagActionLoading.includes(t.name)"
-            @click="onChipLabelClick(t, $event)"
-          >
-            {{ t.label }}
-          </button>
-          <span v-if="many" class="visually-hidden"
-            >, on {{ t.count }} of {{ totalWithTagData }}</span
-          >
-          <button
-            v-if="!readOnly"
-            class="rail-chip__x"
-            type="button"
-            :aria-label="removeLabel(t)"
-            :disabled="tagActionLoading.includes(t.name)"
-            @click="onRemoveClick(t)"
-            @mouseenter="removeHot = isSelected(t.name)"
-            @mouseleave="removeHot = false"
-          >
-            <v-icon size="12">mdi-close</v-icon>
-          </button>
-        </span>
+            <span
+              v-for="t in block.chips"
+              :key="t.name"
+              class="rail-chip"
+              :class="{
+                'rail-chip--conf': !many && !t.anomaly,
+                'rail-chip--anomaly': t.anomaly,
+                'rail-chip--neutral': chipNeutral(t),
+                'rail-chip--selected': isSelected(t.name),
+                'rail-chip--remove-hot': removeHot && isSelected(t.name),
+                'rail-chip--source': isDragSource('applied', t.name),
+              }"
+              :style="chipStyle(t)"
+              :data-tag="t.name"
+              :draggable="readOnly ? undefined : 'true'"
+              @dragstart="onDragStart('applied', t.name, $event)"
+              @dragend="onDragEnd"
+              @contextmenu="onAppliedContextMenu(t, $event)"
+              @mouseenter="hoverTag(t.name)"
+              @mouseleave="hoverTag(null)"
+            >
+              <Tooltip :text="chipTip(t)" activator="parent" />
+              <v-icon v-if="t.anomaly" class="rail-chip__warn" size="13"
+                >mdi-alert-outline</v-icon
+              >
+              <!-- The object detector found it: pointing at it draws its box. -->
+              <v-icon
+                v-if="isBoxed(t.name)"
+                class="rail-chip__box"
+                size="12"
+                aria-hidden="true"
+                >mdi-vector-square</v-icon
+              >
+              <!-- A click selects the chip, except on a part-tinted one, where
+                   it adds the tag to the rest; a modifier selects there too.
+                   The Menu key and Shift+F10 open the chip's menu. -->
+              <button
+                class="rail-chip__label"
+                type="button"
+                :aria-label="
+                  addsToRest(t)
+                    ? `Add ${t.label} to the other ${totalWithTagData - t.count}`
+                    : undefined
+                "
+                :aria-pressed="addsToRest(t) ? undefined : String(isSelected(t.name))"
+                :disabled="addsToRest(t) && tagActionLoading.includes(t.name)"
+                @click="onChipLabelClick(t, $event)"
+                @keydown="onAppliedChipKey(t, $event)"
+              >
+                {{ t.label }}
+              </button>
+              <span v-if="many" class="visually-hidden"
+                >, on {{ t.count }} of {{ totalWithTagData }}</span
+              >
+              <button
+                v-if="!readOnly"
+                class="rail-chip__x"
+                type="button"
+                :aria-label="removeLabel(t)"
+                :disabled="tagActionLoading.includes(t.name)"
+                @click="onRemoveClick(t)"
+                @mouseenter="removeHot = isSelected(t.name)"
+                @mouseleave="removeHot = false"
+              >
+                <v-icon size="12">mdi-close</v-icon>
+              </button>
+            </span>
+          </div>
+        </div>
       </div>
       <button
         v-if="hiddenSingles && !showSingles"
@@ -387,6 +488,148 @@
         </button>
       </div>
     </template>
+
+    <!-- The chip menu: right-click, the Menu key or Shift+F10 on a chip. The
+         keyboard and no-drag path to Move to group, and the only way to make
+         the first group. Read-only leaves Copy and Select all in group. -->
+    <v-menu
+      v-model="contextOpen"
+      :target="contextAt"
+      location="bottom end"
+      origin="top start"
+      :offset="2"
+      :close-on-content-click="false"
+      @after-enter="focusMenu"
+    >
+      <div
+        ref="menuRef"
+        class="ctx-menu rail-tags__menu"
+        role="menu"
+        aria-label="Tag"
+        tabindex="-1"
+        @keydown="onMenuKey"
+      >
+        <button type="button" class="ctx-item" role="menuitem" @click="menuCopy">
+          <span class="ctx-icon" aria-hidden="true"></span>
+          <span class="ctx-label-text">Copy</span>
+          <span class="ctx-shortcut">Ctrl C</span>
+        </button>
+        <button
+          type="button"
+          class="ctx-item"
+          role="menuitem"
+          @click="menuSelectGroup"
+        >
+          <span class="ctx-icon" aria-hidden="true"></span>
+          <span class="ctx-label-text">Select all in group</span>
+        </button>
+        <template v-if="!readOnly">
+          <div class="ctx-sep" role="separator"></div>
+          <div class="ctx-submenu-wrap" @mouseenter="openSub">
+            <button
+              ref="moveRowRef"
+              type="button"
+              class="ctx-item"
+              role="menuitem"
+              aria-haspopup="menu"
+              :aria-expanded="subOpen ? 'true' : 'false'"
+              @click="openSub"
+              @keydown="onMoveRowKey"
+            >
+              <span class="ctx-icon" aria-hidden="true"></span>
+              <span class="ctx-label-text">Move to group</span>
+              <v-icon class="ctx-arrow" aria-hidden="true">mdi-chevron-right</v-icon>
+            </button>
+            <div
+              v-if="subOpen"
+              v-submenu-fit
+              class="ctx-submenu"
+              role="menu"
+              aria-label="Move to group"
+              tabindex="-1"
+              @keydown.stop="onSubKey"
+            >
+              <button
+                v-for="group in tagGroups.groups"
+                :key="group.id"
+                type="button"
+                class="ctx-item"
+                role="menuitemradio"
+                :aria-checked="currentGroup === group.id ? 'true' : 'false'"
+                @click="menuMove(group.id)"
+              >
+                <span class="ctx-icon" aria-hidden="true"></span>
+                <span class="ctx-label-text">{{ group.name }}</span>
+                <v-icon v-if="currentGroup === group.id" class="ctx-check" aria-hidden="true"
+                  >mdi-check</v-icon
+                >
+              </button>
+              <button
+                type="button"
+                class="ctx-item"
+                role="menuitemradio"
+                :aria-checked="currentGroup === null ? 'true' : 'false'"
+                @click="menuMove(null)"
+              >
+                <span class="ctx-icon" aria-hidden="true"></span>
+                <span class="ctx-label-text">Ungrouped</span>
+                <v-icon v-if="currentGroup === null" class="ctx-check" aria-hidden="true"
+                  >mdi-check</v-icon
+                >
+              </button>
+              <div class="ctx-sep" role="separator"></div>
+              <button
+                v-if="!naming"
+                ref="newRowRef"
+                type="button"
+                class="ctx-item"
+                role="menuitem"
+                @click="startNaming"
+              >
+                <span class="ctx-icon" aria-hidden="true"></span>
+                <span class="ctx-label-text">New group…</span>
+              </button>
+              <form v-else class="rail-tags__naming" @submit.prevent="commitNaming">
+                <input
+                  ref="nameInputRef"
+                  v-model="newGroupName"
+                  class="rail-tags__naming-input"
+                  type="text"
+                  aria-label="New group name"
+                  placeholder="Group name"
+                  autocomplete="off"
+                  spellcheck="false"
+                  @keydown.esc.stop.prevent="cancelNaming"
+                />
+              </form>
+            </div>
+          </div>
+          <div class="ctx-sep" role="separator"></div>
+          <button
+            type="button"
+            class="ctx-item ctx-item--danger"
+            role="menuitem"
+            @click="menuRemove"
+          >
+            <span class="ctx-icon" aria-hidden="true"></span>
+            <span class="ctx-label-text">{{ removeText }}</span>
+          </button>
+        </template>
+      </div>
+    </v-menu>
+
+    <!-- The drop label, on the tooltip surface beside the heading under the
+         pointer. Teleported, so it takes the page's inks in either pane. -->
+    <Teleport to="body">
+      <div
+        v-if="dropTip"
+        class="rail-tags__droptip"
+        role="status"
+        :style="{ left: `${dropTip.x}px`, top: `${dropTip.y}px` }"
+      >
+        {{ dropTip.text }}
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -416,12 +659,16 @@ import {
   useTagClipboardStore,
 } from "../../stores/useTagClipboardStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useWsStore } from "../../stores/useWsStore";
+import { useContextMenuAt } from "../../composables/useContextMenuAt";
 import { errorDetail } from "../../utils/apiError";
 import { hasNativeCopyContext, isTypingTarget } from "../../utils/dom.js";
 import { formatSentinelTag } from "../../utils/tags.js";
+import { chipText, colourKey, NEUTRAL_KEYS } from "../../utils/tagColour.js";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+import { vSubmenuFit } from "../../utils/submenuFit";
 import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
@@ -459,6 +706,17 @@ const sidebarStore = useSidebarStore();
 const userPrefsStore = useUserPrefsStore();
 const wsStore = useWsStore();
 const tagClipboard = useTagClipboardStore();
+const tagGroups = useTagGroupsStore();
+// Tags | By group: the tabs, their box, and the ids that tie them together.
+const tagsPanelId = `rail-tags-panel-${(listSerial.n += 1)}`;
+const listTabId = `${tagsPanelId}-list-tab`;
+const groupsTabId = `${tagsPanelId}-groups-tab`;
+const listTabRef = ref(null);
+const groupsTabRef = ref(null);
+const showTabs = computed(() => tagGroups.hasGroups);
+const showGroups = computed(
+  () => showTabs.value && tagGroups.railView === "groups",
+);
 
 const readOnly = computed(() => isReadOnly.value || props.locked);
 const pictureIds = computed(() =>
@@ -583,6 +841,55 @@ const applied = computed(() => {
     );
 });
 
+// Colour-named tags fill with their colour (tagColour.js). The text ink depends
+// on the surface behind the chip, which the host decides: the rail's own, or the
+// lightbox's dark pane. So read the nearest opaque background once a mount and
+// again when the theme changes; a chip never reads its own ground.
+const ground = ref(null);
+const darkTheme = ref(false);
+
+function opaqueBehind(el) {
+  for (let node = el; node; node = node.parentElement) {
+    const m = getComputedStyle(node).backgroundColor.match(/^rgba?\(([^)]+)\)$/);
+    if (!m) continue;
+    const [r, g, b, a = 1] = m[1].split(",").map(Number);
+    if (a >= 1) return [r, g, b];
+  }
+  return null;
+}
+
+function readGround() {
+  darkTheme.value = document.documentElement.classList.contains(
+    "v-theme--pixlStashDark",
+  );
+  ground.value = opaqueBehind(rootRef.value);
+}
+
+onMounted(readGround);
+watch(
+  () => userPrefsStore.themeMode,
+  () => nextTick(readGround),
+);
+
+/**
+ * The chip's inline custom properties. An applied tag that names a colour
+ * takes its `--tag-*` fill and the ink its alpha needs over this ground; every
+ * other chip, anomalies included, carries only its tint, as before.
+ */
+function chipStyle(t) {
+  const style = { "--tint": t.tint };
+  const key = t.anomaly ? null : colourKey(t.name);
+  if (!key) return style;
+  const { ink } = chipText(key, t.tint, !many.value, ground.value, darkTheme.value);
+  style["--ink"] = `var(--tag-${key})`;
+  style["--chip-ink"] = ink.join(", ");
+  return style;
+}
+
+/** Black and white chips draw an on-surface edge; see `.rail-chip--neutral`. */
+const chipNeutral = (t) =>
+  !t.anomaly && NEUTRAL_KEYS.has(colourKey(t.name));
+
 // On three or more, the long tail of tags on just one picture folds behind a
 // link; anomalies never fold.
 const showSingles = ref(false);
@@ -594,6 +901,63 @@ const hiddenSingles = computed(
 const shownApplied = computed(() =>
   showSingles.value ? applied.value : applied.value.filter((t) => !folds(t)),
 );
+
+/** The group a tag is filed under, its id (null: Ungrouped). */
+const groupIdOf = (name) => tagGroups.groupFor(name)?.id ?? null;
+
+/**
+ * The applied tags under one heading per group, in rail order and Ungrouped
+ * last. `all` is every applied tag in the group (copied, counted); `chips` the
+ * shown ones. Only headings with a shown chip are listed.
+ */
+const groupBlocks = computed(() => {
+  const shown = new Set(shownApplied.value.map((t) => t.name));
+  const byKey = new Map();
+  for (const t of applied.value) {
+    const group = tagGroups.groupFor(t.name);
+    const key = group ? String(group.id) : "none";
+    if (!byKey.has(key)) {
+      byKey.set(key, {
+        key,
+        id: group ? group.id : null,
+        heading: true,
+        name: group ? group.name : "Ungrouped",
+        all: [],
+        chips: [],
+      });
+    }
+    const block = byKey.get(key);
+    block.all.push(t);
+    if (shown.has(t.name)) block.chips.push(t);
+  }
+  const order = [...tagGroups.groups.map((g) => String(g.id)), "none"];
+  return order.map((key) => byKey.get(key)).filter((b) => b && b.chips.length);
+});
+
+/** What the body draws: the groups, or one flat block with no heading. */
+const shownBlocks = computed(() =>
+  showGroups.value
+    ? groupBlocks.value
+    : [
+        {
+          key: "all",
+          heading: false,
+          all: applied.value,
+          chips: shownApplied.value,
+        },
+      ],
+);
+
+const groupDropKey = (block) => `group:${block.key}`;
+
+function copyGroupLabel(block) {
+  const count = block.all.length;
+  return `Copy the ${count.toLocaleString()} ${block.name} tag${count === 1 ? "" : "s"}`;
+}
+
+/** A chip being dragged leaves a dashed place where it was. */
+const isDragSource = (from, name) =>
+  drag.value?.from === from && drag.value.names.includes(name);
 
 /**
  * ×: the tag goes and the tagger is told it was wrong, one gesture, so one
@@ -716,6 +1080,173 @@ function onRemoveClick(t) {
   else void removeAndReject(t);
 }
 
+// ── The chip menu ────────────────────────────────────────────────────────────
+// Opened at a point (`useContextMenuAt`, as the grid's selection bar does), so
+// the chip that asked gets its focus back on close. It acts on the applied
+// chips selected when it opened: the chip itself is selected first, as a
+// right-click always selected it.
+const { contextOpen, contextAt, openContextMenu } = useContextMenuAt();
+const menuRef = ref(null);
+const moveRowRef = ref(null);
+const newRowRef = ref(null);
+const nameInputRef = ref(null);
+const menuTag = ref("");
+const menuNames = ref([]);
+const subOpen = ref(false);
+const naming = ref(false);
+const newGroupName = ref("");
+let namingBusy = false;
+
+/** The group every chip the menu acts on shares: its id, or undefined when they differ. */
+const currentGroup = computed(() => {
+  const ids = menuNames.value.map(groupIdOf);
+  return ids.every((id) => id === ids[0]) ? ids[0] : undefined;
+});
+
+const removeText = computed(() => {
+  const count = menuNames.value.length;
+  const verb = count > 1 ? `Remove ${count} tags` : "Remove";
+  return many.value ? `${verb} from all ${n.value}` : `${verb} from picture`;
+});
+
+/**
+ * Open the chip menu for `t`, selecting it first. `trigger` is the element
+ * focus goes back to on close.
+ */
+function openChipMenu(t, x, y, trigger) {
+  if (!isSelected(t.name)) selectedLabels.value = [...selectedLabels.value, t.name];
+  menuTag.value = t.name;
+  menuNames.value = selectedApplied().map((a) => a.name);
+  subOpen.value = false;
+  naming.value = false;
+  newGroupName.value = "";
+  openContextMenu(x, y, trigger);
+}
+
+/** Right-click on an applied chip: the menu at the pointer. */
+function onAppliedContextMenu(t, event) {
+  event.preventDefault();
+  const label = event.currentTarget?.querySelector(".rail-chip__label");
+  openChipMenu(t, event.clientX, event.clientY, label);
+}
+
+/** The Menu key, or Shift+F10, on a focused chip label: the menu under it. */
+function onAppliedChipKey(t, event) {
+  if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
+  event.preventDefault();
+  const rect = event.currentTarget.getBoundingClientRect();
+  openChipMenu(t, rect.left, rect.bottom, event.currentTarget);
+}
+
+function focusMenu() {
+  menuRef.value?.focus();
+}
+
+/** Escape closes the menu from anywhere in it; the rest is the roving rows'. */
+function onMenuKey(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    contextOpen.value = false;
+    return;
+  }
+  onMenuKeydown(event);
+}
+
+function openSub() {
+  if (readOnly.value) return;
+  subOpen.value = true;
+}
+
+function closeSub(focusRow) {
+  subOpen.value = false;
+  naming.value = false;
+  newGroupName.value = "";
+  if (focusRow) nextTick(() => moveRowRef.value?.focus());
+}
+
+/** Right moves into the submenu; Left and Escape come back out of it. */
+function onMoveRowKey(event) {
+  if (event.key !== "ArrowRight") return;
+  event.preventDefault();
+  event.stopPropagation();
+  openSub();
+  nextTick(() => menuRef.value?.querySelector(".ctx-submenu .ctx-item")?.focus());
+}
+
+function onSubKey(event) {
+  // The naming field keeps its own keys (Left moves the caret, Esc cancels).
+  if (event.target?.tagName === "INPUT") return;
+  if (event.key === "ArrowLeft" || event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSub(true);
+    return;
+  }
+  onMenuKeydown(event);
+}
+
+function menuCopy() {
+  contextOpen.value = false;
+  copySelection();
+}
+
+/** Every shown chip in the chosen tag's group, Ungrouped included, selected. */
+function menuSelectGroup() {
+  const id = groupIdOf(menuTag.value);
+  selectedLabels.value = shownApplied.value
+    .filter((t) => groupIdOf(t.name) === id)
+    .map((t) => t.name);
+  contextOpen.value = false;
+}
+
+async function menuMove(groupId) {
+  const names = [...menuNames.value];
+  contextOpen.value = false;
+  await tagGroups.moveTags(names, groupId);
+}
+
+async function menuRemove() {
+  contextOpen.value = false;
+  await removeSelection();
+}
+
+function startNaming() {
+  naming.value = true;
+  nextTick(() => nameInputRef.value?.focus());
+}
+
+function cancelNaming() {
+  naming.value = false;
+  newGroupName.value = "";
+  nextTick(() => newRowRef.value?.focus());
+}
+
+/** Make the group, then file the chips under it. Nothing moves if it fails. */
+async function commitNaming() {
+  const name = newGroupName.value.trim();
+  if (!name || namingBusy) return;
+  namingBusy = true;
+  const names = [...menuNames.value];
+  try {
+    const group = await tagGroups.createGroup(name);
+    if (!group) return;
+    contextOpen.value = false;
+    await tagGroups.moveTags(names, group.id);
+  } finally {
+    namingBusy = false;
+  }
+}
+
+/** Left and Right move between the two tabs, and take the chosen one. */
+function onTabKey(event) {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  const next = showGroups.value ? "list" : "groups";
+  tagGroups.setRailView(next);
+  nextTick(() => (next === "groups" ? groupsTabRef : listTabRef).value?.focus());
+}
+
 const rootRef = ref(null);
 
 /** Out of sight: the lightbox's pane shut, or Info behind another tab. */
@@ -726,7 +1257,15 @@ const hidden = () => Boolean(rootRef.value?.closest('[style*="display: none"]'))
  * so a chip picked a while ago never takes a key meant for the grid.
  */
 function onWindowPointerdown(e) {
-  if (hasSelection.value && !rootRef.value?.contains(e.target)) clearSelection();
+  // The chip menu is teleported out of the rail: a press in it is no press
+  // outside.
+  if (
+    hasSelection.value &&
+    !rootRef.value?.contains(e.target) &&
+    !menuRef.value?.contains(e.target)
+  ) {
+    clearSelection();
+  }
 }
 
 /**
@@ -737,7 +1276,8 @@ function onWindowPointerdown(e) {
  */
 function onWindowKeydown(e) {
   if (!hasSelection.value || e.altKey || hidden()) return;
-  // A menu or dialog over the panel takes its own keys.
+  // The chip menu, its naming field, or a dialog over the panel takes its own keys.
+  if (contextOpen.value) return;
   if (document.querySelector(".v-overlay--active.v-menu, .v-overlay--active.v-dialog")) {
     return;
   }
@@ -773,10 +1313,17 @@ watch(applied, (tags) => {
 // ── Drag between Tags and Rejected ───────────────────────────────────────────
 const drag = ref(null);
 const dropOn = ref(null);
+// The drop label under a group heading the pointer is over: where, and what.
+const dropTip = ref(null);
 
 function onDragStart(from, tag, event) {
   if (readOnly.value) return;
-  drag.value = { from, tag };
+  // A selected applied chip carries the whole selection to a group.
+  const names =
+    from === "applied" && isSelected(tag) && selectedApplied().length > 1
+      ? selectedApplied().map((t) => t.name)
+      : [tag];
+  drag.value = { from, tag, names };
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = "move";
     // Firefox starts no drag without data.
@@ -787,6 +1334,7 @@ function onDragStart(from, tag, event) {
 function onDragEnd() {
   drag.value = null;
   dropOn.value = null;
+  dropTip.value = null;
 }
 
 function onDragOver(to, event) {
@@ -812,6 +1360,75 @@ async function onDrop(to) {
     const t = applied.value.find((a) => a.name === dragged.tag);
     if (t) await removeAndReject(t);
   }
+}
+
+// ── Drag between groups ──────────────────────────────────────────────────────
+// Only applied chips move between headings. A rejected chip dropped on one
+// is no move: the event bubbles to the Tags body, which accepts it.
+
+/** The count a drop label gives: the library's pictures carrying the tags. */
+const libraryCounts = computed(
+  () =>
+    new Map(
+      library.value.map((row) => [String(row.tag), row.count]),
+    ),
+);
+
+function dropCountText(names) {
+  // Tags are case-sensitive names ("Hair" and "hair" are two), so the exact
+  // name first; the lower-case spelling only when the exact one is unknown.
+  const counts = names.map(
+    (name) =>
+      libraryCounts.value.get(name) ??
+      libraryCounts.value.get(name.toLowerCase()),
+  );
+  if (counts.some((c) => c == null)) {
+    return `on every picture that carries ${names.length > 1 ? "them" : "it"}`;
+  }
+  const sum = counts.reduce((a, b) => a + b, 0);
+  if (names.length === 1) return `on all ${sum} ${sum === 1 ? "picture" : "pictures"}`;
+  // Several tags can share a picture, so the sum is an upper bound.
+  return `on up to ${sum.toLocaleString()} pictures`;
+}
+
+function onGroupDragOver(block, event) {
+  const dragged = drag.value;
+  if (!block.heading || !dragged || dragged.from !== "applied" || readOnly.value) return;
+  // Already filed there: nothing would move, so no wash and no drop.
+  if (dragged.names.every((name) => groupIdOf(name) === block.id)) return;
+  event.preventDefault();
+  if (dropOn.value === groupDropKey(block)) return;
+  dropOn.value = groupDropKey(block);
+  const head = event.currentTarget.querySelector(".rail-tags__group-head");
+  const rect = (head ?? event.currentTarget).getBoundingClientRect();
+  const names = dragged.names;
+  const subject = names.length === 1 ? names[0] : `${names.length} tags`;
+  dropTip.value = {
+    x: rect.left,
+    y: rect.bottom + 4,
+    text: `Move ${subject} to ${block.name} · ${dropCountText(names)}`,
+  };
+}
+
+function onGroupDragLeave(block, event) {
+  if (
+    dropOn.value === groupDropKey(block) &&
+    !event.currentTarget.contains(event.relatedTarget)
+  ) {
+    dropOn.value = null;
+    dropTip.value = null;
+  }
+}
+
+async function onGroupDrop(block, event) {
+  const dragged = drag.value;
+  if (!block.heading || !dragged || dragged.from !== "applied") return;
+  event.preventDefault();
+  onDragEnd();
+  if (readOnly.value) return;
+  // Back onto the heading it is drawn under: no label was shown, no move.
+  if (dragged.names.every((name) => groupIdOf(name) === block.id)) return;
+  await tagGroups.moveTags(dragged.names, block.id);
 }
 
 // ── The field ────────────────────────────────────────────────────────────────
@@ -1071,6 +1688,10 @@ watch(
 
 onMounted(() => {
   fetchAnomalies();
+  // The map answers nothing to a read share session: the rail stays a list.
+  void tagGroups.fetch();
+  // A drop label counts the library's pictures per tag.
+  if (!isReadOnly.value) void fetchLibrary();
   if (props.autofocus) focus();
   window.addEventListener("keydown", onWindowKeydown, true);
   window.addEventListener("pointerdown", onWindowPointerdown, true);
@@ -1256,7 +1877,8 @@ defineExpose({
   border: 1px solid rgba(var(--ink), var(--b));
   border-radius: var(--radius-sm);
   background: rgba(var(--ink), var(--a));
-  color: rgb(var(--v-theme-on-surface));
+  /* A colour-named chip sets --chip-ink (tagColour.js); the rest stay on-surface. */
+  color: rgb(var(--chip-ink, var(--v-theme-on-surface)));
   font-size: var(--tag-chip-font, var(--text-xs));
   overflow-wrap: anywhere;
 }
@@ -1270,6 +1892,13 @@ defineExpose({
 .rail-chip--anomaly {
   --ink: var(--v-theme-error);
   --b: calc(var(--a) + 0.25);
+}
+
+/* Black and white fill with no edge of their own: on the light surface white
+   vanishes and on the dark one black does. The edge is the on-surface ink, so
+   it re-inks with the lightbox pane like every other rail edge. */
+.rail-chip--neutral {
+  border-color: rgba(var(--v-theme-on-surface), 0.45);
 }
 
 .rail-chip__warn {
@@ -1398,5 +2027,172 @@ defineExpose({
 .rail-tags__more:focus-visible {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--focus-offset);
+}
+
+/* ── Tags | By group ──────────────────────────────────────────────────────
+   The shipped label tabs (`.section-tabs` in LightboxDescriptionPanel) on the
+   section label: the label's own type, muted; the chosen tab in full ink on
+   a 2px bar. The bar lies on the box's top border, so the row overlaps the
+   box by its 1px and the gap between them is taken back. */
+.rail-sec--tabs {
+  position: relative;
+  z-index: var(--z-raised);
+  min-height: var(--control-h-bar);
+  margin-bottom: calc(-1 * var(--space-3) - 1px);
+  padding-right: var(--space-1);
+}
+
+.rail-tags__tabs {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  gap: var(--space-5);
+  padding-left: var(--space-3);
+}
+
+.rail-tags__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  cursor: pointer;
+}
+
+.rail-tags__tab:hover,
+.rail-tags__tab[aria-selected="true"] {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.rail-tags__tab[aria-selected="true"] {
+  border-bottom-color: var(--active-bar);
+}
+
+.rail-tags__tab:focus-visible {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
+}
+
+/* The box under the tabs: the card shape on a well, `--space-3` inside. */
+.rail-tags__body--boxed {
+  padding: var(--space-3);
+  border: 1px solid var(--rail-line, rgb(var(--v-theme-border)));
+  border-radius: var(--radius-md);
+  background: var(--rail-field, rgb(var(--v-theme-background)));
+}
+
+.rail-tags__groups {
+  display: flex;
+  flex-direction: column;
+}
+
+.rail-tags__group + .rail-tags__group {
+  margin-top: var(--space-3);
+}
+
+/* A heading takes a drop: the olive wash and ring the rail uses for a drop. */
+.rail-tags__group--drop {
+  border-radius: var(--radius-sm);
+  background: var(--active-wash);
+  outline: 1px dashed var(--active-bar);
+  outline-offset: var(--space-1);
+}
+
+/* A quieter sub-heading: the chevron, the name, the count, and copy at the
+   right, folded or open. */
+.rail-tags__group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h-sm);
+  margin-bottom: var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.rail-tags__group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.rail-tags__group-toggle:hover {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.rail-tags__group-toggle:focus-visible {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
+}
+
+.rail-chip__warn-wrap {
+  display: inline-flex;
+}
+
+/* A chip being dragged: a dashed place where it was, its × gone. */
+.rail-chip--source {
+  background: transparent;
+  border: 1px dashed var(--rail-line, rgb(var(--v-theme-border)));
+  box-shadow: none;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.rail-chip--source .rail-chip__x {
+  opacity: 0;
+}
+
+/* The chip menu's naming field, in the submenu's last row. */
+.rail-tags__naming {
+  padding: 0 var(--space-4) var(--space-2);
+}
+
+.rail-tags__naming-input {
+  width: 100%;
+  height: var(--control-h-bar);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--rail-line, rgb(var(--v-theme-border)));
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-input-background));
+  color: rgb(var(--v-theme-on-surface));
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.rail-tags__naming-input:focus-visible {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
+}
+
+/* The drop label: the tooltip surface, pointer-transparent so the drag goes
+   on to the heading under it. */
+.rail-tags__droptip {
+  position: fixed;
+  z-index: var(--z-dropdown);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  box-shadow: var(--elevation-3);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  pointer-events: none;
 }
 </style>

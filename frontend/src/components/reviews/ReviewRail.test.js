@@ -1,11 +1,12 @@
-// ReviewRail - focus management around archived-review removal, and the
-// accessible names of the two icon-only controls.
+// ReviewRail - the board's footer: archived receipts and the sticker shelf.
+// Open reviews, their Abort and the New review button moved to the sidebar, so
+// the rail must no longer render them.
 //
 // Removing an archived receipt unmounts the row the user just activated (and,
 // for the last one, the whole Archived section, which sits behind a v-if). With
 // no focus move, focus falls to <body> and a keyboard user loses their place
 // entirely. These tests pin the recovery target: the next row's delete button,
-// or the rail's "New review" button when there is nothing left.
+// or the rail root when there is nothing left in the footer to focus.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
@@ -96,7 +97,7 @@ describe("ReviewRail archived focus management", () => {
     w.unmount();
   });
 
-  it("moves focus to New review when the last archived row is deleted", async () => {
+  it("moves focus to the rail root when the last archived row is deleted", async () => {
     seedStore([archivedRow(1, "shirt")]);
     const w = mountRail();
 
@@ -105,11 +106,12 @@ describe("ReviewRail archived focus management", () => {
 
     // The whole Archived section is behind v-if and has unmounted.
     expect(w.find(".rs-rail-archived-del").exists()).toBe(false);
-    expect(document.activeElement).toBe(w.find(".rs-rail-new").element);
+    expect(document.activeElement).toBe(w.find(".rs-rail").element);
+    expect(document.activeElement).not.toBe(document.body);
     w.unmount();
   });
 
-  it("moves focus to New review after Clear all resolves", async () => {
+  it("moves focus to the rail root after Clear all resolves", async () => {
     seedStore([archivedRow(1, "shirt"), archivedRow(2, "hat")]);
     const w = mountRail();
 
@@ -117,13 +119,13 @@ describe("ReviewRail archived focus management", () => {
     await w.find(".rs-archived-clear").trigger("click");
     await nextTick();
     expect(w.find(".rs-archived-clear").text()).toContain("Sure?");
-    expect(document.activeElement).not.toBe(w.find(".rs-rail-new").element);
+    expect(document.activeElement).not.toBe(w.find(".rs-rail").element);
 
     await w.find(".rs-archived-clear").trigger("click");
     await flush();
 
     expect(w.find(".rs-archived-clear").exists()).toBe(false);
-    expect(document.activeElement).toBe(w.find(".rs-rail-new").element);
+    expect(document.activeElement).toBe(w.find(".rs-rail").element);
     w.unmount();
   });
 });
@@ -170,8 +172,10 @@ describe("ReviewRail truncated labels carry a native title", () => {
     );
     w.unmount();
   });
+});
 
-  it("titles the session tag and scope spans", () => {
+describe("ReviewRail footer after the open reviews moved to the sidebar", () => {
+  it("renders no open reviews, no Abort and no New review button", () => {
     const store = seedStore([]);
     store.sessions = [
       {
@@ -184,13 +188,35 @@ describe("ReviewRail truncated labels carry a native title", () => {
     ];
     const w = mountRail();
 
-    expect(w.find(".rs-rail-session-tag").attributes("title")).toBe(
-      "long-session-tag",
-    );
-    // Scope title matches the string actually rendered as its text.
-    const scope = w.find(".rs-rail-session-scope");
-    expect(scope.attributes("title")).toBe("Whole vault");
-    expect(scope.text()).toBe("Whole vault");
+    expect(w.find(".rs-rail-session").exists()).toBe(false);
+    expect(w.find(".rs-rail-abort").exists()).toBe(false);
+    expect(w.find(".rs-rail-new").exists()).toBe(false);
+    expect(w.text()).not.toContain("Open reviews");
+    expect(w.text()).not.toContain("New review");
+    // The rail never emits new-review any more; TagHealthBoard's binding is dead.
+    expect(w.emitted("new-review")).toBeUndefined();
+    w.unmount();
+  });
+
+  it("still renders the Archived receipts", () => {
+    seedStore([archivedRow(1, "shirt")]);
+    const w = mountRail();
+
+    expect(w.find(".rs-rail-archived").exists()).toBe(true);
+    expect(w.find(".rs-rail-archived-tag").text()).toBe("shirt");
+    w.unmount();
+  });
+
+  it("still renders the sticker shelf while Pretend this is fun is on", () => {
+    const store = seedStore([]);
+    store.gamify = true;
+    store.stickers = [
+      { id: 1, icon: "mdi-star", color: "#ff0000", label: "First review" },
+    ];
+    const w = mountRail();
+
+    expect(w.find(".rs-shelf").exists()).toBe(true);
+    expect(w.findAll(".rs-shelf-grid .rs-sticker").length).toBe(1);
     w.unmount();
   });
 });

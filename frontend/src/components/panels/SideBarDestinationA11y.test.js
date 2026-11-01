@@ -121,7 +121,7 @@ const DESTINATIONS = [
   "Favourites",
   "Scrapheap",
   "Duplicates",
-  "Tags to review",
+  "Tags",
 ];
 
 function respond(url) {

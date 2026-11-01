@@ -255,7 +255,7 @@
   justify-content: flex-end;
 }
 
-/* An open tag review, one level under "Tags to review": depth moves the edge,
+/* An open tag review, one level under "Tags": depth moves the edge,
    as everywhere in the row system. Its meter is the inspector's teal one at
    row size, the identity hue for data. */
 .sidebar-review-session {

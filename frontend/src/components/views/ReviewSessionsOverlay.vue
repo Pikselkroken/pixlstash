@@ -1,19 +1,19 @@
 <template>
-  <!-- Tags to review is a view like Duplicates and Moves: App.vue draws it in
+  <!-- Tags is a view like Duplicates and Moves: App.vue draws it in
        the centre column in place of the grid, so the title bar and the
-       sidebar never move. The sidebar's "Tags to review" row lights while it
+       sidebar never move. The sidebar's "Tags" row lights while it
        is up, and its open reviews nest under that row. -->
   <div
     class="rs-overlay"
     role="region"
-    aria-label="Tags to review"
+    aria-label="Tags"
     data-testid="tags-to-review"
   >
     <!-- The grid's toolbar line, its contents swapped as the Lightbox swaps
          them: the way back (named for where it goes, with Esc), the title,
          then the board's own controls, which TagHealthBoard teleports into
          `.rs-toolbar-tools`. -->
-    <header class="rs-toolbar" role="toolbar" aria-label="Tags to review">
+    <header class="rs-toolbar" role="toolbar" aria-label="Tags">
       <ViewBackButton
         class="rs-toolbar-back"
         :label="backTarget"
@@ -41,7 +41,6 @@
         ref="boardRef"
         :toolbar-target="`#${TOOLBAR_TOOLS_ID}`"
         @start-review="openNewReview($event)"
-        @new-review="openNewReview()"
       />
     </div>
 
@@ -138,7 +137,7 @@
 </template>
 
 <script setup>
-// The Tags to review view: a toolbar line (back, title, the board's controls)
+// The Tags view: a toolbar line (back, title, the board's controls)
 // over the main area (tag health board / one session / an archived receipt),
 // plus the view-level layers - new-review dialog, direct-tagging panel (T),
 // keyboard cheat-sheet (?), and the full-screen zoom. It replaces the grid in
@@ -170,7 +169,9 @@ import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { formatKeyHint, undoKeyHint } from "../../utils/shortcutHints";
-import { API_BASE_URL } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
+import { useOperationStore } from "../../stores/useOperationStore";
+import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 // Sidebar selection sentinels (mirrors useSelectionStore.js / App.vue).
 const ALL_PICTURES_ID = "ALL";
 const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
@@ -190,6 +191,19 @@ const store = useReviewSessionsStore();
 const selectionStore = useSelectionStore();
 const projectStore = useProjectStore();
 const noticeStore = useNoticeStore();
+const operationStore = useOperationStore();
+const tagGroups = useTagGroupsStore();
+
+// The board's Groups view files tags, and a tag move is the app-wide stack's
+// (one library-wide operation, no review decision in it): there, Ctrl+Z,
+// Ctrl+Y and `U` act on that stack rather than saying there is nothing here.
+const onGroupsBoard = computed(
+  () =>
+    store.view.type === "board" &&
+    !archivedReview.value &&
+    !isReadOnly.value &&
+    tagGroups.boardView === "groups",
+);
 
 const sessionRef = ref(null);
 const boardRef = ref(null);
@@ -223,12 +237,12 @@ const onBoard = computed(
   () => !store.activeSession && store.view.type !== "archived",
 );
 const backTarget = computed(() =>
-  onBoard.value ? props.backLabel : "Tags to review",
+  onBoard.value ? props.backLabel : "Tags",
 );
 const toolbarTitle = computed(() => {
   if (store.activeSession) return `Review: “${store.activeSession.tag}”`;
   if (archivedReview.value) return `Archived: “${archivedReview.value.tag}”`;
-  return "Tags to review";
+  return "Tags";
 });
 
 function goBack() {
@@ -521,6 +535,10 @@ function handleUndoRequest() {
     closeZoom();
     return;
   }
+  if (onGroupsBoard.value) {
+    void operationStore.undo();
+    return;
+  }
   noticeStore.push({
     level: "info",
     text: "Nothing to undo here. Close the review sessions to undo earlier changes from the toolbar.",
@@ -535,6 +553,10 @@ function handleUndoRequest() {
  * app-wide redo behind the overlay.
  */
 function reportNoRedo() {
+  if (onGroupsBoard.value) {
+    void operationStore.redo();
+    return;
+  }
   noticeStore.push({
     level: "info",
     text: "Nothing to redo in this review. Answer the card again to reapply a decision you undid.",
@@ -544,6 +566,9 @@ function reportNoRedo() {
 
 function handleKeyDown(event) {
   if (isEditable(event.target) || isEditable(document.activeElement)) return;
+  // The sidebar's abort dialog sits over this view but outside it: while it
+  // is up its own keys (Esc cancels it) are the only ones that act.
+  if (document.querySelector(".v-overlay--active.v-dialog")) return;
 
   // Undo/redo are checked BEFORE the modifier bail below - that bail is what
   // made Ctrl+Z dead in a review session, while App's global handler skips the
@@ -579,6 +604,8 @@ function handleKeyDown(event) {
     else if (tagApplyOpen.value) tagApplyOpen.value = false;
     else if (sessionRef.value?.handleKey("escape")) {
       // The session consumed it (a pending consistency confirm).
+    } else if (boardRef.value?.handleEscape?.()) {
+      // The board's Groups view cleared its tag selection.
     } else {
       // Same exit as the toolbar's back button: a review (or a receipt) steps
       // back to the board, the board back to the view underneath.

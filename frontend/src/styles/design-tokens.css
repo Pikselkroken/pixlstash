@@ -447,6 +447,77 @@
     rgba(var(--v-theme-on-surface), 0.35) 0 1px,
     transparent 1px 4px
   );
+
+  /* ---------------------------------------------------------------------------
+     TAG COLOURS - the fill of a chip whose tag names a colour ("blue eyes",
+     "red"). Read by RailTags through tagColour.js, which mirrors these values
+     (tagColour.test.js holds the two to each other). Light values here; the
+     dark theme lifts each one under `.v-theme--pixlStashDark` below.
+
+     A FILL, not a text colour: the chip's text ink is chosen per chip from the
+     blended fill over the surface behind it, so these carry no label pairing.
+     Each value is a starting system, not a measured one.
+
+     Red is pure and saturated, not brick: `error` is #b0392b, a muted hue about
+     7 degrees off this red and roughly 80 RGB units away. An anomaly chip wears
+     that hue, so a red tag must not read as one; chroma separates them where
+     hue alone would not. Teal is the brand `tertiary` hue, so a teal-named chip matches a
+     confidence chip; the name is the signal there. Black and white are the
+     neutral ends: the chip draws them with an on-surface edge (RailTags), since
+     the fill alone vanishes on the surface it is nearest to. Silver and grey
+     are separated by lightness and a cool cast only.
+     --------------------------------------------------------------------------- */
+  --tag-red: 224, 0, 0;
+  --tag-orange: 224, 112, 32;
+  --tag-yellow: 232, 184, 0;
+  --tag-green: 46, 139, 58;
+  --tag-lime: 140, 198, 63;
+  --tag-aqua: 95, 211, 208;
+  --tag-cyan: 0, 181, 216;
+  --tag-teal: 42, 140, 134;
+  --tag-blue: 47, 95, 179;
+  --tag-lightblue: 127, 184, 232;
+  --tag-navy: 31, 47, 107;
+  --tag-purple: 122, 63, 176;
+  --tag-violet: 155, 107, 214;
+  --tag-pink: 240, 143, 176;
+  --tag-magenta: 194, 38, 143;
+  --tag-brown: 122, 74, 34;
+  --tag-tan: 196, 154, 108;
+  --tag-beige: 227, 211, 176;
+  --tag-black: 0, 0, 0;
+  --tag-white: 255, 255, 255;
+  --tag-grey: 138, 138, 138;
+  --tag-silver: 192, 196, 200;
+}
+
+/* The dark theme's tag colours: each hue lifted until it reads on the dark
+   surfaces (`surface` #23282f, `dark-surface` #181b20), so navy in particular
+   does not sink into the rail. Red moves to a brighter red, clear of the
+   salmon `dark-surface-error` as well as the brick `error`. */
+.v-theme--pixlStashDark {
+  --tag-red: 239, 68, 82;
+  --tag-orange: 245, 147, 66;
+  --tag-yellow: 240, 200, 40;
+  --tag-green: 90, 190, 110;
+  --tag-lime: 170, 220, 90;
+  --tag-aqua: 120, 225, 220;
+  --tag-cyan: 60, 205, 235;
+  --tag-teal: 80, 178, 170;
+  --tag-blue: 90, 140, 230;
+  --tag-lightblue: 160, 205, 245;
+  --tag-navy: 110, 130, 210;
+  --tag-purple: 165, 110, 225;
+  --tag-violet: 185, 140, 235;
+  --tag-pink: 245, 165, 195;
+  --tag-magenta: 225, 90, 190;
+  --tag-brown: 170, 115, 70;
+  --tag-tan: 215, 180, 140;
+  --tag-beige: 240, 230, 205;
+  --tag-black: 0, 0, 0;
+  --tag-white: 255, 255, 255;
+  --tag-grey: 150, 150, 150;
+  --tag-silver: 200, 205, 210;
 }
 
 /* Honour the OS "reduce motion" setting everywhere. Non-negotiable. */

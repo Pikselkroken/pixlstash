@@ -12,6 +12,7 @@ import { setActivePinia, createPinia } from "pinia";
 import FilterMenu from "./FilterMenu.vue";
 import { useFilterStore } from "../../stores/useFilterStore.js";
 import { getPictureCount } from "../../api/pictures";
+import { getTagGroups } from "../../api/tagGroups";
 import { resetFilterCounts } from "../../composables/useFilterCounts";
 
 vi.mock("../../api/tags", () => ({
@@ -19,6 +20,13 @@ vi.mock("../../api/tags", () => ({
     { tag: "hat", count: 12 },
     { tag: "outdoors", count: 7 },
   ]),
+}));
+// No groups unless a test files some: the Tags menu then lists none.
+vi.mock("../../api/tagGroups", () => ({
+  getTagGroups: vi.fn(),
+  createTagGroup: vi.fn(),
+  reorderTagGroups: vi.fn(),
+  assignTagsToGroup: vi.fn(),
 }));
 vi.mock("../../api/pictures", () => ({
   listComfyuiModels: vi
@@ -571,5 +579,78 @@ describe("FilterMenu", () => {
       .find(".ftf-thr-select")
       .trigger("keydown", { key: "ArrowLeft" });
     expect(wrapper.find(".fm-sub").exists()).toBe(true);
+  });
+});
+
+describe("FilterMenu: tag groups in the Tags menu (#2469)", () => {
+  const GROUPS = {
+    groups: [
+      { id: 1, name: "Character", position: 0 },
+      { id: 2, name: "Copyright", position: 1 },
+    ],
+    tags: { hat: 1, wolf: 1, sun: 1, moss: 1, outdoors: 2 },
+  };
+
+  beforeEach(() => {
+    getTagGroups.mockReset();
+    getTagGroups.mockResolvedValue({ groups: [], tags: {} });
+  });
+
+  it("files the groups under the empty Tags field, and a group term reads its words", async () => {
+    getTagGroups.mockResolvedValue(GROUPS);
+    const store = useFilterStore();
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Tags");
+    // Opening the Tags menu reads the map.
+    expect(getTagGroups).toHaveBeenCalled();
+    expect(wrapper.find(".tbm-footer").text()).toBe(
+      "Click a group or tag to require it, Shift-click to exclude it. Click a chip to flip it.",
+    );
+
+    const row = (name) =>
+      wrapper
+        .findAll('[role="option"]')
+        .find((o) => o.find(".fm-check-label").text() === name);
+    // Click requires the group; Shift-click excludes Ungrouped.
+    await row("Character").trigger("click");
+    expect(store.tagFilter).toEqual(["__group:1"]);
+    const chipNames = () => wrapper.findAll(".ftf-chip-name").map((n) => n.text());
+    expect(chipNames()).toEqual(["any Character tag"]);
+
+    await row("Ungrouped").trigger("click", { shiftKey: true });
+    expect(store.tagRejectedFilter).toEqual(["__group:none"]);
+    expect(chipNames()).toEqual(["any Character tag", "any Ungrouped tag"]);
+
+    // A chip flips like a tag's; a group term leaves the other list.
+    await wrapper.find(".ftf-chip-body").trigger("click");
+    expect(store.tagFilter).toEqual([]);
+    expect(store.tagRejectedFilter).toEqual(["__group:none", "__group:1"]);
+    expect(wrapper.findAll(".ftf-chip--lacks .ftf-chip-name")[1].text()).toBe(
+      "any Character tag",
+    );
+
+    // Backspace in the empty field takes the lacks row's last chip, the group.
+    await wrapper.find(".fm-sub input").trigger("keydown", { key: "Backspace" });
+    expect(store.tagRejectedFilter).toEqual(["__group:none"]);
+  });
+
+  it("reads a group term that is not in the map as a tag in a group, and nothing crashes", async () => {
+    const store = useFilterStore();
+    store.tagFilter = ["__group:9", "__group:none"];
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Tags");
+    expect(wrapper.findAll(".ftf-chip-name").map((n) => n.text())).toEqual([
+      "any tag in a group",
+      "any Ungrouped tag",
+    ]);
+  });
+
+  it("gives the Tags menu its plain footer when no groups are filed", async () => {
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Tags");
+    expect(wrapper.find(".tbm-footer").text()).toBe(
+      "Click a chip to flip it between has and lacks.",
+    );
+    expect(wrapper.text()).not.toContain("By group");
   });
 });

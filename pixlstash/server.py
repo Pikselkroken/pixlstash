@@ -54,6 +54,7 @@ from pixlstash.services import (
     comfyui_link_service,
     library_settings_service,
     scrapheap_service,
+    tag_group_service,
     workflow_ghost_service,
 )
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
@@ -124,6 +125,7 @@ from pixlstash.routes.reviews import create_router as create_reviews_router
 from pixlstash.routes.insights import create_router as create_insights_router
 from pixlstash.routes.moves import create_router as create_moves_router
 from pixlstash.routes.tag_health import create_router as create_tag_health_router
+from pixlstash.routes.tag_groups import create_router as create_tag_groups_router
 from pixlstash.routes.tagger_runs import (
     create_router as create_tagger_runs_router,
 )
@@ -1154,7 +1156,19 @@ class Server(
         only a fingerprint, and the key lives in the hub. Penalised and hidden
         tags say what someone collects and what they hide, and a library folder
         is made to be copied and handed to other people.
+
+        It also seeds the default tag groups this library is behind on (issue
+        #2469). That runs first, and on every open, startup and switch alike, so
+        a library never opens without its defaults. A failure there is logged
+        and the library still opens.
         """
+        try:
+            tag_group_service.seed_default_groups(vault.db)
+        except Exception:
+            logger.exception(
+                "Could not seed the default tag groups for library %s",
+                getattr(library, "name", None) or "(active)",
+            )
         # The library is passed explicitly by the switch path, which reconciles
         # *before* it marks the target active: reading "the active library" there
         # would return the one being closed, and key the fingerprint with the
@@ -1986,6 +2000,12 @@ class Server(
             create_tag_health_router(self),
             prefix=API_V1_PREFIX,
             tags=["tag_health"],
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_tag_groups_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["tag_groups"],
             dependencies=gate,
         )
         self.api.include_router(
