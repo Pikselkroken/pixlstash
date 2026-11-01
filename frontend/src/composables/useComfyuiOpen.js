@@ -8,7 +8,7 @@
 // queued in ComfyUI comes back here; `pixlstash_original=1` tells it to ask
 // for the workflow's own nodes instead.
 
-import { computed, ref, watch } from "vue";
+import { computed, onScopeDispose, ref, watch } from "vue";
 
 import { getPixlstashNode } from "../api/comfyui";
 import { useFilterStore } from "../stores/useFilterStore";
@@ -116,10 +116,23 @@ export async function openHeldInComfyui(hold, failText) {
 }
 
 /**
+ * How soon a ComfyUI that did not answer is asked again, in ms: doubling from
+ * the first to the most while it stays down, since each ask costs the server
+ * a request to ComfyUI and a log line.
+ */
+export const COMFYUI_RECHECK_MS = 5000;
+export const COMFYUI_RECHECK_MAX_MS = 30000;
+
+/**
  * Whether a workflow can be opened in ComfyUI from here, and what opens.
  *
  * Asks ComfyUI for the PixlStash node once per mount and again when the
- * address in Settings changes.
+ * address in Settings changes. A ComfyUI that does not answer is asked again
+ * until it does, backing off from `COMFYUI_RECHECK_MS` to
+ * `COMFYUI_RECHECK_MAX_MS`, so starting it wakes the buttons without leaving
+ * the screen; and once more whenever the window regains focus, which is when
+ * the owner comes back from starting or stopping it, and which starts the
+ * back-off over, since ComfyUI is then likely still loading.
  */
 export function useComfyuiOpen() {
   const filterStore = useFilterStore();
@@ -133,8 +146,7 @@ export function useComfyuiOpen() {
   /**
    * ComfyUI answered that it lacks the ComfyUI-PixlStash node's
    * `open_workflow.js`, so a link would open on whatever it had last. Only a
-   * definite no refuses: an unreachable ComfyUI, or a failed ask, leaves the
-   * verb to try.
+   * definite no refuses.
    */
   const comfyuiLacksNode = ref(false);
   /**
@@ -147,36 +159,86 @@ export function useComfyuiOpen() {
    * `openHeldInComfyui` would open on nothing. Only a definite no.
    */
   const comfyuiOpensNoRuns = ref(false);
+  /**
+   * The server could not reach ComfyUI at the address in Settings (the node
+   * check answers `null`): a link would open a tab on nothing. A failed ask of
+   * PixlStash's own server is not this, and leaves the verbs to try.
+   */
+  const comfyuiDown = ref(false);
+  /** Why the verbs are refused while `comfyuiDown`, without a full stop. */
+  const comfyuiDownReason = computed(
+    () =>
+      `ComfyUI is not running at ${filterStore.comfyuiUrl}. ` +
+      "Start ComfyUI to open it there",
+  );
+
   let nodeCheck = 0;
+  let recheck = null;
+  let delay = COMFYUI_RECHECK_MS;
+  function askLater(url) {
+    recheck = setTimeout(() => ask(url), delay);
+    delay = Math.min(delay * 2, COMFYUI_RECHECK_MAX_MS);
+  }
+  async function ask(url) {
+    const check = ++nodeCheck;
+    clearTimeout(recheck);
+    recheck = null;
+    if (!url) return;
+    try {
+      const {
+        can_open_workflows: canOpen,
+        saves_back: savesBack,
+        opens_runs: opensRuns,
+      } = await getPixlstashNode();
+      if (check !== nodeCheck) return;
+      comfyuiDown.value = canOpen === null;
+      comfyuiLacksNode.value = canOpen === false;
+      comfyuiOpensACopy.value = canOpen === true && savesBack === false;
+      comfyuiOpensNoRuns.value = opensRuns === false;
+      if (comfyuiDown.value) askLater(url);
+      else delay = COMFYUI_RECHECK_MS;
+    } catch (err) {
+      console.warn("[workflows] could not ask ComfyUI for the PixlStash node", err);
+      // A refusal already standing keeps being re-asked, or it would stick.
+      if (check === nodeCheck && comfyuiDown.value) askLater(url);
+    }
+  }
+
+  const currentUrl = () => canOpenComfyui.value && filterStore.comfyuiUrl;
+  // A new address starts from nothing: the answer about one ComfyUI says
+  // nothing of the next. A re-ask of the same one keeps its answer until the
+  // new one lands, so the buttons do not flicker on every poll.
   watch(
-    () => canOpenComfyui.value && filterStore.comfyuiUrl,
-    async (url) => {
-      const check = ++nodeCheck;
+    currentUrl,
+    (url) => {
+      comfyuiDown.value = false;
       comfyuiLacksNode.value = false;
       comfyuiOpensACopy.value = false;
       comfyuiOpensNoRuns.value = false;
-      if (!url) return;
-      try {
-        const {
-          can_open_workflows: canOpen,
-          saves_back: savesBack,
-          opens_runs: opensRuns,
-        } = await getPixlstashNode();
-        if (check !== nodeCheck) return;
-        comfyuiLacksNode.value = canOpen === false;
-        comfyuiOpensACopy.value = canOpen === true && savesBack === false;
-        comfyuiOpensNoRuns.value = opensRuns === false;
-      } catch (err) {
-        console.warn("[workflows] could not ask ComfyUI for the PixlStash node", err);
-      }
+      delay = COMFYUI_RECHECK_MS;
+      void ask(url);
     },
     { immediate: true },
   );
+  const onFocus = () => {
+    delay = COMFYUI_RECHECK_MS;
+    void ask(currentUrl());
+  };
+  if (typeof window !== "undefined") window.addEventListener("focus", onFocus);
+  onScopeDispose(() => {
+    nodeCheck += 1;
+    clearTimeout(recheck);
+    if (typeof window !== "undefined") {
+      window.removeEventListener("focus", onFocus);
+    }
+  });
 
   return {
     canOpenComfyui,
     comfyuiLacksNode,
     comfyuiOpensACopy,
     comfyuiOpensNoRuns,
+    comfyuiDown,
+    comfyuiDownReason,
   };
 }

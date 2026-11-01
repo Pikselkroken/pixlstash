@@ -771,6 +771,24 @@ describe("Open in ComfyUI", () => {
     wrapper.unmount();
   });
 
+  it("is refused while ComfyUI is not running, saying so", async () => {
+    getPixlstashNode.mockResolvedValue({
+      can_open_workflows: null,
+      saves_back: null,
+      opens_runs: null,
+    });
+    const wrapper = await withComfyui(["a"]);
+    const row = trigger(wrapper);
+    expect(row.attributes("aria-disabled")).toBe("true");
+    expect(row.find(".tip").attributes("data-text")).toBe(
+      "ComfyUI is not running at http://127.0.0.1:8188/. " +
+        "Start ComfyUI to open it there",
+    );
+    expect(enabled(wrapper, "open-comfyui")).toBe(false);
+    expect(tooltip(wrapper, "open-comfyui")).toContain("not running");
+    wrapper.unmount();
+  });
+
   it("Right arrow opens it on its first row, Left goes back", async () => {
     const wrapper = await withComfyui(["a"], { attachTo: document.body });
     const row = trigger(wrapper);

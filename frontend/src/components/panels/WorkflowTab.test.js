@@ -111,6 +111,10 @@ import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
+import {
+  COMFYUI_RECHECK_MAX_MS,
+  COMFYUI_RECHECK_MS,
+} from "../../composables/useComfyuiOpen";
 
 /** Called with the workflow id when *Change model set…* is opened from outside. */
 const useSetOpened = vi.fn();
@@ -3213,9 +3217,94 @@ describe("Open in ComfyUI", () => {
     expect(open).not.toHaveBeenCalled();
   });
 
-  it("still opens when ComfyUI cannot be asked about the node", async () => {
+  // The server answers all nulls when it cannot reach ComfyUI.
+  const DOWN = { can_open_workflows: null, saves_back: null, opens_runs: null };
+
+  it("refuses, saying so, while ComfyUI is not running", async () => {
     configure();
-    getPixlstashNode.mockResolvedValue({ can_open_workflows: null });
+    getPixlstashNode.mockResolvedValue(DOWN);
+    const { wrapper } = await mountWith([ID], [card({ id: ID })]);
+    await flush(wrapper);
+
+    const button = openButton(wrapper);
+    expect(button.attributes("aria-disabled")).toBe("true");
+    const described = button.attributes("aria-describedby");
+    expect(wrapper.find(`#${described}`).text()).toBe(
+      "ComfyUI is not running at http://127.0.0.1:8188/. " +
+        "Start ComfyUI to open it there.",
+    );
+    await button.trigger("click");
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("opens once ComfyUI starts, asking again until it answers", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      configure();
+      getPixlstashNode.mockResolvedValue(DOWN);
+      const store = useWorkflowsStore();
+      store.cards = [card({ id: ID })];
+      store.selectedKeys = [ID];
+      const wrapper = mount(WorkflowTab, globalOpts);
+      mounted.push(wrapper);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(openButton(wrapper).attributes("aria-disabled")).toBe("true");
+      expect(getPixlstashNode).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MS);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(2);
+
+      // Backing off: the next ask is twice as far away.
+      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MS * 2 - 1);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(2);
+      // A failed ask of PixlStash itself does not end the asking.
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      getPixlstashNode.mockRejectedValueOnce(new Error("network down"));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(3);
+      expect(openButton(wrapper).attributes("aria-disabled")).toBe("true");
+
+      // Never further apart than the most.
+      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MS * 4);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MAX_MS);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(5);
+      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MAX_MS);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(6);
+
+      // Focus starts the back-off over.
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(7);
+
+      getPixlstashNode.mockResolvedValue({ can_open_workflows: true });
+      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MS);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(8);
+      expect(openButton(wrapper).attributes("aria-disabled")).toBeUndefined();
+      // Answered: no more asking.
+      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MAX_MS * 3);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(8);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks again when the window regains focus, and refuses once ComfyUI stops", async () => {
+    configure();
+    const { wrapper } = await mountWith([ID], [card({ id: ID })]);
+    expect(openButton(wrapper).attributes("aria-disabled")).toBeUndefined();
+
+    getPixlstashNode.mockResolvedValue(DOWN);
+    window.dispatchEvent(new Event("focus"));
+    await flush(wrapper);
+
+    expect(openButton(wrapper).attributes("aria-disabled")).toBe("true");
+  });
+
+  it("still opens when PixlStash's own server could not be asked", async () => {
+    configure();
+    getPixlstashNode.mockRejectedValue(new Error("network down"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const { wrapper } = await mountWith([ID], [card({ id: ID })]);
     await flush(wrapper);
 
