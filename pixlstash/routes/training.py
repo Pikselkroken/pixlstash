@@ -564,8 +564,9 @@ def create_router(server) -> APIRouter:
         model_ids: list[int] = Field(
             default_factory=list,
             description=(
-                "The shelf models (LoRAs) this run made. Listing a set's runs "
-                "with ?set_id= names the LoRAs trained from that set."
+                "The shelf models (LoRAs) this run made, its stack's cover "
+                "first. Listing a set's runs with ?set_id= names the LoRAs "
+                "trained from that set."
             ),
         )
 
@@ -633,7 +634,8 @@ def create_router(server) -> APIRouter:
             default=None, description="The run's dataset snapshot, once built."
         )
         model_ids: list[int] = Field(
-            default_factory=list, description="The shelf models this run made."
+            default_factory=list,
+            description="The shelf models this run made, its stack's cover first.",
         )
 
     class SnapshotItemResponse(BaseModel):
@@ -1104,13 +1106,18 @@ def create_router(server) -> APIRouter:
         ]
 
     def _models_by_run(run_ids: list[int]) -> dict[int, list[int]]:
-        """The shelf models each run made, by run id (one query for the lot)."""
+        """The shelf models each run made, by run id (one query for the lot).
+
+        Cover first: the stack's position 0 is the row the shelf draws for a
+        closed stack, so it is the one "Go to model" opens.
+        """
         if not run_ids:
             return {}
         marks = ", ".join("?" for _ in run_ids)
         rows = server.vault.hub.fetchall(
             "SELECT id, training_run_id FROM model "
-            f"WHERE training_run_id IN ({marks}) ORDER BY id",
+            f"WHERE training_run_id IN ({marks}) "
+            "ORDER BY stack_position IS NULL, stack_position, id",
             tuple(run_ids),
         )
         models: dict[int, list[int]] = {}

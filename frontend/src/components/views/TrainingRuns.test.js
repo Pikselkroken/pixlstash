@@ -1150,6 +1150,33 @@ describe("the runs PixlStash trains (#2118)", () => {
     });
   });
 
+  it("goes to the model a run put on the shelf, its stack's cover", async () => {
+    listTrainingJobs.mockResolvedValue([
+      job({ status: "completed", completed_at: DONE_AT, model_ids: [12, 11] }),
+    ]);
+    const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
+    await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
+    await wrapper.find("[data-testid='tr-menu-model']").trigger("click");
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "models",
+      query: { model: "12" },
+    });
+  });
+
+  it("offers no Go to model for a run with nothing on the shelf", async () => {
+    listTrainingJobs.mockResolvedValue([
+      job({ status: "completed", completed_at: DONE_AT, model_ids: [] }),
+    ]);
+    const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
+    await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(true);
+    expect(wrapper.find("[data-testid='tr-menu-model']").exists()).toBe(false);
+    // Nor for one trained elsewhere: only a job knows its models.
+    await cardNamed(wrapper, "Foxglove").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(true);
+    expect(wrapper.find("[data-testid='tr-menu-model']").exists()).toBe(false);
+  });
+
   it("keeps the batch when the right-clicked card is already in it", async () => {
     const wrapper = await openWith([run("Clementine"), run("Foxglove")]);
     await tick(wrapper, "Clementine");

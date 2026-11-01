@@ -861,10 +861,18 @@ def test_a_runs_snapshot_reads_back_and_exports_what_it_trained_on():
                 "INSERT INTO model (file_kind, filename, sha256, provenance) "
                 "VALUES ('checkpoint', 'base.safetensors', 'beef', 'scanned')"
             )
+            # A stepped checkpoint ahead of the cover, so id order is not
+            # cover-first: the list must still lead with the cover.
+            step_id = conn.execute(
+                "INSERT INTO model (file_kind, kind, filename, sha256, provenance, "
+                "training_run_id, stack_position) VALUES ('adapter', 'lora', "
+                "'my_run_000000500.safetensors', 'f00d', 'trained', ?, 1)",
+                (job_id,),
+            ).lastrowid
             lora_id = conn.execute(
                 "INSERT INTO model (file_kind, kind, filename, sha256, provenance, "
-                "training_run_id) VALUES ('adapter', 'lora', 'my_run.safetensors', "
-                "'feed', 'trained', ?)",
+                "training_run_id, stack_position) VALUES ('adapter', 'lora', "
+                "'my_run.safetensors', 'feed', 'trained', ?, 0)",
                 (job_id,),
             ).lastrowid
 
@@ -900,11 +908,11 @@ def test_a_runs_snapshot_reads_back_and_exports_what_it_trained_on():
             row["id"]: row
             for row in owner.get("/training/jobs", params={"set_id": set_id}).json()
         }
-        assert rows[job_id]["model_ids"] == [lora_id]
+        assert rows[job_id]["model_ids"] == [lora_id, step_id]
         assert rows[job_id]["dataset_snapshot_id"] == body["id"]
         assert rows[bare_id]["model_ids"] == []
         detail = owner.get(f"/training/jobs/{job_id}").json()
-        assert detail["model_ids"] == [lora_id]
+        assert detail["model_ids"] == [lora_id, step_id]
         live = owner.get(f"/training/jobs/{job_id}/live").json()
         assert live["dataset_snapshot_id"] == body["id"]
 
