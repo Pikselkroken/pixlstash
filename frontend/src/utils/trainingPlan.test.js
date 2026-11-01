@@ -12,6 +12,7 @@ import {
   promptFromDisplay,
   promptLines,
   promptsEdited,
+  runName,
   sourceLabel,
   toggleTrigger,
   triggerFromName,
@@ -215,5 +216,36 @@ describe("sample prompts", () => {
     expect(promptsEdited(lines, lines)).toBe(false);
     expect(promptsEdited(lines.slice(1), lines)).toBe(true);
     expect(promptsEdited([...lines, { text: "  ", alt: null }], lines)).toBe(false);
+  });
+});
+
+describe("runName", () => {
+  it("names the subject and the model, numbered after the runs named so", () => {
+    const names = [
+      "Grandad Z-Image Turbo #1",
+      "Grandad Z-Image Turbo #3",
+      "Grandad Krea 2 Raw #7",
+      "Grandad Z-Image Turbo #2b",
+      "Grandad (grandad)",
+      null,
+    ];
+    expect(runName("Grandad", "Z-Image Turbo", names)).toBe(
+      "Grandad Z-Image Turbo #4",
+    );
+    expect(runName("Grandad", "Krea 2 Raw", names)).toBe("Grandad Krea 2 Raw #8");
+    expect(runName("Pub nights", "Z-Image Turbo", names)).toBe(
+      "Pub nights Z-Image Turbo #1",
+    );
+  });
+
+  it("starts at one, and names a LoRA when nothing else is known", () => {
+    expect(runName("", "", [])).toBe("LoRA #1");
+    expect(runName("Grandad", undefined, undefined)).toBe("Grandad #1");
+    expect(runName("  Grandad ", " Z-Image Turbo", [])).toBe(
+      "Grandad Z-Image Turbo #1",
+    );
+    const long = runName("x".repeat(300), "Z-Image Turbo", []);
+    expect(long.length).toBeLessThanOrEqual(200);
+    expect(long).toMatch(/^x+ Z-Image Turbo #1$/);
   });
 });

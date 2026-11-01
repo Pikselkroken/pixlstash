@@ -81,7 +81,8 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
       const job = byRunName.get(run.name) ?? null;
       return {
         key: `run:${run.name}`,
-        name: run.name,
+        // The job's name, not its folder's, which carries the id's suffix.
+        name: job?.name || run.name,
         run,
         job,
         live: isLive(job),

@@ -128,6 +128,33 @@ export function triggerFromName(name) {
     .replace(/[^a-z0-9]+/g, "");
 }
 
+/**
+ * A new run's name: who or what it learns, the base model, and the next
+ * number among the runs already named that way. "Grandad Z-Image Turbo #3".
+ *
+ * @param {string} subject - the person's or set's name.
+ * @param {string} model - the recipe's label.
+ * @param {string[]} names - every existing run's name.
+ */
+export function runName(subject, model, names) {
+  // The server takes 200 characters: the subject is cut, never the model,
+  // and the number keeps room for its digits.
+  const base = [
+    String(subject ?? "").trim().slice(0, 120) || "LoRA",
+    String(model ?? "").trim().slice(0, 60),
+  ]
+    .filter(Boolean)
+    .join(" ");
+  let last = 0;
+  for (const name of names || []) {
+    const rest = String(name ?? "").startsWith(`${base} #`)
+      ? String(name).slice(base.length + 2)
+      : "";
+    if (/^\d+$/.test(rest)) last = Math.max(last, Number(rest));
+  }
+  return `${base} #${last + 1}`;
+}
+
 const NUMBER = new Intl.NumberFormat("en-US");
 
 export function formatCount(n) {

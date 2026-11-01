@@ -946,7 +946,7 @@ describe("the runs PixlStash trains (#2118)", () => {
     const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
     const card = wrapper
       .findAll(".tr-card")
-      .find((c) => c.find(".tr-card-name").text() === "Clementine_abcd1234");
+      .find((c) => c.find(".tr-card-name").text() === "Clementine");
     expect(card.find(".tr-card-chip").text()).toBe("Finishing");
     await tick(wrapper, "Foxglove");
     await card.trigger("click");
@@ -959,7 +959,7 @@ describe("the runs PixlStash trains (#2118)", () => {
     const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
     const card = wrapper
       .findAll(".tr-card")
-      .find((c) => c.find(".tr-card-name").text() === "Clementine_abcd1234");
+      .find((c) => c.find(".tr-card-name").text() === "Clementine");
     expect(card.find(".tr-card-chip").text()).toBe("Training");
     expect(card.text()).toContain("1,000 / 1,500 steps");
 
@@ -1078,7 +1078,7 @@ describe("the runs PixlStash trains (#2118)", () => {
   it("opens a run it trained on a double-click, and only selects on the first click", async () => {
     listTrainingJobs.mockResolvedValue([job()]);
     const wrapper = await openWith([run("Clementine_abcd1234")]);
-    const card = cardNamed(wrapper, "Clementine_abcd1234");
+    const card = cardNamed(wrapper, "Clementine");
     // A real double-click: two clicks, the second with `detail: 2`, then dblclick.
     for (const detail of [1, 2]) {
       card.element.dispatchEvent(new MouseEvent("click", { detail, bubbles: true }));
@@ -1094,7 +1094,7 @@ describe("the runs PixlStash trains (#2118)", () => {
   it("keeps an already-selected card selected when it is double-clicked open", async () => {
     listTrainingJobs.mockResolvedValue([job()]);
     const wrapper = await openWith([run("Clementine_abcd1234")]);
-    const card = cardNamed(wrapper, "Clementine_abcd1234");
+    const card = cardNamed(wrapper, "Clementine");
     await card.trigger("click");
     for (const detail of [1, 2]) {
       card.element.dispatchEvent(new MouseEvent("click", { detail, bubbles: true }));
@@ -1107,7 +1107,7 @@ describe("the runs PixlStash trains (#2118)", () => {
   it("acts on the job as it is now, not as it was when the menu opened", async () => {
     listTrainingJobs.mockResolvedValue([job()]);
     const wrapper = await openWith([run("Clementine_abcd1234")]);
-    await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
+    await cardNamed(wrapper, "Clementine").trigger("contextmenu");
     expect(wrapper.find("[data-testid='tr-menu-stop']").exists()).toBe(true);
     listTrainingJobs.mockResolvedValue([job({ status: "stopping" })]);
     await useTrainingRunsStore().loadJobs();
@@ -1164,7 +1164,7 @@ describe("the runs PixlStash trains (#2118)", () => {
     listTrainingJobs.mockResolvedValue([job()]);
     const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
     await tick(wrapper, "Foxglove");
-    const card = cardNamed(wrapper, "Clementine_abcd1234");
+    const card = cardNamed(wrapper, "Clementine");
     await card.trigger("contextmenu");
     expect(useTrainingRunsStore().chosen).toEqual(["run:Clementine_abcd1234"]);
     await wrapper.find("[data-testid='tr-menu-open']").trigger("click");
@@ -1194,7 +1194,7 @@ describe("the runs PixlStash trains (#2118)", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     try {
       const wrapper = await openWith([run("Clementine_abcd1234")]);
-      await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
+      await cardNamed(wrapper, "Clementine").trigger("contextmenu");
       await wrapper.find("[data-testid='tr-menu-stop']").trigger("click");
       await settle(wrapper);
       expect(confirm).toHaveBeenCalled();
@@ -1207,7 +1207,7 @@ describe("the runs PixlStash trains (#2118)", () => {
   it("offers no Stop for a trained run still finishing", async () => {
     listTrainingJobs.mockResolvedValue([job({ status: "completed", completed_at: null })]);
     const wrapper = await openWith([run("Clementine_abcd1234")]);
-    await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
+    await cardNamed(wrapper, "Clementine").trigger("contextmenu");
     expect(wrapper.find("[data-testid='tr-menu-stop']").exists()).toBe(false);
     expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(true);
   });

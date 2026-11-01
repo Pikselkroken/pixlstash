@@ -51,6 +51,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
   training.createTrainingJob.mockResolvedValue({ id: 1 });
+  training.listTrainingJobs.mockResolvedValue([]);
   training.listTrainingPresets.mockResolvedValue([
     { id: "zimage-turbo", label: "Z-Image Turbo", offered: true },
   ]);
@@ -245,12 +246,16 @@ describe("startTraining", () => {
       choicesKey: store.choicesKey,
     };
     store.setPin("train.steps", 2000);
+    training.listTrainingJobs.mockResolvedValue([
+      { name: "Grandad Z-Image Turbo #1" },
+      { name: "Grandad (grandad)" },
+    ]);
     await store.startTraining();
 
     expect(training.createTrainingJob).toHaveBeenCalledWith({
       set_id: 40,
       character_id: 4,
-      name: "Grandad (grandad)",
+      name: "Grandad Z-Image Turbo #2",
       trigger_word: "grandad",
       preset: "zimage-turbo",
       subject: "person",
