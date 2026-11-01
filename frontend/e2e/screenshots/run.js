@@ -10,7 +10,7 @@
 // disagree with itself:
 //   - the title bar, from vite's build-time __APP_VERSION__ (vite.config.js)
 //   - the telemetry-consent dialog, from a runtime GET /version (App.vue),
-//     intercepted in capture.spec.js
+//     intercepted in electronApp.js
 //
 // Any argument that does not look like a version is forwarded to Playwright, so
 // `npm run screenshots 1.9.0 --headed -g main-grid` works.

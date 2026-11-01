@@ -16,6 +16,10 @@ drives the host's file manager, and execs the real server. The server also
 serves the built SPA from ``pixlstash/frontend/dist`` on the same origin, so
 cookie auth just works.
 
+``--screenshots`` lays out the work dir for the website captures and exits
+without starting the server: the Electron shell starts it instead
+(``e2e/screenshots/electron-setup.js``).
+
 Env:
     PIXLSTASH_E2E_PORT   Port to bind (default 9600).
     PIXLSTASH_E2E_COMFYUI_PORT
@@ -74,8 +78,14 @@ FAKE_RUN = REPO_ROOT / "tests" / "training" / "fake_run.py"
 
 
 def _ignore_backups(_dir, names):
-    """Skip backup / sidecar DB files when copying the fixture images."""
-    return [n for n in names if ".bck" in n]
+    """Skip backup / sidecar DB files when copying the fixture images.
+
+    Also the share-copy staging folder a desktop session leaves in a library
+    (``share_copies.SHARE_LINKS_DIRNAME``): its files are hard links to the
+    originals, which ``copytree`` writes out in full (20 GB from a 1.7 GB
+    demo-data), and nothing reads it back.
+    """
+    return [n for n in names if ".bck" in n or n == ".pixlstash-share"]
 
 
 def _strip_credentials(db_path: Path) -> None:
@@ -472,6 +482,19 @@ def main() -> int:
     config_path.write_text(json.dumps(base_config, indent=2))
 
     _harden_permissions(WORK_DIR)
+
+    if "--screenshots" in sys.argv:
+        # The website captures: the Electron shell starts this server itself
+        # (with its own port and desktop session), so only the work dir is
+        # needed. The reference folder and workflow seeds are flat colour
+        # squares the specs count on; on the marketing site they would be the
+        # first row of the grid, so they stay out. The last line printed is the
+        # config path, for the caller.
+        for key in ("e2e_reference_folder", "e2e_workflow_seed"):
+            base_config.pop(key)
+        config_path.write_text(json.dumps(base_config, indent=2))
+        print(config_path)
+        return 0
 
     print(f"[e2e-backend] starting server on http://127.0.0.1:{PORT}")
     os.execvp(
