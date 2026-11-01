@@ -272,49 +272,6 @@ def render(facets: FacetValues, layout: Layout) -> str:
     return "/".join(part if part is not None else GLOBAL_FOLDER for part in parts)
 
 
-def tree_node_folder(
-    layout: Layout,
-    *,
-    project: str | None = None,
-    person: str | None = None,
-    picture_set: str | None = None,
-    unassigned: bool = False,
-) -> str:
-    """Return the folder a node of the sidebar's Folders tree stands for.
-
-    The tree (#2448) draws ``Project › Person or Set``, then ``Global`` and
-    ``Unassigned``, from assignments. Each node is the folder :func:`render`
-    gives a picture with exactly that node's names, so a project node is
-    ``Nordvik``, a person in it ``Nordvik/Mira``, a person in no project
-    ``Global/Mira``. ``Global`` itself is a folder no picture renders to (a
-    picture with nothing past its empty project segment drops the segment), so
-    it is named directly, and ``Unassigned`` is ``layout.unfiled``.
-
-    Args:
-        layout: The library's own layout, or ``DEFAULT_LAYOUT`` when it has none.
-        project: The project's name, or None for a node in no project.
-        person: A person node's name.
-        picture_set: A set node's name.
-        unassigned: True for the Unassigned node; the names are then ignored.
-
-    Returns:
-        A ``/``-separated path relative to the library root, every component
-        passed through :func:`folder_name`, so it can never climb out of it.
-    """
-    if unassigned:
-        return layout.unfiled
-    facets: dict[Facet, list[str]] = {}
-    if project:
-        facets[Facet.PROJECT] = [project]
-    if person:
-        facets[Facet.PERSON] = [person]
-    if picture_set:
-        facets[Facet.SET] = [picture_set]
-    if not facets:
-        return GLOBAL_FOLDER
-    return render(facets, layout)
-
-
 def _components(folder: str) -> tuple[str, ...]:
     """Split a relative folder path into components, either separator.
 
@@ -680,6 +637,20 @@ def read_named_components(
         component text, so a folder-name-safe rendering of the entity (e.g.
         punctuation replaced by ``_``) still resolves to the real name.
     """
+    return [
+        reading
+        for reading in read_components(components, layout, known_names)
+        if reading is not None
+    ]
+
+
+def name_index(known_names: FacetVocabulary) -> dict[Facet, dict[str, str]]:
+    """Map each facet's folder match keys to the one name they read as.
+
+    A key two distinct names share is left out: unreadable rather than a guess
+    (see :func:`read_named_components`). Built once by a caller reading many
+    paths against one vocabulary and passed to :func:`read_components`.
+    """
     _AMBIGUOUS = object()
     name_by_key: dict[Facet, dict[str, str]] = {}
     for facet in Facet:
@@ -697,7 +668,25 @@ def read_named_components(
         name_by_key[facet] = {
             key: name for key, name in keyed.items() if name is not _AMBIGUOUS
         }
-    result: list[tuple[Facet, str]] = []
+    return name_by_key
+
+
+def read_components(
+    components: Sequence[str],
+    layout: Layout,
+    known_names: FacetVocabulary,
+    index: dict[Facet, dict[str, str]] | None = None,
+) -> list[tuple[Facet, str] | None]:
+    """:func:`read_named_components`, one entry per component consumed.
+
+    A ``Global`` component consumes its segment and names nothing, so it is
+    ``None`` here and absent there. The Media sidebar's Folders tree (#2458)
+    labels every level of a real folder with this, so it has to know which
+    component each reading belongs to, and passes *index* (from
+    :func:`name_index` over *known_names*) so it is not rebuilt per folder.
+    """
+    name_by_key = index if index is not None else name_index(known_names)
+    result: list[tuple[Facet, str] | None] = []
     global_key = _match_key(GLOBAL_FOLDER)
     next_segment = 0
     for component in components:
@@ -719,6 +708,7 @@ def read_named_components(
             # of this read as a removal, which is the whole point. A real entity
             # named ``Global`` wins: the facet search above runs first.
             next_segment += 1
+            result.append(None)
             continue
         if found is None:
             break

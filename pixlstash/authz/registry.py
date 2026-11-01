@@ -339,12 +339,15 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "§16.3.1 RED LINE (#2448): the Folders tree's Open in File Manager "
             "shows a node's folder in the host file manager (open_in_file_manager "
             "→ os.startfile/open/xdg-open - the same host-GUI spawn as "
-            "pictures/{id}/open-location). Takes ids, never a path: the folder "
-            "is rendered from entity names through folder_name and contained "
-            "in the library root. Loopback-only, allow_remote_host_ops can NOT "
-            "loosen it"
+            "pictures/{id}/open-location). Takes a path only if GET "
+            "/library/folders lists it (a folder pictures are filed in), and "
+            "its realpath is contained in the library root. Loopback-only, "
+            "allow_remote_host_ops can NOT loosen it"
         ),
     ),
+    # #2458: the Folders tree, read from where pictures are filed. Names
+    # folders relative to the library root, never a host path.
+    ("GET", "/api/v1/library/folders"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/server-config/captions"): RoutePolicy(
         _LOCAL,
         justification=(

@@ -46,7 +46,11 @@ import {
   deletePictureSet,
   addPictureToSet,
 } from "../../api/pictureSets";
-import { inspectLibraryPath, openLibraryFolder } from "../../api/libraries";
+import {
+  inspectLibraryPath,
+  listLibraryFolders,
+  openLibraryFolder,
+} from "../../api/libraries";
 import { getFolderStructureCommitStatus } from "../../api/folderStructure";
 import { deleteProject, getProjectSummary } from "../../api/projects";
 import {
@@ -2725,6 +2729,13 @@ const showsTree = computed(
   () => !scopedResourceType.value || scopedResourceType.value === "project",
 );
 
+// Folders draws the owner's disk (#2458), which no share token reads: a
+// read-only session keeps its Library list and gets no switch.
+const showsFolders = computed(() => !isReadOnly.value);
+const foldersMode = computed(
+  () => showsFolders.value && treeMode.value === "folders",
+);
+
 // Find in library: names in the tree below the switch, never picture content.
 const findQuery = ref("");
 const findInputRef = ref(null);
@@ -2847,33 +2858,51 @@ const scopeCounts = computed(() => ({
   byId: projectCounts.value,
 }));
 
-// Folders mode: the DEFAULT_LAYOUT tree.
+// Folders mode (#2458): the folders pictures are filed in, from the server.
+const libraryFolders = ref([]);
+const libraryFoldersRead = ref(false);
+// The last read failed: said in the tree, so a blank tree is never mistaken
+// for an empty library. The next refresh or mode switch reads again.
+const libraryFoldersFailed = ref(false);
+let libraryFoldersEpoch = 0;
+
+async function fetchLibraryFolders() {
+  if (!foldersMode.value) return;
+  const epoch = (libraryFoldersEpoch += 1);
+  try {
+    const { folders } = await listLibraryFolders();
+    if (epoch !== libraryFoldersEpoch) return;
+    libraryFolders.value = folders ?? [];
+    libraryFoldersRead.value = true;
+    libraryFoldersFailed.value = false;
+  } catch (err) {
+    if (epoch !== libraryFoldersEpoch) return;
+    libraryFoldersFailed.value = true;
+    console.warn("Failed to read the library's folders for the Folders tree", err);
+  }
+}
+
+watch(foldersMode, (on) => on && fetchLibraryFolders(), { immediate: true });
+
 const folderRows = computed(() =>
   folderTreeRows({
+    folders: libraryFolders.value,
     projects: sortedProjects.value,
     characters: sortedCharacters.value,
     sets: nonReferenceSets.value,
     isOpen: isTreeOpen,
     query: findQuery.value,
-    withGlobal: scopedResourceType.value !== "project",
   }),
 );
 
 function folderRowCount(row) {
-  if (row.kind === "project") return projectCounts.value[row.projectId] ?? "";
-  if (row.kind === "global") return notInProjectCount.value ?? "";
-  if (row.kind === "unassigned")
-    return categoryCounts.value[UNASSIGNED_PICTURES_ID] ?? "";
-  if (row.kind === "character") return personCountIn(row.projectId, row.entity);
-  return row.entity.picture_count ?? 0;
+  return row.count ?? "";
 }
 
 function folderRowActive(row) {
-  if (
-    !selectionOwnsHighlight.value ||
-    !branchIsScope(row.projectId, row.depth > 0 ? row.entity : null)
-  )
-    return false;
+  if (row.kind === "folder" || !selectionOwnsHighlight.value) return false;
+  const placed = row.kind === "project" || row.kind === "global" ? null : row.entity;
+  if (!branchIsScope(row.projectId, placed)) return false;
   if (row.kind === "project" || row.kind === "global")
     return isAllPicturesRowActive.value;
   if (row.kind === "unassigned")
@@ -2883,6 +2912,9 @@ function folderRowActive(row) {
   return selectedSetIdSet.value.has(row.entity.id);
 }
 
+// A row opens what the folder names, not the folder: a project or Global its
+// branch, a person inside the nearest project, a set whole. The owner's own
+// folder names nothing, so it only opens and closes.
 function openFolderRow(row, event = null) {
   if (row.kind === "project" || row.kind === "global") {
     openProjectBranch(row.projectId);
@@ -2894,8 +2926,10 @@ function openFolderRow(row, event = null) {
     inScope(row.projectId, () =>
       selectCharacter(row.entity.id, row.entity.name, event),
     );
-  } else {
+  } else if (row.kind === "set") {
     openSetRow(row.entity, event);
+  } else if (row.childCount) {
+    toggleTreeKey(row.key);
   }
 }
 
@@ -2908,7 +2942,7 @@ function openFolderRowMenu(row, event) {
   else if (row.kind === "character")
     openSidebarCtxMenu("character", row.entity, event);
   else if (row.kind === "set") openSidebarCtxMenu("set", row.entity, event);
-  // A share token cannot open a folder, so Global and Unassigned have no menu.
+  // A share token cannot open a folder, so the rest have no menu.
   else if (isReadOnly.value) return;
   else openSidebarCtxMenu("folder", null, event);
   sidebarCtxFolderRow.value = row;
@@ -2916,23 +2950,20 @@ function openFolderRowMenu(row, event) {
 
 // The folder opens on the machine running PixlStash, so a press that did
 // nothing says why: 403 is the app opened from another machine (the route is
-// loopback-only), 404 a folder nothing has been filed into yet.
+// loopback-only), 404 a folder emptied or moved since the tree was read, which
+// re-reads the tree.
 async function openFolderInFileManager(row) {
-  const node = {
-    kind: row.kind,
-    project_id: row.projectId ?? null,
-    entity_id: row.depth > 0 ? row.entity.id : undefined,
-  };
   try {
-    await openLibraryFolder(node);
+    await openLibraryFolder(row.path);
   } catch (err) {
     const status = err?.response?.status;
+    if (status === 404) fetchLibraryFolders();
     console.warn(`Failed to open the ${row.kind} folder ${row.key}`, err);
     noticeStore.warning(
       status === 403
         ? "A file manager opens on the machine running PixlStash, so this only works when you are sitting at it."
         : status === 404
-          ? `Nothing is filed in “${row.name}” on disk yet.`
+          ? `Nothing is filed in “${row.name}” any more.`
           : "Couldn't open that folder - the machine running PixlStash has no desktop file manager.",
       { key: "sidebar-open-folder" },
     );
@@ -2962,7 +2993,7 @@ function folderWashStyle(row) {
 // Every match, in the order drawn, as the navigation it opens.
 const findMatches = computed(() => {
   if (!isFinding.value) return [];
-  if (treeMode.value === "folders" && showsTree.value) {
+  if (foldersMode.value) {
     return folderRows.value
       .filter((row) => row.match)
       .map((row) => () => openFolderRow(row));
@@ -3008,10 +3039,11 @@ function searchPicturesForFind() {
 
 /**
  * A set row, in either tree: the whole set. A set is a collection made by
- * hand, its row counts all of it (`picture_count`), and nothing counts it
- * inside one project, so narrowing it to the branch's project would show a
- * grid the number beside it does not describe. A person row stays in its
- * branch's project, where its count is read.
+ * hand and nothing counts it inside one project, so a set is not narrowed to
+ * a branch's project. In Library its row counts all of it (`picture_count`);
+ * in Folders the row counts what is filed in that folder (#2458), so the
+ * grid can hold more than the number. A person row stays in its branch's
+ * project.
  */
 function openSetRow(pset, event = null) {
   inScope(showsTree.value ? WHOLE_LIBRARY : undefined, () =>
@@ -3026,12 +3058,21 @@ function expandToFind() {
 }
 
 // The Folders branch holding the selection is forced open: a project chosen
-// from anywhere (the dropdown, Back, a deep link) opens in place there.
+// from anywhere (the dropdown, Back, a deep link) opens in place there, with
+// every folder above it. Re-run when the folders first arrive, not on every
+// re-read, so a branch the owner closed stays closed.
 watch(
-  selectionBranchId,
-  (id) => {
+  [selectionBranchId, () => libraryFolders.value.length > 0],
+  ([id]) => {
     if (id === undefined) return;
-    expandTreeKeys([id == null ? "f:global" : `f:p:${id}`]);
+    const branch = libraryFolders.value.find((f) =>
+      id == null
+        ? f.kind === "global" && !f.path.includes("/")
+        : f.kind === "project" && f.entity_id === id,
+    );
+    if (!branch) return;
+    const parts = branch.path.split("/");
+    expandTreeKeys(parts.map((_, i) => `f:${parts.slice(0, i + 1).join("/")}`));
   },
   { immediate: true },
 );
@@ -3048,27 +3089,33 @@ function projectInitial(project) {
   return (project?.name || "?").trim().charAt(0).toUpperCase() || "?";
 }
 
-/** A Folders node's flyout: all of it, then its people and sets. */
+/** A Folders node's flyout: all of it (the owner's own folder, which names
+ * nothing, opens in the file manager instead), then the people and sets
+ * filed in it, each labelled by its path below the node. */
 function folderNodeItems(node) {
-  const people = sortedCharacters.value.filter((c) =>
-    inProjectBranch(c, node.projectId),
-  );
-  const sets = nonReferenceSets.value.filter((pset) =>
-    inProjectBranch(pset, node.projectId),
+  const below = `${node.row.path}/`;
+  const kids = folderTreeRows({
+    folders: libraryFolders.value,
+    projects: sortedProjects.value,
+    characters: sortedCharacters.value,
+    sets: nonReferenceSets.value,
+    isOpen: () => true,
+  }).filter(
+    (row) =>
+      row.path.startsWith(below) && (row.kind === "character" || row.kind === "set"),
   );
   return [
-    { key: "all", label: `All of ${node.label}`, run: () => openProjectBranch(node.projectId) },
-    ...(people.length ? [{ key: "h-people", section: "People" }] : []),
-    ...people.map((c) => ({
-      key: `c-${c.id}`,
-      label: c.name,
-      run: () => inScope(node.projectId, () => selectCharacter(c.id, c.name)),
-    })),
-    ...(sets.length ? [{ key: "h-sets", section: "Sets" }] : []),
-    ...sets.map((pset) => ({
-      key: `s-${pset.id}`,
-      label: pset.name,
-      run: () => openSetRow(pset),
+    node.row.kind !== "folder"
+      ? { key: "all", label: `All of ${node.label}`, run: () => openFolderRow(node.row) }
+      : {
+          key: "open",
+          label: "Open in file manager",
+          run: () => openFolderInFileManager(node.row),
+        },
+    ...kids.map((row) => ({
+      key: row.key,
+      label: row.path.slice(below.length).split("/").join(" › "),
+      run: () => openFolderRow(row),
     })),
   ];
 }
@@ -3090,7 +3137,7 @@ function scopeNodeItems() {
 }
 
 const railNodes = computed(() => {
-  if (treeMode.value === "library") {
+  if (!foldersMode.value) {
     const [list] = libraryBranches.value;
     const nodes = [];
     // A project token has one project to see, so no dropdown.
@@ -3132,30 +3179,34 @@ const railNodes = computed(() => {
     );
     return nodes;
   }
-  const nodes = sortedProjects.value.map((p) => ({
-    key: `r:p:${p.id}`,
-    kind: "folder",
-    projectId: p.id,
-    project: p,
-    label: p.name,
-  }));
-  if (scopedResourceType.value !== "project") {
-    nodes.push(
-      { key: "r:global", kind: "folder", projectId: null, label: "Global", icon: "mdi-earth" },
-      {
-        key: "r:unassigned",
-        kind: "unassigned",
-        projectId: null,
-        label: "Unassigned",
-        icon: "mdi-folder-question-outline",
-        leaf: true,
-      },
-    );
-  }
-  for (const node of nodes) {
-    if (node.kind === "folder") node.items = () => folderNodeItems(node);
-  }
-  return nodes;
+  // Folders: one button per top-level folder.
+  const icons = {
+    global: "mdi-earth",
+    unassigned: "mdi-folder-question-outline",
+    folder: "mdi-folder-outline",
+    character: "mdi-account-outline",
+    set: "mdi-image-album",
+  };
+  return folderTreeRows({
+    folders: libraryFolders.value,
+    projects: sortedProjects.value,
+    characters: sortedCharacters.value,
+    sets: nonReferenceSets.value,
+    isOpen: () => false,
+  }).map((row) => {
+    const node = {
+      key: `r:${row.key}`,
+      kind: row.kind === "unassigned" ? "unassigned" : "folder",
+      projectId: row.projectId,
+      project: row.kind === "project" ? row.entity : undefined,
+      label: row.name,
+      icon: icons[row.kind],
+      leaf: row.kind === "unassigned",
+      row,
+    };
+    if (!node.leaf) node.items = () => folderNodeItems(node);
+    return node;
+  });
 });
 
 function railNodeActive(node) {
@@ -3171,6 +3222,8 @@ function railNodeActive(node) {
       characters.value.some((c) => c.id === Number(character) && character != null)
     );
   if (node.kind === "sets") return selectedSetIdSet.value.size > 0;
+  if (node.row && !["project", "global", "unassigned"].includes(node.row.kind))
+    return folderRowActive(node.row);
   if (!branchIsScope(node.projectId)) return false;
   const onUnassigned = character === UNASSIGNED_PICTURES_ID;
   return node.leaf ? onUnassigned : !onUnassigned;
@@ -3447,6 +3500,7 @@ function refreshSidebar(options = {}) {
   fetchProjects();
   fetchSharedIds();
   fetchSidebarData();
+  fetchLibraryFolders();
 }
 
 async function fetchCharacterThumbnail(characterId) {
@@ -4603,7 +4657,7 @@ defineExpose({
           <template v-if="showsTree">
             <div class="sidebar-collapsed-divider"></div>
             <!-- One boxed button flips Library / Folders. -->
-            <div class="sidebar-collapsed-row">
+            <div v-if="showsFolders" class="sidebar-collapsed-row">
               <button
                 type="button"
                 class="sidebar-collapsed-item sidebar-rail-mode"
@@ -4918,7 +4972,7 @@ defineExpose({
                default layout files it on disk. The design system's Segmented:
                a radiogroup, since it sets a value rather than switching
                panels. -->
-          <div v-if="showsTree" class="sidebar-tree-switch">
+          <div v-if="showsFolders" class="sidebar-tree-switch">
             <Segmented
               :options="TREE_MODE_OPTIONS"
               :model-value="treeMode"
@@ -4962,7 +5016,7 @@ defineExpose({
                slot (#2159), moved under the switch, over the People and Sets
                it narrows. A project token has one project to see, so no
                dropdown; a person or set token has no switch either. -->
-          <template v-if="treeMode === 'library' || !showsTree">
+          <template v-if="!foldersMode">
             <SidebarScopeSlot
               v-if="showsTree && scopedResourceType !== 'project'"
               :projects="sortedProjects"
@@ -5610,9 +5664,9 @@ defineExpose({
             </div>
           </template>
 
-          <!-- Folders: Project › Person or Set, Global, Unassigned, from
-               assignments. Read-only about folders; people and sets keep
-               their menus and take drops. -->
+          <!-- Folders (#2458): the folders pictures are filed in, nested as
+               on disk. Read-only about folders; a level the layout reads as
+               a person or set keeps its menu and takes drops. -->
           <template v-else>
             <div
               v-for="row in folderRows"
@@ -5635,7 +5689,7 @@ defineExpose({
                       (row.kind === 'set' && dragOverSet === row.entity.id)),
                 },
               ]"
-              :style="folderWashStyle(row)"
+              :style="{ ...folderWashStyle(row), '--depth': row.depth }"
               role="button"
               tabindex="0"
               :data-testid="`sidebar-folder-${row.kind}`"
@@ -5666,6 +5720,13 @@ defineExpose({
                     : undefined
               "
             >
+              <span
+                v-for="level in row.rails"
+                :key="level"
+                class="sidebar-folder-rail"
+                :style="{ '--rail-depth': level }"
+                aria-hidden="true"
+              />
               <span
                 :class="[
                   'ps-row-glyph',
@@ -5698,6 +5759,9 @@ defineExpose({
                 <v-icon v-else-if="row.kind === 'unassigned'" size="16"
                   >mdi-folder-question-outline</v-icon
                 >
+                <v-icon v-else-if="row.kind === 'folder'" size="16">{{
+                  row.open ? "mdi-folder-open-outline" : "mdi-folder-outline"
+                }}</v-icon>
                 <img
                   v-else-if="row.kind === 'character'"
                   :src="characterThumbnails[row.entity.id] || unknownPerson"
@@ -5725,6 +5789,22 @@ defineExpose({
               </span>
               <span class="sidebar-list-count">{{ folderRowCount(row) }}</span>
             </div>
+            <p
+              v-if="libraryFoldersFailed"
+              class="sidebar-find-none"
+              data-testid="sidebar-folders-failed"
+            >
+              Couldn't read the library's folders. They are read again on the
+              next refresh.
+            </p>
+            <p
+              v-else-if="libraryFoldersRead && !libraryFolders.length"
+              class="sidebar-find-none"
+              data-testid="sidebar-folders-empty"
+            >
+              No picture is in a folder yet: they all sit at the top of the
+              library folder.
+            </p>
           </template>
 
           <!-- A pending folder read for this library: the wizard's way back

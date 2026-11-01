@@ -1309,20 +1309,26 @@
   background: var(--wash, transparent);
 }
 
-.sidebar-folder-kid {
-  --depth: 1;
-}
-
 /* A child folder's guide: under its parent's chevron, elbowing into the
-   last child. On ::before, since the refused-drop state owns ::after. */
-.sidebar-folder-kid::before {
+   last child. On ::before, since the refused-drop state owns ::after. The
+   row's --depth (set inline) indents it and places the guide. */
+.sidebar-folder-kid::before,
+.sidebar-folder-rail {
   content: "";
   position: absolute;
   top: 0;
   bottom: 0;
-  left: calc(var(--space-3) + var(--gutter-glyph) / 2);
+  left: calc(
+    var(--space-3) + (var(--depth) - 1) * var(--indent-step) +
+      var(--gutter-glyph) / 2
+  );
   border-left: 1px solid var(--tree-guide);
   pointer-events: none;
+}
+
+/* An ancestor's guide running on through a deeper row (#2458). */
+.sidebar-folder-rail {
+  --depth: var(--rail-depth);
 }
 
 .sidebar-folder-kid--last::before {

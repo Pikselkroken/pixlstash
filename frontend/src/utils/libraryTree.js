@@ -38,92 +38,104 @@ export function findMatch(name, query) {
   };
 }
 
+// Siblings in the Folders tree: projects, people, sets, the owner's own
+// folders, then Global and Unassigned last, as the layout writes them.
+const KIND_ORDER = { project: 0, character: 1, set: 2, folder: 3, global: 4, unassigned: 5 };
+
 /**
- * The Folders tree as `DEFAULT_LAYOUT` files the library (Project › Person or
- * Set, then Global, then Unassigned), flattened into the rows the sidebar
- * draws. Folders come from assignments, so a person in two projects is a
- * folder in both, and every set of a project sits directly under it (a set
- * nested under a person or set in Library is still its own folder on disk).
+ * The Folders tree (#2458): the folders pictures are filed in, as
+ * `GET /library/folders` lists them, nested as they are on disk and flattened
+ * into the rows the sidebar draws. A level the library's layout reads as a
+ * project, person or set carries that entity (its menu, its drops, its click);
+ * one whose entity is not in the given lists is drawn as a plain folder.
  *
  * With a query, only folders whose name matches or that hold a match are
  * drawn, opened for the search; a folder kept only as context is `dim`.
  * Global and Unassigned are not names, so a search never matches them.
  *
  * @param {Object} opts
- * @param {Array<Object>} opts.projects - sorted project rows.
- * @param {Array<Object>} opts.characters - sorted character rows.
- * @param {Array<Object>} opts.sets - sorted, non-reference set rows.
+ * @param {Array<Object>} opts.folders - `{path, name, kind, entity_id,
+ *   project_id, count}`, every ancestor of a folder included.
+ * @param {Array<Object>} opts.projects - project rows.
+ * @param {Array<Object>} opts.characters - character rows.
+ * @param {Array<Object>} opts.sets - non-reference set rows.
  * @param {(key: string) => boolean} opts.isOpen - the remembered expand state.
  * @param {string} [opts.query] - the Find text.
- * @param {boolean} [opts.withGlobal=true] - false for a project share token,
- *   whose tree is rooted at its own project.
- * @returns {Array<Object>} rows: `{key, kind, depth, projectId, entity, name,
- *   childCount, open, match, dim}`, plus `last` on a child; `kind` is
- *   project, global, unassigned, character or set.
+ * @returns {Array<Object>} rows: `{key, path, kind, depth, projectId, entity,
+ *   name, count, childCount, open, match, dim, last, rails}`; `kind` is
+ *   project, character, set, folder, global or unassigned, and `rails` the
+ *   depths of the ancestors whose guide line runs on through the row.
  */
 export function folderTreeRows({
+  folders,
   projects,
   characters,
   sets,
   isOpen,
   query = "",
-  withGlobal = true,
 }) {
   const finding = Boolean((query || "").trim());
-  const tops = projects.map((p) => ({
-    key: `f:p:${p.id}`,
-    kind: "project",
-    projectId: p.id,
-    entity: p,
-    name: p.name,
-  }));
-  if (withGlobal) {
-    tops.push(
-      { key: "f:global", kind: "global", projectId: null, name: "Global" },
-      { key: "f:unassigned", kind: "unassigned", projectId: null, name: "Unassigned" },
-    );
+  const byId = {
+    project: new Map(projects.map((e) => [e.id, e])),
+    character: new Map(characters.map((e) => [e.id, e])),
+    set: new Map(sets.map((e) => [e.id, e])),
+  };
+  const nodes = new Map();
+  const tops = [];
+  for (const folder of folders) {
+    const entity = byId[folder.kind]?.get(folder.entity_id) ?? null;
+    const kind = byId[folder.kind] && !entity ? "folder" : folder.kind;
+    const node = {
+      key: `f:${folder.path}`,
+      path: folder.path,
+      kind,
+      entity,
+      projectId: folder.project_id ?? null,
+      name: folder.name,
+      count: folder.count,
+      match:
+        kind === "global" || kind === "unassigned"
+          ? null
+          : findMatch(folder.name, query),
+      children: [],
+    };
+    nodes.set(folder.path, node);
+    const cut = folder.path.lastIndexOf("/");
+    const parent = cut < 0 ? null : nodes.get(folder.path.slice(0, cut));
+    (parent ? parent.children : tops).push(node);
   }
+  const order = (a, b) =>
+    KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || a.name.localeCompare(b.name);
+  const held = new Map();
+  const holds = (node) => {
+    if (!held.has(node)) {
+      held.set(node, Boolean(node.match) || node.children.some(holds));
+    }
+    return held.get(node);
+  };
 
   const rows = [];
-  for (const top of tops) {
-    const kids =
-      top.kind === "unassigned"
-        ? []
-        : [
-            ...characters
-              .filter((c) => inProjectBranch(c, top.projectId))
-              .map((c) => ({ kind: "character", entity: c })),
-            ...sets
-              .filter((s) => inProjectBranch(s, top.projectId))
-              .map((s) => ({ kind: "set", entity: s })),
-          ].map((kid) => ({
-            ...kid,
-            key: `${top.key}/${kid.kind === "character" ? "c" : "s"}:${kid.entity.id}`,
-            depth: 1,
-            projectId: top.projectId,
-            name: kid.entity.name,
-            childCount: 0,
-            open: false,
-            match: findMatch(kid.entity.name, query),
-            dim: false,
-          }));
-    const topMatch = top.kind === "project" ? findMatch(top.name, query) : null;
-    const shownKids = finding ? kids.filter((k) => k.match) : kids;
-    if (finding && !topMatch && !shownKids.length) continue;
-    const open = finding ? shownKids.length > 0 : isOpen(top.key);
-    rows.push({
-      ...top,
-      depth: 0,
-      childCount: kids.length,
-      open,
-      match: topMatch,
-      dim: finding && !topMatch,
+  const emit = (siblings, depth, rails) => {
+    const shown = (finding ? siblings.filter(holds) : siblings).sort(order);
+    shown.forEach((node, i) => {
+      const { children, ...row } = node;
+      const shownKids = finding ? children.filter(holds) : children;
+      const open = finding ? shownKids.length > 0 : isOpen(node.key);
+      const last = i === shown.length - 1;
+      rows.push({
+        ...row,
+        depth,
+        childCount: children.length,
+        open,
+        dim: finding && !node.match,
+        last,
+        rails,
+      });
+      // A level whose row has siblings still to come keeps its guide running
+      // past this row's children.
+      if (open) emit(children, depth + 1, depth > 0 && !last ? [...rails, depth] : rails);
     });
-    if (open) {
-      rows.push(
-        ...shownKids.map((kid, i) => ({ ...kid, last: i === shownKids.length - 1 })),
-      );
-    }
-  }
+  };
+  emit(tops, 0, []);
   return rows;
 }

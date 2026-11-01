@@ -5375,7 +5375,7 @@ Without it, a filter needs no payload to answer the hidden question: `GET /pictu
 | Query parameter | `?project_id=7` | `enforce_project_filter_scope` (the gate, every declared route) |
 | Path segment, numeric | `/projects/{project_id}/summary` | the registry's `PROJECT_SCOPED` declaration; the gate resolves the id before the handler, so a missing project and an invisible one both 403 |
 | Path segment, name or id-or-name | `/projects/{project_name}/picture_sets/{set_name}`, `/projects/{id_or_name}` | `enforce_project_path_scope`, inline in the 4 `resolved_inline` handlers (§16.1) — see below |
-| Body / form field, **declared** | `POST /pictures/import`, `POST /pictures/import/staging`, `POST /reviews`, `POST /tag_suggestions/bulk-accept`, `POST /tag_suggestions/scan`, `POST /workflows/run`, `POST /workflows/run/preflight`, `POST /library/folders/open` | **nothing.** They are safe only because they are writes: a resource-scoped token can only be minted `READ` (§16.2 item 4) and `auth.py` blocks a non-`GET` for a `READ` token unless the path is in `READ_SAFE_POST_PATHS`, which none of these is. Adding one of them to that frozenset opens the hole. |
+| Body / form field, **declared** | `POST /pictures/import`, `POST /pictures/import/staging`, `POST /reviews`, `POST /tag_suggestions/bulk-accept`, `POST /tag_suggestions/scan`, `POST /workflows/run`, `POST /workflows/run/preflight` | **nothing.** They are safe only because they are writes: a resource-scoped token can only be minted `READ` (§16.2 item 4) and `auth.py` blocks a non-`GET` for a `READ` token unless the path is in `READ_SAFE_POST_PATHS`, which none of these is. Adding one of them to that frozenset opens the hole. |
 | Body / form field, **opaque (`payload: dict`)** | known: `PATCH /pictures/project`, `POST /characters`, `POST /picture_sets`, `PATCH /picture_sets/{id}` — **and this list cannot be shown complete** | **nothing, and nothing can enumerate them.** Same write-only argument as the row above, but the *set* is a blind spot: see below. |
 | Value-typed discriminator | `?resource_type=project&resource_id=7` | **nothing, and nothing name-based can.** An argument for keeping that pattern off read-filter routes. |
 
@@ -8641,6 +8641,27 @@ host-filesystem authority any route in this library exercises. It is above
 is the check that matters; here the caller names none and the scope is the whole
 library, so there is nothing for the gate to bound and the tier carries it. The
 GET is on `READ_BLOCKED_GET_PATHS` beside `GET /server-config/layout`.
+
+**The Media sidebar's Folders tree reads where files are (#2458).**
+`layout_move_service.library_folder_tree` groups the library root's pictures
+(not deleted, not in a reference folder, not at the root itself) by the folder
+their stored `file_path` is in, counting each folder and every folder above it,
+and never walks the disk, so a folder holding no picture is not listed and every
+listed one exists. Each level is labelled with `library_layout.read_components`
+(`read_named_components` with one entry per component, `None` for a consumed
+`Global`) against the library's layout, or `DEFAULT_LAYOUT` when it has none: a
+level naming one project, person or set carries its id, a name two entities
+share is a plain `folder` rather than a guess, everything below the layout's
+reach is a `folder`, and a top-level unreadable `layout.unfiled` is
+`unassigned`. `GET /library/folders` (owner only) serves it; `POST
+/library/folders/open` (loopback only) opens a `path` only if that list holds
+it, then contains its realpath in the library root. It builds the name index once
+(`library_layout.name_index`) and reads every folder against it: about 0.5 s
+for 100k pictures in 2.4k folders, run on each sidebar refresh while Folders is
+showing and once per open. A top-level `Global` is `global`; one below a project
+(`Nordvik/Global/Beach`) is a plain folder of that project. A stored path that
+only reaches the root through a symlink (so climbs out of it relatively) is
+left out.
 
 ### 24.5 Reconciling moves made outside PixlStash
 

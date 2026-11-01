@@ -53,7 +53,6 @@ from pixlstash.utils.library_layout import (
     reconcile_move,
     relocate,
     render,
-    tree_node_folder,
 )
 
 # The library the cases below are judged against: two projects, two people, one
@@ -3030,19 +3029,124 @@ def test_a_move_still_in_flight_is_deferred_rather_than_purged(library):
     assert session.exec(select(DeletedFileLog)).all() == []
 
 
-def test_tree_node_folder_names_each_folders_tree_node():
-    """The sidebar's Folders tree (#2448): every node is the folder render()
-    gives a picture with exactly its names, plus Global and Unassigned."""
-    layout = DEFAULT_LAYOUT
-    assert tree_node_folder(layout, project="Nordvik") == "Nordvik"
-    assert tree_node_folder(layout, project="Nordvik", person="Mira") == "Nordvik/Mira"
-    assert tree_node_folder(layout, project="Nordvik", picture_set="Shoot") == (
-        "Nordvik/Shoot"
+# ---------------------------------------------------------------------------
+# The Media sidebar's Folders tree (#2458): where pictures are filed
+# ---------------------------------------------------------------------------
+
+
+def _file(session, path, **fields):
+    picture = Picture(file_path=path, **fields)
+    session.add(picture)
+    session.commit()
+    return picture
+
+
+def test_the_folders_tree_is_where_pictures_are_filed(library, tmp_path):
+    """A folder is drawn only where a picture is filed, nested as on disk, and
+    a level the layout reads carries its entity; a set with nothing under its
+    own name is no folder, and deleted, reference and root-level pictures add
+    nothing."""
+    session = library["session"]
+    beach = PictureSet(name="Beach")
+    empty_set = PictureSet(name="Never filed")
+    external = ReferenceFolder(folder=str(tmp_path / "theirs"), label="theirs")
+    session.add_all([beach, empty_set, external])
+    session.commit()
+    _file(session, "2024 Shoots/Beach/b.png")
+    _file(session, "Global/Mira/c.png")
+    _file(session, "Unassigned/d.png")
+    _file(session, "loose.png")
+    _file(session, "Gone/e.png", deleted=True)
+    _file(
+        session,
+        str(tmp_path / "theirs" / "Elsewhere" / "f.png"),
+        reference_folder_id=external.id,
     )
-    assert tree_node_folder(layout, person="Mira") == "Global/Mira"
-    assert tree_node_folder(layout) == "Global"
-    assert tree_node_folder(layout, project="Nordvik", unassigned=True) == (
-        layout.unfiled
-    )
-    # A name never climbs out of the library root.
-    assert ".." not in tree_node_folder(layout, project="..", person="../x").split("/")
+
+    project_id, person_id = library["project_id"], library["person_id"]
+    assert engine.library_folder_tree(session, library["root"]) == [
+        {
+            "path": "2024 Shoots",
+            "name": "2024 Shoots",
+            "kind": "project",
+            "entity_id": project_id,
+            "project_id": project_id,
+            "count": 2,
+        },
+        {
+            "path": "2024 Shoots/Beach",
+            "name": "Beach",
+            "kind": "set",
+            "entity_id": beach.id,
+            "project_id": project_id,
+            "count": 1,
+        },
+        {
+            "path": "2024 Shoots/Mira",
+            "name": "Mira",
+            "kind": "character",
+            "entity_id": person_id,
+            "project_id": project_id,
+            "count": 1,
+        },
+        {
+            "path": "2024 Shoots/Mira/2026-08",
+            "name": "2026-08",
+            "kind": "folder",
+            "entity_id": None,
+            "project_id": project_id,
+            "count": 1,
+        },
+        {
+            "path": "Global",
+            "name": "Global",
+            "kind": "global",
+            "entity_id": None,
+            "project_id": None,
+            "count": 1,
+        },
+        {
+            "path": "Global/Mira",
+            "name": "Mira",
+            "kind": "character",
+            "entity_id": person_id,
+            "project_id": None,
+            "count": 1,
+        },
+        {
+            "path": "Unassigned",
+            "name": "Unassigned",
+            "kind": "unassigned",
+            "entity_id": None,
+            "project_id": None,
+            "count": 1,
+        },
+    ]
+
+
+def test_the_folders_tree_nests_by_the_librarys_own_layout(library):
+    """Under Project › Person › Set a set's folder sits inside the person's, and
+    a name two people share is a plain folder rather than a guess at one."""
+    session = library["session"]
+    settings = session.exec(select(LibrarySettings)).one()
+    settings.layout = "project/person/set"
+    beach = PictureSet(name="Beach")
+    session.add_all([settings, beach, Character(name="Anna"), Character(name="Anna")])
+    session.commit()
+    _file(session, "2024 Shoots/Mira/Beach/x.png")
+    _file(session, "2024 Shoots/Anna/y.png")
+    _file(session, "2024 Shoots/Global/Beach/z.png")
+
+    by_path = {
+        folder["path"]: folder
+        for folder in engine.library_folder_tree(session, library["root"])
+    }
+    nested = by_path["2024 Shoots/Mira/Beach"]
+    assert (nested["kind"], nested["entity_id"]) == ("set", beach.id)
+    assert "2024 Shoots/Beach" not in by_path
+    shared = by_path["2024 Shoots/Anna"]
+    assert (shared["kind"], shared["entity_id"]) == ("folder", None)
+    assert shared["project_id"] == library["project_id"]
+    # A Global inside a project is no person within it, not "in no project".
+    inner = by_path["2024 Shoots/Global"]
+    assert (inner["kind"], inner["project_id"]) == ("folder", library["project_id"])
