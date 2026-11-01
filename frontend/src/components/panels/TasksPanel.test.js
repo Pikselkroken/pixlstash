@@ -1323,6 +1323,13 @@ describe("the GPU queue in the task manager", () => {
       TextEmbeddingTask: { label: "Text embeddings", current: 9, total: 9, running: false, active: true },
       ImageEmbeddingTask: { label: "Image embeddings", current: 5, total: 9, running: true, active: true },
     };
+    // Its last batch still counts in the minute's rate; it is done all the same.
+    tasksStore.series = {
+      TextEmbeddingTask: [
+        { t: 100, rate: 0, current: 1 },
+        { t: 110, rate: 0.8, current: 9 },
+      ],
+    };
     localStorage.setItem("pixlstash:tasks:pixlstash-fold", "1");
     const wrapper = mount(TasksPanel, globalOpts);
     const rows = wrapper.findAll('[data-testid="tm-pixl-child"]');

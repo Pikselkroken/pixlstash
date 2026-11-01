@@ -927,11 +927,12 @@ function childProgress(child) {
 }
 
 /**
- * A worker that has worked through all it was given and is not moving: a
- * check in place of its dot, and no chart or figure.
+ * A worker that has worked through all it was given and is not running: a
+ * check in place of its dot, and no chart or figure. Its own `running`, not
+ * the rate: the rate averages a minute and outlives the row's grace.
  */
 function childDone(child) {
-  if (!child.snapshot || child.stopped || child.mb || childRunning(child)) return false;
+  if (!child.snapshot || child.stopped || child.mb || child.snapshot.running) return false;
   const total = Number(child.snapshot.total || 0);
   return total > 0 && Number(child.snapshot.current || 0) >= total;
 }
