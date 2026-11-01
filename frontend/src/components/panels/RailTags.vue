@@ -1377,12 +1377,18 @@ async function onDrop(to) {
 const libraryCounts = computed(
   () =>
     new Map(
-      library.value.map((row) => [String(row.tag).toLowerCase(), row.count]),
+      library.value.map((row) => [String(row.tag), row.count]),
     ),
 );
 
 function dropCountText(names) {
-  const counts = names.map((name) => libraryCounts.value.get(name.toLowerCase()));
+  // Tags are case-sensitive names ("Hair" and "hair" are two), so the exact
+  // name first; the lower-case spelling only when the exact one is unknown.
+  const counts = names.map(
+    (name) =>
+      libraryCounts.value.get(name) ??
+      libraryCounts.value.get(name.toLowerCase()),
+  );
   if (counts.some((c) => c == null)) {
     return `on every picture that carries ${names.length > 1 ? "them" : "it"}`;
   }

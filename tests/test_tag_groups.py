@@ -1568,3 +1568,21 @@ def test_positional_cells_are_held_to_the_column_limit():
         archive.writestr("xl/worksheets/sheet1.xml", sheet)
     with pytest.raises(xlsx_reader.XlsxError):
         list(xlsx_reader.iter_first_sheet_rows(buf.getvalue()))
+
+
+def test_categories_whose_tags_are_all_kept_do_not_count_against_the_cap(
+    client, server, use_defaults
+):
+    use_defaults({})
+    mine = _create(client, "Mine")
+    tags = [f"kept-{n}" for n in range(51)]
+    assert _assign(client, tags, mine).status_code == 200
+    rows = [["english", "category"]] + [[t, f"Saga {n}"] for n, t in enumerate(tags)]
+
+    kept = _import(client, _csv(rows), "kept.csv", dry_run=True)
+    assert kept.status_code == 200, kept.text
+    assert kept.json()["plan"]["groups_created"] == []
+    assert kept.json()["plan"]["user_conflicts"] == 51
+    moved = _import(client, _csv(rows), "kept.csv", dry_run=True, overwrite=True)
+    assert moved.status_code == 400, moved.text
+    assert "51 categories" in moved.json()["detail"]

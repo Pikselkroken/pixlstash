@@ -745,20 +745,6 @@ def import_tags_in_session(
         ).all()
         # Keyed by casefold: "Artist" and "artist" are one group, not two.
         by_key = {g.name.casefold(): g for g in groups}
-        # Counted over the whole file, so the refusal names every category the
-        # file asks for.
-        unknown = {
-            name.casefold()
-            for name in targets.values()
-            if name.casefold() not in by_key
-        }
-        if len(unknown) > MAX_IMPORT_NEW_GROUPS:
-            raise TagGroupError(
-                400,
-                f"The file has {len(unknown)} categories that are not groups yet; "
-                f"an import may create at most {MAX_IMPORT_NEW_GROUPS}",
-            )
-
         filings = _filings_of(session, sorted(targets))
         changes: list[tuple[str, str, Optional[tuple[int, bool]]]] = []
         conflicts: list[str] = []
@@ -789,6 +775,15 @@ def import_tags_in_session(
             if key not in by_key and key not in created_keys:
                 created_keys.add(key)
                 groups_created.append(name)
+        # Counted over the groups this import would really make: a category
+        # whose tags are all kept (the user's own filings, without overwrite)
+        # makes none, so it does not count against the cap.
+        if len(groups_created) > MAX_IMPORT_NEW_GROUPS:
+            raise TagGroupError(
+                400,
+                f"The file has {len(groups_created)} categories that are not groups "
+                f"yet; an import may create at most {MAX_IMPORT_NEW_GROUPS}",
+            )
         plan = {
             "rows": len(rows),
             "filed": len(changes),

@@ -23,6 +23,9 @@ vi.mock("../../api/tags", () => ({
     { tag: "filing cabinet", count: 3 },
     { tag: "film grain", count: 412 },
     { tag: "rain", count: 9 },
+    // Another tag that differs only in case: the drop label must not mix
+    // their counts ("rain" stays on 9 pictures).
+    { tag: "Rain", count: 77 },
   ]),
 }));
 vi.mock("../../api/config", () => ({
