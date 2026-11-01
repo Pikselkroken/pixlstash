@@ -1305,7 +1305,16 @@ describe("the GPU queue in the task manager", () => {
     expect(rows[1].find(".tm-fig-text").text()).toBe("1.2 GB");
     expect(rows[0].find(".tm-fig-text").text()).toBe("");
     expect(rows[1].find(".tm-mark").classes("tm-mark--running")).toBe(true);
-    expect(wrapper.find(".tm-worker-row").exists()).toBe(false);
+    // The rate and what is left are the tooltip's, and read out with the row.
+    tasksStore.series = {
+      TagTask: [
+        { t: 100, rate: 0, current: 1 },
+        { t: 110, rate: 2, current: 21 },
+      ],
+    };
+    await flushPromises();
+    const tagRow = fold.findAll('[data-testid="tm-pixl-child"]')[1];
+    expect(tagRow.find(".visually-hidden").text()).toBe(", 2.0/s · 8 to go");
   });
 
   it("checks off a worker that has finished, with no chart and no figure", () => {

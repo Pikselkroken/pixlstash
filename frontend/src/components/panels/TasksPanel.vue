@@ -207,6 +207,11 @@
                     childProgress(child)
                   }}</span>
                 </span>
+                <!-- The tooltip is hover-only on a row with no focus stop, so
+                     what it says is read out here too. -->
+                <span v-if="childDetail(child)" class="visually-hidden"
+                  >, {{ childDetail(child) }}</span
+                >
                 <span class="tm-child-spark">
                   <canvas
                     v-if="child.snapshot && !childDone(child)"
@@ -938,9 +943,9 @@ function childFigure(child) {
   return child.mb ? formatGb(child.mb) : "";
 }
 
-/** A fold child's tooltip: its name, why it is unusual, its rate and what is left. */
-function childTip(child) {
-  const parts = [childName(child)];
+/** Why a fold child is unusual, its rate and what is left: its tooltip after its name. */
+function childDetail(child) {
+  const parts = [];
   if (child.stopped) parts.push(child.text || "Stopped to make room; nothing was lost");
   else if (child.onCpu) parts.push("Running on the CPU");
   const rate = child.snapshot ? tmGetLatestRate(child.workerKey) : 0;
@@ -949,6 +954,10 @@ function childTip(child) {
   const left = Number(progress?.total || 0) - Number(progress?.current || 0);
   if (Number(progress?.total) > 0 && left > 0) parts.push(`${left} to go`);
   return parts.join(" · ");
+}
+
+function childTip(child) {
+  return [childName(child), childDetail(child)].filter(Boolean).join(" · ");
 }
 
 /** The fold's tooltip: its size, and anything unusual about its tasks. */
@@ -2017,9 +2026,9 @@ const tmSystemItems = computed(() => {
 
 /* The parent's app mark: the padlock, as the resource-usage footer draws it. */
 .tm-app-logo {
-  width: 16px;
-  height: 16px;
-  margin: 1px;
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+  margin: calc(var(--space-1) / 2);
   color: rgb(var(--v-theme-on-surface));
 }
 
