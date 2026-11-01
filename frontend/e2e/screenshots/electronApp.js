@@ -68,7 +68,7 @@ function standInHardware(body) {
     }
     for (const holder of resources.holders ?? []) holder.device = STAND_IN_GPU.uuid
     if (resources.ram) {
-      const used = resources.ram.total_mb - resources.ram.available_mb
+      const used = Math.min(resources.ram.total_mb - resources.ram.available_mb, STAND_IN_RAM_MB)
       resources.ram.total_mb = STAND_IN_RAM_MB
       resources.ram.available_mb = STAND_IN_RAM_MB - used
     }
@@ -77,11 +77,15 @@ function standInHardware(body) {
   // The percentage alone gives the real total away (used / percent).
   if (usage?.ram_used_gb != null) {
     usage.ram_total_gb = STAND_IN_RAM_MB / 1024
+    usage.ram_used_gb = Math.min(usage.ram_used_gb, usage.ram_total_gb)
     usage.ram_percent = (usage.ram_used_gb / usage.ram_total_gb) * 100
   }
   if (usage?.vram_total_gb) {
     usage.vram_total_gb = STAND_IN_GPU.total_mb / 1024
-    if (usage.vram_used_gb != null) usage.vram_percent = (usage.vram_used_gb / usage.vram_total_gb) * 100
+    if (usage.vram_used_gb != null) {
+      usage.vram_used_gb = Math.min(usage.vram_used_gb, usage.vram_total_gb)
+      usage.vram_percent = (usage.vram_used_gb / usage.vram_total_gb) * 100
+    }
   }
   return body
 }
