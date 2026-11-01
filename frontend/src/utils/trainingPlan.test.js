@@ -244,8 +244,8 @@ describe("runName", () => {
     expect(runName("  Grandad ", " Z-Image Turbo", [])).toBe(
       "Grandad Z-Image Turbo #1",
     );
-    expect(runName("x".repeat(300), "Z-Image Turbo", []).length).toBeLessThanOrEqual(
-      200,
-    );
+    const long = runName("x".repeat(300), "Z-Image Turbo", []);
+    expect(long.length).toBeLessThanOrEqual(200);
+    expect(long).toMatch(/^x+ Z-Image Turbo #1$/);
   });
 });

@@ -137,11 +137,14 @@ export function triggerFromName(name) {
  * @param {string[]} names - every existing run's name.
  */
 export function runName(subject, model, names) {
-  // The server takes 200 characters; the number needs a few of them.
-  const base = [String(subject ?? "").trim() || "LoRA", String(model ?? "").trim()]
+  // The server takes 200 characters: the subject is cut, never the model,
+  // and the number keeps room for its digits.
+  const base = [
+    String(subject ?? "").trim().slice(0, 120) || "LoRA",
+    String(model ?? "").trim().slice(0, 60),
+  ]
     .filter(Boolean)
-    .join(" ")
-    .slice(0, 180);
+    .join(" ");
   let last = 0;
   for (const name of names || []) {
     const rest = String(name ?? "").startsWith(`${base} #`)
