@@ -204,7 +204,7 @@ export function useGridDragDrop(
       noticeStore.warning(
         carriedFiles
           ? "None of those files are a supported image, video or archive."
-          : "That drop carried no files. A very large drag can lose them on the way in: drag fewer at a time, or use Import.",
+          : "That drop carried no files. If you dragged a lot of files at once, drag fewer at a time, or use Import.",
         { key: "import-unsupported-files" },
       );
       return;

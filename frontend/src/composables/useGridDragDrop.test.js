@@ -172,9 +172,14 @@ describe("a drop on the grid that imports nothing", () => {
 
   it("still says the files are unsupported when it held only unsupported files", async () => {
     delete window.pixlstashDesktop;
-    await grid().handleGridDrop(
-      drop(["Files"], [new File(["x"], "notes.psd", { type: "image/vnd.adobe.photoshop" })]),
-    );
+    const event = drop(["Files"], [
+      new File(["x"], "notes.psd", { type: "image/vnd.adobe.photoshop" }),
+    ]);
+    const done = grid().handleGridDrop(event);
+    // The browser empties the payload once dispatch is over: a check made
+    // after the walk's await would read no types and blame a missing file.
+    event.dataTransfer.types = [];
+    await done;
     const last = useNoticeStore().notices.at(-1);
     expect(last.text).toContain("None of those files are a supported");
   });
