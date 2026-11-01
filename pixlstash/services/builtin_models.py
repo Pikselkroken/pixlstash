@@ -273,7 +273,8 @@ class DeclaredEntry:
 
 
 # Mirrors `pixlstash_tagger.PIXLSTASH_TAGGER_FILENAME` /
-# `..._META_FILENAME`, `wd14.WD14_CSV_FILE`, and
+# `..._META_FILENAME` / `..._CONFIG_FILENAME` / `..._LICENSE_FILENAME`,
+# `wd14.WD14_CSV_FILE`, and
 # `ImageEmbeddingTask.AESTHETIC_MODELS`. Pinned by tests/test_builtin_models.py.
 BUILTIN_ENGINES: tuple[BuiltinEngine, ...] = (
     BuiltinEngine(
@@ -286,6 +287,8 @@ BUILTIN_ENGINES: tuple[BuiltinEngine, ...] = (
         # reads it to decide whether the pinned revision has moved.
         companions=(
             "pixlstash-anomaly-tagger_meta.json",
+            "pixlstash-anomaly-tagger_dinov3_config.json",
+            "pixlstash-anomaly-tagger_LICENSE.md",
             "pixlstash-anomaly-tagger.revision",
         ),
     ),

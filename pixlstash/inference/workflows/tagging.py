@@ -649,14 +649,14 @@ class TaggingWorkflow:
     def _pixlstash_tagger_memory_model(self) -> tuple[int, int]:
         """Return ``(base_mb, per_item_mb)`` for the tagger on this device.
 
-        Two measurements, not one scaled guess. The CUDA pair is the figure the
-        tagger has always used; the MPS pair was measured on Apple Silicon as
-        fresh-process peak device memory at batch 8, and differs enough
-        (450 + 240n against 700 + 90n) that reusing either for the other would
-        misprice the batch in opposite directions.
+        Two device models, not one. The CUDA pair is the figure the tagger has
+        always used; the MPS pair is sized for Apple Silicon's unified memory
+        (see ``vram_budget.py`` for how it was derived), and differs enough
+        (450 + 340n against 700 + 90n) that reusing either for the other would
+        misprice the batch.
 
         The MPS per-item figure also follows the dtype, because the tagger runs
-        fp16 there and that halves the per-image cost - which is most of why
+        fp16 there and that lowers the per-image cost - which is most of why
         fp16 was adopted on MPS at all.
 
         Returns:
