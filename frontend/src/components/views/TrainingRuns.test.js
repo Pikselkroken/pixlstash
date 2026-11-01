@@ -425,6 +425,44 @@ describe("drawing the grid", () => {
     expect(srcs[0]).toContain("s_500_0.jpg");
     expect(srcs[1]).toContain("s_500_1.jpg");
   });
+
+  it("reserves a slot per prompt while a step's samples are still landing", async () => {
+    // Three prompts, and step 500 has drawn only the second so far: the strip
+    // keeps three slots in prompt order rather than shrinking to one frame.
+    const wrapper = await openWith([
+      run("Clementine", {
+        sample_prompts: ["a", "b", "c"],
+        samples: [
+          { filename: "s_250_0.jpg", step: 250, index: 0 },
+          { filename: "s_250_1.jpg", step: 250, index: 1 },
+          { filename: "s_500_1.jpg", step: 500, index: 1 },
+        ],
+      }),
+    ]);
+    const slots = wrapper.findAll(".tr-card-strip > *");
+    expect(slots.map((el) => el.element.tagName)).toEqual(["SPAN", "IMG", "SPAN"]);
+    expect(slots[1].attributes("src")).toContain("s_500_1.jpg");
+    expect(wrapper.findAll(".tr-card-blank")).toHaveLength(2);
+    // No job is training it, so nothing is coming: the blanks hold still.
+    expect(wrapper.findAll(".tr-card-blank--live")).toHaveLength(0);
+  });
+
+  it("counts slots from the samples when the config names no prompts", async () => {
+    const wrapper = await openWith([
+      run("Clementine", {
+        samples: [
+          { filename: "s_250_0.jpg", step: 250, index: 0 },
+          { filename: "s_250_1.jpg", step: 250, index: 1 },
+          { filename: "s_500_0.jpg", step: 500, index: 0 },
+        ],
+      }),
+    ]);
+    expect(wrapper.findAll(".tr-card-strip > *")).toHaveLength(2);
+    expect(wrapper.find(".tr-card-strip img").attributes("src")).toContain(
+      "s_500_0.jpg",
+    );
+    expect(wrapper.findAll(".tr-card-blank")).toHaveLength(1);
+  });
 });
 
 describe("choosing runs", () => {

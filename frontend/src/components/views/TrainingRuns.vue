@@ -150,16 +150,26 @@
                  what it has learned so far, on prompts that stay the same
                  across runs so two cards are comparable (see `stripOf`).
                  `loading="lazy"`, because a run carries up to 130 samples and
-                 only visible cards need to fetch. -->
+                 only visible cards need to fetch. One slot per prompt from the
+                 start, so the strip does not re-lay itself from 1 to 4 frames
+                 as a step's samples land; a slot not drawn yet is a blank
+                 tile, pulsing while the run is live. -->
             <div v-if="stripOf(card).length" class="tr-card-strip">
-              <img
-                v-for="url in stripOf(card)"
-                :key="url"
-                class="tr-card-preview"
-                :src="url"
-                alt=""
-                loading="lazy"
-              />
+              <template v-for="(url, slot) in stripOf(card)" :key="slot">
+                <img
+                  v-if="url"
+                  class="tr-card-preview"
+                  :src="url"
+                  alt=""
+                  loading="lazy"
+                />
+                <span
+                  v-else
+                  class="tr-card-preview tr-card-blank"
+                  :class="{ 'tr-card-blank--live': card.live }"
+                  aria-hidden="true"
+                ></span>
+              </template>
             </div>
             <div v-else class="tr-card-preview tr-card-preview--none">
               <v-icon v-if="card.live" size="18" class="mdi-spin"
@@ -831,16 +841,29 @@ const canSubmit = computed(
  * step, not time, so every sample at the top step is equally "newest". Keeping
  * prompt 0 first keeps the strip's first frame on the same prompt for every run
  * and at every step, which is what makes two cards in this grid comparable.
+ *
+ * One slot per prompt (at most four), a URL or null: the config names how many
+ * prompts there are, and the samples' own indexes stand in when it does not.
+ * A step's samples land one at a time, so a strip of only what is drawn grew
+ * from one frame to four on every sampled step.
  */
 function stripOf(card) {
   const samples = card.run?.samples || [];
   if (!samples.length || source.value?.id == null) return [];
   const top = Math.max(...samples.map((s) => s.step));
-  return samples
-    .filter((s) => s.step === top)
-    .sort((a, b) => a.index - b.index)
-    .slice(0, 4)
-    .map((s) => runSampleUrl(source.value.id, card.run.name, s.filename));
+  const slots = Math.min(
+    4,
+    Math.max(
+      card.run.sample_prompts?.length || 0,
+      ...samples.map((s) => s.index + 1),
+    ),
+  );
+  return Array.from({ length: slots }, (_, index) => {
+    const sample = samples.find((s) => s.step === top && s.index === index);
+    return sample
+      ? runSampleUrl(source.value.id, card.run.name, sample.filename)
+      : null;
+  });
 }
 
 function selectAll() {
@@ -1243,6 +1266,34 @@ function batchReceipt(imported, failed) {
   object-fit: cover;
   display: block;
   background: rgba(var(--v-theme-on-background), 0.06);
+}
+
+/* A prompt not drawn yet at this step: the photo grid's loading skeleton
+   (ImageGrid.css), so the slot reads as waiting rather than as a black frame. */
+.tr-card-blank {
+  position: relative;
+  overflow: hidden;
+  background: rgb(var(--v-theme-panel));
+}
+
+.tr-card-blank::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(var(--v-theme-on-panel), 0.08);
+}
+
+.tr-card-blank--live::after {
+  animation: trCardBlankPulse 1.2s var(--ease-standard) infinite alternate;
+}
+
+@keyframes trCardBlankPulse {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .tr-card-preview--none {
