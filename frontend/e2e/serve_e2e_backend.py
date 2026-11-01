@@ -183,32 +183,6 @@ WORKFLOW_COVERS = (
 )
 
 
-# The demo-data pictures the website's import video drops in, mirrored so the
-# importer, which de-duplicates by pixel hash, takes them as new pictures.
-IMPORT_VIDEO_SOURCES = (
-    "03efc763-a9fa-488a-bcca-ab5f7afb8a47.png",
-    "04125d38-bc5b-4d89-bb5d-14003920da94.png",
-    "05932f7d-56ae-425e-9b10-344186286483.png",
-    "0a230e14-ffd6-42db-a928-b4ad844c1354.png",
-    "0b0fa739-0809-426b-baab-0949eb3e69fe.png",
-    "0d2622b0-ae4d-4b13-8750-700934a9c214.png",
-    "0db21f57-e1e6-49ad-9812-072cdde4c064.png",
-    "12cff112-3e43-4648-b9ce-abfe5c079628.png",
-    "130b81ab-4f04-46a6-98ec-7a46895d3b71.png",
-)
-# Where they go. Read by frontend/e2e/screenshots/videos.spec.js.
-IMPORT_VIDEO_DIR = WORK_DIR / "import-video"
-
-
-def _seed_import_video(root: Path) -> None:
-    """Write :data:`IMPORT_VIDEO_SOURCES`, mirrored, as camera-style JPEGs."""
-    root.mkdir(parents=True)
-    for n, name in enumerate(IMPORT_VIDEO_SOURCES, start=1):
-        with Image.open(SRC_IMAGES / name) as source:
-            mirrored = source.convert("RGB").transpose(Image.FLIP_LEFT_RIGHT)
-        mirrored.save(root / f"IMG_{4100 + n}.jpg", quality=92)
-
-
 def _seed_showcase_models(root: Path) -> None:
     """Add :data:`SHOWCASE_MODELS` to the seeded model folder."""
     lora = {"blocks.0.lora_A.weight": [8, 16], "blocks.0.lora_B.weight": [16, 8]}
@@ -558,7 +532,6 @@ def main() -> int:
     _seed_model_folder(MODEL_FOLDER)
     if screenshots:
         _seed_showcase_models(MODEL_FOLDER)
-        _seed_import_video(IMPORT_VIDEO_DIR)
     _seed_reference_folder(REFERENCE_FOLDER)
     _stub_host_openers(WORK_DIR / "bin")
     covers = [SRC_IMAGES / name for name in WORKFLOW_COVERS] if screenshots else None
@@ -588,7 +561,7 @@ def main() -> int:
         # for the caller.
         base_config.pop("e2e_reference_folder", None)
         # Smart scores are worked out from what demo-data already stores (no
-        # model runs), and the Getting started video sorts by them.
+        # model runs), so the statistics shots show a scored library.
         base_config["e2e_planner_finders"] = [
             *base_config["e2e_planner_finders"],
             "SmartScoreTask",

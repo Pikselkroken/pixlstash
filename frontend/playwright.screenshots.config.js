@@ -8,7 +8,7 @@ import { defineConfig } from '@playwright/test'
 // setup builds the SPA and the shell and lays out the library; the shell then
 // starts the backend itself. The fixture forces a dark theme + sensible grid
 // density to match the originals. capture.spec.js takes the stills;
-// videos.spec.js records the Getting started videos (needs ffmpeg) and runs
+// videos.spec.js records Getting started videos 02, 03, 06 (needs ffmpeg) and runs
 // second, since it changes the library. Everything lands in the gitignored
 // website/screenshots/output/; copying into website/assets/ is by hand.
 //

@@ -1,4 +1,4 @@
-// Records the Getting started videos (website/introduction.html, 01-06) from
+// Records Getting started videos 02, 03 and 06 (website/introduction.html) from
 // the real desktop app, the same way capture.spec.js takes the stills: one
 // Electron app off screen, the demo-data library (electronApp.js).
 //
@@ -10,7 +10,9 @@
 // rather than jumps: the viewer has to see where the click lands.
 //
 // Each video writes website/screenshots/output/<name>.mp4. They change the
-// library (an import, a new person, a tag), so they run after the stills.
+// library (a new person, a tag), so they run after the stills. 01 (a drag in
+// from the desktop), 04 and 05 (which need the owner's tags and embeddings to
+// mean anything) and 07 are recorded by hand.
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -183,42 +185,6 @@ mkdirSync(OUT_DIR, { recursive: true })
 test.describe('Getting started videos', () => {
   test.setTimeout(180_000)
 
-  test('01-PictureImport', async ({ page, apiContext }) => {
-    void apiContext // the fixture applies the shared look
-    const { grid } = await start(page)
-    const dir = join(JSON.parse(readFileSync(WORK_INFO, 'utf8')).userData, 'import-video')
-    const files = readdirSync(dir).map((name) => ({
-      name,
-      b64: readFileSync(join(dir, name)).toString('base64'),
-    }))
-    await record(page, '01-PictureImport', async () => {
-      // A drag in from another window: the drop overlay first, then the drop.
-      const target = grid.scrollWrapper
-      const dataTransfer = await page.evaluateHandle((items) => {
-        const dt = new DataTransfer()
-        for (const item of items) {
-          const bytes = Uint8Array.from(atob(item.b64), (c) => c.charCodeAt(0))
-          dt.items.add(new File([bytes], item.name, { type: 'image/jpeg' }))
-        }
-        return dt
-      }, files)
-      await glide(page, 1500, 300, 300)
-      await glide(page, 900, 520, 900)
-      await target.dispatchEvent('dragenter', { dataTransfer })
-      await target.dispatchEvent('dragover', { dataTransfer })
-      await page.waitForTimeout(1200)
-      const done = importCompleted(page)
-      await target.dispatchEvent('drop', { dataTransfer })
-      // The import runs, and the new pictures land at the top of the grid.
-      expect((await done).imported_count).toBe(files.length)
-      await grid.waitForThumbnailLoaded()
-      await page.waitForTimeout(1200)
-      // What the import set going: tagging, faces and scores, in the Tasks list.
-      await glideClick(page, page.getByRole('button', { name: /task list/ }))
-      await page.waitForTimeout(2500)
-    })
-  })
-
   test('02-CharacterAssignment', async ({ page, apiContext }) => {
     const ids = await unassignedPictures(apiContext, PERSON_PICTURES)
     const { grid, sidebar } = await start(page)
@@ -295,41 +261,6 @@ test.describe('Getting started videos', () => {
     })
   })
 
-  test('04-SmartScore', async ({ page, apiContext }) => {
-    void apiContext // the fixture waits for the smart scores
-    const { grid } = await start(page)
-    await record(page, '04-SmartScore', async () => {
-      await glideClick(page, grid.sortMenuButton)
-      await glideClick(page, grid.sortOption('Smart Score'))
-      await page.waitForTimeout(600)
-      // Worst first: the menu closes on a pick, so open it again to flip it.
-      await glideClick(page, grid.sortMenuButton)
-      await glideClick(page, grid.sortDirectionButton)
-      await expect(grid.sortDirectionButton).toContainText('Ascending')
-      await page.waitForTimeout(400)
-      await page.keyboard.press('Escape')
-      await grid.waitForThumbnailLoaded()
-      await page.waitForTimeout(1500)
-      // The worst first: open it and look.
-      await glideClick(page, grid.thumbnails.first(), { dbl: true })
-      await page.waitForTimeout(2600)
-    })
-  })
-
-  test('05-SemanticSearch', async ({ page, apiContext }) => {
-    void apiContext
-    const { grid } = await start(page)
-    await record(page, '05-SemanticSearch', async () => {
-      await glideClick(page, grid.searchButton)
-      await expect(grid.searchOverlay).toBeVisible()
-      await grid.searchInput.pressSequentially('man sorting photos', { delay: 30 })
-      await page.waitForTimeout(400)
-      await grid.searchInput.press('Enter')
-      await grid.waitForThumbnailLoaded()
-      await page.waitForTimeout(3000)
-    })
-  })
-
   test('06-Export', async ({ page, apiContext }) => {
     void apiContext
     const { sidebar } = await start(page)
@@ -369,18 +300,4 @@ async function unassignedPictures(api, ids) {
     expect(faces.map((f) => f.character_id), `picture ${id}: one face, no person`).toEqual([null])
   }
   return ids
-}
-
-/** The terminal status of the next import the page runs. */
-function importCompleted(page) {
-  return page
-    .waitForResponse(
-      async (r) => {
-        if (!/\/pictures\/import\/staging\/[^/]+\/status$/.test(r.url()) || !r.ok()) return false
-        const body = await r.json().catch(() => null)
-        return body?.stage === 'completed'
-      },
-      { timeout: 60_000 },
-    )
-    .then((r) => r.json())
 }
