@@ -6,6 +6,13 @@
  * only way the strip changes a filter: editing a chip in place is out of scope.
  */
 
+import {
+  GROUP_TOKEN_PREFIX,
+  UNGROUPED_TOKEN,
+  isGroupToken,
+  useTagGroupsStore,
+} from "../stores/useTagGroupsStore";
+
 // Pick-one Picture kinds. "Any" is deliberately not a choice: removing the chip
 // is how you get back to any.
 export const MEDIA_OPTIONS = [
@@ -90,6 +97,21 @@ export function confidenceEntry(tag, threshold) {
   return `${tag}:${threshold.toFixed(2)}`;
 }
 
+/**
+ * A tag filter term as its words. A tag is its own name; a group term reads
+ * "any Character tag", "any Ungrouped tag", or "any tag in a group" when the
+ * group is not in the map (deleted, not loaded yet, or a read-only share).
+ * The map is read only for a group term, so tag-only callers need no store.
+ */
+export function tagTermLabel(term) {
+  const value = String(term ?? "");
+  if (!isGroupToken(value)) return value;
+  if (value === UNGROUPED_TOKEN) return "any Ungrouped tag";
+  const id = Number(value.slice(GROUP_TOKEN_PREFIX.length));
+  const group = useTagGroupsStore().byId.get(id);
+  return group ? `any ${group.name} tag` : "any tag in a group";
+}
+
 /** A filter row's count, localised; blank while it is still unknown. */
 export function formatCount(n) {
   return n == null ? "" : Number(n).toLocaleString();
@@ -128,7 +150,9 @@ function without(list, value) {
  * @param {{ allPicturesView?: boolean }} [view] "No character" and "In no
  *   set" only exist in All Pictures, so a stale flag elsewhere is not shown
  *   as a filter.
- * @returns {Array<{ key: string, kind: string, value: string, remove: Function }>}
+ * @returns {Array<{ key: string, kind: string, value: string, term: ?string, remove: Function }>}
+ *   `term` is the raw tag filter value of a tag chip (a group term included),
+ *   null for every other chip.
  */
 /** The Workflows Filters panel's two Source answers (v1.12 F7). */
 export const WORKFLOW_SOURCE_LABELS = Object.freeze({
@@ -212,8 +236,8 @@ export function workflowFilterChips(filters, cards, setFilters) {
 
 export function filterChips(store, { allPicturesView = true } = {}) {
   const chips = [];
-  const push = (key, kind, value, remove) =>
-    chips.push({ key, kind, value, remove });
+  const push = (key, kind, value, remove, term = null) =>
+    chips.push({ key, kind, value, remove, term });
 
   // First, as it leads the menu: a grid narrowed to favourites without saying
   // so looks like lost pictures.
@@ -314,14 +338,26 @@ export function filterChips(store, { allPicturesView = true } = {}) {
   }
 
   for (const tag of store.tagFilter || []) {
-    push(`tag:${tag}`, "Has tag", tag, () => {
-      store.tagFilter = without(store.tagFilter, tag);
-    });
+    push(
+      `tag:${tag}`,
+      "Has tag",
+      tagTermLabel(tag),
+      () => {
+        store.tagFilter = without(store.tagFilter, tag);
+      },
+      tag,
+    );
   }
   for (const tag of store.tagRejectedFilter || []) {
-    push(`lacks:${tag}`, "Lacks tag", tag, () => {
-      store.tagRejectedFilter = without(store.tagRejectedFilter, tag);
-    });
+    push(
+      `lacks:${tag}`,
+      "Lacks tag",
+      tagTermLabel(tag),
+      () => {
+        store.tagRejectedFilter = without(store.tagRejectedFilter, tag);
+      },
+      tag,
+    );
   }
   for (const entry of store.tagConfidenceAboveFilter || []) {
     const { tag, threshold } = parseConfidenceEntry(entry);

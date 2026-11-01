@@ -341,6 +341,7 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/snapshots",
         "/api/v1/snapshots/status",
         "/api/v1/tag_health",
+        "/api/v1/tag_groups",
         "/api/v1/telemetry/install-id",
         "/api/v1/users/me/auth",
         "/api/v1/users/me/shared-resource-ids",

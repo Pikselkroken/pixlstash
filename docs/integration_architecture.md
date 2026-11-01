@@ -1893,6 +1893,35 @@ desktop shell or on a loopback page (`utils/serverLocation.js`), never for a
 video, a read-only session or a multi-selection. Backend:
 `docs/backend_architecture.md` §5, the *Open with* paragraph.
 
+### 2.6 The `/tag_groups` contract (#2469)
+
+The library-wide map from a tag **name** to a group (Character, Copyright, Meta…). All four
+routes are `OWNER_ONLY`; `GET /tag_groups` is on the read-blocked belt. Backend:
+`docs/backend_architecture.md` §6.1.
+
+| Method | Path | Body | Answer |
+|---|---|---|---|
+| `GET` | `/api/v1/tag_groups` | — | the whole map |
+| `POST` | `/api/v1/tag_groups` | `{"name": str}` | the whole map plus `"group": {id, name, position}`; new group last. Name trimmed, 1–64 chars (else 400); case-insensitive duplicate → 409 |
+| `PUT` | `/api/v1/tag_groups/order` | `{"ids": [int]}` | the whole map; `ids` must be exactly the existing group ids (else 400) |
+| `POST` | `/api/v1/tag_groups/assign` | `{"tags": [str], "group_id": int \| null}` | the whole map; `null` makes the tags Ungrouped; unknown `group_id` → 404; pending-retag markers → 400; over 5000 tags → 400 |
+
+The whole map is `{"groups": [{id, name, position}…] (position order), "tags": {"<tag>": <group_id>}}`.
+A tag not in `tags` is Ungrouped. Names match exactly, as the `tag` filter does.
+
+A move that changes something is one undoable operation: `op_type` `tag_groups.move`,
+`target_type` `tag_group`, `target_ids` `[]`. Undo and redo answer with that `target_type`,
+which is the signal to re-read `GET /tag_groups` (no picture events are sent for it). A move
+that changes nothing records nothing.
+
+**Filter terms** travel inside the existing picture-listing params, not new ones:
+
+- `tag=__group:<id>`: the picture has any tag filed in that group.
+- `rejected_tag=__group:<id>`: the picture lacks every tag filed in that group.
+- `tag=__group:none` / `rejected_tag=__group:none`: the picture has / lacks any tag filed nowhere.
+
+Any other value, including a malformed `__group:abc`, is a literal tag name as before.
+
 ---
 
 

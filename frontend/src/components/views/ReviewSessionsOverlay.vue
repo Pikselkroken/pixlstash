@@ -579,6 +579,8 @@ function handleKeyDown(event) {
     else if (tagApplyOpen.value) tagApplyOpen.value = false;
     else if (sessionRef.value?.handleKey("escape")) {
       // The session consumed it (a pending consistency confirm).
+    } else if (boardRef.value?.handleEscape?.()) {
+      // The board's Groups view cleared its tag selection.
     } else {
       // Same exit as the toolbar's back button: a review (or a receipt) steps
       // back to the board, the board back to the view underneath.

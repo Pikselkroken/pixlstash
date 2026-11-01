@@ -29,6 +29,7 @@ from .operation import (  # noqa: F401
     STATUS_SUPERSEDED,
     STATUS_UNDONE,
     TARGET_PICTURE,
+    TARGET_TAG_GROUP,
     VALID_STATUSES,
 )
 from .picture import Picture, SortMechanism  # noqa: F401
@@ -64,6 +65,7 @@ from .tag import (  # noqa: F401
 from .review import Review  # noqa: F401
 from .saved_recipe import SavedRecipe  # noqa: F401
 from .tag_health import TagHealth  # noqa: F401
+from .tag_group import TagGroup, TagGroupMember  # noqa: F401
 from .tag_prediction import TagPrediction  # noqa: F401
 from .tag_suggestion import TagSuggestion  # noqa: F401
 from .tagger_run import TaggerRun  # noqa: F401

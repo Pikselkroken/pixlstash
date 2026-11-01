@@ -69,6 +69,7 @@ import { useFavouritesStore } from "./useFavouritesStore";
 import { useUpscaleStore } from "./useUpscaleStore";
 import { useNewBatchStore } from "./useNewBatchStore";
 import { useTagClipboardStore } from "./useTagClipboardStore";
+import { useTagGroupsStore } from "./useTagGroupsStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -242,6 +243,20 @@ const STORES = [
       s.clipboardTags = ["umbrella"];
     },
     isEmpty: (s) => s.clipboardTags.length === 0,
+  },
+  {
+    // The library's tag -> group map. Another library files its tags
+    // differently, and a share session may not read it at all. The view
+    // choices (Tags | By group, Health | Groups) are this machine's and stay.
+    name: "useTagGroupsStore",
+    use: useTagGroupsStore,
+    seed: (s) => {
+      s.groups = [{ id: 1, name: "Character", position: 0 }];
+      s.groupOf = new Map([["red hood", 1]]);
+      s.loaded = true;
+    },
+    isEmpty: (s) =>
+      s.groups.length === 0 && s.groupOf.size === 0 && s.loaded === false,
   },
   {
     name: "useLockedSetsStore",

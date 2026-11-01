@@ -833,6 +833,10 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/stacks/{stack_id}/members/{picture_id}                                | stacks          | Set member position                                           |
 | PATCH  | /api/v1/stacks/{stack_id}/order                                               | stacks          | Reorder stack                                                 |
 | GET    | /api/v1/stacks/{stack_id}/pictures                                            | stacks          | List pictures in stack                                        |
+| GET    | /api/v1/tag_groups                                                            | tag_groups      | The tag group map                                             |
+| POST   | /api/v1/tag_groups                                                            | tag_groups      | Create a tag group (last in position)                         |
+| POST   | /api/v1/tag_groups/assign                                                     | tag_groups      | File tags under a group (or make them Ungrouped)              |
+| PUT    | /api/v1/tag_groups/order                                                      | tag_groups      | Reorder the tag groups                                        |
 | GET    | /api/v1/tag_health                                                            | tag_health      | Tag health board rows                                         |
 | POST   | /api/v1/tag_health/rebuild                                                    | tag_health      | Rebuild the tag health cache                                  |
 | GET    | /api/v1/tag_suggestions                                                       | tag_suggestions | List ranked tag-fix suggestions                               |
@@ -1068,6 +1072,45 @@ TaggerRun: id, run (unique), model_version, verdict, recommend,
            accepted, anomaly_macro_f1, report (JSON), created_at
            (tagger eval runs pushed from PixlTagger)
 ```
+
+### 6.1 Tag groups: a library-wide tag-name → group map (#2469)
+
+```text
+TagGroup: id, name (1-64 chars, unique case-insensitively in the service),
+          position (display order)
+TagGroupMember: tag (PK, exact tag name), group_id (FK tag_group.id,
+                ON DELETE CASCADE, indexed)
+          (a tag with no member row is Ungrouped; groups start empty)
+```
+
+A group belongs to the tag, not to a picture: filing `film grain` under Meta files
+it on every picture carrying it, and a tag need not exist on any picture to be
+filed. The map is user vocabulary, so nothing is derived from it. Migration
+`0141_add_tag_groups` creates both tables only when absent (the baseline builds them
+with `create_all`).
+
+- **Service** [`services/tag_group_service.py`](../pixlstash/services/tag_group_service.py):
+  `*_in_session` functions take the writer's session; the public wrappers take the
+  `db` handle (§10.1). The route module only translates requests and maps
+  `TagGroupError` to a status code. Every route returns the whole map.
+- **Undo.** `assign` writes only the tags whose group changes and records one
+  `tag_groups.move` operation in the same transaction: `target_type` is
+  `tag_group` (`TARGET_TAG_GROUP`), `target_ids` is empty, and the payload is
+  `{"tags": {tag: old_group_or_null}}` / `{"tags": {tag: new_group_or_null}}`. A
+  request that changes nothing records nothing. Undo and redo write the map back
+  through the post-restore hook (§21.3), which sorts its operations itself, so the
+  oldest recorded "before" wins on undo and the newest "after" on redo whatever order
+  the restore hands them in. A recorded group that no longer exists leaves the tag
+  Ungrouped and logs a warning.
+- **Filter.** Group terms travel inside the ordinary `tag` (has) and `rejected_tag`
+  (lacks) params: `__group:<id>` is "any tag filed in that group", `__group:none` is
+  "any tag filed nowhere" (pending-retag sentinels excluded). They compile in one
+  place, `predicate_filter.py::_group_term_clause`, so every route that builds a
+  `PredicateFilter` (listing, search, stats, set listing, counts) reads a
+  group term identically. A malformed `__group:abc` stays a literal tag name.
+  `hidden_tag` and the tag-confidence params take no group terms.
+- **Authorization.** All four routes are `OWNER_ONLY`; `GET /tag_groups` is also on
+  `READ_BLOCKED_GET_PATHS`. Tests: `tests/test_tag_groups.py`.
 
 ### Operation log (append-only)
 
@@ -6211,6 +6254,12 @@ whole restore and the operation stays `applied`.
   feature that owns the `op_type` — `dedup_verdict_service` registers at import
   time and is imported by `routes/dedup.py`, which `Server` mounts at startup.
   An `op_type` with no hook simply has none.
+- **A non-picture operation is not fed to the picture applier.** `_restore` skips
+  any operation whose `target_type` is not `TARGET_PICTURE`: its payload is not a
+  `{picture_id: facets}` map, and reading its keys as picture ids would corrupt the
+  restore. Such an operation is restored entirely by its hook (the tag-group move, §6.1
+  is the first). It is recorded with `record_payload_operation_in_session`, which
+  shares the redo-stack supersession with the picture recorder.
 
 Pinned by `tests/test_operation_log.py::test_a_post_restore_hook_runs_once_per_restore_with_its_whole_batch`
 and `::test_a_failing_post_restore_hook_aborts_the_whole_undo`.

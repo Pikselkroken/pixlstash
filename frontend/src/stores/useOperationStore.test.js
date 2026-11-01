@@ -30,6 +30,10 @@ vi.mock("../api/operations", () => ({
   undoBatch: vi.fn(),
 }));
 
+vi.mock("../api/tagGroups", () => ({
+  getTagGroups: vi.fn().mockResolvedValue({ groups: [], tags: {} }),
+}));
+
 import { isReadOnly as readOnly } from "../utils/apiClient";
 import {
   getUndoState,
@@ -51,6 +55,7 @@ import {
   useOperationStore,
 } from "./useOperationStore";
 import { useNoticeStore } from "./useNoticeStore";
+import { getTagGroups } from "../api/tagGroups";
 import { useWsStore } from "./useWsStore";
 
 const MY_CLIENT = "client-me";
@@ -458,6 +463,21 @@ describe("useOperationStore - the receipt countdown", () => {
 });
 
 describe("useOperationStore - undo and redo", () => {
+  it("re-reads the tag groups when an undo or redo restored a tag move, and only then", async () => {
+    getTagGroups.mockClear();
+    const store = await primed([op({ id: 10 })]);
+    undoLastOperation.mockResolvedValue({ operations: [op({ id: 10 })] });
+    serve([op({ id: 10, status: "undone" })]);
+    await store.undo();
+    expect(getTagGroups).not.toHaveBeenCalled();
+
+    const move = op({ id: 11, op_type: "tag_groups.move", target_type: "tag_group" });
+    redoOperation.mockResolvedValue({ operations: [move] });
+    serve([op({ id: 10, status: "undone" })]);
+    await store.redo();
+    expect(getTagGroups).toHaveBeenCalledTimes(1);
+  });
+
   it("undoes, then flips the receipt to the undone state with Redo offered", async () => {
     const store = await primed([op({ id: 10, summary: "Moved to Scrapheap" })]);
     undoLastOperation.mockResolvedValue({ operations: [op({ id: 10 })] });

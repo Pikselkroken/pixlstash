@@ -276,7 +276,8 @@
         title="Tags"
         :tags="tagRows"
         :rows="tagFieldRows"
-        footer="Click a chip to flip it between has and lacks."
+        grouped
+        :footer="tagFooter"
         @add="setTag"
         @flip="
           (chip, from) => setTag(chip.tag, from === 'has' ? 'lacks' : 'has')
@@ -365,6 +366,7 @@ import { listWorkflowCards, workflowCoverUrl } from "../../api/workflows";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useImportFoldersStore } from "../../stores/useImportFoldersStore";
+import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 import { PIL_IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from "../../utils/media.js";
 import { useCascadeMenu } from "../../composables/useCascadeMenu";
 import {
@@ -384,6 +386,7 @@ import {
   modelLabel,
   parseConfidenceEntry,
   scoreChipValue,
+  tagTermLabel,
 } from "../../utils/filterChips";
 import { shortTypeLabel } from "../../utils/workflowCard";
 
@@ -397,6 +400,7 @@ const props = defineProps({
 const store = useFilterStore();
 const gridStore = useGridStore();
 const importFoldersStore = useImportFoldersStore();
+const tagGroups = useTagGroupsStore();
 
 const PICTURE_KINDS = [
   { id: "media", label: "Media", icon: "mdi-image-multiple-outline" },
@@ -788,6 +792,7 @@ function toggleIn(field, value, on) {
 // ── Tags and Tag confidence: a field that adds chips ─────────────────────────
 const TAG_FIELDS = { has: "tagFilter", lacks: "tagRejectedFilter" };
 
+// A group term (`__group:<id>`) is shown as its words, "any Character tag".
 const tagFieldRows = computed(() => [
   {
     id: "has",
@@ -795,7 +800,7 @@ const tagFieldRows = computed(() => [
     short: "has",
     tone: "has",
     icon: "mdi-check",
-    chips: store.tagFilter.map((tag) => ({ tag })),
+    chips: store.tagFilter.map((tag) => ({ tag, label: tagTermLabel(tag) })),
   },
   {
     id: "lacks",
@@ -803,9 +808,24 @@ const tagFieldRows = computed(() => [
     short: "lacks",
     tone: "lacks",
     icon: "mdi-cancel",
-    chips: store.tagRejectedFilter.map((tag) => ({ tag })),
+    chips: store.tagRejectedFilter.map((tag) => ({
+      tag,
+      label: tagTermLabel(tag),
+    })),
   },
 ]);
+
+// The groups are named in the footer only where they are listed.
+const tagFooter = computed(() =>
+  tagGroups.hasGroups
+    ? "Click a group or tag to require it, Shift-click to exclude it. Click a chip to flip it."
+    : "Click a chip to flip it between has and lacks.",
+);
+
+// The Tags submenu lists the groups, so their map is read as it opens.
+watch(sub, (kind) => {
+  if (kind === "tags") tagGroups.fetch();
+});
 
 // A tag is either required or excluded, never both.
 function setTag(tag, rule) {

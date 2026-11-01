@@ -1891,6 +1891,23 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Vault-wide rebuild; inline _reject_scoped_tokens; owner/full only",
     ),
+    # ── tag_groups.py (library-wide tag name -> group map; owner-only) ──────
+    ("GET", "/api/v1/tag_groups"): RoutePolicy(
+        _OWNER,
+        justification="Library-wide tag vocabulary (tag name -> group), not a picture fact; a share token's scope cannot narrow it meaningfully (same reasoning as tag_health); owner only",
+    ),
+    ("POST", "/api/v1/tag_groups"): RoutePolicy(
+        _OWNER,
+        justification="Library-wide tag vocabulary (tag name -> group), not a picture fact; a share token's scope cannot narrow it meaningfully (same reasoning as tag_health); owner only",
+    ),
+    ("PUT", "/api/v1/tag_groups/order"): RoutePolicy(
+        _OWNER,
+        justification="Library-wide tag vocabulary (tag name -> group), not a picture fact; a share token's scope cannot narrow it meaningfully (same reasoning as tag_health); owner only",
+    ),
+    ("POST", "/api/v1/tag_groups/assign"): RoutePolicy(
+        _OWNER,
+        justification="Library-wide tag vocabulary (tag name -> group), not a picture fact; a share token's scope cannot narrow it meaningfully (same reasoning as tag_health); owner only",
+    ),
     # ── tag_suggestions.py ──────────────────────────────────────────────────
     ("GET", "/api/v1/tag_suggestions"): _LIST_AWARE,
     (

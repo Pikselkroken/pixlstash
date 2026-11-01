@@ -41,6 +41,7 @@ from sqlmodel import select
 
 from pixlstash.db_models.dedup import DedupGroup, DedupGroupMember
 from pixlstash.db_models.picture import Picture
+from pixlstash.db_models.tag import TAG_SENTINEL_LIKE_PATTERN, TAG_SENTINEL_ESCAPE_CHAR
 from pixlstash.utils.workflow_ids import AUTO_PREFIX, MANUAL_PREFIX
 from pixlstash.utils.service.person_tags import (
     FACE_REQUIRING_TAGS,
@@ -212,6 +213,67 @@ def is_truthy_flag(raw) -> bool:
     if isinstance(raw, bool):
         return raw
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+# Tag-group terms travel inside the ordinary ``tag`` / ``rejected_tag`` params:
+# ``__group:<id>`` is "any tag filed in that group", ``__group:none`` is "any tag
+# filed nowhere". Anything else stays a literal tag name, as it always was.
+GROUP_TERM_PREFIX = "__group:"
+GROUP_TERM_NONE = "__group:none"
+# SQLite's INTEGER is 64-bit; an id beyond it cannot name a group, so it binds to
+# a value no group can have (ids start at 1) rather than overflowing the driver.
+_SQLITE_MAX_INT = 2**63 - 1
+# A tag is unfiled when no tag_group_member row names it. Pending-retag sentinels
+# are machine bookkeeping, not user tags, so they never count as unfiled.
+_UNFILED_TAG_SQL = (
+    "tag.tag NOT LIKE :{prefix}_pattern ESCAPE '{esc}' "
+    "AND NOT EXISTS (SELECT 1 FROM tag_group_member m WHERE m.tag = tag.tag)"
+)
+
+
+def _group_term_id(term: str) -> Optional[int]:
+    """The group id a ``__group:<digits>`` term names, else ``None``."""
+    if not term.startswith(GROUP_TERM_PREFIX):
+        return None
+    digits = term[len(GROUP_TERM_PREFIX) :]
+    if not digits or not digits.isascii() or not digits.isdigit():
+        return None
+    value = int(digits)
+    return value if value <= _SQLITE_MAX_INT else -1
+
+
+def _group_term_clause(
+    term: str, index: int, negate: bool
+) -> Optional[tuple[str, dict]]:
+    """SQL for one group term in a has (``negate=False``) or lacks list.
+
+    Returns ``None`` when *term* is a literal tag, so the caller keeps its own
+    exact-name clause. ``has`` means "some tag of the picture matches"; ``lacks``
+    is the negation of that same EXISTS, so a picture lacks a group only when it
+    carries none of the group's tags.
+    """
+    # The has and lacks lists are numbered from 0 each, and their clauses land
+    # in one statement, so the list is part of every bind name.
+    side = "lacks" if negate else "has"
+    group_id = _group_term_id(term)
+    if group_id is not None:
+        name = f"tg_group_{side}_{index}"
+        body = (
+            "EXISTS (SELECT 1 FROM tag JOIN tag_group_member m ON m.tag = tag.tag "
+            f"WHERE tag.picture_id = picture.id AND m.group_id = :{name})"
+        )
+        params: dict = {name: group_id}
+    elif term == GROUP_TERM_NONE:
+        prefix = f"tg_unfiled_{side}_{index}"
+        body = (
+            "EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND "
+            + _UNFILED_TAG_SQL.format(prefix=prefix, esc=TAG_SENTINEL_ESCAPE_CHAR)
+            + ")"
+        )
+        params = {f"{prefix}_pattern": TAG_SENTINEL_LIKE_PATTERN}
+    else:
+        return None
+    return (f"NOT {body}" if negate else body), params
 
 
 def _tag_in_exists(prefix: str, tags_lower: list[str]) -> tuple[str, dict]:
@@ -483,6 +545,10 @@ class PredicateFilter(BaseModel):
 
         if self.tags_filter:
             for i, tag in enumerate(self.tags_filter):
+                group = _group_term_clause(tag, i, negate=False)
+                if group is not None:
+                    preds.append(text(group[0]).bindparams(**group[1]))
+                    continue
                 preds.append(
                     text(
                         f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :tag_filter_{i})"
@@ -491,6 +557,10 @@ class PredicateFilter(BaseModel):
 
         if self.tags_rejected_filter:
             for i, tag in enumerate(self.tags_rejected_filter):
+                group = _group_term_clause(tag, i, negate=True)
+                if group is not None:
+                    preds.append(text(group[0]).bindparams(**group[1]))
+                    continue
                 preds.append(
                     text(
                         f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :rejected_tag_filter_{i})"

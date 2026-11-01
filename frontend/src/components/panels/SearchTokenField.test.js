@@ -270,6 +270,18 @@ describe("SearchTokenField", () => {
     expect(copy).toHaveBeenCalledWith(["rain"]);
   });
 
+  it("a group token shows its words and copies nothing (#2469)", async () => {
+    await mountField();
+    const store = useTagClipboardStore();
+    const copy = vi.spyOn(store, "copyTags").mockResolvedValue();
+    useFilterStore().tagFilter = ["__group:none"];
+    await flushPromises();
+    expect(wrapper.find(".stf-token-body").text()).toContain("any Ungrouped tag");
+    await wrapper.find(".stf-token-body").trigger("mousedown");
+    await wrapper.find(".stf-token-body").trigger("click");
+    expect(copy).not.toHaveBeenCalled();
+  });
+
   it("an empty field lists recent searches; a click runs one, Tab leaves", async () => {
     const search = useSearchStore();
     search.addToSearchHistory("red hair");
