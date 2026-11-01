@@ -1252,6 +1252,21 @@ def test_an_import_naming_too_many_new_categories_is_a_400(
     assert "51 categories" in over.json()["detail"]
 
 
+def test_a_category_longer_than_a_group_name_is_capped_not_refused(
+    client, server, use_defaults
+):
+    use_defaults({})
+    _seed(server)
+    long_name = "Very Long Category " + "x" * 70
+    rows = [["english", "category"], ["long-cat-tag", long_name]]
+
+    resp = _import(client, _csv(rows), "long.csv")
+    assert resp.status_code == 200, resp.text
+    names = [g["name"] for g in resp.json()["groups"]]
+    assert long_name[:64] in names
+    assert all(len(n) <= 64 for n in names)
+
+
 def test_an_ungrouped_or_blank_category_creates_no_group(client, server, use_defaults):
     use_defaults({})
     _seed(server)
@@ -1502,5 +1517,40 @@ def test_a_defaults_file_with_a_malformed_group_entry_is_a_value_error(
 ):
     path = tmp_path / "defaults.json"
     path.write_text(json.dumps({"version": 1, "groups": groups}), encoding="utf-8")
+    with pytest.raises(ValueError):
+        tag_group_service.load_default_tags(path)
+
+
+def test_a_phonetic_run_is_not_part_of_the_string():
+    # <rPh> carries a reading (furigana), not text: "long hair", not "long hairよみ".
+    ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+    sst = (
+        f'<?xml version="1.0" encoding="UTF-8"?><sst {ns}>'
+        "<si><t>english</t></si><si><t>category</t></si>"
+        "<si><r><t>long </t></r><r><t>hair</t></r>"
+        '<rPh sb="0" eb="1"><t>よみ</t></rPh></si>'
+        "</sst>"
+    )
+    sheet = (
+        f'<?xml version="1.0" encoding="UTF-8"?><worksheet {ns}><sheetData>'
+        '<row><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>'
+        '<row><c r="A2" t="s"><v>2</v></c>'
+        '<c r="B2" t="inlineStr"><is><t>Person</t>'
+        '<rPh sb="0" eb="1"><t>ひと</t></rPh></is></c></row>'
+        "</sheetData></worksheet>"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("xl/worksheets/sheet1.xml", sheet)
+        archive.writestr("xl/sharedStrings.xml", sst)
+    rows = list(xlsx_reader.iter_first_sheet_rows(buf.getvalue()))
+    assert rows == [["english", "category"], ["long hair", "Person"]]
+
+
+@pytest.mark.parametrize("tags", ["hair", [1, 2], [None], {"a": 1}])
+def test_a_defaults_group_whose_tags_are_not_names_is_a_value_error(tmp_path, tags):
+    path = tmp_path / "defaults.json"
+    payload = {"version": 1, "groups": [{"name": "Hair", "tags": tags}]}
+    path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError):
         tag_group_service.load_default_tags(path)

@@ -504,7 +504,14 @@ def load_default_tags(path: Optional[Path] = None) -> Optional[dict[str, Any]]:
         name = str(entry.get("name") or "").strip()
         if not 1 <= len(name) <= NAME_MAX_LENGTH:
             raise ValueError(f"{target} has a group with no usable name")
-        tags = [normalise_tag(t) for t in (entry.get("tags") or [])]
+        raw_tags = entry.get("tags") or []
+        if not isinstance(raw_tags, list) or not all(
+            isinstance(t, str) for t in raw_tags
+        ):
+            raise ValueError(
+                f"{target} has a group whose 'tags' is not a list of names"
+            )
+        tags = [normalise_tag(t) for t in raw_tags]
         groups.append((name, [t for t in tags if t]))
     return {"version": version, "groups": groups}
 

@@ -169,12 +169,29 @@ def _completed(
     yield from _drain(parser.read_events())
 
 
+def _rich_text(container: ET.Element) -> str:
+    """The text of a string item (``<si>``) or an inline string (``<is>``).
+
+    Only its own ``<t>`` and the ``<t>`` of its runs (``<r>``) are the string;
+    a phonetic run (``<rPh>``, furigana) carries a reading, not the text, and is
+    left out.
+    """
+    parts: list[str] = []
+    for child in container:
+        name = _local(child.tag)
+        if name == "t":
+            parts.append(child.text or "")
+        elif name == "r":
+            parts.extend(t.text or "" for t in child if _local(t.tag) == "t")
+    return "".join(parts)
+
+
 def _shared_strings(zf: zipfile.ZipFile, budget: _Budget) -> list[str]:
     if SHARED_STRINGS_MEMBER not in zf.namelist():
         return []
     strings: list[str] = []
     for si in _completed(zf, SHARED_STRINGS_MEMBER, "si", budget):
-        text = "".join(t.text or "" for t in si.iter() if _local(t.tag) == "t")
+        text = _rich_text(si)
         budget.spend(len(text), SHARED_STRINGS_MEMBER)
         strings.append(text)
     return strings
@@ -195,7 +212,8 @@ def _column_index(ref: str) -> int:
 def _cell_text(cell: ET.Element, shared: list[str]) -> str:
     kind = cell.get("t")
     if kind == "inlineStr":
-        return "".join(t.text or "" for t in cell.iter() if _local(t.tag) == "t")
+        inline = next((c for c in cell if _local(c.tag) == "is"), None)
+        return _rich_text(inline) if inline is not None else ""
     value: Optional[ET.Element] = None
     for child in cell:
         if _local(child.tag) == "v":
