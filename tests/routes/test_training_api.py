@@ -1915,7 +1915,13 @@ def test_create_job_pins_win_and_are_recorded():
     temp_dir, owner, server, read_token = _setup()
     try:
         char_id = _make_character(owner)
-        pins = {"train.steps": 50, "train.lr": 0.0002}
+        # A prompt the path pattern would read as a path: pins are the owner's
+        # own values and come back as written, so a retry can send them again.
+        pins = {
+            "train.steps": 50,
+            "train.lr": 0.0002,
+            "sample.samples[*].prompt": ["tw on a sunset / beach, photo"],
+        }
         r = owner.post(
             "/training/jobs",
             json={

@@ -387,8 +387,15 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     try {
       await deleteTrainingJob(job.id);
     } catch (err) {
-      // The retry is queued; only the failed card stays beside it.
+      // The retry is queued; only the failed card stays beside it, and a
+      // second Retry on it would queue the run twice, so say so.
       console.warn(`Could not delete the failed training job ${job.id}:`, err);
+      useNoticeStore().push({
+        level: "warning",
+        text: `Queued "${created.name}" again, but could not remove the failed run: ${
+          errorDetail(err) || "delete it by hand"
+        }.`,
+      });
     }
     await loadJobs();
     const card = cards.value.find((c) => c.job?.uuid === created.uuid);

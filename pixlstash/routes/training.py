@@ -160,8 +160,9 @@ def _redact_host_paths(value):
 
 # The owner's own text in a job response. The path pattern reads "Cats / Dogs
 # (cd)" or a "sunset / beach" prompt as a path, and these carry no host path, so
-# they pass through as written.
-_OWNER_TEXT_FIELDS = frozenset({"name", "trigger_word", "rows"})
+# they pass through as written. The Advanced pins are numbers, choices and the
+# owner's prompts (no tunable is a path), and a retry sends them back as given.
+_OWNER_TEXT_FIELDS = frozenset({"name", "trigger_word", "rows", "advanced_pins"})
 
 
 def _redact_job(payload: dict) -> dict:

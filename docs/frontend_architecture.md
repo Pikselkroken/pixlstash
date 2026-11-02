@@ -6662,6 +6662,18 @@ the whole text (`report`, else `error`) behind *Full message*, and the run
 page's notice uses the same cut. A
 failed run that saved checkpoints stays importable, as a stopped one is.
 
+**Retry.** A failed card with no previews shows **Retry** where its state would
+read "Failed" (the chip already says it), and every failed card's menu offers
+**Retry training**. `retryJob` in the store reads the job
+(`GET /training/jobs/{id}`), queues it again with `POST /training/jobs` from
+what it recorded (name, scope, trigger word, the recipe id from `preset`'s
+`id@version`, subject / effort / fit from `resolved_profile`, `advanced_pins`
+as `pins`) and only then deletes the failed job, so a refused retry leaves it
+in place with a notice. The new job's card is picked and focused. The run
+folder of a failed job that had one is kept, as Delete keeps it, and stays a
+card of its own. `advanced_pins` is owner text in `_redact_job`, so a pinned
+prompt with " / " in it comes back, and goes out again, as written.
+
 **Selection.** A click, Enter or Space picks; a double-click picks and opens a
 run's page (the pair's second click does not toggle). The view does
 not follow the picture grid's `gridOpenGesture`: like the Workflow set grid, a

@@ -378,6 +378,25 @@ describe("drawing the grid", () => {
       );
     });
 
+    it("says so when the failed run could not be removed after the retry", async () => {
+      listTrainingJobs.mockResolvedValue([failedJob]);
+      deleteTrainingJob.mockRejectedValue({
+        response: { status: 409, data: { detail: "Job is still stopping" } },
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const wrapper = await openWith([]);
+        await wrapper.find("[data-testid='tr-card-retry']").trigger("click");
+        await settle(wrapper);
+        expect(createTrainingJob).toHaveBeenCalledTimes(1);
+        const notice = useNoticeStore().notices.at(-1);
+        expect(notice.level).toBe("warning");
+        expect(notice.text).toContain("could not remove the failed run");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     it("offers Retry training in a failed card's menu, and only there", async () => {
       listTrainingJobs.mockResolvedValue([
         failedJob,

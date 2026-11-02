@@ -789,7 +789,14 @@ async function retry(card) {
   if (retrying.value != null) return;
   retrying.value = card.job.id;
   try {
-    await runsStore.retryJob(card.job);
+    const created = await runsStore.retryJob(card.job);
+    // The card that had focus is gone: hand it to the one that replaced it.
+    const index = cards.value.findIndex((c) => c.job?.uuid === created?.uuid);
+    if (index >= 0) {
+      cursor.value = index;
+      await nextTick();
+      gridEl.value?.querySelector(`[data-run-index="${index}"]`)?.focus();
+    }
   } finally {
     retrying.value = null;
   }
