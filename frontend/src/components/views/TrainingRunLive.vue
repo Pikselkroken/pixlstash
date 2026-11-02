@@ -500,7 +500,6 @@ import {
   isBusyJob,
   isQueuedBehindRun,
   LIVE_STATUSES,
-  PHASE_LABELS,
   stepsOf,
   WAITING_BEHIND_RUN,
 } from "../../utils/trainingRuns.js";
@@ -516,6 +515,16 @@ const emit = defineEmits(["close"]);
 
 const POLL_MS = 2000;
 
+const PHASE_LABELS = {
+  waiting_gpu: "Waiting for the GPU",
+  checking: "Checking memory and speed",
+  loading: "Loading the model",
+  caching: "Caching captions",
+  training: "Training",
+  previews: "Generating previews",
+  saving: "Saving",
+  importing: "Importing to the shelf",
+};
 const SETUP = ["waiting_gpu", "checking", "loading", "caching"];
 
 const live = ref(null);

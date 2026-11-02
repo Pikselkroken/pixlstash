@@ -122,33 +122,22 @@ export function isQueuedBehindRun(waiting) {
   return waiting?.code === "fifo";
 }
 
-/** Each of the live view's phases in words, as the run page names them. */
-export const PHASE_LABELS = {
-  waiting_gpu: "Waiting for the GPU",
-  checking: "Checking memory and speed",
-  loading: "Loading the model",
-  caching: "Caching captions",
-  training: "Training",
-  previews: "Generating previews",
-  saving: "Saving",
-  importing: "Importing to the shelf",
-};
-
 /**
  * The run's state in words, from its job. A running job still loading its
- * model or caching names that step rather than "Training 0 / N", which reads
- * as stuck; the live view's `downloading` names a first run's model fetch.
+ * model or caching names that step, in the run page's words, rather than
+ * "Training 0 / N", which reads as stuck; the live view's `downloading` names
+ * a first run's model fetch.
  */
 export function jobStatus(job) {
   switch (job?.status) {
     case "queued":
       // Only the live view knows a probe is running, as it does a phase.
-      return PHASE_LABELS[job.phase === "checking" ? "checking" : "waiting_gpu"];
+      return job.phase === "checking" ? "Checking memory and speed" : "Waiting for the GPU";
     case "running":
-      if (job.phase === "loading" && job.downloading) return "Downloading the model";
-      if (job.phase === "loading" || job.phase === "caching") {
-        return PHASE_LABELS[job.phase];
+      if (job.phase === "loading") {
+        return job.downloading ? "Downloading the model" : "Loading the model";
       }
+      if (job.phase === "caching") return "Caching captions";
       return job.total_steps
         ? `Training ${(job.step ?? 0).toLocaleString()} / ${job.total_steps.toLocaleString()}`
         : "Setting up";
@@ -164,8 +153,8 @@ export function jobStatus(job) {
     case "completed":
       // Only the live view knows which: a job summary carries no phase.
       if (job.completed_at) return "Trained by PixlStash";
-      if (job.phase === "previews") return PHASE_LABELS.previews;
-      if (job.phase === "importing") return PHASE_LABELS.importing;
+      if (job.phase === "previews") return "Generating previews";
+      if (job.phase === "importing") return "Importing to the shelf";
       return "Finishing";
     default:
       return "Trained by PixlStash";
