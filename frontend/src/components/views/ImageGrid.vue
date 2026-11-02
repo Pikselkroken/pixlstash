@@ -1298,6 +1298,7 @@ import {
 } from "../../utils/media";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { usePublishTransientProgress } from "../../composables/usePublishTransientProgress";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
@@ -6732,26 +6733,12 @@ const {
 );
 // The sort/search wait cannot be aborted and is over in seconds, so it sits in
 // the title bar beside the tasks pill rather than over the grid's corner.
-watch(
-  () => ({
-    visible: smartScoreLoadingVisible.value,
-    status: smartScoreProgress.status,
-    message: smartScoreProgressMessage.value,
-    percent: smartScoreProgressPercent.value,
-  }),
-  (progress) => {
-    tasksStore.transientProgress = progress;
-  },
-  { immediate: true },
-);
-onUnmounted(() => {
-  tasksStore.transientProgress = {
-    visible: false,
-    status: "idle",
-    message: "",
-    percent: 0,
-  };
-});
+usePublishTransientProgress(() => ({
+  visible: smartScoreLoadingVisible.value,
+  status: smartScoreProgress.status,
+  message: smartScoreProgressMessage.value,
+  percent: smartScoreProgressPercent.value,
+}));
 
 // The view with no filters: the filter menu counts against it, and the strip
 // shows its size as the "of N".
