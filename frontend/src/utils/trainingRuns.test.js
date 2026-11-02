@@ -65,6 +65,7 @@ describe("a run's status", () => {
     expect(jobStatus({ ...job, phase: "caching" })).toBe("Caching captions");
     expect(jobStatus({ ...job, phase: "training" })).toBe("Training 0 / 2,000");
     expect(jobStatus(job)).toBe("Training 0 / 2,000");
+    expect(jobStatus({ ...job, step: 5, phase: "caching" })).toBe("Training 5 / 2,000");
   });
 
   it("says a queued run whose probe is running is checking, not waiting", () => {

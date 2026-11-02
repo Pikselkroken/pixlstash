@@ -479,12 +479,16 @@ def test_the_job_list_names_a_running_runs_last_logged_phase():
             ),
         )
         _, ended_uuid = _seed_job(server, status="error", phase_log=json.dumps(log))
+        _, stopping_uuid = _seed_job(
+            server, status="stopping", phase_log=json.dumps(log)
+        )
         _, unlogged_uuid = _seed_job(server, status="running", step=0)
         listed = {j["uuid"]: j for j in owner.get("/training/jobs").json()}
         assert listed[loading_uuid]["phase"] == "loading"
         assert listed[caching_uuid]["phase"] == "caching"
         # An ended run has no phase, whatever its log last said.
         assert listed[ended_uuid]["phase"] is None
+        assert listed[stopping_uuid]["phase"] is None
         assert listed[unlogged_uuid]["phase"] is None
     finally:
         _teardown(temp_dir, server)

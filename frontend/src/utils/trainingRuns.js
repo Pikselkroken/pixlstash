@@ -134,10 +134,12 @@ export function jobStatus(job) {
       // Only the live view knows a probe is running, as it does a phase.
       return job.phase === "checking" ? "Checking memory and speed" : "Waiting for the GPU";
     case "running":
-      if (job.phase === "loading") {
+      // Only before the first step: a counted step is training, whatever the
+      // phase last logged says.
+      if (!job.step && job.phase === "loading") {
         return job.downloading ? "Downloading the model" : "Loading the model";
       }
-      if (job.phase === "caching") return "Caching captions";
+      if (!job.step && job.phase === "caching") return "Caching captions";
       return job.total_steps
         ? `Training ${(job.step ?? 0).toLocaleString()} / ${job.total_steps.toLocaleString()}`
         : "Setting up";
