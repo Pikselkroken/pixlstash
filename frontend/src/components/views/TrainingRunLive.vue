@@ -299,6 +299,12 @@
                     </template>
                     <span v-if="!row.prompt" class="trl-muted">Prompt {{ row.index + 1 }}</span>
                   </span>
+                  <!-- What a control row should do, under its prompt: the label
+                       column is fixed, so this never widens the board. -->
+                  <span v-if="roleOf(row)" class="trl-expect" data-testid="trl-expect">
+                    <span>{{ roleOf(row).expect }}</span>
+                    <span class="trl-muted">{{ roleOf(row).detail }}</span>
+                  </span>
                 </div>
                 <div
                   v-for="(cell, i) in row.cells"
@@ -340,16 +346,6 @@
                         ? "after set-up"
                         : ""
                   }}</span>
-                </div>
-                <!-- What a control row should do, after its last column. -->
-                <div
-                  v-if="roleOf(row)"
-                  class="trl-expect"
-                  data-testid="trl-expect"
-                  :style="{ gridRow: group.row + 1 + r, gridColumn: columns.length + 2 }"
-                >
-                  <span>{{ roleOf(row).expect }}</span>
-                  <span class="trl-muted">{{ roleOf(row).detail }}</span>
                 </div>
               </template>
             </template>
@@ -1861,14 +1857,12 @@ onBeforeUnmount(() => {
   margin-right: var(--space-2);
 }
 
+/* One line under the prompt, wrapping inside the label column. */
 .trl-expect {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding-left: var(--space-4);
+  flex-wrap: wrap;
+  column-gap: var(--space-2);
   font-size: var(--text-xs);
-  line-height: var(--leading-snug);
-  white-space: nowrap;
 }
 
 .trl-trig {
