@@ -3549,6 +3549,18 @@ def test_the_desktop_needs_remote_access_and_a_password_for_a_network_link(
     assert comfyui_link_service.link_target(
         server, "this_computer", "http://127.0.0.1:8188/"
     ) == ("https://127.0.0.1:9537", Path(certfile).read_text())
+    # A certificate ComfyUI cannot verify 127.0.0.1 against, or none to read:
+    # the configured port would refuse every call, so the window's listener.
+    for unusable in (_self_signed(tmp_path / "lan.pem", LAN_IPV4), "missing.pem"):
+        server._server_config["ssl_certfile"] = str(tmp_path / unusable)
+        assert comfyui_link_service.link_target(
+            server, "this_computer", "http://127.0.0.1:8188/"
+        ) == ("http://127.0.0.1:61001", None)
+    # Remote access over plain HTTP: the configured port, no certificate.
+    server._server_config["require_ssl"] = False
+    assert comfyui_link_service.link_target(
+        server, "this_computer", "http://127.0.0.1:8188/"
+    ) == ("http://127.0.0.1:9537", None)
 
 
 def test_each_linked_comfyui_here_is_told_once_a_session(monkeypatch):

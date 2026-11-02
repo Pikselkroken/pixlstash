@@ -230,6 +230,33 @@ def _external_listener_up(server) -> bool:
     )
 
 
+def _cert_for_loopback(server) -> Optional[str]:
+    """PixlStash's certificate, if it names 127.0.0.1; else ``None``, logged.
+
+    One the owner supplied may name only the machine's network address, and
+    the pack verifying against it would then refuse every call to 127.0.0.1.
+    """
+    try:
+        cert = _read_cert(server)
+    except LinkRefused as refused:
+        logger.warning(
+            "A ComfyUI on this computer is linked through the window's "
+            "listener instead of port %s: %s",
+            server._server_config.get("port", 9537),
+            refused,
+        )
+        return None
+    if not _cert_covers(cert, "127.0.0.1"):
+        logger.warning(
+            "A ComfyUI on this computer is linked through the window's "
+            "listener instead of port %s: PixlStash's HTTPS certificate does "
+            "not name 127.0.0.1.",
+            server._server_config.get("port", 9537),
+        )
+        return None
+    return cert.decode()
+
+
 def link_target(server, where: str, pinned_url: str) -> tuple[str, Optional[str]]:
     """The PixlStash URL ComfyUI should call, and the certificate to trust.
 
@@ -240,21 +267,24 @@ def link_target(server, where: str, pinned_url: str) -> tuple[str, Optional[str]
     https = bool(config.get("require_ssl", False))
     if where == "this_computer":
         if not _is_desktop():
-            port = _loopback_port(server)
-        elif _external_listener_up(server):
+            scheme = "https" if https else "http"
+            url = f"{scheme}://127.0.0.1:{_loopback_port(server)}"
+            return url, (_read_cert(server).decode() if https else None)
+        if _external_listener_up(server):
             # The configured port, never the window's: the loopback port is
             # this install's own (`stableLoopbackPort`), so another install or
             # a test run on this computer has another, and moves ComfyUI off
             # ours. The external listener binds 0.0.0.0, so 127.0.0.1 reaches
-            # it, and PixlStash's certificate names 127.0.0.1.
+            # it, over HTTPS only with a certificate that names 127.0.0.1.
             port = int(config.get("port", 9537))
-        else:
-            # Nothing serves the configured port: the window's own listener,
-            # always plain HTTP, re-sent each session (`reannounce`).
-            return f"http://127.0.0.1:{_loopback_port(server)}", None
-        scheme = "https" if https else "http"
-        url = f"{scheme}://127.0.0.1:{port}"
-        return url, (_read_cert(server).decode() if https else None)
+            if not https:
+                return f"http://127.0.0.1:{port}", None
+            cert = _cert_for_loopback(server)
+            if cert is not None:
+                return f"https://127.0.0.1:{port}", cert
+        # Nothing ComfyUI can use serves the configured port: the window's own
+        # listener, always plain HTTP, re-sent each session (`reannounce`).
+        return f"http://127.0.0.1:{_loopback_port(server)}", None
 
     if _is_desktop():
         # Password first: remote access will not bind without one, so turning
