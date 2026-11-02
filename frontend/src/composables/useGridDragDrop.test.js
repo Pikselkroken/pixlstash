@@ -1,5 +1,6 @@
-// A picture drag in the desktop app is an OS file drag of share copies (#2420);
-// in a browser it stays the HTML5 drag with the JSON payload.
+// An Alt-drag of pictures in the desktop app is an OS file drag of share copies
+// (#2420); a plain drag, and any drag in a browser, stays the HTML5 drag with
+// the JSON payload.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ref } from "vue";
@@ -43,9 +44,10 @@ function grid(selected = [1, 2]) {
   );
 }
 
-function dragStart() {
+function dragStart({ altKey = true } = {}) {
   const data = new Map();
   return {
+    altKey,
     defaultPrevented: false,
     preventDefault() {
       this.defaultPrevented = true;
@@ -145,6 +147,57 @@ describe("dragging pictures out of the grid (#2420)", () => {
     delete window.pixlstashDesktop;
     html5(grid());
     expect(makeShareCopies).not.toHaveBeenCalled();
+  });
+
+  it("stays the instant in-app drag in the desktop app without Alt", () => {
+    const g = grid();
+    const event = dragStart({ altKey: false });
+    g.handleContainerDragStart({ id: 1 }, event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(event.dataTransfer.getData("application/json")).toContain("image-ids");
+    expect(g.dragSourceImageIds.value).toEqual(new Set(["1", "2"]));
+    g.handleThumbnailNativeDragStart({ id: 1 }, dragStart({ altKey: false }));
+    expect(makeShareCopies).not.toHaveBeenCalled();
+    expect(startShareDrag).not.toHaveBeenCalled();
+  });
+
+  describe("the hint to hold Alt", () => {
+    const dragEnd = (clientX, clientY, dropEffect = "none") => ({
+      clientX,
+      clientY,
+      dataTransfer: { dropEffect },
+    });
+    const hints = () =>
+      useNoticeStore().notices.filter((n) => n.key === "drag-out-hint");
+    function plainDrag() {
+      const g = grid();
+      g.handleContainerDragStart({ id: 1 }, dragStart({ altKey: false }));
+      return g;
+    }
+
+    it("shows once when a plain drag is let go outside the window", () => {
+      const g = plainDrag();
+      const info = vi.spyOn(useNoticeStore(), "info");
+      g.handleDragEnd(dragEnd(-40, 200));
+      // The tile's own dragend follows its container's.
+      g.handleDragEnd(dragEnd(-40, 200));
+      expect(info).toHaveBeenCalledTimes(1);
+      expect(hints()).toHaveLength(1);
+      expect(hints()[0].text).toContain("hold Alt");
+      expect(g.dragSource.value).toBe(null);
+    });
+
+    it("stays quiet for a drop inside the window, or one taken outside", () => {
+      plainDrag().handleDragEnd(dragEnd(100, 100));
+      plainDrag().handleDragEnd(dragEnd(window.innerWidth + 5, 100, "copy"));
+      expect(hints()).toHaveLength(0);
+    });
+
+    it("stays quiet where Alt would not drag out", () => {
+      delete window.pixlstashDesktop;
+      plainDrag().handleDragEnd(dragEnd(-40, 200));
+      expect(hints()).toHaveLength(0);
+    });
   });
 });
 
