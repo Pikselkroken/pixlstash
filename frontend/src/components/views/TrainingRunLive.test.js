@@ -849,3 +849,105 @@ describe("a person's run with a lookalike and a stranger", () => {
     expect(wrapper.find('[data-testid="trl-role"]').exists()).toBe(false);
   });
 });
+
+describe("likeness to the run's character (#2522)", () => {
+  const scoredCells = (scores, faces = scores.map(() => true)) =>
+    scores.map((likeness, i) => ({
+      state: "sample",
+      filename: `s_${i}.jpg`,
+      face: faces[i],
+      likeness,
+    }));
+
+  function scored(likeness = {}) {
+    const run = payload({
+      status: "completed",
+      phase: null,
+      previews: null,
+      step: 1500,
+      imported: true,
+      cover_step: 1500,
+      character_id: 4,
+      completed_at: "2026-10-26T09:00:00+00:00",
+      speed: { seconds_per_step: 1.9, remaining_low_s: null, remaining_high_s: null },
+    });
+    run.rows[0].cells = scoredCells(
+      [14, 51, 74, 83, 86, 84, null],
+      [true, true, true, true, true, true, false],
+    );
+    run.rows[1].cells = scoredCells([3, 5, 8, 12, 21, 33, 46]);
+    run.likeness = {
+      character_id: 4,
+      character_name: "Someone",
+      with_trigger: [14, 51, 74, 83, 86, 84, null],
+      without_trigger: [3, 5, 8, 12, 21, 33, 46],
+      best_step: 1000,
+      best: 86,
+      pending: 0,
+      references: 5,
+      ...likeness,
+    };
+    return run;
+  }
+
+  it("draws a likeness row under the loss and a score on the previews", async () => {
+    const wrapper = await open(scored());
+    const label = wrapper.find('[data-testid="trl-likeness"]');
+    expect(label.text()).toContain("Likeness to Someone");
+    expect(label.text()).toContain("86");
+    expect(label.text()).toContain("at step 1,000");
+    const chart = wrapper.find(".trl-likeness svg");
+    expect(chart.text()).toContain("86 · most like Someone");
+    // The previews without the word cross the leak line at step 1,000.
+    expect(chart.text()).toContain("leaking past here");
+    // The prompt groups move down one row to make room.
+    expect(wrapper.find(".trl-gline").attributes("style")).toContain("grid-row: 4");
+    // With the word every preview says its score or that it shows no face;
+    // without it, only the ones that leak, in the warning hue.
+    const chips = wrapper.findAll('[data-testid="trl-chip"]');
+    expect(chips.map((c) => c.text())).toEqual([
+      "14", "51", "74", "83", "86", "84", "no face", "21", "33", "46",
+    ]);
+    expect(chips.map((c) => c.classes().includes("trl-chip--warn"))).toEqual([
+      false, false, false, false, false, false, false, true, true, true,
+    ]);
+    // The best step's button is marked; nothing is chosen for the owner.
+    const best = wrapper.find(".trl-use--best");
+    expect(best.attributes("aria-label")).toBe("Use this step, the most like Someone");
+    expect(wrapper.findAll(".trl-step")[4].find(".trl-use--best").exists()).toBe(true);
+    expect(wrapper.findAll(".trl-use")).toHaveLength(2);
+    expect(wrapper.findAll(".trl-step")[6].text()).toContain("Cover");
+  });
+
+  it("says Unknown before a preview is scored, and why", async () => {
+    const wrapper = await open(
+      scored({ with_trigger: Array(7).fill(null), best_step: null, best: null, references: 0 }),
+    );
+    const label = wrapper.find('[data-testid="trl-likeness"]');
+    expect(label.text()).toContain("Unknown");
+    expect(label.text()).toContain("no reference faces yet");
+    expect(wrapper.find(".trl-use--best").exists()).toBe(false);
+  });
+
+  it("draws none of it for a run with no character", async () => {
+    const wrapper = await open(payload());
+    expect(wrapper.find('[data-testid="trl-likeness"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="trl-chip"]').exists()).toBe(false);
+    expect(wrapper.find(".trl-gline").attributes("style")).toContain("grid-row: 3");
+  });
+
+  it("keeps asking about an ended run until its previews are scored", async () => {
+    vi.useFakeTimers();
+    try {
+      await open(scored({ pending: 3 }));
+      getTrainingJobLive.mockClear();
+      getTrainingJobLive.mockResolvedValue(scored());
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(getTrainingJobLive).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(getTrainingJobLive).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

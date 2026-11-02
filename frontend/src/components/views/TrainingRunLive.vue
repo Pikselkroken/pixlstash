@@ -241,10 +241,18 @@
                   v-else-if="live.coverable.includes(column)"
                   type="button"
                   class="trl-use"
+                  :class="{ 'trl-use--best': i === bestIndex }"
+                  :aria-label="
+                    i === bestIndex
+                      ? `Use this step, the most like ${likeness.character_name}`
+                      : undefined
+                  "
                   :disabled="choosing"
                   @click="useStep(column)"
                 >
-                  Use this step
+                  <v-icon v-if="i === bestIndex" size="11" class="trl-best-mark"
+                    >mdi-account</v-icon
+                  >Use this step
                 </button>
                 <span v-else-if="dueIn(column)">{{ dueIn(column) }}</span>
               </span>
@@ -274,6 +282,44 @@
                 compact
               />
             </div>
+            <!-- How much the previews look like the run's character (#2522),
+                 on the same step axis: evidence beside the pictures, never a
+                 choice made for the owner. -->
+            <template v-if="likeness">
+              <div class="trl-lab" :style="{ gridRow: 3 }" data-testid="trl-likeness">
+                <span class="section-label">Likeness to {{ likeness.character_name }}</span>
+                <span class="trl-loss">
+                  <span class="trl-lv">{{ likeness.best ?? "Unknown" }}</span>
+                  <span v-if="likeness.best != null" class="trl-muted"
+                    >at step {{ likeness.best_step.toLocaleString() }}</span
+                  >
+                  <span v-else-if="!likeness.references" class="trl-muted"
+                    >no reference faces yet</span
+                  >
+                  <span v-else-if="likeness.pending" class="trl-muted"
+                    >looking for faces</span
+                  >
+                </span>
+                <span class="trl-legend"><i class="trl-sw"></i>with the trigger word</span>
+                <span class="trl-legend">
+                  <i class="trl-sw trl-sw--d"></i>without it
+                  <Provenance :kind="likeness.best != null ? 'measured' : 'none'" />
+                </span>
+              </div>
+              <div
+                class="trl-likeness"
+                :style="{ gridRow: 3, gridColumn: `2 / span ${columns.length}` }"
+              >
+                <TrainingLikenessChart
+                  :with-trigger="likeness.with_trigger"
+                  :without-trigger="likeness.without_trigger"
+                  :best-index="bestIndex"
+                  :name="likeness.character_name"
+                  :pitch="pitch"
+                  :leak-at="LEAK_AT"
+                />
+              </div>
+            </template>
 
             <template v-for="(group, g) in groups" :key="group.key">
               <div class="trl-gline" :style="{ gridRow: group.row }">
@@ -307,18 +353,28 @@
                   :style="{ gridRow: group.row + 1 + r, gridColumn: i + 2 }"
                   @mouseenter="hoverColumn = i"
                 >
-                  <img
-                    v-if="cell.state === 'sample' && sampleUrl(cell)"
-                    class="trl-cell"
-                    :src="sampleUrl(cell)"
-                    :alt="`${row.prompt || `Prompt ${row.index + 1}`}, step ${columns[i]}`"
-                    loading="lazy"
-                    role="button"
-                    tabindex="0"
-                    @click="openSample(row, i, cell)"
-                    @keydown.enter="openSample(row, i, cell)"
-                    @keydown.space.prevent="openSample(row, i, cell)"
-                  />
+                  <span v-if="cell.state === 'sample' && sampleUrl(cell)" class="trl-cellbox">
+                    <img
+                      class="trl-cell"
+                      :src="sampleUrl(cell)"
+                      :alt="`${row.prompt || `Prompt ${row.index + 1}`}, step ${columns[i]}`"
+                      loading="lazy"
+                      role="button"
+                      tabindex="0"
+                      @click="openSample(row, i, cell)"
+                      @keydown.enter="openSample(row, i, cell)"
+                      @keydown.space.prevent="openSample(row, i, cell)"
+                    />
+                    <span
+                      v-if="chipOf(row, cell)"
+                      class="trl-chip"
+                      :class="{ 'trl-chip--warn': chipOf(row, cell).warn }"
+                      data-testid="trl-chip"
+                    >
+                      <v-icon v-if="chipOf(row, cell).noFace" size="10">mdi-cancel</v-icon>
+                      {{ chipOf(row, cell).text }}
+                    </span>
+                  </span>
                   <span v-else-if="cell.state === 'drawing'" class="trl-cell trl-cell--gen">
                     <span class="trl-spin"></span>
                     <template v-if="live.previews">
@@ -478,6 +534,7 @@ import LoraLossChart from "../widgets/LoraLossChart.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import SectionHeader from "../widgets/SectionHeader.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import TrainingLikenessChart from "../widgets/TrainingLikenessChart.vue";
 import TrainingSampleDialog from "../widgets/TrainingSampleDialog.vue";
 import ViewBackButton from "../widgets/ViewBackButton.vue";
 import {
@@ -689,15 +746,41 @@ const markers = computed(() =>
   })),
 );
 
+// A run filed under a character scores its previews against it (#2522).
+const likeness = computed(() => live.value?.likeness ?? null);
+const bestIndex = computed(() =>
+  likeness.value?.best_step == null ? -1 : columns.value.indexOf(likeness.value.best_step),
+);
+// Past this a preview without the trigger word looks like the character: the
+// LoRA is leaking. A stand-in, to tune on real runs.
+const LEAK_AT = 20;
+
+/**
+ * A preview's score chip: every one with the trigger word ("no face" for a
+ * back view, which the step's mean leaves out), and one without only once it
+ * leaks.
+ */
+function chipOf(row, cell) {
+  if (row.with_trigger === true) {
+    if (cell.face === false) return { text: "no face", noFace: true };
+    return cell.likeness == null ? null : { text: String(cell.likeness) };
+  }
+  if (row.with_trigger === false && cell.likeness >= LEAK_AT) {
+    return { text: String(cell.likeness), warn: true };
+  }
+  return null;
+}
+
 const groups = computed(() => {
   const rows = live.value?.rows ?? [];
   const withWord = rows.filter((row) => row.with_trigger === true);
   const without = rows.filter((row) => row.with_trigger === false);
   // Rows whose prompt the run's config did not give: no claim either way.
   const unknown = rows.filter((row) => row.with_trigger == null);
-  // Grid rows: 1 timeline, 2 loss, then each group's heading and its prompts.
+  // Grid rows: 1 timeline, 2 loss, 3 likeness when the run has a character,
+  // then each group's heading and its prompts.
   const out = [];
-  let next = 3;
+  let next = likeness.value ? 4 : 3;
   if (withWord.length) {
     out.push({
       key: "with",
@@ -750,7 +833,7 @@ function roleOf(row) {
 
 /** Every grid row: the timeline, the loss, each group's heading and prompts. */
 const rowCount = computed(() =>
-  groups.value.reduce((n, group) => n + 1 + group.rows.length, 2),
+  groups.value.reduce((n, group) => n + 1 + group.rows.length, likeness.value ? 3 : 2),
 );
 
 const phaseLog = computed(() => live.value?.phases ?? []);
@@ -1275,7 +1358,8 @@ function schedule() {
   clearTimeout(timer);
   timer = null;
   if (disposed || document.visibilityState !== "visible" || notFound) return;
-  if (live.value && !isLive.value) return;
+  // A run that has ended is asked again only while its previews are scored.
+  if (live.value && !isLive.value && !live.value.likeness?.pending) return;
   timer = setTimeout(async () => {
     await load();
     schedule();
@@ -1747,8 +1831,22 @@ onBeforeUnmount(() => {
 }
 
 .trl-step:hover .trl-use,
-.trl-use:focus-visible {
+.trl-use:focus-visible,
+.trl-use--best {
   opacity: 1;
+}
+
+/* The step most like the character: a mark in the identity hue, never the
+   cover's olive, and shown without a hover. */
+.trl-use--best {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-color: rgba(var(--v-theme-on-background), var(--opacity-text-secondary));
+}
+
+.trl-best-mark {
+  color: rgb(var(--v-theme-secondary));
 }
 
 .trl-use:hover {
@@ -1809,6 +1907,29 @@ onBeforeUnmount(() => {
 
 .trl-chart :deep(.lora-loss-empty) {
   text-align: center;
+}
+
+.trl-likeness {
+  align-self: center;
+  padding: var(--space-2) 0;
+}
+
+.trl-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-background), var(--opacity-text-secondary));
+}
+
+.trl-sw {
+  display: inline-block;
+  width: 16px;
+  border-top: 2px solid rgb(var(--v-theme-secondary));
+}
+
+.trl-sw--d {
+  border-top-style: dashed;
 }
 
 .trl-gline {
@@ -1898,6 +2019,34 @@ onBeforeUnmount(() => {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-background), var(--opacity-text-secondary));
   text-align: center;
+}
+
+.trl-cellbox {
+  position: relative;
+  display: block;
+}
+
+/* A preview's likeness, on the photo's own dark scrim. */
+.trl-chip {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--scrim-photo-strong);
+  color: rgb(var(--v-theme-on-background));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  pointer-events: none;
+}
+
+.trl-chip--warn {
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 img.trl-cell {

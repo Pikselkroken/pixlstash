@@ -42,6 +42,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.resources.arbiter import arbiter
 from pixlstash.resources.ledger import ledger
 from pixlstash.resources.ledger import ram as read_ram
+from pixlstash.scoring import select_reference_faces_for_character
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
 from pixlstash.services.picture_set_tree import owning_character_id
 from pixlstash.services.training_service import handle_for_run
@@ -51,6 +52,7 @@ from pixlstash.training import (
     measurements,
     preset_updates,
     presets,
+    preview_likeness,
     sample_prompts,
 )
 from pixlstash.training.config_render import (
@@ -748,9 +750,24 @@ def create_router(server) -> APIRouter:
             default_factory=list,
             description=(
                 "One per sample prompt: {index, prompt, with_trigger, role, "
-                "cells}, each cell {state, filename} in column order. role is "
-                "lookalike or stranger on a written prompt without the trigger "
-                "word of a person's run, else null."
+                "cells}, each cell {state, filename, face, likeness} in column "
+                "order. role is lookalike or stranger on a written prompt "
+                "without the trigger word of a person's run, else null. On a "
+                "run with a character, face is whether the preview shows one "
+                "(null before it is looked at) and likeness how much it looks "
+                "like the character, 0-100."
+            ),
+        )
+        likeness: Optional[dict] = Field(
+            default=None,
+            description=(
+                "For a run filed under a character: {character_id, "
+                "character_name, with_trigger, without_trigger, best_step, best, "
+                "pending, references}. The two lists hold one likeness per "
+                "column, the mean over its previews with a face (null where "
+                "none has one); best_step is the step after 0 most like the "
+                "character; pending counts previews not looked at yet. Null "
+                "for a run with no character."
             ),
         )
         preservation: Optional[dict] = Field(
@@ -1327,6 +1344,36 @@ def create_router(server) -> APIRouter:
                 )
         return handle, on_disk
 
+    def _likeness(job: dict, work_dir: str, rows: list, columns: list) -> dict | None:
+        """How much each preview looks like the run's character (#2522).
+
+        Scores the cells of *rows* in place. None for a run with no character,
+        or whose character is gone.
+        """
+        character_id = job["character_id"]
+        if character_id is None:
+            return None
+
+        def read(session):
+            character = session.get(Character, character_id)
+            if character is None:
+                return None, []
+            return character.name, select_reference_faces_for_character(
+                session, character_id
+            )
+
+        name, references = server.vault.db.run_immediate_read_task(read)
+        if name is None:
+            return None
+        # ponytail: any pack's embeddings are read here; while a pack change
+        # refreshes the library, a step may briefly compare across packs.
+        faces = preview_likeness.read_faces(work_dir)
+        return {
+            "character_id": character_id,
+            "character_name": name,
+            **preview_likeness.score(rows, columns, faces, references),
+        }
+
     def _live_payload(job: dict) -> dict:
         hub = server.vault.hub
         config = _parse_json_field(
@@ -1424,6 +1471,7 @@ def create_router(server) -> APIRouter:
                 }
                 for column in columns
             ]
+        likeness = _likeness(job, handle.work_dir, rows, columns)
 
         folder_id = None
         if job["training_folder"] and handle.training_folder == job["training_folder"]:
@@ -1475,6 +1523,7 @@ def create_router(server) -> APIRouter:
             "columns": columns,
             "rows": rows,
             "preservation": preservation,
+            "likeness": likeness,
             "run_folder": (
                 {"folder_id": folder_id, "run_name": _run_name(job)}
                 if folder_id is not None

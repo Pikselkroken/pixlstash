@@ -42,6 +42,7 @@ class TaskType(str, Enum):
     GHOST_CASCADE = "GhostCascadeTask"
     WORKFLOW_CARD_BACKFILL = "WorkflowCardBackfillTask"
     SAVED_RECIPE_CONVERT = "SavedRecipeConvertTask"
+    TRAINING_PREVIEW_FACES = "TrainingPreviewFacesTask"
 
     @staticmethod
     def all():
