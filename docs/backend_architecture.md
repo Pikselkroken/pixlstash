@@ -11843,14 +11843,20 @@ resolves them, so other recipes keep their measurements). A clip recipe needs
 clips: `POST /training/jobs` refuses one (422) when the scope has none
 (`ExportUtils.training_counts`), and the Train dialog shows it disabled and moves
 the pick to the same model's still recipe, since a set of stills would train at
-its video settings (one 512 bucket for H3's motion mode).
+its video settings (one 512 bucket for H3's motion mode), saying under the picker
+that the motion recipe is off and why. A queued clip run whose clips are gone by
+the time its dataset is built fails there (`_build_dataset`) rather than
+training motion on stills.
 
 **Caption form.** A recipe's optional `captions` names the form its model is
 prompted in: `description` (each picture's description, its tags where it has
 none) or `tags` (the default). `presets.caption_mode` reads it, the route queues
 it on the job's pending spec, and `_build_dataset` hands it to the builder, so a
 recipe changed since queueing changes nothing. MiniMax H3's two recipes caption
-in prose; the rest keep tags. The rendered config is the template, the
+in prose; the rest keep tags. `GET /training/presets` carries each recipe's
+`captions`, which the Train dialog states under the picker, and
+`GET /training/dataset` counts `undescribed` and `uncaptioned` pictures beside
+`untagged`, so the dialog warns by the form the picked recipe uses. The rendered config is the template, the
 resolved values (checked by `validate_tunables`) and the locked keys merged
 last; placeholders are substituted after the merge, so a recipe's prompts get
 the trigger word. A sample prompt expands `{{TRIGGER_WORD}}` and nothing else,

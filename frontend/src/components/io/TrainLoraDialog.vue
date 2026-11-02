@@ -172,6 +172,12 @@
         <span v-if="presetVerdict && presetVerdict !== 'fits'" class="tld-hint">
           {{ VERDICT_LABELS[presetVerdict] }}
         </span>
+        <span v-if="motionOff" class="tld-hint" data-testid="tld-motion-off">
+          {{ motionOff }}
+        </span>
+        <span v-if="captionsHint" class="tld-hint" data-testid="tld-captions">
+          {{ captionsHint }}
+        </span>
         <span class="tld-hint">
           <button
             type="button"
@@ -1046,11 +1052,25 @@ const presetVerdict = computed(
     (plan.value?.presets || []).find((p) => p.id === store.selectedPreset)
       ?.verdict || null,
 );
-const presetLabel = computed(
-  () =>
-    (store.presets || []).find((p) => p.id === store.selectedPreset)?.label ||
-    "",
+const selectedRecipe = computed(() =>
+  (store.presets || []).find((p) => p.id === store.selectedPreset),
 );
+const presetLabel = computed(() => selectedRecipe.value?.label || "");
+const byDescription = computed(() => selectedRecipe.value?.captions === "description");
+const captionsHint = computed(() => {
+  if (!selectedRecipe.value) return "";
+  return byDescription.value
+    ? "Captions: each picture's description, or its tags where it has none."
+    : "Captions: each picture's tags.";
+});
+/** Why this model's motion recipe cannot be picked, when it cannot. */
+const motionOff = computed(() => {
+  const arch = selectedRecipe.value?.requires_arch;
+  const off = (store.presets || []).find(
+    (p) => arch && p.requires_arch === arch && store.presetUnusable(p),
+  );
+  return off ? `${off.label} is off: there are no video clips here to learn motion from.` : "";
+});
 
 const fitOptions = computed(() => {
   const free = plan.value?.room?.vram_mb;
@@ -1220,7 +1240,22 @@ const checks = computed(() => {
       text: `${clips} video clip${clips === 1 ? " is" : "s are"} left out: this model trains on still pictures. A motion recipe trains on clips.`,
     });
   }
-  if (d.untagged > 0) {
+  if (byDescription.value) {
+    const bare = d.uncaptioned || 0;
+    const onTags = (d.undescribed || 0) - bare;
+    if (onTags > 0) {
+      out.push({
+        id: "undescribed",
+        text: `${onTags} picture${onTags === 1 ? " has" : "s have"} no description, so ${onTags === 1 ? "it trains" : "they train"} on ${onTags === 1 ? "its" : "their"} tags instead.`,
+      });
+    }
+    if (bare > 0) {
+      out.push({
+        id: "uncaptioned",
+        text: `${bare} picture${bare === 1 ? " has" : "s have"} neither a description nor tags, so ${bare === 1 ? "it trains" : "they train"} on the trigger word alone.`,
+      });
+    }
+  } else if (d.untagged > 0) {
     out.push({
       id: "untagged",
       text: `${d.untagged} picture${d.untagged === 1 ? " has" : "s have"} no tags yet, so ${d.untagged === 1 ? "it trains" : "they train"} on the trigger word alone.`,

@@ -843,6 +843,13 @@ def create_router(server) -> APIRouter:
                 "its stills; every other recipe leaves clips out."
             ),
         )
+        captions: str = Field(
+            default="tags",
+            description=(
+                "How the recipe captions each picture: ``description`` (its "
+                "description, its tags where it has none) or ``tags``."
+            ),
+        )
 
     class PresetUpdateItem(BaseModel):
         """A recipe a check replaced with a newer version from pixlstash.dev."""
@@ -987,7 +994,22 @@ def create_router(server) -> APIRouter:
         untagged: int = Field(
             ...,
             description=(
-                "Pictures with no tags; their caption is the trigger word alone."
+                "Pictures with no tags; a recipe captioning by tags trains "
+                "them on the trigger word alone."
+            ),
+        )
+        undescribed: int = Field(
+            default=0,
+            description=(
+                "Pictures with no description; a recipe captioning by "
+                "description trains them on their tags."
+            ),
+        )
+        uncaptioned: int = Field(
+            default=0,
+            description=(
+                "Pictures with neither a description nor tags; every recipe "
+                "trains them on the trigger word alone."
             ),
         )
         near_duplicates: int = Field(
@@ -1175,6 +1197,7 @@ def create_router(server) -> APIRouter:
                 "requires_arch": preset["requires_arch"],
                 "offered": presets.offered(preset, architectures, version),
                 "clips": presets.trains_clips(preset),
+                "captions": presets.caption_mode(preset),
             }
             for preset in presets.list_presets()
         ]

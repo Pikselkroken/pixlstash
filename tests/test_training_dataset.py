@@ -437,6 +437,11 @@ def test_training_facts_count_untagged_near_copies_and_other_people(env):
         for pid in pic_ids:
             session.get(Picture, pid).perceptual_hash = "00ff00ff00ff00ff"
         session.get(Picture, third).perceptual_hash = "ff00ff00ff00ff00"
+        # Captioned by description: one has it, one falls back to its tag,
+        # one has neither and trains on the trigger word alone.
+        session.get(Picture, pic_ids[0]).description = None
+        session.get(Picture, pic_ids[1]).description = None
+        session.get(Picture, third).description = "an old man in a garden"
         for face in session.exec(select(Face).where(Face.picture_id == third)):
             face.character_id = None
         session.add(
@@ -451,6 +456,8 @@ def test_training_facts_count_untagged_near_copies_and_other_people(env):
         "count": 3,
         "clips": 0,
         "untagged": 1,
+        "undescribed": 2,
+        "uncaptioned": 1,
         "near_duplicates": 2,
         "other_people": 1,
     }

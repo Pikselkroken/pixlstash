@@ -1176,11 +1176,12 @@ class ExportUtils:
         """What the Train dialog checks before a run of the set or character.
 
         Returns:
-            ``{"count", "clips", "untagged", "near_duplicates",
-            "other_people"}``: the picture count (stills), the video clips a
-            recipe that trains on clips adds to them, how many pictures have
-            no tags (the dataset's captions are the tags, so those train on
-            the trigger word alone), how many have a near copy in the dataset,
+            ``{"count", "clips", "untagged", "undescribed", "uncaptioned",
+            "near_duplicates", "other_people"}``: the picture count (stills),
+            the video clips a recipe that trains on clips adds to them, how
+            many pictures have no tags, no description, and neither (what a
+            caption falls back to the trigger word alone on, depending on the
+            recipe's caption form), how many have a near copy in the dataset,
             and how many show a face named as somebody other than
             *character_id* (0 without one).
         """
@@ -1195,7 +1196,7 @@ class ExportUtils:
 
         rows = ExportUtils._training_rows(server, set_id, character_id, clips=True)
         pics = [pic for pic in rows if not VideoUtils.is_video_file(pic.file_path)]
-        _, tags = ExportUtils._captions_and_tags(pics)
+        captions, tags = ExportUtils._captions_and_tags(pics)
         ids = [pic.id for pic in pics]
 
         def near_and_others(session):
@@ -1225,6 +1226,10 @@ class ExportUtils:
             "count": len(ids),
             "clips": len(rows) - len(pics),
             "untagged": sum(1 for row in tags if not row),
+            "undescribed": sum(1 for text in captions if not text),
+            "uncaptioned": sum(
+                1 for text, row in zip(captions, tags) if not text and not row
+            ),
             "near_duplicates": near,
             "other_people": others,
         }

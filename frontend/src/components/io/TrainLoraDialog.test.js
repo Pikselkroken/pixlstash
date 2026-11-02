@@ -614,6 +614,40 @@ describe("a recipe that trains on clips (#2179)", () => {
       chips: ["Needs a newer ai-toolkit", "Needs video clips"],
     });
     expect(picker.props("options").filter((o) => o.disabled)).toHaveLength(1);
+    // And says so where the recipe was chosen, not only inside the list.
+    expect(wrapper.find('[data-testid="tld-motion-off"]').text()).toBe(
+      "MiniMax H3 · motion is off: there are no video clips here to learn motion from.",
+    );
+    // Another model with no motion recipe has nothing to say about it.
+    store.selectedPreset = "zimage-turbo";
+    await flushPromises();
+    expect(wrapper.find('[data-testid="tld-motion-off"]').exists()).toBe(false);
+  });
+
+  it("says how the pictures are captioned, and warns by that caption form", async () => {
+    training.listTrainingPresets.mockResolvedValue([
+      { id: "zimage-turbo", label: "Z-Image Turbo", offered: true, captions: "tags" },
+      { id: "minimax-h3-image", label: "MiniMax H3 · image", offered: true, captions: "description" },
+    ]);
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset({ untagged: 3, undescribed: 5, uncaptioned: 1 }),
+    );
+    const text = () => wrapper.find('[data-testid="tld-captions"]').text();
+    const checks = () => wrapper.find('[data-testid="tld-checks"]').text();
+    store.selectedPreset = "zimage-turbo";
+    await flushPromises();
+    expect(text()).toBe("Captions: each picture's tags.");
+    expect(checks()).toContain("3 pictures have no tags yet");
+
+    store.selectedPreset = "minimax-h3-image";
+    await flushPromises();
+    expect(text()).toBe("Captions: each picture's description, or its tags where it has none.");
+    expect(checks()).not.toContain("no tags yet");
+    expect(checks()).toContain("4 pictures have no description, so they train on their tags instead.");
+    expect(checks()).toContain(
+      "1 picture has neither a description nor tags, so it trains on the trigger word alone.",
+    );
   });
 });
 
