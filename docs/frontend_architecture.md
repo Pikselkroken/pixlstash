@@ -2370,16 +2370,13 @@ Run tab**: Run… is an action, so it belongs in the footer and opens a popup (F
 card is. The footer is the Workflow tab's alone: Recipes runs a recipe from its
 own row.
 
-Its head row (`AppInspector`'s `#head`) is `StatsSidebar`'s: the view's name,
-the workflow's, or `N workflows`; an `Esc` keycap and the selection-off icon
-that clears the selection while anything is selected; and a close button that
-always ends the row, shuts the rail as the toolbar toggle does (persisted) and
-hands focus to that toggle.
-
 - **Layout (#2165), the rail pattern of #2161.** A `#head` row on the
   toolbar's line: `store.viewName` with nothing selected, the workflow's name
-  for one, "N workflows" for several, and **Clear** while anything is
-  selected. The `#lead` is the star histogram (`WorkflowStarChart.vue`: six
+  for one, "N workflows" for several, then an `Esc` keycap and the
+  selection-off icon that clears the selection while anything is selected,
+  and a close button that always ends the row: it shuts the rail as the
+  toolbar toggle does (persisted) and hands focus to that toggle, as
+  `StatsSidebar`'s does. The `#lead` is the star histogram (`WorkflowStarChart.vue`: six
   32px bars, none and 1★–5★, `role="img"` with the counts in its label) over
   the tabs. The Workflow tab's sections are `SectionHeader`s collapsed through
   `useSectionCollapse` (scope `workflow`): **Models** (read-only rows, missing
