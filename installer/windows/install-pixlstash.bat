@@ -8,17 +8,20 @@ if "%APP_DIR%"=="" (
 )
 
 :: ---- Locate Python -------------------------------------------------------
+:: The first candidate that is Python 3.11 or newer wins (pyproject.toml's
+:: requires-python). A 3.10 on PATH must not be picked: pip refuses the wheel.
+set "PY_FLOOR_CHECK=import sys; sys.exit(sys.version_info < (3, 11))"
 set "PYTHON_CMD="
-py -3.12 --version >nul 2>&1
-if not errorlevel 1 set "PYTHON_CMD=py -3.12"
-
-if not defined PYTHON_CMD (
-    python --version >nul 2>&1
-    if not errorlevel 1 set "PYTHON_CMD=python"
+for %%C in ("py -3.12" "py -3.11" "py -3" "python") do (
+    if not defined PYTHON_CMD (
+        %%~C -c "%PY_FLOOR_CHECK%" >nul 2>&1
+        if not errorlevel 1 set "PYTHON_CMD=%%~C"
+    )
 )
 
 if not defined PYTHON_CMD (
-    echo Error: Python 3.10+ is required but was not found.
+    echo Error: Python 3.11 or newer is required but was not found.
+    python --version 2>nul
     echo Please install Python from https://www.python.org/ and run the installer again.
     exit /b 1
 )
@@ -26,7 +29,21 @@ if not defined PYTHON_CMD (
 echo Using Python: %PYTHON_CMD%
 
 :: ---- Create virtual environment ------------------------------------------
+:: A venv left on an older Python (or whose base Python is gone) cannot take the
+:: wheel, so rebuild it. The library lives elsewhere; packages built for the old
+:: Python, plugin dependencies included, could not load on the new one anyway.
 set "VENV_DIR=%APP_DIR%\venv"
+if exist "%VENV_DIR%\" (
+    "%VENV_DIR%\Scripts\python.exe" -c "%PY_FLOOR_CHECK%" >nul 2>&1
+    if errorlevel 1 (
+        echo Existing virtual environment does not run Python 3.11+; recreating it.
+        rmdir /s /q "%VENV_DIR%"
+        if exist "%VENV_DIR%\" (
+            echo Error: Could not remove %VENV_DIR%. Close PixlStash and try again.
+            exit /b 1
+        )
+    )
+)
 if not exist "%VENV_DIR%\" (
     echo Creating virtual environment in %VENV_DIR%
     %PYTHON_CMD% -m venv "%VENV_DIR%"
