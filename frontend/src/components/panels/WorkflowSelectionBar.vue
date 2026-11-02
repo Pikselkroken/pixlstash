@@ -60,7 +60,7 @@
           role="menuitem"
           @click="store.clearSelection()"
         >
-          <v-icon class="ctx-icon">mdi-close</v-icon>
+          <v-icon class="ctx-icon">mdi-selection-off</v-icon>
           <span class="ctx-label-text">Clear selection</span>
           <span class="ctx-shortcut">Esc</span>
         </button>
@@ -164,11 +164,12 @@
       @click="emit('delete')"
     />
 
-    <!-- Clear is the × beside the count's own "Clear selection" row: the pill
-         is where a reader ends a selection, and Esc is the same act. -->
+    <!-- Clear is the deselect icon beside the count's own "Clear selection"
+         row: the pill is where a reader ends a selection, and Esc is the same
+         act. -->
     <AppBarButton
       shape="round"
-      icon="close"
+      icon="selection-off"
       data-verb="clear"
       aria-label="Clear selection"
       tooltip="Clear selection (Esc)"

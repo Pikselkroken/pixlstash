@@ -331,7 +331,7 @@
           role="menuitem"
           @click="clearSelection"
         >
-          <v-icon class="ctx-icon">mdi-close</v-icon>
+          <v-icon class="ctx-icon">mdi-selection-off</v-icon>
           <span class="ctx-label-text">Clear selection</span>
           <span class="ctx-shortcut">Esc</span>
         </button>
@@ -394,7 +394,7 @@
               role="menuitem"
               @click="clearSelection"
             >
-              <v-icon class="ctx-icon">mdi-close</v-icon>
+              <v-icon class="ctx-icon">mdi-selection-off</v-icon>
               <span class="ctx-label-text">Clear selection</span>
               <span class="ctx-shortcut">Esc</span>
             </button>
@@ -505,7 +505,7 @@
 
         <AppBarButton
           shape="round"
-          icon="close"
+          icon="selection-off"
           tooltip="Clear the selection (Esc)"
           aria-label="Clear the selection"
           @click="clearSelection"

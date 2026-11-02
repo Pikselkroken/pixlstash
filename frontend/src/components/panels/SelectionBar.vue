@@ -317,7 +317,7 @@
           @click="$emit('delete-selected')"
         />
         <AppBarButton
-          icon="close"
+          icon="selection-off"
           shape="round"
           data-verb="clear"
           :disabled="!hasSelection"

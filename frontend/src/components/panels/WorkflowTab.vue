@@ -8,23 +8,37 @@
   >
     <!-- One head row on the toolbar's line (#2165, the StatsSidebar idiom): the
          view's name when nothing is selected, the workflow's when one is, or
-         how many. Clear while anything is selected. -->
+         how many. Esc's keycap and the selection-off icon while anything is
+         selected; the close button always ends the row. -->
     <template #head>
       <h2 class="wftab-rail-title" data-testid="wftab-title">
         <Tooltip :text="headTitle" activator="parent" />
         {{ headTitle }}
       </h2>
+      <template v-if="store.selectedKeys.length">
+        <kbd class="fm-kbd wftab-esc" aria-hidden="true">Esc</kbd>
+        <AppButton
+          class="wftab-clear"
+          variant="ghost"
+          size="sm"
+          icon-left="selection-off"
+          icon-only
+          tooltip="Clear the selection · Esc"
+          aria-keyshortcuts="Escape"
+          data-testid="wftab-clear"
+          @click="store.clearSelection()"
+        />
+      </template>
       <AppButton
-        v-if="store.selectedKeys.length"
-        class="wftab-clear"
+        class="wftab-close"
         variant="ghost"
         size="sm"
-        tooltip="Clear the selection"
-        data-testid="wftab-clear"
-        @click="store.clearSelection()"
-      >
-        Clear
-      </AppButton>
+        icon-left="close"
+        icon-only
+        tooltip="Close this panel"
+        data-testid="wftab-close"
+        @click="closeRail"
+      />
     </template>
 
     <!-- The star histogram, for one workflow with a rating: where its defaults
@@ -1403,6 +1417,18 @@ const { showPictures, showLoraPictures, showValuePictures } =
   useWorkflowPictures();
 const sidebarStore = useSidebarStore();
 const notices = useNoticeStore();
+
+// The same act as the toolbar toggle, so it persists. The button goes with
+// the rail, so focus moves to the toolbar's toggle (not the lightbox's)
+// rather than dropping to `body`.
+function closeRail() {
+  sidebarStore.toggleWorkflowInspector();
+  nextTick(() =>
+    [...document.querySelectorAll(".tb-stats-btn")]
+      .find((el) => !el.closest(".lightbox-topbar-sidebar-toggle"))
+      ?.focus(),
+  );
+}
 const {
   canOpenComfyui,
   comfyuiLacksNode,
@@ -5245,7 +5271,14 @@ async function checkInstalled(key, { quiet = false } = {}) {
   font-weight: var(--weight-semibold);
 }
 
-.wftab-clear {
+.wftab-esc {
+  flex: none;
+  margin-left: var(--space-2);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.wftab-clear,
+.wftab-close {
   flex: none;
 }
 

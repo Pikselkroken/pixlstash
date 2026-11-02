@@ -179,7 +179,7 @@
         >
         <AppBarButton
           shape="round"
-          icon="close"
+          icon="selection-off"
           aria-label="Clear selection"
           tooltip="Clear selection"
           @click="store.clearSelection()"
@@ -236,7 +236,7 @@
           data-verb="clear"
           @click="verb(() => store.clearSelection())"
         >
-          <v-icon class="ctx-icon">mdi-close</v-icon>
+          <v-icon class="ctx-icon">mdi-selection-off</v-icon>
           <span class="ctx-label-text">Clear selection</span>
           <span class="ctx-shortcut">Esc</span>
         </button>

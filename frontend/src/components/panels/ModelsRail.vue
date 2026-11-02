@@ -9,15 +9,30 @@
       <h2 class="mrail-title" tabindex="-1" data-testid="mrail-title">
         {{ title }}
       </h2>
+      <template v-if="hasSelection">
+        <kbd class="fm-kbd mrail-esc" aria-hidden="true">Esc</kbd>
+        <AppButton
+          class="mrail-clear"
+          variant="ghost"
+          size="sm"
+          icon-left="selection-off"
+          icon-only
+          tooltip="Clear the selection · Esc"
+          aria-keyshortcuts="Escape"
+          data-testid="mrail-clear"
+          @click="clearSelection"
+        />
+      </template>
       <AppButton
-        v-if="hasSelection"
-        class="mrail-clear"
+        class="mrail-close"
         variant="ghost"
         size="sm"
-        data-testid="mrail-clear"
-        @click="clearSelection"
-        >Clear</AppButton
-      >
+        icon-left="close"
+        icon-only
+        tooltip="Close this panel"
+        data-testid="mrail-close"
+        @click="closeRail"
+      />
     </template>
 
     <div class="mrail-scroll">
@@ -212,7 +227,7 @@
  * The rail holds no selection of its own: it reads the store's, so the shelf,
  * the set grid and this rail cannot disagree about what is picked.
  */
-import { computed, onBeforeUnmount, provide, reactive } from "vue";
+import { computed, nextTick, onBeforeUnmount, provide, reactive } from "vue";
 import { useRoute } from "vue-router";
 import { VIcon } from "vuetify/components";
 
@@ -374,6 +389,18 @@ function clearSelection() {
   store.clearMissingSelection();
 }
 
+// The same act as the toolbar toggle, so it persists. The button goes with
+// the rail, so focus moves to the toolbar's toggle (not the lightbox's)
+// rather than dropping to `body`.
+function closeRail() {
+  sidebarStore.setModelsRailOpen(false);
+  nextTick(() =>
+    [...document.querySelectorAll(".tb-stats-btn")]
+      .find((el) => !el.closest(".lightbox-topbar-sidebar-toggle"))
+      ?.focus(),
+  );
+}
+
 // ── Nothing picked: the view's figures ────────────────────────────────────
 
 /**
@@ -467,7 +494,14 @@ function bytesText(bytes) {
   white-space: nowrap;
 }
 
-.mrail-clear {
+.mrail-esc {
+  flex: none;
+  margin-left: var(--space-2);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.mrail-clear,
+.mrail-close {
   flex: none;
 }
 

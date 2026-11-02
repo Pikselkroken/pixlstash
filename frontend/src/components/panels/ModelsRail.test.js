@@ -276,6 +276,12 @@ describe("nothing picked", () => {
     const { wrapper } = await mountRail();
     expect(wrapper.find('[data-testid="mrail-clear"]').exists()).toBe(false);
   });
+
+  it("closes from the head's close button, with nothing picked", async () => {
+    const { wrapper } = await mountRail();
+    await wrapper.get('[data-testid="mrail-close"]').trigger("click");
+    expect(useSidebarStore().modelsRailOpen).toBe(false);
+  });
 });
 
 describe("one set", () => {

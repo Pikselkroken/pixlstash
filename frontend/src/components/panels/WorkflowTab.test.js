@@ -6296,6 +6296,12 @@ describe("the rail's head, sections and dialogs (#2165)", () => {
     expect(store.selectedKeys).toEqual([]);
   });
 
+  it("closes from the head's close button, selection or not", async () => {
+    const { wrapper } = await mountWith([]);
+    await wrapper.get("[data-testid='wftab-close']").trigger("click");
+    expect(useSidebarStore().workflowInspectorOpen).toBe(false);
+  });
+
   it("gives each section its header, and folds a section's body away on its chevron", async () => {
     const { wrapper } = await mountWith([KEY]);
     const labels = wrapper.findAll(".section-head__label").map((label) => label.text());

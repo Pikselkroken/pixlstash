@@ -408,10 +408,12 @@
             <button
               type="button"
               class="qselclear"
+              aria-label="Clear the selection"
+              aria-keyshortcuts="Escape"
               @click="clearMixedSelection()"
             >
-              <Tooltip text="Clear the selection (Esc)" activator="parent" />
-              Clear
+              <Tooltip text="Clear the selection (Esc)" activator="parent" :describe="false" />
+              <v-icon size="14">mdi-selection-off</v-icon>
             </button>
           </span>
         </div>
@@ -519,10 +521,12 @@
           <button
             type="button"
             class="qselclear"
+            aria-label="Clear the selection"
+            aria-keyshortcuts="Escape"
             @click="store.clearSelection()"
           >
-            <Tooltip text="Clear the selection (Esc)" activator="parent" />
-            Clear
+            <Tooltip text="Clear the selection (Esc)" activator="parent" :describe="false" />
+            <v-icon size="14">mdi-selection-off</v-icon>
           </button>
         </span>
       </div>
@@ -3259,11 +3263,9 @@ defineExpose({ windowedGroups, tierLabel });
 }
 
 .qselclear {
+  display: inline-flex;
   padding: 0;
-  font: inherit;
-  font-weight: var(--weight-semibold);
   color: var(--active-text);
-  text-decoration: underline;
   border-radius: var(--radius-sm);
 }
 
