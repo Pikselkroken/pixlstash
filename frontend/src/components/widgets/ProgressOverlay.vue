@@ -78,7 +78,9 @@
  *                held up to report a failure can carry its own dismissal. A
  *                caller that wants no button at the end nulls the label, which
  *                the export already does.
- *   anchor     - 'top' | 'bottom'. Controls vertical position.
+ *   anchor     - 'top' | 'bottom' | 'inline'. 'top'/'bottom' float the card in
+ *                its host's corner; 'inline' drops the card and sits in a row
+ *                of chrome as a label and a short bar (the title bar's sort wait).
  *   indeterminate - When true, show animated indeterminate progress.
  *
  * Emits:
@@ -171,6 +173,36 @@ const announcement = computed(() => {
 
 .progress-overlay--bottom {
   bottom: 88px;
+}
+
+/* Inline: a label and a short bar in a row of chrome, on the chrome's own
+   ink. `inherit` takes back the bright amber the dark card swapped in. */
+.progress-overlay--inline {
+  --v-theme-accent: inherit;
+  position: static;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: 0;
+  background: none;
+  color: rgba(var(--v-theme-on-background), var(--opacity-text-secondary));
+  box-shadow: none;
+  backdrop-filter: none;
+  white-space: nowrap;
+}
+
+.progress-overlay--inline .progress-overlay__title {
+  margin: 0;
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+}
+
+.progress-overlay--inline .progress-overlay__bar {
+  flex-shrink: 0;
+  width: 80px;
+  height: 4px;
+  background: rgba(var(--v-theme-on-background), 0.12);
 }
 
 .progress-overlay--error {

@@ -15,10 +15,12 @@ import { RouterLink, useRoute } from "vue-router";
 import { useVersionCheck } from "../composables/useVersionCheck";
 import { MODEL_SHELF_ROUTES, WORKFLOW_ROUTES } from "../router/routeNames";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
+import { useTasksStore } from "../stores/useTasksStore";
 import { useUserPrefsStore } from "../stores/useUserPrefsStore";
 import { isReadOnly } from "../utils/apiClient";
 import TitleBarLibraryPicker from "./TitleBarLibraryPicker.vue";
 import TitleBarTasks from "./TitleBarTasks.vue";
+import ProgressOverlay from "./widgets/ProgressOverlay.vue";
 import WordmarkLogo from "./WordmarkLogo.vue";
 import AppBarButton from "./widgets/AppBarButton.vue";
 import Tooltip from "./widgets/Tooltip.vue";
@@ -42,6 +44,7 @@ const isMac = /mac/i.test(
 
 const route = useRoute();
 const modelShelfStore = useModelShelfStore();
+const tasksStore = useTasksStore();
 const userPrefsStore = useUserPrefsStore();
 
 // Every route outside the workflow library and the model shelf is Media: the
@@ -283,6 +286,16 @@ const close = () => desktop?.windowClose?.();
           @click.prevent="dismissUpdateAlert"
         />
       </div>
+      <!-- A short wait the user cannot abort (the grid's sort or search):
+           beside the tasks pill, not over the grid. Outside the read-only
+           gate, since a share session sorts too. -->
+      <ProgressOverlay
+        :visible="tasksStore.transientProgress.visible"
+        :status="tasksStore.transientProgress.status"
+        :message="tasksStore.transientProgress.message"
+        :percent="tasksStore.transientProgress.percent"
+        anchor="inline"
+      />
       <TitleBarTasks v-if="!isReadOnly" />
       <AppBarButton
         class="titlebar-settings"
@@ -632,6 +645,11 @@ const close = () => desktop?.windowClose?.();
 
 @media (max-width: 850px) {
   .titlebar-update {
+    display: none;
+  }
+
+  /* The bar alone still says "working"; its label is the screen reader's. */
+  .titlebar-end :deep(.progress-overlay__title) {
     display: none;
   }
 }

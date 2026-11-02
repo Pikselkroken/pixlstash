@@ -61,7 +61,17 @@ vi.mock("../composables/useConfirm", () => ({
 
 vi.mock("../utils/reloadPage", () => ({ reloadPage: vi.fn() }));
 
-const tasks = reactive({ activeCount: 0, hasActiveTasks: false });
+const IDLE_PROGRESS = {
+  visible: false,
+  status: "idle",
+  message: "",
+  percent: 0,
+};
+const tasks = reactive({
+  activeCount: 0,
+  hasActiveTasks: false,
+  transientProgress: IDLE_PROGRESS,
+});
 vi.mock("../stores/useTasksStore", () => ({ useTasksStore: () => tasks }));
 
 vi.mock("./panels/TasksPanel.vue", () => ({
@@ -165,6 +175,7 @@ beforeEach(() => {
   isReadOnly.value = false;
   tasks.activeCount = 0;
   tasks.hasActiveTasks = false;
+  tasks.transientProgress = IDLE_PROGRESS;
   confirmMock.mockReset().mockResolvedValue(true);
   setActiveLibrary.mockReset().mockResolvedValue({ status: "ok" });
   listLibraries.mockReset().mockResolvedValue({
@@ -528,6 +539,48 @@ describe("the tasks pill", () => {
     useSidebarStore().tasksPillRequest += 1;
     await flushPromises();
     expect(pill().classes()).toContain("bar-btn--open");
+  });
+});
+
+describe("the transient progress bar", () => {
+  const SORTING = {
+    visible: true,
+    status: "running",
+    message: "Sorting by smart score",
+    percent: 40,
+  };
+
+  it("draws the grid's sort wait left of the tasks pill", async () => {
+    const wrapper = await mountBar("/");
+    expect(wrapper.find('[role="progressbar"]').exists()).toBe(false);
+
+    tasks.transientProgress = SORTING;
+    await flushPromises();
+    const bar = wrapper.find('[role="progressbar"]');
+    expect(bar.attributes("aria-label")).toBe("Sorting by smart score");
+    expect(bar.attributes("aria-valuenow")).toBe("40");
+    const end = wrapper.find(".titlebar-end").element;
+    const order = [
+      ...end.querySelectorAll(
+        ".progress-overlay, [data-testid='titlebar-tasks']",
+      ),
+    ];
+    expect(order.map((el) => el.dataset.testid ?? "progress")).toEqual([
+      "progress",
+      "titlebar-tasks",
+    ]);
+
+    tasks.transientProgress = IDLE_PROGRESS;
+    await flushPromises();
+    expect(wrapper.find('[role="progressbar"]').exists()).toBe(false);
+  });
+
+  it("shows in a read-only session, which has no tasks pill", async () => {
+    isReadOnly.value = true;
+    tasks.transientProgress = SORTING;
+    const wrapper = await mountBar("/");
+    expect(wrapper.find('[data-testid="titlebar-tasks"]').exists()).toBe(false);
+    expect(wrapper.find('[role="progressbar"]').exists()).toBe(true);
   });
 });
 

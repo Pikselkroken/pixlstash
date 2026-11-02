@@ -63,6 +63,18 @@ export const useTasksStore = defineStore("tasks", () => {
   const lastActiveAtByWorker = new Map();
   const lastProgressAtByWorker = new Map();
 
+  // ── Transient progress ────────────────────────────────────────────────────
+  // A short wait the user cannot abort and the task list does not list: the
+  // grid's sort or search loading. The grid writes it, the title bar draws it
+  // beside the tasks pill, so it no longer covers the grid's corner.
+  // ProgressOverlay's props: { visible, status, message, percent }.
+  const transientProgress = ref({
+    visible: false,
+    status: "idle",
+    message: "",
+    percent: 0,
+  });
+
   // ── ComfyUI runs (backend-reported) ───────────────────────────────────────
   // The runs in flight as the last poll listed them, oldest first:
   // [{ run_id, prompt_id, label, workflow_id, status: "waiting" | "queued" |
@@ -870,6 +882,8 @@ export const useTasksStore = defineStore("tasks", () => {
     runWaitingAnyway,
     cancelWaiting,
     freeComfyuiCache,
+    // transient progress (the grid's sort/search wait)
+    transientProgress,
     // import runs (#459)
     importRuns,
     setImportRun,

@@ -404,15 +404,8 @@
       :total="pluginProgress.total"
       anchor="bottom"
     />
-
-    <ProgressOverlay
-      :visible="smartScoreLoadingVisible"
-      :status="smartScoreProgress.status"
-      :message="smartScoreProgressMessage"
-      :percent="smartScoreProgressPercent"
-      :indeterminate="false"
-      anchor="top"
-    />
+    <!-- The sort/search wait is drawn in the title bar, beside the tasks
+         pill, through tasksStore.transientProgress (wired below). -->
 
     <!-- An import's arriving tiles sit above the grid's scroller, pinned
          whatever the sort or filter, and the scroller starts below them, so
@@ -6737,6 +6730,29 @@ const {
     onGridFetchDone,
   },
 );
+// The sort/search wait cannot be aborted and is over in seconds, so it sits in
+// the title bar beside the tasks pill rather than over the grid's corner.
+watch(
+  () => ({
+    visible: smartScoreLoadingVisible.value,
+    status: smartScoreProgress.status,
+    message: smartScoreProgressMessage.value,
+    percent: smartScoreProgressPercent.value,
+  }),
+  (progress) => {
+    tasksStore.transientProgress = progress;
+  },
+  { immediate: true },
+);
+onUnmounted(() => {
+  tasksStore.transientProgress = {
+    visible: false,
+    status: "idle",
+    message: "",
+    percent: 0,
+  };
+});
+
 // The view with no filters: the filter menu counts against it, and the strip
 // shows its size as the "of N".
 const filterCountBaseQuery = computed(() => buildFilterCountBaseQuery());
