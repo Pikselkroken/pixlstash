@@ -174,20 +174,31 @@
               </template>
             </div>
             <div v-else class="tr-card-preview tr-card-preview--none">
-              <v-icon v-if="card.live" size="18" class="mdi-spin"
-                >mdi-loading</v-icon
+              <!-- A failed run offers its retry where it would say "Failed":
+                   the chip beside the name already says that. -->
+              <AppButton
+                v-if="failed(card)"
+                size="sm"
+                icon-left="refresh"
+                :loading="retrying === card.job.id"
+                data-testid="tr-card-retry"
+                @click.stop="retry(card)"
+                @dblclick.stop
+                @keydown.enter.stop
+                @keydown.space.stop
+                >Retry</AppButton
               >
-              <v-icon v-else-if="failed(card)" size="18" class="tr-card-err"
-                >mdi-alert</v-icon
-              >
-              <v-icon v-else size="18">mdi-image-off-outline</v-icon>
-              <!-- A job with no folder has nothing to preview: its state is the
-                   whole card (#2293). -->
-              <span>{{
-                card.live || failed(card) || !card.run
-                  ? jobStatus(card.job)
-                  : "No previews"
-              }}</span>
+              <template v-else>
+                <v-icon v-if="card.live" size="18" class="mdi-spin"
+                  >mdi-loading</v-icon
+                >
+                <v-icon v-else size="18">mdi-image-off-outline</v-icon>
+                <!-- A job with no folder has nothing to preview: its state is
+                     the whole card (#2293). -->
+                <span>{{
+                  card.live || !card.run ? jobStatus(card.job) : "No previews"
+                }}</span>
+              </template>
             </div>
           </div>
 
@@ -304,6 +315,18 @@
         >
           <v-icon class="ctx-icon">mdi-tray-arrow-down</v-icon>
           <span class="ctx-label-text">{{ confirmLabel }}</span>
+        </button>
+        <button
+          v-if="failed(menuCard)"
+          class="ctx-item"
+          type="button"
+          role="menuitem"
+          data-testid="tr-menu-retry"
+          :disabled="retrying === menuCard.job.id"
+          @click="retry(menuCard)"
+        >
+          <v-icon class="ctx-icon">mdi-refresh</v-icon>
+          <span class="ctx-label-text">Retry training</span>
         </button>
         <button
           v-if="canStop(menuCard)"
@@ -756,6 +779,20 @@ function canStop(card) {
   return Boolean(
     card?.live && card.job && !["completed", "stopping"].includes(card.job.status),
   );
+}
+
+/** The failed job being queued again, so its Retry cannot fire twice. */
+const retrying = ref(null);
+
+/** Queue a failed run again; the new job takes over its card. */
+async function retry(card) {
+  if (retrying.value != null) return;
+  retrying.value = card.job.id;
+  try {
+    await runsStore.retryJob(card.job);
+  } finally {
+    retrying.value = null;
+  }
 }
 
 /** Right-click: the card becomes the selection unless it is already in it. */
@@ -1405,10 +1442,6 @@ function batchReceipt(imported, failed) {
 /* As the run page's notices: the hue on the edge and the glyph, the word in ink. */
 .tr-card-chip--err {
   border-color: rgb(var(--v-theme-surface-error));
-}
-
-.tr-card-err {
-  color: rgb(var(--v-theme-surface-error));
 }
 
 .tr-card-bar {
