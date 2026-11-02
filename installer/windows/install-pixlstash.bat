@@ -29,14 +29,19 @@ if not defined PYTHON_CMD (
 echo Using Python: %PYTHON_CMD%
 
 :: ---- Create virtual environment ------------------------------------------
-:: A venv left by an earlier install on an older Python cannot take the wheel,
-:: so rebuild it. Only the venv goes; the library lives elsewhere.
+:: A venv left on an older Python (or whose base Python is gone) cannot take the
+:: wheel, so rebuild it. The library lives elsewhere; packages built for the old
+:: Python, plugin dependencies included, could not load on the new one anyway.
 set "VENV_DIR=%APP_DIR%\venv"
 if exist "%VENV_DIR%\" (
     "%VENV_DIR%\Scripts\python.exe" -c "%PY_FLOOR_CHECK%" >nul 2>&1
     if errorlevel 1 (
-        echo Existing virtual environment is not Python 3.11+; recreating it.
+        echo Existing virtual environment does not run Python 3.11+; recreating it.
         rmdir /s /q "%VENV_DIR%"
+        if exist "%VENV_DIR%\" (
+            echo Error: Could not remove %VENV_DIR%. Close PixlStash and try again.
+            exit /b 1
+        )
     )
 )
 if not exist "%VENV_DIR%\" (
