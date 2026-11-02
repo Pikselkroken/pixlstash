@@ -36,9 +36,15 @@ vi.mock("../../api/modelImports", () => ({
 
 const listTrainingJobs = vi.fn();
 const cancelTrainingJob = vi.fn();
+const getTrainingJob = vi.fn();
+const createTrainingJob = vi.fn();
+const deleteTrainingJob = vi.fn();
 vi.mock("../../api/training", () => ({
   listTrainingJobs: (...args) => listTrainingJobs(...args),
   cancelTrainingJob: (...args) => cancelTrainingJob(...args),
+  getTrainingJob: (...args) => getTrainingJob(...args),
+  createTrainingJob: (...args) => createTrainingJob(...args),
+  deleteTrainingJob: (...args) => deleteTrainingJob(...args),
 }));
 
 // The route the tab is on: `?run=<uuid>` opens a run's page.
@@ -270,13 +276,182 @@ describe("drawing the grid", () => {
     ]);
     const wrapper = await openWith([]);
     const card = wrapper.find(".tr-card");
-    expect(card.find(".tr-card-preview--none").text()).toBe("Failed");
+    // The chip says it failed; where the state would be, it offers a retry.
+    expect(card.find(".tr-card-chip--err").text()).toBe("Failed");
+    expect(card.find(".tr-card-preview--none").text()).toBe("Retry");
     expect(card.find("[data-testid='tr-card-reason']").text()).toBe(
       "Dataset build failed",
     );
     // There is nothing to import from it.
     await tick(wrapper, "Clementine");
     expect(importBtn(wrapper)).toBeUndefined();
+  });
+
+  describe("retrying a failed run", () => {
+    const failedJob = {
+      id: 7,
+      uuid: "u1",
+      name: "Clementine",
+      status: "error",
+      error: "Dataset build failed",
+      run_name: null,
+      created_at: "2026-10-01T00:00:00Z",
+    };
+    const detail = {
+      ...failedJob,
+      set_id: 4,
+      character_id: null,
+      trigger_word: "clem",
+      preset: "flux-dev@3",
+      resolved_profile: {
+        preset: "flux-dev@3",
+        subject: "style",
+        effort: "strong",
+        fit: "save_memory",
+      },
+      advanced_pins: { "train.steps": 1200 },
+    };
+    const queued = {
+      id: 8,
+      uuid: "u2",
+      name: "Clementine",
+      status: "queued",
+      run_name: null,
+      created_at: "2026-10-02T00:00:00Z",
+    };
+
+    beforeEach(() => {
+      getTrainingJob.mockReset().mockResolvedValue(detail);
+      createTrainingJob.mockReset().mockResolvedValue(queued);
+      deleteTrainingJob.mockReset().mockResolvedValue({});
+    });
+
+    const cardNamed = (wrapper, name) =>
+      wrapper
+        .findAll(".tr-card")
+        .find((c) => c.find(".tr-card-name").text() === name);
+
+    async function retried(wrapper, click) {
+      listTrainingJobs.mockResolvedValue([queued]);
+      await click();
+      await settle(wrapper);
+    }
+
+    it("queues it again with its settings, in its card's place", async () => {
+      listTrainingJobs.mockResolvedValue([failedJob]);
+      const wrapper = await openWith([]);
+      await retried(wrapper, () =>
+        wrapper.find("[data-testid='tr-card-retry']").trigger("click"),
+      );
+      expect(createTrainingJob).toHaveBeenCalledWith({
+        name: "Clementine",
+        set_id: 4,
+        trigger_word: "clem",
+        preset: "flux-dev",
+        subject: "style",
+        effort: "strong",
+        fit: "save_memory",
+        pins: { "train.steps": 1200 },
+      });
+      // Created first, so a refused retry leaves the failed run alone.
+      expect(deleteTrainingJob).toHaveBeenCalledWith(7);
+      expect(
+        createTrainingJob.mock.invocationCallOrder[0],
+      ).toBeLessThan(deleteTrainingJob.mock.invocationCallOrder[0]);
+      const cards = wrapper.findAll(".tr-card");
+      expect(cards).toHaveLength(1);
+      expect(cards[0].attributes("data-run-key")).toBe("job:u2");
+      expect(cards[0].attributes("aria-selected")).toBe("true");
+    });
+
+    it("keeps the failed run when the retry is refused", async () => {
+      listTrainingJobs.mockResolvedValue([failedJob]);
+      createTrainingJob.mockRejectedValue({
+        response: { status: 422, data: { detail: "AI-toolkit is not set up." } },
+      });
+      const wrapper = await openWith([]);
+      await wrapper.find("[data-testid='tr-card-retry']").trigger("click");
+      await settle(wrapper);
+      expect(deleteTrainingJob).not.toHaveBeenCalled();
+      expect(useNoticeStore().notices.at(-1).text).toContain(
+        "AI-toolkit is not set up.",
+      );
+    });
+
+    it("leaves the keyboard place alone when the retry is refused", async () => {
+      // A folder card has no job; a refused retry must not read it as the
+      // replacement and move the cursor there.
+      listTrainingJobs.mockResolvedValue([failedJob]);
+      createTrainingJob.mockRejectedValue({
+        response: { status: 422, data: { detail: "AI-toolkit is not set up." } },
+      });
+      const wrapper = await openWith([run("Foxglove")]);
+      const tabbable = () =>
+        wrapper.find(".tr-card[tabindex='0'] .tr-card-name").text();
+      expect(tabbable()).toBe("Clementine");
+      await wrapper.find("[data-testid='tr-card-retry']").trigger("click");
+      await settle(wrapper);
+      expect(tabbable()).toBe("Clementine");
+    });
+
+    it("says why when the run no longer fits this GPU", async () => {
+      listTrainingJobs.mockResolvedValue([failedJob]);
+      createTrainingJob.mockRejectedValue({
+        response: {
+          status: 422,
+          data: {
+            detail: {
+              message: "Needs 24 GB of GPU memory; 12 GB is free.",
+              budget: "vram",
+              need_mb: 24576,
+              free_mb: 12288,
+            },
+          },
+        },
+      });
+      const wrapper = await openWith([]);
+      await wrapper.find("[data-testid='tr-card-retry']").trigger("click");
+      await settle(wrapper);
+      expect(deleteTrainingJob).not.toHaveBeenCalled();
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "Needs 24 GB of GPU memory; 12 GB is free.",
+      );
+    });
+
+    it("says so when the failed run could not be removed after the retry", async () => {
+      listTrainingJobs.mockResolvedValue([failedJob]);
+      deleteTrainingJob.mockRejectedValue({
+        response: { status: 409, data: { detail: "Job is still stopping" } },
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const wrapper = await openWith([]);
+        await wrapper.find("[data-testid='tr-card-retry']").trigger("click");
+        await settle(wrapper);
+        expect(createTrainingJob).toHaveBeenCalledTimes(1);
+        const notice = useNoticeStore().notices.at(-1);
+        expect(notice.level).toBe("warning");
+        expect(notice.text).toContain("could not remove the failed run");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("offers Retry training in a failed card's menu, and only there", async () => {
+      listTrainingJobs.mockResolvedValue([
+        failedJob,
+        { ...queued, id: 9, uuid: "u3", name: "Foxglove", status: "stopped" },
+      ]);
+      const wrapper = await openWith([]);
+      await cardNamed(wrapper, "Foxglove").trigger("contextmenu");
+      expect(wrapper.find("[data-testid='tr-menu-retry']").exists()).toBe(false);
+      await cardNamed(wrapper, "Clementine").trigger("contextmenu");
+      await retried(wrapper, () =>
+        wrapper.find("[data-testid='tr-menu-retry']").trigger("click"),
+      );
+      expect(createTrainingJob).toHaveBeenCalledTimes(1);
+      expect(deleteTrainingJob).toHaveBeenCalledWith(7);
+    });
   });
 
   it("keeps a run importable when its config could not be read", async () => {

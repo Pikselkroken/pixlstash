@@ -2,7 +2,13 @@ import { computed, onScopeDispose, ref, watch } from "vue";
 import { defineStore } from "pinia";
 
 import { listRuns } from "../api/modelImports";
-import { cancelTrainingJob, listTrainingJobs } from "../api/training";
+import {
+  cancelTrainingJob,
+  createTrainingJob,
+  deleteTrainingJob,
+  getTrainingJob,
+  listTrainingJobs,
+} from "../api/training";
 import { onSessionReset } from "../utils/apiClient";
 import { errorDetail } from "../utils/apiError";
 import { isBusyJob } from "../utils/trainingRuns.js";
@@ -337,6 +343,70 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     }
   }
 
+  /**
+   * Queue a failed job again with the same settings, in its place.
+   *
+   * The new job is created from what the failed one recorded (its scope,
+   * trigger word, recipe, choices and Advanced pins), then the failed job is
+   * deleted, so its card is replaced rather than joined by a second one. A
+   * failed job that had already made a folder keeps that folder, as Delete
+   * does: it may hold checkpoints. The new job is picked.
+   *
+   * @returns {Promise<object|null>} the new job, or null when it was refused.
+   */
+  async function retryJob(job) {
+    let created;
+    try {
+      const detail = await getTrainingJob(job.id);
+      const profile = detail.resolved_profile || {};
+      // Recorded as `id@version`; the recipe is asked for by id.
+      const ref = detail.preset || profile.preset || "";
+      const at = ref.lastIndexOf("@");
+      const body = {
+        name: detail.name,
+        set_id: detail.set_id,
+        character_id: detail.character_id,
+        trigger_word: detail.trigger_word,
+        subject: profile.subject,
+        effort: profile.effort,
+        fit: profile.fit,
+        pins: detail.advanced_pins || null,
+      };
+      if (ref) body.preset = at > 0 ? ref.slice(0, at) : ref;
+      for (const key of Object.keys(body)) {
+        if (body[key] == null) delete body[key];
+      }
+      created = await createTrainingJob(body);
+    } catch (err) {
+      useNoticeStore().push({
+        level: "error",
+        // A run that fits nowhere answers { message, budget, need_mb, free_mb }.
+        text:
+          errorDetail(err) ||
+          err?.response?.data?.detail?.message ||
+          "Could not queue the run again.",
+      });
+      return null;
+    }
+    try {
+      await deleteTrainingJob(job.id);
+    } catch (err) {
+      // The retry is queued; only the failed card stays beside it, and a
+      // second Retry on it would queue the run twice, so say so.
+      console.warn(`Could not delete the failed training job ${job.id}:`, err);
+      useNoticeStore().push({
+        level: "warning",
+        text: `Queued "${created.name}" again, but could not remove the failed run: ${
+          errorDetail(err) || "delete it by hand"
+        }.`,
+      });
+    }
+    await loadJobs();
+    const card = cards.value.find((c) => c.job?.uuid === created.uuid);
+    if (card) pick(card);
+    return created;
+  }
+
   /** Read once, for a surface that only counts (the sidebar). */
   function ensureLoaded() {
     if (!asked.value) reload();
@@ -414,6 +484,7 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     loadJobs,
     reload,
     stopJob,
+    retryJob,
     ensureLoaded,
   };
 });
