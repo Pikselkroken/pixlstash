@@ -950,4 +950,18 @@ describe("likeness to the run's character (#2522)", () => {
       vi.useRealTimers();
     }
   });
+
+  it("gives up on an ended run whose scoring has stood still for a minute", async () => {
+    vi.useFakeTimers();
+    try {
+      await open(scored({ pending: 3 }));
+      getTrainingJobLive.mockClear();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      const asked = getTrainingJobLive.mock.calls.length;
+      expect(asked).toBeGreaterThan(20);
+      expect(asked).toBeLessThan(40);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

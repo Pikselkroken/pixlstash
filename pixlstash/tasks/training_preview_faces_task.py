@@ -15,6 +15,7 @@ from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.training import preview_likeness
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.insightface_model_utils import DEFAULT_MODEL_PACK
+from pixlstash.utils.vram_utils import is_vram_oom
 
 logger = get_logger(__name__)
 
@@ -63,12 +64,26 @@ class TrainingPreviewFacesTask(BaseTask):
                 )
                 found[filename] = None
             else:
-                faces = FaceExtractionTask.detect_faces_in_images(app, [img])[0]
-                found[filename] = [
-                    face.embedding.astype(np.float32)
-                    for face in faces
-                    if face.embedding is not None
-                ]
+                try:
+                    faces = FaceExtractionTask.detect_faces_in_images(app, [img])[0]
+                except Exception as exc:
+                    if is_vram_oom(exc):
+                        raise
+                    # One preview that breaks the detector is that preview's
+                    # problem, not the rest of the run's.
+                    logger.warning(
+                        "Face detection failed on training preview %s; it gets "
+                        "no likeness: %s",
+                        path,
+                        exc,
+                    )
+                    found[filename] = None
+                else:
+                    found[filename] = [
+                        face.embedding.astype(np.float32)
+                        for face in faces
+                        if face.embedding is not None
+                    ]
             self._processed_count += 1
         preview_likeness.write_faces(self._work_dir, model_pack, found)
         logger.info(

@@ -120,7 +120,12 @@ class TrainingPreviewFacesFinder(BaseTaskFinder):
                 try:
                     settled = now - os.path.getmtime(sample.path) >= self.SETTLE_SECONDS
                 except OSError as exc:
-                    logger.debug("Preview %s went away: %s", sample.path, exc)
+                    logger.warning(
+                        "Training preview %s went away while it was listed; "
+                        "skipped this sweep: %s",
+                        sample.path,
+                        exc,
+                    )
                     continue
                 if settled:
                     todo.append((sample.filename, sample.path))

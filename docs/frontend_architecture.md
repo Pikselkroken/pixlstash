@@ -6806,7 +6806,9 @@ preview with the trigger word wears its score on a `--scrim-photo-strong` chip
 `LEAK_AT`, in the warning hue. The best step's *Use this step* carries a
 raspberry mark and shows without a hover, but nothing is chosen: the olive
 cover is unchanged. A run that has ended keeps polling while
-`likeness.pending` is above 0, so scores land without a reload.
+`likeness.pending` is above 0, so scores land without a reload, and gives up
+once that count has stood still for 30 polls (a failed scoring is retried
+only after a restart).
 
 **Export dataset** is the rail's *Trained on* section action once the run's
 payload names a `dataset_snapshot_id` (#2123): it fetches

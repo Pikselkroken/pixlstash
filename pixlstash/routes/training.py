@@ -754,8 +754,8 @@ def create_router(server) -> APIRouter:
                 "order. role is lookalike or stranger on a written prompt "
                 "without the trigger word of a person's run, else null. On a "
                 "run with a character, face is whether the preview shows one "
-                "(null before it is looked at) and likeness how much it looks "
-                "like the character, 0-100."
+                "(null before it is looked at, or when it could not be read) "
+                "and likeness how much it looks like the character, 0-100."
             ),
         )
         likeness: Optional[dict] = Field(
@@ -1471,7 +1471,18 @@ def create_router(server) -> APIRouter:
                 }
                 for column in columns
             ]
-        likeness = _likeness(job, handle.work_dir, rows, columns)
+        try:
+            likeness = _likeness(job, handle.work_dir, rows, columns)
+        except Exception:
+            # The likeness is one row of the board; a failure scoring it must
+            # not take the loss, the previews and Stop with it.
+            logger.exception(
+                "Could not score the previews of training run %s (character %s) "
+                "for likeness; the run is shown without it.",
+                job["uuid"],
+                job["character_id"],
+            )
+            likeness = None
 
         folder_id = None
         if job["training_folder"] and handle.training_folder == job["training_folder"]:

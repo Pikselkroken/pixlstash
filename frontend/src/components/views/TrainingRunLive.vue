@@ -1330,6 +1330,12 @@ watch([drawingIndex, pitch, () => columns.value.length], () => nextTick(followNe
 
 let timer = null;
 let generation = 0;
+// An ended run is asked again while its previews are scored, until the count
+// still to score has stood still this many polls (a minute): a scoring that
+// failed is retried only after a restart, so it would otherwise ask forever.
+const SCORING_STALL_POLLS = 30;
+let scoringStalled = 0;
+let lastPending = null;
 // A run this library does not hold will not appear by asking again.
 let notFound = false;
 // A read in flight at unmount still reaches schedule(); it must not re-arm.
@@ -1359,7 +1365,13 @@ function schedule() {
   timer = null;
   if (disposed || document.visibilityState !== "visible" || notFound) return;
   // A run that has ended is asked again only while its previews are scored.
-  if (live.value && !isLive.value && !live.value.likeness?.pending) return;
+  if (live.value && !isLive.value) {
+    const pending = live.value.likeness?.pending ?? 0;
+    if (!pending) return;
+    scoringStalled = pending === lastPending ? scoringStalled + 1 : 0;
+    lastPending = pending;
+    if (scoringStalled >= SCORING_STALL_POLLS) return;
+  }
   timer = setTimeout(async () => {
     await load();
     schedule();
@@ -1386,6 +1398,8 @@ watch(
     scrolledLeft.value = false;
     following = true;
     placedAt = null;
+    scoringStalled = 0;
+    lastPending = null;
     load().then(schedule);
   },
 );

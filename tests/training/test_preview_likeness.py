@@ -212,3 +212,30 @@ def test_the_task_writes_faces_and_an_ended_run_settles(tmp_path, monkeypatch):
 
     assert finder.find_task() is None
     assert run["uuid"] in finder._settled
+
+
+def test_a_preview_that_breaks_the_detector_spares_the_rest(tmp_path, monkeypatch):
+    run, handle = _run(tmp_path)
+    first = _sample(handle, 0, 0)
+    second = _sample(handle, 0, 1)
+    calls = []
+
+    def detect(app, images):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("the detector choked")
+        return [[SimpleNamespace(embedding=ME)]]
+
+    monkeypatch.setattr(
+        FaceExtractionTask,
+        "get_or_init_insightface",
+        classmethod(lambda cls, engine, cpu_spillover=False: "app"),
+    )
+    monkeypatch.setattr(
+        FaceExtractionTask, "detect_faces_in_images", staticmethod(detect)
+    )
+    task = _finder(tmp_path, [run]).find_task()
+    assert task._run_task() == {"previews": 2}
+    faces = preview_likeness.read_faces(handle.work_dir, "buffalo_l")
+    assert faces[first] is None
+    assert np.array_equal(faces[second][0], ME)
