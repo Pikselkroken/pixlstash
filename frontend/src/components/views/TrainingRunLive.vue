@@ -1099,8 +1099,9 @@ const TIPS = [
   },
   {
     title: "Without it",
-    // An earlier step is not the cure: it leaks less but may lose likeness.
-    text: "These rows should stay close to step 0. If they drift toward the subject, the LoRA is leaking into everything. An earlier step may leak less but also look less like the subject, so fix the leak on the next run instead: train on pictures that vary in everything but the subject, such as background, clothing and framing.",
+    // The cure is the next run, not an earlier step: that leaks less but may
+    // lose likeness.
+    text: "These rows should stay close to step 0. If they drift toward the subject, the LoRA is leaking: on the next run, vary the background, clothing and framing.",
   },
   {
     title: "Loss",
