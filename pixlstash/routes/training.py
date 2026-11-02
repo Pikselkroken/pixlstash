@@ -1700,6 +1700,19 @@ def create_router(server) -> APIRouter:
         )
         if refusal:
             raise HTTPException(status_code=422, detail=refusal)
+        if presets.trains_clips(preset):
+            _, clips = ExportUtils.training_counts(
+                server, set_id=set_id, character_id=character_id
+            )
+            if clips == 0:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"{preset['label']} learns motion from video clips, and "
+                        "there are none here. Pick a recipe that trains on "
+                        "still pictures."
+                    ),
+                )
         subject = _subject_for(payload.subject, character_id)
         try:
             pins = presets.validate_pins(preset, payload.pins)
@@ -1776,6 +1789,7 @@ def create_router(server) -> APIRouter:
                 locked=presets.to_patch(preset["locked"]),
                 resolution=resolution,
                 pins=pins,
+                caption_mode=presets.caption_mode(preset),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

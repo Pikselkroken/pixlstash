@@ -11839,7 +11839,18 @@ written from the stills' captions only. `GET /training/dataset` gives each
 character count's clips beside it (`reference_clips`, `all_clips`,
 `child_set.clips`), and the probe fingerprints a clip run's sound and preview
 length (`measurements.CLIP_FINGERPRINT_KEYS`, named only when a recipe
-resolves them, so other recipes keep their measurements). The rendered config is the template, the
+resolves them, so other recipes keep their measurements). A clip recipe needs
+clips: `POST /training/jobs` refuses one (422) when the scope has none
+(`ExportUtils.training_counts`), and the Train dialog shows it disabled and moves
+the pick to the same model's still recipe, since a set of stills would train at
+its video settings (one 512 bucket for H3's motion mode).
+
+**Caption form.** A recipe's optional `captions` names the form its model is
+prompted in: `description` (each picture's description, its tags where it has
+none) or `tags` (the default). `presets.caption_mode` reads it, the route queues
+it on the job's pending spec, and `_build_dataset` hands it to the builder, so a
+recipe changed since queueing changes nothing. MiniMax H3's two recipes caption
+in prose; the rest keep tags. The rendered config is the template, the
 resolved values (checked by `validate_tunables`) and the locked keys merged
 last; placeholders are substituted after the merge, so a recipe's prompts get
 the trigger word. A sample prompt expands `{{TRIGGER_WORD}}` and nothing else,

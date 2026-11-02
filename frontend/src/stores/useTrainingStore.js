@@ -131,6 +131,10 @@ export const useTrainingStore = defineStore("training", () => {
 
   /** The character the run is filed under, or null for an ordinary set. */
   const character = computed(() => dataset.value?.character || null);
+  /** Whether *preset* trains on clips the loaded set does not have. */
+  function presetUnusable(preset) {
+    return !!preset?.clips && dataset.value != null && !dataset.value.clips;
+  }
   /** Whether the chosen recipe trains on the set's video clips too. */
   const presetClips = computed(
     () => !!presets.value.find((p) => p.id === selectedPreset.value)?.clips,
@@ -477,6 +481,19 @@ export const useTrainingStore = defineStore("training", () => {
   watch(presetClips, (clips) => {
     if (!clips && AUDIO_KEY in pins.value) unpin([AUDIO_KEY]);
   });
+  // A motion recipe on a set with no clips would train its stills at video
+  // settings, so it is not offered: the pick moves to the same model's still
+  // recipe, else the first still recipe the checkout can run.
+  watch([dataset, presets, selectedPreset], () => {
+    const picked = presets.value.find((p) => p.id === selectedPreset.value);
+    if (!picked || !presetUnusable(picked)) return;
+    const stills = presets.value.filter((p) => !presetUnusable(p));
+    const next =
+      stills.find((p) => p.requires_arch === picked.requires_arch) ||
+      stills.find((p) => p.offered) ||
+      stills[0];
+    if (next) selectedPreset.value = next.id;
+  });
   watch(
     () => [trainDialogOpen.value, effectiveSubject.value, dataset.value],
     () => {
@@ -740,6 +757,7 @@ export const useTrainingStore = defineStore("training", () => {
     pickScope,
     character,
     presetClips,
+    presetUnusable,
     pictureCount,
     displayName,
     scopePayload,

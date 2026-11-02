@@ -59,6 +59,17 @@ def test_only_the_h3_motion_recipe_trains_on_clips():
     assert motion["locked"]["datasets[*].auto_frame_count"] is True
 
 
+def test_only_h3_recipes_caption_in_prose_and_the_rest_in_tags():
+    """MiniMax H3 is prompted in sentences, so its datasets take descriptions;
+    a recipe that names no caption form keeps the tags it always had."""
+    modes = {p["id"]: presets.caption_mode(p) for p in presets.list_presets()}
+    assert {pid for pid, mode in modes.items() if mode == "description"} == {
+        "minimax-h3-image",
+        "minimax-h3-motion",
+    }
+    assert set(modes.values()) == {"description", "tags"}
+
+
 def test_h3_keeps_its_pre_quantised_formats_and_its_distillation_handling():
     """H3 ships int8 ConvRot and nvfp4 weights; any other qtype re-quantises
     them on load. It is guidance-distilled, so both recipes train with
@@ -184,6 +195,7 @@ def test_table_keys_are_tunable_and_locked_keys_are_not():
         (lambda p: p["hardware_profiles"]["q8"].pop("max_rank"), "max_rank"),
         (lambda p: p["hardware_profiles"].clear(), "at least one profile"),
         (lambda p: p["fit"]["save_memory"].clear(), "names no profile"),
+        (lambda p: p.update({"captions": "booru"}), "captions must be"),
     ],
 )
 def test_a_broken_preset_is_refused(breakage, message):

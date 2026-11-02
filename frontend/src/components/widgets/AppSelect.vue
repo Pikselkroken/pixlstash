@@ -136,9 +136,11 @@
               :class="{
                 'app-select__option--active': i === activeIndex,
                 'app-select__option--quiet': opt.quiet,
+                'ctx-item--disabled': opt.disabled,
               }"
               role="option"
               :aria-selected="String(isCurrent(opt))"
+              :aria-disabled="opt.disabled || undefined"
               :aria-label="optionSpoken(opt)"
               @click="choose(i)"
               @mousemove="onRowMouseMove(i)"
@@ -171,6 +173,7 @@
           v-for="opt in normalizedOptions"
           :key="String(opt.value)"
           :value="opt.value"
+          :disabled="opt.disabled"
         >
           {{ opt.label }}
         </option>
@@ -199,7 +202,7 @@ const props = defineProps({
   // the prefix; `groupTone`, success|warning|error|info; `groupNote`), and the
   // mark stays beside the value once picked. `groupDownloading` draws the
   // animated download mark in its place, for models still on their way. `quiet` draws a name in
-  // secondary ink.
+  // secondary ink. `disabled` makes a row inert: shown, never picked.
   options: { type: Array, default: () => [] },
   // What a listbox field reads while its value is none of the options.
   placeholder: { type: String, default: "" },
@@ -305,6 +308,8 @@ function toggle() {
 function choose(i) {
   if (props.disabled) return;
   const opt = normalizedOptions.value[i];
+  // A disabled row is read, never picked; the list stays open on it.
+  if (opt?.disabled) return;
   open.value = false;
   if (opt && !isCurrent(opt)) emit("update:modelValue", opt.value);
 }
@@ -411,7 +416,8 @@ function onComboKeydown(e) {
 // row into view would fight the scroll.
 let pointerMoved = false;
 function onRowMouseMove(i) {
-  if (i === activeIndex.value) return;
+  // A disabled row takes no hover (visual-language.md, inert rows).
+  if (i === activeIndex.value || normalizedOptions.value[i]?.disabled) return;
   pointerMoved = true;
   activeIndex.value = i;
 }

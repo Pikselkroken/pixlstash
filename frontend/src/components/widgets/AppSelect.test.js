@@ -141,6 +141,24 @@ describe("AppSelect with chip options", () => {
     expect(w.emitted("update:modelValue")).toEqual([["d"]]);
   });
 
+  it("never picks a disabled row, by click or by key, and keeps it inert", async () => {
+    const options = [
+      { value: "a", label: "Still", chips: ["x"] },
+      { value: "b", label: "Motion", chips: ["Needs video clips"], disabled: true },
+    ];
+    const w = mount(AppSelect, { props: { modelValue: "a", options } });
+    await combo(w).trigger("click");
+    const row = opts(w)[1];
+    expect(row.attributes("aria-disabled")).toBe("true");
+    expect(row.classes()).toContain("ctx-item--disabled");
+    await row.trigger("click");
+    // The list stays open on it, so the reason can still be read.
+    expect(combo(w).attributes("aria-expanded")).toBe("true");
+    await combo(w).trigger("keydown", { key: "ArrowDown" });
+    await combo(w).trigger("keydown", { key: "Enter" });
+    expect(w.emitted("update:modelValue")).toBeUndefined();
+  });
+
   it("jumps to a typed name, a repeated letter walking the matches", async () => {
     const w = mountRich("a");
     await combo(w).trigger("keydown", { key: "ArrowDown" });

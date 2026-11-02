@@ -5,6 +5,7 @@
   "requires_arch": "minimax_h3",
   "template": "zimage-turbo-lora",
   "divisibility": 32,
+  "captions": "description",
   "locked": {
     "model.arch": "minimax_h3",
     "model.name_or_path": "Comfy-Org/MiniMax-H3",
@@ -140,6 +141,7 @@
     "hardware_profiles.q8_offload_60": "measured: peaks 17.2 GB encoding captions and 17.0 GB training at 1024, 16.4 GB previewing; 69.1 GB resident while the weights load, 45-54 GB after",
     "hardware_profiles.q8_low_vram.vram_mb": "derived: ran out of memory on the 32 GB card moving the 21 GB transformer onto the GPU, about 29.5 GB in use; 30% of layers in RAM also ran out there (27.7 GB measured, with the text encoder still resident). Seeded at 36 GB (a 40 GB card, less its margin) for the transformer, LoRA state and 1024 activations",
     "hardware_profiles.*.max_rank, max_batch": "rank 32 is derived from the rank 16 measurement (rank 16 LoRA state is about 0.2 GB); batch 1 as measured",
-    "hardware_profiles.*.ram_mb": "measured, outside loading: the trainer's resident memory peaked at 50.9 GB after the weights were in, x1.1. While they load it reads 69.1 GB, but that includes the mapped weight files: both runs loaded with about 65 GB of RAM available, so the loading peak is left out of the seed"
+    "hardware_profiles.*.ram_mb": "measured, outside loading: the trainer's resident memory peaked at 50.9 GB after the weights were in, x1.1. While they load it reads 69.1 GB, but that includes the mapped weight files: both runs loaded with about 65 GB of RAM available, so the loading peak is left out of the seed",
+    "captions": "MiniMax prompts in prose: the H3 text-to-image template opens on style and framing and describes the scene in sentences, and ai-toolkit's MiniMax image captioner (ui/src/helpers/captionOptions.ts) writes descriptive sentences too, never tags. The dataset takes each picture's description, and its tags only where it has none. The captioner's three-field wrapper (integrated_multimodal_description / overall_soundscape / non_diegetic_music) is left out: prompts at inference are plain prose"
   }
 }

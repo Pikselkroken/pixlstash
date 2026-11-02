@@ -83,6 +83,7 @@ class _FakeTrainingService:
         locked=None,
         resolution=None,
         pins=None,
+        caption_mode=None,
     ):
         if set_id is None and character_id is None:
             raise ValueError("A training run needs a set_id or a character_id.")
@@ -98,6 +99,7 @@ class _FakeTrainingService:
                 "locked": locked,
                 "resolution": resolution,
                 "pins": pins,
+                "caption_mode": caption_mode,
             }
         )
 
@@ -2097,6 +2099,9 @@ def test_create_job_refuses_a_set_with_no_pictures():
         ExportUtils.count_training_pictures = staticmethod(
             lambda server, clips=False, **kwargs: 3 if clips else 0
         )
+        _PICTURES["clips"] = 3
+        # A 48 GB card, which fits every H3 profile.
+        server.vault.training_room = lambda: {"vram_mb": 48_000, "ram_mb": 128_000}
         repo = _fake_checkout(
             os.path.join(temp_dir.name, "h3kit"), archs=("minimax_h3",)
         )
@@ -2107,6 +2112,32 @@ def test_create_job_refuses_a_set_with_no_pictures():
                 "/training/jobs", json={**body, "subject": "thing", "preset": preset}
             )
             assert ("no pictures" in r.text) is empty, (preset, r.text)
+        assert r.status_code == 200, r.text
+        # It is queued to caption in prose, as H3 is prompted.
+        assert server.vault.training_service.enqueue_calls[-1]["caption_mode"] == (
+            "description"
+        )
+
+        # Stills alone: a motion recipe has nothing to learn motion from, so
+        # it is refused rather than trained as stills at its video settings.
+        _PICTURES["count"], _PICTURES["clips"] = 24, 0
+        ExportUtils.count_training_pictures = staticmethod(
+            lambda server, **kwargs: _PICTURES["count"]
+        )
+        calls = len(server.vault.training_service.enqueue_calls)
+        r = owner.post(
+            "/training/jobs",
+            json={**body, "subject": "thing", "preset": "minimax-h3-motion"},
+        )
+        assert r.status_code == 422, r.text
+        assert "there are none here" in r.text
+        assert len(server.vault.training_service.enqueue_calls) == calls
+        # The still-picture recipe of the same model still trains them.
+        r = owner.post(
+            "/training/jobs",
+            json={**body, "subject": "thing", "preset": "minimax-h3-image"},
+        )
+        assert r.status_code == 200, r.text
     finally:
         _teardown(temp_dir, server)
 

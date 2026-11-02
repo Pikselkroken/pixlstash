@@ -589,17 +589,27 @@ describe("a recipe that trains on clips (#2179)", () => {
     expect(wrapper.text()).toContain("Every picture of Grandad · 145");
   });
 
-  it("says a clip recipe on a set without clips learns no motion", async () => {
+  it("disables a clip recipe on a set without clips and moves to the model's still recipe", async () => {
+    training.listTrainingPresets.mockResolvedValue([
+      { id: "zimage-turbo", label: "Z-Image Turbo", offered: true, clips: false, requires_arch: "zimage" },
+      { id: "minimax-h3-image", label: "MiniMax H3 · image", offered: true, clips: false, requires_arch: "minimax_h3" },
+      { id: "minimax-h3-motion", label: "MiniMax H3 · motion", offered: true, clips: true, requires_arch: "minimax_h3" },
+    ]);
     const { wrapper, store } = await openDialog(
       { type: "character", id: 4, name: "Grandad" },
       dataset({ count: 20, clips: 0 }),
     );
     store.selectedPreset = "minimax-h3-motion";
-    await store.resolvePlan();
     await flushPromises();
-    expect(wrapper.find('[data-testid="tld-checks"]').text()).toContain(
-      "no video clips here",
-    );
+    expect(store.selectedPreset).toBe("minimax-h3-image");
+
+    // AppSelect is stubbed here; its own suite proves a disabled row is inert.
+    const picker = wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .find((c) => c.props("label") === "Base model");
+    const motion = picker.props("options").find((o) => o.value === "minimax-h3-motion");
+    expect(motion).toMatchObject({ disabled: true, chips: ["Needs video clips"] });
+    expect(picker.props("options").filter((o) => o.disabled)).toHaveLength(1);
   });
 });
 

@@ -1033,6 +1033,16 @@ const presetOptions = computed(() => {
     (plan.value?.presets || []).map((p) => [p.id, p.verdict]),
   );
   return (store.presets || []).map((p) => {
+    // A motion recipe has nothing to learn from a set of stills alone.
+    if (store.presetUnusable(p)) {
+      return {
+        label: p.label,
+        value: p.id,
+        name: p.label,
+        chips: ["Needs video clips"],
+        disabled: true,
+      };
+    }
     const verdict = verdicts[p.id] || (p.offered ? null : "needs_checkout");
     return {
       label: p.label,
@@ -1219,11 +1229,6 @@ const checks = computed(() => {
     out.push({
       id: "clips",
       text: `${clips} video clip${clips === 1 ? " is" : "s are"} left out: this model trains on still pictures. A motion recipe trains on clips.`,
-    });
-  } else if (clips === 0 && store.presetClips) {
-    out.push({
-      id: "no-clips",
-      text: "There are no video clips here, so this learns from still pictures alone and no motion.",
     });
   }
   if (d.untagged > 0) {

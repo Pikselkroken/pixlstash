@@ -333,7 +333,7 @@ def test_only_a_clip_recipe_builds_its_dataset_with_the_clips(hub, repo_dir):
     empty = _make_dataset_builder(image_count=0)
 
     def builder(**kwargs):
-        asked.append(kwargs["clips"])
+        asked.append((kwargs["clips"], kwargs["caption_mode"]))
         return empty(**kwargs)
 
     lease, notify = _StubLease(), _CapturingNotify()
@@ -344,10 +344,11 @@ def test_only_a_clip_recipe_builds_its_dataset_with_the_clips(hub, repo_dir):
     service.start()
     try:
         # The third was queued under a recipe this PixlStash no longer ships.
-        for preset_id, recorded in (
-            ("minimax-h3-motion", "minimax-h3-motion@1"),
-            ("minimax-h3-image", "minimax-h3-image@1"),
-            ("minimax-h3-motion", "a-retired-recipe@1"),
+        # The caption form rides on the job as queued, like the clips.
+        for preset_id, recorded, captions in (
+            ("minimax-h3-motion", "minimax-h3-motion@1", "description"),
+            ("minimax-h3-image", "minimax-h3-image@1", "tags"),
+            ("minimax-h3-motion", "a-retired-recipe@1", None),
         ):
             job = service.enqueue(
                 set_id=_SET_ID,
@@ -357,11 +358,12 @@ def test_only_a_clip_recipe_builds_its_dataset_with_the_clips(hub, repo_dir):
                 template_path=template,
                 locked=presets.to_patch(presets.get_preset(preset_id)["locked"]),
                 resolution={**_RESOLUTION, "preset": recorded},
+                caption_mode=captions,
             )
             assert _poll_until(lambda: _job_status(hub, job["uuid"]).status == "error")
     finally:
         service.stop()
-    assert asked == [True, False, True]
+    assert asked == [(True, "description"), (False, "tags"), (True, None)]
 
 
 def test_enqueue_needs_a_scope(hub, repo_dir):

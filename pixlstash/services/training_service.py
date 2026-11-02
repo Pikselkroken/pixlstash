@@ -345,6 +345,7 @@ class TrainingService:
         locked: dict | None = None,
         resolution: dict | None = None,
         pins: dict | None = None,
+        caption_mode: str | None = None,
     ) -> dict:
         """Create a queued training run and wake the worker.
 
@@ -370,6 +371,9 @@ class TrainingService:
                 row with its ``preset``; its ``vram_mb`` / ``ram_mb`` are what
                 the run asks the arbiter for.
             pins: The owner's Advanced values, recorded on the row.
+            caption_mode: How the dataset's captions are written
+                (:func:`pixlstash.training.presets.caption_mode`); the
+                builder's default (tags) when None.
 
         Returns:
             The persisted run, as the hub row (a dict of its columns).
@@ -405,6 +409,7 @@ class TrainingService:
             "template_path": template_path,
             "config_overrides": config_overrides,
             "locked": locked,
+            "caption_mode": caption_mode,
         }
         with self._pending_specs_lock:
             self._pending_specs[job_uuid] = pending
@@ -2055,7 +2060,8 @@ class TrainingService:
         os.makedirs(dataset_dir, exist_ok=True)
         # The clips go in when the job's own locked config reads video: the
         # config it renders, not a recipe looked up again, which may be gone.
-        locked = self._load_pending_spec(info["uuid"]).get("locked") or {}
+        pending = self._load_pending_spec(info["uuid"])
+        locked = pending.get("locked") or {}
         try:
             return self._dataset_builder(
                 dest_dir=dataset_dir,
@@ -2063,6 +2069,7 @@ class TrainingService:
                 character_id=info.get("character_id"),
                 trigger_word=info.get("trigger_word"),
                 clips=presets.reads_video(locked),
+                caption_mode=pending.get("caption_mode"),
             )
         except Exception:
             logger.exception("Job %s: dataset build failed", info["uuid"])
