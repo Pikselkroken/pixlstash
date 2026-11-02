@@ -11,13 +11,13 @@
         v-for="opt in normalizedOptions"
         :key="String(opt.value)"
         class="app-select__multiple-option"
-        :class="{ 'app-select__multiple-option--disabled': disabled }"
+        :class="{ 'app-select__multiple-option--disabled': disabled || opt.disabled }"
       >
         <input
           type="checkbox"
           :value="opt.value"
           :checked="isSelected(opt.value)"
-          :disabled="disabled"
+          :disabled="disabled || opt.disabled"
           @change="toggleValue(opt.value, $event.target.checked)"
         />
         <span>{{ opt.label }}</span>

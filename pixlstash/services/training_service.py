@@ -48,6 +48,7 @@ from pixlstash.training import ai_toolkit_install, live_view, measurements, pres
 from pixlstash.training.backend import TrainerBackend, TrainingProgress, TrainingSpec
 from pixlstash.training.config_render import deep_merge
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
+from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 logger = get_logger(__name__)
 
@@ -2061,14 +2062,14 @@ class TrainingService:
         # The clips go in when the job's own locked config reads video: the
         # config it renders, not a recipe looked up again, which may be gone.
         pending = self._load_pending_spec(info["uuid"])
-        locked = pending.get("locked") or {}
+        clips = presets.reads_video(pending.get("locked") or {})
         try:
-            return self._dataset_builder(
+            manifest = self._dataset_builder(
                 dest_dir=dataset_dir,
                 set_id=info.get("set_id"),
                 character_id=info.get("character_id"),
                 trigger_word=info.get("trigger_word"),
-                clips=presets.reads_video(locked),
+                clips=clips,
                 caption_mode=pending.get("caption_mode"),
             )
         except Exception:
@@ -2078,6 +2079,22 @@ class TrainingService:
                 info["uuid"], status="error", message="Dataset build failed"
             )
             return None
+        # Enqueue refused a motion run with no clips, but they can be removed
+        # while it waits; it must not then train its motion on stills alone.
+        items = manifest.get("items") or []
+        if (
+            clips
+            and items
+            and not any(VideoUtils.is_video_file(item["file_name"]) for item in items)
+        ):
+            msg = "The video clips this run learns motion from are gone."
+            logger.warning(
+                "Job %s: %s (%d stills built)", info["uuid"], msg, len(items)
+            )
+            self._update_job(info["uuid"], status="error", error=msg)
+            self._emit_progress(info["uuid"], status="error", message=msg)
+            return None
+        return manifest
 
     def _record_snapshot(self, info: dict, manifest: dict) -> bool:
         """Freeze what the run is about to train on (#2123).

@@ -159,6 +159,16 @@ describe("AppSelect with chip options", () => {
     expect(w.emitted("update:modelValue")).toBeUndefined();
   });
 
+  it("disables only its own checkbox in multiple mode", () => {
+    const options = [
+      { value: "a", label: "Still" },
+      { value: "b", label: "Motion", disabled: true },
+    ];
+    const w = mount(AppSelect, { props: { multiple: true, modelValue: [], options } });
+    const boxes = w.findAll('input[type="checkbox"]');
+    expect(boxes.map((b) => b.element.disabled)).toEqual([false, true]);
+  });
+
   it("jumps to a typed name, a repeated letter walking the matches", async () => {
     const w = mountRich("a");
     await combo(w).trigger("keydown", { key: "ArrowDown" });

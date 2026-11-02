@@ -1701,9 +1701,10 @@ def create_router(server) -> APIRouter:
         if refusal:
             raise HTTPException(status_code=422, detail=refusal)
         if presets.trains_clips(preset):
-            _, clips = ExportUtils.training_counts(
+            stills, clips = ExportUtils.training_counts(
                 server, set_id=set_id, character_id=character_id
             )
+            picture_count = stills + clips
             if clips == 0:
                 raise HTTPException(
                     status_code=422,
@@ -1713,18 +1714,16 @@ def create_router(server) -> APIRouter:
                         "still pictures."
                     ),
                 )
+        else:
+            picture_count = ExportUtils.count_training_pictures(
+                server, set_id=set_id, character_id=character_id
+            )
         subject = _subject_for(payload.subject, character_id)
         try:
             pins = presets.validate_pins(preset, payload.pins)
         except TunableOverrideError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        picture_count = ExportUtils.count_training_pictures(
-            server,
-            set_id=set_id,
-            character_id=character_id,
-            clips=presets.trains_clips(preset),
-        )
         if picture_count == 0:
             raise HTTPException(
                 status_code=422,
