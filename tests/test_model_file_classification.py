@@ -213,9 +213,27 @@ class TestFileClassification:
         assert info is not None
         assert info.file_kind == FILE_VAE
 
+    def test_a_transformer_decoder_vae_is_a_vae_in_any_folder(self, tmp_path):
+        # MiniMax H3's video VAE: a convolutional encoder and a transformer
+        # decoder, 2.6B parameters, which would otherwise read as a checkpoint.
+        folder = tmp_path / "Downloads"
+        folder.mkdir()
+        path = _write_safetensors(
+            folder / "minimax_h3_video_vae_int8_convrot.safetensors",
+            {
+                "encoder.conv_in.weight": _tensor([128, 3, 3, 3, 3]),
+                "decoder.x_embedder.weight": _tensor([2048, 24]),
+                "decoder.transformer_blocks.0.ff.w1.weight": _tensor([50_000, 50_000]),
+            },
+        )
+        info = describe_adapter(path)
+        assert info is not None
+        assert info.file_kind == FILE_VAE
+
     @pytest.mark.parametrize(
         "names",
         [
+            ["decoder.x_embedder.weight"],  # one half, a transformer decoder
             ["decoder.conv_in.weight"],  # one half only
             ["decoder.conv1.weight", "conv1.weight"],  # one half, Wan's layout
             ["encoder.conv_in.weight", "decoder.conv1.weight"],  # two layouts

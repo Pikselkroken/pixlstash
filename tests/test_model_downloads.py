@@ -235,6 +235,26 @@ def test_without_the_comfyui_subfolder_the_file_goes_at_the_top(
     assert (chosen / "flat.safetensors").is_file()
 
 
+@pytest.mark.parametrize(
+    "directory, subfolder",
+    [("vae", "VAE"), ("text_encoders", "TextEncoders"), ("unet", "DiffusionModels")],
+)
+def test_a_launcher_spelled_subfolder_for_the_role_takes_the_file(
+    hub, target, adapter_bytes, linked, directory, subfolder
+):
+    """Stability Matrix spells ComfyUI's folders its own way. The folder is
+    what tells the shelf a VAE of a layout its tensors do not show, so the
+    file goes into it rather than to the top of the download folder."""
+    chosen, _ = target
+    (chosen / "ApproxVAE").mkdir()
+    (chosen / subfolder).mkdir()
+    with serve_bytes(adapter_bytes) as url:
+        linked(url, directory)
+        done = _wait(start_download(hub, "component.safetensors")["id"])
+    assert done["status"] == STATUS_DONE, done
+    assert (chosen / subfolder / "component.safetensors").is_file()
+
+
 def test_with_no_marked_folder_the_default_folder_takes_it(
     hub, tmp_path, adapter_bytes, linked
 ):
