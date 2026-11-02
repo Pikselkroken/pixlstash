@@ -12055,7 +12055,8 @@ polls alone is probed again.
 for each candidate profile's fingerprint and measurement. A measured profile's
 need is its highest peak outside previews ×1.1 (`NEED_MARGIN`, as for a learned
 ComfyUI need), and its evidence becomes `measured`; previews are admitted
-apart, on the previews phase's peak. As for ComfyUI (#2081), the margin never
+apart, on the previews phase's peak. In the shape of ComfyUI's rule (#2081, which
+caps at the card's ceiling where this caps at the run's room), the margin never
 lifts a peak that fits the room past room ÷ 1.1, nor below the peak itself
 (`measurements.with_margin(peak, room)`, GPU and RAM alike): a probe that held
 at 25.4 GB in 27.2 GB of room ran in it, and asking 27.9 GB refused the run it

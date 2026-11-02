@@ -477,7 +477,7 @@ def test_a_measured_profile_is_admitted_on_what_it_measured():
     assert out["probe"] is False and out["previews_deferred"] is False
 
 
-def test_a_measured_peak_above_the_seed_moves_to_the_next_profile():
+def test_a_measured_peak_above_the_room_moves_to_the_next_profile():
     out = _resolve(lookup=_lookup({"q8": _measurement(23_000)}))
     assert out["profile"] == "q8_cached"
     # Never measured here: the run checks memory and speed first, and a probe
@@ -489,8 +489,9 @@ def test_a_measured_peak_above_the_seed_moves_to_the_next_profile():
 
 def test_a_measured_peak_that_fits_the_room_is_admitted_without_its_margin():
     """A probe that held at 14 GB on a card with 14.9 GB of room ran in it: the
-    10% margin (15.4 GB) does not refuse what just ran. A peak further below
-    the room keeps its margin, and one above the room is refused as before."""
+    10% margin (15.4 GB) does not refuse what just ran. A lower peak keeps
+    as much of its margin as room / 1.1 allows, and one above the room is
+    refused as before."""
     out = _resolve(vram_mb=_16GB, lookup=_lookup({"q8": _measurement(14_000)}))
     assert (out["profile"], out["evidence"], out["vram_mb"]) == (
         "q8",

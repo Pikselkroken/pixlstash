@@ -154,7 +154,7 @@ def with_margin(mb: int | None, room: int | None = None) -> int | None:
     # Rounded first: 14000 * 1.1 is 15400.000000000002 in floating point.
     need = int(math.ceil(round(mb * NEED_MARGIN, 6)))
     if room is not None and mb <= room:
-        need = max(mb, min(need, int(room / NEED_MARGIN)))
+        need = max(mb, min(need, int(round(room / NEED_MARGIN, 6))))
     return need
 
 

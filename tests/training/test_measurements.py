@@ -210,6 +210,8 @@ def test_the_margin_never_lifts_a_peak_that_fits_the_room_past_it():
     assert measurements.with_margin(20_001, room=20_000) == 22_002
     assert measurements.with_margin(19_500) == 21_450
     assert measurements.with_margin(None, room=20_000) is None
+    # room / 1.1 on an exact multiple is not floored a megabyte short.
+    assert measurements.with_margin(10_000, room=11_000) == 10_000
     needs = measurements.needs(
         {
             "phase_peaks": {
