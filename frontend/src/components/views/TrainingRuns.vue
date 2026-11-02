@@ -791,7 +791,11 @@ async function retry(card) {
   try {
     const created = await runsStore.retryJob(card.job);
     // The card that had focus is gone: hand it to the one that replaced it.
-    const index = cards.value.findIndex((c) => c.job?.uuid === created?.uuid);
+    // Refused, there is no replacement: a jobless card's undefined uuid would
+    // otherwise match.
+    const index = created
+      ? cards.value.findIndex((c) => c.job?.uuid === created.uuid)
+      : -1;
     if (index >= 0) {
       cursor.value = index;
       await nextTick();

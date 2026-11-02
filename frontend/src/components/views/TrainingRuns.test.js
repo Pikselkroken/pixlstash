@@ -378,6 +378,22 @@ describe("drawing the grid", () => {
       );
     });
 
+    it("leaves the keyboard place alone when the retry is refused", async () => {
+      // A folder card has no job; a refused retry must not read it as the
+      // replacement and move the cursor there.
+      listTrainingJobs.mockResolvedValue([failedJob]);
+      createTrainingJob.mockRejectedValue({
+        response: { status: 422, data: { detail: "AI-toolkit is not set up." } },
+      });
+      const wrapper = await openWith([run("Foxglove")]);
+      const tabbable = () =>
+        wrapper.find(".tr-card[tabindex='0'] .tr-card-name").text();
+      expect(tabbable()).toBe("Clementine");
+      await wrapper.find("[data-testid='tr-card-retry']").trigger("click");
+      await settle(wrapper);
+      expect(tabbable()).toBe("Clementine");
+    });
+
     it("says why when the run no longer fits this GPU", async () => {
       listTrainingJobs.mockResolvedValue([failedJob]);
       createTrainingJob.mockRejectedValue({
