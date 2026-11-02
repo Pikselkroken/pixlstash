@@ -832,6 +832,10 @@ describe("a person's run with a lookalike and a stranger", () => {
       "Should not change kept generic",
       "Should not change from step 0",
     ]);
+    // Under the prompt, in the fixed label column: never a column of its own.
+    for (const note of wrapper.findAll('[data-testid="trl-expect"]')) {
+      expect(note.element.closest(".trl-prompt")).not.toBeNull();
+    }
   });
 
   it("with the words left free, the lookalike is expected to drift", async () => {
