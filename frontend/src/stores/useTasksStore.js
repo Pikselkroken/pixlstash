@@ -34,6 +34,11 @@ export function downloadMessage(download) {
     : `Downloading… ${received}`;
 }
 
+/** Nothing waiting: `transientProgress` when no grid is sorting or searching. */
+function idleTransientProgress() {
+  return { visible: false, status: "idle", message: "", percent: 0 };
+}
+
 /**
  * Cross-component "what is the app working on right now" store.
  *
@@ -62,6 +67,17 @@ export const useTasksStore = defineStore("tasks", () => {
   const lastSnapshot = new Map(); // key → { current, t }
   const lastActiveAtByWorker = new Map();
   const lastProgressAtByWorker = new Map();
+
+  // ── Transient progress ────────────────────────────────────────────────────
+  // A short wait the user cannot abort and the task list does not list: the
+  // grid's sort or search loading. The grid writes it, the title bar draws it
+  // beside the tasks pill, so it no longer covers the grid's corner.
+  // ProgressOverlay's props: { visible, status, message, percent }.
+  const transientProgress = ref(idleTransientProgress());
+
+  function clearTransientProgress() {
+    transientProgress.value = idleTransientProgress();
+  }
 
   // ── ComfyUI runs (backend-reported) ───────────────────────────────────────
   // The runs in flight as the last poll listed them, oldest first:
@@ -824,6 +840,7 @@ export const useTasksStore = defineStore("tasks", () => {
     resources.value = null;
     modelDownloads.value = [];
     seenDownloadStatus.clear();
+    clearTransientProgress();
   }
 
   onScopeDispose(onSessionReset(reset));
@@ -870,6 +887,9 @@ export const useTasksStore = defineStore("tasks", () => {
     runWaitingAnyway,
     cancelWaiting,
     freeComfyuiCache,
+    // transient progress (the grid's sort/search wait)
+    transientProgress,
+    clearTransientProgress,
     // import runs (#459)
     importRuns,
     setImportRun,
