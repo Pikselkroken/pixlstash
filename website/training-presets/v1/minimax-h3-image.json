@@ -1,7 +1,7 @@
 {
   "id": "minimax-h3-image",
   "version": 1,
-  "label": "MiniMax H3 · image",
+  "label": "MiniMax H3 · from stills",
   "requires_arch": "minimax_h3",
   "template": "zimage-turbo-lora",
   "divisibility": 32,

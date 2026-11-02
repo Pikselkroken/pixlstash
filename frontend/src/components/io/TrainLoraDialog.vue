@@ -175,9 +175,6 @@
         <span v-if="motionOff" class="tld-hint" data-testid="tld-motion-off">
           {{ motionOff }}
         </span>
-        <span v-if="captionsHint" class="tld-hint" data-testid="tld-captions">
-          {{ captionsHint }}
-        </span>
         <span class="tld-hint">
           <button
             type="button"
@@ -219,6 +216,16 @@
     <p v-else-if="autoCheckNote" class="tld-hint" role="status" data-testid="tld-auto-check-note">
       {{ autoCheckNote }}
     </p>
+
+    <div class="tld-field" data-testid="tld-captions">
+      <FieldLabel>Captions</FieldLabel>
+      <Segmented
+        v-model="store.captionMode"
+        full
+        :options="CAPTION_OPTIONS"
+        aria-label="Captions"
+      />
+    </div>
 
     <div class="tld-field">
       <div class="tld-label-row">
@@ -732,6 +739,13 @@ const EFFORT_OPTIONS = Object.entries(EFFORT_LABELS).map(([id, label]) => ({
   id,
   label,
 }));
+// The recipe picks one (store.captionMode follows it); None trains each
+// picture on the trigger word alone.
+const CAPTION_OPTIONS = [
+  { id: "tags", label: "Tags" },
+  { id: "description", label: "Full text description" },
+  { id: "none", label: "None" },
+];
 
 const advancedOpen = ref(false);
 const showAll = ref(false);
@@ -1059,20 +1073,13 @@ const selectedRecipe = computed(() =>
   (store.presets || []).find((p) => p.id === store.selectedPreset),
 );
 const presetLabel = computed(() => selectedRecipe.value?.label || "");
-const byDescription = computed(() => selectedRecipe.value?.captions === "description");
-const captionsHint = computed(() => {
-  if (!selectedRecipe.value) return "";
-  return byDescription.value
-    ? "Captions: each picture's description, or its tags where it has none."
-    : "Captions: each picture's tags.";
-});
 /** Why this model's motion recipe cannot be picked, when it cannot. */
 const motionOff = computed(() => {
   const arch = selectedRecipe.value?.requires_arch;
   const off = (store.presets || []).find(
     (p) => arch && p.requires_arch === arch && store.presetUnusable(p),
   );
-  return off ? `${off.label} is off: there are no video clips here to learn motion from.` : "";
+  return off ? `${off.label} is off: no video clips here.` : "";
 });
 
 const fitOptions = computed(() => {
@@ -1245,25 +1252,25 @@ const checks = computed(() => {
       text: `${clips} video clip${clips === 1 ? " is" : "s are"} left out: this model trains on still pictures. A motion recipe trains on clips.`,
     });
   }
-  if (byDescription.value) {
+  if (store.captionMode === "description") {
     const bare = d.uncaptioned || 0;
     const onTags = (d.undescribed || 0) - bare;
     if (onTags > 0) {
       out.push({
         id: "undescribed",
-        text: `${onTags} picture${onTags === 1 ? " has" : "s have"} no description, so ${onTags === 1 ? "it trains" : "they train"} on ${onTags === 1 ? "its" : "their"} tags instead.`,
+        text: `${onTags} picture${onTags === 1 ? " has" : "s have"} no description and will use tags.`,
       });
     }
     if (bare > 0) {
       out.push({
         id: "uncaptioned",
-        text: `${bare} picture${bare === 1 ? " has" : "s have"} neither a description nor tags, so ${bare === 1 ? "it trains" : "they train"} on the trigger word alone.`,
+        text: `${bare} picture${bare === 1 ? " has" : "s have"} no description or tags: trigger word only.`,
       });
     }
-  } else if (d.untagged > 0) {
+  } else if (store.captionMode === "tags" && d.untagged > 0) {
     out.push({
       id: "untagged",
-      text: `${d.untagged} picture${d.untagged === 1 ? " has" : "s have"} no tags yet, so ${d.untagged === 1 ? "it trains" : "they train"} on the trigger word alone.`,
+      text: `${d.untagged} picture${d.untagged === 1 ? " has" : "s have"} no tags: trigger word only.`,
     });
   }
   if (d.near_duplicates > 0) {

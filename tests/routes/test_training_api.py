@@ -1637,7 +1637,7 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
                     ("chroma1-base", "Chroma1 Base"),
                     ("flux2-klein-9b-base", "FLUX.2 Klein 9B Base"),
                     ("krea2-raw", "Krea 2 Raw"),
-                    ("minimax-h3-image", "MiniMax H3 · image"),
+                    ("minimax-h3-image", "MiniMax H3 · from stills"),
                     ("minimax-h3-motion", "MiniMax H3 · motion"),
                     ("moss-image-base", "MOSS-Image Base"),
                 )
@@ -2138,6 +2138,28 @@ def test_create_job_refuses_a_set_with_no_pictures():
             json={**body, "subject": "thing", "preset": "minimax-h3-image"},
         )
         assert r.status_code == 200, r.text
+        # The owner's caption choice wins over the recipe's, and only the
+        # three the dataset writer knows are taken.
+        for captions in ("tags", "none"):
+            r = owner.post(
+                "/training/jobs",
+                json={
+                    **body,
+                    "subject": "thing",
+                    "preset": "minimax-h3-image",
+                    "captions": captions,
+                },
+            )
+            assert r.status_code == 200, r.text
+            assert (
+                server.vault.training_service.enqueue_calls[-1]["caption_mode"]
+                == captions
+            )
+        r = owner.post(
+            "/training/jobs",
+            json={**body, "subject": "thing", "captions": "booru"},
+        )
+        assert r.status_code == 422, r.text
     finally:
         _teardown(temp_dir, server)
 

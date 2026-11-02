@@ -380,7 +380,7 @@ describe("TrainLoraDialog", () => {
     );
     const checks = wrapper.find('[data-testid="tld-checks"]').text();
     expect(checks).toContain("Only 4 pictures");
-    expect(checks).toContain("2 pictures have no tags yet");
+    expect(checks).toContain("2 pictures have no tags: trigger word only.");
     expect(checks).toContain("2 pictures are near copies");
     expect(checks).toContain("1 picture shows somebody else's face");
     // Warnings, not blocks.
@@ -606,7 +606,7 @@ describe("a recipe that trains on clips (#2179)", () => {
   it("disables a clip recipe on a set without clips and moves to the model's still recipe", async () => {
     training.listTrainingPresets.mockResolvedValue([
       { id: "zimage-turbo", label: "Z-Image Turbo", offered: true, clips: false, requires_arch: "zimage" },
-      { id: "minimax-h3-image", label: "MiniMax H3 · image", offered: true, clips: false, requires_arch: "minimax_h3" },
+      { id: "minimax-h3-image", label: "MiniMax H3 · from stills", offered: true, clips: false, requires_arch: "minimax_h3" },
       { id: "minimax-h3-motion", label: "MiniMax H3 · motion", offered: false, clips: true, requires_arch: "minimax_h3" },
     ]);
     const { wrapper, store } = await openDialog(
@@ -630,7 +630,7 @@ describe("a recipe that trains on clips (#2179)", () => {
     expect(picker.props("options").filter((o) => o.disabled)).toHaveLength(1);
     // And says so where the recipe was chosen, not only inside the list.
     expect(wrapper.find('[data-testid="tld-motion-off"]').text()).toBe(
-      "MiniMax H3 · motion is off: there are no video clips here to learn motion from.",
+      "MiniMax H3 · motion is off: no video clips here.",
     );
     // Another model with no motion recipe has nothing to say about it.
     store.selectedPreset = "zimage-turbo";
@@ -638,30 +638,43 @@ describe("a recipe that trains on clips (#2179)", () => {
     expect(wrapper.find('[data-testid="tld-motion-off"]').exists()).toBe(false);
   });
 
-  it("says how the pictures are captioned, and warns by that caption form", async () => {
+  it("captions as the recipe suggests, warns by the form chosen, and sends it", async () => {
     training.listTrainingPresets.mockResolvedValue([
       { id: "zimage-turbo", label: "Z-Image Turbo", offered: true, captions: "tags" },
-      { id: "minimax-h3-image", label: "MiniMax H3 · image", offered: true, captions: "description" },
+      { id: "flux-dev", label: "FLUX.1 Dev", offered: true },
+      { id: "minimax-h3-image", label: "MiniMax H3 · from stills", offered: true, captions: "description" },
     ]);
     const { wrapper, store } = await openDialog(
       { type: "character", id: 4, name: "Grandad" },
       dataset({ untagged: 3, undescribed: 5, uncaptioned: 1 }),
     );
-    const text = () => wrapper.find('[data-testid="tld-captions"]').text();
-    const checks = () => wrapper.find('[data-testid="tld-checks"]').text();
+    const checks = () => {
+      const list = wrapper.find('[data-testid="tld-checks"]');
+      return list.exists() ? list.text() : "";
+    };
     store.selectedPreset = "zimage-turbo";
     await flushPromises();
-    expect(text()).toBe("Captions: each picture's tags.");
-    expect(checks()).toContain("3 pictures have no tags yet");
+    expect(store.captionMode).toBe("tags");
+    expect(checks()).toContain("3 pictures have no tags: trigger word only.");
 
     store.selectedPreset = "minimax-h3-image";
     await flushPromises();
-    expect(text()).toBe("Captions: each picture's description, or its tags where it has none.");
-    expect(checks()).not.toContain("no tags yet");
-    expect(checks()).toContain("4 pictures have no description, so they train on their tags instead.");
-    expect(checks()).toContain(
-      "1 picture has neither a description nor tags, so it trains on the trigger word alone.",
-    );
+    expect(store.captionMode).toBe("description");
+    expect(checks()).not.toContain("no tags:");
+    expect(checks()).toContain("4 pictures have no description and will use tags.");
+    expect(checks()).toContain("1 picture has no description or tags: trigger word only.");
+
+    // The owner's choice holds until the recipe changes, and goes with the run.
+    store.captionMode = "none";
+    await flushPromises();
+    expect(checks()).not.toMatch(/no tags|no description/);
+    training.createTrainingJob.mockResolvedValue({ id: 1 });
+    await store.startTraining();
+    expect(training.createTrainingJob.mock.calls.at(-1)[0].captions).toBe("none");
+    // A recipe that names no form, after one that did, is back on tags.
+    store.selectedPreset = "flux-dev";
+    await flushPromises();
+    expect(store.captionMode).toBe("tags");
   });
 });
 

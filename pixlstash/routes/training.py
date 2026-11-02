@@ -415,6 +415,14 @@ def create_router(server) -> APIRouter:
                 "locked recipe key is refused with 422 naming it."
             ),
         )
+        captions: Optional[Literal["tags", "description", "none"]] = Field(
+            default=None,
+            description=(
+                "How each picture is captioned: its tags, its description (its "
+                "tags where it has none), or none (the trigger word alone). "
+                "Defaults to the recipe's `captions`."
+            ),
+        )
 
         @field_validator("name")
         @classmethod
@@ -1811,7 +1819,7 @@ def create_router(server) -> APIRouter:
                 locked=presets.to_patch(preset["locked"]),
                 resolution=resolution,
                 pins=pins,
-                caption_mode=presets.caption_mode(preset),
+                caption_mode=payload.captions or presets.caption_mode(preset),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

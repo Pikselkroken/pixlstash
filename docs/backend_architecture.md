@@ -11854,9 +11854,12 @@ none) or `tags` (the default). `presets.caption_mode` reads it, the route queues
 it on the job's pending spec, and `_build_dataset` hands it to the builder, so a
 recipe changed since queueing changes nothing. MiniMax H3's two recipes caption
 in prose; the rest keep tags. `GET /training/presets` carries each recipe's
-`captions`, which the Train dialog states under the picker, and
+`captions`. The Train dialog's Captions choice (Tags, Full text description,
+None) starts on it each time the recipe changes, and `POST /training/jobs`
+takes the owner's pick as `captions`, which wins over the recipe's; None writes
+no caption files, so each picture trains on the trigger word alone.
 `GET /training/dataset` counts `undescribed` and `uncaptioned` pictures beside
-`untagged`, so the dialog warns by the form the picked recipe uses. The rendered config is the template, the
+`untagged`, so the dialog warns by the form chosen. The rendered config is the template, the
 resolved values (checked by `validate_tunables`) and the locked keys merged
 last; placeholders are substituted after the merge, so a recipe's prompts get
 the trigger word. A sample prompt expands `{{TRIGGER_WORD}}` and nothing else,

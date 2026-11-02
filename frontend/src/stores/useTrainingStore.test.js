@@ -262,6 +262,7 @@ describe("startTraining", () => {
       effort: "standard",
       fit: "save_memory",
       pins: { "train.steps": 2000 },
+      captions: "tags",
     });
   });
 
