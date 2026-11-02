@@ -128,6 +128,9 @@ describe("connecting ComfyUI", () => {
       "http://127.0.0.1:8188/",
     );
     expect(config.patchUserConfig).not.toHaveBeenCalled();
+    // Found means they have it: no "Get ComfyUI", and no header link yet.
+    expect(byTestId(wrapper, "upstream-get-comfyui").exists()).toBe(false);
+    expect(byTestId(wrapper, "upstream-site-comfyui").exists()).toBe(false);
 
     await byTestId(wrapper, "comfyui-connect-found").trigger("click");
     await flushPromises();
@@ -158,6 +161,14 @@ describe("connecting ComfyUI", () => {
     expect(byTestId(wrapper, "comfyui-found-url").exists()).toBe(false);
     expect(byTestId(wrapper, "comfyui-host").exists()).toBe(true);
     expect(wrapper.text()).toContain("Where is ComfyUI running?");
+    // Nothing found: where to get it, inside the card, in a new window.
+    const strip = byTestId(wrapper, "upstream-get-comfyui");
+    expect(strip.text()).toContain("Don't have ComfyUI yet?");
+    expect(strip.text()).toContain("Comfy Org (GPL-3.0)");
+    const get = strip.find("a");
+    expect(get.attributes("href")).toBe("https://github.com/Comfy-Org/ComfyUI/releases/latest");
+    expect(get.attributes("target")).toBe("_blank");
+    expect(byTestId(wrapper, "upstream-site-comfyui").exists()).toBe(false);
   });
 
   it("refuses an unreachable address, saying why, and saves nothing", async () => {
@@ -238,6 +249,11 @@ describe("the table of connections", () => {
     // Wrong if the empty-state search ran behind a populated list.
     expect(comfyui.probeComfyui).not.toHaveBeenCalled();
     expect(byTestId(wrapper, "comfyui-probing").exists()).toBe(false);
+    // Connected: only the header link to the site, never the "Get" strip.
+    expect(byTestId(wrapper, "upstream-site-comfyui").attributes("href")).toBe(
+      "https://github.com/Comfy-Org/ComfyUI/releases/latest",
+    );
+    expect(byTestId(wrapper, "upstream-get-comfyui").exists()).toBe(false);
   });
 
   it("shows Linked with its date, and Link on an unlinked row", async () => {

@@ -8,6 +8,7 @@ import { createPinia, setActivePinia } from "pinia";
 vi.mock("vuetify/components", () => ({
   VIcon: { template: "<i />" },
   VProgressCircular: { template: "<i />" },
+  VTooltip: { template: "<i />" },
   VSwitch: {
     props: ["modelValue", "label"],
     emits: ["update:modelValue"],
@@ -162,6 +163,16 @@ describe("when no checkout is found", () => {
     expect(byTestId(w, "ait-search-again").exists()).toBe(true);
     expect(connectButton(w).exists()).toBe(false);
     expect(training.checkAiToolkit).not.toHaveBeenCalled();
+    // Where to get it: the README's install section, in a new window.
+    const strip = byTestId(w, "upstream-get-ai-toolkit");
+    expect(strip.text()).toContain("Don't have AI-toolkit yet?");
+    expect(strip.text()).toContain("Ostris (MIT)");
+    const get = strip.find("a");
+    expect(get.attributes("href")).toBe(
+      "https://github.com/ostris/ai-toolkit#installation",
+    );
+    expect(get.attributes("target")).toBe("_blank");
+    expect(byTestId(w, "upstream-site-ai-toolkit").exists()).toBe(false);
   });
 });
 
@@ -176,6 +187,9 @@ describe("when a checkout is found", () => {
     expect(byTestId(w, "ait-check-sentence").text()).toBe(SENTENCE_ONE_GPU);
     expect(connectButton(w).exists()).toBe(true);
     expect(liveRegion(w)).toContain("AI-toolkit can train.");
+    // Found means they have it: neither the strip nor the header link.
+    expect(byTestId(w, "upstream-get-ai-toolkit").exists()).toBe(false);
+    expect(byTestId(w, "upstream-site-ai-toolkit").exists()).toBe(false);
   });
 
   it("says which recipes the checkout can train", async () => {
@@ -392,7 +406,11 @@ describe("when connected", () => {
     expect(byTestId(w, "ait-runs-count").text()).toBe("3 runs");
     expect(byTestId(w, "ait-shelf-line").text()).toBe(
       "Runs land in your model shelf's ai-toolkit folder.",
+    );    // Connected: only the header link to the repository.
+    expect(byTestId(w, "upstream-site-ai-toolkit").attributes("href")).toBe(
+      "https://github.com/ostris/ai-toolkit",
     );
+    expect(byTestId(w, "upstream-get-ai-toolkit").exists()).toBe(false);
   });
 
   it("says so when the datasets folder is not writable", async () => {
