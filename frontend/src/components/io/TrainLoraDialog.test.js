@@ -437,9 +437,9 @@ describe("keeping the description generic", () => {
     );
     const notice = wrapper.find('[data-testid="tld-keep-generic"]');
     expect(notice.text()).toContain("All 24 captions call Grandad “an elderly man”.");
-    expect(notice.text()).toContain("every elderly man is Grandad");
+    expect(notice.text()).toContain("any elderly man you ask for starts to look like Grandad");
     expect(notice.find("mark").text()).toBe("an elderly man");
-    expect(notice.text()).toContain("Keep “an elderly man” generic");
+    expect(notice.text()).toContain("Protect “an elderly man”");
     expect(wrapper.find('[data-testid="tld-keep-source"]').text()).toBe(
       "On because 24 of 24 captions use it",
     );
@@ -457,7 +457,7 @@ describe("keeping the description generic", () => {
         .findAll('[data-testid="tld-prompt-role"]')
         .map((r) => r.findAll("span").map((t) => t.text()).join(" "));
     expect(roles()).toEqual([
-      "Like him Should not change: kept generic",
+      "Like him Should not change: protected",
       "Someone else Should not change",
     ]);
 

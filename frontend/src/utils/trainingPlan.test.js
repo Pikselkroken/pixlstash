@@ -273,12 +273,12 @@ describe("the control prompts' roles", () => {
     expect(promptRole("a red bicycle", { description: "a red bicycle" })).toBeNull();
   });
 
-  it("words the lookalike by whether the description was kept generic", () => {
+  it("words the lookalike by whether the description was protected", () => {
     const d = { description: "an elderly man" };
     expect(roleText("lookalike", { ...d, kept: true })).toEqual({
       label: "Like him",
       expect: "Should not change",
-      detail: "kept generic",
+      detail: "protected",
     });
     expect(roleText("lookalike", { ...d, kept: false }).expect).toBe("Expected to drift");
     expect(roleText("stranger", { ...d, kept: false }).expect).toBe("Should not change");

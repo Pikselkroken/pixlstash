@@ -352,10 +352,12 @@
       <v-icon size="16">mdi-alert-outline</v-icon>
       <div class="tld-keep__body">
         <span>
-          <b>{{ keepGeneric.headline }}</b> Left alone, the LoRA learns that every
-          {{ keepGeneric.bare }} is {{ keepGeneric.name }}. Keeping the words
-          generic holds &ldquo;{{ keepGeneric.description }}&rdquo; to what the
-          model drew before training.
+          <b>{{ keepGeneric.headline }}</b> Unprotected, the LoRA can learn
+          that &ldquo;{{ keepGeneric.description }}&rdquo; means
+          {{ keepGeneric.name }}, so any {{ keepGeneric.bare }} you ask for
+          starts to look like {{ keepGeneric.name }}. Protecting it makes each
+          training step also check that &ldquo;{{ keepGeneric.description }}&rdquo;
+          still comes out as it did before training.
         </span>
         <span v-if="keepGeneric.example" class="tld-keep__cap" data-testid="tld-keep-caption"
           >{{ keepGeneric.example[0] }}<mark v-if="keepGeneric.example[1]">{{
@@ -374,7 +376,7 @@
           />
           <span class="tld-keep__label">
             <span>{{ keepGeneric.label }}</span>
-            <span class="tld-hint">slower steps, a little less likeness</span>
+            <span class="tld-hint">slower training, a little less likeness</span>
           </span>
           <span class="tld-sp" />
           <span class="tld-hint" data-testid="tld-keep-source">{{ keepGeneric.source }}</span>
@@ -1006,7 +1008,7 @@ const keepGeneric = computed(() => {
   let source;
   if (PRESERVATION_KEY in store.allPins) source = "Set by you";
   else if (entry.value) source = `On because ${count} of ${total} captions use it`;
-  else source = "Off: training the text encoder cannot keep words generic";
+  else source = "Off: not possible while the text encoder is trained";
   return {
     headline,
     description,
@@ -1014,7 +1016,7 @@ const keepGeneric = computed(() => {
     name,
     example,
     on: !!entry.value,
-    label: `Keep “${description}” generic`,
+    label: `Protect “${description}”`,
     source,
   };
 });

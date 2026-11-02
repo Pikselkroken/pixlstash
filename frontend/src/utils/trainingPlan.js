@@ -104,8 +104,8 @@ const KEY_LABELS = {
   "train.audio_loss_multiplier": "Sound weight",
   "sample.num_frames": "Sample frames",
   "sample.fps": "Sample frame rate",
-  [PRESERVATION_KEY]: "Keep the description generic",
-  [PRESERVATION_CLASS_KEY]: "Description kept generic",
+  [PRESERVATION_KEY]: "Protect the description",
+  [PRESERVATION_CLASS_KEY]: "Description to protect",
 };
 
 /** The sizes the "Train at sizes" chips offer (all multiples of 16). */
@@ -511,7 +511,7 @@ export function promptRole(text, info) {
 /**
  * A control row's label and what it should do, as the dialog and the run
  * screen word them. The lookalike holds still only while the description is
- * kept generic; the stranger always should.
+ * protected; the stranger always should.
  *
  * @returns {{label: string, expect: string, detail: string} | null}
  */
@@ -519,7 +519,7 @@ export function roleText(role, { kept, description }) {
   const who = pronounOf(description);
   if (role === "lookalike") {
     return kept
-      ? { label: `Like ${who}`, expect: "Should not change", detail: "kept generic" }
+      ? { label: `Like ${who}`, expect: "Should not change", detail: "protected" }
       : {
           label: `Like ${who}`,
           expect: "Expected to drift",

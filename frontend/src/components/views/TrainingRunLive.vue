@@ -800,8 +800,8 @@ const groups = computed(() => {
         : "should change little from step 0",
       badge: roles
         ? kept.on
-          ? `“${kept.description}” kept generic`
-          : "words left free"
+          ? `“${kept.description}” protected`
+          : `“${kept.description}” not protected`
         : null,
       rows: without,
       row: next,

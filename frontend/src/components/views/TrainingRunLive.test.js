@@ -818,10 +818,10 @@ describe("a person's run with a lookalike and a stranger", () => {
     });
   }
 
-  it("kept generic, both controls should hold still", async () => {
+  it("protected, both controls should hold still", async () => {
     const wrapper = await open(controls(true));
     expect(wrapper.find('[data-testid="trl-mode"]').text()).toBe(
-      "“an elderly man” kept generic",
+      "“an elderly man” protected",
     );
     expect(wrapper.text()).toContain("one person like him, one who is not");
     expect(wrapper.findAll('[data-testid="trl-role"]').map((r) => r.text())).toEqual([
@@ -829,7 +829,7 @@ describe("a person's run with a lookalike and a stranger", () => {
       "Someone else",
     ]);
     expect(wrapper.findAll('[data-testid="trl-expect"]').map(spaced)).toEqual([
-      "Should not change kept generic",
+      "Should not change protected",
       "Should not change from step 0",
     ]);
     // Under the prompt, in the fixed label column: never a column of its own.
@@ -838,9 +838,9 @@ describe("a person's run with a lookalike and a stranger", () => {
     }
   });
 
-  it("with the words left free, the lookalike is expected to drift", async () => {
+  it("unprotected, the lookalike is expected to drift", async () => {
     const wrapper = await open(controls(false));
-    expect(wrapper.find('[data-testid="trl-mode"]').text()).toBe("words left free");
+    expect(wrapper.find('[data-testid="trl-mode"]').text()).toBe("“an elderly man” not protected");
     expect(spaced(wrapper.findAll('[data-testid="trl-expect"]')[0])).toBe(
       "Expected to drift the words that describe him",
     );
