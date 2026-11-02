@@ -15,6 +15,7 @@ import FieldLabel from "../widgets/FieldLabel.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsRow from "./SettingsRow.vue";
+import SettingsUpstream from "./SettingsUpstream.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -319,6 +320,9 @@ watch(
 <template>
   <div>
     <SettingsSection title="AI-toolkit" :desc="SETUP_DESC" first>
+      <template v-if="phase === 'connected'" #action>
+        <SettingsUpstream program="ai-toolkit" compact />
+      </template>
       <div class="ait-card" :aria-busy="showSpinner ? 'true' : 'false'">
         <!-- Always present, so a line that arrives in it is announced. -->
         <div role="status" class="ait-status">
@@ -520,6 +524,12 @@ watch(
             Search again
           </AppButton>
         </div>
+
+        <!-- Not once a typed folder passed: they have it. -->
+        <SettingsUpstream
+          v-if="phase === 'not-found' && !checkPassed"
+          program="ai-toolkit"
+        />
 
         <div v-if="phase === 'connected'" class="ait-row">
           <AppButton

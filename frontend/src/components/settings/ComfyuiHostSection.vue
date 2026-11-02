@@ -22,6 +22,7 @@ import NewComfyuiConnectionDialog from "../panels/NewComfyuiConnectionDialog.vue
 import ComfyuiConnectionsTable from "./ComfyuiConnectionsTable.vue";
 import ComfyuiLinkDialog from "./ComfyuiLinkDialog.vue";
 import SettingsSection from "./SettingsSection.vue";
+import SettingsUpstream from "./SettingsUpstream.vue";
 import { errorMessage } from "../../utils/apiError";
 import { useFilterStore } from "../../stores/useFilterStore";
 
@@ -80,6 +81,7 @@ function fillForm(url) {
 // Probe the usual local addresses in order; the first that answers is offered.
 async function detectLocal() {
   const run = ++detectRun;
+  foundUrl.value = "";
   state.value = "probing";
   formError.value = "";
   for (const candidate of LOCAL_CANDIDATES) {
@@ -227,6 +229,9 @@ watch(
     desc="Run workflows from PixlStash and save ComfyUI's pictures straight into your library. Automatic setup works for a ComfyUI on this computer or your local network."
     :first="first"
   >
+    <template v-if="state === 'table'" #action>
+      <SettingsUpstream program="comfyui" compact />
+    </template>
     <template v-if="state === 'table'">
       <div class="cf-head">
         <span class="section-label">Connections</span>
@@ -380,6 +385,8 @@ watch(
             Search again
           </AppButton>
         </div>
+        <!-- Not after Use another address: one was just found. -->
+        <SettingsUpstream v-if="!foundUrl" program="comfyui" />
       </template>
 
       <p v-if="actionError" class="cf-error" role="alert">
