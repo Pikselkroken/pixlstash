@@ -49,12 +49,14 @@ Name: "{autodesktop}\{#MyAppName} Server"; Filename: "{app}\{#MyAppExeName}"; Ic
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
 
 [Run]
-Filename: "{app}\install-pixlstash.bat"; Parameters: """{app}"""; Flags: waituntilterminated
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch PixlStash Server"; Flags: nowait postinstall skipifsilent
+; install-pixlstash.bat runs from CurStepChanged instead of here: a [Run] entry's
+; exit code is ignored, so a failed pip install used to finish "successfully".
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch PixlStash Server"; Flags: nowait postinstall skipifsilent; Check: PackagesInstalled
 
 [Code]
 var
   StopScriptExtracted: Boolean;
+  PackageInstallFailed: Boolean;
 
 { Run stop-pixlstash.ps1 against the install dir. Exit code 1 means a PixlStash
   process is (still, when Kill=True) running; 0 means none. -1 = launch failed. }
@@ -103,13 +105,51 @@ begin
   end;
 end;
 
-function IsPythonAvailable(): Boolean;
+{ True when Cmd runs a Python at or above pyproject.toml's requires-python. Keep
+  the candidates in step with install-pixlstash.bat, which makes the real pick. }
+function PythonMeetsFloor(const Cmd: String): Boolean;
 var
   ResultCode: Integer;
 begin
-  Result := Exec('cmd.exe', '/c py -3.12 --version', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
-  if not Result then
-    Result := Exec('cmd.exe', '/c python --version', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+  Result := Exec('cmd.exe',
+    '/c ' + Cmd + ' -c "import sys; sys.exit(sys.version_info < (3, 11))"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+function IsPythonAvailable(): Boolean;
+begin
+  Result := PythonMeetsFloor('py -3.12') or PythonMeetsFloor('py -3.11') or
+    PythonMeetsFloor('py -3') or PythonMeetsFloor('python');
+end;
+
+function PackagesInstalled(): Boolean;
+begin
+  Result := not PackageInstallFailed;
+end;
+
+{ Install the wheel into the venv once the files are in place, and say so when it
+  fails instead of reaching the Finished page as if PixlStash were ready. }
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+begin
+  if CurStep <> ssPostInstall then
+    Exit;
+  if not Exec(ExpandConstant('{app}\install-pixlstash.bat'),
+      '"' + ExpandConstant('{app}') + '"', ExpandConstant('{app}'),
+      SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+    ResultCode := -1;
+  if ResultCode <> 0 then
+  begin
+    PackageInstallFailed := True;
+    SuppressibleMsgBox(
+      'PixlStash could not install its Python packages (exit code ' +
+      IntToStr(ResultCode) + '), so it will not start yet.' + #13#10#13#10 +
+      'To see what went wrong, run this in a Command Prompt, then run this ' +
+      'installer again:' + #13#10#13#10 +
+      '"' + ExpandConstant('{app}\install-pixlstash.bat') + '" "' + ExpandConstant('{app}') + '"',
+      mbCriticalError, MB_OK, IDOK);
+  end;
 end;
 
 function InitializeSetup(): Boolean;
@@ -118,7 +158,7 @@ begin
   if not IsPythonAvailable() then
   begin
     MsgBox(
-      'Python 3.10 or newer is required to install PixlStash.' + #13#10#13#10 +
+      'Python 3.11 or newer is required to install PixlStash.' + #13#10#13#10 +
       'Please install Python from https://www.python.org/ and run this installer again.' + #13#10 +
       'Make sure to check "Add Python to PATH" during installation.',
       mbCriticalError, MB_OK);
