@@ -141,27 +141,50 @@ def _peak(peaks: dict, key: str, phases) -> int | None:
     return max(figures) if figures else None
 
 
-def with_margin(mb: int | None) -> int | None:
-    """*mb* times :data:`NEED_MARGIN`, rounded up to a whole MB."""
+def with_margin(mb: int | None, room: int | None = None) -> int | None:
+    """*mb* times :data:`NEED_MARGIN`, rounded up to a whole MB.
+
+    With *room*, the margin never lifts a peak that fits the room past
+    ``room / NEED_MARGIN``, nor below the peak itself, as for a learned ComfyUI
+    need (#2081): the setup completed in that peak on this card, so asking 10%
+    more would refuse what just ran. A peak above the room keeps its margin.
+    """
+    if mb is None:
+        return None
     # Rounded first: 14000 * 1.1 is 15400.000000000002 in floating point.
-    return None if mb is None else int(math.ceil(round(mb * NEED_MARGIN, 6)))
+    need = int(math.ceil(round(mb * NEED_MARGIN, 6)))
+    if room is not None and mb <= room:
+        need = max(mb, min(need, int(room / NEED_MARGIN)))
+    return need
 
 
-def needs(measurement: dict) -> dict:
+def needs(
+    measurement: dict, *, vram_room: int | None = None, ram_room: int | None = None
+) -> dict:
     """What a run of a measured setup asks for, previews apart.
+
+    Args:
+        measurement: A recorded measurement.
+        vram_room: The GPU memory the run can be given; see :func:`with_margin`.
+        ram_room: The RAM the run can be given, likewise.
 
     Returns:
         ``{vram_mb, ram_mb, preview_vram_mb, preview_ram_mb}``, each the phase
-        peak times :data:`NEED_MARGIN`, None where nothing was measured.
+        peak times :data:`NEED_MARGIN` (held under the room as
+        :func:`with_margin` says), None where nothing was measured.
         Training's figures are the highest of every phase but previews.
     """
     peaks = measurement.get("phase_peaks") or {}
     training = [p for p in peaks if p != PREVIEW_PHASE]
     return {
-        "vram_mb": with_margin(_peak(peaks, "vram_mb", training)),
-        "ram_mb": with_margin(_peak(peaks, "ram_mb", training)),
-        "preview_vram_mb": with_margin(_peak(peaks, "vram_mb", [PREVIEW_PHASE])),
-        "preview_ram_mb": with_margin(_peak(peaks, "ram_mb", [PREVIEW_PHASE])),
+        "vram_mb": with_margin(_peak(peaks, "vram_mb", training), vram_room),
+        "ram_mb": with_margin(_peak(peaks, "ram_mb", training), ram_room),
+        "preview_vram_mb": with_margin(
+            _peak(peaks, "vram_mb", [PREVIEW_PHASE]), vram_room
+        ),
+        "preview_ram_mb": with_margin(
+            _peak(peaks, "ram_mb", [PREVIEW_PHASE]), ram_room
+        ),
     }
 
 
