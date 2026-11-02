@@ -477,14 +477,36 @@ def test_a_measured_profile_is_admitted_on_what_it_measured():
     assert out["probe"] is False and out["previews_deferred"] is False
 
 
-def test_a_measured_peak_above_the_seed_moves_to_the_next_profile():
-    out = _resolve(lookup=_lookup({"q8": _measurement(21_000)}))
+def test_a_measured_peak_above_the_room_moves_to_the_next_profile():
+    out = _resolve(lookup=_lookup({"q8": _measurement(23_000)}))
     assert out["profile"] == "q8_cached"
     # Never measured here: the run checks memory and speed first, and a probe
     # that runs out of memory steps to the profiles after it.
     assert out["probe"] is True
     assert out["fallbacks"] == ["q8_offload"]
     assert out["estimate"] == {"seconds": None, "basis": "none"}
+
+
+def test_a_measured_peak_that_fits_the_room_is_admitted_without_its_margin():
+    """A probe that held at 14 GB on a card with 14.9 GB of room ran in it: the
+    10% margin (15.4 GB) does not refuse what just ran. A lower peak keeps
+    as much of its margin as room / 1.1 allows, and one above the room is
+    refused as before."""
+    out = _resolve(vram_mb=_16GB, lookup=_lookup({"q8": _measurement(14_000)}))
+    assert (out["profile"], out["evidence"], out["vram_mb"]) == (
+        "q8",
+        "measured",
+        14_000,
+    )
+    out = _resolve(vram_mb=_16GB, lookup=_lookup({"q8": _measurement(12_500)}))
+    assert out["vram_mb"] == int(_16GB / 1.1)
+    out = _resolve(vram_mb=_16GB, lookup=_lookup({"q8": _measurement(15_000)}))
+    assert out["profile"] == "q8_cached"
+    # RAM is held to its room the same way.
+    hungry = _measurement(12_000)
+    hungry["phase_peaks"]["training"]["ram_mb"] = 39_000
+    out = _resolve(vram_mb=_16GB, ram_mb=40_000, lookup=_lookup({"q8": hungry}))
+    assert (out["profile"], out["ram_mb"]) == ("q8", 39_000)
 
 
 def test_without_measurements_nothing_is_probed():
@@ -564,9 +586,9 @@ def _sized_lookup(full: dict, small: dict | None = None):
     return lookup
 
 
-# On a 16 GB card q8 trains (13.2 GB with the margin) but its previews do not
-# (15.4 GB); q8_cached draws them while training at a third of q8's speed.
-_FAST = _measurement(12_000, previews_mb=14_000, per_update=1.0)
+# On a 16 GB card q8 trains (12.1 GB with the margin) but its previews do not
+# (15 GB); q8_cached draws them while training at a third of q8's speed.
+_FAST = _measurement(11_000, previews_mb=15_000, per_update=1.0)
 _SLOW = _measurement(9_000, previews_mb=12_000, per_update=3.0)
 
 
@@ -594,11 +616,11 @@ def test_the_previews_question_prices_each_route():
     assert by_id["after"]["profile"] == by_id["smaller"]["profile"] == "q8"
     # The default peaks at its preview, after training at training alone.
     assert by_id["while"]["peak_vram_mb"] == 13_200
-    assert by_id["after"]["peak_vram_mb"] == 13_200
+    assert by_id["after"]["peak_vram_mb"] == 12_100
     # Nobody drew 768² here: what a 1024² preview adds is scaled by pixels.
     assert by_id["smaller"]["basis"] == "estimated"
-    assert by_id["smaller"]["peak_vram_mb"] == 13_200 + 1238
-    assert by_id["smaller"]["free_mb"] == _16GB - 14_438
+    assert by_id["smaller"]["peak_vram_mb"] == 12_100 + 2475
+    assert by_id["smaller"]["free_mb"] == _16GB - 14_575
     assert by_id["smaller"]["tight"] is True and by_id["after"]["tight"] is False
     assert by_id["while"]["seconds"] > by_id["after"]["seconds"]
     assert by_id["while"]["seconds"] > by_id["smaller"]["seconds"]
@@ -621,7 +643,7 @@ def test_the_previews_question_follows_the_pins_that_answer_it():
     assert (run["profile"], run["probe"], run["evidence"]) == ("q8", True, "measured")
     assert run["previews_deferred"] is False
     # Drawn at 768² since and found too big: smaller is no route any more.
-    too_big = _measurement(12_000, previews_mb=14_500, per_update=1.0)
+    too_big = _measurement(11_000, previews_mb=15_000, per_update=1.0)
     out = _choice(
         lookup=_sized_lookup({"q8": _FAST, "q8_cached": _SLOW}, {"q8": too_big})
     )
@@ -653,7 +675,7 @@ def test_a_route_must_save_both_a_share_and_minutes(monkeypatch):
 
 
 def test_smaller_previews_are_no_answer_to_previews_short_of_ram():
-    hungry = _measurement(12_000, previews_mb=14_000, per_update=1.0)
+    hungry = _measurement(11_000, previews_mb=15_000, per_update=1.0)
     hungry["phase_peaks"]["previews"]["ram_mb"] = 50_000
     out = _choice(
         lookup=_sized_lookup({"q8": hungry, "q8_cached": _SLOW}), ram_mb=40_000

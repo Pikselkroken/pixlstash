@@ -197,6 +197,40 @@ def test_needs_put_previews_apart_with_a_margin():
     }
 
 
+def test_the_margin_never_lifts_a_peak_that_fits_the_room_past_it():
+    """#2081's rule for ComfyUI, for training: a peak the run completed in on
+    this card is never asked for with more than the room holds."""
+    assert measurements.with_margin(10_000, room=20_000) == 11_000
+    # Between room / 1.1 and room / 1.21 the margin is cut to room / 1.1.
+    assert measurements.with_margin(17_000, room=20_000) == 18_181
+    # Above room / 1.1 the peak itself is the need.
+    assert measurements.with_margin(19_500, room=20_000) == 19_500
+    assert measurements.with_margin(20_000, room=20_000) == 20_000
+    # A peak the room cannot hold keeps its margin, and no room keeps it too.
+    assert measurements.with_margin(20_001, room=20_000) == 22_002
+    assert measurements.with_margin(19_500) == 21_450
+    assert measurements.with_margin(None, room=20_000) is None
+    # room / 1.1 on an exact multiple is not floored a megabyte short.
+    assert measurements.with_margin(10_000, room=11_000) == 10_000
+    needs = measurements.needs(
+        {
+            "phase_peaks": {
+                "caching": {"vram_mb": 25_962, "ram_mb": 37_532},
+                "training": {"vram_mb": 12_534, "ram_mb": 41_790},
+                "previews": {"vram_mb": 22_002, "ram_mb": 42_638},
+            }
+        },
+        vram_room=27_852,
+        ram_room=44_000,
+    )
+    assert needs == {
+        "vram_mb": 25_962,
+        "ram_mb": 41_790,
+        "preview_vram_mb": 24_203,
+        "preview_ram_mb": 42_638,
+    }
+
+
 def test_estimate_is_setup_updates_and_preview_images():
     measured = {
         "seconds_per_update": 2.0,

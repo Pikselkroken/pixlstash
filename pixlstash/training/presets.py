@@ -731,14 +731,18 @@ def resolve(
             if not full:
                 return entry
             _, sized_like = lookup({**flat, **settings, **full})
-            needs = measurements.needs(sized_like) if sized_like else {}
+            needs = (
+                measurements.needs(sized_like, vram_room=vram_mb, ram_room=ram_mb)
+                if sized_like
+                else {}
+            )
             if needs.get("vram_mb") is not None:
                 entry["vram_mb"] = needs["vram_mb"]
                 entry["evidence"] = "measured"
             if needs.get("ram_mb") is not None:
                 entry["ram_mb"] = needs["ram_mb"]
             return entry
-        measured = measurements.needs(measurement)
+        measured = measurements.needs(measurement, vram_room=vram_mb, ram_room=ram_mb)
         entry["measurement"] = measurement
         if measured["vram_mb"] is not None:
             entry["vram_mb"] = measured["vram_mb"]
