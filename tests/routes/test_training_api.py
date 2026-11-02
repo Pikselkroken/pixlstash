@@ -1850,7 +1850,11 @@ def test_dataset_counts_and_checks_and_knows_a_reference_set():
 
 
 def _seed_character_pictures(server, char_id):
-    """Four stills and a clip of *char_id*; the third still has two faces."""
+    """Four stills and a clip of *char_id*.
+
+    The third still also shows someone else; the first has a second face row
+    of the character itself.
+    """
     import numpy as np
 
     from pixlstash.db_models import Face, Picture, Tag
@@ -1882,6 +1886,8 @@ def _seed_character_pictures(server, char_id):
             session.add(Tag(picture_id=pic.id, tag=tag))
             ids.append(pic.id)
         session.add(Face(picture_id=ids[2], face_index=1))
+        # A second face row of the character itself is not another person.
+        session.add(Face(picture_id=ids[0], face_index=2, character_id=char_id))
         session.commit()
         return ids
 

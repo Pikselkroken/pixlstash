@@ -51,6 +51,7 @@
                     :aria-valuetext="`${g.size} of ${g.reachable}`"
                     :data-testid="`cts-slider-${g.key}`"
                     @input="onSlide(g.key, $event)"
+                    @keydown.enter.prevent
                   />
                   <span
                     v-if="g.capPercent > 0"
@@ -221,6 +222,7 @@
           :key="r.key"
           class="cts-ex"
           :data-testid="`cts-reason-${r.key}`"
+          @keydown.enter.prevent
         >
           <span class="cts-ex__t">
             <span>{{ r.title }}</span>
@@ -233,7 +235,7 @@
             density="compact"
             hide-details
             :aria-label="`Set aside: ${r.title}`"
-            :disabled="busy"
+            :disabled="busy || loading"
             :data-testid="`cts-switch-${r.key}`"
             @update:model-value="(v) => toggle(r.key, !!v)"
           />
@@ -271,7 +273,7 @@
           variant="primary"
           key-hint="enter"
           :loading="busy"
-          :disabled="!total"
+          :disabled="!total || loading"
           data-testid="cts-create"
           @click="create"
         >
@@ -348,6 +350,8 @@ const allSetAside = () => Object.fromEntries(REASONS.map((r) => [r.key, true]));
 const setAside = ref(allSetAside());
 const coverageKey = ref("stills");
 const busy = ref(false);
+// A request is in flight: the picks on screen are for the previous filters.
+const loading = ref(false);
 const created = ref(null);
 const createError = ref("");
 let fetchSeq = 0;
@@ -411,7 +415,8 @@ function gapsOf(key) {
       }
       let at = null;
       for (let k = size + 1; k <= reachable; k++) {
-        if (countIn(group.picks.slice(0, k), axis, label) >= want) {
+        const picksK = group.picks.slice(0, k);
+        if (countIn(picksK, axis, label) >= target(axis, label, k)) {
           at = k;
           break;
         }
@@ -560,6 +565,7 @@ function capital(text) {
 async function load() {
   const seq = ++fetchSeq;
   loadError.value = "";
+  loading.value = true;
   const include = Object.fromEntries(
     REASONS.map((r) => [r.key, !setAside.value[r.key]]),
   );
@@ -570,9 +576,15 @@ async function load() {
     for (const key of ["stills", "clips"]) {
       sizes.value[key] = clampSize(key, sizes.value[key]);
     }
+    // A person with clips only: the coverage starts on what was picked.
+    if (!reachableOf(result.stills) && reachableOf(result.clips)) {
+      coverageKey.value = "clips";
+    }
   } catch (e) {
     if (seq !== fetchSeq) return;
     loadError.value = `Couldn't rank the pictures. ${errorDetail(e) || "Please try again."}`;
+  } finally {
+    if (seq === fetchSeq) loading.value = false;
   }
 }
 
@@ -608,7 +620,7 @@ function onSlide(key, event) {
 }
 
 async function create() {
-  if (busy.value || created.value || !total.value) return;
+  if (busy.value || loading.value || created.value || !total.value) return;
   busy.value = true;
   createError.value = "";
   const name = data.value.set_name;

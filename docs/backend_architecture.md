@@ -12617,11 +12617,14 @@ function over those rows, tested without a server.
 - **Quality** is a percentile in the group: the user's rating first, smart score
   second, so a rated picture outranks every unrated one.
 - **Four reasons set a picture aside**, each with an `include_<reason>` flag:
-  more than one face on a frame (`other_people`), a weaker member of a near
+  a face on some frame that is not the character (`other_people`), a weaker
+  member of a near
   group (`near_duplicates`, judged after the other three), a 1-2★ rating or an
   unrated smart score under `SMART_SCORE_FLOOR` (`low_quality`), and a likeness
   under `LIKENESS_FLOOR` or none (`low_likeness`). `would_add` re-runs the
   filters with only that flag flipped, so it is exactly what the toggle lets in.
+  A set takes a whole stack, so a reason against one stack member is a reason
+  against every member that shows the character.
 - **One greedy pass per group**, stills and clips apart, up to `MAX_PICKS` (50).
   `value = quality * likeness`; each next pick maximises
   `value * (1 + W_NEW * axes_under_target + W_SEM * min_cosine_distance)`.
@@ -12632,7 +12635,10 @@ function over those rows, tested without a server.
   axis yet (no head pose is stored); it would be one more `AXES` entry.
 
 Because the order depends only on the picks so far, a set of N is the first N
-of the ranking, and the dialog's slider never reshuffles. Owner-only
+of the ranking, and the dialog's slider never reshuffles. A stacked pick brings
+its whole stack when the set is filled (`POST /picture_sets/{id}/members`
+expands stacks), so the set can hold more than N pictures; the dialog reports
+the count the server added. Owner-only
 (`ROUTE_POLICIES` and `READ_BLOCKED_GET_PATHS`).
 
 ## 26. Prompt match

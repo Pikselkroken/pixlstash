@@ -177,3 +177,41 @@ def test_targets_scale_with_the_set_and_never_drop_below_one():
     assert dp.target("expression", "closed eyes", 15) == 1
     assert dp.target("expression", "closed eyes", 5) == 1
     assert dp.target("framing", "close-up", 30) == 6
+
+
+def test_a_stack_is_set_aside_when_any_member_is():
+    # A set takes a whole stack, so the clean member cannot pass alone.
+    lib = [
+        _cand(1, rating=5, stack_id=9),
+        _cand(2, face_count_max=2, stack_id=9),
+        _cand(3, rating=4),
+    ]
+    out = rank(lib, [(1, 2)])["stills"]
+    assert _ids(out) == [3]
+    assert out.excluded["other_people"] == 2
+    assert out.would_add["other_people"] == 1
+
+
+def test_a_lone_reference_keeps_a_likeness():
+    vec = _emb(1).tobytes()
+    assert dp.face_likeness([(1, vec)], [(1, vec)])[1] > 0.9
+
+
+def test_variety_still_counts_when_the_best_pick_has_no_embedding():
+    near, far = _emb(1), -_emb(1)
+    lib = [
+        _cand(1, rating=5, likeness=0.9, embedding=None),
+        _cand(2, embedding=near),
+        _cand(3, embedding=near),
+        _cand(4, likeness=0.75, embedding=far),
+    ]
+    # 2 is picked second (lowest id among equals); 4, far from it, beats 3.
+    assert _ids(rank(lib)["stills"])[:3] == [1, 2, 4]
+
+
+def test_embeddings_of_another_size_are_skipped_not_fatal():
+    lib = [
+        _cand(1, rating=5, embedding=_emb(1)),
+        _cand(2, embedding=np.ones(8, dtype=np.float32)),
+    ]
+    assert _ids(rank(lib)["stills"]) == [1, 2]

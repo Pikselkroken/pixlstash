@@ -203,6 +203,38 @@ describe("CreateTrainingSetDialog", () => {
     wrapper.unmount();
   });
 
+  it("offers a slider position only where the target there is met", async () => {
+    // Smiles at ranks 16 and 30 only: 2 at 30, but a set of 30 wants 4.
+    const group = stills(50);
+    group.picks.forEach((p, i) => {
+      p.buckets.expression = [i === 15 || i === 29 ? "smile" : "neutral"];
+    });
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: group }),
+    );
+    const wrapper = mountDialog();
+    await flushPromises();
+    const texts = (id) =>
+      wrapper.findAll(`[data-testid="${id}"]`).map((g) => g.text());
+    expect(texts("cts-gap-closable").join()).not.toContain("Smile");
+    expect(texts("cts-gap-outside")).toContainEqual(
+      expect.stringContaining("Smile: 9 in the pool, only 2 in the top 50"),
+    );
+    wrapper.unmount();
+  });
+
+  it("does not create on Enter in a slider", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper
+      .find('[data-testid="cts-slider-stills"]')
+      .trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(api.createPictureSet).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it("sets every reason aside by default; switching one off asks again", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
     const wrapper = mountDialog();

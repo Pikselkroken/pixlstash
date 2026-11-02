@@ -33,7 +33,7 @@ import psutil
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlmodel import select
 from starlette.background import BackgroundTask
 
@@ -2672,9 +2672,16 @@ def create_router(server) -> APIRouter:
         ).all()
         if not rows:
             return [], [], False
+        # Faces on each frame that are not this character: a second face
+        # row of the character itself (a mirror, a duplicate detection) is
+        # not another person.
         per_frame = session.exec(
             select(Face.picture_id, Face.frame_index, func.count(Face.id))
-            .where(Face.picture_id.in_(shown), Face.face_index != -1)
+            .where(
+                Face.picture_id.in_(shown),
+                Face.face_index != -1,
+                or_(Face.character_id.is_(None), Face.character_id != character_id),
+            )
             .group_by(Face.picture_id, Face.frame_index)
         ).all()
         tag_rows = session.exec(
@@ -2721,7 +2728,7 @@ def create_router(server) -> APIRouter:
         )
         most_faces = {}
         for pid, _frame, count in per_frame:
-            most_faces[pid] = max(most_faces.get(pid, 0), int(count))
+            most_faces[pid] = max(most_faces.get(pid, 1), 1 + int(count))
         tags = {}
         for pid, tag in tag_rows:
             tags.setdefault(pid, []).append(tag)
@@ -2752,6 +2759,7 @@ def create_router(server) -> APIRouter:
                     smart_score=pic["smart"],
                     likeness=max(scores) if scores else None,
                     face_count_max=most_faces.get(pid, 1),
+                    stack_id=pic["stack"],
                     tags=tuple(tags.get(pid, ())),
                     face_area_ratio=face_ratio(pic),
                     embedding=(
@@ -2763,6 +2771,9 @@ def create_router(server) -> APIRouter:
             )
             if pic["stack"] is not None:
                 stacks.setdefault(pic["stack"], []).append(pid)
+        # ponytail: one bucket over the whole character, unlike the dedup
+        # worker's MAX_BUCKET_MEMBERS split; milliseconds at a few thousand
+        # pictures, split it if a character of tens of thousands is slow.
         pairs = [
             (a, b)
             for a, b, _sim in near_pairs_in_bucket(
