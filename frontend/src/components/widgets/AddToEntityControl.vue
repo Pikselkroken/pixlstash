@@ -275,7 +275,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 import {
   getPictureSetMembership,
-  addPictureToSet,
+  bulkAddPicturesToSet,
   removePictureFromSet,
 } from "../../api/pictureSets";
 import { getProjectMembership } from "../../api/projects";
@@ -1320,9 +1320,13 @@ async function toggleSet(item) {
       });
       applyOptimisticMembership(item.key, "removed", idsToRemove);
     } else {
-      await Promise.all(
-        idsToAdd.map((id) => addPictureToSet(item.id, id, apiOpts.value)),
-      );
+      const result = await bulkAddPicturesToSet(item.id, idsToAdd);
+      if (result?.added === 0) {
+        // The membership read was stale: they were in the set already.
+        statusMessage.value = "Already in set";
+        scheduleStatusClear();
+        return;
+      }
       statusMessage.value = `Added to ${item.name}`;
       emit("added", { setId: item.id, pictureIds: idsToAdd, action: "added" });
       lastUsedItem.value = { id: item.id, name: item.name };
@@ -1482,9 +1486,13 @@ async function addToLastSet() {
   const item = lastUsedItem.value;
   statusMessage.value = `Adding to ${item.name}...`;
   try {
-    await Promise.all(
-      ids.map((id) => addPictureToSet(item.id, id, apiOpts.value)),
-    );
+    // Bulk add skips pictures already in the set instead of failing on them.
+    const result = await bulkAddPicturesToSet(item.id, ids);
+    if (result?.added === 0) {
+      statusMessage.value = `Already in ${item.name}`;
+      scheduleStatusClear();
+      return { success: true, setName: item.name };
+    }
     statusMessage.value = `Added to ${item.name}`;
     applyOptimisticMembership(String(item.id), "added", ids);
     emit("added", { setId: item.id, pictureIds: ids, action: "added" });

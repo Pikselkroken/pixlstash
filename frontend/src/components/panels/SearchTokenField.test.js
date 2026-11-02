@@ -30,7 +30,7 @@ vi.mock("../../api/folders", () => ({
   listImportFolders: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("../../api/pictureSets", () => ({
-  addPictureToSet: vi.fn(),
+  bulkAddPicturesToSet: vi.fn(),
   getPictureSetMembership: vi.fn(),
   removePictureFromSet: vi.fn(),
 }));

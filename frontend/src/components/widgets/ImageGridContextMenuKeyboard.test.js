@@ -44,7 +44,7 @@ vi.mock("../../api/pictureSets", () => ({
     .fn()
     .mockResolvedValue([{ id: 7, name: "Portraits", picture_count: 1 }]),
   getPictureSetMembership: vi.fn().mockResolvedValue({}),
-  addPictureToSet: vi.fn(),
+  bulkAddPicturesToSet: vi.fn(),
   removePictureFromSet: vi.fn(),
 }));
 vi.mock("../../api/projects", () => ({

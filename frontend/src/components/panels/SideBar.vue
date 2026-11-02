@@ -45,7 +45,7 @@ import {
 import {
   patchPictureSet,
   deletePictureSet,
-  addPictureToSet,
+  bulkAddPicturesToSet,
 } from "../../api/pictureSets";
 import {
   inspectLibraryPath,
@@ -3951,12 +3951,18 @@ async function handleDropOnSet(setId, event) {
   if (!targetSet) return;
 
   try {
-    // Add each image to the set
-    const addPromises = draggedIds.map(async (picId) => {
-      await addPictureToSet(setId, picId);
-    });
-
-    await Promise.all(addPromises);
+    // One bulk add: pictures already in the set are skipped, so they cannot
+    // fail the rest of the drop.
+    const result = await bulkAddPicturesToSet(setId, draggedIds);
+    if (result?.added === 0) {
+      showNotice(
+        draggedIds.length === 1
+          ? "Picture already in set"
+          : "Pictures already in set",
+        setId,
+      );
+      return;
+    }
 
     // Refresh the picture sets to update counts
     await fetchPictureSets();
@@ -3965,10 +3971,6 @@ async function handleDropOnSet(setId, event) {
     emit("images-moved", { imageIds: draggedIds });
   } catch (e) {
     const detail = errorDetail(e) || e?.message || String(e);
-    if (typeof detail === "string" && detail.includes("already in set")) {
-      showNotice("Picture already in set", setId);
-      return;
-    }
     setError("Failed to add images to set: " + detail, setId, "set");
   }
 }

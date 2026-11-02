@@ -1,9 +1,10 @@
 // Picture sets resource - /picture_sets.
 //
-// Membership is joined or left one picture at a time
-// (`/picture_sets/{id}/members/{pictureId}`), or joined in bulk
-// (`/picture_sets/{id}/members`), which records ONE undoable operation where a
-// loop over the per-picture call records one per picture.
+// Membership is left one picture at a time
+// (`/picture_sets/{id}/members/{pictureId}`) and joined in bulk
+// (`/picture_sets/{id}/members`), which records ONE undoable operation and
+// skips pictures already in the set. The per-picture add answers 400 for one
+// already there, which failed a whole drop, so the client no longer calls it.
 
 import { API_BASE_URL, apiClient, appendShareToken } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
@@ -110,16 +111,6 @@ export async function getPictureSetMembership(
       include_deleted: includeDeleted,
     }),
   );
-}
-
-/**
- * Add one picture to a set.
- * @param {number|string} setId
- * @param {number|string} pictureId
- * @returns {Promise<Object>} the response body.
- */
-export async function addPictureToSet(setId, pictureId) {
-  return unwrap(apiClient.post(setsUrl(`/${setId}/members/${pictureId}`)));
 }
 
 /**

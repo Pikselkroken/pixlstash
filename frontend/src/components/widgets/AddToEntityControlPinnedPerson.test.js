@@ -21,7 +21,7 @@ vi.mock("../../utils/apiClient", async () => {
 vi.mock("../../api/pictureSets", () => ({
   listPictureSets: vi.fn(async () => SETS),
   getPictureSetMembership: vi.fn(async () => ({})),
-  addPictureToSet: vi.fn(),
+  bulkAddPicturesToSet: vi.fn(),
   removePictureFromSet: vi.fn(),
 }));
 vi.mock("../../api/characters", () => ({

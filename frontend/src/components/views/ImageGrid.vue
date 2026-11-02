@@ -1449,7 +1449,6 @@ import { nextSetAppearance } from "../../utils/setAppearance.js";
 import { getEntityProjectIds } from "../../utils/projectMembership.js";
 import {
   getPictureSet,
-  addPictureToSet,
   bulkAddPicturesToSet,
   listPictureSets,
   removePictureFromSet,
@@ -5907,11 +5906,7 @@ async function handleImagesUploaded(payload) {
         String(SCRAPHEAP_PICTURES_ID),
       ].includes(selectedCharacterKey);
       if (selectedSetId != null && selectedSetId !== "") {
-        await Promise.all(
-          pictureIds.map((id) =>
-            addPictureToSet(selectedSetId, id),
-          ),
-        );
+        await bulkAddPicturesToSet(selectedSetId, pictureIds);
       } else if (!skipCharacter && selectedCharacterId != null) {
         await addCharacterFaces(selectedCharacterId, pictureIds);
       }

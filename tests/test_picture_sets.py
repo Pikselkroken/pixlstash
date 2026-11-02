@@ -9,6 +9,7 @@ import json
 import psutil
 import tracemalloc
 
+from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.server import Server
 from tests.utils import upload_pictures_and_wait
@@ -432,6 +433,26 @@ def test_reference_picture_set_created_with_character():
         assert len(ref_sets) == 1, (
             f"Expected 1 reference set for character, found {len(ref_sets)}"
         )
+
+        # A bulk add into the reference set changes the character, as the
+        # single-picture add already said; the sidebar drop now uses bulk.
+        picture_id = _import_one_picture(client)
+        emitted = []
+        real_notify = server.vault.notify
+        server.vault.notify = lambda event_type, data=None: (
+            emitted.append(event_type),
+            real_notify(event_type, data),
+        )
+        try:
+            resp = client.post(
+                f"/picture_sets/{ref_sets[0]['id']}/members",
+                json={"picture_ids": [picture_id]},
+            )
+        finally:
+            server.vault.notify = real_notify
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["added"] == 1
+        assert EventType.CHANGED_CHARACTERS in emitted, emitted
     finally:
         server.close()
         temp_dir.cleanup()

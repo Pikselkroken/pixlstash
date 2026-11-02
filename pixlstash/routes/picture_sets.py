@@ -2077,6 +2077,13 @@ def create_router(server) -> APIRouter:
                     "change_kind": "updated",
                 },
             )
+            # Same as the single-picture add: a character's reference set
+            # changing changes that character.
+            if _find_reference_character_id_for_set(id) is not None:
+                server.vault.notify(
+                    EventType.CHANGED_CHARACTERS,
+                    {"source": "ui", "origin_client_id": origin_client_id},
+                )
         return {"status": "success", "added": added}
 
     @router.put(

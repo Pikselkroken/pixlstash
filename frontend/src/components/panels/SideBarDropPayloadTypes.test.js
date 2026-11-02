@@ -160,7 +160,7 @@ beforeEach(() => {
   isReadOnly.value = false;
   sessionContext.value = null;
   apiGet.mockReset().mockImplementation((url) => Promise.resolve(respond(url)));
-  apiPost.mockReset().mockResolvedValue({ data: {} });
+  apiPost.mockReset().mockResolvedValue({ data: { added: 2 } });
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -251,6 +251,41 @@ describe("sidebar drops read the payload kind, not just imageIds", () => {
     expect(wrapper.emitted("images-moved")?.[0]?.[0]).toEqual({
       imageIds: PICTURES.imageIds,
     });
+
+    wrapper.unmount();
+  });
+
+  it("still files the rest when one dragged picture is already in the set", async () => {
+    // The per-picture route answers 400 for a picture already in the set; the
+    // drop must not let that one refusal fail the pictures that are new.
+    apiPost.mockImplementation((url) =>
+      /\/members\/102$/.test(String(url))
+        ? Promise.reject({ response: { status: 400, data: { detail: "already in set" } } })
+        : Promise.resolve({ data: { status: "success", added: 1 } }),
+    );
+    const wrapper = await mountSidebar();
+    const row = rowByTitle(wrapper, `${SET.name} (`);
+
+    await fire(row, "drop", transfer(PICTURES));
+
+    expect(apiPost).toHaveBeenCalledWith(`/picture_sets/${SET.id}/members`, {
+      picture_ids: PICTURES.imageIds,
+    });
+    expect(wrapper.emitted("images-moved")?.[0]?.[0]).toEqual({
+      imageIds: PICTURES.imageIds,
+    });
+
+    wrapper.unmount();
+  });
+
+  it("moves nothing when every dragged picture is already in the set", async () => {
+    apiPost.mockResolvedValue({ data: { status: "success", added: 0 } });
+    const wrapper = await mountSidebar();
+    const row = rowByTitle(wrapper, `${SET.name} (`);
+
+    await fire(row, "drop", transfer(PICTURES));
+
+    expect(wrapper.emitted("images-moved")).toBeUndefined();
 
     wrapper.unmount();
   });
