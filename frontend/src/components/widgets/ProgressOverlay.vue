@@ -58,7 +58,8 @@
 /**
  * ProgressOverlay
  *
- * A shared progress bar overlay used for export, plugin and smart-score progress.
+ * A shared progress bar overlay used for export, plugin and the model shelf's
+ * move, and inline in the title bar for the grid's sort/search wait.
  *
  * Accessibility: the bar is a real `role="progressbar"` (value omitted while
  * indeterminate, per ARIA), the card carries `aria-busy` until it reaches a
@@ -202,7 +203,8 @@ const announcement = computed(() => {
   flex-shrink: 0;
   width: 80px;
   height: 4px;
-  background: rgba(var(--v-theme-on-background), 0.12);
+  /* The trough the workspace switch beside it sits in. */
+  background: var(--track-trough);
 }
 
 .progress-overlay--error {

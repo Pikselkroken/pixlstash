@@ -836,6 +836,12 @@ export const useTasksStore = defineStore("tasks", () => {
     resources.value = null;
     modelDownloads.value = [];
     seenDownloadStatus.clear();
+    transientProgress.value = {
+      visible: false,
+      status: "idle",
+      message: "",
+      percent: 0,
+    };
   }
 
   onScopeDispose(onSessionReset(reset));
