@@ -2379,8 +2379,11 @@ own row.
 
 - **Layout (#2165), the rail pattern of #2161.** A `#head` row on the
   toolbar's line: `store.viewName` with nothing selected, the workflow's name
-  for one, "N workflows" for several, and **Clear** while anything is
-  selected. The `#lead` is the star histogram (`WorkflowStarChart.vue`: six
+  for one, "N workflows" for several, then an `Esc` keycap and the
+  selection-off icon that clears the selection while anything is selected,
+  and a close button that always ends the row: it shuts the rail as the
+  toolbar toggle does (persisted) and hands focus to that toggle, as
+  `StatsSidebar`'s does. The `#lead` is the star histogram (`WorkflowStarChart.vue`: six
   32px bars, none and 1★–5★, `role="img"` with the counts in its label) over
   the tabs. The Workflow tab's sections are `SectionHeader`s collapsed through
   `useSectionCollapse` (scope `workflow`): **Models** (read-only rows, missing
@@ -6949,7 +6952,7 @@ the toolbar's rail glyph flashes. With nothing selected it is the same tab
 reading `All models` with no selection stripe (the tab's `plain` prop; named
 `Show all models (N)`, N being the rail's count), and a card's tray opening
 bumps the same counter whether or not anything is selected. Opening from it persists and
-puts focus on the rail's *Clear*, else its title (`openRailFromTab`). The set grid reserves
+puts focus on the rail's clear button, else its title (`openRailFromTab`). The set grid reserves
 the tab's width on that edge while the rail is closed; the row list does not.
 
 **It is an inspector, not a list (#2168).** It used to be a picker of every
@@ -6962,7 +6965,11 @@ set's own slot ＋ pickers; nothing drags from the rail any more.
 - **The head** is the inspector's `head` slot, on the toolbar's line: the view's name (the
   place, or the sidebar's Type / Base row, or *Training runs* on
   `models-runs`), one set's or model's name, or `N sets` / `N models` /
-  `N selected`, and *Clear* while anything is selected (`utils/modelsInspector.js`).
+  `N selected`, then, while anything is selected, an `Esc` keycap and the
+  selection-off icon that clears it, and a close button that always ends the
+  row (`utils/modelsInspector.js`). The close shuts the rail as the toolbar
+  toggle does (persisted) and hands focus to that toggle, as `StatsSidebar`'s
+  does.
 - **Nothing selected:** three figures (sets on Sets, models elsewhere; on
   disk; in no set), *Disk by type* (Checkpoints teal, encoders + VAEs and the
   rest neutral, LoRAs raspberry; a `role="img"` bar with its figures as its

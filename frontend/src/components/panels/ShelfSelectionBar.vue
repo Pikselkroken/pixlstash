@@ -53,7 +53,7 @@
           <span class="ctx-shortcut">{{ selectAllHint }}</span>
         </button>
         <button class="ctx-item" type="button" role="menuitem" @click="clear">
-          <v-icon class="ctx-icon">mdi-close</v-icon>
+          <v-icon class="ctx-icon">mdi-selection-off</v-icon>
           <span class="ctx-label-text">Clear selection</span>
           <span class="ctx-shortcut">Esc</span>
         </button>
@@ -193,7 +193,7 @@
 
     <AppBarButton
       shape="round"
-      icon="close"
+      icon="selection-off"
       data-verb="clear"
       aria-label="Clear selection (Esc)"
       tooltip="Clear selection (Esc)"

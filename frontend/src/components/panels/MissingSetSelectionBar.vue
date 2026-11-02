@@ -85,7 +85,7 @@
     />
     <AppBarButton
       shape="round"
-      icon="close"
+      icon="selection-off"
       data-verb="clear"
       aria-label="Clear selection (Esc)"
       tooltip="Clear selection (Esc)"
