@@ -12612,7 +12612,9 @@ function over those rows, tested without a server.
 - **Likeness** is the face similarity (0-1, shown 0-100) against up to
   `MAX_REFERENCES` faces picked locally: 5★ pictures, then 4★, then by smart
   score, one face per picture. A reference is scored against the *other*
-  references, or it would score itself near 1. `select_reference_faces_for_character`
+  references, or it would score itself near 1. Only embeddings from the active
+  InsightFace pack are compared (a wholly legacy set is used as is), as face
+  search does; a face from another pack has no likeness until it is refreshed. `select_reference_faces_for_character`
   (the grid's likeness sort) is not used and not changed.
 - **Quality** is a percentile in the group: the user's rating first, smart score
   second, so a rated picture outranks every unrated one.
@@ -12624,7 +12626,7 @@ function over those rows, tested without a server.
   under `LIKENESS_FLOOR` or none (`low_likeness`). `would_add` re-runs the
   filters with only that flag flipped, so it is exactly what the toggle lets in.
   A set takes a whole stack, so a reason against one stack member is a reason
-  against every member that shows the character.
+  against every member that shows the character, stills and clips alike.
 - **One greedy pass per group**, stills and clips apart, up to `MAX_PICKS` (50).
   `value = quality * likeness`; each next pick maximises
   `value * (1 + W_NEW * axes_under_target + W_SEM * min_cosine_distance)`.

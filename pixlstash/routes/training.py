@@ -2648,8 +2648,12 @@ def create_router(server) -> APIRouter:
             **facts,
         }
 
-    def _character_candidates(session, character_id: int):
+    def _character_candidates(session, character_id: int, model_pack: str | None):
         """The rows the training-set picker ranks, gathered for one character.
+
+        Only embeddings from *model_pack* are compared, as face search does:
+        while a pack change refreshes the library, the others are of another
+        width or space. A wholly legacy set (no pack recorded) is used as is.
 
         Returns ``(candidates, near_pairs, has_clips)``.
         """
@@ -2660,6 +2664,7 @@ def create_router(server) -> APIRouter:
                 Face.picture_id,
                 Face.bbox_,
                 Face.features,
+                Face.model_pack,
                 Picture.score,
                 Picture.smart_score,
                 Picture.width,
@@ -2697,7 +2702,25 @@ def create_router(server) -> APIRouter:
             ).all()
         )
         pictures = {}
-        for face_id, pid, bbox, features, score, smart, w, h, path, stack in rows:
+        packs = {row[4] for row in rows if row[3] is not None}
+        if model_pack and packs != {None}:
+            rows = [
+                (*row[:3], row[3] if row[4] == model_pack else None, *row[4:])
+                for row in rows
+            ]
+        for (
+            face_id,
+            pid,
+            bbox,
+            features,
+            _pack,
+            score,
+            smart,
+            w,
+            h,
+            path,
+            stack,
+        ) in rows:
             pic = pictures.setdefault(
                 pid,
                 {
@@ -2823,6 +2846,10 @@ def create_router(server) -> APIRouter:
         include_low_likeness: bool = False,
     ):
         _ensure_secure(request)
+        engine = getattr(server.vault, "_engine", None)
+        model_pack = getattr(engine, "insightface_model_pack", None) or getattr(
+            server.vault, "_insightface_model_pack", None
+        )
 
         def read(session):
             character = session.get(Character, character_id)
@@ -2832,7 +2859,7 @@ def create_router(server) -> APIRouter:
             return (
                 name,
                 _free_set_name(session, f"{name} training set"),
-                *_character_candidates(session, character_id),
+                *_character_candidates(session, character_id, model_pack),
             )
 
         found = server.vault.db.run_immediate_read_task(read)

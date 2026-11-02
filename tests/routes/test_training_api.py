@@ -1853,7 +1853,8 @@ def _seed_character_pictures(server, char_id):
     """Four stills and a clip of *char_id*.
 
     The third still also shows someone else; the first has a second face row
-    of the character itself.
+    of the character itself. A sixth picture's face is from another model
+    pack, with an embedding of another width.
     """
     import numpy as np
 
@@ -1881,10 +1882,23 @@ def _seed_character_pictures(server, char_id):
                     character_id=char_id,
                     features=vec.tobytes(),
                     bbox_="[10, 10, 50, 50]",
+                    model_pack="buffalo_l",
                 )
             )
             session.add(Tag(picture_id=pic.id, tag=tag))
             ids.append(pic.id)
+        other = Picture(file_path="f.png", width=100, height=100, score=5)
+        session.add(other)
+        session.flush()
+        session.add(
+            Face(
+                picture_id=other.id,
+                character_id=char_id,
+                features=np.ones(16, dtype=np.float32).tobytes(),
+                model_pack="antelopev2",
+            )
+        )
+        ids.append(other.id)
         session.add(Face(picture_id=ids[2], face_index=1))
         # A second face row of the character itself is not another person.
         session.add(Face(picture_id=ids[0], face_index=2, character_id=char_id))
@@ -1898,7 +1912,7 @@ def test_character_set_suggestion_ranks_stills_and_clips_apart():
     temp_dir, owner, server, read_token = _setup()
     try:
         char_id = _make_character(owner, "Anna")
-        a, b, c, d, clip = _seed_character_pictures(server, char_id)
+        a, b, c, d, clip, other_pack = _seed_character_pictures(server, char_id)
         url = "/training/character_set_suggestion"
 
         r = owner.get(url, params={"character_id": char_id})
@@ -1908,7 +1922,9 @@ def test_character_set_suggestion_ranks_stills_and_clips_apart():
         assert out["set_name"] == "Anna training set"
         assert out["has_clips"] is True
         stills, clips = out["stills"], out["clips"]
-        assert (stills["candidates"], clips["candidates"]) == (4, 1)
+        assert (stills["candidates"], clips["candidates"]) == (5, 1)
+        # Not compared across model packs: no likeness, so set aside.
+        assert stills["excluded"]["low_likeness"] == 1
         assert {p["picture_id"] for p in stills["picks"]} == {a, b, d}
         assert [p["picture_id"] for p in clips["picks"]] == [clip]
         assert stills["excluded"]["other_people"] == 1

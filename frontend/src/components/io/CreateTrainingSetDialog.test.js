@@ -286,6 +286,55 @@ describe("CreateTrainingSetDialog", () => {
     wrapper.unmount();
   });
 
+  it("removes the set when none of the picks could be added", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    api.createPictureSet.mockResolvedValue({ picture_set: { id: 56 } });
+    api.bulkAddPicturesToSet.mockResolvedValue({ added: 0 });
+    api.deletePictureSet.mockResolvedValue({});
+    const wrapper = mountDialog();
+    await flushPromises();
+    await button(wrapper, "Create set of").trigger("click");
+    await flushPromises();
+    expect(api.deletePictureSet).toHaveBeenCalledWith(56);
+    expect(wrapper.emitted("created")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("fills the set with what was submitted, and locks the slider meanwhile", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    let release;
+    api.createPictureSet.mockReturnValue(
+      new Promise((resolve) => {
+        release = () => resolve({ picture_set: { id: 57 } });
+      }),
+    );
+    api.bulkAddPicturesToSet.mockResolvedValue({ added: 15 });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await button(wrapper, "Create set of").trigger("click");
+    const slider = wrapper.find('[data-testid="cts-slider-stills"]');
+    expect(slider.attributes("disabled")).toBeDefined();
+    await slider.setValue("25");
+    release();
+    await flushPromises();
+    expect(api.bulkAddPicturesToSet.mock.calls[0][1]).toHaveLength(15);
+    wrapper.unmount();
+  });
+
+  it("keeps Create off while the last reload failed", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValueOnce(suggestion());
+    api.fetchCharacterSetSuggestion.mockRejectedValueOnce(new Error("down"));
+    const wrapper = mountDialog();
+    await flushPromises();
+    wrapper.findAllComponents({ name: "VSwitch" })[0].vm.$emit(
+      "update:modelValue",
+      false,
+    );
+    await flushPromises();
+    expect(button(wrapper, "Create set of").attributes("disabled")).toBeDefined();
+    wrapper.unmount();
+  });
+
   it("creates the set from the picks and hands it to the Train dialog", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
     api.createPictureSet.mockResolvedValue({ picture_set: { id: 55 } });

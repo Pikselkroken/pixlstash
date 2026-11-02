@@ -215,3 +215,16 @@ def test_embeddings_of_another_size_are_skipped_not_fatal():
         _cand(2, embedding=np.ones(8, dtype=np.float32)),
     ]
     assert _ids(rank(lib)["stills"]) == [1, 2]
+
+
+def test_a_stack_reason_reaches_across_stills_and_clips():
+    # The clip drags the still in when the set is filled, and the reverse.
+    lib = [
+        _cand(1, rating=5, stack_id=9),
+        _cand(2, is_clip=True, face_count_max=2, stack_id=9),
+        _cand(3, rating=4),
+    ]
+    out = rank(lib)
+    assert _ids(out["stills"]) == [3]
+    assert out["stills"].excluded["other_people"] == 1
+    assert _ids(out["clips"]) == []

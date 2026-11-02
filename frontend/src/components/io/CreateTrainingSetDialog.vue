@@ -47,6 +47,7 @@
                     :max="g.trackMax"
                     step="1"
                     :value="g.size"
+                    :disabled="busy || !!created"
                     :aria-label="`${g.title} in the set`"
                     :aria-valuetext="`${g.size} of ${g.reachable}`"
                     :data-testid="`cts-slider-${g.key}`"
@@ -176,7 +177,11 @@
                 >{{ capital(gap.label) }} {{ gap.short }} short · at
                 {{ gap.at }}</span
               >
-              <AppButton size="sm" @click="setSize(coverageKey, gap.at)">
+              <AppButton
+                size="sm"
+                :disabled="busy || !!created"
+                @click="setSize(coverageKey, gap.at)"
+              >
                 Show {{ gap.at }}
               </AppButton>
             </div>
@@ -273,7 +278,7 @@
           variant="primary"
           key-hint="enter"
           :loading="busy"
-          :disabled="!total || loading"
+          :disabled="!total || loading || !!loadError"
           data-testid="cts-create"
           @click="create"
         >
@@ -620,11 +625,15 @@ function onSlide(key, event) {
 }
 
 async function create() {
-  if (busy.value || loading.value || created.value || !total.value) return;
+  if (busy.value || loading.value || loadError.value) return;
+  if (created.value || !total.value) return;
   busy.value = true;
   createError.value = "";
   const name = data.value.set_name;
+  // What the user submitted, taken before the first await.
+  const ids = pickedIds.value;
   let setId = null;
+  let why;
   try {
     const response = await createPictureSet({
       name,
@@ -634,23 +643,29 @@ async function create() {
         : {}),
     });
     setId = response.picture_set.id;
-    const added = await bulkAddPicturesToSet(setId, pickedIds.value);
-    created.value = { id: setId, name, members: added.added ?? total.value };
-    emit("created", created.value);
-  } catch (e) {
-    // The set was made but holds nothing: remove it rather than leave an
-    // empty set behind, then say what failed.
-    if (setId != null) {
-      try {
-        await deletePictureSet(setId);
-      } catch (cleanup) {
-        console.error("Couldn't remove the empty training set", setId, cleanup);
-      }
+    const added = await bulkAddPicturesToSet(setId, ids);
+    if (added.added === 0) {
+      why = "None of the picked pictures could be added; they may have been deleted.";
+    } else {
+      created.value = { id: setId, name, members: added.added ?? ids.length };
+      busy.value = false;
+      emit("created", created.value);
+      return;
     }
-    createError.value = `Couldn't create the set. ${errorDetail(e) || "Please try again."}`;
-  } finally {
-    busy.value = false;
+  } catch (e) {
+    why = errorDetail(e) || "Please try again.";
   }
+  // The set was made but holds nothing: remove it rather than leave an empty
+  // set behind, then say what failed.
+  if (setId != null) {
+    try {
+      await deletePictureSet(setId);
+    } catch (cleanup) {
+      console.error("Couldn't remove the empty training set", setId, cleanup);
+    }
+  }
+  createError.value = `Couldn't create the set. ${why}`;
+  busy.value = false;
 }
 
 function onAccept() {

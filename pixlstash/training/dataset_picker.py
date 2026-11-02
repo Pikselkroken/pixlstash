@@ -278,18 +278,27 @@ def _components(ids: list[int], pairs) -> list[list[int]]:
     return list(groups.values())
 
 
-def _passing(cands, value, pairs, include) -> tuple[list[Candidate], dict]:
-    """The candidates that pass the filters, and how many each reason sets aside."""
-    reasons = {c.picture_id: _intrinsic_reasons(c) for c in cands}
-    # A set takes a whole stack, so a stack passes only if every member
-    # showing the character does: a reason against one is against them all.
+def _stack_reasons(candidates: list[Candidate]) -> dict[int, set[str]]:
+    """The reasons against each stack: the union over its members.
+
+    A set takes a whole stack, so a stack passes only if every member showing
+    the character does, stills and clips alike.
+    """
     by_stack: dict[int, set[str]] = {}
-    for c in cands:
+    for c in candidates:
         if c.stack_id is not None:
-            by_stack.setdefault(c.stack_id, set()).update(reasons[c.picture_id])
-    for c in cands:
-        if c.stack_id is not None:
-            reasons[c.picture_id] = by_stack[c.stack_id]
+            by_stack.setdefault(c.stack_id, set()).update(_intrinsic_reasons(c))
+    return by_stack
+
+
+def _passing(cands, value, pairs, include, by_stack) -> tuple[list[Candidate], dict]:
+    """The candidates that pass the filters, and how many each reason sets aside."""
+    reasons = {
+        c.picture_id: (
+            by_stack[c.stack_id] if c.stack_id is not None else _intrinsic_reasons(c)
+        )
+        for c in cands
+    }
     excluded = {r: 0 for r in REASONS}
     for rs in reasons.values():
         for r in rs:
@@ -360,19 +369,19 @@ def _greedy(pool: list[Candidate], value: dict[int, float]) -> list[Candidate]:
     return picks
 
 
-def _rank_group(cands, pairs, include) -> Ranking:
+def _rank_group(cands, pairs, include, by_stack) -> Ranking:
     quality = _quality(cands)
     value = {
         c.picture_id: quality[c.picture_id] * max(0.0, min(1.0, c.likeness or 0.0))
         for c in cands
     }
-    pool, excluded = _passing(cands, value, pairs, include)
+    pool, excluded = _passing(cands, value, pairs, include, by_stack)
     would_add = {}
     for reason in REASONS:
         if include[reason]:
             would_add[reason] = 0
             continue
-        wider, _ = _passing(cands, value, pairs, {**include, reason: True})
+        wider, _ = _passing(cands, value, pairs, {**include, reason: True}, by_stack)
         would_add[reason] = len(wider) - len(pool)
     available = {name: {label: 0 for label in TARGET_SHARE[name]} for name, _ in AXES}
     for c in pool:
@@ -420,9 +429,10 @@ def rank(
     """
     include = {r: bool((include or {}).get(r)) for r in REASONS}
     pairs = [(int(p[0]), int(p[1])) for p in near_pairs]
+    by_stack = _stack_reasons(candidates)
     return {
         group: _rank_group(
-            [c for c in candidates if c.is_clip == is_clip], pairs, include
+            [c for c in candidates if c.is_clip == is_clip], pairs, include, by_stack
         )
         for group, is_clip in (("stills", False), ("clips", True))
     }
