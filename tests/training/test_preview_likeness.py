@@ -239,3 +239,10 @@ def test_a_preview_that_breaks_the_detector_spares_the_rest(tmp_path, monkeypatc
     faces = preview_likeness.read_faces(handle.work_dir, "buffalo_l")
     assert faces[first] is None
     assert np.array_equal(faces[second][0], ME)
+
+
+def test_step_zero_is_skipped_by_its_step_not_its_position():
+    rows = [{"with_trigger": True, "cells": [_cell("a"), _cell("b")]}]
+    faces = {"a": [ME], "b": [OTHER]}
+    result = preview_likeness.score(rows, [500, 1000], faces, [_reference(ME)])
+    assert (result["best_step"], result["best"]) == (500, 100)

@@ -179,7 +179,11 @@ def score(rows: list[dict], columns: list[int], faces: dict, references: list) -
 
     with_trigger = means(series[True])
     best_index = max(
-        (i for i, value in enumerate(with_trigger) if i > 0 and value is not None),
+        (
+            i
+            for i, value in enumerate(with_trigger)
+            if columns[i] > 0 and value is not None
+        ),
         key=lambda i: with_trigger[i],
         default=None,
     )
