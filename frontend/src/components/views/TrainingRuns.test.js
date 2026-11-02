@@ -378,6 +378,30 @@ describe("drawing the grid", () => {
       );
     });
 
+    it("says why when the run no longer fits this GPU", async () => {
+      listTrainingJobs.mockResolvedValue([failedJob]);
+      createTrainingJob.mockRejectedValue({
+        response: {
+          status: 422,
+          data: {
+            detail: {
+              message: "Needs 24 GB of GPU memory; 12 GB is free.",
+              budget: "vram",
+              need_mb: 24576,
+              free_mb: 12288,
+            },
+          },
+        },
+      });
+      const wrapper = await openWith([]);
+      await wrapper.find("[data-testid='tr-card-retry']").trigger("click");
+      await settle(wrapper);
+      expect(deleteTrainingJob).not.toHaveBeenCalled();
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "Needs 24 GB of GPU memory; 12 GB is free.",
+      );
+    });
+
     it("says so when the failed run could not be removed after the retry", async () => {
       listTrainingJobs.mockResolvedValue([failedJob]);
       deleteTrainingJob.mockRejectedValue({

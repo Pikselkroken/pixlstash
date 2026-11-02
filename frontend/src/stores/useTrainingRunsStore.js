@@ -380,7 +380,11 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     } catch (err) {
       useNoticeStore().push({
         level: "error",
-        text: errorDetail(err) || "Could not queue the run again.",
+        // A run that fits nowhere answers { message, budget, need_mb, free_mb }.
+        text:
+          errorDetail(err) ||
+          err?.response?.data?.detail?.message ||
+          "Could not queue the run again.",
       });
       return null;
     }
