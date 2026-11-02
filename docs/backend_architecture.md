@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205), [25.26 Creating, renaming and moving a folder inside a model folder (#2206)](#2526-creating-renaming-and-moving-a-folder-inside-a-model-folder-2206), [25.27 Removing a folder inside a model folder (#2207)](#2527-removing-a-folder-inside-a-model-folder-2207)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205), [25.26 Creating, renaming and moving a folder inside a model folder (#2206)](#2526-creating-renaming-and-moving-a-folder-inside-a-model-folder-2206), [25.27 Removing a folder inside a model folder (#2207)](#2527-removing-a-folder-inside-a-model-folder-2207), [25.28 Training set picker](#2528-training-set-picker)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -860,6 +860,7 @@ Public guest scoring and shared-link endpoints.
 | PUT    | /api/v1/training/ai-toolkit/config                                            |                 | Save or disconnect the ai-toolkit install                     |
 | GET    | /api/v1/training/ai-toolkit/discover                                          |                 | Find an ai-toolkit checkout on this computer                  |
 | GET    | /api/v1/training/ai-toolkit/status                                            |                 | The configured ai-toolkit install and its folders             |
+| GET    | /api/v1/training/character_set_suggestion                                     |                 | Suggest a training set for a character LoRA                   |
 | GET    | /api/v1/training/dataset                                                      |                 | What a training run of a set or character would hold          |
 | POST   | /api/v1/training/jobs                                                         |                 | Enqueue a training job                                        |
 | GET    | /api/v1/training/jobs                                                         |                 | List training jobs                                            |
@@ -12592,6 +12593,47 @@ list (previews, notes, sidecars) go too.
   tag (`_is_link`), not `os.path.isjunction`, which Python 3.11 lacks; other
   reparse points (cloud placeholders) are walked as directories, because the
   removal takes their contents.
+
+### 25.28 Training set picker
+
+`GET /training/character_set_suggestion?character_id=` ranks a character's
+pictures for a character LoRA. It is computed per call and stores nothing; the
+dialog that calls it makes an ordinary child set under the character, which the
+Train dialog (§25.19) then trains on like any set.
+
+**The route gathers, the picker ranks.** The handler in `routes/training.py`
+reads every non-deleted picture with a `Face` of the character: its faces'
+boxes and embeddings, the most faces on any one frame, its tags, its CLIP
+`image_embedding`, and near pairs from `near_pairs_in_bucket` at
+`DEFAULT_THRESHOLD` (the members of one stack count as near pairs too, because
+a set takes a whole stack). `pixlstash/training/dataset_picker.py` is a pure
+function over those rows, tested without a server.
+
+- **Likeness** is the face similarity (0-1, shown 0-100) against up to
+  `MAX_REFERENCES` faces picked locally: 5★ pictures, then 4★, then by smart
+  score, one face per picture. A reference is scored against the *other*
+  references, or it would score itself near 1. `select_reference_faces_for_character`
+  (the grid's likeness sort) is not used and not changed.
+- **Quality** is a percentile in the group: the user's rating first, smart score
+  second, so a rated picture outranks every unrated one.
+- **Four reasons set a picture aside**, each with an `include_<reason>` flag:
+  more than one face on a frame (`other_people`), a weaker member of a near
+  group (`near_duplicates`, judged after the other three), a 1-2★ rating or an
+  unrated smart score under `SMART_SCORE_FLOOR` (`low_quality`), and a likeness
+  under `LIKENESS_FLOOR` or none (`low_likeness`). `would_add` re-runs the
+  filters with only that flag flipped, so it is exactly what the toggle lets in.
+- **One greedy pass per group**, stills and clips apart, up to `MAX_PICKS` (50).
+  `value = quality * likeness`; each next pick maximises
+  `value * (1 + W_NEW * axes_under_target + W_SEM * min_cosine_distance)`.
+  An axis is under target when the candidate brings a label the picks hold
+  fewer of than `target()` asks for at the next set size: `TARGET_SHARE` per
+  label, never below one. Framing comes from tags, else from the face box's
+  share of the frame; expression from tags, `neutral` when none. Pose is not an
+  axis yet (no head pose is stored); it would be one more `AXES` entry.
+
+Because the order depends only on the picks so far, a set of N is the first N
+of the ranking, and the dialog's slider never reshuffles. Owner-only
+(`ROUTE_POLICIES` and `READ_BLOCKED_GET_PATHS`).
 
 ## 26. Prompt match
 

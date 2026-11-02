@@ -71,6 +71,7 @@ import ShortcutsDialog from "./components/widgets/ShortcutsDialog.vue";
 import ConfirmDialog from "./components/widgets/ConfirmDialog.vue";
 import ModelDropFolderDialog from "./components/dialogs/ModelDropFolderDialog.vue";
 import TrainLoraDialog from "./components/io/TrainLoraDialog.vue";
+import CreateTrainingSetDialog from "./components/io/CreateTrainingSetDialog.vue";
 import LibrarySwitchOverlay from "./components/settings/LibrarySwitchOverlay.vue";
 import Tooltip from "./components/widgets/Tooltip.vue";
 import { useFloatingBottomInset } from "./composables/useBottomAnchor";
@@ -560,6 +561,15 @@ async function handleTrainLora(scope) {
   });
 }
 
+// SideBar context-menu "Create a training set…": the character it was opened
+// on, or null while the dialog is closed.
+const trainingSetCharacter = ref(null);
+
+function handleCreateTrainingSet(character) {
+  if (!character || character.id == null) return;
+  trainingSetCharacter.value = character;
+}
+
 /** The empty library's "Choose a folder…" / "Import them…".
  *
  * The sidebar picks the route: the local_import wizard over the library's own
@@ -935,6 +945,7 @@ defineExpose({
             @open-import="openImportDialog"
             @open-tag-review="reviewSessionsStore.overlayOpen = true"
             @train-lora="handleTrainLora"
+            @create-training-set="handleCreateTrainingSet"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMoved"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
@@ -1184,6 +1195,14 @@ defineExpose({
     <ConfirmDialog />
     <ModelDropFolderDialog />
     <TrainLoraDialog />
+    <CreateTrainingSetDialog
+      :open="!!trainingSetCharacter"
+      :character="trainingSetCharacter"
+      :return-focus-to="trainingSetCharacter?.returnFocusTo ?? null"
+      @close="trainingSetCharacter = null"
+      @created="sidebarRef?.refreshSidebar?.()"
+      @train="handleTrainLora"
+    />
     <LibrarySwitchOverlay />
   </v-app>
 </template>
