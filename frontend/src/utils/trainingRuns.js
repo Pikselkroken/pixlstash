@@ -122,13 +122,24 @@ export function isQueuedBehindRun(waiting) {
   return waiting?.code === "fifo";
 }
 
-/** The run's state in words, from its job. */
+/**
+ * The run's state in words, from its job. A running job still loading its
+ * model or caching names that step, in the run page's words, rather than
+ * "Training 0 / N", which reads as stuck; the live view's `downloading` names
+ * a first run's model fetch.
+ */
 export function jobStatus(job) {
   switch (job?.status) {
     case "queued":
       // Only the live view knows a probe is running, as it does a phase.
       return job.phase === "checking" ? "Checking memory and speed" : "Waiting for the GPU";
     case "running":
+      // Only before the first step: a counted step is training, whatever the
+      // phase last logged says.
+      if (!job.step && job.phase === "loading") {
+        return job.downloading ? "Downloading the model" : "Loading the model";
+      }
+      if (!job.step && job.phase === "caching") return "Caching captions";
       return job.total_steps
         ? `Training ${(job.step ?? 0).toLocaleString()} / ${job.total_steps.toLocaleString()}`
         : "Setting up";

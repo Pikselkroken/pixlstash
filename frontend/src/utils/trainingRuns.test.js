@@ -56,6 +56,18 @@ describe("a run's status", () => {
     );
   });
 
+  it("names a running run's setup step instead of step 0", () => {
+    const job = { status: "running", step: 0, total_steps: 2000 };
+    expect(jobStatus({ ...job, phase: "loading" })).toBe("Loading the model");
+    expect(jobStatus({ ...job, phase: "loading", downloading: true })).toBe(
+      "Downloading the model",
+    );
+    expect(jobStatus({ ...job, phase: "caching" })).toBe("Caching captions");
+    expect(jobStatus({ ...job, phase: "training" })).toBe("Training 0 / 2,000");
+    expect(jobStatus(job)).toBe("Training 0 / 2,000");
+    expect(jobStatus({ ...job, step: 5, phase: "caching" })).toBe("Training 5 / 2,000");
+  });
+
   it("says a queued run whose probe is running is checking, not waiting", () => {
     expect(jobStatus({ status: "queued", phase: "checking" })).toBe("Checking memory and speed");
     expect(jobStatus({ status: "queued", phase: "waiting_gpu" })).toBe("Waiting for the GPU");
