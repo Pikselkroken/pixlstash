@@ -307,7 +307,7 @@ export function useGridDragDrop(
   }
 
   // ── Drag-out as files (#2420) ─────────────────────────────────────────────
-  // In the desktop app an Alt-drag (Option on a Mac) is an OS file drag of the
+  // In the desktop app a Ctrl-drag (Option on a Mac) is an OS file drag of the
   // original files, so it lands in a file manager, a mail or a chat like a file
   // manager's own drag, and the in-app targets take it too (utils/shareDrag.js).
   // A plain drag stays the instant in-app HTML5 drag: the OS drag can only
@@ -318,8 +318,16 @@ export function useGridDragDrop(
     return ids.length > 0 && canStartShareDrag() && !isReadOnly.value;
   }
 
+  // Not Alt off a Mac: Linux window managers take Alt+drag to move the window,
+  // so the page never sees the drag. Not Ctrl on a Mac: Ctrl+click is a right
+  // click there. Selection changes on click, which a drag never fires, so
+  // either key leaves the selection alone.
   function dragOutKey() {
-    return isApplePlatform() ? "Option" : "Alt";
+    return isApplePlatform() ? "Option" : "Ctrl";
+  }
+
+  function wantsDragOut(event) {
+    return isApplePlatform() ? !!event.altKey : !!event.ctrlKey;
   }
 
   /** A plain drag let go outside the window with nothing taking it. */
@@ -416,7 +424,7 @@ export function useGridDragDrop(
       return;
     }
     const selectionIds = getDragSelectionIds(img);
-    if (event.altKey && wantsShareDrag(selectionIds)) {
+    if (wantsDragOut(event) && wantsShareDrag(selectionIds)) {
       startShareDrag(img, event, selectionIds);
       return;
     }
@@ -479,7 +487,7 @@ export function useGridDragDrop(
     const existing = event.dataTransfer.getData("application/json");
     if (existing) return;
     const selectionIds = getDragSelectionIds(img);
-    if (event.altKey && wantsShareDrag(selectionIds)) {
+    if (wantsDragOut(event) && wantsShareDrag(selectionIds)) {
       startShareDrag(img, event, selectionIds);
       return;
     }
