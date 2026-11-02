@@ -1033,23 +1033,12 @@ const presetOptions = computed(() => {
     (plan.value?.presets || []).map((p) => [p.id, p.verdict]),
   );
   return (store.presets || []).map((p) => {
-    // A motion recipe has nothing to learn from a set of stills alone.
-    if (store.presetUnusable(p)) {
-      return {
-        label: p.label,
-        value: p.id,
-        name: p.label,
-        chips: ["Needs video clips"],
-        disabled: true,
-      };
-    }
     const verdict = verdicts[p.id] || (p.offered ? null : "needs_checkout");
-    return {
-      label: p.label,
-      value: p.id,
-      name: p.label,
-      chips: verdict ? [VERDICT_LABELS[verdict]] : [],
-    };
+    const chips = verdict ? [VERDICT_LABELS[verdict]] : [];
+    // A motion recipe has nothing to learn from a set of stills alone.
+    const unusable = store.presetUnusable(p);
+    if (unusable) chips.push("Needs video clips");
+    return { label: p.label, value: p.id, name: p.label, chips, disabled: unusable };
   });
 });
 const presetVerdict = computed(

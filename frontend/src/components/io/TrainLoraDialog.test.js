@@ -593,7 +593,7 @@ describe("a recipe that trains on clips (#2179)", () => {
     training.listTrainingPresets.mockResolvedValue([
       { id: "zimage-turbo", label: "Z-Image Turbo", offered: true, clips: false, requires_arch: "zimage" },
       { id: "minimax-h3-image", label: "MiniMax H3 · image", offered: true, clips: false, requires_arch: "minimax_h3" },
-      { id: "minimax-h3-motion", label: "MiniMax H3 · motion", offered: true, clips: true, requires_arch: "minimax_h3" },
+      { id: "minimax-h3-motion", label: "MiniMax H3 · motion", offered: false, clips: true, requires_arch: "minimax_h3" },
     ]);
     const { wrapper, store } = await openDialog(
       { type: "character", id: 4, name: "Grandad" },
@@ -608,7 +608,11 @@ describe("a recipe that trains on clips (#2179)", () => {
       .findAllComponents({ name: "AppSelect" })
       .find((c) => c.props("label") === "Base model");
     const motion = picker.props("options").find((o) => o.value === "minimax-h3-motion");
-    expect(motion).toMatchObject({ disabled: true, chips: ["Needs video clips"] });
+    // The clips chip sits beside any reason it is not offered, never instead of it.
+    expect(motion).toMatchObject({
+      disabled: true,
+      chips: ["Needs a newer ai-toolkit", "Needs video clips"],
+    });
     expect(picker.props("options").filter((o) => o.disabled)).toHaveLength(1);
   });
 });
