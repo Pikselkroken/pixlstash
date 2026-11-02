@@ -479,6 +479,22 @@ class Vault:
                     vault=self,
                 )
             )
+            # A training run's previews are files in its folder, so nothing
+            # else finds their faces; the live view scores them against the
+            # run's character (#2522).
+            if self._library_uuid:
+                from pixlstash.tasks.training_preview_faces_finder import (
+                    TrainingPreviewFacesFinder,
+                )
+
+                self._planner_work_finders[TaskType.TRAINING_PREVIEW_FACES] = (
+                    TrainingPreviewFacesFinder(
+                        hub=registered_hub,
+                        library_uuid=self._library_uuid,
+                        image_root=self.image_root,
+                        engine_getter=lambda: self._engine,
+                    )
+                )
         if self._planner_finders is not None:
             self._planner_work_finders = {
                 task_type: finder
@@ -2357,6 +2373,11 @@ class Vault:
                 finder = self._planner_work_finders.get(TaskType.WORKFLOW_CARD_BACKFILL)
                 total, missing = finder.progress() if finder is not None else (0, 0)
                 label = "workflows_carded"
+            elif worker_type == TaskType.TRAINING_PREVIEW_FACES:
+                # Counted over the training previews, not the library's pictures.
+                finder = self._planner_work_finders.get(TaskType.TRAINING_PREVIEW_FACES)
+                total, missing = finder.progress() if finder is not None else (0, 0)
+                label = "training_previews_scored"
             elif worker_type == TaskType.ORIENTATION:
                 # Without its own count this row fell into `planner_managed`
                 # below - `missing = 0`, so it read "12,094 / 12,094, 0.00/s"

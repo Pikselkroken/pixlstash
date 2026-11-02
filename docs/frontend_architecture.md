@@ -6818,6 +6818,22 @@ at the pitch it has just chosen: sized for the old pitch, a wider one
 overflowed the page, the page's scrollbar narrowed the board, and the pitch
 flipped back every frame.
 
+**Likeness to the character (#2522).** A run whose payload carries `likeness`
+(one filed under a character) gets one more board row under the loss:
+`widgets/TrainingLikenessChart.vue`, an SVG at the board's pitch with one
+raspberry series per group (solid with the trigger word, dashed without, since
+a faded raspberry falls under the 3:1 mark floor), the best step ringed and
+labelled, and a warning rule from where the no-trigger line crosses
+`LEAK_AT` (20, a stand-in to tune). The prompt groups start a row lower. Each
+preview with the trigger word wears its score on a `--scrim-photo-strong` chip
+("no face" for a back view); one without it wears its score only past
+`LEAK_AT`, in the warning hue. The best step's *Use this step* carries a
+raspberry mark and shows without a hover, but nothing is chosen: the olive
+cover is unchanged. A run that has ended keeps polling while
+`likeness.pending` is above 0, so scores land without a reload, and gives up
+once that count has stood still for 30 polls (a failed scoring is retried
+only after a restart).
+
 **Export dataset** is the rail's *Trained on* section action once the run's
 payload names a `dataset_snapshot_id` (#2123): it fetches
 `GET /training/jobs/{id}/snapshot/export` and hands the zip to `saveFileAs`.

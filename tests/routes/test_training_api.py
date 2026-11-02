@@ -685,6 +685,8 @@ def test_live_view_draws_a_run_from_its_folder_and_its_logs():
         # Pruned checkpoints cannot cover the run; the last step is its final.
         assert body["coverable"] == [750, 1000, 1500]
         assert body["imported"] is False and body["cover_step"] is None
+        # No character, nothing to compare with: no likeness at all.
+        assert body["likeness"] is None
         assert body["speed"]["seconds_per_step"] == 2.0
         assert body["speed"]["remaining_low_s"] == 1000.0
         assert [p["phase"] for p in body["phases"]] == [
@@ -723,6 +725,65 @@ def test_live_view_draws_a_run_from_its_folder_and_its_logs():
         r = owner.put(f"/training/jobs/{job_id}/cover", json={"step": 1000})
         assert r.status_code == 500, r.text
         assert owner.get(f"/training/jobs/{job_id}/live").json()["cover_step"] == 750
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_live_view_scores_a_character_runs_previews(monkeypatch):
+    """#2522: each preview against the character, and each step's mean."""
+    import numpy as np
+
+    from pixlstash.services.training_service import handle_for_run
+    from pixlstash.training import preview_likeness
+
+    me, other = np.eye(2, 512, dtype=np.float32)
+    seen = []
+
+    def references(session, character_id):
+        seen.append(character_id)
+        return [types.SimpleNamespace(id=1, features=me.tobytes())]
+
+    monkeypatch.setattr(
+        training_routes, "select_reference_faces_for_character", references
+    )
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        character_id = _make_character(owner, name="Someone")
+        job_id, _, _, _ = _live_run(server, temp_dir, character_id=character_id)
+        job = training_runs.get_run(server.vault.hub, server.vault.library_uuid, job_id)
+        work_dir = handle_for_run(
+            os.path.join(server.vault.image_root, "training"), job
+        ).work_dir
+        name = "1700000000000__{:09d}_{}.jpg".format
+        preview_likeness.write_faces(
+            work_dir,
+            "buffalo_l",
+            {
+                name(0, 0): [other],
+                name(250, 0): [me],
+                name(500, 0): [],
+                name(0, 1): [other],
+                name(250, 1): [me],
+            },
+        )
+
+        body = owner.get(f"/training/jobs/{job_id}/live").json()
+        likeness = body["likeness"]
+        assert seen == [character_id]
+        assert likeness["character_id"] == character_id
+        assert likeness["character_name"] == "Someone"
+        assert likeness["with_trigger"][:4] == [0, 100, None, None]
+        assert likeness["without_trigger"][:2] == [0, 100]
+        assert (likeness["best_step"], likeness["best"]) == (250, 100)
+        # 500/1, 750/0, 750/1 and 1000/0 are on disk but not looked at yet.
+        assert likeness["pending"] == 4
+        cells = body["rows"][0]["cells"]
+        assert [(c["face"], c["likeness"]) for c in cells[:4]] == [
+            (True, 0),
+            (True, 100),
+            (False, None),
+            (None, None),
+        ]
     finally:
         _teardown(temp_dir, server)
 
