@@ -808,7 +808,7 @@ function close() {
   content: "";
   width: 1px;
   height: 5px;
-  margin-bottom: 2px;
+  margin-bottom: var(--space-1);
   background: currentColor;
 }
 
