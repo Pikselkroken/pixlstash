@@ -9,6 +9,8 @@ import {
   moreRows,
   timeEstimate,
   parseTyped,
+  formatField,
+  parseField,
   promptFromDisplay,
   promptLines,
   promptsEdited,
@@ -175,6 +177,21 @@ describe("typed values", () => {
       value: 0.0001,
     });
     expect(parseTyped({ kind: "float", lo: 1e-7, hi: 0.1 }, " ")).toEqual({ value: null });
+  });
+
+  it("reads the caption dropout rate as a percentage, both ways", () => {
+    const key = "datasets[*].caption_dropout_rate";
+    const rule = { kind: "float", lo: 0, hi: 1 };
+    expect([0, 0.05, 0.125].map((v) => formatField(key, v))).toEqual(["0%", "5%", "12.5%"]);
+    expect(parseField(key, rule, "5")).toEqual({ value: 0.05 });
+    expect(parseField(key, rule, " 10 % ")).toEqual({ value: 0.1 });
+    expect(parseField(key, rule, "")).toEqual({ value: null });
+    expect(parseField(key, rule, "150").error).toBe("A percentage from 0 to 100");
+    // Every other key is shown and read as typed.
+    expect(formatField("train.lr", 0.0001)).toBe("0.0001");
+    expect(parseField("train.lr", { kind: "float", lo: 1e-7, hi: 0.1 }, "1e-4")).toEqual({
+      value: 0.0001,
+    });
   });
 });
 

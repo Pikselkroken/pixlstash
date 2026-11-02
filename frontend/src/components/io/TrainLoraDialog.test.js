@@ -77,6 +77,7 @@ function plan({ steps = { value: 2400, source: "pictures" } } = {}) {
         "network.linear": { value: 32, source: "effort" },
         "network.linear_alpha": { value: 32, source: "effort" },
         "model.qtype": { value: "qfloat8", source: "gpu" },
+        "datasets[*].caption_dropout_rate": { value: 0.05, source: "subject" },
       },
     },
     derived: {
@@ -89,6 +90,7 @@ function plan({ steps = { value: 2400, source: "pictures" } } = {}) {
       "network.linear": { kind: "int", lo: 1, hi: 512, count: 0, choices: [] },
       "network.linear_alpha": { kind: "float", lo: 0, hi: 1024, count: 0, choices: [] },
       "model.qtype": { kind: "enum", lo: 0, hi: 0, count: 0, choices: ["qfloat8", "qint8"] },
+      "datasets[*].caption_dropout_rate": { kind: "float", lo: 0, hi: 1, count: 0, choices: [] },
     },
     steps_rule: { steps_per_picture: 100, min_steps: 1200, max_steps: 3000 },
     room: { vram_mb: 20480, ram_mb: 60000 },
@@ -285,6 +287,18 @@ describe("TrainLoraDialog", () => {
     store.datasetLoading = false;
     await flushPromises();
     expect(startButton(wrapper).attributes("disabled")).toBeUndefined();
+  });
+
+  it("shows the caption dropout rate as a percentage and pins what is typed", async () => {
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    await wrapper.find('[data-testid="tld-advanced"]').trigger("click");
+    const field = wrapper.find('input[aria-label="Steps without captions"]');
+    expect(field.element.value).toBe("5%");
+    await field.setValue("10%");
+    expect(store.pins).toEqual({ "datasets[*].caption_dropout_rate": 0.1 });
   });
 
   it("pins a typed value, keeps the choice's name, and unpins back", async () => {

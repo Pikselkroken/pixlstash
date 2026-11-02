@@ -357,7 +357,8 @@
           {{ keepGeneric.name }}, so any {{ keepGeneric.bare }} you ask for
           starts to look like {{ keepGeneric.name }}. Protecting it makes each
           training step also check that &ldquo;{{ keepGeneric.description }}&rdquo;
-          still comes out as it did before training.
+          still comes out as it did before training. In ai-toolkit this is
+          Differential Output Preservation.
         </span>
         <span v-if="keepGeneric.example" class="tld-keep__cap" data-testid="tld-keep-caption"
           >{{ keepGeneric.example[0] }}<mark v-if="keepGeneric.example[1]">{{
@@ -671,12 +672,12 @@ import {
   effortReadout,
   fitReadout,
   formatCount,
-  formatValue,
+  formatField,
   gb,
   hasTrigger,
   keyLabel,
   moreRows,
-  parseTyped,
+  parseField,
   previewCards,
   previewHint,
   sourceLabel,
@@ -1167,23 +1168,25 @@ function resetLabel(row) {
     .filter((key) => key in store.allPins)
     .map((key) => {
       const v = derived.value[key]?.value;
-      return typeof v === "number" ? formatCount(v) : formatValue(v);
+      const shown = formatField(key, v);
+      // A plain number reads with its thousands grouped; a percentage as is.
+      return typeof v === "number" && shown === String(v) ? formatCount(v) : shown;
     })
     .join(" / ");
 }
 
 function fieldText(key) {
   if (key in drafts) return drafts[key];
-  return formatValue(values.value?.[key]?.value);
+  return formatField(key, values.value?.[key]?.value);
 }
 
 function onFieldFocus(key) {
-  drafts[key] = formatValue(values.value?.[key]?.value);
+  drafts[key] = formatField(key, values.value?.[key]?.value);
 }
 
 function onFieldInput(key, text) {
   drafts[key] = text;
-  const parsed = parseTyped(rules.value[key], text);
+  const parsed = parseField(key, rules.value[key], text);
   if (parsed.error) {
     fieldErrors[key] = parsed.error;
     return;
