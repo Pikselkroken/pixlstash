@@ -1406,9 +1406,10 @@ class Server(
         comfyui_link_service.adopt_single_record(self)
         # A link from before the ComfyUI scope (#1811) is held to it.
         comfyui_link_service.narrow_recorded_key(self)
-        # A linked ComfyUI on this computer is told if the loopback port moved.
+        # Each linked ComfyUI on this computer is told where PixlStash is, once
+        # a session, as soon as it answers.
         threading.Thread(
-            target=comfyui_link_service.reannounce,
+            target=comfyui_link_service.reannounce_until_told,
             args=(self,),
             name="comfyui-link-reannounce",
             daemon=True,
