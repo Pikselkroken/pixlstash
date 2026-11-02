@@ -71,6 +71,7 @@ from pixlstash.services.model_mover import (
     publish_no_clobber,
     require_space,
 )
+from pixlstash.utils.adapter_header import folder_name_role
 from pixlstash.utils.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
@@ -241,11 +242,41 @@ def _relpath(folder_path: str, file: str, comfyui_folder: Optional[str]) -> str:
         return name
     head, sep, rest = name.partition("/")
     if sep and head.casefold() == comfyui_folder.casefold():
-        # Already under it, in whatever case: once, spelled as the list does.
-        return f"{comfyui_folder}/{rest}"
+        # Already under it, in whatever case: once, in the folder's own
+        # subfolder for it, else spelled as the list does.
+        return f"{_subfolder_for(folder_path, comfyui_folder) or comfyui_folder}/{rest}"
+    subfolder = _subfolder_for(folder_path, comfyui_folder)
+    return f"{subfolder}/{name}" if subfolder else name
+
+
+def _subfolder_for(folder_path: str, comfyui_folder: str) -> Optional[str]:
+    """The download folder's own subfolder for ComfyUI's *comfyui_folder*.
+
+    That name as spelled, else a subfolder naming the same role however a
+    launcher spells it (Stability Matrix's `VAE`, `TextEncoders`,
+    `DiffusionModels`). The folder is what tells the shelf a VAE or a text
+    encoder of a layout its tensors do not show (``role_from_folder``); one
+    left at the top level is filed by its parameter count. ``None`` when the
+    folder has neither.
+    """
     if os.path.isdir(os.path.join(folder_path, comfyui_folder)):
-        name = f"{comfyui_folder}/{name}"
-    return name
+        return comfyui_folder
+    role = folder_name_role(comfyui_folder)
+    if role is None:
+        return None
+    try:
+        names = sorted(
+            entry.name for entry in os.scandir(folder_path) if entry.is_dir()
+        )
+    except OSError as exc:
+        logger.warning(
+            "Could not list %s for a %s subfolder; downloading to its top: %s",
+            folder_path,
+            comfyui_folder,
+            exc,
+        )
+        return None
+    return next((name for name in names if folder_name_role(name) == role), None)
 
 
 def start_download(

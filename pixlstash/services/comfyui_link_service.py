@@ -19,8 +19,9 @@ Owner decisions (2026-10-06), which this module implements and nothing more:
   settings, token included, to anyone who can reach it, so the token is bound
   to the source address PixlStash sees on the link's round-trip check, and
   refused from anywhere else (see ``auth.TOKEN_BIND_PENDING``).
-* Automatic linking is for a ComfyUI on this computer (plain HTTP over the
-  loopback listener) or on the local network (the external listener, which
+* Automatic linking is for a ComfyUI on this computer (over PixlStash's
+  configured port, or the desktop window's loopback listener only when nothing
+  serves that port) or on the local network (the external listener, which
   must be on **with HTTPS**; the pack is handed PixlStash's certificate and
   verifies against it). Anything else is a manual exercise.
 
@@ -28,8 +29,8 @@ Each ComfyUI connection (``services/comfyui_connections.py``) is linked with
 its own key and stays linked when the owner switches between them (#2194).
 The record of each live link (which token, which URL) is kept in the server
 config under :data:`LINKS_CONFIG_KEY`, keyed by connection id, so removing a
-connection can revoke exactly its token and a restart can re-send a loopback
-URL whose port moved. :func:`adopt_single_record` moves the one record older
+connection can revoke exactly its token, and each session re-sends the URL
+ComfyUI should call (:func:`reannounce`). :func:`adopt_single_record` moves the one record older
 builds kept (:data:`LINK_CONFIG_KEY`) onto its connection.
 """
 
@@ -39,6 +40,7 @@ import ipaddress
 import os
 import socket
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlsplit
@@ -87,6 +89,10 @@ STEP_IDS = ("reach", "nodes", "link", "check")
 # ponytail: one lock for every connection; per-connection locks if links are
 # ever automated.
 _LINK_LOCK = threading.Lock()
+
+# ``(connection_id, token_public_id, url)`` per ComfyUI told this session.
+_told_this_session: set[tuple] = set()
+REANNOUNCE_RETRY_SECONDS = 30.0
 
 
 class LinkRefused(Exception):
@@ -168,7 +174,13 @@ def _address_toward(host: str, port: int) -> Optional[str]:
 
 
 def _cert_covers(cert_pem: bytes, ip: str) -> bool:
-    cert = x509.load_pem_x509_certificate(cert_pem)
+    """Whether the PEM certificate names *ip*; False for one that will not
+    parse (DER, a key, a corrupt file), which the pack could not verify by."""
+    try:
+        cert = x509.load_pem_x509_certificate(cert_pem)
+    except ValueError as exc:
+        logger.warning("PixlStash's HTTPS certificate does not parse: %s", exc)
+        return False
     try:
         names = cert.extensions.get_extension_for_class(
             x509.SubjectAlternativeName
@@ -212,6 +224,45 @@ def _loopback_port(server) -> int:
     return int(port) if port else int(server._server_config.get("port", 9537))
 
 
+def _external_listener_up(server) -> bool:
+    """Whether the desktop serves its configured port: the rule
+    ``_build_electron_configs`` binds the external listener by.
+
+    ponytail: the rule, not the socket; a port another program holds reads as
+    up, and the link's round-trip check is what then fails.
+    """
+    return bool(server._server_config.get("external_server_enabled", False)) and bool(
+        server._external_listener_password_ready()
+    )
+
+
+def _cert_for_loopback(server) -> Optional[str]:
+    """PixlStash's certificate, if it names 127.0.0.1; else ``None``, logged.
+
+    One the owner supplied may name only the machine's network address, and
+    the pack verifying against it would then refuse every call to 127.0.0.1.
+    """
+    try:
+        cert = _read_cert(server)
+    except LinkRefused as refused:
+        logger.warning(
+            "A ComfyUI on this computer is linked through the window's "
+            "listener instead of port %s: %s",
+            server._server_config.get("port", 9537),
+            refused,
+        )
+        return None
+    if not _cert_covers(cert, "127.0.0.1"):
+        logger.warning(
+            "A ComfyUI on this computer is linked through the window's "
+            "listener instead of port %s: PixlStash's HTTPS certificate does "
+            "not name 127.0.0.1.",
+            server._server_config.get("port", 9537),
+        )
+        return None
+    return cert.decode()
+
+
 def link_target(server, where: str, pinned_url: str) -> tuple[str, Optional[str]]:
     """The PixlStash URL ComfyUI should call, and the certificate to trust.
 
@@ -221,12 +272,25 @@ def link_target(server, where: str, pinned_url: str) -> tuple[str, Optional[str]
     config = server._server_config
     https = bool(config.get("require_ssl", False))
     if where == "this_computer":
-        if _is_desktop():
-            # The desktop window's own listener: always on, always plain HTTP.
-            return f"http://127.0.0.1:{_loopback_port(server)}", None
-        scheme = "https" if https else "http"
-        url = f"{scheme}://127.0.0.1:{_loopback_port(server)}"
-        return url, (_read_cert(server).decode() if https else None)
+        if not _is_desktop():
+            scheme = "https" if https else "http"
+            url = f"{scheme}://127.0.0.1:{_loopback_port(server)}"
+            return url, (_read_cert(server).decode() if https else None)
+        if _external_listener_up(server):
+            # The configured port, never the window's: the loopback port is
+            # this install's own (`stableLoopbackPort`), so another install or
+            # a test run on this computer has another, and moves ComfyUI off
+            # ours. The external listener binds 0.0.0.0, so 127.0.0.1 reaches
+            # it, over HTTPS only with a certificate that names 127.0.0.1.
+            port = int(config.get("port", 9537))
+            if not https:
+                return f"http://127.0.0.1:{port}", None
+            cert = _cert_for_loopback(server)
+            if cert is not None:
+                return f"https://127.0.0.1:{port}", cert
+        # Nothing ComfyUI can use serves the configured port: the window's own
+        # listener, always plain HTTP, re-sent each session (`reannounce`).
+        return f"http://127.0.0.1:{_loopback_port(server)}", None
 
     if _is_desktop():
         # Password first: remote access will not bind without one, so turning
@@ -891,50 +955,82 @@ def _narrow(server, public_id: str) -> None:
         )
 
 
-def reannounce(server) -> None:
-    """After a restart, re-send a loopback URL whose port moved.
+def reannounce(server, quiet: bool = False) -> bool:
+    """Tell every linked ComfyUI on this computer where PixlStash is, once a
+    session.
 
-    The desktop listener's port is stable best-effort (``stableLoopbackPort``)
-    and falls back to a random one when the usual port is taken. The token is
-    unchanged, so only the URL is written, to every linked ComfyUI on this
-    computer.
+    Written on the first contact whatever the record says: another PixlStash on
+    this computer (a second install, a test run) linking or re-announcing to the
+    same ComfyUI leaves it calling that one's port, which no record here can
+    see. The token is unchanged, so only the URL and its certificate are
+    written. A ComfyUI that cannot be reached is tried again
+    (:func:`reannounce_until_told`).
+
+    Returns:
+        False while a ComfyUI that should be told has not been.
     """
     if not _is_desktop():
-        return
-    current = f"http://127.0.0.1:{_loopback_port(server)}"
+        return True
+    told_all = True
     for connection_id, record in list(_records(server).items()):
         if record.get("where") != "this_computer":
-            continue
-        if record.get("pixlstash_url") == current:
             continue
         pinned = _pinned(record)
         if pinned is None:
             logger.warning(
                 "The linked ComfyUI at %s is no longer on this computer; not "
-                "telling it PixlStash moved to %s.",
+                "telling it where PixlStash is.",
                 record.get("comfyui_url"),
-                current,
             )
             continue
         try:
-            _write_settings(pinned, {SETTING_URL: current})
-        except requests.RequestException as exc:
+            current, cert = link_target(server, "this_computer", pinned)
+        except LinkRefused as refused:
             logger.warning(
-                "PixlStash moved to %s but could not tell the linked ComfyUI at "
-                "%s: %s. Link it again from Settings.",
-                current,
+                "Not telling the linked ComfyUI at %s where PixlStash is: %s",
                 record.get("comfyui_url"),
+                refused,
+            )
+            continue
+        told = (connection_id, record.get("token_public_id"), current)
+        if told in _told_this_session:
+            continue
+        try:
+            _write_settings(
+                pinned,
+                {SETTING_URL: current, SETTING_SSL: True, SETTING_CA: cert or ""},
+            )
+        except requests.RequestException as exc:
+            told_all = False
+            (logger.debug if quiet else logger.info)(
+                "Could not tell the linked ComfyUI at %s that PixlStash is at "
+                "%s yet (%s); trying again until it answers.",
+                record.get("comfyui_url"),
+                current,
                 exc,
             )
             continue
-        with _LINK_LOCK:
-            # A link or unlink while ComfyUI was being told owns the record now.
-            fresh = _records(server).get(connection_id)
-            if not fresh or fresh["token_public_id"] != record["token_public_id"]:
-                continue
-            _save_record(server, connection_id, {**fresh, "pixlstash_url": current})
+        _told_this_session.add(told)
+        if record.get("pixlstash_url") != current:
+            with _LINK_LOCK:
+                # A link or unlink while ComfyUI was being told owns the record.
+                fresh = _records(server).get(connection_id)
+                if fresh and fresh["token_public_id"] == record["token_public_id"]:
+                    _save_record(
+                        server, connection_id, {**fresh, "pixlstash_url": current}
+                    )
         logger.info(
-            "Told the linked ComfyUI at %s that PixlStash is now at %s.",
+            "Told the linked ComfyUI at %s that PixlStash is at %s.",
             record.get("comfyui_url"),
             current,
         )
+    return told_all
+
+
+def reannounce_until_told(server, interval: float = REANNOUNCE_RETRY_SECONDS) -> None:
+    """:func:`reannounce`, again every *interval* seconds until every linked
+    ComfyUI here has been told: ComfyUI is often started after PixlStash."""
+    quiet = False
+    while not reannounce(server, quiet=quiet):
+        quiet = True
+        time.sleep(interval)

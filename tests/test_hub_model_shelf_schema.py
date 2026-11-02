@@ -1243,6 +1243,42 @@ class TestComponentRoleBackfill:
         ]
         assert hub.execute("PRAGMA user_version").fetchone()[0] == CURRENT_DATA_VERSION
 
+    def test_a_data_v24_hub_refiles_a_transformer_decoder_vae(self, hub, tmp_path):
+        # Data version 25: MiniMax H3's video VAE decodes with a transformer,
+        # which no layout knew, and its 2.6B parameters filed a flat-folder
+        # copy as a `checkpoint`. That layout only: a Wan VAE the owner set to
+        # `checkpoint` stays one, and so does one half of the new layout.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 24")
+        folder_id = add_folder(hub, str(tmp_path))
+
+        def shelved(name, tensors, file_kind="checkpoint"):
+            header = {t: {"dtype": "BF16", "shape": [1]} for t in tensors}
+            blob = json.dumps(header).encode()
+            (tmp_path / name).write_bytes(struct.pack("<Q", len(blob)) + blob)
+            model_id = add_model(hub, file_kind=file_kind, sha256=name, kind=None)
+            add_file(hub, model_id, folder_id, name)
+            return model_id
+
+        minimax = ["encoder.conv_in.weight", "decoder.x_embedder.weight"]
+        vae = shelved("minimax_h3_video_vae_int8_convrot.safetensors", minimax)
+        half = shelved("decoder_only.safetensors", ["decoder.x_embedder.weight"])
+        wan = shelved(
+            "owner_says_checkpoint.safetensors",
+            ["encoder.conv1.weight", "decoder.conv1.weight"],
+        )
+        hub.commit()
+
+        apply_migrations(hub)
+
+        kinds = dict(hub.execute("SELECT id, file_kind FROM model").fetchall())
+        assert [kinds[vae], kinds[half], kinds[wan]] == [
+            "vae",
+            "checkpoint",
+            "checkpoint",
+        ]
+        assert hub.execute("PRAGMA user_version").fetchone()[0] == CURRENT_DATA_VERSION
+
     def test_a_fresh_hub_records_the_backfill_as_done(self, hub):
         apply_migrations(hub)
 

@@ -37,6 +37,7 @@ from pixlstash.utils.adapter_header import (
     FILE_UNKNOWN,
     FILE_UPSCALER,
     FILE_VAE,
+    VIT_DECODER_VAE_LAYOUT,
     has_controlnet_markers,
     has_text_encoder_markers,
     has_vae_markers,
@@ -77,7 +78,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 24
+CURRENT_DATA_VERSION = 25
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -3041,6 +3042,17 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     # still `unknown` and no run loads it off the shelf.
                     # Step 19 again, with the wider rule.
                     _refile_by_tensors(conn, FILE_VAE, has_vae_markers, (FILE_UNKNOWN,))
+                if data_version < 25:
+                    # MiniMax H3's video VAE decodes with a transformer, which
+                    # no VAE layout knew, and at 2.6B parameters a flat-folder
+                    # copy was a `checkpoint`, so no run loaded it off the
+                    # shelf. Its layout only, so, as in step 21, `checkpoint`
+                    # rows too: that is what the bug stored.
+                    _refile_by_tensors(
+                        conn,
+                        FILE_VAE,
+                        lambda header: VIT_DECODER_VAE_LAYOUT <= set(header),
+                    )
                 if data_version < CURRENT_DATA_VERSION:
                     # No placeholder: PRAGMA takes no parameters, and the value
                     # is this module's own constant, nothing from outside.

@@ -3512,6 +3512,7 @@ def test_an_ipv6_comfyui_is_routed_over_ipv6_on_the_scheme_port(tmp_path, monkey
 
 
 def test_the_desktop_needs_remote_access_and_a_password_for_a_network_link(
+    tmp_path,
     monkeypatch,
 ):
     monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "electron")
@@ -3528,60 +3529,113 @@ def test_the_desktop_needs_remote_access_and_a_password_for_a_network_link(
     with pytest.raises(comfyui_link_service.LinkRefused) as refused:
         comfyui_link_service.link_target(server, "local_network", "http://x:8188/")
     assert refused.value.reason == "remote_access_off"
-    # This computer goes through the window's own listener: plain HTTP, no cert.
+    # With nothing on the configured port, this computer goes through the
+    # window's own listener: plain HTTP, no cert.
     monkeypatch.setenv("PIXLSTASH_PORT", "61001")
     assert comfyui_link_service.link_target(
         server, "this_computer", "http://127.0.0.1:8188/"
     ) == ("http://127.0.0.1:61001", None)
+    # Remote access on but no password: it is not bound, so still the window's.
+    server._server_config["external_server_enabled"] = True
+    ready["password"] = False
+    assert comfyui_link_service.link_target(
+        server, "this_computer", "http://127.0.0.1:8188/"
+    ) == ("http://127.0.0.1:61001", None)
+    # Bound: the configured port, never the window's loopback one, which is
+    # this install's alone.
+    ready["password"] = True
+    certfile = _self_signed(tmp_path / "cert.pem", "127.0.0.1")
+    server._server_config.update(port=9537, ssl_certfile=certfile)
+    assert comfyui_link_service.link_target(
+        server, "this_computer", "http://127.0.0.1:8188/"
+    ) == ("https://127.0.0.1:9537", Path(certfile).read_text())
+    # A certificate ComfyUI cannot verify 127.0.0.1 against, or none to read:
+    # the configured port would refuse every call, so the window's listener.
+    (tmp_path / "corrupt.pem").write_text("not a certificate")
+    for unusable in (
+        _self_signed(tmp_path / "lan.pem", LAN_IPV4),
+        "missing.pem",
+        "corrupt.pem",
+    ):
+        server._server_config["ssl_certfile"] = str(tmp_path / unusable)
+        assert comfyui_link_service.link_target(
+            server, "this_computer", "http://127.0.0.1:8188/"
+        ) == ("http://127.0.0.1:61001", None)
+    # Remote access over plain HTTP: the configured port, no certificate.
+    server._server_config["require_ssl"] = False
+    assert comfyui_link_service.link_target(
+        server, "this_computer", "http://127.0.0.1:8188/"
+    ) == ("http://127.0.0.1:9537", None)
 
 
-def test_a_moved_loopback_port_is_sent_to_every_linked_comfyui_here(monkeypatch):
+def test_each_linked_comfyui_here_is_told_once_a_session(monkeypatch):
     """Each connection on this computer has its own key and its own record,
-    so each is told; one on the network is not."""
+    so each is told; one on the network is not. Told even when the record
+    already names this port: another PixlStash on this computer may have moved
+    ComfyUI off it, which no record here can see."""
     monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "electron")
     monkeypatch.setenv("PIXLSTASH_PORT", "61002")
+    monkeypatch.setattr(comfyui_link_service, "_told_this_session", set())
 
-    def record(url: str, where: str) -> dict:
+    def record(url: str, where: str, pixlstash_url: str) -> dict:
         return {
             "token_public_id": f"example-{where}",
             "comfyui_url": url,
-            "pixlstash_url": "http://127.0.0.1:61001",
+            "pixlstash_url": pixlstash_url,
             "where": where,
         }
 
     server = SimpleNamespace(
         _server_config={
             comfyui_link_service.LINKS_CONFIG_KEY: {
-                "a": record("http://127.0.0.1:8188/", "this_computer"),
-                "b": record("http://127.0.0.1:8189/", "this_computer"),
-                "c": record("http://192.0.2.20:8188/", "local_network"),
+                "a": record(
+                    "http://127.0.0.1:8188/", "this_computer", "http://127.0.0.1:61001"
+                ),
+                "b": record(
+                    "http://127.0.0.1:8189/", "this_computer", "http://127.0.0.1:61002"
+                ),
+                "c": record(
+                    "http://192.0.2.20:8188/", "local_network", "http://127.0.0.1:61001"
+                ),
             }
         }
     )
     writes = []
+    down = {"http://127.0.0.1:8189/settings"}
 
     def fake_post(url, json=None, timeout=None, allow_redirects=True, proxies=None):
         assert allow_redirects is False
         assert proxies == comfyui_link_service.NO_PROXY
+        if url in down:
+            raise comfyui_link_service.requests.ConnectionError("refused")
         writes.append((url, json))
         return _http_answer(200, None)
 
     monkeypatch.setattr(comfyui_link_service.requests, "post", fake_post)
-    comfyui_link_service.reannounce(server)
-    moved = {comfyui_link_service.SETTING_URL: "http://127.0.0.1:61002"}
-    assert writes == [
-        ("http://127.0.0.1:8188/settings", moved),
-        ("http://127.0.0.1:8189/settings", moved),
-    ]
-    for connection_id, told in (("a", True), ("b", True), ("c", False)):
+    told = {
+        comfyui_link_service.SETTING_URL: "http://127.0.0.1:61002",
+        comfyui_link_service.SETTING_SSL: True,
+        comfyui_link_service.SETTING_CA: "",
+    }
+    # One ComfyUI is not running yet: the pass says so, to be tried again.
+    assert comfyui_link_service.reannounce(server) is False
+    assert writes == [("http://127.0.0.1:8188/settings", told)]
+    down.clear()
+    assert comfyui_link_service.reannounce(server) is True
+    assert writes[1:] == [("http://127.0.0.1:8189/settings", told)]
+    for connection_id, now in (
+        ("a", "http://127.0.0.1:61002"),
+        ("b", "http://127.0.0.1:61002"),
+        ("c", "http://127.0.0.1:61001"),
+    ):
         url = comfyui_link_service.link_record(server, connection_id)["pixlstash_url"]
-        assert (url == "http://127.0.0.1:61002") is told, connection_id
-    comfyui_link_service.reannounce(server)
-    assert len(writes) == 2, "an unchanged port must not be re-sent"
+        assert url == now, connection_id
+    assert comfyui_link_service.reannounce(server) is True
+    assert len(writes) == 2, "a ComfyUI told this session is not told again"
 
     # A relink while ComfyUI is being told keeps its own record and key.
     monkeypatch.setenv("PIXLSTASH_PORT", "61003")
-    relinked = record("http://127.0.0.1:8188/", "this_computer")
+    relinked = record("http://127.0.0.1:8188/", "this_computer", "x")
     relinked["token_public_id"] = "example-relinked"
 
     def relink_meanwhile(url, json=None, **_):
@@ -3592,6 +3646,17 @@ def test_a_moved_loopback_port_is_sent_to_every_linked_comfyui_here(monkeypatch)
     monkeypatch.setattr(comfyui_link_service.requests, "post", relink_meanwhile)
     comfyui_link_service.reannounce(server)
     assert comfyui_link_service.link_record(server, "a") == relinked
+
+
+def test_reannounce_until_told_tries_again_until_comfyui_answers(monkeypatch):
+    answers = iter([False, False, True])
+    slept = []
+    monkeypatch.setattr(
+        comfyui_link_service, "reannounce", lambda server, quiet=False: next(answers)
+    )
+    monkeypatch.setattr(comfyui_link_service.time, "sleep", slept.append)
+    comfyui_link_service.reannounce_until_told(object(), interval=7)
+    assert slept == [7, 7]
 
 
 # ===========================================================================
