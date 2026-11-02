@@ -3,3 +3,5 @@
 - Changed: a motion recipe is disabled in the Train dialog when the set has no
   video clips, and the still-picture recipe of the same model is picked
   instead. The dialog says so, and says how the pictures will be captioned.
+- Fixed: a video model's training previews (MiniMax H3 motion) now show on
+  the run page and in the Models rail; they were MP4 clips PixlStash skipped.

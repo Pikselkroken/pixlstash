@@ -63,12 +63,13 @@ SOURCE_FOLDER_KIND = "source"
 # ``mimetypes.guess_type``: the directory is on the owner's disk and anything
 # could have been dropped into it, and guessing would let an ``.html`` be served
 # from our own origin. ai-toolkit writes JPEG and PNG; WebP is here because a
-# run configured for it writes that instead.
+# run configured for it writes that instead; a video model's previews are MP4.
 SAMPLE_MEDIA_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
     ".webp": "image/webp",
+    ".mp4": "video/mp4",
 }
 
 
@@ -429,7 +430,7 @@ def create_router(server) -> APIRouter:
 
     @router.get(
         "/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
-        summary="One preview image from a training run",
+        summary="One preview (image or clip) from a training run",
         description=(
             "Serves a sample ai-toolkit rendered during the run, so a step can "
             "be judged before it is imported. Reads and changes nothing else - "
@@ -444,7 +445,7 @@ def create_router(server) -> APIRouter:
         ),
         tags=["model_shelf"],
         response_class=FileResponse,
-        responses={200: {"content": {"image/*": {}}}},
+        responses={200: {"content": {"image/*": {}, "video/mp4": {}}}},
     )
     def get_run_sample(folder_id: int, run_name: str, filename: str, request: Request):
         server.auth.ensure_secure_when_required(request)
@@ -467,10 +468,10 @@ def create_router(server) -> APIRouter:
         if media_type is None:
             # An allowlist, not a guess. `mimetypes` would happily label an
             # `.html` dropped in `samples/` as text/html and serve it from our
-            # origin; the run only ever writes the three formats below.
+            # origin; the run only ever writes the formats listed above.
             logger.warning(
-                "Refusing to serve %s: %r is not one of the image formats a "
-                "run's samples directory holds.",
+                "Refusing to serve %s: %r is not one of the formats a run's "
+                "samples directory holds.",
                 sample_path,
                 os.path.splitext(sample_path)[1],
             )
@@ -579,7 +580,7 @@ def create_router(server) -> APIRouter:
         ),
         tags=["model_shelf"],
         response_class=FileResponse,
-        responses={200: {"content": {"image/*": {}}}},
+        responses={200: {"content": {"image/*": {}, "video/mp4": {}}}},
     )
     def get_model_sample(model_id: int, filename: str, request: Request):
         server.auth.ensure_secure_when_required(request)

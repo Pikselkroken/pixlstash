@@ -360,7 +360,7 @@
                   @mouseenter="hoverColumn = i"
                 >
                   <span v-if="cell.state === 'sample' && sampleUrl(cell)" class="trl-cellbox">
-                    <img
+                    <SampleMedia
                       class="trl-cell"
                       :src="sampleUrl(cell)"
                       :alt="`${row.prompt || `Prompt ${row.index + 1}`}, step ${columns[i]}`"
@@ -539,6 +539,7 @@ import {
   setTrainingJobCover,
 } from "../../api/training";
 import { runSampleUrl } from "../../api/modelImports";
+import SampleMedia from "../widgets/SampleMedia.vue";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { errorDetail } from "../../utils/apiError";
@@ -2058,7 +2059,8 @@ onBeforeUnmount(() => {
   color: rgb(var(--v-theme-surface-warning));
 }
 
-img.trl-cell {
+img.trl-cell,
+video.trl-cell {
   display: block;
   cursor: zoom-in;
   object-fit: cover;

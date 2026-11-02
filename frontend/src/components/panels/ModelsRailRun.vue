@@ -162,7 +162,7 @@
             <!-- Only with an address: a live job can name a sample before its
                  folder resolves, and an empty src draws a broken picture. The
                  cell stays, so the grid keeps its shape (as TrainingRunLive). -->
-            <img
+            <SampleMedia
               v-if="file && sampleUrl(file)"
               :src="sampleUrl(file)"
               :alt="`${row.prompt}, step ${grid.steps[c].toLocaleString()}`"
@@ -251,6 +251,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { importRun, runSampleUrl } from "../../api/modelImports";
+import SampleMedia from "../widgets/SampleMedia.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { exportTrainingSnapshot, getTrainingJobLive } from "../../api/training";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
@@ -740,7 +741,8 @@ onBeforeUnmount(() => {
   background: rgba(var(--v-theme-on-surface), 0.06);
 }
 
-.mrr-cell img {
+.mrr-cell img,
+.mrr-cell video {
   display: block;
   width: 100%;
   height: 100%;

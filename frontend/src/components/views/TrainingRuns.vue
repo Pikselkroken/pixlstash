@@ -158,7 +158,7 @@
                  tile, pulsing while the run is live. -->
             <div v-if="stripOf(card).length" class="tr-card-strip">
               <template v-for="(url, slot) in stripOf(card)" :key="slot">
-                <img
+                <SampleMedia
                   v-if="url"
                   class="tr-card-preview"
                   :src="url"
@@ -590,6 +590,7 @@ import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { importRun, runSampleUrl } from "../../api/modelImports";
+import SampleMedia from "../widgets/SampleMedia.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";

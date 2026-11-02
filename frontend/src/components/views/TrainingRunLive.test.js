@@ -217,6 +217,25 @@ describe("TrainingRunLive", () => {
     });
   });
 
+  it("draws a video model's clip previews as video, and opens one on a click", async () => {
+    const base = payload();
+    const clips = {
+      ...base,
+      rows: base.rows.map((row) => ({
+        ...row,
+        cells: row.cells.map((c) => (c.filename ? { ...c, filename: c.filename.replace(".jpg", ".mp4") } : c)),
+      })),
+    };
+    const wrapper = await open(clips);
+    expect(wrapper.find("img.trl-cell").exists()).toBe(false);
+    const cell = wrapper.findAll("video.trl-cell")[7];
+    expect(cell.attributes("src")).toBe("/samples/3/ohwx_abcd/s_2.mp4#t=0.1");
+    await cell.trigger("click");
+    expect(JSON.parse(wrapper.find(".tsd-stub").attributes("data-sample")).src).toBe(
+      "/samples/3/ohwx_abcd/s_2.mp4",
+    );
+  });
+
   it("labels every figure, and an unreadable one is Unknown, never 0", async () => {
     const wrapper = await open(payload());
     const bar = wrapper.find(".trl-statusbar").text();

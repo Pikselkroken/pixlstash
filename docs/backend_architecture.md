@@ -664,7 +664,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move a folder PixlStash owns to another location              |
 | POST   | /api/v1/model-folders/{folder_id}/rename                                      | model_shelf     | Rename a registered model folder on disk                      |
 | GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder         |
-| GET    | /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}          | model_shelf     | One preview image from a training run                         |
+| GET    | /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}          | model_shelf     | One preview (image or clip) from a training run               |
 | GET    | /api/v1/model-icons/{sha256}                                                  | model_shelf     | Serve one stored icon                                         |
 | POST   | /api/v1/model-imports                                                         | model_shelf     | Import a training run onto the shelf                          |
 | GET    | /api/v1/model-moves                                                           | model_shelf     | How the current or last model move is going                   |
