@@ -242,8 +242,9 @@ def _relpath(folder_path: str, file: str, comfyui_folder: Optional[str]) -> str:
         return name
     head, sep, rest = name.partition("/")
     if sep and head.casefold() == comfyui_folder.casefold():
-        # Already under it, in whatever case: once, spelled as the list does.
-        return f"{comfyui_folder}/{rest}"
+        # Already under it, in whatever case: once, in the folder's own
+        # subfolder for it, else spelled as the list does.
+        return f"{_subfolder_for(folder_path, comfyui_folder) or comfyui_folder}/{rest}"
     subfolder = _subfolder_for(folder_path, comfyui_folder)
     return f"{subfolder}/{name}" if subfolder else name
 

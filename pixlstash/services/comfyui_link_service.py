@@ -174,7 +174,13 @@ def _address_toward(host: str, port: int) -> Optional[str]:
 
 
 def _cert_covers(cert_pem: bytes, ip: str) -> bool:
-    cert = x509.load_pem_x509_certificate(cert_pem)
+    """Whether the PEM certificate names *ip*; False for one that will not
+    parse (DER, a key, a corrupt file), which the pack could not verify by."""
+    try:
+        cert = x509.load_pem_x509_certificate(cert_pem)
+    except ValueError as exc:
+        logger.warning("PixlStash's HTTPS certificate does not parse: %s", exc)
+        return False
     try:
         names = cert.extensions.get_extension_for_class(
             x509.SubjectAlternativeName

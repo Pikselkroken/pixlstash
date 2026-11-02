@@ -251,8 +251,14 @@ def test_a_launcher_spelled_subfolder_for_the_role_takes_the_file(
     with serve_bytes(adapter_bytes) as url:
         linked(url, directory)
         done = _wait(start_download(hub, "component.safetensors")["id"])
+        # A loader naming the folder itself goes there too, not into a new
+        # folder of the list's spelling beside it.
+        named = _wait(start_download(hub, f"{directory}/named.safetensors")["id"])
     assert done["status"] == STATUS_DONE, done
+    assert named["status"] == STATUS_DONE, named
     assert (chosen / subfolder / "component.safetensors").is_file()
+    assert (chosen / subfolder / "named.safetensors").is_file()
+    assert not (chosen / directory).exists()
 
 
 def test_with_no_marked_folder_the_default_folder_takes_it(
