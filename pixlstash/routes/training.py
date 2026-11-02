@@ -2789,17 +2789,15 @@ def create_router(server) -> APIRouter:
         return candidates, pairs, any(c.is_clip for c in candidates)
 
     def _free_set_name(session, base: str) -> str:
+        # Compared in Python: SQLite's lower() and LIKE fold ASCII only, so
+        # "ÅSE TRAINING SET" would not be seen as taken by "Åse training set".
         taken = {
-            name.lower()
-            for name in session.exec(
-                select(PictureSet.name).where(
-                    func.lower(PictureSet.name).like(f"{base.lower()}%")
-                )
-            ).all()
+            name.casefold()
+            for name in session.exec(select(PictureSet.name)).all()
             if name
         }
         name, n = base, 1
-        while name.lower() in taken:
+        while name.casefold() in taken:
             n += 1
             name = f"{base} {n}"
         return name

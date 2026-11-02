@@ -1928,6 +1928,12 @@ def test_character_set_suggestion_ranks_stills_and_clips_apart():
         r = owner.get(url, params={"character_id": char_id})
         assert r.json()["set_name"] == "Anna training set 2"
 
+        # SQLite folds ASCII case only; a non-ASCII name is matched too.
+        ase = _make_character(owner, "Åse")
+        owner.post("/picture_sets", json={"name": "ÅSE TRAINING SET"})
+        r = owner.get(url, params={"character_id": ase})
+        assert r.json()["set_name"] == "Åse training set 2"
+
         r = owner.get(url, params={"character_id": 9999})
         assert r.status_code == 404, r.text
 
