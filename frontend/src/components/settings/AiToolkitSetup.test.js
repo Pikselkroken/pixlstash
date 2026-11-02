@@ -332,6 +332,8 @@ describe("the python Connect saves", () => {
       python: null,
     });
     expect(connectButton(w).attributes("disabled")).toBeUndefined();
+    // A folder that can train is one they have: no "Get AI-toolkit".
+    expect(byTestId(w, "upstream-get-ai-toolkit").exists()).toBe(false);
     await connectButton(w).trigger("click");
     await flushPromises();
     expect(training.putAiToolkitConfig).toHaveBeenCalledWith({
@@ -406,7 +408,8 @@ describe("when connected", () => {
     expect(byTestId(w, "ait-runs-count").text()).toBe("3 runs");
     expect(byTestId(w, "ait-shelf-line").text()).toBe(
       "Runs land in your model shelf's ai-toolkit folder.",
-    );    // Connected: only the header link to the repository.
+    );
+    // Connected: only the header link to the repository.
     expect(byTestId(w, "upstream-site-ai-toolkit").attributes("href")).toBe(
       "https://github.com/ostris/ai-toolkit",
     );

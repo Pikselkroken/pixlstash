@@ -525,7 +525,11 @@ watch(
           </AppButton>
         </div>
 
-        <SettingsUpstream v-if="phase === 'not-found'" program="ai-toolkit" />
+        <!-- Not once a typed folder passed: they have it. -->
+        <SettingsUpstream
+          v-if="phase === 'not-found' && !checkPassed"
+          program="ai-toolkit"
+        />
 
         <div v-if="phase === 'connected'" class="ait-row">
           <AppButton

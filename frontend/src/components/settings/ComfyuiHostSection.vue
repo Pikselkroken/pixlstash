@@ -81,6 +81,7 @@ function fillForm(url) {
 // Probe the usual local addresses in order; the first that answers is offered.
 async function detectLocal() {
   const run = ++detectRun;
+  foundUrl.value = "";
   state.value = "probing";
   formError.value = "";
   for (const candidate of LOCAL_CANDIDATES) {
@@ -384,7 +385,8 @@ watch(
             Search again
           </AppButton>
         </div>
-        <SettingsUpstream program="comfyui" />
+        <!-- Not after Use another address: one was just found. -->
+        <SettingsUpstream v-if="!foundUrl" program="comfyui" />
       </template>
 
       <p v-if="actionError" class="cf-error" role="alert">

@@ -65,6 +65,7 @@ const credit = computed(
     :href="p.site"
     target="_blank"
     rel="noopener noreferrer"
+    :aria-label="`${p.name}: ${p.siteLabel}`"
     :data-testid="`upstream-site-${program}`"
   >
     <Tooltip :text="`${credit} ${p.about}`" activator="parent" />

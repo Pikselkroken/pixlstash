@@ -155,6 +155,15 @@ describe("connecting ComfyUI", () => {
     );
   });
 
+  it("offers no Get ComfyUI after Use another address on a found one", async () => {
+    probeAnswers({ "http://127.0.0.1:8188/": "http://127.0.0.1:8188/" });
+    const wrapper = await mountPane();
+    await byTestId(wrapper, "comfyui-use-another").trigger("click");
+    await flushPromises();
+    expect(byTestId(wrapper, "comfyui-host").exists()).toBe(true);
+    expect(byTestId(wrapper, "upstream-get-comfyui").exists()).toBe(false);
+  });
+
   it("shows the address form when nothing answers locally", async () => {
     probeAnswers({});
     const wrapper = await mountPane();
@@ -166,7 +175,9 @@ describe("connecting ComfyUI", () => {
     expect(strip.text()).toContain("Don't have ComfyUI yet?");
     expect(strip.text()).toContain("Comfy Org (GPL-3.0)");
     const get = strip.find("a");
-    expect(get.attributes("href")).toBe("https://github.com/Comfy-Org/ComfyUI/releases/latest");
+    expect(get.attributes("href")).toBe(
+      "https://github.com/Comfy-Org/ComfyUI/releases/latest",
+    );
     expect(get.attributes("target")).toBe("_blank");
     expect(byTestId(wrapper, "upstream-site-comfyui").exists()).toBe(false);
   });
@@ -253,6 +264,9 @@ describe("the table of connections", () => {
     expect(byTestId(wrapper, "upstream-site-comfyui").attributes("href")).toBe(
       "https://github.com/Comfy-Org/ComfyUI/releases/latest",
     );
+    const site = byTestId(wrapper, "upstream-site-comfyui");
+    expect(site.attributes("aria-label")).toBe("ComfyUI: Latest release");
+    expect(site.attributes("target")).toBe("_blank");
     expect(byTestId(wrapper, "upstream-get-comfyui").exists()).toBe(false);
   });
 
