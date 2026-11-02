@@ -585,7 +585,8 @@ def create_router(server) -> APIRouter:
             default=None,
             description=(
                 "'checking' while a queued run's memory and speed are checked; "
-                "otherwise null (the live view names every phase)."
+                "a running run's last logged phase; otherwise null (the live "
+                "view names every phase)."
             ),
         )
 
@@ -1194,6 +1195,20 @@ def create_router(server) -> APIRouter:
             and (row.get("progress") or {}).get("shown_as") == "checking"
         }
 
+    def _summary_phase(job: dict, checking: set[str]) -> str | None:
+        """The phase the runs grid's card can name without the live view.
+
+        A probe runs while the row is still queued; a running row's phase is
+        the last one the worker logged, so a run still loading its model or
+        caching reads as that rather than as stuck at step 0.
+        """
+        if job["status"] == "queued":
+            return "checking" if job["uuid"] in checking else None
+        if job["status"] == "running":
+            log = live_view.parse_phase_log(job.get("phase_log"))
+            return log[-1].get("phase") if log else None
+        return None
+
     def _job_to_summary(
         job: dict, model_ids: list[int], checking: set[str] = frozenset()
     ) -> dict:
@@ -1203,12 +1218,7 @@ def create_router(server) -> APIRouter:
                 "uuid": job["uuid"],
                 "name": job["name"],
                 "status": job["status"],
-                # A probe runs while the row is still queued.
-                "phase": (
-                    "checking"
-                    if job["status"] == "queued" and job["uuid"] in checking
-                    else None
-                ),
+                "phase": _summary_phase(job, checking),
                 "set_id": job["set_id"],
                 "character_id": job["character_id"],
                 "base_model": job["base_model"],

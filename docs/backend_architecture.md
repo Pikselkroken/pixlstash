@@ -11932,6 +11932,9 @@ calls except each run's last swap counters.
   huggingface_hub progress line (`live_view.downloading`): a model the trainer
   has not loaded before is fetched inside that phase, which on a first run is
   most of the wait, and the view says so rather than looking stuck.
+  `GET /training/jobs` carries a lighter `phase` for the runs grid's card:
+  `checking` for a probed queued run, and a running run's last `phase_log`
+  entry, so a run still loading or caching reads as that, not "Training 0 / N".
 - **Why it failed.** A failed run's `error` is `live_view.failure_summary` of
   the trainer's info line, the sentence every surface shows: torch's CUDA OOM
   paragraph becomes the step, what it asked for, what was free and what other

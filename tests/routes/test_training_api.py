@@ -727,6 +727,36 @@ def test_live_view_draws_a_run_from_its_folder_and_its_logs():
         _teardown(temp_dir, server)
 
 
+def test_the_job_list_names_a_running_runs_last_logged_phase():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        log = [
+            {"phase": "waiting_gpu", "at": "2026-10-26T01:00:00+00:00"},
+            {"phase": "loading", "at": "2026-10-26T01:00:30+00:00"},
+        ]
+        _, loading_uuid = _seed_job(
+            server, status="running", step=0, phase_log=json.dumps(log)
+        )
+        _, caching_uuid = _seed_job(
+            server,
+            status="running",
+            step=0,
+            phase_log=json.dumps(
+                log + [{"phase": "caching", "at": "2026-10-26T01:01:00+00:00"}]
+            ),
+        )
+        _, ended_uuid = _seed_job(server, status="error", phase_log=json.dumps(log))
+        _, unlogged_uuid = _seed_job(server, status="running", step=0)
+        listed = {j["uuid"]: j for j in owner.get("/training/jobs").json()}
+        assert listed[loading_uuid]["phase"] == "loading"
+        assert listed[caching_uuid]["phase"] == "caching"
+        # An ended run has no phase, whatever its log last said.
+        assert listed[ended_uuid]["phase"] is None
+        assert listed[unlogged_uuid]["phase"] is None
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_live_view_of_a_run_that_finished_while_pixlstash_was_closed():
     temp_dir, owner, server, read_token = _setup()
     try:
