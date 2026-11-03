@@ -9,7 +9,7 @@ vi.mock("../api/pictures", () => ({
   renderPictureMask: (...a) => renderPictureMask(...a),
 }));
 
-import { usePaintSelection } from "./usePaintSelection";
+import { extendSidesAt, usePaintSelection } from "./usePaintSelection";
 
 let scope;
 const pictureId = ref(7);
@@ -191,5 +191,107 @@ describe("usePaintSelection", () => {
     await vi.advanceTimersByTimeAsync(200);
     expect(paint.maskError.value).toBe("Could not show the selection.");
     expect(paint.maskUrl.value).toBe("");
+  });
+
+  describe("Extend", () => {
+    it("drags an edge out in the picture's pixels, snapped to 8", () => {
+      const paint = make();
+      paint.setTool("extend");
+      // The right edge of a 2000 x 1000 picture, dragged 0.1 (200 px) out.
+      paint.begin({ x: 1, y: 0.5 }, { tolerance: { x: 0.01, y: 0.01 } });
+      paint.move({ x: 1.1003, y: 0.7 });
+      paint.end();
+      expect({ ...paint.extension }).toEqual({
+        left: 0,
+        top: 0,
+        right: 200,
+        bottom: 0,
+        feather: 40,
+      });
+      paint.setExtension("left", 13);
+      expect(paint.extension.left).toBe(16);
+      // Up, as the server rounds: a typed 3 is 8, not 0.
+      paint.setExtension("left", 3);
+      expect(paint.extension.left).toBe(8);
+      paint.setExtension("left", 13);
+      expect(paint.extend.value).toEqual({ ...paint.extension });
+      expect(paint.extendedSize.value).toEqual({ width: 2216, height: 1000 });
+    });
+
+    it("a corner takes two sides, and a press off the frame takes none", () => {
+      const paint = make();
+      paint.setTool("extend");
+      paint.begin({ x: -0.004, y: 1.004 }, { tolerance: { x: 0.01, y: 0.01 } });
+      paint.move({ x: -0.104, y: 1.204 });
+      paint.end();
+      expect(paint.extension.left).toBe(200);
+      expect(paint.extension.bottom).toBe(200);
+      paint.begin({ x: 0.5, y: 0.5 }, { tolerance: { x: 0.01, y: 0.01 } });
+      expect(paint.draft.value).toBeNull();
+    });
+
+    it("holds the canvas to twice the picture on the 8 px grid", () => {
+      dims.value = { naturalWidth: 1003, naturalHeight: 600 };
+      const paint = make();
+      paint.setExtension("left", 700);
+      paint.setExtension("right", 900);
+      // 1003 rounds down to 1000: the server rounds up, so 1008 would be refused.
+      expect(paint.extension.left + paint.extension.right).toBe(1000);
+      paint.setExtension("top", -50);
+      expect(paint.extension.top).toBe(0);
+      paint.setExtendFeather(500);
+      expect(paint.extension.feather).toBe(100);
+    });
+
+    it("is never held with a selection: each drops the other", () => {
+      const paint = make();
+      paint.setTool("rect");
+      paint.begin({ x: 0.1, y: 0.1 });
+      paint.move({ x: 0.5, y: 0.5 });
+      paint.end();
+      expect(paint.hasSelection.value).toBe(true);
+      paint.setTool("extend");
+      expect(paint.hasSelection.value).toBe(false);
+      paint.setExtension("top", 64);
+      expect(paint.hasExtension.value).toBe(true);
+      paint.setTool("rect");
+      paint.begin({ x: 0.1, y: 0.1 });
+      paint.move({ x: 0.5, y: 0.5 });
+      paint.end();
+      expect(paint.hasSelection.value).toBe(true);
+      expect(paint.hasExtension.value).toBe(false);
+      expect(paint.extend.value).toBeNull();
+    });
+
+    it("Clear and another picture drop the extension; the feather stays", async () => {
+      const paint = make();
+      paint.setExtension("bottom", 80);
+      paint.setExtendFeather(12);
+      paint.clear();
+      expect(paint.hasExtension.value).toBe(false);
+      expect(paint.extension.feather).toBe(12);
+      paint.setExtension("bottom", 80);
+      pictureId.value = 8;
+      await nextTick();
+      expect(paint.hasExtension.value).toBe(false);
+    });
+
+    it("finds the sides under a press against the extended frame", () => {
+      const ext = { left: 100, top: 0, right: 0, bottom: 50 };
+      const natural = { width: 1000, height: 500 };
+      const tol = { x: 0.01, y: 0.02 };
+      expect(extendSidesAt({ x: -0.1, y: 0.5 }, ext, natural, tol)).toEqual(["left"]);
+      expect(extendSidesAt({ x: 1.005, y: 0.5 }, ext, natural, tol)).toEqual(["right"]);
+      expect(extendSidesAt({ x: 0.5, y: 0 }, ext, natural, tol)).toEqual(["top"]);
+      expect(extendSidesAt({ x: 0.5, y: 1.1 }, ext, natural, tol)).toEqual(["bottom"]);
+      expect(extendSidesAt({ x: 1, y: 1.1 }, ext, natural, tol)).toEqual([
+        "right",
+        "bottom",
+      ]);
+      // On the picture's own left edge, which is no longer the frame's.
+      expect(extendSidesAt({ x: 0, y: 0.5 }, ext, natural, tol)).toEqual([]);
+      // Past the frame's end along the edge's line.
+      expect(extendSidesAt({ x: -0.1, y: 1.5 }, ext, natural, tol)).toEqual([]);
+    });
   });
 });

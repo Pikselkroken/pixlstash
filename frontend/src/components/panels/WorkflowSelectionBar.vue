@@ -247,6 +247,7 @@ const emit = defineEmits([
   "export",
   "duplicate",
   "inpaint-copy",
+  "outpaint-copy",
   "use-set",
   "download-missing",
   "delete",
@@ -658,6 +659,25 @@ const inpaintTitle = computed(() =>
       "Make a new manual workflow from this one that redraws only a selection"),
 );
 
+/** *Convert to Outpainting workflow*: the same gate, worded for outpainting. */
+const NOT_OUTPAINTABLE = {
+  inpaint: "This workflow already inpaints",
+  outpaint: "This workflow already outpaints",
+  video: "A video workflow cannot be converted to outpainting",
+  upscale: "An upscale workflow has no sampler to outpaint with",
+};
+const outpaintRefusal = computed(() =>
+  single.value && Object.hasOwn(NOT_OUTPAINTABLE, cards.value[0]?.type ?? "")
+    ? NOT_OUTPAINTABLE[cards.value[0].type]
+    : undefined,
+);
+const outpaintTitle = computed(() =>
+  !single.value
+    ? "Select one workflow to convert it to outpainting"
+    : (outpaintRefusal.value ??
+      "Make a new manual workflow from this one that extends the picture past its edges"),
+);
+
 /**
  * *Change model set…* is the Workflow tab's: it fills that tab's model rows, and
  * nothing is written until the tab's bar saves them (#1850).
@@ -1047,6 +1067,11 @@ const VerbMenu = () => {
         verb: "inpaint-copy",
         disabled: !single.value || Boolean(inpaintRefusal.value),
         title: inpaintTitle.value,
+      }),
+      item("mdi-arrow-expand-all", "Convert to Outpainting workflow", {
+        verb: "outpaint-copy",
+        disabled: !single.value || Boolean(outpaintRefusal.value),
+        title: outpaintTitle.value,
       }),
       sep(),
       item("mdi-delete-outline", "Delete…", {

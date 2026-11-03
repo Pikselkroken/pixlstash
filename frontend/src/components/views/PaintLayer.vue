@@ -3,6 +3,22 @@
        displayed picture, so it follows zoom and pan like the face boxes.
        Decorative: the Edit tab's sliders and the toolbox are the controls. -->
   <div class="paint-layer" :style="layerStyle" aria-hidden="true">
+    <!-- Extend: the new area as a checkerboard round the picture, the
+         picture's old edge dashed, the new frame and its eight handles. The
+         Edit tab's side fields are the accessible control. -->
+    <template v-if="frame">
+      <div class="paint-extend-new" :style="frame.style" />
+      <div class="paint-extend-edge" />
+      <div class="paint-extend-frame" :style="frame.style" />
+      <span
+        v-for="handle in frame.handles"
+        :key="handle.sides"
+        class="paint-extend-handle"
+        :class="{ 'paint-extend-handle--hot': handle.sides === hot }"
+        :data-sides="handle.sides"
+        :style="handle.style"
+      />
+    </template>
     <img
       v-if="paint.showMask.value && paint.maskUrl.value"
       class="paint-bw"
@@ -76,12 +92,67 @@ const props = defineProps({
   paint: { type: Object, required: true },
   /** The lightbox's `lightboxDims`: display and natural size, offset. */
   dims: { type: Object, required: true },
+  /** The CSS scale the layer is drawn at, so a handle stays 10 px on screen. */
+  scale: { type: Number, default: 1 },
+  /** The sides under the pointer with Extend in hand, e.g. `left,top`. */
+  hot: { type: String, default: "" },
 });
 
 const canvasRef = ref(null);
 const layerStyle = computed(() => wordLayerStyle(props.dims));
 
 const draft = computed(() => props.paint.draft.value);
+
+// Extend's frame, in percent of the picture: it runs from -left to 100+right.
+const HANDLE_PX = 10;
+const frame = computed(() => {
+  if (!props.paint.extending?.value) return null;
+  const { left, top, right, bottom } = props.paint.extension;
+  const width = Math.max(1, props.dims.naturalWidth || 1);
+  const height = Math.max(1, props.dims.naturalHeight || 1);
+  const x0 = (-left / width) * 100;
+  const x1 = 100 + (right / width) * 100;
+  const y0 = (-top / height) * 100;
+  const y1 = 100 + (bottom / height) * 100;
+  const size = `${HANDLE_PX / (props.scale || 1)}px`;
+  const columns = [
+    [x0, "left"],
+    [(x0 + x1) / 2, ""],
+    [x1, "right"],
+  ];
+  const rows = [
+    [y0, "top"],
+    [(y0 + y1) / 2, ""],
+    [y1, "bottom"],
+  ];
+  const handles = rows.flatMap(([y, row]) =>
+    columns.flatMap(([x, column]) => {
+      const sides = [column, row].filter(Boolean).join(",");
+      if (!sides) return [];
+      return [
+        {
+          sides,
+          style: { left: `${x}%`, top: `${y}%`, width: size, height: size },
+        },
+      ];
+    }),
+  );
+  return {
+    style: {
+      left: `${x0}%`,
+      top: `${y0}%`,
+      width: `${x1 - x0}%`,
+      height: `${y1 - y0}%`,
+      // The picture is cut out of the checkerboard, which lies under nothing.
+      "--hole-x0": `${(-x0 / (x1 - x0)) * 100}%`,
+      "--hole-y0": `${(-y0 / (y1 - y0)) * 100}%`,
+      "--hole-x1": `${((100 - x0) / (x1 - x0)) * 100}%`,
+      "--hole-y1": `${((100 - y0) / (y1 - y0)) * 100}%`,
+      "--line": `${1.5 / (props.scale || 1)}px`,
+    },
+    handles,
+  };
+});
 const crop = computed(() => {
   const current = draft.value;
   if (current?.tool === "crop") return boxOf(current);
@@ -279,6 +350,61 @@ onBeforeUnmount(() => {
 .paint-layer {
   position: absolute;
   pointer-events: none;
+}
+
+/* Extend. The checkerboard is the dark surface's ink at two strengths, the
+   picture cut out of it; lines and handles keep their screen size at any
+   scale (`--line`, the handle's own size). */
+.paint-extend-new,
+.paint-extend-frame,
+.paint-extend-edge {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.paint-extend-new {
+  background-color: rgba(var(--v-theme-on-dark-surface), 0.12);
+  background-image:
+    linear-gradient(45deg, rgba(var(--v-theme-on-dark-surface), 0.08) 25%, transparent 25%, transparent 75%, rgba(var(--v-theme-on-dark-surface), 0.08) 75%),
+    linear-gradient(45deg, rgba(var(--v-theme-on-dark-surface), 0.08) 25%, transparent 25%, transparent 75%, rgba(var(--v-theme-on-dark-surface), 0.08) 75%);
+  background-size: calc(2 * var(--space-3)) calc(2 * var(--space-3));
+  background-position:
+    0 0,
+    var(--space-3) var(--space-3);
+  clip-path: polygon(
+    evenodd,
+    0 0,
+    100% 0,
+    100% 100%,
+    0 100%,
+    0 0,
+    var(--hole-x0) var(--hole-y0),
+    var(--hole-x1) var(--hole-y0),
+    var(--hole-x1) var(--hole-y1),
+    var(--hole-x0) var(--hole-y1),
+    var(--hole-x0) var(--hole-y0)
+  );
+}
+
+.paint-extend-edge {
+  inset: 0;
+  border: 1px dashed rgba(var(--v-theme-on-dark-surface), 0.55);
+}
+
+.paint-extend-frame {
+  border: var(--line) solid rgb(var(--v-theme-on-dark-surface));
+}
+
+.paint-extend-handle {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-on-dark-surface));
+  box-shadow: 0 0 0 1px rgb(var(--v-theme-shadow));
+}
+
+.paint-extend-handle--hot {
+  background: var(--active-bar);
 }
 
 .paint-ants,

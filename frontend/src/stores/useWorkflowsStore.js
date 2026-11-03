@@ -5,6 +5,7 @@ import {
   deleteWorkflow,
   duplicateWorkflow,
   inpaintCopyWorkflow,
+  outpaintCopyWorkflow,
   listWorkflowCards,
   patchWorkflowCard,
   setWorkflowThumbnail,
@@ -659,6 +660,16 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     );
   }
 
+  /** The same for an outpaint workflow, padded and redrawn round the picture. */
+  function outpaintCopyCard(key) {
+    return busyCall(
+      "outpaint-copy",
+      key,
+      "Could not convert that workflow to outpainting.",
+      () => outpaintCopyWorkflow(key),
+    );
+  }
+
   /**
    * Delete every selected MANUAL workflow.
    *
@@ -916,6 +927,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     pinThumbnail,
     duplicateCard,
     inpaintCopyCard,
+    outpaintCopyCard,
     deleteSelected,
     select,
     selectRange,

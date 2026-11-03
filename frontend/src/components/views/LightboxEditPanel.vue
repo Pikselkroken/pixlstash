@@ -90,8 +90,78 @@
                 >
               </button>
             </span>
+            <span v-else-if="hasExtension" class="edit-sec-end">
+              <button
+                class="edit-sec-act edit-sec-act--clear"
+                type="button"
+                :aria-keyshortcuts="paint.tool.value ? undefined : 'Escape'"
+                @click="paint.clear()"
+              >
+                Clear
+                <kbd v-if="!paint.tool.value" class="edit-kbd" aria-hidden="true"
+                  >Esc</kbd
+                >
+              </button>
+            </span>
           </div>
-          <p v-if="!hasSelection" class="edit-note edit-note--lead">
+          <!-- Extend: each side's field on its side of a small drawing of
+               the new canvas, as a box model is drawn. -->
+          <template v-if="extending">
+            <div class="edit-extend" role="group" aria-label="Extend by">
+              <label
+                v-for="side in EXTEND_FIELDS"
+                :key="side.id"
+                class="edit-extend-side"
+                :class="`edit-extend-side--${side.id}`"
+              >
+                <span class="edit-extend-cap">{{ side.label }}</span>
+                <span class="edit-num">
+                  <input
+                    class="edit-num-field"
+                    :class="{ 'edit-num-field--zero': !paint.extension[side.id] }"
+                    type="number"
+                    min="0"
+                    :max="sideMax(side.id)"
+                    :step="EXTEND_STEP"
+                    :value="paint.extension[side.id]"
+                    @change="onSide(side.id, $event)"
+                  />
+                  <span class="edit-num-unit" aria-hidden="true">px</span>
+                </span>
+              </label>
+              <div class="edit-extend-mini" :style="miniStyle" aria-hidden="true">
+                <img
+                  class="edit-extend-pic"
+                  :style="miniPictureStyle"
+                  :src="pictureThumbnailUrl(pictureId)"
+                  alt=""
+                />
+              </div>
+            </div>
+            <label class="edit-slider">
+              <span>Feather</span>
+              <input
+                :value="paint.extension.feather"
+                type="range"
+                min="0"
+                :max="EXTEND_FEATHER_MAX"
+                step="1"
+                @input="paint.setExtendFeather($event.target.value)"
+              />
+              <output>{{ paint.extension.feather }} px</output>
+            </label>
+            <p class="edit-note">
+              <template v-if="hasExtension"
+                >Becomes {{ paint.extendedSize.value.width }} ×
+                {{ paint.extendedSize.value.height }}.</template
+              >
+              <template v-else
+                >Drag an edge of the picture out, or type a side.</template
+              >
+              Zoom stays at fit while Extend is in hand.
+            </p>
+          </template>
+          <p v-else-if="!hasSelection" class="edit-note edit-note--lead">
             Mark where with the tools above. Without a selection the whole
             picture changes.
           </p>
@@ -126,7 +196,7 @@
             <span>Apply to</span>
           </div>
           <Segmented
-            :model-value="hasSelection ? 'this' : applyTo"
+            :model-value="handMark ? 'this' : applyTo"
             full
             aria-label="Apply to"
             :options="applyToOptions"
@@ -134,6 +204,10 @@
           />
           <p v-if="hasSelection" class="edit-note">
             A hand selection stays on the picture it was drawn on. Clear it to
+            run on all {{ applyToIds.length }}.
+          </p>
+          <p v-else-if="hasExtension" class="edit-note">
+            An extension stays on the picture it was dragged on. Clear it to
             run on all {{ applyToIds.length }}.
           </p>
         </template>
@@ -242,6 +316,10 @@
           {{ chosenCard.type_label }} workflows do not use a mask, so this
           would change the whole picture. Choose an Inpaint workflow.
         </p>
+        <p v-if="hasExtension && chosenCard && !usesExtend" class="edit-note">
+          {{ chosenCard.type_label }} workflows do not extend pictures. Choose
+          an Outpaint workflow.
+        </p>
 
         <div class="section-label section-label--on-dark edit-sec">
           <label :for="instructionFieldId">{{ promptHelp.label }}</label>
@@ -345,6 +423,9 @@
         <p v-if="submitError" class="edit-note" role="alert">
           {{ submitError }}
         </p>
+        <p v-if="needsExtension" id="edit-run-extend-why" class="edit-note">
+          Drag an edge out to say where.
+        </p>
         <AppButton
           on-dark
           variant="primary"
@@ -352,6 +433,8 @@
           block
           :loading="submitting"
           :disabled="!!chosenMissing"
+          :aria-disabled="needsExtension ? 'true' : undefined"
+          :aria-describedby="needsExtension ? 'edit-run-extend-why' : undefined"
           key-hint="ctrl+enter"
           @click="submit"
         >
@@ -458,6 +541,10 @@ import { runTaskLabel } from "../../utils/runTaskLabel";
 import { withRef } from "../../utils/withRef";
 import { selectNewestStackMember } from "../../utils/stack";
 import { stackMemberIds } from "../../utils/stackMembers";
+import {
+  EXTEND_FEATHER_MAX,
+  EXTEND_STEP,
+} from "../../composables/usePaintSelection";
 
 const props = defineProps({
   /** The open picture. */
@@ -488,6 +575,18 @@ const EDIT_TYPES = new Set(["img2img", "inpaint", "outpaint"]);
  * Not outpaint: it makes its own mask from the padding it adds.
  */
 const MASK_TYPES = new Set(["inpaint"]);
+/** The ones whose graph pads the picture, which a run's `extend` sets. */
+const EXTEND_TYPES = new Set(["outpaint"]);
+
+/** Extend's side fields, in the margin box's reading order. */
+const EXTEND_FIELDS = [
+  { id: "top", label: "Top" },
+  { id: "left", label: "Left" },
+  { id: "right", label: "Right" },
+  { id: "bottom", label: "Bottom" },
+];
+// The margin box's drawing of the new canvas fits in this, in px.
+const MINI_BOX = { width: 104, height: 72 };
 
 const refineRows = [
   { key: "grow", label: "Grow", min: -100, max: 100 },
@@ -498,6 +597,8 @@ const refineRows = [
 const LAST_KEY_PREFIX = "pixlstash:editTabWorkflow:";
 // The last workflow run on a selection, which a new selection goes back to.
 const LAST_MASKED_KEY_PREFIX = "pixlstash:editTabMaskedWorkflow:";
+// The same for an extension.
+const LAST_EXTEND_KEY_PREFIX = "pixlstash:editTabExtendWorkflow:";
 
 /**
  * What the instruction box asks for. An inpaint run regenerates only the
@@ -524,6 +625,15 @@ const PROMPT_HELP = {
       "Say what must stay if it matters: “keep her face the same”.",
       "An ordinary checkpoint reads this as the whole picture, not a change: describe the finished picture instead.",
       "To change only part of it, mark it with the tools beside the picture and choose an Inpaint workflow.",
+    ],
+  },
+  extend: {
+    label: "What goes in the new area?",
+    placeholder: "The rest of the room, same light",
+    tips: [
+      "Describe what surrounds the picture, not the change: “the rest of the beach, the sea to the horizon”, not “make it wider”.",
+      "With an edit model (Flux Kontext, Qwen Image Edit, Klein) the new area reaches it painted green: say “fill the green area with …”.",
+      "Left empty, the workflow's own prompt is used.",
     ],
   },
 };
@@ -590,19 +700,71 @@ function missingTip(key) {
 
 const hasSelection = computed(() => !!props.paint?.hasSelection.value);
 const usesMask = computed(() => MASK_TYPES.has(chosenCard.value?.type));
-const promptHelp = computed(() =>
-  hasSelection.value && usesMask.value ? PROMPT_HELP.masked : PROMPT_HELP.edit,
+// Extend in hand, or an extension made; one made is what a run sends.
+const extending = computed(() => !!props.paint?.extending?.value);
+const hasExtension = computed(() => !!props.paint?.hasExtension?.value);
+const usesExtend = computed(() => EXTEND_TYPES.has(chosenCard.value?.type));
+// A hand mark of either kind belongs to the picture it was made on.
+const handMark = computed(() => hasSelection.value || hasExtension.value);
+// An outpaint card pads by what a run sends, so it waits for an extension.
+const needsExtension = computed(
+  () => !!props.paint && usesExtend.value && !hasExtension.value,
 );
+const promptHelp = computed(() => {
+  if (hasSelection.value && usesMask.value) return PROMPT_HELP.masked;
+  if (extending.value && usesExtend.value) return PROMPT_HELP.extend;
+  return PROMPT_HELP.edit;
+});
 
-// With a selection the workflows that read it come first.
-const menuCards = computed(() =>
-  hasSelection.value
-    ? [
-        ...cards.value.filter((card) => MASK_TYPES.has(card.type)),
-        ...cards.value.filter((card) => !MASK_TYPES.has(card.type)),
-      ]
-    : cards.value,
-);
+// With a selection the workflows that read it come first; extending, the
+// ones that extend.
+const menuCards = computed(() => {
+  const first = hasSelection.value
+    ? MASK_TYPES
+    : extending.value
+      ? EXTEND_TYPES
+      : null;
+  if (!first) return cards.value;
+  return [
+    ...cards.value.filter((card) => first.has(card.type)),
+    ...cards.value.filter((card) => !first.has(card.type)),
+  ];
+});
+
+/** The most a side can take: the cap, less what its opposite has. */
+function sideMax(side) {
+  const paint = props.paint;
+  const cap = paint.extendCap.value;
+  const opposite = { left: "right", right: "left", top: "bottom", bottom: "top" }[side];
+  const whole = side === "left" || side === "right" ? cap.width : cap.height;
+  return whole - paint.extension[opposite];
+}
+
+/** A typed side, snapped and capped; the field shows what was kept. */
+function onSide(side, event) {
+  props.paint.setExtension(side, event.target.value);
+  event.target.value = props.paint.extension[side];
+}
+
+// The margin box's drawing: the new canvas fitted in MINI_BOX, the picture
+// where it sits in it.
+const miniStyle = computed(() => {
+  const { width, height } = props.paint.extendedSize.value;
+  const scale = Math.min(MINI_BOX.width / width, MINI_BOX.height / height);
+  return { width: `${width * scale}px`, height: `${height * scale}px` };
+});
+const miniPictureStyle = computed(() => {
+  const { left, top } = props.paint.extension;
+  const { width, height } = props.paint.extendedSize.value;
+  const pictureWidth = width - left - props.paint.extension.right;
+  const pictureHeight = height - top - props.paint.extension.bottom;
+  return {
+    left: `${(left / width) * 100}%`,
+    top: `${(top / height) * 100}%`,
+    width: `${(pictureWidth / width) * 100}%`,
+    height: `${(pictureHeight / height) * 100}%`,
+  };
+});
 
 // *Apply to*: this picture, or every one the grid's *Edit…* named. A hand
 // selection belongs to its picture, so it holds the choice on this one.
@@ -612,14 +774,14 @@ const applyToOptions = computed(() => [
   {
     id: "all",
     label: `${props.applyToIds.length} selected`,
-    disabled: hasSelection.value,
+    disabled: handMark.value,
   },
 ]);
 const runsOnAll = computed(
   () =>
     props.applyToIds.length > 1 &&
     applyTo.value === "all" &&
-    !hasSelection.value,
+    !handMark.value,
 );
 watch(
   () => props.applyToIds,
@@ -632,30 +794,43 @@ watch(
 // late library key below must not overrule.
 let choseByHand = false;
 
-// The card a selection moved the tab off, to go back to when it is cleared;
-// empty once the reader chooses a card themselves.
+// The card a selection (or an extension) moved the tab off, to go back to
+// when it is cleared; empty once the reader chooses a card themselves.
 let beforeSelection = "";
+let beforeExtension = "";
 
-/** The workflow a selection runs with: the last one run on one, else the first. */
-function maskedCard() {
-  const last = readRemembered(LAST_MASKED_KEY_PREFIX);
-  const masked = cards.value.filter((card) => MASK_TYPES.has(card.type));
-  const usable = masked.filter((card) => runsHere(card.id));
-  // One a download would fix beats staying on a card that ignores the mask.
+/**
+ * The workflow a selection runs with (*types* MASK_TYPES, remembered under
+ * *prefix*), or an extension (EXTEND_TYPES): the last one run on one, else
+ * the first.
+ */
+function markCard(types = MASK_TYPES, prefix = LAST_MASKED_KEY_PREFIX) {
+  const last = readRemembered(prefix);
+  const marked = cards.value.filter((card) => types.has(card.type));
+  const usable = marked.filter((card) => runsHere(card.id));
+  // One a download would fix beats staying on a card that ignores the mark.
   return (
     usable.find((card) => card.id === last) ||
     usable[0] ||
-    masked.find((card) => missing.value.has(card.id)) ||
+    marked.find((card) => missing.value.has(card.id)) ||
     null
   );
 }
 
 function moveToMasked() {
   if (usesMask.value) return;
-  const masked = maskedCard();
+  const masked = markCard();
   if (!masked) return;
   beforeSelection = workflowId.value;
   workflowId.value = masked.id;
+}
+
+function moveToExtend() {
+  if (usesExtend.value) return;
+  const card = markCard(EXTEND_TYPES, LAST_EXTEND_KEY_PREFIX);
+  if (!card) return;
+  beforeExtension = workflowId.value;
+  workflowId.value = card.id;
 }
 
 // A selection moves the tab onto a workflow that reads it, even off a card
@@ -670,6 +845,17 @@ watch(hasSelection, (has) => {
   }
 });
 
+// Taking up Extend moves the tab onto a workflow that extends, the same way,
+// and putting it down with nothing dragged goes back.
+watch(extending, (on) => {
+  if (on) {
+    moveToExtend();
+  } else if (beforeExtension) {
+    if (runsHere(beforeExtension)) workflowId.value = beforeExtension;
+    beforeExtension = "";
+  }
+});
+
 function choose(key) {
   pickerOpen.value = false;
   if (fillInPopup.value.has(key)) {
@@ -680,6 +866,7 @@ function choose(key) {
   refocusPicker = true;
   choseByHand = true;
   beforeSelection = "";
+  beforeExtension = "";
   workflowId.value = key;
 }
 
@@ -703,6 +890,7 @@ watch(libraryKey, () => {
   }
   // A card chosen by hand stays chosen, with a selection up or not.
   if (hasSelection.value && !choseByHand) moveToMasked();
+  else if (extending.value && !choseByHand) moveToExtend();
 });
 
 // The run belongs to the picture it started from (and the picture it made);
@@ -739,14 +927,23 @@ function readRemembered(prefix = LAST_KEY_PREFIX) {
   }
 }
 
-/** The card just run; one run on a selection is also the next selection's. */
-function remember(key, masked) {
+/**
+ * The card just run; one run on a selection is also the next selection's, and
+ * one run on an extension the next extension's.
+ */
+function remember(key, masked, extended = false) {
   rememberedKey.value = key;
   try {
     window.localStorage?.setItem(`${LAST_KEY_PREFIX}${libraryKey.value}`, key);
     if (masked) {
       window.localStorage?.setItem(
         `${LAST_MASKED_KEY_PREFIX}${libraryKey.value}`,
+        key,
+      );
+    }
+    if (extended) {
+      window.localStorage?.setItem(
+        `${LAST_EXTEND_KEY_PREFIX}${libraryKey.value}`,
         key,
       );
     }
@@ -795,6 +992,7 @@ async function loadCards({ cached = true } = {}) {
       : defaultKey();
     // Drawn before the tab was first shown.
     if (hasSelection.value) moveToMasked();
+    else if (extending.value) moveToExtend();
     loaded.value = true;
     // A download that landed during the read may postdate its answers.
     if (tasksStore.downloadsLanded !== landed) void recheckMissing();
@@ -1106,6 +1304,7 @@ function onMoreOptions(key = workflowId.value, edit = false) {
 async function submit() {
   const id = Number(props.pictureId);
   if (submitting.value || !workflowId.value || chosenMissing.value) return;
+  if (needsExtension.value) return;
   if (!Number.isFinite(id) || id <= 0) return;
   submitting.value = true;
   submitError.value = "";
@@ -1131,6 +1330,8 @@ async function submit() {
       target: workflowId.value,
       // Where on the picture: rendered server-side into its MASK.
       ...(hasSelection.value ? { selection: props.paint.selection.value } : {}),
+      // How far each side grows: written into the workflow's pad.
+      ...(hasExtension.value ? { extend: props.paint.extend.value } : {}),
       // An empty box leaves the workflow's own prompt alone: `""` would blank
       // every positive prompt node in the graph.
       prompt: text || null,
@@ -1149,7 +1350,11 @@ async function submit() {
         : "Nothing was queued.";
       return;
     }
-    remember(workflowId.value, hasSelection.value && usesMask.value);
+    remember(
+      workflowId.value,
+      hasSelection.value && usesMask.value,
+      hasExtension.value && usesExtend.value,
+    );
     follow(id, card?.name, text, stack.value, before, pictureIds.length);
     // No picture ids: see the component's docstring.
     runDialog.started(prompts, []);
@@ -1291,7 +1496,8 @@ defineExpose({ submit });
 }
 
 .edit-select,
-.edit-textarea {
+.edit-textarea,
+.edit-num-field {
   width: 100%;
   border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
@@ -1409,6 +1615,111 @@ defineExpose({ submit });
 
 .edit-note--lead {
   margin-top: 0;
+}
+
+/* Extend's margin box: Top above a drawing of the new canvas, Left and Right
+   beside it, Bottom below. */
+.edit-extend {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr) 60px;
+  grid-template-areas:
+    ". top ."
+    "left mini right"
+    ". bottom .";
+  align-items: center;
+  justify-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: rgba(var(--v-theme-on-dark-surface), 0.05);
+}
+
+.edit-extend-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.edit-extend-side--top {
+  grid-area: top;
+}
+
+.edit-extend-side--left {
+  grid-area: left;
+}
+
+.edit-extend-side--right {
+  grid-area: right;
+}
+
+/* Its caption under the field, as the design reads it from the canvas out. */
+.edit-extend-side--bottom {
+  grid-area: bottom;
+  flex-direction: column-reverse;
+}
+
+.edit-extend-cap {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+.edit-num {
+  position: relative;
+  display: block;
+  width: 60px;
+}
+
+.edit-num-field {
+  display: block;
+  height: var(--control-h-sm);
+  padding: 0 calc(var(--space-2) + 2ch) 0 var(--space-2);
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs);
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.edit-num-field::-webkit-inner-spin-button,
+.edit-num-field::-webkit-outer-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+.edit-num-field--zero {
+  color: rgba(var(--v-theme-on-dark-surface), 0.5);
+}
+
+.edit-num-unit {
+  position: absolute;
+  top: 50%;
+  right: var(--space-2);
+  transform: translateY(-50%);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-dark-surface), 0.55);
+  pointer-events: none;
+}
+
+/* The new canvas: the dark surface's ink checkerboard, as on the stage. */
+.edit-extend-mini {
+  grid-area: mini;
+  position: relative;
+  border: 1px solid rgb(var(--v-theme-on-dark-surface));
+  background-color: rgba(var(--v-theme-on-dark-surface), 0.12);
+  background-image:
+    linear-gradient(45deg, rgba(var(--v-theme-on-dark-surface), 0.08) 25%, transparent 25%, transparent 75%, rgba(var(--v-theme-on-dark-surface), 0.08) 75%),
+    linear-gradient(45deg, rgba(var(--v-theme-on-dark-surface), 0.08) 25%, transparent 25%, transparent 75%, rgba(var(--v-theme-on-dark-surface), 0.08) 75%);
+  background-size: var(--space-3) var(--space-3);
+  background-position:
+    0 0,
+    var(--space-2) var(--space-2);
+}
+
+.edit-extend-pic {
+  position: absolute;
+  object-fit: cover;
 }
 
 /* Grow, feather, fill holes: label, slider, value (mono). */

@@ -782,6 +782,14 @@ function fakePaint(steps = []) {
     stepBrushSize: vi.fn(),
     invert: vi.fn(),
     undo: vi.fn(),
+    extending: ref(false),
+    hasExtension: ref(false),
+    extension: reactive({ left: 0, top: 0, right: 0, bottom: 0, feather: 40 }),
+    extend: ref(null),
+    extendCap: ref({ width: 2000, height: 1000 }),
+    extendedSize: ref({ width: 2000, height: 1000 }),
+    setExtension: vi.fn(),
+    setExtendFeather: vi.fn(),
   });
 }
 
@@ -979,14 +987,152 @@ describe("the Edit tab with the Paint tools", () => {
   });
 });
 
+describe("the Edit tab with Extend", () => {
+  const rows = (wrapper) =>
+    wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
+
+  function extendBy(paint, right) {
+    paint.extension.right = right;
+    paint.hasExtension.value = right > 0;
+    paint.extend.value = right > 0 ? { ...paint.extension } : null;
+    paint.extendedSize.value = { width: 2000 + right, height: 1000 };
+  }
+
+  it("moves onto an outpaint card, lists those first, and goes back", async () => {
+    // The outpaint card last, so listing it first is the tab's doing.
+    listWorkflowCards.mockResolvedValue({ cards: [CARDS[3], CARDS[2]] });
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+    expect(rows(wrapper)[0]).toBe("Relight, Image to Image");
+    paint.tool.value = "extend";
+    paint.extending.value = true;
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
+    expect(rows(wrapper)[0]).toBe("Widen, Outpaint");
+    // The prompt asks for the new area, and says how for an edit model.
+    expect(wrapper.text()).toContain("What goes in the new area?");
+    expect(wrapper.find("textarea").attributes("placeholder")).toBe(
+      "The rest of the room, same light",
+    );
+    expect(wrapper.find(".edit-help").text()).toContain("fill the green area with");
+    paint.tool.value = null;
+    paint.extending.value = false;
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+    expect(wrapper.find(".edit-extend").exists()).toBe(false);
+  });
+
+  it("holds Run on an outpaint card until an edge is dragged out", async () => {
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    paint.extending.value = true;
+    await flush();
+    const run = () => wrapper.find("button.run");
+    // aria-disabled, so a keyboard reader can reach Run and hear why.
+    expect(run().attributes("aria-disabled")).toBe("true");
+    expect(run().attributes("disabled")).toBeUndefined();
+    const why = run().attributes("aria-describedby");
+    expect(wrapper.find(`#${why}`).text()).toBe("Drag an edge out to say where.");
+    expect(wrapper.text()).toContain("Drag an edge of the picture out, or type a side.");
+    // Ctrl+Enter reaches `submit` past the button: held there too.
+    await wrapper.vm.submit();
+    expect(runWorkflowCard).not.toHaveBeenCalled();
+    extendBy(paint, 128);
+    await flush();
+    expect(run().attributes("aria-disabled")).toBeUndefined();
+    expect(wrapper.text()).not.toContain("Drag an edge out to say where.");
+    expect(wrapper.text()).toContain("Becomes 2128 × 1000.");
+  });
+
+  it("sends the extension with the run, and the next one starts on that card", async () => {
+    const other = { id: "out2", name: "Roomier", type: "outpaint", type_label: "Outpaint" };
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, other] });
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    paint.extending.value = true;
+    extendBy(paint, 128);
+    await flush();
+    const roomier = wrapper
+      .findAll("[role=menuitemradio]")
+      .find((row) => row.text().includes("Roomier"));
+    await roomier.trigger("click");
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    const body = runWorkflowCard.mock.calls[0][0];
+    expect(body).toMatchObject({
+      picture_ids: [7],
+      target: "out2",
+      extend: { left: 0, top: 0, right: 128, bottom: 0, feather: 40 },
+    });
+    expect(body).not.toHaveProperty("selection");
+    expect(window.localStorage.getItem("pixlstash:editTabExtendWorkflow:")).toBe("out2");
+  });
+
+  it("warns on a card that does not extend, and sends no extension without one", async () => {
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    expect(runWorkflowCard.mock.calls[0][0]).not.toHaveProperty("extend");
+    paint.extending.value = true;
+    extendBy(paint, 64);
+    await flush();
+    const relight = wrapper
+      .findAll("[role=menuitemradio]")
+      .find((row) => row.text().includes("Relight"));
+    await relight.trigger("click");
+    expect(wrapper.text()).toContain("Image to Image workflows do not extend pictures");
+  });
+
+  it("holds Apply to on this picture while there is an extension", async () => {
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint, applyToIds: [7, 8, 9] });
+    paint.extending.value = true;
+    extendBy(paint, 64);
+    await flush();
+    expect(wrapper.find("button.run").text()).toBe("Run edit");
+    expect(wrapper.text()).toContain("An extension stays on the picture");
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    expect(runWorkflowCard.mock.calls[0][0].picture_ids).toEqual([7]);
+  });
+
+  it("puts each side's field on its side, and a typed one shows what was kept", async () => {
+    const paint = fakePaint();
+    paint.setExtension.mockImplementation((side) => {
+      paint.extension[side] = 1000;
+    });
+    const wrapper = await mountPanel({ paint });
+    paint.extending.value = true;
+    await flush();
+    const sides = wrapper
+      .findAll(".edit-extend-side")
+      .map((el) => [el.classes().find((c) => c.startsWith("edit-extend-side--")), el.find(".edit-extend-cap").text()]);
+    expect(sides).toEqual([
+      ["edit-extend-side--top", "Top"],
+      ["edit-extend-side--left", "Left"],
+      ["edit-extend-side--right", "Right"],
+      ["edit-extend-side--bottom", "Bottom"],
+    ]);
+    const left = wrapper.find(".edit-extend-side--left input");
+    left.element.value = "5000";
+    await left.trigger("change");
+    expect(paint.setExtension).toHaveBeenCalledWith("left", "5000");
+    expect(left.element.value).toBe("1000");
+    await wrapper.find(".edit-slider input").setValue("12");
+    expect(paint.setExtendFeather).toHaveBeenCalledWith("12");
+  });
+});
+
 describe("the Edit tab holds the tools (lightbox design C)", () => {
-  it("heads the tab with the mark tools, seven across, crop left out", async () => {
+  it("heads the tab with the mark tools, eight across, crop left out", async () => {
     listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
     const wrapper = await mountPanel({ paint: fakePaint() });
     const keys = wrapper
       .findAll(".paint-toolbox-grid .paint-tool-key")
       .map((key) => key.text());
-    expect(keys).toEqual(["W", "R", "O", "L", "B", "E", "I"]);
+    expect(keys).toEqual(["W", "R", "O", "L", "B", "E", "X", "I"]);
   });
 
   it("offers a size only with a brush or eraser in hand, stepped by − and +", async () => {

@@ -823,6 +823,27 @@
   cursor: cell;
 }
 
+/* Extend: an arrow until the pointer is on an edge it can take hold of. */
+.paint-input-layer--extend {
+  cursor: default;
+}
+
+.paint-input-layer--extend-ew {
+  cursor: ew-resize;
+}
+
+.paint-input-layer--extend-ns {
+  cursor: ns-resize;
+}
+
+.paint-input-layer--extend-nwse {
+  cursor: nwse-resize;
+}
+
+.paint-input-layer--extend-nesw {
+  cursor: nesw-resize;
+}
+
 /* Before / after: the original laid over the result, cut at the slider. */
 .paint-compare {
   position: absolute;

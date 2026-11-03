@@ -440,6 +440,13 @@ export function readReason(reason) {
         String(reason.message || "").trim() ||
           "This workflow does not use a mask, so it would change the whole picture.",
       );
+    case "extend_not_read":
+      // The Edit tab's extension on a workflow with no pad the open picture
+      // feeds: refused rather than run without extending anything.
+      return read(
+        String(reason.message || "").trim() ||
+          "This workflow does not extend pictures. Choose an outpaint workflow, or clear the extension.",
+      );
     default:
       return read("This workflow cannot be run just now.");
   }

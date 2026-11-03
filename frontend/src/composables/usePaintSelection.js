@@ -22,6 +22,7 @@ export const PAINT_TOOLS = [
   { id: "lasso", label: "Lasso", key: "L", icon: "mdi-lasso" },
   { id: "brush", label: "Brush", key: "B", icon: "mdi-brush" },
   { id: "eraser", label: "Eraser", key: "E", icon: "mdi-eraser" },
+  { id: "extend", label: "Extend", key: "X", icon: "mdi-arrow-expand-all" },
   { id: "crop", label: "Crop", key: "C", icon: "mdi-crop" },
 ];
 
@@ -40,6 +41,33 @@ export const MODE_TOOLS = new Set(["wand", "rect", "ellipse", "lasso"]);
 export const SIZED_TOOLS = new Set(["brush", "eraser"]);
 export const BRUSH_MIN = 1;
 export const BRUSH_MAX = 200;
+
+/** Extend's sides, the grid they snap to, and the feather it starts with. */
+export const EXTEND_SIDES = ["left", "top", "right", "bottom"];
+export const EXTEND_STEP = 8;
+export const EXTEND_FEATHER = 40;
+export const EXTEND_FEATHER_MAX = 100;
+
+/**
+ * The sides of an extension a press at `p` takes hold of: an edge of the
+ * extended frame, or two at a corner, within `tol` (fractions per axis).
+ * `p` and the frame are in fractions of the picture, so the frame runs from
+ * `-left / width` to `1 + right / width`. Empty when the press is on no edge.
+ */
+export function extendSidesAt(p, extension, natural, tol) {
+  const x0 = -extension.left / natural.width;
+  const x1 = 1 + extension.right / natural.width;
+  const y0 = -extension.top / natural.height;
+  const y1 = 1 + extension.bottom / natural.height;
+  const inX = p.x >= x0 - tol.x && p.x <= x1 + tol.x;
+  const inY = p.y >= y0 - tol.y && p.y <= y1 + tol.y;
+  const sides = [];
+  if (inY && Math.abs(p.x - x0) <= tol.x) sides.push("left");
+  else if (inY && Math.abs(p.x - x1) <= tol.x) sides.push("right");
+  if (inX && Math.abs(p.y - y0) <= tol.y) sides.push("top");
+  else if (inX && Math.abs(p.y - y1) <= tol.y) sides.push("bottom");
+  return sides;
+}
 
 const PREVIEW_DELAY_MS = 120;
 // A path point closer than this to the last one (a fraction of the picture)
@@ -94,8 +122,43 @@ export function usePaintSelection({ pictureId, dims }) {
   // The server's rendering of the selection, as an object URL.
   const maskUrl = ref("");
   const maskError = ref("");
+  // Extend: how far each side of the picture grows, in its pixels, and the
+  // blend into the original (`RunRequest.extend`). Never with a selection.
+  const extension = reactive({
+    left: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    feather: EXTEND_FEATHER,
+  });
 
   const hasSelection = computed(() => steps.value.length > 0);
+  const hasExtension = computed(() =>
+    EXTEND_SIDES.some((side) => extension[side] > 0),
+  );
+  // The extended canvas is on screen: Extend in hand, or an extension made.
+  const extending = computed(
+    () => tool.value === "extend" || hasExtension.value,
+  );
+  const natural = computed(() => ({
+    width: Math.max(1, dims.value?.naturalWidth || 1),
+    height: Math.max(1, dims.value?.naturalHeight || 1),
+  }));
+  // The canvas is at most twice the picture on each axis, on the 8 px grid
+  // the server rounds to, so nothing allowed here is refused there.
+  const extendCap = computed(() => ({
+    width: Math.floor(natural.value.width / EXTEND_STEP) * EXTEND_STEP,
+    height: Math.floor(natural.value.height / EXTEND_STEP) * EXTEND_STEP,
+  }));
+  /** The size a run with this extension makes. */
+  const extendedSize = computed(() => ({
+    width: natural.value.width + extension.left + extension.right,
+    height: natural.value.height + extension.top + extension.bottom,
+  }));
+  /** What a run sends as `extend`, or null with no extension. */
+  const extend = computed(() =>
+    hasExtension.value ? { ...extension } : null,
+  );
   const canRedo = computed(() => undone.value.length > 0);
   const selection = computed(() => ({
     version: 1,
@@ -120,12 +183,26 @@ export function usePaintSelection({ pictureId, dims }) {
     steps.value = [...steps.value, step];
     undone.value = [];
     showMask.value = false;
+    // One run inpaints or outpaints, never both.
+    clearExtension();
   }
 
-  /** A pointer went down at `p` (fractions) with the tool in hand. */
+  /**
+   * A pointer went down at `p` (fractions) with the tool in hand. Extend
+   * reads `modifiers.tolerance`, `{x, y}` in fractions, for how near an edge
+   * the press must be to take hold of it.
+   */
   function begin(p, modifiers = {}) {
     const chosen = tool.value;
     if (!chosen) return;
+    if (chosen === "extend") {
+      const tol = modifiers.tolerance || { x: 0.02, y: 0.02 };
+      const sides = extendSidesAt(p, extension, natural.value, tol);
+      if (sides.length) {
+        draft.value = { tool: "extend", sides, start: p, from: { ...extension } };
+      }
+      return;
+    }
     if (chosen === "wand") {
       commit({
         tool: "wand",
@@ -148,6 +225,17 @@ export function usePaintSelection({ pictureId, dims }) {
   function move(p) {
     const current = draft.value;
     if (!current) return;
+    if (current.tool === "extend") {
+      const dx = (p.x - current.start.x) * natural.value.width;
+      const dy = (p.y - current.start.y) * natural.value.height;
+      const grow = { left: -dx, right: dx, top: -dy, bottom: dy };
+      for (const side of current.sides) {
+        // A drag snaps to the nearest 8; a typed side rounds up.
+        const px = current.from[side] + grow[side];
+        setExtension(side, Math.round(px / EXTEND_STEP) * EXTEND_STEP);
+      }
+      return;
+    }
     if (current.tool === "wand") {
       const drag = p.x - current.start.x + (p.y - current.start.y);
       const retuned = Math.max(
@@ -172,7 +260,7 @@ export function usePaintSelection({ pictureId, dims }) {
   function end() {
     const current = draft.value;
     draft.value = null;
-    if (!current || current.tool === "wand") return;
+    if (!current || current.tool === "wand" || current.tool === "extend") return;
     if (current.start) {
       const box = [
         round(Math.min(current.start.x, current.end.x)),
@@ -204,6 +292,8 @@ export function usePaintSelection({ pictureId, dims }) {
   }
 
   function cancel() {
+    // A drag of Extend's frame applies as it goes: called off, it goes back.
+    if (draft.value?.tool === "extend") Object.assign(extension, draft.value.from);
     draft.value = null;
   }
 
@@ -243,6 +333,36 @@ export function usePaintSelection({ pictureId, dims }) {
     cropBox.value = box;
   }
 
+  /**
+   * One side of the extension, in the picture's pixels: snapped to the 8 px
+   * grid and held inside the cap, less what the opposite side already takes.
+   */
+  function setExtension(side, px) {
+    const horizontal = side === "left" || side === "right";
+    const opposite = { left: "right", right: "left", top: "bottom", bottom: "top" }[side];
+    const cap = horizontal ? extendCap.value.width : extendCap.value.height;
+    // Up, as the server rounds: a typed 4 is 8, never 0. The cap is already
+    // a multiple of 8, so clamping to it after keeps it on the grid.
+    const snapped = Math.ceil((Number(px) || 0) / EXTEND_STEP) * EXTEND_STEP;
+    extension[side] = Math.max(0, Math.min(cap - extension[opposite], snapped));
+    if (extension[side] > 0 && steps.value.length) {
+      steps.value = [];
+      undone.value = [];
+    }
+  }
+
+  function setExtendFeather(px) {
+    extension.feather = Math.max(
+      0,
+      Math.min(EXTEND_FEATHER_MAX, Math.round(Number(px) || 0)),
+    );
+  }
+
+  function clearExtension() {
+    for (const side of EXTEND_SIDES) extension[side] = 0;
+    if (draft.value?.tool === "extend") draft.value = null;
+  }
+
   function toggleMask() {
     showMask.value = !showMask.value;
   }
@@ -268,7 +388,21 @@ export function usePaintSelection({ pictureId, dims }) {
     undone.value = [];
     draft.value = null;
     showMask.value = false;
+    clearExtension();
   }
+
+  // Taking Extend up drops the selection (the key sets `tool` directly, so
+  // this watches rather than living in `setTool`).
+  watch(
+    tool,
+    (now) => {
+      if (now !== "extend" || !steps.value.length) return;
+      steps.value = [];
+      undone.value = [];
+      showMask.value = false;
+    },
+    { flush: "sync" },
+  );
 
   watch(
     () => [dims.value?.naturalWidth, dims.value?.naturalHeight],
@@ -353,6 +487,12 @@ export function usePaintSelection({ pictureId, dims }) {
     hasSelection,
     canRedo,
     selection,
+    extension,
+    hasExtension,
+    extending,
+    extendCap,
+    extendedSize,
+    extend,
     begin,
     move,
     end,
@@ -364,6 +504,9 @@ export function usePaintSelection({ pictureId, dims }) {
     setTolerance,
     setRefine,
     setCropBox,
+    setExtension,
+    setExtendFeather,
+    clearExtension,
     toggleMask,
     invert,
     undo,
