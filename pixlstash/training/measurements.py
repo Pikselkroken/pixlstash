@@ -173,10 +173,13 @@ def needs(
         peak times :data:`NEED_MARGIN` (held under the room as
         :func:`with_margin` says), None where nothing was measured.
         Training's figures are the highest of every phase but previews.
+        ``peak_vram_mb`` is training's GPU peak as measured, without the
+        margin, for saying what a refused run actually peaked at.
     """
     peaks = measurement.get("phase_peaks") or {}
     training = [p for p in peaks if p != PREVIEW_PHASE]
     return {
+        "peak_vram_mb": _peak(peaks, "vram_mb", training),
         "vram_mb": with_margin(_peak(peaks, "vram_mb", training), vram_room),
         "ram_mb": with_margin(_peak(peaks, "ram_mb", training), ram_room),
         "preview_vram_mb": with_margin(

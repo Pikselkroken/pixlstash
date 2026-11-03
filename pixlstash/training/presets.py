@@ -730,6 +730,7 @@ def resolve(
             "measurement": None,
             "preview_vram_mb": None,
             "preview_ram_mb": None,
+            "peak_vram_mb": None,
         }
         if lookup is None:
             return entry
@@ -750,6 +751,7 @@ def resolve(
             )
             if needs.get("vram_mb") is not None:
                 entry["vram_mb"] = needs["vram_mb"]
+                entry["peak_vram_mb"] = needs["peak_vram_mb"]
                 entry["evidence"] = "measured"
             if needs.get("ram_mb") is not None:
                 entry["ram_mb"] = needs["ram_mb"]
@@ -758,6 +760,7 @@ def resolve(
         entry["measurement"] = measurement
         if measured["vram_mb"] is not None:
             entry["vram_mb"] = measured["vram_mb"]
+            entry["peak_vram_mb"] = measured["peak_vram_mb"]
             entry["evidence"] = "measured"
         if measured["ram_mb"] is not None:
             entry["ram_mb"] = measured["ram_mb"]
@@ -782,10 +785,16 @@ def resolve(
                 need,
                 ram_mb or 0,
             )
-        need = min(e["vram_mb"] for e in judgedall)
+        closest = min(judgedall, key=lambda e: e["vram_mb"])
+        need, peak = closest["vram_mb"], closest["peak_vram_mb"]
+        # A measured need carries the margin; the peak is what the run took.
+        said = (
+            f"peaked at {_gb(peak)} of GPU memory when measured here"
+            if peak is not None
+            else f"needs {_gb(need)} of GPU memory at least"
+        )
         raise NoProfileFits(
-            f"{preset['label']} needs {_gb(need)} of GPU memory at least; "
-            f"{_gb(vram_mb)} can be given to it on this GPU.",
+            f"{preset['label']} {said}; {_gb(vram_mb)} can be given to it on this GPU.",
             "vram",
             need,
             vram_mb,
