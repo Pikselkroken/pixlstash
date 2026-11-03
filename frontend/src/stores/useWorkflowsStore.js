@@ -7,6 +7,7 @@ import {
   inpaintCopyWorkflow,
   listWorkflowCards,
   patchWorkflowCard,
+  restoreWorkflow,
   setWorkflowThumbnail,
 } from "../api/workflows";
 import {
@@ -22,6 +23,8 @@ import {
 import { onSessionReset } from "../utils/apiClient";
 import { errorMessage } from "../utils/apiError";
 import { favouritesFirst, useFavouritesStore } from "./useFavouritesStore";
+import { useNoticeStore } from "./useNoticeStore";
+import { useOperationStore } from "./useOperationStore";
 import { useWorkflowTemplatesStore } from "./useWorkflowTemplatesStore";
 
 /**
@@ -674,14 +677,61 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     // exactly what was looked at.
     const keys = selectedCards.value.map((card) => card.id);
     if (!keys.length || verbBusy.value) return { done: 0, refused: 0 };
-    const result = await writeEach("delete", keys, (key) =>
-      deleteWorkflow(key),
-    );
-    if (result.done) notedRecipesChanged();
+    const result = await deleteKeys(keys);
     // The deleted cards left the grid, and the selection goes with them.
     if (!result.refused) clearSelection();
     else deselect(result.written);
     return result;
+  }
+
+  /**
+   * Delete *keys* and raise the receipt whose Undo takes them back out of the
+   * trash. Redo is this again, on what the undo brought back: a restored
+   * workflow keeps its id.
+   */
+  async function deleteKeys(keys) {
+    const tokens = new Map();
+    const names = [];
+    const result = await writeEach("delete", keys, async (key) => {
+      const body = await deleteWorkflow(key);
+      names.push(body?.deleted);
+      if (body?.undo_token) tokens.set(key, body.undo_token);
+    });
+    if (result.done) notedRecipesChanged();
+    if (tokens.size) {
+      useOperationStore().showLocalReceipt({
+        summary:
+          result.done === 1 && names[0]
+            ? `Deleted “${names[0]}”`
+            : `Deleted ${result.done} workflows`,
+        icon: "mdi-trash-can-outline",
+        destructive: true,
+        undo: () => undoDelete(tokens),
+        redo: async () => (await deleteKeys([...restoredKeys])).done > 0,
+      });
+    }
+    return result;
+  }
+
+  /** The keys the last Undo brought back, which its Redo deletes again. */
+  let restoredKeys = [];
+
+  /** Undo a delete: `true` when anything came back, else says why. */
+  async function undoDelete(tokens) {
+    const result = await writeEach("restore", [...tokens.keys()], (key) =>
+      restoreWorkflow(key, tokens.get(key)),
+    );
+    if (result.done) notedRecipesChanged();
+    restoredKeys = result.written;
+    if (result.refused) {
+      useNoticeStore().push({
+        level: "error",
+        text: result.done
+          ? `${result.done} of ${tokens.size} workflows came back; the rest are no longer in the trash.`
+          : "That could not be undone: the workflow is no longer in the trash.",
+      });
+    }
+    return result.done > 0;
   }
 
   /** Replace the selection, or toggle one id into it (Ctrl/Cmd). */

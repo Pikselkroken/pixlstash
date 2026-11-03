@@ -9932,6 +9932,88 @@ def test_a_copy_registered_while_the_files_went_keeps_its_model_alive(
     assert (spare / "alice.safetensors").exists()
 
 
+@pytest.fixture
+def os_trash(monkeypatch, tmp_path):
+    """send2trash's real freedesktop trash, kept under tmp_path, so the undo
+    has a real `.trashinfo` record to find the file by."""
+    if sys.platform in ("win32", "darwin"):
+        pytest.skip("freedesktop trash only")
+    from send2trash import plat_other  # imports os.getuid: not on Windows
+
+    data_home = tmp_path / "share"
+    monkeypatch.setattr(plat_other, "XDG_DATA_HOME", os.fsencode(data_home))
+    monkeypatch.setattr(plat_other, "HOMETRASH_B", os.fsencode(data_home / "Trash"))
+    monkeypatch.setattr(plat_other, "get_dev", lambda path: 0)
+    monkeypatch.setattr(model_files_routes, "send2trash", plat_other.send2trash)
+    return data_home / "Trash"
+
+
+def test_undo_puts_a_trashed_model_back_under_the_same_id(
+    shelf_env, real_files, os_trash
+):
+    """Undo brings the file out of the trash and the row back as it was, so a
+    Redo is the same delete again; the token is spent by its undo."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET display_name = 'Alice v2' WHERE id = ?", (alice,)
+        )
+
+    body = _delete(shelf_env, [alice]).json()
+    assert body["deleted"] == [alice]
+    token = body["undo_token"]
+    assert token
+
+    r = shelf_env.owner.post(f"{API}/model-files/delete/undo", json={"token": token})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"restored": [alice], "refused": []}
+    assert (real_files / "alice.safetensors").exists(), "the file stayed trashed"
+    assert list((os_trash / "info").iterdir()) == []
+    row = shelf_env.server.hub.fetchone(
+        "SELECT display_name FROM model WHERE id = ?", (alice,)
+    )
+    assert row is not None and row["display_name"] == "Alice v2"
+    assert shelf_env.server.hub.fetchone(
+        "SELECT 1 FROM model_file WHERE model_id = ?", (alice,)
+    ), "the model came back without its copy"
+
+    again = shelf_env.owner.post(
+        f"{API}/model-files/delete/undo", json={"token": token}
+    )
+    assert again.status_code == 404
+
+    # Redo: the same delete, the same id.
+    assert _delete(shelf_env, [alice]).json()["deleted"] == [alice]
+
+
+def test_undo_of_an_emptied_trash_leaves_the_model_deleted(
+    shelf_env, real_files, os_trash
+):
+    alice = shelf_env.model_ids["alice.safetensors"]
+    token = _delete(shelf_env, [alice]).json()["undo_token"]
+    for sub in ("files", "info"):
+        for entry in (os_trash / sub).iterdir():
+            entry.unlink()
+
+    r = shelf_env.owner.post(f"{API}/model-files/delete/undo", json={"token": token})
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "restored": [],
+        "refused": [{"id": alice, "reason": "not_in_trash"}],
+    }
+    assert (
+        shelf_env.server.hub.fetchone("SELECT id FROM model WHERE id = ?", (alice,))
+        is None
+    ), "a row came back naming a file that is not there"
+
+
+def test_a_permanent_delete_offers_no_undo(shelf_env, real_files, fake_trash):
+    alice = shelf_env.model_ids["alice.safetensors"]
+    body = _delete(shelf_env, [alice], permanent=True).json()
+    assert body["deleted"] == [alice]
+    assert body["undo_token"] is None
+
+
 # ===========================================================================
 # Open in file manager (#933) - the shelf's one host-shell verb
 # ===========================================================================

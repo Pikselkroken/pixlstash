@@ -109,6 +109,8 @@ from pixlstash.hub.workflow_group_writes import (
     WAITING,
     clear_changes,
     delete_manual_workflow,
+    restore_manual_workflow,
+    snapshot_manual_workflow,
     is_parameter_address,
     read_changes,
     waiting_counts,
@@ -232,6 +234,8 @@ from pixlstash.services.workflow_card_service import (
     workflow_lora_summary,
 )
 from pixlstash.services import saved_recipe_service
+from pixlstash.services.trash_undo import KIND_WORKFLOW, remember, take
+from pixlstash.utils.trash_restore import NotInTrash
 from pixlstash.services.model_kind_suggestions import (
     OFFERED_KINDS,
     REFILEABLE_KINDS,
@@ -280,6 +284,7 @@ from pixlstash.routes.comfyui import (
     store_manual_workflow,
     store_over_workflow,
     trash_user_workflow,
+    put_back_trashed_workflow,
     user_workflow_exists,
 )
 from pixlstash.services.workflow_export import (
@@ -3466,6 +3471,21 @@ class WorkflowDeleted(BaseModel):
 
     deleted: str = Field(description="The deleted workflow's name.")
     workflow_id: str
+    undo_token: str | None = Field(
+        default=None,
+        description=(
+            "Hand to `POST /workflows/{workflow_id}/restore` to undo the delete. "
+            "Kept in memory only: a restart forgets it."
+        ),
+    )
+
+
+class RestoreWorkflowRequest(BaseModel):
+    """Body of ``POST /workflows/{workflow_id}/restore``."""
+
+    token: str = Field(
+        max_length=64, description="The `undo_token` the delete answered with."
+    )
 
 
 @dataclass
@@ -14443,12 +14463,14 @@ def create_router(server) -> APIRouter:
         # of identical content can be another live workflow's.
         sweep = INBOX_ORIGIN in owned
         adopted = owned.get(FILE_ORIGIN)
+        rows = snapshot_manual_workflow(hub, workflow_id)
+        undo: dict = {}
         try:
             if adopted is not None and user_workflow_exists(adopted):
                 # A user-folder file data step 7 made this workflow of: the
                 # file itself goes to the trash (through the inbox, as a
                 # delete always did), or it would still list and re-adopt.
-                trash_user_workflow(hub, adopted, sweep=sweep)
+                trash_user_workflow(hub, adopted, sweep=sweep, undo=undo)
                 with workflow_inbox.INBOX_LOCK:
                     delete_manual_workflow(hub, workflow_id)
             else:
@@ -14456,7 +14478,7 @@ def create_router(server) -> APIRouter:
                     # The trash copy first, the rows once it is there: a
                     # failed trash never loses the workflow. Under the lock
                     # the inbox stores under, so it cannot land between.
-                    workflow_inbox.trash_workflow(
+                    undo["trashed"] = workflow_inbox.trash_workflow(
                         workflow_inbox.workflow_inbox_dir(),
                         f"{download_stem(name) or 'workflow'}.json",
                         json.loads(row["document"]),
@@ -14476,6 +14498,75 @@ def create_router(server) -> APIRouter:
                 status_code=500, detail="Failed to delete the workflow."
             ) from exc
         _announce(request, [workflow_id], "changed")
-        return WorkflowDeleted(deleted=name, workflow_id=workflow_id)
+        token = remember(
+            KIND_WORKFLOW,
+            {
+                "workflow_id": workflow_id,
+                "name": name,
+                "rows": rows,
+                "file": undo.get("file"),
+                "file_rows": undo.get("rows", {}),
+                "trashed": undo["trashed"],
+            },
+        )
+        return WorkflowDeleted(deleted=name, workflow_id=workflow_id, undo_token=token)
+
+    @router.post(
+        "/workflows/{workflow_id}/restore",
+        summary="Undo deleting a manual workflow",
+        description=(
+            "Puts back a workflow `DELETE /workflows/{workflow_id}` deleted, "
+            "under the same id, with its versions, defaults, pins and layout, "
+            "so deleting it again is the redo. A workflow that was a file in "
+            "the user folder needs that file back out of the system trash, and "
+            "is refused when the trash no longer holds it."
+        ),
+        response_model=WorkflowDeleted,
+        responses={
+            404: {
+                "description": "The token is unknown, spent or for another workflow."
+            },
+            409: {
+                "description": "Its file is no longer in the trash, or its place is taken."
+            },
+        },
+    )
+    def restore_workflow(
+        request: Request, workflow_id: str, payload: RestoreWorkflowRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        with workflow_inbox.INBOX_LOCK:
+            undo = take(KIND_WORKFLOW, payload.token)
+            if undo is None or undo["workflow_id"] != workflow_id:
+                raise HTTPException(
+                    status_code=404,
+                    detail="There is nothing to undo: it was already undone, or PixlStash has restarted since.",
+                )
+            try:
+                put_back_trashed_workflow(undo["file"], undo["trashed"])
+            except (NotInTrash, OSError) as exc:
+                logger.warning("Could not restore workflow %s: %s", workflow_id, exc)
+                raise HTTPException(
+                    status_code=409,
+                    detail="Its file is no longer in the trash, so it cannot be put back.",
+                ) from exc
+            try:
+                restore_manual_workflow(
+                    hub, workflow_id, undo["rows"], undo["file_rows"]
+                )
+            except sqlite3.Error as exc:
+                logger.error(
+                    "Put workflow %s's files back but not its rows: %s",
+                    workflow_id,
+                    exc,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="Something has taken this workflow's place since it was deleted.",
+                ) from exc
+        _announce(request, [workflow_id], "changed")
+        return WorkflowDeleted(deleted=undo["name"], workflow_id=workflow_id)
 
     return router

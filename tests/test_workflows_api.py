@@ -38,6 +38,7 @@ import re
 import shutil
 import socket
 import sqlite3
+import sys
 import tempfile
 import threading
 import time
@@ -18607,7 +18608,9 @@ def test_deleting_a_manual_workflow_leaves_the_automatic_one_and_its_file(
     runnable.owner.patch(f"{API}/workflows/{manual}", json={"notes": "mine"})
     r = runnable.owner.delete(f"{API}/workflows/{manual}")
     assert r.status_code == 200, r.text
-    assert r.json() == {"deleted": copy["name"], "workflow_id": manual}
+    body = r.json()
+    assert body.pop("undo_token")
+    assert body == {"deleted": copy["name"], "workflow_id": manual}
     assert runnable.owner.get(f"{API}/workflows/{manual}").status_code == 404
     assert runnable.owner.delete(f"{API}/workflows/{manual}").status_code == 404
     hub = runnable.server.hub
@@ -18618,6 +18621,67 @@ def test_deleting_a_manual_workflow_leaves_the_automatic_one_and_its_file(
         ), table
     assert runnable.owner.get(f"{API}/workflows/{RUN_WF}").status_code == 200
     assert (tmp_path / "imported.json").exists()
+
+
+@pytest.mark.parametrize("adopted", [False, True], ids=["stored", "user-file"])
+def test_restore_undoes_deleting_a_manual_workflow_under_the_same_id(
+    runnable, tmp_path, adopted
+):
+    """The delete's token puts the workflow back as it was, its file out of the
+    trash; the token is spent, and deleting it again is the redo. A workflow
+    made of a user-folder file gets that file back where it was."""
+    if sys.platform in ("win32", "darwin"):
+        pytest.skip("freedesktop trash only")
+    from send2trash import plat_other  # imports os.getuid: not on Windows
+
+    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
+    data_home = tmp_path / "share"
+    runnable.monkeypatch.setattr(plat_other, "XDG_DATA_HOME", os.fsencode(data_home))
+    runnable.monkeypatch.setattr(
+        plat_other, "HOMETRASH_B", os.fsencode(data_home / "Trash")
+    )
+    runnable.monkeypatch.setattr(plat_other, "get_dev", lambda path: 0)
+    runnable.monkeypatch.setattr(workflow_inbox, "send2trash", plat_other.send2trash)
+    runnable.monkeypatch.setattr(comfyui_module, "send2trash", plat_other.send2trash)
+
+    copy = runnable.owner.post(f"{API}/workflows/{RUN_WF}/duplicate").json()
+    manual = copy["workflow_id"]
+    runnable.owner.patch(f"{API}/workflows/{manual}", json={"notes": "mine"})
+    if adopted:
+        (tmp_path / "old.json").write_text(json.dumps(RUN_DOCUMENT))
+        with runnable.server.hub.transaction() as conn:
+            workflow_group_writes.workflow_origin.upsert(
+                conn,
+                workflow_group_writes.workflow_origin.FILE_ORIGIN,
+                "old.json",
+                manual,
+                None,
+                None,
+            )
+    files_before = sorted(p.name for p in tmp_path.glob("*.json"))
+    token = runnable.owner.delete(f"{API}/workflows/{manual}").json()["undo_token"]
+    assert runnable.owner.get(f"{API}/workflows/{manual}").status_code == 404
+    assert (tmp_path / "old.json").exists() is False
+
+    r = runnable.owner.post(f"{API}/workflows/{manual}/restore", json={"token": token})
+    assert r.status_code == 200, r.text
+    assert r.json()["workflow_id"] == manual
+    restored = runnable.owner.get(f"{API}/workflows/{manual}")
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["notes"] == "mine"
+    assert sorted(p.name for p in tmp_path.glob("*.json")) == files_before
+    if adopted:
+        assert json.loads((tmp_path / "old.json").read_text()) == RUN_DOCUMENT
+    assert list((data_home / "Trash" / "info").iterdir()) == [], (
+        "the delete's copy was left in the trash"
+    )
+    assert list((tmp_path / "inbox").iterdir()) == [], "a copy was left to import"
+
+    again = runnable.owner.post(
+        f"{API}/workflows/{manual}/restore", json={"token": token}
+    )
+    assert again.status_code == 404
+    assert runnable.owner.delete(f"{API}/workflows/{manual}").status_code == 200
 
 
 # A graph with no LoRA loader at all: the state `no_lora_loader` names and the
