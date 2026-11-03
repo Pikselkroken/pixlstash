@@ -731,13 +731,10 @@ const menuCards = computed(() => {
   ];
 });
 
-/** The most a side can take: the cap, less what its opposite has. */
+/** The most a side can take: the picture's own size on its axis. */
 function sideMax(side) {
-  const paint = props.paint;
-  const cap = paint.extendCap.value;
-  const opposite = { left: "right", right: "left", top: "bottom", bottom: "top" }[side];
-  const whole = side === "left" || side === "right" ? cap.width : cap.height;
-  return whole - paint.extension[opposite];
+  const cap = props.paint.extendCap.value;
+  return side === "left" || side === "right" ? cap.width : cap.height;
 }
 
 /** A typed side, snapped and capped; the field shows what was kept. */

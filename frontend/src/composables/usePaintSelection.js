@@ -144,8 +144,8 @@ export function usePaintSelection({ pictureId, dims }) {
     width: Math.max(1, dims.value?.naturalWidth || 1),
     height: Math.max(1, dims.value?.naturalHeight || 1),
   }));
-  // The canvas is at most twice the picture on each axis, on the 8 px grid
-  // the server rounds to, so nothing allowed here is refused there.
+  // Each side grows by at most the picture's own size on its axis, on the
+  // 8 px grid the server rounds to, so nothing allowed here is refused there.
   const extendCap = computed(() => ({
     width: Math.floor(natural.value.width / EXTEND_STEP) * EXTEND_STEP,
     height: Math.floor(natural.value.height / EXTEND_STEP) * EXTEND_STEP,
@@ -335,16 +335,15 @@ export function usePaintSelection({ pictureId, dims }) {
 
   /**
    * One side of the extension, in the picture's pixels: snapped to the 8 px
-   * grid and held inside the cap, less what the opposite side already takes.
+   * grid and held to the picture's own size on its axis.
    */
   function setExtension(side, px) {
     const horizontal = side === "left" || side === "right";
-    const opposite = { left: "right", right: "left", top: "bottom", bottom: "top" }[side];
     const cap = horizontal ? extendCap.value.width : extendCap.value.height;
     // Up, as the server rounds: a typed 4 is 8, never 0. The cap is already
     // a multiple of 8, so clamping to it after keeps it on the grid.
     const snapped = Math.ceil((Number(px) || 0) / EXTEND_STEP) * EXTEND_STEP;
-    extension[side] = Math.max(0, Math.min(cap - extension[opposite], snapped));
+    extension[side] = Math.max(0, Math.min(cap, snapped));
     if (extension[side] > 0 && steps.value.length) {
       steps.value = [];
       undone.value = [];

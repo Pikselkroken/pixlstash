@@ -12905,23 +12905,24 @@ def test_a_pad_behind_a_resize_does_not_read_the_extension(i2i):
     assert "extend_not_read" in codes, codes
 
 
-def test_an_extension_past_twice_the_picture_is_refused(i2i):
-    """The picture is 20 x 10: top + bottom of 16 is past its height, and
-    left + right of 16 is not past its width."""
+def test_a_side_past_the_pictures_own_size_is_refused(i2i):
+    """The picture is 20 x 10. Each side takes up to the picture's own size on
+    its axis: bottom 16 is past its height; top 8 + bottom 8, and left 16 +
+    right 16, are not."""
     _padded(i2i)
     picture = _real_picture(i2i.server, i2i.tmp_path, "capped.png")
     r = i2i.owner.post(
         f"{API}/workflows/run",
-        json=_extend_run(picture, extend={"top": 8, "bottom": 8}),
+        json=_extend_run(picture, extend={"bottom": 16}),
     )
     assert r.status_code == 422, r.text
     assert "10 px tall" in r.json()["detail"], r.json()
     assert i2i.submitted == []
-    r = i2i.owner.post(
-        f"{API}/workflows/run",
-        json=_extend_run(picture, extend={"left": 8, "right": 8}),
-    )
-    assert r.status_code == 200 and r.json()["status"] == "success", r.text
+    for extend in ({"top": 8, "bottom": 8}, {"left": 16, "right": 16}):
+        r = i2i.owner.post(
+            f"{API}/workflows/run", json=_extend_run(picture, extend=extend)
+        )
+        assert r.status_code == 200 and r.json()["status"] == "success", r.text
 
 
 @pytest.mark.parametrize("kind", ["inpaint", "outpaint"])

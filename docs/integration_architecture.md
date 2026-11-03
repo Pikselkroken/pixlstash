@@ -792,8 +792,9 @@ repeated as they are.
 tool): `{left, top, right, bottom, feather}`, pixels of the upright picture,
 each side rounded up to a multiple of 8 and `feather` 0-100 (default 40). One
 picture, at least one side above 0, and never together with `selection` (422
-for each: a run either inpaints or outpaints). Left + right past the picture's
-width, or top + bottom past its height, is a 422 naming the axis. The sides
+for each: a run either inpaints or outpaints). A side past the picture's own
+size on its axis (left or right past its width, top or bottom past its height)
+is a 422 naming the side. The sides
 and the feather are written into every `ImagePadForOutpaint` whose `image` is
 output 0 of a loader the picture feeds, so the submitted graph, and the recipe
 recorded from it, carry the padding. A card with no such pad, including a pad

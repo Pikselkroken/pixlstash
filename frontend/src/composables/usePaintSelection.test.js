@@ -243,13 +243,17 @@ describe("usePaintSelection", () => {
       expect(paint.draft.value).toBeNull();
     });
 
-    it("holds the canvas to twice the picture on the 8 px grid", () => {
+    it("holds each side to the picture's own size on the 8 px grid", () => {
       dims.value = { naturalWidth: 1003, naturalHeight: 600 };
       const paint = make();
       paint.setExtension("left", 700);
-      paint.setExtension("right", 900);
+      paint.setExtension("right", 1500);
+      // Each side on its own: left keeps its 700 beside a full right.
+      expect(paint.extension.left).toBe(704);
       // 1003 rounds down to 1000: the server rounds up, so 1008 would be refused.
-      expect(paint.extension.left + paint.extension.right).toBe(1000);
+      expect(paint.extension.right).toBe(1000);
+      paint.setExtension("bottom", 9999);
+      expect(paint.extension.bottom).toBe(600);
       paint.setExtension("top", -50);
       expect(paint.extension.top).toBe(0);
       paint.setExtendFeather(500);

@@ -232,11 +232,20 @@ class Extension(BaseModel):
         return self
 
     def past_cap(self, width: int, height: int) -> str | None:
-        """Why this extension is past twice the picture on an axis, if it is."""
-        if self.left + self.right > width:
-            return f"Left and right add {self.left + self.right} px to a {width} px wide picture; at most its width can be added."
-        if self.top + self.bottom > height:
-            return f"Top and bottom add {self.top + self.bottom} px to a {height} px tall picture; at most its height can be added."
+        """Why a side grows by more than the picture's own size on its axis,
+        if one does: each side takes at most one picture's width or height."""
+        for side, size, measure in (
+            ("left", width, "wide"),
+            ("right", width, "wide"),
+            ("top", height, "tall"),
+            ("bottom", height, "tall"),
+        ):
+            grow = getattr(self, side)
+            if grow > size:
+                return (
+                    f"{side.capitalize()} adds {grow} px to a {size} px {measure} "
+                    f"picture; a side can add at most the picture's own size."
+                )
         return None
 
 
