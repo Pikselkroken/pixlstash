@@ -1451,13 +1451,18 @@ def loaderless_workflow(tmp_path, lora_workflow):
     return lora_workflow
 
 
-def _extensions_answer(monkeypatch, answer):
-    """Stand ComfyUI's ``GET /extensions`` in for the node check."""
+def _extensions_answer(monkeypatch, answer, loader=None):
+    """Stand ComfyUI's ``GET /extensions`` in for the node check, and its
+    ``GET /object_info/PixlStashCheckpointLoader`` (*loader*; ``{}``, no such
+    class, by default)."""
 
     def fake_get(url, timeout):
-        if isinstance(answer, Exception):
-            raise answer
-        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: answer)
+        got = answer
+        if "/object_info/" in url:
+            got = {} if loader is None else loader
+        if isinstance(got, Exception):
+            raise got
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: got)
 
     monkeypatch.setattr(
         comfyui_service,
@@ -1551,7 +1556,45 @@ def test_the_node_check_reads_comfyuis_extensions(
         "can_open_workflows": expected,
         "saves_back": saves_back,
         "opens_runs": opens_runs,
+        # No pack loader in this stand-in: not current, unless unreachable.
+        "shelf_loader_current": None if expected is None else False,
     }
+
+
+def _loader(*optional):
+    return {
+        "PixlStashCheckpointLoader": {
+            "input": {
+                "required": {"checkpoint_id": ["STRING", {}]},
+                "optional": {name: ["STRING", {}] for name in optional},
+            }
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "loader, current",
+    [
+        (_loader("shelf", "weight_dtype"), True),
+        # From before the cast, and from before the shelf widget.
+        (_loader("shelf"), False),
+        (_loader(), False),
+        # No pack loader at all, and ComfyUI gone mid-restart.
+        ({}, False),
+        (requests.ConnectionError("restarting"), None),
+    ],
+)
+def test_the_node_check_says_whether_the_shelf_loader_is_current(
+    workflow_env, monkeypatch, loader, current
+):
+    """What an outdated pack's update waits for: the old nodes answer false,
+    so a poll that lands before the restart cannot end the wait early."""
+    _extensions_answer(
+        monkeypatch, ["/extensions/ComfyUI-PixlStash/open_workflow.js"], loader
+    )
+    r = workflow_env.owner.get(f"{API}/comfyui/pixlstash-node")
+    assert r.status_code == 200, r.text
+    assert r.json()["shelf_loader_current"] is current
 
 
 def _system_stats_answer(monkeypatch, answer) -> list[str]:
@@ -24471,6 +24514,23 @@ def test_a_pack_from_before_the_shelf_widget_says_restart_comfyui(id_loaders):
 
     model = {"file": _SHELF_FILENAME, "folder": "checkpoints"}
     assert reasons() == {"pack_outdated": [model]}
+    # This PixlStash ships the nodes, so it offers to update them; one built
+    # without them does not.
+    outdated = [
+        reason
+        for group in _preflight(env.owner, workflow_id=workflow)["groups"]
+        for reason in group["reasons"]
+        if reason["code"] == "pack_outdated"
+    ]
+    assert [reason["can_update"] for reason in outdated] == [True]
+    with pytest.MonkeyPatch.context() as local:
+        local.setattr(comfyui_pack_service, "bundled_pack", lambda: None)
+        assert [
+            reason["can_update"]
+            for group in _preflight(env.owner, workflow_id=workflow)["groups"]
+            for reason in group["reasons"]
+            if reason["code"] == "pack_outdated"
+        ] == [False]
     r = env.owner.post(f"{API}/workflows/run", json={"workflow_id": workflow})
     assert not env.submitted, r.text
 
@@ -24550,7 +24610,7 @@ def test_a_pack_from_before_the_shelf_widget_says_restart_comfyui(id_loaders):
     )
     assert [r.as_dict() for r in moved] == [
         {"code": "missing_models", "models": [vae]},
-        {"code": "pack_outdated", "models": [model]},
+        {"code": "pack_outdated", "models": [model], "can_update": False},
     ]
     # A reason nothing moved out of is kept, even one with no models.
     bare = run_service.Reason("missing_models", {})

@@ -876,12 +876,17 @@ Seven rules the client must not re-derive:
    the graph names that a running download will deliver, matched by name or
    digest; moved out of `missing_models`, it blocks the batch, and a LoRA on
    its way keeps its loader rather than being bypassed),
-   `pack_outdated: {models: [{file, folder}]}` (a checkpoint or diffusion
-   model ComfyUI lacks and the shelf holds, which the run would load through
-   `PixlStashCheckpointLoader` but for a running pack from before its `shelf`
-   widget, or, for a loader that casts, its `weight_dtype` widget; moved out of
-   `missing_models`, it blocks the batch the same way, and the Workflow tab and
-   the Run popup word it as "restart ComfyUI"), `a1111`,
+   `pack_outdated: {models: [{file, folder}], can_update}` (a checkpoint or
+   diffusion model ComfyUI lacks and the shelf holds, which the run would load
+   through `PixlStashCheckpointLoader` but for a running pack from before its
+   `shelf` widget, or, for a loader that casts, its `weight_dtype` widget;
+   moved out of `missing_models`, it blocks the batch the same way. Only ever
+   for a ComfyUI on this computer, so `can_update` is whether this PixlStash
+   ships the nodes: the Workflow tab and the Run popup then offer *Update and
+   restart ComfyUI* (`POST /comfyui/pack/install`, then
+   `GET /comfyui/pixlstash-node` polled until `shelf_loader_current`, then the
+   pre-flight asked again uncached; `usePixlstashPackUpdate`), and otherwise
+   say to update the pack and restart ComfyUI), `a1111`,
    `picture_input_unfilled: {inputs: [{slot_label, input_name, title}]}`,
    `no_lora_loader`,
    `pixlstash_nodes: {nodes: [{node_id, class_type, title, why, kind?, id?}]}`,

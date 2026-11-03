@@ -81,8 +81,10 @@ vi.mock("../../api/modelFolders", () => ({
 }));
 
 const getPixlstashNode = vi.fn();
+const installComfyuiPack = vi.fn();
 vi.mock("../../api/comfyui", () => ({
   getPixlstashNode: (...args) => getPixlstashNode(...args),
+  installComfyuiPack: (...args) => installComfyuiPack(...args),
 }));
 
 // *Show all N pictures* (F7) leaves this screen for the library, and
@@ -1574,9 +1576,8 @@ describe("a checkpoint that will not load", () => {
     expect(textOf(wrapper)).not.toContain("Checkpoint missing");
   });
 
-  it("says restart ComfyUI for a shelf checkpoint its old pack cannot load", async () => {
-    // #1923: the running ComfyUI-PixlStash predates the loader's shelf widget.
-    preflightWorkflowRun.mockResolvedValue({
+  function outdated(canUpdate) {
+    return {
       groups: [
         {
           reasons: [
@@ -1585,21 +1586,68 @@ describe("a checkpoint that will not load", () => {
               models: [
                 { file: "SDXL/realvisXL_v5.safetensors", folder: "checkpoints" },
               ],
+              can_update: canUpdate,
             },
           ],
         },
       ],
-    });
+    };
+  }
+
+  it("says the nodes are out of date for a shelf checkpoint they cannot load", async () => {
+    // #1923: the running ComfyUI-PixlStash predates a widget its loader needs.
+    preflightWorkflowRun.mockResolvedValue(outdated(false));
     getWorkflowCard.mockResolvedValue(detail({ card: named }));
     const { wrapper } = await mountWith([KEY], [named]);
     await settle(wrapper);
-    expect(textOf(wrapper)).toContain("Restart ComfyUI");
+    expect(textOf(wrapper)).toContain("Nodes out of date");
     expect(textOf(wrapper)).not.toContain("Checkpoint missing");
     expect(missingLine(wrapper).text).toBe(
-      "realvisXL_v5 is on your model shelf, but the ComfyUI-PixlStash " +
-        "running in ComfyUI is out of date and cannot load it. " +
-        "Restart ComfyUI, or update the pack.",
+      "realvisXL_v5 is on your shelf, but ComfyUI's PixlStash nodes are too " +
+        "old to load it.",
     );
+    // PixlStash cannot update them here: the line says what to do instead.
+    const action = wrapper.find('[data-testid="wftab-update-pack"]');
+    expect(action.text()).toBe("Update ComfyUI-PixlStash, then restart ComfyUI.");
+    expect(action.find("button").exists()).toBe(false);
+    // Not a file to download or replace through the set menu.
+    expect(wrapper.find('[data-testid="wftab-missing-action"]').exists()).toBe(false);
+  });
+
+  it("updates the nodes, restarts ComfyUI and asks again once they are current", async () => {
+    preflightWorkflowRun
+      .mockResolvedValueOnce(outdated(true))
+      .mockResolvedValue({ groups: [{ reasons: [] }] });
+    installComfyuiPack.mockResolvedValue({ restart: "requested", detail: null });
+    // The old nodes still answer before the restart: not current.
+    getPixlstashNode
+      .mockReset()
+      .mockResolvedValueOnce({ shelf_loader_current: false })
+      .mockResolvedValue({ shelf_loader_current: true });
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    // Fake only for the wait: `flush` itself runs on a timer.
+    vi.useFakeTimers();
+    try {
+      const action = () => wrapper.find('[data-testid="wftab-update-pack"]');
+      await action().find("button").trigger("click");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(installComfyuiPack).toHaveBeenCalledTimes(1);
+      expect(action().text()).toBe("Updated. Restarting ComfyUI…");
+      const asked = preflightWorkflowRun.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(preflightWorkflowRun.mock.calls.length).toBe(asked);
+      await vi.advanceTimersByTimeAsync(3000);
+      for (let i = 0; i < 4; i += 1) await vi.advanceTimersByTimeAsync(0);
+      // Asked again, past the minute-old map of the old nodes.
+      expect(preflightWorkflowRun.mock.calls.length).toBe(asked + 1);
+      expect(preflightWorkflowRun.mock.calls.at(-1)[1]).toEqual({ cached: false });
+      expect(textOf(wrapper)).not.toContain("Nodes out of date");
+      expect(action().exists()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
 

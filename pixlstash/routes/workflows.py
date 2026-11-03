@@ -195,6 +195,7 @@ from pixlstash.services.comfyui_service import (
     unfed_picture_loaders,
 )
 from pixlstash.services import (
+    comfyui_pack_service,
     run_log,
     vram_history,
     workflow_bindings,
@@ -7943,7 +7944,13 @@ def create_router(server) -> APIRouter:
                         **node_policy,
                     )
             if stale_pack:
-                judged = run_service.with_pack_outdated(judged, stale_pack)
+                # Only ever a ComfyUI on this computer: the one the bundled
+                # pack can be installed into.
+                judged = run_service.with_pack_outdated(
+                    judged,
+                    stale_pack,
+                    can_update=comfyui_pack_service.bundled_pack() is not None,
+                )
             found += judged
             if object_info is None and not configured:
                 # The URL is the guessed default and nothing answered on it:

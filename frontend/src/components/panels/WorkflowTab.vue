@@ -312,10 +312,34 @@
                      can (a graph, a row that takes a pick). None of them, and
                      the row offers nothing it cannot do. The why of an
                      unmatched list is the mark's tooltip. -->
+                <!-- An outdated pack's fix: PixlStash updates its own nodes
+                     and restarts ComfyUI, where it can (#2548). -->
+                <p
+                  v-if="row.missing && !row.edited && staleFiles.has(row.missing)"
+                  class="wftab-note wftab-quiet wftab-update"
+                  aria-live="polite"
+                  data-testid="wftab-update-pack"
+                >
+                  <AppButton
+                    v-if="packUpdatable && packUpdate.offering.value"
+                    size="sm"
+                    data-testid="wftab-update-pack-button"
+                    @click="packUpdate.update"
+                  >
+                    Update and restart ComfyUI
+                  </AppButton>
+                  <template v-if="packUpdate.note.value">{{
+                    packUpdate.note.value
+                  }}</template>
+                  <template v-else-if="!packUpdatable">{{
+                    PACK_OUTDATED_ACTION
+                  }}</template>
+                </p>
                 <p
                   v-if="
                     row.missing &&
                     !row.edited &&
+                    !staleFiles.has(row.missing) &&
                     (downloadableFiles.has(row.missing) ||
                       row.options.length ||
                       setCanReplace(row))
@@ -566,6 +590,29 @@
                   </p>
                   <p v-else class="wftab-note wftab-quiet">
                     No file name was kept for it anywhere.
+                  </p>
+                  <!-- An outdated pack's fix: PixlStash updates its own nodes
+                       and restarts ComfyUI, where it can (#2548). -->
+                  <p
+                    v-if="staleFiles.has(missingCheckpointFile)"
+                    class="wftab-note wftab-quiet wftab-update"
+                    aria-live="polite"
+                    data-testid="wftab-update-pack"
+                  >
+                    <AppButton
+                      v-if="packUpdatable && packUpdate.offering.value"
+                      size="sm"
+                      data-testid="wftab-update-pack-button"
+                      @click="packUpdate.update"
+                    >
+                      Update and restart ComfyUI
+                    </AppButton>
+                    <template v-if="packUpdate.note.value">{{
+                      packUpdate.note.value
+                    }}</template>
+                    <template v-else-if="!packUpdatable">{{
+                      PACK_OUTDATED_ACTION
+                    }}</template>
                   </p>
                   <p
                     v-if="downloadableFiles.has(missingCheckpointFile)"
@@ -1413,6 +1460,7 @@ import {
   useComfyuiOpen,
 } from "../../composables/useComfyuiOpen";
 import { pickUpKey, useModelPickUp } from "../../composables/useModelPickUp";
+import { usePixlstashPackUpdate } from "../../composables/usePixlstashPackUpdate";
 import { useSectionCollapse } from "../../composables/useSectionCollapse";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -1965,7 +2013,14 @@ const downloadableFiles = ref(new Set());
  * (`bypassed_loras`), by `pickUpKey`: `true` where the server can download one.
  */
 const leftOutLoras = ref(new Map());
-const PACK_OUTDATED_TEXT = "Restart ComfyUI";
+const PACK_OUTDATED_TEXT = "Nodes out of date";
+/** The pre-flight's `pack_outdated` says PixlStash can update the nodes. */
+const packUpdatable = ref(false);
+/** Once ComfyUI is back with the new nodes, the rows ask ComfyUI again. */
+const packUpdate = usePixlstashPackUpdate(() => {
+  if (selectedKey.value)
+    void checkInstalled(selectedKey.value, { quiet: true, fresh: true });
+});
 /**
  * What follows a missing file's name, once ComfyUI has answered. A missing
  * checkpoint is said to be off the shelf too, because a current
@@ -1979,7 +2034,7 @@ function missingNote(file, kind) {
   if (tasksStore.runningDownload({ file, slot: kind }))
     return " is still downloading. It runs once it has finished.";
   if (staleFiles.value.has(file))
-    return ` is on your model shelf, but the ComfyUI-PixlStash running in ComfyUI is out of date and cannot load it. ${PACK_OUTDATED_ACTION}`;
+    return " is on your shelf, but ComfyUI's PixlStash nodes are too old to load it.";
   return kind === "checkpoint"
     ? " is not in ComfyUI or PixlStash."
     : " is not in ComfyUI.";
@@ -4865,12 +4920,13 @@ watch(
   },
 );
 
-async function checkInstalled(key, { quiet = false } = {}) {
+async function checkInstalled(key, { quiet = false, fresh = false } = {}) {
   const check = ++installedCheck;
   // `quiet`: the rows keep what they say until the new answers are in.
   if (!quiet) {
     missingByKind.value = {};
     staleFiles.value = new Set();
+    packUpdatable.value = false;
     downloadableFiles.value = new Set();
     leftOutLoras.value = new Map();
     preflightAnswered.value = false;
@@ -4878,9 +4934,10 @@ async function checkInstalled(key, { quiet = false } = {}) {
   }
   if (!key) return;
   try {
+    // `fresh` after a pack update: the minute-old map is of the old nodes.
     const answer = await preflightWorkflowRun(
       { workflow_id: key, values: [] },
-      { cached: true },
+      { cached: !fresh },
     );
     if (check !== installedCheck || !stillOn(key)) return;
     preflightAnswered.value = true;
@@ -4894,6 +4951,9 @@ async function checkInstalled(key, { quiet = false } = {}) {
     // Still a row that needs something done, worded as a restart.
     const stale = modelsOf(PACK_OUTDATED);
     staleFiles.value = new Set(stale.map((model) => String(model.file)));
+    packUpdatable.value = reasons.some(
+      (reason) => reason.code === PACK_OUTDATED && reason.can_update,
+    );
     // On its way is still a row that cannot run: drawn with its download.
     const missing = [
       ...modelsOf("missing_models"),
@@ -5321,6 +5381,14 @@ async function checkInstalled(key, { quiet = false } = {}) {
 /* On its way is not a fault: ink, with the mark's own accent beside it. */
 .wftab-warn.wftab-coming {
   color: rgb(var(--v-theme-on-surface));
+}
+
+/* The update button over the line saying how it went. */
+.wftab-update {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
 }
 
 .wftab-info-mark {
