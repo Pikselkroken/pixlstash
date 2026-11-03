@@ -163,6 +163,7 @@ from pixlstash.services.comfyui_recipe_service import (
     read_lora_chain_untyped,
     retype_text_encoders,
     PICTURE_LOADER_LIBRARY,
+    CHECKPOINT_LOADER_CAST,
     CHECKPOINT_LOADER_SHELF,
     PIXLSTASH_CHECKPOINT_LOADER,
     PIXLSTASH_CONTROLNET_LOADER,
@@ -196,6 +197,7 @@ from pixlstash.services.comfyui_service import (
     unfed_picture_loaders,
 )
 from pixlstash.services import (
+    comfyui_pack_service,
     run_log,
     vram_history,
     workflow_bindings,
@@ -4738,7 +4740,8 @@ def create_router(server) -> APIRouter:
             }
             if kind == FILE_CHECKPOINT and unlisted:
                 # Per loader: a twin naming the same file that the pack's
-                # loader cannot stand in for (an fp8 cast) keeps it.
+                # loader cannot stand in for (an fp8 cast on a pack whose
+                # loader has none) keeps it.
                 held = [
                     (node_id, widget, value)
                     for node_id, _cls, widget, value in iter_model_fields_api(graph)
@@ -7962,7 +7965,13 @@ def create_router(server) -> APIRouter:
                         **node_policy,
                     )
             if stale_pack:
-                judged = run_service.with_pack_outdated(judged, stale_pack)
+                # Only ever a ComfyUI on this computer: the one the bundled
+                # pack can be installed into.
+                judged = run_service.with_pack_outdated(
+                    judged,
+                    stale_pack,
+                    can_update=comfyui_pack_service.bundled_pack() is not None,
+                )
             found += judged
             if object_info is None and not configured:
                 # The URL is the guessed default and nothing answered on it:
@@ -9978,29 +9987,33 @@ def create_router(server) -> APIRouter:
     ) -> set[str]:
         """The checkpoints and diffusion models :func:`_swap_in_shelf_loaders`
         left missing only because the running ComfyUI has a pack from before
-        the loader's ``shelf`` widget (#1923): one restart would load them off
-        the shelf.
+        a widget the loader needs: ``shelf`` for any of them (#1923), or
+        ``weight_dtype`` for a diffusion model's loader that casts. One restart
+        on a current pack would load them off the shelf.
 
-        Empty where the pack has no loader at all, or has the widget: the
+        Empty where the pack has no loader at all, or has every widget: the
         missing file is then reported as it always was.
         """
         spec = object_info.get(PIXLSTASH_CHECKPOINT_LOADER)
-        if (
-            not isinstance(spec, dict)
-            or find_input_spec(spec, CHECKPOINT_LOADER_SHELF) is not None
-        ):
+        if not isinstance(spec, dict):
             return set()
+        has_shelf = find_input_spec(spec, CHECKPOINT_LOADER_SHELF) is not None
+        has_cast = find_input_spec(spec, CHECKPOINT_LOADER_CAST) is not None
+        if has_shelf and has_cast:
+            return set()
+
+        def cast_of(item: dict) -> object:
+            node = graph.get(str(item.get("node_id"))) or {}
+            return (node.get("inputs") or {}).get(CHECKPOINT_LOADER_CAST, "default")
+
+        # A cast wired in from another node is one no pack's loader takes.
         names = {
             str(item.get("value"))
             for item in detect_model_targets(graph, object_info)
             if item
             and item.get("class_type") in ("CheckpointLoaderSimple", "UNETLoader")
-            # The pack's loader has no cast, so even a current one leaves an
-            # fp8 diffusion model's loader as it is (`swap_in_pack_nodes`).
-            and (graph.get(str(item.get("node_id"))) or {})
-            .get("inputs", {})
-            .get("weight_dtype", "default")
-            == "default"
+            and isinstance(cast_of(item), str)
+            and (not has_shelf or (not has_cast and cast_of(item) != "default"))
         }
         if not names or not _comfyui_is_here(request):
             return set()
@@ -12246,7 +12259,8 @@ def create_router(server) -> APIRouter:
         if not unlisted:
             return loaders, swapped, unswapped
         # Per loader: a twin naming the same file that the pack's loader
-        # cannot stand in for (an fp8 cast) keeps it, and refuses the clone.
+        # cannot stand in for (an fp8 cast on a pack whose loader has none)
+        # keeps it, and refuses the clone.
         held = [
             (node_id, widget, value)
             for node_id, _cls, widget, value in iter_model_fields_api(graph)

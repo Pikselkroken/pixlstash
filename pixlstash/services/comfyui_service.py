@@ -53,6 +53,7 @@ from pixlstash.services.layout_move_service import resolve_placement
 from pixlstash.services.move_reconciliation_service import add_person
 from pixlstash.scoring import match_faces_to_characters
 from pixlstash.services.comfyui_recipe_service import (
+    CHECKPOINT_LOADER_CAST,
     CHECKPOINT_LOADER_ID,
     CHECKPOINT_LOADER_SHELF,
     PACK_SAVERS,
@@ -2539,6 +2540,40 @@ def comfyui_pixlstash_scripts(base_url: str) -> set[str] | None:
         for script in scripts
         if isinstance(script, str) and "pixlstash" in script.lower()
     }
+
+
+def comfyui_shelf_loader_current(base_url: str) -> bool | None:
+    """Whether the running pack's checkpoint loader has every widget PixlStash
+    writes into it (``shelf`` and ``weight_dtype``), so it loads any shelf
+    checkpoint a run swaps it in for. ``None`` when ComfyUI cannot be asked.
+
+    One class's ``GET /object_info/<class>``, not the whole map: this is polled
+    while ComfyUI restarts after an update. A ComfyUI without the pack's
+    loader answers ``{}``, which is not current.
+    """
+    try:
+        response = requests.get(
+            f"{base_url}/object_info/{PIXLSTASH_CHECKPOINT_LOADER}", timeout=5
+        )
+        response.raise_for_status()
+        spec = response.json().get(PIXLSTASH_CHECKPOINT_LOADER)
+    except (requests.RequestException, ValueError, AttributeError) as exc:
+        logger.info(
+            "Could not read ComfyUI's %s at %s: %s",
+            PIXLSTASH_CHECKPOINT_LOADER,
+            base_url,
+            exc,
+        )
+        return None
+    if not isinstance(spec, dict):
+        return False
+    declared = spec.get("input") if isinstance(spec.get("input"), dict) else {}
+    names = {
+        name
+        for group in ("required", "optional")
+        for name in (declared.get(group) or {})
+    }
+    return {CHECKPOINT_LOADER_SHELF, CHECKPOINT_LOADER_CAST} <= names
 
 
 # The pack's scripts PixlStash asks ComfyUI for: the one that reads a

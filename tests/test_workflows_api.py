@@ -1452,13 +1452,18 @@ def loaderless_workflow(tmp_path, lora_workflow):
     return lora_workflow
 
 
-def _extensions_answer(monkeypatch, answer):
-    """Stand ComfyUI's ``GET /extensions`` in for the node check."""
+def _extensions_answer(monkeypatch, answer, loader=None):
+    """Stand ComfyUI's ``GET /extensions`` in for the node check, and its
+    ``GET /object_info/PixlStashCheckpointLoader`` (*loader*; ``{}``, no such
+    class, by default)."""
 
     def fake_get(url, timeout):
-        if isinstance(answer, Exception):
-            raise answer
-        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: answer)
+        got = answer
+        if "/object_info/" in url:
+            got = {} if loader is None else loader
+        if isinstance(got, Exception):
+            raise got
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: got)
 
     monkeypatch.setattr(
         comfyui_service,
@@ -1552,7 +1557,45 @@ def test_the_node_check_reads_comfyuis_extensions(
         "can_open_workflows": expected,
         "saves_back": saves_back,
         "opens_runs": opens_runs,
+        # No pack loader in this stand-in: not current, unless unreachable.
+        "shelf_loader_current": None if expected is None else False,
     }
+
+
+def _loader(*optional):
+    return {
+        "PixlStashCheckpointLoader": {
+            "input": {
+                "required": {"checkpoint_id": ["STRING", {}]},
+                "optional": {name: ["STRING", {}] for name in optional},
+            }
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "loader, current",
+    [
+        (_loader("shelf", "weight_dtype"), True),
+        # From before the cast, and from before the shelf widget.
+        (_loader("shelf"), False),
+        (_loader(), False),
+        # No pack loader at all, and ComfyUI gone mid-restart.
+        ({}, False),
+        (requests.ConnectionError("restarting"), None),
+    ],
+)
+def test_the_node_check_says_whether_the_shelf_loader_is_current(
+    workflow_env, monkeypatch, loader, current
+):
+    """What an outdated pack's update waits for: the old nodes answer false,
+    so a poll that lands before the restart cannot end the wait early."""
+    _extensions_answer(
+        monkeypatch, ["/extensions/ComfyUI-PixlStash/open_workflow.js"], loader
+    )
+    r = workflow_env.owner.get(f"{API}/comfyui/pixlstash-node")
+    assert r.status_code == 200, r.text
+    assert r.json()["shelf_loader_current"] is current
 
 
 def _system_stats_answer(monkeypatch, answer) -> list[str]:
@@ -18373,9 +18416,9 @@ def test_a_shelf_checkpoint_fix_skips_a_twin_loader_the_pack_cannot_stand_in_for
     runnable, monkeypatch
 ):
     """Two loaders name the fixed file; one casts its weights (fp8), which
-    the pack's checkpoint loader cannot. Only the other loads the shelf's
-    replacement. Wrong if the casting one is left naming the replacement,
-    which this ComfyUI does not list.
+    this pack's checkpoint loader cannot (it has no `weight_dtype`). Only the
+    other loads the shelf's replacement. Wrong if the casting one is left
+    naming the replacement, which this ComfyUI does not list.
     """
     unlisted, digest = "test-chroma-unlisted.safetensors", _h("chroma-unlisted")
     embedded = json.loads(json.dumps(RUN_DOCUMENT))
@@ -24638,6 +24681,23 @@ def test_a_pack_from_before_the_shelf_widget_says_restart_comfyui(id_loaders):
 
     model = {"file": _SHELF_FILENAME, "folder": "checkpoints"}
     assert reasons() == {"pack_outdated": [model]}
+    # This PixlStash ships the nodes, so it offers to update them; one built
+    # without them does not.
+    outdated = [
+        reason
+        for group in _preflight(env.owner, workflow_id=workflow)["groups"]
+        for reason in group["reasons"]
+        if reason["code"] == "pack_outdated"
+    ]
+    assert [reason["can_update"] for reason in outdated] == [True]
+    with pytest.MonkeyPatch.context() as local:
+        local.setattr(comfyui_pack_service, "bundled_pack", lambda: None)
+        assert [
+            reason["can_update"]
+            for group in _preflight(env.owner, workflow_id=workflow)["groups"]
+            for reason in group["reasons"]
+            if reason["code"] == "pack_outdated"
+        ] == [False]
     r = env.owner.post(f"{API}/workflows/run", json={"workflow_id": workflow})
     assert not env.submitted, r.text
 
@@ -24661,8 +24721,8 @@ def test_a_pack_from_before_the_shelf_widget_says_restart_comfyui(id_loaders):
         ]
     }
 
-    # A diffusion model the shelf holds reads the same; one cast to fp8 does
-    # not, since even a current pack's loader cannot cast it.
+    # A diffusion model the shelf holds reads the same, cast to fp8 or not:
+    # a current pack's loader casts too.
     info["UNETLoader"] = {
         "input": {"required": {"unet_name": [["something-else.safetensors"], {}]}},
         "output": ["MODEL"],
@@ -24682,11 +24742,28 @@ def test_a_pack_from_before_the_shelf_widget_says_restart_comfyui(id_loaders):
         )
     ) == {"missing_models": [not_held], "pack_outdated": [diffusion]}
     unet["11"]["inputs"]["weight_dtype"] = "fp8_e4m3fn"
+    cast = workflows_routes.store_manual_workflow(
+        env.server.hub, "Old pack, fp8 diffusion model", unet, "import"
+    )
+    assert reasons(cast) == {"missing_models": [not_held], "pack_outdated": [diffusion]}
+
+    # A pack with the `shelf` widget but no cast loads the uncast one; the
+    # cast one is out of date for it, never missing. Wrong if the uncast one
+    # reads as out of date too.
+    loader = info["PixlStashCheckpointLoader"]["input"]["optional"]
+    loader["shelf"] = ["STRING", {"default": ""}]
+    assert reasons(cast) == {"missing_models": [not_held], "pack_outdated": [diffusion]}
+    unet["11"]["inputs"]["weight_dtype"] = "default"
     assert reasons(
         workflows_routes.store_manual_workflow(
-            env.server.hub, "Old pack, fp8 diffusion model", unet, "import"
+            env.server.hub, "Shelf pack, diffusion model", unet, "import"
         )
-    ) == {"missing_models": [not_held, diffusion]}
+    ) == {"missing_models": [not_held]}
+    # With the cast as well, the cast one loads off the shelf.
+    loader["weight_dtype"] = [["default", "fp8_e4m3fn"], {"default": "default"}]
+    assert reasons(cast) == {"missing_models": [not_held]}
+    del loader["weight_dtype"]
+    del loader["shelf"]
 
     # A pack with no loader at all keeps today's wording.
     del info["PixlStashCheckpointLoader"]
@@ -24700,7 +24777,7 @@ def test_a_pack_from_before_the_shelf_widget_says_restart_comfyui(id_loaders):
     )
     assert [r.as_dict() for r in moved] == [
         {"code": "missing_models", "models": [vae]},
-        {"code": "pack_outdated", "models": [model]},
+        {"code": "pack_outdated", "models": [model], "can_update": False},
     ]
     # A reason nothing moved out of is kept, even one with no models.
     bare = run_service.Reason("missing_models", {})

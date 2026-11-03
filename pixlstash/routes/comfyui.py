@@ -130,6 +130,7 @@ from pixlstash.services.comfyui_service import (
     PIXLSTASH_CHECKPOINT_LOADER,
     comfyui_can_open_workflows,
     comfyui_pixlstash_scripts,
+    comfyui_shelf_loader_current,
     library_ids_named,
     normalize_comfyui_url,
     probe_comfyui,
@@ -1854,6 +1855,10 @@ class ComfyUIPixlstashNodeResponse(BaseModel):
     # Whether it can open a run from the Run popup, which it saves as a new
     # workflow: the pack's `open_run.js` is loaded. False for an older pack.
     opens_runs: Optional[bool] = None
+    # Whether its checkpoint loader loads every shelf checkpoint a run swaps
+    # it in for (`shelf` and `weight_dtype`): what an update of an outdated
+    # pack waits for (`pack_outdated`). False for an older pack.
+    shelf_loader_current: Optional[bool] = None
 
 
 class ComfyUIProbeRequest(BaseModel):
@@ -2476,7 +2481,10 @@ def create_router(server) -> APIRouter:
             "ComfyUI-PixlStash node's open_workflow.js is loaded, the script "
             "that reads ?pixlstash_workflow=<key>. can_open_workflows is null "
             "when ComfyUI cannot be asked. opens_runs says the same of "
-            "open_run.js, which reads the Run popup's ?pixlstash_run=<opening>."
+            "open_run.js, which reads the Run popup's ?pixlstash_run=<opening>. "
+            "shelf_loader_current says whether its checkpoint loader has every "
+            "widget a run writes into it (shelf, weight_dtype), so an outdated "
+            "pack's update can wait for it."
         ),
         response_model=ComfyUIPixlstashNodeResponse,
     )
@@ -2484,11 +2492,17 @@ def create_router(server) -> APIRouter:
         comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
         scripts = comfyui_pixlstash_scripts(comfyui_url)
         if scripts is None:
-            return {"can_open_workflows": None, "saves_back": None, "opens_runs": None}
+            return {
+                "can_open_workflows": None,
+                "saves_back": None,
+                "opens_runs": None,
+                "shelf_loader_current": None,
+            }
         return {
             "can_open_workflows": PACK_OPENS_WORKFLOWS in scripts,
             "saves_back": PACK_SAVES_BACK in scripts,
             "opens_runs": PACK_OPENS_RUNS in scripts,
+            "shelf_loader_current": comfyui_shelf_loader_current(comfyui_url),
         }
 
     def _connection_or_404(user, connection_id: str) -> dict:

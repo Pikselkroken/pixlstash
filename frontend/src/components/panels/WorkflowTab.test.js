@@ -81,8 +81,10 @@ vi.mock("../../api/modelFolders", () => ({
 }));
 
 const getPixlstashNode = vi.fn();
+const installComfyuiPack = vi.fn();
 vi.mock("../../api/comfyui", () => ({
   getPixlstashNode: (...args) => getPixlstashNode(...args),
+  installComfyuiPack: (...args) => installComfyuiPack(...args),
 }));
 
 // *Show all N pictures* (F7) leaves this screen for the library, and
@@ -1334,6 +1336,221 @@ describe("a checkpoint that will not load", () => {
     expect(action(wrapper).exists()).toBe(false);
   });
 
+  it("makes a missing checkpoint a row with a picker, asked for by the graph's spelling", async () => {
+    // The recipe says `realvisXL_v5`, the graph loads the fp8 build of it:
+    // the missing file is still the Checkpoint row's, and it is the graph's
+    // spelling the server is asked about.
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap.mockReset().mockImplementation(
+      replacementsByKind({
+        checkpoint: [
+          { id: 7, filename: "realvisXL_v5_bf16.safetensors", display_name: "RealVis 5" },
+          { id: 8, filename: "juggernaut.safetensors", display_name: "Juggernaut" },
+        ],
+      }),
+    );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+
+    expect(readModelSwap).toHaveBeenCalledWith(KEY, {
+      replacing: "SDXL/realvisXL_v5_fp8.safetensors",
+      slotKind: "checkpoint",
+      cached: true,
+      grouped: true,
+    });
+    expect(textOf(wrapper)).toContain("Checkpoint missing");
+    expect(wrapper.find('[data-testid="wftab-missing-action"]').text()).toBe(
+      "Pick a replacement below.",
+    );
+    // Held to the missing one's base model: nothing to warn of.
+    expect(wrapper.find('[data-testid="wftab-replace-unmatched"]').exists()).toBe(
+      false,
+    );
+    const picker = () =>
+      wrapper.find('[data-testid="wftab-pick-checkpoint"] select');
+    expect(picker().text()).toContain("realvisXL_v5_fp8 (missing)");
+    expect(picker().text()).toContain("RealVis 5");
+
+    await picker().setValue("realvisXL_v5_bf16.safetensors");
+    await flush(wrapper);
+    // A pick waits with the other changes: it is not written by itself.
+    expect(setWorkflowChanges).toHaveBeenCalledTimes(1);
+    expect(setWorkflowChanges.mock.calls[0][1].models).toEqual([
+      {
+        address: "core:n1/ckpt_name/ckpt_name",
+        filename: "realvisXL_v5_bf16.safetensors",
+      },
+    ]);
+    // Picked: the warning gives way to the saved value under the field, and
+    // the picker stays, so the pick can be changed.
+    expect(textOf(wrapper)).not.toContain("Checkpoint missing");
+    expect(wrapper.find('[data-testid="wftab-saved"]').text()).toContain(
+      "Saved: realvisXL_v5_fp8",
+    );
+    expect(picker().element.value).toBe("realvisXL_v5_bf16.safetensors");
+    await picker().setValue("juggernaut.safetensors");
+    await flush(wrapper);
+    expect(setWorkflowChanges.mock.calls.at(-1)[1].models).toEqual([
+      { address: "core:n1/ckpt_name/ckpt_name", filename: "juggernaut.safetensors" },
+    ]);
+    // The missing file is the first option: choosing it takes the pick back.
+    await picker().setValue("");
+    await flush(wrapper);
+    expect(setWorkflowChanges.mock.calls.at(-1)[1].models ?? []).toEqual([]);
+    expect(textOf(wrapper)).toContain("Checkpoint missing");
+  });
+
+  it("files a missing checkpoint's candidates under how likely each is to work", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    const candidates = [
+      { id: 8, filename: "flux1-dev.safetensors", base_model: "FLUX.1 dev", verdict: "unlikely" },
+      { id: 9, filename: "merge.safetensors", base_model: null, verdict: "unknown" },
+      { id: 7, filename: "realvisXL_v5_bf16.safetensors", display_name: "RealVis 5", base_model: "SDXL 1.0", verdict: "likely", loader: "PixlStashCheckpointLoader" },
+      { id: 6, filename: "pony.safetensors", base_model: "Pony Diffusion V6 XL", verdict: "maybe" },
+    ];
+    readModelSwap.mockReset().mockImplementation((_key, { slotKind } = {}) =>
+      Promise.resolve({
+        replacements: slotKind === "checkpoint" ? candidates : [],
+        replacements_reason: null,
+        replacements_narrowed: slotKind === "checkpoint" ? true : null,
+        replacing_base_model: slotKind === "checkpoint" ? "SDXL 1.0" : null,
+      }),
+    );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+
+    const field = wrapper.find('[data-testid="wftab-pick-checkpoint"] [role="combobox"]');
+    // The missing file is what the field reads, never an option.
+    expect(field.text()).toContain("realvisXL_v5_fp8 (missing)");
+    // The picker stands in for the saved value's text, never beside it.
+    expect(
+      wrapper.find('[data-testid="wftab-row-checkpoint"] .wftab-row__value > .wftab-file').exists(),
+    ).toBe(false);
+    await field.trigger("click");
+    const list = wrapper.find('[data-testid="wftab-pick-checkpoint"] [role="listbox"]');
+    expect(list.find('[data-testid="wftab-replacing"]').text()).toBe(
+      "Replacing realvisXL_v5_fp8 · SDXL 1.0",
+    );
+    expect(list.find('[data-testid="wftab-none-likely"]').exists()).toBe(false);
+    const headings = list.findAll(".app-select__group .section-label").map((h) => h.text());
+    expect(headings).toEqual(["Likely to work", "Might work", "Not known", "Unlikely to work"]);
+    const options = list.findAll('[role="option"]');
+    expect(options.map((o) => o.attributes("aria-label"))).toEqual([
+      "RealVis 5, SDXL 1.0, PixlStash loader (This loader cannot load it, so a run loads it through PixlStash's.)",
+      "pony, Pony Diffusion V6 XL",
+      "merge, base not read",
+      "flux1-dev, FLUX.1 dev",
+    ]);
+    expect(options.some((o) => o.text().includes("missing"))).toBe(false);
+
+    // A poor pick is allowed, and says what it is.
+    await options[3].trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowChanges.mock.calls.at(-1)[1].models).toEqual([
+      { address: "core:n1/ckpt_name/ckpt_name", filename: "flux1-dev.safetensors" },
+    ]);
+    expect(wrapper.find('[data-testid="wftab-verdict"]').text()).toBe(
+      "FLUX.1 dev, not SDXL 1.0: LoRAs made for SDXL 1.0 will not load on it.",
+    );
+    expect(
+      wrapper.find('[data-testid="wftab-pick-checkpoint"] .app-select__mark').classes(),
+    ).toContain("app-select__tone--error");
+  });
+
+  it("says at the top of the list when nothing on the shelf is the missing one's base model", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap.mockReset().mockImplementation((_key, { slotKind } = {}) =>
+      Promise.resolve({
+        replacements:
+          slotKind === "checkpoint"
+            ? [{ id: 8, filename: "flux1-dev.safetensors", base_model: "FLUX.1 dev", verdict: "unlikely" }]
+            : [],
+        replacements_reason: null,
+        replacements_narrowed: slotKind === "checkpoint" ? false : null,
+        replacing_base_model: slotKind === "checkpoint" ? "SDXL 1.0" : null,
+      }),
+    );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    // The headings say it; the "every one is listed" mark is not needed.
+    expect(wrapper.find('[data-testid="wftab-replace-unmatched"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="wftab-pick-checkpoint"] [role="combobox"]').trigger("click");
+    expect(wrapper.find('[data-testid="wftab-none-likely"]').text()).toBe(
+      "Nothing on your shelf is SDXL 1.0.",
+    );
+  });
+
+  it("says so when the picker lists every checkpoint, none known to match", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap
+      .mockReset()
+      .mockImplementation(
+        replacementsByKind({ checkpoint: [{ id: 7, filename: "sd15.safetensors" }] }, {}, false),
+      );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-pick-checkpoint"]').exists()).toBe(true);
+    // The why is the mark's tooltip; the line says only what to do.
+    expect(
+      wrapper.find('[data-testid="wftab-missing-action"]').text(),
+    ).toBe("Pick a replacement below.");
+    expect(
+      wrapper.find('[data-testid="wftab-replace-unmatched"]').attributes("data-note"),
+    ).toContain("is known to match it");
+  });
+
+  it.each([
+    ["none_go_with_it", "is known to work with this checkpoint"],
+    ["none_loadable", "is one this loader can load"],
+    ["unread", "Could not read what could replace it"],
+    [null, "Nothing on your shelf can replace it."],
+  ])("says why a missing checkpoint has nothing to pick (%s)", async (reason, text) => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap
+      .mockReset()
+      .mockImplementation(replacementsByKind({}, { checkpoint: reason }));
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-pick-checkpoint"]').exists()).toBe(
+      false,
+    );
+    expect(
+      wrapper.find('[data-testid="wftab-no-replacement-checkpoint"]').text(),
+    ).toContain(text);
+  });
+
+  it("offers no picker on a checkpoint that loads (#2165)", async () => {
+    preflightWorkflowRun.mockResolvedValue({ groups: [{ reasons: [] }] });
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap.mockReset().mockImplementation(
+      replacementsByKind({
+        checkpoint: [{ id: 7, filename: "juggernaut.safetensors" }],
+      }),
+    );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(readModelSwap).toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="wftab-pick-checkpoint"]').exists()).toBe(
+      false,
+    );
+    expect(textOf(wrapper)).toContain("realvisXL_v5");
+  });
+
   it("picks up a file downloaded after the last scan and asks again", async () => {
     let added;
     pickUpModelFiles
@@ -1359,9 +1576,8 @@ describe("a checkpoint that will not load", () => {
     expect(textOf(wrapper)).not.toContain("Checkpoint missing");
   });
 
-  it("says restart ComfyUI for a shelf checkpoint its old pack cannot load", async () => {
-    // #1923: the running ComfyUI-PixlStash predates the loader's shelf widget.
-    preflightWorkflowRun.mockResolvedValue({
+  function outdated(canUpdate) {
+    return {
       groups: [
         {
           reasons: [
@@ -1370,21 +1586,68 @@ describe("a checkpoint that will not load", () => {
               models: [
                 { file: "SDXL/realvisXL_v5.safetensors", folder: "checkpoints" },
               ],
+              can_update: canUpdate,
             },
           ],
         },
       ],
-    });
+    };
+  }
+
+  it("says the nodes are out of date for a shelf checkpoint they cannot load", async () => {
+    // #1923: the running ComfyUI-PixlStash predates a widget its loader needs.
+    preflightWorkflowRun.mockResolvedValue(outdated(false));
     getWorkflowCard.mockResolvedValue(detail({ card: named }));
     const { wrapper } = await mountWith([KEY], [named]);
     await settle(wrapper);
-    expect(textOf(wrapper)).toContain("Restart ComfyUI");
+    expect(textOf(wrapper)).toContain("Nodes out of date");
     expect(textOf(wrapper)).not.toContain("Checkpoint missing");
     expect(missingLine(wrapper).text).toBe(
-      "realvisXL_v5 is on your model shelf, but the ComfyUI-PixlStash " +
-        "running in ComfyUI is out of date and cannot load it. " +
-        "Restart ComfyUI, or update the pack.",
+      "realvisXL_v5 is on your shelf, but ComfyUI's PixlStash nodes are too " +
+        "old to load it.",
     );
+    // PixlStash cannot update them here: the line says what to do instead.
+    const action = wrapper.find('[data-testid="wftab-update-pack"]');
+    expect(action.text()).toBe("Update ComfyUI-PixlStash, then restart ComfyUI.");
+    expect(action.find("button").exists()).toBe(false);
+    // Not a file to download or replace through the set menu.
+    expect(wrapper.find('[data-testid="wftab-missing-action"]').exists()).toBe(false);
+  });
+
+  it("updates the nodes, restarts ComfyUI and asks again once they are current", async () => {
+    preflightWorkflowRun
+      .mockResolvedValueOnce(outdated(true))
+      .mockResolvedValue({ groups: [{ reasons: [] }] });
+    installComfyuiPack.mockResolvedValue({ restart: "requested", detail: null });
+    // The old nodes still answer before the restart: not current.
+    getPixlstashNode
+      .mockReset()
+      .mockResolvedValueOnce({ shelf_loader_current: false })
+      .mockResolvedValue({ shelf_loader_current: true });
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    // Fake only for the wait: `flush` itself runs on a timer.
+    vi.useFakeTimers();
+    try {
+      const action = () => wrapper.find('[data-testid="wftab-update-pack"]');
+      await action().find("button").trigger("click");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(installComfyuiPack).toHaveBeenCalledTimes(1);
+      expect(action().text()).toBe("Updated. Restarting ComfyUI…");
+      const asked = preflightWorkflowRun.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(preflightWorkflowRun.mock.calls.length).toBe(asked);
+      await vi.advanceTimersByTimeAsync(3000);
+      for (let i = 0; i < 4; i += 1) await vi.advanceTimersByTimeAsync(0);
+      // Asked again, past the minute-old map of the old nodes.
+      expect(preflightWorkflowRun.mock.calls.length).toBe(asked + 1);
+      expect(preflightWorkflowRun.mock.calls.at(-1)[1]).toEqual({ cached: false });
+      expect(textOf(wrapper)).not.toContain("Nodes out of date");
+      expect(action().exists()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
 
@@ -1682,6 +1945,43 @@ describe("a VAE or text encoder row (#1596, #1850)", () => {
   });
 
 
+
+  it("offers a model still downloading to a missing row of its kind, marked", async () => {
+    // Put in before it lands; the run refuses it until then (server side).
+    readModelSwap.mockReset().mockImplementation(replacementsByKind({}));
+    getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
+    preflightWorkflowRun.mockResolvedValue(
+      missing({ file: "t5/t5xxl_fp8.safetensors", folder: "text_encoders" }),
+    );
+    useTasksStore().modelDownloads = [
+      {
+        id: "d2",
+        file: "UMT5_xxl.safetensors",
+        status: "running",
+        directory: "text_encoders",
+        percent: 40,
+      },
+      // Another kind's folder: never a text encoder's option.
+      { id: "d3", file: "big_vae.safetensors", status: "running", directory: "vae" },
+      // Ended: no longer on its way.
+      { id: "d4", file: "done.safetensors", status: "done", directory: "text_encoders" },
+    ];
+    const { wrapper } = await mountWith([KEY], [withSupport]);
+    await settle(wrapper);
+    const picker = row(wrapper, "text_encoder").find(
+      '[data-testid="wftab-pick-text_encoder"]',
+    );
+    expect(picker.exists()).toBe(true);
+    // The VAE loads: no picker, whatever is downloading for it.
+    expect(wrapper.find('[data-testid="wftab-pick-vae"]').exists()).toBe(false);
+    await picker.find('[role="combobox"]').trigger("click");
+    const options = picker.findAll('[role="option"]').map((o) => o.text());
+    expect(options.some((o) => o.includes("UMT5_xxl"))).toBe(true);
+    expect(options.some((o) => o.includes("big_vae"))).toBe(false);
+    expect(options.some((o) => o.includes("done"))).toBe(false);
+    expect(picker.text()).toContain("Downloading");
+    expect(picker.find('[data-testid="downloading-mark"]').exists()).toBe(true);
+  });
 
   it("files the missing file's misfiled shelf copy and picks it, in one choice", async () => {
     // #1962 after #1966: the copy is on the shelf as Unclassified, so nothing

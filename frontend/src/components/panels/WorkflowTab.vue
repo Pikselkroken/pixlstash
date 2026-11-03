@@ -265,7 +265,8 @@
           <template v-if="detail">
             <!-- One row per loader the default recipe names: its kind, then the
                  file it loads. A missing file is amber, with what to do about it
-                 beneath. Changing the file is the set menu's, in the header. -->
+                 beneath, and a picker of what on the shelf could replace it.
+                 Changing a file that loads is the set menu's, in the header. -->
             <div
               v-for="row in modelRows"
               :key="row.address"
@@ -289,7 +290,8 @@
                   >
                   {{ row.missingText }}
                 </span>
-                <span v-else class="wftab-file"
+                <!-- The picker stands in for the saved value's text. -->
+                <span v-else-if="!row.options.length" class="wftab-file"
                   ><Tooltip v-if="row.file" :text="row.file" activator="parent" />{{
                     row.savedLabel
                   }}</span
@@ -305,22 +307,66 @@
                     }}</span
                   >{{ missingNote(row.missing, row.kind) }}
                 </p>
-                <!-- What to do about it: download it, or replace it through
-                     the set menu where that menu can (a graph, a row that takes
-                     a pick). Neither, and the row offers nothing it cannot do. -->
+                <!-- What to do about it: download it, pick a replacement
+                     below, or replace it through the set menu where that menu
+                     can (a graph, a row that takes a pick). None of them, and
+                     the row offers nothing it cannot do. The why of an
+                     unmatched list is the mark's tooltip. -->
+                <!-- An outdated pack's fix: PixlStash updates its own nodes
+                     and restarts ComfyUI, where it can (#2548). -->
+                <p
+                  v-if="row.missing && !row.edited && staleFiles.has(row.missing)"
+                  class="wftab-note wftab-quiet wftab-update"
+                  aria-live="polite"
+                  data-testid="wftab-update-pack"
+                >
+                  <AppButton
+                    v-if="packUpdatable && packUpdate.offering.value"
+                    size="sm"
+                    data-testid="wftab-update-pack-button"
+                    @click="packUpdate.update"
+                  >
+                    Update and restart ComfyUI
+                  </AppButton>
+                  <template v-if="packUpdate.note.value">{{
+                    packUpdate.note.value
+                  }}</template>
+                  <template v-else-if="!packUpdatable">{{
+                    PACK_OUTDATED_ACTION
+                  }}</template>
+                </p>
                 <p
                   v-if="
                     row.missing &&
                     !row.edited &&
-                    (downloadableFiles.has(row.missing) || setCanReplace(row))
+                    !staleFiles.has(row.missing) &&
+                    (downloadableFiles.has(row.missing) ||
+                      row.options.length ||
+                      setCanReplace(row))
                   "
                   class="wftab-note wftab-quiet"
                   data-testid="wftab-missing-action"
                 >
                   <template v-if="downloadableFiles.has(row.missing)"
-                    >Download it<ModelDownloadButton :file="row.missing"
-                  /></template>
-                  <template v-else>Change the model set to replace it.</template>
+                    >Download it<ModelDownloadButton :file="row.missing" />{{
+                      row.options.length ? " or pick a replacement below." : ""
+                    }}</template
+                  ><template v-else-if="row.options.length"
+                    >Pick a replacement below.</template
+                  ><template v-else>Change the model set to replace it.</template
+                  ><span
+                    v-if="row.unmatched"
+                    class="wftab-info-mark"
+                    tabindex="0"
+                    aria-label="Why every checkpoint is listed"
+                    data-testid="wftab-replace-unmatched"
+                    :data-note="UNMATCHED_REPLACEMENTS_TEXT"
+                    ><Tooltip
+                      :text="UNMATCHED_REPLACEMENTS_TEXT"
+                      activator="parent" /><v-icon size="14" aria-hidden="true"
+                      >mdi-help-circle-outline</v-icon
+                    ></span
+                  >
                 </p>
                 <p
                   v-if="isAdding(row.missing)"
@@ -331,8 +377,54 @@
                   <v-progress-circular indeterminate size="12" width="2" />
                   Found in your model folders. Adding it to your shelf…
                 </p>
+                <!-- A missing file's replacements (#1850): a pick joins the
+                     unsaved changes, it is not written. It stays after a pick,
+                     so the pick can be changed. -->
+                <AppSelect
+                  v-if="row.options.length"
+                  :model-value="row.pick ?? ''"
+                  :label="row.name"
+                  hide-label
+                  :options="row.options"
+                  :placeholder="row.grouped ? `${row.savedLabel} (missing)` : ''"
+                  :disabled="!canEdit"
+                  :data-testid="`wftab-pick-${row.kind}`"
+                  @update:model-value="(file) => pickModel(row, file)"
+                >
+                  <template v-if="row.grouped" #head>
+                    <span data-testid="wftab-replacing"
+                      >Replacing <b class="wftab-strong">{{ row.savedLabel }}</b
+                      >{{ row.target ? ` · ${row.target}` : "" }}</span
+                    >
+                    <span
+                      v-if="row.target && !row.likelyCount"
+                      class="wftab-none-likely"
+                      data-testid="wftab-none-likely"
+                      ><v-icon
+                        size="14"
+                        class="wftab-tone--info"
+                        aria-hidden="true"
+                        >mdi-information-outline</v-icon
+                      >Nothing on your shelf is {{ row.target }}.</span
+                    >
+                  </template>
+                </AppSelect>
+                <p
+                  v-if="row.verdictLine"
+                  class="wftab-verdict"
+                  data-testid="wftab-verdict"
+                >
+                  <v-icon
+                    size="14"
+                    :class="`wftab-tone--${row.verdictTone}`"
+                    aria-hidden="true"
+                    >{{ `mdi-${row.verdictIcon}` }}</v-icon
+                  ><span>{{ row.verdictLine }}</span>
+                </p>
                 <!-- What the shelf files this loader's model as, where every
-                     workflow loading it says it is this loader's kind (#1962). -->
+                     workflow loading it says it is this loader's kind (#1962).
+                     It is the one note under the picker, so "Nothing to
+                     offer" gives way to it. -->
                 <KindMenu
                   v-if="row.offer"
                   :file-kind="row.offer.file_kind"
@@ -357,6 +449,15 @@
                   @pick="(kind) => fileOffered(row, { file_kind: kind })"
                   @suggest="(on) => fileOffered(row, { suggest_kind: on })"
                 />
+                <p
+                  v-else-if="
+                    row.missing && !row.edited && !row.options.length && row.noOptions
+                  "
+                  class="wftab-note wftab-quiet"
+                  :data-testid="`wftab-no-replacement-${row.kind}`"
+                >
+                  {{ row.noOptions }}
+                </p>
                 <!-- The saved value stays readable under a changed row, with
                      the way back beside it. -->
                 <div v-if="row.edited" class="wftab-meta" data-testid="wftab-saved">
@@ -489,6 +590,29 @@
                   </p>
                   <p v-else class="wftab-note wftab-quiet">
                     No file name was kept for it anywhere.
+                  </p>
+                  <!-- An outdated pack's fix: PixlStash updates its own nodes
+                       and restarts ComfyUI, where it can (#2548). -->
+                  <p
+                    v-if="staleFiles.has(missingCheckpointFile)"
+                    class="wftab-note wftab-quiet wftab-update"
+                    aria-live="polite"
+                    data-testid="wftab-update-pack"
+                  >
+                    <AppButton
+                      v-if="packUpdatable && packUpdate.offering.value"
+                      size="sm"
+                      data-testid="wftab-update-pack-button"
+                      @click="packUpdate.update"
+                    >
+                      Update and restart ComfyUI
+                    </AppButton>
+                    <template v-if="packUpdate.note.value">{{
+                      packUpdate.note.value
+                    }}</template>
+                    <template v-else-if="!packUpdatable">{{
+                      PACK_OUTDATED_ACTION
+                    }}</template>
                   </p>
                   <p
                     v-if="downloadableFiles.has(missingCheckpointFile)"
@@ -1336,6 +1460,7 @@ import {
   useComfyuiOpen,
 } from "../../composables/useComfyuiOpen";
 import { pickUpKey, useModelPickUp } from "../../composables/useModelPickUp";
+import { usePixlstashPackUpdate } from "../../composables/usePixlstashPackUpdate";
 import { useSectionCollapse } from "../../composables/useSectionCollapse";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -1369,7 +1494,13 @@ import {
   baseModels,
   checkpointUnread,
   modelDisplayName,
+  NO_REPLACEMENT_TEXT,
   outputCount,
+  replacementLabel,
+  UNMATCHED_REPLACEMENTS_TEXT,
+  REPLACEMENT_VERDICTS,
+  verdictLine,
+  verdictOptions,
 } from "../../utils/workflowCard";
 import {
   choicesFor,
@@ -1396,6 +1527,7 @@ import {
 } from "../../utils/workflowEdits";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
+import AppSelect from "../widgets/AppSelect.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import SectionHeader from "../widgets/SectionHeader.vue";
 import EditLorasDialog from "../io/EditLorasDialog.vue";
@@ -1881,22 +2013,28 @@ const downloadableFiles = ref(new Set());
  * (`bypassed_loras`), by `pickUpKey`: `true` where the server can download one.
  */
 const leftOutLoras = ref(new Map());
-const PACK_OUTDATED_TEXT = "Restart ComfyUI";
+const PACK_OUTDATED_TEXT = "Nodes out of date";
+/** The pre-flight's `pack_outdated` says PixlStash can update the nodes. */
+const packUpdatable = ref(false);
+/** Once ComfyUI is back with the new nodes, the rows ask ComfyUI again. */
+const packUpdate = usePixlstashPackUpdate(() => {
+  if (selectedKey.value)
+    void checkInstalled(selectedKey.value, { quiet: true, fresh: true });
+});
 /**
  * What follows a missing file's name, once ComfyUI has answered. A missing
  * checkpoint is said to be off the shelf too, because a current
  * ComfyUI-PixlStash would load a shelf one. Other kinds are not loaded off
  * the shelf.
- * ponytail: wrong where ComfyUI-PixlStash is not installed, or for an fp8
- * diffusion loader the pack leaves alone; the pre-flight would have to say
- * whether the shelf holds the file to tell those apart.
+ * ponytail: wrong where ComfyUI-PixlStash is not installed; the pre-flight
+ * would have to say whether the shelf holds the file to tell that apart.
  */
 function missingNote(file, kind) {
   if (!preflightAnswered.value) return "";
   if (tasksStore.runningDownload({ file, slot: kind }))
     return " is still downloading. It runs once it has finished.";
   if (staleFiles.value.has(file))
-    return ` is on your model shelf, but the ComfyUI-PixlStash running in ComfyUI is out of date and cannot load it. ${PACK_OUTDATED_ACTION}`;
+    return " is on your shelf, but ComfyUI's PixlStash nodes are too old to load it.";
   return kind === "checkpoint"
     ? " is not in ComfyUI or PixlStash."
     : " is not in ComfyUI.";
@@ -1957,7 +2095,8 @@ const missingCheckpointFile = computed(
  * models that go with the workflow's checkpoint and that the file's loader
  * can load (`replacements`), and why there are none (`replacements_reason`).
  * Read for every row, missing or not: the answer feeds a missing row's
- * automatic fix and every row's kind offer, not a list to pick from (#2165).
+ * picker and automatic fix, and every row's kind offer. A row whose file
+ * loads offers no list to pick from (#2165); the set menu changes it.
  */
 const replacementsByFile = ref({});
 
@@ -1987,11 +2126,113 @@ function settable(model) {
   return !String(model.address ?? "").endsWith("/checkpoint_id");
 }
 
+/** A candidate's name alone, for a row whose chips say the rest. */
+function shownName(model) {
+  return model.display_name || modelLabel(fileName(model.filename));
+}
+
+/** A candidate as a picker option names it: never a bare filename. */
+function candidateLabel(model) {
+  return replacementLabel({
+    ...model,
+    filename: modelLabel(fileName(model.filename)),
+  });
+}
+
+/** Why a missing file's row has nothing to pick, or "". */
+function noReplacementText(kind, answer) {
+  if (!answer || answer.replacements?.length) return "";
+  const reason = answer.replacements_reason;
+  if (kind !== "checkpoint") return NO_REPLACEMENT_TEXT[reason] ?? "";
+  if (reason === "none_loadable")
+    return "No checkpoint on your shelf that could replace it is one this loader can load.";
+  return ["none_go_with_it", "unread"].includes(reason)
+    ? NO_REPLACEMENT_TEXT[reason]
+    : "Nothing on your shelf can replace it.";
+}
+
 /**
- * The model rows: one per loader the default recipe names, read-only (#2165).
+ * The picker a missing file's row offers: what on the shelf its loader could
+ * load instead, and the models on their way. A row whose file loads offers
+ * none (#2165).
+ *
+ * A missing checkpoint's candidates are `grouped` under how likely each is to
+ * run it, where the server gave them a verdict. Otherwise the missing file is
+ * the first option, said to be missing, so choosing it takes a pick back. A
+ * pick the candidates do not list (one a model set filled in) is listed too,
+ * or the field would read as empty while the row says Edited.
+ */
+function replacementPicker(spec, file, gone, pick, candidates, answer, savedLabel) {
+  if (!gone) return { options: [], grouped: false, target: "", picked: null };
+  const coming = comingOptions(spec, file);
+  const extra =
+    pick &&
+    !candidates.some((candidate) => candidate.filename === pick) &&
+    !coming.some((option) => option.value === pick)
+      ? [{ value: pick, label: modelLabel(fileName(pick)) }]
+      : [];
+  const grouped = candidates.some((candidate) => candidate.verdict);
+  const target = grouped ? answer?.replacing_base_model || "" : "";
+  const picked = pick
+    ? (candidates.find((candidate) => candidate.filename === pick) ?? null)
+    : null;
+  if (grouped) {
+    return {
+      options: [
+        ...verdictOptions(candidates, target, shownName),
+        ...extra,
+        ...coming,
+      ],
+      grouped,
+      target,
+      picked,
+    };
+  }
+  const listed = [
+    ...candidates.map((candidate) => ({
+      value: candidate.filename,
+      label: candidateLabel(candidate),
+    })),
+    ...extra,
+    ...coming,
+  ];
+  return {
+    options: listed.length
+      ? [{ value: "", label: `${savedLabel} (missing)` }, ...listed]
+      : [],
+    grouped,
+    target,
+    picked,
+  };
+}
+
+/**
+ * The models on their way that a row's loader could take, as picker options:
+ * every running download for a folder of the row's kind, but the row's own
+ * file. Picked, it is an ordinary unsaved change; a run of it is refused,
+ * loudly, until it has landed (`models_downloading`).
+ */
+function comingOptions(spec, file) {
+  return tasksStore.runningDownloads
+    .filter((d) => spec.folders.has(d.directory) && !sameFile(d.file, file))
+    .map((d) => ({
+      value: d.file,
+      label: `${modelLabel(d.file)} (downloading)`,
+      name: modelLabel(d.file),
+      group: "Downloading",
+      groupIcon: "download",
+      groupDownloading: true,
+      groupNote: "runs once it has landed",
+    }));
+}
+
+/**
+ * The model rows: one per loader the default recipe names, read-only but for
+ * a missing file's picker.
  *
  * `pick` is the file waiting, unsaved, at that loader's address: the likely
- * match the tab picked itself, or what a model set filled in.
+ * match the tab picked itself, one picked from a missing row's picker, or
+ * what a model set filled in.
  */
 const rowModels = computed(() =>
   (recipeModels.value ?? []).filter(
@@ -2049,8 +2290,8 @@ const modelRows = computed(() => {
     const answer = canPick
       ? replacementsByFile.value[`${model.kind}:${file}`]
       : null;
-    // The candidates feed the automatic fix and the kind offer; the rows no
-    // longer offer them as a list to pick from.
+    // The candidates feed a missing row's picker, the automatic fix and the
+    // kind offer.
     const candidates = (answer?.replacements ?? []).filter(
       (candidate) => !sameFile(candidate.filename, file),
     );
@@ -2063,6 +2304,15 @@ const modelRows = computed(() => {
       canPick && file !== model.filename
         ? modelLabel(fileName(file))
         : recipeModelLabel(model);
+    const picker = replacementPicker(
+      spec,
+      file,
+      gone,
+      pick,
+      candidates,
+      answer,
+      savedLabel,
+    );
     return {
       address: model.address,
       kind: model.kind,
@@ -2083,6 +2333,22 @@ const modelRows = computed(() => {
         : staleFiles.value.has(gone)
           ? PACK_OUTDATED_TEXT
           : spec.missingText,
+      options: picker.options,
+      grouped: picker.grouped,
+      target: picker.target,
+      likelyCount: candidates.filter((c) => c.verdict === "likely").length,
+      // A checkpoint list not held to the missing one's base model.
+      unmatched:
+        model.kind === "checkpoint" &&
+        candidates.length > 0 &&
+        !(picker.grouped && picker.target) &&
+        answer?.replacements_narrowed === false,
+      verdictLine: picker.grouped
+        ? verdictLine(picker.picked, picker.target)
+        : "",
+      verdictTone: REPLACEMENT_VERDICTS[picker.picked?.verdict]?.tone ?? "",
+      verdictIcon: REPLACEMENT_VERDICTS[picker.picked?.verdict]?.icon ?? "",
+      noOptions: gone ? noReplacementText(model.kind, answer) : "",
       // Only on the file the loader still loads: a replacement is a shelf
       // model of the loader's own kind already.
       offer: kindOfferFor(model, canPick, file, gone, pick, answer),
@@ -4654,12 +4920,13 @@ watch(
   },
 );
 
-async function checkInstalled(key, { quiet = false } = {}) {
+async function checkInstalled(key, { quiet = false, fresh = false } = {}) {
   const check = ++installedCheck;
   // `quiet`: the rows keep what they say until the new answers are in.
   if (!quiet) {
     missingByKind.value = {};
     staleFiles.value = new Set();
+    packUpdatable.value = false;
     downloadableFiles.value = new Set();
     leftOutLoras.value = new Map();
     preflightAnswered.value = false;
@@ -4667,9 +4934,10 @@ async function checkInstalled(key, { quiet = false } = {}) {
   }
   if (!key) return;
   try {
+    // `fresh` after a pack update: the minute-old map is of the old nodes.
     const answer = await preflightWorkflowRun(
       { workflow_id: key, values: [] },
-      { cached: true },
+      { cached: !fresh },
     );
     if (check !== installedCheck || !stillOn(key)) return;
     preflightAnswered.value = true;
@@ -4683,6 +4951,9 @@ async function checkInstalled(key, { quiet = false } = {}) {
     // Still a row that needs something done, worded as a restart.
     const stale = modelsOf(PACK_OUTDATED);
     staleFiles.value = new Set(stale.map((model) => String(model.file)));
+    packUpdatable.value = reasons.some(
+      (reason) => reason.code === PACK_OUTDATED && reason.can_update,
+    );
     // On its way is still a row that cannot run: drawn with its download.
     const missing = [
       ...modelsOf("missing_models"),
@@ -5110,6 +5381,55 @@ async function checkInstalled(key, { quiet = false } = {}) {
 /* On its way is not a fault: ink, with the mark's own accent beside it. */
 .wftab-warn.wftab-coming {
   color: rgb(var(--v-theme-on-surface));
+}
+
+/* The update button over the line saying how it went. */
+.wftab-update {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.wftab-info-mark {
+  display: inline-flex;
+  vertical-align: text-bottom;
+  margin-left: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.wftab-strong {
+  font-weight: var(--weight-medium);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+/* A picked candidate's verdict, in its group's words: the hue on the mark. */
+.wftab-verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+}
+.wftab-none-likely {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+}
+.wftab-tone--success {
+  color: rgb(var(--v-theme-surface-success));
+}
+.wftab-tone--warning {
+  color: rgb(var(--v-theme-surface-warning));
+}
+.wftab-tone--error {
+  color: rgb(var(--v-theme-surface-error));
+}
+.wftab-tone--info {
+  color: rgb(var(--v-theme-surface-info));
 }
 
 .wftab-disclose > summary {

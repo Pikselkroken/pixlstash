@@ -29,11 +29,13 @@ export const UNCHECKED_CODES = ["comfyui_unreachable", "comfyui_not_configured"]
 
 /**
  * A checkpoint or diffusion model on the shelf that the running ComfyUI's
- * ComfyUI-PixlStash is too old to load (#1923): restarting ComfyUI is the
- * fix, not installing it.
+ * ComfyUI-PixlStash is too old to load (#1923). `can_update`: PixlStash can
+ * update the nodes there and restart ComfyUI (`usePixlstashPackUpdate`);
+ * otherwise the person does, and this says so.
  */
 export const PACK_OUTDATED = "pack_outdated";
-export const PACK_OUTDATED_ACTION = "Restart ComfyUI, or update the pack.";
+export const PACK_OUTDATED_ACTION =
+  "Update ComfyUI-PixlStash, then restart ComfyUI.";
 
 /** A model file the graph names that this machine does not have. */
 export const MISSING_MODELS = "missing_models";
@@ -140,6 +142,7 @@ export const FIX_SETTINGS = "settings";
 export const FIX_DROP_LORA = "drop-lora";
 export const FIX_EDIT_LORAS = "edit-loras";
 export const FIX_INSTALL_PACK = "install-pack";
+export const FIX_UPDATE_PIXLSTASH_PACK = "update-pixlstash-pack";
 
 function names(list, key) {
   return (list || [])
@@ -345,11 +348,10 @@ export function readReason(reason) {
     case PACK_OUTDATED: {
       const files = (reason.models || []).filter(Boolean);
       const one = files.length === 1;
-      return read(
-        `ComfyUI-PixlStash is out of date in the running ComfyUI, so it cannot load ${one ? "this model" : "these models"} from your model shelf. ${PACK_OUTDATED_ACTION}`,
-        null,
-        files,
-      );
+      const said = `ComfyUI's PixlStash nodes are too old to load ${one ? "this model" : "these models"} from your shelf.`;
+      return reason.can_update
+        ? read(said, FIX_UPDATE_PIXLSTASH_PACK, files)
+        : read(`${said} ${PACK_OUTDATED_ACTION}`, null, files);
     }
     case MISSING_CHOICES: {
       const values = (reason.choices || [])

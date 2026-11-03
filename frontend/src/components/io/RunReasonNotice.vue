@@ -81,6 +81,17 @@
              cut short where the column is narrow (the Edit tab, #2094), so the
              tip says it whole. Not the button's own `tooltip`, which would
              describe it with the words it is already named by. -->
+        <!-- PixlStash's own nodes, the copy it ships: no third-party
+             warning to read first, so the press updates at once. -->
+        <AppButton
+          v-else-if="read.fix === FIX_UPDATE_PIXLSTASH_PACK && packUpdate.offering.value"
+          size="sm"
+          :on-dark="onDark"
+          data-testid="rrn-update-pack"
+          @click="packUpdate.update"
+        >
+          Update and restart ComfyUI
+        </AppButton>
         <template v-else-if="read.fix === FIX_INSTALL_PACK && offering">
           <Tooltip
             v-for="pack in packs"
@@ -139,8 +150,20 @@
       >
         {{ installNote }}
       </p>
+      <p
+        v-else-if="packUpdate.note.value"
+        class="rrn-text"
+        aria-live="polite"
+        data-testid="rrn-update-note"
+      >
+        {{ packUpdate.note.value }}
+      </p>
       <div
-        v-if="install.phase === 'manual' || install.phase === 'timeout'"
+        v-if="
+          install.phase === 'manual' ||
+          install.phase === 'timeout' ||
+          packUpdate.phase.value === 'timeout'
+        "
         class="rrn-acts"
       >
         <AppButton
@@ -174,12 +197,14 @@ import { computed, onBeforeUnmount, ref } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { getNodePack, installNodePack } from "../../api/comfyui";
+import { usePixlstashPackUpdate } from "../../composables/usePixlstashPackUpdate";
 import { errorMessage } from "../../utils/apiError";
 import {
   FIX_DROP_LORA,
   FIX_EDIT_LORAS,
   FIX_INSTALL_PACK,
   FIX_SETTINGS,
+  FIX_UPDATE_PIXLSTASH_PACK,
   readReason,
 } from "../../utils/runReasons";
 import AppButton from "../widgets/AppButton.vue";
@@ -205,12 +230,18 @@ const emit = defineEmits(["settings", "retry", "drop-lora", "edit-loras"]);
 
 const read = computed(() => readReason(props.reason));
 
+// ── Updating PixlStash's own nodes (`pack_outdated`) ───────────────────────
+// Like an install below: the notice owns the wait and emits `retry` once,
+// when ComfyUI is back with the new nodes.
+const packUpdate = usePixlstashPackUpdate(() => emit("retry"));
+
 /** Whether anything here can actually be pressed; see the template. */
 const hasAction = computed(
   () =>
     read.value.retry ||
     [FIX_SETTINGS, FIX_DROP_LORA, FIX_EDIT_LORAS].includes(read.value.fix) ||
-    (read.value.fix === FIX_INSTALL_PACK && offering.value),
+    (read.value.fix === FIX_INSTALL_PACK && offering.value) ||
+    (read.value.fix === FIX_UPDATE_PIXLSTASH_PACK && packUpdate.offering.value),
 );
 
 // ── Installing a node pack (#2054) ──────────────────────────────────────────

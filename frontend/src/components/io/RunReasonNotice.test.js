@@ -19,9 +19,16 @@ vi.mock("vuetify/components", async (importOriginal) => ({
 vi.mock("../../api/comfyui", () => ({
   installNodePack: vi.fn(),
   getNodePack: vi.fn(),
+  installComfyuiPack: vi.fn(),
+  getPixlstashNode: vi.fn(),
 }));
 
-import { getNodePack, installNodePack } from "../../api/comfyui";
+import {
+  getNodePack,
+  getPixlstashNode,
+  installComfyuiPack,
+  installNodePack,
+} from "../../api/comfyui";
 import RunReasonNotice from "./RunReasonNotice.vue";
 
 function mountNotice(reason, subject = "Cinematic portrait") {
@@ -454,5 +461,81 @@ describe("a node pack PixlStash can install (#2054)", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("on the computer it runs on, or from ComfyUI Manager");
     expect(wrapper.text()).not.toContain("loopback");
+  });
+});
+
+describe("ComfyUI-PixlStash too old to load a shelf model", () => {
+  const reason = {
+    code: "pack_outdated",
+    models: [{ file: "flux-2-klein-9b.safetensors", folder: "diffusion_models" }],
+    can_update: true,
+  };
+
+  function mountOutdated(props = {}) {
+    return mount(RunReasonNotice, {
+      props: { reason, subject: "Inpaint", ...props },
+      global: {
+        stubs: {
+          AppButton: {
+            props: ["loading", "disabled"],
+            emits: ["click"],
+            template: "<button @click=\"$emit('click')\"><slot /></button>",
+          },
+        },
+      },
+    });
+  }
+
+  function update(wrapper) {
+    return wrapper.find('[data-testid="rrn-update-pack"]');
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("updates the nodes, waits for the new ones, then asks the parent again once", async () => {
+    // The old nodes still answer before the restart: not current, so the
+    // wait does not end early.
+    vi.useFakeTimers();
+    installComfyuiPack.mockResolvedValue({ restart: "requested", detail: null });
+    getPixlstashNode
+      .mockResolvedValueOnce({ shelf_loader_current: false })
+      .mockRejectedValueOnce(new Error("ComfyUI restarting"))
+      .mockResolvedValue({ shelf_loader_current: true });
+    const wrapper = mountOutdated();
+    expect(update(wrapper).text()).toBe("Update and restart ComfyUI");
+    await update(wrapper).trigger("click");
+    await flushPromises();
+    expect(installComfyuiPack).toHaveBeenCalledTimes(1);
+    expect(update(wrapper).exists()).toBe(false);
+    expect(wrapper.find('[data-testid="rrn-update-note"]').text()).toBe(
+      "Updated. Restarting ComfyUI…",
+    );
+    for (let tick = 0; tick < 3; tick += 1) {
+      await vi.advanceTimersByTimeAsync(3000);
+    }
+    expect(getPixlstashNode).toHaveBeenCalledTimes(3);
+    expect(wrapper.emitted("retry")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(getPixlstashNode).toHaveBeenCalledTimes(3);
+  });
+
+  it("offers the update again after one failed, saying why", async () => {
+    installComfyuiPack.mockRejectedValue({
+      response: { status: 409, data: { detail: "No ComfyUI address is saved." } },
+    });
+    const wrapper = mountOutdated();
+    await update(wrapper).trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("No ComfyUI address is saved.");
+    expect(update(wrapper).exists()).toBe(true);
+  });
+
+  it("offers no button where PixlStash cannot update it, and says what to do", () => {
+    const wrapper = mountOutdated({ reason: { ...reason, can_update: false } });
+    expect(update(wrapper).exists()).toBe(false);
+    expect(wrapper.text()).toContain("Update ComfyUI-PixlStash, then restart ComfyUI.");
   });
 });
