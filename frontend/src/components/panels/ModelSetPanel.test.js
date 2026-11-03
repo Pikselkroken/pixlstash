@@ -99,11 +99,12 @@ describe("ModelSetPanel clone", () => {
     w.unmount();
   });
 
-  it("offers none for a set whose base model is not on the shelf", () => {
+  it("offers it for a set whose base model is not on the shelf too", async () => {
     const w = mountPanel({
       missing: { names: ["gone.safetensors"], workflowIds: [], workflowsByName: {} },
     });
-    expect(w.find('[data-testid="set-clone"]').exists()).toBe(false);
+    await w.get('[data-testid="set-clone"]').trigger("click");
+    expect(w.emitted("clone")).toHaveLength(1);
     w.unmount();
   });
 });

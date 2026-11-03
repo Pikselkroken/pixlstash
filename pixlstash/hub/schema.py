@@ -534,7 +534,11 @@ CREATE TABLE IF NOT EXISTS adapter_stack (
 # this machine's models, not about a library. AUTOINCREMENT so a deleted set's id
 # is never reissued to a client still holding it for an undo. `cloned` marks a
 # set the owner copied from a set from pictures on purpose, which is why it is
-# kept while it still holds exactly that set's models.
+# kept while it still holds exactly that set's models. `replaces` is the key of
+# the set from pictures it was made from by Edit set (`model:<id>` or
+# `missing:<file>`), so the grid draws it in that card's place; NULL for a set
+# made any other way. Said here rather than in the DDL: SQLite's DROP COLUMN
+# cannot cut a comment that runs up to the last column.
 _V2_MODEL_WORKFLOW_SET = """
 CREATE TABLE IF NOT EXISTS model_workflow_set (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -545,7 +549,8 @@ CREATE TABLE IF NOT EXISTS model_workflow_set (
     -- The ComfyUI template (services.workflow_templates) the set was made
     -- from, by name; NULL for a set made any other way. Covers that template
     -- in the picker whatever members the set holds since.
-    template    TEXT
+    template    TEXT,
+    replaces    TEXT
 )
 """
 
@@ -2421,6 +2426,9 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     # The template a set was made from (#2001), guarded the same way.
     if "template" not in set_columns:
         conn.execute("ALTER TABLE model_workflow_set ADD COLUMN template TEXT")
+    # The card a set was made from by Edit set, guarded the same way.
+    if "replaces" not in set_columns:
+        conn.execute("ALTER TABLE model_workflow_set ADD COLUMN replaces TEXT")
 
     # The ComfyUI link token's source binding (#1810), guarded the same way.
     # NULL, every existing token, means "from any address".

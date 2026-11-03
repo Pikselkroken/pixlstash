@@ -2022,13 +2022,24 @@ the shelf's workflow sets section) and served as `hand_made` on
   sends `PUT .../seen` with the set's `new` members when the owner leaves its
   tray, never while it is open, so what joined is seen before it clears.
 - **A set from pictures is edited by making it the owner's.** *Edit set* on the
-  open tray's bar (`ModelSetPanel` emits `clone`; not on a missing-base set)
-  and on the menu opened on the CARD (`ShelfSelectionBar`'s `clone-set`, keyed
-  by the card, never by the selected file) runs
+  open tray's bar (`ModelSetPanel` emits `clone`) and on the menu opened on the
+  CARD (`ShelfSelectionBar`'s `clone-set`, keyed by the card, never by the
+  selected file; not on a missing-base card) runs
   `store.cloneSetFromPictures`: a set holding the head as its checkpoint and
   `cloned: true`, which the pictures fill and which reads Automatic until it is
   changed; a second press while the first is on the wire is ignored. The new
-  set covers the card, which leaves the grid until the set is deleted.
+  set covers the card, which leaves the grid until the set is deleted. **A
+  missing-base set** has no checkpoint to follow, so its copy holds the on-shelf
+  members under the card's name, without `cloned`, its checkpoint slot empty
+  for a replacement, and the card is HIDDEN (`createHandMadeSet`'s `hides`)
+  so the set reads as edited in place; the receipt's Undo deletes the copy and
+  shows the card again. Deleting the copy later leaves the card hidden: *Show
+  them* brings it back. **Either way the set keeps the card's place**: both
+  post `replaces` (the card's key), and `store.setGridCards` draws a set with
+  `cloned` or `replaces` among the sets from pictures, by the hidden card's
+  evidence while it is still read, else by its own (a set on the card's
+  checkpoint covers the same pictures), instead of first with the sets made
+  by hand.
 - **A hand-made card selects the SET; a tray tile selects a FILE.**
   `store.selectSet` / `selectedSetIds` is a second selection. A plain click on
   either kind clears the other; Ctrl+click and select-all hold both (see the
@@ -7005,12 +7016,22 @@ bumps the same counter whether or not anything is selected. Opening from it pers
 puts focus on the rail's clear button, else its title (`openRailFromTab`). The set grid reserves
 the tab's width on that edge while the rail is closed; the row list does not.
 
-**It is an inspector, not a list (#2168).** It used to be a picker of every
-shelf model with its own selection, filters, order track and pointer drag onto
-set cards; the shelf's own list is the list now (*All models*), so the rail
-describes what is selected on the shelf instead. Adding a model to a set is
-*Add to set…* (the rail's one-model view, the pill and the row menu) and a
-set's own slot ＋ pickers; nothing drags from the rail any more.
+**It is an inspector (#2168), with the shelf to drag from on Sets.** Its
+default pane describes what is selected on the shelf. On the Sets place only it
+has two tabs, *Details* (that inspector) and *Models*
+(`ModelsRailShelf.vue`): every shelf model a set slot takes
+(`store.railRows`), with *Fits <set>* and *In no set yet* chips and the pick
+order, a selection of its own that feeds only Add and the drag (the shelf's
+verbs stay on *All models*), a row Add and Enter into the open hand-made set
+(a run of adds is one receipt), *New set with this* when none is open, and a
+pointer drag onto a hand-made card, a slot of the open tray, or New workflow
+set (`store.railDrag` / `railOver`; targets carry `data-rail-drop` and take a
+`rail-drop` event; evidence cards dim and never take one). The tray's *Models ·
+N fit* sets `railFitsSetId` and bumps `railShelfRequest`, which turns the rail
+to *Models*; a card's double-click that opens a shut rail opens it on
+*Details*, and an open rail keeps the tab the reader chose. Elsewhere,
+*Add to set…* (the one-model view, the pill and the row menu) and a set's slot
+＋ pickers add models.
 
 - **The head** is the inspector's `head` slot, on the toolbar's line: the view's name (the
   place, or the sidebar's Type / Base row, or *Training runs* on

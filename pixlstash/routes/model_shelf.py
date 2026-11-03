@@ -1346,6 +1346,10 @@ class HandMadeSet(BaseModel):
         default=None,
         description="The ComfyUI template it was made from, by name (see the create).",
     )
+    replaces: Optional[str] = Field(
+        default=None,
+        description="The set from pictures it was made from by Edit set (see the create).",
+    )
     incomplete: bool = Field(description="The set has no checkpoint member.")
     checkpoint_ids: list[int] = Field(
         default_factory=list,
@@ -1470,6 +1474,16 @@ class WorkflowSetCreateRequest(BaseModel):
             "The ComfyUI template (`GET /models/workflow-templates`) the set is "
             "made from, by name. Stored as given and served back; the set then "
             "covers that template in the picker whatever it holds."
+        ),
+    )
+    replaces: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=1000,
+        description=(
+            "The key of the set from pictures (`model:<id>` or "
+            "`missing:<file>`) the set is made from by Edit set. Stored as "
+            "given and served back; the grid draws the set in that card's place."
         ),
     )
     declined: list[Digest] = Field(
@@ -3141,6 +3155,7 @@ def create_router(server) -> APIRouter:
                 cloned=payload.cloned,
                 template=payload.template,
                 declined=payload.declined,
+                replaces=payload.replaces,
             )
         return _one_set(set_id, seen=payload.seen)
 

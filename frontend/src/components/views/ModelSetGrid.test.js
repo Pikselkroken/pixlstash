@@ -1864,6 +1864,35 @@ describe("hand-made sets (#1520)", () => {
   const SET_CKPT = slotMember(1, "realvisXL_v5", "checkpoint");
   const SET_VAE = slotMember(2, "sdxl_vae", "vae");
 
+  it("draws a set made by Edit set in its card's place, a set by hand first", async () => {
+    const { wrapper } = await mountGrid({
+      rows: [
+        row(1, "realvisXL_v5", "checkpoint"),
+        row(4, "juggernautXL_v9", "checkpoint"),
+      ],
+      combinations: [
+        combination("a", [CKPT], { pictures: 20 }),
+        // Covered by set 11, which Edit set made on its checkpoint.
+        {
+          ...combination("b", [OTHER_CKPT], { pictures: 5 }),
+          covered_by: [11],
+        },
+      ],
+      handMade: [
+        handSet(11, [slotMember(4, "juggernautXL_v9", "checkpoint")], {
+          cloned: true,
+          replaces: "model:4",
+          picture_count: 5,
+        }),
+        handSet(10, [SET_CKPT]),
+      ],
+    });
+    const keys = wrapper
+      .findAll(".msg__row[data-key]")
+      .map((el) => el.attributes("data-key"));
+    expect(keys).toEqual(["hand:10", "model:1", "hand:11"]);
+  });
+
   it("badges every set Yours or nothing, and says when it has no checkpoint", async () => {
     const { wrapper } = await mountGrid({
       rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
@@ -4224,6 +4253,7 @@ describe("hiding a set from pictures", () => {
     expect(createWorkflowSet).toHaveBeenCalledWith({
       cloned: true,
       seen: true,
+      replaces: "model:1",
       members: [{ model_id: 1, slot: "checkpoint" }],
     });
     wrapper.unmount();

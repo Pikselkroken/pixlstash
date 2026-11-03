@@ -10655,10 +10655,12 @@ like every shelf table), read and written by
   (`incomplete`). The slot defaults from `file_kind`; `checkpoint` is accepted
   for a `checkpoint` or an `unknown` file only (a diffusion file is often
   `unknown`). Engines and files still waiting for their hash are refused (409).
-- **`cloned` is only stored.** `POST /models/workflow-sets` takes `cloned: true`
-  for a set made from a set from pictures and serves it back; nothing has read
-  it since #1972 removed the swap that kept such a set while it matched. The
-  column is amended into v2 with a default.
+- **`cloned` and `replaces` are only stored.** `POST /models/workflow-sets`
+  takes `cloned: true` for a set made from a set from pictures and `replaces`
+  (that card's key, `model:<id>` or `missing:<file>`), and serves both back,
+  delete snapshot included; the server reads neither since #1972 removed the
+  swap that kept such a set while it matched. The grid draws a set carrying
+  either in its card's place. Both columns are amended into v2.
 - **Members are sha256s, with no foreign key to `model`.** Forgetting or
   deleting a file drops its `model` row; the member stays, is served
   `on_shelf: false` under the `label` it was added with, and reconnects when a

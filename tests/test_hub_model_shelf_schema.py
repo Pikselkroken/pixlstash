@@ -1426,6 +1426,17 @@ class TestHandMadeWorkflowSets:
             "SELECT cloned FROM model_workflow_set WHERE id = ?", (set_id,)
         ).fetchone() == (0,)
 
+    def test_a_hub_from_before_the_replaced_card_gains_it(self, hub):
+        """A set made by an earlier build replaces no card: it reads NULL."""
+        apply_migrations(hub)
+        set_id = self._set(hub)
+        hub.execute("ALTER TABLE model_workflow_set DROP COLUMN replaces")
+        hub.commit()
+        apply_migrations(hub)
+        assert hub.execute(
+            "SELECT replaces FROM model_workflow_set WHERE id = ?", (set_id,)
+        ).fetchone() == (None,)
+
     def test_a_slot_outside_the_five_is_refused(self, hub):
         apply_migrations(hub)
         with pytest.raises(sqlite3.IntegrityError):
