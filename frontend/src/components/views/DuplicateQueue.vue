@@ -313,7 +313,6 @@
              lives in the left group, where the controls it collapses stood.
              Auto-stack compresses to an icon form and the size slider hides
              at ≤1040, its value persisting in the store. -->
-        <UndoControl />
         <TbGlobalActions />
       </div>
     </div>
@@ -810,7 +809,6 @@ import {
 import { pictureThumbnailUrl } from "../../api/pictures";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import TbOverflowMenu from "../panels/TbOverflowMenu.vue";
-import UndoControl from "../panels/UndoControl.vue";
 import DedupGroupRow from "../widgets/DedupGroupRow.vue";
 import MixedQueueRow from "../widgets/MixedQueueRow.vue";
 import DedupThresholdControl from "../widgets/DedupThresholdControl.vue";

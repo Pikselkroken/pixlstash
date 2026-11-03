@@ -383,11 +383,10 @@ defineExpose({
      asserting "expired" about a live receipt.
 
      The grid pill justifies this by pointing at the toolbar control surviving
-     the receipt. That fallback is FALSE here - `UndoControl` is occluded by the
-     lightbox. What survives instead is the Ctrl+Z binding this lightbox's own
-     key handler keeps live, plus the hover/focus pause. Same conclusion, and a
-     2px linear hairline is at the bottom of the vestibular-risk scale, but the
-     reasoning had to be re-made rather than copied. */
+     the receipt. The lightbox's top bar carries that control too (it rides in
+     TbGlobalActions), and the Ctrl+Z binding this lightbox's own key handler
+     keeps live, plus the hover/focus pause, survive as well. A 2px linear
+     hairline is at the bottom of the vestibular-risk scale. */
   .r-progress.run::after {
     animation-duration: var(--r-drain-dur, 5000ms) !important;
   }

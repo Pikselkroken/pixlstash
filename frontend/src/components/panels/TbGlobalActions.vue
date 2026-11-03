@@ -1,5 +1,11 @@
 <template>
   <span v-if="separator" class="bar-separator" aria-hidden="true"></span>
+  <!-- Undo, redo and History: app-wide, so they ride in this tail and every
+       screen that mounts it carries them in the same place. The operation log
+       is the library's, not a screen's, and undo is how a reader recovers from
+       anywhere. Mounted in a read-only session too, inert: UndoControl owns
+       that state. -->
+  <UndoControl />
   <!-- Settings lives in the title bar (#2158): one control, the same place in
        every workspace. -->
   <!-- ── Right-rail toggle ─────────────────────────────────────────────── -->
@@ -24,8 +30,9 @@
 </template>
 
 <script setup>
-// The app-wide chrome that must survive a change of destination: the
-// right-rail toggle (Settings moved to the title bar, #2158). The grid's
+// The app-wide chrome that must survive a change of destination: undo/redo
+// with its History, and the right-rail toggle (Settings moved to the title
+// bar, #2158). The grid's
 // toolbar and the duplicates queue both mount this SAME component, which is
 // what keeps it pixel-identical in every view - the styles live here, not in
 // either host.
@@ -38,6 +45,7 @@
 import { computed, ref, watch } from "vue";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import AppBarButton from "../widgets/AppBarButton.vue";
+import UndoControl from "./UndoControl.vue";
 
 const props = defineProps({
   // Draw the toolbar's vertical rule ahead of the pair. The grid toolbar
@@ -132,7 +140,8 @@ watch(
 }
 
 /* No collapse rule here on purpose (amendment #2 in
-   docs/design/toolbar-responsive-decisions.md): Settings and Stats never
-   fold - a burger may only collapse controls from its own visual group, and
-   these are the app-wide tail's. */
+   docs/design/toolbar-responsive-decisions.md): the rail toggle never folds,
+   and undo itself never hides (UndoControl's own @container steps drop only
+   History and redo) - a burger may only collapse controls from its own visual
+   group, and these are the app-wide tail's. */
 </style>

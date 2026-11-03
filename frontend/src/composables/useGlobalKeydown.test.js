@@ -79,16 +79,7 @@ describe("the undo chord", () => {
     expect(notices.notices).toHaveLength(0);
   });
 
-  it("declines while the model shelf is the mounted destination", () => {
-    mountShelfMarker();
-    press("z");
-    press("y");
-    press("z", { shiftKey: true });
-    expect(store.undo).not.toHaveBeenCalled();
-    expect(store.redo).not.toHaveBeenCalled();
-  });
-
-  it("takes a live local receipt's action on the shelf instead of declining", async () => {
+  it("takes a live local receipt's action on the shelf ahead of the log", async () => {
     mountShelfMarker();
     const undo = vi.fn().mockResolvedValue(true);
     const redo = vi.fn().mockResolvedValue({});
@@ -100,6 +91,7 @@ describe("the undo chord", () => {
     expect(notices.notices.at(-1).text).toContain(
       "Undo takes that change back",
     );
+    expect(notices.notices.at(-1).key).toBe(SHELF_NO_UNDO_KEY);
     press("z");
     await vi.waitFor(() => expect(store.receipt?.mode).toBe("undone"));
     expect(undo).toHaveBeenCalledTimes(1);
@@ -109,41 +101,21 @@ describe("the undo chord", () => {
     expect(store.redo).not.toHaveBeenCalled();
   });
 
-  it("says why, once, however many times the chord is pressed", () => {
-    mountShelfMarker();
-    press("z");
-    press("z");
-    press("y");
-    // One card, not three: the coalescing key is what makes a repeated press
-    // an update rather than a wall (notice spec §9.1).
-    expect(notices.notices).toHaveLength(1);
-    expect(notices.notices[0].key).toBe(SHELF_NO_UNDO_KEY);
-    expect(notices.notices[0].text).toContain("aren't undoable");
-  });
-
-  // #1415: the shelf was guarded alone, and the three other grid-replacing
-  // destinations that mount neither a receipt nor an UndoControl were not - so
-  // the chord reverted a library action there with nothing on screen to say so.
+  // Every grid-replacing destination now carries UndoControl (in
+  // TbGlobalActions) and an ActionReceipt, so the chord acts there as it does
+  // on the grid. They used to decline (#1415) because they had neither.
   it.each([
+    ["the model shelf", "shelf"],
     ["the Workflows grid", "wfv"],
     ["Moves", "mv"],
     ["Insights", "ins"],
-  ])("declines on %s too, for the shelf's reason", (_name, className) => {
+  ])("undoes and redoes on %s, silently", (_name, className) => {
     mountShelfMarker(className);
     press("z");
-    press("z", { shiftKey: true });
-    expect(store.undo).not.toHaveBeenCalled();
-    expect(store.redo).not.toHaveBeenCalled();
-    expect(notices.notices[0].key).toBe(SHELF_NO_UNDO_KEY);
-  });
-
-  it("acts again once the shelf unmounts", () => {
-    const el = mountShelfMarker();
-    press("z");
-    expect(store.undo).not.toHaveBeenCalled();
-    el.remove();
-    press("z");
     expect(store.undo).toHaveBeenCalledTimes(1);
+    press("z", { shiftKey: true });
+    expect(store.redo).toHaveBeenCalledTimes(1);
+    expect(notices.notices).toHaveLength(0);
   });
 });
 

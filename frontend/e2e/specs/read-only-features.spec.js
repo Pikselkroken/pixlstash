@@ -59,8 +59,8 @@ test.describe('read-only session: owner-only features stay visible', () => {
     try {
       await page.goto(`/?token=${encodeURIComponent(token)}`)
 
-      // Undo has no control in the grid since #2160 (Ctrl+Z and the receipt
-      // carry it), so the inert-but-visible case starts at Duplicates.
+      // Every screen's toolbar carries the undo control; the inert-but-visible
+      // case is checked at Duplicates.
       // ── Duplicates: a visible destination that does not navigate ───────
       const duplicates = page
         .locator('.sidebar-list-item', { hasText: 'Duplicates' })

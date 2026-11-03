@@ -180,9 +180,9 @@
         <kbd class="wfv-search-key" aria-hidden="true">F</kbd>
       </div>
 
-      <!-- The app-wide tail, minus undo: this view replaces the grid and its
-           toolbar, so without it neither Settings nor the right rail has a
-           control on the screen — and the rail is where `WorkflowTab` is
+      <!-- The app-wide tail (undo/redo and the rail toggle): this view
+           replaces the grid and its toolbar, so without it neither undo nor
+           the right rail has a control on the screen — and the rail is where `WorkflowTab` is
            shown (`AppInspector` gates it on
            `sidebarStore.workflowInspectorOpen`), so the rail would be
            unreachable (#1415). Its own `--space-3` cluster because this bar
@@ -492,8 +492,9 @@
     </AppDialog>
 
     <!-- A delete's Undo/Redo: workflows are not in the library's operation
-         log, so their receipt is a local one, as on the model shelf. -->
-    <ActionReceipt local-only />
+         log, so their receipt is a local one, as on the model shelf. The same
+         pill narrates the toolbar's undo/redo of a library action. -->
+    <ActionReceipt />
   </div>
 </template>
 

@@ -131,7 +131,7 @@
           label="Filter models by name"
           @update:model-value="(name) => store.setFilters({ name })"
         />
-        <!-- The tail: [separator] [TbGlobalActions]
+        <!-- The tail: [separator] [TbGlobalActions], which carries undo/redo
              (docs/design/toolbar-responsive-decisions.md). -->
         <span class="bar-separator" aria-hidden="true"></span>
         <TbGlobalActions
@@ -1166,10 +1166,11 @@
       :heads="replacingHeads"
       @close="replacingHeads = []"
     />
-    <!-- The set receipts (#1573): the grid's own pill, lifted clear of the
-         selection pill when both are up. Local receipts only - a library
-         action's Undo would revert something this screen cannot show. -->
-    <ActionReceipt v-if="isShelfTab" local-only :lift-px="receiptLift" />
+    <!-- The set receipts (#1573) and the toolbar's undo/redo narration: the
+         grid's own pill, lifted clear of the selection pill when both are up.
+         A local receipt is raised only on the list tab (the host flag below);
+         a library undo from the toolbar is narrated on every tab. -->
+    <ActionReceipt :lift-px="receiptLift" />
     <WorkflowSetRenameDialog
       :set="renamingSet"
       @close="renamingSet = null"
@@ -4765,9 +4766,8 @@ watch(
      pair the grid bar (`selbar toolbar`) and the queue's (`dqbar toolbar`)
      declare, so a shared control mounted here degrades exactly as it does
      there. `shelfbar` carries this bar's own ladder (the rungs at the bottom
-     of this block); `toolbar` is what a shared control mounted here would
-     write its own rules against, and nothing on the bar does today -
-     dropping UndoControl took the one control that did. `container-type:
+     of this block); `toolbar` is what UndoControl (inside TbGlobalActions)
+     writes its own rules against. `container-type:
      inline-size` is also what keeps the bar's width independent of its
      contents. */
   container-type: inline-size;

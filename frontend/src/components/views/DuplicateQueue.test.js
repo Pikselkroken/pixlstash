@@ -975,9 +975,8 @@ describe("DuplicateQueue - the shell chrome", () => {
     wrapper.unmount();
   });
 
-  // The decision record's canonical tail, identical in every view that writes
-  // the operation log (the model shelf does not, and mounts no undo):
-  // [separator] [UndoControl] [TbGlobalActions]. The ⋯ is NOT part of the
+  // The decision record's canonical tail, identical in every view:
+  // [separator] [UndoControl] [rail toggle], the last two from TbGlobalActions. The ⋯ is NOT part of the
   // tail - it belongs to the left group, whose controls it collapses, and the
   // app-wide cluster never folds into it (amendment #4).
   it("orders the tail separator → UndoControl → TbGlobalActions, ⋯ elsewhere", async () => {
