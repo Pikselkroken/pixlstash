@@ -1898,6 +1898,43 @@ describe("a VAE or text encoder row (#1596, #1850)", () => {
 
 
 
+  it("offers a model still downloading to a missing row of its kind, marked", async () => {
+    // Put in before it lands; the run refuses it until then (server side).
+    readModelSwap.mockReset().mockImplementation(replacementsByKind({}));
+    getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
+    preflightWorkflowRun.mockResolvedValue(
+      missing({ file: "t5/t5xxl_fp8.safetensors", folder: "text_encoders" }),
+    );
+    useTasksStore().modelDownloads = [
+      {
+        id: "d2",
+        file: "UMT5_xxl.safetensors",
+        status: "running",
+        directory: "text_encoders",
+        percent: 40,
+      },
+      // Another kind's folder: never a text encoder's option.
+      { id: "d3", file: "big_vae.safetensors", status: "running", directory: "vae" },
+      // Ended: no longer on its way.
+      { id: "d4", file: "done.safetensors", status: "done", directory: "text_encoders" },
+    ];
+    const { wrapper } = await mountWith([KEY], [withSupport]);
+    await settle(wrapper);
+    const picker = row(wrapper, "text_encoder").find(
+      '[data-testid="wftab-pick-text_encoder"]',
+    );
+    expect(picker.exists()).toBe(true);
+    // The VAE loads: no picker, whatever is downloading for it.
+    expect(wrapper.find('[data-testid="wftab-pick-vae"]').exists()).toBe(false);
+    await picker.find('[role="combobox"]').trigger("click");
+    const options = picker.findAll('[role="option"]').map((o) => o.text());
+    expect(options.some((o) => o.includes("UMT5_xxl"))).toBe(true);
+    expect(options.some((o) => o.includes("big_vae"))).toBe(false);
+    expect(options.some((o) => o.includes("done"))).toBe(false);
+    expect(picker.text()).toContain("Downloading");
+    expect(picker.find('[data-testid="downloading-mark"]').exists()).toBe(true);
+  });
+
   it("files the missing file's misfiled shelf copy and picks it, in one choice", async () => {
     // #1962 after #1966: the copy is on the shelf as Unclassified, so nothing
     // offers it until it is filed as a text encoder.
