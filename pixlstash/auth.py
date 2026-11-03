@@ -380,6 +380,8 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/training/presets",
         "/api/v1/training/sample-prompts",
         "/api/v1/training/dataset",
+        # A character's pictures ranked for a training set.
+        "/api/v1/training/character_set_suggestion",
         # The ai-toolkit install: where the checkout, its Python and the run
         # folder are on this machine, and the discovery that finds them.
         "/api/v1/training/ai-toolkit/discover",

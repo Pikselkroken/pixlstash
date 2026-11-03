@@ -274,6 +274,7 @@ const emit = defineEmits([
   "select-character",
   "select-set",
   "train-lora",
+  "create-training-set",
   "import-finished",
   "set-error",
   "set-loading",
@@ -357,6 +358,8 @@ const sidebarCtxVisible = ref(false);
 const sidebarCtxX = ref(0);
 const sidebarCtxY = ref(0);
 const sidebarCtxCharacter = ref(null); // { id, name } or null
+// The character row the menu opened on, for a dialog to hand focus back to.
+let sidebarCtxCharacterEl = null;
 const sidebarCtxSet = ref(null); // { id, name, set_icon, set_color } or null
 // Whether the open menu's person or set has a LoRA for "Create with LoRA…":
 // 'checking' | 'attached' | 'none' | 'failed'. Only 'attached' enables the row.
@@ -2232,6 +2235,7 @@ function openSidebarCtxMenu(type, item, event) {
   }
   if (type === "character") {
     sidebarCtxCharacter.value = item;
+    sidebarCtxCharacterEl = event?.currentTarget ?? null;
     sidebarCtxSet.value = null;
     sidebarCtxProject.value = null;
     sidebarCtxAllPictures.value = false;
@@ -6521,6 +6525,22 @@ defineExpose({
         >
           <v-icon class="ctx-icon">mdi-school-outline</v-icon>
           <span class="ctx-label-text">Train LoRA…</span>
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            emit('create-training-set', {
+              id: sidebarCtxCharacter.id,
+              name: sidebarCtxCharacter.name,
+              project_ids: getEntityProjectIds(sidebarCtxCharacter),
+              returnFocusTo: sidebarCtxCharacterEl,
+            });
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon class="ctx-icon">mdi-image-multiple-outline</v-icon>
+          <span class="ctx-label-text">Create a training set…</span>
         </button>
         <button
           class="ctx-item"

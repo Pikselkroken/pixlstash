@@ -1851,6 +1851,117 @@ def test_dataset_counts_and_checks_and_knows_a_reference_set():
         _teardown(temp_dir, server)
 
 
+def _seed_character_pictures(server, char_id):
+    """Four stills and a clip of *char_id*.
+
+    The third still also shows someone else; the first has a second face row
+    of the character itself. A sixth picture's face is from another model
+    pack, with an embedding of another width.
+    """
+    import numpy as np
+
+    from pixlstash.db_models import Face, Picture, Tag
+
+    def seed(session):
+        ids = []
+        for i, (path, tag) in enumerate(
+            [
+                ("a.png", "Close-up"),
+                ("b.png", "full body"),
+                ("c.png", "portrait"),
+                ("d.png", "upper body"),
+                ("e.mp4", "portrait"),
+            ]
+        ):
+            pic = Picture(file_path=path, width=100, height=100, score=4)
+            session.add(pic)
+            session.flush()
+            vec = np.zeros(8, dtype=np.float32)
+            vec[0], vec[1 + i % 7] = 1.0, 0.2
+            session.add(
+                Face(
+                    picture_id=pic.id,
+                    character_id=char_id,
+                    features=vec.tobytes(),
+                    bbox_="[10, 10, 50, 50]",
+                    model_pack="buffalo_l",
+                )
+            )
+            session.add(Tag(picture_id=pic.id, tag=tag))
+            ids.append(pic.id)
+        other = Picture(file_path="f.png", width=100, height=100, score=5)
+        session.add(other)
+        session.flush()
+        session.add(
+            Face(
+                picture_id=other.id,
+                character_id=char_id,
+                features=np.ones(16, dtype=np.float32).tobytes(),
+                model_pack="antelopev2",
+            )
+        )
+        ids.append(other.id)
+        session.add(Face(picture_id=ids[2], face_index=1))
+        # A second face row of the character itself is not another person.
+        session.add(Face(picture_id=ids[0], face_index=2, character_id=char_id))
+        session.commit()
+        return ids
+
+    return server.vault.db.run_task(seed)
+
+
+def test_character_set_suggestion_ranks_stills_and_clips_apart():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        char_id = _make_character(owner, "Anna")
+        a, b, c, d, clip, other_pack = _seed_character_pictures(server, char_id)
+        url = "/training/character_set_suggestion"
+
+        r = owner.get(url, params={"character_id": char_id})
+        assert r.status_code == 200, r.text
+        out = r.json()
+        assert out["character_name"] == "Anna"
+        assert out["set_name"] == "Anna training set"
+        assert out["has_clips"] is True
+        stills, clips = out["stills"], out["clips"]
+        assert (stills["candidates"], clips["candidates"]) == (5, 1)
+        # Not compared across model packs: no likeness, so set aside.
+        assert stills["excluded"]["low_likeness"] == 1
+        assert {p["picture_id"] for p in stills["picks"]} == {a, b, d}
+        assert [p["picture_id"] for p in clips["picks"]] == [clip]
+        assert stills["excluded"]["other_people"] == 1
+        assert stills["would_add"]["other_people"] == 1
+        framing = {p["picture_id"]: p["buckets"]["framing"] for p in stills["picks"]}
+        assert framing[a] == ["close-up"]
+        assert all(0 <= p["likeness"] <= 100 for p in stills["picks"])
+        assert out["targets"]["framing"]["close-up"] == 0.2
+
+        r = owner.get(
+            url, params={"character_id": char_id, "include_other_people": True}
+        )
+        assert r.status_code == 200, r.text
+        assert c in {p["picture_id"] for p in r.json()["stills"]["picks"]}
+
+        owner.post("/picture_sets", json={"name": "Anna training set"})
+        r = owner.get(url, params={"character_id": char_id})
+        assert r.json()["set_name"] == "Anna training set 2"
+
+        # SQLite folds ASCII case only; a non-ASCII name is matched too.
+        ase = _make_character(owner, "Åse")
+        owner.post("/picture_sets", json={"name": "ÅSE TRAINING SET"})
+        r = owner.get(url, params={"character_id": ase})
+        assert r.json()["set_name"] == "Åse training set 2"
+
+        r = owner.get(url, params={"character_id": 9999})
+        assert r.status_code == 404, r.text
+
+        scoped = _scoped_client(server, read_token)
+        r = scoped.get(url, params={"character_id": char_id})
+        assert r.status_code == 403, r.text
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_create_job_on_a_reference_set_is_filed_under_its_character():
     temp_dir, owner, server, read_token = _setup()
     try:

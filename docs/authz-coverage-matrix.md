@@ -745,6 +745,7 @@ and the declarations themselves are pinned by
 | POST | `/api/v1/training/presets/check` | owner_only |  | Checks pixlstash.dev for newer training recipes and keeps the ones that verify, in the cache beside the hub. Takes no URL or path; reads no picture data. Refused to READ tokens by method. |
 | GET | `/api/v1/training/sample-prompts` | owner_only |  | Writes a run's default sample prompts from the set's or character's captions and tags; the description it returns is taken from them. |
 | GET | `/api/v1/training/dataset` | owner_only |  | Counts the pictures a run of the set or character would hold and the Train dialog's checks (no tags, near copies, faces named as somebody else), and names the character a reference set belongs to. Untemplated, so also on `READ_BLOCKED_GET_PATHS`. |
+| GET | `/api/v1/training/character_set_suggestion` | owner_only |  | Ranks one character's pictures and clips for a LoRA training set: picture ids, likeness, framing and expression labels, and per-reason set-aside counts. Computed per call, writes nothing. Untemplated, so also on `READ_BLOCKED_GET_PATHS`. |
 | POST | `/api/v1/training/resolve` | owner_only |  | Resolves a recipe from the dialog's choices, a picture count and this machine's free GPU and RAM, as `POST /training/jobs` would, without queueing; reads no picture data. Refused to READ tokens by method. |
 
 ---

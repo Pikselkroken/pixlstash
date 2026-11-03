@@ -28,14 +28,17 @@ import zipfile
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
+import numpy as np
 import psutil
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import func, or_
+from sqlmodel import select
 from starlette.background import BackgroundTask
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Character, PictureSet, User
+from pixlstash.db_models import Character, Face, Picture, PictureSet, Tag, User
 from pixlstash.hub import dataset_snapshots, training_runs
 from pixlstash.hub.db import now_iso
 from pixlstash.pixl_logging import get_logger
@@ -43,11 +46,17 @@ from pixlstash.resources.arbiter import arbiter
 from pixlstash.resources.ledger import ledger
 from pixlstash.resources.ledger import ram as read_ram
 from pixlstash.scoring import select_reference_faces_for_character
+from pixlstash.services.dedup_tier_service import (
+    DEFAULT_THRESHOLD,
+    NearBucket,
+    near_pairs_in_bucket,
+)
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
 from pixlstash.services.picture_set_tree import owning_character_id
 from pixlstash.services.training_service import handle_for_run
 from pixlstash.training import (
     ai_toolkit_install,
+    dataset_picker,
     live_view,
     measurements,
     preset_updates,
@@ -62,6 +71,7 @@ from pixlstash.training.config_render import (
 )
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 from pixlstash.utils.aitoolkit_run import read_output_root, read_run
+from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.known_base_models import training_base_tile
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.service.export_utils import ExportUtils
@@ -1033,6 +1043,69 @@ def create_router(server) -> APIRouter:
             description=(
                 "The set this set sits under, if any: with no character, a "
                 "concept LoRA's dataset (#2124)."
+            ),
+        )
+
+    class SuggestionPick(BaseModel):
+        """One ranked picture of a suggested training set."""
+
+        picture_id: int
+        rank: int = Field(..., description="1-based place in the ranking.")
+        likeness: Optional[int] = Field(
+            default=None, description="Face likeness to the character, 0-100."
+        )
+        buckets: dict[str, list[str]] = Field(
+            ..., description="Its labels per kind of variety (framing, expression)."
+        )
+
+    class SuggestionGroup(BaseModel):
+        """The ranking of the stills, or of the clips."""
+
+        candidates: int = Field(..., description="Pictures showing the character.")
+        passing: int = Field(..., description="How many pass the filters.")
+        picks: list[SuggestionPick] = Field(
+            ..., description="Up to 50 picks, best first; a set takes a prefix."
+        )
+        excluded: dict[str, int] = Field(
+            ...,
+            description=(
+                "How many each reason sets aside, whether or not it is "
+                "included; a picture can fail more than one."
+            ),
+        )
+        would_add: dict[str, int] = Field(
+            ...,
+            description=(
+                "How many more would pass with only that reason included "
+                "(0 when it already is)."
+            ),
+        )
+        available: dict[str, dict[str, int]] = Field(
+            ...,
+            description=(
+                "Passing pictures per framing and expression label, so a gap "
+                "the ranking cannot close reads apart from one it can."
+            ),
+        )
+
+    class CharacterSetSuggestionResponse(BaseModel):
+        """A ranked training set for a character LoRA."""
+
+        character_id: int
+        character_name: str
+        set_name: str = Field(
+            ..., description="A free name for the set: '<name> training set'."
+        )
+        has_clips: bool = Field(
+            ..., description="Whether the character has any video clip."
+        )
+        stills: SuggestionGroup
+        clips: SuggestionGroup
+        targets: dict[str, dict[str, float]] = Field(
+            ...,
+            description=(
+                "The share of a set each label should hold; a set of N wants "
+                "max(1, round(share * N))."
             ),
         )
 
@@ -2617,6 +2690,256 @@ def create_router(server) -> APIRouter:
             "character": character,
             "parent_set_id": scoped_set.parent_set_id if scoped_set else None,
             **facts,
+        }
+
+    def _character_candidates(session, character_id: int, model_pack: str | None):
+        """The rows the training-set picker ranks, gathered for one character.
+
+        Only embeddings from *model_pack* are compared, as face search does:
+        while a pack change refreshes the library, the others are of another
+        width or space. A wholly legacy set (no pack recorded) is used as is.
+
+        Returns ``(candidates, near_pairs, has_clips)``.
+        """
+        shown = select(Face.picture_id).where(Face.character_id == character_id)
+        rows = session.exec(
+            select(
+                Face.id,
+                Face.picture_id,
+                Face.bbox_,
+                Face.features,
+                Face.model_pack,
+                Picture.score,
+                Picture.smart_score,
+                Picture.width,
+                Picture.height,
+                Picture.file_path,
+                Picture.stack_id,
+            )
+            .join(Picture, Face.picture_id == Picture.id)
+            .where(Face.character_id == character_id, Picture.deleted.is_(False))
+        ).all()
+        if not rows:
+            return [], [], False
+        # Faces on each frame that are not this character: a second face
+        # row of the character itself (a mirror, a duplicate detection) is
+        # not another person.
+        per_frame = session.exec(
+            select(Face.picture_id, Face.frame_index, func.count(Face.id))
+            .where(
+                Face.picture_id.in_(shown),
+                Face.face_index != -1,
+                or_(Face.character_id.is_(None), Face.character_id != character_id),
+            )
+            .group_by(Face.picture_id, Face.frame_index)
+        ).all()
+        tag_rows = session.exec(
+            select(Tag.picture_id, Tag.tag).where(
+                Tag.picture_id.in_(shown), Tag.tag.is_not(None)
+            )
+        ).all()
+        embeddings = dict(
+            session.exec(
+                select(Picture.id, Picture.image_embedding).where(
+                    Picture.id.in_(shown), Picture.image_embedding.is_not(None)
+                )
+            ).all()
+        )
+        pictures = {}
+        packs = {row[4] for row in rows if row[3] is not None}
+        if model_pack and packs != {None}:
+            rows = [
+                (*row[:3], row[3] if row[4] == model_pack else None, *row[4:])
+                for row in rows
+            ]
+        for (
+            face_id,
+            pid,
+            bbox,
+            features,
+            _pack,
+            score,
+            smart,
+            w,
+            h,
+            path,
+            stack,
+        ) in rows:
+            pic = pictures.setdefault(
+                pid,
+                {
+                    "score": score,
+                    "smart": smart,
+                    "area": (w or 0) * (h or 0),
+                    "path": path,
+                    "stack": stack,
+                    "faces": [],
+                },
+            )
+            pic["faces"].append((face_id, bbox, features))
+        references = dataset_picker.pick_references(
+            [
+                (fid, pid, pic["score"], pic["smart"], feat)
+                for pid, pic in pictures.items()
+                for fid, _bbox, feat in pic["faces"]
+            ]
+        )
+        likeness = dataset_picker.face_likeness(
+            [(fid, feat) for fid, _pid, _r, _s, feat in references],
+            [
+                (fid, feat)
+                for pic in pictures.values()
+                for fid, _bbox, feat in pic["faces"]
+                if feat is not None
+            ],
+        )
+        most_faces = {}
+        for pid, _frame, count in per_frame:
+            most_faces[pid] = max(most_faces.get(pid, 1), 1 + int(count))
+        tags = {}
+        for pid, tag in tag_rows:
+            tags.setdefault(pid, []).append(tag)
+
+        def face_ratio(pic):
+            best = None
+            for _fid, bbox, _feat in pic["faces"]:
+                try:
+                    x1, y1, x2, y2 = json.loads(bbox)[:4] if bbox else (0, 0, 0, 0)
+                except (ValueError, TypeError) as exc:
+                    logger.warning("Unreadable face box %r (%s); ignored.", bbox, exc)
+                    continue
+                if pic["area"] > 0 and x2 > x1 and y2 > y1:
+                    ratio = (x2 - x1) * (y2 - y1) / pic["area"]
+                    best = ratio if best is None else max(best, ratio)
+            return best
+
+        candidates = []
+        stacks = {}
+        for pid, pic in pictures.items():
+            scores = [likeness[f] for f, _b, _x in pic["faces"] if f in likeness]
+            emb = embeddings.get(pid)
+            candidates.append(
+                dataset_picker.Candidate(
+                    picture_id=pid,
+                    is_clip=bool(pic["path"]) and VideoUtils.is_video_file(pic["path"]),
+                    rating=pic["score"],
+                    smart_score=pic["smart"],
+                    likeness=max(scores) if scores else None,
+                    face_count_max=most_faces.get(pid, 1),
+                    stack_id=pic["stack"],
+                    tags=tuple(tags.get(pid, ())),
+                    face_area_ratio=face_ratio(pic),
+                    embedding=(
+                        np.frombuffer(bytes(emb), dtype=np.float32)
+                        if emb is not None
+                        else None
+                    ),
+                )
+            )
+            if pic["stack"] is not None:
+                stacks.setdefault(pic["stack"], []).append(pid)
+        # ponytail: one bucket over the whole character, unlike the dedup
+        # worker's MAX_BUCKET_MEMBERS split; milliseconds at a few thousand
+        # pictures, split it if a character of tens of thousands is slow.
+        pairs = [
+            (a, b)
+            for a, b, _sim in near_pairs_in_bucket(
+                session,
+                NearBucket("training", "character_set", tuple(sorted(pictures))),
+                DEFAULT_THRESHOLD,
+            )
+        ]
+        # A set takes a whole stack, so a stack is one shot: its members are
+        # near copies of each other however far apart their hashes are.
+        for members in stacks.values():
+            pairs.extend((members[0], other) for other in members[1:])
+        return candidates, pairs, any(c.is_clip for c in candidates)
+
+    def _free_set_name(session, base: str) -> str:
+        # Compared in Python: SQLite's lower() and LIKE fold ASCII only, so
+        # "ÅSE TRAINING SET" would not be seen as taken by "Åse training set".
+        taken = {
+            name.casefold()
+            for name in session.exec(select(PictureSet.name)).all()
+            if name
+        }
+        name, n = base, 1
+        while name.casefold() in taken:
+            n += 1
+            name = f"{base} {n}"
+        return name
+
+    @router.get(
+        "/training/character_set_suggestion",
+        summary="Suggest a training set for a character LoRA",
+        response_model=CharacterSetSuggestionResponse,
+        description=(
+            "Ranks the character's pictures and clips for a LoRA training set: "
+            "likeness and quality first, then variety in framing, expression "
+            "and look. Pictures with someone else in frame, near copies, low "
+            "quality or a poor likeness are set aside unless included. "
+            "Computed on each call; nothing is stored. Owner-only."
+        ),
+    )
+    def get_character_set_suggestion(
+        request: Request,
+        character_id: int,
+        include_other_people: bool = False,
+        include_near_duplicates: bool = False,
+        include_low_quality: bool = False,
+        include_low_likeness: bool = False,
+    ):
+        _ensure_secure(request)
+        engine = getattr(server.vault, "_engine", None)
+        model_pack = getattr(engine, "insightface_model_pack", None) or getattr(
+            server.vault, "_insightface_model_pack", None
+        )
+
+        def read(session):
+            character = session.get(Character, character_id)
+            if character is None:
+                return None
+            name = character.name or f"Character {character_id}"
+            return (
+                name,
+                _free_set_name(session, f"{name} training set"),
+                *_character_candidates(session, character_id, model_pack),
+            )
+
+        found = server.vault.db.run_immediate_read_task(read)
+        if found is None:
+            raise HTTPException(status_code=404, detail=f"No character {character_id}.")
+        name, set_name, candidates, pairs, has_clips = found
+        ranked = dataset_picker.rank(
+            candidates,
+            pairs,
+            include={
+                "other_people": include_other_people,
+                "near_duplicates": include_near_duplicates,
+                "low_quality": include_low_quality,
+                "low_likeness": include_low_likeness,
+            },
+        )
+
+        def group(key, is_clip):
+            r = ranked[key]
+            return {
+                "candidates": sum(1 for c in candidates if c.is_clip == is_clip),
+                "passing": r.passing,
+                "picks": [vars(p) for p in r.picks],
+                "excluded": r.excluded,
+                "would_add": r.would_add,
+                "available": r.available,
+            }
+
+        return {
+            "character_id": character_id,
+            "character_name": name,
+            "set_name": set_name,
+            "has_clips": has_clips,
+            "stills": group("stills", False),
+            "clips": group("clips", True),
+            "targets": dataset_picker.TARGET_SHARE,
         }
 
     @router.post(

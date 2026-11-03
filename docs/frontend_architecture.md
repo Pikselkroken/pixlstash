@@ -1585,6 +1585,28 @@ Load-bearing behaviours:
 - **Pictures are of** (the left column, under *Results go to*) says who the run's pictures are of, as a list (`ofRows`). It fills itself with everyone whose LoRA the run loads: `loraPeople` reads the form the way the server's `_lora_people` reads the graph, the people the shelf attaches to each LoRA row (`attachments` of `adapters` and `unknownLoras`, hidden rows included, plus the person a picked row was added for), less a row taken off or at strength zero; each is a row saying *by their LoRA*. The × on such a row takes the link off and leaves the LoRA running (`ofRemoved`): the row stays, struck through, saying *LoRA still runs*, with Undo, for a LoRA used for a look. **Add someone** (an `AppSelect` of everyone not listed, with typeahead) adds a row saying *linked only*, which loads nothing (`ofAdded`); its × just removes it. An empty list is a *No one* row. With two or more people the note says each face goes to whichever of them it looks most like, which the server does by likeness. Every row not struck through is sent as `character_ids`, and the server takes that list over what the LoRAs say, so the column says what will happen, a dead loader no output reads included. The one exception is a run with no LoRA person and nobody added: the field is left out, and the server reads the graph itself, so a LoRA the form could not name (a filename the shelf resolves by digest, or attachments still loading) still links its person. Offered on every kind of run, and absent in a library with no people. Neither list is remembered between popups, unlike the set: a wrong person on a later run's pictures is worse than one more pick. It is not `destination.character_id`, which files into a person's reference pictures and names no face.
 - **Save as recipe** opens `io/SaveRecipeDialog.vue` from the footer (F6, #1408; F5 shipped it as an inline name field, which that step replaced). It `POST /recipes` with the prompt, the LoRAs and the edits as `overrides`, addressed `"<slot_label>/<input_name>"` — the form `POST /workflows/run` unpacks back into `values` when that recipe is run. Since #1480 the button reads an inert **Saved** once one of the card's saved recipes would be *duplicated* by this form (`wouldDuplicate`, not `keepsTheSameLook` — an edited parameter is a variation, not a duplicate), and a typed name already on the workflow offers **Replace** instead of a second row with the same name.
 
+#### `CreateTrainingSetDialog.vue` (`io/`)
+
+The character sidebar menu's *Create a training set…*, `AppDialog size="xl"`
+with a flush body split in two: the picks on the left, a 280px coverage column
+on the right that stays in view. Mounted in **`App.vue`**, opened by the
+sidebar's `create-training-set` event (the character's id, name, projects and
+the row element to hand focus back to on close).
+
+- **One request per filter state.** `fetchCharacterSetSuggestion` on open and on
+  every *Set aside* switch; the switches are on by default (on = those pictures
+  stay out). The sliders take a prefix of each group's `picks` and never
+  refetch: Pictures runs 5-50 with the part past what passes hatched, Video
+  clips (shown only with `has_clips`) runs 1 to what passes.
+- **Coverage** draws one bar per framing and expression label over the current
+  picks, against `target = max(1, round(share * N))` from the response. A short
+  label is sorted into *The slider can close* (with a *Show N* that moves the
+  slider), *Past the top 50*, or *Not in the library* (`available` is 0).
+- **Create** posts the set with `parent_character_id` and the character's
+  projects, then bulk-adds the picks; if the add fails it deletes the empty set
+  and says so. After it, *Train a LoRA on it* emits `train`, which App routes
+  to `handleTrainLora` on the new set.
+
 #### `TrainLoraDialog.vue` (`io/`, #2119)
 **Outcome choices, numbers derived** (design artifact "Outcome choices, numbers derived"). The Train a LoRA dialog, `AppDialog size="lg"`, mounted in **`App.vue`** and opened by `useTrainingStore.openForScope({type, id, name})` from the toolbar's Train button, its overflow row and the sidebar's *Train LoRA…*. It replaced the toolbar popover `TbTrainPanel`.
 

@@ -2363,6 +2363,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("GET", "/api/v1/training/sample-prompts"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/training/dataset"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/character_set_suggestion"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/training/resolve"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/training/jobs"): RoutePolicy(
         _LOCAL,

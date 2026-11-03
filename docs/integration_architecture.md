@@ -1978,6 +1978,22 @@ that changes nothing records nothing.
 
 Any other value, including a malformed `__group:abc`, is a literal tag name as before.
 
+### 2.7 The training-set suggestion contract
+
+`GET /training/character_set_suggestion?character_id=&include_<reason>=`
+(owner-only) answers `{character_name, set_name, has_clips, targets, stills,
+clips}`. Each group carries `candidates`, `passing`, `picks` (up to 50, best
+first: `{picture_id, rank, likeness 0-100, buckets: {framing: [...],
+expression: [...]}}`), `excluded` and `would_add` per reason, and `available`
+(passing pictures per label). The reasons are `other_people`,
+`near_duplicates`, `low_quality` and `low_likeness`; each flag defaults to
+false, so every reason sets its pictures aside unless the client lets them in.
+`targets` holds a share per label: a set of N wants `max(1, round(share * N))`,
+and the client applies the same rule to draw its coverage bars. The client
+takes a prefix of `picks` per group and creates the set itself
+(`POST /picture_sets` with `parent_character_id`, then
+`POST /picture_sets/{id}/members`). Backend: §25.28 of the backend document.
+
 ---
 
 

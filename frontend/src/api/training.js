@@ -31,6 +31,19 @@ export function getTrainingDataset(params) {
   return unwrap(apiClient.get("/training/dataset", { params }));
 }
 
+/**
+ * A character's pictures ranked for a LoRA training set: stills and clips,
+ * each a best-first list a set takes a prefix of. `include` lets a set-aside
+ * reason back in: {other_people, near_duplicates, low_quality, low_likeness}.
+ */
+export function fetchCharacterSetSuggestion(characterId, include = {}) {
+  const params = { character_id: characterId };
+  for (const [reason, on] of Object.entries(include)) {
+    if (on) params[`include_${reason}`] = true;
+  }
+  return unwrap(apiClient.get("/training/character_set_suggestion", { params }));
+}
+
 /** The sample prompts written from the set's or character's captions. */
 export function getTrainingSamplePrompts(params) {
   return unwrap(apiClient.get("/training/sample-prompts", { params }));
