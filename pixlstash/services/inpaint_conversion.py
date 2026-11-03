@@ -210,6 +210,7 @@ def _convert(graph: dict, target: str) -> dict:
         and latent_link[0] in nodes
         and _reads_picture(nodes, latent_link[0], loader)
     )
+    replaced = [latent_link[0]] if from_picture else []
     if latent_source != "VAEEncode" and not from_empty and not from_picture:
         raise InpaintConversionRefused(
             f"Its sampler starts from {latent_source or 'nothing'}, not from the "
@@ -326,6 +327,7 @@ def _convert(graph: dict, target: str) -> dict:
     candidates = (
         set(resizers)
         | _switched_off(nodes, switches)
+        | set(replaced)
         | {
             node_id
             for node_id, node in nodes.items()
@@ -563,14 +565,18 @@ def _through_switches(nodes: dict, link: list) -> tuple[list, list[str]]:
     """*link* followed through each ``ComfySwitchNode`` set by a literal.
 
     Returns where it ends up and the switches it went through. A switch wired
-    to something else, or whose chosen side is not wired, is where it stops:
-    what it hands on is not in the graph to read.
+    to something else, whose chosen side is not wired, or that is met again
+    (a loop), is where it stops: what it hands on is not in the graph to read.
     """
     switches: list[str] = []
     while nodes.get(link[0], {}).get("class_type") == _SWITCH_CLASS:
         inputs = nodes[link[0]]["inputs"]
         chosen = inputs.get("on_true" if inputs.get("switch") else "on_false")
-        if not isinstance(inputs.get("switch"), bool) or not is_link(chosen):
+        if (
+            not isinstance(inputs.get("switch"), bool)
+            or not is_link(chosen)
+            or link[0] in switches
+        ):
             break
         switches.append(link[0])
         link = chosen

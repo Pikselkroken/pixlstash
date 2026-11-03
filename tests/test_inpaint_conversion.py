@@ -461,6 +461,41 @@ def test_a_two_picture_edit_inpaints_the_picture_it_edits(edited, reference):
     assert converted[save["images"][0]]["class_type"] == "InpaintStitchImproved"
 
 
+def test_the_picture_the_latent_is_made_from_wins_over_the_first_input():
+    """An encode of ``image_2`` says which picture is edited."""
+    graph = _qwen_two_picture_edit()
+    graph["12"] = {
+        "class_type": "VAEEncode",
+        "inputs": {"pixels": ["21", 0], "vae": ["3", 0]},
+    }
+    graph["6"]["inputs"]["on_false"] = ["12", 0]
+    converted = convert_to_inpaint(graph)
+    crop = _one(converted, "InpaintCropImproved")
+    assert converted[crop]["inputs"]["image"] == ["21", 0]
+    assert converted["4"]["inputs"]["images.image_1"] == ["20", 0]
+    assert converted["4"]["inputs"]["images.image_2"] == [crop, 1]
+
+
+def test_a_switch_that_reads_itself_is_refused_not_followed_forever():
+    graph = _qwen_two_picture_edit()
+    graph["6"]["inputs"].update(switch=True, on_true=["6", 0])
+    with pytest.raises(InpaintConversionRefused) as refused:
+        convert_to_inpaint(graph)
+    assert "ComfySwitchNode" in refused.value.reason
+
+
+def test_a_tiled_encode_of_the_picture_is_replaced_not_left_behind():
+    graph = _qwen_two_picture_edit()
+    graph["12"] = {
+        "class_type": "VAEEncodeTiled",
+        "inputs": {"pixels": ["20", 0], "vae": ["3", 0], "tile_size": 512},
+    }
+    graph["7"]["inputs"]["latent_image"] = ["12", 0]
+    converted = convert_to_inpaint(graph)
+    assert "12" not in converted
+    assert len(_of(converted, "VAEEncode")) == 1
+
+
 def test_a_reference_beside_an_img2img_encode_is_left_alone():
     graph = _sdxl_img2img()
     graph["9"] = {"class_type": "LoadImage", "inputs": {"image": "reference.png"}}
