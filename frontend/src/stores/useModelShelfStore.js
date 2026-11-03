@@ -67,6 +67,7 @@ import {
   UNSET_GROUP_KEY,
 } from "../utils/modelShelf";
 import {
+  defaultSlot,
   handMadeBase,
   handMadeCard,
   handMadeName,
@@ -75,6 +76,7 @@ import {
   hideSetsVerb,
   identicalSets,
   PICK_ORDERS,
+  railListed,
   rowBaseModel,
   rowMatches,
   setCard,
@@ -1541,6 +1543,16 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       : rows.value.filter((row) => !hiddenModelIds.value.has(row.id)),
   );
 
+  /**
+   * What the Models rail's *Models* tab lists: every offered row some set slot
+   * takes, a stack folded into its leader as the row list folds it. Folded
+   * after the hidden rows are left out, so a stack whose leader alone is hidden
+   * is stood for by its next member.
+   */
+  const railRows = computed(() =>
+    collapseStacks(offeredRows.value.filter(railListed)),
+  );
+
   /** The rows the current selection actually shows, with display fields. */
   const visibleRows = computed(() => {
     const kinds = filters.adapterKinds;
@@ -1769,6 +1781,28 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   /** The stack whose member panel is open, by its card key. */
   const openSetKey = ref("");
+
+  /**
+   * The Models rail's *Models* tab, as far as the set grid has to see it: the
+   * shelf rows a drag from it carries while it is in the air, and the set its
+   * *Fits* filter is on, which the set panel's *Models · N fit* sets.
+   *
+   * The drag is the rail's own pointer drag, not the browser's, so the rows
+   * live here for its length, and `railOver` is the `data-rail-drop` key of
+   * the target under the pointer, which that target lights up from.
+   */
+  const railDrag = shallowRef(null);
+  const railOver = ref("");
+  /** What the drag carries, in words: one model's name, or how many. */
+  const railDragWhat = computed(() => {
+    const dragged = railDrag.value ?? [];
+    return dragged.length === 1
+      ? modelName(dragged[0]).text || dragged[0].filename
+      : `${dragged.length} models`;
+  });
+  const railFitsSetId = ref(null);
+  /** Bumped by *Models · N fit*: the rail turns to its Models tab. */
+  const railShelfRequest = ref(0);
 
   /**
    * The order the Models rail and every slot's ＋ picker list models in: one
@@ -2842,10 +2876,19 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Make a set, optionally with members, and open its tray.
    *
    * @param {{name?: string|null, members?: Array<Object>}} [body]
+   * @param {{replaces?: string}} [options] - `replaces` is the key of a set
+   *   from pictures the new set stands in for: it is hidden once the set is
+   *   made, and shown again by the receipt's Undo.
    * @returns {Promise<Object|null>} the new set.
    */
-  async function createHandMadeSet(body = {}) {
-    const created = await setWrite(() => createWorkflowSet(body), {
+  async function createHandMadeSet(body = {}, { replaces = "" } = {}) {
+    const created = await setWrite(async () => {
+      const set = await createWorkflowSet(body);
+      // Inside the write, so the receipt only goes up once the old card is
+      // out of the grid and the set reads as edited rather than duplicated.
+      if (replaces) await changeHidden([replaces], true);
+      return set;
+    }, {
       receipt: (set) =>
         `Made "${setLabel(set)}" with ${(set.members ?? []).length} ${
           (set.members ?? []).length === 1 ? "model" : "models"
@@ -2853,12 +2896,18 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // Through the delete verb, not a bare call: this receipt can still be up
       // while the set is filled, and undoing it then would take every model added
       // since with no way back. The delete's own receipt offers that way back.
-      undo: async (set) => (await deleteHandMadeSets([set])) ?? false,
+      undo: async (set) => {
+        const deleted = await deleteHandMadeSets([set]);
+        if (deleted && replaces) await changeHidden([replaces], false);
+        return deleted ?? false;
+      },
       verb: "create",
       failure: "The set could not be made.",
     });
     if (created) {
       clearSelection();
+      // The card it replaces is out of the grid; it must not stay picked.
+      if (replaces) clearMissingSelection();
       openSetKey.value = `hand:${created.id}`;
       noteCheckpoint(created.id, created.members ?? []);
     }
@@ -2871,17 +2920,36 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Automatic until the owner changes it. The card it was made from leaves the
    * grid, since the set is on its checkpoint; deleting the set brings it back.
    *
-   * @param {Object} group - an entry of `setGroups`, never a missing-base one.
+   * **A set whose base model is off the shelf** has no checkpoint for its copy
+   * to follow, so the copy holds the members that are on the shelf, under the
+   * card's name, with its checkpoint slot empty for a replacement. The card
+   * itself is hidden rather than left beside it: it is kept, since the
+   * pictures still say what they ran with, but to the owner the set was edited.
+   *
+   * @param {Object} group - an entry of `setGroups`.
    * @returns {Promise<Object|null>} the new set.
    */
   async function cloneSetFromPictures(group) {
-    if (!group?.head || group.head.missing || cloning.has(group.key)) {
-      return null;
-    }
+    if (!group?.head || cloning.has(group.key)) return null;
     // One per card: a second press while the first is on the wire would make
     // two identical sets.
     cloning.add(group.key);
     try {
+      if (group.head.missing) {
+        return await createHandMadeSet(
+          {
+            name: group.card?.name || group.head.name,
+            seen: true,
+            members: (group.models ?? [])
+              .filter((model) => model.id != null)
+              .map((model) => ({
+                model_id: model.id,
+                slot: defaultSlot(model.kind),
+              })),
+          },
+          { replaces: group.key },
+        );
+      }
       return await createHandMadeSet({
         cloned: true,
         // Made from the card the owner is looking at: nothing in it is new.
@@ -3088,6 +3156,38 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     const base = handMadeBase(set);
     const other = fresh.map(rowBaseModel).find((b) => b && b !== base);
     return base && other ? `${base}, not ${other}` : "";
+  }
+
+  /**
+   * Shelf rows into a set, from a rail drop: each to `slotId`, or to the slot
+   * its kind goes to. One write and one receipt with Undo, the ＋ chooser's own.
+   *
+   * @param {Object} set
+   * @param {Array<Object>} models - shelf rows.
+   * @param {string} [slotId]
+   */
+  async function addRowsToHandMadeSet(set, models, slotId = "") {
+    const members = models
+      .filter((row) => row.sha256)
+      .map((row) => ({
+        model_id: row.id,
+        slot: slotId || defaultSlot(row.file_kind),
+      }));
+    if (!members.length) return null;
+    // The card already refused this during the drag; this is the same rule
+    // stated where the write happens.
+    if (setAddRefusal(set, models)) return null;
+    if (!(await confirmSecondCheckpoint(set, members))) return null;
+    return addToHandMadeSet(set, members);
+  }
+
+  /** A new set holding these shelf rows, each in its kind's slot. */
+  function createSetFromRows(models) {
+    const members = models
+      .filter((row) => row.sha256)
+      .map((row) => ({ model_id: row.id, slot: defaultSlot(row.file_kind) }));
+    if (!members.length) return Promise.resolve(null);
+    return createHandMadeSet({ members });
   }
 
   /**
@@ -4965,6 +5065,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     templatesNewReady.value = 0;
     setsError.value = "";
     openSetKey.value = "";
+    railDrag.value = null;
+    railOver.value = "";
+    railFitsSetId.value = null;
     selectedSetIds.value = new Set();
     clearMissingSelection();
     checkpointAdded.value = null;
@@ -5056,6 +5159,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsLoaded,
     loadWorkflowSets,
     setRailMounted,
+    railRows,
+    railDrag,
+    railOver,
+    railDragWhat,
+    railFitsSetId,
+    railShelfRequest,
+    addRowsToHandMadeSet,
+    createSetFromRows,
     shownModelIds,
     visibleCombinations,
     setGroups: setGroupList,

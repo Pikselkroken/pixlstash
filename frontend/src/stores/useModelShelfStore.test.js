@@ -4041,11 +4041,41 @@ describe("sets from pictures are hidden, never deleted", () => {
       seen: true,
       members: [{ model_id: 1, slot: "checkpoint" }],
     });
+  });
 
-    // A set named after a file the shelf does not hold has nothing to clone.
-    createWorkflowSet.mockClear();
-    await store.cloneSetFromPictures({ head: { missing: true }, models: [] });
-    expect(createWorkflowSet).not.toHaveBeenCalled();
+  it("edits a set whose base model is off the shelf as a copy that hides it", async () => {
+    useOperationStore().setLocalReceiptHost(true);
+    const store = shelfWithASet();
+    createWorkflowSet.mockReset().mockResolvedValue({ id: 9, members: [] });
+    deleteWorkflowSet.mockReset().mockResolvedValue({ deleted: { id: 9 } });
+    await store.cloneSetFromPictures({
+      key: "missing:gone.safetensors",
+      head: { missing: true, name: "gone.safetensors" },
+      card: { name: "gone" },
+      models: [
+        { id: 2, kind: "vae" },
+        { id: 5, kind: "text_encoder" },
+      ],
+    });
+
+    // The members on the shelf, the checkpoint slot left for a replacement,
+    // and no `cloned`: there is no checkpoint for it to follow.
+    expect(createWorkflowSet).toHaveBeenCalledWith({
+      name: "gone",
+      seen: true,
+      members: [
+        { model_id: 2, slot: "vae" },
+        { model_id: 5, slot: "text_encoder" },
+      ],
+    });
+    expect(store.openSetKey).toBe("hand:9");
+    // The old card is kept, hidden, so the set reads as edited in place.
+    expect(hiddenOnServer.has("missing:gone.safetensors")).toBe(true);
+
+    // Undo takes the copy away and brings the card back.
+    await useOperationStore().takeLocalReceiptAction();
+    expect(deleteWorkflowSet).toHaveBeenCalledWith(9);
+    expect(hiddenOnServer.has("missing:gone.safetensors")).toBe(false);
   });
 
   it("makes one clone when the button is pressed twice", async () => {

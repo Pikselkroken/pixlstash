@@ -1,8 +1,10 @@
 <template>
   <AppInspector
+    v-model="tab"
     class="mrail"
     label="Models"
     :open="sidebarStore.modelsRailOpen"
+    :tabs="tabs"
   >
     <!-- One head row on the toolbar's line (the StatsSidebar idiom). -->
     <template #head>
@@ -35,7 +37,11 @@
       />
     </template>
 
-    <div class="mrail-scroll">
+    <!-- The shelf to drag from, on the Sets place only: the sets it drops on
+         are drawn there, and every other place's list is the shelf itself. -->
+    <ModelsRailShelf v-if="shelfShown" />
+
+    <div v-else class="mrail-scroll">
       <!-- The training runs place (#2169): the open run, the picked run, or
            the folder. -->
       <template v-if="onRuns">
@@ -227,7 +233,15 @@
  * The rail holds no selection of its own: it reads the store's, so the shelf,
  * the set grid and this rail cannot disagree about what is picked.
  */
-import { computed, nextTick, onBeforeUnmount, provide, reactive } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  provide,
+  reactive,
+  ref,
+  watch,
+} from "vue";
 import { useRoute } from "vue-router";
 import { VIcon } from "vuetify/components";
 
@@ -256,6 +270,7 @@ import { baseOf as runBaseOf } from "../../utils/trainingRuns.js";
 import ModelsRailModel from "./ModelsRailModel.vue";
 import ModelsRailRun from "./ModelsRailRun.vue";
 import ModelsRailSet from "./ModelsRailSet.vue";
+import ModelsRailShelf from "./ModelsRailShelf.vue";
 
 const store = useModelShelfStore();
 const foldersStore = useModelFoldersStore();
@@ -281,6 +296,48 @@ provide(RAIL_SECTIONS, {
 // ── What is picked ────────────────────────────────────────────────────────
 
 const onRuns = computed(() => route.name === "models-runs");
+
+// ── Details | Models ──────────────────────────────────────────────────────
+//
+// On the Sets place the rail has two tabs: Details, the inspector below, and
+// Models, the shelf to drag onto a set or add to the open one
+// (`ModelsRailShelf.vue`). Elsewhere it is the inspector alone.
+
+const onSets = computed(() => !onRuns.value && store.place === "sets");
+
+const tab = ref("details");
+
+const tabs = computed(() =>
+  onSets.value
+    ? [
+        { value: "details", label: "Details", icon: "mdi-information-outline" },
+        {
+          value: "models",
+          label: "Models",
+          icon: "mdi-cube-outline",
+          count: store.railRows.length,
+        },
+      ]
+    : [],
+);
+
+const shelfShown = computed(() => onSets.value && tab.value === "models");
+
+// The tray's *Models · N fit* asks for the shelf with Fits on.
+watch(
+  () => store.railShelfRequest,
+  () => {
+    tab.value = "models";
+  },
+);
+
+// A double-click on a card that opened this rail asks for the card's details.
+watch(
+  () => sidebarStore.cardTabRequest,
+  () => {
+    tab.value = "details";
+  },
+);
 
 /** The set cards picked: evidence cards, missing cards, and hand-made sets. */
 const pickedGroups = computed(() => {

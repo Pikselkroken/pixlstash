@@ -26,14 +26,19 @@
           <span class="msp__count num">{{ countLabel }}</span>
           <span class="msp__spacer"></span>
           <!-- Editing a set from pictures makes it the owner's own set on its
-               checkpoint (#1972), which replaces this card. Not for a set whose
-               base model is off the shelf, which no set of theirs can hold. -->
+               checkpoint (#1972), which replaces this card. With the base model
+               off the shelf the set of theirs keeps the members that are on it,
+               with the checkpoint slot empty for a replacement, and this card
+               is hidden behind it (`cloneSetFromPictures`). -->
           <AppButton
-            v-if="!missing"
             variant="ghost"
             size="sm"
             icon-left="pencil-outline"
-            tooltip="Makes it a set of your own on this checkpoint. It keeps following the pictures and reads Automatic until you change it. No file is touched."
+            :tooltip="
+              missing
+                ? 'Makes it a set of your own with the models that are on the shelf, and an empty checkpoint slot to put a replacement in. No file is touched.'
+                : 'Makes it a set of your own on this checkpoint. It keeps following the pictures and reads Automatic until you change it. No file is touched.'
+            "
             data-testid="set-clone"
             @click="emit('clone')"
             >Edit set</AppButton
