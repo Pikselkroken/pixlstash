@@ -2957,9 +2957,15 @@ own row.
     set's checkpoints have only run in another kind of workflow, "Used for
     Image to Video, not Image to Image") is a third line, in amber, on a row
     that can still be taken: the owner may know the model does this kind
-    too. The surface has a width of its own (320px) and a row is the set's name over that line, wrapped: the sets
+    too. The rows sit under three headings, each left out when empty:
+    *Fits this workflow*, *Used in other kinds of workflow* (the warned
+    rows) and *Not usable here* (will not load, or changes nothing); inside
+    each, a favourite set leads, then A to Z by name, hand-made first on a
+    tie. The surface has a width of its own (320px) and a row is the set's name over that line, wrapped: the sets
     are read after the menu has opened and been placed, and a surface sized
-    by a long row ran off the window. The button is found through a wrapper,
+    by a long row ran off the window. Its height is the room `v-menu` leaves
+    beside the button (the content box's max-height) and it scrolls inside
+    that, rather than running off the bottom of the window. The button is found through a wrapper,
     not a `ref`: `v-menu` hands its activator a `ref` of its own and a second
     one on the same button is the one that loses, which left focus on the
     page after a choice. It writes nothing: it emits

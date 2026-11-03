@@ -39,31 +39,43 @@
       data-testid="wftab-use-set-menu"
       @keydown="onMenuKeydown"
     >
-      <div class="section-label ctx-label" aria-hidden="true">Your sets</div>
-      <!-- Hand-made sets first, then the ones read from the owner's pictures.
-           A set that cannot be used stays in the list, with why: one that is
-           missing would read as a set the owner has lost. Named outright: the
-           two spans would otherwise be read run together. -->
-      <button
-        v-for="row in rows ?? []"
-        :key="row.key"
-        class="ctx-item"
-        :class="{ 'ctx-item--disabled': row.off }"
-        type="button"
-        role="menuitem"
-        :aria-disabled="row.off ? 'true' : undefined"
-        :aria-label="[row.name, row.meta, row.warning].filter(Boolean).join(', ')"
-        :data-set="row.key"
-        @click="choose(row)"
+      <!-- Grouped by what taking the set would do here: the sets that fit,
+           then the ones that ran in another kind of workflow, then the ones
+           that cannot be used. A set that cannot be used stays in the list,
+           with why: one that is missing would read as a set the owner has
+           lost. A row is named outright: the two spans would otherwise be
+           read run together. -->
+      <div
+        v-for="section in sections"
+        :key="section.id"
+        role="group"
+        :aria-label="section.label"
+        :data-section="section.id"
       >
-        <span class="ctx-label-text">{{ row.name }}</span>
-        <span class="ctx-meta">{{ row.meta }}</span>
-        <!-- Its checkpoints only ran in another kind of workflow: said, in
-             amber, and still taken, since the owner may know better. -->
-        <span v-if="row.warning" class="ctx-meta wfset-warn">{{
-          row.warning
-        }}</span>
-      </button>
+        <div class="section-label ctx-label" aria-hidden="true">
+          {{ section.label }}
+        </div>
+        <button
+          v-for="row in section.rows"
+          :key="row.key"
+          class="ctx-item"
+          :class="{ 'ctx-item--disabled': row.off }"
+          type="button"
+          role="menuitem"
+          :aria-disabled="row.off ? 'true' : undefined"
+          :aria-label="[row.name, row.meta, row.warning].filter(Boolean).join(', ')"
+          :data-set="row.key"
+          @click="choose(row)"
+        >
+          <span class="ctx-label-text">{{ row.name }}</span>
+          <span class="ctx-meta">{{ row.meta }}</span>
+          <!-- Its checkpoints only ran in another kind of workflow: said, in
+               amber, and still taken, since the owner may know better. -->
+          <span v-if="row.warning" class="ctx-meta wfset-warn">{{
+            row.warning
+          }}</span>
+        </button>
+      </div>
       <!-- The read is out, failed, or found nothing: a row that says so, never
            an empty surface. Opening the menu again asks again. -->
       <button
@@ -98,17 +110,19 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { loraBase } from "../../utils/loraChain";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
-import {
-  favouriteSetsFirst,
-  handMadeName,
-  headName,
-  setGroups,
-} from "../../utils/workflowSets";
+import { handMadeName, headName, setGroups } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 
 // The root is a wrapper round the menu, whose content is teleported: what the
 // tab puts on this component belongs on the button.
 defineOptions({ inheritAttrs: false });
+
+/** The menu's headings, in the order they are drawn. */
+const SECTIONS = [
+  { id: "fits", label: "Fits this workflow" },
+  { id: "other", label: "Used in other kinds of workflow" },
+  { id: "off", label: "Not usable here" },
+];
 
 const props = defineProps({
   /** The workflow whose rows are filled. */
@@ -274,16 +288,24 @@ function fillOf(plan) {
 }
 
 /**
- * The sets in the order they are drawn: hand-made first, a favourite leading
- * inside each group. Null while the sets are unread.
+ * The sets in the order they are drawn: a favourite first, then by name, so a
+ * set is where its name says it is. Two sets of one name keep the shelf's
+ * order, hand-made first. Null while the sets are unread.
  */
-const rankedSets = computed(
-  () =>
-    sets.value &&
-    favouriteSetsFirst(sets.value, (key) => favourites.isFavourite("set", key)),
-);
+const rankedSets = computed(() => {
+  if (!sets.value) return null;
+  const fav = (set) => favourites.isFavourite("set", set.key);
+  return [...sets.value].sort(
+    (a, b) =>
+      fav(b) - fav(a) ||
+      a.name.localeCompare(b.name, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }),
+  );
+});
 
-/** The rows as drawn, or null while the sets are unread. */
+/** The rows, unsectioned, or null while the sets are unread. */
 const rows = computed(
   () =>
     rankedSets.value?.map((set) => {
@@ -316,6 +338,15 @@ const rows = computed(
       };
     }) ?? null,
 );
+
+/** The rows under their headings, in order; a heading with no rows is left out. */
+const sections = computed(() => {
+  const sectionOf = (row) => (row.off ? "off" : row.warning ? "other" : "fits");
+  return SECTIONS.map((section) => ({
+    ...section,
+    rows: (rows.value ?? []).filter((row) => sectionOf(row) === section.id),
+  })).filter((section) => section.rows.length);
+});
 
 /** Every set on the shelf, and one plan request for all of them. */
 async function read() {
@@ -432,8 +463,15 @@ defineExpose({ open: openMenu, focus });
   display: inline-flex;
 }
 
+/* The menu's content box takes the room left below (or above) the button as
+   its max-height; the surface scrolls inside it rather than running off the
+   bottom of the window. `min-height: 0` lets it shrink in that flex column. */
 .wfset-menu {
   width: 320px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 /* A row is a set's name over what taking it would do. On two lines, and the
