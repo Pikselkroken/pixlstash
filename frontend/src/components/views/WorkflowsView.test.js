@@ -2106,6 +2106,49 @@ describe("Add…, a dropped file, and Unfiled recipes", () => {
     expect(importWorkflow).not.toHaveBeenCalled();
   });
 
+  it("says why a file was not added in a toast, not the grid's error line", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    importWorkflow.mockReset();
+    importWorkflow.mockRejectedValue(
+      Object.assign(new Error("422"), {
+        response: { status: 422, data: { detail: "Not a ComfyUI workflow." } },
+      }),
+    );
+    await chooseFiles(wrapper, ["broken.json"]);
+
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const notice = useNoticeStore().notices.find(
+      (entry) => entry.text === "Not a ComfyUI workflow.",
+    );
+    expect(notice?.level).toBe("error");
+    expect(store.error).toBe("");
+    expect(wrapper.find(".wfv-error").exists()).toBe(false);
+  });
+
+  it("says a file too large to be a workflow is not read, in a toast", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    importWorkflow.mockReset();
+    const input = wrapper.find(".wfv-file-input");
+    const file = new File(["{}"], "huge.json", { type: "application/json" });
+    Object.defineProperty(file, "size", { value: 51 * 1024 * 1024 });
+    Object.defineProperty(input.element, "files", {
+      value: [file],
+      configurable: true,
+    });
+    await input.trigger("change");
+    await flush();
+
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const notice = useNoticeStore().notices.find(
+      (entry) => entry.text === "huge.json is too large to be a workflow.",
+    );
+    expect(notice?.level).toBe("error");
+    expect(importWorkflow).not.toHaveBeenCalled();
+    expect(store.error).toBe("");
+  });
+
   it("is not a drop target for an in-app picture drag the desktop fills with files", async () => {
     const wrapper = await grid();
     const dataTransfer = { files: [], types: ["Files", "application/json"] };
