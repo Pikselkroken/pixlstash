@@ -94,7 +94,7 @@ export function headModel(combination) {
  * covers and its `sets` list are read in this order, so a caller that filtered or
  * concatenated payloads must not be able to change what a card leads with.
  */
-function byEvidence(entries) {
+export function byEvidence(entries) {
   return [...entries].sort(
     (a, b) =>
       (b.picture_count ?? b.pictures ?? 0) -

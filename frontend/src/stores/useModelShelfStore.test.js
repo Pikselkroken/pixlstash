@@ -3264,6 +3264,66 @@ describe("sets from pictures are hidden, never deleted", () => {
     return { ...model, sha256: sha, slot: "checkpoint", on_shelf: true };
   }
 
+  it("draws a set made by Edit set in its card's place, not first", async () => {
+    const other = { id: 3, name: "other.st", kind: "checkpoint" };
+    const vae = { id: 2, name: "style.st", kind: "vae" };
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, sha256: "a".repeat(64), filename: "base.st" }),
+      adapter({ id: 2, sha256: "b".repeat(64), filename: "style.st" }),
+      adapter({ id: 3, sha256: "c".repeat(64), filename: "other.st" }),
+    ]);
+    // The copy of the missing-base set hides its card, as Edit set does.
+    hiddenOnServer.add("missing:gone.st");
+    const set = (id, extra) => ({
+      id,
+      name: `set ${id}`,
+      declined: [],
+      members: [],
+      picture_count: 0,
+      recipes: 0,
+      history_runs: 0,
+      ...extra,
+    });
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        { key: "a", models: [checkpoint], recipes: 1, picture_count: 20, covers: [] },
+        // Covered by set 21, made on its checkpoint by Edit set.
+        { key: "b", models: [other], recipes: 1, picture_count: 10, covers: [], covered_by: [21] },
+        {
+          key: "c",
+          models: [vae],
+          missing: [{ name: "gone.st", workflow_ids: [] }],
+          recipes: 1,
+          picture_count: 15,
+          covers: [],
+        },
+      ],
+      no_set: [],
+      hand_made: [
+        // Newest first, as the server serves them.
+        set(22, { replaces: "missing:gone.st" }),
+        set(21, { cloned: true, replaces: "model:3", picture_count: 10, recipes: 1 }),
+        set(20),
+      ],
+      hidden_sets: [...hiddenOnServer],
+    });
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+
+    const { lead, sets } = store.setGridCards;
+    // A set made by hand still leads.
+    expect(lead.map((group) => group.key)).toEqual(["hand:20"]);
+    // The edited ones sit where their cards did: the copy of the hidden
+    // missing card by that card's pictures (15), not its own (0).
+    expect(sets.map((group) => group.key)).toEqual([
+      "model:1",
+      "hand:22",
+      "hand:21",
+    ]);
+  });
+
   it("takes only the hand-made sets the grid draws on Select all", async () => {
     // A hidden hand-made set leaves the grid (#1869), so Select all must not
     // take it: Delete would otherwise delete a set the reader cannot see.
@@ -4016,10 +4076,12 @@ describe("sets from pictures are hidden, never deleted", () => {
 
     await store.cloneSetFromPictures(store.setGroups[0]);
 
-    // The checkpoint alone: the pictures on it bring in the rest (#1972).
+    // The checkpoint alone: the pictures on it bring in the rest (#1972),
+    // and the card it was made from is where it is drawn.
     expect(createWorkflowSet).toHaveBeenCalledWith({
       cloned: true,
       seen: true,
+      replaces: "model:1",
       members: [{ model_id: 1, slot: "checkpoint" }],
     });
     expect(store.openSetKey).toBe("hand:9");
@@ -4063,6 +4125,7 @@ describe("sets from pictures are hidden, never deleted", () => {
     expect(createWorkflowSet).toHaveBeenCalledWith({
       name: "gone",
       seen: true,
+      replaces: "missing:gone.safetensors",
       members: [
         { model_id: 2, slot: "vae" },
         { model_id: 5, slot: "text_encoder" },

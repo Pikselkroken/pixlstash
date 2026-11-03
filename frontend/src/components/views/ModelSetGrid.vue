@@ -630,7 +630,7 @@ const trayColumns = computed(() =>
  * is drawn in.
  */
 const flatRows = computed(() => {
-  const hand = store.handMadeGroups.map((group, cardIndex) => ({
+  const handCard = (group) => ({
     kind: "card",
     hand: true,
     id: `card:${group.key}`,
@@ -643,9 +643,8 @@ const flatRows = computed(() => {
     },
     headId: null,
     dropModels: dropModelIds(group),
-    cardIndex,
-  }));
-  const evidence = store.setGroups.map((group, cardIndex) => ({
+  });
+  const evidenceCard = (group) => ({
     kind: "card",
     id: `card:${group.key}`,
     key: group.key,
@@ -656,9 +655,16 @@ const flatRows = computed(() => {
     // card is selected as itself, for Replace (`selectedMissingKeys`).
     missingKey: group.head?.missing ? group.key : null,
     dropModels: dropModelIds(group),
-    cardIndex: hand.length + cardIndex,
-  }));
-  const cards = [{ kind: "new", id: "new", key: "new" }, ...hand, ...evidence];
+  });
+  // A set made by Edit set is drawn in its card's place (`setGridCards`).
+  const { lead, sets } = store.setGridCards;
+  const cards = [
+    { kind: "new", id: "new", key: "new" },
+    ...[
+      ...lead.map(handCard),
+      ...sets.map((group) => (group.set ? handCard(group) : evidenceCard(group))),
+    ].map((entry, cardIndex) => ({ ...entry, cardIndex })),
+  ];
   const openKey = store.openSetKey;
   if (!openKey) return cards;
   const at = cards.findIndex((entry) => entry.key === openKey);

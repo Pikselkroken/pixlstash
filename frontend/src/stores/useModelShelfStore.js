@@ -67,6 +67,7 @@ import {
   UNSET_GROUP_KEY,
 } from "../utils/modelShelf";
 import {
+  byEvidence,
   defaultSlot,
   handMadeBase,
   handMadeCard,
@@ -2405,6 +2406,42 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   );
 
   /**
+   * The set grid's cards in drawn order: `lead`, the owner's own sets that
+   * come first (newest first), then `sets`, the sets from pictures by their
+   * evidence.
+   *
+   * **A set made by Edit set keeps its card's place** rather than jumping to
+   * the front as a new set: `cloned`, or `replaces` naming the card. It sorts
+   * among the sets from pictures by that card's evidence while the card is
+   * still read (a missing-base card, hidden behind its copy), else by its own,
+   * which for a set on the card's checkpoint is the same pictures.
+   */
+  const setGridCards = computed(() => {
+    const inPlace = (group) => group.set.cloned || Boolean(group.set.replaces);
+    const cards = new Map(evidenceGroups.value.map((g) => [g.key, g]));
+    const weighed = (group) => {
+      if (!group.set) return { ...group, group };
+      const card = cards.get(group.set.replaces);
+      return {
+        key: group.key,
+        pictures: card ? card.pictures : group.set.picture_count,
+        recipes: card ? card.recipes : group.set.recipes,
+        historyRuns: card ? card.historyRuns : group.set.history_runs,
+        group,
+      };
+    };
+    const placed = byEvidence(
+      [...setGroupList.value, ...handMadeGroups.value.filter(inPlace)].map(
+        weighed,
+      ),
+    ).map((entry) => entry.group);
+    return {
+      lead: handMadeGroups.value.filter((group) => !inPlace(group)),
+      sets: arrangeSets(placed, isFavouriteSet),
+    };
+  });
+
+  /**
    * The hand-made sets a surface other than the grid offers or names (the
    * rail, the set chooser). Hidden is a filter on the library (#1869), so a
    * set hidden here is left out of those too, until "Show them" draws it. The
@@ -2860,6 +2897,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       members: (snapshot.members ?? []).map(memberBack),
       ...clonedBack(snapshot),
       ...(snapshot.template ? { template: snapshot.template } : {}),
+      ...(snapshot.replaces ? { replaces: snapshot.replaces } : {}),
       ...(snapshot.declined?.length ? { declined: snapshot.declined } : {}),
     });
     if (snapshot.hidden) {
@@ -2876,22 +2914,22 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Make a set, optionally with members, and open its tray.
    *
    * @param {{name?: string|null, members?: Array<Object>}} [body]
-   * @param {{replaces?: string}} [options] - `replaces` is the key of a set
-   *   from pictures the new set stands in for: it is hidden once the set is
-   *   made, and shown again by the receipt's Undo.
+   * @param {{hides?: string}} [options] - `hides` is the key of a set from
+   *   pictures the new set stands in for: it is hidden once the set is made,
+   *   and shown again by the receipt's Undo.
    * @returns {Promise<Object|null>} the new set.
    */
-  async function createHandMadeSet(body = {}, { replaces = "" } = {}) {
+  async function createHandMadeSet(body = {}, { hides = "" } = {}) {
     const created = await setWrite(async () => {
       // The old card goes first: a set made beside a card that will not hide
       // reads as a duplicate, not an edit. `changeHidden` has said why.
-      if (replaces && !(await changeHidden([replaces], true))) {
+      if (hides && !(await changeHidden([hides], true))) {
         throw new Error("The set could not be edited.");
       }
       try {
         return await createWorkflowSet(body);
       } catch (err) {
-        if (replaces) await changeHidden([replaces], false);
+        if (hides) await changeHidden([hides], false);
         throw err;
       }
     }, {
@@ -2904,7 +2942,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // since with no way back. The delete's own receipt offers that way back.
       undo: async (set) => {
         const deleted = await deleteHandMadeSets([set]);
-        if (deleted && replaces) await changeHidden([replaces], false);
+        if (deleted && hides) await changeHidden([hides], false);
         return deleted ?? false;
       },
       verb: "create",
@@ -2913,7 +2951,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (created) {
       clearSelection();
       // The card it replaces is out of the grid; it must not stay picked.
-      if (replaces) clearMissingSelection();
+      if (hides) clearMissingSelection();
       openSetKey.value = `hand:${created.id}`;
       noteCheckpoint(created.id, created.members ?? []);
     }
@@ -2946,6 +2984,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           {
             name: group.card?.name || group.head.name,
             seen: true,
+            replaces: group.key,
             // Hidden members too: the copy stands in for the whole set.
             members: (group.allModels ?? group.models ?? [])
               .filter((model) => model.id != null)
@@ -2954,13 +2993,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
                 slot: defaultSlot(model.kind),
               })),
           },
-          { replaces: group.key },
+          { hides: group.key },
         );
       }
       return await createHandMadeSet({
         cloned: true,
         // Made from the card the owner is looking at: nothing in it is new.
         seen: true,
+        // Drawn in the card's place, not first (`setGridCards`).
+        replaces: group.key,
         members: [{ model_id: group.head.id, slot: "checkpoint" }],
       });
     } finally {
@@ -5195,6 +5236,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     toggleSet,
     handMadeSets,
     handMadeGroups,
+    setGridCards,
     shownHandMadeSets,
     selectedSetIds,
     selectedMissingKeys,

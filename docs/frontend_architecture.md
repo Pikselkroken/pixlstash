@@ -2031,10 +2031,15 @@ the shelf's workflow sets section) and served as `hand_made` on
   set covers the card, which leaves the grid until the set is deleted. **A
   missing-base set** has no checkpoint to follow, so its copy holds the on-shelf
   members under the card's name, without `cloned`, its checkpoint slot empty
-  for a replacement, and the card is HIDDEN (`createHandMadeSet`'s `replaces`)
+  for a replacement, and the card is HIDDEN (`createHandMadeSet`'s `hides`)
   so the set reads as edited in place; the receipt's Undo deletes the copy and
   shows the card again. Deleting the copy later leaves the card hidden: *Show
-  them* brings it back.
+  them* brings it back. **Either way the set keeps the card's place**: both
+  post `replaces` (the card's key), and `store.setGridCards` draws a set with
+  `cloned` or `replaces` among the sets from pictures, by the hidden card's
+  evidence while it is still read, else by its own (a set on the card's
+  checkpoint covers the same pictures), instead of first with the sets made
+  by hand.
 - **A hand-made card selects the SET; a tray tile selects a FILE.**
   `store.selectSet` / `selectedSetIds` is a second selection. A plain click on
   either kind clears the other; Ctrl+click and select-all hold both (see the

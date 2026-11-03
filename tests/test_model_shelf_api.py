@@ -2196,6 +2196,31 @@ def test_a_cloned_set_says_so_and_its_snapshot_keeps_the_mark(shelf_env):
         _wipe_sets(shelf_env.server)
 
 
+def test_a_set_made_by_edit_set_names_the_card_it_replaces(shelf_env):
+    """`replaces` is how the grid draws an edited set in its card's place, so it
+    is served on the set, in the list, and on a delete's snapshot for an Undo."""
+    try:
+        key = "missing:gone.safetensors"
+        made = _new_set(shelf_env, name="Edited", replaces=key)
+        assert made["replaces"] == key
+        plain = _new_set(shelf_env, name="By hand")
+        assert plain["replaces"] is None
+        listed = _hand_made(shelf_env)
+        assert (listed[made["id"]]["replaces"], listed[plain["id"]]["replaces"]) == (
+            key,
+            None,
+        )
+        r = shelf_env.owner.delete(f"{API}/models/workflow-sets/{made['id']}")
+        assert r.status_code == 200, r.text
+        assert r.json()["deleted"]["replaces"] == key
+        r = shelf_env.owner.post(
+            f"{API}/models/workflow-sets", json={"name": "x", "replaces": ""}
+        )
+        assert r.status_code == 422, r.text
+    finally:
+        _wipe_sets(shelf_env.server)
+
+
 def _held(entry) -> dict[str, dict]:
     """What a served set holds, by member name."""
     return {m["name"]: m for m in entry["members"]}
