@@ -1030,9 +1030,12 @@ async function confirmDelete() {
   const folders = list.some((card) => card.run);
   const ok = await useConfirm().confirm({
     title: n === 1 ? `Delete "${list[0].name}"?` : `Delete ${n} training runs?`,
+    // The run is named in the message as well as the title: with no styled
+    // dialog mounted, `confirm` falls back to the browser's, which shows only
+    // the message.
     message: folders
-      ? `${n === 1 ? "Its folder goes" : "Their folders go"} to your ${trashName()}, with the checkpoints and previews in ${n === 1 ? "it" : "them"}. Checkpoints already imported stay on the shelf.`
-      : `${n === 1 ? "It" : "They"} never made a folder, so only the record goes.`,
+      ? `${n === 1 ? `"${list[0].name}" goes` : `${n} training runs go`} to your ${trashName()}, with the checkpoints and previews in ${n === 1 ? "its folder" : "their folders"}. Checkpoints already imported stay on the shelf.`
+      : `${n === 1 ? `"${list[0].name}" never made a folder, so only its record goes.` : `${n} runs never made a folder, so only their records go.`}`,
     confirmLabel: folders ? `Move to ${trashName()}` : "Delete",
     danger: true,
   });
@@ -1079,8 +1082,10 @@ function onGridKeydown(event) {
     clearSelection();
     return;
   }
+  // From a card only: Backspace on the card's own Retry button is not a delete.
   if (
     (event.key === "Delete" || event.key === "Backspace") &&
+    event.target?.matches?.("[data-run-index]") &&
     !event.ctrlKey &&
     !event.metaKey &&
     !event.altKey &&

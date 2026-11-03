@@ -510,7 +510,10 @@ def create_router(server) -> APIRouter:
                 job["name"],
                 training_folder=job["training_folder"],
             ).save_root
-            if os.path.realpath(save_root) == run_dir:
+            # normcase: a case-insensitive drive spells one folder two ways.
+            if os.path.normcase(os.path.realpath(save_root)) == os.path.normcase(
+                run_dir
+            ):
                 raise HTTPException(
                     status_code=409,
                     detail=(

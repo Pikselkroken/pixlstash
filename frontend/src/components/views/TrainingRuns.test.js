@@ -1557,8 +1557,8 @@ describe("deleting runs", () => {
     wrapper
       .findAll(".tr-card")
       .find((c) => c.find(".tr-card-name").text() === name);
-  const del = (wrapper) =>
-    wrapper.find(".tr-grid").trigger("keydown", { key: "Delete" });
+  const del = (wrapper, key = "Delete") =>
+    wrapper.find(".tr-card--checked").trigger("keydown", { key });
 
   beforeEach(() => {
     trashRun.mockReset();
@@ -1587,6 +1587,7 @@ describe("deleting runs", () => {
     await settle(wrapper);
     await settle(wrapper);
     expect(ask).toHaveBeenCalledTimes(1);
+    expect(ask.mock.calls[0][0]).toContain("2 training runs go");
     expect(ask.mock.calls[0][0]).toContain("Checkpoints already imported stay");
     expect(trashRun.mock.calls.map((c) => c[1]).sort()).toEqual([
       "Clementine",
@@ -1597,6 +1598,34 @@ describe("deleting runs", () => {
     expect(deleteTrainingJob).not.toHaveBeenCalled();
     expect(useNoticeStore().notices.at(-1).text).toBe("Cleared 2 runs.");
     expect(wrapper.findAll(".tr-card")).toHaveLength(0);
+  });
+
+  it("names a single run in the question, and takes Backspace too", async () => {
+    const ask = confirmSpy().mockReturnValue(false);
+    const wrapper = await openWith([run()]);
+    await tick(wrapper, "Clementine");
+    await del(wrapper, "Backspace");
+    expect(ask.mock.calls[0][0]).toContain('"Clementine" goes to your');
+  });
+
+  it("does not delete on Backspace from a control inside a card", async () => {
+    const ask = confirmSpy().mockReturnValue(true);
+    listTrainingJobs.mockResolvedValue([
+      {
+        id: 9,
+        uuid: "u1",
+        name: "Clementine",
+        status: "error",
+        run_name: null,
+        created_at: "2026-10-01T00:00:00Z",
+      },
+    ]);
+    const wrapper = await openWith([]);
+    await tick(wrapper, "Clementine");
+    await wrapper
+      .find("[data-testid='tr-card-retry']")
+      .trigger("keydown", { key: "Backspace" });
+    expect(ask).not.toHaveBeenCalled();
   });
 
   it("deletes nothing when the question is declined", async () => {
