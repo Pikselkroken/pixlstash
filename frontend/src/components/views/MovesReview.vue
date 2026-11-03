@@ -20,8 +20,8 @@
         >
           Look again
         </AppButton>
-        <!-- The app-wide tail, minus undo: this view replaces the grid and its
-             toolbar, so without it neither Settings nor the right rail has a
+        <!-- The app-wide tail (undo/redo and the rail toggle): this view
+             replaces the grid and its toolbar, so without it neither has a
              control on the screen (#1415). -->
         <TbGlobalActions separator />
       </div>
@@ -229,11 +229,14 @@
         </div>
       </template>
     </div>
+    <!-- Narrates an undo/redo taken from the toolbar's control. -->
+    <ActionReceipt />
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from "vue";
+import ActionReceipt from "../widgets/ActionReceipt.vue";
 import AppButton from "../widgets/AppButton.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -421,6 +424,8 @@ onMounted(() => {
 
 <style scoped>
 .mv {
+  /* The receipt slot is absolutely placed against this root. */
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;

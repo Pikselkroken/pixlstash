@@ -3253,8 +3253,8 @@ describe("a long move, in the panel that is running it", () => {
 
 // #938-follow-up: the shelf is a destination like Duplicates, so it carries the
 // app-wide tail - the stats toggle - rather than dropping it the moment the
-// grid unmounts. Settings is the title bar's (#2158). Undo is the exception: nothing on this screen writes
-// to the operation log, so there is nothing here for it to take back.
+// grid unmounts. Settings is the title bar's (#2158). Undo/redo rides in the
+// same tail, as it does on every screen.
 describe("the app-wide toolbar tail", () => {
   it("toggles the Models rail itself, and leaves Settings to the title bar", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
@@ -3279,8 +3279,8 @@ describe("the app-wide toolbar tail", () => {
     expect(sidebar.statsOpen).toBe(false);
   });
 
-  it("orders the tail separator → TbGlobalActions, last in the bar", async () => {
-    // The documented tail minus undo
+  it("orders the tail separator → UndoControl → rail toggle, last in the bar", async () => {
+    // The documented tail
     // (docs/design/toolbar-responsive-decisions.md). Asserted as PLACEMENT and
     // not merely as presence: the whole point of the rule is that the app-wide
     // chrome sits after the view controls, ruled off from them, at the end.
@@ -3302,7 +3302,9 @@ describe("the app-wide toolbar tail", () => {
     expect(follows(showBtn, separator)).toBe(true);
     // Adjacency, not merely order: the rule marks the boundary, so nothing may
     // slip between it and the chrome it rules off.
-    expect(separator.nextElementSibling).toBe(toggle);
+    const undo = wrapper.find(".shelf-bar-cluster .uc").element;
+    expect(separator.nextElementSibling).toBe(undo);
+    expect(undo.nextElementSibling).toBe(toggle);
     // Nothing of this view's own follows the app-wide chrome. TbGlobalActions
     // is multi-root, so its stats button IS the bar's last element.
     expect(cluster.lastElementChild.classList.contains("tb-stats-btn")).toBe(
@@ -3310,11 +3312,15 @@ describe("the app-wide toolbar tail", () => {
     );
   });
 
-  // The shelf writes nothing to the operation log, so undo/redo and the
-  // History popover are not offered here at all.
-  it("mounts no undo control", async () => {
+  // Undo/redo and History are app-wide, so the shelf carries them too.
+  it("mounts the undo control in its tail", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
-    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(false);
+    expect(
+      wrapper
+        .find(".shelf-bar-cluster")
+        .findComponent({ name: "UndoControl" })
+        .exists(),
+    ).toBe(true);
   });
 });
 

@@ -479,8 +479,9 @@ describe("Toolbar - Recently changed stacks", () => {
 describe("Toolbar - browse only (#2160)", () => {
   // With nothing selected, the bar holds no verb that acts on pictures: Export
   // and Train LoRA live on the selection pill, Import and Review tags in the
-  // sidebar, and undo on Ctrl+Z and the receipt.
-  it("carries no selection verb, no import, no review and no undo", () => {
+  // sidebar. Undo is not a picture verb: it rides in the app-wide tail
+  // (TbGlobalActions), as it does on every screen.
+  it("carries no selection verb, no import and no review", () => {
     const filterStore = useFilterStore();
     filterStore.comfyuiConfigured = true;
     const wrapper = mountToolbar();
@@ -492,12 +493,9 @@ describe("Toolbar - browse only (#2160)", () => {
     expect(
       wrapper.find('button[aria-label="Review and fix tags"]').exists(),
     ).toBe(false);
-    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(
-      false,
-    );
   });
 
-  // The tail is the rail toggle alone, after the search field.
+  // The tail (undo/redo and the rail toggle) comes after the search field.
   it("ends with the search field, then the rail toggle", () => {
     const wrapper = mountToolbar();
     const right = wrapper.find(".selection-bar-right").element;

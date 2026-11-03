@@ -415,10 +415,9 @@
           :all-pictures-view="isAllPicturesView"
           @update:open="gbSearchOpen = $event"
         />
-        <!-- ── The app-wide tail: the rail toggle (shared with the duplicates
-             queue, which is why it lives in its own component). Never folds
-             (amendment #2). Undo left this bar with #2160: Ctrl+Z and the
-             receipt carry it in the grid. -->
+        <!-- ── The app-wide tail: undo/redo + History and the rail toggle
+             (shared with every destination, which is why it lives in its own
+             component). Never folds (amendment #2). -->
         <TbGlobalActions />
       </div>
     </div>

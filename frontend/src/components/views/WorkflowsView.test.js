@@ -137,6 +137,7 @@ import { useFilterStore } from "../../stores/useFilterStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
 import { useSearchStore } from "../../stores/useSearchStore";
+import { useOperationStore } from "../../stores/useOperationStore";
 
 // `key` is the workflow's `id`; the grid row carries it as `data-key`.
 const card = (key, extra = {}) => ({
@@ -1028,7 +1029,7 @@ describe("the app-wide toolbar tail", () => {
     );
   });
 
-  it("orders the tail separator → TbGlobalActions, last in the bar", async () => {
+  it("orders the tail separator → UndoControl → rail toggle, last in the bar", async () => {
     // Placement, not presence: the app-wide chrome sits after this view's own
     // controls, ruled off from them, at the end - as ModelShelf's bar does.
     const wrapper = await grid();
@@ -1045,19 +1046,45 @@ describe("the app-wide toolbar tail", () => {
     expect(follows(add, separator)).toBe(true);
     // Adjacency, not merely order: the rule marks the boundary, so nothing may
     // slip between it and the chrome it rules off.
-    expect(separator.nextElementSibling).toBe(toggle);
+    const undo = wrapper.find(".wfv-toolbar .uc").element;
+    expect(separator.nextElementSibling).toBe(undo);
+    expect(undo.nextElementSibling).toBe(toggle);
     // Nothing of this view's own follows the app-wide chrome. TbGlobalActions
     // is multi-root, so its stats button is the tail's last element.
     expect(bar.lastElementChild).toBe(tail);
     expect(tail.lastElementChild.classList.contains("tb-stats-btn")).toBe(true);
   });
 
-  // Nothing here writes to the operation log, so undo/redo and the History
-  // popover are not offered at all - the model shelf's exception, for its
-  // reason. `UNDO_BLIND_ROOTS` declines the chord to match.
-  it("mounts no undo control", async () => {
+  // Undo/redo and History are app-wide: they ride in TbGlobalActions, so this
+  // screen carries them in the same place every other screen does.
+  it("mounts the undo control in its tail", async () => {
     const wrapper = await grid();
-    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(false);
+    expect(
+      wrapper.find(".wfv-bar-tail").findComponent({ name: "UndoControl" }).exists(),
+    ).toBe(true);
+  });
+
+  // ...and an undo taken from that control is narrated here: the receipt is
+  // not local-only any more, so a library step's pill draws on this screen.
+  it("draws the receipt for a library undo", async () => {
+    const wrapper = await grid();
+    const operations = useOperationStore();
+    operations.showReceipt(
+      operations.buildReceipt(
+        {
+          id: 10,
+          created_at: "2026-07-29T12:00:00",
+          op_type: "pictures.tags.add",
+          target_count: 1,
+          undoable: true,
+          status: "applied",
+          summary: "Added tag 'portrait'",
+        },
+        "undone",
+      ),
+    );
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".receipt").exists()).toBe(true);
   });
 
   // The toggle's tooltip is its accessible name, and the rail on this screen

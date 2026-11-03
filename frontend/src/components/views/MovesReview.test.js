@@ -253,7 +253,10 @@ describe("MovesReview - the app-wide toolbar tail", () => {
     const separator = wrapper.find(".mv-toolbar .bar-separator").element;
     const toggle = wrapper.find(".mv-toolbar .tb-stats-btn").element;
 
-    expect(separator.nextElementSibling).toBe(toggle);
+    // Undo/redo rides in the tail, between the rule and the rail toggle.
+    const undo = wrapper.find(".mv-toolbar .uc").element;
+    expect(separator.nextElementSibling).toBe(undo);
+    expect(undo.nextElementSibling).toBe(toggle);
     expect(
       bar.lastElementChild.lastElementChild.classList.contains("tb-stats-btn"),
     ).toBe(true);

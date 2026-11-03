@@ -10,9 +10,8 @@ import { test, expect, readClientId } from '../fixtures/test.js'
 // verdict is read back from the server, never only from the grid. Every step
 // is reversible, and each test puts the fixture back the way it found it.
 //
-// UndoControl is mounted by the Duplicates destination only: the grid lost its
-// control in #2160 (Ctrl+Z and the receipt carry undo there), so the toolbar
-// checks run on /duplicates.
+// UndoControl rides in TbGlobalActions, so every screen's toolbar carries it;
+// the toolbar checks run on /duplicates, where they were first written.
 
 const API = '/api/v1'
 const CLIENT_HEADER = 'X-Client-Id'
