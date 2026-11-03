@@ -27,10 +27,12 @@ Outpainting pads the picture first (``ImagePadForOutpaint``, every side 0 and
 a 40 px feather until a run writes the extension into it) and crops the padded
 canvas to the pad's mask, so the stitch pastes into the extended canvas. The
 crop's own ``extend_for_outpainting`` stays off: it extends after the mask is
-blended, which leaves a hard seam. An edit graph (the picture reaches the
-sampler's conditioning, not just its latent) gets the pad painted green from
-core nodes, since an edit model is told what to change rather than handed a
-noised area; the crop's mask stays the pad's feathered one.
+blended, which leaves a hard seam. An edit model's reference encoders
+(``ReferenceLatent``, ``*ImageEdit*``) keep the picture they read before, not
+the padded crop: an edit model copies its reference, so a reference holding
+the pad comes back with the pad in it (a green pad stayed green on Klein even
+when told to fill it, and tinted the fill when only the canvas was green).
+Only the sampler's latent works on the padded canvas.
 """
 
 from __future__ import annotations
@@ -85,11 +87,8 @@ _RESIZE_RE = re.compile(r"^ImageScale")
 _EMPTY_LATENT_RE = re.compile(r"Empty.*Latent")
 _SAVE_PREFIX = {"inpaint": "Inpaint-", "outpaint": "Outpaint-"}
 _PAD_FEATHER = 40
-_GREEN = 0x00FF00
-# A sampler's inputs that carry conditioning: an edit graph's picture reaches
-# one of these through an edit encoder, an img2img graph's only reaches
-# ``latent_image`` (or a ControlNet / IP-adapter, which is not an edit).
-_CONDITIONING_INPUTS = frozenset({"positive", "negative", "guider", "conditioning"})
+# An edit model's reference encoders. A ControlNet or IP-adapter is not one:
+# it takes the padded crop like any other edge that carried the picture.
 _EDIT_ENCODER_RE = re.compile(r"^ReferenceLatent$|ImageEdit")
 # Loaders known to put the picture on output 0 and its alpha as a MASK on 1,
 # which is what the crop reads. ``is_picture_loader`` also matches loaders
@@ -198,7 +197,16 @@ def _convert(graph: dict, target: str) -> dict:
     empty = latent_link[0] if from_empty else None
     resizers = _resizers_of(nodes, loader)
     width, height = _target_size(nodes, resizers, empty)
-    edit_graph = _is_edit_graph(nodes, sampler_id, {loader} | resizers)
+    references = (
+        _reference_edges(nodes, {loader} | resizers) if target == "outpaint" else []
+    )
+    if references:
+        # A reference read through a resize keeps the resize on the picture;
+        # one nothing reads any more is pruned below as before.
+        references += [
+            (node_id, "image", list(nodes[node_id]["inputs"]["image"]), None)
+            for node_id in resizers
+        ]
 
     # The crop, and every edge that carried the picture now carries it.
     crop = next(new_id)
@@ -214,7 +222,7 @@ def _convert(graph: dict, target: str) -> dict:
                 inputs[name] = list(crop_link)
     crop_image, crop_mask = [loader, 0], [loader, 1]
     if target == "outpaint":
-        crop_image, crop_mask = _pad(out, nodes, new_id, loader, edit_graph)
+        crop_image, crop_mask = _pad(out, nodes, loader, next(new_id))
     out[crop] = nodes[crop] = {
         "class_type": CROP_CLASS,
         "inputs": {
@@ -304,19 +312,17 @@ def _convert(graph: dict, target: str) -> dict:
     }
     if empty is not None:
         candidates.add(empty)
+    _restore_references(out, nodes, new_id, references)
     _prune(out, nodes, candidates)
     return out
 
 
-def _pad(
-    graph: dict, nodes: dict, new_id, loader: str, edit_graph: bool
-) -> tuple[list, list]:
+def _pad(graph: dict, nodes: dict, loader: str, pad: str) -> tuple[list, list]:
     """Pad the loaded picture; the crop's ``image`` and ``mask`` links.
 
     The pad reads the loader directly, which is what a run's extension looks
-    for. For an edit graph the pad (not its feathered rim) is painted green.
+    for.
     """
-    pad = next(new_id)
     graph[pad] = nodes[pad] = {
         "class_type": PAD_CLASS,
         "inputs": {
@@ -329,75 +335,52 @@ def _pad(
         },
         "_meta": {"title": "Pad for outpainting"},
     }
-    if not edit_graph:
-        return [pad, 0], [pad, 1]
-    size, green, threshold, composite = (next(new_id) for _ in range(4))
-    graph[size] = nodes[size] = {
-        "class_type": "GetImageSize",
-        "inputs": {"image": [pad, 0]},
-        "_meta": {"title": "Get Image Size"},
-    }
-    graph[green] = nodes[green] = {
-        "class_type": "EmptyImage",
-        "inputs": {
-            "width": [size, 0],
-            "height": [size, 1],
-            "batch_size": 1,
-            "color": _GREEN,
-        },
-        "_meta": {"title": "Green"},
-    }
-    graph[threshold] = nodes[threshold] = {
-        "class_type": "ThresholdMask",
-        "inputs": {"mask": [pad, 1], "value": 0.99},
-        "_meta": {"title": "The pad without its feather"},
-    }
-    graph[composite] = nodes[composite] = {
-        "class_type": "ImageCompositeMasked",
-        "inputs": {
-            "destination": [pad, 0],
-            "source": [green, 0],
-            "x": 0,
-            "y": 0,
-            "resize_source": False,
-            "mask": [threshold, 0],
-        },
-        "_meta": {"title": "Paint the pad green"},
-    }
-    return [composite, 0], [pad, 1]
+    return [pad, 0], [pad, 1]
 
 
-def _is_edit_graph(nodes: dict, sampler_id: str, picture: set[str]) -> bool:
-    """Whether the picture reaches the sampler's conditioning through an edit
-    encoder (``ReferenceLatent``, ``TextEncodeQwenImageEdit*``,
-    ``TextEncodeMOSSImageEdit``)."""
-    starts = [
-        value[0]
-        for name, value in nodes[sampler_id]["inputs"].items()
-        if name in _CONDITIONING_INPUTS and is_link(value)
-    ]
-    return any(
-        _EDIT_ENCODER_RE.search(nodes[node_id]["class_type"])
-        and picture & _upstream(nodes, [node_id])
-        for node_id in _upstream(nodes, starts)
-    )
-
-
-def _upstream(nodes: dict, starts: list[str]) -> set[str]:
-    """*starts* and every node they read, directly or not."""
-    seen: set[str] = set()
-    stack = list(starts)
-    while stack:
-        node_id = stack.pop()
-        if node_id in seen or node_id not in nodes:
+def _reference_edges(nodes: dict, picture: set[str]) -> list[tuple]:
+    """Each edge into an edit encoder that carries the picture, before the
+    crop takes it: ``(node, input, picture link, vae)``, *vae* set when the
+    edge goes through a ``VAEEncode`` of the picture."""
+    edges = []
+    for node_id, node in nodes.items():
+        if not _EDIT_ENCODER_RE.search(node["class_type"]):
             continue
-        seen.add(node_id)
-        stack.extend(
-            value[0]
-            for value in nodes[node_id].get("inputs", {}).values()
-            if is_link(value)
-        )
-    return seen
+        for name, value in node["inputs"].items():
+            if not is_link(value):
+                continue
+            if value[1] == 0 and value[0] in picture:
+                edges.append((node_id, name, list(value), None))
+                continue
+            source = nodes.get(value[0], {})
+            pixels = source.get("inputs", {}).get("pixels")
+            if (
+                source.get("class_type") == "VAEEncode"
+                and is_link(pixels)
+                and pixels[1] == 0
+                and pixels[0] in picture
+            ):
+                edges.append((node_id, name, list(pixels), source["inputs"]["vae"]))
+    return edges
+
+
+def _restore_references(graph: dict, nodes: dict, new_id, edges: list) -> None:
+    """Point each of *edges* back at the picture it read, through a fresh
+    ``VAEEncode`` (one per picture and VAE) where it went through one."""
+    encodes: dict[str, str] = {}
+    for node_id, name, picture, vae in edges:
+        if vae is None:
+            nodes[node_id]["inputs"][name] = picture
+            continue
+        key = repr((picture, vae))
+        if key not in encodes:
+            encodes[key] = next(new_id)
+            graph[encodes[key]] = nodes[encodes[key]] = {
+                "class_type": "VAEEncode",
+                "inputs": {"pixels": picture, "vae": vae},
+                "_meta": {"title": "Encode the reference"},
+            }
+        nodes[node_id]["inputs"][name] = [encodes[key], 0]
 
 
 def _id_counter(graph: dict):

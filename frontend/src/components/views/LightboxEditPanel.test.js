@@ -1015,7 +1015,7 @@ describe("the Edit tab with Extend", () => {
     expect(wrapper.find("textarea").attributes("placeholder")).toBe(
       "The rest of the room, same light",
     );
-    expect(wrapper.find(".edit-help").text()).toContain("fill the green area with");
+    expect(wrapper.find(".edit-help").text()).toContain("describe the whole finished picture");
     paint.tool.value = null;
     paint.extending.value = false;
     await flush();

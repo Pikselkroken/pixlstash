@@ -524,40 +524,46 @@ def test_an_img2img_outpaint_pads_between_the_loader_and_the_crop():
     assert reduced_workflow_type(reduce_api_graph(converted)) == "outpaint"
 
 
-def test_a_plain_img2img_outpaint_is_not_painted_green():
-    converted = _outpaint_img2img()
-    for green in ("EmptyImage", "ThresholdMask", "ImageCompositeMasked"):
-        assert not _of(converted, green)
+def test_an_outpaint_paints_nothing_green():
+    """Green in the canvas came back green from Klein, or tinted the fill."""
+    for graph in (_sdxl_img2img(), _built_in("Flux2-Klein-Image-Edit.json")):
+        converted = convert_to_outpaint(graph)
+        for green in ("EmptyImage", "ThresholdMask", "ImageCompositeMasked"):
+            assert not _of(converted, green)
 
 
-def test_a_klein_edit_outpaint_paints_the_pad_green_and_masks_the_feather():
+def test_a_klein_edit_outpaint_keeps_its_reference_on_the_original():
+    """The sampler's latent is the padded crop; the reference latents are a
+    fresh encode of the loaded picture, so the edit model never sees the pad.
+    Wrong if a `ReferenceLatent` reads the crop's encode."""
     converted = convert_to_outpaint(_built_in("Flux2-Klein-Image-Edit.json"))
     pad = _one(converted, "ImagePadForOutpaint")
-    crop = converted[_one(converted, "InpaintCropImproved")]["inputs"]
-    composite = converted[crop["image"][0]]
-    assert composite["class_type"] == "ImageCompositeMasked"
-    assert composite["inputs"]["destination"] == [pad, 0]
-    green = converted[composite["inputs"]["source"][0]]
-    assert green["class_type"] == "EmptyImage"
-    assert green["inputs"]["color"] == 0x00FF00
-    size = converted[green["inputs"]["width"][0]]
-    assert size == {
-        "class_type": "GetImageSize",
-        "inputs": {"image": [pad, 0]},
-        "_meta": {"title": "Get Image Size"},
-    }
-    assert green["inputs"]["height"] == [green["inputs"]["width"][0], 1]
-    threshold = converted[composite["inputs"]["mask"][0]]
-    assert threshold["class_type"] == "ThresholdMask"
-    assert threshold["inputs"] == {"mask": [pad, 1], "value": 0.99}
-    # The crop's mask is the pad's feathered one, not the threshold.
-    assert crop["mask"] == [pad, 1]
+    crop = _one(converted, "InpaintCropImproved")
+    assert converted[crop]["inputs"]["image"] == [pad, 0]
+    assert converted[crop]["inputs"]["mask"] == [pad, 1]
+    sampler = converted[_one(converted, "SamplerCustomAdvanced")]["inputs"]
+    masked = converted[sampler["latent_image"][0]]["inputs"]
+    assert converted[masked["samples"][0]]["inputs"]["pixels"] == [crop, 1]
+    references = _of(converted, "ReferenceLatent")
+    assert len(references) == 2
+    [encode] = {tuple(converted[r]["inputs"]["latent"]) for r in references}
+    assert converted[encode[0]]["class_type"] == "VAEEncode"
+    assert converted[encode[0]]["inputs"]["pixels"] == ["76", 0]
+    assert len(_of(converted, "VAEEncode")) == 2
     assert reduced_workflow_type(reduce_api_graph(converted)) == "outpaint"
 
 
-def test_a_controlnet_on_the_picture_is_not_an_edit_graph():
-    """The picture reaches the conditioning through a ControlNet: green would
-    feed the control image, so it is not painted."""
+def test_a_moss_edit_outpaint_keeps_its_scaled_picture_as_the_reference():
+    """The encoders read the resize they read before, so it stays."""
+    converted = convert_to_outpaint(_moss_edit())
+    for encoder in ("8", "9"):
+        assert converted[encoder]["inputs"]["images.image_0"] == ["7", 0]
+    assert converted["7"]["inputs"]["image"] == ["6", 0]
+
+
+def test_a_controlnet_on_the_picture_takes_the_padded_crop():
+    """A ControlNet is not an edit encoder: like every other edge that carried
+    the picture, it reads the crop."""
     graph = _sdxl_img2img()
     graph["9"] = {
         "class_type": "ControlNetLoader",
@@ -574,12 +580,14 @@ def test_a_controlnet_on_the_picture_is_not_an_edit_graph():
     }
     graph["6"]["inputs"]["positive"] = ["10", 0]
     converted = convert_to_outpaint(graph)
-    assert not _of(converted, "ImageCompositeMasked")
+    crop = _one(converted, "InpaintCropImproved")
+    assert converted["10"]["inputs"]["image"] == [crop, 1]
 
 
-def test_a_moss_edit_graph_with_no_encode_is_an_edit_graph_too():
-    converted = convert_to_outpaint(_moss_edit())
-    assert len(_of(converted, "ImageCompositeMasked")) == 1
+def test_inpainting_an_edit_graph_still_hands_the_crop_to_its_reference():
+    converted = convert_to_inpaint(_moss_edit())
+    crop = _one(converted, "InpaintCropImproved")
+    assert converted["8"]["inputs"]["images.image_0"] == [crop, 1]
 
 
 @pytest.mark.parametrize(
