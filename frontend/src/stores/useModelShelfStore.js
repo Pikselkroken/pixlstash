@@ -3174,8 +3174,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * @param {string} [slotId]
    */
   async function addRowsToHandMadeSet(set, models, slotId = "") {
+    // What the set already holds is not written again, so a held checkpoint in
+    // the selection cannot ask about a second one.
+    const held = new Set((set.members ?? []).map((member) => member.sha256));
     const members = models
-      .filter((row) => row.sha256)
+      .filter((row) => row.sha256 && !held.has(row.sha256))
       .map((row) => ({
         model_id: row.id,
         slot: slotId || defaultSlot(row.file_kind),

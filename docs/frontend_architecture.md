@@ -7013,7 +7013,8 @@ pointer drag onto a hand-made card, a slot of the open tray, or New workflow
 set (`store.railDrag` / `railOver`; targets carry `data-rail-drop` and take a
 `rail-drop` event; evidence cards dim and never take one). The tray's *Models ·
 N fit* sets `railFitsSetId` and bumps `railShelfRequest`, which turns the rail
-to *Models*; a card's double-click turns it back to *Details*. Elsewhere,
+to *Models*; a card's double-click that opens a shut rail opens it on
+*Details*, and an open rail keeps the tab the reader chose. Elsewhere,
 *Add to set…* (the one-model view, the pill and the row menu) and a set's slot
 ＋ pickers add models.
 

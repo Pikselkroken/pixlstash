@@ -198,6 +198,8 @@ function pointer(type, target, x, y, extra = {}) {
     bubbles: true,
     cancelable: true,
     button: 0,
+    // Held through the drag, as a real move reports it; let go on the release.
+    buttons: type === "pointerup" ? 0 : 1,
     clientX: x,
     clientY: y,
     ...extra,
@@ -669,6 +671,23 @@ describe("dragging", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(addWorkflowSetMembers).not.toHaveBeenCalled();
   });
+
+  it("ends a drag whose release the window never heard, dropping nothing", async () => {
+    const { wrapper, store } = await mountRail({
+      handMade: [handSet(10, [])],
+    });
+    const grid = mountGrid();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    pointAt(grid.find('[data-key="hand:10"] .msg__cell').element);
+    await startDrag(wrapper, "Soft");
+    expect(store.railDrag).not.toBe(null);
+    // Back over the page with no button held: the button came up elsewhere.
+    pointer("pointermove", window, 50, 50, { buttons: 0 });
+    expect(store.railDrag).toBe(null);
+    pointer("pointerup", window, 50, 50);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers).not.toHaveBeenCalled();
+  });
 });
 
 describe("dropping on the set grid", () => {
@@ -850,6 +869,51 @@ describe("dropping on the set grid", () => {
     const slot = grid.find('[data-slot="lora"]');
     expect(slot.classes()).toContain("mss__slot--refuse");
     expect(slot.classes()).not.toContain("mss__slot--target");
+  });
+
+  it("refuses a row of another base model on Add and on Enter, and says why", async () => {
+    const sdxl = handSet(10, [
+      { ...member(1, "RealVisXL_v5", "checkpoint"), base_model: "SDXL" },
+    ]);
+    const { wrapper } = await mountRail({
+      handMade: [sdxl],
+      open: "hand:10",
+      rows: [
+        row(1, "RealVisXL_v5", "checkpoint", { base_model: "SDXL" }),
+        row(5, "Soft_Light", "adapter", { base_model: "SD 1.5" }),
+        row(6, "Film_XL", "adapter", { base_model: "SDXL" }),
+      ],
+    });
+    const add = option(wrapper, "Soft").find('[data-testid="mrail-add"]');
+    expect(add.attributes("disabled")).toBeDefined();
+    expect(
+      option(wrapper, "Film").find('[data-testid="mrail-add"]').attributes(
+        "disabled",
+      ),
+    ).toBeUndefined();
+
+    // Enter on a selection holding it refuses the lot, as a drop would.
+    await option(wrapper, "Soft").trigger("click");
+    await option(wrapper, "Film").trigger("click", { ctrlKey: true });
+    await wrapper.get('[data-testid="mrail-list"]').trigger("keydown", {
+      key: "Enter",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices.at(-1).text).toBe(
+      "Not added: SDXL, not SD 1.5.",
+    );
+  });
+
+  it("writes only what a drop adds, so a held checkpoint asks nothing", async () => {
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    const set = handSet(10, [member(1, "RealVisXL_v5", "checkpoint")]);
+    addWorkflowSetMembers.mockResolvedValue({ set, added: [shaOf(5)] });
+    await store.addRowsToHandMadeSet(set, [ROWS[0], ROWS[2]]);
+    expect(addWorkflowSetMembers).toHaveBeenCalledWith(10, [
+      { model_id: 5, slot: "lora" },
+    ]);
   });
 
   it("refuses a drop on a set of another base model, as the menu does", async () => {

@@ -142,8 +142,12 @@
             variant="outline"
             size="sm"
             tabindex="-1"
-            :disabled="rowState(row) === 'hashing' || pending.has(row.id)"
-            :tooltip="rowState(row) === 'second' ? secondNote() : ''"
+            :disabled="
+              rowState(row) === 'hashing' ||
+              rowState(row) === 'refused' ||
+              pending.has(row.id)
+            "
+            :tooltip="addTooltip(row)"
             data-testid="mrail-add"
             @click.stop="addFromRow(row)"
             >{{ addLabel(row) }}</AppButton
@@ -252,6 +256,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { formatModelSize, modelName } from "../../utils/modelShelf";
@@ -513,6 +518,8 @@ function rowState(row) {
   if (!targetSet.value) return "";
   if (!row.sha256) return "hashing";
   if (targetHeld.value.has(row.sha256)) return "held";
+  // Another base model: refused here as the card refuses the drop.
+  if (store.setAddRefusal(targetSet.value, [row])) return "refused";
   if (
     defaultSlot(row.file_kind) === "checkpoint" &&
     setCheckpoint(targetSet.value)
@@ -520,6 +527,14 @@ function rowState(row) {
     return "second";
   }
   return "add";
+}
+
+/** Why Add is as it is: a second checkpoint, or the set's refusal. */
+function addTooltip(row) {
+  const state = rowState(row);
+  if (state === "second") return secondNote();
+  if (state === "refused") return store.setAddRefusal(targetSet.value, [row]);
+  return "";
 }
 
 function addLabel(row) {
@@ -853,6 +868,12 @@ async function addRows(set, rows, { ask = true } = {}) {
     (row) => row.sha256 && !held.has(row.sha256) && !pending.value.has(row.id),
   );
   if (!fresh.length) return;
+  // The card's rule for a drop: one model on another base model refuses all.
+  const refusal = store.setAddRefusal(set, fresh);
+  if (refusal) {
+    useNoticeStore().push({ level: "info", text: `Not added: ${refusal}.` });
+    return;
+  }
   const members = fresh.map((row) => ({
     model_id: row.id,
     slot: defaultSlot(row.file_kind),
@@ -972,6 +993,12 @@ function onRowPointerDown(row, event) {
 
 function onPointerMove(event) {
   if (!press) return;
+  // No button held: the release happened where the window never heard it
+  // (off the window, or over a dialog). End without dropping.
+  if (event.buttons === 0) {
+    endDrag();
+    return;
+  }
   point = { x: event.clientX, y: event.clientY };
   if (!dragging) {
     if (Math.hypot(point.x - press.x, point.y - press.y) < DRAG_START_PX) {
