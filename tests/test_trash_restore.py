@@ -131,3 +131,32 @@ def test_a_recycle_bin_record_is_found_by_its_original_path(tmp_path, version):
     assert os.path.basename(info) == "$INEW.safetensors"
     with pytest.raises(NotInTrash):
         trash_restore._find_windows_entry("C:\\Users\\me\\Carol.pt", [str(bin_dir)])
+
+
+def test_the_fingerprint_picks_its_own_entry_over_a_newer_one(home_trash, tmp_path):
+    """Undoing the older of two deletes from one path brings back its own file,
+    never the newer delete's, whose undo still finds its own."""
+    original = tmp_path / "alice.safetensors"
+    original.write_bytes(b"first file")
+    first = trash_restore.fingerprint(str(original))
+    home_trash(str(original))
+    original.write_bytes(b"second, longer file")
+    second = trash_restore.fingerprint(str(original))
+    home_trash(str(original))
+
+    restore_from_trash(str(original), first)
+    assert original.read_bytes() == b"first file"
+
+    original.rename(tmp_path / "moved-aside")
+    restore_from_trash(str(original), second)
+    assert original.read_bytes() == b"second, longer file"
+
+
+def test_a_fingerprint_nothing_matches_is_not_in_the_trash(home_trash, tmp_path):
+    original = tmp_path / "alice.safetensors"
+    original.write_bytes(b"weights")
+    home_trash(str(original))
+
+    with pytest.raises(NotInTrash):
+        restore_from_trash(str(original), (999, 1))
+    assert not original.exists()

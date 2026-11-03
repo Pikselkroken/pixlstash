@@ -285,6 +285,7 @@ from pixlstash.routes.comfyui import (
     store_over_workflow,
     trash_user_workflow,
     put_back_trashed_workflow,
+    trash_again,
     user_workflow_exists,
 )
 from pixlstash.services.workflow_export import (
@@ -14537,14 +14538,18 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         with workflow_inbox.INBOX_LOCK:
-            undo = take(KIND_WORKFLOW, payload.token)
-            if undo is None or undo["workflow_id"] != workflow_id:
+            undo = take(
+                KIND_WORKFLOW,
+                payload.token,
+                lambda entry: entry["workflow_id"] == workflow_id,
+            )
+            if undo is None:
                 raise HTTPException(
                     status_code=404,
                     detail="There is nothing to undo: it was already undone, or PixlStash has restarted since.",
                 )
             try:
-                put_back_trashed_workflow(undo["file"], undo["trashed"])
+                back = put_back_trashed_workflow(undo["file"], undo["trashed"])
             except (NotInTrash, OSError) as exc:
                 logger.warning("Could not restore workflow %s: %s", workflow_id, exc)
                 raise HTTPException(
@@ -14557,14 +14562,17 @@ def create_router(server) -> APIRouter:
                 )
             except sqlite3.Error as exc:
                 logger.error(
-                    "Put workflow %s's files back but not its rows: %s",
+                    "Could not write workflow %s back (%s); sending the files "
+                    "it put back to the trash again.",
                     workflow_id,
                     exc,
                     exc_info=True,
                 )
+                # Under the inbox lock still, so nothing imported them meanwhile.
+                trash_again(back)
                 raise HTTPException(
                     status_code=409,
-                    detail="Something has taken this workflow's place since it was deleted.",
+                    detail="This workflow could not be put back: something has taken its place since it was deleted.",
                 ) from exc
         _announce(request, [workflow_id], "changed")
         return WorkflowDeleted(deleted=undo["name"], workflow_id=workflow_id)

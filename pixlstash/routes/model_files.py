@@ -133,7 +133,7 @@ from pixlstash.utils.adapter_header import FILE_ENGINE
 from pixlstash.utils.aitoolkit_run import is_sample_filename
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.system_utils import TRASH_NAME
-from pixlstash.utils.trash_restore import NotInTrash, restore_from_trash
+from pixlstash.utils.trash_restore import NotInTrash, fingerprint, restore_from_trash
 
 logger = get_logger(__name__)
 
@@ -225,11 +225,21 @@ class UndoDeleteModelsResponse(BaseModel):
     restored: list[int] = Field(
         description="Models back on the shelf under the ids they had, ascending."
     )
+    partly_restored: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Of `restored`, the models some of whose copies could not be put "
+            "back; the shelf marks those copies missing at its next scan."
+        ),
+    )
     refused: list[DeleteRefusal] = Field(
         description=(
-            "Models that stayed deleted: `not_in_trash` (the trash no longer "
-            "holds their files, or this machine's trash cannot be read) or "
-            "`path_taken` (something is at the file's path again)."
+            "Models that are not back on the shelf: `not_in_trash` (the trash "
+            "no longer holds their files, or this machine's trash cannot be "
+            "read), `path_taken` (something is at the file's path again), "
+            "`restore_failed` (the move back failed; the server log says why) "
+            "or `already_on_shelf` (the files are back, but the shelf took "
+            "those bytes onto another row meanwhile, which keeps them)."
         )
     )
 
@@ -1470,7 +1480,9 @@ def create_router(server) -> APIRouter:
             for model_id, copies in deletable.items():
                 paths = [copy["path"] for copy in copies if copy["path"]]
                 done = 0
-                trashed: list[str] = []
+                # (path, fingerprint): the fingerprint picks this delete's own
+                # entry when a later delete trashes another file from the path.
+                trashed: list[tuple[str, tuple[int, int] | None]] = []
                 if not payload.permanent:
                     undo[model_id] = {
                         "rows": _snapshot_model(server.hub, model_id),
@@ -1478,12 +1490,13 @@ def create_router(server) -> APIRouter:
                     }
                 try:
                     for path in paths:
+                        stamp = fingerprint(path)
                         if _remove(path, permanent=payload.permanent):
-                            trashed.append(path)
+                            trashed.append((path, stamp))
                         done += 1
                         # After the file, and never allowed to fail it.
                         if _remove_samples(path, permanent=payload.permanent):
-                            trashed.append(samples_relpath(path))
+                            trashed.append((samples_relpath(path), None))
                 except (TrashPermissionError, OSError) as exc:
                     # `done` files of this model are already gone. Its rows stay
                     # so the shelf keeps naming the copies that did not go, and
@@ -1571,7 +1584,11 @@ def create_router(server) -> APIRouter:
         ),
         tags=["model_shelf"],
         response_model=UndoDeleteModelsResponse,
-        responses={404: {"description": "The token is unknown, spent or expired."}},
+        responses={
+            404: {
+                "description": "The token is unknown: spent, pushed out by later deletes, or from before a restart."
+            }
+        },
     )
     def undo_delete_model_files(
         request: Request, payload: UndoDeleteModelsRequest = Body(...)
@@ -1590,14 +1607,18 @@ def create_router(server) -> APIRouter:
                     detail="There is nothing to undo: that delete was already undone, or PixlStash has restarted since.",
                 )
             restored: list[int] = []
+            partly: list[int] = []
             refused: list[dict] = []
             for model_id, entry in undo.items():
                 back = 0
                 reason = "not_in_trash"
-                for path in entry["trashed"]:
+                files = [stamp for _path, stamp in entry["trashed"] if stamp]
+                files_back = 0
+                for path, stamp in entry["trashed"]:
                     try:
-                        restore_from_trash(path)
+                        restore_from_trash(path, stamp)
                         back += 1
+                        files_back += bool(stamp)
                     except FileExistsError:
                         reason = "path_taken"
                         logger.warning(
@@ -1614,7 +1635,8 @@ def create_router(server) -> APIRouter:
                             exc,
                             exc_info=True,
                         )
-                if not back:
+                # Its previews alone coming back is not the model coming back.
+                if not (files_back if files else back):
                     refused.append({"id": model_id, "reason": reason})
                     continue
                 try:
@@ -1628,7 +1650,12 @@ def create_router(server) -> APIRouter:
                         model_id,
                         exc,
                     )
+                    refused.append({"id": model_id, "reason": "already_on_shelf"})
+                    continue
                 restored.append(model_id)
+                # The model's copies, not its previews directory.
+                if files_back < len(files):
+                    partly.append(model_id)
         finally:
             SHELF_IO_LOCK.release()
         logger.info(
@@ -1638,6 +1665,7 @@ def create_router(server) -> APIRouter:
         )
         return UndoDeleteModelsResponse(
             restored=sorted(restored),
+            partly_restored=sorted(partly),
             refused=[DeleteRefusal(**item) for item in refused],
         )
 

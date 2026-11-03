@@ -9,9 +9,10 @@ undo route spends it: the files come back out of the trash
 (:mod:`pixlstash.utils.trash_restore`) and the rows go back in with the ids they
 had, so the client's Redo is simply the same delete again.
 
-A token lives in this process only and is spent by its undo. That fits the
-receipt it backs, which offers Undo for a few seconds; it does not survive a
-restart, and a permanent delete never gets one.
+A token lives in this process only, is spent by its undo, and is dropped once
+:data:`MAX_TOKENS` newer ones exist. That fits the receipt it backs, which
+offers Undo for a few seconds; it does not survive a restart, and a permanent
+delete never gets one.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from __future__ import annotations
 import secrets
 import threading
 from collections import OrderedDict
-from typing import Any
+from typing import Any, Callable
 
 # ponytail: in-memory and capped; a hub table if undo ever has to outlive a
 # restart or a long history.
@@ -42,11 +43,19 @@ def remember(kind: str, payload: Any) -> str:
     return token
 
 
-def take(kind: str, token: str) -> Any | None:
-    """Spend *token*: its payload, or None when it is unknown, spent or another kind."""
+def take(
+    kind: str, token: str, accept: Callable[[Any], bool] | None = None
+) -> Any | None:
+    """Spend *token*: its payload, or None when it is unknown, spent or another kind.
+
+    With *accept*, a payload it refuses is left unspent and None is answered,
+    so a request naming the wrong object cannot use up somebody's undo.
+    """
     with _lock:
         entry = _entries.get(token)
         if entry is None or entry[0] != kind:
+            return None
+        if accept is not None and not accept(entry[1]):
             return None
         del _entries[token]
     return entry[1]

@@ -9966,7 +9966,7 @@ def test_undo_puts_a_trashed_model_back_under_the_same_id(
 
     r = shelf_env.owner.post(f"{API}/model-files/delete/undo", json={"token": token})
     assert r.status_code == 200, r.text
-    assert r.json() == {"restored": [alice], "refused": []}
+    assert r.json() == {"restored": [alice], "partly_restored": [], "refused": []}
     assert (real_files / "alice.safetensors").exists(), "the file stayed trashed"
     assert list((os_trash / "info").iterdir()) == []
     row = shelf_env.server.hub.fetchone(
@@ -9999,12 +9999,42 @@ def test_undo_of_an_emptied_trash_leaves_the_model_deleted(
     assert r.status_code == 200, r.text
     assert r.json() == {
         "restored": [],
+        "partly_restored": [],
         "refused": [{"id": alice, "reason": "not_in_trash"}],
     }
     assert (
         shelf_env.server.hub.fetchone("SELECT id FROM model WHERE id = ?", (alice,))
         is None
     ), "a row came back naming a file that is not there"
+
+
+def test_undo_is_declared_local_owner_only_and_refuses_every_share_token(
+    shelf_env, real_files, os_trash
+):
+    """The undo writes the same folders the delete emptied, so the same tier;
+    a share token is refused, and the owner's token still undoes."""
+    declared = ROUTE_POLICIES.get(("POST", "/api/v1/model-files/delete/undo"))
+    assert declared is not None and declared.justification
+    assert declared.policy is AccessPolicy.LOCAL_OWNER_ONLY
+    alice = shelf_env.model_ids["alice.safetensors"]
+    token = _delete(shelf_env, [alice]).json()["undo_token"]
+    path = f"{API}/model-files/delete/undo"
+    for description, restriction in (
+        ("undo scoped probe", {"resource_type": "character", "resource_id": 1}),
+        ("undo unscoped probe", {}),
+    ):
+        client = bearer_client(
+            shelf_env.server,
+            mint_read_token(shelf_env.owner, description, **restriction),
+        )
+        assert client.get(f"{API}/pictures").status_code == 200, description
+        assert_real_route(shelf_env.server.api, "POST", path)
+        r = client.post(path, json={"token": token})
+        assert r.status_code == 403, f"{description}: {r.status_code} {r.text}"
+    assert not (real_files / "alice.safetensors").exists(), "a refused undo restored"
+    # Positive control: the token was not spent by the refusals.
+    r = shelf_env.owner.post(path, json={"token": token})
+    assert r.status_code == 200 and r.json()["restored"] == [alice], r.text
 
 
 def test_a_permanent_delete_offers_no_undo(shelf_env, real_files, fake_trash):

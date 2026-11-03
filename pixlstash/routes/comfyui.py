@@ -116,6 +116,7 @@ from pixlstash.services.workflow_io import (
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.trash_restore import NotInTrash, restore_from_trash
+from pixlstash.services.model_mover import publish_no_clobber
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 
 # ComfyUI workflow-execution orchestration and the output-import pipeline live in
@@ -687,7 +688,7 @@ def trash_user_workflow(
     return normalized
 
 
-def put_back_trashed_workflow(file: str | None, trashed: list[str]) -> None:
+def put_back_trashed_workflow(file: str | None, trashed: list[str]) -> list[str]:
     """Take a deleted workflow's files back out of the trash, for its undo.
 
     Call holding :data:`workflow_inbox.INBOX_LOCK`, and restore the rows before
@@ -704,17 +705,27 @@ def put_back_trashed_workflow(file: str | None, trashed: list[str]) -> None:
             The rest were inbox files holding the same workflow and go back to
             the inbox.
 
+    Returns:
+        The paths now back on disk, so a caller that cannot finish can send
+        them to the trash again.
+
     Raises:
         NotInTrash, FileExistsError, OSError: *file*'s copy could not be put
             back; nothing was moved.
     """
     first, rest = trashed[0], trashed[1:]
+    back = []
     if file is not None:
         if os.path.lexists(file):
             raise FileExistsError(errno.EEXIST, "Something is already there", file)
         restore_from_trash(first)
         if first != file:
-            os.replace(first, file)
+            try:
+                publish_no_clobber(first, file)
+            except OSError:
+                send2trash(first)
+                raise
+        back.append(file)
     else:
         try:
             restore_from_trash(first)
@@ -724,9 +735,25 @@ def put_back_trashed_workflow(file: str | None, trashed: list[str]) -> None:
     for path in rest:
         try:
             restore_from_trash(path)
+            back.append(path)
         except (NotInTrash, OSError) as exc:
             logger.warning(
                 "Restored a workflow but not its inbox file %s: %s", path, exc
+            )
+    return back
+
+
+def trash_again(paths: list[str]) -> None:
+    """Send what :func:`put_back_trashed_workflow` put back to the trash again."""
+    for path in paths:
+        try:
+            send2trash(path)
+        except (OSError, TrashPermissionError) as exc:
+            logger.error(
+                "Could not send %s back to the trash after a failed restore; it "
+                "may be imported as a new workflow: %s",
+                path,
+                exc,
             )
 
 

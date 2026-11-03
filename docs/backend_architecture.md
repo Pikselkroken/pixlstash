@@ -9791,10 +9791,13 @@ longer wants was a file manager and then a rescan.
   ([`services/trash_undo.py`](../pixlstash/services/trash_undo.py), in memory, capped,
   gone on restart, single-use). The undo takes each path back out of the trash
   ([`utils/trash_restore.py`](../pixlstash/utils/trash_restore.py): the freedesktop
-  `.trashinfo` records and the Windows `$I` records name the original path, newest entry
-  wins; the macOS Trash does not, so there it refuses) and re-inserts the rows under the
-  same ids, so the client's Redo is the same delete again. Nothing at a path is ever
-  replaced; a model whose files the trash no longer holds stays deleted and is reported. A
+  `.trashinfo` records and the Windows `$I` records name the original path; of several
+  entries from one path the one matching the size and mtime recorded at delete time wins,
+  so undoing an older delete never brings back a newer one's file; the macOS Trash keeps no
+  original path, so there it refuses) and re-inserts the rows under the same ids, so the
+  client's Redo is the same delete again. Nothing at a path is ever replaced: a file goes
+  back through `publish_no_clobber`, a directory by a rename that refuses a non-empty
+  target. A model whose files the trash no longer holds stays deleted and is reported. A
   stack the model was in that dissolved meanwhile does not come back. Workflow deletes
   (the watched inbox, under `comfyui.py` in the route map) use the same token store. **Two honest limits on "the trash is the
   undo":** Windows deletes outright anything larger than the Recycle Bin's

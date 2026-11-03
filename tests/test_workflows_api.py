@@ -7637,6 +7637,13 @@ _EVERY_WORKFLOW_ROUTE = (
         "/workflows/run/opening",
         {"workflow_id": BUSY_WF},
     ),
+    # A delete's undo: the owner's answer is a 404, no delete made the token.
+    (
+        "POST",
+        "/workflows/{workflow_id}/restore",
+        f"/workflows/{BUSY_WF}/restore",
+        {"token": "gate-probe"},
+    ),
     ("DELETE", "/workflows/{workflow_id}", f"/workflows/{BUSY_WF}", None),
 )
 
@@ -18662,6 +18669,11 @@ def test_restore_undoes_deleting_a_manual_workflow_under_the_same_id(
     token = runnable.owner.delete(f"{API}/workflows/{manual}").json()["undo_token"]
     assert runnable.owner.get(f"{API}/workflows/{manual}").status_code == 404
     assert (tmp_path / "old.json").exists() is False
+    # Naming another workflow is refused and does not spend the token.
+    wrong = runnable.owner.post(
+        f"{API}/workflows/{RUN_WF}/restore", json={"token": token}
+    )
+    assert wrong.status_code == 404
 
     r = runnable.owner.post(f"{API}/workflows/{manual}/restore", json={"token": token})
     assert r.status_code == 200, r.text
