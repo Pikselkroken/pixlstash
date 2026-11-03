@@ -15347,6 +15347,14 @@ def test_a_peak_that_filled_the_room_it_had_fits_that_room_again():
     assert vram_history._need([row(10000, total), filled], None) == int(
         10000 * vram_history.COMFYUI_PEAK_MARGIN
     )
+    # A larger run is judged against proportionally more room, never the
+    # smaller room the measured run had: 5 GB filling 6 GB at 1 MP, run at
+    # 1.5 MP, had 9 GB of room, not 6.
+    sized = {**row(5000, 6000), "pixels": 1_000_000}
+    assert vram_history._need([sized], 1_500_000) == 9000 - margin
+    # Scaled past the card, the room is the card.
+    big = {**sized, "peak_mb": 25000, "room_mb": 25050}
+    assert vram_history._need([big], 1_500_000) == total - margin
 
 
 def test_the_peak_sampler_records_the_room_at_its_peak(monkeypatch):

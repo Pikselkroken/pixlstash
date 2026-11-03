@@ -425,7 +425,9 @@ class PeakSampler:
         if usage is None or usage <= (self.peak_mb or 0):
             return
         self.peak_mb = usage
-        card = ledger().device(self._device, max_age_s=PEAK_SAMPLE_S / 2)
+        # Fresh, read right after the usage: a cached card reading from
+        # before it would misjudge the room while a model loads.
+        card = ledger().device(self._device, max_age_s=0.0)
         self.room_mb = (
             usage + card.free_mb if card is not None and card.measurable else None
         )

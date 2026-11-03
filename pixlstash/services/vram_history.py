@@ -238,7 +238,8 @@ def _need(rows: list, pixels: int | None) -> int | None:
     The margin never lifts a need past the run's *ceiling*, the room it had
     (``room_mb``: what ComfyUI held at the peak plus what was still free on
     the card; a row written before that was recorded takes the card's total)
-    less the arbiter's safety margin, divided by the margin: a peak that high
+    scaled up with the peak but never past the card, less the arbiter's
+    safety margin, divided by the margin: a peak that high
     is taken to have filled the card, since ComfyUI keeps models resident
     while there is room, so it is what the run completed in and asks for no
     more (#2081). Nor does a need pass the ceiling itself, which leaves it
@@ -246,7 +247,7 @@ def _need(rows: list, pixels: int | None) -> int | None:
 
     A peak at or past its ceiling took the memory the arbiter keeps in
     reserve, so it filled all the room the run had and measures that room,
-    not the run. The run is proven to finish in the smallest such room, so
+    not the run. The run has finished in the smallest such room before, so
     the need is the smallest such ceiling: the largest would wait each time
     other apps hold a little more than they did on that run.
     """
@@ -254,9 +255,12 @@ def _need(rows: list, pixels: int | None) -> int | None:
         return None
     needs, filled = [], []
     for row in rows:
-        peak = row["peak_mb"] * max(1.0, pixels / row["pixels"] if pixels else 1.0)
-        room = row["room_mb"] or row["device_total_mb"]
-        ceiling = room - safety_margin_mb(row["device_total_mb"])
+        scale = max(1.0, pixels / row["pixels"] if pixels else 1.0)
+        peak = row["peak_mb"] * scale
+        total = row["device_total_mb"]
+        # A larger run had proportionally more room, up to the whole card.
+        room = min(row["room_mb"] * scale, total) if row["room_mb"] else total
+        ceiling = room - safety_margin_mb(total)
         if ceiling <= 0:
             # A card whose size was not read: no ceiling to judge the margin
             # by, so the need is the peak the run completed in.
