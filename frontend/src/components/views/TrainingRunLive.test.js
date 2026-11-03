@@ -963,6 +963,7 @@ describe("likeness to the run's character (#2522)", () => {
     );
     const chart = wrapper.find(".trl-likeness svg");
     expect(chart.text()).toBe("Scored as the previews land");
+    expect(chart.find(".tlc-grid").exists()).toBe(false);
   });
 
   it("draws none of it for a run with no character", async () => {

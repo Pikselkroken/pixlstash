@@ -97,7 +97,8 @@ const summary = computed(() => {
   >
     <path class="tlc-base" :d="`M${x(0)} ${y(0)}H${lastX}`" />
     <!-- No scale before a score: on a one-column board the 50 label sits
-         where the waiting sentence is centred. -->
+         where the waiting sentence is centred, and there is nothing to read
+         against it yet. -->
     <text v-if="empty" class="tlc-axis" :x="width / 2" :y="y(50) + 3" text-anchor="middle">
       Scored as the previews land
     </text>
