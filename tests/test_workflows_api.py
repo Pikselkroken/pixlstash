@@ -18274,9 +18274,9 @@ def test_a_shelf_checkpoint_fix_skips_a_twin_loader_the_pack_cannot_stand_in_for
     runnable, monkeypatch
 ):
     """Two loaders name the fixed file; one casts its weights (fp8), which
-    the pack's checkpoint loader cannot. Only the other loads the shelf's
-    replacement. Wrong if the casting one is left naming the replacement,
-    which this ComfyUI does not list.
+    this pack's checkpoint loader cannot (it has no `weight_dtype`). Only the
+    other loads the shelf's replacement. Wrong if the casting one is left
+    naming the replacement, which this ComfyUI does not list.
     """
     unlisted, digest = "test-chroma-unlisted.safetensors", _h("chroma-unlisted")
     embedded = json.loads(json.dumps(RUN_DOCUMENT))

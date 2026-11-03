@@ -4718,7 +4718,8 @@ def create_router(server) -> APIRouter:
             }
             if kind == FILE_CHECKPOINT and unlisted:
                 # Per loader: a twin naming the same file that the pack's
-                # loader cannot stand in for (an fp8 cast) keeps it.
+                # loader cannot stand in for (an fp8 cast on a pack whose
+                # loader has none) keeps it.
                 held = [
                     (node_id, widget, value)
                     for node_id, _cls, widget, value in iter_model_fields_api(graph)
@@ -9973,18 +9974,18 @@ def create_router(server) -> APIRouter:
         if has_shelf and has_cast:
             return set()
 
-        def needs_cast(item: dict) -> bool:
+        def cast_of(item: dict) -> object:
             node = graph.get(str(item.get("node_id"))) or {}
-            return (node.get("inputs") or {}).get(
-                CHECKPOINT_LOADER_CAST, "default"
-            ) != "default"
+            return (node.get("inputs") or {}).get(CHECKPOINT_LOADER_CAST, "default")
 
+        # A cast wired in from another node is one no pack's loader takes.
         names = {
             str(item.get("value"))
             for item in detect_model_targets(graph, object_info)
             if item
             and item.get("class_type") in ("CheckpointLoaderSimple", "UNETLoader")
-            and (not has_shelf or (not has_cast and needs_cast(item)))
+            and isinstance(cast_of(item), str)
+            and (not has_shelf or (not has_cast and cast_of(item) != "default"))
         }
         if not names or not _comfyui_is_here(request):
             return set()
@@ -12230,7 +12231,8 @@ def create_router(server) -> APIRouter:
         if not unlisted:
             return loaders, swapped, unswapped
         # Per loader: a twin naming the same file that the pack's loader
-        # cannot stand in for (an fp8 cast) keeps it, and refuses the clone.
+        # cannot stand in for (an fp8 cast on a pack whose loader has none)
+        # keeps it, and refuses the clone.
         held = [
             (node_id, widget, value)
             for node_id, _cls, widget, value in iter_model_fields_api(graph)

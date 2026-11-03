@@ -2301,10 +2301,20 @@ def as_stock_loaders(
                 if isinstance(other, dict) and isinstance(other.get("inputs"), dict)
                 for value in other["inputs"].values()
             )
+            # The cast the swap carried onto the pack's loader goes back.
+            cast = inputs.get(CHECKPOINT_LOADER_CAST)
             now, fields = (
                 ("CheckpointLoaderSimple", {"ckpt_name": file})
                 if whole
-                else ("UNETLoader", {"unet_name": file, "weight_dtype": "default"})
+                else (
+                    "UNETLoader",
+                    {
+                        "unet_name": file,
+                        CHECKPOINT_LOADER_CAST: cast
+                        if isinstance(cast, str) and cast
+                        else "default",
+                    },
+                )
             )
         elif was in _DIGEST_WIDGETS_OF:
             digests = [
@@ -2486,9 +2496,14 @@ def swap_in_pack_nodes(
                     }
             else:
                 name = old.get(_CHECKPOINT_FIELDS[was])
+                cast = old.get(CHECKPOINT_LOADER_CAST, "default")
                 row = (
                     checkpoint_id(name)
-                    if checkpoint_id and shelf_uuid and isinstance(name, str)
+                    if checkpoint_id
+                    and shelf_uuid
+                    and isinstance(name, str)
+                    # A cast wired in from another node has no place to go.
+                    and isinstance(cast, str)
                     else None
                 )
                 if row:
@@ -2499,7 +2514,6 @@ def swap_in_pack_nodes(
                     # The owner's fp8 choice goes with the file. A pack whose
                     # loader cannot cast has no widget for it, so the stock
                     # node stays rather than lose it.
-                    cast = old.get(CHECKPOINT_LOADER_CAST, "default")
                     if cast != "default":
                         owned[CHECKPOINT_LOADER_CAST] = cast
             spec = object_info.get(now)

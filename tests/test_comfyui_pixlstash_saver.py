@@ -432,6 +432,14 @@ class TestOpeningWithPackNodes:
         }
         comfyui_recipe_service.swap_in_pack_nodes(plain, info, {}.get, **known)
         assert plain["1"]["inputs"]["weight_dtype"] == "default"
+        # A cast wired in from another node has nowhere to go: stock it stays.
+        wired = {
+            "1": _node("UNETLoader", unet_name="u.safetensors", weight_dtype=["5", 0])
+        }
+        assert (
+            comfyui_recipe_service.swap_in_pack_nodes(wired, info, {}.get, **known)
+            == []
+        )
 
     @staticmethod
     def _stock():
@@ -637,6 +645,25 @@ class TestReadingPackLoadersAsStock:
         assert self._read(graph)[0]["1"] == {
             "class_type": "CheckpointLoaderSimple",
             "inputs": {"ckpt_name": "unet.safetensors"},
+        }
+
+    def test_a_cast_the_swap_carried_reads_back_onto_the_stock_loader(self):
+        """Wrong if an fp8 pack loader reads back uncast: every later run and
+        save of the graph would load the model at full size."""
+        graph = {
+            "1": {
+                "class_type": CKPT,
+                "inputs": {
+                    "checkpoint_id": "130",
+                    "shelf": "this-shelf",
+                    "weight_dtype": "fp8_e4m3fn_fast",
+                },
+            },
+            "4": {"class_type": "KSampler", "inputs": {"model": ["1", 0]}},
+        }
+        assert self._read(graph)[0]["1"]["inputs"] == {
+            "unet_name": "unet.safetensors",
+            "weight_dtype": "fp8_e4m3fn_fast",
         }
 
     def test_a_loader_naming_no_file_of_this_shelf_stays(self):
