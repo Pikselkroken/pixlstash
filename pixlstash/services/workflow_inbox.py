@@ -144,7 +144,7 @@ def reconcile(folder: str, store: Callable[[str, dict], dict]) -> int:
 
 def trash_workflow(
     folder: str, name: str, workflow: dict, *, sweep: bool = True
-) -> None:
+) -> list[str]:
     """Write *workflow* back to the inbox and move it to the system trash.
 
     With *sweep*, every inbox file holding the workflow goes, not just the one
@@ -155,6 +155,10 @@ def trash_workflow(
     it, and that edit must stay for the watcher to import. For the same reason
     the copy is written to a name no file has yet. Call it holding
     :data:`INBOX_LOCK`, and remove the stored workflow before releasing it.
+
+    Returns:
+        Every path sent to the trash, the copy written here first, so an undo
+        can take them back out.
 
     Raises:
         ValueError: *name* would put the copy outside *folder*.
@@ -180,11 +184,15 @@ def trash_workflow(
             counter += 1
     if not sweep:
         send2trash(path)
-        return
+        return [path]
+    written_path, trashed = path, []
     for entry in _entries(folder):
         path = os.path.join(folder, entry)
         if _file_hash(path) == digest:
             send2trash(path)
+            trashed.append(path)
+    # The copy written here first, whatever order the folder listed in.
+    return sorted(trashed, key=lambda trashed_path: trashed_path != written_path)
 
 
 def _file_hash(path: str) -> str | None:

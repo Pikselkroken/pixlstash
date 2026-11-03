@@ -14,6 +14,7 @@ import {
   BASE_MODEL_UNASSIGNED,
   createWorkflowSet,
   deleteModels,
+  undoDeleteModels,
   deleteWorkflowSet,
   editModels,
   fetchWorkflowSets,
@@ -4499,18 +4500,33 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       clearSelection();
       await fetchRows();
       const gone = body?.deleted?.length ?? 0;
-      notices.push({
-        level: gone ? "success" : "info",
-        text: deleteReceipt(
-          gone,
-          body?.refused ?? [],
-          Boolean(body?.permanent),
-          // The server's word for its own trash, because the server is the
-          // machine the files were on. `trashName()` is the browser's guess and
-          // stands in only for an older backend.
-          body?.trash_name || trashName(),
-          body?.files_removed ?? 0,
-        ),
+      const text = deleteReceipt(
+        gone,
+        body?.refused ?? [],
+        Boolean(body?.permanent),
+        // The server's word for its own trash, because the server is the
+        // machine the files were on. `trashName()` is the browser's guess and
+        // stands in only for an older backend.
+        body?.trash_name || trashName(),
+        body?.files_removed ?? 0,
+      );
+      const token = body?.undo_token;
+      if (!token) {
+        notices.push({ level: gone ? "success" : "info", text });
+        return true;
+      }
+      // A trash delete: Undo takes the files back out of the trash, and Redo
+      // deletes what came back, which kept its ids.
+      let restored = [];
+      useOperationStore().showLocalReceipt({
+        summary: text,
+        icon: "mdi-trash-can-outline",
+        destructive: true,
+        undo: async () => {
+          restored = await undoDelete(token);
+          return restored.length > 0;
+        },
+        redo: () => deleteSelected({ ids: restored }),
       });
       return true;
     } catch (err) {
@@ -4519,6 +4535,41 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         text: errorDetail(err) || "Could not delete those models.",
       });
       return false;
+    }
+  }
+
+  /**
+   * Undo a trash delete, re-read the shelf, and say what stayed deleted.
+   *
+   * @param {string} token - the delete's `undo_token`.
+   * @returns {Promise<number[]>} the ids that came back.
+   */
+  async function undoDelete(token) {
+    const notices = useNoticeStore();
+    try {
+      const body = await undoDeleteModels(token);
+      await fetchRows();
+      const kept = body?.refused?.length ?? 0;
+      const partly = body?.partly_restored?.length ?? 0;
+      if (partly) {
+        notices.push({
+          level: "info",
+          text: `${modelCount(partly)} came back without some of ${partly === 1 ? "its" : "their"} copies; the shelf shows those as missing after its next scan.`,
+        });
+      }
+      if (kept) {
+        notices.push({
+          level: body?.restored?.length ? "info" : "error",
+          text: `${modelCount(kept)} could not be put back: ${kept === 1 ? "its files are" : "their files are"} no longer in the ${trashName()}, or something is in their place.`,
+        });
+      }
+      return body?.restored ?? [];
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || "That delete could not be undone.",
+      });
+      return [];
     }
   }
 

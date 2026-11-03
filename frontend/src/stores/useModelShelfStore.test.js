@@ -29,6 +29,7 @@ const editModels = vi.fn();
 const listBaseModelCompletions = vi.fn();
 const forgetModels = vi.fn();
 const deleteModels = vi.fn();
+const undoDeleteModels = vi.fn();
 const setAdapterAttachments = vi.fn();
 const fetchWorkflowSets = vi.fn();
 const createWorkflowSet = vi.fn();
@@ -58,6 +59,7 @@ vi.mock("../api/modelShelf", () => ({
   listBaseModelCompletions: (...args) => listBaseModelCompletions(...args),
   forgetModels: (...args) => forgetModels(...args),
   deleteModels: (...args) => deleteModels(...args),
+  undoDeleteModels: (...args) => undoDeleteModels(...args),
   setAdapterAttachments: (...args) => setAdapterAttachments(...args),
   fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
   createWorkflowSet: (...args) => createWorkflowSet(...args),
@@ -2406,6 +2408,54 @@ describe("deleting from disk", () => {
     expect(useNoticeStore().notices.at(-1).text).toContain(
       "Permanently deleted",
     );
+  });
+
+  it("offers Undo for a trash delete, and Redo deletes what came back", async () => {
+    const store = useModelShelfStore();
+    const operations = useOperationStore();
+    operations.setLocalReceiptHost(true);
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    listAdapters.mockResolvedValue([]);
+    deleteModels.mockResolvedValue({
+      deleted: [1],
+      files_removed: 1,
+      permanent: false,
+      refused: [],
+      undo_token: "tok-1",
+    });
+    undoDeleteModels.mockResolvedValue({ restored: [1], refused: [] });
+
+    await store.deleteSelected();
+    expect(operations.receipt.summary).toContain("to the Trash");
+    await operations.takeLocalReceiptAction();
+    expect(undoDeleteModels).toHaveBeenCalledWith("tok-1");
+    expect(operations.receipt.mode).toBe("undone");
+
+    deleteModels.mockClear();
+    await operations.takeLocalReceiptAction();
+    expect(deleteModels).toHaveBeenCalledWith([1], { permanent: false });
+    operations.setLocalReceiptHost(false);
+  });
+
+  it("raises no Undo for a permanent delete", async () => {
+    const store = useModelShelfStore();
+    const operations = useOperationStore();
+    operations.setLocalReceiptHost(true);
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    listAdapters.mockResolvedValue([]);
+    deleteModels.mockResolvedValue({
+      deleted: [1],
+      files_removed: 1,
+      permanent: true,
+      refused: [],
+      undo_token: null,
+    });
+
+    await store.deleteSelected({ permanent: true });
+    expect(operations.receipt).toBe(null);
+    operations.setLocalReceiptHost(false);
   });
 
   it("says what failed rather than swallowing it", async () => {

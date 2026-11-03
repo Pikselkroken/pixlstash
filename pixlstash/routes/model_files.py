@@ -72,6 +72,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import sqlite3
 import stat
 from typing import Optional, Union
 
@@ -120,10 +121,19 @@ from pixlstash.services.model_shelf_service import (
     folder_removal_consequences,
     purge_deleted_models,
 )
+from pixlstash.services.stack_detector import repair_stacks
+from pixlstash.services.trash_undo import (
+    KIND_MODELS,
+    insert_rows,
+    remember,
+    snapshot_rows,
+    take,
+)
 from pixlstash.utils.adapter_header import FILE_ENGINE
 from pixlstash.utils.aitoolkit_run import is_sample_filename
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.system_utils import TRASH_NAME
+from pixlstash.utils.trash_restore import NotInTrash, fingerprint, restore_from_trash
 
 logger = get_logger(__name__)
 
@@ -193,6 +203,44 @@ class DeleteModelsRequest(BaseModel):
             "is the undo. True unlinks them, and nothing gets them back. The "
             "shelf sends true only for Shift+Delete, the file-manager gesture."
         ),
+    )
+
+
+class UndoDeleteModelsRequest(BaseModel):
+    """Body of ``POST /model-files/delete/undo``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(
+        max_length=64,
+        description="The `undo_token` a trash delete answered with. Spent by this call.",
+    )
+
+
+class UndoDeleteModelsResponse(BaseModel):
+    """Body of ``POST /model-files/delete/undo``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    restored: list[int] = Field(
+        description="Models back on the shelf under the ids they had, ascending."
+    )
+    partly_restored: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Of `restored`, the models some of whose copies could not be put "
+            "back; the shelf marks those copies missing at its next scan."
+        ),
+    )
+    refused: list[DeleteRefusal] = Field(
+        description=(
+            "Models that are not back on the shelf: `not_in_trash` (the trash "
+            "no longer holds their files, or this machine's trash cannot be "
+            "read), `path_taken` (something is at the file's path again), "
+            "`restore_failed` (the move back failed; the server log says why) "
+            "or `already_on_shelf` (the files are back, but the shelf took "
+            "those bytes onto another row meanwhile, which keeps them)."
+        )
     )
 
 
@@ -322,6 +370,15 @@ class DeleteModelsResponse(BaseModel):
             "and failing the whole call because one model moved would be the "
             "wrong answer to good news."
         )
+    )
+    undo_token: Optional[str] = Field(
+        default=None,
+        description=(
+            "Hand to `POST /model-files/delete/undo` to take the files back out "
+            "of the trash and the models back onto the shelf. Null for a "
+            "permanent delete or when nothing went to the trash. Kept in memory "
+            "only: a restart forgets it."
+        ),
     )
 
 
@@ -969,8 +1026,10 @@ def _is_advertised(relpath: str, advertised: set[str]) -> bool:
     return normalized in advertised or normalized.rsplit("/", 1)[-1] in advertised
 
 
-def _remove(path: str, *, permanent: bool) -> None:
+def _remove(path: str, *, permanent: bool) -> bool:
     """Trash or unlink one file, treating an already-gone one as done.
+
+    Returns whether the file was there to remove.
 
     ``FileNotFoundError`` is success, not failure: the shelf is a catalogue of
     what a scan saw, the owner may have deleted the file themselves since, and
@@ -987,6 +1046,8 @@ def _remove(path: str, *, permanent: bool) -> None:
             "dropped anyway, which is what was asked for.",
             path,
         )
+        return False
+    return True
 
 
 def _holds_only_samples(directory: str) -> bool:
@@ -1025,8 +1086,10 @@ def _holds_only_samples(directory: str) -> bool:
     )
 
 
-def _remove_samples(model_path: str, *, permanent: bool) -> None:
+def _remove_samples(model_path: str, *, permanent: bool) -> bool:
     """Take the file's training previews with it - **if that is all they are**.
+
+    Returns whether the previews directory was removed.
 
     An imported checkpoint's previews sit beside it in ``<stem>_samples/``
     (``services/run_importer.py``), and the lifecycle the import opens and a move
@@ -1054,7 +1117,7 @@ def _remove_samples(model_path: str, *, permanent: bool) -> None:
     """
     directory = samples_relpath(model_path)
     if not os.path.isdir(directory):
-        return
+        return False
     if os.path.islink(directory):
         # ``isdir`` follows the link, so without this the removal is decided by
         # which branch runs: ``rmtree`` happens to refuse a symlinked root and
@@ -1068,7 +1131,7 @@ def _remove_samples(model_path: str, *, permanent: bool) -> None:
             os.path.basename(model_path),
             directory,
         )
-        return
+        return False
     if not _holds_only_samples(directory):
         logger.info(
             "Left %s in place: it holds something other than this run's "
@@ -1076,12 +1139,13 @@ def _remove_samples(model_path: str, *, permanent: bool) -> None:
             directory,
             os.path.basename(model_path),
         )
-        return
+        return False
     try:
         if permanent:
             shutil.rmtree(directory)
         else:
             send2trash(directory)
+        return True
     except FileNotFoundError:
         logger.debug("No samples directory at %s to remove.", directory)
     except (TrashPermissionError, OSError) as exc:
@@ -1094,6 +1158,48 @@ def _remove_samples(model_path: str, *, permanent: bool) -> None:
             directory,
             exc,
         )
+    return False
+
+
+# What a model delete drops, by the column naming the model: `_purge`'s tables.
+_MODEL_TABLES = (
+    ("model", "id"),
+    ("model_file", "model_id"),
+    ("model_capability", "model_id"),
+    ("model_hidden", "model_id"),
+)
+
+
+def _snapshot_model(hub, model_id: int) -> dict[str, list[dict]]:
+    """The hub rows a delete of *model_id* drops, for its undo."""
+    with hub.transaction() as conn:
+        return {
+            table: snapshot_rows(conn, table, column, model_id)
+            for table, column in _MODEL_TABLES
+        }
+
+
+def _restore_model_rows(hub, rows: dict[str, list[dict]]) -> None:
+    """Put one deleted model's rows back, under the id it had.
+
+    A stack it was in that dissolved meanwhile does not come back: the model
+    returns unstacked. One that is still there gets it back and is renumbered.
+    """
+    model = dict(rows["model"][0])
+    with hub.transaction() as conn:
+        stack_id = model.get("stack_id")
+        if (
+            stack_id is not None
+            and conn.execute(
+                "SELECT 1 FROM adapter_stack WHERE id = ?", (stack_id,)
+            ).fetchone()
+            is None
+        ):
+            model["stack_id"] = model["stack_position"] = None
+        insert_rows(conn, "model", [model])
+        for table, _column in _MODEL_TABLES[1:]:
+            insert_rows(conn, table, rows[table])
+        repair_stacks(conn, [model["stack_id"]])
 
 
 def create_router(server) -> APIRouter:
@@ -1370,15 +1476,27 @@ def create_router(server) -> APIRouter:
             deleted: list[int] = []
             emptied: dict[int, list[tuple[int, str]]] = {}
             files_removed = 0
+            undo: dict[int, dict] = {}
             for model_id, copies in deletable.items():
                 paths = [copy["path"] for copy in copies if copy["path"]]
                 done = 0
+                # (path, fingerprint): the fingerprint picks this delete's own
+                # entry when a later delete trashes another file from the path.
+                trashed: list[tuple[str, tuple[int, int] | None]] = []
+                if not payload.permanent:
+                    undo[model_id] = {
+                        "rows": _snapshot_model(server.hub, model_id),
+                        "trashed": trashed,
+                    }
                 try:
                     for path in paths:
-                        _remove(path, permanent=payload.permanent)
+                        stamp = fingerprint(path)
+                        if _remove(path, permanent=payload.permanent):
+                            trashed.append((path, stamp))
                         done += 1
                         # After the file, and never allowed to fail it.
-                        _remove_samples(path, permanent=payload.permanent)
+                        if _remove_samples(path, permanent=payload.permanent):
+                            trashed.append((samples_relpath(path), None))
                 except (TrashPermissionError, OSError) as exc:
                     # `done` files of this model are already gone. Its rows stay
                     # so the shelf keeps naming the copies that did not go, and
@@ -1428,6 +1546,12 @@ def create_router(server) -> APIRouter:
                     len(deleted),
                     len(deleted) - len(purged),
                 )
+            # Only what is gone and left something in the trash to bring back.
+            undo = {
+                model_id: entry
+                for model_id, entry in undo.items()
+                if model_id in purged and entry["trashed"]
+            }
         finally:
             SHELF_IO_LOCK.release()
 
@@ -1442,6 +1566,116 @@ def create_router(server) -> APIRouter:
             deleted=sorted(deleted),
             files_removed=files_removed,
             permanent=payload.permanent,
+            refused=[DeleteRefusal(**item) for item in refused],
+            undo_token=remember(KIND_MODELS, undo) if undo else None,
+        )
+
+    @router.post(
+        "/model-files/delete/undo",
+        summary="Undo a delete that went to the trash",
+        description=(
+            "Takes the files a `POST /model-files/delete` sent to this machine's "
+            f"{TRASH_NAME.lower()} back to where they were, and puts the models "
+            "back on the shelf under the ids, names and settings they had, so "
+            "deleting the same ids again is the redo. The `token` is the one the "
+            "delete answered with, and is spent here. A model whose file is no "
+            "longer in the trash stays deleted and is reported, not raised. "
+            "The macOS Trash cannot be read, so there every model is refused."
+        ),
+        tags=["model_shelf"],
+        response_model=UndoDeleteModelsResponse,
+        responses={
+            404: {
+                "description": "The token is unknown: spent, pushed out by later deletes, or from before a restart."
+            }
+        },
+    )
+    def undo_delete_model_files(
+        request: Request, payload: UndoDeleteModelsRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        if not SHELF_IO_LOCK.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail="A move or an import is already running. Try again when it ends.",
+            )
+        try:
+            undo = take(KIND_MODELS, payload.token)
+            if undo is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="There is nothing to undo: that delete was already undone, or PixlStash has restarted since.",
+                )
+            restored: list[int] = []
+            partly: list[int] = []
+            refused: list[dict] = []
+            for model_id, entry in undo.items():
+                back = 0
+                reason = "not_in_trash"
+                # Copies first, then previews, and previews only beside a copy
+                # that came back: a refused model must not leave them orphaned.
+                files = [item for item in entry["trashed"] if item[1]]
+                previews = [item for item in entry["trashed"] if not item[1]]
+                files_back = 0
+                for path, stamp in files + previews:
+                    if not stamp and files and not files_back:
+                        break
+                    try:
+                        restore_from_trash(path, stamp)
+                        back += 1
+                        files_back += bool(stamp)
+                    except FileExistsError:
+                        # The first decisive reason stands.
+                        if reason == "not_in_trash":
+                            reason = "path_taken"
+                        logger.warning(
+                            "Not putting %s back from the trash: something is there again.",
+                            path,
+                        )
+                    except NotInTrash as exc:
+                        logger.warning("Model %s: %s", model_id, exc)
+                    except OSError as exc:
+                        if reason == "not_in_trash":
+                            reason = "restore_failed"
+                        logger.error(
+                            "Could not put %s back from the trash: %s",
+                            path,
+                            exc,
+                            exc_info=True,
+                        )
+                # A copy must come back. A model whose file was already gone
+                # when it was deleted had only its row (and previews) to lose,
+                # so that row coming back is it as it was.
+                if not (files_back if files else back):
+                    refused.append({"id": model_id, "reason": reason})
+                    continue
+                try:
+                    _restore_model_rows(server.hub, entry["rows"])
+                except sqlite3.IntegrityError as exc:
+                    # ponytail: a scan registered the same bytes since the
+                    # delete; its row stands and the next walk adds this copy.
+                    logger.warning(
+                        "Put model %s's files back but not its row: %s. The "
+                        "shelf already holds those bytes under another row.",
+                        model_id,
+                        exc,
+                    )
+                    refused.append({"id": model_id, "reason": "already_on_shelf"})
+                    continue
+                restored.append(model_id)
+                # The model's copies, not its previews directory.
+                if files_back < len(files):
+                    partly.append(model_id)
+        finally:
+            SHELF_IO_LOCK.release()
+        logger.info(
+            "Undid the delete of %d model(s), %d stayed deleted.",
+            len(restored),
+            len(refused),
+        )
+        return UndoDeleteModelsResponse(
+            restored=sorted(restored),
+            partly_restored=sorted(partly),
             refused=[DeleteRefusal(**item) for item in refused],
         )
 

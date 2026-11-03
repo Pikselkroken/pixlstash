@@ -179,7 +179,7 @@ function setWidth(wrapper, width) {
     value: width,
     configurable: true,
   });
-  observers.forEach((callback) => callback());
+  observers.forEach((callback) => callback([]));
 }
 
 // `attachTo: document.body` leaves its DOM behind, so every wrapper is

@@ -475,10 +475,23 @@ export async function planSetClones(workflowId, sets) {
  * it instead), which is why every caller gates on `manual`.
  *
  * @param {string} workflowId
- * @returns {Promise<{deleted: string, workflow_id: string}>} `deleted` is its name.
+ * @returns {Promise<{deleted: string, workflow_id: string, undo_token: ?string}>}
+ *   `deleted` is its name; `undo_token` undoes it through `restoreWorkflow`.
  */
 export async function deleteWorkflow(workflowId) {
   return unwrap(apiClient.delete(wf(workflowId)));
+}
+
+/**
+ * Undo a delete: the workflow comes back under the same id, its file out of
+ * the trash, so deleting it again redoes it.
+ *
+ * @param {string} workflowId
+ * @param {string} token - the delete's `undo_token`; spent by this call.
+ * @returns {Promise<{deleted: string, workflow_id: string}>}
+ */
+export async function restoreWorkflow(workflowId, token) {
+  return unwrap(apiClient.post(wf(workflowId, "/restore"), { token }));
 }
 
 /**

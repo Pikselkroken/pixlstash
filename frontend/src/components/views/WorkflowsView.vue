@@ -472,6 +472,9 @@
       </template>
     </AppDialog>
 
+    <!-- A delete's Undo/Redo: workflows are not in the library's operation
+         log, so their receipt is a local one, as on the model shelf. -->
+    <ActionReceipt local-only />
   </div>
 </template>
 
@@ -512,6 +515,7 @@ import {
 } from "../../stores/useFavouritesStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useOperationStore } from "../../stores/useOperationStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
@@ -536,6 +540,7 @@ import WorkflowRecipesTab from "../panels/WorkflowRecipesTab.vue";
 import WorkflowSelectionBar from "../panels/WorkflowSelectionBar.vue";
 import WorkflowTemplateFilterMenu from "../panels/WorkflowTemplateFilterMenu.vue";
 import WorkflowTemplatesPanel from "../panels/WorkflowTemplatesPanel.vue";
+import ActionReceipt from "../widgets/ActionReceipt.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -573,6 +578,11 @@ const favourites = useFavouritesStore();
 const filterStore = useFilterStore();
 const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
+// A delete's receipt exists only while this screen shows it: its Undo means
+// nothing anywhere else.
+const operationStore = useOperationStore();
+onMounted(() => operationStore.setLocalReceiptHost(true));
+onBeforeUnmount(() => operationStore.setLocalReceiptHost(false));
 const {
   dropKey: modelDropKey,
   onDragOver: onModelDragOver,
