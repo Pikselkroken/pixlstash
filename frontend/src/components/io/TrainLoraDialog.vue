@@ -770,7 +770,11 @@ watch(
 const character = computed(() => store.character);
 const plan = computed(() => store.plan);
 const resolution = computed(() => plan.value?.resolution || null);
-const values = computed(() => resolution.value?.values || null);
+// A run that does not fit still shows what its closest profile would use, so
+// Advanced can be read and pinned; Start waits for a resolution.
+const values = computed(
+  () => resolution.value?.values || plan.value?.unfit_values || null,
+);
 const rules = computed(() => plan.value?.rules || {});
 const derived = computed(() => plan.value?.derived || {});
 const planError = computed(() => plan.value?.error?.message || "");
