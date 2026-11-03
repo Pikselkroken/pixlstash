@@ -1394,6 +1394,11 @@ describe("a checkpoint that will not load", () => {
     expect(setWorkflowChanges.mock.calls.at(-1)[1].models).toEqual([
       { address: "core:n1/ckpt_name/ckpt_name", filename: "juggernaut.safetensors" },
     ]);
+    // The missing file is the first option: choosing it takes the pick back.
+    await picker().setValue("");
+    await flush(wrapper);
+    expect(setWorkflowChanges.mock.calls.at(-1)[1].models ?? []).toEqual([]);
+    expect(textOf(wrapper)).toContain("Checkpoint missing");
   });
 
   it("files a missing checkpoint's candidates under how likely each is to work", async () => {

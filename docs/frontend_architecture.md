@@ -2411,8 +2411,8 @@ own row.
   32px bars, none and 1★–5★, `role="img"` with the counts in its label) over
   the tabs. The Workflow tab's sections are `SectionHeader`s collapsed through
   `useSectionCollapse` (scope `workflow`): **Models** (read-only rows, missing
-  files in the warning ink with a replacement picker beneath, *Stages* as text whose names are `aria-pressed`
-  toggle buttons, an off stage struck through; the verb is *Change model
+  files in the warning ink with a replacement picker beneath, *Stages* as
+  text whose names are `aria-pressed` toggle buttons, an off stage struck through; the verb is *Change model
   set…*, `WorkflowUseSetMenu`), **LoRAs** (read-only name and strength, the
   *Also used* list from `WorkflowLoraPile.vue` with *Add*, and a pencil that
   opens `WorkflowLorasDialog.vue`, where strength, remove, put back and reset
@@ -2430,10 +2430,10 @@ own row.
   missing model has a picker** (#2165 dropped them all, which left a missing
   checkpoint no set holds a replacement for with no way to replace it): an
   `AppSelect` of the shelf's `model-swap?replacing=` candidates, grouped by
-  verdict for a checkpoint, and a pick is an unsaved change. A model that
-  loads changes through *Change model set…*, a recipe, or ComfyUI. Where a
-  bullet below describes pickers on every row, the panels' side labels, the stacked LoRA pile or the "N pictures"
-  head line, it is history.
+  verdict where the server gives one, and a pick is an unsaved change. A
+  model that loads changes through *Change model set…*, a recipe, or ComfyUI.
+  Where a bullet below describes pickers on every row, the panels' side
+  labels, the stacked LoRA pile or the "N pictures" head line, it is history.
 
 - **Open in ComfyUI is an icon-only button beside Run…**, wearing the ComfyUI
   logomark (`widgets/ComfyuiIcon.vue`, `currentColor` on the AiToolkitIcon
