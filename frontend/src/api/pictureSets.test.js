@@ -12,7 +12,6 @@ import {
   patchPictureSet,
   deletePictureSet,
   getPictureSetMembership,
-  addPictureToSet,
   bulkAddPicturesToSet,
   removePictureFromSet,
   getLockedMembers,
@@ -102,14 +101,7 @@ describe("api/pictureSets", () => {
     });
   });
 
-  // Membership is per-picture, so add/remove address one picture at a time and
-  // bulk actions are the caller's loop.
-  it("addPictureToSet addresses one picture within one set", async () => {
-    apiClient.post.mockResolvedValue({ data: {} });
-    await addPictureToSet(5, 42);
-    expect(apiClient.post).toHaveBeenCalledWith("/picture_sets/5/members/42");
-  });
-
+  // Removal is per-picture, so it addresses one picture at a time.
   it("removePictureFromSet addresses one picture within one set", async () => {
     apiClient.delete.mockResolvedValue({ data: {} });
     await removePictureFromSet(5, 42);
