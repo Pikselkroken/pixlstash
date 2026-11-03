@@ -752,12 +752,13 @@ describe("opened from the Models workspace (#2169)", () => {
     expect(tile("character:4").find("img").exists()).toBe(true);
   });
 
-  it("lands on Training runs when Start is pressed from there", async () => {
+  it("lands on the new run's page when Start is pressed from Training runs", async () => {
     const wrapper = mount(TrainLoraDialog, globalOpts);
     const store = useTrainingStore();
     store.openToPick();
     training.getTrainingDataset.mockResolvedValue(dataset());
     training.listTrainingJobs.mockResolvedValue([]);
+    training.createTrainingJob.mockResolvedValue({ id: 1, uuid: "run-7" });
     await store.pickScope({ type: "character", id: 4, name: "Grandad" });
     await store.resolvePlan();
     await flushPromises();
@@ -765,11 +766,12 @@ describe("opened from the Models workspace (#2169)", () => {
     await startButton(wrapper).trigger("click");
     await flushPromises();
     expect(training.createTrainingJob).toHaveBeenCalled();
-    expect(push).toHaveBeenCalledWith({ name: "models-runs" });
+    expect(push).toHaveBeenCalledWith({ name: "models-runs", query: { run: "run-7" } });
     expect(training.listTrainingJobs).toHaveBeenCalled();
   });
 
-  it("stays where it is when opened on a set or person elsewhere", async () => {
+  it("lands on the new run's page when opened on a set or person elsewhere", async () => {
+    training.createTrainingJob.mockResolvedValue({ id: 1, uuid: "run-8" });
     const { wrapper } = await openDialog(
       { type: "character", id: 4, name: "Grandad" },
       dataset(),
@@ -778,6 +780,36 @@ describe("opened from the Models workspace (#2169)", () => {
     await startButton(wrapper).trigger("click");
     await flushPromises();
     expect(training.createTrainingJob).toHaveBeenCalled();
+    expect(push).toHaveBeenCalledWith({ name: "models-runs", query: { run: "run-8" } });
+  });
+
+  it("navigates only once the job list holding the new run is read", async () => {
+    let answer;
+    training.createTrainingJob.mockResolvedValue({ id: 1, uuid: "run-9" });
+    const { wrapper } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    // The first read names the run; the second is the runs store's reload.
+    training.listTrainingJobs
+      .mockResolvedValueOnce([])
+      .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    await startButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(push).not.toHaveBeenCalled();
+    answer([{ uuid: "run-9" }]);
+    await flushPromises();
+    expect(push).toHaveBeenCalledWith({ name: "models-runs", query: { run: "run-9" } });
+  });
+
+  it("does not navigate when the run was not queued", async () => {
+    training.createTrainingJob.mockRejectedValue(new Error("no"));
+    const { wrapper } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    await startButton(wrapper).trigger("click");
+    await flushPromises();
     expect(push).not.toHaveBeenCalled();
   });
 });

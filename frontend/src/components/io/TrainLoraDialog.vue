@@ -1333,19 +1333,19 @@ async function onStart() {
   if (!canStart.value) return;
   try {
     const job = await store.startTraining();
-    const fromModels = store.pickable;
     store.closeDialog();
-    // The new run's card is on Training runs; from the Models workspace's
-    // door that is where Start lands.
-    useTrainingRunsStore().loadJobs();
-    if (fromModels) router.push({ name: "models-runs" });
+    // Start lands on the new run's own page, wherever the dialog was opened.
+    // The page finds its job in the runs store, so the list is read first:
+    // unread, the page would draw the runs grid until the list arrived.
+    await useTrainingRunsStore().loadJobs();
+    router.push(
+      job?.uuid
+        ? { name: "models-runs", query: { run: job.uuid } }
+        : { name: "models-runs" },
+    );
     // The create response carries the resolver's result as an object.
     const profile = job?.resolved_profile?.profile_label;
-    store.showQueuedToast(
-      profile
-        ? `Training queued: ${profile}. Watch progress under Tasks in the title bar.`
-        : "Training queued. Watch progress under Tasks in the title bar.",
-    );
+    store.showQueuedToast(profile ? `Training queued: ${profile}.` : "Training queued.");
     emit("started");
   } catch (err) {
     // store.submitError is already shown in the footer; keep the cause too.
