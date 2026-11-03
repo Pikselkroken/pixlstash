@@ -10,7 +10,7 @@
   <v-menu
     v-model="open"
     location="bottom end"
-    :offset="4"
+    :offset="MENU_GAP_PX"
     @after-enter="onOpened"
   >
     <template #activator="{ props: menuProps }">
@@ -33,6 +33,7 @@
     <div
       ref="surface"
       class="ctx-menu wfset-menu"
+      :style="surfaceMax ? { maxHeight: `${surfaceMax}px` } : undefined"
       role="menu"
       aria-label="Your sets"
       tabindex="-1"
@@ -173,6 +174,29 @@ const failed = ref(false);
 let asked = 0;
 /** The menu was opened from outside the tab, so nothing put focus in it. */
 let focusOnOpen = false;
+/**
+ * The surface's height cap: the room left between the button and the bottom
+ * of the window, measured as the menu opens. The rows arrive after `v-menu`
+ * has placed the surface, and its own re-placement then measures a box its
+ * previous max-height already cut short, which left a long list hanging out
+ * of the window. A surface that never grows past the room below is never
+ * re-placed.
+ */
+const surfaceMax = ref(null);
+
+/** The gap to the button, and how close the surface comes to the window's edge. */
+const MENU_GAP_PX = 4;
+const MENU_EDGE_PX = 12;
+/** Below this the surface is not squeezed further: `v-menu` moves it instead. */
+const MENU_MIN_HEIGHT_PX = 160;
+
+/** Cap the surface to the room below the button. */
+function sizeSurface() {
+  const button = buttonEl()?.getBoundingClientRect();
+  if (!button) return;
+  const room = window.innerHeight - button.bottom - MENU_GAP_PX - MENU_EDGE_PX;
+  surfaceMax.value = Math.max(MENU_MIN_HEIGHT_PX, Math.floor(room));
+}
 
 /**
  * A set member under the name the shelf reads it by (`headName`): its display
@@ -436,6 +460,7 @@ function onOpened() {
 // click that closed the menu landed on another control.
 watch(open, async (now) => {
   if (now) {
+    sizeSurface();
     void read();
     return;
   }
@@ -467,9 +492,9 @@ defineExpose({ open: openMenu, focus });
   display: inline-flex;
 }
 
-/* The menu's content box takes the room left below (or above) the button as
-   its max-height; the surface scrolls inside it rather than running off the
-   bottom of the window. `min-height: 0` lets it shrink in that flex column. */
+/* Its max-height is the room below the button (`sizeSurface`), and it
+   scrolls inside that rather than running off the bottom of the window.
+   `min-height: 0` lets it shrink in `v-menu`'s flex column as well. */
 .wfset-menu {
   width: 320px;
   min-height: 0;

@@ -780,6 +780,57 @@ test.describe("Change model set…", () => {
     await expect(rail(page).getByTestId("wftab-row-vae").getByText("Edited", { exact: true })).toBeVisible();
     expect(await overflows(rail(page).locator(".inspector-body"))).toBe(false);
   });
+
+  test("a long list stays inside a short window and scrolls under the wheel", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 600 });
+    net = await stubWorkflows(page);
+    // Thirty sets, registered after the fixture's routes so this answer wins:
+    // far more rows than 600px holds. The plan route answers each one.
+    await page.route("**/api/v1/models/workflow-sets", (route) =>
+      route.fulfill({
+        json: {
+          combinations: [],
+          no_set: [],
+          set_checks: [],
+          hand_made: Array.from({ length: 30 }, (_, index) => ({
+            id: 100 + index,
+            name: `Set ${index + 1}`,
+            members: [{ id: 200 + index, slot: "checkpoint", on_shelf: true, name: `ckpt ${index}` }],
+          })),
+        },
+      }),
+    );
+    await selectWorkflow(page);
+
+    await rail(page).getByRole("button", { name: "Change model set…" }).click();
+    const menu = page.getByTestId("wftab-use-set-menu");
+    await expect(menu.locator("[data-set]")).toHaveCount(30);
+    await settled(menu);
+    expect(await insideViewport(page, menu)).toBe(true);
+    const box = () =>
+      menu.evaluate((el) => ({
+        overflowY: getComputedStyle(el).overflowY,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+        scrollTop: el.scrollTop,
+        pageScroll: document.scrollingElement.scrollTop,
+      }));
+    const before = await box();
+    expect(before.overflowY).toBe("auto");
+    expect(before.scrollHeight).toBeGreaterThan(before.clientHeight);
+    expect(before.scrollTop).toBe(0);
+
+    const { x, y, width, height } = await menu.boundingBox();
+    await page.mouse.move(x + width / 2, y + height / 2);
+    await page.mouse.wheel(0, 400);
+    await expect.poll(async () => (await box()).scrollTop).toBeGreaterThan(0);
+    // The menu took the wheel, the page behind it did not move.
+    expect((await box()).pageScroll).toBe(before.pageScroll);
+    // The last row can be reached and is drawn inside the window.
+    const last = menu.locator("[data-set]").last();
+    await last.scrollIntoViewIfNeeded();
+    expect(await insideViewport(page, last)).toBe(true);
+  });
 });
 
 test.describe("Edit LoRAs…", () => {

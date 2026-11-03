@@ -2963,9 +2963,12 @@ own row.
     each, a favourite set leads, then A to Z by name, hand-made first on a
     tie. The surface has a width of its own (320px) and a row is the set's name over that line, wrapped: the sets
     are read after the menu has opened and been placed, and a surface sized
-    by a long row ran off the window. Its height is the room `v-menu` leaves
-    beside the button (the content box's max-height) and it scrolls inside
-    that, rather than running off the bottom of the window. The button is found through a wrapper,
+    by a long row ran off the window. Its max-height is the room between the
+    button and the window's bottom edge, measured as it opens (`sizeSurface`),
+    and it scrolls inside that: `v-menu`'s own re-placement, after the rows
+    arrive, measures a box its last max-height already cut short and left a
+    long list hanging out of the window (e2e: `workflow-tab-editor.spec.js`,
+    "a long list stays inside a short window"). The button is found through a wrapper,
     not a `ref`: `v-menu` hands its activator a `ref` of its own and a second
     one on the same button is the one that loses, which left focus on the
     page after a choice. It writes nothing: it emits
