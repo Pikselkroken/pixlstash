@@ -4308,3 +4308,65 @@ describe("a model is hidden in this library", () => {
     expect(store.handMadeSets[0].removed).toEqual([]);
   });
 });
+
+describe("the set grid's sort", () => {
+  /** Three sets: most pictures, newest use and first name are each another one. */
+  function shelfWithThreeSets() {
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, sha256: "a".repeat(64) }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+      adapter({ id: 3, sha256: "c".repeat(64) }),
+    ]);
+    const combo = (id, name, pictures, lastUsed) => ({
+      key: String(id),
+      models: [{ id, name, kind: "checkpoint" }],
+      recipes: 1,
+      picture_count: pictures,
+      last_used_at: lastUsed,
+      covers: [],
+    });
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        combo(1, "Bravo", 12, "2026-01-01T00:00:00Z"),
+        combo(2, "alpha", 3, "2026-06-01T00:00:00Z"),
+        combo(3, "Charlie", 5, null),
+      ],
+      no_set: [],
+    });
+    return useModelShelfStore();
+  }
+  const order = (store) => store.setGroups.map((group) => group.key);
+
+  it("orders by use, name and last use, each from its own end", async () => {
+    const store = shelfWithThreeSets();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+
+    // The default is the evidence order the grid always had.
+    expect(order(store)).toEqual(["model:1", "model:3", "model:2"]);
+    store.setView({ setSortDirection: "asc" });
+    expect(order(store)).toEqual(["model:2", "model:3", "model:1"]);
+
+    // A new key starts at its own end: Name after "Least used first" is A to Z.
+    store.setView({ setSortKey: "name" });
+    expect(store.view.setSortDirection).toBe("asc");
+    expect(order(store)).toEqual(["model:2", "model:1", "model:3"]);
+
+    // A set never used sorts last in both directions.
+    store.setView({ setSortKey: "last_used" });
+    expect(order(store)).toEqual(["model:2", "model:1", "model:3"]);
+    store.setView({ setSortDirection: "asc" });
+    expect(order(store)).toEqual(["model:1", "model:2", "model:3"]);
+  });
+
+  it("is remembered apart from the row list's sort", async () => {
+    const store = shelfWithThreeSets();
+    store.setView({ setSortKey: "size", setSortDirection: "asc" });
+
+    setActivePinia(createPinia());
+    const next = useModelShelfStore();
+    expect(next.view.setSortKey).toBe("size");
+    expect(next.view.setSortDirection).toBe("asc");
+    expect(next.view.sortKey).toBe("added_at");
+  });
+});

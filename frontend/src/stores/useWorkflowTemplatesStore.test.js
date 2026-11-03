@@ -151,7 +151,7 @@ describe("the Templates tab's list", () => {
 
   it("remembers the sort and filters for next time, but not the name text", async () => {
     const store = useWorkflowTemplatesStore();
-    store.sortKey = "newest";
+    store.setSortKey("newest");
     store.setFilters({
       category: ["Video", "Image"],
       model: ["Wan"],
@@ -179,9 +179,23 @@ describe("the Templates tab's list", () => {
     });
   });
 
+  it("remembers the direction, and a new key starts at its own end", async () => {
+    const store = useWorkflowTemplatesStore();
+    store.setSortKey("newest");
+    expect(store.sortDirection).toBe("desc");
+    store.toggleSortDirection();
+    await nextTick();
+    setActivePinia(createPinia());
+    const next = useWorkflowTemplatesStore();
+    expect(next.sortKey).toBe("newest");
+    expect(next.sortDirection).toBe("asc");
+    next.setSortKey("name");
+    expect(next.sortDirection).toBe("asc");
+  });
+
   it("comes back from a session reset as a fresh start would", async () => {
     const store = useWorkflowTemplatesStore();
-    store.sortKey = "newest";
+    store.setSortKey("newest");
     store.setFilters({ model: ["Wan"], name: "flux" });
     await nextTick();
     localStorage.clear();
@@ -226,6 +240,13 @@ describe("the Templates tab's list", () => {
       "hidden (1)",
     );
     expect(store.activeFilterCount).toBe(0);
+  });
+
+  it("reverses the whole order when the direction is flipped", async () => {
+    const store = await loaded();
+    const forward = keys(store);
+    store.toggleSortDirection();
+    expect(keys(store)).toEqual([...forward].reverse());
   });
 
   it("shows partner templates when the chip is removed", async () => {
@@ -310,14 +331,14 @@ describe("the Templates tab's list", () => {
 
   it("sorts by model size, smallest first, a template that gives none last", async () => {
     const store = await loaded();
-    store.sortKey = "size";
+    store.setSortKey("size");
     expect(keys(store).slice(0, 2)).toEqual(["one-missing", "ready"]);
   });
 
   it("sorts by use", async () => {
     const store = await loaded();
     store.setFilters({ showPartner: true });
-    store.sortKey = "popular";
+    store.setSortKey("popular");
     expect(keys(store).slice(0, 2)).toEqual(["partner", "ready"]);
   });
 

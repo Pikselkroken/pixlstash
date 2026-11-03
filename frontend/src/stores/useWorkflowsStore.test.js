@@ -135,6 +135,31 @@ describe("the sort keys", () => {
     ]);
   });
 
+  it("flips the order with the direction, and a new key starts at its own end", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    store.setSortKey("pictures");
+    expect(store.sortDirection).toBe("desc");
+    store.toggleSortDirection();
+    expect(order(store)).toEqual([
+      "never-kept-a-picture",
+      "few-but-loved",
+      "the-stack",
+      "workhorse",
+    ]);
+
+    // Name after "Fewest first" is A to Z, not the direction carried over.
+    store.setSortKey("name");
+    expect(store.sortDirection).toBe("asc");
+    store.toggleSortDirection();
+    expect(order(store)).toEqual([
+      "few-but-loved",
+      "the-stack",
+      "never-kept-a-picture",
+      "workhorse",
+    ]);
+  });
+
   it("refuses a key it does not know rather than emptying the grid", async () => {
     const store = useWorkflowsStore();
     await store.fetchCards();

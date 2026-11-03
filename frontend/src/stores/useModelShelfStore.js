@@ -84,6 +84,7 @@ import {
   worksWith,
 } from "../utils/workflowSets";
 import { checksByKey, comboKey } from "../utils/setVerdicts";
+import { activityOf, combinationsOfSet } from "../utils/setActivity";
 
 /**
  * The Models sidebar's places (#2168). `sets` is the set grid; every other one
@@ -319,6 +320,52 @@ export const SORT_KEYS = [
   "type",
   "sets",
 ];
+
+/**
+ * The set grid's own sort keys: a set card has no file date, type or base
+ * column, so it does not take the row list's. Each carries its name, glyph,
+ * the end it starts at (`natural`) and its directions in words, `[asc, desc]`.
+ */
+export const SET_SORT_LABELS = {
+  used: {
+    label: "Most used",
+    icon: "mdi-image-multiple-outline",
+    natural: "desc",
+    words: ["Least used first", "Most used first"],
+  },
+  last_used: {
+    label: "Last used",
+    icon: "mdi-clock-outline",
+    natural: "desc",
+    words: ["Oldest first", "Newest first"],
+  },
+  name: {
+    label: "Name",
+    icon: "mdi-sort-alphabetical-variant",
+    natural: "asc",
+    words: ["A to Z", "Z to A"],
+  },
+  size: {
+    label: "Size",
+    icon: "mdi-harddisk",
+    natural: "desc",
+    words: ["Smallest first", "Largest first"],
+  },
+};
+export const SET_SORT_KEYS = Object.keys(SET_SORT_LABELS);
+
+const setNameCollator = new Intl.Collator(undefined, { numeric: true });
+
+/**
+ * What each set sort key reads off a card, given its activity. `null` sorts
+ * last in both directions, as an unanswered row does in `compareOn`.
+ */
+const SET_SORT_VALUE = {
+  used: (group, activity) => activity.pictures,
+  last_used: (group, activity) => Date.parse(activity.lastUsedAt) || null,
+  name: (group) => group.card?.name || null,
+  size: (group) => group.card?.sizeBytes ?? null,
+};
 
 /**
  * What each sort key reads off a row. `null` means the row cannot answer.
@@ -743,6 +790,9 @@ function defaultView() {
     listGroupBy: LIST_GROUP_BY,
     sortKey: "added_at",
     sortDirection: "desc",
+    // The set grid's sort, apart from the list's: its keys are its own.
+    setSortKey: "used",
+    setSortDirection: "desc",
     // How an open set's tray draws its models: as cards or as a comparison
     // list. Carried at all times and only read under `workflow_set`.
     // Remembered for every tray
@@ -912,6 +962,13 @@ function storedView() {
   if (SORT_KEYS.includes(parsed.sortKey)) view.sortKey = parsed.sortKey;
   if (parsed.sortDirection === "asc" || parsed.sortDirection === "desc") {
     view.sortDirection = parsed.sortDirection;
+  }
+  if (SET_SORT_KEYS.includes(parsed.setSortKey)) {
+    view.setSortKey = parsed.setSortKey;
+    view.setSortDirection = SET_SORT_LABELS[parsed.setSortKey].natural;
+  }
+  if (parsed.setSortDirection === "asc" || parsed.setSortDirection === "desc") {
+    view.setSortDirection = parsed.setSortDirection;
   }
   // Per column and clamped on the way in, for the reason the fields above are
   // read one at a time: a blob written before the columns could be dragged is
@@ -1973,12 +2030,47 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     fetchRows();
   }
 
+  /**
+   * Set cards in the grid's sort order. Stable, so a tie keeps the order the
+   * cards arrived in: strongest evidence first, or the newest hand-made set.
+   */
+  function sortSets(groups) {
+    const key = SET_SORT_KEYS.includes(view.setSortKey)
+      ? view.setSortKey
+      : "used";
+    const sign = view.setSortDirection === "asc" ? 1 : -1;
+    const combinations = workflowSets.value.combinations;
+    const valued = groups.map((group) => ({
+      group,
+      // The activity is a walk over every combination: read only for the
+      // two keys that need it.
+      value: SET_SORT_VALUE[key](
+        group,
+        key === "used" || key === "last_used"
+          ? activityOf(combinationsOfSet(group, combinations))
+          : null,
+      ),
+    }));
+    valued.sort((a, b) => {
+      if (a.value === null) return b.value === null ? 0 : 1;
+      if (b.value === null) return -1;
+      const diff =
+        typeof a.value === "string"
+          ? setNameCollator.compare(a.value, b.value)
+          : a.value - b.value;
+      return diff * sign;
+    });
+    return valued.map((entry) => entry.group);
+  }
+
   /** The evidence cards drawn: the hidden ones only while Show hidden is on. */
   const setGroupList = computed(() =>
     arrangeSets(
-      showHiddenSets.value
-        ? evidenceGroups.value
-        : evidenceGroups.value.filter((group) => !group.hidden),
+      sortSets(
+        showHiddenSets.value
+          ? evidenceGroups.value
+          : evidenceGroups.value.filter((group) => !group.hidden),
+      ),
       isFavouriteSet,
     ),
   );
@@ -2367,7 +2459,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   /** The hand-made cards the set grid draws, arranged for favourites. */
   const handMadeGroups = computed(() =>
-    arrangeSets(namedHandMadeGroups.value, isFavouriteSet),
+    arrangeSets(sortSets(namedHandMadeGroups.value), isFavouriteSet),
   );
 
   /**
@@ -3439,6 +3531,16 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       patch.sortDirection === undefined
     ) {
       patch = { ...patch, sortDirection: defaultSortDirection(patch.sortKey) };
+    }
+    if (
+      patch.setSortKey !== undefined &&
+      patch.setSortKey !== view.setSortKey &&
+      patch.setSortDirection === undefined
+    ) {
+      patch = {
+        ...patch,
+        setSortDirection: SET_SORT_LABELS[patch.setSortKey].natural,
+      };
     }
     Object.assign(view, patch);
     // The grid IS the Sets place (#2168): a `groupBy` written without going

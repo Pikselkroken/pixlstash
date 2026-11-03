@@ -24,24 +24,43 @@
         :offset="8"
         :close-on-content-click="false"
       >
+        <!-- The picture grid's split-button: a direction toggle welded to
+             the menu trigger. -->
         <template #activator="{ props: menuProps }">
-          <AppBarButton
-            v-bind="menuProps"
-            prefix="Sort:"
-            aria-haspopup="menu"
-            :aria-expanded="sortMenuOpen"
-            >{{
-              onTemplates
-                ? TEMPLATE_SORT_LABELS[templates.sortKey].label
-                : SORT_LABELS[store.sortKey].label
-            }}</AppBarButton
+          <div
+            class="bar-split-button"
+            :class="{ 'bar-split-button--open': sortMenuOpen }"
+            role="group"
+            aria-label="Sort"
           >
+            <AppBarButton
+              class="bar-split-toggle"
+              :icon="sortDirectionIcon"
+              :tooltip="sortDirectionLabel"
+              @click.stop="toggleSortDirection"
+            />
+            <AppBarButton
+              v-bind="menuProps"
+              class="bar-split-menu"
+              prefix="Sort:"
+              chevron
+              aria-haspopup="menu"
+              :aria-expanded="sortMenuOpen"
+              :tooltip="`Sort by ${activeSort.label.toLowerCase()}: ${sortDirectionLabel}`"
+              >{{ activeSort.label }}</AppBarButton
+            >
+          </div>
         </template>
         <div class="tbm">
           <span class="tbm-caret tbm-caret--start"></span>
           <div class="tbm-header">
             <v-icon size="18" class="tbm-header-icon">mdi-sort</v-icon>
             <span class="tbm-title">Sort</span>
+            <span class="tbm-spacer"></span>
+            <button class="tbm-ghost" type="button" @click="toggleSortDirection">
+              <v-icon size="16">{{ sortDirectionIcon }}</v-icon>
+              <span>{{ sortDirectionLabel }}</span>
+            </button>
           </div>
           <div class="tbm-section">
             <span class="tbm-label">Sort by</span>
@@ -50,7 +69,7 @@
               :options="templateSortOptions"
               :model-value="templates.sortKey"
               aria-label="Sort by"
-              @update:model-value="(key) => (templates.sortKey = key)"
+              @update:model-value="templates.setSortKey"
             />
             <OptionRows
               v-else
@@ -646,6 +665,27 @@ const templateSortOptions = TEMPLATE_SORT_KEYS.map((key) => ({
   id: key,
   label: TEMPLATE_SORT_LABELS[key].label,
 }));
+/** The shown tab's sort key, as its `SORT_LABELS` entry. */
+const activeSort = computed(() =>
+  onTemplates.value
+    ? TEMPLATE_SORT_LABELS[templates.sortKey]
+    : SORT_LABELS[store.sortKey],
+);
+const activeDirection = computed(() =>
+  onTemplates.value ? templates.sortDirection : store.sortDirection,
+);
+/** The direction in the key's own words: "Newest first", "A to Z". */
+const sortDirectionLabel = computed(
+  () => activeSort.value.words[activeDirection.value === "asc" ? 0 : 1],
+);
+const sortDirectionIcon = computed(() =>
+  activeDirection.value === "asc" ? "mdi-sort-ascending" : "mdi-sort-descending",
+);
+function toggleSortDirection() {
+  if (onTemplates.value) templates.toggleSortDirection();
+  else store.toggleSortDirection();
+}
+
 /** The Filters button's badge: the filters the shown tab has on. */
 const filterCount = computed(() =>
   onTemplates.value ? templates.activeFilterCount : store.filterChips.length,

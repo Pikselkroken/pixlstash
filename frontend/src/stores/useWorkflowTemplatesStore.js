@@ -19,13 +19,30 @@ import { errorMessage } from "../utils/apiError";
 
 export const TEMPLATE_SORT_KEYS = ["readiness", "popular", "newest", "name", "size"];
 
+/** As the Mine grid's `SORT_LABELS`: name, starting end, `[asc, desc]` words. */
 export const TEMPLATE_SORT_LABELS = {
-  readiness: { label: "Readiness" },
-  popular: { label: "Most used" },
-  newest: { label: "Newest" },
-  name: { label: "Name" },
+  readiness: {
+    label: "Readiness",
+    natural: "asc",
+    words: ["Ready first", "Ready last"],
+  },
+  popular: {
+    label: "Most used",
+    natural: "desc",
+    words: ["Least used first", "Most used first"],
+  },
+  newest: {
+    label: "Newest",
+    natural: "desc",
+    words: ["Oldest first", "Newest first"],
+  },
+  name: { label: "Name", natural: "asc", words: ["A to Z", "Z to A"] },
   // ComfyUI's "Model size (low to high)"; a template that gives none goes last.
-  size: { label: "Model size" },
+  size: {
+    label: "Model size",
+    natural: "asc",
+    words: ["Smallest first", "Largest first"],
+  },
 };
 
 /** Which state a template is in, best first: the readiness sort's order. */
@@ -228,10 +245,13 @@ function storedView() {
     const value = ok && Array.isArray(parsed[key]) ? parsed[key] : [];
     filters[key] = [...new Set(value.filter(allowed[key]))];
   }
-  return {
-    sortKey: ok && TEMPLATE_SORT_KEYS.includes(parsed.sortKey) ? parsed.sortKey : "readiness",
-    filters,
-  };
+  const sortKey =
+    ok && TEMPLATE_SORT_KEYS.includes(parsed.sortKey) ? parsed.sortKey : "readiness";
+  const sortDirection =
+    ok && (parsed.sortDirection === "asc" || parsed.sortDirection === "desc")
+      ? parsed.sortDirection
+      : TEMPLATE_SORT_LABELS[sortKey].natural;
+  return { sortKey, sortDirection, filters };
 }
 
 const SORTERS = {
@@ -282,14 +302,20 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
   const adding = ref(false);
   const initial = storedView();
   const sortKey = ref(initial.sortKey);
+  const sortDirection = ref(initial.sortDirection);
   const filters = ref(initial.filters);
   // The name text is left out, as the shelf leaves it out: it is never
   // restored, so writing it would only leave a search lying in storage.
-  watch([sortKey, filters], ([sort, { name: _name, ...kept }]) => {
+  watch([sortKey, sortDirection, filters], ([sort, direction, { name: _name, ...kept }]) => {
     try {
       window.localStorage?.setItem(
         VIEW_KEY,
-        JSON.stringify({ v: VIEW_SCHEMA_VERSION, sortKey: sort, ...kept }),
+        JSON.stringify({
+          v: VIEW_SCHEMA_VERSION,
+          sortKey: sort,
+          sortDirection: direction,
+          ...kept,
+        }),
       );
     } catch (err) {
       console.warn(`[templates] could not remember ${VIEW_KEY} for next time`, err);
@@ -439,13 +465,27 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     });
   });
 
-  const sortedTemplates = computed(() =>
-    [...filtered.value].sort(
+  const sortedTemplates = computed(() => {
+    const sorted = [...filtered.value].sort(
       (a, b) =>
         SORTERS[sortKey.value](a, b) ||
         String(a.title).localeCompare(String(b.title)),
-    ),
-  );
+    );
+    return sortDirection.value === TEMPLATE_SORT_LABELS[sortKey.value].natural
+      ? sorted
+      : sorted.reverse();
+  });
+
+  /** Sort on a key, starting at its own end. */
+  function setSortKey(key) {
+    if (!TEMPLATE_SORT_KEYS.includes(key) || key === sortKey.value) return;
+    sortKey.value = key;
+    sortDirection.value = TEMPLATE_SORT_LABELS[key].natural;
+  }
+
+  function toggleSortDirection() {
+    sortDirection.value = sortDirection.value === "asc" ? "desc" : "asc";
+  }
 
   /**
    * Each filter's rows with how many templates it holds: categories in the
@@ -623,6 +663,7 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     // What this browser remembers, as a fresh start would read it.
     const view = storedView();
     sortKey.value = view.sortKey;
+    sortDirection.value = view.sortDirection;
     filters.value = view.filters;
   }
 
@@ -640,6 +681,9 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     error,
     adding,
     sortKey,
+    sortDirection,
+    setSortKey,
+    toggleSortDirection,
     filters,
     selectedKeys,
     selectedTemplates,
