@@ -21,11 +21,13 @@
     <div class="tbm-section">
       <span class="tbm-label">Sort by</span>
       <OptionRows
-        :options="sortOptions"
-        :model-value="view.sortKey"
+        :options="onSets ? setSortOptions : sortOptions"
+        :model-value="onSets ? view.setSortKey : view.sortKey"
         :columns="2"
         aria-label="Sort by"
-        @update:model-value="(key) => store.setView({ sortKey: key })"
+        @update:model-value="
+          (key) => store.setView(onSets ? { setSortKey: key } : { sortKey: key })
+        "
       />
       <!-- A tie-break inside each group, not a place: the groups and the sort
            stay as they are, and a favourite leads its own group. -->
@@ -70,7 +72,14 @@
 
 <script setup>
 import { computed } from "vue";
-import { LIST_GROUP_BY_KEYS, SORT_KEYS, useModelShelfStore } from "../../stores/useModelShelfStore";
+import {
+  GRID_GROUP_BY,
+  LIST_GROUP_BY_KEYS,
+  SET_SORT_KEYS,
+  SET_SORT_LABELS,
+  SORT_KEYS,
+  useModelShelfStore,
+} from "../../stores/useModelShelfStore";
 import {
   GROUP_BY_LABELS,
   SORT_LABELS,
@@ -85,24 +94,37 @@ const view = store.view;
 const asOptions = (keys, labels) =>
   keys.map((key) => ({ id: key, label: labels[key].label }));
 const sortOptions = asOptions(SORT_KEYS, SORT_LABELS);
+const setSortOptions = asOptions(SET_SORT_KEYS, SET_SORT_LABELS);
 const groupOptions = asOptions(LIST_GROUP_BY_KEYS, GROUP_BY_LABELS);
 
-const activeSort = computed(
-  () => SORT_LABELS[view.sortKey] || SORT_LABELS.added_at,
+/** The set grid sorts on its own keys and keeps its own direction. */
+const onSets = computed(() => view.groupBy === GRID_GROUP_BY);
+
+const activeSort = computed(() =>
+  onSets.value
+    ? SET_SORT_LABELS[view.setSortKey] || SET_SORT_LABELS.used
+    : SORT_LABELS[view.sortKey] || SORT_LABELS.added_at,
+);
+
+const activeDirection = computed(() =>
+  onSets.value ? view.setSortDirection : view.sortDirection,
 );
 
 const directionLabel = computed(() =>
-  sortDirectionLabel(view.sortKey, view.sortDirection),
+  onSets.value
+    ? activeSort.value.words[activeDirection.value === "asc" ? 0 : 1]
+    : sortDirectionLabel(view.sortKey, view.sortDirection),
 );
 
 const directionIcon = computed(() =>
-  view.sortDirection === "asc" ? "mdi-sort-ascending" : "mdi-sort-descending",
+  activeDirection.value === "asc" ? "mdi-sort-ascending" : "mdi-sort-descending",
 );
 
 function toggleDirection() {
-  store.setView({
-    sortDirection: view.sortDirection === "asc" ? "desc" : "asc",
-  });
+  const next = activeDirection.value === "asc" ? "desc" : "asc";
+  store.setView(
+    onSets.value ? { setSortDirection: next } : { sortDirection: next },
+  );
 }
 </script>
 
