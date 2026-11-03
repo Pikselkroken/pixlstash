@@ -210,16 +210,21 @@ test.describe("import", () => {
     await expect(page.locator(".wfv-scroll")).toBeVisible({ timeout: 15_000 });
     const before = await workflowIds(apiContext);
     const posts = importPosts(page);
-    const alert = page.locator(".wfv-error");
+    // Each refusal is an error toast; the grid's own error line stays empty.
+    const toast = (text) =>
+      page.locator(".notice-card--error .notice-message", { hasText: text });
 
     // MAX_WORKFLOW_BYTES (50 MiB) and one byte: refused before it is read.
     await dropFiles(page, [{ name: "huge.json", size: 50 * 1024 * 1024 + 1 }]);
-    await expect(alert).toHaveText("huge.json is too large to be a workflow.");
+    await expect(
+      toast("huge.json is too large to be a workflow."),
+    ).toBeVisible();
     expect(posts).toHaveLength(0);
 
     // Not JSON: the parse fails in the browser, so nothing is sent either.
     await dropFiles(page, [{ name: "broken.json", text: "{ not json" }]);
-    await expect(alert).toContainText("JSON");
+    // Case-sensitive: the first toast's "huge.json" is not the parse error.
+    await expect(toast(/JSON/)).toBeVisible();
     expect(posts).toHaveLength(0);
 
     // JSON, but no ComfyUI graph: the server refuses it with its reason.
@@ -230,7 +235,8 @@ test.describe("import", () => {
       { name: "notes.json", text: JSON.stringify({ hello: "world" }) },
     ]);
     expect((await refused).status()).toBe(400);
-    await expect(alert).toContainText("not a ComfyUI workflow");
+    await expect(toast("not a ComfyUI workflow")).toBeVisible();
+    await expect(page.locator(".wfv-error")).toHaveCount(0);
 
     // Only the last of the three was ever sent.
     expect(posts.map((req) => req.postDataJSON().name)).toEqual(["notes"]);
