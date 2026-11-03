@@ -565,8 +565,10 @@ export const useWorkflowsStore = defineStore("workflows", () => {
 
   /**
    * One single-card verb under `verbBusy`: `call`, then the grid re-read.
-   * Answers what `call` did, or `null` - with the reason in `error` - when it
-   * failed or another verb was already busy.
+   * Answers what `call` did, or `null` - with the reason in an error notice -
+   * when it failed or another verb was already busy. Not `error`: that line
+   * is for a grid that could not be read, and a refused verb leaves the grid
+   * as it was.
    */
   async function busyCall(verb, key, failText, call) {
     if (verbBusy.value) return null;
@@ -577,7 +579,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       return answer;
     } catch (err) {
       console.warn(`[workflows] could not ${verb} ${key}`, err);
-      error.value = errorMessage(err, failText);
+      useNoticeStore().error(errorMessage(err, failText));
       return null;
     } finally {
       verbBusy.value = "";
@@ -649,7 +651,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * Store a Crop & Stitch inpaint workflow made from one workflow (#2446).
    *
    * Like `duplicateCard`: the grid is re-read and the answer's `workflow_id`
-   * is handed back to select it. A refusal's reason lands in `error`.
+   * is handed back to select it. A refusal's reason is an error notice.
    */
   function inpaintCopyCard(key) {
     return busyCall(

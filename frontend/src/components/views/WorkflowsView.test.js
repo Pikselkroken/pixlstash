@@ -1580,7 +1580,12 @@ describe("the verbs the bar fires", () => {
     await flush();
     await flush();
     expect(store.selectedKeys).toEqual(["a"]);
-    expect(wrapper.find(".wfv-error").text()).toBe("This workflow loads 2 pictures.");
+    // A toast like every other refusal, not the grid's own error line.
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.level).toBe("error");
+    expect(notice.text).toBe("This workflow loads 2 pictures.");
+    expect(wrapper.find(".wfv-error").exists()).toBe(false);
   });
 
   it("Choose thumbnail… uploads the picked image onto the one card", async () => {

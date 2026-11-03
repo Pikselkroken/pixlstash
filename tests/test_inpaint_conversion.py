@@ -362,6 +362,121 @@ def test_keys_that_are_not_nodes_are_carried_over():
     assert convert_to_inpaint(graph)["pixlstash_bindings"] == [{"node": "4"}]
 
 
+def _qwen_two_picture_edit(edited: str = "20", reference: str = "21") -> dict:
+    """Qwen Image 2.1's edit template: two pictures into one encoder.
+
+    The sampler starts from the encoder's own latent of ``images.image_1``,
+    through an If/Else switch set to it (its other side an empty latent), and
+    the picture is saved with ``SaveImageAdvanced``.
+    """
+    return {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen.safetensors"}},
+        "2": {
+            "class_type": "CLIPLoader",
+            "inputs": {"clip_name": "qwen_te.safetensors"},
+        },
+        "3": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "qwen_vae.safetensors"},
+        },
+        "4": {
+            "class_type": "TextEncodeQwenImage21",
+            "inputs": {
+                "clip": ["2", 0],
+                "vae": ["3", 0],
+                "prompt": "put the shirt on him",
+                "resolution": 0,
+                "images.image_1": [edited, 0],
+                "images.image_2": [reference, 0],
+                "clip_vision_output": ["10", 0],
+            },
+        },
+        # Reads the reference alone, so it says nothing about which is edited.
+        "10": {
+            "class_type": "CLIPVisionEncode",
+            "inputs": {"image": [reference, 0], "crop": "center"},
+        },
+        "5": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
+        },
+        "6": {
+            "class_type": "ComfySwitchNode",
+            "inputs": {"switch": False, "on_false": ["4", 2], "on_true": ["5", 0]},
+        },
+        "7": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["1", 0],
+                "positive": ["4", 0],
+                "negative": ["4", 1],
+                "latent_image": ["6", 0],
+                "seed": 3,
+                "steps": 25,
+                "cfg": 1.0,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 0.8,
+            },
+        },
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["7", 0], "vae": ["3", 0]},
+        },
+        "9": {
+            "class_type": "SaveImageAdvanced",
+            "inputs": {"images": ["8", 0], "filename_prefix": "Qwen"},
+        },
+        "20": {"class_type": "LoadImage", "inputs": {"image": "person.png"}},
+        "21": {"class_type": "LoadImage", "inputs": {"image": "shirt.png"}},
+    }
+
+
+@pytest.mark.parametrize("edited, reference", [("20", "21"), ("21", "20")])
+def test_a_two_picture_edit_inpaints_the_picture_it_edits(edited, reference):
+    """The first picture the encoder takes is cropped; the reference is not."""
+    converted = convert_to_inpaint(_qwen_two_picture_edit(edited, reference))
+    crop = _one(converted, "InpaintCropImproved")
+    assert converted[crop]["inputs"]["image"] == [edited, 0]
+    encoder = converted["4"]["inputs"]
+    assert encoder["images.image_1"] == [crop, 1]
+    assert encoder["images.image_2"] == [reference, 0]
+    assert reference in converted
+
+    # Started from the crop's encode, not the encoder's latent or the switch.
+    sampler = converted["7"]["inputs"]
+    masked = converted[sampler["latent_image"][0]]
+    assert masked["class_type"] == "SetLatentNoiseMask"
+    assert masked["inputs"]["mask"] == [crop, 2]
+    assert converted[masked["inputs"]["samples"][0]]["inputs"] == {
+        "pixels": [crop, 1],
+        "vae": ["3", 0],
+    }
+    # A latent of the picture, like an img2img encode: the denoise stays.
+    assert sampler["denoise"] == 0.8
+    for gone in ("5", "6"):
+        assert gone not in converted, f"{gone} should have been removed"
+
+    save = converted["9"]["inputs"]
+    assert converted[save["images"][0]]["class_type"] == "InpaintStitchImproved"
+
+
+def test_a_reference_beside_an_img2img_encode_is_left_alone():
+    graph = _sdxl_img2img()
+    graph["9"] = {"class_type": "LoadImage", "inputs": {"image": "reference.png"}}
+    graph["10"] = {
+        "class_type": "ImageScale",
+        "inputs": {"image": ["9", 0], "width": 512, "height": 512},
+    }
+    graph["2"]["inputs"]["reference"] = ["10", 0]
+    converted = convert_to_inpaint(graph)
+    crop = _one(converted, "InpaintCropImproved")
+    assert converted[crop]["inputs"]["image"] == ["4", 0]
+    assert converted["5"]["inputs"]["pixels"] == [crop, 1]
+    assert converted["2"]["inputs"]["reference"] == ["10", 0]
+    assert converted["10"]["inputs"]["image"] == ["9", 0]
+
+
 def _no_picture() -> dict:
     graph = _sdxl_img2img()
     del graph["4"], graph["5"]
@@ -381,9 +496,22 @@ def _no_picture_no_empty_latent() -> dict:
 
 
 def _two_pictures() -> dict:
-    graph = _sdxl_img2img()
-    graph["9"] = {"class_type": "LoadImage", "inputs": {"image": "reference.png"}}
-    graph["6"]["inputs"]["reference"] = ["9", 0]
+    """Two pictures, each read on its own, under an empty latent: no telling."""
+    graph = _qwen_two_picture_edit()
+    graph["7"]["inputs"]["latent_image"] = ["5", 0]
+    del graph["4"]["inputs"]["images.image_2"]
+    graph["22"] = {
+        "class_type": "TextEncodeQwenImage21",
+        "inputs": {"clip": ["2", 0], "images.image_1": ["21", 0]},
+    }
+    graph["7"]["inputs"]["negative"] = ["22", 0]
+    return graph
+
+
+def _a_switch_decided_at_run_time() -> dict:
+    graph = _qwen_two_picture_edit()
+    graph["11"] = {"class_type": "PrimitiveBoolean", "inputs": {"value": False}}
+    graph["6"]["inputs"]["switch"] = ["11", 0]
     return graph
 
 
@@ -455,6 +583,7 @@ def _no_save() -> dict:
         (_no_save, "not decoded into a saved picture"),
         (_encodes_something_else, "something other than the loaded picture"),
         (_mask_loader, "LoadImageMask"),
+        (_a_switch_decided_at_run_time, "starts from ComfySwitchNode"),
     ],
     ids=lambda v: getattr(v, "__name__", v),
 )

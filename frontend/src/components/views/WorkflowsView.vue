@@ -1893,7 +1893,7 @@ async function addWorkflowFiles(files) {
   revealedHidden.value = false;
   for (const file of files) {
     if (file.size > MAX_WORKFLOW_BYTES) {
-      store.error = `${file.name} is too large to be a workflow.`;
+      notices.error(`${file.name} is too large to be a workflow.`);
       continue;
     }
     try {
@@ -1908,9 +1908,8 @@ async function addWorkflowFiles(files) {
         refused.push({ file: file.name, ...existing });
         continue;
       }
-      store.error = errorMessage(
-        err,
-        `Could not add ${file.name}: it may not be a workflow.`,
+      notices.error(
+        errorMessage(err, `Could not add ${file.name}: it may not be a workflow.`),
       );
       console.warn(`[workflows] could not add ${file.name}`, err);
     }

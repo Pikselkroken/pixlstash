@@ -88,6 +88,11 @@ CROP_WIDGETS = {
     "device_mode": "gpu (much faster)",
 }
 DEFAULT_TARGET = 1024
+# ComfyUI's own ``SaveImageAdvanced`` saves a picture too. Run does not collect
+# it yet (``SAVE_NODE_CLASSES``), so a graph saving with it converts and stays
+# exactly as runnable as it was.
+_SAVES = SAVE_NODE_CLASSES | {"SaveImageAdvanced"}
+_SWITCH_CLASS = "ComfySwitchNode"
 
 _SAMPLERS = frozenset({"KSampler", "KSamplerAdvanced", "SamplerCustomAdvanced"})
 _RESIZE_RE = re.compile(r"^ImageScale")
@@ -193,10 +198,19 @@ def _convert(graph: dict, target: str) -> dict:
     sampler = nodes[sampler_id]
     decode_id = _saved_decode(nodes, sampler_id)
     vae = nodes[decode_id]["inputs"].get("vae")
-    latent_link = sampler["inputs"]["latent_image"]
+    latent_link, switches = _through_switches(nodes, sampler["inputs"]["latent_image"])
     latent_source = nodes.get(latent_link[0], {}).get("class_type", "")
     from_empty = bool(_EMPTY_LATENT_RE.search(latent_source))
-    if latent_source != "VAEEncode" and not from_empty:
+    # An edit encoder that hands out its own latent of the picture
+    # (``TextEncodeQwenImage21``): started from a ``VAEEncode`` of the crop,
+    # as the built-in inpaint workflows do, so the latent is the crop's size.
+    from_picture = (
+        latent_source != "VAEEncode"
+        and not from_empty
+        and latent_link[0] in nodes
+        and _reads_picture(nodes, latent_link[0], loader)
+    )
+    if latent_source != "VAEEncode" and not from_empty and not from_picture:
         raise InpaintConversionRefused(
             f"Its sampler starts from {latent_source or 'nothing'}, not from the "
             "picture or an empty latent, so PixlStash cannot convert it."
@@ -242,14 +256,17 @@ def _convert(graph: dict, target: str) -> dict:
         },
         "_meta": {"title": "Crop to selection + context"},
     }
-    if not from_empty and nodes[latent_link[0]]["inputs"].get("pixels") != crop_link:
+    if (
+        latent_source == "VAEEncode"
+        and nodes[latent_link[0]]["inputs"].get("pixels") != crop_link
+    ):
         raise InpaintConversionRefused(
             "Its sampler starts from an encode of something other than the "
             "loaded picture, so PixlStash cannot convert it."
         )
 
     # The latent: the crop's, under the crop's mask.
-    if from_empty:
+    if from_empty or from_picture:
         encode = next(
             (
                 node_id
@@ -268,7 +285,7 @@ def _convert(graph: dict, target: str) -> dict:
                 "_meta": {"title": "VAE Encode"},
             }
         latent_link = [encode, 0]
-        if "denoise" in sampler["inputs"]:
+        if from_empty and "denoise" in sampler["inputs"]:
             sampler["inputs"]["denoise"] = 1.0
     masked = next(new_id)
     out[masked] = nodes[masked] = {
@@ -306,12 +323,16 @@ def _convert(graph: dict, target: str) -> dict:
     _prefix_saves(nodes, stitch, _SAVE_PREFIX[target])
 
     # Sizing nodes the crop made redundant.
-    candidates = set(resizers) | {
-        node_id
-        for node_id, node in nodes.items()
-        if node["class_type"] == "GetImageSize"
-        and node["inputs"].get("image") == crop_link
-    }
+    candidates = (
+        set(resizers)
+        | _switched_off(nodes, switches)
+        | {
+            node_id
+            for node_id, node in nodes.items()
+            if node["class_type"] == "GetImageSize"
+            and node["inputs"].get("image") == crop_link
+        }
+    )
     if empty is not None:
         candidates.add(empty)
     _prune(out, nodes, candidates)
@@ -516,10 +537,7 @@ def _only_loader(nodes: dict, txt2img: bool = False) -> str | None:
             "inpaint. Convert an image-to-image or image-edit workflow."
         )
     if len(loaders) > 1:
-        raise InpaintConversionRefused(
-            f"This workflow loads {len(loaders)} pictures. Only a workflow with "
-            "one picture input can be converted."
-        )
+        loaders = [_edited_picture(nodes, sorted(loaders))]
     if nodes[loaders[0]]["class_type"] not in _CROPPABLE_LOADERS:
         raise InpaintConversionRefused(
             f"Its picture loader, {nodes[loaders[0]]['class_type']}, does not "
@@ -527,6 +545,100 @@ def _only_loader(nodes: dict, txt2img: bool = False) -> str | None:
             "to it. Load the picture with Load Image."
         )
     return loaders[0]
+
+
+def _upstream(nodes: dict, start: str) -> set[str]:
+    """Every node *start* reads, directly or not."""
+    seen: set[str] = set()
+    stack = [start]
+    while stack:
+        for value in nodes.get(stack.pop(), {}).get("inputs", {}).values():
+            if is_link(value) and value[0] in nodes and value[0] not in seen:
+                seen.add(value[0])
+                stack.append(value[0])
+    return seen
+
+
+def _through_switches(nodes: dict, link: list) -> tuple[list, list[str]]:
+    """*link* followed through each ``ComfySwitchNode`` set by a literal.
+
+    Returns where it ends up and the switches it went through. A switch wired
+    to something else, or whose chosen side is not wired, is where it stops:
+    what it hands on is not in the graph to read.
+    """
+    switches: list[str] = []
+    while nodes.get(link[0], {}).get("class_type") == _SWITCH_CLASS:
+        inputs = nodes[link[0]]["inputs"]
+        chosen = inputs.get("on_true" if inputs.get("switch") else "on_false")
+        if not isinstance(inputs.get("switch"), bool) or not is_link(chosen):
+            break
+        switches.append(link[0])
+        link = chosen
+    return link, switches
+
+
+def _switched_off(nodes: dict, switches: list[str]) -> set[str]:
+    """*switches*, and what they chose between: once the sampler starts from
+    the crop, nothing may read them."""
+    return set(switches) | {
+        value[0]
+        for switch in switches
+        for value in nodes[switch]["inputs"].values()
+        if is_link(value)
+    }
+
+
+def _reads_picture(nodes: dict, node_id: str, loader: str) -> bool:
+    """True when *node_id* takes the loader's picture, or a resize of it."""
+    picture = {loader} | _resizers_of(nodes, loader)
+    return any(
+        is_link(value) and value[1] == 0 and value[0] in picture
+        for value in nodes[node_id]["inputs"].values()
+    )
+
+
+def _natural(name: str) -> list:
+    """``image_2`` before ``image_10``: digit runs compare as numbers."""
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name)]
+
+
+def _edited_picture(nodes: dict, loaders: list[str]) -> str:
+    """Which of several picture *loaders* the sampler edits.
+
+    The one the sampler's starting latent is made from (an img2img encode
+    beside a reference picture). When that latent is made from more than one,
+    or from none, the one every node feeding the sampler several of them takes
+    on its first input (``image_1`` before ``image_2``), which is the picture
+    an edit model edits.
+    """
+    sampler_id, _ = _only_sampler(nodes)
+    start, _ = _through_switches(nodes, nodes[sampler_id]["inputs"]["latent_image"])
+    behind = _upstream(nodes, start[0]) | {start[0]}
+    reached = [loader for loader in loaders if loader in behind]
+    if len(reached) == 1:
+        return reached[0]
+    # A resize of a picture stands for it.
+    picture_of = {}
+    for loader in reached or loaders:
+        picture_of[loader] = loader
+        picture_of.update(dict.fromkeys(_resizers_of(nodes, loader), loader))
+    # ponytail: input-name order is the whole tie-break; a graph whose nodes
+    # disagree, or that never takes two pictures in one node, is refused.
+    firsts = set()
+    for node_id in _upstream(nodes, sampler_id):
+        fed = sorted(
+            (_natural(name), picture_of[value[0]])
+            for name, value in nodes[node_id].get("inputs", {}).items()
+            if is_link(value) and value[1] == 0 and value[0] in picture_of
+        )
+        if len({picture for _, picture in fed}) > 1:
+            firsts.add(fed[0][1])
+    if len(firsts) == 1:
+        return firsts.pop()
+    raise InpaintConversionRefused(
+        f"This workflow loads {len(loaders)} pictures, and PixlStash cannot "
+        "tell which one it edits."
+    )
 
 
 def _only_sampler(nodes: dict) -> tuple[str, str]:
@@ -570,8 +682,7 @@ def _saved_decode(nodes: dict, sampler_id: str) -> str:
             node["class_type"] == "VAEDecode"
             and node["inputs"].get("samples") == [sampler_id, 0]
             and any(
-                nodes[d]["class_type"] in SAVE_NODE_CLASSES
-                for d in _downstream(nodes, node_id)
+                nodes[d]["class_type"] in _SAVES for d in _downstream(nodes, node_id)
             )
         ):
             return node_id
