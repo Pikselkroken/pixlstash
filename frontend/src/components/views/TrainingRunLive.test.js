@@ -952,6 +952,19 @@ describe("likeness to the run's character (#2522)", () => {
     expect(wrapper.find(".trl-use--best").exists()).toBe(false);
   });
 
+  it("draws no 50/100 scale under the waiting sentence", async () => {
+    const wrapper = await open(
+      scored({
+        with_trigger: [null],
+        without_trigger: [null],
+        best_step: null,
+        best: null,
+      }),
+    );
+    const chart = wrapper.find(".trl-likeness svg");
+    expect(chart.text()).toBe("Scored as the previews land");
+  });
+
   it("draws none of it for a run with no character", async () => {
     const wrapper = await open(payload());
     expect(wrapper.find('[data-testid="trl-likeness"]').exists()).toBe(false);

@@ -96,13 +96,15 @@ const summary = computed(() => {
     :aria-label="summary"
   >
     <path class="tlc-base" :d="`M${x(0)} ${y(0)}H${lastX}`" />
-    <template v-for="line in [50, 100]" :key="line">
-      <path class="tlc-grid" :d="`M${x(0)} ${y(line)}H${lastX}`" />
-      <text class="tlc-axis" :x="lastX + 6" :y="y(line) + 3">{{ line }}</text>
-    </template>
+    <!-- No scale before a score: on a one-column board the 50 label sits
+         where the waiting sentence is centred. -->
     <text v-if="empty" class="tlc-axis" :x="width / 2" :y="y(50) + 3" text-anchor="middle">
       Scored as the previews land
     </text>
+    <template v-for="line in [50, 100]" v-else :key="line">
+      <path class="tlc-grid" :d="`M${x(0)} ${y(line)}H${lastX}`" />
+      <text class="tlc-axis" :x="lastX + 6" :y="y(line) + 3">{{ line }}</text>
+    </template>
     <template v-if="leakIndex >= 0">
       <path class="tlc-leak" :d="`M${x(leakIndex)} ${y(leakAt)}H${lastX}`" />
       <text class="tlc-leak-label" :x="x(leakIndex) + 4" :y="y(leakAt) - 5">
