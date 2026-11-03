@@ -4552,7 +4552,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       const kept = body?.refused?.length ?? 0;
       if (kept) {
         notices.push({
-          level: body.restored?.length ? "info" : "error",
+          level: body?.restored?.length ? "info" : "error",
           text: `${modelCount(kept)} could not be put back: ${kept === 1 ? "its files are" : "their files are"} no longer in the ${trashName()}, or something is in their place.`,
         });
       }

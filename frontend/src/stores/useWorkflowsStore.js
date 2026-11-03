@@ -699,6 +699,8 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     });
     if (result.done) notedRecipesChanged();
     if (tokens.size) {
+      // What this receipt's own Undo brought back, which its Redo deletes.
+      let back = [];
       useOperationStore().showLocalReceipt({
         summary:
           result.done === 1 && names[0]
@@ -706,23 +708,22 @@ export const useWorkflowsStore = defineStore("workflows", () => {
             : `Deleted ${result.done} workflows`,
         icon: "mdi-trash-can-outline",
         destructive: true,
-        undo: () => undoDelete(tokens),
-        redo: async () => (await deleteKeys([...restoredKeys])).done > 0,
+        undo: async () => {
+          back = await undoDelete(tokens);
+          return back.length > 0;
+        },
+        redo: async () => (await deleteKeys(back)).done > 0,
       });
     }
     return result;
   }
 
-  /** The keys the last Undo brought back, which its Redo deletes again. */
-  let restoredKeys = [];
-
-  /** Undo a delete: `true` when anything came back, else says why. */
+  /** Undo a delete: the keys that came back, and says why when some did not. */
   async function undoDelete(tokens) {
     const result = await writeEach("restore", [...tokens.keys()], (key) =>
       restoreWorkflow(key, tokens.get(key)),
     );
     if (result.done) notedRecipesChanged();
-    restoredKeys = result.written;
     if (result.refused) {
       useNoticeStore().push({
         level: "error",
@@ -731,7 +732,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
           : "That could not be undone: the workflow is no longer in the trash.",
       });
     }
-    return result.done > 0;
+    return result.written;
   }
 
   /** Replace the selection, or toggle one id into it (Ctrl/Cmd). */
