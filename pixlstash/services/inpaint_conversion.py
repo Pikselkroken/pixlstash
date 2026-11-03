@@ -1,4 +1,7 @@
-"""Rewrite an img2img or image-edit API graph to inpaint with Crop & Stitch (#2446).
+"""Rewrite an img2img, image-edit or txt2img API graph to inpaint or outpaint.
+
+Inpainting is #2446; outpainting is the same transform with a pad in front of
+the crop.
 
 A pure, deterministic transform: API graph in, a new API graph out, read from
 node classes and edges alone. The picture is cropped to the selection plus
@@ -16,6 +19,18 @@ model's reference input (``ReferenceLatent``, ``TextEncodeQwenImageEdit*``,
 built-in inpaint workflows omit it, with nothing recorded to say that was
 deliberate; the crop's mask is blended (``mask_blend_pixels``), and a soft mask
 is what differential diffusion exists to honour.
+
+A txt2img graph has no picture to start from, so a ``LoadImage`` is put in and
+the sampler starts from an encode of the crop instead of the empty latent.
+
+Outpainting pads the picture first (``ImagePadForOutpaint``, every side 0 and
+a 40 px feather until a run writes the extension into it) and crops the padded
+canvas to the pad's mask, so the stitch pastes into the extended canvas. The
+crop's own ``extend_for_outpainting`` stays off: it extends after the mask is
+blended, which leaves a hard seam. An edit graph (the picture reaches the
+sampler's conditioning, not just its latent) gets the pad painted green from
+core nodes, since an edit model is told what to change rather than handed a
+noised area; the crop's mask stays the pad's feathered one.
 """
 
 from __future__ import annotations
@@ -34,6 +49,7 @@ from pixlstash.services.workflow_identity import reduced_workflow_type
 from pixlstash.services.workflow_io import is_picture_loader
 
 CROP_CLASS = "InpaintCropImproved"
+PAD_CLASS = "ImagePadForOutpaint"
 STITCH_CLASS = "InpaintStitchImproved"
 
 # The crop node's settings, copied from the built-in
@@ -67,7 +83,14 @@ DEFAULT_TARGET = 1024
 _SAMPLERS = frozenset({"KSampler", "KSamplerAdvanced", "SamplerCustomAdvanced"})
 _RESIZE_RE = re.compile(r"^ImageScale")
 _EMPTY_LATENT_RE = re.compile(r"Empty.*Latent")
-_SAVE_PREFIX = "Inpaint-"
+_SAVE_PREFIX = {"inpaint": "Inpaint-", "outpaint": "Outpaint-"}
+_PAD_FEATHER = 40
+_GREEN = 0x00FF00
+# A sampler's inputs that carry conditioning: an edit graph's picture reaches
+# one of these through an edit encoder, an img2img graph's only reaches
+# ``latent_image`` (or a ControlNet / IP-adapter, which is not an edit).
+_CONDITIONING_INPUTS = frozenset({"positive", "negative", "guider", "conditioning"})
+_EDIT_ENCODER_RE = re.compile(r"^ReferenceLatent$|ImageEdit")
 # Loaders known to put the picture on output 0 and its alpha as a MASK on 1,
 # which is what the crop reads. ``is_picture_loader`` also matches loaders
 # that do not (``LoadImageMask`` has a MASK alone).
@@ -76,10 +99,23 @@ _CROPPABLE_LOADERS = frozenset(
 )
 
 _TYPE_REFUSALS = {
-    "inpaint": "This workflow already inpaints.",
-    "outpaint": "This workflow outpaints, so it already works on part of a picture.",
-    "video": "A video workflow cannot be converted to inpainting.",
-    "upscale": "An upscale workflow has no sampler to inpaint with.",
+    "inpaint": {
+        "inpaint": "This workflow already inpaints.",
+        "outpaint": (
+            "This workflow outpaints, so it already works on part of a picture."
+        ),
+        "video": "A video workflow cannot be converted to inpainting.",
+        "upscale": "An upscale workflow has no sampler to inpaint with.",
+    },
+    "outpaint": {
+        "inpaint": (
+            "This workflow already inpaints. Convert the image-to-image or "
+            "edit workflow it came from instead."
+        ),
+        "outpaint": "This workflow already outpaints.",
+        "video": "A video workflow cannot be converted to outpainting.",
+        "upscale": "An upscale workflow has no sampler to outpaint with.",
+    },
 }
 
 
@@ -100,17 +136,36 @@ def convert_to_inpaint(graph: dict) -> dict:
 
     Raises:
         InpaintConversionRefused: The graph is not a single-pass, one-picture
-            img2img or edit graph, or is already inpaint, outpaint, video or
-            upscale.
+            img2img, edit or txt2img graph, or is already inpaint, outpaint,
+            video or upscale.
     """
+    return _convert(graph, "inpaint")
+
+
+def convert_to_outpaint(graph: dict) -> dict:
+    """A copy of *graph* that extends the picture and redraws only the new area.
+
+    The pad sits between the loader and the crop with every side 0, so the
+    copy pads nothing until a run writes an extension into it. Otherwise as
+    :func:`convert_to_inpaint`.
+
+    Raises:
+        InpaintConversionRefused: As :func:`convert_to_inpaint`, worded for
+            outpainting.
+    """
+    return _convert(graph, "outpaint")
+
+
+def _convert(graph: dict, target: str) -> dict:
     try:
         kind = reduced_workflow_type(reduce_api_graph(graph))
     except WorkflowGraphError as exc:
         raise InpaintConversionRefused(
             f"PixlStash cannot read this workflow's graph: {exc}"
         ) from exc
-    if kind in _TYPE_REFUSALS:
-        raise InpaintConversionRefused(_TYPE_REFUSALS[kind])
+    refusals = _TYPE_REFUSALS[target]
+    if kind in refusals:
+        raise InpaintConversionRefused(refusals[kind])
 
     out = copy.deepcopy(graph)
     nodes = {
@@ -118,7 +173,15 @@ def convert_to_inpaint(graph: dict) -> dict:
         for node_id, node in out.items()
         if isinstance(node, dict) and "class_type" in node
     }
-    loader = _only_loader(nodes)
+    new_id = _id_counter(out)
+    loader = _only_loader(nodes, txt2img=kind == "txt2img")
+    if loader is None:
+        loader = next(new_id)
+        out[loader] = nodes[loader] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": "example.png"},
+            "_meta": {"title": "Load Image"},
+        }
     sampler_id, model_holder = _only_sampler(nodes)
     sampler = nodes[sampler_id]
     decode_id = _saved_decode(nodes, sampler_id)
@@ -135,7 +198,7 @@ def convert_to_inpaint(graph: dict) -> dict:
     empty = latent_link[0] if from_empty else None
     resizers = _resizers_of(nodes, loader)
     width, height = _target_size(nodes, resizers, empty)
-    new_id = _id_counter(out)
+    edit_graph = _is_edit_graph(nodes, sampler_id, {loader} | resizers)
 
     # The crop, and every edge that carried the picture now carries it.
     crop = next(new_id)
@@ -149,11 +212,14 @@ def convert_to_inpaint(graph: dict) -> dict:
                 and (value[0] == loader or value[0] in resizers)
             ):
                 inputs[name] = list(crop_link)
+    crop_image, crop_mask = [loader, 0], [loader, 1]
+    if target == "outpaint":
+        crop_image, crop_mask = _pad(out, nodes, new_id, loader, edit_graph)
     out[crop] = nodes[crop] = {
         "class_type": CROP_CLASS,
         "inputs": {
-            "image": [loader, 0],
-            "mask": [loader, 1],
+            "image": crop_image,
+            "mask": crop_mask,
             **CROP_WIDGETS,
             "output_target_width": width,
             "output_target_height": height,
@@ -218,15 +284,16 @@ def convert_to_inpaint(graph: dict) -> dict:
         "inputs": {"stitcher": [crop, 0], "inpainted_image": [decode_id, 0]},
         "_meta": {"title": "Stitch into the original"},
     }
+    save_prefix = _SAVE_PREFIX[target]
     for node_id in _downstream(nodes, stitch):
         node = nodes[node_id]
         prefix = node["inputs"].get("filename_prefix")
         if (
             node["class_type"] in SAVE_NODE_CLASSES
             and isinstance(prefix, str)
-            and not prefix.startswith(_SAVE_PREFIX)
+            and not prefix.startswith(save_prefix)
         ):
-            node["inputs"]["filename_prefix"] = _SAVE_PREFIX + prefix
+            node["inputs"]["filename_prefix"] = save_prefix + prefix
 
     # Sizing nodes the crop made redundant.
     candidates = set(resizers) | {
@@ -239,6 +306,98 @@ def convert_to_inpaint(graph: dict) -> dict:
         candidates.add(empty)
     _prune(out, nodes, candidates)
     return out
+
+
+def _pad(
+    graph: dict, nodes: dict, new_id, loader: str, edit_graph: bool
+) -> tuple[list, list]:
+    """Pad the loaded picture; the crop's ``image`` and ``mask`` links.
+
+    The pad reads the loader directly, which is what a run's extension looks
+    for. For an edit graph the pad (not its feathered rim) is painted green.
+    """
+    pad = next(new_id)
+    graph[pad] = nodes[pad] = {
+        "class_type": PAD_CLASS,
+        "inputs": {
+            "image": [loader, 0],
+            "left": 0,
+            "top": 0,
+            "right": 0,
+            "bottom": 0,
+            "feathering": _PAD_FEATHER,
+        },
+        "_meta": {"title": "Pad for outpainting"},
+    }
+    if not edit_graph:
+        return [pad, 0], [pad, 1]
+    size, green, threshold, composite = (next(new_id) for _ in range(4))
+    graph[size] = nodes[size] = {
+        "class_type": "GetImageSize",
+        "inputs": {"image": [pad, 0]},
+        "_meta": {"title": "Get Image Size"},
+    }
+    graph[green] = nodes[green] = {
+        "class_type": "EmptyImage",
+        "inputs": {
+            "width": [size, 0],
+            "height": [size, 1],
+            "batch_size": 1,
+            "color": _GREEN,
+        },
+        "_meta": {"title": "Green"},
+    }
+    graph[threshold] = nodes[threshold] = {
+        "class_type": "ThresholdMask",
+        "inputs": {"mask": [pad, 1], "value": 0.99},
+        "_meta": {"title": "The pad without its feather"},
+    }
+    graph[composite] = nodes[composite] = {
+        "class_type": "ImageCompositeMasked",
+        "inputs": {
+            "destination": [pad, 0],
+            "source": [green, 0],
+            "x": 0,
+            "y": 0,
+            "resize_source": False,
+            "mask": [threshold, 0],
+        },
+        "_meta": {"title": "Paint the pad green"},
+    }
+    return [composite, 0], [pad, 1]
+
+
+def _is_edit_graph(nodes: dict, sampler_id: str, picture: set[str]) -> bool:
+    """Whether the picture reaches the sampler's conditioning through an edit
+    encoder (``ReferenceLatent``, ``TextEncodeQwenImageEdit*``,
+    ``TextEncodeMOSSImageEdit``)."""
+    starts = [
+        value[0]
+        for name, value in nodes[sampler_id]["inputs"].items()
+        if name in _CONDITIONING_INPUTS and is_link(value)
+    ]
+    return any(
+        _EDIT_ENCODER_RE.search(nodes[node_id]["class_type"])
+        and picture & _upstream(nodes, [node_id])
+        for node_id in _upstream(nodes, starts)
+    )
+
+
+def _upstream(nodes: dict, starts: list[str]) -> set[str]:
+    """*starts* and every node they read, directly or not."""
+    seen: set[str] = set()
+    stack = list(starts)
+    while stack:
+        node_id = stack.pop()
+        if node_id in seen or node_id not in nodes:
+            continue
+        seen.add(node_id)
+        stack.extend(
+            value[0]
+            for value in nodes[node_id].get("inputs", {}).values()
+            if is_link(value)
+        )
+    return seen
 
 
 def _id_counter(graph: dict):
@@ -285,8 +444,11 @@ def _prune(graph: dict, nodes: dict, candidates: set[str]) -> None:
                 removed = True
 
 
-def _only_loader(nodes: dict) -> str:
+def _only_loader(nodes: dict, txt2img: bool = False) -> str | None:
+    """The one picture loader, or None for a txt2img graph that has none."""
     loaders = [i for i, n in nodes.items() if is_picture_loader(n["class_type"])]
+    if not loaders and txt2img:
+        return None
     if not loaders:
         raise InpaintConversionRefused(
             "This workflow does not start from a picture, so there is nothing to "

@@ -208,6 +208,48 @@ def render_mask(selection: Selection, image: np.ndarray) -> np.ndarray:
     return _refine(mask, selection.refine)
 
 
+class Extension(BaseModel):
+    """How far an outpaint run extends the picture (the Edit tab's Extend tool).
+
+    Sides are pixels of the upright picture, rounded up to ComfyUI's 8 px pad
+    step; ``feather`` is how far the redraw blends into the original. Written
+    into the ``ImagePadForOutpaint`` the open picture's loader feeds.
+    """
+
+    left: int = Field(0, ge=0)
+    top: int = Field(0, ge=0)
+    right: int = Field(0, ge=0)
+    bottom: int = Field(0, ge=0)
+    feather: int = Field(40, ge=0, le=MAX_FEATHER)
+
+    @model_validator(mode="after")
+    def _some_side_on_the_pad_grid(self) -> "Extension":
+        sides = ("left", "top", "right", "bottom")
+        if not any(getattr(self, side) for side in sides):
+            raise ValueError("An extension extends at least one side.")
+        for side in sides:
+            setattr(self, side, -(-getattr(self, side) // 8) * 8)
+        return self
+
+    def past_cap(self, width: int, height: int) -> str | None:
+        """Why this extension is past twice the picture on an axis, if it is."""
+        if self.left + self.right > width:
+            return f"Left and right add {self.left + self.right} px to a {width} px wide picture; at most its width can be added."
+        if self.top + self.bottom > height:
+            return f"Top and bottom add {self.top + self.bottom} px to a {height} px tall picture; at most its height can be added."
+        return None
+
+
+def upright_size(path: str) -> tuple[int, int]:
+    """The picture's width and height as it is shown, read from its header."""
+    with Image.open(path) as image:
+        width, height = image.size
+        # Orientations 5-8 turn the picture a quarter.
+        if image.getexif().get(0x0112) in (5, 6, 7, 8):
+            return height, width
+        return width, height
+
+
 # What reading a picture can raise: not an image, unreadable, or past PIL's
 # decompression-bomb limit (which is not an OSError).
 UNREADABLE_PICTURE = (OSError, Image.DecompressionBombError)

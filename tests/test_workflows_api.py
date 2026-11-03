@@ -205,7 +205,10 @@ from pixlstash.services.comfyui_service import (
     pixlstash_node_refusals,
     swap_pixlstash_savers,
 )
-from pixlstash.services.inpaint_conversion import convert_to_inpaint
+from pixlstash.services.inpaint_conversion import (
+    convert_to_inpaint,
+    convert_to_outpaint,
+)
 from pixlstash.services.model_shelf_service import people_who_fit, shelf_uuid
 from pixlstash.hub import workflow_group_writes
 
@@ -282,6 +285,7 @@ _WORKFLOW_WRITE_ROUTES = (
     # whole library the way the run route does, and write a file.
     ("POST", "/api/v1/workflows/{workflow_id}/duplicate"),
     ("POST", "/api/v1/workflows/{workflow_id}/inpaint-copy"),
+    ("POST", "/api/v1/workflows/{workflow_id}/outpaint-copy"),
     ("POST", "/api/v1/workflows/{workflow_id}/fixed-copy"),
     ("PUT", "/api/v1/workflows/{workflow_id}/lora-chain"),
     ("POST", "/api/v1/workflows/{workflow_id}/clone-with-models"),
@@ -7422,6 +7426,7 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
         ),
         ("POST", f"{API}/workflows/{BUSY_WF}/duplicate", None),
         ("POST", f"{API}/workflows/{BUSY_WF}/inpaint-copy", None),
+        ("POST", f"{API}/workflows/{BUSY_WF}/outpaint-copy", None),
         ("POST", f"{API}/workflows/{BUSY_WF}/fixed-copy", None),
         ("PUT", f"{API}/workflows/{BUSY_WF}/lora-chain", {"entries": []}),
         (
@@ -7549,6 +7554,12 @@ _EVERY_WORKFLOW_ROUTE = (
         "POST",
         "/workflows/{workflow_id}/inpaint-copy",
         f"/workflows/{BUSY_WF}/inpaint-copy",
+        None,
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/outpaint-copy",
+        f"/workflows/{BUSY_WF}/outpaint-copy",
         None,
     ),
     (
@@ -11703,6 +11714,8 @@ I2I_OBJECT_INFO = {
     "LoadImage": {
         "input": {"required": {"image": [["subject.png", "reference.png"], {}]}}
     },
+    # An outpaint card's pad (`_padded`).
+    "ImagePadForOutpaint": {"input": {"required": {"image": ["IMAGE"]}}},
 }
 
 
@@ -12815,6 +12828,127 @@ def test_a_load_image_mask_on_alpha_reads_the_selection():
     assert workflows_routes._reads_mask(graph, feeds, 9)
     graph["5"]["inputs"]["channel"] = "red"
     assert not workflows_routes._reads_mask(graph, feeds, 9)
+
+
+# --- an extension: how far an outpaint run extends the picture ---------------
+
+
+def _padded(i2i, behind_resize: bool = False) -> None:
+    """The i2i card with an outpaint pad on its loader, or behind a resize."""
+    source = ["5", 0]
+    if behind_resize:
+        i2i.graph["10"] = {
+            "class_type": "ImageScale",
+            "inputs": {"image": ["5", 0], "width": 40, "height": 20},
+        }
+        source = ["10", 0]
+    i2i.graph["9"] = {
+        "class_type": "ImagePadForOutpaint",
+        "inputs": {
+            "image": source,
+            "left": 0,
+            "top": 0,
+            "right": 0,
+            "bottom": 0,
+            "feathering": 40,
+        },
+    }
+    i2i.graph["3"]["inputs"]["latent_image"] = ["9", 0]
+
+
+def _extend_run(picture: int, **extra) -> dict:
+    return {"picture_ids": [picture], "target": RUN_WF, **extra}
+
+
+def test_an_extension_is_written_into_the_pad_rounded_up_to_8(i2i):
+    """Wrong if the submitted pad keeps its zeros, or a side is not on the
+    8 px grid ComfyUI's pad steps in."""
+    _padded(i2i)
+    picture = _real_picture(i2i.server, i2i.tmp_path, "extend.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json=_extend_run(
+            picture, extend={"left": 3, "top": 0, "right": 8, "feather": 30}
+        ),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    pad = i2i.submitted[0]["graph"]["9"]["inputs"]
+    assert (pad["left"], pad["top"], pad["right"], pad["bottom"]) == (8, 0, 8, 0)
+    assert pad["feathering"] == 30
+
+
+def test_an_extension_is_refused_where_no_pad_reads_the_picture(i2i):
+    """`extend_not_read`, nothing uploaded; the same card runs without one."""
+    picture = _real_picture(i2i.server, i2i.tmp_path, "unpadded.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run", json=_extend_run(picture, extend={"left": 8})
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "refused", r.json()
+    codes = [reason["code"] for reason in r.json()["groups"][0]["reasons"]]
+    assert codes == ["extend_not_read"], codes
+    assert i2i.uploads == [] and i2i.submitted == []
+    plain = _preflight(i2i.owner, picture_ids=[picture], target=RUN_WF)
+    assert plain["ok"] is True, plain
+
+
+def test_a_pad_behind_a_resize_does_not_read_the_extension(i2i):
+    _padded(i2i, behind_resize=True)
+    picture = _real_picture(i2i.server, i2i.tmp_path, "resized.png")
+    codes = [
+        reason["code"]
+        for reason in _preflight(i2i.owner, **_extend_run(picture, extend={"left": 8}))[
+            "groups"
+        ][0]["reasons"]
+    ]
+    assert "extend_not_read" in codes, codes
+
+
+def test_an_extension_past_twice_the_picture_is_refused(i2i):
+    """The picture is 20 x 10: top + bottom of 16 is past its height, and
+    left + right of 16 is not past its width."""
+    _padded(i2i)
+    picture = _real_picture(i2i.server, i2i.tmp_path, "capped.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json=_extend_run(picture, extend={"top": 8, "bottom": 8}),
+    )
+    assert r.status_code == 422, r.text
+    assert "10 px tall" in r.json()["detail"], r.json()
+    assert i2i.submitted == []
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json=_extend_run(picture, extend={"left": 8, "right": 8}),
+    )
+    assert r.status_code == 200 and r.json()["status"] == "success", r.text
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"extend": {"left": 8}, "selection": LEFT_HALF},
+        {"extend": {"left": 0}},
+        {"extend": {"left": 8, "feather": 101}},
+    ],
+    ids=["with-a-selection", "no-side", "feather-past-100"],
+)
+def test_an_extension_the_body_cannot_hold_is_422(i2i, extra):
+    _padded(i2i)
+    picture = _real_picture(i2i.server, i2i.tmp_path, "bad-extend.png")
+    r = i2i.owner.post(f"{API}/workflows/run", json=_extend_run(picture, **extra))
+    assert r.status_code == 422, r.text
+    assert i2i.submitted == []
+
+
+def test_an_extension_runs_on_exactly_one_picture(i2i):
+    _padded(i2i)
+    pictures = [_real_picture(i2i.server, i2i.tmp_path, f"e{n}.png") for n in (1, 2)]
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": pictures, "target": RUN_WF, "extend": {"left": 8}},
+    )
+    assert r.status_code == 422, r.text
 
 
 def test_a_selection_turns_a_pack_picture_loader_into_an_upload(pack):
@@ -16264,6 +16398,35 @@ def test_converting_an_inpaint_workflow_is_refused_with_its_reason(i2i):
     r = i2i.owner.post(f"{API}/workflows/{RUN_WF}/inpaint-copy")
     assert r.status_code == 422, r.text
     assert r.json()["detail"] == "This workflow already inpaints."
+    assert _manual_ids(i2i) == stored
+
+
+def test_converting_to_outpainting_stores_a_padded_copy(i2i):
+    """The copy pads nothing until a run sends an extension."""
+    i2i.graph = _full_i2i_graph()
+    owner = i2i.owner
+    graph_before = owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
+    r = owner.post(f"{API}/workflows/{RUN_WF}/outpaint-copy")
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"].endswith(" (outpaint)")
+    written = _written(i2i, body)
+    [pad] = [
+        n for n in written.values() if n.get("class_type") == "ImagePadForOutpaint"
+    ]
+    assert pad["inputs"]["image"] == ["5", 0]
+    assert [pad["inputs"][k] for k in ("left", "top", "right", "bottom")] == [0] * 4
+    card = _by_key(_cards(owner, "?include_one_offs=true"))[body["workflow_id"]]
+    assert (card["manual"], card["type"]) == (True, "outpaint")
+    assert owner.get(f"{API}/workflows/{RUN_WF}/graph").json() == graph_before
+
+
+def test_converting_an_outpaint_workflow_to_outpainting_is_refused(i2i):
+    i2i.graph = convert_to_outpaint(_full_i2i_graph())
+    stored = _manual_ids(i2i)
+    r = i2i.owner.post(f"{API}/workflows/{RUN_WF}/outpaint-copy")
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == "This workflow already outpaints."
     assert _manual_ids(i2i) == stored
 
 
