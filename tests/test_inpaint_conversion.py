@@ -550,12 +550,14 @@ def _painted(converted: dict) -> tuple[str, str]:
     return pad, painted
 
 
-def test_a_klein_edit_outpaint_redraws_the_green_canvas_and_pastes_the_original():
+def test_a_klein_edit_outpaint_redraws_the_green_canvas_and_keeps_the_redraw():
     """No crop and no noise mask: on Klein those came back a grey wash. The
     reference is the green-padded picture, lined up with the canvas the sampler
-    draws from noise; the original is pasted back over its own area. Wrong if
-    the reference reads the unpadded picture (the original lands in the middle
-    of a blank card), or the save reads the bare decode."""
+    draws from noise; the save reads the redraw at the padded size, with no
+    paste-back (the model re-frames, so the original laid over it put a big
+    head on a small body). Wrong if the reference reads the unpadded picture
+    (the original lands in the middle of a blank card), or the original is
+    composited back."""
     converted = convert_to_outpaint(_built_in("Flux2-Klein-Image-Edit.json"))
     for gone in (
         "InpaintCropImproved",
@@ -573,19 +575,12 @@ def test_a_klein_edit_outpaint_redraws_the_green_canvas_and_pastes_the_original(
     assert converted["75:81"]["inputs"]["image"] == [painted, 0]
     assert _of(converted, "EmptyFlux2LatentImage")
     save = converted["9"]["inputs"]
-    paste = converted[save["images"][0]]["inputs"]
-    scale = converted[paste["destination"][0]]
+    scale = converted[save["images"][0]]
     assert scale["class_type"] == "ImageScale"
     assert scale["inputs"]["image"] == ["75:65", 0]
     size = scale["inputs"]["width"][0]
     assert converted[size]["inputs"]["image"] == [pad, 0]
-    assert paste["source"] == [pad, 0]
-    invert = converted[paste["mask"][0]]
-    assert invert == {
-        "class_type": "InvertMask",
-        "inputs": {"mask": [pad, 1]},
-        "_meta": {"title": "The original, feathered"},
-    }
+    assert not _of(converted, "InvertMask")
     assert save["filename_prefix"] == "Outpaint-Flux2-Klein"
     assert reduced_workflow_type(reduce_api_graph(converted)) == "outpaint"
 

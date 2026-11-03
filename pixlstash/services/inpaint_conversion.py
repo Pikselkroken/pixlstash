@@ -37,8 +37,9 @@ of a blank card. So it outpaints the way the ComfyUI-PixlStash outpaint
 example does: every edge that read the picture reads it padded, with the pad
 painted green from core nodes, the sampler starts from noise at that size, and
 the model redraws the whole canvas, filling the green from the prompt. The
-decode is scaled back to the padded size and the original is pasted over its
-own area under the pad's feathered mask, so its pixels are kept exactly.
+decode is scaled back to the padded size. The original is not pasted back: the
+model re-frames, drawing the subject at its own scale, so the original laid
+over the redraw put a large head on a small body.
 """
 
 from __future__ import annotations
@@ -375,7 +376,7 @@ def _outpaint_edit(
     empty: str | None,
 ) -> None:
     """Outpaint an edit graph: the whole canvas redrawn from the green-padded
-    picture, then the original pasted back over its own area."""
+    picture, scaled to the padded size."""
     pad, size, green, threshold, painted = (next(new_id) for _ in range(5))
     for node in nodes.values():
         inputs = node.get("inputs", {})
@@ -419,12 +420,14 @@ def _outpaint_edit(
             sized = next(new_id)
             added[sized] = ("GetImageSize", {"image": [last, 0]}, "Get Image Size")
             latent.update(width=[sized, 0], height=[sized, 1])
-    scale, invert, paste = (next(new_id) for _ in range(3))
+    # No paste-back: the model re-frames, drawing the face smaller than the
+    # reference's, so the original laid over it is a big head on a small body.
+    scale = next(new_id)
     for node in nodes.values():
         inputs = node.get("inputs", {})
         for name, value in inputs.items():
             if is_link(value) and value == [decode_id, 0]:
-                inputs[name] = [paste, 0]
+                inputs[name] = [scale, 0]
     added[scale] = (
         "ImageScale",
         {
@@ -436,26 +439,13 @@ def _outpaint_edit(
         },
         "Back to the padded size",
     )
-    added[invert] = ("InvertMask", {"mask": [pad, 1]}, "The original, feathered")
-    added[paste] = (
-        "ImageCompositeMasked",
-        {
-            "destination": [scale, 0],
-            "source": [pad, 0],
-            "x": 0,
-            "y": 0,
-            "resize_source": False,
-            "mask": [invert, 0],
-        },
-        "Paste the original back",
-    )
     for node_id, (class_type, inputs, title) in added.items():
         graph[node_id] = nodes[node_id] = {
             "class_type": class_type,
             "inputs": inputs,
             "_meta": {"title": title},
         }
-    _prefix_saves(nodes, paste, _SAVE_PREFIX["outpaint"])
+    _prefix_saves(nodes, scale, _SAVE_PREFIX["outpaint"])
 
 
 def _prefix_saves(nodes: dict, start: str, save_prefix: str) -> None:

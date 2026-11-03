@@ -632,7 +632,7 @@ const PROMPT_HELP = {
     placeholder: "The rest of the room, same light",
     tips: [
       "Describe what surrounds the picture, not the change: “the rest of the beach, the sea to the horizon”, not “make it wider”.",
-      "With an edit model (Flux Kontext, Qwen Image Edit, Klein) describe the whole finished picture: it redraws the canvas around the original, which is pasted back unchanged.",
+      "With an edit model (Flux Kontext, Qwen Image Edit, Klein) describe the whole finished picture: it redraws the whole canvas, the original included.",
       "Left empty, the workflow's own prompt is used.",
     ],
   },
