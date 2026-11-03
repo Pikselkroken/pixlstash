@@ -2208,8 +2208,8 @@ filtered by.
   templates store's chips while Templates is shown), a spacer, a **Search**
   field (260px, shrinking, an `F` keycap) bound to `store.filters.name` or the
   templates store's name filter, and then the app-wide tail —
-  `[separator] [TbGlobalActions]` in its own `--space-3` cluster,
-  `rail-name="inspector"`. There is no title, no Mine | Templates switch and
+  `[separator] [TbGlobalActions]` (undo/redo + History, then the rail
+  toggle) in its own `--space-3` cluster, `rail-name="inspector"`. There is no title, no Mine | Templates switch and
   no *Add…*: the source is the left sidebar's (`WorkflowsSidebar.vue`, §13.2),
   and its amber *Add workflow* calls `useWorkflowsStore().requestAdd()`, which
   bumps `addRequest`; the view watches it and clicks its hidden workflow file
@@ -4563,7 +4563,7 @@ The shelf's former Shelf / Training runs tab strip is gone; the runs panel still
 title bar's segment and the sidebar name the view), and
 on the shelf tab the **Sort** split-button (a direction toggle and a menu, the menu not
 drawn on the Sets place), **Show** (the filter menu, whose badge counts active filters,
-never results), and the name field; then the tail `[separator] [TbGlobalActions]`. Adding models,
+never results), and the name field; then the tail `[separator] [TbGlobalActions]` (undo/redo + History, then the rail toggle). Adding models,
 managing folders and the training-runs view are the sidebar's; the verbs are on the
 selection pill, the row menu and the shortcuts. Everything but the count and the
 tail is `v-if`'d to the shelf tab, because all of it acts on `model_file` rows that are not
