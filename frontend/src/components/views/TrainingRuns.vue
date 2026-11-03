@@ -339,8 +339,20 @@
           <v-icon class="ctx-icon">mdi-stop</v-icon>
           <span class="ctx-label-text">Stop training</span>
         </button>
+        <button
+          v-if="deletable.length"
+          class="ctx-item ctx-item--danger"
+          type="button"
+          role="menuitem"
+          data-testid="tr-menu-delete"
+          @click="confirmDelete"
+        >
+          <v-icon class="ctx-icon">mdi-delete-outline</v-icon>
+          <span class="ctx-label-text">{{ deleteLabel }}</span>
+          <span class="ctx-shortcut">Del</span>
+        </button>
         <div
-          v-if="menuCard?.job || importable.length"
+          v-if="menuCard?.job || importable.length || deletable.length"
           class="ctx-sep"
           role="separator"
         ></div>
@@ -376,7 +388,7 @@
     <!-- The same floating pill the shelf docks over its rows, in the same
          strip. Centred, which is also what keeps it clear of the fixed
          bottom-right shortcuts FAB that a full-width bar ran underneath. -->
-    <div v-if="importable.length" class="selbar-float">
+    <div v-if="deletable.length" class="selbar-float">
       <div class="selbar" role="toolbar" aria-label="Selected training runs">
         <v-menu
           v-model="countMenuOpen"
@@ -394,7 +406,9 @@
             >
               <Tooltip :text="countTitle" activator="parent" />
               <span>{{ runCountLabel }}</span>
-              <span class="selbar-size">· {{ fileCountLabel }}</span>
+              <span v-if="importable.length" class="selbar-size"
+                >· {{ fileCountLabel }}</span
+              >
               <v-icon size="16" class="selbar-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
@@ -421,110 +435,142 @@
               <span class="ctx-label-text">Clear selection</span>
               <span class="ctx-shortcut">Esc</span>
             </button>
+            <div class="ctx-sep" role="separator"></div>
+            <button
+              class="ctx-item ctx-item--danger"
+              type="button"
+              role="menuitem"
+              data-testid="tr-count-delete"
+              @click="confirmDelete"
+            >
+              <v-icon class="ctx-icon">mdi-delete-outline</v-icon>
+              <span class="ctx-label-text">{{ deleteLabel }}</span>
+              <span class="ctx-shortcut">Del</span>
+            </button>
           </div>
         </v-menu>
 
         <span class="selbar-sep"></span>
 
-        <!-- Which checkpoints, and only while exactly one run is chosen. At two
-             or more the answer is every checkpoint in each: the steps of a run
-             land as one stack, and a per-step list across five runs would be
-             forty checkboxes for a decision nobody came here to make. The
-             Import label says which rule is in force. -->
-        <v-menu
-          v-if="single"
-          v-model="stepMenuOpen"
-          location="top"
-          :offset="8"
-          :close-on-content-click="false"
-        >
-          <template #activator="{ props: menuProps }">
-            <button
-              v-bind="menuProps"
-              class="selbar-count"
-              type="button"
-              aria-haspopup="menu"
-              :aria-expanded="stepMenuOpen"
-            >
-              <Tooltip
-                text="Choose which checkpoints of this run to take"
-                activator="parent"
-              />
-              <span>{{ stepsLabel }}</span>
-              <v-icon size="16" class="selbar-chevron">mdi-menu-down</v-icon>
-            </button>
-          </template>
-          <div class="ctx-menu shelf-menu">
-            <label
-              v-for="cp in single.checkpoints"
-              :key="cp.filename"
-              class="ctx-item tr-step"
-            >
-              <input
-                v-model="chosenSteps"
-                type="checkbox"
-                :value="cp.step ?? null"
-                :disabled="working"
-              />
-              <span class="ctx-label-text">{{
-                cp.step === null ? "Final" : `Step ${cp.step}`
-              }}</span>
-              <span class="ctx-meta">{{ formatModelSize(cp.size) }}</span>
-            </label>
-          </div>
-        </v-menu>
-
-        <v-menu v-model="destMenuOpen" location="top" :offset="8">
-          <template #activator="{ props: menuProps }">
-            <button
-              v-bind="menuProps"
-              class="selbar-count"
-              type="button"
-              aria-haspopup="menu"
-              :aria-expanded="destMenuOpen"
-            >
-              <Tooltip
-                text="Which folder the checkpoints are copied into"
-                activator="parent"
-              />
-              <v-icon size="16">mdi-folder-outline</v-icon>
-              <span>{{ destinationName }}</span>
-              <v-icon size="16" class="selbar-chevron">mdi-menu-down</v-icon>
-            </button>
-          </template>
-          <div class="ctx-menu shelf-menu" role="menu"
-            tabindex="-1"
-            @keydown="onMenuKeydown"
+        <!-- The import's controls, only while a picked run has checkpoints to
+             take. A failed run that never made a folder is picked for Delete
+             alone. -->
+        <template v-if="importable.length">
+          <!-- Which checkpoints, and only while exactly one run is chosen. At two
+               or more the answer is every checkpoint in each: the steps of a run
+               land as one stack, and a per-step list across five runs would be
+               forty checkboxes for a decision nobody came here to make. The
+               Import label says which rule is in force. -->
+          <v-menu
+            v-if="single"
+            v-model="stepMenuOpen"
+            location="top"
+            :offset="8"
+            :close-on-content-click="false"
           >
-            <button
-              v-for="folder in destinations"
-              :key="folder.id"
-              class="ctx-item"
-              type="button"
-              role="menuitemradio"
-              :aria-checked="folder.id === destinationId"
-              @click="destinationId = folder.id"
-            >
-              <span class="ctx-label-text">{{ folder.path }}</span>
-              <v-icon v-if="folder.id === destinationId" class="ctx-check"
-                >mdi-check</v-icon
+            <template #activator="{ props: menuProps }">
+              <button
+                v-bind="menuProps"
+                class="selbar-count"
+                type="button"
+                aria-haspopup="menu"
+                :aria-expanded="stepMenuOpen"
               >
-            </button>
-          </div>
-        </v-menu>
+                <Tooltip
+                  text="Choose which checkpoints of this run to take"
+                  activator="parent"
+                />
+                <span>{{ stepsLabel }}</span>
+                <v-icon size="16" class="selbar-chevron">mdi-menu-down</v-icon>
+              </button>
+            </template>
+            <div class="ctx-menu shelf-menu">
+              <label
+                v-for="cp in single.checkpoints"
+                :key="cp.filename"
+                class="ctx-item tr-step"
+              >
+                <input
+                  v-model="chosenSteps"
+                  type="checkbox"
+                  :value="cp.step ?? null"
+                  :disabled="working"
+                />
+                <span class="ctx-label-text">{{
+                  cp.step === null ? "Final" : `Step ${cp.step}`
+                }}</span>
+                <span class="ctx-meta">{{ formatModelSize(cp.size) }}</span>
+              </label>
+            </div>
+          </v-menu>
 
-        <span class="selbar-sep"></span>
+          <v-menu v-model="destMenuOpen" location="top" :offset="8">
+            <template #activator="{ props: menuProps }">
+              <button
+                v-bind="menuProps"
+                class="selbar-count"
+                type="button"
+                aria-haspopup="menu"
+                :aria-expanded="destMenuOpen"
+              >
+                <Tooltip
+                  text="Which folder the checkpoints are copied into"
+                  activator="parent"
+                />
+                <v-icon size="16">mdi-folder-outline</v-icon>
+                <span>{{ destinationName }}</span>
+                <v-icon size="16" class="selbar-chevron">mdi-menu-down</v-icon>
+              </button>
+            </template>
+            <div class="ctx-menu shelf-menu" role="menu"
+              tabindex="-1"
+              @keydown="onMenuKeydown"
+            >
+              <button
+                v-for="folder in destinations"
+                :key="folder.id"
+                class="ctx-item"
+                type="button"
+                role="menuitemradio"
+                :aria-checked="folder.id === destinationId"
+                @click="destinationId = folder.id"
+              >
+                <span class="ctx-label-text">{{ folder.path }}</span>
+                <v-icon v-if="folder.id === destinationId" class="ctx-check"
+                  >mdi-check</v-icon
+                >
+              </button>
+            </div>
+          </v-menu>
 
-        <AppButton
-          variant="primary"
-          size="sm"
-          :loading="working"
-          :disabled="!canSubmit"
-          :tooltip="deletesSource ? deleteWarning : ''"
-          @click="submit"
-        >
-          {{ confirmLabel }}
-        </AppButton>
+          <span class="selbar-sep"></span>
+
+          <AppButton
+            variant="primary"
+            size="sm"
+            :loading="working"
+            :disabled="!canSubmit"
+            :tooltip="deletesSource ? deleteWarning : ''"
+            @click="submit"
+          >
+            {{ confirmLabel }}
+          </AppButton>
+
+          <span class="selbar-sep"></span>
+        </template>
+
+        <!-- Delete, in the error colour, beside Clear: the shelf pill's
+             destructive verb in the same place. -->
+        <AppBarButton
+          shape="round"
+          danger
+          icon="delete-outline"
+          data-testid="tr-pill-delete"
+          :aria-label="deleteLabel"
+          :tooltip="`${deleteLabel} (Del)`"
+          :disabled="working || deleting"
+          @click="confirmDelete"
+        />
 
         <AppBarButton
           shape="round"
@@ -597,8 +643,9 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
 import { useTrainingStore } from "../../stores/useTrainingStore";
+import { useConfirm } from "../../composables/useConfirm";
 import { errorDetail } from "../../utils/apiError";
-import { formatModelSize } from "../../utils/modelShelf";
+import { formatModelSize, trashName } from "../../utils/modelShelf";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import {
   baseOf,
@@ -629,6 +676,7 @@ const {
   chosen,
   chosenSteps,
   importable,
+  deletable,
   single,
   loading,
   error,
@@ -872,8 +920,10 @@ const fileCountLabel = computed(() =>
   plural(fileTotal.value, "checkpoint", "checkpoints"),
 );
 
+// Every picked run, importable or not: a failed run with no folder is picked
+// for Delete, and the pill counts what its verbs act on.
 const runCountLabel = computed(() =>
-  plural(chosenRuns.value.length, "run", "runs"),
+  plural(deletable.value.length, "run", "runs"),
 );
 
 const stepsLabel = computed(() => {
@@ -884,8 +934,8 @@ const stepsLabel = computed(() => {
 
 const countTitle = computed(
   () =>
-    `${chosenRuns.value.length} of ${
-      cards.value.filter((card) => !card.live && card.run).length
+    `${deletable.value.length} of ${
+      cards.value.filter((card) => !card.live).length
     } runs selected`,
 );
 
@@ -957,7 +1007,54 @@ function clearSelection() {
   countMenuOpen.value = false;
 }
 
-/** Arrow keys move the cursor; Space and Enter tick. Ctrl+A selects all, Escape clears. */
+// ── Delete ────────────────────────────────────────────────────────────────
+
+const deleting = ref(false);
+
+const deleteLabel = computed(() =>
+  deletable.value.length > 1
+    ? `Delete ${deletable.value.length} runs`
+    : "Delete run",
+);
+
+/**
+ * Ask, then clear the picked runs that are not training. A run's folder goes
+ * to the OS trash, the undo; one that never made a folder is only a record.
+ */
+async function confirmDelete() {
+  const list = [...deletable.value];
+  if (!list.length || deleting.value || working.value) return;
+  cardMenuOpen.value = false;
+  countMenuOpen.value = false;
+  const n = list.length;
+  const folders = list.some((card) => card.run);
+  const ok = await useConfirm().confirm({
+    title: n === 1 ? `Delete "${list[0].name}"?` : `Delete ${n} training runs?`,
+    message: folders
+      ? `${n === 1 ? "Its folder goes" : "Their folders go"} to your ${trashName()}, with the checkpoints and previews in ${n === 1 ? "it" : "them"}. Checkpoints already imported stay on the shelf.`
+      : `${n === 1 ? "It" : "They"} never made a folder, so only the record goes.`,
+    confirmLabel: folders ? `Move to ${trashName()}` : "Delete",
+    danger: true,
+  });
+  if (!ok) return;
+  deleting.value = true;
+  try {
+    await runsStore.deleteRuns(list);
+  } finally {
+    deleting.value = false;
+  }
+  cursor.value = Math.min(cursor.value, Math.max(cards.value.length - 1, 0));
+  await nextTick();
+  (
+    gridEl.value?.querySelector(`[data-run-index="${cursor.value}"]`) ??
+    gridEl.value?.querySelector(".tr-new")
+  )?.focus();
+}
+
+/**
+ * Arrow keys move the cursor; Space and Enter tick. Ctrl+A selects all, Escape
+ * clears, Delete (or Backspace, the Mac's) deletes.
+ */
 function onGridKeydown(event) {
   const menuKey =
     event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
@@ -980,6 +1077,17 @@ function onGridKeydown(event) {
   if (event.key === "Escape" && chosen.value.length) {
     event.preventDefault();
     clearSelection();
+    return;
+  }
+  if (
+    (event.key === "Delete" || event.key === "Backspace") &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    deletable.value.length
+  ) {
+    event.preventDefault();
+    confirmDelete();
     return;
   }
   const keys = ["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"];

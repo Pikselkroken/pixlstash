@@ -570,6 +570,9 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     90 = 72 + 18 with ``POST /model-files/delete/undo``, which moves the files
     a trash delete removed back into their registered folders: the delete's
     authority from the other end.
+    91 = 73 + 18 with ``DELETE /model-folders/{folder_id}/runs/{run_name}``,
+    which moves one ai-toolkit run folder to the host trash: ``POST
+    /model-files/delete``' authority over a run.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -584,7 +587,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 18, sorted(loopback)
-    assert len(local) == 72, sorted(local)
+    assert len(local) == 73, sorted(local)
 
 
 # ===========================================================================

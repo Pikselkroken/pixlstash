@@ -1,7 +1,7 @@
 import { computed, onScopeDispose, ref, watch } from "vue";
 import { defineStore } from "pinia";
 
-import { listRuns } from "../api/modelImports";
+import { listRuns, trashRun } from "../api/modelImports";
 import {
   cancelTrainingJob,
   createTrainingJob,
@@ -144,6 +144,15 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     liveKnown.value
       ? chosenCards.value.filter((card) => !card.live && card.run)
       : [],
+  );
+
+  /**
+   * The picked runs a delete can take: every one that is not training. Gated
+   * on `liveKnown` like the import, so a run still training never reads as
+   * finished here.
+   */
+  const deletable = computed(() =>
+    liveKnown.value ? chosenCards.value.filter((card) => !card.live) : [],
   );
 
   /** The one importable run, or null: what gates the per-step picker. */
@@ -407,6 +416,60 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     return created;
   }
 
+  /**
+   * Clear runs, one after another: a run's folder goes to the OS trash, and
+   * the job PixlStash trained it with goes too (its record, work folder and
+   * dataset). A job that never made a folder is only its record.
+   *
+   * Sequential because the trash takes the shelf's one job slot, as an import
+   * does. Each run is caught on its own, so the receipt names what was left.
+   *
+   * @param {Array<Object>} list - cards, as `deletable` holds them.
+   */
+  async function deleteRuns(list) {
+    const sourceId = source.value?.id ?? null;
+    const cleared = [];
+    const failed = [];
+    for (const card of list) {
+      try {
+        if (card.run) {
+          if (sourceId == null) throw new Error("no training folder is set");
+          await trashRun(sourceId, card.run.name);
+        }
+      } catch (err) {
+        failed.push(`${card.name} (${errorDetail(err) || err.message || "refused"})`);
+        continue;
+      }
+      if (card.job) {
+        try {
+          await deleteTrainingJob(card.job.id);
+        } catch (err) {
+          // With its folder gone the run is cleared from the grid all the same;
+          // what is left is a job record that names nothing.
+          if (!card.run) {
+            failed.push(`${card.name} (${errorDetail(err) || "refused"})`);
+            continue;
+          }
+          console.warn(
+            `Trashed run "${card.run.name}" but could not delete its training job ${card.job.id}:`,
+            err,
+          );
+        }
+      }
+      cleared.push(card.name);
+    }
+    const ok = cleared.length
+      ? `Cleared ${cleared.length} ${cleared.length === 1 ? "run" : "runs"}`
+      : "Cleared nothing";
+    useNoticeStore().push({
+      level: failed.length ? "warning" : "success",
+      text: failed.length
+        ? `${ok}. Could not clear ${failed.join(", ")}.`
+        : `${ok}.`,
+    });
+    await reload();
+  }
+
   /** Read once, for a surface that only counts (the sidebar). */
   function ensureLoaded() {
     if (!asked.value) reload();
@@ -473,6 +536,7 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     count,
     chosenCards,
     importable,
+    deletable,
     single,
     isLive,
     isChosen,
@@ -485,6 +549,7 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     reload,
     stopJob,
     retryJob,
+    deleteRuns,
     ensureLoaded,
   };
 });

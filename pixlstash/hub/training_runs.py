@@ -184,6 +184,23 @@ def unfinished_runs(hub: HubDatabase, library_uuid: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def busy_runs(hub: HubDatabase) -> list[dict]:
+    """Every library's runs that may still write into their folder.
+
+    Queued, running or stopping, or completed but still drawing its previews or
+    being imported: the runs :func:`delete_run` with *only_finished* refuses.
+    Not scoped by library, because the shelf's ai-toolkit folder is shared by
+    every library, so a run another library is training writes into it too.
+    """
+    marks = ", ".join("?" for _ in FINISHED_STATUSES)
+    rows = hub.fetchall(
+        "SELECT * FROM training_run "
+        f"WHERE status NOT IN ({marks}) OR {_COMPLETED_BUT_BUSY}",
+        FINISHED_STATUSES,
+    )
+    return [dict(row) for row in rows]
+
+
 def update_run(hub: HubDatabase, run_uuid: str, **fields) -> bool:
     """Set mutable columns on one run, by uuid.
 
@@ -254,6 +271,7 @@ def delete_run(
 __all__ = [
     "FINISHED_STATUSES",
     "UNFINISHED_STATUSES",
+    "busy_runs",
     "create_run",
     "delete_run",
     "get_run",

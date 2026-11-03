@@ -13,6 +13,11 @@ a move because it *is* a move with a row created rather than repointed: copy →
 verify by SHA-256 → register the row and commit → then unlink. The unlink only
 happens at all when the source folder carries ``delete_after_import``.
 
+``DELETE /model-folders/{id}/runs/{name}`` clears a run the owner no longer
+wants: the folder goes to the OS trash whole, which is the undo. It is refused
+while a training job may still write into it, and it takes the import's slot so
+nothing is copying out of it at the time.
+
 **A run is addressed by name, not by path.** The body names a registered
 ``source`` folder and a run *inside* it, and the server joins them, so no host
 path is ever taken from the caller. The join is contained: a run name that
@@ -27,7 +32,9 @@ Authorization: every route here is `LOCAL_OWNER_ONLY`, declared in
 ``pixlstash/authz/registry.py``. The listing walks a registered host path and
 reads every run under it, which is the same authority as the background
 folder scan (``ModelFolderScanFinder``); the import writes files into one registered folder
-and may unlink them from another, which is the ``model-moves`` authority; and
+and may unlink them from another, which is the ``model-moves`` authority; the
+trash removes one run folder from a registered root, which is
+``POST /model-files/delete``' authority over a run; and
 both sample routes read inside a registered folder, which is the authority
 ``GET /adapters/{sha256}/file`` sits on for the same reason - bytes out of a
 registered root are a capability of their own, and "no host path crosses the
@@ -42,18 +49,23 @@ from typing import Optional
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
+from send2trash import TrashPermissionError, send2trash
 
+from pixlstash.hub.training_runs import busy_runs
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_folder_scanner import STATE_PRESENT
 from pixlstash.services.model_mover import SHELF_IO_LOCK, MoveRefused, samples_relpath
 from pixlstash.services.run_importer import RunImporter
+from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 from pixlstash.utils.aitoolkit_run import (
     SAMPLES_DIRNAME,
     is_sample_filename,
     read_output_root,
+    read_run,
 )
 from pixlstash.utils.known_base_models import training_base_tile
 from pixlstash.utils.path_utils import resolve_path_within
+from pixlstash.utils.system_utils import TRASH_NAME
 
 logger = get_logger(__name__)
 
@@ -235,6 +247,18 @@ class ImportResponse(BaseModel):
         )
     )
     files: list[ImportedFile] = Field(default_factory=list)
+
+
+class TrashRunResponse(BaseModel):
+    """Body of ``DELETE /model-folders/{folder_id}/runs/{run_name}``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    run_name: str
+    trash_name: str = Field(
+        default=TRASH_NAME,
+        description="What this machine calls its trash, for the receipt.",
+    )
 
 
 def sample_path_within(run_dir: str, filename: str) -> str:
@@ -427,6 +451,116 @@ def create_router(server) -> APIRouter:
                 detail=f"Could not read {folder['path']}: {exc}",
             ) from exc
         return RunListResponse(runs=[_to_run_response(run) for run in runs])
+
+    @router.delete(
+        "/model-folders/{folder_id}/runs/{run_name}",
+        summary="Move a training run to the trash",
+        description=(
+            "Moves one run folder of a registered `source` folder to this "
+            f"machine's {TRASH_NAME.lower()} as one entry, which restores whole. "
+            "Checkpoints already imported are shelf copies of their own and stay. "
+            "Refused while a training job may still write into the folder "
+            "(409), for a name that is not a run in that folder (400 or 404), "
+            "for a symbolic link (409), and on a drive with no trash (409)."
+        ),
+        tags=["model_shelf"],
+        response_model=TrashRunResponse,
+    )
+    def trash_run(folder_id: int, run_name: str, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        folder = _source_folder(folder_id)
+        # One name, joined and contained, as the import takes it.
+        if run_name in ("", ".", "..") or "/" in run_name or "\\" in run_name:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{run_name!r} is not a run inside that folder.",
+            )
+        joined = os.path.join(folder["path"], run_name)
+        try:
+            run_dir = resolve_path_within(folder["path"], run_name)
+        except ValueError as exc:
+            logger.error(
+                "Refusing to trash %r from %s: it resolves outside the "
+                "registered output root (%s).",
+                run_name,
+                folder["path"],
+                exc,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"{run_name!r} is not a run inside that folder.",
+            ) from exc
+        if os.path.islink(joined):
+            # The trash would take the link and the listing reads its target:
+            # what the card showed is not what would go.
+            raise HTTPException(
+                status_code=409,
+                detail=f"{run_name!r} is a link, so PixlStash leaves it alone.",
+            )
+        # Only what the listing would show as a run: the output root may hold
+        # other folders, and those are not this route's to remove.
+        if not os.path.isdir(run_dir) or not read_run(run_dir).checkpoints:
+            raise HTTPException(status_code=404, detail=f"No run named {run_name!r}.")
+        for job in busy_runs(server.hub):
+            if not job.get("training_folder"):
+                continue
+            save_root = LocalAiToolkit.handle_for(
+                "",
+                job["uuid"],
+                job["name"],
+                training_folder=job["training_folder"],
+            ).save_root
+            if os.path.realpath(save_root) == run_dir:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{job['name']!r} is still {job['status']} in that folder. "
+                        "Stop it, or wait for it to finish, first."
+                    ),
+                )
+        # The slot an import takes: an import reading this folder would lose
+        # its files halfway through.
+        if not SHELF_IO_LOCK.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A move or an import is already running. Removing a run out "
+                    "from under it could take files it is still copying."
+                ),
+            )
+        try:
+            send2trash(run_dir)
+        except TrashPermissionError as exc:
+            logger.error("Could not move %s to the %s: %s", run_dir, TRASH_NAME, exc)
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"This drive has no {TRASH_NAME} PixlStash can use, so "
+                    f"{run_name!r} was left where it is."
+                ),
+            ) from exc
+        except OSError as exc:
+            logger.error(
+                "Moving run %s (folder id=%s) to the %s failed: %s",
+                run_dir,
+                folder_id,
+                TRASH_NAME,
+                exc,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not remove {run_name!r}: {exc.strerror or exc}",
+            ) from exc
+        finally:
+            SHELF_IO_LOCK.release()
+        logger.info(
+            "Moved training run %s (folder id=%s) to the %s.",
+            run_dir,
+            folder_id,
+            TRASH_NAME,
+        )
+        return TrashRunResponse(run_name=run_name)
 
     @router.get(
         "/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",

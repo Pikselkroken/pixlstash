@@ -76,3 +76,21 @@ export async function importRun({
   if (steps) body.steps = steps;
   return unwrap(apiClient.post("/model-imports", body));
 }
+
+/**
+ * Move one run's folder to the OS trash, which is the undo.
+ *
+ * Refused (409) while a training job may still write into it, or while a move
+ * or an import holds the shelf's job slot, so a batch is sequential.
+ *
+ * @param {number} folderId - the registered output root.
+ * @param {string} runName - a run inside it, by name.
+ * @returns {Promise<Object>} `{ run_name, trash_name }`.
+ */
+export async function trashRun(folderId, runName) {
+  return unwrap(
+    apiClient.delete(
+      `/model-folders/${folderId}/runs/${encodeURIComponent(runName)}`,
+    ),
+  );
+}
