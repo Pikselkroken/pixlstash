@@ -1890,10 +1890,14 @@ def test_a_split_gives_every_heir_the_gpu_peaks_and_the_run_alone_flag(tmp_path)
         with hub.transaction() as conn:
             conn.executemany(
                 "INSERT INTO workflow_vram_peak (workflow_id, model_set, "
-                "device_name, device_total_mb, peak_mb, measured_by, outcome, at) "
-                "VALUES ('auto:old', 'm', 'GPU', 24576, ?, 'torch_reserved', "
-                "'completed', ?)",
-                [(9000, "2026-10-01T00:00:00"), (9500, "2026-10-02T00:00:00")],
+                "device_name, device_total_mb, peak_mb, measured_by, outcome, at, "
+                "room_mb) VALUES ('auto:old', 'm', 'GPU', 24576, ?, "
+                "'torch_reserved', 'completed', ?, ?)",
+                [
+                    (9000, "2026-10-01T00:00:00", None),
+                    # The room it had goes with the peak: it sets the need.
+                    (9500, "2026-10-02T00:00:00", 12000),
+                ],
             )
             conn.execute(
                 "INSERT INTO workflow_vram_policy (workflow_id, exclusive, source, at) "
@@ -1912,15 +1916,15 @@ def test_a_split_gives_every_heir_the_gpu_peaks_and_the_run_alone_flag(tmp_path)
             _carry_group_state(conn, "auto:old", "auto:a", keep=True)
             _carry_group_state(conn, "auto:old", "auto:b")
         for heir, expected in (
-            ("auto:a", [9000, 9500]),
-            ("auto:b", [9000, 9000, 9500]),
+            ("auto:a", [(9000, None), (9500, 12000)]),
+            ("auto:b", [(9000, None), (9000, None), (9500, 12000)]),
         ):
             peaks = hub.fetchall(
-                "SELECT peak_mb FROM workflow_vram_peak WHERE workflow_id = ? "
-                "ORDER BY peak_mb",
+                "SELECT peak_mb, room_mb FROM workflow_vram_peak "
+                "WHERE workflow_id = ? ORDER BY peak_mb",
                 (heir,),
             )
-            assert [row[0] for row in peaks] == expected, heir
+            assert [tuple(row) for row in peaks] == expected, heir
             policy = hub.fetchone(
                 "SELECT source FROM workflow_vram_policy WHERE workflow_id = ?",
                 (heir,),

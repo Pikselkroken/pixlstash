@@ -1785,8 +1785,9 @@ CREATE TABLE IF NOT EXISTS shelf_identity (
 # ``oom`` (``peak_mb`` is then the card's total) or ``aborted``, which the need
 # ignores. ``measured_by`` is ``torch_reserved`` or ``device_delta``.
 # ``pixels`` is the size of the image the run worked on (``run_pixels``), null
-# where it could not be read from the graph. The 50 newest rows per workflow
-# are kept.
+# where it could not be read from the graph. ``room_mb`` is the room the run
+# had at its peak, what ComfyUI held plus what was still free on the card,
+# null where it was not read. The 50 newest rows per workflow are kept.
 _V2_WORKFLOW_VRAM_PEAK = """
 CREATE TABLE IF NOT EXISTS workflow_vram_peak (
     id               INTEGER PRIMARY KEY,
@@ -1798,7 +1799,8 @@ CREATE TABLE IF NOT EXISTS workflow_vram_peak (
     measured_by      TEXT NOT NULL,
     outcome          TEXT NOT NULL,
     at               TEXT NOT NULL,
-    pixels           INTEGER
+    pixels           INTEGER,
+    room_mb          INTEGER
 )
 """
 
@@ -2346,6 +2348,10 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     }
     if "pixels" not in peak_columns:
         conn.execute("ALTER TABLE workflow_vram_peak ADD COLUMN pixels INTEGER")
+    # And the room the run had, which an older row has none of either: its
+    # need is judged against the card's total, as before.
+    if "room_mb" not in peak_columns:
+        conn.execute("ALTER TABLE workflow_vram_peak ADD COLUMN room_mb INTEGER")
 
     # The icon column (shelf plan, the sixth verb) lands the same way the rest
     # of v2 does: amended in place rather than as a v3, because a build shipped

@@ -395,14 +395,20 @@ class PeakSampler:
 
     Runs from the moment ComfyUI starts the run until ``stop``. A run's peak
     is ComfyUI's whole allocation, cache included, which is what its next run
-    will grow to again.
+    will grow to again. ``room_mb`` is the room the run had at that peak: what
+    ComfyUI held plus what was still free on *device*, None when unread. A
+    peak that left less free than the arbiter's safety margin filled it.
     """
 
-    def __init__(self, probe: ComfyUIProbe, started: callable) -> None:
+    def __init__(
+        self, probe: ComfyUIProbe, started: callable, device: str | None = None
+    ) -> None:
         self._probe = probe
         self._started = started
+        self._device = device
         self._stop = threading.Event()
         self.peak_mb: int | None = None
+        self.room_mb: int | None = None
         self._thread = threading.Thread(
             target=self._run, name="comfyui-peak", daemon=True
         )
@@ -410,12 +416,21 @@ class PeakSampler:
 
     def _run(self) -> None:
         while not self._stop.wait(PEAK_SAMPLE_S):
-            if not self._started():
-                continue
-            self._probe.stats(max_age_s=PEAK_SAMPLE_S / 2)
-            usage = self._probe.usage_mb()
-            if usage is not None:
-                self.peak_mb = max(self.peak_mb or 0, usage)
+            if self._started():
+                self._sample()
+
+    def _sample(self) -> None:
+        self._probe.stats(max_age_s=PEAK_SAMPLE_S / 2)
+        usage = self._probe.usage_mb()
+        if usage is None or usage <= (self.peak_mb or 0):
+            return
+        self.peak_mb = usage
+        # Fresh, read right after the usage: a cached card reading from
+        # before it would misjudge the room while a model loads.
+        card = ledger().device(self._device, max_age_s=0.0)
+        self.room_mb = (
+            usage + card.free_mb if card is not None and card.measurable else None
+        )
 
     def stop(self) -> int | None:
         self._stop.set()
