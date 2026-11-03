@@ -10037,6 +10037,25 @@ def test_undo_is_declared_local_owner_only_and_refuses_every_share_token(
     assert r.status_code == 200 and r.json()["restored"] == [alice], r.text
 
 
+def test_a_refused_undo_leaves_the_previews_in_the_trash(
+    shelf_env, real_files, os_trash
+):
+    """Previews come back only beside a copy that did: a refused model must
+    not leave them orphaned in the folder."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    samples = real_files / "alice_samples"
+    samples.mkdir()
+    (samples / "1712345678901__000000500_0.jpg").write_bytes(b"\xff\xd8\xff")
+    token = _delete(shelf_env, [alice]).json()["undo_token"]
+    assert not samples.exists()
+    (os_trash / "files" / "alice.safetensors").unlink()
+
+    r = shelf_env.owner.post(f"{API}/model-files/delete/undo", json={"token": token})
+    assert r.json()["refused"] == [{"id": alice, "reason": "not_in_trash"}]
+    assert not samples.exists(), "a refused model's previews came back alone"
+    assert (os_trash / "files" / "alice_samples").exists()
+
+
 def test_a_permanent_delete_offers_no_undo(shelf_env, real_files, fake_trash):
     alice = shelf_env.model_ids["alice.safetensors"]
     body = _delete(shelf_env, [alice], permanent=True).json()

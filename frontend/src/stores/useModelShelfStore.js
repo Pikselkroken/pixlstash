@@ -4550,6 +4550,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       const body = await undoDeleteModels(token);
       await fetchRows();
       const kept = body?.refused?.length ?? 0;
+      const partly = body?.partly_restored?.length ?? 0;
+      if (partly) {
+        notices.push({
+          level: "info",
+          text: `${modelCount(partly)} came back without some of ${partly === 1 ? "its" : "their"} copies; the shelf shows those as missing after its next scan.`,
+        });
+      }
       if (kept) {
         notices.push({
           level: body?.restored?.length ? "info" : "error",

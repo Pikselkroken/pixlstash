@@ -15,15 +15,16 @@ import pytest
 from pixlstash.utils import trash_restore
 from pixlstash.utils.trash_restore import NotInTrash, restore_from_trash
 
-pytestmark = pytest.mark.skipif(
-    sys.platform in ("win32", "darwin"), reason="freedesktop trash only"
-)
-
 
 @pytest.fixture
 def home_trash(monkeypatch, tmp_path):
-    """send2trash's freedesktop trash, kept under tmp_path; returns its trash()."""
-    from send2trash import plat_other
+    """send2trash's freedesktop trash, kept under tmp_path; returns its trash().
+
+    The Windows record tests below need no trash at all and run everywhere.
+    """
+    if sys.platform in ("win32", "darwin"):
+        pytest.skip("freedesktop trash only")
+    from send2trash import plat_other  # imports os.getuid: not on Windows
 
     data_home = tmp_path / "share"
     monkeypatch.setattr(plat_other, "XDG_DATA_HOME", os.fsencode(data_home))

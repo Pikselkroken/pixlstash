@@ -1612,15 +1612,22 @@ def create_router(server) -> APIRouter:
             for model_id, entry in undo.items():
                 back = 0
                 reason = "not_in_trash"
-                files = [stamp for _path, stamp in entry["trashed"] if stamp]
+                # Copies first, then previews, and previews only beside a copy
+                # that came back: a refused model must not leave them orphaned.
+                files = [item for item in entry["trashed"] if item[1]]
+                previews = [item for item in entry["trashed"] if not item[1]]
                 files_back = 0
-                for path, stamp in entry["trashed"]:
+                for path, stamp in files + previews:
+                    if not stamp and files and not files_back:
+                        break
                     try:
                         restore_from_trash(path, stamp)
                         back += 1
                         files_back += bool(stamp)
                     except FileExistsError:
-                        reason = "path_taken"
+                        # The first decisive reason stands.
+                        if reason == "not_in_trash":
+                            reason = "path_taken"
                         logger.warning(
                             "Not putting %s back from the trash: something is there again.",
                             path,
@@ -1628,14 +1635,17 @@ def create_router(server) -> APIRouter:
                     except NotInTrash as exc:
                         logger.warning("Model %s: %s", model_id, exc)
                     except OSError as exc:
-                        reason = "restore_failed"
+                        if reason == "not_in_trash":
+                            reason = "restore_failed"
                         logger.error(
                             "Could not put %s back from the trash: %s",
                             path,
                             exc,
                             exc_info=True,
                         )
-                # Its previews alone coming back is not the model coming back.
+                # A copy must come back. A model whose file was already gone
+                # when it was deleted had only its row (and previews) to lose,
+                # so that row coming back is it as it was.
                 if not (files_back if files else back):
                     refused.append({"id": model_id, "reason": reason})
                     continue
