@@ -161,3 +161,19 @@ def test_a_fingerprint_nothing_matches_is_not_in_the_trash(home_trash, tmp_path)
     with pytest.raises(NotInTrash):
         restore_from_trash(str(original), (999, 1))
     assert not original.exists()
+
+
+def test_a_trashed_symlink_comes_back_by_its_own_fingerprint(home_trash, tmp_path):
+    """A symlinked model loses its link to the trash, so the link's own stats
+    are what is fingerprinted and matched, never its target's."""
+    target = tmp_path / "elsewhere.safetensors"
+    target.write_bytes(b"the bytes, which stay where they are")
+    link = tmp_path / "alice.safetensors"
+    link.symlink_to(target)
+    stamp = trash_restore.fingerprint(str(link))
+    assert stamp is not None
+    home_trash(str(link))
+
+    restore_from_trash(str(link), stamp)
+
+    assert link.is_symlink() and link.resolve() == target
