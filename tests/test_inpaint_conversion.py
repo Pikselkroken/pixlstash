@@ -459,6 +459,7 @@ def test_a_two_picture_edit_inpaints_the_picture_it_edits(edited, reference):
 
     save = converted["9"]["inputs"]
     assert converted[save["images"][0]]["class_type"] == "InpaintStitchImproved"
+    assert save["filename_prefix"] == "Inpaint-Qwen"
 
 
 def test_the_picture_the_latent_is_made_from_wins_over_the_first_input():
@@ -776,6 +777,29 @@ def test_an_edit_outpaint_sizes_a_literal_latent_by_the_canvas():
     assert sized["class_type"] == "GetImageSize"
     assert sized["inputs"]["image"] == [painted, 0]
     assert latent["height"] == [latent["width"][0], 1]
+
+
+@pytest.mark.parametrize("edited, reference", [("20", "21"), ("21", "20")])
+def test_a_two_picture_edit_outpaints_the_picture_it_edits(edited, reference):
+    """Qwen Image 2.1 is an edit graph: the picture it edits is padded green
+    and redrawn whole, from noise at the encoder's latent of the canvas. Wrong
+    if the reference is padded, or a crop or noise mask appears."""
+    converted = convert_to_outpaint(_qwen_two_picture_edit(edited, reference))
+    for gone in ("InpaintCropImproved", "SetLatentNoiseMask"):
+        assert not _of(converted, gone)
+    pad, painted = _painted(converted)
+    assert converted[pad]["inputs"]["image"] == [edited, 0]
+    encoder = converted["4"]["inputs"]
+    assert encoder["images.image_1"] == [painted, 0]
+    assert encoder["images.image_2"] == [reference, 0]
+    assert converted["10"]["inputs"]["image"] == [reference, 0]
+    sampler = converted["7"]["inputs"]
+    assert sampler["latent_image"] == ["6", 0]
+    assert converted["6"]["inputs"]["on_false"] == ["4", 2]
+    assert sampler["denoise"] == 1.0
+    save = converted["9"]["inputs"]
+    assert converted[save["images"][0]]["class_type"] == "ImageScale"
+    assert save["filename_prefix"] == "Outpaint-Qwen"
 
 
 def test_a_controlnet_on_the_picture_takes_the_padded_crop():

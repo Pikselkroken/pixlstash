@@ -102,7 +102,8 @@ _PAD_FEATHER = 40
 _GREEN = 0x00FF00
 # An edit model's reference encoders. A ControlNet or IP-adapter is not one:
 # a graph with only those takes the padded crop like an img2img graph.
-_EDIT_ENCODER_RE = re.compile(r"^ReferenceLatent$|ImageEdit")
+# Qwen Image 2.1's encoder edits too, though its name does not say so.
+_EDIT_ENCODER_RE = re.compile(r"^ReferenceLatent$|ImageEdit|^TextEncodeQwenImage21$")
 # Loaders known to put the picture on output 0 and its alpha as a MASK on 1,
 # which is what the crop reads. ``is_picture_loader`` also matches loaders
 # that do not (``LoadImageMask`` has a MASK alone).
@@ -221,7 +222,11 @@ def _convert(graph: dict, target: str) -> dict:
     resizers = _resizers_of(nodes, loader)
     width, height = _target_size(nodes, resizers, empty)
     if target == "outpaint" and _feeds_edit_encoder(nodes, {loader} | resizers):
-        if not from_empty and not _encodes(nodes, latent_link, {loader} | resizers):
+        if (
+            not from_empty
+            and not from_picture
+            and not _encodes(nodes, latent_link, {loader} | resizers)
+        ):
             raise InpaintConversionRefused(
                 "Its sampler starts from an encode of something other than the "
                 "loaded picture, so PixlStash cannot convert it."
@@ -477,7 +482,7 @@ def _prefix_saves(nodes: dict, start: str, save_prefix: str) -> None:
         node = nodes[node_id]
         prefix = node["inputs"].get("filename_prefix")
         if (
-            node["class_type"] in SAVE_NODE_CLASSES
+            node["class_type"] in _SAVES
             and isinstance(prefix, str)
             and not prefix.startswith(save_prefix)
         ):
