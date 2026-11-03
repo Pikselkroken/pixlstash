@@ -148,9 +148,9 @@ def convert_to_inpaint(graph: dict) -> dict:
     one.
 
     Raises:
-        InpaintConversionRefused: The graph is not a single-pass, one-picture
-            img2img, edit or txt2img graph, or is already inpaint, outpaint,
-            video or upscale.
+        InpaintConversionRefused: The graph is not a single-pass img2img,
+            edit or txt2img graph with one picture to edit, or is already
+            inpaint, outpaint, video or upscale.
     """
     return _convert(graph, "inpaint")
 
