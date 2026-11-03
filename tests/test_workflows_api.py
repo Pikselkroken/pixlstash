@@ -24494,8 +24494,8 @@ def test_a_pack_from_before_the_shelf_widget_says_restart_comfyui(id_loaders):
         ]
     }
 
-    # A diffusion model the shelf holds reads the same; one cast to fp8 does
-    # not, since even a current pack's loader cannot cast it.
+    # A diffusion model the shelf holds reads the same, cast to fp8 or not:
+    # a current pack's loader casts too.
     info["UNETLoader"] = {
         "input": {"required": {"unet_name": [["something-else.safetensors"], {}]}},
         "output": ["MODEL"],
@@ -24515,11 +24515,28 @@ def test_a_pack_from_before_the_shelf_widget_says_restart_comfyui(id_loaders):
         )
     ) == {"missing_models": [not_held], "pack_outdated": [diffusion]}
     unet["11"]["inputs"]["weight_dtype"] = "fp8_e4m3fn"
+    cast = workflows_routes.store_manual_workflow(
+        env.server.hub, "Old pack, fp8 diffusion model", unet, "import"
+    )
+    assert reasons(cast) == {"missing_models": [not_held], "pack_outdated": [diffusion]}
+
+    # A pack with the `shelf` widget but no cast loads the uncast one; the
+    # cast one is out of date for it, never missing. Wrong if the uncast one
+    # reads as out of date too.
+    loader = info["PixlStashCheckpointLoader"]["input"]["optional"]
+    loader["shelf"] = ["STRING", {"default": ""}]
+    assert reasons(cast) == {"missing_models": [not_held], "pack_outdated": [diffusion]}
+    unet["11"]["inputs"]["weight_dtype"] = "default"
     assert reasons(
         workflows_routes.store_manual_workflow(
-            env.server.hub, "Old pack, fp8 diffusion model", unet, "import"
+            env.server.hub, "Shelf pack, diffusion model", unet, "import"
         )
-    ) == {"missing_models": [not_held, diffusion]}
+    ) == {"missing_models": [not_held]}
+    # With the cast as well, the cast one loads off the shelf.
+    loader["weight_dtype"] = [["default", "fp8_e4m3fn"], {"default": "default"}]
+    assert reasons(cast) == {"missing_models": [not_held]}
+    del loader["weight_dtype"]
+    del loader["shelf"]
 
     # A pack with no loader at all keeps today's wording.
     del info["PixlStashCheckpointLoader"]

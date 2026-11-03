@@ -388,8 +388,8 @@ class TestOpeningWithPackNodes:
 
     def test_a_diffusion_model_loads_off_the_shelf_as_a_checkpoint(self):
         """The pack's checkpoint loader hands on MODEL first, so it stands in
-        for Load Diffusion Model on the shelf's row, but never where the
-        stock loader casts the weights: the pack's has no cast."""
+        for Load Diffusion Model on the shelf's row, but not where the stock
+        loader casts the weights and this pack's loader has no cast."""
         info = {**self.INFO, **self.ID_LOADERS}
         known = {"checkpoint_id": {"u.safetensors": "8"}.get, "shelf_uuid": "s"}
         unet = _node("UNETLoader", unet_name="u.safetensors", weight_dtype="default")
@@ -404,6 +404,34 @@ class TestOpeningWithPackNodes:
         assert (
             comfyui_recipe_service.swap_in_pack_nodes(cast, info, {}.get, **known) == []
         )
+
+    def test_a_cast_goes_with_the_file_onto_a_pack_loader_that_can_cast(self):
+        """Wrong if the owner's fp8 choice is dropped, or if an uncast loader
+        gains a cast it never had."""
+        loader = json.loads(json.dumps(self.ID_LOADERS[CKPT]))
+        loader["input"]["optional"]["weight_dtype"] = [
+            ["default", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"],
+            {"default": "default"},
+        ]
+        info = {**self.INFO, **self.ID_LOADERS, CKPT: loader}
+        known = {"checkpoint_id": {"u.safetensors": "8"}.get, "shelf_uuid": "s"}
+        cast = {
+            "1": _node(
+                "UNETLoader", unet_name="u.safetensors", weight_dtype="fp8_e4m3fn_fast"
+            )
+        }
+        swapped = comfyui_recipe_service.swap_in_pack_nodes(cast, info, {}.get, **known)
+        assert [(s["was"], s["now"]) for s in swapped] == [("UNETLoader", CKPT)]
+        assert cast["1"]["inputs"] == {
+            "checkpoint_id": "8",
+            "shelf": "s",
+            "weight_dtype": "fp8_e4m3fn_fast",
+        }
+        plain = {
+            "1": _node("UNETLoader", unet_name="u.safetensors", weight_dtype="default")
+        }
+        comfyui_recipe_service.swap_in_pack_nodes(plain, info, {}.get, **known)
+        assert plain["1"]["inputs"]["weight_dtype"] == "default"
 
     @staticmethod
     def _stock():

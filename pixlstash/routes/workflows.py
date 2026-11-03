@@ -161,6 +161,7 @@ from pixlstash.services.comfyui_recipe_service import (
     read_lora_chain_untyped,
     retype_text_encoders,
     PICTURE_LOADER_LIBRARY,
+    CHECKPOINT_LOADER_CAST,
     CHECKPOINT_LOADER_SHELF,
     PIXLSTASH_CHECKPOINT_LOADER,
     PIXLSTASH_CONTROLNET_LOADER,
@@ -9957,29 +9958,33 @@ def create_router(server) -> APIRouter:
     ) -> set[str]:
         """The checkpoints and diffusion models :func:`_swap_in_shelf_loaders`
         left missing only because the running ComfyUI has a pack from before
-        the loader's ``shelf`` widget (#1923): one restart would load them off
-        the shelf.
+        a widget the loader needs: ``shelf`` for any of them (#1923), or
+        ``weight_dtype`` for a diffusion model's loader that casts. One restart
+        on a current pack would load them off the shelf.
 
-        Empty where the pack has no loader at all, or has the widget: the
+        Empty where the pack has no loader at all, or has every widget: the
         missing file is then reported as it always was.
         """
         spec = object_info.get(PIXLSTASH_CHECKPOINT_LOADER)
-        if (
-            not isinstance(spec, dict)
-            or find_input_spec(spec, CHECKPOINT_LOADER_SHELF) is not None
-        ):
+        if not isinstance(spec, dict):
             return set()
+        has_shelf = find_input_spec(spec, CHECKPOINT_LOADER_SHELF) is not None
+        has_cast = find_input_spec(spec, CHECKPOINT_LOADER_CAST) is not None
+        if has_shelf and has_cast:
+            return set()
+
+        def needs_cast(item: dict) -> bool:
+            node = graph.get(str(item.get("node_id"))) or {}
+            return (node.get("inputs") or {}).get(
+                CHECKPOINT_LOADER_CAST, "default"
+            ) != "default"
+
         names = {
             str(item.get("value"))
             for item in detect_model_targets(graph, object_info)
             if item
             and item.get("class_type") in ("CheckpointLoaderSimple", "UNETLoader")
-            # The pack's loader has no cast, so even a current one leaves an
-            # fp8 diffusion model's loader as it is (`swap_in_pack_nodes`).
-            and (graph.get(str(item.get("node_id"))) or {})
-            .get("inputs", {})
-            .get("weight_dtype", "default")
-            == "default"
+            and (not has_shelf or (not has_cast and needs_cast(item)))
         }
         if not names or not _comfyui_is_here(request):
             return set()
