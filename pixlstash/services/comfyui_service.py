@@ -2135,6 +2135,7 @@ def _process_comfyui_outputs(
         sampler = PeakSampler(
             comfyui_tenant.probe(RUN_CLIENT_ID, base_url),
             lambda: run_executing(prompt_id),
+            vram_lease.device,
         )
     released = False
     settled = False
@@ -2176,8 +2177,9 @@ def _process_comfyui_outputs(
         if sampler is None or not workflow_id:
             return
         card = ledger().device(vram_lease.device)
+        room = sampler.room_mb
         if outcome == "oom" and card is not None:
-            peak = card.total_mb
+            peak, room = card.total_mb, None
         if peak is None or card is None:
             logger.info(
                 "Run %s of workflow %s ended %s without a measured peak",
@@ -2196,6 +2198,7 @@ def _process_comfyui_outputs(
             "torch_reserved",
             outcome,
             vram_pixels,
+            room,
         )
 
     def mark_alone_after_oom() -> str:

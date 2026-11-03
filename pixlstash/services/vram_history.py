@@ -5,7 +5,8 @@ its peak written here with how it ended and the size of the image it worked
 on (``run_pixels``). A run's **need** is the largest of the newest five peaks
 measured at about its size (within ``SIZE_BAND``), each scaled up to it, times
 ``COMFYUI_PEAK_MARGIN`` where the card had room for it (``_need``): one run on
-a very large picture does not set what a small one waits for. With no such
+a very large picture does not set what a small one waits for. A run whose peak
+filled the room it had needs the smallest room it has finished in. With no such
 peak the run is unmeasured, and runs with the other heavy tenants kept off
 the card (D2). ``forget_peaks`` is the owner's reset.
 
@@ -130,13 +131,18 @@ def record_peak(
     measured_by: str,
     outcome: str,
     pixels: int | None = None,
+    room_mb: int | None = None,
 ) -> None:
-    """Write one run's peak and keep the newest ``KEPT_PEAKS`` of the workflow."""
+    """Write one run's peak and keep the newest ``KEPT_PEAKS`` of the workflow.
+
+    *room_mb* is the room the run had at its peak (``PeakSampler.room_mb``),
+    None when it could not be read.
+    """
     with hub.transaction() as conn:
         conn.execute(
             "INSERT INTO workflow_vram_peak (workflow_id, model_set, device_name, "
-            "device_total_mb, peak_mb, measured_by, outcome, at, pixels) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "device_total_mb, peak_mb, measured_by, outcome, at, pixels, room_mb) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 workflow_id,
                 model_set,
@@ -147,6 +153,7 @@ def record_peak(
                 outcome,
                 _now(),
                 pixels,
+                room_mb,
             ),
         )
         conn.execute(
@@ -156,9 +163,10 @@ def record_peak(
             (workflow_id, workflow_id, KEPT_PEAKS),
         )
     logger.info(
-        "Workflow %s peaked at %s MB on %s (%s, %s, %s pixels)",
+        "Workflow %s peaked at %s MB of %s MB room on %s (%s, %s, %s pixels)",
         workflow_id,
         peak_mb,
+        room_mb,
         device_name,
         outcome,
         measured_by,
@@ -188,7 +196,7 @@ def _peaks(hub, workflow_ids: list[str]) -> dict[str, list]:
     marks = ",".join("?" for _ in workflow_ids)
     rows = hub.fetchall(
         "SELECT workflow_id, model_set, peak_mb, outcome, at, pixels, "
-        "device_total_mb FROM "
+        "device_total_mb, room_mb FROM "
         f"workflow_vram_peak WHERE workflow_id IN ({marks}) "
         "ORDER BY at DESC, id DESC",
         tuple(workflow_ids),
@@ -227,28 +235,40 @@ def _need(rows: list, pixels: int | None) -> int | None:
     """The need from *rows*: the largest peak, each scaled up to *pixels* and
     never down, with ``COMFYUI_PEAK_MARGIN`` while the card has room for it.
 
-    The margin never lifts a need past the card's *ceiling*, its total less
-    the arbiter's safety margin (what an otherwise empty card grants), divided
-    by the margin: a peak that high is taken to have filled the card, since
-    ComfyUI keeps models resident while there is room, so it is what the run
-    completed in and asks for no more (#2081). Nor does a need pass the
-    ceiling itself, which leaves it waiting for ever.
+    The margin never lifts a need past the run's *ceiling*, the room it had
+    (``room_mb``: what ComfyUI held at the peak plus what was still free on
+    the card; a row written before that was recorded takes the card's total)
+    less the arbiter's safety margin, divided by the margin: a peak that high
+    is taken to have filled the card, since ComfyUI keeps models resident
+    while there is room, so it is what the run completed in and asks for no
+    more (#2081). Nor does a need pass the ceiling itself, which leaves it
+    waiting for ever.
+
+    A peak at or past its ceiling took the memory the arbiter keeps in
+    reserve, so it filled all the room the run had and measures that room,
+    not the run. The run is proven to finish in the smallest such room, so
+    the need is the smallest such ceiling: the largest would wait each time
+    other apps hold a little more than they did on that run.
     """
     if not rows:
         return None
-    needs = []
+    needs, filled = [], []
     for row in rows:
         peak = row["peak_mb"] * max(1.0, pixels / row["pixels"] if pixels else 1.0)
-        ceiling = row["device_total_mb"] - safety_margin_mb(row["device_total_mb"])
+        room = row["room_mb"] or row["device_total_mb"]
+        ceiling = room - safety_margin_mb(row["device_total_mb"])
         if ceiling <= 0:
             # A card whose size was not read: no ceiling to judge the margin
             # by, so the need is the peak the run completed in.
             needs.append(int(peak))
             continue
-        # ponytail: "filled the card" is read off the card's size, not the
-        # room the run actually had; record that per run if it misjudges.
+        if peak >= ceiling:
+            filled.append(int(ceiling))
+            continue
         headroom = min(peak * COMFYUI_PEAK_MARGIN, ceiling / COMFYUI_PEAK_MARGIN)
-        needs.append(int(min(max(peak, headroom), ceiling)))
+        needs.append(int(max(peak, headroom)))
+    if filled:
+        return min(filled + ([max(needs)] if needs else []))
     return max(needs)
 
 

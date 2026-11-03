@@ -151,9 +151,11 @@ class Ledger:
             self._read_at = time.monotonic()
         return list(readings)
 
-    def device(self, uuid: str | None) -> DeviceReading | None:
-        """The reading of one device, or None."""
-        return next((d for d in self.devices() if d.uuid == uuid), None)
+    def device(
+        self, uuid: str | None, max_age_s: float = READING_TTL_S
+    ) -> DeviceReading | None:
+        """The reading of one device, read at most *max_age_s* ago, or None."""
+        return next((d for d in self.devices(max_age_s) if d.uuid == uuid), None)
 
     def pixlstash_device(self) -> str | None:
         """The UUID of the GPU this process's ``cuda:0`` is.

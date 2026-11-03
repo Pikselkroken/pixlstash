@@ -15281,7 +15281,14 @@ def test_a_peak_that_filled_the_card_asks_for_what_the_card_can_grant(held):
     margin = vram_history.COMFYUI_PEAK_MARGIN
 
     def need_of(peak, device_total=total):
-        rows = [{"peak_mb": peak, "pixels": None, "device_total_mb": device_total}]
+        rows = [
+            {
+                "peak_mb": peak,
+                "pixels": None,
+                "device_total_mb": device_total,
+                "room_mb": None,
+            }
+        ]
         return vram_history._need(rows, None)
 
     # Room for the margin: it is added.
@@ -15303,6 +15310,74 @@ def test_a_peak_that_filled_the_card_asks_for_what_the_card_can_grant(held):
         assert vram_history.card_vram(hub, [RUN_WF])[RUN_WF]["need_mb"] == ceiling
     finally:
         _forget_run_wf_peaks(hub)
+
+
+def test_a_peak_that_filled_the_room_it_had_fits_that_room_again():
+    """A run that filled the card beside other apps must fit beside them
+    again: its peak measures the room, and the safety margin made a need of
+    that peak wait for ever (the Tasks tab showed 28.3 GB on a 32 GB card)."""
+    total = 32607
+    margin = safety_margin_mb(total)
+
+    def row(peak, room):
+        return {
+            "peak_mb": peak,
+            "pixels": None,
+            "device_total_mb": total,
+            "room_mb": room,
+        }
+
+    def budget(others_mb):
+        # The arbiter's budget for a ComfyUI run: the card less everyone
+        # else and the margin (``_budget_locked``).
+        return total - others_mb - margin
+
+    # Others held 3.5 GB; ComfyUI took all but 50 MB of the rest.
+    filled = row(total - 3500 - 50, total - 3500)
+    assert vram_history._need([filled], None) <= budget(3500)
+    # Run again beside 2.3 GB of others: a bigger peak, which must not undo
+    # the first. Others back at 3.5 GB still fit.
+    roomier = row(total - 2300 - 50, total - 2300)
+    assert vram_history._need([roomier, filled], None) <= budget(3500)
+    # A peak that left room to spare keeps its margin, room or no room.
+    assert vram_history._need([row(10000, total)], None) == int(
+        10000 * vram_history.COMFYUI_PEAK_MARGIN
+    )
+    # A run that measured less than a filled room's ceiling needs no more.
+    assert vram_history._need([row(10000, total), filled], None) == int(
+        10000 * vram_history.COMFYUI_PEAK_MARGIN
+    )
+
+
+def test_the_peak_sampler_records_the_room_at_its_peak(monkeypatch):
+    class Probe:
+        usage = 0
+
+        def stats(self, max_age_s):
+            pass
+
+        def usage_mb(self):
+            return self.usage
+
+    free = {"mb": 0}
+    card = SimpleNamespace(
+        device=lambda uuid, max_age_s: SimpleNamespace(
+            free_mb=free["mb"], measurable=uuid == "GPU-0"
+        )
+    )
+    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: card)
+    probe = Probe()
+    sampler = comfyui_tenant.PeakSampler(probe, lambda: False, "GPU-0")
+    sampler.stop()
+    for usage, free_mb in ((8000, 20000), (28000, 50), (20000, 9000)):
+        probe.usage, free["mb"] = usage, free_mb
+        sampler._sample()
+    # The room of the sample that set the peak, not of a later, lower one.
+    assert (sampler.peak_mb, sampler.room_mb) == (28000, 28050)
+    unread = comfyui_tenant.PeakSampler(probe, lambda: False, "GPU-other")
+    unread.stop()
+    unread._sample()
+    assert (unread.peak_mb, unread.room_mb) == (20000, None)
 
 
 def test_a_run_asks_for_the_need_of_its_size_and_records_it(held):
@@ -15347,6 +15422,8 @@ def test_reset_forgets_the_measured_peaks_and_leaves_run_alone(held):
 
 
 class _Peak:
+    room_mb = 5600
+
     def __init__(self, *args, **kwargs):
         pass
 
@@ -15380,14 +15457,15 @@ def test_a_run_with_no_outputs_records_its_peak_as_failed(held):
         )
         assert lease.state is LeaseState.RELEASED
         row = server.hub.fetchone(
-            "SELECT peak_mb, outcome, pixels FROM workflow_vram_peak "
+            "SELECT peak_mb, outcome, pixels, room_mb FROM workflow_vram_peak "
             "WHERE workflow_id = ?",
             (RUN_WF,),
         )
-        assert (row["peak_mb"], row["outcome"], row["pixels"]) == (
+        assert (row["peak_mb"], row["outcome"], row["pixels"], row["room_mb"]) == (
             5000,
             "failed",
             1024 * 1024,
+            5600,
         )
     finally:
         with server.hub.transaction() as conn:
@@ -15397,6 +15475,8 @@ def test_a_run_with_no_outputs_records_its_peak_as_failed(held):
 
 
 class _NoPeak:
+    room_mb = None
+
     def __init__(self, *args, **kwargs):
         pass
 
