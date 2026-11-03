@@ -1,5 +1,6 @@
-// A picture drag in the desktop app is an OS file drag of share copies (#2420);
-// in a browser it stays the HTML5 drag with the JSON payload.
+// A Ctrl-drag (Option on a Mac) of pictures in the desktop app is an OS file drag of share copies
+// (#2420); a plain drag, and any drag in a browser, stays the HTML5 drag with
+// the JSON payload.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ref } from "vue";
@@ -43,9 +44,11 @@ function grid(selected = [1, 2]) {
   );
 }
 
-function dragStart() {
+function dragStart({ ctrlKey = true, altKey = false } = {}) {
   const data = new Map();
   return {
+    ctrlKey,
+    altKey,
     defaultPrevented: false,
     preventDefault() {
       this.defaultPrevented = true;
@@ -145,6 +148,77 @@ describe("dragging pictures out of the grid (#2420)", () => {
     delete window.pixlstashDesktop;
     html5(grid());
     expect(makeShareCopies).not.toHaveBeenCalled();
+  });
+
+  it("stays the instant in-app drag in the desktop app without Ctrl", () => {
+    const g = grid();
+    const event = dragStart({ ctrlKey: false });
+    g.handleContainerDragStart({ id: 1 }, event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(event.dataTransfer.getData("application/json")).toContain("image-ids");
+    expect(g.dragSourceImageIds.value).toEqual(new Set(["1", "2"]));
+    g.handleThumbnailNativeDragStart({ id: 1 }, dragStart({ ctrlKey: false }));
+    expect(makeShareCopies).not.toHaveBeenCalled();
+    expect(startShareDrag).not.toHaveBeenCalled();
+  });
+
+  it("takes Alt for the drag-out only on a Mac, where Ctrl+click is a right click", async () => {
+    const altOnly = { ctrlKey: false, altKey: true };
+    const event = dragStart(altOnly);
+    grid().handleContainerDragStart({ id: 1 }, event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(makeShareCopies).not.toHaveBeenCalled();
+
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    );
+    const ctrlOnMac = dragStart();
+    grid().handleContainerDragStart({ id: 1 }, ctrlOnMac);
+    expect(ctrlOnMac.defaultPrevented).toBe(false);
+    const optionOnMac = dragStart(altOnly);
+    grid().handleContainerDragStart({ id: 1 }, optionOnMac);
+    expect(optionOnMac.defaultPrevented).toBe(true);
+    await flush();
+    expect(makeShareCopies).toHaveBeenCalledTimes(1);
+  });
+
+  describe("the hint to hold Ctrl", () => {
+    const dragEnd = (clientX, clientY, dropEffect = "none") => ({
+      clientX,
+      clientY,
+      dataTransfer: { dropEffect },
+    });
+    const hints = () =>
+      useNoticeStore().notices.filter((n) => n.key === "drag-out-hint");
+    function plainDrag() {
+      const g = grid();
+      g.handleContainerDragStart({ id: 1 }, dragStart({ ctrlKey: false }));
+      return g;
+    }
+
+    it("shows once when a plain drag is let go outside the window", () => {
+      const g = plainDrag();
+      const info = vi.spyOn(useNoticeStore(), "info");
+      g.handleDragEnd(dragEnd(-40, 200));
+      // The tile's own dragend follows its container's.
+      g.handleDragEnd(dragEnd(-40, 200));
+      expect(info).toHaveBeenCalledTimes(1);
+      expect(hints()).toHaveLength(1);
+      expect(hints()[0].text).toContain("hold Ctrl");
+      expect(g.dragSource.value).toBe(null);
+    });
+
+    it("stays quiet for a drop inside the window, or one taken outside", () => {
+      plainDrag().handleDragEnd(dragEnd(100, 100));
+      plainDrag().handleDragEnd(dragEnd(window.innerWidth + 5, 100, "copy"));
+      expect(hints()).toHaveLength(0);
+    });
+
+    it("stays quiet where the key would not drag out", () => {
+      delete window.pixlstashDesktop;
+      plainDrag().handleDragEnd(dragEnd(-40, 200));
+      expect(hints()).toHaveLength(0);
+    });
   });
 });
 

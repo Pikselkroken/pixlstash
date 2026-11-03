@@ -12,6 +12,7 @@ import { useProjectStore } from "../stores/useProjectStore";
 import { resolveImportTarget } from "../utils/importTarget.js";
 import { isReadOnly } from "../utils/apiClient";
 import { stageShareFiles } from "../utils/copyAsFiles.js";
+import { isApplePlatform } from "../utils/shortcutHints.js";
 import {
   canStartShareDrag,
   isOwnShareCopyDrop,
@@ -306,12 +307,34 @@ export function useGridDragDrop(
   }
 
   // ── Drag-out as files (#2420) ─────────────────────────────────────────────
-  // In the desktop app a picture drag is an OS file drag of the original files,
-  // so it lands in a file manager, a mail or a chat like a file manager's own
-  // drag, and the in-app targets take it too (utils/shareDrag.js).
+  // In the desktop app a Ctrl-drag (Option on a Mac) is an OS file drag of the
+  // original files, so it lands in a file manager, a mail or a chat like a file
+  // manager's own drag, and the in-app targets take it too (utils/shareDrag.js).
+  // A plain drag stays the instant in-app HTML5 drag: the OS drag can only
+  // start once the backend has linked the files, which made every drag onto a
+  // set or a stack wait for it and lose the tile ghost.
 
   function wantsShareDrag(ids) {
     return ids.length > 0 && canStartShareDrag() && !isReadOnly.value;
+  }
+
+  // Not Alt off a Mac: Linux window managers take Alt+drag to move the window,
+  // so the page never sees the drag. Not Ctrl on a Mac: Ctrl+click is a right
+  // click there. Selection changes on click, which a drag never fires, so
+  // either key leaves the selection alone.
+  function dragOutKey() {
+    return isApplePlatform() ? "Option" : "Ctrl";
+  }
+
+  function wantsDragOut(event) {
+    return isApplePlatform() ? !!event.altKey : !!event.ctrlKey;
+  }
+
+  /** A plain drag let go outside the window with nothing taking it. */
+  function endedOutsideWindowUntaken(event) {
+    if (!event || event.dataTransfer?.dropEffect !== "none") return false;
+    const { clientX: x, clientY: y } = event;
+    return x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight;
   }
 
   /** The thumbnail under the pointer as PNG bytes for the OS drag, or undefined. */
@@ -401,7 +424,7 @@ export function useGridDragDrop(
       return;
     }
     const selectionIds = getDragSelectionIds(img);
-    if (wantsShareDrag(selectionIds)) {
+    if (wantsDragOut(event) && wantsShareDrag(selectionIds)) {
       startShareDrag(img, event, selectionIds);
       return;
     }
@@ -419,7 +442,20 @@ export function useGridDragDrop(
     setDragDataForImageIds(event, [img.id]);
   }
 
-  function handleDragEnd() {
+  function handleDragEnd(event) {
+    // Someone trying to drag pictures out without the key: say which it is.
+    // Once per drag: the tile's dragend follows its container's, after this
+    // has cleared the source.
+    if (
+      dragSource.value === "grid" &&
+      wantsShareDrag([...dragSourceImageIds.value]) &&
+      endedOutsideWindowUntaken(event)
+    ) {
+      noticeStore.info(
+        `To drag pictures out of PixlStash as files, hold ${dragOutKey()} as you start the drag.`,
+        { key: "drag-out-hint" },
+      );
+    }
     dragSource.value = null;
     stackReorderDrag.value = null;
     clearDragSourceImageIds();
@@ -451,7 +487,7 @@ export function useGridDragDrop(
     const existing = event.dataTransfer.getData("application/json");
     if (existing) return;
     const selectionIds = getDragSelectionIds(img);
-    if (wantsShareDrag(selectionIds)) {
+    if (wantsDragOut(event) && wantsShareDrag(selectionIds)) {
       startShareDrag(img, event, selectionIds);
       return;
     }

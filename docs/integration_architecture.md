@@ -1771,9 +1771,18 @@ the lightbox's Ctrl/⌘+C stays "Copy picture" (a PNG via `media:copyPng`) for
 apps that only take images. On Linux a GTK desktop's chat apps that read only
 `text/uri-list` get no files; offering both would need a native helper.
 
-**Drag-out (#2420).** In the desktop app a picture drag from the grid is an OS
-file drag of the selection's original files, so it lands in a file manager, a
-mail or a chat as files, the way a file manager's own drag does. It stages
+**Drag-out (#2420).** In the desktop app a picture drag from the grid started
+with Ctrl held (Option on a Mac) is an OS file drag of the selection's original
+files, so it lands in a file manager, a mail or a chat as files, the way a file
+manager's own drag does. A plain drag stays the in-app HTML5 drag with its JSON
+payload: the OS drag can only begin once the backend has linked the files, so
+every drag onto a set or a stack waited for that and carried a small icon
+instead of the tile, which is the regression the key removes. Not Alt off a
+Mac, because Linux window managers take Alt+drag to move the window, and not
+Ctrl on a Mac, where Ctrl+click is a right click; selection changes on click,
+which a drag never fires, so the key leaves the selection alone. A plain drag
+let go outside the window with nothing taking it shows a notice naming the key
+(`useGridDragDrop.handleDragEnd`). It stages
 through the same `stageShareFiles` as copy-as-files (`utils/copyAsFiles.js`),
 so the names are the same: `file_names: "made"` names every file after when
 the picture was made, `PixlStash-2026-10-24-14.22.42.png`, with `-2`, `-3` only
@@ -1799,8 +1808,8 @@ so the HTML5 `dragstart` is cancelled, the request is made with a busy cursor,
 and the drag starts once it answers, unless the button was let go meanwhile. A
 browser or a read-only session, or a remote backend, keeps the HTML5 drag.
 
-`startDrag` replaces the HTML5 drag and its JSON payload, so the in-app targets
-(sets, people, projects, stack reorder) read the payload through
+`startDrag` replaces the HTML5 drag and its JSON payload, so for a drag-out
+the in-app targets (sets, people, projects, stack reorder) read the payload through
 `readInternalDragPayload` and judge it with `isPictureDrag` /
 `isInternalImageDrag` (`utils/media.js`), which answer for a drag-out from
 `utils/shareDrag.js`. During dragover the files are hidden and the drag in

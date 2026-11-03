@@ -1,8 +1,9 @@
 // Drag pictures out of the desktop window as real files (#2420).
 //
-// A thumbnail drag in the desktop app is an OS file drag of share copies
-// (POST /pictures/share-copies), never the vault's originals, so it lands in a
-// file manager, a mail or a chat the way a file manager's own drag does.
+// A Ctrl-drag (Option on a Mac) of a thumbnail in the desktop app is an OS
+// file drag of share copies (POST /pictures/share-copies), never the vault's
+// originals, so it lands in a file manager, a mail or a chat the way a file
+// manager's own drag does.
 // Electron's `webContents.startDrag` replaces the HTML5 drag, so the in-app
 // drop targets (sets, people, projects, stacks) recognise it here instead of
 // by their JSON payload: while it is in flight, `outgoingDragIds` answers with
