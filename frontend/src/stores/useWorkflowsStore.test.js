@@ -148,7 +148,17 @@ describe("the sort keys", () => {
       "workhorse",
     ]);
 
-    // Name after "Fewest first" is A to Z, not the direction carried over.
+    // Oldest first still puts the card never used last, not first.
+    store.setSortKey("used");
+    store.toggleSortDirection();
+    expect(order(store)).toEqual([
+      "few-but-loved",
+      "workhorse",
+      "the-stack",
+      "never-kept-a-picture",
+    ]);
+
+    // Name after "Oldest first" is A to Z, not the direction carried over.
     store.setSortKey("name");
     expect(store.sortDirection).toBe("asc");
     store.toggleSortDirection();

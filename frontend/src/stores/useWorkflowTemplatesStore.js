@@ -274,6 +274,12 @@ const SORTERS = {
   },
 };
 
+/** The keys a template can leave unanswered: such a template sorts last. */
+const UNANSWERED = {
+  size: (t) => t.size == null,
+  newest: (t) => !t.date,
+};
+
 /** The words the name filter is matched against: title, tags and models. */
 function haystack(template) {
   return [
@@ -471,9 +477,16 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
         SORTERS[sortKey.value](a, b) ||
         String(a.title).localeCompare(String(b.title)),
     );
-    return sortDirection.value === TEMPLATE_SORT_LABELS[sortKey.value].natural
-      ? sorted
-      : sorted.reverse();
+    if (sortDirection.value === TEMPLATE_SORT_LABELS[sortKey.value].natural) {
+      return sorted;
+    }
+    // A template that gives no size or date stays last in both directions,
+    // where the natural order already puts it: only the rest is reversed.
+    const blank = UNANSWERED[sortKey.value] ?? (() => false);
+    return [
+      ...sorted.filter((t) => !blank(t)).reverse(),
+      ...sorted.filter(blank),
+    ];
   });
 
   /** Sort on a key, starting at its own end. */

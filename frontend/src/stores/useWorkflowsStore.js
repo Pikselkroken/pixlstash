@@ -99,6 +99,13 @@ const SORT_VALUES = {
   pictures: (card) => card.picture_count ?? 0,
 };
 
+/** The date keys' cards with no date: last in both directions. */
+const UNDATED = {
+  used: (card) => !card.last_used,
+  changed: (card) => !card.changed_at,
+  created: (card) => !card.created_at,
+};
+
 // Name is the one key that reads A to Z rather than highest first. Numeric so
 // "v2" sorts before "v10"; the collator already keeps "flux" beside "Flux".
 const nameCollator = new Intl.Collator(undefined, { numeric: true });
@@ -287,15 +294,20 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   const sortedCards = computed(() => {
     // A copy: `cards` is the fetch order and a sort in place would make the
     // next resort depend on the last one.
-    const copy = [...filteredCards.value];
+    let copy = [...filteredCards.value];
     if (sortKey.value === "name") copy.sort(byName);
     else {
       const value = SORT_VALUES[sortKey.value] ?? SORT_VALUES.rating;
       copy.sort((a, b) => value(b) - value(a));
     }
-    // The flip reverses the whole order, undated cards included.
+    // The flip reverses the dated cards only: an undated one stays below
+    // every dated card in both directions, as it does unflipped.
     if (sortDirection.value !== SORT_LABELS[sortKey.value].natural) {
-      copy.reverse();
+      const blank = UNDATED[sortKey.value] ?? (() => false);
+      copy = [
+        ...copy.filter((card) => !blank(card)).reverse(),
+        ...copy.filter(blank),
+      ];
     }
     // The grid is one group, so favourites lead the whole sorted list. The
     // sort still orders everything else (#1578).

@@ -249,6 +249,20 @@ describe("the Templates tab's list", () => {
     expect(keys(store)).toEqual([...forward].reverse());
   });
 
+  it("keeps a template with no model size last in both directions", async () => {
+    const store = await loaded();
+    store.setSortKey("size");
+    const sized = (list) =>
+      list.filter((name) => store.sortedTemplates.find((t) => t.name === name).size != null);
+    const forward = keys(store);
+    const unsized = forward.filter((name) => !sized([name]).length);
+    expect(unsized.length).toBeGreaterThan(0);
+    expect(sized(forward).length).toBeGreaterThan(1);
+
+    store.toggleSortDirection();
+    expect(keys(store)).toEqual([...sized(forward).reverse(), ...unsized]);
+  });
+
   it("shows partner templates when the chip is removed", async () => {
     const store = await loaded();
     store.filterChips.find((chip) => chip.key === "partner").remove();
