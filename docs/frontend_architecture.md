@@ -2411,7 +2411,7 @@ own row.
   32px bars, none and 1★–5★, `role="img"` with the counts in its label) over
   the tabs. The Workflow tab's sections are `SectionHeader`s collapsed through
   `useSectionCollapse` (scope `workflow`): **Models** (read-only rows, missing
-  files in the warning ink, *Stages* as text whose names are `aria-pressed`
+  files in the warning ink with a replacement picker beneath, *Stages* as text whose names are `aria-pressed`
   toggle buttons, an off stage struck through; the verb is *Change model
   set…*, `WorkflowUseSetMenu`), **LoRAs** (read-only name and strength, the
   *Also used* list from `WorkflowLoraPile.vue` with *Add*, and a pencil that
@@ -2426,10 +2426,13 @@ own row.
   switch) and **Latest pictures** (up to ten, `GET /pictures/stream` with the
   workflow filter sorted by date descending, through `pictureThumbnailUrl`;
   *Show all* is `useWorkflowPictures`). The footer is the draft bar, an amber
-  *Run…* with an `R` keycap, and the bordered *Open in ComfyUI*. **There is no
-  per-model picker** (the issue's ruling): a model changes through *Change
-  model set…*, a recipe, or ComfyUI. Where a bullet below describes per-row
-  pickers, the panels' side labels, the stacked LoRA pile or the "N pictures"
+  *Run…* with an `R` keycap, and the bordered *Open in ComfyUI*. **Only a
+  missing model has a picker** (#2165 dropped them all, which left a missing
+  checkpoint no set holds a replacement for with no way to replace it): an
+  `AppSelect` of the shelf's `model-swap?replacing=` candidates, grouped by
+  verdict for a checkpoint, and a pick is an unsaved change. A model that
+  loads changes through *Change model set…*, a recipe, or ComfyUI. Where a
+  bullet below describes pickers on every row, the panels' side labels, the stacked LoRA pile or the "N pictures"
   head line, it is history.
 
 - **Open in ComfyUI is an icon-only button beside Run…**, wearing the ComfyUI
