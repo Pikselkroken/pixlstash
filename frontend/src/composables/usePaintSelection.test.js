@@ -257,7 +257,7 @@ describe("usePaintSelection", () => {
       paint.setExtension("top", -50);
       expect(paint.extension.top).toBe(0);
       paint.setExtendFeather(500);
-      expect(paint.extension.feather).toBe(100);
+      expect(paint.extension.feather).toBe(200);
     });
 
     it("is never held with a selection: each drops the other", () => {

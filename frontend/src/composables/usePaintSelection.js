@@ -46,7 +46,7 @@ export const BRUSH_MAX = 200;
 export const EXTEND_SIDES = ["left", "top", "right", "bottom"];
 export const EXTEND_STEP = 8;
 export const EXTEND_FEATHER = 40;
-export const EXTEND_FEATHER_MAX = 100;
+export const EXTEND_FEATHER_MAX = 200;
 
 /**
  * The sides of an extension a press at `p` takes hold of: an edge of the

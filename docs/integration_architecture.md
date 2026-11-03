@@ -790,7 +790,7 @@ repeated as they are.
 
 **`extend` is how far the run extends the picture** (the Edit tab's Extend
 tool): `{left, top, right, bottom, feather}`, pixels of the upright picture,
-each side rounded up to a multiple of 8 and `feather` 0-100 (default 40). One
+each side rounded up to a multiple of 8 and `feather` 0-200 (default 40). One
 picture, at least one side above 0, and never together with `selection` (422
 for each: a run either inpaints or outpaints). A side past the picture's own
 size on its axis (left or right past its width, top or bottom past its height)

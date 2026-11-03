@@ -12868,14 +12868,14 @@ def test_an_extension_is_written_into_the_pad_rounded_up_to_8(i2i):
     r = i2i.owner.post(
         f"{API}/workflows/run",
         json=_extend_run(
-            picture, extend={"left": 3, "top": 0, "right": 8, "feather": 30}
+            picture, extend={"left": 3, "top": 0, "right": 8, "feather": 200}
         ),
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "success", r.json()
     pad = i2i.submitted[0]["graph"]["9"]["inputs"]
     assert (pad["left"], pad["top"], pad["right"], pad["bottom"]) == (8, 0, 8, 0)
-    assert pad["feathering"] == 30
+    assert pad["feathering"] == 200
 
 
 def test_an_extension_is_refused_where_no_pad_reads_the_picture(i2i):
@@ -12961,9 +12961,9 @@ def test_a_converted_txt2img_with_bindings_feeds_its_inserted_loader(i2i, kind):
     [
         {"extend": {"left": 8}, "selection": LEFT_HALF},
         {"extend": {"left": 0}},
-        {"extend": {"left": 8, "feather": 101}},
+        {"extend": {"left": 8, "feather": 201}},
     ],
-    ids=["with-a-selection", "no-side", "feather-past-100"],
+    ids=["with-a-selection", "no-side", "feather-past-200"],
 )
 def test_an_extension_the_body_cannot_hold_is_422(i2i, extra):
     _padded(i2i)

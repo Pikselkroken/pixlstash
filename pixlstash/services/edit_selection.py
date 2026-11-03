@@ -42,6 +42,7 @@ MAX_STEPS = 200
 MAX_POINTS = 20000
 MAX_GROW = 100
 MAX_FEATHER = 100
+MAX_EXTEND_FEATHER = 200
 MAX_FILL_HOLES = 200
 
 # A coordinate, as a fraction of the picture. A gesture may run a little past
@@ -220,7 +221,7 @@ class Extension(BaseModel):
     top: int = Field(0, ge=0)
     right: int = Field(0, ge=0)
     bottom: int = Field(0, ge=0)
-    feather: int = Field(40, ge=0, le=MAX_FEATHER)
+    feather: int = Field(40, ge=0, le=MAX_EXTEND_FEATHER)
 
     @model_validator(mode="after")
     def _some_side_on_the_pad_grid(self) -> "Extension":
