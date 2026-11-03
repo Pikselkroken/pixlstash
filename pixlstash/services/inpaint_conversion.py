@@ -27,12 +27,18 @@ Outpainting pads the picture first (``ImagePadForOutpaint``, every side 0 and
 a 40 px feather until a run writes the extension into it) and crops the padded
 canvas to the pad's mask, so the stitch pastes into the extended canvas. The
 crop's own ``extend_for_outpainting`` stays off: it extends after the mask is
-blended, which leaves a hard seam. An edit model's reference encoders
-(``ReferenceLatent``, ``*ImageEdit*``) keep the picture they read before, not
-the padded crop: an edit model copies its reference, so a reference holding
-the pad comes back with the pad in it (a green pad stayed green on Klein even
-when told to fill it, and tinted the fill when only the canvas was green).
-Only the sampler's latent works on the padded canvas.
+blended, which leaves a hard seam.
+
+An edit graph (the picture reaches an edit encoder: ``ReferenceLatent``,
+``*ImageEdit*``) is not cropped. Crop & Stitch under a noise mask came back as
+a grey wash on Klein, and an edit model needs its reference lined up with what
+it draws: a reference of the unpadded picture put the original in the middle
+of a blank card. So it outpaints the way the ComfyUI-PixlStash outpaint
+example does: every edge that read the picture reads it padded, with the pad
+painted green from core nodes, the sampler starts from noise at that size, and
+the model redraws the whole canvas, filling the green from the prompt. The
+decode is scaled back to the padded size and the original is pasted over its
+own area under the pad's feathered mask, so its pixels are kept exactly.
 """
 
 from __future__ import annotations
@@ -87,8 +93,9 @@ _RESIZE_RE = re.compile(r"^ImageScale")
 _EMPTY_LATENT_RE = re.compile(r"Empty.*Latent")
 _SAVE_PREFIX = {"inpaint": "Inpaint-", "outpaint": "Outpaint-"}
 _PAD_FEATHER = 40
+_GREEN = 0x00FF00
 # An edit model's reference encoders. A ControlNet or IP-adapter is not one:
-# it takes the padded crop like any other edge that carried the picture.
+# a graph with only those takes the padded crop like an img2img graph.
 _EDIT_ENCODER_RE = re.compile(r"^ReferenceLatent$|ImageEdit")
 # Loaders known to put the picture on output 0 and its alpha as a MASK on 1,
 # which is what the crop reads. ``is_picture_loader`` also matches loaders
@@ -197,16 +204,16 @@ def _convert(graph: dict, target: str) -> dict:
     empty = latent_link[0] if from_empty else None
     resizers = _resizers_of(nodes, loader)
     width, height = _target_size(nodes, resizers, empty)
-    references = (
-        _reference_edges(nodes, {loader} | resizers) if target == "outpaint" else []
-    )
-    if references:
-        # A reference read through a resize keeps the resize on the picture;
-        # one nothing reads any more is pruned below as before.
-        references += [
-            (node_id, "image", list(nodes[node_id]["inputs"]["image"]), None)
-            for node_id in resizers
-        ]
+    if target == "outpaint" and _feeds_edit_encoder(nodes, {loader} | resizers):
+        if not from_empty and not _encodes(nodes, latent_link, {loader} | resizers):
+            raise InpaintConversionRefused(
+                "Its sampler starts from an encode of something other than the "
+                "loaded picture, so PixlStash cannot convert it."
+            )
+        _outpaint_edit(out, nodes, new_id, loader, resizers, decode_id, empty)
+        if "denoise" in sampler["inputs"]:
+            sampler["inputs"]["denoise"] = 1.0
+        return out
 
     # The crop, and every edge that carried the picture now carries it.
     crop = next(new_id)
@@ -269,6 +276,9 @@ def _convert(graph: dict, target: str) -> dict:
         "_meta": {"title": "SetLatentNoiseMask"},
     }
     sampler["inputs"]["latent_image"] = [masked, 0]
+    if target == "outpaint" and "denoise" in sampler["inputs"]:
+        # From noise: under an img2img graph's partial denoise the pad stays grey.
+        sampler["inputs"]["denoise"] = 1.0
 
     # The model, after every patch the sampler already reads.
     holder_inputs = nodes[model_holder]["inputs"]
@@ -292,16 +302,7 @@ def _convert(graph: dict, target: str) -> dict:
         "inputs": {"stitcher": [crop, 0], "inpainted_image": [decode_id, 0]},
         "_meta": {"title": "Stitch into the original"},
     }
-    save_prefix = _SAVE_PREFIX[target]
-    for node_id in _downstream(nodes, stitch):
-        node = nodes[node_id]
-        prefix = node["inputs"].get("filename_prefix")
-        if (
-            node["class_type"] in SAVE_NODE_CLASSES
-            and isinstance(prefix, str)
-            and not prefix.startswith(save_prefix)
-        ):
-            node["inputs"]["filename_prefix"] = save_prefix + prefix
+    _prefix_saves(nodes, stitch, _SAVE_PREFIX[target])
 
     # Sizing nodes the crop made redundant.
     candidates = set(resizers) | {
@@ -312,7 +313,6 @@ def _convert(graph: dict, target: str) -> dict:
     }
     if empty is not None:
         candidates.add(empty)
-    _restore_references(out, nodes, new_id, references)
     _prune(out, nodes, candidates)
     return out
 
@@ -338,49 +338,137 @@ def _pad(graph: dict, nodes: dict, loader: str, pad: str) -> tuple[list, list]:
     return [pad, 0], [pad, 1]
 
 
-def _reference_edges(nodes: dict, picture: set[str]) -> list[tuple]:
-    """Each edge into an edit encoder that carries the picture, before the
-    crop takes it: ``(node, input, picture link, vae)``, *vae* set when the
-    edge goes through a ``VAEEncode`` of the picture."""
-    edges = []
-    for node_id, node in nodes.items():
+def _feeds_edit_encoder(nodes: dict, picture: set[str]) -> bool:
+    """Whether an edit encoder reads the picture, directly or through a
+    ``VAEEncode`` of it."""
+    for node in nodes.values():
         if not _EDIT_ENCODER_RE.search(node["class_type"]):
             continue
-        for name, value in node["inputs"].items():
-            if not is_link(value):
-                continue
-            if value[1] == 0 and value[0] in picture:
-                edges.append((node_id, name, list(value), None))
-                continue
-            source = nodes.get(value[0], {})
-            pixels = source.get("inputs", {}).get("pixels")
-            if (
-                source.get("class_type") == "VAEEncode"
-                and is_link(pixels)
-                and pixels[1] == 0
-                and pixels[0] in picture
+        for value in node["inputs"].values():
+            if is_link(value) and (
+                (value[1] == 0 and value[0] in picture)
+                or _encodes(nodes, value, picture)
             ):
-                edges.append((node_id, name, list(pixels), source["inputs"]["vae"]))
-    return edges
+                return True
+    return False
 
 
-def _restore_references(graph: dict, nodes: dict, new_id, edges: list) -> None:
-    """Point each of *edges* back at the picture it read, through a fresh
-    ``VAEEncode`` (one per picture and VAE) where it went through one."""
-    encodes: dict[str, str] = {}
-    for node_id, name, picture, vae in edges:
-        if vae is None:
-            nodes[node_id]["inputs"][name] = picture
-            continue
-        key = repr((picture, vae))
-        if key not in encodes:
-            encodes[key] = next(new_id)
-            graph[encodes[key]] = nodes[encodes[key]] = {
-                "class_type": "VAEEncode",
-                "inputs": {"pixels": picture, "vae": vae},
-                "_meta": {"title": "Encode the reference"},
-            }
-        nodes[node_id]["inputs"][name] = [encodes[key], 0]
+def _encodes(nodes: dict, link: list, picture: set[str]) -> bool:
+    """Whether *link* is a ``VAEEncode`` of the picture."""
+    source = nodes.get(link[0], {})
+    pixels = source.get("inputs", {}).get("pixels")
+    return (
+        source.get("class_type") == "VAEEncode"
+        and is_link(pixels)
+        and pixels[1] == 0
+        and pixels[0] in picture
+    )
+
+
+def _outpaint_edit(
+    graph: dict,
+    nodes: dict,
+    new_id,
+    loader: str,
+    resizers: set[str],
+    decode_id: str,
+    empty: str | None,
+) -> None:
+    """Outpaint an edit graph: the whole canvas redrawn from the green-padded
+    picture, then the original pasted back over its own area."""
+    pad, size, green, threshold, painted = (next(new_id) for _ in range(5))
+    for node in nodes.values():
+        inputs = node.get("inputs", {})
+        for name, value in inputs.items():
+            if is_link(value) and value == [loader, 0]:
+                inputs[name] = [painted, 0]
+    _pad(graph, nodes, loader, pad)
+    added = {
+        size: ("GetImageSize", {"image": [pad, 0]}, "Get Image Size"),
+        green: (
+            "EmptyImage",
+            {"width": [size, 0], "height": [size, 1], "batch_size": 1, "color": _GREEN},
+            "Green",
+        ),
+        # The pad itself, not the feathered rim inside the picture.
+        threshold: (
+            "ThresholdMask",
+            {"mask": [pad, 1], "value": 0.99},
+            "The pad without its feather",
+        ),
+        painted: (
+            "ImageCompositeMasked",
+            {
+                "destination": [pad, 0],
+                "source": [green, 0],
+                "x": 0,
+                "y": 0,
+                "resize_source": False,
+                "mask": [threshold, 0],
+            },
+            "Paint the pad green",
+        ),
+    }
+    # An empty latent of a literal size would draw the canvas at another
+    # aspect: it takes the size the encoders see (the last resize, if any).
+    if empty is not None:
+        latent = nodes[empty]["inputs"]
+        if not (is_link(latent.get("width")) and is_link(latent.get("height"))):
+            fed = {nodes[r]["inputs"]["image"][0] for r in resizers}
+            last = next((r for r in sorted(resizers) if r not in fed), painted)
+            sized = next(new_id)
+            added[sized] = ("GetImageSize", {"image": [last, 0]}, "Get Image Size")
+            latent.update(width=[sized, 0], height=[sized, 1])
+    scale, invert, paste = (next(new_id) for _ in range(3))
+    for node in nodes.values():
+        inputs = node.get("inputs", {})
+        for name, value in inputs.items():
+            if is_link(value) and value == [decode_id, 0]:
+                inputs[name] = [paste, 0]
+    added[scale] = (
+        "ImageScale",
+        {
+            "image": [decode_id, 0],
+            "upscale_method": "lanczos",
+            "width": [size, 0],
+            "height": [size, 1],
+            "crop": "disabled",
+        },
+        "Back to the padded size",
+    )
+    added[invert] = ("InvertMask", {"mask": [pad, 1]}, "The original, feathered")
+    added[paste] = (
+        "ImageCompositeMasked",
+        {
+            "destination": [scale, 0],
+            "source": [pad, 0],
+            "x": 0,
+            "y": 0,
+            "resize_source": False,
+            "mask": [invert, 0],
+        },
+        "Paste the original back",
+    )
+    for node_id, (class_type, inputs, title) in added.items():
+        graph[node_id] = nodes[node_id] = {
+            "class_type": class_type,
+            "inputs": inputs,
+            "_meta": {"title": title},
+        }
+    _prefix_saves(nodes, paste, _SAVE_PREFIX["outpaint"])
+
+
+def _prefix_saves(nodes: dict, start: str, save_prefix: str) -> None:
+    """Prefix every save *start* reaches with *save_prefix*, once."""
+    for node_id in _downstream(nodes, start):
+        node = nodes[node_id]
+        prefix = node["inputs"].get("filename_prefix")
+        if (
+            node["class_type"] in SAVE_NODE_CLASSES
+            and isinstance(prefix, str)
+            and not prefix.startswith(save_prefix)
+        ):
+            node["inputs"]["filename_prefix"] = save_prefix + prefix
 
 
 def _id_counter(graph: dict):

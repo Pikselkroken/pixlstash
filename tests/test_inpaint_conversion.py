@@ -522,43 +522,101 @@ def test_an_img2img_outpaint_pads_between_the_loader_and_the_crop():
     assert stitch["inputs"]["stitcher"] == [crop, 0]
     assert converted["8"]["inputs"]["filename_prefix"] == "Outpaint-Inpaint-sdxl"
     assert reduced_workflow_type(reduce_api_graph(converted)) == "outpaint"
+    # From noise: under the graph's 0.6 the pad would stay grey.
+    assert converted["6"]["inputs"]["denoise"] == 1.0
 
 
-def test_an_outpaint_paints_nothing_green():
-    """Green in the canvas came back green from Klein, or tinted the fill."""
-    for graph in (_sdxl_img2img(), _built_in("Flux2-Klein-Image-Edit.json")):
-        converted = convert_to_outpaint(graph)
-        for green in ("EmptyImage", "ThresholdMask", "ImageCompositeMasked"):
-            assert not _of(converted, green)
+def test_only_an_edit_graph_outpaint_is_painted_green():
+    img2img = convert_to_outpaint(_sdxl_img2img())
+    for green in ("EmptyImage", "ThresholdMask", "ImageCompositeMasked"):
+        assert not _of(img2img, green)
+    klein = convert_to_outpaint(_built_in("Flux2-Klein-Image-Edit.json"))
+    assert _of(klein, "EmptyImage") and _of(klein, "ThresholdMask")
 
 
-def test_a_klein_edit_outpaint_keeps_its_reference_on_the_original():
-    """The sampler's latent is the padded crop; the reference latents are a
-    fresh encode of the loaded picture, so the edit model never sees the pad.
-    Wrong if a `ReferenceLatent` reads the crop's encode."""
-    converted = convert_to_outpaint(_built_in("Flux2-Klein-Image-Edit.json"))
+def _painted(converted: dict) -> tuple[str, str]:
+    """The pad and the green-painted canvas made of it."""
     pad = _one(converted, "ImagePadForOutpaint")
-    crop = _one(converted, "InpaintCropImproved")
-    assert converted[crop]["inputs"]["image"] == [pad, 0]
-    assert converted[crop]["inputs"]["mask"] == [pad, 1]
-    sampler = converted[_one(converted, "SamplerCustomAdvanced")]["inputs"]
-    masked = converted[sampler["latent_image"][0]]["inputs"]
-    assert converted[masked["samples"][0]]["inputs"]["pixels"] == [crop, 1]
-    references = _of(converted, "ReferenceLatent")
-    assert len(references) == 2
-    [encode] = {tuple(converted[r]["inputs"]["latent"]) for r in references}
-    assert converted[encode[0]]["class_type"] == "VAEEncode"
-    assert converted[encode[0]]["inputs"]["pixels"] == ["76", 0]
-    assert len(_of(converted, "VAEEncode")) == 2
+    [painted] = [
+        i
+        for i in _of(converted, "ImageCompositeMasked")
+        if converted[i]["inputs"]["destination"] == [pad, 0]
+    ]
+    inputs = converted[painted]["inputs"]
+    green = converted[inputs["source"][0]]
+    assert (green["class_type"], green["inputs"]["color"]) == ("EmptyImage", 0x00FF00)
+    threshold = converted[inputs["mask"][0]]
+    assert threshold["inputs"] == {"mask": [pad, 1], "value": 0.99}
+    return pad, painted
+
+
+def test_a_klein_edit_outpaint_redraws_the_green_canvas_and_pastes_the_original():
+    """No crop and no noise mask: on Klein those came back a grey wash. The
+    reference is the green-padded picture, lined up with the canvas the sampler
+    draws from noise; the original is pasted back over its own area. Wrong if
+    the reference reads the unpadded picture (the original lands in the middle
+    of a blank card), or the save reads the bare decode."""
+    converted = convert_to_outpaint(_built_in("Flux2-Klein-Image-Edit.json"))
+    for gone in (
+        "InpaintCropImproved",
+        "InpaintStitchImproved",
+        "SetLatentNoiseMask",
+        "DifferentialDiffusion",
+    ):
+        assert not _of(converted, gone)
+    pad, painted = _painted(converted)
+    assert converted[pad]["inputs"]["image"] == ["76", 0]
+    for reference in _of(converted, "ReferenceLatent"):
+        encode = converted[converted[reference]["inputs"]["latent"][0]]
+        assert encode["inputs"]["pixels"] == [painted, 0]
+    # The latent and the scheduler are sized by the painted canvas.
+    assert converted["75:81"]["inputs"]["image"] == [painted, 0]
+    assert _of(converted, "EmptyFlux2LatentImage")
+    save = converted["9"]["inputs"]
+    paste = converted[save["images"][0]]["inputs"]
+    scale = converted[paste["destination"][0]]
+    assert scale["class_type"] == "ImageScale"
+    assert scale["inputs"]["image"] == ["75:65", 0]
+    size = scale["inputs"]["width"][0]
+    assert converted[size]["inputs"]["image"] == [pad, 0]
+    assert paste["source"] == [pad, 0]
+    invert = converted[paste["mask"][0]]
+    assert invert == {
+        "class_type": "InvertMask",
+        "inputs": {"mask": [pad, 1]},
+        "_meta": {"title": "The original, feathered"},
+    }
+    assert save["filename_prefix"] == "Outpaint-Flux2-Klein"
     assert reduced_workflow_type(reduce_api_graph(converted)) == "outpaint"
 
 
-def test_a_moss_edit_outpaint_keeps_its_scaled_picture_as_the_reference():
-    """The encoders read the resize they read before, so it stays."""
+def test_a_moss_edit_outpaint_scales_the_green_canvas_its_own_way():
+    """The graph's own resize now scales the painted canvas, and the sampler
+    starts from noise."""
     converted = convert_to_outpaint(_moss_edit())
+    _pad_id, painted = _painted(converted)
+    assert converted["7"]["inputs"]["image"] == [painted, 0]
     for encoder in ("8", "9"):
         assert converted[encoder]["inputs"]["images.image_0"] == ["7", 0]
-    assert converted["7"]["inputs"]["image"] == ["6", 0]
+    assert converted["10"]["inputs"]["image"] == ["7", 0]
+    assert converted["11"]["inputs"]["width"] == ["10", 0]
+    assert converted["12"]["inputs"]["denoise"] == 1.0
+
+
+def test_an_edit_outpaint_sizes_a_literal_latent_by_the_canvas():
+    """A literal 832 x 1216 would draw the extended canvas at the wrong aspect."""
+    graph = _moss_edit()
+    graph["8"]["inputs"]["images.image_0"] = ["6", 0]
+    graph["9"]["inputs"]["images.image_0"] = ["6", 0]
+    del graph["7"], graph["10"]
+    graph["11"]["inputs"].update(width=832, height=1216)
+    converted = convert_to_outpaint(graph)
+    _pad_id, painted = _painted(converted)
+    latent = converted["11"]["inputs"]
+    sized = converted[latent["width"][0]]
+    assert sized["class_type"] == "GetImageSize"
+    assert sized["inputs"]["image"] == [painted, 0]
+    assert latent["height"] == [latent["width"][0], 1]
 
 
 def test_a_controlnet_on_the_picture_takes_the_padded_crop():
