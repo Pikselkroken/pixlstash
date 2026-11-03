@@ -357,12 +357,14 @@ export const SET_SORT_KEYS = Object.keys(SET_SORT_LABELS);
 const setNameCollator = new Intl.Collator(undefined, { numeric: true });
 
 /**
- * What each set sort key reads off a card, given its activity. `null` sorts
+ * What each set sort key reads off a card, given its combinations. `null` sorts
  * last in both directions, as an unanswered row does in `compareOn`.
  */
 const SET_SORT_VALUE = {
-  used: (group, activity) => activity.pictures,
-  last_used: (group, activity) => Date.parse(activity.lastUsedAt) || null,
+  used: (group, combos) =>
+    combos.reduce((sum, c) => sum + (Number(c.picture_count) || 0), 0),
+  last_used: (group, combos) =>
+    Date.parse(activityOf(combos).lastUsedAt) || null,
   name: (group) => group.card?.name || null,
   size: (group) => group.card?.sizeBytes ?? null,
 };
@@ -2033,6 +2035,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /**
    * Set cards in the grid's sort order. Stable, so a tie keeps the order the
    * cards arrived in: strongest evidence first, or the newest hand-made set.
+   * Hand-made sets sort on the same key, so under Most used a new one with
+   * no pictures yet follows the ones that have made some.
    */
   function sortSets(groups) {
     const key = SET_SORT_KEYS.includes(view.setSortKey)
@@ -2042,12 +2046,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     const combinations = workflowSets.value.combinations;
     const valued = groups.map((group) => ({
       group,
-      // The activity is a walk over every combination: read only for the
-      // two keys that need it.
+      // Its combinations are a filter over the whole payload for a hand-made
+      // set: read only for the two keys that need them.
       value: SET_SORT_VALUE[key](
         group,
         key === "used" || key === "last_used"
-          ? activityOf(combinationsOfSet(group, combinations))
+          ? combinationsOfSet(group, combinations)
           : null,
       ),
     }));
@@ -3533,7 +3537,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       patch = { ...patch, sortDirection: defaultSortDirection(patch.sortKey) };
     }
     if (
-      patch.setSortKey !== undefined &&
+      SET_SORT_KEYS.includes(patch.setSortKey) &&
       patch.setSortKey !== view.setSortKey &&
       patch.setSortDirection === undefined
     ) {
