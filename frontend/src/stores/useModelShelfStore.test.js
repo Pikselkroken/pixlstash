@@ -4359,6 +4359,49 @@ describe("the set grid's sort", () => {
     expect(order(store)).toEqual(["model:1", "model:2", "model:3"]);
   });
 
+  it("orders the hand-made cards by the same key, from what their combinations hold", async () => {
+    listAdapters.mockResolvedValue([adapter({ id: 1, sha256: "a".repeat(64) })]);
+    const hand = (id, name) => ({ id, name, members: [] });
+    // Served newest first, as the hub serves them: 9, 8, 7.
+    const combo = (id, pictures, lastUsed) => ({
+      key: `c${id}`,
+      models: [{ id: 1, name: "Base", kind: "checkpoint" }],
+      recipes: 1,
+      picture_count: pictures,
+      last_used_at: lastUsed,
+      covers: [],
+      covered_by: [id],
+    });
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        combo(7, 12, "2026-01-01T00:00:00Z"),
+        combo(8, 3, "2026-06-01T00:00:00Z"),
+      ],
+      no_set: [],
+      hand_made: [hand(9, "Charlie"), hand(8, "alpha"), hand(7, "Bravo")],
+    });
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    const handOrder = () => store.handMadeGroups.map((group) => group.set.id);
+
+    // Most used: 9 has no pictures and follows the two that have made some.
+    expect(handOrder()).toEqual([7, 8, 9]);
+    store.setView({ setSortDirection: "asc" });
+    expect(handOrder()).toEqual([9, 8, 7]);
+
+    // Last used: 9 was never used, so it is last in both directions.
+    store.setView({ setSortKey: "last_used" });
+    expect(handOrder()).toEqual([8, 7, 9]);
+    store.setView({ setSortDirection: "asc" });
+    expect(handOrder()).toEqual([7, 8, 9]);
+
+    store.setView({ setSortKey: "name" });
+    expect(handOrder()).toEqual([8, 7, 9]);
+    store.setView({ setSortDirection: "desc" });
+    expect(handOrder()).toEqual([9, 7, 8]);
+  });
+
   it("is remembered apart from the row list's sort", async () => {
     const store = shelfWithThreeSets();
     store.setView({ setSortKey: "size", setSortDirection: "asc" });
