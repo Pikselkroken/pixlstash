@@ -2883,11 +2883,17 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   async function createHandMadeSet(body = {}, { replaces = "" } = {}) {
     const created = await setWrite(async () => {
-      const set = await createWorkflowSet(body);
-      // Inside the write, so the receipt only goes up once the old card is
-      // out of the grid and the set reads as edited rather than duplicated.
-      if (replaces) await changeHidden([replaces], true);
-      return set;
+      // The old card goes first: a set made beside a card that will not hide
+      // reads as a duplicate, not an edit. `changeHidden` has said why.
+      if (replaces && !(await changeHidden([replaces], true))) {
+        throw new Error("The set could not be edited.");
+      }
+      try {
+        return await createWorkflowSet(body);
+      } catch (err) {
+        if (replaces) await changeHidden([replaces], false);
+        throw err;
+      }
     }, {
       receipt: (set) =>
         `Made "${setLabel(set)}" with ${(set.members ?? []).length} ${
@@ -2940,7 +2946,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           {
             name: group.card?.name || group.head.name,
             seen: true,
-            members: (group.models ?? [])
+            // Hidden members too: the copy stands in for the whole set.
+            members: (group.allModels ?? group.models ?? [])
               .filter((model) => model.id != null)
               .map((model) => ({
                 model_id: model.id,

@@ -1365,7 +1365,7 @@ onBeforeUnmount(endDrag);
 .mrsh-kbd {
   margin-left: var(--space-2);
   font-family: inherit;
-  opacity: 0.7;
+  opacity: var(--opacity-text-secondary);
 }
 
 /* The drag pill. A solid primary fill, the sidebar's live-drop colour, so it

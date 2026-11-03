@@ -4078,6 +4078,32 @@ describe("sets from pictures are hidden, never deleted", () => {
     expect(hiddenOnServer.has("missing:gone.safetensors")).toBe(false);
   });
 
+  it("copies a member this library hides, and makes nothing when the card will not hide", async () => {
+    const store = shelfWithASet();
+    createWorkflowSet.mockReset().mockResolvedValue({ id: 9, members: [] });
+    const group = {
+      key: "missing:gone.safetensors",
+      head: { missing: true, name: "gone.safetensors" },
+      card: { name: "gone" },
+      // The VAE is hidden here, so the drawn members leave it out.
+      models: [{ id: 5, kind: "text_encoder" }],
+      allModels: [
+        { id: 2, kind: "vae" },
+        { id: 5, kind: "text_encoder" },
+      ],
+    };
+
+    setWorkflowSetsHidden.mockRejectedValueOnce(new Error("test-hide-failed"));
+    await expect(store.cloneSetFromPictures(group)).resolves.toBeNull();
+    expect(createWorkflowSet).not.toHaveBeenCalled();
+
+    await store.cloneSetFromPictures(group);
+    expect(createWorkflowSet.mock.calls[0][0].members).toEqual([
+      { model_id: 2, slot: "vae" },
+      { model_id: 5, slot: "text_encoder" },
+    ]);
+  });
+
   it("makes one clone when the button is pressed twice", async () => {
     const store = shelfWithASet();
     await store.fetchRows();
