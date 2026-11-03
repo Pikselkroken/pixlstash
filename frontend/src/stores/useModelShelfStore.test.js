@@ -29,6 +29,7 @@ const editModels = vi.fn();
 const listBaseModelCompletions = vi.fn();
 const forgetModels = vi.fn();
 const deleteModels = vi.fn();
+const undoDeleteModels = vi.fn();
 const setAdapterAttachments = vi.fn();
 const fetchWorkflowSets = vi.fn();
 const createWorkflowSet = vi.fn();
@@ -58,6 +59,7 @@ vi.mock("../api/modelShelf", () => ({
   listBaseModelCompletions: (...args) => listBaseModelCompletions(...args),
   forgetModels: (...args) => forgetModels(...args),
   deleteModels: (...args) => deleteModels(...args),
+  undoDeleteModels: (...args) => undoDeleteModels(...args),
   setAdapterAttachments: (...args) => setAdapterAttachments(...args),
   fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
   createWorkflowSet: (...args) => createWorkflowSet(...args),
@@ -2408,6 +2410,54 @@ describe("deleting from disk", () => {
     );
   });
 
+  it("offers Undo for a trash delete, and Redo deletes what came back", async () => {
+    const store = useModelShelfStore();
+    const operations = useOperationStore();
+    operations.setLocalReceiptHost(true);
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    listAdapters.mockResolvedValue([]);
+    deleteModels.mockResolvedValue({
+      deleted: [1],
+      files_removed: 1,
+      permanent: false,
+      refused: [],
+      undo_token: "tok-1",
+    });
+    undoDeleteModels.mockResolvedValue({ restored: [1], refused: [] });
+
+    await store.deleteSelected();
+    expect(operations.receipt.summary).toContain("to the Trash");
+    await operations.takeLocalReceiptAction();
+    expect(undoDeleteModels).toHaveBeenCalledWith("tok-1");
+    expect(operations.receipt.mode).toBe("undone");
+
+    deleteModels.mockClear();
+    await operations.takeLocalReceiptAction();
+    expect(deleteModels).toHaveBeenCalledWith([1], { permanent: false });
+    operations.setLocalReceiptHost(false);
+  });
+
+  it("raises no Undo for a permanent delete", async () => {
+    const store = useModelShelfStore();
+    const operations = useOperationStore();
+    operations.setLocalReceiptHost(true);
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    listAdapters.mockResolvedValue([]);
+    deleteModels.mockResolvedValue({
+      deleted: [1],
+      files_removed: 1,
+      permanent: true,
+      refused: [],
+      undo_token: null,
+    });
+
+    await store.deleteSelected({ permanent: true });
+    expect(operations.receipt).toBe(null);
+    operations.setLocalReceiptHost(false);
+  });
+
   it("says what failed rather than swallowing it", async () => {
     const store = useModelShelfStore();
     store.rows = [adapter({ id: 1 })];
@@ -3264,6 +3314,66 @@ describe("sets from pictures are hidden, never deleted", () => {
     return { ...model, sha256: sha, slot: "checkpoint", on_shelf: true };
   }
 
+  it("draws a set made by Edit set in its card's place, not first", async () => {
+    const other = { id: 3, name: "other.st", kind: "checkpoint" };
+    const vae = { id: 2, name: "style.st", kind: "vae" };
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, sha256: "a".repeat(64), filename: "base.st" }),
+      adapter({ id: 2, sha256: "b".repeat(64), filename: "style.st" }),
+      adapter({ id: 3, sha256: "c".repeat(64), filename: "other.st" }),
+    ]);
+    // The copy of the missing-base set hides its card, as Edit set does.
+    hiddenOnServer.add("missing:gone.st");
+    const set = (id, extra) => ({
+      id,
+      name: `set ${id}`,
+      declined: [],
+      members: [],
+      picture_count: 0,
+      recipes: 0,
+      history_runs: 0,
+      ...extra,
+    });
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        { key: "a", models: [checkpoint], recipes: 1, picture_count: 20, covers: [] },
+        // Covered by set 21, made on its checkpoint by Edit set.
+        { key: "b", models: [other], recipes: 1, picture_count: 10, covers: [], covered_by: [21] },
+        {
+          key: "c",
+          models: [vae],
+          missing: [{ name: "gone.st", workflow_ids: [] }],
+          recipes: 1,
+          picture_count: 15,
+          covers: [],
+        },
+      ],
+      no_set: [],
+      hand_made: [
+        // Newest first, as the server serves them.
+        set(22, { replaces: "missing:gone.st" }),
+        set(21, { cloned: true, replaces: "model:3", picture_count: 10, recipes: 1 }),
+        set(20),
+      ],
+      hidden_sets: [...hiddenOnServer],
+    });
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+
+    const { lead, sets } = store.setGridCards;
+    // A set made by hand still leads.
+    expect(lead.map((group) => group.key)).toEqual(["hand:20"]);
+    // The edited ones sit where their cards did: the copy of the hidden
+    // missing card by that card's pictures (15), not its own (0).
+    expect(sets.map((group) => group.key)).toEqual([
+      "model:1",
+      "hand:22",
+      "hand:21",
+    ]);
+  });
+
   it("takes only the hand-made sets the grid draws on Select all", async () => {
     // A hidden hand-made set leaves the grid (#1869), so Select all must not
     // take it: Delete would otherwise delete a set the reader cannot see.
@@ -4016,10 +4126,12 @@ describe("sets from pictures are hidden, never deleted", () => {
 
     await store.cloneSetFromPictures(store.setGroups[0]);
 
-    // The checkpoint alone: the pictures on it bring in the rest (#1972).
+    // The checkpoint alone: the pictures on it bring in the rest (#1972),
+    // and the card it was made from is where it is drawn.
     expect(createWorkflowSet).toHaveBeenCalledWith({
       cloned: true,
       seen: true,
+      replaces: "model:1",
       members: [{ model_id: 1, slot: "checkpoint" }],
     });
     expect(store.openSetKey).toBe("hand:9");
@@ -4041,11 +4153,68 @@ describe("sets from pictures are hidden, never deleted", () => {
       seen: true,
       members: [{ model_id: 1, slot: "checkpoint" }],
     });
+  });
 
-    // A set named after a file the shelf does not hold has nothing to clone.
-    createWorkflowSet.mockClear();
-    await store.cloneSetFromPictures({ head: { missing: true }, models: [] });
+  it("edits a set whose base model is off the shelf as a copy that hides it", async () => {
+    useOperationStore().setLocalReceiptHost(true);
+    const store = shelfWithASet();
+    createWorkflowSet.mockReset().mockResolvedValue({ id: 9, members: [] });
+    deleteWorkflowSet.mockReset().mockResolvedValue({ deleted: { id: 9 } });
+    await store.cloneSetFromPictures({
+      key: "missing:gone.safetensors",
+      head: { missing: true, name: "gone.safetensors" },
+      card: { name: "gone" },
+      models: [
+        { id: 2, kind: "vae" },
+        { id: 5, kind: "text_encoder" },
+      ],
+    });
+
+    // The members on the shelf, the checkpoint slot left for a replacement,
+    // and no `cloned`: there is no checkpoint for it to follow.
+    expect(createWorkflowSet).toHaveBeenCalledWith({
+      name: "gone",
+      seen: true,
+      replaces: "missing:gone.safetensors",
+      members: [
+        { model_id: 2, slot: "vae" },
+        { model_id: 5, slot: "text_encoder" },
+      ],
+    });
+    expect(store.openSetKey).toBe("hand:9");
+    // The old card is kept, hidden, so the set reads as edited in place.
+    expect(hiddenOnServer.has("missing:gone.safetensors")).toBe(true);
+
+    // Undo takes the copy away and brings the card back.
+    await useOperationStore().takeLocalReceiptAction();
+    expect(deleteWorkflowSet).toHaveBeenCalledWith(9);
+    expect(hiddenOnServer.has("missing:gone.safetensors")).toBe(false);
+  });
+
+  it("copies a member this library hides, and makes nothing when the card will not hide", async () => {
+    const store = shelfWithASet();
+    createWorkflowSet.mockReset().mockResolvedValue({ id: 9, members: [] });
+    const group = {
+      key: "missing:gone.safetensors",
+      head: { missing: true, name: "gone.safetensors" },
+      card: { name: "gone" },
+      // The VAE is hidden here, so the drawn members leave it out.
+      models: [{ id: 5, kind: "text_encoder" }],
+      allModels: [
+        { id: 2, kind: "vae" },
+        { id: 5, kind: "text_encoder" },
+      ],
+    };
+
+    setWorkflowSetsHidden.mockRejectedValueOnce(new Error("test-hide-failed"));
+    await expect(store.cloneSetFromPictures(group)).resolves.toBeNull();
     expect(createWorkflowSet).not.toHaveBeenCalled();
+
+    await store.cloneSetFromPictures(group);
+    expect(createWorkflowSet.mock.calls[0][0].members).toEqual([
+      { model_id: 2, slot: "vae" },
+      { model_id: 5, slot: "text_encoder" },
+    ]);
   });
 
   it("makes one clone when the button is pressed twice", async () => {
@@ -4306,5 +4475,110 @@ describe("a model is hidden in this library", () => {
     await store.toggleHiddenModels([store.rows.find((r) => r.id === 2)]);
 
     expect(store.handMadeSets[0].removed).toEqual([]);
+  });
+});
+
+describe("the set grid's sort", () => {
+  /** Three sets: most pictures, newest use and first name are each another one. */
+  function shelfWithThreeSets() {
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, sha256: "a".repeat(64) }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+      adapter({ id: 3, sha256: "c".repeat(64) }),
+    ]);
+    const combo = (id, name, pictures, lastUsed) => ({
+      key: String(id),
+      models: [{ id, name, kind: "checkpoint" }],
+      recipes: 1,
+      picture_count: pictures,
+      last_used_at: lastUsed,
+      covers: [],
+    });
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        combo(1, "Bravo", 12, "2026-01-01T00:00:00Z"),
+        combo(2, "alpha", 3, "2026-06-01T00:00:00Z"),
+        combo(3, "Charlie", 5, null),
+      ],
+      no_set: [],
+    });
+    return useModelShelfStore();
+  }
+  const order = (store) => store.setGroups.map((group) => group.key);
+
+  it("orders by use, name and last use, each from its own end", async () => {
+    const store = shelfWithThreeSets();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+
+    // The default is the evidence order the grid always had.
+    expect(order(store)).toEqual(["model:1", "model:3", "model:2"]);
+    store.setView({ setSortDirection: "asc" });
+    expect(order(store)).toEqual(["model:2", "model:3", "model:1"]);
+
+    // A new key starts at its own end: Name after "Least used first" is A to Z.
+    store.setView({ setSortKey: "name" });
+    expect(store.view.setSortDirection).toBe("asc");
+    expect(order(store)).toEqual(["model:2", "model:1", "model:3"]);
+
+    // A set never used sorts last in both directions.
+    store.setView({ setSortKey: "last_used" });
+    expect(order(store)).toEqual(["model:2", "model:1", "model:3"]);
+    store.setView({ setSortDirection: "asc" });
+    expect(order(store)).toEqual(["model:1", "model:2", "model:3"]);
+  });
+
+  it("orders the hand-made cards by the same key, from what their combinations hold", async () => {
+    listAdapters.mockResolvedValue([adapter({ id: 1, sha256: "a".repeat(64) })]);
+    const hand = (id, name) => ({ id, name, members: [] });
+    // Served newest first, as the hub serves them: 9, 8, 7.
+    const combo = (id, pictures, lastUsed) => ({
+      key: `c${id}`,
+      models: [{ id: 1, name: "Base", kind: "checkpoint" }],
+      recipes: 1,
+      picture_count: pictures,
+      last_used_at: lastUsed,
+      covers: [],
+      covered_by: [id],
+    });
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        combo(7, 12, "2026-01-01T00:00:00Z"),
+        combo(8, 3, "2026-06-01T00:00:00Z"),
+      ],
+      no_set: [],
+      hand_made: [hand(9, "Charlie"), hand(8, "alpha"), hand(7, "Bravo")],
+    });
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    const handOrder = () => store.handMadeGroups.map((group) => group.set.id);
+
+    // Most used: 9 has no pictures and follows the two that have made some.
+    expect(handOrder()).toEqual([7, 8, 9]);
+    store.setView({ setSortDirection: "asc" });
+    expect(handOrder()).toEqual([9, 8, 7]);
+
+    // Last used: 9 was never used, so it is last in both directions.
+    store.setView({ setSortKey: "last_used" });
+    expect(handOrder()).toEqual([8, 7, 9]);
+    store.setView({ setSortDirection: "asc" });
+    expect(handOrder()).toEqual([7, 8, 9]);
+
+    store.setView({ setSortKey: "name" });
+    expect(handOrder()).toEqual([8, 7, 9]);
+    store.setView({ setSortDirection: "desc" });
+    expect(handOrder()).toEqual([9, 7, 8]);
+  });
+
+  it("is remembered apart from the row list's sort", async () => {
+    const store = shelfWithThreeSets();
+    store.setView({ setSortKey: "size", setSortDirection: "asc" });
+
+    setActivePinia(createPinia());
+    const next = useModelShelfStore();
+    expect(next.view.setSortKey).toBe("size");
+    expect(next.view.setSortDirection).toBe("asc");
+    expect(next.view.sortKey).toBe("added_at");
   });
 });

@@ -872,6 +872,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # Stops a download and discards its own partial file; returns nothing but
     # whether one was running.
     ("POST", "/api/v1/model-downloads/{download_id}/cancel"): RoutePolicy(_OWNER),
+    # The delete's undo: the same files back out of the trash, so the same tier.
+    ("POST", "/api/v1/model-files/delete/undo"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 undo of POST /model-files/delete: moves the files that delete sent to the OS trash back to the paths they were removed from and restores the hub rows it dropped. Takes no host path: the body is the in-memory token the delete answered with, and every path it restores is one that delete itself contained against a registered folder and trashed; nothing at a path is ever replaced; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("POST", "/api/v1/model-files/delete"): RoutePolicy(
         _LOCAL,
         justification="§16.3 unlinks the owner's model files (OS trash by default, permanent on request) out of registered host folders - the unlink half of POST /model-moves standing alone, and the shelf's only destructive verb. Takes no host path: the ids address rows the scanner wrote, every path is contained against its registered folder - lexically for the file so a symlinked model loses its link and not the bytes it points at, and by realpath for the directory holding it so no symlinked component can redirect the unlink (`_contained_path`) - and only `user` and `managed` folders are eligible, so PixlStash's own engine roots, the InsightFace packs and the shared HuggingFace cache are refused whole; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
@@ -2177,6 +2182,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("DELETE", "/api/v1/workflows/{workflow_id}"): RoutePolicy(
         _OWNER,
         justification="Send a workflow's imported file to the trash; DELETE blocked for READ tokens; owner only",
+    ),
+    # Its undo: puts back what that delete took, spending the token it answered.
+    ("POST", "/api/v1/workflows/{workflow_id}/restore"): RoutePolicy(
+        _OWNER,
+        justification="Undo of DELETE /workflows/{workflow_id}: takes its file back out of the trash and restores the hub rows the delete dropped, named by the in-memory token that delete answered with; writes the machine-wide workflow store, so owner only",
     ),
     # The run route and its dry run (v1.12 B7). OWNER_ONLY, which is NARROWER
     # than the PICTURE_SCOPED run routes in comfyui.py it will eventually

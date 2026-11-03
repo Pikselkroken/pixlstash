@@ -9,12 +9,15 @@ import { createPinia, setActivePinia } from "pinia";
 
 const listWorkflowCards = vi.fn();
 const deleteWorkflow = vi.fn();
+const restoreWorkflow = vi.fn();
 vi.mock("../api/workflows", () => ({
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   deleteWorkflow: (...args) => deleteWorkflow(...args),
+  restoreWorkflow: (...args) => restoreWorkflow(...args),
 }));
 
 import { useWorkflowsStore } from "./useWorkflowsStore";
+import { useOperationStore } from "./useOperationStore";
 import { useFavouritesStore } from "./useFavouritesStore";
 
 // Input order is none of the sorted orders, and the undated card leads:
@@ -132,6 +135,41 @@ describe("the sort keys", () => {
       "never-kept-a-picture",
       "the-stack",
       "few-but-loved",
+    ]);
+  });
+
+  it("flips the order with the direction, and a new key starts at its own end", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    store.setSortKey("pictures");
+    expect(store.sortDirection).toBe("desc");
+    store.toggleSortDirection();
+    expect(order(store)).toEqual([
+      "never-kept-a-picture",
+      "few-but-loved",
+      "the-stack",
+      "workhorse",
+    ]);
+
+    // Oldest first still puts the card never used last, not first.
+    store.setSortKey("used");
+    store.toggleSortDirection();
+    expect(order(store)).toEqual([
+      "few-but-loved",
+      "workhorse",
+      "the-stack",
+      "never-kept-a-picture",
+    ]);
+
+    // Name after "Oldest first" is A to Z, not the direction carried over.
+    store.setSortKey("name");
+    expect(store.sortDirection).toBe("asc");
+    store.toggleSortDirection();
+    expect(order(store)).toEqual([
+      "few-but-loved",
+      "the-stack",
+      "never-kept-a-picture",
+      "workhorse",
     ]);
   });
 
@@ -292,6 +330,29 @@ describe("deleteSelected", () => {
     expect(store.selectedKeys).toEqual([]);
     // Their saved recipes are unfiled now: the Unfiled list re-reads.
     expect(store.recipesEpoch).toBe(epoch + 1);
+  });
+
+  it("offers Undo, which restores each workflow, and Redo deletes them again", async () => {
+    const store = useWorkflowsStore();
+    const operations = useOperationStore();
+    operations.setLocalReceiptHost(true);
+    await store.fetchCards();
+    store.selectRange(["workhorse"]);
+    deleteWorkflow.mockReset();
+    deleteWorkflow.mockResolvedValue({ deleted: "Workhorse", undo_token: "tok-1" });
+    restoreWorkflow.mockReset();
+    restoreWorkflow.mockResolvedValue({ deleted: "Workhorse" });
+
+    await store.deleteSelected();
+    expect(operations.receipt.summary).toBe("Deleted “Workhorse”");
+    await operations.takeLocalReceiptAction();
+    expect(restoreWorkflow).toHaveBeenCalledWith("workhorse", "tok-1");
+    expect(operations.receipt.mode).toBe("undone");
+
+    deleteWorkflow.mockClear();
+    await operations.takeLocalReceiptAction();
+    expect(deleteWorkflow.mock.calls.map(([id]) => id)).toEqual(["workhorse"]);
+    operations.setLocalReceiptHost(false);
   });
 
   it("keeps the selection, and moves no recipe, when every delete is refused", async () => {

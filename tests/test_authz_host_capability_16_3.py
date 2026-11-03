@@ -567,6 +567,9 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     89 = 71 + 18 with ``POST /library/folders/open`` (#2448), the Folders
     tree's ``Open in File Manager``: the host-GUI spawn of
     ``pictures/{id}/open-location`` for a folder rendered from ids.
+    90 = 72 + 18 with ``POST /model-files/delete/undo``, which moves the files
+    a trash delete removed back into their registered folders: the delete's
+    authority from the other end.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -581,7 +584,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 18, sorted(loopback)
-    assert len(local) == 71, sorted(local)
+    assert len(local) == 72, sorted(local)
 
 
 # ===========================================================================

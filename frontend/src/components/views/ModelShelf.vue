@@ -52,7 +52,6 @@
 
       <template v-if="isShelfTab">
         <v-menu
-          v-if="!isSetGrid"
           v-model="sortMenuOpen"
           :close-on-content-click="false"
           location="bottom start"
@@ -1331,6 +1330,7 @@ import {
   GRID_GROUP_BY,
   MAX_COLUMN_WIDTH,
   MIN_COLUMN_WIDTHS,
+  SET_SORT_LABELS,
   useModelShelfStore,
 } from "../../stores/useModelShelfStore";
 import {
@@ -4308,8 +4308,16 @@ function closeWorksWith() {
   nextTick(() => restoreFocus(returnTo, rootEl.value));
 }
 
-const activeSort = computed(
-  () => SORT_LABELS[store.view.sortKey] || SORT_LABELS.added_at,
+// The Sort button names whichever sort is on screen: the set grid keeps its
+// own keys and direction (`setSortKey`), the row list the column keys. The
+// column headings below are the list's alone and read `store.view` directly.
+const activeSort = computed(() =>
+  isSetGrid.value
+    ? SET_SORT_LABELS[store.view.setSortKey] || SET_SORT_LABELS.used
+    : SORT_LABELS[store.view.sortKey] || SORT_LABELS.added_at,
+);
+const activeDirection = computed(() =>
+  isSetGrid.value ? store.view.setSortDirection : store.view.sortDirection,
 );
 
 // The badge already says HOW MANY sections deviate; the tooltip says what the
@@ -4323,13 +4331,13 @@ const showButtonTitle = computed(() =>
 );
 
 const directionLabel = computed(() =>
-  sortDirectionLabel(store.view.sortKey, store.view.sortDirection),
+  isSetGrid.value
+    ? activeSort.value.words[activeDirection.value === "asc" ? 0 : 1]
+    : sortDirectionLabel(store.view.sortKey, store.view.sortDirection),
 );
 
 const directionIcon = computed(() =>
-  store.view.sortDirection === "asc"
-    ? "mdi-sort-ascending"
-    : "mdi-sort-descending",
+  activeDirection.value === "asc" ? "mdi-sort-ascending" : "mdi-sort-descending",
 );
 
 // The direction phrase keeps its own capital: "A to Z" lowercased is "a to z",
@@ -4346,9 +4354,10 @@ const sortAnnouncement = computed(
 );
 
 function toggleDirection() {
-  store.setView({
-    sortDirection: store.view.sortDirection === "asc" ? "desc" : "asc",
-  });
+  const next = activeDirection.value === "asc" ? "desc" : "asc";
+  store.setView(
+    isSetGrid.value ? { setSortDirection: next } : { sortDirection: next },
+  );
 }
 
 /* ── The header strip ──────────────────────────────────────────────────────

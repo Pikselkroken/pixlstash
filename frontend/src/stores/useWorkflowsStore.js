@@ -8,6 +8,7 @@ import {
   outpaintCopyWorkflow,
   listWorkflowCards,
   patchWorkflowCard,
+  restoreWorkflow,
   setWorkflowThumbnail,
 } from "../api/workflows";
 import {
@@ -23,6 +24,8 @@ import {
 import { onSessionReset } from "../utils/apiClient";
 import { errorMessage } from "../utils/apiError";
 import { favouritesFirst, useFavouritesStore } from "./useFavouritesStore";
+import { useNoticeStore } from "./useNoticeStore";
+import { useOperationStore } from "./useOperationStore";
 import { useWorkflowTemplatesStore } from "./useWorkflowTemplatesStore";
 
 /**
@@ -51,13 +54,37 @@ export const SORT_KEYS = [
   "name",
 ];
 
+/**
+ * Each key's name, the end it starts at (`natural`) and its two directions in
+ * words, `[asc, desc]`: "Ascending" means nothing on a date or a rating.
+ */
 export const SORT_LABELS = {
-  rating: { label: "Your ratings" },
-  used: { label: "Recently used" },
-  changed: { label: "Recently changed" },
-  created: { label: "Recently created" },
-  pictures: { label: "Picture count" },
-  name: { label: "Name" },
+  rating: {
+    label: "Your ratings",
+    natural: "desc",
+    words: ["Lowest first", "Highest first"],
+  },
+  used: {
+    label: "Recently used",
+    natural: "desc",
+    words: ["Oldest first", "Newest first"],
+  },
+  changed: {
+    label: "Recently changed",
+    natural: "desc",
+    words: ["Oldest first", "Newest first"],
+  },
+  created: {
+    label: "Recently created",
+    natural: "desc",
+    words: ["Oldest first", "Newest first"],
+  },
+  pictures: {
+    label: "Picture count",
+    natural: "desc",
+    words: ["Fewest first", "Most first"],
+  },
+  name: { label: "Name", natural: "asc", words: ["A to Z", "Z to A"] },
 };
 
 /** The numeric sort keys, each as `(card) => number`, descending. */
@@ -74,6 +101,13 @@ const SORT_VALUES = {
   changed: (card) => (card.changed_at ? Date.parse(card.changed_at) : -Infinity),
   created: (card) => (card.created_at ? Date.parse(card.created_at) : -Infinity),
   pictures: (card) => card.picture_count ?? 0,
+};
+
+/** The date keys' cards with no date: last in both directions. */
+const UNDATED = {
+  used: (card) => !card.last_used,
+  changed: (card) => !card.changed_at,
+  created: (card) => !card.created_at,
 };
 
 // Name is the one key that reads A to Z rather than highest first. Numeric so
@@ -155,6 +189,9 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   const error = ref("");
 
   const sortKey = ref("rating");
+  // "asc" | "desc". A new key starts at its own end (`setSortKey`), never the
+  // last key's: Name after "Highest first" would otherwise read Z to A.
+  const sortDirection = ref(SORT_LABELS.rating.natural);
   // Favourites lead inside the grid's group, after the sort (#1578). On by
   // default; remembered for the session the way the sort is.
   const favouritesLead = ref(true);
@@ -261,11 +298,20 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   const sortedCards = computed(() => {
     // A copy: `cards` is the fetch order and a sort in place would make the
     // next resort depend on the last one.
-    const copy = [...filteredCards.value];
+    let copy = [...filteredCards.value];
     if (sortKey.value === "name") copy.sort(byName);
     else {
       const value = SORT_VALUES[sortKey.value] ?? SORT_VALUES.rating;
       copy.sort((a, b) => value(b) - value(a));
+    }
+    // The flip reverses the dated cards only: an undated one stays below
+    // every dated card in both directions, as it does unflipped.
+    if (sortDirection.value !== SORT_LABELS[sortKey.value].natural) {
+      const blank = UNDATED[sortKey.value] ?? (() => false);
+      copy = [
+        ...copy.filter((card) => !blank(card)).reverse(),
+        ...copy.filter(blank),
+      ];
     }
     // The grid is one group, so favourites lead the whole sorted list. The
     // sort still orders everything else (#1578).
@@ -687,14 +733,62 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     // exactly what was looked at.
     const keys = selectedCards.value.map((card) => card.id);
     if (!keys.length || verbBusy.value) return { done: 0, refused: 0 };
-    const result = await writeEach("delete", keys, (key) =>
-      deleteWorkflow(key),
-    );
-    if (result.done) notedRecipesChanged();
+    const result = await deleteKeys(keys);
     // The deleted cards left the grid, and the selection goes with them.
     if (!result.refused) clearSelection();
     else deselect(result.written);
     return result;
+  }
+
+  /**
+   * Delete *keys* and raise the receipt whose Undo takes them back out of the
+   * trash. Redo is this again, on what the undo brought back: a restored
+   * workflow keeps its id.
+   */
+  async function deleteKeys(keys) {
+    const tokens = new Map();
+    const names = [];
+    const result = await writeEach("delete", keys, async (key) => {
+      const body = await deleteWorkflow(key);
+      names.push(body?.deleted);
+      if (body?.undo_token) tokens.set(key, body.undo_token);
+    });
+    if (result.done) notedRecipesChanged();
+    if (tokens.size) {
+      // What this receipt's own Undo brought back, which its Redo deletes.
+      let back = [];
+      useOperationStore().showLocalReceipt({
+        summary:
+          result.done === 1 && names[0]
+            ? `Deleted “${names[0]}”`
+            : `Deleted ${result.done} workflows`,
+        icon: "mdi-trash-can-outline",
+        destructive: true,
+        undo: async () => {
+          back = await undoDelete(tokens);
+          return back.length > 0;
+        },
+        redo: async () => (await deleteKeys(back)).done > 0,
+      });
+    }
+    return result;
+  }
+
+  /** Undo a delete: the keys that came back, and says why when some did not. */
+  async function undoDelete(tokens) {
+    const result = await writeEach("restore", [...tokens.keys()], (key) =>
+      restoreWorkflow(key, tokens.get(key)),
+    );
+    if (result.done) notedRecipesChanged();
+    if (result.refused) {
+      useNoticeStore().push({
+        level: "error",
+        text: result.done
+          ? `${result.done} of ${tokens.size} workflows came back; the rest are no longer in the trash.`
+          : "That could not be undone: the workflow is no longer in the trash.",
+      });
+    }
+    return result.written;
   }
 
   /** Replace the selection, or toggle one id into it (Ctrl/Cmd). */
@@ -718,7 +812,13 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   }
 
   function setSortKey(key) {
-    if (SORT_KEYS.includes(key)) sortKey.value = key;
+    if (!SORT_KEYS.includes(key) || key === sortKey.value) return;
+    sortKey.value = key;
+    sortDirection.value = SORT_LABELS[key].natural;
+  }
+
+  function toggleSortDirection() {
+    sortDirection.value = sortDirection.value === "asc" ? "desc" : "asc";
   }
 
   /**
@@ -897,6 +997,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     loaded,
     error,
     sortKey,
+    sortDirection,
     favouritesLead,
     setFavouritesLead,
     favouriteCount,
@@ -935,6 +1036,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     selectRange,
     clearSelection,
     setSortKey,
+    toggleSortDirection,
     setFilters,
     clearFilters,
     reset,

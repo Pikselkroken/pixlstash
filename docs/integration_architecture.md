@@ -599,8 +599,9 @@ Rules neither side may drift from:
    transaction) and `seen` (mark the base seen, for Edit set). The client
    removes a model the pictures brought in through `declines` and one the
    owner added through `members/remove`; `members/remove` on a picture-held
-   model declines it too. `cloned` is
-   stored and served, never read. **Undo is the client re-posting what a write
+   model declines it too. `cloned` and `replaces` (the key of the card from
+   pictures Edit set made it from) are stored and served; the client draws a
+   set carrying either in that card's place on the grid. **Undo is the client re-posting what a write
    returned**: a deleted or merged set as a create plus its `declined` (and its
    hide), removed members as `{sha256, slot, label}`, added ones through
    `members/remove`, a list through `declines`. No server-side undo exists. A

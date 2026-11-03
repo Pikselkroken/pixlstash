@@ -14,6 +14,7 @@ import {
   BASE_MODEL_UNASSIGNED,
   createWorkflowSet,
   deleteModels,
+  undoDeleteModels,
   deleteWorkflowSet,
   editModels,
   fetchWorkflowSets,
@@ -67,6 +68,8 @@ import {
   UNSET_GROUP_KEY,
 } from "../utils/modelShelf";
 import {
+  byEvidence,
+  defaultSlot,
   handMadeBase,
   handMadeCard,
   handMadeName,
@@ -75,6 +78,7 @@ import {
   hideSetsVerb,
   identicalSets,
   PICK_ORDERS,
+  railListed,
   rowBaseModel,
   rowMatches,
   setCard,
@@ -84,6 +88,7 @@ import {
   worksWith,
 } from "../utils/workflowSets";
 import { checksByKey, comboKey } from "../utils/setVerdicts";
+import { activityOf, combinationsOfSet } from "../utils/setActivity";
 
 /**
  * The Models sidebar's places (#2168). `sets` is the set grid; every other one
@@ -319,6 +324,54 @@ export const SORT_KEYS = [
   "type",
   "sets",
 ];
+
+/**
+ * The set grid's own sort keys: a set card has no file date, type or base
+ * column, so it does not take the row list's. Each carries its name, glyph,
+ * the end it starts at (`natural`) and its directions in words, `[asc, desc]`.
+ */
+export const SET_SORT_LABELS = {
+  used: {
+    label: "Most used",
+    icon: "mdi-image-multiple-outline",
+    natural: "desc",
+    words: ["Least used first", "Most used first"],
+  },
+  last_used: {
+    label: "Last used",
+    icon: "mdi-clock-outline",
+    natural: "desc",
+    words: ["Oldest first", "Newest first"],
+  },
+  name: {
+    label: "Name",
+    icon: "mdi-sort-alphabetical-variant",
+    natural: "asc",
+    words: ["A to Z", "Z to A"],
+  },
+  size: {
+    label: "Size",
+    icon: "mdi-harddisk",
+    natural: "desc",
+    words: ["Smallest first", "Largest first"],
+  },
+};
+export const SET_SORT_KEYS = Object.keys(SET_SORT_LABELS);
+
+const setNameCollator = new Intl.Collator(undefined, { numeric: true });
+
+/**
+ * What each set sort key reads off a card, given its combinations. `null` sorts
+ * last in both directions, as an unanswered row does in `compareOn`.
+ */
+const SET_SORT_VALUE = {
+  used: (group, combos) =>
+    combos.reduce((sum, c) => sum + (Number(c.picture_count) || 0), 0),
+  last_used: (group, combos) =>
+    Date.parse(activityOf(combos).lastUsedAt) || null,
+  name: (group) => group.card?.name || null,
+  size: (group) => group.card?.sizeBytes ?? null,
+};
 
 /**
  * What each sort key reads off a row. `null` means the row cannot answer.
@@ -743,6 +796,9 @@ function defaultView() {
     listGroupBy: LIST_GROUP_BY,
     sortKey: "added_at",
     sortDirection: "desc",
+    // The set grid's sort, apart from the list's: its keys are its own.
+    setSortKey: "used",
+    setSortDirection: "desc",
     // How an open set's tray draws its models: as cards or as a comparison
     // list. Carried at all times and only read under `workflow_set`.
     // Remembered for every tray
@@ -912,6 +968,13 @@ function storedView() {
   if (SORT_KEYS.includes(parsed.sortKey)) view.sortKey = parsed.sortKey;
   if (parsed.sortDirection === "asc" || parsed.sortDirection === "desc") {
     view.sortDirection = parsed.sortDirection;
+  }
+  if (SET_SORT_KEYS.includes(parsed.setSortKey)) {
+    view.setSortKey = parsed.setSortKey;
+    view.setSortDirection = SET_SORT_LABELS[parsed.setSortKey].natural;
+  }
+  if (parsed.setSortDirection === "asc" || parsed.setSortDirection === "desc") {
+    view.setSortDirection = parsed.setSortDirection;
   }
   // Per column and clamped on the way in, for the reason the fields above are
   // read one at a time: a blob written before the columns could be dragged is
@@ -1541,6 +1604,16 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       : rows.value.filter((row) => !hiddenModelIds.value.has(row.id)),
   );
 
+  /**
+   * What the Models rail's *Models* tab lists: every offered row some set slot
+   * takes, a stack folded into its leader as the row list folds it. Folded
+   * after the hidden rows are left out, so a stack whose leader alone is hidden
+   * is stood for by its next member.
+   */
+  const railRows = computed(() =>
+    collapseStacks(offeredRows.value.filter(railListed)),
+  );
+
   /** The rows the current selection actually shows, with display fields. */
   const visibleRows = computed(() => {
     const kinds = filters.adapterKinds;
@@ -1771,6 +1844,28 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const openSetKey = ref("");
 
   /**
+   * The Models rail's *Models* tab, as far as the set grid has to see it: the
+   * shelf rows a drag from it carries while it is in the air, and the set its
+   * *Fits* filter is on, which the set panel's *Models · N fit* sets.
+   *
+   * The drag is the rail's own pointer drag, not the browser's, so the rows
+   * live here for its length, and `railOver` is the `data-rail-drop` key of
+   * the target under the pointer, which that target lights up from.
+   */
+  const railDrag = shallowRef(null);
+  const railOver = ref("");
+  /** What the drag carries, in words: one model's name, or how many. */
+  const railDragWhat = computed(() => {
+    const dragged = railDrag.value ?? [];
+    return dragged.length === 1
+      ? modelName(dragged[0]).text || dragged[0].filename
+      : `${dragged.length} models`;
+  });
+  const railFitsSetId = ref(null);
+  /** Bumped by *Models · N fit*: the rail turns to its Models tab. */
+  const railShelfRequest = ref(0);
+
+  /**
    * The order the Models rail and every slot's ＋ picker list models in: one
    * choice for both, so the list the rail shows is the list the picker shows.
    */
@@ -1973,12 +2068,49 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     fetchRows();
   }
 
+  /**
+   * Set cards in the grid's sort order. Stable, so a tie keeps the order the
+   * cards arrived in: strongest evidence first, or the newest hand-made set.
+   * Hand-made sets sort on the same key, so under Most used a new one with
+   * no pictures yet follows the ones that have made some.
+   */
+  function sortSets(groups) {
+    const key = SET_SORT_KEYS.includes(view.setSortKey)
+      ? view.setSortKey
+      : "used";
+    const sign = view.setSortDirection === "asc" ? 1 : -1;
+    const combinations = workflowSets.value.combinations;
+    const valued = groups.map((group) => ({
+      group,
+      // Its combinations are a filter over the whole payload for a hand-made
+      // set: read only for the two keys that need them.
+      value: SET_SORT_VALUE[key](
+        group,
+        key === "used" || key === "last_used"
+          ? combinationsOfSet(group, combinations)
+          : null,
+      ),
+    }));
+    valued.sort((a, b) => {
+      if (a.value === null) return b.value === null ? 0 : 1;
+      if (b.value === null) return -1;
+      const diff =
+        typeof a.value === "string"
+          ? setNameCollator.compare(a.value, b.value)
+          : a.value - b.value;
+      return diff * sign;
+    });
+    return valued.map((entry) => entry.group);
+  }
+
   /** The evidence cards drawn: the hidden ones only while Show hidden is on. */
   const setGroupList = computed(() =>
     arrangeSets(
-      showHiddenSets.value
-        ? evidenceGroups.value
-        : evidenceGroups.value.filter((group) => !group.hidden),
+      sortSets(
+        showHiddenSets.value
+          ? evidenceGroups.value
+          : evidenceGroups.value.filter((group) => !group.hidden),
+      ),
       isFavouriteSet,
     ),
   );
@@ -2367,8 +2499,44 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   /** The hand-made cards the set grid draws, arranged for favourites. */
   const handMadeGroups = computed(() =>
-    arrangeSets(namedHandMadeGroups.value, isFavouriteSet),
+    arrangeSets(sortSets(namedHandMadeGroups.value), isFavouriteSet),
   );
+
+  /**
+   * The set grid's cards in drawn order: `lead`, the owner's own sets that
+   * come first (newest first), then `sets`, the sets from pictures by their
+   * evidence.
+   *
+   * **A set made by Edit set keeps its card's place** rather than jumping to
+   * the front as a new set: `cloned`, or `replaces` naming the card. It sorts
+   * among the sets from pictures by that card's evidence while the card is
+   * still read (a missing-base card, hidden behind its copy), else by its own,
+   * which for a set on the card's checkpoint is the same pictures.
+   */
+  const setGridCards = computed(() => {
+    const inPlace = (group) => group.set.cloned || Boolean(group.set.replaces);
+    const cards = new Map(evidenceGroups.value.map((g) => [g.key, g]));
+    const weighed = (group) => {
+      if (!group.set) return { ...group, group };
+      const card = cards.get(group.set.replaces);
+      return {
+        key: group.key,
+        pictures: card ? card.pictures : group.set.picture_count,
+        recipes: card ? card.recipes : group.set.recipes,
+        historyRuns: card ? card.historyRuns : group.set.history_runs,
+        group,
+      };
+    };
+    const placed = byEvidence(
+      [...setGroupList.value, ...handMadeGroups.value.filter(inPlace)].map(
+        weighed,
+      ),
+    ).map((entry) => entry.group);
+    return {
+      lead: handMadeGroups.value.filter((group) => !inPlace(group)),
+      sets: arrangeSets(placed, isFavouriteSet),
+    };
+  });
 
   /**
    * The hand-made sets a surface other than the grid offers or names (the
@@ -2826,6 +2994,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       members: (snapshot.members ?? []).map(memberBack),
       ...clonedBack(snapshot),
       ...(snapshot.template ? { template: snapshot.template } : {}),
+      ...(snapshot.replaces ? { replaces: snapshot.replaces } : {}),
       ...(snapshot.declined?.length ? { declined: snapshot.declined } : {}),
     });
     if (snapshot.hidden) {
@@ -2842,10 +3011,25 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Make a set, optionally with members, and open its tray.
    *
    * @param {{name?: string|null, members?: Array<Object>}} [body]
+   * @param {{hides?: string}} [options] - `hides` is the key of a set from
+   *   pictures the new set stands in for: it is hidden once the set is made,
+   *   and shown again by the receipt's Undo.
    * @returns {Promise<Object|null>} the new set.
    */
-  async function createHandMadeSet(body = {}) {
-    const created = await setWrite(() => createWorkflowSet(body), {
+  async function createHandMadeSet(body = {}, { hides = "" } = {}) {
+    const created = await setWrite(async () => {
+      // The old card goes first: a set made beside a card that will not hide
+      // reads as a duplicate, not an edit. `changeHidden` has said why.
+      if (hides && !(await changeHidden([hides], true))) {
+        throw new Error("The set could not be edited.");
+      }
+      try {
+        return await createWorkflowSet(body);
+      } catch (err) {
+        if (hides) await changeHidden([hides], false);
+        throw err;
+      }
+    }, {
       receipt: (set) =>
         `Made "${setLabel(set)}" with ${(set.members ?? []).length} ${
           (set.members ?? []).length === 1 ? "model" : "models"
@@ -2853,12 +3037,18 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // Through the delete verb, not a bare call: this receipt can still be up
       // while the set is filled, and undoing it then would take every model added
       // since with no way back. The delete's own receipt offers that way back.
-      undo: async (set) => (await deleteHandMadeSets([set])) ?? false,
+      undo: async (set) => {
+        const deleted = await deleteHandMadeSets([set]);
+        if (deleted && hides) await changeHidden([hides], false);
+        return deleted ?? false;
+      },
       verb: "create",
       failure: "The set could not be made.",
     });
     if (created) {
       clearSelection();
+      // The card it replaces is out of the grid; it must not stay picked.
+      if (hides) clearMissingSelection();
       openSetKey.value = `hand:${created.id}`;
       noteCheckpoint(created.id, created.members ?? []);
     }
@@ -2871,21 +3061,44 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Automatic until the owner changes it. The card it was made from leaves the
    * grid, since the set is on its checkpoint; deleting the set brings it back.
    *
-   * @param {Object} group - an entry of `setGroups`, never a missing-base one.
+   * **A set whose base model is off the shelf** has no checkpoint for its copy
+   * to follow, so the copy holds the members that are on the shelf, under the
+   * card's name, with its checkpoint slot empty for a replacement. The card
+   * itself is hidden rather than left beside it: it is kept, since the
+   * pictures still say what they ran with, but to the owner the set was edited.
+   *
+   * @param {Object} group - an entry of `setGroups`.
    * @returns {Promise<Object|null>} the new set.
    */
   async function cloneSetFromPictures(group) {
-    if (!group?.head || group.head.missing || cloning.has(group.key)) {
-      return null;
-    }
+    if (!group?.head || cloning.has(group.key)) return null;
     // One per card: a second press while the first is on the wire would make
     // two identical sets.
     cloning.add(group.key);
     try {
+      if (group.head.missing) {
+        return await createHandMadeSet(
+          {
+            name: group.card?.name || group.head.name,
+            seen: true,
+            replaces: group.key,
+            // Hidden members too: the copy stands in for the whole set.
+            members: (group.allModels ?? group.models ?? [])
+              .filter((model) => model.id != null)
+              .map((model) => ({
+                model_id: model.id,
+                slot: defaultSlot(model.kind),
+              })),
+          },
+          { hides: group.key },
+        );
+      }
       return await createHandMadeSet({
         cloned: true,
         // Made from the card the owner is looking at: nothing in it is new.
         seen: true,
+        // Drawn in the card's place, not first (`setGridCards`).
+        replaces: group.key,
         members: [{ model_id: group.head.id, slot: "checkpoint" }],
       });
     } finally {
@@ -3088,6 +3301,41 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     const base = handMadeBase(set);
     const other = fresh.map(rowBaseModel).find((b) => b && b !== base);
     return base && other ? `${base}, not ${other}` : "";
+  }
+
+  /**
+   * Shelf rows into a set, from a rail drop: each to `slotId`, or to the slot
+   * its kind goes to. One write and one receipt with Undo, the ＋ chooser's own.
+   *
+   * @param {Object} set
+   * @param {Array<Object>} models - shelf rows.
+   * @param {string} [slotId]
+   */
+  async function addRowsToHandMadeSet(set, models, slotId = "") {
+    // What the set already holds is not written again, so a held checkpoint in
+    // the selection cannot ask about a second one.
+    const held = new Set((set.members ?? []).map((member) => member.sha256));
+    const members = models
+      .filter((row) => row.sha256 && !held.has(row.sha256))
+      .map((row) => ({
+        model_id: row.id,
+        slot: slotId || defaultSlot(row.file_kind),
+      }));
+    if (!members.length) return null;
+    // The card already refused this during the drag; this is the same rule
+    // stated where the write happens.
+    if (setAddRefusal(set, models)) return null;
+    if (!(await confirmSecondCheckpoint(set, members))) return null;
+    return addToHandMadeSet(set, members);
+  }
+
+  /** A new set holding these shelf rows, each in its kind's slot. */
+  function createSetFromRows(models) {
+    const members = models
+      .filter((row) => row.sha256)
+      .map((row) => ({ model_id: row.id, slot: defaultSlot(row.file_kind) }));
+    if (!members.length) return Promise.resolve(null);
+    return createHandMadeSet({ members });
   }
 
   /**
@@ -3439,6 +3687,16 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       patch.sortDirection === undefined
     ) {
       patch = { ...patch, sortDirection: defaultSortDirection(patch.sortKey) };
+    }
+    if (
+      SET_SORT_KEYS.includes(patch.setSortKey) &&
+      patch.setSortKey !== view.setSortKey &&
+      patch.setSortDirection === undefined
+    ) {
+      patch = {
+        ...patch,
+        setSortDirection: SET_SORT_LABELS[patch.setSortKey].natural,
+      };
     }
     Object.assign(view, patch);
     // The grid IS the Sets place (#2168): a `groupBy` written without going
@@ -4499,18 +4757,33 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       clearSelection();
       await fetchRows();
       const gone = body?.deleted?.length ?? 0;
-      notices.push({
-        level: gone ? "success" : "info",
-        text: deleteReceipt(
-          gone,
-          body?.refused ?? [],
-          Boolean(body?.permanent),
-          // The server's word for its own trash, because the server is the
-          // machine the files were on. `trashName()` is the browser's guess and
-          // stands in only for an older backend.
-          body?.trash_name || trashName(),
-          body?.files_removed ?? 0,
-        ),
+      const text = deleteReceipt(
+        gone,
+        body?.refused ?? [],
+        Boolean(body?.permanent),
+        // The server's word for its own trash, because the server is the
+        // machine the files were on. `trashName()` is the browser's guess and
+        // stands in only for an older backend.
+        body?.trash_name || trashName(),
+        body?.files_removed ?? 0,
+      );
+      const token = body?.undo_token;
+      if (!token) {
+        notices.push({ level: gone ? "success" : "info", text });
+        return true;
+      }
+      // A trash delete: Undo takes the files back out of the trash, and Redo
+      // deletes what came back, which kept its ids.
+      let restored = [];
+      useOperationStore().showLocalReceipt({
+        summary: text,
+        icon: "mdi-trash-can-outline",
+        destructive: true,
+        undo: async () => {
+          restored = await undoDelete(token);
+          return restored.length > 0;
+        },
+        redo: () => deleteSelected({ ids: restored }),
       });
       return true;
     } catch (err) {
@@ -4519,6 +4792,41 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         text: errorDetail(err) || "Could not delete those models.",
       });
       return false;
+    }
+  }
+
+  /**
+   * Undo a trash delete, re-read the shelf, and say what stayed deleted.
+   *
+   * @param {string} token - the delete's `undo_token`.
+   * @returns {Promise<number[]>} the ids that came back.
+   */
+  async function undoDelete(token) {
+    const notices = useNoticeStore();
+    try {
+      const body = await undoDeleteModels(token);
+      await fetchRows();
+      const kept = body?.refused?.length ?? 0;
+      const partly = body?.partly_restored?.length ?? 0;
+      if (partly) {
+        notices.push({
+          level: "info",
+          text: `${modelCount(partly)} came back without some of ${partly === 1 ? "its" : "their"} copies; the shelf shows those as missing after its next scan.`,
+        });
+      }
+      if (kept) {
+        notices.push({
+          level: body?.restored?.length ? "info" : "error",
+          text: `${modelCount(kept)} could not be put back: ${kept === 1 ? "its files are" : "their files are"} no longer in the ${trashName()}, or something is in their place.`,
+        });
+      }
+      return body?.restored ?? [];
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || "That delete could not be undone.",
+      });
+      return [];
     }
   }
 
@@ -4965,6 +5273,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     templatesNewReady.value = 0;
     setsError.value = "";
     openSetKey.value = "";
+    railDrag.value = null;
+    railOver.value = "";
+    railFitsSetId.value = null;
     selectedSetIds.value = new Set();
     clearMissingSelection();
     checkpointAdded.value = null;
@@ -5056,6 +5367,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsLoaded,
     loadWorkflowSets,
     setRailMounted,
+    railRows,
+    railDrag,
+    railOver,
+    railDragWhat,
+    railFitsSetId,
+    railShelfRequest,
+    addRowsToHandMadeSet,
+    createSetFromRows,
     shownModelIds,
     visibleCombinations,
     setGroups: setGroupList,
@@ -5074,6 +5393,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     toggleSet,
     handMadeSets,
     handMadeGroups,
+    setGridCards,
     shownHandMadeSets,
     selectedSetIds,
     selectedMissingKeys,

@@ -38,6 +38,7 @@ import re
 import shutil
 import socket
 import sqlite3
+import sys
 import tempfile
 import threading
 import time
@@ -7646,6 +7647,13 @@ _EVERY_WORKFLOW_ROUTE = (
         "/workflows/run/opening",
         "/workflows/run/opening",
         {"workflow_id": BUSY_WF},
+    ),
+    # A delete's undo: the owner's answer is a 404, no delete made the token.
+    (
+        "POST",
+        "/workflows/{workflow_id}/restore",
+        f"/workflows/{BUSY_WF}/restore",
+        {"token": "gate-probe"},
     ),
     ("DELETE", "/workflows/{workflow_id}", f"/workflows/{BUSY_WF}", None),
 )
@@ -15447,7 +15455,14 @@ def test_a_peak_that_filled_the_card_asks_for_what_the_card_can_grant(held):
     margin = vram_history.COMFYUI_PEAK_MARGIN
 
     def need_of(peak, device_total=total):
-        rows = [{"peak_mb": peak, "pixels": None, "device_total_mb": device_total}]
+        rows = [
+            {
+                "peak_mb": peak,
+                "pixels": None,
+                "device_total_mb": device_total,
+                "room_mb": None,
+            }
+        ]
         return vram_history._need(rows, None)
 
     # Room for the margin: it is added.
@@ -15469,6 +15484,85 @@ def test_a_peak_that_filled_the_card_asks_for_what_the_card_can_grant(held):
         assert vram_history.card_vram(hub, [RUN_WF])[RUN_WF]["need_mb"] == ceiling
     finally:
         _forget_run_wf_peaks(hub)
+
+
+def test_a_peak_that_filled_the_room_it_had_fits_that_room_again():
+    """A run that filled the card beside other apps must fit beside them
+    again: its peak measures the room, and the safety margin made a need of
+    that peak wait for ever (the Tasks tab showed 28.3 GB on a 32 GB card)."""
+    total = 32607
+    margin = safety_margin_mb(total)
+
+    def row(peak, room):
+        return {
+            "peak_mb": peak,
+            "pixels": None,
+            "device_total_mb": total,
+            "room_mb": room,
+        }
+
+    def budget(others_mb):
+        # The arbiter's budget for a ComfyUI run: the card less everyone
+        # else and the margin (``_budget_locked``).
+        return total - others_mb - margin
+
+    # Others held 3.5 GB; ComfyUI took all but 50 MB of the rest.
+    filled = row(total - 3500 - 50, total - 3500)
+    assert vram_history._need([filled], None) <= budget(3500)
+    # Run again beside 2.3 GB of others: a bigger peak, which must not undo
+    # the first. Others back at 3.5 GB still fit.
+    roomier = row(total - 2300 - 50, total - 2300)
+    assert vram_history._need([roomier, filled], None) <= budget(3500)
+    # A peak that left room to spare keeps its margin, room or no room.
+    assert vram_history._need([row(10000, total)], None) == int(
+        10000 * vram_history.COMFYUI_PEAK_MARGIN
+    )
+    # A run that measured less than a filled room's ceiling needs no more.
+    assert vram_history._need([row(10000, total), filled], None) == int(
+        10000 * vram_history.COMFYUI_PEAK_MARGIN
+    )
+    # A larger run is judged against proportionally more room, never the
+    # smaller room the measured run had: 5 GB filling 6 GB at 1 MP, run at
+    # 1.5 MP, had 9 GB of room, not 6.
+    sized = {**row(5000, 6000), "pixels": 1_000_000}
+    assert vram_history._need([sized], 1_500_000) == 9000 - margin
+    # Scaled past the card, the room is the card.
+    big = {**sized, "peak_mb": 25000, "room_mb": 25050}
+    assert vram_history._need([big], 1_500_000) == total - margin
+    # Rows with no recorded room keep the largest need, as before the column.
+    legacy = [row(total - 100, None), row(22000, None)]
+    assert vram_history._need(legacy, None) == total - margin
+
+
+def test_the_peak_sampler_records_the_room_at_its_peak(monkeypatch):
+    class Probe:
+        usage = 0
+
+        def stats(self, max_age_s):
+            pass
+
+        def usage_mb(self):
+            return self.usage
+
+    free = {"mb": 0}
+    card = SimpleNamespace(
+        device=lambda uuid, max_age_s: SimpleNamespace(
+            free_mb=free["mb"], measurable=uuid == "GPU-0"
+        )
+    )
+    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: card)
+    probe = Probe()
+    sampler = comfyui_tenant.PeakSampler(probe, lambda: False, "GPU-0")
+    sampler.stop()
+    for usage, free_mb in ((8000, 20000), (28000, 50), (20000, 9000)):
+        probe.usage, free["mb"] = usage, free_mb
+        sampler._sample()
+    # The room of the sample that set the peak, not of a later, lower one.
+    assert (sampler.peak_mb, sampler.room_mb) == (28000, 28050)
+    unread = comfyui_tenant.PeakSampler(probe, lambda: False, "GPU-other")
+    unread.stop()
+    unread._sample()
+    assert (unread.peak_mb, unread.room_mb) == (20000, None)
 
 
 def test_a_run_asks_for_the_need_of_its_size_and_records_it(held):
@@ -15513,6 +15607,8 @@ def test_reset_forgets_the_measured_peaks_and_leaves_run_alone(held):
 
 
 class _Peak:
+    room_mb = 5600
+
     def __init__(self, *args, **kwargs):
         pass
 
@@ -15546,14 +15642,15 @@ def test_a_run_with_no_outputs_records_its_peak_as_failed(held):
         )
         assert lease.state is LeaseState.RELEASED
         row = server.hub.fetchone(
-            "SELECT peak_mb, outcome, pixels FROM workflow_vram_peak "
+            "SELECT peak_mb, outcome, pixels, room_mb FROM workflow_vram_peak "
             "WHERE workflow_id = ?",
             (RUN_WF,),
         )
-        assert (row["peak_mb"], row["outcome"], row["pixels"]) == (
+        assert (row["peak_mb"], row["outcome"], row["pixels"], row["room_mb"]) == (
             5000,
             "failed",
             1024 * 1024,
+            5600,
         )
     finally:
         with server.hub.transaction() as conn:
@@ -15563,6 +15660,8 @@ def test_a_run_with_no_outputs_records_its_peak_as_failed(held):
 
 
 class _NoPeak:
+    room_mb = None
+
     def __init__(self, *args, **kwargs):
         pass
 
@@ -18802,7 +18901,9 @@ def test_deleting_a_manual_workflow_leaves_the_automatic_one_and_its_file(
     runnable.owner.patch(f"{API}/workflows/{manual}", json={"notes": "mine"})
     r = runnable.owner.delete(f"{API}/workflows/{manual}")
     assert r.status_code == 200, r.text
-    assert r.json() == {"deleted": copy["name"], "workflow_id": manual}
+    body = r.json()
+    assert body.pop("undo_token")
+    assert body == {"deleted": copy["name"], "workflow_id": manual}
     assert runnable.owner.get(f"{API}/workflows/{manual}").status_code == 404
     assert runnable.owner.delete(f"{API}/workflows/{manual}").status_code == 404
     hub = runnable.server.hub
@@ -18813,6 +18914,72 @@ def test_deleting_a_manual_workflow_leaves_the_automatic_one_and_its_file(
         ), table
     assert runnable.owner.get(f"{API}/workflows/{RUN_WF}").status_code == 200
     assert (tmp_path / "imported.json").exists()
+
+
+@pytest.mark.parametrize("adopted", [False, True], ids=["stored", "user-file"])
+def test_restore_undoes_deleting_a_manual_workflow_under_the_same_id(
+    runnable, tmp_path, adopted
+):
+    """The delete's token puts the workflow back as it was, its file out of the
+    trash; the token is spent, and deleting it again is the redo. A workflow
+    made of a user-folder file gets that file back where it was."""
+    if sys.platform in ("win32", "darwin"):
+        pytest.skip("freedesktop trash only")
+    from send2trash import plat_other  # imports os.getuid: not on Windows
+
+    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
+    data_home = tmp_path / "share"
+    runnable.monkeypatch.setattr(plat_other, "XDG_DATA_HOME", os.fsencode(data_home))
+    runnable.monkeypatch.setattr(
+        plat_other, "HOMETRASH_B", os.fsencode(data_home / "Trash")
+    )
+    runnable.monkeypatch.setattr(plat_other, "get_dev", lambda path: 0)
+    runnable.monkeypatch.setattr(workflow_inbox, "send2trash", plat_other.send2trash)
+    runnable.monkeypatch.setattr(comfyui_module, "send2trash", plat_other.send2trash)
+
+    copy = runnable.owner.post(f"{API}/workflows/{RUN_WF}/duplicate").json()
+    manual = copy["workflow_id"]
+    runnable.owner.patch(f"{API}/workflows/{manual}", json={"notes": "mine"})
+    if adopted:
+        (tmp_path / "old.json").write_text(json.dumps(RUN_DOCUMENT))
+        with runnable.server.hub.transaction() as conn:
+            workflow_group_writes.workflow_origin.upsert(
+                conn,
+                workflow_group_writes.workflow_origin.FILE_ORIGIN,
+                "old.json",
+                manual,
+                None,
+                None,
+            )
+    files_before = sorted(p.name for p in tmp_path.glob("*.json"))
+    token = runnable.owner.delete(f"{API}/workflows/{manual}").json()["undo_token"]
+    assert runnable.owner.get(f"{API}/workflows/{manual}").status_code == 404
+    assert (tmp_path / "old.json").exists() is False
+    # Naming another workflow is refused and does not spend the token.
+    wrong = runnable.owner.post(
+        f"{API}/workflows/{RUN_WF}/restore", json={"token": token}
+    )
+    assert wrong.status_code == 404
+
+    r = runnable.owner.post(f"{API}/workflows/{manual}/restore", json={"token": token})
+    assert r.status_code == 200, r.text
+    assert r.json()["workflow_id"] == manual
+    restored = runnable.owner.get(f"{API}/workflows/{manual}")
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["notes"] == "mine"
+    assert sorted(p.name for p in tmp_path.glob("*.json")) == files_before
+    if adopted:
+        assert json.loads((tmp_path / "old.json").read_text()) == RUN_DOCUMENT
+    assert list((data_home / "Trash" / "info").iterdir()) == [], (
+        "the delete's copy was left in the trash"
+    )
+    assert list((tmp_path / "inbox").iterdir()) == [], "a copy was left to import"
+
+    again = runnable.owner.post(
+        f"{API}/workflows/{manual}/restore", json={"token": token}
+    )
+    assert again.status_code == 404
+    assert runnable.owner.delete(f"{API}/workflows/{manual}").status_code == 200
 
 
 # A graph with no LoRA loader at all: the state `no_lora_loader` names and the

@@ -430,10 +430,23 @@ export async function markWorkflowSetSeen(id, sha256) {
  *   machine's trash, which is the undo. True unlinks them, and nothing gets
  *   them back; the shelf sends it only for Shift+Delete.
  * @returns {Promise<{deleted: Array<number>, files_removed: number,
- *   permanent: boolean, refused: Array<{id: number, reason: string}>}>}
+ *   permanent: boolean, refused: Array<{id: number, reason: string}>,
+ *   undo_token: ?string}>} `undo_token` is null for a permanent delete.
  */
 export async function deleteModels(ids, { permanent = false } = {}) {
   return unwrap(apiClient.post("/model-files/delete", { ids, permanent }));
+}
+
+/**
+ * Undo a trash delete: the files come back out of the trash and the models
+ * back onto the shelf under the ids they had, so deleting them again redoes it.
+ *
+ * @param {string} token - the delete's `undo_token`; spent by this call.
+ * @returns {Promise<{restored: Array<number>,
+ *   refused: Array<{id: number, reason: string}>}>}
+ */
+export async function undoDeleteModels(token) {
+  return unwrap(apiClient.post("/model-files/delete/undo", { token }));
 }
 
 /**

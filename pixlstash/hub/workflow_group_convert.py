@@ -1773,10 +1773,11 @@ def _carry_group_state(
     # the heir already has (a re-run of the carry) is not copied twice.
     conn.execute(
         "INSERT INTO workflow_vram_peak (workflow_id, model_set, device_name, "
-        "device_total_mb, peak_mb, measured_by, outcome, at, pixels) "
+        "device_total_mb, peak_mb, measured_by, outcome, at, pixels, room_mb) "
         "SELECT ?, model_set, device_name, device_total_mb, peak_mb, "
-        "measured_by, outcome, at, pixels FROM workflow_vram_peak AS p WHERE "
-        "workflow_id = ? AND NOT EXISTS (SELECT 1 FROM workflow_vram_peak AS h "
+        "measured_by, outcome, at, pixels, room_mb FROM workflow_vram_peak "
+        "AS p WHERE workflow_id = ? AND NOT EXISTS (SELECT 1 FROM "
+        "workflow_vram_peak AS h "
         "WHERE h.workflow_id = ? AND h.at = p.at AND h.peak_mb = p.peak_mb "
         "AND h.model_set = p.model_set AND h.device_name = p.device_name "
         "AND h.device_total_mb = p.device_total_mb "

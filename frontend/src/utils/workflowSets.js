@@ -94,7 +94,7 @@ export function headModel(combination) {
  * covers and its `sets` list are read in this order, so a caller that filtered or
  * concatenated payloads must not be able to change what a card leads with.
  */
-function byEvidence(entries) {
+export function byEvidence(entries) {
   return [...entries].sort(
     (a, b) =>
       (b.picture_count ?? b.pictures ?? 0) -
@@ -1245,22 +1245,6 @@ export function setFits(set, rows, combinations) {
 
 /** A hand-made set's key in the favourites store, `hand:<id>`. */
 export const handMadeKey = (set) => `hand:${set.id}`;
-
-/**
- * The picker ranking rule for a list of sets (the Use-a-set menu): the
- * hand-made group stays first, and inside each group a favourite set leads. A
- * favourite in the lower group never climbs over the hand-made one.
- *
- * @param {Array<{key: string}>} sets - hand-made sets have `hand:` keys.
- * @param {(key: string) => boolean} isFav
- */
-export function favouriteSetsFirst(sets, isFav) {
-  const isHand = (set) => set.key.startsWith("hand:");
-  const hand = (sets ?? []).filter(isHand);
-  const evidence = (sets ?? []).filter((set) => !isHand(set));
-  const lead = (group) => favouritesFirst(group, (set) => isFav(set.key));
-  return [...lead(hand), ...lead(evidence)];
-}
 
 /**
  * The slot picker's ranking rule: inside each group a favourite model leads.

@@ -29,8 +29,9 @@ export const SHELF_NO_UNDO_KEY = "shelf-no-undo";
 
 /**
  * The roots of every destination that replaces the grid and narrates nothing:
- * no `ActionReceipt` for library actions, no `UndoControl`. The shelf mounts
- * one for its own set edits only, and the chord takes that pill's action. One list rather than a check per
+ * no `ActionReceipt` for library actions, no `UndoControl`. The shelf and the
+ * workflow library mount one for their own writes only (set edits, deletes),
+ * and the chord takes that pill's action. One list rather than a check per
  * screen, because the population is what the invariant is about - the model
  * shelf was guarded alone and the other three were not, so the chord reverted
  * a library action with nothing on screen to say it had happened (#1415).

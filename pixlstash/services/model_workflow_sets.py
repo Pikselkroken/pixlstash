@@ -102,7 +102,8 @@ def fetch_sets(hub) -> list[dict]:
 # The two reads a set is made of, shared by `fetch_sets` (every set, through
 # the hub) and `delete_set` (one set, on the transaction that deletes it).
 _SETS_SQL = (
-    "SELECT id, name, created_at, updated_at, cloned, template FROM model_workflow_set"
+    "SELECT id, name, created_at, updated_at, cloned, template, replaces "
+    "FROM model_workflow_set"
 )
 # `model.sha256` is UNIQUE, so the LEFT JOIN yields one row per member.
 _MEMBERS_SQL = (
@@ -416,6 +417,7 @@ def _shape(entry: dict) -> dict:
         "updated_at": entry["updated_at"],
         "cloned": bool(entry["cloned"]),
         "template": entry["template"],
+        "replaces": entry["replaces"],
         "incomplete": not checkpoints,
         "checkpoint_ids": [m["id"] for m in checkpoints if m["on_shelf"]],
         "picture_count": 0,
@@ -514,6 +516,7 @@ def create_set(
     cloned: bool = False,
     template: Optional[str] = None,
     declined: Optional[list[str]] = None,
+    replaces: Optional[str] = None,
 ) -> int:
     """Create a set, empty or with *members*, in one transaction; return its id.
 
@@ -522,16 +525,18 @@ def create_set(
     ComfyUI template it was made from (``services.workflow_templates``), which
     it then covers in the New workflow set picker. *declined* is its removed
     list, written in the same transaction, so a set put back by an undo never
-    holds, even for a moment, what its owner had taken out.
+    holds, even for a moment, what its owner had taken out. *replaces* is the
+    key of the set from pictures it was made from by Edit set, only stored and
+    served: the grid draws the set in that card's place.
     """
     now = now_iso()
     with hub.transaction() as conn:
         set_id = int(
             conn.execute(
                 "INSERT INTO model_workflow_set "
-                "(name, created_at, updated_at, cloned, template) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (clean_name(name), now, now, int(cloned), template),
+                "(name, created_at, updated_at, cloned, template, replaces) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (clean_name(name), now, now, int(cloned), template, replaces),
             ).lastrowid
         )
         added = _insert_members(conn, set_id, members, now)

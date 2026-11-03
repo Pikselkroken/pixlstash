@@ -1,3 +1,4 @@
+import errno
 import functools
 import hashlib
 import json
@@ -96,6 +97,7 @@ from pixlstash.services import (
 )
 from pixlstash.services.workflow_events import announce_changed_workflows
 from pixlstash.services.workflow_inbox import workflow_user_dir
+from pixlstash.services.trash_undo import snapshot_rows
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     normalized_filename,
@@ -113,6 +115,8 @@ from pixlstash.services.workflow_io import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
+from pixlstash.utils.trash_restore import NotInTrash, restore_from_trash
+from pixlstash.services.model_mover import publish_no_clobber
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 
 # ComfyUI workflow-execution orchestration and the output-import pipeline live in
@@ -505,8 +509,11 @@ def store_inbox_workflow(hub, name: str, workflow: dict) -> dict:
     return {"name": _stem(name), "matched": False, "workflow_id": workflow_id}
 
 
-def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> None:
+def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> list[str]:
     """Move a stored workflow to the system trash by way of the inbox.
+
+    Returns what :func:`workflow_inbox.trash_workflow` trashed, or the file
+    itself when it is not a readable workflow.
 
     The trash copy comes first and the stored file goes only once it is there,
     so a failed trash never loses the workflow. The file is first renamed out
@@ -527,7 +534,7 @@ def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> None:
             exc,
         )
         send2trash(path)
-        return
+        return [path]
     # The file's own spelling, so a put-back never renames it; a unique name,
     # so it never lands over an earlier leftover.
     # ponytail: a crash before the put-back leaves the only copy as the
@@ -536,7 +543,7 @@ def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> None:
     aside = f"{disk}.{uuid.uuid4().hex[:8]}{DELETING_SUFFIX}"
     os.replace(disk, aside)
     try:
-        workflow_inbox.trash_workflow(
+        trashed = workflow_inbox.trash_workflow(
             workflow_inbox.workflow_inbox_dir(), name, workflow, sweep=sweep
         )
     except Exception as exc:
@@ -562,6 +569,7 @@ def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> None:
             aside,
             exc,
         )
+    return trashed
 
 
 def user_workflow_exists(workflow_name: str) -> bool:
@@ -576,7 +584,17 @@ def user_workflow_exists(workflow_name: str) -> bool:
     return os.path.isfile(path)
 
 
-def trash_user_workflow(hub, workflow_name: str, *, sweep: bool = True) -> str:
+# The rows keyed by a workflow FILE's name that deleting the file forgets.
+FILE_KEYED_TABLES = (
+    "workflow_picture_input",
+    "workflow_parameter_pins",
+    "workflow_file",
+)
+
+
+def trash_user_workflow(
+    hub, workflow_name: str, *, sweep: bool = True, undo: dict | None = None
+) -> str:
     """Send one stored workflow to the trash and forget its rows.
 
     Shared with ``DELETE /workflows/{key}``, so the card route and the file
@@ -591,6 +609,10 @@ def trash_user_workflow(hub, workflow_name: str, *, sweep: bool = True) -> str:
             them. Takes the hub rather than the whole server so it needs no
             server to test.
         workflow_name: The stored file to delete.
+        sweep: Also trash every inbox file holding the same workflow.
+        undo: Filled, when given, with what an undo puts back: ``file`` (the
+            path it was at), ``trashed`` (what went to the trash, the copy of
+            it first) and ``rows`` (its file-keyed rows, by table).
 
     Returns:
         The normalized name that was deleted.
@@ -606,9 +628,18 @@ def trash_user_workflow(hub, workflow_name: str, *, sweep: bool = True) -> str:
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="Workflow not found in user")
     stored_name = _on_disk_name(path)
+    if undo is not None and hub is not None:
+        with hub.transaction() as conn:
+            undo["rows"] = {
+                table: snapshot_rows(conn, table, "workflow_name", stored_name)
+                for table in FILE_KEYED_TABLES
+            }
+        undo["file"] = os.path.join(os.path.dirname(path), stored_name)
     try:
         with workflow_inbox.INBOX_LOCK:
-            _trash_stored_workflow(path, normalized, sweep)
+            trashed = _trash_stored_workflow(path, normalized, sweep)
+            if undo is not None:
+                undo["trashed"] = trashed
     except (TrashPermissionError, OSError, RecursionError, ValueError) as exc:
         logger.warning("Failed to delete workflow %s: %s", normalized, exc)
         raise HTTPException(status_code=500, detail="Failed to delete workflow")
@@ -655,6 +686,75 @@ def trash_user_workflow(hub, workflow_name: str, *, sweep: bool = True) -> str:
                     exc,
                 )
     return normalized
+
+
+def put_back_trashed_workflow(file: str | None, trashed: list[str]) -> list[str]:
+    """Take a deleted workflow's files back out of the trash, for its undo.
+
+    Call holding :data:`workflow_inbox.INBOX_LOCK`, and restore the rows before
+    releasing it, or the inbox could import a put-back file as a new workflow.
+
+    Args:
+        file: Where the workflow's file was in the user folder, or ``None`` for
+            a workflow that was only a stored document. Its copy is the first
+            of *trashed* and goes back there; nothing else can bring it back,
+            so this raises before anything moves when it cannot.
+        trashed: What the delete sent to the trash, its own copy first. For a
+            stored document that copy is only a copy - the rows are the
+            workflow - so it is taken out and removed when it can be found.
+            The rest were inbox files holding the same workflow and go back to
+            the inbox.
+
+    Returns:
+        The paths now back on disk, so a caller that cannot finish can send
+        them to the trash again.
+
+    Raises:
+        NotInTrash, FileExistsError, OSError: *file*'s copy could not be put
+            back; nothing was moved.
+    """
+    first, rest = trashed[0], trashed[1:]
+    back = []
+    if file is not None:
+        if os.path.lexists(file):
+            raise FileExistsError(errno.EEXIST, "Something is already there", file)
+        restore_from_trash(first)
+        if first != file:
+            try:
+                publish_no_clobber(first, file)
+            except OSError:
+                send2trash(first)
+                raise
+        back.append(file)
+    else:
+        try:
+            restore_from_trash(first)
+            os.remove(first)
+        except (NotInTrash, OSError) as exc:
+            logger.info("Left the trash copy %s of a restored workflow: %s", first, exc)
+    for path in rest:
+        try:
+            restore_from_trash(path)
+            back.append(path)
+        except (NotInTrash, OSError) as exc:
+            logger.warning(
+                "Restored a workflow but not its inbox file %s: %s", path, exc
+            )
+    return back
+
+
+def trash_again(paths: list[str]) -> None:
+    """Send what :func:`put_back_trashed_workflow` put back to the trash again."""
+    for path in paths:
+        try:
+            send2trash(path)
+        except (OSError, TrashPermissionError) as exc:
+            logger.error(
+                "Could not send %s back to the trash after a failed restore; it "
+                "may be imported as a new workflow: %s",
+                path,
+                exc,
+            )
 
 
 def _builtin_path(name: str) -> str | None:

@@ -534,7 +534,11 @@ CREATE TABLE IF NOT EXISTS adapter_stack (
 # this machine's models, not about a library. AUTOINCREMENT so a deleted set's id
 # is never reissued to a client still holding it for an undo. `cloned` marks a
 # set the owner copied from a set from pictures on purpose, which is why it is
-# kept while it still holds exactly that set's models.
+# kept while it still holds exactly that set's models. `replaces` is the key of
+# the set from pictures it was made from by Edit set (`model:<id>` or
+# `missing:<file>`), so the grid draws it in that card's place; NULL for a set
+# made any other way. Said here rather than in the DDL: SQLite's DROP COLUMN
+# cannot cut a comment that runs up to the last column.
 _V2_MODEL_WORKFLOW_SET = """
 CREATE TABLE IF NOT EXISTS model_workflow_set (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -545,7 +549,8 @@ CREATE TABLE IF NOT EXISTS model_workflow_set (
     -- The ComfyUI template (services.workflow_templates) the set was made
     -- from, by name; NULL for a set made any other way. Covers that template
     -- in the picker whatever members the set holds since.
-    template    TEXT
+    template    TEXT,
+    replaces    TEXT
 )
 """
 
@@ -1780,8 +1785,9 @@ CREATE TABLE IF NOT EXISTS shelf_identity (
 # ``oom`` (``peak_mb`` is then the card's total) or ``aborted``, which the need
 # ignores. ``measured_by`` is ``torch_reserved`` or ``device_delta``.
 # ``pixels`` is the size of the image the run worked on (``run_pixels``), null
-# where it could not be read from the graph. The 50 newest rows per workflow
-# are kept.
+# where it could not be read from the graph. ``room_mb`` is the room the run
+# had at its peak, what ComfyUI held plus what was still free on the card,
+# null where it was not read. The 50 newest rows per workflow are kept.
 _V2_WORKFLOW_VRAM_PEAK = """
 CREATE TABLE IF NOT EXISTS workflow_vram_peak (
     id               INTEGER PRIMARY KEY,
@@ -1793,7 +1799,8 @@ CREATE TABLE IF NOT EXISTS workflow_vram_peak (
     measured_by      TEXT NOT NULL,
     outcome          TEXT NOT NULL,
     at               TEXT NOT NULL,
-    pixels           INTEGER
+    pixels           INTEGER,
+    room_mb          INTEGER
 )
 """
 
@@ -2341,6 +2348,10 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     }
     if "pixels" not in peak_columns:
         conn.execute("ALTER TABLE workflow_vram_peak ADD COLUMN pixels INTEGER")
+    # And the room the run had, which an older row has none of either: its
+    # need is judged against the card's total, as before.
+    if "room_mb" not in peak_columns:
+        conn.execute("ALTER TABLE workflow_vram_peak ADD COLUMN room_mb INTEGER")
 
     # The icon column (shelf plan, the sixth verb) lands the same way the rest
     # of v2 does: amended in place rather than as a v3, because a build shipped
@@ -2421,6 +2432,9 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     # The template a set was made from (#2001), guarded the same way.
     if "template" not in set_columns:
         conn.execute("ALTER TABLE model_workflow_set ADD COLUMN template TEXT")
+    # The card a set was made from by Edit set, guarded the same way.
+    if "replaces" not in set_columns:
+        conn.execute("ALTER TABLE model_workflow_set ADD COLUMN replaces TEXT")
 
     # The ComfyUI link token's source binding (#1810), guarded the same way.
     # NULL, every existing token, means "from any address".

@@ -4069,21 +4069,23 @@ describe("the set grid is what the shelf opens on", () => {
     expect(wrapper.find(".shelf-row").exists()).toBe(false);
   });
 
-  it("hides Sort, because it steers a list that is not on screen", async () => {
+  it("sorts the grid on its own keys, and the list on the list's", async () => {
     const wrapper = await mountDefaultShelf();
     const store = useModelShelfStore();
 
     // The shipped split-button, which is what `Sort` actually is.
-    const hasSort = () => wrapper.find(".bar-split-button").exists();
+    const sortLabel = () => textOf(wrapper.find(".bar-split-menu"));
 
-    // A live control with no effect reads "Sort: Added" over a grid it cannot
-    // reorder, so it is absent here and back the moment the row list is. The grid
-    // orders itself by the weight of the evidence behind each set.
-    expect(hasSort()).toBe(false);
+    // The grid's own sort, never the list's "Date added" over a grid it
+    // cannot reorder.
+    expect(sortLabel()).toContain("Most used");
+    await wrapper.find(".bar-split-toggle").trigger("click");
+    expect(store.view.setSortDirection).toBe("asc");
+    expect(store.view.sortDirection).toBe("desc");
 
     store.setView({ groupBy: "none" });
     await wrapper.vm.$nextTick();
-    expect(hasSort()).toBe(true);
+    expect(sortLabel()).toContain("Date added");
   });
 
   it("counts sets rather than models while the grid is on screen", async () => {
