@@ -407,6 +407,30 @@ def picture_target(document: dict, node_id: str, class_type: str) -> dict | None
     return None
 
 
+def bind_new_loaders(bindings: list | None, before: dict, after: dict) -> list | None:
+    """*bindings* with an image binding for each ``LoadImage`` that *after*
+    adds to *before* (a txt2img graph converted to inpaint or outpaint).
+
+    A file's bindings, even an empty list, are the whole of what a run fills
+    (:func:`run_targets`), so a loader they do not name gets no picture.
+    Without bindings the loader is detected and nothing is added.
+    """
+    if not isinstance(bindings, list):
+        return bindings
+    return bindings + [
+        {
+            "role": IMAGE,
+            "node": node_id,
+            "path": [node_id, "inputs", "image"],
+            "recovered": True,
+        }
+        for node_id, node in after.items()
+        if node_id not in before
+        and isinstance(node, dict)
+        and node.get("class_type") == "LoadImage"
+    ]
+
+
 def _text_path(graph: dict, node_id: str, hops: int = 1) -> list | None:
     inputs = (graph.get(node_id) or {}).get("inputs") or {}
     field = prompt_field(inputs)

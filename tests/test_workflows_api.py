@@ -12924,6 +12924,37 @@ def test_an_extension_past_twice_the_picture_is_refused(i2i):
     assert r.status_code == 200 and r.json()["status"] == "success", r.text
 
 
+@pytest.mark.parametrize("kind", ["inpaint", "outpaint"])
+def test_a_converted_txt2img_with_bindings_feeds_its_inserted_loader(i2i, kind):
+    """A txt2img source's `pixlstash_bindings` (here the empty list, which
+    `run_targets` takes as the whole of what a run fills) cannot name the
+    `LoadImage` the conversion inserts, so the copy's bindings gain it.
+    Wrong if the copy has no picture input, or, outpainting, the extension
+    finds no pad the picture feeds."""
+    graph = _full_i2i_graph()
+    del graph["5"], graph["6"]
+    graph["8"] = {
+        "class_type": "EmptyLatentImage",
+        "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
+    }
+    graph["3"]["inputs"]["latent_image"] = ["8", 0]
+    i2i.graph = {**graph, "pixlstash_bindings": []}
+    r = i2i.owner.post(f"{API}/workflows/{RUN_WF}/{kind}-copy")
+    assert r.status_code == 201, r.text
+    copy = r.json()["workflow_id"]
+    picture = _real_picture(i2i.server, i2i.tmp_path, f"t2i-{kind}.png")
+    body = {"picture_ids": [picture], "target": copy}
+    if kind == "outpaint":
+        body["extend"] = {"bottom": 8}
+    else:
+        body["selection"] = LEFT_HALF
+    group = _preflight(i2i.owner, **body)["groups"][0]
+    codes = [reason["code"] for reason in group["reasons"]]
+    assert not {"extend_not_read", "mask_not_read"} & set(codes), codes
+    [fed] = group["picture_inputs"]
+    assert (fed["fill"], fed["title"]) == ("selection", "Load Image"), fed
+
+
 @pytest.mark.parametrize(
     "extra",
     [
