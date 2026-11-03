@@ -18,7 +18,12 @@ import tempfile
 from pixlstash.server import Server
 
 # Media types that legitimately carry no JSON schema (file/binary downloads).
-_BINARY_MEDIA_PREFIXES = ("image/", "application/zip", "application/octet-stream")
+_BINARY_MEDIA_PREFIXES = (
+    "image/",
+    "video/",
+    "application/zip",
+    "application/octet-stream",
+)
 _HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
 
 

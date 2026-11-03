@@ -12,6 +12,9 @@ reads an ai-toolkit config:
 - ``subject`` (person / style / thing), ``effort`` (gentle / standard /
   strong) and ``fit`` (auto / save memory / best quality): the dialog's three
   choices.
+- ``captions`` (optional): how the dataset's captions are written, as the
+  model's own prompts read: ``description`` (prose, for a model prompted in
+  sentences) or ``tags`` (the default).
 - ``hardware_profiles``: memory tiers, each with a VRAM and RAM need, the
   largest bucket, rank and batch the need holds for, the settings it writes and
   the evidence behind its figures. A tier with evidence ``none`` is never
@@ -110,7 +113,9 @@ FIELDS = (
 )
 # Keys a recipe may leave out. ``min_ai_toolkit``: the oldest ai-toolkit version
 # (``version.py``) that can train it, when its model folder alone does not say.
-OPTIONAL_FIELDS = ("min_ai_toolkit",)
+# ``captions``: the caption form the model is prompted in (:func:`caption_mode`).
+OPTIONAL_FIELDS = ("min_ai_toolkit", "captions")
+CAPTION_MODES = ("description", "tags")
 PROFILE_FIELDS = (
     "label",
     "vram_mb",
@@ -192,6 +197,8 @@ def validate_preset(preset: dict) -> dict:
         raise PresetError(f"{pid}: version must be a whole number.")
     if "min_ai_toolkit" in preset and _version_tuple(preset["min_ai_toolkit"]) is None:
         raise PresetError(f"{pid}: min_ai_toolkit must be a version like 0.13.28.")
+    if preset.get("captions", "tags") not in CAPTION_MODES:
+        raise PresetError(f"{pid}: captions must be one of {', '.join(CAPTION_MODES)}.")
     if "model.name_or_path" not in preset["locked"]:
         raise PresetError(f"{pid}: locked must name 'model.name_or_path'.")
     for key in preset["locked"]:
@@ -455,6 +462,11 @@ def not_offered_because(
 def offered(preset: dict, architectures: list[str], version: str | None = None) -> bool:
     """Whether a checkout with *architectures* at *version* can train *preset*."""
     return not_offered_because(preset, architectures, version) is None
+
+
+def caption_mode(preset: dict) -> str:
+    """How *preset*'s dataset captions are written: ``description`` or ``tags``."""
+    return preset.get("captions", "tags")
 
 
 def trains_clips(preset: dict) -> bool:

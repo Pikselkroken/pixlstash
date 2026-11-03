@@ -49,7 +49,7 @@ export const PRIMARY_ROWS = [
   { label: "Steps", keys: ["train.steps"] },
   { label: "Learning rate", keys: ["train.lr"] },
   { label: "LoRA rank / alpha", keys: ["network.linear", "network.linear_alpha"] },
-  { label: "Captions left out", keys: ["datasets[*].caption_dropout_rate"] },
+  { label: "Steps without captions", keys: ["datasets[*].caption_dropout_rate"] },
   { label: "Sample prompts", keys: [PROMPTS_KEY], prompts: true },
   {
     label: "Quantise model / text encoder",
@@ -70,7 +70,7 @@ const KEY_LABELS = {
   "train.lr": "Learning rate",
   "network.linear": "LoRA rank",
   "network.linear_alpha": "LoRA alpha",
-  "datasets[*].caption_dropout_rate": "Captions left out",
+  "datasets[*].caption_dropout_rate": "Steps without captions",
   "model.quantize": "Quantise model",
   "model.quantize_te": "Quantise text encoder",
   "model.low_vram": "Low-VRAM mode",
@@ -104,8 +104,8 @@ const KEY_LABELS = {
   "train.audio_loss_multiplier": "Sound weight",
   "sample.num_frames": "Sample frames",
   "sample.fps": "Sample frame rate",
-  [PRESERVATION_KEY]: "Keep the description generic",
-  [PRESERVATION_CLASS_KEY]: "Description kept generic",
+  [PRESERVATION_KEY]: "Protect the description (Differential Output Preservation)",
+  [PRESERVATION_CLASS_KEY]: "Description to protect",
 };
 
 /** The sizes the "Train at sizes" chips offer (all multiples of 16). */
@@ -390,6 +390,30 @@ export function formatValue(value) {
   return String(value);
 }
 
+// A rate from 0 to 1 that reads as a share: "5%", not "0.05".
+const PERCENT_KEYS = new Set(["datasets[*].caption_dropout_rate"]);
+
+/** *key*'s value as its Advanced field shows it. */
+export function formatField(key, value) {
+  if (PERCENT_KEYS.has(key) && typeof value === "number") {
+    return `${Number((value * 100).toFixed(1))}%`;
+  }
+  return formatValue(value);
+}
+
+/** Read *key*'s typed field against its rule; a percentage field takes "5" or "5%". */
+export function parseField(key, rule, text) {
+  if (!PERCENT_KEYS.has(key)) return parseTyped(rule, text);
+  const raw = String(text ?? "").trim().replace(/%$/, "").trim();
+  if (!raw) return { value: null };
+  const n = Number(raw);
+  const [lo, hi] = [rule.lo * 100, rule.hi * 100];
+  if (!Number.isFinite(n) || n < lo || n > hi) {
+    return { error: `A percentage from ${lo} to ${hi}` };
+  }
+  return { value: n / 100 };
+}
+
 /**
  * Read a typed field against its rule ({kind, lo, hi}).
  * Returns `{ value }` or `{ error }`; an empty field is `{ value: null }`.
@@ -511,7 +535,7 @@ export function promptRole(text, info) {
 /**
  * A control row's label and what it should do, as the dialog and the run
  * screen word them. The lookalike holds still only while the description is
- * kept generic; the stranger always should.
+ * protected; the stranger always should.
  *
  * @returns {{label: string, expect: string, detail: string} | null}
  */
@@ -519,7 +543,7 @@ export function roleText(role, { kept, description }) {
   const who = pronounOf(description);
   if (role === "lookalike") {
     return kept
-      ? { label: `Like ${who}`, expect: "Should not change", detail: "kept generic" }
+      ? { label: `Like ${who}`, expect: "Should not change", detail: "protected" }
       : {
           label: `Like ${who}`,
           expect: "Expected to drift",

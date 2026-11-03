@@ -6,10 +6,11 @@
     @close="emit('close')"
   >
     <template v-if="sample">
-      <img
+      <SampleMedia
         class="tsd-img"
         :src="sample.src"
         :alt="sample.prompt || `Sample, step ${sample.step}`"
+        playing
         data-testid="training-sample-full"
       />
       <p v-if="sample.prompt" class="tsd-prompt">{{ sample.prompt }}</p>
@@ -27,6 +28,7 @@
 import { nextTick, watch } from "vue";
 
 import AppDialog from "./AppDialog.vue";
+import SampleMedia from "./SampleMedia.vue";
 
 const props = defineProps({
   /** `{ src, step, prompt }`, or null when closed. */

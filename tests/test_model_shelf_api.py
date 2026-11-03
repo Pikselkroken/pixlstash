@@ -5573,6 +5573,23 @@ def test_a_symlinked_sample_file_is_refused_too(tmp_path):
         sample_path_within(str(run_dir), "innocent.png")
 
 
+def test_a_video_models_clip_preview_is_served_as_mp4(shelf_env, import_folders):
+    """A video model's previews are MP4 clips; refusing them left a motion
+    run's board with nothing on it."""
+    samples = import_folders.run_dir / "samples"
+    samples.mkdir(exist_ok=True)
+    (samples / "1712345678901__000000500_0.mp4").write_bytes(
+        b"\x00\x00\x00\x18ftypmp42"
+    )
+
+    r = _sample(
+        shelf_env, import_folders, "Clementine", "1712345678901__000000500_0.mp4"
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "video/mp4"
+    assert r.content[4:8] == b"ftyp"
+
+
 def test_a_file_that_is_not_an_image_is_never_served_from_our_origin(
     shelf_env, import_folders
 ):

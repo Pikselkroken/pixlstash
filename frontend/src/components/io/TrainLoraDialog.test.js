@@ -77,6 +77,7 @@ function plan({ steps = { value: 2400, source: "pictures" } } = {}) {
         "network.linear": { value: 32, source: "effort" },
         "network.linear_alpha": { value: 32, source: "effort" },
         "model.qtype": { value: "qfloat8", source: "gpu" },
+        "datasets[*].caption_dropout_rate": { value: 0.05, source: "subject" },
       },
     },
     derived: {
@@ -89,6 +90,7 @@ function plan({ steps = { value: 2400, source: "pictures" } } = {}) {
       "network.linear": { kind: "int", lo: 1, hi: 512, count: 0, choices: [] },
       "network.linear_alpha": { kind: "float", lo: 0, hi: 1024, count: 0, choices: [] },
       "model.qtype": { kind: "enum", lo: 0, hi: 0, count: 0, choices: ["qfloat8", "qint8"] },
+      "datasets[*].caption_dropout_rate": { kind: "float", lo: 0, hi: 1, count: 0, choices: [] },
     },
     steps_rule: { steps_per_picture: 100, min_steps: 1200, max_steps: 3000 },
     room: { vram_mb: 20480, ram_mb: 60000 },
@@ -287,6 +289,18 @@ describe("TrainLoraDialog", () => {
     expect(startButton(wrapper).attributes("disabled")).toBeUndefined();
   });
 
+  it("shows the caption dropout rate as a percentage and pins what is typed", async () => {
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    await wrapper.find('[data-testid="tld-advanced"]').trigger("click");
+    const field = wrapper.find('input[aria-label="Steps without captions"]');
+    expect(field.element.value).toBe("5%");
+    await field.setValue("10%");
+    expect(store.pins).toEqual({ "datasets[*].caption_dropout_rate": 0.1 });
+  });
+
   it("pins a typed value, keeps the choice's name, and unpins back", async () => {
     const { wrapper, store } = await openDialog(
       { type: "character", id: 4, name: "Grandad" },
@@ -366,7 +380,7 @@ describe("TrainLoraDialog", () => {
     );
     const checks = wrapper.find('[data-testid="tld-checks"]').text();
     expect(checks).toContain("Only 4 pictures");
-    expect(checks).toContain("2 pictures have no tags yet");
+    expect(checks).toContain("2 pictures have no tags: trigger word only.");
     expect(checks).toContain("2 pictures are near copies");
     expect(checks).toContain("1 picture shows somebody else's face");
     // Warnings, not blocks.
@@ -437,9 +451,9 @@ describe("keeping the description generic", () => {
     );
     const notice = wrapper.find('[data-testid="tld-keep-generic"]');
     expect(notice.text()).toContain("All 24 captions call Grandad “an elderly man”.");
-    expect(notice.text()).toContain("every elderly man is Grandad");
+    expect(notice.text()).toContain("any elderly man you ask for starts to look like Grandad");
     expect(notice.find("mark").text()).toBe("an elderly man");
-    expect(notice.text()).toContain("Keep “an elderly man” generic");
+    expect(notice.text()).toContain("Protect “an elderly man”");
     expect(wrapper.find('[data-testid="tld-keep-source"]').text()).toBe(
       "On because 24 of 24 captions use it",
     );
@@ -457,7 +471,7 @@ describe("keeping the description generic", () => {
         .findAll('[data-testid="tld-prompt-role"]')
         .map((r) => r.findAll("span").map((t) => t.text()).join(" "));
     expect(roles()).toEqual([
-      "Like him Should not change: kept generic",
+      "Like him Should not change: protected",
       "Someone else Should not change",
     ]);
 
@@ -589,17 +603,78 @@ describe("a recipe that trains on clips (#2179)", () => {
     expect(wrapper.text()).toContain("Every picture of Grandad · 145");
   });
 
-  it("says a clip recipe on a set without clips learns no motion", async () => {
+  it("disables a clip recipe on a set without clips and moves to the model's still recipe", async () => {
+    training.listTrainingPresets.mockResolvedValue([
+      { id: "zimage-turbo", label: "Z-Image Turbo", offered: true, clips: false, requires_arch: "zimage" },
+      { id: "minimax-h3-image", label: "MiniMax H3 · from stills", offered: true, clips: false, requires_arch: "minimax_h3" },
+      { id: "minimax-h3-motion", label: "MiniMax H3 · motion", offered: false, clips: true, requires_arch: "minimax_h3" },
+    ]);
     const { wrapper, store } = await openDialog(
       { type: "character", id: 4, name: "Grandad" },
       dataset({ count: 20, clips: 0 }),
     );
     store.selectedPreset = "minimax-h3-motion";
-    await store.resolvePlan();
     await flushPromises();
-    expect(wrapper.find('[data-testid="tld-checks"]').text()).toContain(
-      "no video clips here",
+    expect(store.selectedPreset).toBe("minimax-h3-image");
+
+    // AppSelect is stubbed here; its own suite proves a disabled row is inert.
+    const picker = wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .find((c) => c.props("label") === "Base model");
+    const motion = picker.props("options").find((o) => o.value === "minimax-h3-motion");
+    // The clips chip sits beside any reason it is not offered, never instead of it.
+    expect(motion).toMatchObject({
+      disabled: true,
+      chips: ["Needs a newer ai-toolkit", "Needs video clips"],
+    });
+    expect(picker.props("options").filter((o) => o.disabled)).toHaveLength(1);
+    // And says so where the recipe was chosen, not only inside the list.
+    expect(wrapper.find('[data-testid="tld-motion-off"]').text()).toBe(
+      "MiniMax H3 · motion is off: no video clips here.",
     );
+    // Another model with no motion recipe has nothing to say about it.
+    store.selectedPreset = "zimage-turbo";
+    await flushPromises();
+    expect(wrapper.find('[data-testid="tld-motion-off"]').exists()).toBe(false);
+  });
+
+  it("captions as the recipe suggests, warns by the form chosen, and sends it", async () => {
+    training.listTrainingPresets.mockResolvedValue([
+      { id: "zimage-turbo", label: "Z-Image Turbo", offered: true, captions: "tags" },
+      { id: "flux-dev", label: "FLUX.1 Dev", offered: true },
+      { id: "minimax-h3-image", label: "MiniMax H3 · from stills", offered: true, captions: "description" },
+    ]);
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset({ untagged: 3, undescribed: 5, uncaptioned: 1 }),
+    );
+    const checks = () => {
+      const list = wrapper.find('[data-testid="tld-checks"]');
+      return list.exists() ? list.text() : "";
+    };
+    store.selectedPreset = "zimage-turbo";
+    await flushPromises();
+    expect(store.captionMode).toBe("tags");
+    expect(checks()).toContain("3 pictures have no tags: trigger word only.");
+
+    store.selectedPreset = "minimax-h3-image";
+    await flushPromises();
+    expect(store.captionMode).toBe("description");
+    expect(checks()).not.toContain("no tags:");
+    expect(checks()).toContain("4 pictures have no description and will use tags.");
+    expect(checks()).toContain("1 picture has no description or tags: trigger word only.");
+
+    // The owner's choice holds until the recipe changes, and goes with the run.
+    store.captionMode = "none";
+    await flushPromises();
+    expect(checks()).not.toMatch(/no tags|no description/);
+    training.createTrainingJob.mockResolvedValue({ id: 1 });
+    await store.startTraining();
+    expect(training.createTrainingJob.mock.calls.at(-1)[0].captions).toBe("none");
+    // A recipe that names no form, after one that did, is back on tags.
+    store.selectedPreset = "flux-dev";
+    await flushPromises();
+    expect(store.captionMode).toBe("tags");
   });
 });
 

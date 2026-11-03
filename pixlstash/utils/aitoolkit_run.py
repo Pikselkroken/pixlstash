@@ -36,7 +36,10 @@ from pixlstash.pixl_logging import get_logger
 logger = get_logger(__name__)
 
 CHECKPOINT_SUFFIX = ".safetensors"
-SAMPLE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
+IMAGE_SAMPLE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
+# A video model's previews (MiniMax H3 motion, Wan) are clips.
+VIDEO_SAMPLE_SUFFIXES = (".mp4",)
+SAMPLE_SUFFIXES = IMAGE_SAMPLE_SUFFIXES + VIDEO_SAMPLE_SUFFIXES
 CONFIG_NAMES = ("config.yaml", "config.yml")
 SAMPLES_DIRNAME = "samples"
 
@@ -67,13 +70,17 @@ class Checkpoint:
 
 @dataclass(frozen=True)
 class Sample:
-    """One preview image ai-toolkit rendered at a given step."""
+    """One preview ai-toolkit rendered at a given step: an image, or a clip."""
 
     path: str
     filename: str
     step: int
     index: int
     timestamp: str
+
+    @property
+    def is_video(self) -> bool:
+        return self.filename.lower().endswith(VIDEO_SAMPLE_SUFFIXES)
 
 
 @dataclass
@@ -111,7 +118,7 @@ class TrainingRun:
 def is_sample_filename(filename: str) -> bool:
     """Whether a filename is one ai-toolkit wrote as a step preview.
 
-    The same two tests :func:`_read_samples` applies - an image extension and
+    The same two tests :func:`_read_samples` applies - a preview extension and
     the ``<timestamp>__<step>_<index>`` shape - exposed because a *caller* needs
     to ask it of a file it did not read here: the delete verb decides whether a
     ``<stem>_samples/`` directory holds only the trainer's previews, and so is

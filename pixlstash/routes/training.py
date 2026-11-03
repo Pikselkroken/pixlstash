@@ -415,6 +415,14 @@ def create_router(server) -> APIRouter:
                 "locked recipe key is refused with 422 naming it."
             ),
         )
+        captions: Optional[Literal["tags", "description", "none"]] = Field(
+            default=None,
+            description=(
+                "How each picture is captioned: its tags, its description (its "
+                "tags where it has none), or none (the trigger word alone). "
+                "Defaults to the recipe's `captions`."
+            ),
+        )
 
         @field_validator("name")
         @classmethod
@@ -843,6 +851,13 @@ def create_router(server) -> APIRouter:
                 "its stills; every other recipe leaves clips out."
             ),
         )
+        captions: str = Field(
+            default="tags",
+            description=(
+                "How the recipe captions each picture: ``description`` (its "
+                "description, its tags where it has none) or ``tags``."
+            ),
+        )
 
     class PresetUpdateItem(BaseModel):
         """A recipe a check replaced with a newer version from pixlstash.dev."""
@@ -987,7 +1002,22 @@ def create_router(server) -> APIRouter:
         untagged: int = Field(
             ...,
             description=(
-                "Pictures with no tags; their caption is the trigger word alone."
+                "Pictures with no tags; a recipe captioning by tags trains "
+                "them on the trigger word alone."
+            ),
+        )
+        undescribed: int = Field(
+            default=0,
+            description=(
+                "Pictures with no description; a recipe captioning by "
+                "description trains them on their tags."
+            ),
+        )
+        uncaptioned: int = Field(
+            default=0,
+            description=(
+                "Pictures with neither a description nor tags; every recipe "
+                "trains them on the trigger word alone."
             ),
         )
         near_duplicates: int = Field(
@@ -1175,6 +1205,7 @@ def create_router(server) -> APIRouter:
                 "requires_arch": preset["requires_arch"],
                 "offered": presets.offered(preset, architectures, version),
                 "clips": presets.trains_clips(preset),
+                "captions": presets.caption_mode(preset),
             }
             for preset in presets.list_presets()
         ]
@@ -1700,18 +1731,30 @@ def create_router(server) -> APIRouter:
         )
         if refusal:
             raise HTTPException(status_code=422, detail=refusal)
+        if presets.trains_clips(preset):
+            stills, clips = ExportUtils.training_counts(
+                server, set_id=set_id, character_id=character_id
+            )
+            picture_count = stills + clips
+            if clips == 0:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"{preset['label']} learns motion from video clips, and "
+                        "there are none here. Pick a recipe that trains on "
+                        "still pictures."
+                    ),
+                )
+        else:
+            picture_count = ExportUtils.count_training_pictures(
+                server, set_id=set_id, character_id=character_id
+            )
         subject = _subject_for(payload.subject, character_id)
         try:
             pins = presets.validate_pins(preset, payload.pins)
         except TunableOverrideError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        picture_count = ExportUtils.count_training_pictures(
-            server,
-            set_id=set_id,
-            character_id=character_id,
-            clips=presets.trains_clips(preset),
-        )
         if picture_count == 0:
             raise HTTPException(
                 status_code=422,
@@ -1776,6 +1819,7 @@ def create_router(server) -> APIRouter:
                 locked=presets.to_patch(preset["locked"]),
                 resolution=resolution,
                 pins=pins,
+                caption_mode=payload.captions or presets.caption_mode(preset),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

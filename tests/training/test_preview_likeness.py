@@ -187,6 +187,19 @@ def test_the_finder_hands_out_settled_previews_of_character_runs(tmp_path):
     assert finder.find_task() is not None
 
 
+def test_a_clip_preview_is_never_handed_to_the_face_reader(tmp_path):
+    """A video model's previews are MP4 clips, which the detector cannot open."""
+    run, handle = _run(tmp_path)
+    still = _sample(handle, 0, 0)
+    clip = os.path.join(handle.save_root, "samples", "1700000000000__000000000_1.mp4")
+    open(clip, "wb").close()
+    then = time.time() - 10.0
+    os.utime(clip, (then, then))
+
+    task = _finder(tmp_path, [run]).find_task()
+    assert [name for name, _ in task._previews] == [still]
+
+
 def test_the_task_writes_faces_and_an_ended_run_settles(tmp_path, monkeypatch):
     run, handle = _run(tmp_path, status="completed", completed_at="2026-11-02")
     with_face = _sample(handle, 500, 0)

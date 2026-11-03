@@ -5,6 +5,7 @@
   "requires_arch": "minimax_h3",
   "template": "zimage-turbo-lora",
   "divisibility": 32,
+  "captions": "description",
   "locked": {
     "model.arch": "minimax_h3",
     "model.name_or_path": "Comfy-Org/MiniMax-H3",
@@ -146,6 +147,7 @@
     "hardware_profiles.q8_offload_60": "measured: peaks 23.4 GB encoding captions, 21.8 GB training and previewing; 74.2 GB resident while the weights load, 43-56 GB after",
     "hardware_profiles.q8_low_vram.vram_mb": "derived: without offloading the image recipe already ran out of memory on the 32 GB card loading the transformer and is seeded at 36 GB; with 60% of layers in RAM, 107-frame clips at 512 peaked 6.2 GB above stills at 1024 (23.4 against 17.2 GB), so this seeds 40 GB, a 48 GB card",
     "hardware_profiles.*.ram_mb": "measured, outside loading: the trainer's resident memory peaked at 55.7 GB after the weights were in, x1.1. While they load it reads 74.2 GB, but that includes the mapped weight files: both runs loaded with about 65 GB of RAM available, so the loading peak is left out of the seed",
-    "hardware_profiles.*.max_rank, max_batch": "rank 32 is derived from the rank 16 measurement (rank 16 LoRA state is about 0.2 GB); batch 1 as measured"
+    "hardware_profiles.*.max_rank, max_batch": "rank 32 is derived from the rank 16 measurement (rank 16 LoRA state is about 0.2 GB); batch 1 as measured",
+    "captions": "MiniMax prompts in prose: the H3 text-to-image template opens on style and framing and describes the scene in sentences, and ai-toolkit's MiniMax image captioner (ui/src/helpers/captionOptions.ts) writes descriptive sentences too, never tags. The dataset takes each picture's description, and its tags only where it has none. The captioner's three-field wrapper (integrated_multimodal_description / overall_soundscape / non_diegetic_music) is left out: prompts at inference are plain prose"
   }
 }

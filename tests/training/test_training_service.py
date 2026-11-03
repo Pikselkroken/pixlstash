@@ -333,7 +333,7 @@ def test_only_a_clip_recipe_builds_its_dataset_with_the_clips(hub, repo_dir):
     empty = _make_dataset_builder(image_count=0)
 
     def builder(**kwargs):
-        asked.append(kwargs["clips"])
+        asked.append((kwargs["clips"], kwargs["caption_mode"]))
         return empty(**kwargs)
 
     lease, notify = _StubLease(), _CapturingNotify()
@@ -344,10 +344,11 @@ def test_only_a_clip_recipe_builds_its_dataset_with_the_clips(hub, repo_dir):
     service.start()
     try:
         # The third was queued under a recipe this PixlStash no longer ships.
-        for preset_id, recorded in (
-            ("minimax-h3-motion", "minimax-h3-motion@1"),
-            ("minimax-h3-image", "minimax-h3-image@1"),
-            ("minimax-h3-motion", "a-retired-recipe@1"),
+        # The caption form rides on the job as queued, like the clips.
+        for preset_id, recorded, captions in (
+            ("minimax-h3-motion", "minimax-h3-motion@1", "description"),
+            ("minimax-h3-image", "minimax-h3-image@1", "tags"),
+            ("minimax-h3-motion", "a-retired-recipe@1", None),
         ):
             job = service.enqueue(
                 set_id=_SET_ID,
@@ -357,11 +358,64 @@ def test_only_a_clip_recipe_builds_its_dataset_with_the_clips(hub, repo_dir):
                 template_path=template,
                 locked=presets.to_patch(presets.get_preset(preset_id)["locked"]),
                 resolution={**_RESOLUTION, "preset": recorded},
+                caption_mode=captions,
             )
             assert _poll_until(lambda: _job_status(hub, job["uuid"]).status == "error")
     finally:
         service.stop()
-    assert asked == [True, False, True]
+    assert asked == [(True, "description"), (False, "tags"), (True, None)]
+
+
+def test_a_motion_run_whose_clips_went_while_queued_does_not_train(hub, repo_dir):
+    """The enqueue refusal holds at build time: clips removed while a motion
+    run waited fail it, rather than training its motion on stills alone, or on
+    nothing when the stills went too."""
+    stills = _make_dataset_builder(image_count=2)
+
+    def builder(*, with_clip, **kwargs):
+        manifest = stills(**kwargs)
+        if with_clip:
+            manifest["items"][0]["file_name"] = "img_00001.mp4"
+        elif with_clip is None:
+            manifest["items"] = []
+        return manifest
+
+    gone = "The video clips this run learns motion from are gone."
+    lease, notify = _StubLease(), _CapturingNotify()
+    template = _write_template(repo_dir, steps=4, save_every=2)
+    locked = presets.to_patch(presets.get_preset("minimax-h3-motion")["locked"])
+    for with_clip in (False, True, None):
+        service = _make_service(
+            hub,
+            repo_dir,
+            lease=lease,
+            notify=notify,
+            dataset_builder=lambda **kw: builder(with_clip=with_clip, **kw),
+        )
+        service.start()
+        try:
+            job = service.enqueue(
+                set_id=_SET_ID,
+                name=f"motion-{with_clip}",
+                base_model="m",
+                trigger_word="t",
+                template_path=template,
+                locked=locked,
+                resolution={**_RESOLUTION, "preset": "minimax-h3-motion@1"},
+            )
+            assert _poll_until(
+                lambda: (
+                    _job_status(hub, job["uuid"]).status == "error"
+                    or _job_status(hub, job["uuid"]).dataset_picture_ids
+                )
+            )
+            row = _job_status(hub, job["uuid"])
+        finally:
+            service.stop()
+        if with_clip:
+            assert row.error != gone and row.dataset_picture_ids
+        else:
+            assert row.error == gone and not row.dataset_picture_ids
 
 
 def test_enqueue_needs_a_scope(hub, repo_dir):

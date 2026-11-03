@@ -16,6 +16,7 @@ import pytest
 from pixlstash.utils.aitoolkit_run import (
     Checkpoint,
     TrainingRun,
+    is_sample_filename,
     read_output_root,
     read_run,
 )
@@ -135,6 +136,15 @@ class TestSamples:
         run = read_run(str(run_dir))
         assert "my-reference.jpg" not in [s.filename for s in run.samples]
         assert len(run.samples) == 4
+
+    def test_a_video_models_clips_are_previews_too(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "samples" / "1712345678901__000000500_0.mp4").write_bytes(b"")
+        run = read_run(str(run_dir))
+        clip = next(s for s in run.samples if s.filename.endswith(".mp4"))
+        assert (clip.step, clip.index, clip.is_video) == (500, 0, True)
+        assert not any(s.is_video for s in run.samples if s is not clip)
+        assert is_sample_filename("1712345678901__000000500_0.mp4")
 
     def test_a_run_with_no_samples_folder_still_reads(self, tmp_path):
         run_dir = tmp_path / "Bare"

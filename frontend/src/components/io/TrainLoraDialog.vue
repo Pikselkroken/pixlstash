@@ -172,6 +172,9 @@
         <span v-if="presetVerdict && presetVerdict !== 'fits'" class="tld-hint">
           {{ VERDICT_LABELS[presetVerdict] }}
         </span>
+        <span v-if="motionOff" class="tld-hint" data-testid="tld-motion-off">
+          {{ motionOff }}
+        </span>
         <span class="tld-hint">
           <button
             type="button"
@@ -213,6 +216,16 @@
     <p v-else-if="autoCheckNote" class="tld-hint" role="status" data-testid="tld-auto-check-note">
       {{ autoCheckNote }}
     </p>
+
+    <div class="tld-field" data-testid="tld-captions">
+      <FieldLabel>Captions</FieldLabel>
+      <Segmented
+        v-model="store.captionMode"
+        full
+        :options="CAPTION_OPTIONS"
+        aria-label="Captions"
+      />
+    </div>
 
     <div class="tld-field">
       <div class="tld-label-row">
@@ -346,10 +359,13 @@
       <v-icon size="16">mdi-alert-outline</v-icon>
       <div class="tld-keep__body">
         <span>
-          <b>{{ keepGeneric.headline }}</b> Left alone, the LoRA learns that every
-          {{ keepGeneric.bare }} is {{ keepGeneric.name }}. Keeping the words
-          generic holds &ldquo;{{ keepGeneric.description }}&rdquo; to what the
-          model drew before training.
+          <b>{{ keepGeneric.headline }}</b> Unprotected, the LoRA can learn
+          that &ldquo;{{ keepGeneric.description }}&rdquo; means
+          {{ keepGeneric.name }}, so any {{ keepGeneric.bare }} you ask for
+          starts to look like {{ keepGeneric.name }}. Protecting it makes each
+          training step also check that &ldquo;{{ keepGeneric.description }}&rdquo;
+          still comes out as it did before training. In ai-toolkit this is
+          Differential Output Preservation.
         </span>
         <span v-if="keepGeneric.example" class="tld-keep__cap" data-testid="tld-keep-caption"
           >{{ keepGeneric.example[0] }}<mark v-if="keepGeneric.example[1]">{{
@@ -368,7 +384,7 @@
           />
           <span class="tld-keep__label">
             <span>{{ keepGeneric.label }}</span>
-            <span class="tld-hint">slower steps, a little less likeness</span>
+            <span class="tld-hint">slower training, a little less likeness</span>
           </span>
           <span class="tld-sp" />
           <span class="tld-hint" data-testid="tld-keep-source">{{ keepGeneric.source }}</span>
@@ -663,12 +679,12 @@ import {
   effortReadout,
   fitReadout,
   formatCount,
-  formatValue,
+  formatField,
   gb,
   hasTrigger,
   keyLabel,
   moreRows,
-  parseTyped,
+  parseField,
   previewCards,
   previewHint,
   sourceLabel,
@@ -723,6 +739,13 @@ const EFFORT_OPTIONS = Object.entries(EFFORT_LABELS).map(([id, label]) => ({
   id,
   label,
 }));
+// The recipe picks one (store.captionMode follows it); None trains each
+// picture on the trigger word alone.
+const CAPTION_OPTIONS = [
+  { id: "tags", label: "Tags" },
+  { id: "description", label: "Full text description" },
+  { id: "none", label: "None" },
+];
 
 const advancedOpen = ref(false);
 const showAll = ref(false);
@@ -1000,7 +1023,7 @@ const keepGeneric = computed(() => {
   let source;
   if (PRESERVATION_KEY in store.allPins) source = "Set by you";
   else if (entry.value) source = `On because ${count} of ${total} captions use it`;
-  else source = "Off: training the text encoder cannot keep words generic";
+  else source = "Off: not possible while the text encoder is trained";
   return {
     headline,
     description,
@@ -1008,7 +1031,7 @@ const keepGeneric = computed(() => {
     name,
     example,
     on: !!entry.value,
-    label: `Keep “${description}” generic`,
+    label: `Protect “${description}”`,
     source,
   };
 });
@@ -1034,12 +1057,11 @@ const presetOptions = computed(() => {
   );
   return (store.presets || []).map((p) => {
     const verdict = verdicts[p.id] || (p.offered ? null : "needs_checkout");
-    return {
-      label: p.label,
-      value: p.id,
-      name: p.label,
-      chips: verdict ? [VERDICT_LABELS[verdict]] : [],
-    };
+    const chips = verdict ? [VERDICT_LABELS[verdict]] : [];
+    // A motion recipe has nothing to learn from a set of stills alone.
+    const unusable = store.presetUnusable(p);
+    if (unusable) chips.push("Needs video clips");
+    return { label: p.label, value: p.id, name: p.label, chips, disabled: unusable };
   });
 });
 const presetVerdict = computed(
@@ -1047,11 +1069,18 @@ const presetVerdict = computed(
     (plan.value?.presets || []).find((p) => p.id === store.selectedPreset)
       ?.verdict || null,
 );
-const presetLabel = computed(
-  () =>
-    (store.presets || []).find((p) => p.id === store.selectedPreset)?.label ||
-    "",
+const selectedRecipe = computed(() =>
+  (store.presets || []).find((p) => p.id === store.selectedPreset),
 );
+const presetLabel = computed(() => selectedRecipe.value?.label || "");
+/** Why this model's motion recipe cannot be picked, when it cannot. */
+const motionOff = computed(() => {
+  const arch = selectedRecipe.value?.requires_arch;
+  const off = (store.presets || []).find(
+    (p) => arch && p.requires_arch === arch && store.presetUnusable(p),
+  );
+  return off ? `${off.label} is off: no video clips here.` : "";
+});
 
 const fitOptions = computed(() => {
   const free = plan.value?.room?.vram_mb;
@@ -1146,23 +1175,25 @@ function resetLabel(row) {
     .filter((key) => key in store.allPins)
     .map((key) => {
       const v = derived.value[key]?.value;
-      return typeof v === "number" ? formatCount(v) : formatValue(v);
+      const shown = formatField(key, v);
+      // A plain number reads with its thousands grouped; a percentage as is.
+      return typeof v === "number" && shown === String(v) ? formatCount(v) : shown;
     })
     .join(" / ");
 }
 
 function fieldText(key) {
   if (key in drafts) return drafts[key];
-  return formatValue(values.value?.[key]?.value);
+  return formatField(key, values.value?.[key]?.value);
 }
 
 function onFieldFocus(key) {
-  drafts[key] = formatValue(values.value?.[key]?.value);
+  drafts[key] = formatField(key, values.value?.[key]?.value);
 }
 
 function onFieldInput(key, text) {
   drafts[key] = text;
-  const parsed = parseTyped(rules.value[key], text);
+  const parsed = parseField(key, rules.value[key], text);
   if (parsed.error) {
     fieldErrors[key] = parsed.error;
     return;
@@ -1220,16 +1251,26 @@ const checks = computed(() => {
       id: "clips",
       text: `${clips} video clip${clips === 1 ? " is" : "s are"} left out: this model trains on still pictures. A motion recipe trains on clips.`,
     });
-  } else if (clips === 0 && store.presetClips) {
-    out.push({
-      id: "no-clips",
-      text: "There are no video clips here, so this learns from still pictures alone and no motion.",
-    });
   }
-  if (d.untagged > 0) {
+  if (store.captionMode === "description") {
+    const bare = d.uncaptioned || 0;
+    const onTags = (d.undescribed || 0) - bare;
+    if (onTags > 0) {
+      out.push({
+        id: "undescribed",
+        text: `${onTags} picture${onTags === 1 ? " has" : "s have"} no description and will use tags.`,
+      });
+    }
+    if (bare > 0) {
+      out.push({
+        id: "uncaptioned",
+        text: `${bare} picture${bare === 1 ? " has" : "s have"} no description or tags: trigger word only.`,
+      });
+    }
+  } else if (store.captionMode === "tags" && d.untagged > 0) {
     out.push({
       id: "untagged",
-      text: `${d.untagged} picture${d.untagged === 1 ? " has" : "s have"} no tags yet, so ${d.untagged === 1 ? "it trains" : "they train"} on the trigger word alone.`,
+      text: `${d.untagged} picture${d.untagged === 1 ? " has" : "s have"} no tags: trigger word only.`,
     });
   }
   if (d.near_duplicates > 0) {
