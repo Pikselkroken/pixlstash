@@ -105,7 +105,10 @@ import { VMenu } from "vuetify/components";
 
 import { fetchWorkflowSets } from "../../api/modelShelf";
 import { planSetClones } from "../../api/workflows";
-import { useFavouritesStore } from "../../stores/useFavouritesStore";
+import {
+  favouritesFirst,
+  useFavouritesStore,
+} from "../../stores/useFavouritesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { loraBase } from "../../utils/loraChain";
@@ -288,20 +291,21 @@ function fillOf(plan) {
 }
 
 /**
- * The sets in the order they are drawn: a favourite first, then by name, so a
- * set is where its name says it is. Two sets of one name keep the shelf's
- * order, hand-made first. Null while the sets are unread.
+ * The sets in the order they are drawn: by name, so a set is where its name
+ * says it is, with a favourite leading (`sections` keeps this order, so it
+ * leads inside its own section). Two sets of one name keep the shelf's order,
+ * hand-made first. Null while the sets are unread.
  */
 const rankedSets = computed(() => {
   if (!sets.value) return null;
-  const fav = (set) => favourites.isFavourite("set", set.key);
-  return [...sets.value].sort(
-    (a, b) =>
-      fav(b) - fav(a) ||
-      a.name.localeCompare(b.name, undefined, {
-        numeric: true,
-        sensitivity: "base",
-      }),
+  const byName = [...sets.value].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    }),
+  );
+  return favouritesFirst(byName, (set) =>
+    favourites.isFavourite("set", set.key),
   );
 });
 

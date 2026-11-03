@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   downloadBatches,
   evidenceLine,
-  favouriteSetsFirst,
   favouritesLeadSections,
   fillFromSets,
   handMadeCard,
@@ -1116,16 +1115,6 @@ describe("favourites lead inside a picker's groups (#1578)", () => {
     const sections = [{ id: "a", items: [{ id: 2, row: {} }, { id: 1, row: {} }] }];
     const ranked = favouritesLeadSections(sections, () => false);
     expect(ranked[0].items.map((i) => i.id)).toEqual([2, 1]);
-  });
-
-  it("keeps the hand-made group first, and a favourite set leads inside each", () => {
-    const sets = [{ key: "model:5" }, { key: "hand:1" }, { key: "hand:2" }];
-    expect(favouriteSetsFirst(sets, (key) => key === "model:5").map((s) => s.key)).toEqual(
-      ["hand:1", "hand:2", "model:5"],
-    );
-    expect(favouriteSetsFirst(sets, (key) => key === "hand:2").map((s) => s.key)).toEqual(
-      ["hand:2", "hand:1", "model:5"],
-    );
   });
 
   it("fill from a set finds a favourite set's members first", () => {
