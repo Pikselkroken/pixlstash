@@ -2082,11 +2082,7 @@ class TrainingService:
         # Enqueue refused a motion run with no clips, but they can be removed
         # while it waits; it must not then train its motion on stills alone.
         items = manifest.get("items") or []
-        if (
-            clips
-            and items
-            and not any(VideoUtils.is_video_file(item["file_name"]) for item in items)
-        ):
+        if clips and not any(VideoUtils.is_video_file(i["file_name"]) for i in items):
             msg = "The video clips this run learns motion from are gone."
             logger.warning(
                 "Job %s: %s (%d stills built)", info["uuid"], msg, len(items)

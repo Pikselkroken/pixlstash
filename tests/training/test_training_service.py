@@ -368,20 +368,23 @@ def test_only_a_clip_recipe_builds_its_dataset_with_the_clips(hub, repo_dir):
 
 def test_a_motion_run_whose_clips_went_while_queued_does_not_train(hub, repo_dir):
     """The enqueue refusal holds at build time: clips removed while a motion
-    run waited fail it, rather than training its motion on stills alone."""
+    run waited fail it, rather than training its motion on stills alone, or on
+    nothing when the stills went too."""
     stills = _make_dataset_builder(image_count=2)
 
     def builder(*, with_clip, **kwargs):
         manifest = stills(**kwargs)
         if with_clip:
             manifest["items"][0]["file_name"] = "img_00001.mp4"
+        elif with_clip is None:
+            manifest["items"] = []
         return manifest
 
     gone = "The video clips this run learns motion from are gone."
     lease, notify = _StubLease(), _CapturingNotify()
     template = _write_template(repo_dir, steps=4, save_every=2)
     locked = presets.to_patch(presets.get_preset("minimax-h3-motion")["locked"])
-    for with_clip in (False, True):
+    for with_clip in (False, True, None):
         service = _make_service(
             hub,
             repo_dir,
