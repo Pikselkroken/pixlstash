@@ -15355,6 +15355,9 @@ def test_a_peak_that_filled_the_room_it_had_fits_that_room_again():
     # Scaled past the card, the room is the card.
     big = {**sized, "peak_mb": 25000, "room_mb": 25050}
     assert vram_history._need([big], 1_500_000) == total - margin
+    # Rows with no recorded room keep the largest need, as before the column.
+    legacy = [row(total - 100, None), row(22000, None)]
+    assert vram_history._need(legacy, None) == total - margin
 
 
 def test_the_peak_sampler_records_the_room_at_its_peak(monkeypatch):

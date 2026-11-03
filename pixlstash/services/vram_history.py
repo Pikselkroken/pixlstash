@@ -267,7 +267,8 @@ def _need(rows: list, pixels: int | None) -> int | None:
             needs.append(int(peak))
             continue
         if peak >= ceiling:
-            filled.append(int(ceiling))
+            # A row with no recorded room cannot say it filled it: as before.
+            (filled if row["room_mb"] else needs).append(int(ceiling))
             continue
         headroom = min(peak * COMFYUI_PEAK_MARGIN, ceiling / COMFYUI_PEAK_MARGIN)
         needs.append(int(max(peak, headroom)))
