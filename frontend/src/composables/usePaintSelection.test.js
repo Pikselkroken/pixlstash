@@ -194,6 +194,19 @@ describe("usePaintSelection", () => {
   });
 
   describe("Extend", () => {
+    it("stays extending after the tool is put down, until it is cleared", () => {
+      // The Edit tab keeps its outpaint card, its prompt help and the run's
+      // `extend` on this: putting the tool down must not drop them.
+      const paint = make();
+      paint.setTool("extend");
+      paint.setExtension("bottom", 64);
+      paint.setTool(null);
+      expect(paint.tool.value).toBe(null);
+      expect(paint.extending.value).toBe(true);
+      paint.clearExtension();
+      expect(paint.extending.value).toBe(false);
+    });
+
     it("drags an edge out in the picture's pixels, snapped to 8", () => {
       const paint = make();
       paint.setTool("extend");
