@@ -588,7 +588,7 @@ watch(
     <SettingsSection title="Recipe updates">
       <SettingsRow
         label="Check pixlstash.dev for recipe updates"
-        sub="Once a day, when you open Train a LoRA. A newer recipe can correct settings and memory figures; it never changes which model is trained."
+        sub="Once a day, when you open Train a LoRA. Updates can correct settings and the memory estimates for setups not yet run on this computer; they never replace memory measured here, and a setup an update changes is measured afresh. They never change which model is trained."
       >
         <v-switch
           :model-value="store.presetsAutoCheck === true"
