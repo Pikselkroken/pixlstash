@@ -1154,6 +1154,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/pictures/score_character_likeness"): RoutePolicy(
         _OWNER, justification="Owner scoring op; POST not in READ_SAFE; owner only"
     ),
+    ("POST", "/api/v1/pictures/smart_score_breakdown"): RoutePolicy(
+        _OWNER,
+        justification="Owner diagnostic; reads anchors from the owner's whole library",
+    ),
     ("POST", "/api/v1/pictures/{id}/open-location"): RoutePolicy(
         _LOOPBACK,
         justification="§16.3 RED LINE: opens the file location in the host file manager (drives the server's host shell); loopback-only, allow_remote_host_ops can NOT loosen it",

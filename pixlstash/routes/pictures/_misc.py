@@ -12,9 +12,9 @@ from sqlalchemy import (
     bindparam,
     text,
 )
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import Session, select
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 from pixlstash.db_models import (
     Face,
@@ -60,6 +60,9 @@ from ._helpers import (
 
 
 logger = get_logger(__name__)
+
+SMART_SCORE_BREAKDOWN_MAX = 200
+"""The most pictures one smart-score breakdown call recomputes."""
 
 
 class SortMechanismResponse(BaseModel):
@@ -113,6 +116,24 @@ class PictureStatsResponse(BaseModel):
     smart_score_distribution: Optional[list] = None
     resolution_distribution: Optional[list] = None
     score_agreement: Optional[dict] = None
+
+
+class SmartScoreBreakdownRequest(BaseModel):
+    # Bounded to SQLite's INTEGER range: a larger int overflows in the query.
+    picture_ids: list[Annotated[int, Field(ge=1, le=2**63 - 1)]]
+
+
+class SmartScoreBreakdownResponse(BaseModel):
+    """Each picture's smart score recomputed now, term by term.
+
+    ``pictures`` holds one row per scorable picture: ``id``, ``stored`` (the
+    smart score on record), ``final``, ``raw``, ``megapixels`` and each term's
+    signed contribution to ``raw``. ``unscored`` lists the ids that could not be
+    scored (no image embedding, deleted, or unknown).
+    """
+
+    pictures: list[dict]
+    unscored: list[int]
 
 
 class ComfyUIModelOption(BaseModel):
@@ -1028,6 +1049,60 @@ def register_routes(router, server):
                 detail=f"Could not start {app.name if app else 'the app chooser'}",
             )
         return {"session": session["session"], "app_name": app.name if app else None}
+
+    @router.post(
+        "/pictures/smart_score_breakdown",
+        summary="Explain chosen pictures' smart scores",
+        description=(
+            "Recomputes the smart score of each named picture now, in one batch, "
+            "with the same anchors, anomaly inputs and weights the background "
+            "scorer uses, and returns each term's signed contribution to the raw "
+            "score beside the score on record. Nothing is saved; each row is also "
+            "written to the server log. A difference between `stored` and `final` "
+            "means the stored score was computed from older inputs. At most "
+            f"{SMART_SCORE_BREAKDOWN_MAX} pictures per call. Owner-only."
+        ),
+        response_model=SmartScoreBreakdownResponse,
+    )
+    def smart_score_breakdown(request: Request, payload: SmartScoreBreakdownRequest):
+        ids = list(dict.fromkeys(payload.picture_ids))
+        if not ids or len(ids) > SMART_SCORE_BREAKDOWN_MAX:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Name 1 to {SMART_SCORE_BREAKDOWN_MAX} picture ids.",
+            )
+        good, bad, candidates, scorer_config = fetch_smart_score_data(
+            server,
+            None,
+            candidate_ids=ids,
+            penalised_tags=get_smart_score_penalised_tags_from_request(server, request),
+        )
+        good_list, bad_list, cand_list, _cand_ids = prepare_smart_score_inputs(
+            good, bad, candidates
+        )
+        rows: list[dict] = []
+        if cand_list:
+            SmartScoreUtils.calculate_smart_score_batch_numpy(
+                cand_list, good_list, bad_list, config=scorer_config, breakdown=rows
+            )
+        stored = dict(
+            server.vault.db.run_immediate_read_task(
+                lambda session: session.exec(
+                    select(Picture.id, Picture.smart_score).where(Picture.id.in_(ids))
+                ).all()
+            )
+        )
+        for row in rows:
+            row["stored"] = stored.get(row["id"])
+            logger.info(
+                "[SMART SCORE][BREAKDOWN] %s",
+                " ".join(
+                    f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
+                    for k, v in row.items()
+                ),
+            )
+        scored = {row["id"] for row in rows}
+        return {"pictures": rows, "unscored": [i for i in ids if i not in scored]}
 
     @router.get(
         "/pictures/stats",

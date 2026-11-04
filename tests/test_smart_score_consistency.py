@@ -12,7 +12,7 @@ from pixlstash.server import Server
 from pixlstash.db_models import Picture, Face, Character
 from pixlstash.database import DBPriority
 from pixlstash.tasks.smart_score_task import SmartScoreTask
-from tests.utils import poll_until_zero
+from tests.utils import bearer_client, mint_read_token, poll_until_zero
 
 API_PREFIX = "/api/v1"
 
@@ -40,7 +40,8 @@ def test_smart_score_consistency():
     try:
         # data setup
         def setup_data(session):
-            emb_array = np.random.rand(128).astype(np.float32)
+            # CLIP-sized, so the built-in anchors and the CLIP-IQA probe apply.
+            emb_array = np.random.rand(512).astype(np.float32)
             emb_bytes = emb_array.tobytes()
 
             # Picture 1
@@ -58,6 +59,7 @@ def test_smart_score_consistency():
                 file_path="p2.jpg",
                 image_embedding=emb_bytes,
                 aesthetic_score=4.5,
+                text_score=0.6,
                 score=0,
                 imported_at=datetime.now(timezone.utc),
             )
@@ -155,6 +157,30 @@ def test_smart_score_consistency():
         # P1 score should be > P2 score.
         score_all_p2 = get_score(resp_all.json(), p2_id)
         assert score_all_p1 > score_all_p2
+
+        # The breakdown recomputes what the background task stored, term by term.
+        url = f"{API_PREFIX}/pictures/smart_score_breakdown"
+        resp = client.post(url, json={"picture_ids": [p1_id, p2_id, 999999]})
+        assert resp.status_code == 200, resp.text
+        out = resp.json()
+        assert out["unscored"] == [999999]
+        rows = {row["id"]: row for row in out["pictures"]}
+        assert set(rows) == {p1_id, p2_id}
+        terms = ("good", "bad", "aesthetic", "resolution", "sharpness", "focus")
+        terms += ("detail", "text", "clipiqa", "penalised")
+        for row in rows.values():
+            assert abs(row["final"] - row["stored"]) < 1e-4, row
+            assert abs(sum(row[t] for t in terms) - row["raw"]) < 1e-6, row
+        # Every signed term is live, so a flipped sign cannot hide in a zero.
+        p2_row = rows[p2_id]
+        assert p2_row["good"] > 0 and p2_row["clipiqa"] > 0, p2_row
+        assert p2_row["bad"] < 0 and p2_row["text"] < 0, p2_row
+        assert client.post(url, json={"picture_ids": []}).status_code == 400
+        assert client.post(url, json={"picture_ids": [2**70]}).status_code == 422
+
+        # Owner-only: a READ token is refused where the owner was answered.
+        reader = bearer_client(server, mint_read_token(client, "breakdown"))
+        assert reader.post(url, json={"picture_ids": [p1_id]}).status_code == 403
 
     finally:
         server.close()

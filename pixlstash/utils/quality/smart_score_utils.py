@@ -154,6 +154,7 @@ class SmartScoreUtils:
         good_anchors: List[dict],
         bad_anchors: List[dict],
         config: Optional[dict] = None,
+        breakdown: Optional[list] = None,
     ) -> np.ndarray:
         """
         Calculate smart scores for a batch of candidates using numpy.
@@ -163,6 +164,9 @@ class SmartScoreUtils:
             good_anchors: List of dicts with 'embedding', 'score'.
             bad_anchors: List of dicts with 'embedding', 'score'.
             config: Config dict overrides.
+            breakdown: When a list is given, one dict per candidate is appended:
+                its id, final and raw score, megapixels, and each term's signed
+                contribution to the raw score.
 
         Returns:
             np.ndarray: Array of floating point scores corresponding to candidates.
@@ -539,6 +543,30 @@ class SmartScoreUtils:
         # see compress_raw_score.
         clipped = compress_raw_score(scores)
         final_scores = 1.0 + (clipped * 4.0)
+
+        if breakdown is not None:
+            terms = {
+                "good": good_component,
+                "bad": -bad_component,
+                "aesthetic": aest_component,
+                "resolution": res_component,
+                "sharpness": sharpness_component,
+                "focus": focus_presence_component,
+                "detail": detail_component,
+                "text": -text_component,
+                "clipiqa": clipiqa_component,
+                "penalised": -penalised_component,
+            }
+            for idx, candidate in enumerate(candidates):
+                breakdown.append(
+                    {
+                        "id": candidate.get("id"),
+                        "final": float(final_scores[idx]),
+                        "raw": float(scores[idx]),
+                        "megapixels": float(mpx[idx]),
+                        **{name: float(t[idx]) for name, t in terms.items()},
+                    }
+                )
 
         try:
             for idx, candidate in enumerate(candidates):

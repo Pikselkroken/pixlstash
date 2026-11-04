@@ -758,6 +758,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/scrapheap/restore                                            | pictures        | Restore deleted pictures                                      |
 | GET    | /api/v1/pictures/search                                                       | pictures        | Search pictures by text                                       |
 | POST   | /api/v1/pictures/share-copies                                                 | pictures        | Make share-ready copies of pictures                           |
+| POST   | /api/v1/pictures/smart_score_breakdown                                        | pictures        | Explain chosen pictures' smart scores                         |
 | GET    | /api/v1/pictures/stream                                                       | pictures        | Stream pictures in batches                                    |
 | POST   | /api/v1/pictures/tags/bulk_fetch                                              | tags            | Fetch tags for multiple pictures                              |
 | POST   | /api/v1/pictures/thumbnails                                                   | pictures        | Get batch thumbnail metadata                                  |
@@ -5665,7 +5666,7 @@ Design notes, each of which is a trap someone will otherwise re-open:
 5. **Description** *(GPU)* — Caption text written to sidecar `.txt`; emits `CHANGED_DESCRIPTIONS` internally (not currently pushed to WS clients).
 6. **Embeddings** *(GPU)* — CLIP image embedding + SentenceTransformer caption embedding stored as BLOBs on `Picture`.
 7. **Tagging** *(GPU)* — WD14 + PixlStash tagger write `TagPrediction` rows; emits `CHANGED_TAGS`.
-8. **Smart score** *(GPU)* — Combines image embedding, anchors, and penalised tags into `Picture.smart_score`.
+8. **Smart score** *(GPU)* — Combines image embedding, anchors, and penalised tags into `Picture.smart_score`. A score is computed once and kept, so it can predate the current anchors and tagger; `POST /pictures/smart_score_breakdown` (owner-only) recomputes chosen pictures now, in one batch, and returns and logs (`[SMART SCORE][BREAKDOWN]`) each term's signed share of the raw score beside the stored score, saving nothing.
 9. **Likeness** — Pairwise CLIP similarity (`PictureLikeness`) + per-character likeness parameters.
 10. **Character assignment** — User assigns faces to characters; `SOURCE_FACE_LIKENESS` populates face↔reference similarity.
 11. **Serving** — API endpoints return filtered/sorted pictures, thumbnails (cached), and watermarked originals as needed. WebSocket events keep the SPA in sync.
