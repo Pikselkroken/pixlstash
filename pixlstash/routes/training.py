@@ -39,6 +39,7 @@ from starlette.background import BackgroundTask
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Character, Face, Picture, PictureSet, Tag, User
+from pixlstash.db_models.tag import description_caption_content
 from pixlstash.hub import dataset_snapshots, training_runs
 from pixlstash.hub.db import now_iso
 from pixlstash.pixl_logging import get_logger
@@ -2719,7 +2720,9 @@ def create_router(server) -> APIRouter:
                 Face.model_pack,
                 Picture.score,
                 Picture.smart_score,
+                Picture.width,
                 Picture.height,
+                Picture.orientation,
                 Picture.file_path,
                 Picture.stack_id,
                 Picture.description,
@@ -2768,7 +2771,9 @@ def create_router(server) -> APIRouter:
             _pack,
             score,
             smart,
+            w,
             h,
+            orientation,
             path,
             stack,
             description,
@@ -2778,10 +2783,10 @@ def create_router(server) -> APIRouter:
                 {
                     "score": score,
                     "smart": smart,
-                    "height": h or 0,
+                    "size": (w, h, orientation),
                     "path": path,
                     "stack": stack,
-                    "description": description,
+                    "description": description_caption_content(description),
                     "faces": [],
                 },
             )
@@ -2810,8 +2815,6 @@ def create_router(server) -> APIRouter:
             tags.setdefault(pid, []).append(tag)
 
         def face_room(pic):
-            # Face heights from the top of the largest face to the frame's
-            # bottom: how much of the body the frame has room for.
             best = None
             for _fid, bbox, _feat in pic["faces"]:
                 try:
@@ -2819,11 +2822,11 @@ def create_router(server) -> APIRouter:
                 except (ValueError, TypeError) as exc:
                     logger.warning("Unreadable face box %r (%s); ignored.", bbox, exc)
                     continue
-                if pic["height"] > 0 and x2 > x1 and y2 > y1:
+                if x2 > x1 and y2 > y1:
                     area = (x2 - x1) * (y2 - y1)
                     if best is None or area > best[0]:
-                        best = (area, (pic["height"] - y1) / (y2 - y1))
-            return best[1] if best else None
+                        best = (area, (x1, y1, x2, y2))
+            return dataset_picker.face_room(best[1], *pic["size"]) if best else None
 
         candidates = []
         stacks = {}

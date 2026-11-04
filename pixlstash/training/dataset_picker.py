@@ -60,14 +60,16 @@ _FRAMING_TAGS = (
 )
 
 _FACE_ROOM_FRAMING = (
-    # How many face heights fit from the top of the face to the bottom of the
-    # frame: room for the body, whatever the picture's shape. A standing
-    # figure is about seven; waist-up about three and a half.
-    # ponytail: fixed cut-offs on a still's largest face; a seated or lying
-    # figure reads tighter than it is. A pose model would settle it.
-    (1.6, "close-up"),
-    (2.8, "portrait"),
-    (6.0, "upper body"),
+    # :func:`face_room` on a stored face box, which face extraction widens by
+    # a quarter and rounds up to 64 px at its 512 px working size, so a box
+    # reads about 0.75 of the room a tight face box would. Read off the demo
+    # library sorted by room: chest-up under 2.1, waist-up and seated about
+    # 2.2-2.9, thigh-up mirror shots about 3.1-3.4, whole figures above.
+    # ponytail: fixed cut-offs on the largest face; a seated or lying figure
+    # reads tighter than it is. A pose model would settle it.
+    (1.5, "close-up"),
+    (2.1, "portrait"),
+    (3.5, "upper body"),
 )
 
 _EXPRESSION_TAGS = (
@@ -108,6 +110,26 @@ body, two smiling, two neutral, one open mouth and one closed eyes.
 def target(axis: str, label: str, size: int) -> int:
     """How many pictures of *label* a set of *size* should hold."""
     return max(1, int(TARGET_SHARE[axis][label] * size + 0.5))
+
+
+def face_room(
+    box: tuple[float, float, float, float],
+    width: int | None,
+    height: int | None,
+    orientation: int | None = None,
+) -> float | None:
+    """Face heights from the top of *box* to the bottom of the picture.
+
+    How much of the body the frame has room for, whatever its shape. *box* is
+    a stored face box, in the picture as shown; *width* and *height* are the
+    file's raw size, so an EXIF orientation of 5-8 (a quarter turn) swaps
+    them. ``None`` for a box or size that cannot be measured.
+    """
+    _x1, y1, _x2, y2 = box
+    shown_height = width if orientation in (5, 6, 7, 8) else height
+    if not shown_height or y2 <= y1:
+        return None
+    return (shown_height - max(0.0, y1)) / (y2 - y1)
 
 
 def framing_label(tags: set[str], face_room: float | None) -> str | None:

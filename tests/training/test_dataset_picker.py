@@ -141,21 +141,35 @@ def test_tags_are_case_folded():
 
 
 def test_a_picture_is_framed_by_the_room_below_its_face():
-    # Face heights from the face's top to the frame's bottom.
+    # Stored-box face heights from the face's top to the frame's bottom.
     for room, label in (
-        (1.2, "close-up"),
-        (2.2, "portrait"),
-        (3.8, "upper body"),  # a waist-up shot
-        (7.5, "full body"),  # a standing figure
+        (1.0, "close-up"),
+        (1.9, "portrait"),  # chest-up
+        (2.5, "upper body"),  # waist-up
+        (3.3, "upper body"),  # thigh-up
+        (5.0, "full body"),  # a standing figure
     ):
         assert Candidate(picture_id=1, face_room=room).framing == label, room
     assert Candidate(picture_id=1).framing is None
     assert Candidate(picture_id=1).expressions == ("neutral",)
 
 
+def test_face_room_measures_the_picture_as_shown():
+    box = (10, 20, 50, 60)  # 40 rows tall, top at row 20
+    assert dp.face_room(box, 200, 100) == 2.0
+    # A quarter turn: the 200-wide file is shown 200 tall.
+    for turned in (5, 6, 7, 8):
+        assert dp.face_room(box, 200, 100, turned) == 4.5, turned
+    assert dp.face_room(box, 200, 100, 3) == 2.0
+    # A box above the frame's top counts from the top.
+    assert dp.face_room((10, -20, 50, 20), 200, 100) == 2.5
+    assert dp.face_room(box, 200, None) is None
+    assert dp.face_room((10, 60, 50, 60), 200, 100) is None
+
+
 def test_a_face_box_outranks_a_framing_tag():
     # The tagger calls a waist-up shot a close-up; the face box says otherwise.
-    c = Candidate(picture_id=1, tags=("close-up",), face_room=3.8)
+    c = Candidate(picture_id=1, tags=("close-up",), face_room=2.5)
     assert c.framing == "upper body"
     assert Candidate(picture_id=1, tags=("close-up",)).framing == "close-up"
 
@@ -168,7 +182,14 @@ def test_a_caption_that_never_mentions_smiling_vetoes_a_smile_tag():
     assert Candidate(
         picture_id=2, tags=("smile",), description=serious
     ).expressions == ("neutral",)
-    for caption in ("He has a big smile on his face.", "She is Smiling.", None, " "):
+    for caption in (
+        "He has a big smile on his face.",
+        "She is Smiling.",
+        "A wide grin.",
+        "They are laughing.",
+        None,
+        " ",
+    ):
         c = Candidate(picture_id=3, tags=("smile",), description=caption)
         assert c.expressions == ("smile",), caption
 

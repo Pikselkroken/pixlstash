@@ -12677,13 +12677,16 @@ function over those rows, tested without a server.
   `value * (1 + W_NEW * axes_under_target + W_SEM * min_cosine_distance)`.
   An axis is under target when the candidate brings a label the picks hold
   fewer of than `target()` asks for at the next set size: `TARGET_SHARE` per
-  label, never below one. Framing comes from the largest face box: how many
-  face heights fit from its top to the frame's bottom (`_FACE_ROOM_FRAMING`),
-  which holds for any picture shape; tags decide only for a picture with no
-  face box, since the whole-picture tagger calls a waist-up shot a close-up.
-  Expression comes from tags, `neutral` when none, except that a `smile` tag
-  holds only when the picture's caption, if it has one, mentions smiling: the
-  tagger reads a small face as smiling with high confidence when it is not.
+  label, never below one. Framing comes from the largest face box:
+  `face_room` counts how many face heights fit from its top to the bottom of
+  the picture as shown (an EXIF quarter turn swaps the raw width and height),
+  and `_FACE_ROOM_FRAMING` cuts that at values read off stored boxes, which
+  face extraction widens and rounds up. Tags decide only for a picture with no
+  usable face box, since the whole-picture tagger calls a waist-up shot a
+  close-up. Expression comes from tags, `neutral` when none, except that a
+  `smile` tag holds only when the picture's caption, if it has one, mentions
+  smiling (a pending-redescribe sentinel is no caption): the tagger reads a
+  small face as smiling with high confidence when it is not.
   Pose is not an axis yet (no head pose is stored); it would be one more
   `AXES` entry.
 
