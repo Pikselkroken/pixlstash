@@ -97,6 +97,8 @@ class _StubLease:
         self.acquire_count = 0
         self.release_count = 0
         self.progress_calls: list[dict] = []
+        # The arbiter's warnings on the lease, e.g. that ComfyUI was quit.
+        self.warnings: list[dict] = []
 
     def request(
         self, label: str, job_uuid: str, vram_mb: int, ram_mb: int
@@ -124,6 +126,9 @@ class _StubLease:
 
     def warn(self, code: str, text: str, **payload) -> None:
         self.events.append(f"warn {code}")
+
+    def allow_comfyui_quit(self) -> None:
+        self.events.append("allow_comfyui_quit")
 
 
 class _RecordingImport:
@@ -913,6 +918,47 @@ class _WaitingLease(_StubLease):
         while not self.release_count and not (cancel_event and cancel_event.is_set()):
             time.sleep(0.01)
         return False
+
+
+def test_the_owners_yes_to_quitting_comfyui_reaches_the_lease_and_a_quit_is_kept(
+    hub, repo_dir
+):
+    """#2558: a run queued with quit allowed tells its lease, and a lease the
+    arbiter quit ComfyUI for leaves `quit` on the row for the after-run notice.
+    A run queued without it never allows the quit."""
+    asked = _StubLease(grant=False)
+    asked.warnings = [{"code": "comfyui_quit", "text": "ComfyUI was quit"}]
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=asked,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    template = _write_template(repo_dir, steps=4, save_every=2)
+    service.start()
+    try:
+        jobs = [
+            service.enqueue(
+                set_id=_SET_ID,
+                name=name,
+                base_model="m",
+                trigger_word="t",
+                template_path=template,
+                resolution=_RESOLUTION,
+                quit_comfyui=allowed,
+            )
+            for name, allowed in (("quit", True), ("queue", False))
+        ]
+        for job in jobs:
+            assert _poll_until(
+                lambda job=job: _job_status(hub, job["uuid"]).status == "stopped"
+            )
+    finally:
+        service.stop()
+    assert asked.events.count("allow_comfyui_quit") == 1
+    assert asked.events.index("allow_comfyui_quit") == 1, "asked right after acquire"
+    assert _job_status(hub, jobs[0]["uuid"]).comfyui_quit == "quit"
 
 
 def test_lease_cancelled_while_waiting_stops_the_job_unlaunched(hub, repo_dir):

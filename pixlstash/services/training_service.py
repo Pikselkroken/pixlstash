@@ -347,6 +347,7 @@ class TrainingService:
         resolution: dict | None = None,
         pins: dict | None = None,
         caption_mode: str | None = None,
+        quit_comfyui: bool = False,
     ) -> dict:
         """Create a queued training run and wake the worker.
 
@@ -375,6 +376,8 @@ class TrainingService:
             caption_mode: How the dataset's captions are written
                 (:func:`pixlstash.training.presets.caption_mode`); the
                 builder's default (tags) when None.
+            quit_comfyui: The owner said ComfyUI may be quit if only that
+                makes the run fit (#2558).
 
         Returns:
             The persisted run, as the hub row (a dict of its columns).
@@ -401,6 +404,9 @@ class TrainingService:
             resolved_profile=json.dumps(resolution) if resolution else None,
             advanced_pins=json.dumps(pins or {}),
         )
+        if quit_comfyui:
+            # Before the worker can claim it: its lease reads the answer.
+            self._update_job(job_uuid, comfyui_quit="allowed")
         self._note_phase(job_uuid, "waiting_gpu")
         job = training_runs.get_run(hub, library_uuid, run_id)
         # The template path and the config patches have no column. Keep them
@@ -796,6 +802,12 @@ class TrainingService:
         # 2. Wait for the arbiter: PixlStash yields the card, an idle ComfyUI
         # frees it, and the Tasks tab shows the job waiting until then.
         lease = self._request_gpu(self._lease_label(info), job_uuid, *need)
+        # Read now, not from the claim: Quit ComfyUI now on the run page may
+        # have answered while the dataset was built. It writes the row first
+        # and then looks for this lease, so one of the two sees the other.
+        run = training_runs.get_run_by_uuid(self._hub, job_uuid) or {}
+        if run.get("comfyui_quit") == "allowed":
+            lease.allow_comfyui_quit()
         watch = _Watch()
         backend: TrainerBackend | None = None
         try:
@@ -804,6 +816,10 @@ class TrainingService:
             granted = lease.wait(self._stop)
             with self._active_lock:
                 self._waiting = None
+            if any(w.get("code") == "comfyui_quit" for w in lease.warnings):
+                # The run page says, after the run, it can be started again,
+                # cancelled meanwhile or not.
+                self._update_job(job_uuid, comfyui_quit="quit")
             if self._job_status(job_uuid) != "queued":
                 return  # cancelled while it waited
             if not granted:

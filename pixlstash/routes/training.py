@@ -43,6 +43,7 @@ from pixlstash.hub import dataset_snapshots, training_runs
 from pixlstash.hub.db import now_iso
 from pixlstash.pixl_logging import get_logger
 from pixlstash.resources.arbiter import arbiter
+from pixlstash.resources.comfyui_tenant import probe as comfyui_probe
 from pixlstash.resources.ledger import ledger
 from pixlstash.resources.ledger import ram as read_ram
 from pixlstash.scoring import select_reference_faces_for_character
@@ -53,6 +54,7 @@ from pixlstash.services.dedup_tier_service import (
 )
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
 from pixlstash.services.picture_set_tree import owning_character_id
+from pixlstash.services.comfyui_service import RUN_CLIENT_ID
 from pixlstash.services.training_service import handle_for_run
 from pixlstash.training import (
     ai_toolkit_install,
@@ -341,6 +343,54 @@ def create_router(server) -> APIRouter:
     def _training_root() -> str:
         return os.path.join(_image_root(), "training")
 
+    def _room() -> dict:
+        """``Vault.training_room`` with the owner's ComfyUI read into it.
+
+        The probe is otherwise registered only by a ComfyUI run; unregistered,
+        ComfyUI's memory counts as other apps' and no quit can be offered.
+        """
+        url = (getattr(server._user, "comfyui_url", None) or "").rstrip("/")
+        if url:
+            comfyui_probe(RUN_CLIENT_ID, url)
+        return server.vault.training_room()
+
+    def _comfyui_need(resolution: dict, room: dict, preset: dict, choices: dict):
+        """What the run needs of a local ComfyUI beyond unloading (#2558).
+
+        ``room["vram_mb"]`` counts all ComfyUI holds as room; only quitting
+        releases its ``kept_mb``. None when the run fits beside what ComfyUI
+        keeps. Otherwise ``{kept_mb, short_mb, can_quit, busy, beside}``,
+        ``beside`` being Save memory resolved beside ComfyUI when it fits there.
+        """
+        comfy = room.get("comfyui")
+        if not comfy or room.get("vram_mb") is None:
+            return None
+        beside_mb = room["vram_mb"] - comfy["kept_mb"]
+        short = int(resolution["vram_mb"]) - beside_mb
+        if short <= 0:
+            return None
+        beside = None
+        if choices.get("fit") != "save_memory":
+            try:
+                alt = presets.resolve(
+                    preset, **{**choices, "fit": "save_memory", "vram_mb": beside_mb}
+                )
+                beside = {
+                    "fit": "save_memory",
+                    "profile_label": alt["profile_label"],
+                    "vram_mb": alt["vram_mb"],
+                    "estimate": alt.get("estimate"),
+                }
+            except (presets.NoProfileFits, TunableOverrideError, ValueError) as exc:
+                logger.info("Save memory does not fit beside ComfyUI either: %s", exc)
+        return {
+            "kept_mb": comfy["kept_mb"],
+            "short_mb": short,
+            "can_quit": comfy["can_quit"],
+            "busy": comfy["busy"],
+            "beside": beside,
+        }
+
     def _shelf_source_folders() -> list[str]:
         """Paths of the shelf's registered ``source`` folders, oldest first."""
         hub = server.vault.hub
@@ -431,6 +481,15 @@ def create_router(server) -> APIRouter:
                 "How each picture is captioned: its tags, its description (its "
                 "tags where it has none), or none (the trigger word alone). "
                 "Defaults to the recipe's `captions`."
+            ),
+        )
+        comfyui: Optional[Literal["quit", "queue"]] = Field(
+            default=None,
+            description=(
+                "When only quitting a local ComfyUI makes the run fit "
+                "(`comfyui` of POST /training/resolve): quit lets PixlStash "
+                "quit it once it is idle; queue, the default, waits until "
+                "it is closed."
             ),
         )
 
@@ -1133,6 +1192,14 @@ def create_router(server) -> APIRouter:
                 "only one of them is worth having here."
             ),
         )
+        comfyui: Optional[dict] = Field(
+            default=None,
+            description=(
+                "When the run fits only with a local ComfyUI quit (#2558): "
+                "{ kept_mb, short_mb, can_quit, busy, beside }, beside being "
+                "Save memory resolved to fit beside ComfyUI, or null."
+            ),
+        )
         error: Optional[dict] = Field(
             default=None,
             description=(
@@ -1618,7 +1685,12 @@ def create_router(server) -> APIRouter:
         waiting = None
         if lease is not None and lease.get("state") == "waiting":
             reason = lease.get("waiting_reason") or {}
-            waiting = {"code": reason.get("code"), "text": reason.get("text")}
+            waiting = {
+                "code": reason.get("code"),
+                "text": reason.get("text"),
+                # Only quitting ComfyUI makes it fit (#2558).
+                "comfyui": reason.get("comfyui_closing"),
+            }
 
         step_times = (
             live_view.read_step_times(handle.loss_db_path)
@@ -1684,6 +1756,12 @@ def create_router(server) -> APIRouter:
             },
             "telemetry": _telemetry(job, lease, resolution),
             "waiting": waiting,
+            # ComfyUI was quit for this run and can be started again (#2558).
+            "comfyui_quit": (
+                {"at": job["completed_at"]}
+                if job.get("comfyui_quit") == "quit" and not live
+                else None
+            ),
             "finished_while_closed": (
                 {"at": _epoch_iso(pace["last_step_at"]) or job["completed_at"]}
                 if unwatched
@@ -1845,7 +1923,7 @@ def create_router(server) -> APIRouter:
         prompts = None
         if presets.PROMPTS_KEY not in pins:
             prompts = sample_prompts.prompt_texts(written)
-        room = server.vault.training_room()
+        room = _room()
         if room["ram_mb"] is None:
             logger.warning(
                 "RAM could not be read; resolving %s for job %r without a RAM "
@@ -1901,6 +1979,7 @@ def create_router(server) -> APIRouter:
                 resolution=resolution,
                 pins=pins,
                 caption_mode=payload.captions or presets.caption_mode(preset),
+                quit_comfyui=payload.comfyui == "quit",
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2275,6 +2354,35 @@ def create_router(server) -> APIRouter:
             )
         logger.info("Cancelled training job id=%s (was %s).", job_id, current_status)
         return {"status": "cancelled", "job_id": job_id}
+
+    @router.post(
+        "/training/jobs/{job_id}/quit-comfyui",
+        summary="Let PixlStash quit ComfyUI for a queued run",
+        response_model=CancelJobResponse,
+        description=(
+            "The owner's yes, from the run page, to quitting a local ComfyUI "
+            "when only that makes this queued run fit (#2558). PixlStash "
+            "quits it once it is idle and the run still needs it, and cannot "
+            "start it again. 404 for an unknown job, 409 unless it is queued. "
+            "Owner-only."
+        ),
+    )
+    def quit_comfyui_for_job(job_id: int, request: Request):
+        _ensure_secure(request)
+        hub, library_uuid = _store()
+        job = training_runs.get_run(hub, library_uuid, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Training job not found")
+        if job["status"] != "queued":
+            raise HTTPException(status_code=409, detail="That run is not waiting.")
+        # The row first, then the lease: the worker asks its lease and then
+        # reads the row, so one of the two sees the other's answer.
+        training_runs.update_run(hub, job["uuid"], comfyui_quit="allowed")
+        for lease in arbiter().leases():
+            if lease.job_id == job["uuid"]:
+                lease.allow_comfyui_quit()
+        logger.info("The owner let ComfyUI be quit for training job %s", job_id)
+        return {"status": "allowed", "job_id": job_id}
 
     @router.delete(
         "/training/jobs/{job_id}",
@@ -2971,7 +3079,7 @@ def create_router(server) -> APIRouter:
                 status_code=404, detail=f"No training recipe '{payload.preset}'."
             )
         row = preset["effort"][payload.effort]
-        room = server.vault.training_room()
+        room = _room()
         rule = {k: row[k] for k in presets.EFFORT_STEP_KEYS}
         # The picture counts the effort's step range covers without clamping.
         rule["fits"] = {
@@ -3086,6 +3194,10 @@ def create_router(server) -> APIRouter:
                     sorted(pins),
                     exc,
                 )
+        if "resolution" in out:
+            out["comfyui"] = _comfyui_need(
+                out["resolution"], room, preset, {**choices, "pins": pins}
+            )
         out["rules"] = {
             key: _rule(TUNABLE_KEYS[key]) for key in sorted(keys) if key in TUNABLE_KEYS
         }

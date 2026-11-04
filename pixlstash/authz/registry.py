@@ -2387,6 +2387,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 signals the host process group of a running trainer; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    ("POST", "/api/v1/training/jobs/{job_id}/quit-comfyui"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 lets PixlStash end the owner's local ComfyUI process (terminate) to make room for a queued run; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("DELETE", "/api/v1/training/jobs/{job_id}"): RoutePolicy(
         _LOCAL,
         justification="§16.3 removes a job's host work folder and dataset snapshot and its rows; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",

@@ -99,6 +99,17 @@
             Copy
           </AppButton>
         </div>
+        <div v-if="notice.action" class="trl-notice-acts">
+          <AppButton
+            size="sm"
+            :variant="notice.action.variant"
+            :loading="notice.action.busy"
+            :data-testid="notice.action.testid"
+            @click="notice.action.run()"
+          >
+            {{ notice.action.label }}
+          </AppButton>
+        </div>
       </div>
 
       <!-- The page scrolls down only when the tips are opened on a window too
@@ -536,6 +547,7 @@ import ViewBackButton from "../widgets/ViewBackButton.vue";
 import {
   cancelTrainingJob,
   getTrainingJobLive,
+  quitComfyuiForTrainingJob,
   setTrainingJobCover,
 } from "../../api/training";
 import { runSampleUrl } from "../../api/modelImports";
@@ -545,7 +557,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { errorDetail } from "../../utils/apiError";
 import { copyText } from "../../utils/clipboard";
 import { isTypingTarget } from "../../utils/dom.js";
-import { pronounOf, roleText } from "../../utils/trainingPlan.js";
+import { gbTenths, pronounOf, roleText } from "../../utils/trainingPlan.js";
 import {
   baseMarkOf,
   failureText,
@@ -945,6 +957,37 @@ const notice = computed(() => {
       text: `${run.waiting.text || ""} It starts by itself once enough is free; close other programs, or stop it.`,
     };
   }
+  // #2558: only quitting ComfyUI makes this run fit.
+  const comfy = run.waiting?.comfyui;
+  if (comfy) {
+    if (comfy.allowed) {
+      return {
+        kind: "info",
+        icon: "mdi-clock-outline",
+        title: comfy.busy
+          ? "Queued until ComfyUI's jobs are done."
+          : "Queued until ComfyUI is closed.",
+        text: comfy.busy
+          ? "It quits after them, as you asked."
+          : "PixlStash is quitting it, as you asked.",
+      };
+    }
+    return {
+      kind: "info",
+      icon: "mdi-clock-outline",
+      title: "Queued until ComfyUI is closed.",
+      text: `This run needs the ${gbTenths(comfy.kept_mb)} GB it holds. Close ComfyUI and this starts by itself.`,
+      action: comfy.can_quit
+        ? {
+            label: "Quit ComfyUI now",
+            variant: "primary",
+            testid: "trl-quit-comfyui",
+            busy: quittingComfy.value,
+            run: quitComfy,
+          }
+        : null,
+    };
+  }
   if (run.waiting) {
     const title = isQueuedBehindRun(run.waiting) ? `${WAITING_BEHIND_RUN}.` : "Waiting for the GPU.";
     return { kind: "info", icon: "mdi-information-outline", title, text: run.waiting.text || "" };
@@ -969,10 +1012,48 @@ const notice = computed(() => {
   // behind Full message when it says more.
   if (run.status === "error") {
     const { short, full } = failureText(run);
-    return { kind: "err", icon: "mdi-alert", title: short || "The run failed.", text: "", full };
+    // A run ComfyUI was quit for says so here too: the owner needs it back.
+    const text = run.comfyui_quit ? "ComfyUI was quit for this run and can be started again." : "";
+    return { kind: "err", icon: "mdi-alert", title: short || "The run failed.", text, full };
+  }
+  if (run.comfyui_quit && !comfyNoticeDismissed.value) {
+    return {
+      kind: "ok",
+      icon: "mdi-check-circle-outline",
+      title: "ComfyUI can be started again.",
+      text: run.comfyui_quit.at
+        ? `It was quit for this run, which finished at ${timeOfDay(run.comfyui_quit.at)}.`
+        : "It was quit for this run.",
+      action: {
+        label: "Dismiss",
+        variant: "ghost",
+        testid: "trl-comfyui-dismiss",
+        run: () => (comfyNoticeDismissed.value = true),
+      },
+    };
   }
   return null;
 });
+
+// #2558: the run page's answer to "only quitting ComfyUI makes this fit".
+const quittingComfy = ref(false);
+// Per view: the notice is a reminder, not a record, so it is not stored.
+const comfyNoticeDismissed = ref(false);
+
+async function quitComfy() {
+  quittingComfy.value = true;
+  try {
+    await quitComfyuiForTrainingJob(props.jobId);
+    await load();
+  } catch (err) {
+    useNoticeStore().push({
+      level: "error",
+      text: errorDetail(err) || "Could not ask PixlStash to quit ComfyUI.",
+    });
+  } finally {
+    quittingComfy.value = false;
+  }
+}
 
 // Undefined keeps the chart's own sentence for a run with no curve to show.
 const chartEmptyText = computed(() =>

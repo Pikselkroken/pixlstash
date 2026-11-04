@@ -44,6 +44,7 @@ _MUTABLE_COLUMNS = frozenset(
         "phase_log",
         "cover_step",
         "finished_unwatched",
+        "comfyui_quit",
     }
 )
 

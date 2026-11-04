@@ -126,6 +126,7 @@
           "need_mb": 20000,
           "free_mb": 11348,
           "short_by_mb": 8652,
+          "comfyui_closing": null,
           "position": 1,
           "blocked_by": [
             {

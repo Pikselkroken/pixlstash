@@ -745,6 +745,9 @@ _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 #
 # `dataset_snapshot_id` names the frozen record of what the run trained on
 # (#2123), written once the dataset is built.
+#
+# `comfyui_quit` (#2558) is NULL, `allowed` once the owner said ComfyUI may be
+# quit to make room for the run, and `quit` once it was.
 _V2_TRAINING_RUN = """
 CREATE TABLE IF NOT EXISTS training_run (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -778,7 +781,8 @@ CREATE TABLE IF NOT EXISTS training_run (
     phase_log              TEXT,
     cover_step             INTEGER,
     finished_unwatched     INTEGER NOT NULL DEFAULT 0,
-    dataset_snapshot_id    INTEGER
+    dataset_snapshot_id    INTEGER,
+    comfyui_quit           TEXT
 )
 """
 
@@ -2279,6 +2283,8 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         ("finished_unwatched", "INTEGER NOT NULL DEFAULT 0"),
         # The run's dataset snapshot (#2123), the same way.
         ("dataset_snapshot_id", "INTEGER"),
+        # Whether ComfyUI may be, or was, quit for the run (#2558).
+        ("comfyui_quit", "TEXT"),
     ):
         if column not in run_columns:
             conn.execute(f"ALTER TABLE training_run ADD COLUMN {column} {ddl}")

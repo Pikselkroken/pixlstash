@@ -101,6 +101,11 @@ export function cancelTrainingJob(jobId) {
   return unwrap(apiClient.post(`/training/jobs/${jobId}/cancel`, {}));
 }
 
+/** Let PixlStash quit a local ComfyUI so this queued run fits (#2558). */
+export function quitComfyuiForTrainingJob(jobId) {
+  return unwrap(apiClient.post(`/training/jobs/${jobId}/quit-comfyui`, {}));
+}
+
 /** Delete a job and its work directory; its LoRA stays on the shelf. */
 export function deleteTrainingJob(jobId) {
   return unwrap(apiClient.delete(`/training/jobs/${jobId}`));

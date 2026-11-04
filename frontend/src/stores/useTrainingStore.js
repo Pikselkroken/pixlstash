@@ -103,6 +103,9 @@ export const useTrainingStore = defineStore("training", () => {
 
   const submitting = ref(false);
   const submitError = ref("");
+  // The owner's answer when only quitting ComfyUI makes the run fit (#2558):
+  // "quit" or "queue", sent with the next Start; null when nothing was asked.
+  const comfyuiAnswer = ref(null);
 
   // ── Jobs (settings section) ──────────────────────────────────────
   const jobs = ref([]);
@@ -604,6 +607,7 @@ export const useTrainingStore = defineStore("training", () => {
       if (effectiveSubject.value) body.subject = effectiveSubject.value;
       if (Object.keys(allPins.value).length) body.pins = allPins.value;
       body.captions = captionMode.value;
+      if (comfyuiAnswer.value) body.comfyui = comfyuiAnswer.value;
       return await createTrainingJob(body);
     } catch (err) {
       // A run that fits nowhere answers { message, budget, need_mb, free_mb }.
@@ -793,6 +797,7 @@ export const useTrainingStore = defineStore("training", () => {
     effectiveSubject,
     effort,
     fit,
+    comfyuiAnswer,
     pins,
     choicesKey,
     allPins,

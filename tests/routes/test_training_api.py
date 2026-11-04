@@ -84,6 +84,7 @@ class _FakeTrainingService:
         resolution=None,
         pins=None,
         caption_mode=None,
+        quit_comfyui=False,
     ):
         if set_id is None and character_id is None:
             raise ValueError("A training run needs a set_id or a character_id.")
@@ -100,6 +101,7 @@ class _FakeTrainingService:
                 "resolution": resolution,
                 "pins": pins,
                 "caption_mode": caption_mode,
+                "quit_comfyui": quit_comfyui,
             }
         )
 
@@ -1079,6 +1081,67 @@ def test_a_runs_snapshot_reads_back_and_exports_what_it_trained_on():
 # ---------------------------------------------------------------------------
 # POST /training/jobs/{id}/cancel
 # ---------------------------------------------------------------------------
+
+
+def test_a_run_that_fits_only_with_comfyui_quit_says_so_and_takes_the_answer():
+    """#2558: Z-Image's q8 needs 16000 MB. On a 24 GB card where ComfyUI
+    keeps 7500 MB after unloading, it fits only with ComfyUI quit, 700 short
+    beside it; Save memory (10800) fits beside it."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        comfy = {"kept_mb": 7500, "held_mb": 7500, "can_quit": True, "busy": False}
+        server.vault.training_room = lambda: {**_ROOM_24GB, "comfyui": comfy}
+        char_id = _make_character(owner)
+        ask = {
+            "character_id": char_id,
+            "subject": "person",
+            "picture_count": 24,
+            "trigger_word": "x",
+        }
+        body = owner.post("/training/resolve", json=ask).json()
+        assert body["resolution"]["vram_mb"] == 16000
+        need = body["comfyui"]
+        assert (need["kept_mb"], need["short_mb"], need["can_quit"]) == (
+            7500,
+            700,
+            True,
+        )
+        assert need["beside"]["fit"] == "save_memory"
+        assert need["beside"]["vram_mb"] == 10800
+        # Save memory itself fits beside ComfyUI: nothing to ask.
+        body = owner.post("/training/resolve", json={**ask, "fit": "save_memory"})
+        assert body.json()["comfyui"] is None
+        comfy["kept_mb"] = 500
+        assert owner.post("/training/resolve", json=ask).json()["comfyui"] is None
+
+        create = {"character_id": char_id, "name": "x", "trigger_word": "x"}
+        assert owner.post("/training/jobs", json=create).status_code == 200
+        calls = server.vault.training_service.enqueue_calls
+        assert calls[-1]["quit_comfyui"] is False, "queueing is the default"
+        r = owner.post("/training/jobs", json={**create, "comfyui": "quit"})
+        assert r.status_code == 200, r.text
+        assert calls[-1]["quit_comfyui"] is True
+
+        job_id, job_uuid = _seed_job(server, status="queued")
+        hub = server.vault.hub
+        scoped = _scoped_client(server, read_token)
+        assert scoped.post(f"/training/jobs/{job_id}/quit-comfyui").status_code == 403
+        r = owner.post(f"/training/jobs/{job_id}/quit-comfyui")
+        assert r.status_code == 200, r.text
+        assert training_runs.get_run_by_uuid(hub, job_uuid)["comfyui_quit"] == "allowed"
+        assert owner.post("/training/jobs/999999/quit-comfyui").status_code == 404
+        done_id, done_uuid = _seed_job(server, status="completed")
+        assert owner.post(f"/training/jobs/{done_id}/quit-comfyui").status_code == 409
+        assert training_runs.get_run_by_uuid(hub, done_uuid)["comfyui_quit"] is None
+
+        assert (
+            owner.get(f"/training/jobs/{done_id}/live").json()["comfyui_quit"] is None
+        )
+        training_runs.update_run(hub, done_uuid, comfyui_quit="quit")
+        body = owner.get(f"/training/jobs/{done_id}/live").json()
+        assert body["comfyui_quit"] == {"at": "2026-10-26T09:00:00+00:00"}
+    finally:
+        _teardown(temp_dir, server)
 
 
 def test_cancel_job_owner_works():

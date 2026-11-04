@@ -103,6 +103,9 @@ class TenantProbe(Protocol):
     def reclaim(self) -> bool:
         """Ask the tenant to give its memory back; True if it was asked."""
 
+    # A probe may also define ``kept_mb()`` (what it keeps after ``reclaim``),
+    # ``can_quit()`` and ``quit()`` (ComfyUI's process, #2558).
+
 
 @dataclass(eq=False)
 class Lease:
@@ -131,6 +134,9 @@ class Lease:
     urgent: bool = False
     #: A PixlStash task that spilled to the CPU; holds no GPU memory.
     on_cpu: bool = False
+    #: The owner said ComfyUI may be quit for this lease when only that makes
+    #: it fit (#2558): the reclaim ladder's last rung.
+    quit_comfyui: bool = False
     on_state: Optional[Callable[["Lease"], None]] = None
     id: str = field(default_factory=lambda: f"lease-{uuid.uuid4().hex[:12]}")
     state: LeaseState = LeaseState.WAITING
@@ -208,6 +214,11 @@ class Lease:
         """Replace the live figures the Tasks tab shows for this lease."""
         if self._arbiter is not None:
             self._arbiter.set_progress(self, fields)
+
+    def allow_comfyui_quit(self) -> None:
+        """Let the arbiter quit an idle ComfyUI if only that makes room."""
+        if self._arbiter is not None:
+            self._arbiter.allow_comfyui_quit(self)
 
 
 def safety_margin_mb(total_mb: int) -> int:
@@ -518,6 +529,15 @@ class ResourceArbiter:
         self._announce(changes)
         return True
 
+    def allow_comfyui_quit(self, lease: Lease) -> None:
+        """The owner's yes to quitting ComfyUI for *lease*; acted on only if
+        the lease is still short once ComfyUI has unloaded its models and
+        ComfyUI is idle. Asked again after a failed quit, it tries again."""
+        with self._lock:
+            lease.quit_comfyui = True
+            lease.reclaimed.discard("comfyui_quit")
+        self.kick()
+
     def set_progress(self, lease: Lease, fields: dict) -> None:
         """Store a lease's live figures. The next snapshot carries them."""
         with self._lock:
@@ -656,10 +676,35 @@ class ResourceArbiter:
                 vram = max(
                     0, reading.total_mb - other - safety_margin_mb(reading.total_mb)
                 )
+            comfy = self._comfyui_kept_locked(device)
             ram_now = dict(self._ram_now)
         return {
             "vram_mb": vram,
             "ram_mb": ram_now["available_mb"] if ram_now.get("total_mb") else None,
+            "comfyui": comfy,
+        }
+
+    def _comfyui_kept_locked(self, device: str | None) -> dict | None:
+        """What a ComfyUI on *device* keeps after unloading its models.
+
+        ``{kept_mb, held_mb, can_quit, busy}``, or None when no ComfyUI is
+        read on that card or it would keep nothing. ``vram_mb`` of
+        :meth:`training_room` counts all of ComfyUI's memory as room; only
+        quitting releases ``kept_mb`` of it (#2558).
+        """
+        state = self._probe_state.get(Tenant.COMFYUI) or {}
+        held = state.get("usage")
+        if device is None or state.get("device") != device or not held:
+            return None
+        kept = state.get("kept")
+        kept = held if kept is None else min(int(kept), int(held))
+        if kept <= 0:
+            return None
+        return {
+            "kept_mb": kept,
+            "held_mb": int(held),
+            "can_quit": bool(state.get("can_quit")),
+            "busy": bool(state.get("busy")),
         }
 
     def _lease_row(self, lease: Lease) -> dict:
@@ -795,12 +840,16 @@ class ResourceArbiter:
         for tenant, probe in tenant_probes.items():
             try:
                 label = getattr(probe, "holder_label", None)
+                kept = getattr(probe, "kept_mb", None)
+                can_quit = getattr(probe, "can_quit", None)
                 states[tenant] = {
                     "device": probe.device(),
                     "usage": probe.usage_mb(),
                     "busy": probe.busy(),
                     "idle": probe.idle(),
                     "label": label() if callable(label) else None,
+                    "kept": kept() if callable(kept) else None,
+                    "can_quit": bool(can_quit()) if callable(can_quit) else False,
                 }
             except Exception as exc:
                 logger.warning(
@@ -1148,12 +1197,22 @@ class ResourceArbiter:
             if reading is not None
             else []
         )
+        closing = self._comfyui_closing_locked(lease, free) if code == "vram" else None
+        if text is None and closing is not None:
+            text = (
+                f"Needs ComfyUI closed: needs {_gb(lease.need_mb)}; "
+                f"{_gb(lease.need_mb - closing['short_mb'])} is free once "
+                f"ComfyUI unloads its models, and it keeps "
+                f"{_gb(closing['kept_mb'])} until it quits."
+            )
         if text is None:
             held = "; ".join(f"{h['label']} holds {_gb(h['used_mb'])}" for h in holders)
             text = f"Needs {_gb(lease.need_mb)}; {_gb(free)} is free." + (
                 f" {held}." if held else ""
             )
         actions = ["run_anyway", "cancel"]
+        if closing is not None and closing["can_quit"] and not lease.quit_comfyui:
+            actions.append("quit_comfyui")
         comfy = self._probe_state.get(Tenant.COMFYUI) or {}
         if (
             lease.tenant is not Tenant.COMFYUI
@@ -1169,6 +1228,7 @@ class ResourceArbiter:
             "need_mb": lease.need_mb,
             "free_mb": free,
             "short_by_mb": max(0, lease.need_mb - free),
+            "comfyui_closing": closing,
             "position": 1,
             "blocked_by": holders
             if blocked_by is None
@@ -1187,6 +1247,29 @@ class ResourceArbiter:
             "actions": actions,
         }
 
+    def _comfyui_closing_locked(self, lease: Lease, free: int) -> dict | None:
+        """Whether only quitting ComfyUI makes *lease* fit, given *free*.
+
+        The budget's own arithmetic: short even once ComfyUI unloads its
+        models (``held - kept`` back), and fits with all it holds back.
+        ``{kept_mb, short_mb, can_quit, busy, allowed}``, or None.
+        """
+        if lease.tenant is Tenant.COMFYUI:
+            return None
+        comfy = self._comfyui_kept_locked(lease.device)
+        if comfy is None:
+            return None
+        unloaded = free + comfy["held_mb"] - comfy["kept_mb"]
+        if not unloaded < lease.need_mb <= free + comfy["held_mb"]:
+            return None
+        return {
+            "kept_mb": comfy["kept_mb"],
+            "short_mb": lease.need_mb - unloaded,
+            "can_quit": comfy["can_quit"],
+            "busy": comfy["busy"],
+            "allowed": lease.quit_comfyui,
+        }
+
     # ── reclaim and the poll thread ──────────────────────────────────────
 
     def _reclaim_step(self) -> bool:
@@ -1195,7 +1278,9 @@ class ResourceArbiter:
         1. PixlStash yields: stops its GPU work and unloads its models.
         2. ComfyUI frees, only if nothing at all is queued on it and the lease
            asking is not ComfyUI's own (its cache already counts for it).
-        3. Otherwise the lease waits.
+        3. ComfyUI quits, only if the owner said yes for this lease, it is
+           idle and all it holds is what the lease is short (#2558).
+        4. Otherwise the lease waits.
 
         Returns True when a rung ran, so the caller re-reads the cards.
         """
@@ -1217,6 +1302,7 @@ class ResourceArbiter:
             comfy = self._probe_state.get(Tenant.COMFYUI) or {}
             comfy_probe = self._probes.get(Tenant.COMFYUI)
             short_of_memory = (short.waiting_reason or {}).get("code") == "vram"
+            closing = (short.waiting_reason or {}).get("comfyui_closing")
         if (
             "pixlstash" not in short.reclaimed
             and pixlstash_here
@@ -1282,6 +1368,38 @@ class ResourceArbiter:
                     short.id,
                     exc,
                     exc_info=True,
+                )
+            return True
+        if (
+            short.quit_comfyui
+            and "comfyui_quit" not in short.reclaimed
+            and short_of_memory
+            and closing is not None
+            and closing.get("can_quit")
+            and comfy.get("idle")
+            and callable(getattr(comfy_probe, "quit", None))
+        ):
+            short.reclaimed.add("comfyui_quit")
+            try:
+                quit_ = comfy_probe.quit()
+            except Exception as exc:
+                logger.error(
+                    "ComfyUI could not be quit for %s: %s", short.id, exc, exc_info=True
+                )
+                quit_ = False
+            if quit_:
+                short.warn(
+                    "comfyui_quit",
+                    "ComfyUI was quit to make room for this run. Start it "
+                    "again once the run ends.",
+                )
+            else:
+                # Asked again (Quit ComfyUI now), it tries again.
+                with self._lock:
+                    short.quit_comfyui = False
+                short.warn(
+                    "comfyui_quit_failed",
+                    "ComfyUI could not be quit. Close it yourself and this run starts.",
                 )
             return True
         return False

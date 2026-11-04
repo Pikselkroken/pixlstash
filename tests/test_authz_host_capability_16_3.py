@@ -573,6 +573,10 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     91 = 73 + 18 with ``DELETE /model-folders/{folder_id}/runs/{run_name}``,
     which moves one ai-toolkit run folder to the host trash: ``POST
     /model-files/delete``' authority over a run.
+    92 = 74 + 18 with ``POST /training/jobs/{job_id}/quit-comfyui`` (#2558),
+    the owner's yes to PixlStash terminating the local ComfyUI process for a
+    queued run: ``POST /training/jobs/{job_id}/cancel``'s host-process signal,
+    aimed at ComfyUI's pid. Nothing spawns, so the loopback count is unchanged.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -587,7 +591,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 18, sorted(loopback)
-    assert len(local) == 73, sorted(local)
+    assert len(local) == 74, sorted(local)
 
 
 # ===========================================================================
