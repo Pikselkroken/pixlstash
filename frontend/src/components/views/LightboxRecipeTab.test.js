@@ -804,13 +804,38 @@ describe("the lightbox Edit tab", () => {
     expect(chip().exists()).toBe(true);
   });
 
+  // The shut pane is the witness: the tab getter falls back to Info by
+  // itself, so the tab read alone would pass with the guard gone.
   it("has no chip, and E does nothing, in a read-only session", async () => {
     isReadOnly.value = true;
+    useSidebarStore().lightboxRailOpen = false;
     const wrapper = await openOn(7, undefined, configured);
     expect(wrapper.find(".lightbox-edit-chip").exists()).toBe(false);
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "e" }));
     await flush();
-    expect(activeTab(wrapper)).toBe("Info");
+    expect(useSidebarStore().lightboxRailOpen).toBe(false);
+  });
+
+  it("has no chip, and E does nothing, in a narrow window", async () => {
+    useSidebarStore().lightboxRailOpen = false;
+    const wrapper = await openOn(7, undefined, configured);
+    wrapper.vm.isMobile = true;
+    await flush();
+    expect(wrapper.find(".lightbox-edit-chip").exists()).toBe(false);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "e" }));
+    await flush();
+    expect(useSidebarStore().lightboxRailOpen).toBe(false);
+    expect(wrapper.vm.paintActive).toBe(false);
+  });
+
+  it("leaves E to the Eraser on the Edit tab, chrome hidden or not", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    wrapper.vm.chromeHidden = true;
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "e" }));
+    await flush();
+    // Tool keys wait for the chrome; E must not bring it back as a tab key.
+    expect(wrapper.vm.chromeHidden).toBe(true);
   });
 
   it("keeps the chrome on a canvas click while the Edit tab is open", async () => {

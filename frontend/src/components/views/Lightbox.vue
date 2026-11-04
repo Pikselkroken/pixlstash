@@ -692,7 +692,7 @@
                Gone while that tab is up (you are already there) and under a
                comparison, whose After tag holds this corner. -->
           <button
-            v-if="editTabShown && !paintActive && !compareShown"
+            v-if="editTabOffered && !compareShown"
             type="button"
             class="lightbox-edit-chip"
             :class="{ hidden: chromeHidden }"
@@ -3296,7 +3296,7 @@ function handleKeydown(e) {
     }
     // E: the Edit tab, the hidden chip's key. On that tab already, E is the
     // Eraser, which waits for the chrome like the other tool keys.
-    if (isEditKey(e) && editTabShown.value && !paintActive.value) {
+    if (isEditKey(e) && editTabOffered.value) {
       e.preventDefault();
       openEditTab();
       return;
@@ -3472,7 +3472,7 @@ function handleKeydown(e) {
       e.preventDefault();
       beginTagEntry();
     }
-  } else if (isEditKey(e) && editTabShown.value && !paintActive.value) {
+  } else if (isEditKey(e) && editTabOffered.value) {
     // On the Edit tab E is the Eraser (handlePaintKey, above).
     e.preventDefault();
     openEditTab();
@@ -3766,9 +3766,6 @@ function beginTagEntry() {
   railPictureRef.value?.focusTags();
 }
 
-/** E and the canvas's Edit chip: the Edit tab, in a pane opened for it if the
- * rail was shut, as the grid's *Edit…* does. A press, so the closed-inspector
- * rule (never open by itself) holds. */
 /** A bare E: Ctrl+E and friends are the browser's. */
 function isEditKey(e) {
   return (
@@ -3776,6 +3773,17 @@ function isEditKey(e) {
   );
 }
 
+/** Whether E and the canvas's Edit chip lead anywhere: not on the Edit tab
+ * (there E is the Eraser), and not in a narrow window, whose inspector is
+ * `display: none` - opening the tab there would arm the Paint layer over the
+ * picture with no toolbox in sight. */
+const editTabOffered = computed(
+  () => editTabShown.value && !paintActive.value && !isMobile.value,
+);
+
+/** E and the canvas's Edit chip: the Edit tab, in a pane opened for it if the
+ * rail was shut, as the grid's *Edit…* does. A press, so the closed-inspector
+ * rule (never open by itself) holds. */
 function openEditTab() {
   openSidebar();
   sidebarTab.value = "edit";

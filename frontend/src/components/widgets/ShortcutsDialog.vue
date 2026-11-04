@@ -193,7 +193,7 @@ const open = computed(() => props.modelValue);
         </tr>
         <tr :class="{ 'shortcut-disabled': isReadOnly }">
           <td><kbd>E</kbd></td>
-          <td>Edit the picture (on the Edit tab: Eraser)</td>
+          <td>Open the Edit tab (on it, with ComfyUI: Eraser)</td>
         </tr>
         <tr>
           <td><kbd>Ctrl</kbd>+<kbd>C</kbd></td>

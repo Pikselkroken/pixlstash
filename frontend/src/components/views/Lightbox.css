@@ -653,8 +653,7 @@
 }
 
 /* The closed inspector's edge tab (34px) stands at the stage's right edge. */
-.lightbox-canvas--edge-tab .lightbox-nav-right,
-.lightbox-canvas--edge-tab .lightbox-edit-chip {
+.lightbox-canvas--edge-tab .lightbox-nav-right {
   right: calc(var(--space-4) + 34px);
 }
 
