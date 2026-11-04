@@ -301,9 +301,11 @@ class ComfyUIProbe:
         has the owner's yes. Returns True once the process has exited.
         """
         pid = self._pid
-        # Asked again now: a pid read a while ago may name another process.
+        # Asked again now: a pid read a while ago may name another process,
+        # and a queue read a second ago may have missed a job just submitted.
         if pid is not None and self._listening_pid([pid]) is None:
             pid = None
+        self._queue = (0.0, None)
         if pid is None or not self.idle():
             logger.info(
                 "Not quitting ComfyUI at %s: %s",
@@ -318,8 +320,8 @@ class ComfyUIProbe:
         except psutil.NoSuchProcess:
             logger.info("ComfyUI's process %s had already exited", pid)
         except (psutil.Error, OSError) as exc:
-            # TimeoutExpired is a psutil.Error too: it is left running rather
-            # than killed, since a hard kill can lose whatever it was writing.
+            # TimeoutExpired is a psutil.Error too: not escalated to a kill.
+            # (On Windows psutil's terminate is already TerminateProcess.)
             logger.warning(
                 "Could not quit ComfyUI at %s (process %s): %s",
                 self._base_url,
@@ -338,6 +340,8 @@ class ComfyUIProbe:
             self._searched = frozenset()
             self._stats = (0.0, None)
             self._queue = (0.0, None)
+            # The next ComfyUI started here is a new process with its own floor.
+            self._floor_mb = None
         return True
 
     def _process_mb(self) -> int | None:
@@ -353,7 +357,11 @@ class ComfyUIProbe:
         processes = ledger().processes(card)
         if self._pid not in processes and frozenset(processes) != self._searched:
             self._searched = frozenset(processes)
-            self._pid = self._listening_pid(processes)
+            found = self._listening_pid(processes)
+            if found is not None and self._pid is not None and found != self._pid:
+                # ComfyUI was restarted: its floor was another process's.
+                self._floor_mb = None
+            self._pid = found
             if self._pid is None and processes:
                 logger.warning(
                     "No process on ComfyUI's card listens on %s, so its memory "

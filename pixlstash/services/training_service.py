@@ -816,11 +816,12 @@ class TrainingService:
             granted = lease.wait(self._stop)
             with self._active_lock:
                 self._waiting = None
+            if any(w.get("code") == "comfyui_quit" for w in lease.warnings):
+                # The run page says, after the run, it can be started again,
+                # cancelled meanwhile or not.
+                self._update_job(job_uuid, comfyui_quit="quit")
             if self._job_status(job_uuid) != "queued":
                 return  # cancelled while it waited
-            if any(w.get("code") == "comfyui_quit" for w in lease.warnings):
-                # The run page says, after the run, it can be started again.
-                self._update_job(job_uuid, comfyui_quit="quit")
             if not granted:
                 if not self._stop.is_set():
                     # Cancelled from the Tasks tab's waiting row.

@@ -1394,6 +1394,9 @@ class ResourceArbiter:
                     "again once the run ends.",
                 )
             else:
+                # Asked again (Quit ComfyUI now), it tries again.
+                with self._lock:
+                    short.quit_comfyui = False
                 short.warn(
                     "comfyui_quit_failed",
                     "ComfyUI could not be quit. Close it yourself and this run starts.",

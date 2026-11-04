@@ -71,6 +71,7 @@ class FakeComfy:
         self.kept = kept
         self.quittable = can_quit
         self.quits = 0
+        self.quit_works = True
 
     def device(self):
         return self._device
@@ -97,6 +98,8 @@ class FakeComfy:
 
     def quit(self):
         self.quits += 1
+        if not self.quit_works:
+            return False
         self.usage = 0
         return True
 
@@ -701,6 +704,26 @@ def test_comfyui_is_quit_only_with_the_owners_yes_and_only_once_it_unloaded():
     lease.release()
 
 
+def test_a_quit_that_fails_says_so_and_can_be_asked_again():
+    arb, probe, lease, settle = _quit_scene(8000, can_quit=True)
+    probe.quit_works = False
+    lease.allow_comfyui_quit()
+    while arb._reclaim_step():
+        settle()
+    assert probe.quits == 1
+    assert [w["code"] for w in lease.warnings] == ["comfyui_quit_failed"]
+    settle()
+    assert lease.state is LeaseState.WAITING
+    assert "quit_comfyui" in lease.waiting_reason["actions"], "offered again"
+    probe.quit_works = True
+    lease.allow_comfyui_quit()
+    settle()
+    assert arb._reclaim_step() and probe.quits == 2
+    settle()
+    assert lease.state is LeaseState.GRANTED
+    lease.release()
+
+
 def test_comfyui_is_never_quit_when_an_unload_is_enough_or_it_is_busy():
     # An unload frees 6500, enough for 6000: no offer, no quit, though allowed.
     arb, probe, lease, settle = _quit_scene(6000, can_quit=True)
@@ -712,7 +735,7 @@ def test_comfyui_is_never_quit_when_an_unload_is_enough_or_it_is_busy():
     lease.release()
 
     # Busy with work PixlStash did not submit: never quit mid-job.
-    arb, probe, lease, settle = _quit_scene(8000, can_quit=True, idle=False)
+    arb, probe, lease, settle = _quit_scene(8000, can_quit=True, idle=False, busy=True)
     lease.allow_comfyui_quit()
     settle()
     assert not arb._reclaim_step()
@@ -1154,6 +1177,7 @@ def test_comfyui_keeps_the_least_it_held_and_quits_only_its_own_idle_process(
     probe._queue = (0.0, None)
     assert probe.quit() and ended == [4242], "the listener, not the other pid"
     assert not probe.can_quit()
+    assert probe.kept_mb() is None, "the next ComfyUI has its own floor"
 
 
 def test_the_ledger_lists_one_cards_processes_without_its_own():

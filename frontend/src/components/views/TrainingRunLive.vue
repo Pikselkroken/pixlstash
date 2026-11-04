@@ -1012,7 +1012,9 @@ const notice = computed(() => {
   // behind Full message when it says more.
   if (run.status === "error") {
     const { short, full } = failureText(run);
-    return { kind: "err", icon: "mdi-alert", title: short || "The run failed.", text: "", full };
+    // A run ComfyUI was quit for says so here too: the owner needs it back.
+    const text = run.comfyui_quit ? "ComfyUI was quit for this run and can be started again." : "";
+    return { kind: "err", icon: "mdi-alert", title: short || "The run failed.", text, full };
   }
   if (run.comfyui_quit && !comfyNoticeDismissed.value) {
     return {

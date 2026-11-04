@@ -649,6 +649,21 @@ describe("TrainingRunLive", () => {
     expect(wrapper.find(".trl-notice--ok").text()).toContain("ComfyUI can be started again.");
     await wrapper.find('[data-testid="trl-comfyui-dismiss"]').trigger("click");
     expect(wrapper.text()).not.toContain("ComfyUI can be started again.");
+
+    // A run that failed after the quit still says so, beside its error.
+    const failed = await open(
+      payload({
+        status: "error",
+        phase: null,
+        previews: null,
+        error: "Training failed.",
+        report: null,
+        comfyui_quit: { at: "2026-10-26T09:00:00+00:00" },
+      }),
+    );
+    expect(failed.find(".trl-notice--err").text()).toContain(
+      "ComfyUI was quit for this run and can be started again.",
+    );
   });
 
   it("says a run queued behind another run waits for that run, not the GPU", async () => {
