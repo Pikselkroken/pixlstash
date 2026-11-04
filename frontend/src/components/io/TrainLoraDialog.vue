@@ -1376,6 +1376,9 @@ async function answerComfy(answer) {
     await onStart();
   } finally {
     store.comfyuiAnswer = null;
+    // Not queued (the footer says why): the Train dialog stays, so focus
+    // goes back to Start rather than to the page body.
+    if (store.trainDialogOpen) nextTick(() => startButton.value?.focus?.());
   }
 }
 
