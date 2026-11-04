@@ -321,29 +321,26 @@ describe("TagHealthBoard: provably-empty Start review gate", () => {
     expect(startBtn(w).attributes("disabled")).toBeUndefined();
   });
 
-  it("leaves every button enabled on an UNSCOPED board, where scopes can differ", () => {
-    // ReviewSessionsOverlay only inherits the board scope into the dialog when
-    // store.healthScoped is true; unscoped, the dialog prefills from the app
-    // selection, so this row's numbers may not describe the resulting review.
+  it("gates an UNSCOPED board too: a row-started review takes the board scope", () => {
+    // ReviewSessionsOverlay prefills a row-started review with the board scope
+    // even when unscoped (whole library), so the row's numbers describe it.
     const w = mountRows(
       [healthRow({ ground_truth: 0, est_wrong: 0, est_missing: 0, mismatch: 0 })],
       { projectId: null, setId: null, characterId: null },
     );
     expect(store.healthScoped).toBe(false);
-    expect(startBtn(w).attributes("disabled")).toBeUndefined();
-    expect(w.find(".rs-board-action").attributes("data-tip")).toBeUndefined();
+    expect(startBtn(w).attributes("disabled")).toBeDefined();
   });
 
-  it("re-evaluates when the scope changes", async () => {
-    const w = mountRows(
-      [healthRow({ ground_truth: 0, est_wrong: 0, est_missing: 0, mismatch: 0 })],
-      { projectId: null, setId: null, characterId: null },
-    );
-    expect(startBtn(w).attributes("disabled")).toBeUndefined();
-
-    store.healthScope = { projectId: 3, setId: null, characterId: null };
-    await w.vm.$nextTick();
+  it("re-evaluates when the rows change", async () => {
+    const w = mountRows([
+      healthRow({ ground_truth: 0, est_wrong: 0, est_missing: 0, mismatch: 0 }),
+    ]);
     expect(startBtn(w).attributes("disabled")).toBeDefined();
+
+    store.healthRows = [healthRow({ ground_truth: 5 })];
+    await w.vm.$nextTick();
+    expect(startBtn(w).attributes("disabled")).toBeUndefined();
   });
 
   it("does not blocked-tag a row that already has an open session", () => {

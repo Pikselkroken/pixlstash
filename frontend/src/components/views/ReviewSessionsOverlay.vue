@@ -314,11 +314,16 @@ function initialScopeFromSelection() {
 
 function openNewReview(preset = "") {
   store.createError = null;
-  // A scope chosen on the health board is the user's explicit working scope -
-  // it wins over the app-selection prefill.
-  const initialScope = store.healthScoped
-    ? { ...store.healthScope }
-    : initialScopeFromSelection();
+  // A review started from a board row (preset tag) takes the board's scope,
+  // scoped or not: the row's Priority numbers describe that scope, so a review
+  // of anything else (e.g. the 3 pictures selected in the grid) is a different
+  // review that routinely finds nothing. A scope chosen on the board also wins
+  // for the bare "New review…" entry; only that one falls back to the app
+  // selection.
+  const initialScope =
+    preset || store.healthScoped
+      ? { ...store.healthScope }
+      : initialScopeFromSelection();
   dialog.value = { preset, initialScope };
 }
 
