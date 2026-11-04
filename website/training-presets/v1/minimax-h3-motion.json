@@ -1,6 +1,6 @@
 {
   "id": "minimax-h3-motion",
-  "version": 2,
+  "version": 3,
   "label": "MiniMax H3 · motion",
   "requires_arch": "minimax_h3",
   "template": "zimage-turbo-lora",
@@ -61,22 +61,22 @@
   },
   "effort": {
     "gentle": {
-      "steps_per_picture": 40,
-      "min_steps": 800,
+      "steps_per_picture": 60,
+      "min_steps": 1000,
       "max_steps": 1500,
       "train.lr": 8e-05,
       "network.linear": 16
     },
     "standard": {
-      "steps_per_picture": 60,
-      "min_steps": 1000,
-      "max_steps": 2000,
+      "steps_per_picture": 100,
+      "min_steps": 1500,
+      "max_steps": 2500,
       "train.lr": 0.0001,
       "network.linear": 16
     },
     "strong": {
-      "steps_per_picture": 80,
-      "min_steps": 1500,
+      "steps_per_picture": 150,
+      "min_steps": 2000,
       "max_steps": 3000,
       "train.lr": 0.0001,
       "network.linear": 32
@@ -163,7 +163,7 @@
     "defaults": "ai-toolkit UI defaults for minimax_h3 (timestep shift, adamw8bit, lr 1e-4, rank 16, do_audio on, audio_loss_multiplier 1). Training stays at 512: a 107-frame clip at 512 is 32 latent frames of 256 tokens each",
     "preview.base": "minimax_h3.py model notes: guidance-distilled, keep guidance at 1; 28 steps at 24 fps. ai-toolkit previews 107 frames at 768, which ran out of memory on a 32 GB card with 30% of layers in RAM (an ai-toolkit run on the owner's machine); previews here are 56 frames (2.3 s) at 768, about 87 s each",
     "subject": "heuristic, as for Z-Image Turbo: ai-toolkit's own caption dropout default is 0.0; content_or_style per jobs/process/BaseSDTrainProcess.py",
-    "effort": "ai-toolkit's MiniMax-H3 defaults (lr 1e-4, rank 16); the adapter's notes say it breaks down over long runs, so the step ranges stay under 3000. No source gives a steps-per-picture rule",
+    "effort": "ai-toolkit's MiniMax-H3 defaults (lr 1e-4, rank 16, 3000 steps). Its distillation note says the training adapter 'will still break down over a long run', so no effort goes past ai-toolkit's own 3000. Steps per picture are the other recipes' 60/100/150 rather than the unsourced 40/60/80 shipped first, which planned 1,760 steps for 22 pictures at Strong: a motion run on the owner's machine (15 stills and a clip, 2500 steps, about 156 per item, rank 16) was still sharpening the likeness at its last save, with the class prompts unchanged and no sign of the adapter breaking down; a stills run held to 2000 steps on 95 pictures was still moving at 2000. No source gives a steps-per-picture rule",
     "hardware_profiles": "measured on an RTX 5090 (32 GB) with this recipe rendered by PixlStash: 6 updates at 512 on two 4.6 s clips with sound (trained as 107 frames) and two stills, rank 16, batch 1, a save and 56-frame 768 previews at 28 steps; the trainer's processes read every 0.25 s by nvidia-smi and their resident memory. vram_mb and ram_mb are the highest peak outside previews x1.1 (training/measurements.py NEED_MARGIN). About 6.8 s per update on a 107-frame clip. A longer clip trains more frames and needs more: nothing caps a clip's length",
     "hardware_profiles.q8_offload_60": "measured: the text encoder sits wholly in RAM, since it is unloaded once captions are cached and so costs no training speed. The peak is the video VAE encoding a clip while latents cache: a 124-frame clip at 416x608 peaked 24.7 GB (30.3 GB with 60% of the text encoder in RAM, which left about 6 GB of it on the GPU), captions 19.8 GB, training 11.9 GB, about 1.75 s per update; seeded at 24.7 GB x1.1. The earlier 107-frame runs peaked 23.4 GB encoding captions with the text encoder at 60%, 21.8 GB training and previewing; 74.2 GB resident while the weights load, 43-56 GB after",
     "hardware_profiles.q8_offload_90": "measured on the same 124-frame clip and stills: the clip's VAE encode peaked 19.7 GB, captions 14.8 GB, training 6.5 GB, about 2.35 s per update (a third slower than 60%); seeded at 19.7 GB x1.1. The trainer's resident memory read 63.1 GB while the weights load, 41-48 GB after. Previews were not drawn in this measurement; the 60% profile drew 56-frame 768 previews at 21.5 GB, and this run measures its own",

@@ -1,6 +1,6 @@
 {
   "id": "minimax-h3-image",
-  "version": 1,
+  "version": 2,
   "label": "MiniMax H3 · from stills",
   "requires_arch": "minimax_h3",
   "template": "zimage-turbo-lora",
@@ -55,22 +55,22 @@
   },
   "effort": {
     "gentle": {
-      "steps_per_picture": 40,
-      "min_steps": 800,
+      "steps_per_picture": 60,
+      "min_steps": 1000,
       "max_steps": 1500,
       "train.lr": 8e-05,
       "network.linear": 16
     },
     "standard": {
-      "steps_per_picture": 60,
-      "min_steps": 1000,
-      "max_steps": 2000,
+      "steps_per_picture": 100,
+      "min_steps": 1500,
+      "max_steps": 2500,
       "train.lr": 0.0001,
       "network.linear": 16
     },
     "strong": {
-      "steps_per_picture": 80,
-      "min_steps": 1500,
+      "steps_per_picture": 150,
+      "min_steps": 2000,
       "max_steps": 3000,
       "train.lr": 0.0001,
       "network.linear": 32
@@ -136,7 +136,7 @@
     "defaults": "ai-toolkit UI defaults for minimax_h3 (timestep shift, adamw8bit, lr 1e-4, rank 16). Image mode trains stills as single frames (num_frames 1), so a set's clips are left out",
     "preview.base": "minimax_h3.py model notes: guidance-distilled, keep guidance at 1; 28 steps as ai-toolkit samples; a single frame renders an image",
     "subject": "heuristic, as for Z-Image Turbo: ai-toolkit's own caption dropout default is 0.0; content_or_style per jobs/process/BaseSDTrainProcess.py",
-    "effort": "ai-toolkit's MiniMax-H3 defaults (lr 1e-4, rank 16); the adapter's notes say it breaks down over long runs, so the step ranges stay under 3000. No source gives a steps-per-picture rule",
+    "effort": "ai-toolkit's MiniMax-H3 defaults (lr 1e-4, rank 16, 3000 steps). Its distillation note says the training adapter 'will still break down over a long run', so no effort goes past ai-toolkit's own 3000. Steps per picture are the other recipes' 60/100/150 rather than the unsourced 40/60/80 shipped first, which planned 1,760 steps for 22 pictures at Strong: a motion run on the owner's machine (15 stills and a clip, 2500 steps, about 156 per item, rank 16) was still sharpening the likeness at its last save, with the class prompts unchanged and no sign of the adapter breaking down; a stills run held to 2000 steps on 95 pictures was still moving at 2000. No source gives a steps-per-picture rule",
     "hardware_profiles": "measured on an RTX 5090 (32 GB) with this recipe rendered by PixlStash: 4 updates at 1024 (and 6 over 512/768/1024), rank 16, batch 1, a save and 1024 previews at 28 steps; the trainer's processes read every 0.25 s by nvidia-smi and their resident memory. vram_mb and ram_mb are the highest peak outside previews x1.1, as a measurement on the owner's machine is admitted (training/measurements.py NEED_MARGIN). About 2.2 s per update at 1024, 11-18 s a preview",
     "hardware_profiles.q8_offload_60": "measured: peaks 17.2 GB encoding captions and 17.0 GB training at 1024, 16.4 GB previewing; 69.1 GB resident while the weights load, 45-54 GB after",
     "hardware_profiles.q8_low_vram.vram_mb": "derived: ran out of memory on the 32 GB card moving the 21 GB transformer onto the GPU, about 29.5 GB in use; 30% of layers in RAM also ran out there (27.7 GB measured, with the text encoder still resident). Seeded at 36 GB (a 40 GB card, less its margin) for the transformer, LoRA state and 1024 activations",
