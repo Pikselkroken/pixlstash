@@ -8,6 +8,7 @@ Phase 2 §4.6). Character-likeness scoring lives in the sibling
 """
 
 import functools
+import json
 import pathlib
 from collections import defaultdict
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     DEFAULT_SMART_SCORE_PENALIZED_TAGS,
     DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
+    Face,
     Picture,
     Quality,
     Tag,
@@ -35,6 +37,7 @@ from pixlstash.utils.quality.smart_score_utils import (
 )
 from pixlstash.utils.service.anomaly_thresholds import resolve_anomaly_apply_thresholds
 from pixlstash.utils.service.label_ledger import HUMAN, NEG, POS
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
@@ -259,6 +262,58 @@ def fetch_anomaly_confidences(
     return probs_map, human_map
 
 
+# Face extraction stores the detector's box grown by this scale on each side (then
+# rounded up to 64 px at its working size; Face.expand_face_bbox). Same value as
+# tasks.face_extraction_task.CROP_EXPAND_SCALE, inlined so scoring does not import
+# the InsightFace task module.
+_STORED_FACE_BOX_SCALE = 1.25
+
+
+def fetch_main_face_mpx(session: Session, picture_ids) -> dict:
+    """Return ``{picture_id: megapixels}`` of each picture's largest face.
+
+    The resolution term scores these pixels instead of the file's, so a face crop
+    and the picture it came from score alike. The stored box is shrunk back by
+    :data:`_STORED_FACE_BOX_SCALE` to about the detector's own face.
+
+    ponytail: the 64 px round-up is not undone, so a face in a large file reads up
+    to ~1.6x its area against ~1.05x in a small crop of it; a few hundredths of
+    Quality. Storing the detector's unrounded box is the upgrade.
+
+    Args:
+        session: Active DB session.
+        picture_ids: Pictures to look up.
+
+    Returns:
+        Mapping of picture id to face megapixels. Pictures with no face box are
+        absent.
+    """
+    ids = [pid for pid in picture_ids if pid is not None]
+    result: dict = {}
+    for chunk in chunked(ids):
+        rows = session.exec(
+            select(Face.picture_id, Face.bbox_).where(
+                Face.picture_id.in_(chunk), Face.bbox_.is_not(None)
+            )
+        ).all()
+        for picture_id, raw in rows:
+            try:
+                x1, y1, x2, y2 = (float(v) for v in json.loads(raw))
+            except (TypeError, ValueError) as exc:
+                logger.warning(
+                    "Unreadable face box %r on picture %s (%s); ignored for resolution.",
+                    raw,
+                    picture_id,
+                    exc,
+                )
+                continue
+            area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+            mpx = area / (_STORED_FACE_BOX_SCALE**2) / 1_000_000.0
+            if mpx > result.get(picture_id, 0.0):
+                result[picture_id] = mpx
+    return result
+
+
 def resolve_penalised_tag_weights(auth_service) -> dict:
     """Return the owner's effective ``{tag: weight}`` penalised-tag table.
 
@@ -461,6 +516,10 @@ def fetch_smart_score_data(
                 }
             )
 
+        face_mpx = fetch_main_face_mpx(session, [c["id"] for c in candidates])
+        for candidate in candidates:
+            candidate["face_mpx"] = face_mpx.get(candidate["id"])
+
         # Calibrated anomaly inputs, per-tag precision, and the owner's penalised-tag
         # weights.
         scorer_config = attach_anomaly_inputs(
@@ -576,6 +635,7 @@ def prepare_smart_score_inputs(good_anchors, bad_anchors, candidates):
                     "anomaly_human": get_attr(p, "anomaly_human") or frozenset(),
                     "width": get_attr(p, "width"),
                     "height": get_attr(p, "height"),
+                    "face_mpx": get_attr(p, "face_mpx"),
                     "sharpness": get_attr(p, "sharpness"),
                     "edge_density": get_attr(p, "edge_density"),
                     "luminance_entropy": get_attr(p, "luminance_entropy"),

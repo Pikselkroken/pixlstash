@@ -181,13 +181,33 @@ def _wait_for(predicate, timeout=10.0):
     return False
 
 
+def _settle_background_work(server, timeout_s=60.0):
+    """Stop the planner, drop queued work and wait out what is already running.
+
+    Stopping the planner alone leaves an in-flight face task free to land after
+    a test seeds a score, and a face write clears the stored score (the
+    resolution term reads the face). Finders stay registered, unlike
+    ``tests.utils.quiesce_background_work``: one test drives a finder by hand.
+    """
+    server.vault._work_planner.stop()
+    runner = server.vault._task_runner
+    runner.cancel_pending_tasks()
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        with runner._active_task_lock:
+            if not runner._active_tasks:
+                return
+        time.sleep(0.05)
+    raise AssertionError(f"background work did not settle within {timeout_s:.0f}s")
+
+
 def _set_smart_score(server, pic_id, value=0.5, with_embedding=True):
     """Give the picture a stored smart score (and an embedding so the finder sees it)."""
 
     # Uploads require live workers, but every caller below is about to inspect
     # deliberately controlled intermediate score state. Stop the finder before
     # making that state visible so it cannot claim the row between assertions.
-    server.vault._work_planner.stop()
+    _settle_background_work(server)
 
     def _apply(session):
         pic = session.get(Picture, pic_id)
@@ -1032,6 +1052,7 @@ def test_identical_threshold_offset_save_is_a_noop():
 
 def _prepare_for_scoring(server, pic_id):
     """Give the picture an embedding and clear its score so the finder picks it up."""
+    _settle_background_work(server)
 
     def _apply(session):
         pic = session.get(Picture, pic_id)
@@ -1170,7 +1191,7 @@ def test_persist_leaves_row_null_when_anomaly_state_changed_mid_scoring():
 
         # Signature the scorer would have fed from, captured with the inputs.
         before = server.vault.db.run_task(
-            lambda s: anomaly_state_signature(s, [pic_id])
+            lambda s: SmartScoreTask._input_signature(s, [pic_id])
         )
 
         # A concurrent tag edit lands after compute but before persist, moving the
@@ -1202,7 +1223,7 @@ def test_persist_writes_score_when_anomaly_state_unchanged():
         _prepare_for_scoring(server, pic_id)
 
         before = server.vault.db.run_task(
-            lambda s: anomaly_state_signature(s, [pic_id])
+            lambda s: SmartScoreTask._input_signature(s, [pic_id])
         )
         # No mutation between snapshot and persist.
         persisted = server.vault.db.run_task(
@@ -1586,7 +1607,9 @@ def test_persist_writes_batch_as_single_bulk_statement():
         for pid in pic_ids:
             _prepare_for_scoring(server, pid)
 
-        before = server.vault.db.run_task(lambda s: anomaly_state_signature(s, pic_ids))
+        before = server.vault.db.run_task(
+            lambda s: SmartScoreTask._input_signature(s, pic_ids)
+        )
         id_to_score = {pid: 0.5 + i * 0.1 for i, pid in enumerate(pic_ids)}
 
         executed: list[str] = []
@@ -1638,7 +1661,7 @@ def test_persist_preserves_metadata_hash():
         assert h0 is not None
 
         before = server.vault.db.run_task(
-            lambda s: anomaly_state_signature(s, [pic_id])
+            lambda s: SmartScoreTask._input_signature(s, [pic_id])
         )
         persisted = server.vault.db.run_task(
             SmartScoreTask._persist_scores, {pic_id: 0.5}, before
@@ -1667,7 +1690,7 @@ def test_persist_excludes_picture_deleted_mid_flight():
         gone_id = 9_999_999  # never existed → stands in for a hard-deleted row
 
         before = server.vault.db.run_task(
-            lambda s: anomaly_state_signature(s, [pic_id, gone_id])
+            lambda s: SmartScoreTask._input_signature(s, [pic_id, gone_id])
         )
         persisted = server.vault.db.run_task(
             SmartScoreTask._persist_scores,
