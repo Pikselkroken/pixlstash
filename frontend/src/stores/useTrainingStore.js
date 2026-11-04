@@ -71,7 +71,7 @@ export const useTrainingStore = defineStore("training", () => {
   const trainOn = ref("all");
   const childSet = ref(null); // { id, name, count } or null
   // Opened from the Models workspace, which has no set or person in view: the
-  // dialog leads with a Train on picker, and Start lands on Training runs.
+  // dialog leads with a Train on picker.
   const pickable = ref(false);
 
   // ── Dialog: the choices, and what they resolve to ──────────────────────────
