@@ -159,7 +159,9 @@ class SmartScoreUtils:
         Calculate smart scores for a batch of candidates using numpy.
 
         Args:
-            candidates: List of dicts with 'id', 'embedding' (numpy array), 'aesthetic_score'.
+            candidates: List of dicts with 'id', 'embedding' (numpy array), 'aesthetic_score'
+                and optionally 'face_mpx' (the main face's megapixels, which replaces
+                the file's in the resolution term).
             good_anchors: List of dicts with 'embedding', 'score'.
             bad_anchors: List of dicts with 'embedding', 'score'.
             config: Config dict overrides.
@@ -224,6 +226,13 @@ class SmartScoreUtils:
             "aest_max": 7.0,
             "res_min_mpx": 0.2,
             "res_max_mpx": 4.0,
+            # A picture with a face is scored on the face's own pixels (``face_mpx``,
+            # see scoring.smart_score.fetch_main_face_mpx), not the file's: a crop and
+            # its source share those pixels, so they get about the same credit, and a
+            # full-length shot with a small face gets little however big the file. ~64 px square to ~390 px
+            # square; a face that size is all the detail a face can use.
+            "face_res_min_mpx": 0.004,
+            "face_res_max_mpx": 0.15,
             "res_use_log": True,
             # Reward compositionally rich images using two objective cues:
             # 1) edge density and 2) luminance entropy.
@@ -384,24 +393,36 @@ class SmartScoreUtils:
         aest_component = cfg["w_aest"] * cand_aest
         scores += aest_component
 
-        # Resolution (megapixels)
+        # Resolution (megapixels): the main face's when there is one, else the file's.
         widths = np.array([c.get("width") or 0 for c in candidates], dtype=np.float32)
         heights = np.array([c.get("height") or 0 for c in candidates], dtype=np.float32)
         mpx = (widths * heights) / 1_000_000.0
-        res_min = float(cfg.get("res_min_mpx", 0.2) or 0.2)
-        res_max = float(cfg.get("res_max_mpx", 4.0) or 4.0)
-        res_min = max(0.01, res_min)
-        res_max = max(res_min + 0.01, res_max)
-        if cfg.get("res_use_log", True):
-            res_vals = np.log10(np.clip(mpx, 1e-6, None))
-            res_min_val = np.log10(res_min)
-            res_max_val = np.log10(res_max)
-        else:
-            res_vals = mpx
-            res_min_val = res_min
-            res_max_val = res_max
-        denom_res = max(0.001, res_max_val - res_min_val)
-        res_norm = np.clip((res_vals - res_min_val) / denom_res, 0.0, 1.0)
+        face_mpx = np.array(
+            [
+                np.nan if c.get("face_mpx") is None else float(c["face_mpx"])
+                for c in candidates
+            ],
+            dtype=np.float64,
+        )
+        has_face = np.isfinite(face_mpx) & (face_mpx > 0)
+
+        def _res_norm(values, lo, hi):
+            lo = max(1e-4, float(lo))
+            hi = max(lo * 1.01, float(hi))
+            if cfg.get("res_use_log", True):
+                values = np.log10(np.clip(values, 1e-6, None))
+                lo, hi = np.log10(lo), np.log10(hi)
+            return np.clip((values - lo) / max(1e-3, hi - lo), 0.0, 1.0)
+
+        res_norm = np.where(
+            has_face,
+            _res_norm(
+                np.where(has_face, face_mpx, 1.0),
+                cfg["face_res_min_mpx"],
+                cfg["face_res_max_mpx"],
+            ),
+            _res_norm(mpx, cfg["res_min_mpx"], cfg["res_max_mpx"]),
+        )
         res_component = cfg["w_resolution"] * res_norm
         scores += res_component
 
@@ -549,7 +570,7 @@ class SmartScoreUtils:
                         "[SMART SCORE][MIN] id=%s raw=%.4f clipped=%.4f final=%.4f "
                         "good=%.4f bad=%.4f aest=%.4f sharpness=%.4f focus=%.4f "
                         "res=%.4f detail=%.4f text=%.4f clipiqa=%.4f penalised=%.4f "
-                        "mpx=%.4f w=%s h=%s",
+                        "mpx=%.4f face_mpx=%s w=%s h=%s",
                         candidate.get("id"),
                         float(scores[idx]),
                         float(clipped[idx]),
@@ -565,6 +586,7 @@ class SmartScoreUtils:
                         float(clipiqa_component[idx]),
                         float(penalised_component[idx]),
                         float(mpx[idx]),
+                        candidate.get("face_mpx"),
                         candidate.get("width"),
                         candidate.get("height"),
                     )

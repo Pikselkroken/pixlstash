@@ -21,6 +21,7 @@ from pixlstash.scoring.character_likeness import (
 from pixlstash.scoring.smart_score import (
     attach_anomaly_inputs,
     fetch_anomaly_confidences,
+    fetch_main_face_mpx,
     fetch_smart_score_data,
     fetch_smart_score_unscored_ids,
     find_pictures_by_smart_score,
@@ -34,6 +35,7 @@ __all__ = [
     "compute_character_likeness_for_faces",
     "count_pictures_by_character_likeness",
     "fetch_anomaly_confidences",
+    "fetch_main_face_mpx",
     "fetch_smart_score_data",
     "fetch_smart_score_unscored_ids",
     "find_pictures_by_character_likeness",
