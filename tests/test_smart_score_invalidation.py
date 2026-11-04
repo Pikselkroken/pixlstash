@@ -67,6 +67,13 @@ def _setup():
     with open(server_config_path, "w") as f:
         f.write(json.dumps({"port": 0}))
     server = Server(server_config_path)
+    # A face write clears a stored smart score (the resolution term reads the
+    # face), and these tests seed scores by hand while uploads are still being
+    # processed. Nothing here needs faces, so face extraction finds no engine and
+    # never runs (the finder stays registered: the import route requires it).
+    server.vault._planner_work_finders[TaskType.FACE_EXTRACTION]._engine_getter = (
+        lambda: None
+    )
     client = TestClient(server.api)
     resp = client.post(
         "/login", json={"username": "testuser", "password": "testpassword"}
@@ -181,33 +188,13 @@ def _wait_for(predicate, timeout=10.0):
     return False
 
 
-def _settle_background_work(server, timeout_s=60.0):
-    """Stop the planner, drop queued work and wait out what is already running.
-
-    Stopping the planner alone leaves an in-flight face task free to land after
-    a test seeds a score, and a face write clears the stored score (the
-    resolution term reads the face). Finders stay registered, unlike
-    ``tests.utils.quiesce_background_work``: one test drives a finder by hand.
-    """
-    server.vault._work_planner.stop()
-    runner = server.vault._task_runner
-    runner.cancel_pending_tasks()
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        with runner._active_task_lock:
-            if not runner._active_tasks:
-                return
-        time.sleep(0.05)
-    raise AssertionError(f"background work did not settle within {timeout_s:.0f}s")
-
-
 def _set_smart_score(server, pic_id, value=0.5, with_embedding=True):
     """Give the picture a stored smart score (and an embedding so the finder sees it)."""
 
     # Uploads require live workers, but every caller below is about to inspect
     # deliberately controlled intermediate score state. Stop the finder before
     # making that state visible so it cannot claim the row between assertions.
-    _settle_background_work(server)
+    server.vault._work_planner.stop()
 
     def _apply(session):
         pic = session.get(Picture, pic_id)
@@ -1052,7 +1039,6 @@ def test_identical_threshold_offset_save_is_a_noop():
 
 def _prepare_for_scoring(server, pic_id):
     """Give the picture an embedding and clear its score so the finder picks it up."""
-    _settle_background_work(server)
 
     def _apply(session):
         pic = session.get(Picture, pic_id)

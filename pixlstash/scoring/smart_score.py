@@ -273,12 +273,15 @@ def fetch_main_face_mpx(session: Session, picture_ids) -> dict:
     """Return ``{picture_id: megapixels}`` of each picture's largest face.
 
     The resolution term scores these pixels instead of the file's, so a face crop
-    and the picture it came from score alike. The stored box is shrunk back by
-    :data:`_STORED_FACE_BOX_SCALE` to about the detector's own face.
+    and the picture it came from get about the same credit. A stored box clear of
+    every edge is shrunk back by :data:`_STORED_FACE_BOX_SCALE` to about the
+    detector's own face; one touching an edge was clamped there rather than grown,
+    so it is taken as stored (the rule ``routes/characters.py`` crops by).
 
-    ponytail: the 64 px round-up is not undone, so a face in a large file reads up
-    to ~1.6x its area against ~1.05x in a small crop of it; a few hundredths of
-    Quality. Storing the detector's unrounded box is the upgrade.
+    ponytail: the 64 px round-up at the 512 px working size is not undone, so a
+    face in a large file reads somewhat bigger than the same face in a small crop,
+    and a hand-drawn face (never widened) reads smaller than it is. Storing the
+    detector's unrounded box is the upgrade.
 
     Args:
         session: Active DB session.
@@ -292,11 +295,17 @@ def fetch_main_face_mpx(session: Session, picture_ids) -> dict:
     result: dict = {}
     for chunk in chunked(ids):
         rows = session.exec(
-            select(Face.picture_id, Face.bbox_).where(
-                Face.picture_id.in_(chunk), Face.bbox_.is_not(None)
+            select(
+                Face.picture_id,
+                Face.bbox_,
+                Picture.width,
+                Picture.height,
+                Picture.orientation,
             )
+            .join(Picture, Picture.id == Face.picture_id)
+            .where(Face.picture_id.in_(chunk), Face.bbox_.is_not(None))
         ).all()
-        for picture_id, raw in rows:
+        for picture_id, raw, width, height, orientation in rows:
             try:
                 x1, y1, x2, y2 = (float(v) for v in json.loads(raw))
             except (TypeError, ValueError) as exc:
@@ -308,7 +317,19 @@ def fetch_main_face_mpx(session: Session, picture_ids) -> dict:
                 )
                 continue
             area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-            mpx = area / (_STORED_FACE_BOX_SCALE**2) / 1_000_000.0
+            # The box is in the picture as shown; a quarter turn swaps the file's
+            # width and height.
+            if orientation in (5, 6, 7, 8):
+                width, height = height, width
+            at_edge = (
+                x1 <= 0
+                or y1 <= 0
+                or (width and x2 >= width)
+                or (height and y2 >= height)
+            )
+            if not at_edge:
+                area /= _STORED_FACE_BOX_SCALE**2
+            mpx = area / 1_000_000.0
             if mpx > result.get(picture_id, 0.0):
                 result[picture_id] = mpx
     return result

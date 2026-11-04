@@ -97,12 +97,13 @@ def server():
         temp_dir.cleanup()
 
 
-def _make_picture(server, name, score=3.5):
+def _make_picture(server, name, score=3.5, orientation=None):
     def insert(session):
         pic = Picture(
             file_path=name,
             width=1920,
             height=1280,
+            orientation=orientation,
             image_embedding=np.random.rand(512).astype(np.float32).tobytes(),
             smart_score=score,
         )
@@ -137,10 +138,27 @@ def _add_face(server, pic_id, bbox, face_index=0):
 
 def test_main_face_is_the_largest_box_shrunk_back(server):
     pic_id = _make_picture(server, "largest.png")
-    _add_face(server, pic_id, [0, 0, 100, 100], face_index=0)
-    _add_face(server, pic_id, [0, 0, 500, 400], face_index=1)
+    _add_face(server, pic_id, [100, 100, 200, 200], face_index=0)
+    _add_face(server, pic_id, [100, 100, 600, 500], face_index=1)
     faces = server.vault.db.run_task(lambda s: fetch_main_face_mpx(s, [pic_id]))
     assert faces[pic_id] == pytest.approx(500 * 400 / 1.25**2 / 1e6)
+
+
+def test_a_box_clamped_at_an_edge_is_taken_as_stored(server):
+    """Extraction clamps a box at the edge instead of growing it there."""
+    left = _make_picture(server, "edge-left.png")
+    _add_face(server, left, [0, 100, 300, 400])
+    # 1280 wide as shown once a quarter turn (EXIF 6) swaps the 1920x1280 file.
+    turned = _make_picture(server, "edge-turned.png", orientation=6)
+    _add_face(server, turned, [980, 100, 1280, 400])
+    upright = _make_picture(server, "inside.png")
+    _add_face(server, upright, [980, 100, 1280, 400])
+    faces = server.vault.db.run_task(
+        lambda s: fetch_main_face_mpx(s, [left, turned, upright])
+    )
+    assert faces[left] == pytest.approx(0.09)
+    assert faces[turned] == pytest.approx(0.09)
+    assert faces[upright] == pytest.approx(0.09 / 1.25**2)
 
 
 def test_face_box_changes_clear_the_stored_score(server):
@@ -208,3 +226,21 @@ def test_a_score_computed_before_a_face_change_is_not_written(server):
     )
     assert persisted == [pic_id]
     assert _smart_score(server, pic_id) == 4.0
+
+
+def test_a_picture_loaded_in_the_session_sees_the_cleared_score(server):
+    """The reset is a Core UPDATE; the hook must expire the in-session copy."""
+    pic_id = _make_picture(server, "loaded.png")
+
+    def add_face_to_loaded_picture(session):
+        pic = session.get(Picture, pic_id)
+        assert pic.smart_score == 3.5
+        session.add(
+            Face(picture_id=pic_id, frame_index=0, face_index=0, bbox=[1, 1, 99, 99])
+        )
+        session.flush()
+        score = pic.smart_score
+        session.commit()
+        return score
+
+    assert server.vault.db.run_task(add_face_to_loaded_picture) is None

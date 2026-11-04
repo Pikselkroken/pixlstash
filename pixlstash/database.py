@@ -24,6 +24,7 @@ from sqlalchemy import (
     update as sa_update,
     select as sa_select,
 )
+from sqlalchemy.orm.util import identity_key
 from sqlmodel import create_engine, Session
 from fastapi import HTTPException
 from rapidfuzz.distance import Levenshtein
@@ -440,10 +441,11 @@ def _before_flush_face_box_tracker(session, flush_context, instances) -> None:
     (no box) changes nothing the scorer reads, so it does not count.
     """
     dirty_pids: set = session.info.setdefault("_face_box_dirty_pids", set())
-    for obj in itertools.chain(session.new, session.dirty, session.deleted):
+    dirty = session.dirty  # rebuilt on every access; once per flush, not per row
+    for obj in itertools.chain(session.new, dirty, session.deleted):
         if not isinstance(obj, Face) or obj.picture_id is None:
             continue
-        if obj in session.dirty:
+        if obj in dirty:
             changed = _attribute_changed(obj, "bbox_")
         else:
             changed = obj.bbox_ is not None
@@ -466,7 +468,7 @@ def _after_flush_smart_score_reset(session, flush_context) -> None:
             .values(smart_score=None)
         )
         for pid in dirty_pids:
-            cached = session.identity_map.get((Picture, (pid,)))
+            cached = session.identity_map.get(identity_key(Picture, pid))
             if cached is not None:
                 session.expire(cached, ["smart_score"])
 

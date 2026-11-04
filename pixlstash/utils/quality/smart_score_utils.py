@@ -228,8 +228,8 @@ class SmartScoreUtils:
             "res_max_mpx": 4.0,
             # A picture with a face is scored on the face's own pixels (``face_mpx``,
             # see scoring.smart_score.fetch_main_face_mpx), not the file's: a crop and
-            # its source share those pixels, and a full-length shot with a small face
-            # gets little credit however big the file. ~64 px square to ~390 px
+            # its source share those pixels, so they get about the same credit, and a
+            # full-length shot with a small face gets little however big the file. ~64 px square to ~390 px
             # square; a face that size is all the detail a face can use.
             "face_res_min_mpx": 0.004,
             "face_res_max_mpx": 0.15,
@@ -570,7 +570,7 @@ class SmartScoreUtils:
                         "[SMART SCORE][MIN] id=%s raw=%.4f clipped=%.4f final=%.4f "
                         "good=%.4f bad=%.4f aest=%.4f sharpness=%.4f focus=%.4f "
                         "res=%.4f detail=%.4f text=%.4f clipiqa=%.4f penalised=%.4f "
-                        "mpx=%.4f w=%s h=%s",
+                        "mpx=%.4f face_mpx=%s w=%s h=%s",
                         candidate.get("id"),
                         float(scores[idx]),
                         float(clipped[idx]),
@@ -586,6 +586,7 @@ class SmartScoreUtils:
                         float(clipiqa_component[idx]),
                         float(penalised_component[idx]),
                         float(mpx[idx]),
+                        candidate.get("face_mpx"),
                         candidate.get("width"),
                         candidate.get("height"),
                     )
