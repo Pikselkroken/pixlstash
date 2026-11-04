@@ -676,6 +676,12 @@
   /* Scrolls as one column, as the grid rail does. */
   overflow-x: hidden;
   overflow-y: auto;
+  /* A scroller clips at its padding box, and the face crop sits in the top
+     right corner: its ring (3px, RailPicture) needs room inside the clip. The
+     margin cancels the padding, so the content does not move (a scrollbar
+     sits 4px further right, in the pane's own padding). */
+  padding: var(--space-2);
+  margin: calc(-1 * var(--space-2));
 }
 
 /* The Edit tab's Quick changes (rendered into LightboxEditPanel's slot). */

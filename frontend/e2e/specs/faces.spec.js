@@ -30,5 +30,23 @@ test.describe('faces', () => {
     await expect(lightbox.faceBboxes.first()).toBeHidden()
     await lightbox.faceChips.first().hover()
     await expect(lightbox.faceBboxes.first()).toBeVisible()
+
+    // The pointed-at crop's ring is whole: the Info column scrolls, so it
+    // clips at its padding box, and the crop sits in its top right corner.
+    const ring = 3 // px, `.rail-face--ringed` / hover in RailPicture.vue
+    const [crop, clip] = await Promise.all([
+      lightbox.faceCrops.first().evaluate((el) => el.getBoundingClientRect().toJSON()),
+      page.locator('.lightbox-sidebar-group').evaluate((el) => {
+        const r = el.getBoundingClientRect()
+        return {
+          left: r.left + el.clientLeft,
+          top: r.top + el.clientTop,
+          right: r.left + el.clientLeft + el.clientWidth,
+        }
+      }),
+    ])
+    expect(crop.top - ring, 'ring cut at the top').toBeGreaterThanOrEqual(clip.top)
+    expect(crop.left - ring, 'ring cut at the left').toBeGreaterThanOrEqual(clip.left)
+    expect(crop.right + ring, 'ring cut at the right').toBeLessThanOrEqual(clip.right)
   })
 })
