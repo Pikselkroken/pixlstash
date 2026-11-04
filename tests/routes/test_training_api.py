@@ -1949,7 +1949,9 @@ def test_character_set_suggestion_ranks_stills_and_clips_apart():
         assert stills["excluded"]["other_people"] == 1
         assert stills["would_add"]["other_people"] == 1
         framing = {p["picture_id"]: p["buckets"]["framing"] for p in stills["picks"]}
-        assert framing[a] == ["close-up"]
+        # The face box (90 of 100 rows below a 40-row face) frames it, not
+        # its Close-up tag.
+        assert framing[a] == ["portrait"]
         assert all(0 <= p["likeness"] <= 100 for p in stills["picks"])
         assert out["targets"]["framing"]["close-up"] == 0.2
 

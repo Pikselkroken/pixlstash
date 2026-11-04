@@ -50,22 +50,24 @@ REASONS = ("other_people", "near_duplicates", "low_quality", "low_likeness")
 """The four set-aside reasons, each with an ``include_<reason>`` toggle."""
 
 _FRAMING_TAGS = (
-    # The first label a picture's tags name wins: "full body" and "close-up"
-    # are unambiguous, "portrait" is narrower than "upper body".
+    # For a picture with no face box. The first label its tags name wins:
+    # "full body" and "close-up" are unambiguous, "portrait" is narrower than
+    # "upper body".
     ("full body", ("full body",)),
     ("close-up", ("close-up", "close-up view")),
     ("portrait", ("portrait",)),
     ("upper body", ("upper body", "cowboy shot")),
 )
 
-_FACE_AREA_FRAMING = (
-    # Face box over frame area, for a picture with no framing tag.
-    # ponytail: fixed cut-offs, measured on portrait and full-length stills;
-    # tune if wide-angle libraries misfile.
-    (0.12, "close-up"),
-    (0.04, "portrait"),
-    (0.01, "upper body"),
-    (0.0, "full body"),
+_FACE_ROOM_FRAMING = (
+    # How many face heights fit from the top of the face to the bottom of the
+    # frame: room for the body, whatever the picture's shape. A standing
+    # figure is about seven; waist-up about three and a half.
+    # ponytail: fixed cut-offs on a still's largest face; a seated or lying
+    # figure reads tighter than it is. A pose model would settle it.
+    (1.6, "close-up"),
+    (2.8, "portrait"),
+    (6.0, "upper body"),
 )
 
 _EXPRESSION_TAGS = (
@@ -73,6 +75,14 @@ _EXPRESSION_TAGS = (
     ("open mouth", ("open mouth",)),
     ("closed eyes", ("closed eyes",)),
 )
+
+_SMILE_WORDS = ("smil", "grin", "laugh")
+"""A caption naming one of these agrees with a smile tag.
+
+The whole-picture tagger calls a small face smiling with high confidence when
+it is not (0.92 on a frowning face); a caption reads the face the way a person
+does, so one that never mentions smiling vetoes the tag.
+"""
 
 TARGET_SHARE = {
     "framing": {
@@ -100,24 +110,37 @@ def target(axis: str, label: str, size: int) -> int:
     return max(1, int(TARGET_SHARE[axis][label] * size + 0.5))
 
 
-def framing_label(tags: set[str], face_area_ratio: float | None) -> str | None:
-    """The picture's framing, from its tags or else its face's size."""
-    for label, names in _FRAMING_TAGS:
-        if any(name in tags for name in names):
-            return label
-    if face_area_ratio is None:
+def framing_label(tags: set[str], face_room: float | None) -> str | None:
+    """The picture's framing, from its face's place in the frame, else tags.
+
+    The face box is measured; a framing tag is a whole-picture guess that
+    calls a waist-up shot a close-up, so it decides only with no face box.
+    """
+    if face_room is None:
+        for label, names in _FRAMING_TAGS:
+            if any(name in tags for name in names):
+                return label
         return None
-    for floor, label in _FACE_AREA_FRAMING:
-        if face_area_ratio >= floor:
+    for ceiling, label in _FACE_ROOM_FRAMING:
+        if face_room < ceiling:
             return label
-    return None
+    return "full body"
 
 
-def expression_labels(tags: set[str]) -> tuple[str, ...]:
-    """The picture's expressions; ``neutral`` when its tags name none."""
+def expression_labels(
+    tags: set[str], description: str | None = None
+) -> tuple[str, ...]:
+    """The picture's expressions; ``neutral`` when its tags name none.
+
+    A smile tag holds only if the picture has no caption or its caption
+    mentions smiling (:data:`_SMILE_WORDS`).
+    """
     found = tuple(
         label for label, names in _EXPRESSION_TAGS if any(n in tags for n in names)
     )
+    caption = (description or "").casefold()
+    if caption.strip() and not any(word in caption for word in _SMILE_WORDS):
+        found = tuple(label for label in found if label != "smile")
     return found or ("neutral",)
 
 
@@ -139,7 +162,8 @@ class Candidate:
     likeness: float | None = None
     face_count_max: int = 1
     tags: tuple[str, ...] = ()
-    face_area_ratio: float | None = None
+    face_room: float | None = None  # face heights below the face's top
+    description: str | None = None
     embedding: np.ndarray | None = None
     stack_id: int | None = None
     framing: str | None = field(init=False, default=None)
@@ -147,8 +171,8 @@ class Candidate:
 
     def __post_init__(self):
         folded = {str(tag).strip().casefold() for tag in self.tags if tag}
-        self.framing = framing_label(folded, self.face_area_ratio)
-        self.expressions = expression_labels(folded)
+        self.framing = framing_label(folded, self.face_room)
+        self.expressions = expression_labels(folded, self.description)
 
 
 def pick_references(faces: list) -> list:

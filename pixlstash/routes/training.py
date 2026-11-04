@@ -2719,10 +2719,10 @@ def create_router(server) -> APIRouter:
                 Face.model_pack,
                 Picture.score,
                 Picture.smart_score,
-                Picture.width,
                 Picture.height,
                 Picture.file_path,
                 Picture.stack_id,
+                Picture.description,
             )
             .join(Picture, Face.picture_id == Picture.id)
             .where(Face.character_id == character_id, Picture.deleted.is_(False))
@@ -2768,19 +2768,20 @@ def create_router(server) -> APIRouter:
             _pack,
             score,
             smart,
-            w,
             h,
             path,
             stack,
+            description,
         ) in rows:
             pic = pictures.setdefault(
                 pid,
                 {
                     "score": score,
                     "smart": smart,
-                    "area": (w or 0) * (h or 0),
+                    "height": h or 0,
                     "path": path,
                     "stack": stack,
+                    "description": description,
                     "faces": [],
                 },
             )
@@ -2808,7 +2809,9 @@ def create_router(server) -> APIRouter:
         for pid, tag in tag_rows:
             tags.setdefault(pid, []).append(tag)
 
-        def face_ratio(pic):
+        def face_room(pic):
+            # Face heights from the top of the largest face to the frame's
+            # bottom: how much of the body the frame has room for.
             best = None
             for _fid, bbox, _feat in pic["faces"]:
                 try:
@@ -2816,10 +2819,11 @@ def create_router(server) -> APIRouter:
                 except (ValueError, TypeError) as exc:
                     logger.warning("Unreadable face box %r (%s); ignored.", bbox, exc)
                     continue
-                if pic["area"] > 0 and x2 > x1 and y2 > y1:
-                    ratio = (x2 - x1) * (y2 - y1) / pic["area"]
-                    best = ratio if best is None else max(best, ratio)
-            return best
+                if pic["height"] > 0 and x2 > x1 and y2 > y1:
+                    area = (x2 - x1) * (y2 - y1)
+                    if best is None or area > best[0]:
+                        best = (area, (pic["height"] - y1) / (y2 - y1))
+            return best[1] if best else None
 
         candidates = []
         stacks = {}
@@ -2836,7 +2840,8 @@ def create_router(server) -> APIRouter:
                     face_count_max=most_faces.get(pid, 1),
                     stack_id=pic["stack"],
                     tags=tuple(tags.get(pid, ())),
-                    face_area_ratio=face_ratio(pic),
+                    face_room=face_room(pic),
+                    description=pic["description"],
                     embedding=(
                         np.frombuffer(bytes(emb), dtype=np.float32)
                         if emb is not None

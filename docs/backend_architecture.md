@@ -12648,7 +12648,7 @@ Train dialog (§25.19) then trains on like any set.
 
 **The route gathers, the picker ranks.** The handler in `routes/training.py`
 reads every non-deleted picture with a `Face` of the character: its faces'
-boxes and embeddings, the most faces on any one frame, its tags, its CLIP
+boxes and embeddings, its caption, the most faces on any one frame, its tags, its CLIP
 `image_embedding`, and near pairs from `near_pairs_in_bucket` at
 `DEFAULT_THRESHOLD` (the members of one stack count as near pairs too, because
 a set takes a whole stack). `pixlstash/training/dataset_picker.py` is a pure
@@ -12677,9 +12677,15 @@ function over those rows, tested without a server.
   `value * (1 + W_NEW * axes_under_target + W_SEM * min_cosine_distance)`.
   An axis is under target when the candidate brings a label the picks hold
   fewer of than `target()` asks for at the next set size: `TARGET_SHARE` per
-  label, never below one. Framing comes from tags, else from the face box's
-  share of the frame; expression from tags, `neutral` when none. Pose is not an
-  axis yet (no head pose is stored); it would be one more `AXES` entry.
+  label, never below one. Framing comes from the largest face box: how many
+  face heights fit from its top to the frame's bottom (`_FACE_ROOM_FRAMING`),
+  which holds for any picture shape; tags decide only for a picture with no
+  face box, since the whole-picture tagger calls a waist-up shot a close-up.
+  Expression comes from tags, `neutral` when none, except that a `smile` tag
+  holds only when the picture's caption, if it has one, mentions smiling: the
+  tagger reads a small face as smiling with high confidence when it is not.
+  Pose is not an axis yet (no head pose is stored); it would be one more
+  `AXES` entry.
 
 Because the order depends only on the picks so far, a set of N is the first N
 of the ranking, and the dialog's slider never reshuffles. A stacked pick brings

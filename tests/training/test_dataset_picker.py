@@ -140,10 +140,37 @@ def test_tags_are_case_folded():
     assert c.expressions == ("smile",)
 
 
-def test_a_picture_with_no_framing_tag_is_framed_by_its_face():
-    assert Candidate(picture_id=1, face_area_ratio=0.3).framing == "close-up"
-    assert Candidate(picture_id=1, face_area_ratio=0.001).framing == "full body"
+def test_a_picture_is_framed_by_the_room_below_its_face():
+    # Face heights from the face's top to the frame's bottom.
+    for room, label in (
+        (1.2, "close-up"),
+        (2.2, "portrait"),
+        (3.8, "upper body"),  # a waist-up shot
+        (7.5, "full body"),  # a standing figure
+    ):
+        assert Candidate(picture_id=1, face_room=room).framing == label, room
+    assert Candidate(picture_id=1).framing is None
     assert Candidate(picture_id=1).expressions == ("neutral",)
+
+
+def test_a_face_box_outranks_a_framing_tag():
+    # The tagger calls a waist-up shot a close-up; the face box says otherwise.
+    c = Candidate(picture_id=1, tags=("close-up",), face_room=3.8)
+    assert c.framing == "upper body"
+    assert Candidate(picture_id=1, tags=("close-up",)).framing == "close-up"
+
+
+def test_a_caption_that_never_mentions_smiling_vetoes_a_smile_tag():
+    serious = "An elderly man with a serious expression on his face."
+    assert Candidate(
+        picture_id=1, tags=("smile", "open mouth"), description=serious
+    ).expressions == ("open mouth",)
+    assert Candidate(
+        picture_id=2, tags=("smile",), description=serious
+    ).expressions == ("neutral",)
+    for caption in ("He has a big smile on his face.", "She is Smiling.", None, " "):
+        c = Candidate(picture_id=3, tags=("smile",), description=caption)
+        assert c.expressions == ("smile",), caption
 
 
 def test_stills_and_clips_rank_separately():
