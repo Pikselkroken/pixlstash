@@ -188,7 +188,6 @@ class Candidate:
     description: str | None = None
     embedding: np.ndarray | None = None
     stack_id: int | None = None
-    stack_cover: bool = False  # the member the grid shows for the stack
     framing: str | None = field(init=False, default=None)
     expressions: tuple[str, ...] = field(init=False, default=())
 
@@ -353,16 +352,11 @@ def _passing(cands, value, pairs, include, by_stack) -> tuple[list[Candidate], d
     survivors = [
         c for c in cands if not any(not include[r] for r in reasons[c.picture_id])
     ]
-    # A set takes a whole stack, so its pick is the cover the owner chose.
-    cover = {c.stack_id: c.picture_id for c in survivors if c.stack_cover}
-    stack_of = {c.picture_id: c.stack_id for c in survivors}
     dropped = set()
     for group in _components([c.picture_id for c in survivors], pairs):
         if len(group) < 2:
             continue
         best = max(group, key=lambda pid: (value[pid], -pid))
-        if cover.get(stack_of[best]) in group:
-            best = cover[stack_of[best]]
         dropped.update(pid for pid in group if pid != best)
     excluded["near_duplicates"] = len(dropped)
     if include["near_duplicates"]:

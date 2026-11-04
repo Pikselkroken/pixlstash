@@ -2725,7 +2725,6 @@ def create_router(server) -> APIRouter:
                 Picture.orientation,
                 Picture.file_path,
                 Picture.stack_id,
-                Picture.stack_position,
                 Picture.description,
             )
             .join(Picture, Face.picture_id == Picture.id)
@@ -2777,7 +2776,6 @@ def create_router(server) -> APIRouter:
             orientation,
             path,
             stack,
-            stack_position,
             description,
         ) in rows:
             pic = pictures.setdefault(
@@ -2788,7 +2786,6 @@ def create_router(server) -> APIRouter:
                     "size": (w, h, orientation),
                     "path": path,
                     "stack": stack,
-                    "cover": stack is not None and stack_position == 0,
                     "description": description_caption_content(description),
                     "faces": [],
                 },
@@ -2831,8 +2828,25 @@ def create_router(server) -> APIRouter:
                         best = (area, (x1, y1, x2, y2))
             return dataset_picker.face_room(best[1], *pic["size"]) if best else None
 
+        # Training keeps one picture per stack, its cover, so the cover alone
+        # stands for the stack: the other members are never trained on.
+        stacked = {pic["stack"] for pic in pictures.values()} - {None}
+        if stacked:
+            members = session.exec(
+                select(
+                    Picture.id,
+                    Picture.stack_id,
+                    Picture.stack_position,
+                    Picture.created_at,
+                ).where(Picture.stack_id.in_(stacked), Picture.deleted.is_(False))
+            ).all()
+            covers = {row.id for row in ExportUtils._deduplicate_stacks(members)}
+            pictures = {
+                pid: pic
+                for pid, pic in pictures.items()
+                if pic["stack"] is None or pid in covers
+            }
         candidates = []
-        stacks = {}
         for pid, pic in pictures.items():
             scores = [likeness[f] for f, _b, _x in pic["faces"] if f in likeness]
             emb = embeddings.get(pid)
@@ -2845,7 +2859,6 @@ def create_router(server) -> APIRouter:
                     likeness=max(scores) if scores else None,
                     face_count_max=most_faces.get(pid, 1),
                     stack_id=pic["stack"],
-                    stack_cover=pic["cover"],
                     tags=tuple(tags.get(pid, ())),
                     face_room=face_room(pic),
                     description=pic["description"],
@@ -2856,8 +2869,6 @@ def create_router(server) -> APIRouter:
                     ),
                 )
             )
-            if pic["stack"] is not None:
-                stacks.setdefault(pic["stack"], []).append(pid)
         # ponytail: one bucket over the whole character, unlike the dedup
         # worker's MAX_BUCKET_MEMBERS split; milliseconds at a few thousand
         # pictures, split it if a character of tens of thousands is slow.
@@ -2869,10 +2880,6 @@ def create_router(server) -> APIRouter:
                 DEFAULT_THRESHOLD,
             )
         ]
-        # A set takes a whole stack, so a stack is one shot: its members are
-        # near copies of each other however far apart their hashes are.
-        for members in stacks.values():
-            pairs.extend((members[0], other) for other in members[1:])
         return candidates, pairs, any(c.is_clip for c in candidates)
 
     def _free_set_name(session, base: str) -> str:

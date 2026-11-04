@@ -1955,23 +1955,6 @@ def test_character_set_suggestion_ranks_stills_and_clips_apart():
         assert all(0 <= p["likeness"] <= 100 for p in stills["picks"])
         assert out["targets"]["framing"]["close-up"] == 0.2
 
-        # Stacked, b and d are one shot; d is the cover, so d is picked even
-        # though the tie would go to b.
-        def stack(session):
-            from pixlstash.db_models import Picture, PictureStack
-
-            row = PictureStack()
-            session.add(row)
-            session.flush()
-            for pid, pos in ((b, 1), (d, 0)):
-                pic = session.get(Picture, pid)
-                pic.stack_id, pic.stack_position = row.id, pos
-            session.commit()
-
-        server.vault.db.run_task(stack)
-        r = owner.get(url, params={"character_id": char_id})
-        assert {p["picture_id"] for p in r.json()["stills"]["picks"]} == {a, d}
-
         r = owner.get(
             url, params={"character_id": char_id, "include_other_people": True}
         )
@@ -1994,6 +1977,25 @@ def test_character_set_suggestion_ranks_stills_and_clips_apart():
         scoped = _scoped_client(server, read_token)
         r = scoped.get(url, params={"character_id": char_id})
         assert r.status_code == 403, r.text
+
+        # Stacked under d, c's other person is never trained: the cover alone
+        # stands for the stack.
+        def stack(session):
+            from pixlstash.db_models import Picture, PictureStack
+
+            row = PictureStack()
+            session.add(row)
+            session.flush()
+            for pid, pos in ((c, 1), (d, 0)):
+                pic = session.get(Picture, pid)
+                pic.stack_id, pic.stack_position = row.id, pos
+            session.commit()
+
+        server.vault.db.run_task(stack)
+        stills = owner.get(url, params={"character_id": char_id}).json()["stills"]
+        assert stills["candidates"] == 4
+        assert stills["excluded"]["other_people"] == 0
+        assert d in {p["picture_id"] for p in stills["picks"]}
     finally:
         _teardown(temp_dir, server)
 
