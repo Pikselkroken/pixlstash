@@ -63,8 +63,8 @@ import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import SideBar from "./SideBar.vue";
 
 // The sidebar's open-review rows: the row menu (right-click and Shift+F10) with
-// its Abort review… and Archive review verbs. Abort goes through the shared
-// ReviewAbortDialog; Archive is the store call with no confirm.
+// its Continue review and End review… verbs. End goes through the shared
+// ReviewEndDialog, whose Keep files the receipt (archiveSession).
 //
 // The harness is SideBarCharacterRowActive's: the same module mocks and a
 // shallow mount. The menu and the dialog are Teleported to the body, so these
@@ -96,6 +96,7 @@ async function mountWithReviews(sessions = [REVIEW]) {
   const abort = vi.spyOn(reviews, "abortSession").mockResolvedValue();
   const undo = vi.spyOn(reviews, "undoChangesAndAbort").mockResolvedValue();
   const archive = vi.spyOn(reviews, "archiveSession").mockResolvedValue();
+  const open = vi.spyOn(reviews, "openSession").mockImplementation(() => {});
   const wrapper = mount(SideBar, {
     shallow: true,
     props: { backendUrl: "/api/v1" },
@@ -104,19 +105,19 @@ async function mountWithReviews(sessions = [REVIEW]) {
       config: {
         compilerOptions: { isCustomElement: (tag) => tag.startsWith("v-") },
       },
-      // Teleports are flattened in place, and the abort dialog is the real one
+      // Teleports are flattened in place, and the end dialog is the real one
       // over a passthrough AppDialog (its Vuetify overlay is tested in
-      // ReviewAbortDialog.test.js): open renders its slots, close is its emit.
+      // ReviewEndDialog.test.js): open renders its slots, close is its emit.
       stubs: {
         teleport: { template: '<div class="tp"><slot /></div>' },
-        ReviewAbortDialog: false,
+        ReviewEndDialog: false,
         AppButton: false,
         AppDialog: AppDialogStub,
       },
     },
   });
   for (let i = 0; i < 5; i += 1) await flushPromises();
-  return { wrapper, reviews, abort, undo, archive };
+  return { wrapper, reviews, abort, undo, archive, open };
 }
 
 function rowOf(wrapper, tag) {
@@ -146,21 +147,35 @@ beforeEach(() => {
 });
 
 describe("sidebar review row menu", () => {
-  it("right-click offers Abort review… and Archive review", async () => {
+  it("right-click offers Continue review and End review…, and no Abort or Archive", async () => {
     const { wrapper } = await mountWithReviews();
     await rowOf(wrapper, "hair").trigger("contextmenu");
     await flushPromises();
 
-    expect(menuItem("Abort review")).toBeDefined();
-    expect(menuItem("Archive review")).toBeDefined();
+    expect(menuItem("Continue review")).toBeDefined();
+    expect(menuItem("End review")).toBeDefined();
+    expect(menuItem("Abort review")).toBeUndefined();
+    expect(menuItem("Archive review")).toBeUndefined();
     wrapper.unmount();
   });
 
-  it("Abort review… opens the dialog; Keep calls abortSession with that id", async () => {
-    const { wrapper, abort, undo } = await mountWithReviews();
+  it("Continue review opens that review", async () => {
+    const { wrapper, open } = await mountWithReviews();
     await rowOf(wrapper, "hair").trigger("contextmenu");
     await flushPromises();
-    menuItem("Abort review").click();
+    menuItem("Continue review").click();
+    await flushPromises();
+
+    expect(open).toHaveBeenCalledWith(5);
+    expect(dialog()).toBeNull();
+    wrapper.unmount();
+  });
+
+  it("End review… opens the dialog; Keep files the receipt for that id", async () => {
+    const { wrapper, abort, undo, archive } = await mountWithReviews();
+    await rowOf(wrapper, "hair").trigger("contextmenu");
+    await flushPromises();
+    menuItem("End review").click();
     for (let i = 0; i < 5; i += 1) await flushPromises();
 
     expect(dialog()).not.toBeNull();
@@ -168,17 +183,18 @@ describe("sidebar review row menu", () => {
     dialogAction("Keep").click();
     await flushPromises();
 
-    expect(abort).toHaveBeenCalledTimes(1);
-    expect(abort).toHaveBeenCalledWith(5);
+    expect(archive).toHaveBeenCalledTimes(1);
+    expect(archive).toHaveBeenCalledWith(5);
+    expect(abort).not.toHaveBeenCalled();
     expect(undo).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
-  it("Cancel in the abort dialog calls nothing", async () => {
-    const { wrapper, abort, undo } = await mountWithReviews();
+  it("Cancel in the end dialog calls nothing", async () => {
+    const { wrapper, abort, undo, archive } = await mountWithReviews();
     await rowOf(wrapper, "hair").trigger("contextmenu");
     await flushPromises();
-    menuItem("Abort review").click();
+    menuItem("End review").click();
     for (let i = 0; i < 5; i += 1) await flushPromises();
 
     dialogAction("Cancel").click();
@@ -187,22 +203,9 @@ describe("sidebar review row menu", () => {
     expect(dialog()).toBeNull();
     expect(abort).not.toHaveBeenCalled();
     expect(undo).not.toHaveBeenCalled();
+    expect(archive).not.toHaveBeenCalled();
     // Focus goes back to the row the menu was opened from.
     expect(document.activeElement).toBe(rowOf(wrapper, "hair").element);
-    wrapper.unmount();
-  });
-
-  it("Archive review calls archiveSession with that row's id, with no dialog", async () => {
-    const { wrapper, archive, abort } = await mountWithReviews();
-    await rowOf(wrapper, "hair").trigger("contextmenu");
-    await flushPromises();
-    menuItem("Archive review").click();
-    await flushPromises();
-
-    expect(archive).toHaveBeenCalledTimes(1);
-    expect(archive).toHaveBeenCalledWith(5);
-    expect(abort).not.toHaveBeenCalled();
-    expect(dialog()).toBeNull();
     wrapper.unmount();
   });
 
@@ -212,7 +215,7 @@ describe("sidebar review row menu", () => {
     await flushPromises();
 
     expect(document.querySelector(".sidebar-ctx-menu")).not.toBeNull();
-    expect(menuItem("Abort review")).toBeDefined();
+    expect(menuItem("End review")).toBeDefined();
     wrapper.unmount();
   });
 });

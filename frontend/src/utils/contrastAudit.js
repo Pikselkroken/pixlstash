@@ -46,7 +46,7 @@ const TINT_ON_DARK_CHROME = 0.14
 
 /**
  * WCAG floors. 4.5 is the normal-text floor: `dark-surface-<status>` styles
- * `--text-2xs` (11px) semibold labels in ReviewRail.vue, which is not large
+ * `--text-2xs` (11px) semibold labels in the Tags view, which is not large
  * text. 2.5 is the notice rail's authored floor - it is decorative
  * reinforcement (the glyph carries the variant) but must still read as a mark.
  */

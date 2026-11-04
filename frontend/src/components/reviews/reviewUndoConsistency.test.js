@@ -246,7 +246,6 @@ const overlayOpts = {
       Tooltip: TooltipStub,
       "v-icon": VIcon,
       ReviewSessionView: SessionStub,
-      ReviewRail: Blank,
       TagHealthBoard: Blank,
       ReviewArchivedReceipt: Blank,
       NewReviewDialog: Blank,
