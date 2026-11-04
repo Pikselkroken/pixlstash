@@ -65,6 +65,59 @@ function point(p) {
   return [round(p.x), round(p.y)];
 }
 
+// The mask is read back for its bounds at most this many pixels on a side, so
+// a large picture's box costs no second full-size buffer. The decode itself is
+// full size either way.
+// ponytail: a selection thinner than about one read-back pixel (4 px on an
+// 8000px picture) can be missed; read at full size if that ever matters.
+const BOUNDS_READ_MAX = 2048;
+
+/**
+ * The box around a mask's selected pixels (the marching ants' edge, level 128
+ * and up), as `[left, top, width, height]` in fractions, or `null` when none is
+ * selected. `data` is RGBA, as `getImageData` gives it.
+ */
+export function maskBounds(data, width, height) {
+  let left = width;
+  let top = height;
+  let right = -1;
+  let bottom = -1;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (data[(y * width + x) * 4] < 128) continue;
+      if (x < left) left = x;
+      if (x > right) right = x;
+      if (y < top) top = y;
+      if (y > bottom) bottom = y;
+    }
+  }
+  if (right < 0) return null;
+  return [
+    round(left / width),
+    round(top / height),
+    round((right + 1 - left) / width),
+    round((bottom + 1 - top) / height),
+  ];
+}
+
+async function readMaskBounds(url) {
+  const image = new Image();
+  image.src = url;
+  await image.decode();
+  const scale = Math.min(
+    1,
+    BOUNDS_READ_MAX / Math.max(image.naturalWidth, image.naturalHeight),
+  );
+  const width = Math.max(1, Math.round(image.naturalWidth * scale));
+  const height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.drawImage(image, 0, 0, width, height);
+  return maskBounds(context.getImageData(0, 0, width, height).data, width, height);
+}
+
 /**
  * @param {Object} deps
  * @param {import("vue").Ref<number|string|null>} deps.pictureId - the open picture.
@@ -89,6 +142,10 @@ export function usePaintSelection({ pictureId, dims }) {
   const draft = ref(null);
   // The crop frame the owner is setting, `[left, top, width, height]`.
   const cropBox = ref(null);
+  // Crop was just taken up and may still start its frame from the selection.
+  let seedCrop = false;
+  // `maskUrl` is the mask of the selection as it stands, not one being replaced.
+  let maskCurrent = false;
   // The eye: the mask shown in black and white, as MASK receives it.
   const showMask = ref(false);
   // The server's rendering of the selection, as an object URL.
@@ -183,6 +240,7 @@ export function usePaintSelection({ pictureId, dims }) {
       // A click without a drag draws nothing.
       if (box[2] < 0.005 || box[3] < 0.005) return;
       if (current.tool === "crop") {
+        seedCrop = false;
         cropBox.value = box;
         return;
       }
@@ -240,6 +298,7 @@ export function usePaintSelection({ pictureId, dims }) {
   }
 
   function setCropBox(box) {
+    seedCrop = false;
     cropBox.value = box;
   }
 
@@ -288,6 +347,31 @@ export function usePaintSelection({ pictureId, dims }) {
     cropBox.value = null;
   });
 
+  // Crop keeps a frame of its own, but taken up over a selection it starts
+  // around that selection: the owner who marked a face and pressed Crop meant
+  // the face. Once per taking up, from the selection as it stands (waiting for
+  // its mask if one is on the way); a frame set or dragged first is left alone,
+  // and one cleared with Esc stays cleared.
+  watch([tool, maskUrl], async ([id, url], [was]) => {
+    if (id !== was) seedCrop = id === "crop";
+    if (!seedCrop || !url || !maskCurrent || !hasSelection.value || cropBox.value) {
+      return;
+    }
+    let box;
+    try {
+      box = await readMaskBounds(url);
+    } catch (err) {
+      // A mask replaced meanwhile is revoked under the read: nothing to say.
+      if (maskUrl.value === url) {
+        console.warn(`Could not read the selection's bounds for crop (${url}):`, err);
+      }
+      return;
+    }
+    if (tool.value !== "crop" || maskUrl.value !== url || cropBox.value) return;
+    seedCrop = false;
+    if (box) cropBox.value = box;
+  });
+
   // ── the preview: the server's mask, a moment after the last change ──────
   let previewTimer = null;
   let previewAbort = null;
@@ -305,6 +389,7 @@ export function usePaintSelection({ pictureId, dims }) {
       const blob = await renderPictureMask(id, body, { signal: abort.signal });
       if (abort.signal.aborted) return;
       dropMask();
+      maskCurrent = true;
       maskUrl.value = URL.createObjectURL(blob);
       maskError.value = "";
     } catch (err) {
@@ -320,6 +405,7 @@ export function usePaintSelection({ pictureId, dims }) {
     selection,
     (body) => {
       clearTimeout(previewTimer);
+      maskCurrent = false;
       const id = Number(pictureId.value);
       if (!body.steps.length || !Number.isFinite(id) || id <= 0) {
         previewAbort?.abort();

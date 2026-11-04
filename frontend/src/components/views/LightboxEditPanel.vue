@@ -345,13 +345,20 @@
         <p v-if="submitError" class="edit-note" role="alert">
           {{ submitError }}
         </p>
+        <!-- Crop finishes on its own button over the picture; a primary Run
+             here would read as the way to finish it. More settings… is off
+             with it. -->
+        <p v-if="cropping" class="edit-note">
+          Cropping. Set the frame on the picture and press Crop to a new
+          picture there, or press Crop again to stop.
+        </p>
         <AppButton
           on-dark
           variant="primary"
           size="sm"
           block
           :loading="submitting"
-          :disabled="!!chosenMissing"
+          :disabled="!!chosenMissing || cropping"
           key-hint="ctrl+enter"
           @click="submit"
         >
@@ -369,6 +376,7 @@
           block
           icon-left="cog-outline"
           tooltip="Open the Run window with this filled in, for LoRAs, seed, size and more"
+          :disabled="cropping"
           @click="onMoreOptions()"
         >
           More settings…
@@ -589,6 +597,8 @@ function missingTip(key) {
 }
 
 const hasSelection = computed(() => !!props.paint?.hasSelection.value);
+// The crop tool in hand: Run edit waits until it is put down.
+const cropping = computed(() => props.paint?.tool.value === "crop");
 const usesMask = computed(() => MASK_TYPES.has(chosenCard.value?.type));
 const promptHelp = computed(() =>
   hasSelection.value && usesMask.value ? PROMPT_HELP.masked : PROMPT_HELP.edit,
@@ -1087,6 +1097,9 @@ function openInWorkflows() {
  * recipe, as the tab's own Run would. *More settings…* keeps the recipe read.
  */
 function onMoreOptions(key = workflowId.value, edit = false) {
+  // The Run popup is a run too: not while crop is in hand (the picker's
+  // fill-in cards come through here).
+  if (cropping.value) return;
   const id = Number(props.pictureId);
   if (!Number.isFinite(id) || id <= 0) return;
   emit("more-options", {
@@ -1106,6 +1119,7 @@ function onMoreOptions(key = workflowId.value, edit = false) {
 async function submit() {
   const id = Number(props.pictureId);
   if (submitting.value || !workflowId.value || chosenMissing.value) return;
+  if (cropping.value) return;
   if (!Number.isFinite(id) || id <= 0) return;
   submitting.value = true;
   submitError.value = "";

@@ -227,6 +227,37 @@ describe("Lightbox - the rotate buttons (Edit tab, Quick changes)", () => {
   });
 });
 
+describe("Lightbox - Quick changes over a selection", () => {
+  it("greys rotate, shuts Filters…, and keeps [ off, while a selection is marked", async () => {
+    // The selection is in fractions of the picture as it stands: a turn would
+    // leave it over the wrong part.
+    const wrapper = await openLightbox();
+    wrapper.vm.paint.steps.value = [{ tool: "rect", mode: "new", box: [0, 0, 0.5, 0.5] }];
+    await flush();
+
+    const left = rotateButtons(wrapper).byShortcut("[");
+    expect(left.attributes("aria-disabled")).toBe("true");
+    expect(left.attributes("aria-label")).toBe("Rotate left: Clear the selection first");
+    await left.trigger("click");
+    press("]");
+    await flush();
+    expect(rotateCalls()).toEqual([]);
+
+    // Filters… is a menu: it will not open.
+    const filters = () => wrapper.find(".lightbox-quick v-menu-stub");
+    expect(filters().attributes("disabled")).toBe("true");
+
+    // Cleared, both are live again.
+    wrapper.vm.paint.clear();
+    await flush();
+    expect(rotateButtons(wrapper).left.attributes("aria-disabled")).toBeUndefined();
+    expect(filters().attributes("disabled")).toBe("false");
+    press("[");
+    await flush();
+    expect(rotateCalls()).toEqual([{ picture_ids: [7], direction: "ccw" }]);
+  });
+});
+
 describe("Lightbox - the [ and ] shortcuts", () => {
   it("rotates on a bare bracket", async () => {
     await openLightbox();

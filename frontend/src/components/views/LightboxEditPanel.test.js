@@ -949,6 +949,49 @@ describe("the Edit tab with the Paint tools", () => {
     expect(wrapper.text()).toContain("do not use a mask");
   });
 
+  it("keeps Run edit off while the crop tool is in hand", async () => {
+    // Crop finishes on its own button over the picture; a live primary Run
+    // here is the button the owner would press instead.
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    expect(wrapper.find("button.run").attributes("disabled")).toBeUndefined();
+    paint.tool.value = "crop";
+    await flush();
+    expect(wrapper.find("button.run").attributes("disabled")).toBeDefined();
+    expect(wrapper.text()).toContain("Cropping.");
+    // Nor through Ctrl+Enter, which calls submit directly.
+    await wrapper.vm.submit();
+    expect(runWorkflowCard).not.toHaveBeenCalled();
+    // Nor through the Run popup.
+    const more = wrapper.findAll("button").find((b) => b.text() === "More settings…");
+    expect(more.attributes("disabled")).toBeDefined();
+    paint.tool.value = "rect";
+    await flush();
+    expect(wrapper.find("button.run").attributes("disabled")).toBeUndefined();
+  });
+
+  it("opens no Run popup from the picker's fill-in cards while cropping", async () => {
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "i2i"
+              ? [{ code: "picture_input_unfilled", inputs: [] }]
+              : [],
+        },
+      ],
+    }));
+    const paint = fakePaint();
+    paint.tool.value = "crop";
+    const wrapper = await mountPanel({ paint });
+    const fillIn = wrapper
+      .findAll("[role=menuitemradio]")
+      .find((row) => row.text() === "Relight…, Image to Image");
+    await fillIn.trigger("click");
+    await flush();
+    expect(wrapper.emitted("more-options")).toBeUndefined();
+  });
+
   it("runs on every picture Edit… named, unless a hand selection holds it", async () => {
     const paint = fakePaint();
     const wrapper = await mountPanel({ paint, applyToIds: [7, 8, 9] });
