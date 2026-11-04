@@ -314,11 +314,18 @@ function initialScopeFromSelection() {
 
 function openNewReview(preset = "") {
   store.createError = null;
-  // A scope chosen on the health board is the user's explicit working scope -
-  // it wins over the app-selection prefill.
-  const initialScope = store.healthScoped
-    ? { ...store.healthScope }
-    : initialScopeFromSelection();
+  // A review started from a board row (preset tag) covers what that row
+  // describes, never the grid selection (a review of 3 selected pictures finds
+  // nothing for a tag ranked on the whole library). Health rows describe the
+  // board scope, scoped or not; Groups always covers the whole library. A
+  // scope chosen on the board also wins for the bare "New review…" entry;
+  // only that one falls back to the app selection.
+  const initialScope =
+    preset && tagGroups.boardView === "groups"
+      ? { projectId: null, setId: null, characterId: null }
+      : preset || store.healthScoped
+        ? { ...store.healthScope }
+        : initialScopeFromSelection();
   dialog.value = { preset, initialScope };
 }
 

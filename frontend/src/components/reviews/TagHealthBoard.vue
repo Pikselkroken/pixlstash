@@ -786,28 +786,17 @@ function openSessionFor(tag) {
 
 // --- Provably-empty "Start review" gate --------------------------------------
 
-// The gate is only sound when the row's signals describe the review that the
-// button would actually create - i.e. when the board's scope IS the review's
-// scope. ReviewSessionsOverlay.vue's `openNewReview()` (~:205-213) inherits the
-// board scope into the dialog ONLY when `store.healthScoped` is true; on an
-// unscoped board it prefills from the app selection instead
-// (`initialScopeFromSelection()`), which can be an entirely different set of
-// pictures from the vault-wide numbers on this row. Disabling a button on
-// signals that don't describe the resulting review would be a false negative,
-// so outside the scope-matching case the button stays enabled and the click
-// falls through to the dialog exactly as before.
+// The gate is sound because the row's signals describe the review the button
+// creates: ReviewSessionsOverlay.vue's `openNewReview(tag)` always prefills a
+// row-started review with the board's scope (unscoped board → whole library),
+// never the app selection. Unscoped rows come from the cached board, so a stale
+// cache (tags confirmed since it was built) does not gate: its zeros may be old.
 //
-// (This condition is deliberately a strict SUBSET of "the scopes match": an
-// unscoped board with an empty app selection also matches, but the board can't
-// see the app selection from here, and erring toward "enabled" is the safe
-// direction.)
-const gateApplies = computed(() => store.healthScoped);
-
 // Keyed by tag so the template resolves each row's reason with one lookup
 // instead of recomputing it for :disabled, :title, and :class separately.
 const blockedStarts = computed(() => {
   const blocked = new Map();
-  if (!gateApplies.value) return blocked;
+  if (store.healthStale) return blocked;
   for (const r of store.healthRows) {
     const reason = zeroYieldReason(r);
     if (reason) blocked.set(r.tag, reason);
