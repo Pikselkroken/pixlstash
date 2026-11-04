@@ -111,6 +111,21 @@ def test_a_near_duplicate_group_keeps_its_best_member():
     assert _ids(out) == [2]
 
 
+def test_a_stack_is_picked_as_its_cover():
+    # The owner's close-up crop tops the stack; the better-scored original
+    # comes into the set with it either way, so the crop is what is shown.
+    lib = [
+        _cand(1, rating=0, stack_id=9, stack_cover=True, face_room=1.2),
+        _cand(2, rating=5, stack_id=9, face_room=2.5),
+        _cand(3, rating=4),
+    ]
+    out = rank(lib, [(1, 2)])["stills"]
+    assert sorted(_ids(out)) == [1, 3]
+    # Without a cover among them, the best member still stands for the stack.
+    lib[0].stack_cover = False
+    assert sorted(_ids(rank(lib, [(1, 2)])["stills"])) == [2, 3]
+
+
 def test_references_take_five_stars_then_four_then_smart_score():
     vec = _emb(0).tobytes()
     faces = [

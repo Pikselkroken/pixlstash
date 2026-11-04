@@ -2725,6 +2725,7 @@ def create_router(server) -> APIRouter:
                 Picture.orientation,
                 Picture.file_path,
                 Picture.stack_id,
+                Picture.stack_position,
                 Picture.description,
             )
             .join(Picture, Face.picture_id == Picture.id)
@@ -2776,6 +2777,7 @@ def create_router(server) -> APIRouter:
             orientation,
             path,
             stack,
+            stack_position,
             description,
         ) in rows:
             pic = pictures.setdefault(
@@ -2786,6 +2788,7 @@ def create_router(server) -> APIRouter:
                     "size": (w, h, orientation),
                     "path": path,
                     "stack": stack,
+                    "cover": stack is not None and stack_position == 0,
                     "description": description_caption_content(description),
                     "faces": [],
                 },
@@ -2842,6 +2845,7 @@ def create_router(server) -> APIRouter:
                     likeness=max(scores) if scores else None,
                     face_count_max=most_faces.get(pid, 1),
                     stack_id=pic["stack"],
+                    stack_cover=pic["cover"],
                     tags=tuple(tags.get(pid, ())),
                     face_room=face_room(pic),
                     description=pic["description"],

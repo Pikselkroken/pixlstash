@@ -12651,7 +12651,8 @@ reads every non-deleted picture with a `Face` of the character: its faces'
 boxes and embeddings, its caption, the most faces on any one frame, its tags, its CLIP
 `image_embedding`, and near pairs from `near_pairs_in_bucket` at
 `DEFAULT_THRESHOLD` (the members of one stack count as near pairs too, because
-a set takes a whole stack). `pixlstash/training/dataset_picker.py` is a pure
+a set takes a whole stack, and the stack's cover is the member picked, so a crop
+the owner put on top is what the dialog shows and labels). `pixlstash/training/dataset_picker.py` is a pure
 function over those rows, tested without a server.
 
 - **Likeness** is the face similarity (0-1, shown 0-100) against up to
