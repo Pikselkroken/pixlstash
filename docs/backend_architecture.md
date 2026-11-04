@@ -871,6 +871,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/training/jobs/{job_id}/cancel                                         |                 | Cancel a training job                                         |
 | PUT    | /api/v1/training/jobs/{job_id}/cover                                          |                 | Choose the step that covers a training job                    |
 | GET    | /api/v1/training/jobs/{job_id}/live                                           |                 | Watch a training job                                          |
+| POST   | /api/v1/training/jobs/{job_id}/quit-comfyui                                   |                 | Let PixlStash quit ComfyUI for a queued run                   |
 | GET    | /api/v1/training/jobs/{job_id}/snapshot                                       |                 | What a training job trained on                                |
 | GET    | /api/v1/training/jobs/{job_id}/snapshot/export                                |                 | Download what a training job trained on, as a zip             |
 | GET    | /api/v1/training/jobs/{job_id}/status                                         |                 | Poll training job status                                      |
@@ -1336,6 +1337,8 @@ PixlStash, a ComfyUI on the same machine and (later) AI-toolkit do not fit in on
 A device with no NVML (`measurable: false`: Metal, ROCm) runs heavy work one at a time (`unmeasurable`) and LIGHT freely.
 
 **The reclaim ladder** runs for the first lease short of memory, one rung per poll, re-reading the cards after each: (1) **PixlStash yields** (`Vault._yield_gpu`): the planner is held under the lease's id (`WorkPlanner.hold(owner, None)`), `TaskRunner.preempt_gpu` stops the running GPU task at a task boundary and cancels the queued GPU tasks (never URGENT or awaited ones, never the CPU queue), and `Vault.unload_models()`, queued on the GPU worker as a `DeviceReleaseTask` behind the batch in flight, unloads everything whatever `keep_models_in_memory` says (the arbiter's thread waits for it only `YIELD_WAIT_S`). The hold ends when that lease is granted or released. An exclusive lease always has PixlStash yield before it is granted (Q27). (2) **ComfyUI frees** (`POST /free`, settled over two reads within 30 s), only if nothing at all is queued on it and the lease asking is not ComfyUI's own. (3) Otherwise it waits. **ComfyUI after ComfyUI never frees.**
+
+**Quitting ComfyUI (#2558).** `/free` cannot release ComfyUI's CUDA context (about 780 MB on an RTX 5090, more with dynamic VRAM); only the process exiting does. `ComfyUIProbe.kept_mb()` is that floor, the least ComfyUI has been seen to hold (before any `/free` it may still count models, so it only ever errs towards asking), and `can_quit()` is whether its pid is known: the process on its card listening on its port, so never a remote, Docker or unattributed one. A waiting non-ComfyUI lease short of `vram` by more than an unload frees (`held - kept`) but no more than all ComfyUI holds carries `waiting_reason.comfyui_closing` `{kept_mb, short_mb, can_quit, busy, allowed}`, the text "Needs ComfyUI closed", and the action `quit_comfyui` until the owner says yes. Yes is `Lease.allow_comfyui_quit()` (`quit_comfyui`), and with it the ladder gains a last rung after the unload: when ComfyUI is idle and the lease still only fits with all it holds, `ComfyUIProbe.quit()` terminates the process and waits (`QUIT_WAIT_S`, never a hard kill), and the lease carries a `comfyui_quit` warning (`comfyui_quit_failed` when it would not exit). Busy with work PixlStash did not submit, it is never quit: the run waits for the jobs, then quits it. Nothing quits ComfyUI without that yes.
 
 **Preemption never looks like a failure.** A finder defers a batch for the session on any error other than `TaskCancelledError` (`MissingOcrFinder`, `MissingPromptMatchFinder`), so a task stopped to make room ends as exactly `TaskCancelledError` whatever it raised on the way out (`TaskRunner._run` rewrites it), and its unprocessed pictures, still `NULL`, are found again. `WorkPlanner.hold` is keyed by owner (`hold(owner, seconds | None)`, `release(owner)`) so the folder-structure read and a VRAM lease cannot end each other's hold.
 
@@ -11827,7 +11830,20 @@ enqueue.
 The room is `ResourceArbiter.training_room(device)`, on the card PixlStash
 uses: the card less the safety margin and what other apps hold. PixlStash's own
 memory, ComfyUI's and a finished AI-toolkit run's are not subtracted, because an
-exclusive lease gets them back before it is granted. RAM is psutil's available
+exclusive lease gets them back before it is granted, except what ComfyUI keeps
+after unloading, which only quitting it releases: the room's `comfyui`
+(`{kept_mb, held_mb, can_quit, busy}`, None without a ComfyUI read on that card)
+says how much (#2558). The training routes point the arbiter's ComfyUI probe at
+the owner's ComfyUI before reading the room, since only a ComfyUI run registers
+it otherwise. `POST /training/resolve` answers `comfyui`
+(`{kept_mb, short_mb, can_quit, busy, beside}`) when the resolved profile fits
+only with ComfyUI quit, `beside` being Save memory resolved beside it.
+`POST /training/jobs` takes the owner's answer as `comfyui` (`quit` or `queue`,
+the default); quit is kept on the row as `comfyui_quit = 'allowed'`, the worker
+hands it to the run's lease, and a lease that quit ComfyUI leaves `quit` there,
+which `GET /training/jobs/{id}/live` reports as `comfyui_quit {at}` once the run
+has ended. `POST /training/jobs/{id}/quit-comfyui` is the same yes from the run
+page for a queued run. RAM is psutil's available
 physical memory; swap never counts. A card that cannot be measured is refused
 rather than guessed. The run's lease asks for the profile's `vram_mb` and
 `ram_mb` (`Vault._request_training_gpu`), replacing the fixed 16 GB estimate; a

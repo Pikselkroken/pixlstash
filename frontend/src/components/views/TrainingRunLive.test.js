@@ -19,10 +19,12 @@ vi.mock("vuetify/components", async (importOriginal) => ({
 const getTrainingJobLive = vi.fn();
 const setTrainingJobCover = vi.fn();
 const cancelTrainingJob = vi.fn();
+const quitComfyuiForTrainingJob = vi.fn();
 vi.mock("../../api/training", () => ({
   getTrainingJobLive: (...args) => getTrainingJobLive(...args),
   setTrainingJobCover: (...args) => setTrainingJobCover(...args),
   cancelTrainingJob: (...args) => cancelTrainingJob(...args),
+  quitComfyuiForTrainingJob: (...args) => quitComfyuiForTrainingJob(...args),
 }));
 const copyText = vi.fn();
 vi.mock("../../utils/clipboard", () => ({
@@ -45,7 +47,7 @@ const stubs = {
     template: "<button :aria-label='ariaLabel'><slot /></button>",
   },
   AppButton: {
-    props: ["disabled", "loading"],
+    props: ["disabled", "loading", "variant"],
     template: "<button class='app-btn' :disabled='disabled'><slot /></button>",
   },
   TrainingSampleDialog: {
@@ -610,6 +612,43 @@ describe("TrainingRunLive", () => {
     await wrapper.find(".app-btn").trigger("click");
     await flushPromises();
     expect(cancelTrainingJob).toHaveBeenCalledWith(7);
+  });
+
+  it("says a run waits for ComfyUI to be closed, and offers to quit it (#2558)", async () => {
+    const waitingOn = (comfyui) =>
+      payload({
+        status: "queued",
+        phase: "waiting_gpu",
+        step: 0,
+        phases: [{ phase: "waiting_gpu", seconds: 12 }],
+        waiting: { code: "vram", text: "Needs ComfyUI closed", comfyui },
+      });
+    const comfy = { kept_mb: 1638, short_mb: 700, can_quit: true, busy: false, allowed: false };
+    const wrapper = await open(waitingOn(comfy));
+    expect(wrapper.find(".trl-notice").text()).toContain("Queued until ComfyUI is closed.");
+    expect(wrapper.find(".trl-notice").text()).toContain("needs the 1.6 GB it holds");
+    getTrainingJobLive.mockResolvedValue(waitingOn({ ...comfy, allowed: true }));
+    await wrapper.find('[data-testid="trl-quit-comfyui"]').trigger("click");
+    await flushPromises();
+    expect(quitComfyuiForTrainingJob).toHaveBeenCalledWith(7);
+    expect(wrapper.find(".trl-notice").text()).toContain("PixlStash is quitting it");
+    expect(wrapper.find('[data-testid="trl-quit-comfyui"]').exists()).toBe(false);
+
+    // One PixlStash cannot close: said, never offered.
+    const docker = await open(waitingOn({ ...comfy, can_quit: false }));
+    expect(docker.find('[data-testid="trl-quit-comfyui"]').exists()).toBe(false);
+  });
+
+  it("says ComfyUI can be started again after a run it was quit for", async () => {
+    const done = { status: "completed", phase: null, previews: null };
+    const plain = await open(payload({ ...done, comfyui_quit: null }));
+    expect(plain.text()).not.toContain("ComfyUI can be started again.");
+    const wrapper = await open(
+      payload({ ...done, comfyui_quit: { at: "2026-10-26T09:00:00+00:00" } }),
+    );
+    expect(wrapper.find(".trl-notice--ok").text()).toContain("ComfyUI can be started again.");
+    await wrapper.find('[data-testid="trl-comfyui-dismiss"]').trigger("click");
+    expect(wrapper.text()).not.toContain("ComfyUI can be started again.");
   });
 
   it("says a run queued behind another run waits for that run, not the GPU", async () => {

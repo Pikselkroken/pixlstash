@@ -6,7 +6,7 @@
     size="lg"
     :persistent="store.submitting"
     @close="store.closeDialog()"
-    @accept="onStart"
+    @accept="onStartAsked"
   >
     <!-- ai-toolkit not configured: Start is blocked, the way out is Settings. -->
     <div
@@ -272,6 +272,12 @@
         <template v-else-if="store.fit === 'best_quality'">
           Keeps the model's weights at full precision. It needs more memory and
           can run slower; it does not promise a better LoRA.
+        </template>
+        <!-- #2558: a ComfyUI PixlStash cannot close (Docker, no process). -->
+        <template v-if="comfyNeed && !comfyNeed.can_quit">
+          ComfyUI holds memory on this card that PixlStash can't release, so
+          Start queues the run until {{ gbTenths(comfyNeed.short_mb) }} GB more
+          is free. Close ComfyUI to start it.
         </template>
       </span>
     </div>
@@ -630,14 +636,27 @@
         >Cancel</AppButton
       >
       <AppButton
+        ref="startButton"
         variant="primary"
         key-hint="enter"
         :loading="store.submitting"
         :disabled="!canStart"
         data-testid="tld-start"
-        @click="onStart"
+        @click="onStartAsked"
         >Start training</AppButton
       >
+      <ComfyQuitConfirm
+        v-if="comfyNeed"
+        :open="askComfy"
+        :fit-label="FIT_LABELS[store.fit] || ''"
+        :need-mb="resolution?.vram_mb || 0"
+        :comfyui="comfyNeed"
+        :seconds="measuredSeconds"
+        @close="closeComfyAsk"
+        @queue="answerComfy('queue')"
+        @quit="answerComfy('quit')"
+        @beside="useBeside"
+      />
     </template>
   </AppDialog>
 </template>
@@ -652,6 +671,7 @@ import AppSelect from "../widgets/AppSelect.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
 import Segmented from "../widgets/Segmented.vue";
 import PinnedChip from "./TrainLoraPinnedChip.vue";
+import ComfyQuitConfirm from "./ComfyQuitConfirm.vue";
 import { useRouter } from "vue-router";
 import { characterThumbnailUrl } from "../../api/characters";
 import { pictureSetThumbnailUrl } from "../../api/pictureSets";
@@ -680,7 +700,9 @@ import {
   fitReadout,
   formatCount,
   formatField,
+  formatDuration,
   gb,
+  gbTenths,
   hasTrigger,
   keyLabel,
   moreRows,
@@ -1087,7 +1109,9 @@ const motionOff = computed(() => {
 });
 
 const fitOptions = computed(() => {
-  const free = plan.value?.room?.vram_mb;
+  // What is free once ComfyUI unloads its models; only quitting frees the rest.
+  const room = plan.value?.room;
+  const free = room?.vram_mb != null ? room.vram_mb - (room.comfyui?.kept_mb || 0) : null;
   return [
     {
       id: "auto",
@@ -1115,7 +1139,11 @@ const effortHintText = computed(() =>
     subject: store.effectiveSubject,
   }),
 );
-const fitLine = computed(() => fitReadout(resolution.value));
+const fitLine = computed(() =>
+  [fitReadout(resolution.value), comfyNeed.value && "needs ComfyUI closed"]
+    .filter(Boolean)
+    .join(" · "),
+);
 
 const sourceCtx = computed(() => ({
   effort: store.effort,
@@ -1314,11 +1342,53 @@ const blocker = computed(() => {
 const footError = computed(() => store.submitError || blocker.value);
 
 /** "About 50 min. Other GPU work pauses while it runs." */
-const footLine = computed(() =>
-  [timeEstimate(resolution.value), "Other GPU work pauses while it runs."]
+const footLine = computed(() => {
+  if (comfyNeed.value && measuredSeconds.value != null)
+    return `About ${formatDuration(measuredSeconds.value)}, once ComfyUI is closed.`;
+  return [timeEstimate(resolution.value), "Other GPU work pauses while it runs."]
     .filter(Boolean)
-    .join(" "),
-);
+    .join(" ");
+});
+
+// #2558: the run fits only with a local ComfyUI quit. Start asks first.
+const comfyNeed = computed(() => (resolution.value && plan.value?.comfyui) || null);
+const measuredSeconds = computed(() => {
+  const estimate = resolution.value?.estimate;
+  return estimate?.basis === "measured" ? (estimate.seconds ?? null) : null;
+});
+const askComfy = ref(false);
+const startButton = ref(null);
+
+function onStartAsked() {
+  if (!canStart.value) return;
+  store.comfyuiAnswer = null;
+  if (comfyNeed.value?.can_quit) {
+    askComfy.value = true;
+    return;
+  }
+  onStart();
+}
+
+async function answerComfy(answer) {
+  askComfy.value = false;
+  store.comfyuiAnswer = answer;
+  try {
+    await onStart();
+  } finally {
+    store.comfyuiAnswer = null;
+  }
+}
+
+/** Back to the Train dialog; Vuetify would leave focus on the page body. */
+function closeComfyAsk() {
+  askComfy.value = false;
+  nextTick(() => startButton.value?.focus?.());
+}
+
+function useBeside(fit) {
+  store.fit = fit;
+  closeComfyAsk();
+}
 
 // The plan on screen must answer the choices now made: a plan for earlier
 // choices (the debounce has not fired yet) or a dataset still loading would
