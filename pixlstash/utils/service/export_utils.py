@@ -581,9 +581,10 @@ class ExportUtils:
     def _deduplicate_stacks(pics: list) -> list:
         """Keep only the stack leader from each stack, drop the rest.
 
-        The leader is the newest picture by ``created_at`` (ties broken by
-        highest ``id``), matching the frontend's ``sortStackMembers`` logic.
-        Pictures not in any stack are passed through unchanged.
+        The leader is the cover the grid shows, the lowest ``stack_position``;
+        a stack without positions falls back to the newest picture by
+        ``created_at`` (ties broken by highest ``id``). Pictures not in any
+        stack are passed through unchanged.
         """
         by_stack: dict = {}
         result = []
@@ -595,11 +596,19 @@ class ExportUtils:
                 by_stack.setdefault(stack_id, []).append(pic)
 
         for stack_id, members in by_stack.items():
-            leader = max(
+            newest = sorted(
                 members,
                 key=lambda p: (
                     getattr(p, "created_at", None) or "",
                     getattr(p, "id", 0) or 0,
+                ),
+                reverse=True,
+            )
+            leader = min(
+                newest,
+                key=lambda p: (
+                    p.stack_position is None,
+                    p.stack_position or 0,
                 ),
             )
             result.append(leader)

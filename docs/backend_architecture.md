@@ -12664,10 +12664,12 @@ Train dialog (§25.19) then trains on like any set.
 
 **The route gathers, the picker ranks.** The handler in `routes/training.py`
 reads every non-deleted picture with a `Face` of the character: its faces'
-boxes and embeddings, the most faces on any one frame, its tags, its CLIP
+boxes and embeddings, its caption, the most faces on any one frame, its tags, its CLIP
 `image_embedding`, and near pairs from `near_pairs_in_bucket` at
-`DEFAULT_THRESHOLD` (the members of one stack count as near pairs too, because
-a set takes a whole stack). `pixlstash/training/dataset_picker.py` is a pure
+`DEFAULT_THRESHOLD`. A stack is represented by its cover alone: training keeps
+one picture per stack (`ExportUtils._deduplicate_stacks`, the lowest
+`stack_position`), so the route drops the other members before ranking, and a
+stray face on an original never sets aside the crop the owner put on top. `pixlstash/training/dataset_picker.py` is a pure
 function over those rows, tested without a server.
 
 - **Likeness** is the face similarity (0-1, shown 0-100) against up to
@@ -12686,16 +12688,25 @@ function over those rows, tested without a server.
   unrated smart score under `SMART_SCORE_FLOOR` (`low_quality`), and a likeness
   under `LIKENESS_FLOOR` or none (`low_likeness`). `would_add` re-runs the
   filters with only that flag flipped, so it is exactly what the toggle lets in.
-  A set takes a whole stack, so a reason against one stack member is a reason
-  against every member that shows the character, stills and clips alike.
 - **One greedy pass per group**, stills and clips apart, up to `MAX_PICKS` (50).
-  `value = quality * likeness`; each next pick maximises
-  `value * (1 + W_NEW * axes_under_target + W_SEM * min_cosine_distance)`.
+  `value = quality * likeness`; each next pick maximises first
+  `axes_under_target`, then `value * (1 + W_SEM * min_cosine_distance)`. The
+  filters decide what is good enough, so a weaker picture of a missing framing
+  or expression beats any better repeat.
   An axis is under target when the candidate brings a label the picks hold
   fewer of than `target()` asks for at the next set size: `TARGET_SHARE` per
-  label, never below one. Framing comes from tags, else from the face box's
-  share of the frame; expression from tags, `neutral` when none. Pose is not an
-  axis yet (no head pose is stored); it would be one more `AXES` entry.
+  label, never below one. Framing comes from the largest face box:
+  `face_room` counts how many face heights fit from its top to the bottom of
+  the picture as shown (an EXIF quarter turn swaps the raw width and height),
+  and `_FACE_ROOM_FRAMING` cuts that at values read off stored boxes, which
+  face extraction widens and rounds up. Tags decide only for a picture with no
+  usable face box, since the whole-picture tagger calls a waist-up shot a
+  close-up. Expression comes from tags, `neutral` when none, except that a
+  `smile` tag holds only when the picture's caption, if it has one, mentions
+  smiling (a pending-redescribe sentinel is no caption): the tagger reads a
+  small face as smiling with high confidence when it is not.
+  Pose is not an axis yet (no head pose is stored); it would be one more
+  `AXES` entry.
 
 Because the order depends only on the picks so far, a set of N is the first N
 of the ranking, and the dialog's slider never reshuffles. A stacked pick brings

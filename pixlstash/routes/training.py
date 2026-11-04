@@ -39,6 +39,7 @@ from starlette.background import BackgroundTask
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Character, Face, Picture, PictureSet, Tag, User
+from pixlstash.db_models.tag import description_caption_content
 from pixlstash.hub import dataset_snapshots, training_runs
 from pixlstash.hub.db import now_iso
 from pixlstash.pixl_logging import get_logger
@@ -2829,8 +2830,10 @@ def create_router(server) -> APIRouter:
                 Picture.smart_score,
                 Picture.width,
                 Picture.height,
+                Picture.orientation,
                 Picture.file_path,
                 Picture.stack_id,
+                Picture.description,
             )
             .join(Picture, Face.picture_id == Picture.id)
             .where(Face.character_id == character_id, Picture.deleted.is_(False))
@@ -2878,17 +2881,20 @@ def create_router(server) -> APIRouter:
             smart,
             w,
             h,
+            orientation,
             path,
             stack,
+            description,
         ) in rows:
             pic = pictures.setdefault(
                 pid,
                 {
                     "score": score,
                     "smart": smart,
-                    "area": (w or 0) * (h or 0),
+                    "size": (w, h, orientation),
                     "path": path,
                     "stack": stack,
+                    "description": description_caption_content(description),
                     "faces": [],
                 },
             )
@@ -2916,7 +2922,7 @@ def create_router(server) -> APIRouter:
         for pid, tag in tag_rows:
             tags.setdefault(pid, []).append(tag)
 
-        def face_ratio(pic):
+        def face_room(pic):
             best = None
             for _fid, bbox, _feat in pic["faces"]:
                 try:
@@ -2924,13 +2930,31 @@ def create_router(server) -> APIRouter:
                 except (ValueError, TypeError) as exc:
                     logger.warning("Unreadable face box %r (%s); ignored.", bbox, exc)
                     continue
-                if pic["area"] > 0 and x2 > x1 and y2 > y1:
-                    ratio = (x2 - x1) * (y2 - y1) / pic["area"]
-                    best = ratio if best is None else max(best, ratio)
-            return best
+                if x2 > x1 and y2 > y1:
+                    area = (x2 - x1) * (y2 - y1)
+                    if best is None or area > best[0]:
+                        best = (area, (x1, y1, x2, y2))
+            return dataset_picker.face_room(best[1], *pic["size"]) if best else None
 
+        # Training keeps one picture per stack, its cover, so the cover alone
+        # stands for the stack: the other members are never trained on.
+        stacked = {pic["stack"] for pic in pictures.values()} - {None}
+        if stacked:
+            members = session.exec(
+                select(
+                    Picture.id,
+                    Picture.stack_id,
+                    Picture.stack_position,
+                    Picture.created_at,
+                ).where(Picture.stack_id.in_(stacked), Picture.deleted.is_(False))
+            ).all()
+            covers = {row.id for row in ExportUtils._deduplicate_stacks(members)}
+            pictures = {
+                pid: pic
+                for pid, pic in pictures.items()
+                if pic["stack"] is None or pid in covers
+            }
         candidates = []
-        stacks = {}
         for pid, pic in pictures.items():
             scores = [likeness[f] for f, _b, _x in pic["faces"] if f in likeness]
             emb = embeddings.get(pid)
@@ -2944,7 +2968,8 @@ def create_router(server) -> APIRouter:
                     face_count_max=most_faces.get(pid, 1),
                     stack_id=pic["stack"],
                     tags=tuple(tags.get(pid, ())),
-                    face_area_ratio=face_ratio(pic),
+                    face_room=face_room(pic),
+                    description=pic["description"],
                     embedding=(
                         np.frombuffer(bytes(emb), dtype=np.float32)
                         if emb is not None
@@ -2952,8 +2977,6 @@ def create_router(server) -> APIRouter:
                     ),
                 )
             )
-            if pic["stack"] is not None:
-                stacks.setdefault(pic["stack"], []).append(pid)
         # ponytail: one bucket over the whole character, unlike the dedup
         # worker's MAX_BUCKET_MEMBERS split; milliseconds at a few thousand
         # pictures, split it if a character of tens of thousands is slow.
@@ -2965,10 +2988,6 @@ def create_router(server) -> APIRouter:
                 DEFAULT_THRESHOLD,
             )
         ]
-        # A set takes a whole stack, so a stack is one shot: its members are
-        # near copies of each other however far apart their hashes are.
-        for members in stacks.values():
-            pairs.extend((members[0], other) for other in members[1:])
         return candidates, pairs, any(c.is_clip for c in candidates)
 
     def _free_set_name(session, base: str) -> str:

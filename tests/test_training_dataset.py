@@ -463,3 +463,19 @@ def test_training_facts_count_untagged_near_copies_and_other_people(env):
     }
     # Without a character nobody is "somebody else".
     assert ExportUtils.training_facts(server, set_id=set_id)["other_people"] == 0
+
+
+def test_a_stack_trains_its_cover():
+    from types import SimpleNamespace as P
+
+    early, late = "2026-01-01", "2026-06-01"
+    pics = [
+        P(id=1, stack_id=7, stack_position=1, created_at=late),
+        P(id=2, stack_id=7, stack_position=0, created_at=early),
+        P(id=3, stack_id=8, stack_position=None, created_at=early),
+        P(id=4, stack_id=8, stack_position=None, created_at=late),
+        P(id=5, stack_id=None, stack_position=None, created_at=early),
+    ]
+    kept = {p.id for p in ExportUtils._deduplicate_stacks(pics)}
+    # The cover, not the newest; with no positions, the newest.
+    assert kept == {2, 4, 5}

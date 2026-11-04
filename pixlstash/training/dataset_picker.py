@@ -40,9 +40,6 @@ Smart scores run about 1-5; this drops roughly the weakest 5% of a library.
 LOW_RATING = 2
 """A picture the user rated 1-2 stars is set aside."""
 
-W_NEW = 1.0
-"""The gain of a picture bringing a framing or expression under its target."""
-
 W_SEM = 1.5
 """The gain per unit of CLIP cosine distance from the nearest pick."""
 
@@ -50,22 +47,26 @@ REASONS = ("other_people", "near_duplicates", "low_quality", "low_likeness")
 """The four set-aside reasons, each with an ``include_<reason>`` toggle."""
 
 _FRAMING_TAGS = (
-    # The first label a picture's tags name wins: "full body" and "close-up"
-    # are unambiguous, "portrait" is narrower than "upper body".
+    # For a picture with no face box. The first label its tags name wins:
+    # "full body" and "close-up" are unambiguous, "portrait" is narrower than
+    # "upper body".
     ("full body", ("full body",)),
     ("close-up", ("close-up", "close-up view")),
     ("portrait", ("portrait",)),
     ("upper body", ("upper body", "cowboy shot")),
 )
 
-_FACE_AREA_FRAMING = (
-    # Face box over frame area, for a picture with no framing tag.
-    # ponytail: fixed cut-offs, measured on portrait and full-length stills;
-    # tune if wide-angle libraries misfile.
-    (0.12, "close-up"),
-    (0.04, "portrait"),
-    (0.01, "upper body"),
-    (0.0, "full body"),
+_FACE_ROOM_FRAMING = (
+    # :func:`face_room` on a stored face box, which face extraction widens by
+    # a quarter and rounds up to 64 px at its 512 px working size, so a box
+    # reads about 0.75 of the room a tight face box would. Read off the demo
+    # library sorted by room: chest-up under 2.1, waist-up and seated about
+    # 2.2-2.9, thigh-up mirror shots about 3.1-3.4, whole figures above.
+    # ponytail: fixed cut-offs on the largest face; a seated or lying figure
+    # reads tighter than it is. A pose model would settle it.
+    (1.5, "close-up"),
+    (2.1, "portrait"),
+    (3.5, "upper body"),
 )
 
 _EXPRESSION_TAGS = (
@@ -73,6 +74,14 @@ _EXPRESSION_TAGS = (
     ("open mouth", ("open mouth",)),
     ("closed eyes", ("closed eyes",)),
 )
+
+_SMILE_WORDS = ("smil", "grin", "laugh")
+"""A caption naming one of these agrees with a smile tag.
+
+The whole-picture tagger calls a small face smiling with high confidence when
+it is not (0.92 on a frowning face); a caption reads the face the way a person
+does, so one that never mentions smiling vetoes the tag.
+"""
 
 TARGET_SHARE = {
     "framing": {
@@ -100,24 +109,57 @@ def target(axis: str, label: str, size: int) -> int:
     return max(1, int(TARGET_SHARE[axis][label] * size + 0.5))
 
 
-def framing_label(tags: set[str], face_area_ratio: float | None) -> str | None:
-    """The picture's framing, from its tags or else its face's size."""
-    for label, names in _FRAMING_TAGS:
-        if any(name in tags for name in names):
-            return label
-    if face_area_ratio is None:
+def face_room(
+    box: tuple[float, float, float, float],
+    width: int | None,
+    height: int | None,
+    orientation: int | None = None,
+) -> float | None:
+    """Face heights from the top of *box* to the bottom of the picture.
+
+    How much of the body the frame has room for, whatever its shape. *box* is
+    a stored face box, in the picture as shown; *width* and *height* are the
+    file's raw size, so an EXIF orientation of 5-8 (a quarter turn) swaps
+    them. ``None`` for a box or size that cannot be measured.
+    """
+    _x1, y1, _x2, y2 = box
+    shown_height = width if orientation in (5, 6, 7, 8) else height
+    if not shown_height or y2 <= y1:
         return None
-    for floor, label in _FACE_AREA_FRAMING:
-        if face_area_ratio >= floor:
+    return (shown_height - max(0.0, y1)) / (y2 - y1)
+
+
+def framing_label(tags: set[str], face_room: float | None) -> str | None:
+    """The picture's framing, from its face's place in the frame, else tags.
+
+    The face box is measured; a framing tag is a whole-picture guess that
+    calls a waist-up shot a close-up, so it decides only with no face box.
+    """
+    if face_room is None:
+        for label, names in _FRAMING_TAGS:
+            if any(name in tags for name in names):
+                return label
+        return None
+    for ceiling, label in _FACE_ROOM_FRAMING:
+        if face_room < ceiling:
             return label
-    return None
+    return "full body"
 
 
-def expression_labels(tags: set[str]) -> tuple[str, ...]:
-    """The picture's expressions; ``neutral`` when its tags name none."""
+def expression_labels(
+    tags: set[str], description: str | None = None
+) -> tuple[str, ...]:
+    """The picture's expressions; ``neutral`` when its tags name none.
+
+    A smile tag holds only if the picture has no caption or its caption
+    mentions smiling (:data:`_SMILE_WORDS`).
+    """
     found = tuple(
         label for label, names in _EXPRESSION_TAGS if any(n in tags for n in names)
     )
+    caption = (description or "").casefold()
+    if caption.strip() and not any(word in caption for word in _SMILE_WORDS):
+        found = tuple(label for label in found if label != "smile")
     return found or ("neutral",)
 
 
@@ -139,7 +181,8 @@ class Candidate:
     likeness: float | None = None
     face_count_max: int = 1
     tags: tuple[str, ...] = ()
-    face_area_ratio: float | None = None
+    face_room: float | None = None  # face heights below the face's top
+    description: str | None = None
     embedding: np.ndarray | None = None
     stack_id: int | None = None
     framing: str | None = field(init=False, default=None)
@@ -147,8 +190,8 @@ class Candidate:
 
     def __post_init__(self):
         folded = {str(tag).strip().casefold() for tag in self.tags if tag}
-        self.framing = framing_label(folded, self.face_area_ratio)
-        self.expressions = expression_labels(folded)
+        self.framing = framing_label(folded, self.face_room)
+        self.expressions = expression_labels(folded, self.description)
 
 
 def pick_references(faces: list) -> list:
@@ -337,9 +380,12 @@ def _greedy(pool: list[Candidate], value: dict[int, float]) -> list[Candidate]:
     while rest and len(picks) < MAX_PICKS:
         size = len(picks) + 1
 
+        # Filling a gap comes first: the filters already decided what is good
+        # enough, so a weaker picture of a missing framing beats a better
+        # repeat. Quality and variety order the rest.
         def gain(c):
             if not picks:
-                return value[c.picture_id]
+                return (0, value[c.picture_id])
             short = 0
             for name, labels_of in AXES:
                 if any(
@@ -347,8 +393,9 @@ def _greedy(pool: list[Candidate], value: dict[int, float]) -> list[Candidate]:
                     for label in labels_of(c)
                 ):
                     short += 1
-            return value[c.picture_id] * (
-                1 + W_NEW * short + W_SEM * (min_dist[c.picture_id] or 0.0)
+            return (
+                short,
+                value[c.picture_id] * (1 + W_SEM * (min_dist[c.picture_id] or 0.0)),
             )
 
         # max() keeps the first of equal gains: rest is in picture_id order.

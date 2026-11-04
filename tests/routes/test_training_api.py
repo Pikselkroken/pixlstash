@@ -2012,7 +2012,9 @@ def test_character_set_suggestion_ranks_stills_and_clips_apart():
         assert stills["excluded"]["other_people"] == 1
         assert stills["would_add"]["other_people"] == 1
         framing = {p["picture_id"]: p["buckets"]["framing"] for p in stills["picks"]}
-        assert framing[a] == ["close-up"]
+        # The face box (90 of 100 rows below a 40-row face) frames it, not
+        # its Close-up tag.
+        assert framing[a] == ["upper body"]
         assert all(0 <= p["likeness"] <= 100 for p in stills["picks"])
         assert out["targets"]["framing"]["close-up"] == 0.2
 
@@ -2038,6 +2040,25 @@ def test_character_set_suggestion_ranks_stills_and_clips_apart():
         scoped = _scoped_client(server, read_token)
         r = scoped.get(url, params={"character_id": char_id})
         assert r.status_code == 403, r.text
+
+        # Stacked under d, c's other person is never trained: the cover alone
+        # stands for the stack.
+        def stack(session):
+            from pixlstash.db_models import Picture, PictureStack
+
+            row = PictureStack()
+            session.add(row)
+            session.flush()
+            for pid, pos in ((c, 1), (d, 0)):
+                pic = session.get(Picture, pid)
+                pic.stack_id, pic.stack_position = row.id, pos
+            session.commit()
+
+        server.vault.db.run_task(stack)
+        stills = owner.get(url, params={"character_id": char_id}).json()["stills"]
+        assert stills["candidates"] == 4
+        assert stills["excluded"]["other_people"] == 0
+        assert d in {p["picture_id"] for p in stills["picks"]}
     finally:
         _teardown(temp_dir, server)
 
