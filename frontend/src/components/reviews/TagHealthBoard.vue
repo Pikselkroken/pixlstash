@@ -789,12 +789,14 @@ function openSessionFor(tag) {
 // The gate is sound because the row's signals describe the review the button
 // creates: ReviewSessionsOverlay.vue's `openNewReview(tag)` always prefills a
 // row-started review with the board's scope (unscoped board → whole library),
-// never the app selection.
+// never the app selection. Unscoped rows come from the cached board, so a stale
+// cache (tags confirmed since it was built) does not gate: its zeros may be old.
 //
 // Keyed by tag so the template resolves each row's reason with one lookup
 // instead of recomputing it for :disabled, :title, and :class separately.
 const blockedStarts = computed(() => {
   const blocked = new Map();
+  if (store.healthStale) return blocked;
   for (const r of store.healthRows) {
     const reason = zeroYieldReason(r);
     if (reason) blocked.set(r.tag, reason);

@@ -332,6 +332,15 @@ describe("TagHealthBoard: provably-empty Start review gate", () => {
     expect(startBtn(w).attributes("disabled")).toBeDefined();
   });
 
+  it("does not gate on a stale cache, whose zeros may predate new tags", () => {
+    store.healthStale = true;
+    const w = mountRows(
+      [healthRow({ ground_truth: 0, est_wrong: 0, est_missing: 0, mismatch: 0 })],
+      { projectId: null, setId: null, characterId: null },
+    );
+    expect(startBtn(w).attributes("disabled")).toBeUndefined();
+  });
+
   it("re-evaluates when the rows change", async () => {
     const w = mountRows([
       healthRow({ ground_truth: 0, est_wrong: 0, est_missing: 0, mismatch: 0 }),
