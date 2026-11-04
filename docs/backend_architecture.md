@@ -12672,11 +12672,11 @@ function over those rows, tested without a server.
   unrated smart score under `SMART_SCORE_FLOOR` (`low_quality`), and a likeness
   under `LIKENESS_FLOOR` or none (`low_likeness`). `would_add` re-runs the
   filters with only that flag flipped, so it is exactly what the toggle lets in.
-  A set takes a whole stack, so a reason against one stack member is a reason
-  against every member that shows the character, stills and clips alike.
 - **One greedy pass per group**, stills and clips apart, up to `MAX_PICKS` (50).
-  `value = quality * likeness`; each next pick maximises
-  `value * (1 + W_NEW * axes_under_target + W_SEM * min_cosine_distance)`.
+  `value = quality * likeness`; each next pick maximises first
+  `axes_under_target`, then `value * (1 + W_SEM * min_cosine_distance)`. The
+  filters decide what is good enough, so a weaker picture of a missing framing
+  or expression beats any better repeat.
   An axis is under target when the candidate brings a label the picks hold
   fewer of than `target()` asks for at the next set size: `TARGET_SHARE` per
   label, never below one. Framing comes from the largest face box:

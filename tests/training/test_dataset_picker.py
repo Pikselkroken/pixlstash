@@ -59,6 +59,14 @@ def test_an_uncovered_framing_beats_a_slightly_better_repeat():
     assert _ids(rank(lib)["stills"])[:2] == [1, 3]
 
 
+def test_a_missing_framing_beats_any_better_repeat():
+    # The only close-up is the weakest picture that passed; it still comes
+    # second, before every better upper-body repeat.
+    lib = [_cand(i, rating=5, face_room=2.5) for i in range(1, 6)]
+    lib.append(_cand(6, rating=3, likeness=0.35, face_room=1.2))
+    assert _ids(rank(lib)["stills"])[:2] == [1, 6]
+
+
 def test_each_exclusion_sets_aside_and_its_toggle_lets_back_in():
     lib = [
         _cand(1, rating=5),

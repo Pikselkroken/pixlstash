@@ -40,9 +40,6 @@ Smart scores run about 1-5; this drops roughly the weakest 5% of a library.
 LOW_RATING = 2
 """A picture the user rated 1-2 stars is set aside."""
 
-W_NEW = 1.0
-"""The gain of a picture bringing a framing or expression under its target."""
-
 W_SEM = 1.5
 """The gain per unit of CLIP cosine distance from the nearest pick."""
 
@@ -383,9 +380,12 @@ def _greedy(pool: list[Candidate], value: dict[int, float]) -> list[Candidate]:
     while rest and len(picks) < MAX_PICKS:
         size = len(picks) + 1
 
+        # Filling a gap comes first: the filters already decided what is good
+        # enough, so a weaker picture of a missing framing beats a better
+        # repeat. Quality and variety order the rest.
         def gain(c):
             if not picks:
-                return value[c.picture_id]
+                return (0, value[c.picture_id])
             short = 0
             for name, labels_of in AXES:
                 if any(
@@ -393,8 +393,9 @@ def _greedy(pool: list[Candidate], value: dict[int, float]) -> list[Candidate]:
                     for label in labels_of(c)
                 ):
                     short += 1
-            return value[c.picture_id] * (
-                1 + W_NEW * short + W_SEM * (min_dist[c.picture_id] or 0.0)
+            return (
+                short,
+                value[c.picture_id] * (1 + W_SEM * (min_dist[c.picture_id] or 0.0)),
             )
 
         # max() keeps the first of equal gains: rest is in picture_id order.
