@@ -9,7 +9,7 @@ vi.mock("../api/pictures", () => ({
   renderPictureMask: (...a) => renderPictureMask(...a),
 }));
 
-import { usePaintSelection } from "./usePaintSelection";
+import { maskBounds, usePaintSelection } from "./usePaintSelection";
 
 let scope;
 const pictureId = ref(7);
@@ -191,5 +191,64 @@ describe("usePaintSelection", () => {
     await vi.advanceTimersByTimeAsync(200);
     expect(paint.maskError.value).toBe("Could not show the selection.");
     expect(paint.maskUrl.value).toBe("");
+  });
+
+  it("takes a crop frame from the selection's bounds, and leaves one already set", async () => {
+    // A 4 x 2 mask with the right half of the bottom row selected.
+    const data = new Uint8ClampedArray(4 * 2 * 4);
+    for (const x of [2, 3]) data[(1 * 4 + x) * 4] = 255;
+    const decode = vi.fn(() => Promise.resolve());
+    vi.stubGlobal(
+      "Image",
+      class {
+        naturalWidth = 4;
+        naturalHeight = 2;
+        decode = decode;
+      },
+    );
+    const getContext = vi
+      .spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({ drawImage() {}, getImageData: () => ({ data }) });
+    try {
+      const paint = make();
+      // No selection: Crop starts with no frame, as it always did.
+      paint.setTool("crop");
+      await vi.advanceTimersByTimeAsync(200);
+      expect(paint.cropBox.value).toBe(null);
+
+      paint.setTool("rect");
+      paint.begin({ x: 0.5, y: 0.5 });
+      paint.move({ x: 1, y: 1 });
+      paint.end();
+      paint.setTool("crop");
+      // Before the mask lands there is nothing to read; once it does, the frame follows.
+      expect(paint.cropBox.value).toBe(null);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(decode).toHaveBeenCalled();
+      expect(paint.cropBox.value).toEqual([0.5, 0.5, 0.5, 0.5]);
+
+      // A frame the owner set is theirs: taking Crop up again keeps it.
+      paint.setCropBox([0.1, 0.1, 0.2, 0.2]);
+      paint.setTool(null);
+      await nextTick();
+      paint.setTool("crop");
+      await vi.advanceTimersByTimeAsync(200);
+      expect(paint.cropBox.value).toEqual([0.1, 0.1, 0.2, 0.2]);
+    } finally {
+      getContext.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("maskBounds", () => {
+  it("boxes the pixels at the ants' edge and up, in fractions", () => {
+    const data = new Uint8ClampedArray(4 * 4 * 4);
+    // (1, 1) is selected, (2, 2) is half-feathered in, (3, 3) is only a fringe.
+    data[(1 * 4 + 1) * 4] = 255;
+    data[(2 * 4 + 2) * 4] = 128;
+    data[(3 * 4 + 3) * 4] = 127;
+    expect(maskBounds(data, 4, 4)).toEqual([0.25, 0.25, 0.5, 0.5]);
+    expect(maskBounds(new Uint8ClampedArray(16 * 4), 4, 4)).toBe(null);
   });
 });

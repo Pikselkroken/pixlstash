@@ -949,6 +949,24 @@ describe("the Edit tab with the Paint tools", () => {
     expect(wrapper.text()).toContain("do not use a mask");
   });
 
+  it("keeps Run edit off while the crop tool is in hand", async () => {
+    // Crop finishes on its own button over the picture; a live primary Run
+    // here is the button the owner would press instead.
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    expect(wrapper.find("button.run").attributes("disabled")).toBeUndefined();
+    paint.tool.value = "crop";
+    await flush();
+    expect(wrapper.find("button.run").attributes("disabled")).toBeDefined();
+    expect(wrapper.text()).toContain("Cropping.");
+    // Nor through Ctrl+Enter, which calls submit directly.
+    await wrapper.vm.submit();
+    expect(runWorkflowCard).not.toHaveBeenCalled();
+    paint.tool.value = "rect";
+    await flush();
+    expect(wrapper.find("button.run").attributes("disabled")).toBeUndefined();
+  });
+
   it("runs on every picture Edit… named, unless a hand selection holds it", async () => {
     const paint = fakePaint();
     const wrapper = await mountPanel({ paint, applyToIds: [7, 8, 9] });

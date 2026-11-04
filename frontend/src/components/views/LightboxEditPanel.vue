@@ -345,13 +345,19 @@
         <p v-if="submitError" class="edit-note" role="alert">
           {{ submitError }}
         </p>
+        <!-- Crop finishes on its own button over the picture; a primary Run
+             here would read as the way to finish it. -->
+        <p v-if="cropping" class="edit-note">
+          Cropping. Set the frame on the picture, then press Crop to a new
+          picture at its top. Esc stops cropping.
+        </p>
         <AppButton
           on-dark
           variant="primary"
           size="sm"
           block
           :loading="submitting"
-          :disabled="!!chosenMissing"
+          :disabled="!!chosenMissing || cropping"
           key-hint="ctrl+enter"
           @click="submit"
         >
@@ -589,6 +595,8 @@ function missingTip(key) {
 }
 
 const hasSelection = computed(() => !!props.paint?.hasSelection.value);
+// The crop tool in hand: Run edit waits until it is put down.
+const cropping = computed(() => props.paint?.tool.value === "crop");
 const usesMask = computed(() => MASK_TYPES.has(chosenCard.value?.type));
 const promptHelp = computed(() =>
   hasSelection.value && usesMask.value ? PROMPT_HELP.masked : PROMPT_HELP.edit,
@@ -1106,6 +1114,7 @@ function onMoreOptions(key = workflowId.value, edit = false) {
 async function submit() {
   const id = Number(props.pictureId);
   if (submitting.value || !workflowId.value || chosenMissing.value) return;
+  if (cropping.value) return;
   if (!Number.isFinite(id) || id <= 0) return;
   submitting.value = true;
   submitError.value = "";

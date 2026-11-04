@@ -971,7 +971,11 @@
                   variant="ghost"
                   on-dark
                   icon-left="crop"
-                  tooltip="Crop to a new picture (C)"
+                  :tooltip="
+                    paint.hasSelection.value
+                      ? 'Crop to the selection, as a new picture (C)'
+                      : 'Crop to a new picture (C)'
+                  "
                   aria-keyshortcuts="C"
                   :aria-pressed="paint.tool.value === 'crop' ? 'true' : 'false'"
                   @click.stop="
@@ -991,12 +995,21 @@
                   icon-left="arrow-expand-all"
                   data-testid="lightbox-upscale"
                   :tooltip="upscaleTitle"
-                  @click.stop="upscale.openFor([image.id])"
+                  :aria-disabled="paint.hasSelection.value ? 'true' : undefined"
+                  :aria-label="
+                    paint.hasSelection.value
+                      ? `Upscale: ${upscaleTitle}`
+                      : undefined
+                  "
+                  @click.stop="
+                    paint.hasSelection.value || upscale.openFor([image.id])
+                  "
                 >
                   Upscale…
                 </AppButton>
                 <v-menu
                   v-model="pluginMenuOpen"
+                  :disabled="paint.hasSelection.value"
                   :close-on-content-click="false"
                   location-strategy="connected"
                   location="bottom end"
@@ -1011,6 +1024,15 @@
                       variant="ghost"
                       on-dark
                       icon-left="tune-variant"
+                      :tooltip="
+                        paint.hasSelection.value ? SELECTION_BLOCKS_REASON : ''
+                      "
+                      :aria-disabled="paint.hasSelection.value ? 'true' : undefined"
+                      :aria-label="
+                        paint.hasSelection.value
+                          ? `Filters: ${SELECTION_BLOCKS_REASON}`
+                          : undefined
+                      "
                     >
                       Filters…
                     </AppButton>
@@ -1440,12 +1462,16 @@ const editTabShown = computed(
     !!image.value?.id &&
     !isSupportedVideoFile(getLightboxFormat(image.value)),
 );
+// Why rotate, Upscale… and Filters… are greyed while the Edit tab holds a
+// selection: it marks where a Run edit goes, and none of those reads it.
+const SELECTION_BLOCKS_REASON = "Clear the selection first";
 // Upscale… on this picture (#1868): where the Edit tab can run, a picture.
 const upscale = useUpscaleStore();
 const canUpscaleCurrent = computed(
   () => editTabShown.value && comfyuiConfigured.value,
 );
 const upscaleTitle = computed(() => {
+  if (paint.hasSelection.value) return SELECTION_BLOCKS_REASON;
   // Before the shelf is read the model is not known: the verb alone.
   if (upscale.models === null) return "Upscale…";
   const how = upscale.model?.name || "a Lanczos resize";
@@ -2026,10 +2052,14 @@ function isRotateMetadataInFlight(imageIdKey) {
 const rotateDisabledReason = computed(() =>
   image.value ? rotateBlockReason([image.value]) : null,
 );
+// A selection is drawn in fractions of the picture as it stands, so a turn
+// would leave it over the wrong part. (`paint` is declared further down; this
+// is only read once setup has run.)
 const canRotateCurrent = computed(
   () =>
     !isReadOnly.value &&
     !isCurrentLocked.value &&
+    !paint.hasSelection.value &&
     canRotateInPlace(image.value),
 );
 
@@ -2044,6 +2074,7 @@ const canRotateCurrent = computed(
 function rotateTitle(side, shortcut) {
   if (isCurrentLocked.value) return currentLockReason.value;
   if (rotateDisabledReason.value) return rotateDisabledReason.value;
+  if (paint.hasSelection.value) return SELECTION_BLOCKS_REASON;
   return `Rotate ${side} (${shortcut})`;
 }
 const rotateLeftTitle = computed(() => rotateTitle("left", "["));

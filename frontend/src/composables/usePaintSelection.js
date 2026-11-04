@@ -65,6 +65,56 @@ function point(p) {
   return [round(p.x), round(p.y)];
 }
 
+// The mask is read for its bounds at most this many pixels on a side: an
+// 8000px picture would otherwise cost a 256 MB read for a box.
+const BOUNDS_READ_MAX = 2048;
+
+/**
+ * The box around a mask's selected pixels (the marching ants' edge, level 128
+ * and up), as `[left, top, width, height]` in fractions, or `null` when none is
+ * selected. `data` is RGBA, as `getImageData` gives it.
+ */
+export function maskBounds(data, width, height) {
+  let left = width;
+  let top = height;
+  let right = -1;
+  let bottom = -1;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (data[(y * width + x) * 4] < 128) continue;
+      if (x < left) left = x;
+      if (x > right) right = x;
+      if (y < top) top = y;
+      if (y > bottom) bottom = y;
+    }
+  }
+  if (right < 0) return null;
+  return [
+    round(left / width),
+    round(top / height),
+    round((right + 1 - left) / width),
+    round((bottom + 1 - top) / height),
+  ];
+}
+
+async function readMaskBounds(url) {
+  const image = new Image();
+  image.src = url;
+  await image.decode();
+  const scale = Math.min(
+    1,
+    BOUNDS_READ_MAX / Math.max(image.naturalWidth, image.naturalHeight),
+  );
+  const width = Math.max(1, Math.round(image.naturalWidth * scale));
+  const height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.drawImage(image, 0, 0, width, height);
+  return maskBounds(context.getImageData(0, 0, width, height).data, width, height);
+}
+
 /**
  * @param {Object} deps
  * @param {import("vue").Ref<number|string|null>} deps.pictureId - the open picture.
@@ -286,6 +336,24 @@ export function usePaintSelection({ pictureId, dims }) {
   watch(pictureId, () => {
     clear();
     cropBox.value = null;
+  });
+
+  // Crop keeps a frame of its own, but taken up over a selection it starts
+  // around that selection: the owner who marked a face and pressed Crop meant
+  // the face. Waits for the mask when it has not landed yet; a frame already
+  // set, or dragged meanwhile, is left alone.
+  watch([tool, maskUrl], async ([id, url]) => {
+    if (id !== "crop" || !url || !hasSelection.value || cropBox.value) return;
+    let box;
+    try {
+      box = await readMaskBounds(url);
+    } catch (err) {
+      console.warn(`Could not read the selection's bounds for crop (${url}):`, err);
+      return;
+    }
+    if (box && tool.value === "crop" && maskUrl.value === url && !cropBox.value) {
+      cropBox.value = box;
+    }
   });
 
   // ── the preview: the server's mask, a moment after the last change ──────
