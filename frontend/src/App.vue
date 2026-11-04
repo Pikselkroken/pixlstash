@@ -94,6 +94,9 @@ const MovesReview = defineAsyncComponent(
 const ReviewSessionsOverlay = defineAsyncComponent(
   () => import("./components/views/ReviewSessionsOverlay.vue"),
 );
+const ReviewsInspector = defineAsyncComponent(
+  () => import("./components/reviews/ReviewsInspector.vue"),
+);
 // The Workflows grid, on `/workflows` since F1b. Async like every other
 // destination, and for the same reason — nothing that is not on screen
 // belongs in the first chunk.
@@ -1114,10 +1117,12 @@ defineExpose({
         <!-- Everywhere else the stats panel also inspects the grid's
              selection (#2161). It rates, favourites and tags through the
              grid's own paths, so the rail and the tile cannot disagree. -->
-        <!-- Tags to review owns the centre column and takes no rail on any
-             route it rides over: it has no pictures for the stats rail to
-             inspect, and the board needs the width for every column. -->
-        <template v-if="!reviewSessionsStore.overlayOpen">
+        <!-- Tags to review owns the centre column and has no pictures for the
+             stats rail to inspect, so on any route it rides over the rail is
+             its Reviews inspector (open reviews, archived receipts, stickers)
+             instead. -->
+        <ReviewsInspector v-if="reviewSessionsStore.overlayOpen" />
+        <template v-else>
         <TemplateInspector
           v-if="isWorkflowsView && workflowTemplatesStore.shown"
         />

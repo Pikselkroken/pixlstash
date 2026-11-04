@@ -24,6 +24,20 @@
       <span class="rs-toolbar-sep" aria-hidden="true"></span>
       <h2 class="rs-toolbar-title">{{ toolbarTitle }}</h2>
       <div :id="TOOLBAR_TOOLS_ID" class="rs-toolbar-tools"></div>
+      <!-- The right rail's toggle, as on every screen: here it is the Reviews
+           inspector. The app-wide undo is not here on purpose (the review has
+           its own, see handleUndoRequest). -->
+      <span class="rs-toolbar-rail">
+        <AppBarButton
+          icon="dock-right"
+          on-dark
+          :active="sidebarStore.reviewsRailOpen"
+          :aria-pressed="sidebarStore.reviewsRailOpen ? 'true' : 'false'"
+          tooltip="Reviews"
+          data-testid="rs-reviews-rail-toggle"
+          @click="sidebarStore.toggleReviewsRail()"
+        />
+      </span>
     </header>
 
     <div class="rs-shell">
@@ -164,6 +178,8 @@ import NewReviewDialog from "../reviews/NewReviewDialog.vue";
 import RailTags from "../panels/RailTags.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import ViewBackButton from "../widgets/ViewBackButton.vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
@@ -193,6 +209,7 @@ const projectStore = useProjectStore();
 const noticeStore = useNoticeStore();
 const operationStore = useOperationStore();
 const tagGroups = useTagGroupsStore();
+const sidebarStore = useSidebarStore();
 
 // The board's Groups view files tags, and a tag move is the app-wide stack's
 // (one library-wide operation, no review decision in it): there, Ctrl+Z,
@@ -573,9 +590,13 @@ function reportNoRedo() {
 
 function handleKeyDown(event) {
   if (isEditable(event.target) || isEditable(document.activeElement)) return;
-  // The sidebar's abort dialog sits over this view but outside it: while it
-  // is up its own keys (Esc cancels it) are the only ones that act.
-  if (document.querySelector(".v-overlay--active.v-dialog")) return;
+  // A dialog (End review…, a confirm) or a menu (the Reviews inspector's row
+  // menu) sits over this view but outside it: while one is up its own keys
+  // (Esc closes it) are the only ones that act.
+  if (
+    document.querySelector(".v-overlay--active.v-dialog, .v-overlay--active.v-menu")
+  )
+    return;
 
   // Undo/redo are checked BEFORE the modifier bail below - that bail is what
   // made Ctrl+Z dead in a review session, while App's global handler skips the
@@ -718,10 +739,23 @@ onUnmounted(() => {
 }
 .rs-toolbar-tools {
   flex: 1;
-  min-width: 0;
+  /* Never narrower than its controls: on a narrow window the bar scrolls
+     under the rail toggle instead of drawing them over it. */
+  min-width: auto;
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* The rail toggle stays on screen at the bar's right edge while the board's
+   controls scroll beneath it. */
+.rs-toolbar-rail {
+  position: sticky;
+  right: 0;
+  flex-shrink: 0;
+  display: flex;
+  padding-left: var(--space-2);
+  background: rgb(var(--v-theme-dark-surface));
 }
 
 .rs-shell {

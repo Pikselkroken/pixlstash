@@ -27,6 +27,7 @@ import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 import { isReadOnly } from "../../utils/apiClient";
 import TagGroupsBoard from "./TagGroupsBoard.vue";
+import ReviewsInspector from "./ReviewsInspector.vue";
 
 const VIcon = {
   name: "v-icon",
@@ -669,8 +670,9 @@ describe("TagHealthBoard: Health | Groups switch", () => {
     expect(w.find(".rs-board-anomaly-toggle").exists()).toBe(false);
     expect(w.find(".rs-board-sort").exists()).toBe(false);
     expect(w.find(".rs-board-scope").exists()).toBe(false);
-    // The open-reviews rail stays underneath.
-    expect(w.findComponent({ name: "ReviewRail" }).exists()).toBe(true);
+    // Nothing sits under the board any more: archived receipts and stickers
+    // are the Reviews inspector's, which App.vue mounts in the right rail.
+    expect(w.findComponent(ReviewsInspector).exists()).toBe(false);
   });
 
   it("the choice is remembered on this machine, and read back on the next mount", async () => {

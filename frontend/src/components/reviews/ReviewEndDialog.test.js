@@ -1,10 +1,12 @@
-// ReviewAbortDialog - the Keep / Undo / Cancel confirmation that aborting an
-// open review goes through (opened from the sidebar row's menu).
+// ReviewEndDialog - "End review…": the Keep / Undo / Cancel question every
+// menu route out of an open review goes through (the sidebar row, the Reviews
+// inspector's Open tab).
 //
-// Aborting with decided changes asks first; Cancel calls nothing; Keep calls
-// abortSession and Undo calls undoChangesAndAbort, both with that review's id.
-// A review with no decided changes aborts at once with no dialog. `closed`
-// fires after the store call, so the opener can tell whether its row survived.
+// Ending with decided changes asks first; Cancel calls nothing; Keep calls
+// archiveSession (the receipt is filed) and Undo calls undoChangesAndAbort,
+// both with that review's id. A review with no decided changes ends at once
+// with no dialog and no receipt (abortSession). `closed` fires after the store
+// call, so the opener can tell whether its row survived.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
@@ -28,7 +30,7 @@ vi.mock("../../utils/apiClient", () => ({
   isReadOnly: { value: false },
 }));
 
-import ReviewAbortDialog from "./ReviewAbortDialog.vue";
+import ReviewEndDialog from "./ReviewEndDialog.vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 
 const globalOpts = {
@@ -43,14 +45,14 @@ const globalOpts = {
 function seed(done) {
   const store = useReviewSessionsStore();
   store.sessions = [
-    { id: 5, tag: "hair", scope: {}, stats: { found: 4 }, progress: { done } },
+    { id: 5, tag: "hair", scope: {}, stats: { found: 40 }, progress: { done } },
   ];
   store.archived = [];
   return store;
 }
 
 function mountDialog() {
-  return mount(ReviewAbortDialog, { global: globalOpts, attachTo: document.body });
+  return mount(ReviewEndDialog, { global: globalOpts, attachTo: document.body });
 }
 
 // The dialog is AppDialog, a v-dialog teleported to the body: its footer
@@ -76,7 +78,7 @@ beforeEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("ReviewAbortDialog", () => {
+describe("ReviewEndDialog", () => {
   it("asks Keep / Undo / Cancel with the decided change count", async () => {
     seed(2);
     const w = mountDialog();
@@ -84,13 +86,17 @@ describe("ReviewAbortDialog", () => {
     await flushPromises();
 
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(dialog().textContent).toContain("End “hair”");
+    expect(dialog().textContent).toContain("You decided 2 of 40 cards.");
+    expect(dialog().textContent).toContain("The other 38 stay as they are.");
     expect(action("Keep").textContent).toContain("Keep 2 changes");
     expect(action("Undo").textContent).toContain("Undo 2 changes");
     w.unmount();
   });
 
-  it("Keep calls abortSession with that review's id, then reports closed", async () => {
+  it("Keep files the receipt (archiveSession) with that review's id, then reports closed", async () => {
     const store = seed(2);
+    const archive = vi.spyOn(store, "archiveSession").mockResolvedValue();
     const abort = vi.spyOn(store, "abortSession").mockResolvedValue();
     const undo = vi.spyOn(store, "undoChangesAndAbort").mockResolvedValue();
     const w = mountDialog();
@@ -100,8 +106,9 @@ describe("ReviewAbortDialog", () => {
     action("Keep").click();
     await flushPromises();
 
-    expect(abort).toHaveBeenCalledTimes(1);
-    expect(abort).toHaveBeenCalledWith(5);
+    expect(archive).toHaveBeenCalledTimes(1);
+    expect(archive).toHaveBeenCalledWith(5);
+    expect(abort).not.toHaveBeenCalled();
     expect(undo).not.toHaveBeenCalled();
     expect(w.emitted("closed")).toHaveLength(1);
     expect(isShown()).toBe(false);
@@ -110,6 +117,7 @@ describe("ReviewAbortDialog", () => {
 
   it("Undo calls undoChangesAndAbort with that review's id", async () => {
     const store = seed(2);
+    const archive = vi.spyOn(store, "archiveSession").mockResolvedValue();
     const abort = vi.spyOn(store, "abortSession").mockResolvedValue();
     const undo = vi.spyOn(store, "undoChangesAndAbort").mockResolvedValue();
     const w = mountDialog();
@@ -122,12 +130,14 @@ describe("ReviewAbortDialog", () => {
     expect(undo).toHaveBeenCalledTimes(1);
     expect(undo).toHaveBeenCalledWith(5);
     expect(abort).not.toHaveBeenCalled();
+    expect(archive).not.toHaveBeenCalled();
     expect(w.emitted("closed")).toHaveLength(1);
     w.unmount();
   });
 
-  it("Cancel calls neither store abort and reports closed", async () => {
+  it("Cancel calls no store verb and reports closed", async () => {
     const store = seed(2);
+    const archive = vi.spyOn(store, "archiveSession").mockResolvedValue();
     const abort = vi.spyOn(store, "abortSession").mockResolvedValue();
     const undo = vi.spyOn(store, "undoChangesAndAbort").mockResolvedValue();
     const w = mountDialog();
@@ -137,6 +147,7 @@ describe("ReviewAbortDialog", () => {
     action("Cancel").click();
     await flushPromises();
 
+    expect(archive).not.toHaveBeenCalled();
     expect(abort).not.toHaveBeenCalled();
     expect(undo).not.toHaveBeenCalled();
     expect(w.emitted("closed")).toHaveLength(1);
@@ -175,14 +186,16 @@ describe("ReviewAbortDialog", () => {
     w.unmount();
   });
 
-  it("aborts straight away with no dialog when nothing was decided", async () => {
+  it("ends straight away with no dialog and no receipt when nothing was decided", async () => {
     const store = seed(0);
+    const archive = vi.spyOn(store, "archiveSession").mockResolvedValue();
     const abort = vi.spyOn(store, "abortSession").mockResolvedValue();
     const w = mountDialog();
     await w.vm.open(5);
     await flushPromises();
 
     expect(abort).toHaveBeenCalledWith(5);
+    expect(archive).not.toHaveBeenCalled();
     expect(dialog()).toBeNull();
     expect(w.emitted("closed")).toHaveLength(1);
     w.unmount();

@@ -53,12 +53,13 @@ export class ReviewSessions {
     this.dialogCreate = page.locator('.rs-dialog-btn--go')
     this.dialogCancel = page.locator('.rs-dialog-btn', { hasText: 'Cancel' })
 
-    // The board's footer: archived receipts and the sticker shelf. The open
-    // reviews and their Abort / Archive live in the sidebar (below).
-    this.rail = page.locator('.rs-rail')
-    this.railArchived = page.locator('.rs-rail-archived')
-    this.shelf = page.locator('.rs-shelf')
-    this.shelfStickers = page.locator('.rs-shelf .rs-sticker')
+    // The Reviews inspector (the Tags view's right rail): Open | Archived |
+    // Stickers. The receipt rows open a receipt in the main area.
+    this.rail = page.locator('aside.rvi')
+    this.railTab = (label) => this.rail.locator('.inspector-tab', { hasText: label })
+    this.railArchived = this.rail.locator('.rvi-archived .rvi-row')
+    this.shelf = this.rail.locator('.rvi-stickers')
+    this.shelfStickers = this.rail.locator('.rvi-stickers .rs-sticker')
 
     // The sidebar: "Tags" and the open reviews nested under it
     this.sidebarRow = page.locator('.sidebar-list-item', { has: page.locator('.sidebar-list-label', { hasText: /^Tags$/ }) })
@@ -66,8 +67,8 @@ export class ReviewSessions {
     this.sidebarNewReview = page.locator('.sidebar-review-new')
     // A review row's menu (right-click, Menu key or Shift+F10): its verbs.
     this.sidebarCtxMenu = page.locator('.sidebar-ctx-menu')
-    this.sidebarAbortItem = this.sidebarCtxMenu.locator('.ctx-item', { hasText: 'Abort review' })
-    this.sidebarArchiveItem = this.sidebarCtxMenu.locator('.ctx-item', { hasText: 'Archive review' })
+    this.sidebarContinueItem = this.sidebarCtxMenu.locator('.ctx-item', { hasText: 'Continue review' })
+    this.sidebarEndItem = this.sidebarCtxMenu.locator('.ctx-item', { hasText: 'End review' })
 
     // Session view
     this.session = page.locator('.rs-session')
@@ -108,8 +109,8 @@ export class ReviewSessions {
     this.tagApplyButton = page.locator('.rs-tag-apply-btn')
     this.tagApplyPanel = page.locator('.rs-tag-apply-panel')
 
-    // Abort dialog (ReviewAbortDialog, teleported to the body)
-    // The abort dialog is AppDialog: a v-dialog overlay, shown while active.
+    // End dialog (ReviewEndDialog, teleported to the body)
+    // The end dialog is AppDialog: a v-dialog overlay, shown while active.
     this.abortDialog = page.locator('.v-overlay--active .app-dialog')
     this.abortKeep = this.abortDialog.locator('.app-dialog__footer button', { hasText: 'Keep' })
     this.abortUndo = this.abortDialog.locator('.app-dialog__footer button', { hasText: 'Undo' })
@@ -149,7 +150,7 @@ export class ReviewSessions {
   /** Open a review row's menu with the mouse (right-click). */
   async openSidebarMenu(tag) {
     await this.sidebarSession(tag).click({ button: 'right' })
-    await expect(this.sidebarAbortItem).toBeVisible()
+    await expect(this.sidebarEndItem).toBeVisible()
   }
 
   /** Leave through the toolbar's back button (from the board). */

@@ -21,7 +21,7 @@ import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
-import ReviewAbortDialog from "../reviews/ReviewAbortDialog.vue";
+import ReviewEndDialog from "../reviews/ReviewEndDialog.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
 import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
@@ -375,7 +375,7 @@ const sidebarCtxReview = ref(null); // { id, tag } when ctx opened from an open 
 // The review row the menu was opened from: the abort dialog hands focus back
 // to it. Not reactive, only read when the dialog closes.
 let sidebarCtxReviewEl = null;
-const reviewAbortRef = ref(null);
+const reviewEndRef = ref(null);
 const tagReviewRowEl = ref(null);
 const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
 // Right-click on a section HEADER (not an item): 'people' | 'sets', or null. Offers the "create/add" action.
@@ -2294,31 +2294,27 @@ function onReviewRowKey(review, event) {
   nextTick(() => sidebarCtxMenuEl.value?.querySelector(".ctx-item")?.focus());
 }
 
-// "Abort review…" in the row menu: the same Keep / Undo / Cancel dialog the
-// board rail used to own.
-function abortReviewFromCtx() {
+// "Continue review" in the row menu: the same as clicking the row.
+function continueReviewFromCtx() {
+  const review = sidebarCtxReview.value;
+  closeSidebarCtxMenu();
+  if (review) reviewSessionsStore.openSession(review.id);
+}
+
+// "End review…" in the row menu: the one way to end a review, the Keep / Undo /
+// Cancel dialog the Reviews inspector's Open tab shares. Keep files a receipt.
+function endReviewFromCtx() {
   const review = sidebarCtxReview.value;
   closeSidebarCtxMenu();
   if (!review) return;
-  reviewAbortRef.value?.open(review.id);
+  reviewEndRef.value?.open(review.id);
 }
 
-// "Archive review" in the row menu: ends the review keeping its decisions, the
-// same store call as the session view's Archive button. No confirm, since
-// nothing is discarded. The row goes, so focus moves to the Tags row.
-function archiveReviewFromCtx() {
-  const review = sidebarCtxReview.value;
-  closeSidebarCtxMenu();
-  if (!review) return;
-  reviewSessionsStore.archiveSession(review.id);
-  nextTick(() => tagReviewRowEl.value?.focus());
-}
-
-// Focus goes back to the review row the abort was opened from. An abort
+// Focus goes back to the review row the dialog was opened from. Ending it
 // removes that row, so then it falls to the Tags row.
 // Only the row menu writes sidebarCtxReviewEl, and that menu cannot open while
-// the modal abort dialog holds the screen and its focus.
-function onReviewAbortClosed() {
+// the modal dialog holds the screen and its focus.
+function onReviewEndClosed() {
   const rowEl = sidebarCtxReviewEl;
   nextTick(() => {
     const target = rowEl?.isConnected ? rowEl : tagReviewRowEl.value;
@@ -6322,10 +6318,10 @@ defineExpose({
     {{ sidebarNotice }}
   </div>
 
-  <!-- Abort confirmation for an open review; opened from its row menu. -->
-  <ReviewAbortDialog
-    ref="reviewAbortRef"
-    @closed="onReviewAbortClosed"
+  <!-- "End review…" for an open review; opened from its row menu. -->
+  <ReviewEndDialog
+    ref="reviewEndRef"
+    @closed="onReviewEndClosed"
   />
 
   <!-- ── Sidebar context menu ──────────────────────────────────── -->
@@ -6394,21 +6390,22 @@ defineExpose({
         </button>
       </template>
       <template v-if="sidebarCtxReview">
+        <!-- No "Continue" for the review already on screen. -->
         <button
-          class="ctx-item ctx-item--danger"
-          :disabled="isReadOnly"
-          @click="abortReviewFromCtx()"
+          v-if="!isReviewSessionShown(sidebarCtxReview.id)"
+          class="ctx-item"
+          @click="continueReviewFromCtx()"
         >
-          <v-icon class="ctx-icon">mdi-close-circle-outline</v-icon>
-          Abort review…
+          <v-icon class="ctx-icon">mdi-play-circle-outline</v-icon>
+          Continue review
         </button>
         <button
           class="ctx-item"
           :disabled="isReadOnly"
-          @click="archiveReviewFromCtx()"
+          @click="endReviewFromCtx()"
         >
-          <v-icon class="ctx-icon">mdi-archive-check-outline</v-icon>
-          Archive review
+          <v-icon class="ctx-icon">mdi-stop-circle-outline</v-icon>
+          End review…
         </button>
       </template>
       <template v-if="sidebarCtxScrapheap">

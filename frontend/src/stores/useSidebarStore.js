@@ -44,6 +44,11 @@ const MODELS_RAIL_KEY = "pixlstash:modelsRailOpen";
 // details beside it, so it defaults OPEN and is then however they left it.
 const LIGHTBOX_RAIL_KEY = "pixlstash:lightboxRailOpen";
 
+// The Tags view's Reviews inspector (Open | Archived | Stickers). It is about
+// the screen rather than a selection, so it defaults OPEN and is then however
+// the reader left it.
+const REVIEWS_RAIL_KEY = "pixlstash:reviewsRailOpen";
+
 // Width: full sidebar vs. narrow icon dock. Set in Settings → Appearance.
 const SIDEBAR_DOCKED_KEY = "pixlstash:sidebarDocked";
 
@@ -60,6 +65,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
   const workflowInspectorOpen = ref(loadFlag(WORKFLOW_INSPECTOR_KEY, true));
   const modelsRailOpen = ref(loadFlag(MODELS_RAIL_KEY, false));
   const lightboxRailOpen = ref(loadFlag(LIGHTBOX_RAIL_KEY, true));
+  const reviewsRailOpen = ref(loadFlag(REVIEWS_RAIL_KEY, true));
   // Bumped by whichever screen owns a selection-describing inspector when its
   // selection changes to something NEW. The closed-inspector edge tab and the
   // rail toggle's glyph both play their one-shot nudge on it. A counter, like
@@ -136,6 +142,11 @@ export const useSidebarStore = defineStore("sidebar", () => {
     saveFlag(LIGHTBOX_RAIL_KEY, lightboxRailOpen.value);
   }
 
+  function toggleReviewsRail() {
+    reviewsRailOpen.value = !reviewsRailOpen.value;
+    saveFlag(REVIEWS_RAIL_KEY, reviewsRailOpen.value);
+  }
+
   // A deep link's "show me": opened, not persisted. Opening the rail to answer
   // one request is not the reader choosing to keep it open, and persisting it
   // would leave every later session with a rail they never asked for.
@@ -196,6 +207,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
     workflowInspectorOpen,
     modelsRailOpen,
     lightboxRailOpen,
+    reviewsRailOpen,
     inspectorNudge,
     tasksPillRequest,
     cardTabRequest,
@@ -212,6 +224,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
     setModelsRailOpen,
     toggleModelsRail,
     toggleLightboxRail,
+    toggleReviewsRail,
     showTasksTab,
     showCardInInspector,
     requestTagField,

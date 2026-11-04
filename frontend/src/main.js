@@ -79,7 +79,7 @@ const pixlStashLight = {
     // inside it - and in the specific direction that matters: the fill hues are
     // tuned to CARRY a light label, not to BE one. This family is their light
     // counterpart, the same four hues lifted until they read as 11px semibold
-    // text (`ReviewRail`'s Abort/Clear). Identical in both themes. Measured
+    // text (the Tags view's tallies and receipts). Identical in both themes. Measured
     // 4.60:1 – 6.16:1 plain on `#242628`, 5.23:1 – 7.01:1 on `#181b20`.
     // Deep fill hues here would fail: `error` #b0392b reads 2.51:1, `info`
     // #30558c 2.03:1, `success` #2a7d3e 2.97:1.

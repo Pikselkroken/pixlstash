@@ -424,11 +424,6 @@
           review for the tag was last archived.
         </p>
       </template>
-
-      <!-- Below the table: the open reviews with their scope and Abort, the
-           archived receipts, and the sticker shelf. The sidebar lists the open
-           reviews for getting to them; this is where they are managed. -->
-      <ReviewRail class="rs-board-reviews" />
     </div>
   </div>
 </template>
@@ -448,7 +443,6 @@ import { isReadOnly } from "../../utils/apiClient";
 import { LOCKED_SET_HEADLINE, lockedSetTitle } from "./lockedSetCopy";
 import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
-import ReviewRail from "./ReviewRail.vue";
 import TagGroupsBoard from "./TagGroupsBoard.vue";
 // relativeDate already solves the "naive ISO string = UTC" quirk backend
 // timestamps carry (computed_at is the same shape as the snapshot timestamps
@@ -940,9 +934,6 @@ const TAIL_TOGGLE_TITLE =
   display: inline-flex;
   flex-shrink: 0;
 }
-.rs-board-reviews {
-  margin-top: var(--space-6);
-}
 .rs-board-filter {
   position: relative;
   display: inline-flex;
@@ -1131,14 +1122,18 @@ const TAIL_TOGGLE_TITLE =
 .rs-board-table {
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
   border-radius: var(--radius-md);
-  overflow: hidden;
+  /* Scrolls sideways rather than squeezing Why to nothing when the Reviews
+     inspector takes its 288px beside a narrow window. */
+  overflow-x: auto;
+  overflow-y: hidden;
   background: rgba(var(--v-theme-on-dark-surface), 0.03);
 }
 .rs-board-row {
+  min-width: min-content;
   display: grid;
   /* Compact density (locked): tag · needs-review · wrong · missing · mismatch ·
      last · why · action (Verified column cut - see Spec E) */
-  grid-template-columns: 172px 116px 98px 106px 84px 56px 1fr 116px;
+  grid-template-columns: 172px 116px 98px 106px 84px 56px minmax(160px, 1fr) 116px;
   gap: 10px;
   padding: 7px 14px;
   border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.08);
