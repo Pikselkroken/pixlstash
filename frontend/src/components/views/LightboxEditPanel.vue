@@ -346,10 +346,11 @@
           {{ submitError }}
         </p>
         <!-- Crop finishes on its own button over the picture; a primary Run
-             here would read as the way to finish it. -->
+             here would read as the way to finish it. More settings… is off
+             with it. -->
         <p v-if="cropping" class="edit-note">
-          Cropping. Set the frame on the picture, then press Crop to a new
-          picture at its top. Esc stops cropping.
+          Cropping. Set the frame on the picture and press Crop to a new
+          picture there, or press Crop again to stop.
         </p>
         <AppButton
           on-dark
@@ -375,6 +376,7 @@
           block
           icon-left="cog-outline"
           tooltip="Open the Run window with this filled in, for LoRAs, seed, size and more"
+          :disabled="cropping"
           @click="onMoreOptions()"
         >
           More settings…
@@ -1095,6 +1097,9 @@ function openInWorkflows() {
  * recipe, as the tab's own Run would. *More settings…* keeps the recipe read.
  */
 function onMoreOptions(key = workflowId.value, edit = false) {
+  // The Run popup is a run too: not while crop is in hand (the picker's
+  // fill-in cards come through here).
+  if (cropping.value) return;
   const id = Number(props.pictureId);
   if (!Number.isFinite(id) || id <= 0) return;
   emit("more-options", {

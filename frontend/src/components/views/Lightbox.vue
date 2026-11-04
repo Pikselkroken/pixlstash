@@ -973,7 +973,7 @@
                   icon-left="crop"
                   :tooltip="
                     paint.hasSelection.value
-                      ? 'Crop to the selection, as a new picture (C)'
+                      ? 'Crop to a new picture, starting around the selection (C)'
                       : 'Crop to a new picture (C)'
                   "
                   aria-keyshortcuts="C"

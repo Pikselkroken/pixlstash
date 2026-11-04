@@ -962,9 +962,34 @@ describe("the Edit tab with the Paint tools", () => {
     // Nor through Ctrl+Enter, which calls submit directly.
     await wrapper.vm.submit();
     expect(runWorkflowCard).not.toHaveBeenCalled();
+    // Nor through the Run popup.
+    const more = wrapper.findAll("button").find((b) => b.text() === "More settings…");
+    expect(more.attributes("disabled")).toBeDefined();
     paint.tool.value = "rect";
     await flush();
     expect(wrapper.find("button.run").attributes("disabled")).toBeUndefined();
+  });
+
+  it("opens no Run popup from the picker's fill-in cards while cropping", async () => {
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "i2i"
+              ? [{ code: "picture_input_unfilled", inputs: [] }]
+              : [],
+        },
+      ],
+    }));
+    const paint = fakePaint();
+    paint.tool.value = "crop";
+    const wrapper = await mountPanel({ paint });
+    const fillIn = wrapper
+      .findAll("[role=menuitemradio]")
+      .find((row) => row.text() === "Relight…, Image to Image");
+    await fillIn.trigger("click");
+    await flush();
+    expect(wrapper.emitted("more-options")).toBeUndefined();
   });
 
   it("runs on every picture Edit… named, unless a hand selection holds it", async () => {
