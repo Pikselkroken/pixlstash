@@ -24,16 +24,16 @@
     },
     {
       "id": "minimax-h3-image",
-      "version": 1,
+      "version": 2,
       "file": "minimax-h3-image.json",
-      "sha256": "7e8c6b7be5d13132c76da98d9edc9e78a2fbaede422405c6f2b31340fcc24ddc",
+      "sha256": "c85db249fb1c5f3bbe12ba8572d405dc3203f96dc1f67dee84afff84d3aa1aed",
       "min_pixlstash": "1.13.0"
     },
     {
       "id": "minimax-h3-motion",
-      "version": 2,
+      "version": 3,
       "file": "minimax-h3-motion.json",
-      "sha256": "dc34f0b7a119966e87229511ffa6344669e99871c6dc64e4a6063208a00778b3",
+      "sha256": "512e7d15cdb080efd5414035a8a3d00371d43783e9279f4dc0ece5d91954ecd1",
       "min_pixlstash": "1.13.0"
     },
     {
