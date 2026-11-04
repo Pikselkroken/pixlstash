@@ -26,14 +26,14 @@
       "id": "minimax-h3-image",
       "version": 2,
       "file": "minimax-h3-image.json",
-      "sha256": "66dd81592319f4804f964f0f08af65c6465b6dfae383cfff17e302a069875d9a",
+      "sha256": "c85db249fb1c5f3bbe12ba8572d405dc3203f96dc1f67dee84afff84d3aa1aed",
       "min_pixlstash": "1.13.0"
     },
     {
       "id": "minimax-h3-motion",
       "version": 3,
       "file": "minimax-h3-motion.json",
-      "sha256": "bdefceeb2a1ec52300439e75037598c9f78a54e5865fddd4b9e99fb727509afb",
+      "sha256": "512e7d15cdb080efd5414035a8a3d00371d43783e9279f4dc0ece5d91954ecd1",
       "min_pixlstash": "1.13.0"
     },
     {
