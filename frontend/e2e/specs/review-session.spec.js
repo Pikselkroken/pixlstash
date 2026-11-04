@@ -254,8 +254,8 @@ test.describe('review sessions — session loop', () => {
     expect(detail.status).toBe('ARCHIVED')
   })
 
-  // The row menu is the sidebar's: Continue review and End review…. A review
-  // with a decision made opens the Keep / Undo / Cancel dialog. Cancel changes
+  // The row menu is the sidebar's: Continue review and End review…, without
+  // Continue for the review already on screen. A review with a decision made opens the Keep / Undo / Cancel dialog. Cancel changes
   // nothing and focus returns to the row. The keyboard path (Shift+F10, Enter,
   // then Tab twice from Cancel to Keep) ends it keeping the change, which files
   // a receipt, and focus moves to the Tags row, since the row has gone.
@@ -272,7 +272,7 @@ test.describe('review sessions — session loop', () => {
 
     // Mouse: right-click the row, End review…, then Cancel.
     await reviews.openSidebarMenu('beard')
-    await expect(reviews.sidebarContinueItem).toBeVisible()
+    await expect(reviews.sidebarContinueItem).toHaveCount(0)
     await reviews.sidebarEndItem.click()
     await expect(reviews.abortDialog).toBeVisible()
     await expect(reviews.abortKeep).toContainText('Keep')
@@ -282,12 +282,11 @@ test.describe('review sessions — session loop', () => {
     await expect(reviews.sidebarSession('beard')).toBeFocused()
     expect(await openReviewId(apiContext, 'beard')).toBe(rid)
 
-    // Keyboard: focus the row, Shift+F10, Tab to End review…, Enter, then Tab
-    // twice from the initially focused Cancel (past Undo) to Keep, and Enter.
+    // Keyboard: focus the row, Shift+F10 (focus lands on End review…), Enter,
+    // then Tab twice from the initially focused Cancel (past Undo) to Keep, and
+    // Enter.
     await reviews.sidebarSession('beard').focus()
     await page.keyboard.press('Shift+F10')
-    await expect(reviews.sidebarContinueItem).toBeFocused()
-    await page.keyboard.press('Tab')
     await expect(reviews.sidebarEndItem).toBeFocused()
     await page.keyboard.press('Enter')
     await expect(reviews.abortDialog).toBeVisible()

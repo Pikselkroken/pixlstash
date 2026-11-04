@@ -171,6 +171,17 @@ describe("sidebar review row menu", () => {
     wrapper.unmount();
   });
 
+  it("offers no Continue review for the review already on screen", async () => {
+    const { wrapper, reviews } = await mountWithReviews();
+    reviews.view = { type: "session", id: 5 };
+    await rowOf(wrapper, "hair").trigger("contextmenu");
+    await flushPromises();
+
+    expect(menuItem("Continue review")).toBeUndefined();
+    expect(menuItem("End review")).toBeDefined();
+    wrapper.unmount();
+  });
+
   it("End review… opens the dialog; Keep files the receipt for that id", async () => {
     const { wrapper, abort, undo, archive } = await mountWithReviews();
     await rowOf(wrapper, "hair").trigger("contextmenu");

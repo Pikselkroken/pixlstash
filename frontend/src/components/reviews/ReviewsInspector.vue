@@ -57,7 +57,9 @@
             </button>
           </template>
           <div class="ctx-menu" role="menu">
+            <!-- No "Continue" for the review already on screen. -->
             <button
+              v-if="!isSessionShown(s.id)"
               class="ctx-item"
               type="button"
               role="menuitem"

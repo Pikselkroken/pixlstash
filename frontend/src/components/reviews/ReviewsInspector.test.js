@@ -199,6 +199,12 @@ describe("ReviewsInspector Open tab", () => {
 
     await item("Continue review").trigger("click");
     expect(openSession).toHaveBeenCalledWith(9);
+
+    // The review on screen has nothing to continue.
+    store.view = { type: "session", id: 9 };
+    await nextTick();
+    expect(item("Continue review")).toBeUndefined();
+    expect(item("End review")).toBeDefined();
     w.unmount();
   });
 });

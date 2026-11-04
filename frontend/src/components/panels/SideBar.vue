@@ -6390,7 +6390,12 @@ defineExpose({
         </button>
       </template>
       <template v-if="sidebarCtxReview">
-        <button class="ctx-item" @click="continueReviewFromCtx()">
+        <!-- No "Continue" for the review already on screen. -->
+        <button
+          v-if="!isReviewSessionShown(sidebarCtxReview.id)"
+          class="ctx-item"
+          @click="continueReviewFromCtx()"
+        >
           <v-icon class="ctx-icon">mdi-play-circle-outline</v-icon>
           Continue review
         </button>
