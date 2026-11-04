@@ -27,9 +27,11 @@ vi.mock("vuetify/components", async (importOriginal) => ({
 
 const listRuns = vi.fn();
 const importRun = vi.fn();
+const trashRun = vi.fn();
 vi.mock("../../api/modelImports", () => ({
   listRuns: (...args) => listRuns(...args),
   importRun: (...args) => importRun(...args),
+  trashRun: (...args) => trashRun(...args),
   runSampleUrl: (folderId, runName, filename) =>
     `/api/v1/model-folders/${folderId}/runs/${runName}/samples/${filename}`,
 }));
@@ -1546,5 +1548,197 @@ describe("the closed Models rail's handle", () => {
     sidebar.modelsRailOpen = true;
     await wrapper.vm.$nextTick();
     expect(handle().exists()).toBe(false);
+  });
+});
+
+describe("deleting runs", () => {
+  const confirmSpy = () => vi.spyOn(window, "confirm");
+  const cardNamed = (wrapper, name) =>
+    wrapper
+      .findAll(".tr-card")
+      .find((c) => c.find(".tr-card-name").text() === name);
+  const del = (wrapper, key = "Delete") =>
+    wrapper.find(".tr-card--checked").trigger("keydown", { key });
+
+  beforeEach(() => {
+    trashRun.mockReset();
+    trashRun.mockResolvedValue({ run_name: "x", trash_name: "Trash" });
+    deleteTrainingJob.mockReset();
+    deleteTrainingJob.mockResolvedValue({});
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("trashes each picked run in turn on Delete, after asking", async () => {
+    const ask = confirmSpy().mockReturnValue(true);
+    let inFlight = 0;
+    trashRun.mockImplementation(async () => {
+      inFlight += 1;
+      expect(inFlight).toBe(1);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      inFlight -= 1;
+      return {};
+    });
+    const wrapper = await openWith([run(), run("Foxglove")]);
+    await tick(wrapper, "Clementine");
+    await tick(wrapper, "Foxglove");
+    listRuns.mockResolvedValue([]);
+    await del(wrapper);
+    await settle(wrapper);
+    await settle(wrapper);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(ask.mock.calls[0][0]).toContain("2 training runs go");
+    expect(ask.mock.calls[0][0]).toContain("Checkpoints already imported stay");
+    expect(trashRun.mock.calls.map((c) => c[1]).sort()).toEqual([
+      "Clementine",
+      "Foxglove",
+    ]);
+    expect(trashRun.mock.calls[0][0]).toBe(1);
+    // No job trained either of them, so there is no record to remove.
+    expect(deleteTrainingJob).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices.at(-1).text).toBe("Cleared 2 runs.");
+    expect(wrapper.findAll(".tr-card")).toHaveLength(0);
+  });
+
+  it("names a single run in the question, and takes Backspace too", async () => {
+    const ask = confirmSpy().mockReturnValue(false);
+    const wrapper = await openWith([run()]);
+    await tick(wrapper, "Clementine");
+    await del(wrapper, "Backspace");
+    expect(ask.mock.calls[0][0]).toContain('"Clementine" goes to your');
+  });
+
+  it("does not delete on Backspace from a control inside a card", async () => {
+    const ask = confirmSpy().mockReturnValue(true);
+    listTrainingJobs.mockResolvedValue([
+      {
+        id: 9,
+        uuid: "u1",
+        name: "Clementine",
+        status: "error",
+        run_name: null,
+        created_at: "2026-10-01T00:00:00Z",
+      },
+    ]);
+    const wrapper = await openWith([]);
+    await tick(wrapper, "Clementine");
+    await wrapper
+      .find("[data-testid='tr-card-retry']")
+      .trigger("keydown", { key: "Backspace" });
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("deletes nothing when the question is declined", async () => {
+    confirmSpy().mockReturnValue(false);
+    const wrapper = await openWith([run()]);
+    await tick(wrapper, "Clementine");
+    await del(wrapper);
+    await settle(wrapper);
+    expect(trashRun).not.toHaveBeenCalled();
+  });
+
+  it("offers Delete in the card menu and on the pill", async () => {
+    confirmSpy().mockReturnValue(true);
+    const wrapper = await openWith([run()]);
+    await cardNamed(wrapper, "Clementine").trigger("contextmenu");
+    const item = wrapper.find("[data-testid='tr-menu-delete']");
+    expect(item.text()).toContain("Delete run");
+    expect(wrapper.find("[data-testid='tr-pill-delete']").exists()).toBe(true);
+    await item.trigger("click");
+    await settle(wrapper);
+    expect(trashRun).toHaveBeenCalledWith(1, "Clementine");
+  });
+
+  it("removes the job a run was trained with, after its folder", async () => {
+    confirmSpy().mockReturnValue(true);
+    listTrainingJobs.mockResolvedValue([
+      {
+        id: 7,
+        uuid: "abcd1234ef",
+        name: "Clementine",
+        status: "completed",
+        completed_at: "2026-10-26T09:00:00+00:00",
+        run_name: "Clementine_abcd1234",
+      },
+    ]);
+    const order = [];
+    trashRun.mockImplementation(async () => order.push("trash"));
+    deleteTrainingJob.mockImplementation(async () => order.push("job"));
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    await tick(wrapper, "Clementine");
+    await del(wrapper);
+    await settle(wrapper);
+    expect(trashRun).toHaveBeenCalledWith(1, "Clementine_abcd1234");
+    expect(deleteTrainingJob).toHaveBeenCalledWith(7);
+    expect(order).toEqual(["trash", "job"]);
+  });
+
+  it("keeps the job when its folder would not go", async () => {
+    confirmSpy().mockReturnValue(true);
+    listTrainingJobs.mockResolvedValue([
+      {
+        id: 7,
+        uuid: "abcd1234ef",
+        name: "Clementine",
+        status: "error",
+        run_name: "Clementine_abcd1234",
+        started_at: "2026-10-26T08:00:00+00:00",
+      },
+    ]);
+    trashRun.mockRejectedValue({
+      response: { status: 409, data: { detail: "No trash on that drive" } },
+    });
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    await tick(wrapper, "Clementine");
+    await del(wrapper);
+    await settle(wrapper);
+    expect(deleteTrainingJob).not.toHaveBeenCalled();
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.level).toBe("warning");
+    expect(notice.text).toContain("No trash on that drive");
+  });
+
+  it("deletes only the record of a run that never made a folder", async () => {
+    confirmSpy().mockReturnValue(true);
+    listTrainingJobs.mockResolvedValue([
+      {
+        id: 9,
+        uuid: "u1",
+        name: "Clementine",
+        status: "error",
+        run_name: null,
+        created_at: "2026-10-01T00:00:00Z",
+      },
+    ]);
+    const wrapper = await openWith([]);
+    await tick(wrapper, "Clementine");
+    // The pill is up for it although there is nothing to import.
+    expect(wrapper.find(".selbar").exists()).toBe(true);
+    expect(importBtn(wrapper)).toBeUndefined();
+    await del(wrapper);
+    await settle(wrapper);
+    expect(trashRun).not.toHaveBeenCalled();
+    expect(deleteTrainingJob).toHaveBeenCalledWith(9);
+  });
+
+  it("never offers to delete a run that is training", async () => {
+    const ask = confirmSpy().mockReturnValue(true);
+    listTrainingJobs.mockResolvedValue([
+      {
+        id: 7,
+        uuid: "abcd1234ef",
+        name: "Clementine",
+        status: "running",
+        run_name: "Clementine_abcd1234",
+      },
+    ]);
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    await cardNamed(wrapper, "Clementine").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-delete']").exists()).toBe(false);
+    expect(wrapper.find(".selbar").exists()).toBe(false);
+    await del(wrapper);
+    await settle(wrapper);
+    expect(ask).not.toHaveBeenCalled();
+    expect(trashRun).not.toHaveBeenCalled();
   });
 });

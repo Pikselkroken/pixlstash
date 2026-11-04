@@ -402,6 +402,27 @@ describe("TrainLoraDialog", () => {
     );
     expect(startButton(wrapper).attributes("disabled")).toBeDefined();
   });
+
+  it("still shows Advanced for a run that does not fit, and keeps Start off", async () => {
+    const fitting = plan();
+    training.resolveTraining.mockResolvedValue({
+      ...fitting,
+      resolution: null,
+      unfit_values: fitting.resolution.values,
+      error: { message: "Z-Image Turbo needs 10.5 GB of GPU memory at least" },
+    });
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    await wrapper.find('[data-testid="tld-advanced"]').trigger("click");
+    expect(wrapper.text()).not.toContain("The settings show once the run fits.");
+    const steps = wrapper.find('input[aria-label="Steps"]');
+    expect(steps.element.value).toBe("2400");
+    await steps.setValue("2000");
+    expect(store.pins).toEqual({ "train.steps": 2000 });
+    expect(startButton(wrapper).attributes("disabled")).toBeDefined();
+  });
 });
 
 describe("keeping the description generic", () => {

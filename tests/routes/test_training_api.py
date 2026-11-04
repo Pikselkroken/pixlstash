@@ -1706,6 +1706,23 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
         assert out["resolution"] is None
         assert out["error"]["budget"] == "vram"
         assert out["presets"][0]["verdict"] == "no_gpu"
+        # Advanced still shows what the leanest profile would run with, and
+        # its rules, so the settings can be read and pinned.
+        unfit = out["unfit_values"]
+        assert unfit["model.layer_offloading"]["value"] is True
+        assert unfit["train.steps"]["value"] == 2400
+        assert "model.layer_offloading_transformer_percent" in out["rules"]
+        # What a reset returns to, so a value typed equal to it is no pin.
+        assert out["derived"]["train.steps"] == unfit["train.steps"]
+        # Short of RAM, the closest profile is the one the error's RAM names.
+        server.vault.training_room = lambda: {"vram_mb": 22_800, "ram_mb": 10_000}
+        out = owner.post("/training/resolve", json=body).json()
+        assert out["error"]["budget"] == "ram"
+        assert out["unfit_values"]["model.layer_offloading"]["value"] is False
+        # A run that fits carries none.
+        server.vault.training_room = lambda: dict(_ROOM_24GB)
+        assert owner.post("/training/resolve", json=body).json()["unfit_values"] is None
+        server.vault.training_room = lambda: {"vram_mb": 7_000, "ram_mb": 60_000}
 
         # Unreadable RAM resolves without the RAM check, as a job does
         # (create_training_job warns and queues); only the GPU reading is

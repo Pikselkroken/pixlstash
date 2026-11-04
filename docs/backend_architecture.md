@@ -665,6 +665,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move a folder PixlStash owns to another location              |
 | POST   | /api/v1/model-folders/{folder_id}/rename                                      | model_shelf     | Rename a registered model folder on disk                      |
 | GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder         |
+| DELETE | /api/v1/model-folders/{folder_id}/runs/{run_name}                             | model_shelf     | Move a training run to the trash                              |
 | GET    | /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}          | model_shelf     | One preview (image or clip) from a training run               |
 | GET    | /api/v1/model-icons/{sha256}                                                  | model_shelf     | Serve one stored icon                                         |
 | POST   | /api/v1/model-imports                                                         | model_shelf     | Import a training run onto the shelf                          |
@@ -12058,7 +12059,12 @@ reads that change nothing:
   and a verdict per recipe for the same choices (`fits`, `streams` when the
   profile offloads layers to RAM, `needs_ram`, `no_gpu`, `needs_checkout`). A
   run that cannot be resolved answers 200 with `error`, so the dialog keeps the
-  rest of the preview.
+  rest of the preview. When no profile fits the GPU or RAM it also answers
+  `unfit_values`: the values the closest profile would run with, resolved with
+  the short budget (GPU or RAM) raised to its need, so Advanced can still be
+  read and pinned; `derived` is resolved the same way with no pins. A
+  measured refusal quotes the peak the setup reached here, not its need with
+  the margin.
 
 **A character's reference set.** `set_id` and `character_id` together are
 accepted only when the set is that character's reference set, and a reference

@@ -31,9 +31,9 @@
     },
     {
       "id": "minimax-h3-motion",
-      "version": 1,
+      "version": 2,
       "file": "minimax-h3-motion.json",
-      "sha256": "e1aaffb7934f1e1085eb9e6876bfbf649e1dfa2adf0747f730100233182fc4e8",
+      "sha256": "dc34f0b7a119966e87229511ffa6344669e99871c6dc64e4a6063208a00778b3",
       "min_pixlstash": "1.13.0"
     },
     {

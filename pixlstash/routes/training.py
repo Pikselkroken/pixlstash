@@ -1140,6 +1140,14 @@ def create_router(server) -> APIRouter:
                 "memory profile fits, budget / need_mb / free_mb."
             ),
         )
+        unfit_values: Optional[dict] = Field(
+            default=None,
+            description=(
+                "When no memory profile fits the GPU or RAM: the values the "
+                "closest one would run with, as { value, source }, so they can "
+                "be read and pinned. Not a run: `resolution` stays null."
+            ),
+        )
         rules: dict = Field(
             default_factory=dict,
             description="Each listed key's type and range: { kind, lo, hi, count, choices }.",
@@ -3018,13 +3026,38 @@ def create_router(server) -> APIRouter:
         ]
         choices["lookup"] = _lookup(preset, context)
         keys = set()
+
+        def closest(exc, pins=None):
+            """The run on the closest profile, given the room *exc* says it
+            needs, so Advanced shows what would run instead of nothing; None
+            when no profile covers the run at all."""
+            if exc.budget == "vram":
+                room = {"vram_mb": max(choices["vram_mb"], exc.need_mb), "ram_mb": None}
+            elif exc.budget == "ram":
+                room = {"ram_mb": max(choices["ram_mb"] or 0, exc.need_mb)}
+            else:
+                return None
+            try:
+                return presets.resolve(preset, pins=pins, **{**choices, **room})
+            except (presets.NoProfileFits, TunableOverrideError, ValueError) as e:
+                logger.warning(
+                    "No %s settings to show for a run that does not fit (%s): "
+                    "Advanced stays empty. %s",
+                    preset["id"],
+                    exc,
+                    e,
+                )
+                return None
+
         try:
             derived = presets.resolve(preset, **choices)
+        except presets.NoProfileFits as exc:
+            logger.info("No pin-free %s profile fits: %s", preset["id"], exc)
+            derived = closest(exc)
+        if derived is not None:
             out["derived"] = derived["values"]
             out["steps_clamp"] = derived["steps_clamp"]
             keys |= set(out["derived"])
-        except presets.NoProfileFits as exc:
-            logger.info("No pin-free %s profile fits: %s", preset["id"], exc)
         try:
             pins = presets.validate_pins(preset, payload.pins)
             out["resolution"] = presets.resolve(preset, pins=pins, **choices)
@@ -3036,6 +3069,10 @@ def create_router(server) -> APIRouter:
                 "need_mb": exc.need_mb,
                 "free_mb": exc.free_mb,
             }
+            unfit = closest(exc, pins)
+            if unfit is not None:
+                out["unfit_values"] = unfit["values"]
+                keys |= set(unfit["values"])
         except (TunableOverrideError, ValueError) as exc:
             out["error"] = {"message": str(exc)}
         if "resolution" in out:

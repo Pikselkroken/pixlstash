@@ -65,10 +65,12 @@ from pixlstash.tasks.model_folder_scan_finder import (
     scanned_folders,
 )
 from pixlstash.routes import model_shelf as model_shelf_routes
+from pixlstash.routes import model_imports as model_imports_routes
 from pixlstash.routes.model_imports import (
     model_sample_path_within,
     sample_path_within,
 )
+from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
 from pixlstash.services.model_kind_suggestions import (
     loader_offers,
@@ -5337,6 +5339,7 @@ _IMPORT_ROUTES = (
     # and the listing walks one directory inside that folder.
     ("GET", f"{API}/models/1/samples", {}),
     ("GET", f"{API}/models/1/samples/a.png", {}),
+    ("DELETE", f"{API}/model-folders/1/runs/Clementine", {}),
 )
 
 
@@ -5400,6 +5403,7 @@ def test_every_import_route_is_declared_local_owner_only():
             "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
         ),
         ("POST", "/api/v1/model-imports"),
+        ("DELETE", "/api/v1/model-folders/{folder_id}/runs/{run_name}"),
         # NOT owner_only, which is what the plan for the samples change asked
         # for on the grounds that a model.id crosses the wire and a host path
         # does not. That is the argument the matrix records as *not* the
@@ -5877,6 +5881,121 @@ def test_a_run_name_that_escapes_the_output_root_is_refused(shelf_env, import_fo
     )
     assert r.status_code == 400, r.text
     assert list(import_folders.destination_dir.iterdir()) == []
+
+
+# ── Clearing a run: DELETE /model-folders/{id}/runs/{name} ─────────────────
+
+
+@pytest.fixture
+def run_trash(monkeypatch, tmp_path):
+    """A trash we can look inside, standing in for the OS one."""
+    bin_dir = tmp_path / "run-trash"
+    bin_dir.mkdir()
+
+    def send(path):
+        os.replace(path, bin_dir / os.path.basename(path))
+
+    monkeypatch.setattr(model_imports_routes, "send2trash", send)
+    return bin_dir
+
+
+def _trash_run(env, folders, name):
+    return env.owner.delete(f"{API}/model-folders/{folders.source_id}/runs/{name}")
+
+
+def test_clearing_a_run_moves_its_folder_to_the_trash(
+    shelf_env, import_folders, run_trash
+):
+    r = _trash_run(shelf_env, import_folders, "Clementine")
+    assert r.status_code == 200, r.text
+    assert r.json()["run_name"] == "Clementine"
+    assert not import_folders.run_dir.exists()
+    assert (run_trash / "Clementine" / "Clementine.safetensors").exists()
+    listed = shelf_env.owner.get(
+        f"{API}/model-folders/{import_folders.source_id}/runs"
+    ).json()["runs"]
+    assert listed == []
+
+
+def test_clearing_refuses_what_is_not_a_run(shelf_env, import_folders, run_trash):
+    """A folder with no checkpoint is not a run the grid shows, a link is not
+    followed, and a name outside the root is not read: each is left alone."""
+    not_a_run = import_folders.output_root / "notes"
+    not_a_run.mkdir()
+    (not_a_run / "todo.txt").write_text("keep")
+    outside = import_folders.output_root.parent / "elsewhere"
+    outside.mkdir()
+    _write_run_adapter(outside / "elsewhere.safetensors", b"x")
+    (import_folders.output_root / "escapes").symlink_to(
+        outside, target_is_directory=True
+    )
+    # Inside the root, so containment passes: trashing it would take the run
+    # it points at, not the link the card was drawn from.
+    (import_folders.output_root / "alias").symlink_to(
+        import_folders.run_dir, target_is_directory=True
+    )
+
+    assert _trash_run(shelf_env, import_folders, "notes").status_code == 404
+    assert _trash_run(shelf_env, import_folders, "missing").status_code == 404
+    assert _trash_run(shelf_env, import_folders, "escapes").status_code == 400
+    assert _trash_run(shelf_env, import_folders, "alias").status_code == 409
+    assert import_folders.run_dir.exists()
+    assert _trash_run(shelf_env, import_folders, "a%5Cb").status_code == 400
+    assert (not_a_run / "todo.txt").exists()
+    assert (outside / "elsewhere.safetensors").exists()
+    assert list(run_trash.iterdir()) == []
+    # Over-blocking is its own regression: a real run beside them still goes.
+    assert _trash_run(shelf_env, import_folders, "Clementine").status_code == 200
+
+
+def test_clearing_refuses_a_run_a_job_still_writes_into(
+    shelf_env, import_folders, run_trash
+):
+    uuid = "0123456789abcdef0123456789abcdef"
+    save_root = LocalAiToolkit.handle_for(
+        "", uuid, "Busy run", training_folder=str(import_folders.output_root)
+    ).save_root
+    run_dir = import_folders.output_root / os.path.basename(save_root)
+    run_dir.mkdir()
+    _write_run_adapter(run_dir / f"{run_dir.name}_000000100.safetensors", b"busy")
+    hub = shelf_env.server.hub
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO training_run (uuid, library_uuid, name, status, "
+            "training_folder, created_at) VALUES (?, 'lib', 'Busy run', "
+            "'running', ?, '2026-11-03T00:00:00+00:00')",
+            (uuid, str(import_folders.output_root)),
+        )
+    try:
+        r = _trash_run(shelf_env, import_folders, run_dir.name)
+        assert r.status_code == 409, r.text
+        assert "Busy run" in r.text
+        assert run_dir.exists()
+        # The run it does not touch still goes, and so does this one once the
+        # job has ended.
+        assert _trash_run(shelf_env, import_folders, "Clementine").status_code == 200
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE training_run SET status = 'error' WHERE uuid = ?", (uuid,)
+            )
+        r = _trash_run(shelf_env, import_folders, run_dir.name)
+        assert r.status_code == 200, r.text
+        assert (run_trash / run_dir.name).exists()
+    finally:
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM training_run WHERE uuid = ?", (uuid,))
+
+
+def test_clearing_takes_the_same_slot_as_an_import(
+    shelf_env, import_folders, run_trash
+):
+    assert SHELF_IO_LOCK.acquire(blocking=False)
+    try:
+        r = _trash_run(shelf_env, import_folders, "Clementine")
+        assert r.status_code == 409, r.text
+        assert import_folders.run_dir.exists()
+    finally:
+        SHELF_IO_LOCK.release()
 
 
 def test_import_routes_refuse_every_share_token(shelf_env):
