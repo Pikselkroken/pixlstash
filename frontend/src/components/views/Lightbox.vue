@@ -688,6 +688,27 @@
             <Tooltip text="Next (→)" activator="parent" :describe="false" />
             <v-icon>mdi-chevron-right</v-icon>
           </button>
+          <!-- The signpost to the Edit tab, shown and hidden with the arrows.
+               Gone while that tab is up (you are already there) and under a
+               comparison, whose After tag holds this corner. -->
+          <button
+            v-if="editTabShown && !paintActive && !compareShown"
+            type="button"
+            class="lightbox-edit-chip"
+            :class="{ hidden: chromeHidden }"
+            aria-keyshortcuts="E"
+            @click.stop="openEditTab"
+            @dblclick.stop
+          >
+            <Tooltip
+              text="Edit this picture: mark an area, describe the change, run it"
+              shortcut="E"
+              activator="parent"
+            />
+            <v-icon size="18">mdi-image-edit-outline</v-icon>
+            Edit
+            <kbd aria-hidden="true">E</kbd>
+          </button>
 
           <!-- The zoom announcer: the button's aria-label carries the live
                value (no aria-live on the button); this hidden status node
@@ -1510,9 +1531,9 @@ const sidebarTabs = computed(() => {
     tabs.push({ value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" });
   }
   if (editTabShown.value) {
-    // `mdi-sitemap-outline` is the app's ComfyUI workflow glyph everywhere
-    // else (the Run popup, *Use as input for…*, the Workflows view).
-    tabs.push({ value: "edit", label: "Edit", icon: "mdi-sitemap-outline" });
+    // Not `mdi-sitemap-outline`: that is the app's workflow glyph and read as
+    // "Workflows". The canvas's Edit chip wears the same one.
+    tabs.push({ value: "edit", label: "Edit", icon: "mdi-image-edit-outline" });
   }
   return tabs.length > 1 ? tabs : [];
 });
@@ -3273,6 +3294,13 @@ function handleKeydown(e) {
       if (!isReadOnly.value) beginTagEntry();
       return;
     }
+    // E: the Edit tab, the hidden chip's key. On that tab already, E is the
+    // Eraser, which waits for the chrome like the other tool keys.
+    if (isEditKey(e) && editTabShown.value && !paintActive.value) {
+      e.preventDefault();
+      openEditTab();
+      return;
+    }
     // All other keys: ignore while chrome is hidden
     return;
   }
@@ -3444,6 +3472,10 @@ function handleKeydown(e) {
       e.preventDefault();
       beginTagEntry();
     }
+  } else if (isEditKey(e) && editTabShown.value && !paintActive.value) {
+    // On the Edit tab E is the Eraser (handlePaintKey, above).
+    e.preventDefault();
+    openEditTab();
   } else if ([1, 2, 3, 4, 5].includes(bareDigit(e))) {
     // A bare digit only: Ctrl+2 is not two stars.
     if (!isReadOnly.value) {
@@ -3732,6 +3764,22 @@ function beginTagEntry() {
   openSidebar();
   sidebarTab.value = "info";
   railPictureRef.value?.focusTags();
+}
+
+/** E and the canvas's Edit chip: the Edit tab, in a pane opened for it if the
+ * rail was shut, as the grid's *Edit…* does. A press, so the closed-inspector
+ * rule (never open by itself) holds. */
+/** A bare E: Ctrl+E and friends are the browser's. */
+function isEditKey(e) {
+  return (
+    (e.key === "e" || e.key === "E") && !e.ctrlKey && !e.metaKey && !e.altKey
+  );
+}
+
+function openEditTab() {
+  openSidebar();
+  sidebarTab.value = "edit";
+  handleUserActivity();
 }
 
 // S: the reader's own toggle, kept like the toolbar's. In full screen it is

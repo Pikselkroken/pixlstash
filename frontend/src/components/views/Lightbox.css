@@ -589,18 +589,57 @@
   z-index: var(--z-raised);
 }
 
+/* The Edit chip, top right: a pill bar button on the arrows' fill, shown and
+   hidden with them. */
+.lightbox-edit-chip {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-h-bar);
+  padding: 0 var(--space-4) 0 var(--space-3);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  border-radius: var(--radius-pill);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-sm);
+  opacity: 0;
+  transition: opacity var(--dur-2) var(--ease-standard);
+  z-index: var(--z-raised);
+}
+
+.lightbox-edit-chip:hover {
+  background-image: var(--hover-shade);
+}
+
+.lightbox-edit-chip kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  opacity: 0.9;
+}
+
 .lightbox-canvas:hover .lightbox-nav,
-.lightbox-nav:focus-visible {
+.lightbox-nav:focus-visible,
+.lightbox-canvas:hover .lightbox-edit-chip,
+.lightbox-edit-chip:focus-visible {
   opacity: 1;
 }
 
 @media (hover: none) {
-  .lightbox-nav {
+  .lightbox-nav,
+  .lightbox-edit-chip {
     opacity: 1;
   }
 }
 
-.lightbox-nav.hidden {
+.lightbox-nav.hidden,
+.lightbox-edit-chip.hidden {
   opacity: 0;
   pointer-events: none;
 }
@@ -614,7 +653,8 @@
 }
 
 /* The closed inspector's edge tab (34px) stands at the stage's right edge. */
-.lightbox-canvas--edge-tab .lightbox-nav-right {
+.lightbox-canvas--edge-tab .lightbox-nav-right,
+.lightbox-canvas--edge-tab .lightbox-edit-chip {
   right: calc(var(--space-4) + 34px);
 }
 
@@ -623,7 +663,8 @@
   cursor: none;
 }
 
-.lightbox-canvas.lightbox-canvas--idle .lightbox-nav {
+.lightbox-canvas.lightbox-canvas--idle .lightbox-nav,
+.lightbox-canvas.lightbox-canvas--idle .lightbox-edit-chip {
   opacity: 0;
 }
 
