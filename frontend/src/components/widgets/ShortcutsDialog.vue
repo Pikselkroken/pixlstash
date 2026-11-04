@@ -191,6 +191,10 @@ const open = computed(() => props.modelValue);
           <td><kbd>T</kbd></td>
           <td>Add tag</td>
         </tr>
+        <tr :class="{ 'shortcut-disabled': isReadOnly }">
+          <td><kbd>E</kbd></td>
+          <td>Open the Edit tab (on it, with ComfyUI: Eraser)</td>
+        </tr>
         <tr>
           <td><kbd>Ctrl</kbd>+<kbd>C</kbd></td>
           <td>Copy the selected tags</td>
