@@ -190,6 +190,7 @@ def test_needs_put_previews_apart_with_a_margin():
         }
     )
     assert needs == {
+        "peak_vram_mb": 10000,
         "vram_mb": 11000,
         "ram_mb": 22000,
         "preview_vram_mb": 15400,
@@ -224,6 +225,7 @@ def test_the_margin_never_lifts_a_peak_that_fits_the_room_past_it():
         ram_room=44_000,
     )
     assert needs == {
+        "peak_vram_mb": 25_962,
         "vram_mb": 25_962,
         "ram_mb": 41_790,
         "preview_vram_mb": 24_203,

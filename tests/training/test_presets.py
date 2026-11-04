@@ -99,6 +99,35 @@ def test_h3_keeps_its_pre_quantised_formats_and_its_distillation_handling():
         assert values["datasets[*].do_audio"] is sound
 
 
+def test_h3_motion_fits_a_32_gb_card_and_saving_memory_saves_some():
+    """A 32 GB card gives a run about 28.3 GB. A 124-frame clip's VAE encode
+    peaked 30.3 GB with part of the text encoder on the GPU, so Auto found
+    nothing; with it in RAM Auto fits, and Save memory offloads further."""
+    motion = presets.get_preset("minimax-h3-motion")
+    room = 28_979
+    auto = _resolve(motion, vram_mb=room, ram_mb=None)
+    saver = _resolve(motion, vram_mb=room, ram_mb=None, fit="save_memory")
+    assert auto["profile"] == "q8_offload_60"
+    assert saver["profile"] == "q8_offload_90"
+    assert saver["vram_mb"] <= room - 6_000 < auto["vram_mb"] <= room
+    for profile in motion["hardware_profiles"].values():
+        if profile["settings"]["model.layer_offloading"]:
+            # Unloaded once captions are cached, so never worth GPU memory.
+            assert (
+                profile["settings"]["model.layer_offloading_text_encoder_percent"]
+                == 1.0
+            )
+
+
+def test_save_memory_never_asks_for_more_than_auto_could():
+    """Save memory is the recipe's leanest way to fit, never one Auto beats."""
+    for preset in presets.list_presets():
+        profiles = preset["hardware_profiles"]
+        lean = min(profiles[n]["vram_mb"] for n in preset["fit"]["auto"])
+        for name in preset["fit"]["save_memory"]:
+            assert profiles[name]["vram_mb"] <= lean, (preset["id"], name)
+
+
 def test_chroma_has_no_profile_below_8_bit():
     """ai-toolkit's Chroma loads its bf16 transformer onto the GPU to quantise
     it and cannot offload layers, so saving memory cannot go under q8."""
@@ -519,6 +548,24 @@ def test_a_measured_peak_that_fits_the_room_is_admitted_without_its_margin():
     hungry["phase_peaks"]["training"]["ram_mb"] = 39_000
     out = _resolve(vram_mb=_16GB, ram_mb=40_000, lookup=_lookup({"q8": hungry}))
     assert (out["profile"], out["ram_mb"]) == ("q8", 39_000)
+
+
+def test_a_measured_refusal_quotes_the_peak_not_the_margin():
+    """The margin keeps room for other work; a refusal says what the run
+    actually peaked at, so 30 GB measured reads as 29.3 GB, not 32.2 GB."""
+    peaks = {n: _measurement(30_000) for n in _ZIT["fit"]["auto"]}
+    with pytest.raises(presets.NoProfileFits) as raised:
+        _resolve(vram_mb=28_000, lookup=_lookup(peaks))
+    assert str(raised.value) == (
+        "Z-Image Turbo peaked at 29.3 GB of GPU memory when measured here; "
+        "27.3 GB can be given to it on this GPU."
+    )
+    # The lease still asks for the margin.
+    assert raised.value.need_mb == 33_000
+    # Seeds were never measured here: they keep saying what they need.
+    with pytest.raises(presets.NoProfileFits) as seeded:
+        _resolve(vram_mb=5_000, lookup=_lookup({}))
+    assert "of GPU memory at least" in str(seeded.value)
 
 
 def test_without_measurements_nothing_is_probed():

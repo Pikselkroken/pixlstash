@@ -12059,7 +12059,12 @@ reads that change nothing:
   and a verdict per recipe for the same choices (`fits`, `streams` when the
   profile offloads layers to RAM, `needs_ram`, `no_gpu`, `needs_checkout`). A
   run that cannot be resolved answers 200 with `error`, so the dialog keeps the
-  rest of the preview.
+  rest of the preview. When no profile fits the GPU or RAM it also answers
+  `unfit_values`: the values the closest profile would run with, resolved with
+  the short budget (GPU or RAM) raised to its need, so Advanced can still be
+  read and pinned; `derived` is resolved the same way with no pins. A
+  measured refusal quotes the peak the setup reached here, not its need with
+  the margin.
 
 **A character's reference set.** `set_id` and `character_id` together are
 accepted only when the set is that character's reference set, and a reference
