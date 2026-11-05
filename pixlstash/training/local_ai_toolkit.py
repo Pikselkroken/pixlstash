@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS Job (
   stop            INTEGER NOT NULL DEFAULT 0,
   return_to_queue INTEGER NOT NULL DEFAULT 0,
   save_now        INTEGER NOT NULL DEFAULT 0,
-  sample_now      INTEGER NOT NULL DEFAULT 0
+  sample_now      INTEGER NOT NULL DEFAULT 0,
+  job_config      TEXT
 );
 """
 # Flags added since a job.db could have been created, for a table that exists.
@@ -516,8 +517,6 @@ class LocalAiToolkit(TrainerBackend):
         os.makedirs(save_root, exist_ok=True)
 
         self._rotate_existing_log(log_path)
-        self._create_job_db(sqlite_db_path, spec.job_id)
-
         config = render_job_config(
             spec.template_path,
             job_name=stem,
@@ -531,6 +530,7 @@ class LocalAiToolkit(TrainerBackend):
         # write_json_atomic uses json.dump, whose default ensure_ascii=True
         # already escapes non-ASCII to \uXXXX, matching the SEAM requirement.
         write_json_atomic(config_path, config)
+        self._create_job_db(sqlite_db_path, spec.job_id, config)
         logger.info(
             "Prepared training job %s: save_root=%s config=%s",
             spec.job_id,
@@ -1152,15 +1152,19 @@ class LocalAiToolkit(TrainerBackend):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _create_job_db(sqlite_db_path: str, job_id: str) -> None:
+    def _create_job_db(sqlite_db_path: str, job_id: str, config: dict) -> None:
         """Create the per-job ``Job`` table and insert the single job row.
 
         The INSERT is mandatory: the trainer's UPDATEs are keyed ``WHERE id=?``
         with no upsert, so they silently no-op if the row is absent (SEAM.md).
+        The row carries the rendered config as ``job_config``, as ai-toolkit's
+        own UI does: a trainer that reads its step count from there every step
+        (Extend Training) fails the run on a missing or empty column.
 
         Args:
             sqlite_db_path: Path to the per-job DB file to create.
             job_id: The job id used as the ``Job.id`` primary key.
+            config: The rendered job config.
         """
         os.makedirs(os.path.dirname(os.path.abspath(sqlite_db_path)), exist_ok=True)
         conn = sqlite3.connect(sqlite_db_path, timeout=30.0)
@@ -1174,9 +1178,12 @@ class LocalAiToolkit(TrainerBackend):
                     conn.execute(
                         f"ALTER TABLE Job ADD COLUMN {flag} INTEGER NOT NULL DEFAULT 0"
                     )
+            if "job_config" not in columns:
+                conn.execute("ALTER TABLE Job ADD COLUMN job_config TEXT")
             conn.execute(
-                "INSERT OR REPLACE INTO Job (id, status) VALUES (?, 'queued')",
-                (job_id,),
+                "INSERT OR REPLACE INTO Job (id, status, job_config) "
+                "VALUES (?, 'queued', ?)",
+                (job_id, json.dumps(config)),
             )
             conn.commit()
         finally:

@@ -138,10 +138,14 @@ def test_prepare_creates_db_row_and_config(tmp_path):
         flags = conn.execute(
             "SELECT stop, return_to_queue, save_now, sample_now FROM Job"
         ).fetchall()
+        # The config, as ai-toolkit's UI stores it: its trainer reads the step
+        # count from here every step to pick up an extended run.
+        (job_config,) = conn.execute("SELECT job_config FROM Job").fetchone()
     finally:
         conn.close()
     assert rows == [("job-uuid-1234", "queued")]
     assert flags == [(0, 0, 0, 0)]
+    assert json.loads(job_config) == config
 
 
 def test_prepare_adds_sample_now_to_a_job_db_made_before_it(tmp_path):
@@ -170,9 +174,11 @@ def test_prepare_adds_sample_now_to_a_job_db_made_before_it(tmp_path):
     conn = sqlite3.connect(handle.sqlite_db_path)
     try:
         rows = conn.execute("SELECT status, step, sample_now FROM Job").fetchall()
+        (job_config,) = conn.execute("SELECT job_config FROM Job").fetchone()
     finally:
         conn.close()
     assert rows == [("queued", 0, 0)]
+    assert json.loads(job_config)["config"]["process"][0]["train"]["steps"] == 12
 
 
 def test_config_written_ascii_only(tmp_path):

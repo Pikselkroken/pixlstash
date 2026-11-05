@@ -128,9 +128,11 @@ CREATE TABLE Job (
   stop            INTEGER NOT NULL DEFAULT 0,     -- set to 1 to request cooperative stop
   return_to_queue INTEGER NOT NULL DEFAULT 0,
   save_now        INTEGER NOT NULL DEFAULT 0,
-  sample_now      INTEGER NOT NULL DEFAULT 0     -- read every step since 0.12 ("Sample Next Step")
+  sample_now      INTEGER NOT NULL DEFAULT 0,    -- read every step since 0.12 ("Sample Next Step")
+  job_config      TEXT                           -- the rendered config; an Extend Training
+                                                 -- trainer reads train.steps from it every step
 );
-INSERT INTO Job (id) VALUES ('<job uuid>');
+INSERT INTO Job (id, status, job_config) VALUES ('<job uuid>', 'queued', '<rendered config JSON>');
 ```
 - **Read progress/status:** `SELECT status, info, step, speed_string FROM Job WHERE id=?`.
 - Trainer UPDATEs are keyed `WHERE id=?` (no upsert) → silently no-op if the row is absent, so the
