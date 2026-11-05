@@ -1,54 +1,43 @@
 <template>
-  <!-- #2558: Start on a run that fits only with ComfyUI quit. Two answers,
-       Queue (focused, the safe default) and Quit; Escape and the close button
-       go back to the Train dialog without starting. Enter does nothing here:
-       no @accept, so the dialog's Enter-accepts contract never fires. -->
+  <!-- Start on a run that does not fit beside what ComfyUI is known to keep
+       (#2558). Clear (focused, the key action) has ComfyUI unload its models
+       and stay open; Quit, only where PixlStash can end its process, is the
+       fallback; Cancel, Escape and the close button go back to the Train
+       dialog without starting. Both answers wait for ComfyUI's jobs and close
+       this: the run then waits in Tasks, which shows each phase. No @accept:
+       Enter presses whichever answer has focus, Clear on open. -->
   <AppDialog
     :open="open"
-    :title="`${fitLabel} needs ComfyUI closed`"
-    size="sm"
+    :title="`${fitLabel} needs ComfyUI's memory`"
+    size="md"
     @close="emit('close')"
   >
     <div class="cq-body">
-      <p v-if="comfyui.busy" class="cq-text" data-testid="cq-text">
-        ComfyUI is running jobs PixlStash didn't submit, so the run queues until
-        they finish either way. ComfyUI is never quit mid-job.
-      </p>
-      <p v-else class="cq-text" data-testid="cq-text">
-        This run needs {{ gbTenths(needMb) }} GB. With ComfyUI's models unloaded,
-        {{ gbTenths(needMb - comfyui.short_mb) }} GB is free. ComfyUI's last
-        {{ gbTenths(comfyui.kept_mb) }} GB is released only when it quits.
+      <p class="cq-text" data-testid="cq-text">
+        This run needs <b>{{ gbTenths(needMb) }} GB</b>; {{ gbTenths(freeMb) }} GB
+        is free. ComfyUI holds {{ gbTenths(comfyui.held_mb) }} GB and
+        <template v-if="jobs">is running <b>{{ jobsText }}</b>.</template>
+        <template v-else>is idle.</template>
       </p>
 
-      <table v-if="!comfyui.busy" class="cq-cmp">
+      <table class="cq-cmp">
         <tbody>
           <tr>
             <td>
-              <b>Quit ComfyUI</b>
-              <small>Training starts now.</small>
+              <b>Clear ComfyUI's memory</b>
+              <small>Unloads its models; ComfyUI stays open.</small>
             </td>
-            <td>{{ runTime ? `about ${runTime}` : "starts now" }}</td>
+            <td>{{ when }}</td>
           </tr>
-          <tr>
+          <tr v-if="comfyui.can_quit">
             <td>
-              <b>Queue the run</b>
-              <small
-                >ComfyUI keeps running. The run starts by itself once you close
-                ComfyUI.</small
-              >
+              <b>Quit ComfyUI</b>
+              <small>Start it again yourself after the run.</small>
             </td>
-            <td>starts later</td>
+            <td>{{ when }}</td>
           </tr>
         </tbody>
       </table>
-
-      <p class="cq-notice" role="note">
-        <v-icon size="16">mdi-alert-outline</v-icon>
-        <span
-          >PixlStash didn't start ComfyUI and can't start it again. If it quits,
-          start it yourself after the run. A notice says when.</span
-        >
-      </p>
 
       <button
         v-if="comfyui.beside"
@@ -61,23 +50,36 @@
         ComfyUI{{ besideTime ? `, about ${besideTime}` : "" }}
       </button>
       <span class="cq-hint">
-        A queued run can still be forced to start from Tasks with
-        <i>Run anyway</i>. At {{ gbTenths(comfyui.short_mb) }} GB short it will
-        likely run out of GPU memory.
+        {{ comfyui.can_quit ? "Either way this" : "This" }} closes and the run
+        waits in Tasks, where it can still be cancelled.
+        {{
+          comfyui.can_quit
+            ? "If clearing frees too little, Tasks asks what to do next."
+            : "If clearing frees too little, it waits until ComfyUI is closed."
+        }}
       </span>
     </div>
 
     <template #footer>
-      <AppButton ref="queueButton" data-testid="cq-queue" @click="emit('queue')">
-        {{ comfyui.busy ? "Queue until I close it" : "Queue the run" }}
+      <AppButton variant="ghost" data-testid="cq-cancel" @click="emit('close')">
+        Cancel
       </AppButton>
       <AppButton
-        variant="primary"
+        v-if="comfyui.can_quit"
         icon-left="power"
         data-testid="cq-quit"
         @click="emit('quit')"
       >
-        {{ comfyui.busy ? "Quit it once its jobs are done" : "Quit ComfyUI and train" }}
+        {{ jobs ? "Quit after its jobs" : "Quit ComfyUI and train" }}
+      </AppButton>
+      <AppButton
+        ref="clearButton"
+        variant="primary"
+        icon-left="broom"
+        data-testid="cq-clear"
+        @click="emit('clear')"
+      >
+        {{ jobs ? "Clear after its jobs" : "Clear and train" }}
       </AppButton>
     </template>
   </AppDialog>
@@ -85,7 +87,6 @@
 
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
-import { VIcon } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import { FIT_LABELS, formatDuration, gbTenths } from "../../utils/trainingPlan";
@@ -96,17 +97,31 @@ const props = defineProps({
   fitLabel: { type: String, default: "" },
   /** MB the run's profile peaks at. */
   needMb: { type: Number, default: 0 },
-  /** The plan's `comfyui`: {kept_mb, short_mb, can_quit, busy, beside}. */
+  /**
+   * The plan's `comfyui`: {kept_mb, held_mb, short_mb, can_quit, busy, jobs,
+   * beside}.
+   */
   comfyui: { type: Object, required: true },
-  /** The run's measured estimate, seconds; null when not known. */
-  seconds: { type: Number, default: null },
 });
 
-const emit = defineEmits(["close", "queue", "quit", "beside"]);
+const emit = defineEmits(["close", "clear", "quit", "beside"]);
 
-const queueButton = ref(null);
+const clearButton = ref(null);
 
-const runTime = computed(() => (props.seconds != null ? formatDuration(props.seconds) : ""));
+const jobs = computed(() => Number(props.comfyui.jobs) || 0);
+const jobsText = computed(() => `${jobs.value} ${jobs.value === 1 ? "job" : "jobs"}`);
+const when = computed(() => (jobs.value ? `after ${jobsText.value}` : "starts now"));
+// short = need - (room - kept), so what is free now, ComfyUI's memory and
+// all, is room - held.
+const freeMb = computed(() =>
+  Math.max(
+    0,
+    props.needMb -
+      (Number(props.comfyui.short_mb) || 0) +
+      (Number(props.comfyui.kept_mb) || 0) -
+      (Number(props.comfyui.held_mb) || 0),
+  ),
+);
 const besideTime = computed(() => {
   const estimate = props.comfyui.beside?.estimate;
   return estimate?.basis === "measured" && estimate.seconds != null
@@ -114,13 +129,13 @@ const besideTime = computed(() => {
     : "";
 });
 
-// Queue holds focus: the answer that changes nothing on the machine.
+// Clear holds focus: the key action, and it never ends ComfyUI.
 watch(
   () => props.open,
   async (open) => {
     if (!open) return;
     await nextTick();
-    queueButton.value?.focus?.();
+    clearButton.value?.focus?.();
   },
 );
 </script>
@@ -165,23 +180,6 @@ watch(
   display: block;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-.cq-notice {
-  display: flex;
-  gap: var(--space-3);
-  align-items: flex-start;
-  margin: 0;
-  padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius-md);
-  border: 1px solid rgb(var(--v-theme-border));
-  background: rgb(var(--v-theme-input-background));
-  font-size: var(--text-xs);
-  line-height: var(--leading-snug);
-}
-
-.cq-notice .v-icon {
-  color: rgb(var(--v-theme-surface-warning));
 }
 
 .cq-link {

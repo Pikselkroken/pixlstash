@@ -72,6 +72,8 @@ class FakeComfy:
         self.quittable = can_quit
         self.quits = 0
         self.quit_works = True
+        self.queued = 0
+        self.reclaim_works = True
 
     def device(self):
         return self._device
@@ -85,8 +87,13 @@ class FakeComfy:
     def idle(self):
         return self.is_idle
 
+    def jobs(self):
+        return self.queued
+
     def reclaim(self):
         self.freed += 1
+        if not self.reclaim_works:
+            return False
         self.usage = self.kept or 0
         return True
 
@@ -681,6 +688,7 @@ def test_comfyui_is_quit_only_with_the_owners_yes_and_only_once_it_unloaded():
         "held_mb": 8000,
         "can_quit": True,
         "busy": False,
+        "jobs": 0,
     }
     reason = lease.waiting_reason
     assert reason["code"] == "vram"
@@ -751,6 +759,70 @@ def test_comfyui_is_never_quit_when_an_unload_is_enough_or_it_is_busy():
     # Short even with ComfyUI gone: nothing to ask of it.
     arb, probe, lease, settle = _quit_scene(9000, can_quit=True)
     assert lease.waiting_reason["comfyui_closing"] is None
+    lease.release()
+
+
+def test_a_lease_shows_comfyuis_jobs_then_its_clear_then_the_outcome():
+    """The Tasks row's phase track: ComfyUI's jobs, the clear with what it
+    freed, then still short (and offered the quit) or granted."""
+    arb, probe, lease, settle = _quit_scene(8000, can_quit=True, idle=False)
+    probe.queued = 2
+    settle()
+
+    def clear():
+        return arb.snapshot()["leases"][0]["comfyui_clear"]
+
+    assert clear() == {"phase": "jobs", "jobs": 2, "freed_mb": None, "failed": False}
+    assert arb.snapshot()["comfyui"] == {
+        "device": CARD,
+        "held_mb": 8000,
+        "idle": False,
+        "jobs": 2,
+    }
+    assert not arb._reclaim_step(), "never cleared mid-job"
+    probe.is_idle, probe.queued = True, 0
+    settle()
+    assert clear()["phase"] == "clearing"
+    assert arb._reclaim_step() and probe.freed == 1
+    settle()
+    assert lease.state is LeaseState.WAITING
+    assert clear() == {"phase": "cleared", "jobs": 0, "freed_mb": 6500, "failed": False}
+    assert "quit_comfyui" in lease.waiting_reason["actions"]
+    lease.release()
+
+    arb, probe, lease, settle = _quit_scene(6000)
+    assert clear()["phase"] == "clearing"
+    assert arb._reclaim_step()
+    settle()
+    assert lease.state is LeaseState.GRANTED
+    assert clear() == {"phase": "done", "jobs": 0, "freed_mb": 6500, "failed": False}
+    lease.release()
+
+    # An unload ComfyUI refused (a job arrived meanwhile) is said, not shown
+    # as clearing for ever.
+    arb, probe, lease, settle = _quit_scene(6000)
+    probe.reclaim_works = False
+    assert arb._reclaim_step()
+    settle()
+    assert clear() == {"phase": "cleared", "jobs": 0, "freed_mb": 0, "failed": True}
+    lease.release()
+
+    # Only the lease the ladder clears for has a track: one behind it waits
+    # its turn (fifo), and is never told ComfyUI is clearing for it.
+    arb, probe, lease, settle = _quit_scene(8000, idle=False)
+    behind = arb.request(Tenant.AITOOLKIT, "train 2", device=CARD, need_mb=8000)
+    settle()
+    rows = {row["id"]: row for row in arb.snapshot()["leases"]}
+    assert rows[lease.id]["comfyui_clear"]["phase"] == "jobs"
+    assert rows[behind.id]["comfyui_clear"] is None
+    behind.release()
+    lease.release()
+
+    # Nothing to give: no ComfyUI memory on the card, no track.
+    arb, _fake, _ = make(used_mb=23000, thread=False)
+    lease = arb.request(Tenant.AITOOLKIT, "train", device=CARD, need_mb=8000)
+    assert arb.snapshot()["leases"][0]["comfyui_clear"] is None
+    assert arb.snapshot()["comfyui"] is None
     lease.release()
 
 

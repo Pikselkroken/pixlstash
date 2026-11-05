@@ -55,6 +55,48 @@
         <li><span class="tm-swatch tm-vram-seg--other"></span>Other apps</li>
         <li><span class="tm-swatch tm-vram-seg--spare"></span>Headroom</li>
       </ul>
+      <!-- ComfyUI, standing: what it holds, and the broom that has it unload
+           its models whenever it is idle, with no run involved. Unavailable,
+           not hidden, while it has jobs: it is never cleared mid-job. -->
+      <div
+        v-if="tasksStore.comfyuiHost"
+        class="tm-row"
+        data-testid="tm-comfy-host"
+      >
+        <span
+          class="tm-mark"
+          :class="{ 'tm-mark--running': !tasksStore.comfyuiHost.idle }"
+          aria-hidden="true"
+        ></span>
+        <ComfyuiIcon :size="18" class="tm-app" aria-hidden="true" />
+        <span class="tm-name">
+          ComfyUI
+          <span
+            v-if="tasksStore.comfyuiHost.jobs"
+            class="tm-count"
+            data-testid="tm-comfy-host-jobs"
+            >{{ tasksStore.comfyuiHost.jobs }}</span
+          >
+        </span>
+        <span class="visually-hidden">, {{ hostDetail }}</span>
+        <span class="tm-figure">
+          <span class="tm-fig-text">{{ formatGb(tasksStore.comfyuiHost.held_mb) }}</span>
+          <span v-if="!isReadOnly" class="tm-acts">
+            <button
+              class="tm-act"
+              type="button"
+              data-testid="tm-clear-comfyui"
+              :aria-label="hostClearTip"
+              :aria-disabled="hostClearable ? undefined : 'true'"
+              @click="clearComfyuiNow"
+            >
+              <Tooltip :text="hostClearTip" activator="parent" :describe="false" />
+              <v-icon size="16">mdi-broom</v-icon>
+            </button>
+          </span>
+        </span>
+        <Tooltip :text="`ComfyUI · ${hostDetail}`" activator="parent" :describe="false" />
+      </div>
     </div>
 
     <!-- Running: ComfyUI runs as rows of their own, PixlStash's own background
@@ -345,6 +387,18 @@
             <span class="tm-fig-text">{{ needText(entry) }}</span>
             <span v-if="actionsOf(entry).length" class="tm-acts">
               <button
+                v-if="actionsOf(entry).includes('quit_comfyui')"
+                class="tm-act"
+                type="button"
+                data-testid="tm-quit-comfyui"
+                :aria-label="quitTip(entry)"
+                :disabled="busyLease === entry.lease?.id"
+                @click="quitComfyui(entry)"
+              >
+                <Tooltip :text="quitTip(entry)" activator="parent" :describe="false" />
+                <v-icon size="16">mdi-power</v-icon>
+              </button>
+              <button
                 v-if="actionsOf(entry).includes('run_anyway')"
                 class="tm-act"
                 type="button"
@@ -355,17 +409,6 @@
               >
                 <Tooltip text="Run anyway" activator="parent" :describe="false" />
                 <v-icon size="16">mdi-play</v-icon>
-              </button>
-              <button
-                v-if="actionsOf(entry).includes('free_comfyui')"
-                class="tm-act"
-                type="button"
-                data-testid="tm-free-comfyui"
-                aria-label="Free ComfyUI's cache"
-                @click="freeComfyuiCache()"
-              >
-                <Tooltip text="Free ComfyUI's cache" activator="parent" :describe="false" />
-                <v-icon size="16">mdi-broom</v-icon>
               </button>
               <button
                 v-if="actionsOf(entry).includes('cancel')"
@@ -381,6 +424,26 @@
               </button>
             </span>
           </span>
+          <!-- Waiting on ComfyUI: its jobs, its clear, then the run. -->
+          <div v-if="entry.clear" class="tm-clear" data-testid="tm-clear-phase">
+            <span
+              class="tm-clear-text"
+              :class="{ 'tm-clear-text--short': entry.clear.phase === 'cleared' }"
+              >{{ clearText(entry) }}</span
+            >
+            <ol class="tm-phase" aria-label="Progress">
+              <li
+                v-for="step in phaseSteps(entry.clear)"
+                :key="step.label"
+                :data-state="step.state"
+                :aria-current="step.state === 'now' ? 'step' : undefined"
+              >
+                {{ step.label }}<span class="visually-hidden"
+                  >, {{ PHASE_STATE_NAMES[step.state] }}</span
+                >
+              </li>
+            </ol>
+          </div>
           <Tooltip
             :text="entry.text || `${entry.label} is waiting for the GPU`"
             activator="parent"
@@ -836,9 +899,114 @@ function pctText(value) {
   return `${Math.min(100, Math.max(0, Number(value) || 0)).toFixed(2)}%`;
 }
 
+// What a row waiting on ComfyUI offers, by phase: while its jobs run, quit
+// instead or cancel; while it clears, cancel; still short after, the quit,
+// Run anyway and cancel.
+const PHASE_ACTIONS = {
+  jobs: ["quit_comfyui", "cancel"],
+  clearing: ["cancel"],
+};
+
 function actionsOf(entry) {
   // Every action writes; a read-only session is offered none.
-  return isReadOnly.value ? [] : (entry.actions ?? []);
+  if (isReadOnly.value) return [];
+  let actions = entry.actions ?? [];
+  const only = PHASE_ACTIONS[entry.clear?.phase];
+  if (only) actions = actions.filter((action) => only.includes(action));
+  // The quit is a training run's: its route names the run.
+  if (!entry.lease?.job_id || entry.lease.tenant !== "aitoolkit") {
+    actions = actions.filter((action) => action !== "quit_comfyui");
+  }
+  return actions;
+}
+
+function jobsText(count) {
+  return count ? `${count} ${count === 1 ? "job" : "jobs"}` : "jobs";
+}
+
+/** The line under a row waiting on ComfyUI, for the phase it is in. */
+function clearText(entry) {
+  const clear = entry.clear;
+  if (clear.phase === "jobs") {
+    return `Waits for ComfyUI's ${jobsText(clear.jobs)}, then clears its memory and starts.`;
+  }
+  if (clear.phase === "clearing") {
+    return clear.freed_mb
+      ? `Clearing ComfyUI's memory: ${formatGb(clear.freed_mb)} freed.`
+      : "Clearing ComfyUI's memory.";
+  }
+  if (clear.failed) return "ComfyUI did not clear its memory.";
+  const closing = entry.lease?.waiting_reason?.comfyui_closing;
+  const short = formatGb(entry.shortMb || 0);
+  return [
+    clear.freed_mb
+      ? `Cleared ${formatGb(clear.freed_mb)}; still ${short} short.`
+      : `Still ${short} short after clearing.`,
+    closing?.kept_mb
+      ? `ComfyUI keeps ${formatGb(closing.kept_mb)} until it ${closing.can_quit ? "quits" : "is closed"}.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+const PHASE_STATE_NAMES = { done: "done", now: "in progress", next: "not started" };
+
+// Cleared and still waiting: the first two done, training not begun.
+const PHASE_ORDER = ["jobs", "clearing", "cleared"];
+
+function phaseSteps(clear) {
+  const at = PHASE_ORDER.indexOf(clear.phase);
+  return ["ComfyUI's jobs", "Clear memory", "Train"].map((label, index) => ({
+    label,
+    state: index < at ? "done" : index === at && clear.phase !== "cleared" ? "now" : "next",
+  }));
+}
+
+function quitTip(entry) {
+  return entry.clear?.phase === "jobs"
+    ? "Quit ComfyUI after its jobs instead"
+    : "Quit ComfyUI and train";
+}
+
+async function quitComfyui(entry) {
+  if (!entry.lease || busyLease.value) return;
+  busyLease.value = entry.lease.id;
+  // Never rejects; see `confirmRunAnyway`.
+  try {
+    await tasksStore.quitComfyuiFor(entry.lease);
+  } finally {
+    busyLease.value = "";
+  }
+}
+
+const clearingHost = ref(false);
+const hostClearable = computed(
+  () => Boolean(tasksStore.comfyuiHost?.idle) && !clearingHost.value,
+);
+const hostClearTip = computed(() => {
+  if (clearingHost.value) return "Clearing ComfyUI's memory…";
+  return tasksStore.comfyuiHost?.idle
+    ? "Clear ComfyUI's memory"
+    : "ComfyUI's memory can be cleared once its jobs are done";
+});
+const hostDetail = computed(() => {
+  const host = tasksStore.comfyuiHost;
+  if (!host) return "";
+  const held = `holds ${formatGb(host.held_mb)}`;
+  return host.idle
+    ? `idle, ${held}`
+    : `${jobsText(host.jobs)} queued or running, ${held}`;
+});
+
+async function clearComfyuiNow() {
+  if (!hostClearable.value) return;
+  clearingHost.value = true;
+  try {
+    await tasksStore.freeComfyuiCache();
+  } finally {
+    clearingHost.value = false;
+  }
 }
 
 function needText(entry) {
@@ -900,10 +1068,6 @@ async function cancelWait(entry) {
   } finally {
     busyLease.value = "";
   }
-}
-
-function freeComfyuiCache() {
-  return tasksStore.freeComfyuiCache();
 }
 
 function childLabel(child) {
@@ -2157,8 +2321,77 @@ const tmSystemItems = computed(() => {
   color: rgb(var(--v-theme-on-surface));
 }
 
-.tm-act:disabled {
+.tm-act:disabled,
+.tm-act[aria-disabled="true"] {
   opacity: var(--opacity-disabled);
+}
+
+/* A row waiting on ComfyUI: a line of what is happening, then three short
+   tracks (its jobs, the clear, the run), under the name and figure. Teal,
+   the meter's hue, not olive: progress is not selection. */
+.tm-clear {
+  grid-column: 3 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.tm-clear-text {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.tm-clear-text--short {
+  color: rgb(var(--v-theme-surface-warning));
+}
+
+.tm-phase {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.tm-phase li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-phase li::before {
+  content: "";
+  height: var(--space-1);
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-surface), 0.12);
+}
+
+.tm-phase li[data-state="now"] {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tm-phase li[data-state="now"]::before {
+  background: linear-gradient(
+    90deg,
+    rgb(var(--v-theme-tertiary)) 0 40%,
+    rgba(var(--v-theme-on-surface), 0.12) 40%
+  );
+}
+
+.tm-phase li[data-state="done"] {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.tm-phase li[data-state="done"]::before {
+  background: rgb(var(--v-theme-tertiary));
 }
 
 .tm-fold {

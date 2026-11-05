@@ -11,7 +11,7 @@
 
 import { afterEach, describe, it, expect, beforeEach, vi } from "vitest";
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
-import { h } from "vue";
+import { h, nextTick } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 
 const getWorkflowChanges = vi.fn();
@@ -55,10 +55,18 @@ import RunAnywayDialog from "./RunAnywayDialog.vue";
 vi.mock("../../api/comfyui", () => ({ abortRun: vi.fn(async () => ({})) }));
 const runLeaseAnyway = vi.fn(async () => ({ status: "success" }));
 const cancelLease = vi.fn(async () => ({ status: "success" }));
+const freeComfyui = vi.fn(async () => ({ status: "success", freed_mb: 0 }));
 vi.mock("../../api/resources", () => ({
   runLeaseAnyway: (...args) => runLeaseAnyway(...args),
   cancelLease: (...args) => cancelLease(...args),
-  freeComfyui: vi.fn(async () => ({ status: "success", freed_mb: 0 })),
+  freeComfyui: (...args) => freeComfyui(...args),
+}));
+const quitComfyuiForTrainingJob = vi.fn(async () => ({ status: "allowed" }));
+const listTrainingJobs = vi.fn(async () => [{ id: 7, uuid: "job-uuid" }]);
+vi.mock("../../api/training", async (original) => ({
+  ...(await original()),
+  listTrainingJobs: (...args) => listTrainingJobs(...args),
+  quitComfyuiForTrainingJob: (...args) => quitComfyuiForTrainingJob(...args),
 }));
 
 const globalOpts = { global: { stubs: { "v-icon": true, Tooltip: true } } };
@@ -1380,7 +1388,7 @@ describe("the GPU queue in the task manager", () => {
               short_by_mb: 3100,
               position: 1,
               blocked_by: [],
-              actions: ["run_anyway", "cancel", "free_comfyui"],
+              actions: ["run_anyway", "cancel", "quit_comfyui"],
             },
           }),
         ],
@@ -1397,7 +1405,7 @@ describe("the GPU queue in the task manager", () => {
     expect(wrapper.findAll('[data-testid="tm-waiting-row"]')).toHaveLength(1);
     expect(wrapper.find('[data-testid="tm-run-anyway"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="tm-cancel-wait"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="tm-free-comfyui"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tm-quit-comfyui"]').exists()).toBe(false);
     expect(wrapper.find('button[aria-label="Stop ComfyUI"]').exists()).toBe(false);
   });
 
@@ -1438,7 +1446,8 @@ describe("the GPU queue in the task manager", () => {
     // The three actions the backend offered, and none it did not.
     expect(wrapper.find('[data-testid="tm-run-anyway"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="tm-cancel-wait"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="tm-free-comfyui"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tm-quit-comfyui"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tm-clear-phase"]').exists()).toBe(false);
     // The run is not also listed under Running.
     expect(wrapper.findAll('[data-testid="tm-comfy-row"]')).toHaveLength(0);
   });
@@ -1662,5 +1671,143 @@ describe("the AI Toolkit run in the task manager", () => {
     const wrapper = mount(TasksPanel, globalOpts);
     expect(wrapper.find('[data-testid="tm-aitoolkit-row"]').exists()).toBe(false);
     expect(wrapper.findAll('[data-testid="tm-waiting-row"]')).toHaveLength(1);
+  });
+});
+
+describe("clearing ComfyUI's memory from Tasks", () => {
+  const SHORT = {
+    code: "vram",
+    text: "Needs 26.6 GB; 11.6 GB is free.",
+    need_mb: 27238,
+    free_mb: 11878,
+    short_by_mb: 2458,
+    position: 1,
+    blocked_by: [],
+    comfyui_closing: { kept_mb: 6144, short_mb: 2458, can_quit: true, busy: false, allowed: false },
+    actions: ["run_anyway", "cancel", "quit_comfyui"],
+  };
+
+  function training(clear) {
+    return gpuLease({
+      id: "lease-t",
+      tenant: "aitoolkit",
+      label: "LoRA training 'Grandad'",
+      kind: "exclusive",
+      state: "waiting",
+      need_mb: 27238,
+      job_id: "job-uuid",
+      waiting_reason: SHORT,
+      comfyui_clear: clear,
+    });
+  }
+
+  function acts(wrapper) {
+    return wrapper
+      .find('[data-testid="tm-waiting-row"] .tm-acts')
+      .findAll("button")
+      .map((button) => button.attributes("data-testid"));
+  }
+
+  function steps(wrapper) {
+    return wrapper
+      .findAll(".tm-phase li")
+      .map((li) => `${li.text()}:${li.attributes("data-state")}`);
+  }
+
+  beforeEach(() => {
+    readOnly.ref.value = false;
+    freeComfyui.mockClear();
+    quitComfyuiForTrainingJob.mockClear();
+  });
+
+  it("waits on ComfyUI's jobs with Quit instead and Cancel, never Run anyway", () => {
+    setGpu(gpuAnswer({ leases: [training({ phase: "jobs", jobs: 2, freed_mb: null, failed: false })] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find(".tm-clear-text").text()).toBe(
+      "Waits for ComfyUI's 2 jobs, then clears its memory and starts.",
+    );
+    expect(steps(wrapper)).toEqual([
+      "ComfyUI's jobs, in progress:now",
+      "Clear memory, not started:next",
+      "Train, not started:next",
+    ]);
+    expect(acts(wrapper)).toEqual(["tm-quit-comfyui", "tm-cancel-wait"]);
+    expect(wrapper.find('[data-testid="tm-quit-comfyui"]').attributes("aria-label")).toBe(
+      "Quit ComfyUI after its jobs instead",
+    );
+  });
+
+  it("shows what the clear freed so far, with Cancel alone", () => {
+    setGpu(gpuAnswer({ leases: [training({ phase: "clearing", jobs: 0, freed_mb: 9420, failed: false })] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find(".tm-clear-text").text()).toBe("Clearing ComfyUI's memory: 9.2 GB freed.");
+    expect(steps(wrapper)).toEqual([
+      "ComfyUI's jobs, done:done",
+      "Clear memory, in progress:now",
+      "Train, not started:next",
+    ]);
+    expect(acts(wrapper)).toEqual(["tm-cancel-wait"]);
+  });
+
+  it("still short after clearing, asks: quit and train, run anyway, cancel", async () => {
+    setGpu(gpuAnswer({ leases: [training({ phase: "cleared", jobs: 0, freed_mb: 12902, failed: false })] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find(".tm-clear-text").text()).toBe(
+      "Cleared 12.6 GB; still 2.4 GB short. ComfyUI keeps 6.0 GB until it quits.",
+    );
+    expect(wrapper.find(".tm-clear-text--short").exists()).toBe(true);
+    expect(steps(wrapper)).toEqual([
+      "ComfyUI's jobs, done:done",
+      "Clear memory, done:done",
+      "Train, not started:next",
+    ]);
+    expect(acts(wrapper)).toEqual(["tm-quit-comfyui", "tm-run-anyway", "tm-cancel-wait"]);
+    await wrapper.find('[data-testid="tm-quit-comfyui"]').trigger("click");
+    await flushPromises();
+    // The route names the run by its job id, found from the lease's uuid.
+    expect(quitComfyuiForTrainingJob).toHaveBeenCalledWith(7);
+  });
+
+  it("never says it cleared 0.0 GB, nor 'until it quits' of one it cannot quit", () => {
+    const lease = training({ phase: "cleared", jobs: 0, freed_mb: 0, failed: false });
+    lease.waiting_reason = {
+      ...SHORT,
+      comfyui_closing: { ...SHORT.comfyui_closing, can_quit: false },
+      actions: ["run_anyway", "cancel"],
+    };
+    setGpu(gpuAnswer({ leases: [lease] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find(".tm-clear-text").text()).toBe(
+      "Still 2.4 GB short after clearing. ComfyUI keeps 6.0 GB until it is closed.",
+    );
+  });
+
+  it("gives ComfyUI a standing row whose broom clears it only when idle", async () => {
+    const tasks = setGpu(
+      gpuAnswer({ comfyui: { device: "GPU-1", held_mb: 19046, idle: false, jobs: 3 } }),
+    );
+    const wrapper = mount(TasksPanel, globalOpts);
+    const row = wrapper.find('[data-testid="tm-comfy-host"]');
+    expect(row.find(".tm-fig-text").text()).toBe("18.6 GB");
+    expect(row.find('[data-testid="tm-comfy-host-jobs"]').text()).toBe("3");
+    const broom = row.find('[data-testid="tm-clear-comfyui"]');
+    expect(broom.attributes("aria-disabled")).toBe("true");
+    await broom.trigger("click");
+    expect(freeComfyui).not.toHaveBeenCalled();
+
+    tasks.resources = gpuAnswer({ comfyui: { device: "GPU-1", held_mb: 19046, idle: true, jobs: 0 } });
+    await nextTick();
+    expect(broom.attributes("aria-disabled")).toBeUndefined();
+    freeComfyui.mockResolvedValueOnce({ status: "success", freed_mb: 12902 });
+    await broom.trigger("click");
+    await flushPromises();
+    expect(freeComfyui).toHaveBeenCalledTimes(1);
+    expect(useNoticeStore().notices.map((n) => n.text)).toContain("Cleared 12.6 GB from ComfyUI.");
+  });
+
+  it("draws no ComfyUI row before ComfyUI has been read", () => {
+    setGpu(gpuAnswer());
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find('[data-testid="tm-comfy-host"]').exists()).toBe(false);
   });
 });

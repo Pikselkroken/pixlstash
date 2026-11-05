@@ -360,7 +360,8 @@ def create_router(server) -> APIRouter:
 
         ``room["vram_mb"]`` counts all ComfyUI holds as room; only quitting
         releases its ``kept_mb``. None when the run fits beside what ComfyUI
-        keeps. Otherwise ``{kept_mb, short_mb, can_quit, busy, beside}``,
+        keeps. Otherwise ``{kept_mb, held_mb, short_mb, can_quit, busy, jobs,
+        beside}``,
         ``beside`` being Save memory resolved beside ComfyUI when it fits there.
         """
         comfy = room.get("comfyui")
@@ -386,9 +387,11 @@ def create_router(server) -> APIRouter:
                 logger.info("Save memory does not fit beside ComfyUI either: %s", exc)
         return {
             "kept_mb": comfy["kept_mb"],
+            "held_mb": comfy["held_mb"],
             "short_mb": short,
             "can_quit": comfy["can_quit"],
             "busy": comfy["busy"],
+            "jobs": comfy["jobs"],
             "beside": beside,
         }
 
@@ -488,9 +491,10 @@ def create_router(server) -> APIRouter:
             default=None,
             description=(
                 "When only quitting a local ComfyUI makes the run fit "
-                "(`comfyui` of POST /training/resolve): quit lets PixlStash "
-                "quit it once it is idle; queue, the default, waits until "
-                "it is closed."
+                "(`comfyui` of POST /training/resolve): queue, the default, "
+                "waits for ComfyUI's jobs and has it unload its models, then "
+                "waits until it is closed if that was not enough; quit also "
+                "lets PixlStash quit it once it is idle."
             ),
         )
 
@@ -1196,9 +1200,12 @@ def create_router(server) -> APIRouter:
         comfyui: Optional[dict] = Field(
             default=None,
             description=(
-                "When the run fits only with a local ComfyUI quit (#2558): "
-                "{ kept_mb, short_mb, can_quit, busy, beside }, beside being "
-                "Save memory resolved to fit beside ComfyUI, or null."
+                "When the run does not fit beside what a local ComfyUI is "
+                "known to keep (#2558): { kept_mb, held_mb, short_mb, "
+                "can_quit, busy, jobs, beside }, beside being Save memory "
+                "resolved to fit beside ComfyUI, or null. kept_mb is the "
+                "least ComfyUI has held, which before its first unload may "
+                "still include models, so clearing it may be enough."
             ),
         )
         error: Optional[dict] = Field(
