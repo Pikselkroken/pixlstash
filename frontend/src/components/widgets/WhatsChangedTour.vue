@@ -239,11 +239,10 @@ function onKeydown(event) {
 
 function onPanelPointerDown() {
   panelPress = true;
-  window.addEventListener(
-    "pointerup",
-    () => setTimeout(() => (panelPress = false), 0),
-    { once: true },
-  );
+  // A touch that turns into a scroll ends in pointercancel, not pointerup.
+  const release = () => setTimeout(() => (panelPress = false), 0);
+  window.addEventListener("pointerup", release, { once: true });
+  window.addEventListener("pointercancel", release, { once: true });
 }
 
 onMounted(() => {
@@ -253,6 +252,15 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown, true);
   cancelAnimationFrame(frame);
+  // Every way out unmounts the focused panel: back to Show me, which started
+  // it, once it has re-rendered enabled. After the last step the card is gone
+  // too, so onto the grid's rail when there is one.
+  nextTick(() =>
+    (
+      document.querySelector('[data-testid="headline-show-me"]') ??
+      document.querySelector(".stats-sidebar .inspector-tab--active, .rail-clear")
+    )?.focus?.(),
+  );
 });
 </script>
 

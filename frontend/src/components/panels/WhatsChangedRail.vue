@@ -3,7 +3,7 @@
 // moved, as things to do. Doing one on a real picture ticks it (ImageGrid and
 // Lightbox call `whatsChanged.tick`), and the step just done explains what
 // happened before it offers the choice, so nobody rejects a change unfelt.
-import { computed, nextTick } from "vue";
+import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
@@ -88,18 +88,6 @@ const steps = computed(() =>
 );
 const doneCount = computed(() => whatsChanged.done.length);
 
-/** Where you land after leaving: the inspector stays open, on Details. */
-function leave() {
-  whatsChanged.dismissChecklist();
-  nextTick(() =>
-    document
-      .querySelector(
-        ".stats-sidebar .inspector-tab--active, .stats-sidebar .rail-clear",
-      )
-      ?.focus(),
-  );
-}
-
 /** A done step reopens its explanation (and its choice) on a click. */
 function openStep(step) {
   if (step.done) whatsChanged.openStep = step.id;
@@ -114,7 +102,7 @@ function openStep(step) {
     :band="INSPECTOR_BAND"
     band-value="changes"
     @update:band-value="whatsChanged.showTab($event)"
-    @close-band="leave"
+    @close-band="whatsChanged.leave()"
   >
     <div class="wc-head">
       <h2 class="wc-title">Five things work differently</h2>
@@ -139,7 +127,7 @@ function openStep(step) {
         <AppButton
           icon-left="hand-wave"
           aria-describedby="wc-scram-q"
-          @click="leave"
+          @click="whatsChanged.leave()"
           >Get outta here</AppButton
         >
       </div>

@@ -173,6 +173,15 @@ describe("ticking", () => {
 });
 
 describe("dismissing and coming back", () => {
+  it("reopening during the all-done exit keeps the list up", async () => {
+    const { store } = await launch();
+    for (const id of STEP_IDS) store.tick(id);
+    store.reopen();
+    vi.advanceTimersByTime(ALL_DONE_MS);
+    expect(store.checklist).toBe(true);
+    expect(store.allDone).toBe(false);
+  });
+
   it("Get outta here hides the list, keeps the card, and Undo restores the ticks", async () => {
     const { store } = await launch();
     store.tick("click");

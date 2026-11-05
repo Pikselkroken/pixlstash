@@ -227,6 +227,21 @@ export const useWhatsChangedStore = defineStore("whatsChanged", () => {
     });
   }
 
+  /**
+   * Get outta here, or the band's ×: dismiss, and land on Details. The band
+   * goes with the checklist, so focus would otherwise drop to `body`.
+   */
+  function leave() {
+    dismissChecklist();
+    nextTick(() =>
+      document
+        .querySelector(
+          ".stats-sidebar .inspector-tab--active, .stats-sidebar .rail-clear",
+        )
+        ?.focus(),
+    );
+  }
+
   function dismissCard() {
     card.value = false;
     tourStep.value = 0;
@@ -262,6 +277,9 @@ export const useWhatsChangedStore = defineStore("whatsChanged", () => {
   /** Settings' version and What's new pill: bring back whatever was dismissed. */
   function reopen() {
     if (isReadOnly.value) return;
+    // A pending "That's all of them" exit must not take back what was asked for.
+    clearTimeout(allDoneTimer);
+    allDone.value = false;
     checklist.value = true;
     card.value = true;
     showRails();
@@ -295,6 +313,7 @@ export const useWhatsChangedStore = defineStore("whatsChanged", () => {
     evaluate,
     tick,
     dismissChecklist,
+    leave,
     dismissCard,
     showTab,
     reopen,

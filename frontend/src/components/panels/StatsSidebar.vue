@@ -1138,7 +1138,7 @@ function handleResolutionBarClick(label) {
     :band="whatsChanged.checklistShown ? INSPECTOR_BAND : []"
     band-value="details"
     @update:band-value="whatsChanged.showTab($event)"
-    @close-band="whatsChanged.dismissChecklist()"
+    @close-band="whatsChanged.leave()"
   >
     <!-- One head row on the toolbar's line (#2161): what the rail is about -
          the view, the one picture, or how many - and, while anything is

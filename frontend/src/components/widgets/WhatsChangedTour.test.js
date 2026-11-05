@@ -164,6 +164,22 @@ describe("the training tour", () => {
     }
   });
 
+  it("ending the tour puts focus back on Show me", async () => {
+    const showMe = document.createElement("button");
+    showMe.dataset.testid = "headline-show-me";
+    document.body.appendChild(showMe);
+    const { store } = await start(2);
+    await wrapper.findAll("button").find((b) => b.text().includes("End tour")).trigger("click");
+    await flushPromises();
+    expect(store.tourStep).toBe(0);
+    // App.vue unmounts the tour when the step goes to 0; here, by hand.
+    wrapper.unmount();
+    wrapper = null;
+    await flushPromises();
+    expect(document.activeElement).toBe(showMe);
+    showMe.remove();
+  });
+
   it("Esc ends the tour where you are and keeps the card", async () => {
     const { store } = await start(2);
     const inner = vi.fn();
