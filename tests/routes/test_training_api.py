@@ -1089,7 +1089,13 @@ def test_a_run_that_fits_only_with_comfyui_quit_says_so_and_takes_the_answer():
     beside it; Save memory (10800) fits beside it."""
     temp_dir, owner, server, read_token = _setup()
     try:
-        comfy = {"kept_mb": 7500, "held_mb": 7500, "can_quit": True, "busy": False}
+        comfy = {
+            "kept_mb": 7500,
+            "held_mb": 7500,
+            "can_quit": True,
+            "busy": False,
+            "jobs": 0,
+        }
         server.vault.training_room = lambda: {**_ROOM_24GB, "comfyui": comfy}
         char_id = _make_character(owner)
         ask = {
@@ -1106,6 +1112,8 @@ def test_a_run_that_fits_only_with_comfyui_quit_says_so_and_takes_the_answer():
             700,
             True,
         )
+        # What the confirm words "is running N jobs" and "free now" from.
+        assert (need["held_mb"], need["jobs"]) == (7500, 0)
         assert need["beside"]["fit"] == "save_memory"
         assert need["beside"]["vram_mb"] == 10800
         # Save memory itself fits beside ComfyUI: nothing to ask.
