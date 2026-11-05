@@ -1138,6 +1138,17 @@ describe("the Finished group", () => {
     expect(rows(wrapper)).toHaveLength(2);
   });
 
+  it("heads the group with Clear all, and a read-only session with Made", async () => {
+    let wrapper = await mountWith([run()]);
+    const head = () => wrapper.find('[data-testid="tm-finished"] .tm-group-col');
+    expect(head().text()).toBe("Clear all");
+    wrapper.unmount();
+    readOnly.ref.value = true;
+    wrapper = await mountWith([run()]);
+    expect(head().text()).toBe("Made");
+    expect(wrapper.find('[data-testid="tm-finished-clear"]').exists()).toBe(false);
+  });
+
   it("clears every run but those with unsaved changes", async () => {
     const wrapper = await mountWith([
       run({ id: "run-a", offer: true }),

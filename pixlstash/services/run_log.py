@@ -32,8 +32,8 @@ logger = get_logger(__name__)
 
 #: How many finished batches the group shows.
 KEPT_BATCHES = 10
-#: How long a finished batch is shown.
-KEPT_FOR = timedelta(hours=24)
+#: How long a finished batch is shown: a sitting's runs, not yesterday's.
+KEPT_FOR = timedelta(hours=2)
 
 # A run queued before this process started that never ended was lost with the
 # restart: nothing here will ever record its ending.
