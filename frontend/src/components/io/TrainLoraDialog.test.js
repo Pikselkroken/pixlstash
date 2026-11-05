@@ -55,6 +55,7 @@ import * as training from "../../api/training";
 import * as config from "../../api/config";
 import * as pictureSets from "../../api/pictureSets";
 import { useTrainingStore } from "../../stores/useTrainingStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import TrainLoraDialog from "./TrainLoraDialog.vue";
 
 const T = "{{TRIGGER_WORD}}";
@@ -1087,12 +1088,14 @@ describe("recipe updates from pixlstash.dev (#2122)", () => {
   });
 });
 
-describe("when only quitting ComfyUI makes the run fit (#2558)", () => {
+describe("when the run does not fit beside ComfyUI (#2558)", () => {
   const COMFY = {
     kept_mb: 1600,
+    held_mb: 6000,
     short_mb: 700,
     can_quit: true,
     busy: false,
+    jobs: 0,
     beside: { fit: "save_memory", profile_label: "Offload", vram_mb: 10800, estimate: null },
   };
 
@@ -1107,49 +1110,89 @@ describe("when only quitting ComfyUI makes the run fit (#2558)", () => {
     return openDialog({ type: "character", id: 4, name: "Grandad" }, dataset());
   }
 
-  it("says so under Fit and asks at Start, queueing by default", async () => {
+  async function ask(wrapper) {
+    await startButton(wrapper).trigger("click");
+    await flushPromises();
+  }
+
+  it("says so under Fit and asks at Start, offering Clear first", async () => {
     const { wrapper } = await openNeedingComfy();
     expect(wrapper.find('[data-testid="tld-fit-readout"]').text()).toBe(
-      "8-bit model · text encoder on the GPU · peaks near 16 GB · needs ComfyUI closed",
+      "8-bit model · text encoder on the GPU · peaks near 16 GB · needs ComfyUI's memory",
     );
     // Free once ComfyUI unloads: 20480 less the 1600 it keeps.
     expect(wrapper.text()).toContain("Auto · 18 GB free");
-    await startButton(wrapper).trigger("click");
-    await flushPromises();
+    await ask(wrapper);
     expect(training.createTrainingJob).not.toHaveBeenCalled();
-    expect(wrapper.text()).toContain("ComfyUI's last 1.6 GB is released only when it quits.");
-    await wrapper.find('[data-testid="cq-queue"]').trigger("click");
+    // No claim that only quitting releases the rest: kept_mb may still
+    // include models before ComfyUI's first unload.
+    expect(wrapper.text()).not.toContain("released only when it quits");
+    // Free now: the room (need - short + kept) less all ComfyUI holds.
+    const need = wrapper.findComponent({ name: "ComfyQuitConfirm" }).props("needMb");
+    expect(wrapper.find('[data-testid="cq-text"]').text()).toBe(
+      `This run needs ${((need) / 1024).toFixed(1)} GB; ${((need - 700 + 1600 - 6000) / 1024).toFixed(1)} GB is free. ComfyUI holds 5.9 GB and is idle.`,
+    );
+    expect(wrapper.find('[data-testid="cq-clear"]').text()).toBe("Clear and train");
+    expect(wrapper.text()).toContain("starts now");
+    expect(wrapper.find('[data-testid="cq-queue"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="cq-clear"]').trigger("click");
     await flushPromises();
+    // Clear is the wait the arbiter already does: unload once idle, then wait.
     expect(training.createTrainingJob.mock.calls.at(-1)[0].comfyui).toBe("queue");
+  });
+
+  it("waits for ComfyUI's jobs either way, and says how many", async () => {
+    const { wrapper } = await openNeedingComfy({ ...COMFY, busy: true, jobs: 2 });
+    await ask(wrapper);
+    expect(wrapper.find('[data-testid="cq-text"]').text()).toContain("is running 2 jobs.");
+    expect(wrapper.find('[data-testid="cq-clear"]').text()).toBe("Clear after its jobs");
+    expect(wrapper.find('[data-testid="cq-quit"]').text()).toBe("Quit after its jobs");
+    expect(wrapper.text()).toContain("after 2 jobs");
+    const notices = useNoticeStore();
+    await wrapper.find('[data-testid="cq-quit"]').trigger("click");
+    await flushPromises();
+    expect(notices.notices.at(-1).text).toBe(
+      "Training waits for ComfyUI's 2 jobs, then clears its memory and quits it if that is not enough.",
+    );
   });
 
   it("sends the quit only when the owner picks it", async () => {
     const { wrapper, store } = await openNeedingComfy();
-    await startButton(wrapper).trigger("click");
-    await flushPromises();
+    await ask(wrapper);
     await wrapper.find('[data-testid="cq-quit"]').trigger("click");
     await flushPromises();
     expect(training.createTrainingJob.mock.calls.at(-1)[0].comfyui).toBe("quit");
     expect(store.comfyuiAnswer).toBe(null);
   });
 
+  it("Cancel goes back to the Train dialog without starting", async () => {
+    const { wrapper } = await openNeedingComfy();
+    await ask(wrapper);
+    await wrapper.find('[data-testid="cq-cancel"]').trigger("click");
+    await flushPromises();
+    expect(training.createTrainingJob).not.toHaveBeenCalled();
+    expect(wrapper.findComponent({ name: "ComfyQuitConfirm" }).props("open")).toBe(false);
+  });
+
   it("can switch to the fit that runs beside ComfyUI instead", async () => {
     const { wrapper, store } = await openNeedingComfy();
-    await startButton(wrapper).trigger("click");
-    await flushPromises();
+    await ask(wrapper);
     await wrapper.find('[data-testid="cq-beside"]').trigger("click");
     await flushPromises();
     expect(store.fit).toBe("save_memory");
     expect(training.createTrainingJob).not.toHaveBeenCalled();
-    expect(wrapper.find('[data-testid="cq-queue"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="cq-clear"]').exists()).toBe(false);
   });
 
-  it("never asks when PixlStash cannot close it, and starts as before", async () => {
+  it("offers Clear alone when PixlStash cannot quit it", async () => {
     const { wrapper } = await openNeedingComfy({ ...COMFY, can_quit: false });
-    expect(wrapper.text()).toContain("ComfyUI holds memory on this card that PixlStash can't release");
-    await startButton(wrapper).trigger("click");
+    expect(wrapper.text()).toContain("ComfyUI holds memory on this card that PixlStash can't quit");
+    await ask(wrapper);
+    expect(training.createTrainingJob).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="cq-quit"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Quit ComfyUI");
+    await wrapper.find('[data-testid="cq-clear"]').trigger("click");
     await flushPromises();
-    expect(wrapper.find('[data-testid="cq-queue"]').exists()).toBe(false);
-    expect(training.createTrainingJob.mock.calls.at(-1)[0]).not.toHaveProperty("comfyui");
+    expect(training.createTrainingJob.mock.calls.at(-1)[0].comfyui).toBe("queue");
   });
 });

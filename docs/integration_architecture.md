@@ -2500,7 +2500,7 @@ PixlStash admits the GPU work it starts against the card's measured free memory 
 
 **Lifecycle of a held run.** `POST /workflows/run` asks the arbiter for each run's memory. Granted at once (the common case), the run is submitted inline and the answer is exactly as before, ComfyUI's validation refusal included. Otherwise the answer's entry is `{run_id: "run-<hex>", prompt_id: null, status: "waiting"}`, and:
 
-1. `GET /workers/progress` lists it in `runs` with `status: "waiting"` and in `resources.leases` (joined by `run_id`) with its `waiting_reason`: a backend-written `text`, `need_mb`, `free_mb`, `short_by_mb`, its `position` in the GPU's queue, what `blocked_by` it, and the `actions` possible now (`run_anyway`, `cancel`, `free_comfyui`).
+1. `GET /workers/progress` lists it in `runs` with `status: "waiting"` and in `resources.leases` (joined by `run_id`) with its `waiting_reason`: a backend-written `text`, `need_mb`, `free_mb`, `short_by_mb`, its `position` in the GPU's queue, what `blocked_by` it, and the `actions` possible now (`run_anyway`, `cancel`, `quit_comfyui`). A lease short of memory on the card a local ComfyUI holds also carries `comfyui_clear` `{phase, jobs, freed_mb, failed}`: `jobs` while ComfyUI has prompts queued, `clearing` while the reclaim ladder has it unload (`freed_mb` so far), `cleared` if it still waits (`failed` when ComfyUI refused), `done` once granted; null when ComfyUI has nothing to give it.
 2. On grant the backend submits it. ComfyUI's validation refusal at that point is the run's failure (`GET /workflows/runs/{run_id}` → `failed` with ComfyUI's words, and a `plugin_progress` failure). Accepted, it gets its `prompt_id` and from then on is an ordinary run: every later event names the prompt id, and `GET /workflows/runs/{id}` answers by either id.
 3. `POST /resources/leases/{lease_id}/run-anyway` starts it now regardless of fit; the other waiting work keeps its order. `POST /resources/leases/{lease_id}/cancel` withdraws it and it never reaches ComfyUI (`failed`, `stopped: true`). `POST /comfyui/abort` cancels every held run as well as ComfyUI's own queue.
 4. Held runs live in memory only: a restart forgets them.
@@ -2515,7 +2515,8 @@ PixlStash admits the GPU work it starts against the card's measured free memory 
  holders: [{device, tenant, label, used_mb, measured_by, lease_id, outside_pixlstash}],
  leases: [{id, tenant, label, kind, state, device, need_mb, ram_mb, reserved_mb, held_mb, peak_mb, since,
            worker_type, run_id, job_id, workflow_id, progress: {step, total, loss} | null, on_cpu,
-           warnings: [{code, text}], waiting_reason}],
+           warnings: [{code, text}], comfyui_clear, waiting_reason}],
+ comfyui: {device, held_mb, idle, jobs} | null,
  preempted: [{worker_type, caused_by, since, text}],
  summary: {state: idle | running | waiting, headline}}
 ```

@@ -275,9 +275,9 @@
         </template>
         <!-- #2558: a ComfyUI PixlStash cannot close (Docker, no process). -->
         <template v-if="comfyNeed && !comfyNeed.can_quit">
-          ComfyUI holds memory on this card that PixlStash can't release, so
-          Start queues the run until {{ gbTenths(comfyNeed.short_mb) }} GB more
-          is free. Close ComfyUI to start it.
+          ComfyUI holds memory on this card that PixlStash can't quit, so Start
+          asks it to unload its models, and the run waits until ComfyUI is
+          closed if that frees too little.
         </template>
       </span>
     </div>
@@ -651,9 +651,8 @@
         :fit-label="FIT_LABELS[store.fit] || ''"
         :need-mb="resolution?.vram_mb || 0"
         :comfyui="comfyNeed"
-        :seconds="measuredSeconds"
         @close="closeComfyAsk"
-        @queue="answerComfy('queue')"
+        @clear="answerComfy('queue')"
         @quit="answerComfy('quit')"
         @beside="useBeside"
       />
@@ -702,7 +701,6 @@ import {
   formatField,
   formatDuration,
   gb,
-  gbTenths,
   hasTrigger,
   keyLabel,
   moreRows,
@@ -1140,7 +1138,7 @@ const effortHintText = computed(() =>
   }),
 );
 const fitLine = computed(() =>
-  [fitReadout(resolution.value), comfyNeed.value && "needs ComfyUI closed"]
+  [fitReadout(resolution.value), comfyNeed.value && "needs ComfyUI's memory"]
     .filter(Boolean)
     .join(" · "),
 );
@@ -1344,13 +1342,15 @@ const footError = computed(() => store.submitError || blocker.value);
 /** "About 50 min. Other GPU work pauses while it runs." */
 const footLine = computed(() => {
   if (comfyNeed.value && measuredSeconds.value != null)
-    return `About ${formatDuration(measuredSeconds.value)}, once ComfyUI is closed.`;
+    return `About ${formatDuration(measuredSeconds.value)}, once ComfyUI's memory is cleared.`;
   return [timeEstimate(resolution.value), "Other GPU work pauses while it runs."]
     .filter(Boolean)
     .join(" ");
 });
 
-// #2558: the run fits only with a local ComfyUI quit. Start asks first.
+// #2558: the run does not fit beside what a local ComfyUI keeps. Start asks
+// first: clear its memory (sent as "queue": the arbiter unloads ComfyUI for
+// a waiting run once its jobs are done) or quit it.
 const comfyNeed = computed(() => (resolution.value && plan.value?.comfyui) || null);
 const measuredSeconds = computed(() => {
   const estimate = resolution.value?.estimate;
@@ -1362,7 +1362,7 @@ const startButton = ref(null);
 function onStartAsked() {
   if (!canStart.value) return;
   store.comfyuiAnswer = null;
-  if (comfyNeed.value?.can_quit) {
+  if (comfyNeed.value) {
     askComfy.value = true;
     return;
   }
@@ -1422,7 +1422,17 @@ async function onStart() {
     );
     // The create response carries the resolver's result as an object.
     const profile = job?.resolved_profile?.profile_label;
-    store.showQueuedToast(profile ? `Training queued: ${profile}.` : "Training queued.");
+    const jobs = store.comfyuiAnswer ? Number(comfyNeed.value?.jobs) || 0 : 0;
+    store.showQueuedToast(
+      jobs
+        ? `Training waits for ComfyUI's ${jobs === 1 ? "job" : `${jobs} jobs`}, then clears its memory${
+            // A quit is the ladder's last rung: only if the clear falls short.
+            store.comfyuiAnswer === "quit" ? " and quits it if that is not enough" : ""
+          }.`
+        : profile
+          ? `Training queued: ${profile}.`
+          : "Training queued.",
+    );
     emit("started");
   } catch (err) {
     // store.submitError is already shown in the footer; keep the cause too.

@@ -421,6 +421,10 @@ class ComfyUIProbe:
         entries = self._entries()
         return entries is not None and not entries
 
+    def jobs(self) -> int:
+        """How many prompts are queued or running on ComfyUI, anyone's."""
+        return len(self._entries() or [])
+
     def reclaim(self) -> bool:
         return self.free() is not None
 

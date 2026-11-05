@@ -103,8 +103,8 @@ export const useTrainingStore = defineStore("training", () => {
 
   const submitting = ref(false);
   const submitError = ref("");
-  // The owner's answer when only quitting ComfyUI makes the run fit (#2558):
-  // "quit" or "queue", sent with the next Start; null when nothing was asked.
+  // The owner's answer when the run does not fit beside ComfyUI (#2558):
+  // "quit" or "queue" (Clear), sent with the next Start; null when not asked.
   const comfyuiAnswer = ref(null);
 
   // ── Jobs (settings section) ──────────────────────────────────────

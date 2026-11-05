@@ -614,3 +614,76 @@ describe("runningDownload", () => {
     ).toBe(null);
   });
 });
+
+describe("a waiting run's ComfyUI clear", () => {
+  function lease(phase, over = {}) {
+    return {
+      id: "lease-t",
+      tenant: "aitoolkit",
+      label: "LoRA training 'Grandad'",
+      state: phase === "done" ? "granted" : "waiting",
+      waiting_reason: phase === "done" ? null : { code: "vram", short_by_mb: 2458, actions: [] },
+      comfyui_clear: { phase, jobs: 0, freed_mb: 12902, failed: false, ...over },
+    };
+  }
+
+  async function poll(store, leases) {
+    getWorkerProgress.mockResolvedValue({ ...answer([]), resources: { devices: [], leases } });
+    const asked = getWorkerProgress.mock.calls.length;
+    store.nudge();
+    await vi.waitFor(() =>
+      expect(getWorkerProgress.mock.calls.length).toBeGreaterThan(asked),
+    );
+    await flushPromises();
+  }
+
+  it("tells each change of phase this tab saw, and the first poll's phase not at all", async () => {
+    const store = useTasksStore();
+    const notices = useNoticeStore();
+    getWorkerProgress.mockResolvedValue({
+      ...answer([]),
+      resources: { devices: [], leases: [lease("jobs", { jobs: 2, freed_mb: null })] },
+    });
+    store.startPolling();
+    await flushPromises();
+    try {
+      expect(notices.notices).toEqual([]);
+      await poll(store, [lease("clearing", { freed_mb: 0 })]);
+      expect(notices.notices.at(-1).text).toBe("ComfyUI's jobs finished. Clearing its memory.");
+      await poll(store, [lease("cleared")]);
+      const short = notices.notices.at(-1);
+      expect(short.level).toBe("warning");
+      expect(short.text).toBe(
+        "Cleared 12.6 GB; LoRA training 'Grandad' is still 2.4 GB short and waits.",
+      );
+      expect(short.action.label).toBe("Open Tasks");
+      // Granted after the owner's answer (a quit, Run anyway): not a clear.
+      const told = notices.notices.length;
+      await poll(store, [lease("done")]);
+      expect(notices.notices.length).toBe(told);
+    } finally {
+      store.stopPolling();
+    }
+  });
+
+  it("says what was freed when the run starts", async () => {
+    const store = useTasksStore();
+    const notices = useNoticeStore();
+    getWorkerProgress.mockResolvedValue({
+      ...answer([]),
+      resources: { devices: [], leases: [lease("clearing", { freed_mb: 0 })] },
+    });
+    store.startPolling();
+    await flushPromises();
+    try {
+      // Already clearing when this tab first looked: not told.
+      expect(notices.notices).toEqual([]);
+      await poll(store, [lease("done", { freed_mb: 17203 })]);
+      expect(notices.notices.at(-1).text).toBe(
+        "Cleared 16.8 GB from ComfyUI. LoRA training 'Grandad' started.",
+      );
+    } finally {
+      store.stopPolling();
+    }
+  });
+});

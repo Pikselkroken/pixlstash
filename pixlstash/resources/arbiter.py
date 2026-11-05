@@ -104,6 +104,7 @@ class TenantProbe(Protocol):
         """Ask the tenant to give its memory back; True if it was asked."""
 
     # A probe may also define ``kept_mb()`` (what it keeps after ``reclaim``),
+    # ``jobs()`` (how many prompts are queued or running on it),
     # ``can_quit()`` and ``quit()`` (ComfyUI's process, #2558).
 
 
@@ -137,6 +138,9 @@ class Lease:
     #: The owner said ComfyUI may be quit for this lease when only that makes
     #: it fit (#2558): the reclaim ladder's last rung.
     quit_comfyui: bool = False
+    #: The reclaim ladder's ComfyUI rung for this lease: ``{before_mb,
+    #: freed_mb, failed}``, ``freed_mb`` None while ComfyUI is unloading.
+    comfyui_clear: dict | None = None
     on_state: Optional[Callable[["Lease"], None]] = None
     id: str = field(default_factory=lambda: f"lease-{uuid.uuid4().hex[:12]}")
     state: LeaseState = LeaseState.WAITING
@@ -634,9 +638,20 @@ class ResourceArbiter:
             heavy_running = any(
                 lease.heavy and lease.state is LeaseState.GRANTED for lease in ordered
             )
+            comfy = self._probe_state.get(Tenant.COMFYUI) or {}
             return {
                 "enforcing": self.enforcing,
                 "devices": devices,
+                # The ComfyUI PixlStash submits to, for its row in Tasks: what
+                # it holds and whether it can be cleared now. None until read.
+                "comfyui": {
+                    "device": comfy.get("device"),
+                    "held_mb": int(comfy["usage"]),
+                    "idle": bool(comfy.get("idle")),
+                    "jobs": int(comfy.get("jobs") or 0),
+                }
+                if comfy.get("usage") is not None
+                else None,
                 "ram": dict(self._ram_now),
                 "holders": holders,
                 "leases": [self._lease_row(lease) for lease in ordered],
@@ -687,7 +702,7 @@ class ResourceArbiter:
     def _comfyui_kept_locked(self, device: str | None) -> dict | None:
         """What a ComfyUI on *device* keeps after unloading its models.
 
-        ``{kept_mb, held_mb, can_quit, busy}``, or None when no ComfyUI is
+        ``{kept_mb, held_mb, can_quit, busy, jobs}``, or None when no ComfyUI is
         read on that card or it would keep nothing. ``vram_mb`` of
         :meth:`training_room` counts all of ComfyUI's memory as room; only
         quitting releases ``kept_mb`` of it (#2558).
@@ -705,6 +720,56 @@ class ResourceArbiter:
             "held_mb": int(held),
             "can_quit": bool(state.get("can_quit")),
             "busy": bool(state.get("busy")),
+            "jobs": int(state.get("jobs") or 0),
+        }
+
+    def _comfyui_clear_locked(self, lease: Lease) -> dict | None:
+        """Where *lease* is in waiting for ComfyUI to unload its models.
+
+        ``{phase, jobs, freed_mb, failed}``: ``jobs`` while ComfyUI has work
+        queued, ``clearing`` while it unloads (``freed_mb`` so far), then
+        ``cleared`` if the lease still waits, or ``done`` once granted. None
+        when ComfyUI has nothing to give this lease.
+        """
+        comfy = self._probe_state.get(Tenant.COMFYUI) or {}
+        jobs = int(comfy.get("jobs") or 0)
+        record = lease.comfyui_clear
+        if record is not None:
+            if lease.state is LeaseState.GRANTED:
+                phase = "done"
+            elif record["freed_mb"] is None and not record["failed"]:
+                now = comfy.get("usage")
+                return {
+                    "phase": "clearing",
+                    "jobs": 0,
+                    "freed_mb": max(0, record["before_mb"] - now)
+                    if now is not None
+                    else 0,
+                    "failed": False,
+                }
+            else:
+                phase = "cleared"
+            return {
+                "phase": phase,
+                "jobs": jobs,
+                "freed_mb": record["freed_mb"] or 0,
+                "failed": record["failed"],
+            }
+        if (
+            lease.state is not LeaseState.WAITING
+            or lease.tenant is Tenant.COMFYUI
+            or "comfyui" in lease.reclaimed
+            or (lease.waiting_reason or {}).get("code") != "vram"
+            or comfy.get("device") != lease.device
+            or not comfy.get("usage")
+        ):
+            return None
+        return {
+            # Idle, it is the ladder's next rung: cleared within a poll.
+            "phase": "clearing" if comfy.get("idle") else "jobs",
+            "jobs": jobs,
+            "freed_mb": None,
+            "failed": False,
         }
 
     def _lease_row(self, lease: Lease) -> dict:
@@ -728,6 +793,7 @@ class ResourceArbiter:
             "progress": dict(lease.progress) if lease.progress else None,
             "on_cpu": lease.on_cpu,
             "warnings": [dict(w) for w in lease.warnings],
+            "comfyui_clear": self._comfyui_clear_locked(lease),
             "waiting_reason": dict(lease.waiting_reason)
             if lease.waiting_reason
             else None,
@@ -842,6 +908,7 @@ class ResourceArbiter:
                 label = getattr(probe, "holder_label", None)
                 kept = getattr(probe, "kept_mb", None)
                 can_quit = getattr(probe, "can_quit", None)
+                jobs = getattr(probe, "jobs", None)
                 states[tenant] = {
                     "device": probe.device(),
                     "usage": probe.usage_mb(),
@@ -850,6 +917,7 @@ class ResourceArbiter:
                     "label": label() if callable(label) else None,
                     "kept": kept() if callable(kept) else None,
                     "can_quit": bool(can_quit()) if callable(can_quit) else False,
+                    "jobs": int(jobs()) if callable(jobs) else 0,
                 }
             except Exception as exc:
                 logger.warning(
@@ -1213,15 +1281,6 @@ class ResourceArbiter:
         actions = ["run_anyway", "cancel"]
         if closing is not None and closing["can_quit"] and not lease.quit_comfyui:
             actions.append("quit_comfyui")
-        comfy = self._probe_state.get(Tenant.COMFYUI) or {}
-        if (
-            lease.tenant is not Tenant.COMFYUI
-            and code == "vram"
-            and comfy.get("idle")
-            and comfy.get("usage")
-            and comfy.get("device") == lease.device
-        ):
-            actions.append("free_comfyui")
         return {
             "code": code,
             "text": text,
@@ -1359,15 +1418,39 @@ class ResourceArbiter:
             and comfy.get("usage")
             and comfy.get("device") == short.device
         ):
-            short.reclaimed.add("comfyui")
+            before = int(comfy["usage"])
+            with self._lock:
+                short.reclaimed.add("comfyui")
+                short.comfyui_clear = {
+                    "before_mb": before,
+                    "freed_mb": None,
+                    "failed": False,
+                }
             try:
-                comfy_probe.reclaim()
+                cleared = comfy_probe.reclaim()
+                # Inside the guard: a read that raises must still end the
+                # record, or the lease shows "clearing" for ever.
+                after = comfy_probe.usage_mb() if cleared else None
             except Exception as exc:
                 logger.error(
                     "ComfyUI could not be asked to free memory for %s: %s",
                     short.id,
                     exc,
                     exc_info=True,
+                )
+                cleared = False
+                after = None
+            with self._lock:
+                short.comfyui_clear = {
+                    "before_mb": before,
+                    "freed_mb": max(0, before - after) if after is not None else 0,
+                    "failed": not cleared,
+                }
+            if not cleared:
+                logger.warning(
+                    "ComfyUI did not unload its models for %s (%s); it waits on",
+                    short.id,
+                    short.label,
                 )
             return True
         if (

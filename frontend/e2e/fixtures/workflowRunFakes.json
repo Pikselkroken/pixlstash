@@ -73,6 +73,7 @@
   },
   "resources": {
     "enforcing": true,
+    "comfyui": null,
     "devices": [
       {
         "uuid": "GPU-00000000-0000-0000-0000-000000000001",
@@ -120,6 +121,7 @@
         "progress": null,
         "on_cpu": false,
         "warnings": [],
+        "comfyui_clear": null,
         "waiting_reason": {
           "code": "vram",
           "text": "Needs 19.5 GB; 11.1 GB is free. Other apps holds 11.7 GB.",
