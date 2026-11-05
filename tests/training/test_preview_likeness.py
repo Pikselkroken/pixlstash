@@ -4,6 +4,7 @@ import os
 import time
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -187,17 +188,82 @@ def test_the_finder_hands_out_settled_previews_of_character_runs(tmp_path):
     assert finder.find_task() is not None
 
 
-def test_a_clip_preview_is_never_handed_to_the_face_reader(tmp_path):
-    """A video model's previews are MP4 clips, which the detector cannot open."""
-    run, handle = _run(tmp_path)
-    still = _sample(handle, 0, 0)
-    clip = os.path.join(handle.save_root, "samples", "1700000000000__000000000_1.mp4")
-    open(clip, "wb").close()
+def test_a_clip_preview_is_scored_from_its_frames(tmp_path, monkeypatch):
+    """A video model previews as MP4 clips: their sampled frames are read."""
+    run, handle = _run(tmp_path, status="completed", completed_at="2026-11-02")
+    clip = os.path.join(handle.save_root, "samples", "1700000000000__000000500_0.mp4")
+    writer = cv2.VideoWriter(clip, cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (64, 64))
+    for _ in range(9):
+        writer.write(np.full((64, 64, 3), 100, np.uint8))
+    writer.release()
     then = time.time() - 10.0
     os.utime(clip, (then, then))
+    seen = []
 
+    def detect(app, images):
+        seen.append(len(images))
+        # The face is in the last sampled frame only.
+        return [[] for _ in images[:-1]] + [[SimpleNamespace(embedding=ME)]]
+
+    monkeypatch.setattr(
+        FaceExtractionTask,
+        "get_or_init_insightface",
+        classmethod(lambda cls, engine, cpu_spillover=False: "app"),
+    )
+    monkeypatch.setattr(
+        FaceExtractionTask, "detect_faces_in_images", staticmethod(detect)
+    )
+    finder = _finder(tmp_path, [run])
+
+    task = finder.find_task()
+    assert [name for name, _ in task._previews] == [os.path.basename(clip)]
+    assert task._run_task() == {"previews": 1}
+    finder.on_task_complete(task, None)
+    assert seen and seen[0] > 1
+    faces = preview_likeness.read_faces(handle.work_dir, "buffalo_l")
+    assert np.array_equal(faces[os.path.basename(clip)][0], ME)
+    # Every preview embedded, so the ended run is no longer watched.
+    assert finder.find_task() is None
+    assert run["uuid"] in finder._settled
+
+
+def test_an_unreadable_clip_is_kept_as_such_and_spares_the_rest(tmp_path, monkeypatch):
+    run, handle = _run(tmp_path)
+    samples = os.path.join(handle.save_root, "samples")
+    empty, broken = (
+        os.path.join(samples, f"1700000000000__000000500_{i}.mp4") for i in (0, 1)
+    )
+    then = time.time() - 10.0
+    for path in (empty, broken):
+        open(path, "wb").close()
+        os.utime(path, (then, then))
+    still = _sample(handle, 500, 2)
+    read = FaceExtractionTask._read_video_frames
+
+    def read_frames(path):
+        if path == broken:
+            raise cv2.error("the container is broken")
+        return read(path)
+
+    monkeypatch.setattr(
+        FaceExtractionTask, "_read_video_frames", staticmethod(read_frames)
+    )
+    monkeypatch.setattr(
+        FaceExtractionTask,
+        "get_or_init_insightface",
+        classmethod(lambda cls, engine, cpu_spillover=False: "app"),
+    )
+    monkeypatch.setattr(
+        FaceExtractionTask,
+        "detect_faces_in_images",
+        staticmethod(lambda app, images: [[SimpleNamespace(embedding=ME)]]),
+    )
     task = _finder(tmp_path, [run]).find_task()
-    assert [name for name, _ in task._previews] == [still]
+    assert task._run_task() == {"previews": 3}
+    faces = preview_likeness.read_faces(handle.work_dir, "buffalo_l")
+    assert faces[os.path.basename(empty)] is None
+    assert faces[os.path.basename(broken)] is None
+    assert np.array_equal(faces[still][0], ME)
 
 
 def test_the_task_writes_faces_and_an_ended_run_settles(tmp_path, monkeypatch):

@@ -115,9 +115,7 @@ class TrainingPreviewFacesFinder(BaseTaskFinder):
             done = preview_likeness.read_faces(handle.work_dir, model_pack)
             todo = []
             for sample in samples:
-                # ponytail: a clip has no likeness read; reading its first
-                # frame would give one if motion runs need the chip.
-                if sample.is_video or sample.filename in done:
+                if sample.filename in done:
                     continue
                 try:
                     settled = now - os.path.getmtime(sample.path) >= self.SETTLE_SECONDS
