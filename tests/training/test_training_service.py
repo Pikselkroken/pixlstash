@@ -2762,6 +2762,40 @@ def test_a_stamped_file_at_the_finals_step_is_set_aside_too(tmp_path):
     }
 
 
+def test_a_failed_rename_of_the_final_puts_the_set_aside_back(tmp_path, monkeypatch):
+    """The final's rename comes after the set-aside; failing, it undoes it."""
+    handle = LocalAiToolkit.handle_for(str(tmp_path / "work"), "abcdef12", "late")
+    os.makedirs(handle.save_root)
+    stem = os.path.basename(handle.save_root)
+    final = os.path.join(handle.save_root, f"{stem}.safetensors")
+    for name, step in (
+        (f"{stem}_000000006.safetensors", 6),  # later than the final's step
+        (f"{stem}.safetensors", 4),
+    ):
+        header = json.dumps(
+            {"__metadata__": {"training_info": json.dumps({"step": step})}}
+        ).encode()
+        with open(os.path.join(handle.save_root, name), "wb") as fh:
+            fh.write(len(header).to_bytes(8, "little") + header)
+    with open(os.path.join(handle.save_root, "optimizer.pt"), "w") as fh:
+        fh.write("state")
+    before = sorted(os.listdir(handle.save_root))
+
+    real_rename = os.rename
+
+    def final_locked(source, dest):
+        if source == final:
+            raise PermissionError("locked")
+        real_rename(source, dest)
+
+    monkeypatch.setattr(os, "rename", final_locked)
+    with pytest.raises(PermissionError):
+        LocalAiToolkit.carry_on_from(handle, 4)
+    monkeypatch.setattr(os, "rename", real_rename)
+
+    assert sorted(os.listdir(handle.save_root)) == before
+
+
 def test_a_set_aside_that_fails_midway_leaves_the_folder_as_it_was(
     tmp_path, monkeypatch
 ):

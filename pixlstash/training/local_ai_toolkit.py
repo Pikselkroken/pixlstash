@@ -380,14 +380,21 @@ class LocalAiToolkit(TrainerBackend):
         ]
         if os.path.isfile(final) and kept[step] != final:
             later.append(final)
-        take_name = None
+        # Checked before anything moves, so the refusal changes nothing.
+        stamped = os.path.join(root, f"{stem}_{step:09d}.safetensors")
+        if kept[step] == final and os.path.exists(stamped):
+            raise FileExistsError(
+                f"Step {step} is kept twice, as the final and as "
+                f"{os.path.basename(stamped)}; train on from an earlier step."
+            )
+        moves: list[tuple[str, str]] = []
+        take_name = folder = None
         if later:
             take = 1
             while os.path.exists(os.path.join(root, f"take-{take}")):
                 take += 1
             take_name = f"take-{take}"
             folder = os.path.join(root, take_name)
-            os.makedirs(folder)
             set_aside = list(later)
             optimizer = os.path.join(root, "optimizer.pt")
             if os.path.isfile(optimizer):
@@ -398,43 +405,40 @@ class LocalAiToolkit(TrainerBackend):
                     match = _SAMPLE_STEP_RE.match(name)
                     if match and int(match.group(1)) > step:
                         set_aside.append(os.path.join(samples, name))
-            # A failed move puts back what moved, so a refusal leaves the
-            # folder as it was and nothing is queued over half a take.
-            moved: list[tuple[str, str]] = []
-            try:
-                for path in set_aside:
-                    under = "samples" if os.path.dirname(path) == samples else ""
-                    dest = os.path.join(folder, under, os.path.basename(path))
-                    os.makedirs(os.path.dirname(dest), exist_ok=True)
-                    os.rename(path, dest)
-                    moved.append((dest, path))
-            except OSError:
-                for dest, source in reversed(moved):
-                    try:
-                        os.rename(dest, source)
-                    except OSError as exc:
-                        logger.error(
-                            "Could not move %s back to %s after a failed "
-                            "set-aside (%s); the run folder is left partly moved.",
-                            dest,
-                            source,
-                            exc,
-                        )
-                for empty in (os.path.join(folder, "samples"), folder):
-                    try:
-                        if os.path.isdir(empty) and not os.listdir(empty):
-                            os.rmdir(empty)
-                    except OSError as exc:
-                        logger.warning("Could not remove empty %s: %s", empty, exc)
-                raise
-        if kept[step] == final:
-            stamped = os.path.join(root, f"{stem}_{step:09d}.safetensors")
-            if os.path.exists(stamped):
-                raise FileExistsError(
-                    f"Step {step} is kept twice, as the final and as "
-                    f"{os.path.basename(stamped)}; train on from an earlier step."
+            for path in set_aside:
+                under = "samples" if os.path.dirname(path) == samples else ""
+                moves.append(
+                    (path, os.path.join(folder, under, os.path.basename(path)))
                 )
-            os.rename(final, stamped)
+        if kept[step] == final:
+            moves.append((final, stamped))
+        # A failed move puts back what moved, so a refusal leaves the folder
+        # as it was and nothing is queued over half a take.
+        moved: list[tuple[str, str]] = []
+        try:
+            for source, dest in moves:
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                os.rename(source, dest)
+                moved.append((dest, source))
+        except OSError:
+            for dest, source in reversed(moved):
+                try:
+                    os.rename(dest, source)
+                except OSError as exc:
+                    logger.error(
+                        "Could not move %s back to %s after a failed "
+                        "set-aside (%s); the run folder is left partly moved.",
+                        dest,
+                        source,
+                        exc,
+                    )
+            for empty in (folder and os.path.join(folder, "samples"), folder):
+                try:
+                    if empty and os.path.isdir(empty) and not os.listdir(empty):
+                        os.rmdir(empty)
+                except OSError as exc:
+                    logger.warning("Could not remove empty %s: %s", empty, exc)
+            raise
         return take_name
 
     @staticmethod
