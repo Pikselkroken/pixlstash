@@ -29,6 +29,7 @@ import hashlib
 import io
 import json
 import os
+import socket
 import sqlite3
 import tempfile
 import time
@@ -40,6 +41,9 @@ from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
 import pixlstash.routes.comfyui as comfyui_module
+from pixlstash.authz.policy import AccessPolicy
+from pixlstash.authz.registry import ROUTE_POLICIES
+from pixlstash.route_inventory import api_endpoint_set
 from pixlstash.services.workflow_hash import (
     topology_hash as api_topology_hash,
     ui_topology_hash,
@@ -859,6 +863,103 @@ class TestPictureListWorkflowFilters:
         assert self._ids(client, "?workflow=key-alpha") == set()
         # The old parameters are gone: neither filters anything any more.
         assert self._ids(client, "?workflow_key=key-alpha") == self._ids(client, "")
+
+
+class TestTheReadOnlyWorkflowListing:
+    """`GET /pictures/workflows` (#1616): the workflows behind what a token sees.
+
+    Both directions on one token pair: a set-scoped READ token gets only its
+    set's workflow and count, and the unscoped READ token, which the Connect
+    dialog mints, gets every one.
+    """
+
+    def _setup(self, server, client):
+        alpha = _upload_one(
+            client, "alpha.png", _recipe_png_bytes(FULL_GRAPH, (1, 2, 3))
+        )
+        beta = _upload_one(
+            client, "beta.png", _a1111_png_bytes(A1111_PARAMETERS, (3, 2, 1))
+        )
+        _card_picture(server, alpha, "key-alpha", CORE_SHARED)
+        _card_picture(server, beta, "key-beta", CORE_OTHER)
+        r = client.post(f"{API}/picture_sets", json={"name": "WorkflowScope"})
+        assert r.status_code == 200, r.text
+        set_id = r.json()["picture_set"]["id"]
+        r = client.post(f"{API}/picture_sets/{set_id}/members/{alpha}")
+        assert r.status_code == 200, r.text
+        return alpha, beta, set_id
+
+    def _reader(self, server, client, **scope) -> TestClient:
+        r = client.post(
+            f"{API}/users/me/token",
+            json={"description": "workflow listing", "scope": "READ", **scope},
+        )
+        assert r.status_code == 200, r.text
+        reader = TestClient(server.api)
+        reader.headers.update({"Authorization": f"Bearer {r.json()['token']}"})
+        return reader
+
+    def _listing(self, reader) -> dict[str, dict]:
+        r = reader.get(f"{API}/pictures/workflows")
+        assert r.status_code == 200, r.text
+        return {w["workflow_id"]: w for w in r.json()}
+
+    def test_a_set_token_sees_its_own_workflows_and_the_reader_sees_all(
+        self, env, monkeypatch
+    ):
+        server, client, _pic_id = env
+        alpha, beta, set_id = self._setup(server, client)
+        shared = auto_workflow_id(CORE_SHARED, "")
+        other = auto_workflow_id(CORE_OTHER, "")
+        # Nothing here may reach ComfyUI or any other host.
+        dialled = []
+        monkeypatch.setattr(
+            socket.socket, "connect", lambda sock, addr: dialled.append(addr)
+        )
+
+        scoped = self._listing(
+            self._reader(
+                server, client, resource_type="picture_set", resource_id=set_id
+            )
+        )
+        assert set(scoped) == {shared}
+        assert scoped[shared]["picture_count"] == 1
+        [variant] = scoped[shared]["variants"]
+        assert variant == {
+            "picture_count": 1,
+            "example_picture_id": alpha,
+            "loras": [{"node_id": "5", "name": "example-style"}],
+        }
+
+        everything = self._listing(self._reader(server, client))
+        assert {shared, other} <= set(everything)
+        assert everything[other]["picture_count"] == 1
+        # An A1111 file has no graph to read LoRAs off.
+        assert everything[other]["variants"][0]["example_picture_id"] == beta
+        assert everything[other]["variants"][0]["loras"] is None
+        assert dialled == []
+
+        # The scope's other door stays shut: the owner-only listing refuses
+        # the same token that was just answered above.
+        reader = self._reader(server, client)
+        assert reader.get(f"{API}/workflows").status_code == 403
+
+    def test_a_scope_with_no_pictures_lists_nothing(self, env):
+        server, client, _pic_id = env
+        self._setup(server, client)
+        r = client.post(f"{API}/picture_sets", json={"name": "Empty"})
+        empty = r.json()["picture_set"]["id"]
+        reader = self._reader(
+            server, client, resource_type="picture_set", resource_id=empty
+        )
+        assert self._listing(reader) == {}
+
+    def test_the_route_resolves_and_is_declared_scope_aware(self, env):
+        """A dead path would 403 a READ token just as a refusal does."""
+        server, _client, _pic_id = env
+        assert ("GET", f"{API}/pictures/workflows") in api_endpoint_set(server.api)
+        policy = ROUTE_POLICIES[("GET", f"{API}/pictures/workflows")]
+        assert policy.policy is AccessPolicy.SCOPED_LIST and policy.scope_aware
 
 
 class TestTheFieldsThatCannotBeRendered:

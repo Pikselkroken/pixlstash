@@ -820,7 +820,9 @@ shell where PixlStash runs.
 
 Tools: `search_pictures`, `list_pictures`, `count_pictures`, `get_picture`,
 `view_picture`, `list_tags`, `list_sets`, `list_characters`, `list_projects`,
-`get_recipe`.
+`list_picture_workflows`, `get_recipe`.
+`list_picture_workflows` lists the workflows the pictures the token can see were
+made with, how many pictures each, and the LoRAs each one loads.
 `list_pictures` and `search_pictures` also narrow by `set_id`, `character_id`,
 `project_id` and `tags`; `list_pictures` and `count_pictures` also by the
 `workflow_id` a recipe names. `get_recipe` says whether the model forks into

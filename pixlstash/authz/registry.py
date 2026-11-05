@@ -1028,6 +1028,8 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/pictures/likeness-groups"): _LIST_AWARE,
     ("GET", "/api/v1/pictures/comfyui_models"): _LIST_AWARE,
     ("GET", "/api/v1/pictures/comfyui_loras"): _LIST_AWARE,
+    # Workflows behind the in-scope pictures only (#1616); never /workflows*.
+    ("GET", "/api/v1/pictures/workflows"): _LIST_AWARE,
     (
         "GET",
         "/api/v1/pictures/export",

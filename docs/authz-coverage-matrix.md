@@ -183,6 +183,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | POST | `/api/v1/pictures/character_likeness/batch` | scoped_list |  |  |
 | GET | `/api/v1/pictures/comfyui_loras` | scoped_list |  |  |
 | GET | `/api/v1/pictures/comfyui_models` | scoped_list |  |  |
+| GET | `/api/v1/pictures/workflows` | scoped_list |  | The workflows behind the in-scope pictures, with counts and each variant's LoRAs read off one in-scope picture's own file (#1616). Never asks ComfyUI; carries no card name, note, model fix or cover. |
 | GET | `/api/v1/pictures/count` | scoped_list |  |  |
 | POST | `/api/v1/pictures/detect` | scoped_list |  |  |
 | GET | `/api/v1/pictures/export` | scoped_list |  |  |
