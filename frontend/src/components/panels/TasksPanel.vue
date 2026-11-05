@@ -959,7 +959,15 @@ function phaseSteps(clear) {
   const at = PHASE_ORDER.indexOf(clear.phase);
   return ["ComfyUI's jobs", "Clear memory", "Train"].map((label, index) => ({
     label,
-    state: index < at ? "done" : index === at && clear.phase !== "cleared" ? "now" : "next",
+    // A failed clear is not a done one.
+    state:
+      clear.failed && index === 1
+        ? "next"
+        : index < at
+          ? "done"
+          : index === at && clear.phase !== "cleared"
+            ? "now"
+            : "next",
   }));
 }
 

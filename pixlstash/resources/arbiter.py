@@ -1428,6 +1428,9 @@ class ResourceArbiter:
                 }
             try:
                 cleared = comfy_probe.reclaim()
+                # Inside the guard: a read that raises must still end the
+                # record, or the lease shows "clearing" for ever.
+                after = comfy_probe.usage_mb() if cleared else None
             except Exception as exc:
                 logger.error(
                     "ComfyUI could not be asked to free memory for %s: %s",
@@ -1436,7 +1439,7 @@ class ResourceArbiter:
                     exc_info=True,
                 )
                 cleared = False
-            after = comfy_probe.usage_mb() if cleared else None
+                after = None
             with self._lock:
                 short.comfyui_clear = {
                     "before_mb": before,

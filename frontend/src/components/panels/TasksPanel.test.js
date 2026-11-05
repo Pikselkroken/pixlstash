@@ -1768,6 +1768,17 @@ describe("clearing ComfyUI's memory from Tasks", () => {
     expect(quitComfyuiForTrainingJob).toHaveBeenCalledWith(7);
   });
 
+  it("does not mark a failed clear as done", () => {
+    setGpu(gpuAnswer({ leases: [training({ phase: "cleared", jobs: 0, freed_mb: 0, failed: true })] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find(".tm-clear-text").text()).toBe("ComfyUI did not clear its memory.");
+    expect(steps(wrapper)).toEqual([
+      "ComfyUI's jobs, done:done",
+      "Clear memory, not started:next",
+      "Train, not started:next",
+    ]);
+  });
+
   it("never says it cleared 0.0 GB, nor 'until it quits' of one it cannot quit", () => {
     const lease = training({ phase: "cleared", jobs: 0, freed_mb: 0, failed: false });
     lease.waiting_reason = {

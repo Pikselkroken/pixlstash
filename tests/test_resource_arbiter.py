@@ -807,6 +807,21 @@ def test_a_lease_shows_comfyuis_jobs_then_its_clear_then_the_outcome():
     assert clear() == {"phase": "cleared", "jobs": 0, "freed_mb": 0, "failed": True}
     lease.release()
 
+    # A read that raises after the unload still ends the record.
+    arb, probe, lease, settle = _quit_scene(6000)
+
+    def unreadable():
+        raise RuntimeError("stats unreadable")
+
+    probe.usage_mb = lambda: probe.usage
+    probe.reclaim = lambda: setattr(probe, "usage_mb", unreadable) or True
+    assert arb._reclaim_step()
+    assert lease.comfyui_clear["failed"] is True
+    probe.usage_mb = lambda: 1500
+    settle()
+    assert clear()["phase"] == "cleared"
+    lease.release()
+
     # Only the lease the ladder clears for has a track: one behind it waits
     # its turn (fifo), and is never told ComfyUI is clearing for it.
     arb, probe, lease, settle = _quit_scene(8000, idle=False)
