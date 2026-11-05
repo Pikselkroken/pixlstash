@@ -790,3 +790,35 @@ def test_staging_and_comfy_batches_keep_sampled_collisions_distinct(
     )
     assert repeated_new == []
     assert sorted(repeated_duplicates) == sorted(new_ids)
+
+
+def test_restore_announces_exactly_the_pictures_it_restored(owner_server):
+    """The ``restored`` event names what came back; a no-op restore says nothing."""
+    srv, client = owner_server
+    _staging_import(client, [("a.png", _png_bytes((3, 3, 202)))])
+    heaped_id = _picture_ids(srv)[0]
+    _scrapheap(client, heaped_id)
+
+    emitted: list[dict] = []
+    real_notify = srv.vault.notify
+
+    def _capture(event_type, data=None):
+        if isinstance(data, dict) and data.get("change_kind") == "restored":
+            emitted.append(data)
+        return real_notify(event_type, data)
+
+    srv.vault.notify = _capture
+    try:
+        # Restore-all: no ids in the request, the real one in the event.
+        r = client.post(f"{API}/pictures/scrapheap/restore")
+        assert r.status_code == 200, r.text
+        assert [event["picture_ids"] for event in emitted] == [[heaped_id]]
+
+        emitted.clear()
+        r = client.post(
+            f"{API}/pictures/scrapheap/restore", json={"picture_ids": [heaped_id]}
+        )
+        assert r.json()["restored_count"] == 0, r.text
+        assert emitted == []
+    finally:
+        srv.vault.notify = real_notify

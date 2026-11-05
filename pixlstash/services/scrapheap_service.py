@@ -608,15 +608,18 @@ def restore_pictures(
     # ``restored``, not ``added``: the card comes back, but the picture is not
     # new to the vault. The SPA's sidebar treats ``added`` as a fresh import and
     # flashes its NEW marker on the counts that grew, which is wrong for
-    # something that was in the library the whole time.
-    vault.notify(
-        EventType.CHANGED_PICTURES,
-        {
-            "picture_ids": list(picture_ids) if picture_ids else [],
-            "origin_client_id": origin_client_id,
-            "change_kind": "restored",
-        },
-    )
+    # something that was in the library the whole time. The ids are the ones
+    # that actually came back, so the grid inserts exactly those (an empty list
+    # would make it reload everything) and a no-op restore announces nothing.
+    if restored_ids:
+        vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": restored_ids,
+                "origin_client_id": origin_client_id,
+                "change_kind": "restored",
+            },
+        )
     return restored_ids
 
 
