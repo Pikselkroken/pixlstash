@@ -113,7 +113,8 @@ def _create_picture_imports(
     skipping content already in the vault (live OR scrapheaped) by pixel_sha.
     Returns (fingerprints, existing_map, scrapheaped_map, new_picture_map)
 
-    **A scrapheaped match is skipped too, and reported separately.** This call
+    **A scrapheaped match is skipped too, and returned separately** for the
+    caller to restore or report. This call
     site used to ask ``Picture.find(..., pixel_shas=shas)``, whose
     ``include_deleted`` defaults to False, so a soft-deleted picture was
     invisible here and its file imported again as a brand-new second row. The

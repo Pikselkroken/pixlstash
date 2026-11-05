@@ -22,10 +22,9 @@ and the import must be able to tell them apart:
 * a **live** match; the file is already in the library. Nothing to do; it is a
   duplicate, exactly as before.
 * a **scrapheaped** match, the row exists but is soft-deleted. The file is NOT
-  imported again (that is the doubling bug), and it is NOT reported as an
-  ordinary duplicate either: the user deliberately scrapheaped it, so silently
-  restoring would be its own surprise. It is reported as a third, distinct
-  outcome and the caller is offered a restore.
+  imported again (that is the doubling bug). Re-importing it means the user
+  wants it back, so the import paths restore the picture and report it as a
+  third, distinct outcome rather than an ordinary duplicate.
 
 **Live wins over scrapheaped for the same hash.** Both can exist today,
 precisely because the bug above already created second rows and a live row

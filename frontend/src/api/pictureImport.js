@@ -27,17 +27,14 @@ import { apiClient } from "../utils/apiClient";
  *     the task row from `processed`/`total` and summarising with the five
  *     disjoint buckets `imported_count` / `duplicate_count` /
  *     `scrapheaped_count` / `failed_count` / `cancelled_count`, which sum to
- *     `total`. `scrapheaped_picture_ids` carries the restore offer (see below).
+ *     `total`. `scrapheaped_picture_ids` names the restored pictures (see below).
  *
  * THE SCRAPHEAP BUCKET: a file whose content matches a SOFT-DELETED picture is
  * neither imported nor an ordinary duplicate. Importing it again would put a
  * second copy of every scrapheaped picture back on disk, which a bulk "Keep
  * cover only" cleanup makes a predictable way to undo the cleanup and double the
- * bytes. Restoring it automatically would be the opposite surprise: the user
- * scrapheapped it deliberately. So the import reports it, and the UI offers
- * `POST /pictures/scrapheap/restore` with `scrapheaped_picture_ids`, the
- * shipped restore route, which already clears `deleted_at` and re-folds stack
- * positions. There is deliberately no second restore path here.
+ * bytes. Re-importing it means the user wants it back, so the server restores
+ * the picture (one undoable operation) and reports the file in this bucket.
  *
  * GRID REFRESH - there is deliberately NO per-file `results[]` payload. On
  * completion the backend broadcasts `CHANGED_PICTURES` + `PICTURE_IMPORTED` over
@@ -240,12 +237,11 @@ export async function cancelStaging({ backendUrl, stagingId }) {
  * @property {string|null} taskId
  * @property {number|null} importedCount   New pictures imported (on completion).
  * @property {number|null} duplicateCount  Skipped: content already live in the vault.
- * @property {number|null} scrapheapedCount Skipped: content matches a picture in the
+ * @property {number|null} scrapheapedCount Content matched a picture in the
  *   Scrapheap. Counted per FILE. Not imported again (that would double the bytes on
- *   disk) and not restored either: restoring is offered, because the user
- *   scrapheapped those pictures on purpose.
+ *   disk); the server restored the picture instead.
  * @property {number[]} scrapheapedPictureIds Distinct scrapheaped pictures behind
- *   `scrapheapedCount`, per PICTURE. Feed straight to `restoreScrapheap()`.
+ *   `scrapheapedCount`, per PICTURE: the pictures the import restored.
  * @property {number|null} failedCount     Failed files (on completion).
  * @property {number|null} cancelledCount  Staged files never reached (cancelled run).
  * @property {string|null} error

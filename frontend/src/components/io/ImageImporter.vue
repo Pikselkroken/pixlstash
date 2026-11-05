@@ -12,10 +12,6 @@ import {
   openStagingSession,
   stageFiles,
 } from "../../api/pictureImport";
-// The Scrapheap restore offer below reuses the SHIPPED restore route rather than
-// a second restore path, so it comes from the pictures resource module (the
-// import module owns the staging session, not the whole picture domain).
-import { restoreScrapheap } from "../../api/pictures";
 import { errorDetail, errorMessage } from "../../utils/apiError";
 
 // ── Async streaming-staging import (#459) ────────────────────────────────────
@@ -36,11 +32,9 @@ import { errorDetail, errorMessage } from "../../utils/apiError";
 //     CHANGED_PICTURES / PICTURE_IMPORTED WS broadcast (no results payload).
 //   Scrapheap matches:  a staged file whose content matches a SOFT-DELETED
 //     picture is reported in its own bucket. It is not imported again (that
-//     would put a second copy of every scrapheaped picture back on disk) and not
-//     restored behind the user's back either. Completion pushes ONE sticky
-//     notice whose action calls the shipped POST /pictures/scrapheap/restore.
-// ALL import backend calls are isolated behind ../../api/pictureImport.js; the
-// restore offer reuses api/pictures.js rather than growing a second restore.
+//     would put a second copy of every scrapheaped picture back on disk); the
+//     backend restores the picture instead, as one undoable operation.
+// ALL import backend calls are isolated behind ../../api/pictureImport.js.
 // The public API (startImport + the four emits) is unchanged so existing call
 // sites keep working. Drop-target association (project / set / character) is
 // passed through startImport options into openStagingSession and applied
@@ -63,11 +57,6 @@ const tasksStore = useTasksStore();
 const noticeStore = useNoticeStore();
 const arrivals = useImportArrivalsStore();
 
-// One coalescing key for the whole offer, so back-to-back imports replace the
-// standing offer instead of stacking cards (§9.1). The newest import's ids win,
-// which is what the user is looking at.
-const SCRAPHEAP_OFFER_KEY = "import-scrapheap-offer";
-
 function plural(count, word) {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
@@ -77,76 +66,18 @@ function plural(count, word) {
  *
  * The old line asked "did anything import?" and answered "All files were
  * duplicates", which became a lie the moment a third outcome existed: files
- * matching a picture in the Scrapheap are not duplicates and saying so hides
- * the one thing the user can act on.
+ * matching a picture in the Scrapheap are not duplicates: the import restored
+ * them, and saying "duplicates" would hide that they are back.
  */
 function summariseImport({ imported, duplicate, scrapheaped }) {
-  if (imported > 0) return `Imported ${plural(imported, "image")}`;
-  if (scrapheaped > 0 && duplicate > 0)
-    return "Nothing new: already in your library or Scrapheap";
-  if (scrapheaped > 0)
-    return `Already in your Scrapheap (${plural(scrapheaped, "file")})`;
+  const restored = `${plural(scrapheaped, "picture")} from the Scrapheap`;
+  if (imported > 0)
+    return scrapheaped > 0
+      ? `Imported ${plural(imported, "image")}, restored ${restored}`
+      : `Imported ${plural(imported, "image")}`;
+  if (scrapheaped > 0) return `Restored ${restored}`;
   if (duplicate > 0) return "All files were duplicates";
   return "Nothing to import";
-}
-
-/**
- * Offer the restore. Deliberately an offer and not an automatic restore: the
- * user put those pictures in the Scrapheap on purpose, so bringing them back
- * without asking would be its own surprise. The import already refused to write
- * a second copy, which is the part that must not wait for a click.
- */
-function offerScrapheapRestore(fileCount, pictureIds) {
-  const ids = Array.isArray(pictureIds)
-    ? pictureIds.filter((id) => id != null)
-    : [];
-  if (!fileCount || !ids.length) return;
-  noticeStore.push({
-    level: "info",
-    key: SCRAPHEAP_OFFER_KEY,
-    text:
-      fileCount === 1
-        ? "1 file is already in your Scrapheap, so it was not imported again."
-        : `${fileCount} files are already in your Scrapheap, so they were not imported again.`,
-    action: {
-      label: `Restore ${plural(ids.length, "picture")}`,
-      handler: async () => {
-        try {
-          const data = await restoreScrapheap(ids);
-          // The offer is not a promise: retention can sweep a match away
-          // between the import and the click. Report what came back.
-          const restored = Number(data?.restored_count ?? 0);
-          if (restored === ids.length) {
-            noticeStore.push({
-              level: "success",
-              text: `Restored ${plural(restored, "picture")} from the Scrapheap.`,
-            });
-          } else if (restored > 0) {
-            noticeStore.push({
-              level: "warning",
-              text: `Restored ${restored} of ${ids.length}. The rest had already left the Scrapheap.`,
-            });
-          } else {
-            noticeStore.push({
-              level: "warning",
-              text: "Nothing was restored. Those pictures had already left the Scrapheap.",
-            });
-          }
-        } catch (error) {
-          console.error(
-            "Restoring the scrapheaped import matches failed.",
-            error,
-          );
-          noticeStore.push({
-            level: "error",
-            text:
-              errorDetail(error) ||
-              "Could not restore those pictures. Please try again.",
-          });
-        }
-      },
-    },
-  });
 }
 
 // Whole-flow gate (Phase A + Phase B) used for re-entrancy.
@@ -667,9 +598,9 @@ async function startImport(files, options = {}) {
     // PICTURE_IMPORTED WebSocket broadcast, which the grid already consumes.
     const importedCount = finalStatus.importedCount ?? 0;
     const duplicateCount = finalStatus.duplicateCount ?? 0;
-    // The third bucket: content that matches a picture in the Scrapheap. Not
-    // imported again (a re-import would put a second copy of every scrapheaped
-    // picture back on disk) and not silently restored either.
+    // The third bucket: content that matched a picture in the Scrapheap. Not
+    // imported again (that would put a second copy back on disk); the backend
+    // restored the picture instead.
     const scrapheapedCount = finalStatus.scrapheapedCount ?? 0;
     const scrapheapedPictureIds = finalStatus.scrapheapedPictureIds ?? [];
 
@@ -690,11 +621,11 @@ async function startImport(files, options = {}) {
       message: summariseImport({
         imported: importedCount,
         duplicate: duplicateCount,
-        scrapheaped: scrapheapedCount,
+        // Per picture, and only what the server actually restored.
+        scrapheaped: scrapheapedPictureIds.length,
       }),
       label: "Importing pictures",
     });
-    offerScrapheapRestore(scrapheapedCount, scrapheapedPictureIds);
     const finishedRunId = importRunId;
     tasksStore.unregisterImportAbort(finishedRunId);
     setTimeout(() => tasksStore.clearImportRun(finishedRunId), 2600);

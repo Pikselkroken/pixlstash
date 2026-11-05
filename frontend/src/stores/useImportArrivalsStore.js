@@ -13,7 +13,8 @@
 //   new         checked, not in the library - imported when the run commits
 //   landed      the run committed and this file is now a picture
 //   duplicate   already in the library (`pictureId` names the match if known)
-//   scrapheaped matches a picture in the Scrapheap (`pictureId` names it)
+//   scrapheaped matched a picture in the Scrapheap, which the import restores
+//               (`pictureId` names it)
 //   unsupported refused by name before upload, or by the server's staging
 //   failed      the server could not read or ingest it
 
@@ -200,16 +201,6 @@ export const useImportArrivalsStore = defineStore("importArrivals", () => {
     }
   }
 
-  /** A Scrapheap match was restored: it is in the library now. */
-  function markRestored(runId, tileKey) {
-    const run = runById(runId);
-    const tile = run?.tiles.find((t) => t.key === tileKey);
-    if (!tile || tile.state !== "scrapheaped") return;
-    tile.state = "duplicate";
-    run.counts.scrapheaped = Math.max(0, run.counts.scrapheaped - 1);
-    run.counts.duplicate += 1;
-  }
-
   /** The run committed: what was new is now in the library. */
   function land(runId) {
     const run = runById(runId);
@@ -269,7 +260,6 @@ export const useImportArrivalsStore = defineStore("importArrivals", () => {
     markChecking,
     setProgress,
     applyOutcomes,
-    markRestored,
     land,
     fail,
     beginReading,

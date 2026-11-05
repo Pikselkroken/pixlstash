@@ -1,4 +1,4 @@
-"""Import must SEE the Scrapheap, and must offer a restore rather than a re-import.
+"""Import must SEE the Scrapheap, and restore a match rather than re-import it.
 
 ``Picture.find`` defaults ``include_deleted=False``, and the one-shot import
 called it that way, so a scrapheaped picture was invisible to import dedup:
@@ -11,7 +11,7 @@ cleanup and roughly double the bytes.
 These tests pin both directions:
 
 * a scrapheaped match is NOT imported again, is reported in its own bucket, and
-  is offered for restore (rather than restored behind the user's back);
+  is restored: re-importing a file means the user wants that picture back;
 * a genuinely new file still imports: over-matching is its own regression;
 * a permanently purged (and ledgered) file is not resurrected: with no row left
   there is nothing to match, so a deliberate re-import is a NEW picture;
@@ -31,10 +31,12 @@ from sqlmodel import select
 from pixlstash.db_models import (
     DeletedFileLog,
     Picture,
+    PictureProjectMember,
     PictureSet,
     PictureSetMember,
 )
 from pixlstash.server import Server
+from pixlstash.services import scrapheap_service
 from pixlstash.services.comfyui_service import _import_comfyui_outputs
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from tests.authz_guard import no_spa_fallback  # noqa: F401
@@ -190,8 +192,8 @@ def test_staging_reimport_of_scrapheaped_picture_creates_no_second_row(owner_ser
     assert status["scrapheaped_picture_ids"] == [original_id], status
 
     assert _row_count(srv) == 1, "The scrapheaped picture must not be duplicated"
-    assert _picture_ids(srv, deleted=True) == [original_id], (
-        "The match must stay in the Scrapheap: restoring is offered, not performed"
+    assert _picture_ids(srv, deleted=False) == [original_id], (
+        "Re-importing a scrapheaped picture must restore it"
     )
 
 
@@ -214,7 +216,9 @@ def test_one_shot_reimport_of_scrapheaped_picture_creates_no_second_row(owner_se
     assert [entry["status"] for entry in status["results"]] == ["scrapheaped"], status
 
     assert _row_count(srv) == 1, "The scrapheaped picture must not be duplicated"
-    assert _picture_ids(srv, deleted=True) == [original_id]
+    assert _picture_ids(srv, deleted=False) == [original_id], (
+        "Re-importing a scrapheaped picture must restore it"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +242,7 @@ def test_new_file_still_imports_next_to_a_scrapheaped_match(owner_server):
     assert status["duplicate_count"] == 0, status
     assert status["failed_count"] == 0, status
     assert _row_count(srv) == 2, "The new file must still become a picture"
-    assert len(_picture_ids(srv, deleted=False)) == 1
+    assert len(_picture_ids(srv, deleted=False)) == 2
 
 
 def test_buckets_are_disjoint_and_sum_to_the_file_total(owner_server):
@@ -314,7 +318,7 @@ def test_one_shot_buckets_sum_to_the_file_total(owner_server):
 
 
 def test_several_copies_of_one_scrapheaped_picture_count_per_file(owner_server):
-    """Counts are per FILE; the restore offer is per PICTURE."""
+    """Counts are per FILE; the restored ids are per PICTURE."""
     srv, client = owner_server
     data = _png_bytes(color=(123, 45, 67))
 
@@ -329,6 +333,7 @@ def test_several_copies_of_one_scrapheaped_picture_count_per_file(owner_server):
     assert status["scrapheaped_picture_ids"] == [original_id], status
     assert status["imported_count"] == 0 and status["duplicate_count"] == 0, status
     assert _row_count(srv) == 1
+    assert _picture_ids(srv, deleted=False) == [original_id]
 
 
 def test_purged_and_ledgered_file_imports_as_new_and_is_not_resurrected(owner_server):
@@ -405,7 +410,7 @@ def test_live_row_wins_over_a_scrapheaped_row_with_the_same_hash(owner_server):
     assert _picture_ids(srv, deleted=True) == [heaped_id]
 
 
-def test_scrapheaped_member_of_a_locked_set_is_still_reported(owner_server):
+def test_scrapheaped_member_of_a_locked_set_is_still_matched(owner_server):
     """A lock freezes edits and destruction, not the fact that content exists.
 
     Detection must not consult locks: hiding the match would put the re-imported
@@ -437,13 +442,8 @@ def test_scrapheaped_member_of_a_locked_set_is_still_reported(owner_server):
     assert _row_count(srv) == 1
 
 
-def test_scrapheaped_stack_member_is_offered_and_refolds_on_restore(owner_server):
-    """A stacked match needs no special path: the shipped restore re-folds it.
-
-    ``restore_scrapheap`` already calls ``normalize_stack_positions`` for every
-    affected stack, which is exactly why this change reuses it instead of
-    writing a second restore.
-    """
+def test_scrapheaped_stack_member_refolds_when_the_import_restores_it(owner_server):
+    """A stacked match is re-folded into its stack ordering by the restore."""
     srv, client = owner_server
     leader = _png_bytes(color=(5, 5, 5))
     member = _png_bytes(color=(6, 6, 6))
@@ -461,12 +461,7 @@ def test_scrapheaped_stack_member_is_offered_and_refolds_on_restore(owner_server
     assert status["scrapheaped_count"] == 1, status
     assert status["scrapheaped_picture_ids"] == [member_id], status
     assert _row_count(srv) == 2, "no third row inside the stack"
-
-    r = client.post(
-        f"{API}/pictures/scrapheap/restore", json={"picture_ids": [member_id]}
-    )
-    assert r.status_code == 200, r.text
-    assert r.json()["restored_count"] == 1
+    assert _picture_ids(srv, deleted=False) == [leader_id, member_id]
 
     positions = srv.vault.db.run_task(
         lambda s: {
@@ -481,57 +476,84 @@ def test_scrapheaped_stack_member_is_offered_and_refolds_on_restore(owner_server
 
 
 # ---------------------------------------------------------------------------
-# The offer: the ids the import hands back drive the SHIPPED restore endpoint
+# The restore is the shipped one: recorded, and undoable
 # ---------------------------------------------------------------------------
 
 
-def test_offered_ids_restore_through_the_shipped_endpoint(owner_server):
-    """The import reports; the user chooses; the existing restore route acts."""
+@pytest.mark.parametrize("importer", ["staging", "one_shot"])
+def test_import_restore_is_one_undoable_operation(owner_server, importer):
+    """Undoing the import's restore puts the picture back in the Scrapheap."""
     srv, client = owner_server
+    run_import = _staging_import if importer == "staging" else _one_shot_import
     data = _png_bytes(color=(33, 99, 200))
 
-    _staging_import(client, [("a.png", data)])
+    run_import(client, [("a.png", data)])
     original_id = _picture_ids(srv)[0]
     _scrapheap(client, original_id)
 
-    status = _staging_import(client, [("a-again.png", data)])
-    offered = status["scrapheaped_picture_ids"]
-    assert offered == [original_id]
-
-    r = client.post(f"{API}/pictures/scrapheap/restore", json={"picture_ids": offered})
-    assert r.status_code == 200, r.text
-    assert r.json()["restored_count"] == 1, r.text
-    assert _picture_ids(srv, deleted=True) == []
+    run_import(client, [("a-again.png", data)])
     assert _picture_ids(srv, deleted=False) == [original_id]
-    assert _row_count(srv) == 1
+
+    r = client.get(
+        f"{API}/operations", params={"op_type": "pictures.scrapheap.restore"}
+    )
+    assert r.status_code == 200, r.text
+    assert [op["target_ids"] for op in r.json()] == [[original_id]], r.json()
+
+    r = client.post(f"{API}/operations/undo")
+    assert r.status_code == 200, r.text
+    assert _picture_ids(srv, deleted=True) == [original_id]
 
 
-def test_offer_reports_honestly_when_the_match_was_purged_meanwhile(owner_server):
-    """A match past its retention deadline can be swept before the user clicks.
-
-    The offer is not a promise. The shipped restore endpoint reports what it
-    really restored, so the caller can say "0 of 1" instead of claiming success.
-    """
+def test_one_shot_restore_leaves_the_picture_as_it_was(owner_server):
+    """A restored match does not join the import's project: it comes back as it
+    was, as on the staging path (it may sit in a locked set)."""
     srv, client = owner_server
-    data = _png_bytes(color=(240, 200, 10))
+    data = _png_bytes(color=(150, 10, 220))
 
-    _staging_import(client, [("a.png", data)])
+    _one_shot_import(client, [("a.png", data)])
     original_id = _picture_ids(srv)[0]
     _scrapheap(client, original_id)
 
-    status = _staging_import(client, [("a-again.png", data)])
-    offered = status["scrapheaped_picture_ids"]
-    assert offered == [original_id]
-
-    # The auto-purge sweep (or the user) destroys it before the offer is taken.
-    _purge_forever(client, offered)
-    assert _row_count(srv) == 0
-
-    r = client.post(f"{API}/pictures/scrapheap/restore", json={"picture_ids": offered})
+    r = client.post(f"{API}/projects", json={"name": "restored-into"})
     assert r.status_code == 200, r.text
-    assert r.json()["restored_count"] == 0, (
-        "restoring a purged picture must report 0, not pretend it worked"
+    project_id = r.json()["id"]
+
+    r = client.post(
+        f"{API}/pictures/import",
+        files=[("file", ("a-again.png", data, "image/png"))],
+        data={"project_id": str(project_id)},
     )
+    assert r.status_code == 200, r.text
+    status = _wait_for_import_task(client, r.json()["task_id"])
+    assert status["scrapheaped_picture_ids"] == [original_id], status
+    assert _picture_ids(srv, deleted=False) == [original_id]
+
+    members = srv.vault.db.run_task(
+        lambda s: list(
+            s.exec(
+                select(PictureProjectMember.picture_id).where(
+                    PictureProjectMember.project_id == project_id
+                )
+            ).all()
+        )
+    )
+    assert members == []
+
+
+def test_restore_reports_only_the_pictures_it_restored(owner_server):
+    """A match purged before the restore lands is not reported as restored."""
+    srv, client = owner_server
+    _staging_import(
+        client, [("a.png", _png_bytes((1, 1, 200))), ("b.png", _png_bytes((2, 2, 201)))]
+    )
+    heaped_id, purged_id = _picture_ids(srv)
+    _scrapheap(client, heaped_id)
+    _scrapheap(client, purged_id)
+    _purge_forever(client, [purged_id])
+
+    restored = scrapheap_service.restore_pictures(srv.vault, [heaped_id, purged_id])
+    assert restored == [heaped_id]
 
 
 # ---------------------------------------------------------------------------
@@ -710,7 +732,9 @@ def test_one_shot_different_size_sampled_collision_imports_both(
     assert _row_count(srv) == 2
 
 
-def test_full_hash_mismatch_does_not_offer_scrapheap_restore(owner_server, monkeypatch):
+def test_full_hash_mismatch_does_not_restore_from_the_scrapheap(
+    owner_server, monkeypatch
+):
     srv, client = owner_server
     old = _bmp_bytes((10, 20, 30))
     different = _bmp_bytes((30, 20, 10))

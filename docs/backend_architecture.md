@@ -6258,13 +6258,13 @@ The value is gated by `WsBroadcasterMixin.CHANGE_KINDS` (`pixlstash/ws/broadcast
 
 No new routes and no migration: the existing undo/redo endpoints carry all of it, and `operation` is generic over `op_type`.
 
-### 21.1.1 Import sees the Scrapheap, and offers a restore rather than a second copy
+### 21.1.1 Import sees the Scrapheap, and restores rather than writing a second copy
 
 **The bug.** `routes/pictures/_helpers.py::_create_picture_imports` matched incoming content with `Picture.find(session, pixel_shas=shas, include_unimported=True)`, and `Picture.find` defaults `include_deleted=False`. **A scrapheaped picture was therefore invisible to import dedup**: re-importing a file whose picture sits in the Scrapheap created a brand-new second row while the original was still there. The bulk "Keep cover only" action turns that from a rare annoyance into a predictable one; it moves hundreds of pictures to the Scrapheap in one gesture, and those are by definition copies of files that still exist wherever the user imports from, so the next import silently undoes the cleanup, roughly doubles the bytes on disk, and refills the duplicate queue.
 
-**The fix: match, then offer.** Both import paths now resolve content hashes through [`services/import_dedup_service.py`](../pixlstash/services/import_dedup_service.py) (§10), which sees soft-deleted rows *for that query only*, `Picture.find`'s default is untouched, so nothing else gains deleted rows. A scrapheaped match is **not imported again** (that is the doubling) and **not silently restored** either (the user scrapheapped it on purpose). It is reported as a third outcome and the caller is offered the restore.
+**The fix: match, then restore.** Both import paths now resolve content hashes through [`services/import_dedup_service.py`](../pixlstash/services/import_dedup_service.py) (§10), which sees soft-deleted rows *for that query only*, `Picture.find`'s default is untouched, so nothing else gains deleted rows. A scrapheaped match is **not imported again** (that is the doubling). Re-importing it means the owner wants it back, so the import **restores** the picture and reports the file as a third outcome.
 
-**The offer reuses the shipped restore route.** `scrapheaped_picture_ids` on the import status feeds straight into `POST /pictures/scrapheap/restore`, which already clears `deleted_at`, re-folds stack positions (`normalize_stack_positions`) and records an undoable `pictures.scrapheap.restore` operation (§21.1). **There is deliberately no second restore path**, and no new route: nothing to declare in `authz/registry.py`, and the coverage matrix arithmetic is unchanged.
+**One restore function.** Both import paths and `POST /pictures/scrapheap/restore` call `scrapheap_service.restore_pictures`, which clears `deleted_at`, re-folds stack positions (`normalize_stack_positions`), records one undoable `pictures.scrapheap.restore` operation (§21.1) attributed to the importing request, and broadcasts `change_kind: "restored"`. No new route: nothing to declare in `authz/registry.py`, and the coverage matrix arithmetic is unchanged. `scrapheaped_picture_ids` on the import status names the pictures it actually restored, which is the restore's own answer: a match purged between the match and the restore is not in it.
 
 **Disjoint buckets that sum to the total: never a subtraction.** Following `preview_scrapheap_delete`'s discipline (§5), every file lands in exactly one bucket and each is counted where it happens:
 
@@ -6273,18 +6273,18 @@ No new routes and no migration: the existing undo/redo endpoints carry all of it
 | `POST /pictures/import` (one-shot) | `imported_count` + `duplicate_count` + `scrapheaped_count` | uploaded files |
 | Staging → `PictureImportTask` | `imported_count` + `duplicate_count` + `scrapheaped_count` + `failed_count` + `cancelled_count` | staged files |
 
-Both paths log an `error` if the arithmetic does not close, rather than shipping a summary the user reads as fact. `cancelled_count` and the "staged entry with no `file_path` is a failure" rule exist only because those files previously fell into *no* bucket. The counts are per **file**; `scrapheaped_picture_ids` is per **picture**, so several incoming copies of one scrapheaped picture name its id once and the restore offer cannot overstate how many rows come back.
+Both paths log an `error` if the arithmetic does not close, rather than shipping a summary the user reads as fact. `cancelled_count` and the "staged entry with no `file_path` is a failure" rule exist only because those files previously fell into *no* bucket. The counts are per **file**; `scrapheaped_picture_ids` is per **picture**, so several incoming copies of one scrapheaped picture name its id once and the summary cannot overstate how many rows came back.
 
 **Edge cases, settled deliberately** (pinned in `tests/test_import_scrapheap_match.py`):
 
 - **A live row and a scrapheaped row share a hash** (the old bug already made such pairs): live wins, so it reports as an ordinary duplicate. The content genuinely IS in the library.
 - **Permanently purged and ledgered**: delete-forever removes the `picture` row, so there is nothing to match and nothing to resurrect, a deliberate re-import is a genuinely NEW picture. `deleted_file_log` is not consulted; it guards *snapshot restore* (§18.7), not the owner re-importing a file they still have.
-- **Past its retention deadline**: still offered. The offer is not a promise, the sweep may destroy the row before the user clicks, and `restore_scrapheap`'s `restored_count` is what the UI reports ("Restored 1 of 2"), so a swept match is never claimed as restored.
+- **Past its retention deadline**: still restored, if the sweep has not destroyed the row first. A row swept between the match and the restore is skipped by the restore (it only touches rows still `deleted`) and logged with the restored count.
 - **A stack member**: no special path. The shipped restore re-folds it into the stack ordering.
 - **Frozen by a locked set**: detection does not consult locks. A lock governs label edits and destruction, not whether content exists; hiding the match would put the re-imported copy back on disk, which is the exact doubling this closes. Restore keeps the shipped endpoint's behaviour, unchanged.
-- **Sidecar captions**: a `.txt` sidecar accompanying a scrapheaped match is NOT applied. The picture is not being imported and the user has not chosen to restore it, so editing its tags would act behind their back.
+- **It comes back as it was.** A `.txt` sidecar is not applied to a restored match and the import's project/set/character is not applied either, on both paths: the picture may sit in a locked set, and it is announced as `restored`, not `added`.
 
-**Frontend.** `fetchStagingStatus` surfaces the bucket, and `ImageImporter.vue` pushes one sticky notice ("N files are already in your Scrapheap, so they were not imported again") whose single action calls `restoreScrapheap`. The completion headline is built from the buckets it names, so "All files were duplicates" can no longer be printed over a run whose files were scrapheap matches.
+**Frontend.** `fetchStagingStatus` surfaces the bucket; the arriving tile reads "Restored" with a Show link, and the completion headline says "Restored N pictures from the Scrapheap" rather than "All files were duplicates".
 
 ### 21.2 Tag-review decisions: confirm and reject are undoable
 

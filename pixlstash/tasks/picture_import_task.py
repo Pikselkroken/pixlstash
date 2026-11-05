@@ -13,7 +13,7 @@ from pixlstash.db_models.picture_project import PictureProjectMember
 from pixlstash.db_models.picture_set import PictureSet, PictureSetMember
 from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services import import_dedup_service
+from pixlstash.services import import_dedup_service, scrapheap_service
 from pixlstash.services.layout_move_service import resolve_placement
 from pixlstash.services.project_membership_service import (
     character_project_ids,
@@ -51,7 +51,8 @@ class PictureImportTask(BaseTask):
     **Every staged file lands in exactly one of five disjoint buckets**,
     imported, duplicate (live content already in the vault, including a repeat
     inside this batch), **scrapheaped** (content matches a soft-deleted picture:
-    not imported again, offered for restore), failed, cancelled and they sum
+    not imported again, the picture is restored instead), failed, cancelled and
+    they sum
     to the staged total. A scrapheaped match used to be reported as an ordinary
     duplicate, which told the user nothing about why their file did not appear.
     See :mod:`pixlstash.services.import_dedup_service`.
@@ -63,6 +64,8 @@ class PictureImportTask(BaseTask):
     ``CHANGED_PICTURES`` + ``PICTURE_IMPORTED`` broadcast).
 
     Attributes:
+        _vault: The ``Vault``; restoring a Scrapheap match records an undoable
+            operation and announces it, which needs more than the database.
         _db: The application ``VaultDatabase``.
         _staged_files: List of ``{"file_path", "original_file_name"}`` staged
             entries to ingest.
@@ -78,7 +81,7 @@ class PictureImportTask(BaseTask):
 
     def __init__(
         self,
-        database,
+        vault,
         staged_files: list[dict],
         *,
         project_id: Optional[int] = None,
@@ -88,11 +91,12 @@ class PictureImportTask(BaseTask):
         staging_id: str,
         staging_dir: Optional[str] = None,
         origin_client_id: Optional[str] = None,
+        restore_context: Optional[dict] = None,
     ):
         """Initialise the task.
 
         Args:
-            database: The application ``VaultDatabase`` instance.
+            vault: The application ``Vault``.
             staged_files: Sequence of ``{"file_path", "original_file_name"}``
                 dicts for each staged media file on disk.
             project_id: Optional project id to add every imported picture to.
@@ -109,6 +113,8 @@ class PictureImportTask(BaseTask):
                 completion (best-effort cleanup).
             origin_client_id: Originating tab's client id for origin-stamped
                 events, or ``None`` for an external client.
+            restore_context: ``operation_log_service.request_context`` of the
+                commit request, recorded on the restore of any Scrapheap match.
         """
         staged_files = staged_files or []
         super().__init__(
@@ -122,7 +128,8 @@ class PictureImportTask(BaseTask):
                 "origin_client_id": origin_client_id,
             },
         )
-        self._db = database
+        self._vault = vault
+        self._db = vault.db
         self._staged_files = staged_files
         self._project_id = project_id
         self._set_id = set_id
@@ -131,6 +138,7 @@ class PictureImportTask(BaseTask):
         self._staging_id = staging_id
         self._staging_dir = staging_dir
         self._origin_client_id = origin_client_id
+        self._restore_context = restore_context or {}
         # Live progress, read by Vault.get_worker_progress for the task manager.
         self._total_count = len(staged_files)
         self._processed_count = 0
@@ -171,8 +179,8 @@ class PictureImportTask(BaseTask):
         scrapheaped_count = 0
         failed_count = 0
         cancelled_count = 0
-        # Distinct scrapheaped pictures this import matched. Per PICTURE (the
-        # restore offer), while ``scrapheaped_count`` is per FILE (the bucket
+        # Distinct scrapheaped pictures this import matched and restores. Per
+        # PICTURE, while ``scrapheaped_count`` is per FILE (the bucket
         # arithmetic): several staged copies of one content name one id once.
         scrapheaped_picture_ids: list[int] = []
         seen_scrapheaped_ids: set[int] = set()
@@ -275,7 +283,7 @@ class PictureImportTask(BaseTask):
                 logger.info(
                     "PictureImportTask: staged file %s matches scrapheaped "
                     "picture %d (sha %s); not importing a second copy, "
-                    "offering a restore instead (staging_id=%s)",
+                    "restoring it instead (staging_id=%s)",
                     file_path,
                     match.id,
                     pixel_sha,
@@ -366,6 +374,21 @@ class PictureImportTask(BaseTask):
                 self._apply_project(imported_ids)
                 self._apply_set(imported_ids)
                 self._apply_character(imported_ids)
+
+        if scrapheaped_picture_ids:
+            matched_ids = scrapheaped_picture_ids
+            # Report what was restored, not what matched: a match the retention
+            # sweep purged meanwhile did not come back.
+            scrapheaped_picture_ids = scrapheap_service.restore_pictures(
+                self._vault, matched_ids, **self._restore_context
+            )
+            logger.info(
+                "PictureImportTask: restored %s of the scrapheaped picture(s) %s "
+                "matched by this import (staging_id=%s)",
+                scrapheaped_picture_ids,
+                matched_ids,
+                self._staging_id,
+            )
 
         self._cleanup_staging_dir()
 
