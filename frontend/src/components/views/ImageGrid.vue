@@ -8396,6 +8396,7 @@ function handleFaceBboxContextMenu(img, overlay, event) {
   contextMenuX.value = event.clientX;
   contextMenuY.value = event.clientY;
   contextMenuVisible.value = true;
+  whatsChanged.tick("menu");
 }
 
 // ── Lightbox context menu ─────────────────────────────────────────

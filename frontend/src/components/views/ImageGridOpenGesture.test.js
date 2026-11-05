@@ -185,6 +185,13 @@ describe("grid open gesture", () => {
     expect(tick).toHaveBeenCalledWith("menu");
   });
 
+  it("right-clicking a face box on a picture ticks it too", () => {
+    const tick = vi.spyOn(useWhatsChangedStore(), "tick");
+    const wrapper = mountGrid();
+    wrapper.vm.handleFaceBboxContextMenu(IMG, { face: { id: 3 } }, { clientX: 5, clientY: 5 });
+    expect(tick).toHaveBeenCalledWith("menu");
+  });
+
   it("a double-click while the lightbox is already up does not reopen it", () => {
     const wrapper = mountGrid();
     wrapper.vm.handleThumbnailClick(IMG, 0, click());
