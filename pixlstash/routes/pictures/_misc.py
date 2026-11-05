@@ -22,20 +22,27 @@ from pixlstash.db_models import (
     PictureLikeness,
     SortMechanism,
 )
+from pixlstash.hub.workflow_card_reads import (
+    run_filed_workflow_ids,
+    variant_workflows,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.scoring import (
     fetch_smart_score_data,
     get_smart_score_penalised_tags_from_request,
     prepare_smart_score_inputs,
 )
+from pixlstash.services.comfyui_recipe_service import read_lora_chain_untyped
 from pixlstash.services.edit_copies import create_session, edit_copies_root
 from pixlstash.utils import open_with
+from pixlstash.utils.comfyui_utilities import find_comfy_api_prompt
 from pixlstash.utils.host_open import open_in_file_manager
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.library_roots import refuse_path_inside_a_library
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.serialization_utils import safe_model_dict
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services import plugin_service
 from pixlstash.services.model_shelf_service import recipe_asset_index
 from pixlstash.services.workflow_hash import normalized_filename
@@ -157,6 +164,60 @@ def _with_shelf_names(server, values: list[str], owner: bool) -> list[dict]:
                     if name:
                         names[value] = name
     return [{"value": value, "name": names.get(value)} for value in values]
+
+
+class PictureWorkflowLora(BaseModel):
+    node_id: str
+    name: Optional[str] = None
+
+
+class PictureWorkflowVariant(BaseModel):
+    picture_count: int
+    example_picture_id: int
+    # None when the picture carries no ComfyUI `prompt` chunk to read.
+    loras: Optional[list[PictureWorkflowLora]] = None
+
+
+class PictureWorkflowResponse(BaseModel):
+    workflow_id: str
+    picture_count: int
+    variants: list[PictureWorkflowVariant]
+
+
+def _embedded_loras(server, pic_id: int) -> list[dict] | None:
+    """The LoRA loaders in *pic_id*'s own ``prompt`` chunk, along the model path.
+
+    The API chunk only: rebuilding an editor graph needs ComfyUI's node
+    definitions, and this read never asks ComfyUI. ``None`` when the file has
+    no such chunk or cannot be read.
+    """
+    pics = server.vault.db.run_immediate_read_task(
+        Picture.find, id=pic_id, select_fields=["id", "file_path"]
+    )
+    path = (
+        ImageUtils.resolve_picture_path(server.vault.image_root, pics[0].file_path)
+        if pics
+        else None
+    )
+    if not path:
+        return None
+    try:
+        graph = find_comfy_api_prompt(ImageUtils.extract_embedded_metadata(path))
+    except Exception as exc:
+        logger.warning(
+            "Could not read the embedded workflow of picture id=%s (%s): %s; "
+            "listing its workflow without LoRAs.",
+            pic_id,
+            path,
+            exc,
+        )
+        return None
+    if not graph:
+        return None
+    return [
+        {"node_id": str(slot["node_id"]), "name": slot["name"]}
+        for slot in read_lora_chain_untyped(graph)["loaders"]
+    ]
 
 
 class OpenLocationResponse(BaseModel):
@@ -373,6 +434,80 @@ def register_routes(router, server):
         return _with_shelf_names(
             server, values, owner=server.auth.is_unscoped_owner_request(request)
         )
+
+    @router.get(
+        "/pictures/workflows",
+        include_in_schema=False,
+        summary="List the workflows the visible pictures were made with",
+        response_model=list[PictureWorkflowResponse],
+    )
+    def get_picture_workflows(request: Request):
+        """The workflows behind the pictures this token can see, with counts.
+
+        The read-only token's answer to "what workflows do I have" (#1616):
+        the owner-only ``/workflows`` routes also disclose card names, notes,
+        model fixes and covers no picture carries, so this groups only the
+        pictures in scope, by the ``workflow_id`` ``get_recipe`` reports for
+        each. Every variant's LoRAs are read off one in-scope picture's own
+        embedded ``prompt`` chunk, untyped: ComfyUI is never asked, so a fork
+        into sampler passes is not told apart here (``get_recipe`` on
+        ``example_picture_id`` reads it typed).
+        """
+        allowed = fetch_scope_allowed_picture_ids(server, request)
+        hub = getattr(server, "hub", None)
+        if hub is None or (allowed is not None and not allowed):
+            return []
+
+        def fetch(session: Session):
+            stmt = select(
+                Picture.id,
+                Picture.workflow_structural_hash,
+                Picture.run_workflow_id,
+            ).where(Picture.deleted.is_(False))
+            if allowed is None:
+                return session.exec(stmt).all()
+            # The scope narrows in SQL, chunked under SQLite's bound-parameter
+            # limit: a project scope can hold more pictures than one IN takes.
+            return [
+                row
+                for ids in chunked(sorted(allowed))
+                for row in session.exec(stmt.where(Picture.id.in_(ids))).all()
+            ]
+
+        rows = server.vault.db.run_immediate_read_task(fetch)
+        live = set(run_filed_workflow_ids(hub))
+        placed = variant_workflows(hub)
+        # {workflow_id: {variant: [picture ids]}}, the resolution
+        # `routes/comfyui._picture_workflow` makes for one picture.
+        groups: dict[str, dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
+        for pic_id, variant, made_by in rows:
+            workflow_id = made_by if made_by in live else placed.get(variant)
+            if workflow_id:
+                groups[workflow_id][variant or ""].append(pic_id)
+
+        result = []
+        # ponytail: one metadata read per variant per call (the extractor's
+        # own LRU aside); store the LoRA list on the variant if a large
+        # library makes this slow.
+        for workflow_id, variants in groups.items():
+            entries = [
+                {
+                    "picture_count": len(ids),
+                    "example_picture_id": max(ids),
+                    "loras": _embedded_loras(server, max(ids)),
+                }
+                for ids in variants.values()
+            ]
+            entries.sort(key=lambda e: (-e["picture_count"], e["example_picture_id"]))
+            result.append(
+                {
+                    "workflow_id": workflow_id,
+                    "picture_count": sum(e["picture_count"] for e in entries),
+                    "variants": entries,
+                }
+            )
+        result.sort(key=lambda w: (-w["picture_count"], w["workflow_id"]))
+        return result
 
     @router.get(
         "/pictures/likeness-groups",
