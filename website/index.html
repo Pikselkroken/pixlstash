@@ -443,6 +443,22 @@
         cursor: zoom-in;
       }
 
+      .launch-map {
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border);
+        overflow: hidden;
+      }
+
+      .launch-map img {
+        cursor: zoom-in;
+      }
+
+      .launch-map .app-pin {
+        width: 24px;
+        height: 24px;
+        font-size: 0.8rem;
+      }
+
       .launch-grid {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
@@ -671,7 +687,7 @@
 
       <div class="page-hero">
         <a class="launch-pill" href="whatsnew.html"
-          ><span>New</span> PixlStash 1.13: Inpainting and model downloads →</a
+          ><span>New</span> PixlStash 2.0: a new shape, and LoRA training →</a
         >
         <h1>A desktop image manager for creators</h1>
         <p>
@@ -705,76 +721,29 @@
       <section class="launch">
         <div class="launch-head">
           <div>
-            <span class="launch-kicker"
-              >PixlStash 1.13: inpainting and workflow/model downloads</span
-            >
-            <h2>Draw area to change,<br />set a prompt,<br />press Run</h2>
+            <span class="launch-kicker">PixlStash 2.0</span>
+            <h2>Three workspaces, and LoRAs trained from your library</h2>
             <p class="launch-lead">
-              The picture viewer has paint tools now. Mark a part of a picture,
-              describe the change, and an inpaint workflow redraws only that
-              part. Three inpaint workflows come with PixlStash, and your own
-              inpaint workflows run there too.
+              Media, Workflows and Models each have their own sidebar, and the
+              toolbars are for browsing. Select a person or a set and press
+              Train LoRA, and the result is attached to them when it finishes.
             </p>
           </div>
-          <div class="launch-video">
-            <video
-              src="assets/InpaintBoth.mp4"
-              autoplay
-              loop
-              muted
-              playsinline
-            ></video>
-          </div>
-        </div>
-        <div class="launch-grid">
-          <div class="launch-tile">
+          <div class="app-map launch-map">
             <img
-              src="assets/TemplateDownloads.jpg"
-              alt="The Templates tab: ComfyUI template cards marked Ready to run or with how many files are missing"
-              loading="lazy"
+              src="assets/ScreenshotGridSelection.jpg"
+              alt="The Media workspace in PixlStash 2.0, with numbered pins on Train LoRA in the selection bar, the Models workspace, the search field and the selected pictures"
             />
-            <h3>Every ComfyUI template</h3>
-            <p>
-              A Templates tab lists what your ComfyUI offers, which files each
-              needs and which you have. Add one and it loads from your library
-              and shelf, and saves back to PixlStash.
-            </p>
-          </div>
-          <div class="launch-tile">
-            <img
-              src="assets/ModelDownload.jpg"
-              alt="The Tasks tab downloading a 19 GB checkpoint, with a progress bar and a cancel button"
-              loading="lazy"
-            />
-            <h3>Missing models, downloaded</h3>
-            <p>
-              One press downloads a model a workflow is missing, into the folder
-              you set in Settings › Model folders, and puts it on your shelf,
-              immediately accessible for use.
-            </p>
-          </div>
-          <div class="launch-tile">
-            <img
-              src="assets/WaitingForGPU.png"
-              alt="The Tasks tab with a ComfyUI run waiting for the GPU, showing what it needs and what is free"
-              loading="lazy"
-            />
-            <h3>Runs wait for the GPU</h3>
-            <p>
-              A run that does not fit waits for GPU memory instead of running
-              out of it, and PixlStash unloads its own models to make room.
-            </p>
+            <span class="app-pin" style="left: 67.9%; top: 90%" aria-hidden="true">1</span>
+            <span class="app-pin" style="left: 61.6%; top: 2.1%" aria-hidden="true">2</span>
+            <span class="app-pin" style="left: 63.4%; top: 10.6%" aria-hidden="true">3</span>
+            <span class="app-pin" style="left: 38.3%; top: 89.8%" aria-hidden="true">4</span>
           </div>
         </div>
         <div class="launch-foot">
-          <p>
-            New to workflows? 1.12 turned the ComfyUI workflows behind your
-            pictures into a library you can run. Next up is 2.0: training a LoRA
-            from your library, inside PixlStash. And it does this easier and
-            with more managable folder management than ComfyUI itself.
-          </p>
+          <p>Upgrading? Things have moved. The What's New page shows where.</p>
           <a class="btn btn-primary" href="whatsnew.html"
-            >See everything in 1.13</a
+            >See everything in 2.0</a
           >
         </div>
       </section>

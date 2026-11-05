@@ -7,7 +7,7 @@
     <title>Features | PixlStash</title>
     <meta
       name="description"
-      content="Explore PixlStash features: AI tagging, semantic search and face recognition, ComfyUI workflows and recipes, inpainting, the folders you already have, several libraries, a model shelf, undo, duplicate review and more."
+      content="Explore PixlStash features: AI tagging, semantic search and face recognition, ComfyUI workflows and recipes, inpainting, the folders you already have, several libraries, LoRA training, a Models workspace, undo, duplicate review and more."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -854,11 +854,11 @@
 
       <section class="section">
         <div class="section-header">
-          <h2 class="section-title">Libraries, models and the command line</h2>
+          <h2 class="section-title">Libraries, models, training and the command line</h2>
           <p class="section-subtitle">
             Keep separate picture libraries in one installation, catalogue the
-            models already on your disks, and run the housekeeping from a
-            terminal.
+            models already on your disks, train LoRAs from your library, and
+            run the housekeeping from a terminal.
           </p>
         </div>
         <div class="shot-grid">
@@ -880,36 +880,38 @@
             </p>
           </div>
           <div class="shot">
-            <div class="shot-label"><h4>Model shelf</h4></div>
+            <div class="shot-label"><h4>The Models workspace</h4></div>
             <button class="shot-image-btn" type="button">
               <img
                 src="assets/ScreenshotModelShelf.jpg"
                 data-full="assets/ScreenshotModelShelf.jpg"
-                alt="The PixlStash model shelf listing checkpoints and LoRAs grouped by kind, with size and date columns"
+                alt="The Models workspace: a Folders tree with each drive's free space, and the model list with Name, Type, Base, Size and Date added columns"
                 loading="lazy"
               />
             </button>
             <p>
               Register the folders holding your checkpoints and LoRAs and see
               what is in them: kind, base model, size, and every folder a copy
-              sits in. Group and sort the shelf, move a model between folders,
-              or delete one to your Trash.
+              sits in. Drag models between folders, cut and paste them, or
+              create and rename folders from the tree, and PixlStash keeps
+              finding them.
             </p>
           </div>
           <div class="shot">
-            <div class="shot-label"><h4>Training runs and versions</h4></div>
+            <div class="shot-label"><h4>LoRA training</h4></div>
             <button class="shot-image-btn" type="button">
               <img
-                src="assets/ScreenshotAiToolkitImport.jpg"
-                data-full="assets/ScreenshotAiToolkitImport.jpg"
-                alt="The Training runs view with three discovered ai-toolkit runs selected for import"
+                src="assets/TrainingReport.jpg"
+                data-full="assets/TrainingReport.jpg"
+                alt="A finished training run: the loss curve, previews under each checkpoint, and the last checkpoint marked Cover"
                 loading="lazy"
               />
             </button>
             <p>
-              Read an ai-toolkit run where it was written, then import it with
-              its sample images. Versions of one subject group behind a single
-              row.
+              Select a person or a set and press Train LoRA. AI-toolkit trains
+              it on your own GPU, each checkpoint gets previews, and the
+              finished LoRA is on your shelf and attached to them. A run trained
+              elsewhere opens its own page too.
             </p>
           </div>
           <div class="shot">
@@ -1329,6 +1331,20 @@
               sets, and new pictures are written where it says. A picture moves
               only when its folder stops being true; Move to match is offered,
               counted first, and undone as one batch.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Pictures out as files</h3>
+            <p>
+              In the desktop app, Ctrl+C on a selection copies the original
+              files, ready to paste into a folder, an email or a chat.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Copy and paste tags</h3>
+            <p>
+              Copy tags from one picture and paste them onto another or onto a
+              selection. A pasted prompt becomes one tag per item.
             </p>
           </div>
           <div class="feature-card">
