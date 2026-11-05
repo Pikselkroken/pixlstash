@@ -403,6 +403,10 @@ class WsBroadcasterMixin:
             }
             if fields:
                 payload["fields"] = list(fields)
+            # A face redetect reports how many faces it added, so the tab that
+            # asked can offer a more sensitive run when it found none.
+            if isinstance(data, dict) and "new_faces" in data:
+                payload["new_faces"] = int(data["new_faces"])
         # Uniform origin-aware envelope on EVERY event. ``source`` and
         # ``origin_client_id`` let the frontend recognise the echo of its own
         # change (origin id match) and apply a targeted grid update instead of a

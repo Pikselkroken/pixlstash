@@ -213,6 +213,7 @@ class DetectPicturesResponse(BaseModel):
     picture_ids: list[int] = []
     prompt: str = ""
     target: str = "objects"
+    sensitive: bool = False
 
 
 class PicturePatchResponse(BaseModel):
@@ -946,9 +947,12 @@ def register_routes(router, server):
             "stored per picture (replacing any previous detections) and "
             "progress surfaces in the task manager.\n\n"
             'With `target: "faces"` it detects faces again instead (`prompt` '
-            "is ignored): fresh boxes and embeddings replace the stored ones, a "
-            "face that matches a stored one keeps its person, a hand-drawn box "
-            "is left alone, and a face naming a person is never removed."
+            "is ignored): a face that matches a stored one (by place or by "
+            "likeness) takes the fresh box and embedding and keeps its person, "
+            "a new face is added, a hand-drawn box is left alone, and a stored "
+            "face naming a person that matches nothing is kept as it was. "
+            "`sensitive: true` runs that detection at a lower confidence "
+            "threshold. The completion event reports `new_faces`."
         ),
         response_model=DetectPicturesResponse,
     )
@@ -990,6 +994,7 @@ def register_routes(router, server):
         if not isinstance(prompt, str):
             prompt = str(prompt)
         prompt = "" if target == "faces" else prompt.strip()
+        sensitive = payload.get("sensitive") is True
 
         # Scope guard (BOLA): a scoped token may only run detection on pictures
         # within its granted resource. None == owner / unscoped == no filter; an
@@ -1028,6 +1033,7 @@ def register_routes(router, server):
                 list(pics),
                 redetect=True,
                 origin_client_id=origin_client_id,
+                sensitive=sensitive,
             )
         else:
             from pixlstash.tasks.detection_task import DetectionTask
@@ -1049,6 +1055,7 @@ def register_routes(router, server):
             "picture_ids": [pic.id for pic in pics],
             "prompt": prompt,
             "target": target,
+            "sensitive": sensitive and target == "faces",
         }
 
     @router.get(

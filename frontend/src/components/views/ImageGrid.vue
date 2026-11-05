@@ -16,6 +16,7 @@
     :detectionUpdate="wsStore.wsDetectionUpdate"
     :textUpdate="wsStore.wsTextUpdate"
     :orientationUpdate="wsStore.wsOrientationUpdate"
+    :facesUpdate="wsStore.wsFacesUpdate"
     :showStacks="gridStore.showStacks"
     :showProblemIcon="gridStore.showProblemIcon"
     :favouritable="!isScrapheapView"
@@ -1398,7 +1399,6 @@ import {
   openPictureLocation,
   openPictureWith,
   detectPictures,
-  detectFaces,
   listPicturePlugins,
   runPicturePlugin,
   resetPicturesTags,
@@ -1504,6 +1504,7 @@ import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useWsStore } from "../../stores/useWsStore";
+import { useFaceRedetect } from "../../composables/useFaceRedetect";
 import { useSearchStore } from "../../stores/useSearchStore";
 import {
   ALL_PICTURES_ID,
@@ -8583,20 +8584,15 @@ async function confirmSegment() {
   }
 }
 
-async function detectFacesOnSelection() {
-  if (isReadOnly.value) return;
+const { detectFacesAgain } = useFaceRedetect();
+
+function detectFacesOnSelection() {
+  if (isReadOnly.value || !props.backendUrl) return;
   const ids = selectedImageIds.value
     .map((id) => Number(getPictureId(id)))
     .filter((id) => Number.isFinite(id) && id > 0);
-  if (!ids.length || !props.backendUrl) return;
-  // A background GPU task; the cards re-read their face boxes on its
-  // CHANGED_PICTURES `faces` event.
-  try {
-    await detectFaces(ids);
-    tasksStore.nudge();
-  } catch (err) {
-    console.error("Face detection request failed:", err);
-  }
+  // The cards re-read their face boxes on the run's `faces` event.
+  void detectFacesAgain(ids);
 }
 
 function sharePicture() {

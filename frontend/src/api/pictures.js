@@ -621,12 +621,15 @@ export async function detectPictures(pictureIds, prompt) {
 /**
  * Queue a fresh face detection for pictures; people stay with their faces.
  * @param {number[]} pictureIds
+ * @param {Object} [options]
+ * @param {boolean} [options.sensitive] - detect at a lower confidence.
  * @returns {Promise<Object>} the response body.
  */
-export async function detectFaces(pictureIds) {
+export async function detectFaces(pictureIds, { sensitive = false } = {}) {
   return unwrap(apiClient.post(`/pictures/detect`, {
     picture_ids: pictureIds,
     target: "faces",
+    sensitive,
   }));
 }
 

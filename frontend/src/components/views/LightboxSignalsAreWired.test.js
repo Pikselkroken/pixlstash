@@ -40,6 +40,7 @@ const OVERLAY_SIGNALS = [
   ["wsDetectionUpdate", "detectionUpdate"],
   ["wsTextUpdate", "textUpdate"],
   ["wsOrientationUpdate", "orientationUpdate"],
+  ["wsFacesUpdate", "facesUpdate"],
 ];
 
 describe("lightbox WS signals are wired end to end", () => {

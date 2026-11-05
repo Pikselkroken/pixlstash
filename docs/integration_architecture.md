@@ -2143,7 +2143,7 @@ The backend's [EventType](../pixlstash/event_types.py) enum names are **not** se
 | `source` | `"ui"` \| `"external"` | Coarse origin class. `"ui"` = an attributable owner action through the SPA; `"external"` = work that originated outside the UI (watch/reference folders, external API writes, background ML finishers, externally-run ComfyUI). Defaults to `"external"`. |
 | `origin_client_id` | `string` \| `null` | The `X-Client-Id` of the originating tab, or `null` for background/external work. **The primary signal** — a tab recognises the echo of its own change by matching this against its own id. |
 | `picture_ids` | `number[]` | Affected picture ids. |
-| `fields` | `string[]` (optional) | Columns that changed (e.g. `["smart_score"]`); drives the silent-vs-sort-changed decision. Omitted for edits that may affect any view (user edits, imports). Three values are **not** columns and name a routing class instead: `detections` (card content), `pixels` (the picture's own bytes were rewritten — see §8.3) and `stack_count` (the stack's live member count, derived by the listing endpoint and re-read by its own targeted call). See §8.2. |
+| `fields` | `string[]` (optional) | Columns that changed (e.g. `["smart_score"]`); drives the silent-vs-sort-changed decision. Omitted for edits that may affect any view (user edits, imports). Four values are **not** columns and name a routing class instead: `detections` and `faces` (card content; a face redetect's event also carries `new_faces`, the count of faces it added), `pixels` (the picture's own bytes were rewritten — see §8.3) and `stack_count` (the stack's live member count, derived by the listing endpoint and re-read by its own targeted call). See §8.2. |
 | `change_kind` | `"added"` \| `"updated"` \| `"removed"` \| `"restored"` (optional) | Set at the emit site where cheap (`removed` on deletes is free; `added` is implicit for `picture_imported`). **Omitted entirely when unset** — the SPA infers `added` for `picture_imported` and falls back to `updated` otherwise. `"restored"` is a scrapheap comeback (undo of a move, or `POST /pictures/scrapheap/restore`): the card returns, but the picture is **not** new to the vault, so the sidebar must not raise its NEW marker for it. The value set is a closed allowlist on **both** ends — `WsBroadcasterMixin.CHANGE_KINDS` and `resolveChangeKind` — and each silently degrades an unknown kind (the backend drops the field, the SPA falls back to `updated`), so the two move together or not at all. |
 
 Per-type payload specifics (all carry the envelope fields above):
@@ -2204,8 +2204,8 @@ The picture-event policy lives in [`useGridRealtimeSync.js`](../frontend/src/com
 Two field classes are decided **before** the origin dispatch, because for both
 of them the origin makes no difference to what has to happen:
 
-- **Card-content fields** (`detections`, `pixels`) → never a pill and never a
-  reshuffle. `detections` takes a targeted per-card `refreshGridImage`; `pixels`
+- **Card-content fields** (`detections`, `faces`, `pixels`) → never a pill and never a
+  reshuffle. `detections` and `faces` take a targeted per-card `refreshGridImage`; `pixels`
   takes `applyRotatedCards` instead, and is the one card op that is **not**
   deferred under an open lightbox. See §8.3.
 - **Stack facets** (`stack_count`) → **one batched** `refreshStackFacets(ids)`
@@ -2413,6 +2413,7 @@ The **Segment** action runs Florence-2 object detection over the selected pictur
 
 - **Enqueue**: `POST /api/v1/pictures/detect` with body `{ "picture_ids": [int, …], "prompt": "optional phrase" }`. An empty/omitted `prompt` runs dense object detection; a non-empty phrase runs open-vocabulary grounding for that phrase. Scoped tokens have `picture_ids` filtered to their grant (deny-by-default; all-out-of-scope → 403). Returns `{ "status": "queued", "task_id", "picture_ids", "prompt" }`. Progress surfaces in the existing task-manager UI.
 - **Completion**: the task fires a `pictures_changed` event (`{picture_ids, change_kind:"updated"}`) over the WebSocket; the SPA refreshes affected views.
+- **Detect faces again** (Analyse menu): the same route with `"target": "faces"` (and `"sensitive": true` for a lower detector threshold) queues a `FaceModelRefreshTask` in redetect mode instead; `prompt` is ignored and the response adds `target` and `sensitive`. A detected face that matches a stored one by place or likeness keeps its row and person, a stored face naming a person that matches nothing is kept, and hand-drawn boxes are untouched. Completion is `pictures_changed` with `fields: ["faces"]` and `new_faces`; the asking tab (`useFaceRedetect`) offers "Try more sensitive" when `new_faces` is 0.
 - **Read**: `GET /api/v1/pictures/{id}/detections` returns a **bare JSON array** (object-scope enforced before any read):
   ```json
   [ { "id": 1, "picture_id": 42, "frame_index": 0, "detection_index": 0,

@@ -1850,6 +1850,7 @@ class Vault:
                         "change_kind": "updated",
                         "fields": ["faces"],
                         "origin_client_id": task.params.get("origin_client_id"),
+                        "new_faces": result.get("new_faces", 0),
                     },
                 )
                 self.notify(EventType.CHANGED_FACES)

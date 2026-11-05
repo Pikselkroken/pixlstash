@@ -8,6 +8,10 @@ exactly the kind of change that could silently reintroduce a contextvar read,
 so this test guards against it directly.
 """
 
+import asyncio
+import threading
+
+from pixlstash.event_types import EventType
 from pixlstash.utils.request_origin import origin_client_id_var
 from pixlstash.ws.broadcaster import WsBroadcasterMixin
 
@@ -261,3 +265,23 @@ def test_operation_log_emit_stays_silent_about_stacks_when_nothing_is_stacked():
 
     assert emitted, "an undo must still announce itself"
     assert not [data for _event, data in emitted if data.get("fields")]
+
+
+def test_a_face_redetect_carries_how_many_faces_it_added():
+    """The tab that asked reads `new_faces` to offer a more sensitive run."""
+    sent = []
+
+    class _Ws:
+        async def send_json(self, payload):
+            sent.append(payload)
+
+    hub = WsBroadcasterMixin()
+    hub._ws_clients_lock = threading.Lock()
+    hub._ws_clients = [{"ws": _Ws(), "owner": True}]
+    data = {"picture_ids": [7], "fields": ["faces"], "new_faces": 0}
+    asyncio.run(hub._broadcast_ws_event(EventType.CHANGED_PICTURES, data))
+    del data["new_faces"]
+    asyncio.run(hub._broadcast_ws_event(EventType.CHANGED_PICTURES, data))
+
+    assert sent[0]["new_faces"] == 0
+    assert "new_faces" not in sent[1]

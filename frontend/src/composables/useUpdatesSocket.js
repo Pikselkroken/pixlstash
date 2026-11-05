@@ -423,6 +423,16 @@ export function useUpdatesSocket({
           // file's own coordinate space. The grid's own card refresh for this
           // is deferred under an open lightbox (§9.1), so the lightbox needs a
           // signal of its own to turn without being closed and reopened.
+          if (changedFields.includes("faces")) {
+            wsStore.wsFacesUpdate = {
+              key: (wsStore.wsFacesUpdate?.key || 0) + 1,
+              pictureIds,
+              newFaces: Number.isInteger(payload.new_faces)
+                ? payload.new_faces
+                : null,
+              originClientId: payload.origin_client_id ?? null,
+            };
+          }
           if (changedFields.includes("orientation")) {
             const nextKey = (wsStore.wsOrientationUpdate?.key || 0) + 1;
             wsStore.wsOrientationUpdate = { key: nextKey, pictureIds };

@@ -19,12 +19,16 @@ from sqlmodel import SQLModel, Session, create_engine, select
 from pixlstash.db_models.character import Character
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture
+from pixlstash.event_types import EventType
+from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.tasks.face_model_refresh_task import FaceModelRefreshTask, _bbox_iou
 from pixlstash.tasks.missing_face_model_refresh_finder import (
     MissingFaceModelRefreshFinder,
 )
+from pixlstash.utils.insightface_batched import BatchedFaceRunner
 import pixlstash.utils.insightface_model_utils as model_utils
+from pixlstash.vault import Vault
 
 
 @pytest.fixture(autouse=True)
@@ -255,6 +259,26 @@ def test_the_recogniser_is_called_in_chunks_that_fit_its_arena_cap():
     # Every face got its own row, in order, across the chunk boundaries.
     got = [f.embedding[0] for r in results for f in r]
     assert got == [i % RECOGNITION_CHUNK for i in range(total)]
+
+
+@pytest.mark.parametrize("override", [None, 0.1])
+def test_a_threshold_override_holds_for_its_own_run_only(override):
+    """A sensitive run detects at its threshold and puts the app's back."""
+    seen = []
+
+    class _Det:
+        det_thresh = 0.25
+
+        def detect(self, img):
+            seen.append(self.det_thresh)
+            return np.zeros((0, 5), "float32"), None
+
+    det = _Det()
+    app = types.SimpleNamespace(det_model=det, models={})
+    BatchedFaceRunner(app, det_thresh=override).run_batch([np.zeros((8, 8, 3))])
+
+    assert seen == [override or 0.25]
+    assert det.det_thresh == 0.25
 
 
 @pytest.mark.parametrize("cpu_spillover", [False, True])
@@ -1036,10 +1060,9 @@ def _faces(engine, pic_id):
         return session.exec(select(Face).where(Face.picture_id == pic_id)).all()
 
 
-@pytest.mark.parametrize("redetect", [False, True])
-def test_redetect_matches_a_turned_face_by_embedding(tmp_path, redetect):
-    """After a turn the box moves but the face embeds the same: a redetect keeps
-    the row and its person, while the pack refresh (no embedding match) does not."""
+def test_redetect_matches_a_turned_face_by_embedding(tmp_path):
+    """After a turn the box moves but the face embeds alike: the row and its
+    person carry over to the new box."""
     engine = _make_sqlite(tmp_path)
     pic_id, char_id, face_id = _picture_with_person_face(
         engine, [10, 10, 30, 30], _unit(0)
@@ -1047,17 +1070,16 @@ def test_redetect_matches_a_turned_face_by_embedding(tmp_path, redetect):
     turned = _detected(pic_id, [300, 300, 320, 320], _unit(0))
 
     with Session(engine) as session:
-        FaceModelRefreshTask._refresh_picture_faces(
-            session, pic_id, [turned], "buffalo_l", redetect
+        added = FaceModelRefreshTask._refresh_picture_faces(
+            session, pic_id, [turned], "buffalo_l", True
         )
 
-    faces = _faces(engine, pic_id)
-    if redetect:
-        assert [(f.id, f.character_id, f.bbox) for f in faces] == [
-            (face_id, char_id, [300, 300, 320, 320])
-        ]
-    else:
-        assert [f.character_id for f in faces] == [None]
+    # Nothing new: this is the run that offers "Try more sensitive".
+    assert added == 0
+
+    assert [(f.id, f.character_id, f.bbox) for f in _faces(engine, pic_id)] == [
+        (face_id, char_id, [300, 300, 320, 320])
+    ]
 
 
 def test_redetect_keeps_an_unmatched_face_that_names_a_person(tmp_path):
@@ -1069,9 +1091,11 @@ def test_redetect_keeps_an_unmatched_face_that_names_a_person(tmp_path):
     other = _detected(pic_id, [300, 300, 320, 320], _unit(1))
 
     with Session(engine) as session:
-        FaceModelRefreshTask._refresh_picture_faces(
+        added = FaceModelRefreshTask._refresh_picture_faces(
             session, pic_id, [other], "buffalo_l", True
         )
+
+    assert added == 1
 
     faces = {f.id: f for f in _faces(engine, pic_id)}
     assert faces[face_id].character_id == char_id
@@ -1108,13 +1132,92 @@ def test_a_new_face_above_does_not_take_the_persons_row(tmp_path):
 
     with Session(engine) as session:
         FaceModelRefreshTask._refresh_picture_faces(
-            session, pic_id, [above, same], "auraface"
+            session, pic_id, [above, same], "buffalo_l", True
         )
 
     by_box = {tuple(f.bbox): f for f in _faces(engine, pic_id)}
     assert by_box[(100, 100, 130, 130)].id == face_id
     assert by_box[(100, 100, 130, 130)].character_id == char_id
     assert by_box[(10, 10, 30, 30)].character_id is None
+
+
+def test_redetect_lets_two_named_faces_trade_places(tmp_path):
+    """Two people side by side, turned: each keeps their person although their
+    face_index values swap (the unique key must not trip mid-update)."""
+    engine = _make_sqlite(tmp_path)
+    pic_id, alice_id, alice_face = _picture_with_person_face(
+        engine, [10, 10, 30, 30], _unit(0), face_index=0
+    )
+    with Session(engine) as session:
+        bob = Character(name="Bob")
+        session.add(bob)
+        session.commit()
+        bob_face = Face(
+            picture_id=pic_id,
+            frame_index=0,
+            face_index=1,
+            bbox=[10, 100, 30, 120],
+            features=_unit(1),
+            model_pack="buffalo_l",
+            character_id=bob.id,
+        )
+        session.add(bob_face)
+        session.commit()
+        bob_id, bob_face_id = bob.id, bob_face.id
+    # After the turn Bob is on top (index 0) and Alice below (index 1).
+    new = [
+        _detected(pic_id, [300, 10, 320, 30], _unit(1), face_index=0),
+        _detected(pic_id, [300, 200, 320, 220], _unit(0), face_index=1),
+    ]
+
+    with Session(engine) as session:
+        FaceModelRefreshTask._refresh_picture_faces(
+            session, pic_id, new, "buffalo_l", True
+        )
+
+    by_id = {f.id: f for f in _faces(engine, pic_id)}
+    assert len(by_id) == 2
+    assert (by_id[bob_face_id].character_id, by_id[bob_face_id].face_index) == (
+        bob_id,
+        0,
+    )
+    assert (by_id[alice_face].character_id, by_id[alice_face].face_index) == (
+        alice_id,
+        1,
+    )
+
+
+@pytest.mark.parametrize("redetect", [False, True])
+def test_only_a_redetect_announces_its_faces(redetect):
+    """The owner's redetect tells the grid its face boxes changed; the
+    background pack sweep stays as quiet as it always was."""
+    events = []
+    vault = types.SimpleNamespace(notify=lambda *args: events.append(args))
+    task = types.SimpleNamespace(
+        type="FaceModelRefreshTask",
+        status=TaskStatus.COMPLETED,
+        result={"changed_count": 1, "picture_ids": [7], "new_faces": 0},
+        params={"redetect": redetect, "origin_client_id": "tab-1"},
+    )
+
+    Vault._on_task_completed(vault, task, None)
+
+    if redetect:
+        assert events == [
+            (
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": [7],
+                    "change_kind": "updated",
+                    "fields": ["faces"],
+                    "origin_client_id": "tab-1",
+                    "new_faces": 0,
+                },
+            ),
+            (EventType.CHANGED_FACES,),
+        ]
+    else:
+        assert events == []
 
 
 def test_bbox_iou_basics():
@@ -1198,7 +1301,7 @@ def _patch_detection(monkeypatch, task):
         FaceExtractionTask,
         "detect_faces_in_images",
         staticmethod(
-            lambda app, images: [
+            lambda app, images, det_thresh=None: [
                 [_FakeDetection([10, 10, 30, 30], np.ones(512))] for _ in images
             ]
         ),

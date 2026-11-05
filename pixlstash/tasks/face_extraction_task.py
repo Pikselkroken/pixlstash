@@ -540,7 +540,9 @@ class FaceExtractionTask(BaseTask):
         return bool(self._db.run_immediate_read_task(fetch))
 
     @staticmethod
-    def detect_faces_in_images(insightface_app, images: list) -> list:
+    def detect_faces_in_images(
+        insightface_app, images: list, det_thresh: float | None = None
+    ) -> list:
         """Run face detection and recognition on a list of BGR numpy arrays.
 
         This is the lowest-level detection entry point, intended to be called
@@ -555,6 +557,8 @@ class FaceExtractionTask(BaseTask):
             insightface_app: A prepared ``FaceAnalysis`` instance.
             images: BGR ``np.ndarray`` frames (any size), or ``None`` for
                 positions that should yield an empty result.
+            det_thresh: Detector confidence for this call only; ``None`` keeps
+                the app's own.
 
         Returns:
             A list with one inner list of
@@ -577,7 +581,7 @@ class FaceExtractionTask(BaseTask):
             safe_indices.append(i)
             safe_images.append(img)
         if safe_images:
-            runner = BatchedFaceRunner(insightface_app)
+            runner = BatchedFaceRunner(insightface_app, det_thresh=det_thresh)
             try:
                 batch_results = runner.run_batch(safe_images)
                 for idx, res in zip(safe_indices, batch_results):

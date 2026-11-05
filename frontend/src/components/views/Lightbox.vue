@@ -1330,6 +1330,8 @@ const props = defineProps({
   // Signals the named pictures were turned (`orientation`) - a rotate, or the
   // undo/redo of one, from this tab or another.
   orientationUpdate: { type: Object, default: () => ({}) },
+  // Signals a "Detect faces again" landed for the named pictures (`faces`).
+  facesUpdate: { type: Object, default: () => ({}) },
   showStacks: { type: Boolean, default: true },
   showProblemIcon: { type: Boolean, default: true },
   // False from the Scrapheap, which shows no heart: click and H both go inert.
@@ -1364,6 +1366,7 @@ const {
   detectionUpdate,
   textUpdate,
   orientationUpdate,
+  facesUpdate,
   showStacks,
   showProblemIcon,
   availablePlugins,
@@ -5711,6 +5714,10 @@ onPictureSignal(detectionUpdate, "any", fetchDetections);
 // detection signal this one is gated on the open picture: a text read is one
 // picture's own task, and its frame names that picture.
 onPictureSignal(textUpdate, "named", () => pictureText.refresh());
+
+// Detect faces again landed: the face boxes are read only when the card
+// changes, so re-read them for the open picture.
+onPictureSignal(facesUpdate, "named", fetchFaceBboxes);
 
 // The open picture was TURNED somewhere else: an undo or redo of a rotate
 // (Ctrl+Z, the receipt's Undo, the toolbar), or a rotate made in another tab.

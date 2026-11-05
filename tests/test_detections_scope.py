@@ -212,6 +212,7 @@ def test_detect_faces_queues_a_redetect(monkeypatch):
                 "picture_ids": [in_scope, out_of_scope],
                 "target": "faces",
                 "prompt": "dog",
+                "sensitive": True,
             },
         )
         assert r.status_code == 200, r.text
@@ -222,6 +223,8 @@ def test_detect_faces_queues_a_redetect(monkeypatch):
         task = captured["t"]
         assert task.type == "FaceModelRefreshTask"
         assert task.params["redetect"] is True
+        assert task.params["sensitive"] is True
+        assert body["sensitive"] is True
         assert task.params["picture_ids"] == [in_scope]
 
         r = client.post(

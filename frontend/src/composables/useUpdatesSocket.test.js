@@ -853,3 +853,21 @@ describe("useUpdatesSocket: the GPU queue's resource_lease event", () => {
   });
 });
 
+
+describe("useUpdatesSocket: a face redetect landing", () => {
+  it("passes the pictures, the added count and the asking tab on", () => {
+    connect();
+    receive({
+      type: "pictures_changed",
+      change_kind: "updated",
+      fields: ["faces"],
+      picture_ids: [3],
+      new_faces: 0,
+      origin_client_id: "tab-1",
+    });
+    const update = useWsStore().wsFacesUpdate;
+    expect(update.pictureIds).toEqual([3]);
+    expect(update.newFaces).toBe(0);
+    expect(update.originClientId).toBe("tab-1");
+  });
+});
