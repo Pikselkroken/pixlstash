@@ -64,13 +64,42 @@
         </div>
         <div class="nav-actions">
           <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle light / dark theme">${moon}${sun}</button>
-          <a class="demo-btn" href="https://demo.pixlstash.dev?token=o75qQ-w0fy_FraPb2sdxcGOVTBoKFmmZwStycljomSs" target="_blank" rel="noopener noreferrer">Try demo</a>
-          <a class="download-btn" href="install.html">Install now</a>
+          <div class="nav-cta">
+            <div class="nav-cta-buttons">
+              <a class="demo-btn" href="https://demo.pixlstash.dev?token=o75qQ-w0fy_FraPb2sdxcGOVTBoKFmmZwStycljomSs" target="_blank" rel="noopener noreferrer">Try demo</a>
+              <a class="download-btn" href="install.html">Install now</a>
+            </div>
+          </div>
         </div>`;
 
   const placeholder = document.getElementById("nav-placeholder");
   if (placeholder) {
     placeholder.replaceWith(nav);
+  }
+
+  // While a release candidate is newer than the stable release, offer its
+  // mirror under the two buttons. pages.yml writes prerelease.json on every
+  // deploy, as {"tag": null} when there is none. The mirror itself has a
+  // banner instead, so it skips this.
+  const cta = nav.querySelector(".nav-cta");
+  if (cta && !window.location.pathname.includes("/prerelease/")) {
+    fetch("prerelease.json")
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((data) => {
+        if (!data || !data.tag) return;
+        const link = document.createElement("a");
+        link.className = "nav-edge-link";
+        link.href = "prerelease/index.html";
+        const lead = document.createElement("span");
+        lead.className = "nav-edge-lead";
+        lead.textContent = "Living on the edge? ";
+        link.append(lead, `Try ${data.version} \u2192`);
+        cta.append(link);
+      })
+      .catch((e) => console.warn("Could not read prerelease.json:", e));
   }
 
   // Theme toggle.
