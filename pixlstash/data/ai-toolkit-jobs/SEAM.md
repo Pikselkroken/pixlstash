@@ -90,10 +90,11 @@ Verified against the local clone at v0.13.32 (`jobs/process/BaseSDTrainProcess.p
   newest checkpoint. Absent, the optimizer starts fresh. Its LR groups are reset to the configured
   LR after loading.
 - **The LR schedule is not resumed.** It is built afresh over the new `train.steps` and stepped to the
-  resumed step. `constant` (the default; no recipe sets one) and `constant_with_warmup` past its
-  warmup are the same either side of a restart. Every other schedule (cosine, linear, step, the
-  diffusers ones) depends on the total, so a longer run stretches it and the rate jumps where
-  training restarts: PixlStash refuses to train those on (`LocalAiToolkit.resume_refusal`).
+  resumed step (closed form), so it is spread over the new length. `constant` (the default; no
+  recipe sets one) is unchanged. A decaying one restarts warm: a cosine run trained on from its end
+  at 3,000 to 4,000 starts again at 15% of its base rate and decays to the new end; carried on as it
+  was, it would sit near zero and the extra steps would train nothing. Training on from an earlier
+  step to the old total repeats the original schedule exactly. Every schedule is offered.
 - **`loss_log.db`** drops rows past the resumed step by itself.
 - **From the final:** PixlStash renames `<name>.safetensors` to `<name>_<step:09d>.safetensors` (on
   POSIX the rename makes it the newest ctime; on Windows ctime is creation time and the final was

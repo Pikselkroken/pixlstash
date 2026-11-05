@@ -2662,20 +2662,9 @@ def test_a_cut_off_checkpoint_is_not_offered(hub, repo_dir):
     assert steps == [4]
 
 
-@pytest.mark.parametrize(
-    ("schedule", "offered"),
-    [
-        (None, True),
-        ("constant", True),
-        ("constant_with_warmup", True),
-        ("cosine", False),
-        ("linear", False),
-    ],
-)
-def test_only_a_schedule_that_resumes_cleanly_is_trained_longer(
-    hub, repo_dir, schedule, offered
-):
-    """ai-toolkit rebuilds the LR schedule over the new length on a resume."""
+@pytest.mark.parametrize("schedule", [None, "constant", "cosine", "linear"])
+def test_every_schedule_is_trained_longer(hub, repo_dir, schedule):
+    """ai-toolkit spreads the LR schedule over the new length; none is refused."""
     service = _make_service(
         hub,
         repo_dir,
@@ -2692,10 +2681,7 @@ def test_only_a_schedule_that_resumes_cleanly_is_trained_longer(
     reason = service.train_longer_options(
         training_runs.get_run_by_uuid(hub, run["uuid"])
     )["reason"]
-    if offered:
-        assert reason is None
-    else:
-        assert schedule in reason
+    assert reason is None
 
 
 def test_a_run_trained_longer_draws_deferred_previews_only_for_its_new_steps(

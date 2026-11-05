@@ -480,12 +480,8 @@ class TrainingService:
             reason = "It is still training."
         elif not steps:
             reason = "It kept no checkpoint to train on from."
-        elif not run.get("rendered_config"):
+        elif not self._read_json(run.get("rendered_config")):
             reason = "Its settings were not recorded."
-        elif refusal := LocalAiToolkit.resume_refusal(
-            self._read_json(run["rendered_config"])
-        ):
-            reason = refusal
         elif not run.get("dataset_snapshot_path") or not os.path.isdir(
             run["dataset_snapshot_path"]
         ):

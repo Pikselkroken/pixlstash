@@ -11681,8 +11681,8 @@ SEAM.md "Training on"), writes the run's rendered config back into a template
 (`template_from_rendered`) as its pending spec with `continuation`, and records
 `continued_from_step`, `continued_at` and `set_aside_take` on the row. The
 worker skips the dataset build and the memory check for it. A checkpoint that
-does not read whole is not offered, and a run whose LR schedule depends on its
-length is refused (`resume_refusal`). When it is imported,
+does not read whole is not offered; the LR schedule is spread over the new
+length, so a decaying one restarts warm (SEAM.md). When it is imported,
 `Vault._import_trained_longer` renames the shelf's own copies out of the way
 (the old final to its stamped step, a rewound take's later steps to
 `<stem>_take-<n>_<step>`) and adds only the new steps and the new final to the

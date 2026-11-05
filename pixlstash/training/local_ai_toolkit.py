@@ -438,37 +438,6 @@ class LocalAiToolkit(TrainerBackend):
         return take_name
 
     @staticmethod
-    def resume_refusal(config: dict) -> str | None:
-        """Why a run with this rendered config does not train on cleanly, or None.
-
-        On a resume ai-toolkit restores the optimizer but builds its learning
-        rate schedule afresh over the new ``train.steps`` and steps it to the
-        resumed step; the schedule's own state is never saved. A constant
-        rate (its default, which no recipe changes) and a warmup-then-constant
-        one past their warmup are the same either side of the restart. Every
-        other schedule depends on the total, so a longer run would stretch it
-        and the rate would jump where training starts again.
-
-        Args:
-            config: The run's rendered config.
-
-        Returns:
-            A sentence naming the schedule, or None when it resumes cleanly.
-        """
-        try:
-            train = config["config"]["process"][0].get("train") or {}
-        except (KeyError, IndexError, TypeError, AttributeError):
-            return "Its settings could not be read."
-        schedule = train.get("lr_scheduler") or "constant"
-        if schedule in ("constant", "constant_with_warmup"):
-            return None
-        return (
-            f"It trained with a {schedule} learning-rate schedule, which "
-            "ai-toolkit stretches over the new length, so the rate would jump "
-            "where training starts again."
-        )
-
-    @staticmethod
     def template_from_rendered(config: dict) -> dict:
         """A run's rendered config, turned back into its template.
 
