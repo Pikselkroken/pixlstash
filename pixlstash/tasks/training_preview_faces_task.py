@@ -14,6 +14,7 @@ from pixlstash.tasks.base_task import BaseTask
 from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.training import preview_likeness
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.insightface_model_utils import DEFAULT_MODEL_PACK
 from pixlstash.utils.vram_utils import is_vram_oom
 
@@ -53,10 +54,18 @@ class TrainingPreviewFacesTask(BaseTask):
         )
         found: dict = {}
         for filename, path in self._previews:
-            img, _ = ImageUtils.load_image_bgr_reduced(
-                path, FaceExtractionTask.INFERENCE_MAX_SIDE
-            )
-            if img is None:
+            if VideoUtils.is_video_file(path):
+                # A video model previews as clips: read the frames the library
+                # samples for its own videos, and keep every face they hold.
+                images = [
+                    frame for _, frame in FaceExtractionTask._read_video_frames(path)[0]
+                ]
+            else:
+                img, _ = ImageUtils.load_image_bgr_reduced(
+                    path, FaceExtractionTask.INFERENCE_MAX_SIDE
+                )
+                images = [] if img is None else [img]
+            if not images:
                 # Kept as unreadable rather than "no face": it says nothing
                 # about the step, and is not handed out again.
                 logger.warning(
@@ -65,7 +74,13 @@ class TrainingPreviewFacesTask(BaseTask):
                 found[filename] = None
             else:
                 try:
-                    faces = FaceExtractionTask.detect_faces_in_images(app, [img])[0]
+                    faces = [
+                        face
+                        for per_image in FaceExtractionTask.detect_faces_in_images(
+                            app, images
+                        )
+                        for face in per_image
+                    ]
                 except Exception as exc:
                     if is_vram_oom(exc):
                         raise
