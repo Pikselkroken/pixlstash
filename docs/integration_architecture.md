@@ -2349,7 +2349,7 @@ The decision to watermark is made server-side per request based on `User.embed_w
 - **Content**: image files or `.zip` archives (extracted server-side).
 - **Deduplication**: server computes `pixel_sha` (SHA-256 of decoded pixels) and skips content it already has, **including content sitting in the Scrapheap**. See below.
 - **Async**: the response includes a `task_id`. The frontend polls `GET /api/v1/pictures/import/status?task_id=…` for completion percentage.
-- **Real-time**: as pictures are persisted, the backend also broadcasts `picture_imported` over the WebSocket carrying the uniform envelope (§8). The SPA distinguishes its **own** upload (drives a progress dialog) from a **foreign owner tab** (slick insert) and from **external** imports (the "New pictures" pill) via `source`/`origin_client_id`.
+- **Real-time**: as pictures are persisted, the backend also broadcasts `picture_imported` over the WebSocket carrying the uniform envelope (§8). The SPA distinguishes its **own** upload (drives the arriving tiles in the grid) from a **foreign owner tab** (slick insert) and from **external** imports (the "New pictures" pill) via `source`/`origin_client_id`.
 
 **Contract**: the SPA sets `isUploadInProgress` for the duration of its own upload so that incoming `picture_imported` events don't double-count.
 
