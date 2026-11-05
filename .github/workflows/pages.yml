@@ -7,6 +7,7 @@ on:
     paths:
       - 'website/**'
       - '.github/workflows/pages.yml'
+      - 'scripts/build_prerelease_site.py'
   workflow_dispatch:
 
 permissions: {}
@@ -36,10 +37,48 @@ jobs:
         with:
           enablement: true
 
+      # Every deploy replaces the whole site, so /prerelease/ is rebuilt on
+      # each run, from the newest release candidate that is newer than the
+      # stable release (or as a redirect when there is none). Publishing a new
+      # RC's mirror is a manual run: gh workflow run pages.yml --ref main
+      - name: List releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 50 \
+            --json tagName,isPrerelease,isDraft > "$RUNNER_TEMP/releases.json"
+
+      - name: Select release candidate
+        id: select
+        run: |
+          python3 scripts/build_prerelease_site.py select \
+            --releases-json "$RUNNER_TEMP/releases.json"
+
+      - name: Check out release candidate website
+        if: steps.select.outputs.tag != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.select.outputs.tag }}
+          path: rc
+          sparse-checkout: website
+          persist-credentials: false
+
+      - name: Assemble site
+        env:
+          RC_TAG: ${{ steps.select.outputs.tag }}
+        run: |
+          cp -r website _site
+          if [ -n "$RC_TAG" ]; then
+            python3 scripts/build_prerelease_site.py build --site-dir _site \
+              --rc-website rc/website --tag "$RC_TAG"
+          else
+            python3 scripts/build_prerelease_site.py build --site-dir _site
+          fi
+
       - name: Upload website artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: website
+          path: _site
 
       - name: Deploy to GitHub Pages
         id: deployment
