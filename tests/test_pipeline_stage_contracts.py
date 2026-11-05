@@ -390,7 +390,7 @@ def test_a_full_card_is_never_recorded_as_no_faces():
         pass
 
     class _Runner:
-        def __init__(self, _app):
+        def __init__(self, _app, **_kwargs):
             pass
 
         def run_batch(self, _images):
@@ -419,7 +419,7 @@ def test_a_non_memory_detector_failure_still_degrades_to_no_faces():
     import pixlstash.tasks.face_extraction_task as module
 
     class _Runner:
-        def __init__(self, _app):
+        def __init__(self, _app, **_kwargs):
             pass
 
         def run_batch(self, _images):
@@ -514,7 +514,7 @@ def _clip_with_failing_runner(tmp_path, monkeypatch, exc, picture_id):
     """One clip whose detector raises *exc*; returns ``(task, picture)``."""
 
     class _FailingRunner:
-        def __init__(self, _app):
+        def __init__(self, _app, **_kwargs):
             pass
 
         def run_batch(self, _images):

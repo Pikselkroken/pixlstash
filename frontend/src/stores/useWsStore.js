@@ -63,6 +63,15 @@ export const useWsStore = defineStore("ws", () => {
   // and reopened. Deliberately narrower than `pixels`, which a thumbnail
   // regeneration and a layout move also raise without turning anything.
   const wsOrientationUpdate = ref({ key: 0, pictureIds: [] });
+  // Signals a "Detect faces again" finished: which pictures, how many faces it
+  // added, and which tab asked. The open lightbox re-reads its face boxes, and
+  // useFaceRedetect offers a more sensitive run when none were added.
+  const wsFacesUpdate = ref({
+    key: 0,
+    pictureIds: [],
+    newFaces: null,
+    originClientId: null,
+  });
   const wsPluginProgress = ref({ key: 0, payload: null });
   const isUploadInProgress = ref(false);
 
@@ -129,6 +138,7 @@ export const useWsStore = defineStore("ws", () => {
     wsDetectionUpdate,
     wsTextUpdate,
     wsOrientationUpdate,
+    wsFacesUpdate,
     wsPluginProgress,
     isUploadInProgress,
     clientId,

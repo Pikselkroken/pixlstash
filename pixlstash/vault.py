@@ -2004,6 +2004,23 @@ class Vault:
                 )
             return
 
+        if task.type == "FaceModelRefreshTask" and task.params.get("redetect"):
+            picture_ids = result.get("picture_ids") or []
+            if picture_ids:
+                # "faces" is card content: the grid re-reads the boxes in place.
+                self.notify(
+                    EventType.CHANGED_PICTURES,
+                    {
+                        "picture_ids": picture_ids,
+                        "change_kind": "updated",
+                        "fields": ["faces"],
+                        "origin_client_id": task.params.get("origin_client_id"),
+                        "new_faces": result.get("new_faces", 0),
+                    },
+                )
+                self.notify(EventType.CHANGED_FACES)
+            return
+
         changed = result.get("changed") if isinstance(result, dict) else None
         if not changed:
             return

@@ -37,6 +37,7 @@ from pixlstash.services.set_lock_service import (
 )
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.stacking import normalize_stack_positions
+from pixlstash.tasks.face_model_refresh_task import FaceModelRefreshTask
 from pixlstash.utils.field_allowlist import (
     PICTURE_EXTRA_SERVABLE_FIELDS,
     require_servable_field,
@@ -211,6 +212,8 @@ class DetectPicturesResponse(BaseModel):
     task_id: Optional[str] = None
     picture_ids: list[int] = []
     prompt: str = ""
+    target: str = "objects"
+    sensitive: bool = False
 
 
 class PicturePatchResponse(BaseModel):
@@ -942,7 +945,14 @@ def register_routes(router, server):
             "detection; with a non-empty `prompt` it runs open-vocabulary "
             "phrase grounding for that phrase. Detected labelled boxes are "
             "stored per picture (replacing any previous detections) and "
-            "progress surfaces in the task manager."
+            "progress surfaces in the task manager.\n\n"
+            'With `target: "faces"` it detects faces again instead (`prompt` '
+            "is ignored): a face that matches a stored one (by place or by "
+            "likeness) takes the fresh box and embedding and keeps its person, "
+            "a new face is added, a hand-drawn box is left alone, and a stored "
+            "face naming a person that matches nothing is kept as it was. "
+            "`sensitive: true` runs that detection at a lower confidence "
+            "threshold. The completion event reports `new_faces`."
         ),
         response_model=DetectPicturesResponse,
     )
@@ -975,10 +985,16 @@ def register_routes(router, server):
                 status_code=400, detail="At least one valid picture id is required"
             )
 
+        target = payload.get("target") or "objects"
+        if target not in ("objects", "faces"):
+            raise HTTPException(
+                status_code=400, detail='target must be "objects" or "faces"'
+            )
         prompt = payload.get("prompt") or ""
         if not isinstance(prompt, str):
             prompt = str(prompt)
-        prompt = prompt.strip()
+        prompt = "" if target == "faces" else prompt.strip()
+        sensitive = payload.get("sensitive") is True
 
         # Scope guard (BOLA): a scoped token may only run detection on pictures
         # within its granted resource. None == owner / unscoped == no filter; an
@@ -1010,15 +1026,25 @@ def register_routes(router, server):
         if not pics:
             raise HTTPException(status_code=404, detail="No pictures found")
 
-        from pixlstash.tasks.detection_task import DetectionTask
+        if target == "faces":
+            task = FaceModelRefreshTask(
+                server.vault.db,
+                engine,
+                list(pics),
+                redetect=True,
+                origin_client_id=origin_client_id,
+                sensitive=sensitive,
+            )
+        else:
+            from pixlstash.tasks.detection_task import DetectionTask
 
-        task = DetectionTask(
-            server.vault.db,
-            engine,
-            list(pics),
-            prompt=prompt or None,
-            origin_client_id=origin_client_id,
-        )
+            task = DetectionTask(
+                server.vault.db,
+                engine,
+                list(pics),
+                prompt=prompt or None,
+                origin_client_id=origin_client_id,
+            )
         task_id = server.vault.submit_task(task)
         if task_id is None:
             raise HTTPException(status_code=503, detail="Task runner not available.")
@@ -1028,6 +1054,8 @@ def register_routes(router, server):
             "task_id": task_id,
             "picture_ids": [pic.id for pic in pics],
             "prompt": prompt,
+            "target": target,
+            "sensitive": sensitive and target == "faces",
         }
 
     @router.get(

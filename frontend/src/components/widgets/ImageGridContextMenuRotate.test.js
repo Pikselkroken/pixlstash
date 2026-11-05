@@ -219,13 +219,18 @@ describe("ImageGridContextMenu - groups", () => {
     expect(groups(wrapper)).toEqual(["analyse", "adjust", "restore", "find"]);
   });
 
-  it("draws Analyse as the bare Segment row when it has no models to list", () => {
+  it("draws Analyse with no models too: Segment and Detect faces again", async () => {
     const wrapper = mountMenu();
-    expect(groups(wrapper)).not.toContain("analyse");
-    const segment = wrapper
+    expect(groups(wrapper)).toContain("analyse");
+    await wrapper.find('[data-group="analyse"]').trigger("mouseenter");
+    const sub = wrapper.find('[data-group="analyse"] .ctx-submenu');
+    expect(sub.text()).toContain("Segment");
+    const faces = sub
       .findAll("button.ctx-item")
-      .find((b) => b.html().includes("mdi-shape-outline"));
-    expect(segment.element.closest(".ctx-submenu")).toBeNull();
+      .find((b) => b.text().includes("Detect faces again"));
+    await faces.trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(wrapper.emitted("detect-faces")).toHaveLength(1);
   });
 
   it("lists the models under a heading inside Analyse, not a third level", async () => {

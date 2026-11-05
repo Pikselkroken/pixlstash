@@ -188,6 +188,56 @@ def test_detect_unscoped_owner_processes_all_ids(monkeypatch):
         gc.collect()
 
 
+def test_detect_faces_queues_a_redetect(monkeypatch):
+    """`target: "faces"` queues the face re-detection, scope-filtered the same way."""
+    temp_dir, server, client, picture_ids = _setup_server_with_pictures()
+    try:
+        in_scope, out_of_scope = picture_ids[0], picture_ids[1]
+        monkeypatch.setattr(
+            crud_module,
+            "fetch_scope_allowed_picture_ids",
+            lambda server, request: {in_scope},
+        )
+        captured = {}
+
+        def _capture(task):
+            captured["t"] = task
+            return "test-task-id"
+
+        monkeypatch.setattr(server.vault, "submit_task", _capture)
+
+        r = client.post(
+            f"{API}/pictures/detect",
+            json={
+                "picture_ids": [in_scope, out_of_scope],
+                "target": "faces",
+                "prompt": "dog",
+                "sensitive": True,
+            },
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["picture_ids"] == [in_scope]
+        assert body["target"] == "faces"
+        assert body["prompt"] == ""
+        task = captured["t"]
+        assert task.type == "FaceModelRefreshTask"
+        assert task.params["redetect"] is True
+        assert task.params["sensitive"] is True
+        assert body["sensitive"] is True
+        assert task.params["picture_ids"] == [in_scope]
+
+        r = client.post(
+            f"{API}/pictures/detect",
+            json={"picture_ids": [in_scope], "target": "hands"},
+        )
+        assert r.status_code == 400, r.text
+    finally:
+        server.__exit__(None, None, None)
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_detect_requires_picture_ids():
     temp_dir, server, client, _picture_ids = _setup_server_with_pictures()
     try:

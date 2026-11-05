@@ -293,6 +293,7 @@
             @compare-pictures="$emit('compare-pictures')"
             @reverse-image-search="$emit('reverse-image-search')"
             @segment="$emit('segment')"
+            @detect-faces="$emit('detect-faces')"
             @rotate-left="$emit('rotate-left')"
             @rotate-right="$emit('rotate-right')"
             @remove-from-group="$emit('remove-from-group')"
@@ -425,6 +426,7 @@ const emit = defineEmits([
   "generate-description",
   "reverse-image-search",
   "segment",
+  "detect-faces",
   "rotate-left",
   "rotate-right",
   "selection-menu-open",

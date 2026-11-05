@@ -20,6 +20,7 @@ For a batch of N images averaging F faces each the saving is:
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -48,6 +49,19 @@ class FaceResult:
 # (see ``ORT_ARENA_SHARE``); the chunk bounds its peak anyway.
 RECOGNITION_CHUNK = 16
 
+# One lock per detector object. The detector reads its threshold from an
+# attribute, so a run at another threshold sets it for its own loop and puts it
+# back; every detection loop holds the lock so none reads a borrowed threshold.
+# ponytail: serialises detection on ONE shared detector (the GPU queue already
+# runs one task at a time); the GPU and CPU-spillover detectors stay parallel.
+_DET_LOCKS: dict[int, threading.Lock] = {}
+_DET_LOCKS_GUARD = threading.Lock()
+
+
+def _detector_lock(det_model) -> threading.Lock:
+    with _DET_LOCKS_GUARD:
+        return _DET_LOCKS.setdefault(id(det_model), threading.Lock())
+
 
 class BatchedFaceRunner:
     """Drop-in replacement for repeated ``FaceAnalysis.get()`` calls.
@@ -63,9 +77,11 @@ class BatchedFaceRunner:
         per_image_faces = runner.run_batch(images)   # list[list[FaceResult]]
     """
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, det_thresh: float | None = None) -> None:
         self._det_model = app.det_model
         self._rec_model = app.models.get("recognition")
+        # None keeps the threshold the app was prepared with.
+        self._det_thresh = det_thresh
 
     def run_batch(self, images: list[np.ndarray | None]) -> list[list[FaceResult]]:
         """Detect and recognise faces in a batch of images.
@@ -87,12 +103,23 @@ class BatchedFaceRunner:
 
         # ── Phase 1: detection - one image at a time (ONNX batch dim = 1) ──
         detections: list[tuple[np.ndarray | None, np.ndarray, np.ndarray | None]] = []
-        for img in images:
-            if img is None:
-                detections.append((None, np.empty((0, 5), dtype=np.float32), None))
-                continue
-            bboxes, kpss = self._det_model.detect(img)
-            detections.append((img, bboxes, kpss))
+        with _detector_lock(self._det_model):
+            override = self._det_thresh is not None
+            if override:
+                prepared_thresh = self._det_model.det_thresh
+                self._det_model.det_thresh = self._det_thresh
+            try:
+                for img in images:
+                    if img is None:
+                        detections.append(
+                            (None, np.empty((0, 5), dtype=np.float32), None)
+                        )
+                        continue
+                    bboxes, kpss = self._det_model.detect(img)
+                    detections.append((img, bboxes, kpss))
+            finally:
+                if override:
+                    self._det_model.det_thresh = prepared_thresh
 
         # ── Phase 2: collect aligned crops for batched recognition ──────────
         # crop_refs: (img_idx, face_i, aligned_crop)

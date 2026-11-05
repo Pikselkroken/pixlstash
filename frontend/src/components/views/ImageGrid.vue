@@ -16,6 +16,7 @@
     :detectionUpdate="wsStore.wsDetectionUpdate"
     :textUpdate="wsStore.wsTextUpdate"
     :orientationUpdate="wsStore.wsOrientationUpdate"
+    :facesUpdate="wsStore.wsFacesUpdate"
     :showStacks="gridStore.showStacks"
     :showProblemIcon="gridStore.showProblemIcon"
     :favouritable="!isScrapheapView"
@@ -154,6 +155,7 @@
       @edit-pictures="editSelection"
       @compare-pictures="compareSelection"
       @segment="openSegmentDialog"
+      @detect-faces="detectFacesOnSelection"
       @auto-tag="handleAutoTag"
       @generate-description="handleGenerateDescription"
       @share-picture="sharePicture"
@@ -1245,6 +1247,7 @@
           @generate-description="handleGenerateDescription"
           @reverse-image-search="handleReverseImageSearch"
           @segment="openSegmentDialog"
+          @detect-faces="detectFacesOnSelection"
           @rotate-left="rotateSelectedPictures(ROTATE_CCW)"
           @rotate-right="rotateSelectedPictures(ROTATE_CW)"
           @selection-menu-open="toolbarSelectionMenuOpen = $event"
@@ -1501,6 +1504,7 @@ import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useWsStore } from "../../stores/useWsStore";
+import { useFaceRedetect } from "../../composables/useFaceRedetect";
 import { useSearchStore } from "../../stores/useSearchStore";
 import {
   ALL_PICTURES_ID,
@@ -8563,6 +8567,17 @@ async function confirmSegment() {
   } catch (err) {
     console.error("Object detection request failed:", err);
   }
+}
+
+const { detectFacesAgain } = useFaceRedetect();
+
+function detectFacesOnSelection() {
+  if (isReadOnly.value || !props.backendUrl) return;
+  const ids = selectedImageIds.value
+    .map((id) => Number(getPictureId(id)))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  // The cards re-read their face boxes on the run's `faces` event.
+  void detectFacesAgain(ids);
 }
 
 function sharePicture() {
