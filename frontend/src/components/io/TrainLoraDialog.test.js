@@ -776,6 +776,104 @@ describe("opened from the Models workspace (#2169)", () => {
     expect(tile("character:4").find("img").exists()).toBe(true);
   });
 
+  it("narrows the people and sets by name, and starts whole on each open", async () => {
+    const wrapper = mount(TrainLoraDialog, globalOpts);
+    const store = useTrainingStore();
+    store.openToPick();
+    await flushPromises();
+
+    const ids = () =>
+      wrapper
+        .findAll('[data-testid="tld-train-on"] [role="radio"]')
+        .map((b) => b.attributes("data-testid"));
+    const find = () => wrapper.find('input[aria-label="Find a person or set"]');
+    expect(ids()).toEqual(["tld-source-character:4", "tld-source-set:9"]);
+
+    await find().setValue("  PUB ");
+    expect(ids()).toEqual(["tld-source-set:9"]);
+    await find().setValue("grand");
+    expect(ids()).toEqual(["tld-source-character:4"]);
+    await find().setValue("zzz");
+    expect(ids()).toEqual([]);
+    expect(wrapper.find('[data-testid="tld-train-on"]').text()).toContain(
+      "Nothing here matches “zzz”.",
+    );
+
+    store.closeDialog();
+    await flushPromises();
+    store.openToPick();
+    await flushPromises();
+    expect(find().element.value).toBe("");
+    expect(ids()).toEqual(["tld-source-character:4", "tld-source-set:9"]);
+
+    // The picked tile never filters out: the run's subject stays in view.
+    training.getTrainingDataset.mockResolvedValue(dataset());
+    await wrapper.find('[data-testid="tld-source-character:4"]').trigger("click");
+    await flushPromises();
+    await find().setValue("pub");
+    expect(ids()).toEqual(["tld-source-character:4", "tld-source-set:9"]);
+    await find().setValue("zzz");
+    expect(ids()).toEqual(["tld-source-character:4"]);
+
+    // Enter in the field is the field's, never Start's (AppDialog skips a
+    // handled Enter).
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    find().element.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+  });
+
+  it("shows people or sets on their own, each under its heading", async () => {
+    const wrapper = mount(TrainLoraDialog, globalOpts);
+    const store = useTrainingStore();
+    store.openToPick();
+    await flushPromises();
+
+    const picker = () => wrapper.find('[data-testid="tld-train-on"]');
+    const ids = () =>
+      picker()
+        .findAll('[role="radio"]')
+        .map((b) => b.attributes("data-testid"));
+    const groups = () => picker().findAll(".tld-source-group").map((g) => g.text());
+    const kind = (label) =>
+      picker()
+        .findAll(".seg button")
+        .find((b) => b.text().startsWith(label))
+        .trigger("click");
+
+    expect(picker().findAll(".seg button").map((b) => b.text())).toEqual([
+      "All",
+      "People · 1",
+      "Sets · 1",
+    ]);
+    expect(groups()).toEqual(["People", "Sets"]);
+
+    await kind("Sets");
+    expect(ids()).toEqual(["tld-source-set:9"]);
+    expect(groups()).toEqual(["Sets"]);
+    await kind("People");
+    expect(ids()).toEqual(["tld-source-character:4"]);
+    expect(groups()).toEqual(["People"]);
+
+    // The pick stays in view whatever is shown.
+    training.getTrainingDataset.mockResolvedValue(dataset());
+    await wrapper.find('[data-testid="tld-source-character:4"]').trigger("click");
+    await flushPromises();
+    await kind("Sets");
+    expect(ids()).toEqual(["tld-source-character:4", "tld-source-set:9"]);
+
+    // Each open starts on All.
+    store.closeDialog();
+    await flushPromises();
+    store.openToPick();
+    await flushPromises();
+    await wrapper.find('input[aria-label="Find a person or set"]').setValue("");
+    expect(groups()).toEqual(["People", "Sets"]);
+  });
+
   it("lands on the new run's page when Start is pressed from Training runs", async () => {
     const wrapper = mount(TrainLoraDialog, globalOpts);
     const store = useTrainingStore();
