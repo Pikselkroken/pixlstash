@@ -314,12 +314,20 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* Above the Train dialog (Vuetify overlays sit under --z-modal), under the
-   notice surface so the tour's own toasts stay readable. */
+/* One layer for the whole tour: above the Train dialog (Vuetify overlays
+   sit under --z-modal) and under the notice surface, so the tour's own toasts
+   stay readable. Inside it the scrim, ring and panel stack in DOM order. */
+.wct {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  pointer-events: none;
+}
+
 .wct-scrim {
   position: fixed;
   inset: 0;
-  z-index: calc(var(--z-modal) + 1);
+  pointer-events: auto;
   background: rgba(var(--v-theme-scrim), 0.8);
 }
 
@@ -327,7 +335,6 @@ onBeforeUnmount(() => {
    target under it does. */
 .wct-ring {
   position: fixed;
-  z-index: calc(var(--z-modal) + 2);
   pointer-events: none;
   border-radius: var(--radius-sm);
   box-shadow:
@@ -341,7 +348,7 @@ onBeforeUnmount(() => {
   left: 50%;
   bottom: var(--space-5);
   transform: translateX(-50%);
-  z-index: calc(var(--z-modal) + 3);
+  pointer-events: auto;
   width: min(680px, calc(100vw - 2 * var(--space-5)));
   display: grid;
   grid-template-columns: auto 1fr;

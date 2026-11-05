@@ -317,7 +317,7 @@ function openStep(step) {
 .wc-cb {
   width: 16px;
   height: 16px;
-  margin-top: 2px;
+  margin-top: var(--space-1);
   display: inline-flex;
   align-items: center;
   justify-content: center;

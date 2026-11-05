@@ -1172,6 +1172,9 @@ defineExpose({
              stats rail to inspect, so on any route it rides over the rail is
              its Reviews inspector (open reviews, archived receipts, stickers)
              instead. -->
+        <!-- The 2.0 What's changed checklist (#2145) is a second pane on the
+             media rail, beside Details in the band both panes draw, so it
+             sits just ahead of the stats panel. -->
         <ReviewsInspector v-if="reviewSessionsStore.overlayOpen" />
         <template v-else>
         <TemplateInspector
@@ -1179,8 +1182,6 @@ defineExpose({
         />
         <WorkflowTab v-else-if="isWorkflowsView" />
         <ModelsRail v-else-if="isModelsView" />
-        <!-- The 2.0 checklist (#2145): a second pane on the grid's rail,
-             beside Details in the band both panes draw. -->
         <WhatsChangedRail v-else-if="whatsChanged.railShown" />
         <StatsSidebar v-else
           ref="statsSidebarRef"
