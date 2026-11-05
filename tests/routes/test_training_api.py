@@ -33,6 +33,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pixlstash.hub import dataset_snapshots, training_runs
+from pixlstash.resources import comfyui_tenant
 from pixlstash.resources.arbiter import Tenant, arbiter
 from pixlstash.routes import training as training_routes
 from pixlstash.routes.training import _redact_host_paths
@@ -1149,6 +1150,31 @@ def test_a_run_that_fits_only_with_comfyui_quit_says_so_and_takes_the_answer():
         body = owner.get(f"/training/jobs/{done_id}/live").json()
         assert body["comfyui_quit"] == {"at": "2026-10-26T09:00:00+00:00"}
     finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_queued_run_points_the_arbiter_at_comfyui(monkeypatch):
+    """A run queued by Train longer or resumed at start-up asks for its card
+    before any ComfyUI run or the training dialog has pointed the ComfyUI
+    probe; the lease request itself must, or the arbiter never sees ComfyUI
+    to clear it or offer to quit it."""
+    temp_dir, owner, server, _read_token = _setup()
+    registered = arbiter().probe(Tenant.COMFYUI)
+    try:
+        monkeypatch.setattr(comfyui_tenant, "_probe", None)
+        # Bound only when background workers run, as they do in the app.
+        monkeypatch.setattr(server.vault, "_arbiter", arbiter(), raising=False)
+        r = owner.patch(
+            "/users/me/config", json={"comfyui_url": "http://127.0.0.1:18188/"}
+        )
+        assert r.status_code == 200, r.text
+        lease = server.vault._request_training_gpu("LoRA training 'x'", "u", 1000, 0)
+        lease.release()
+        assert comfyui_tenant._probe is not None
+        assert comfyui_tenant._probe.base_url == "http://127.0.0.1:18188"
+        assert arbiter().probe(Tenant.COMFYUI) is comfyui_tenant._probe
+    finally:
+        arbiter().register_probe(Tenant.COMFYUI, registered)
         _teardown(temp_dir, server)
 
 

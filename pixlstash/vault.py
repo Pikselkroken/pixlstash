@@ -50,6 +50,7 @@ from .tasks.device_release_task import DeviceReleaseTask
 from .task_runner import TaskRunner
 from .resources.aitoolkit_tenant import AiToolkitProbe
 from .resources.arbiter import Lease, LeaseKind, Tenant, arbiter
+from .resources.comfyui_tenant import probe as comfyui_probe
 from .resources.ledger import ledger
 from .work_planner import WorkPlanner
 from .tasks import TaskType
@@ -73,6 +74,7 @@ from pixlstash.services.workflow_ghost_service import DEFAULT_GHOST_RETENTION
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.utils.service.export_utils import ExportUtils
 from pixlstash.services.training_service import ADOPT_QUIET_S, TrainingService
+from pixlstash.services.comfyui_service import RUN_CLIENT_ID
 from pixlstash.services.stack_detector import set_cover
 from pixlstash.hub import training_runs
 from pixlstash.services.run_importer import STATUS_IMPORTED, RunImporter
@@ -1363,6 +1365,7 @@ class Vault:
         ComfyUI frees its cache; the run's own process then has the card. The
         needs are those of the run's resolved memory profile.
         """
+        self._watch_comfyui()
         return self._arbiter.request(
             Tenant.AITOOLKIT,
             label,
@@ -1373,6 +1376,34 @@ class Vault:
             job_id=job_uuid,
         )
 
+    def _watch_comfyui(self) -> None:
+        """Point the arbiter's ComfyUI probe at the owner's ComfyUI.
+
+        Unpointed, the arbiter sees no ComfyUI: a run queued by Train longer
+        or resumed at start-up, before any ComfyUI run or the training dialog
+        pointed it, then never has ComfyUI cleared or offers to quit it, and
+        an adopted run counts ComfyUI's memory as other apps'.
+        """
+        auth = self.auth_service
+        if auth is None:
+            logger.warning(
+                "No owner attached yet; the training run waits without "
+                "ComfyUI's memory in view"
+            )
+            return
+        try:
+            user = auth.get_user()
+        except Exception as exc:
+            logger.warning(
+                "Could not read the owner's ComfyUI address; the training run "
+                "waits without ComfyUI's memory in view: %s",
+                exc,
+            )
+            return
+        url = (getattr(user, "comfyui_url", None) or "").rstrip("/")
+        if url:
+            comfyui_probe(RUN_CLIENT_ID, url)
+
     def _adopt_training_gpu(
         self, label: str, job_uuid: str, vram_mb: int, ram_mb: int
     ) -> Lease:
@@ -1381,6 +1412,7 @@ class Vault:
         See :meth:`ResourceArbiter.adopt`: exclusive and unshrinkable for
         ``ADOPT_QUIET_S``, so PixlStash's own work keeps off the card.
         """
+        self._watch_comfyui()
         return self._arbiter.adopt(
             Tenant.AITOOLKIT,
             label,
