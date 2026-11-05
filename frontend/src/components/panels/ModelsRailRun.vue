@@ -651,6 +651,19 @@ watch(
   },
 );
 
+// The same card's job changed under it: a run trained longer goes from failed,
+// stopped or finished back to queued with the same key. The live view read
+// before still says how it ended, and it outranks the card's job in `current`,
+// so read it again (and poll, now it trains) rather than keep its old failure.
+watch(
+  () => props.card.job?.status,
+  (now, before) => {
+    if (now === before || now === live.value?.status) return;
+    showFull.value = false;
+    load().then(schedule);
+  },
+);
+
 onMounted(() => {
   lists.refresh("characters");
   lists.refresh("sets");

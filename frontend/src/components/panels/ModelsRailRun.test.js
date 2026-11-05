@@ -327,6 +327,25 @@ describe("the rail's training card", () => {
     expect(wrapper.find('[data-testid="mrr-full-toggle"]').exists()).toBe(false);
   });
 
+  it("drops a failure once the same run is trained longer", async () => {
+    const wrapper = await openRail(
+      { card: failedCard },
+      { ...failedLive, error: "no such column: job_config", report: null },
+    );
+    const progress = () => wrapper.find("[data-section='progress']");
+    expect(progress().attributes("count")).toBe("failed");
+    expect(wrapper.find('[data-testid="mrr-reason"]').exists()).toBe(true);
+
+    // Train longer queues the same run: same card key, the store's job queued.
+    getTrainingJobLive.mockResolvedValue({ ...failedLive, status: "queued", error: null });
+    await wrapper.setProps({
+      card: { ...failedCard, live: true, job: { ...failedCard.job, status: "queued" } },
+    });
+    await flushPromises();
+    expect(progress().attributes("count")).toBe("Waiting for the GPU");
+    expect(wrapper.find('[data-testid="mrr-reason"]').exists()).toBe(false);
+  });
+
   it("exports the frozen dataset from the rail", async () => {
     const blob = new Blob(["zip"]);
     exportTrainingSnapshot.mockResolvedValue({ blob, filename: "run_dataset.zip" });
