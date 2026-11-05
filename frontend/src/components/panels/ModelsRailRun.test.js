@@ -294,11 +294,37 @@ describe("the rail's training card", () => {
 
   it("keeps the whole summary while the run is only picked in the grid", async () => {
     const wrapper = await openRail({ card: failedCard });
-    expect(sections(wrapper)).toEqual(["progress", "samples", "ckpts", "setup"]);
+    expect(sections(wrapper)).toEqual([
+      "progress",
+      "samples",
+      "setup",
+      "trained",
+      "ckpts",
+    ]);
     // One loss, said to be smoothed, as the page says it.
     expect(wrapper.find("[data-section='progress']").text()).toMatch(/Loss\s*0\.244\s*smoothed/);
-    expect(wrapper.find("[data-section='setup']").text()).toContain("Old sailor · 12 pictures");
+    // The plan and the pictures it learned from, as on the run's page.
+    expect(wrapper.find("[data-section='setup']").text()).toContain(
+      "1,500 steps, a sample every 250",
+    );
+    const trained = wrapper.find("[data-section='trained']");
+    expect(trained.text()).toContain("Old sailor");
+    expect(trained.findAll("img")).toHaveLength(8);
+    expect(wrapper.find('[data-testid="mrr-export"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="mrr-shelve"]').exists()).toBe(false);
+  });
+
+  it("claims no pictures went unrecorded when the live view could not be read", async () => {
+    setActivePinia(createPinia());
+    getTrainingJobLive.mockRejectedValue(new Error("offline"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const wrapper = mount(ModelsRailRun, { props: { card: failedCard }, global: { stubs } });
+    mounted.push(wrapper);
+    await flushPromises();
+    expect(wrapper.find("[data-section='trained']").text()).not.toContain("not recorded");
+    // A run trained elsewhere has none to read: that one is said.
+    const elsewhere = await openRail({ card: { ...failedCard, job: null } });
+    expect(elsewhere.find("[data-section='trained']").text()).toContain("not recorded");
   });
 
   it("cuts a trainer's whole paragraph and keeps it behind Full message", async () => {

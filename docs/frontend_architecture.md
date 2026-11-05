@@ -7078,10 +7078,11 @@ to *Models*; a card's double-click that opens a shut rail opens it on
   (status, bar, steps, time left, loss chart and value; a red *Stop* while it
   trains, *Skip previews* while a trained run draws them), *Samples* (prompts × the last four sampled steps, the no-trigger
   check prompt marked, *Open run*, which opens a run trained elsewhere from its
-  folder), *Checkpoints*
-  (each save with its step and size, and *Go to model* once the run has a model
-  on the shelf, as on the card menu), *Set-up* (trained on, base, trigger, rank ·
-  LR, folder). The loss is the chart's smoothed value, the one the run page
+  folder), *Set-up* (base, trigger, rank · LR, the plan (steps and the preview
+  interval), folder), *Trained on* (the dataset's pictures as a 3 × 3 grid with
+  *Export*; a click opens a picture in the lightbox, `?from=` bringing it back
+  to the run) and *Checkpoints* (each save with its step and size, and *Go to
+  model* once the run has a model on the shelf, as on the card menu). The loss is the chart's smoothed value, the one the run page
   shows, and says so. A run PixlStash trains is read from
   `GET /training/jobs/{id}/live`, polled every 2 s while it trains; one trained
   elsewhere is described from the folder listing alone. Several runs: the
@@ -7090,10 +7091,7 @@ to *Models*; a card's double-click that opens a shut rail opens it on
 - **With a run's page open** (`?run=<uuid>`, or `?folder-run=<name>` for one
   trained elsewhere) the rail describes that run whether
   or not the grid ticked it, with `open`: *Training* and *Samples* go (the page
-  shows them larger), *Set-up* moves to the top and gains the plan (steps and
-  the preview interval), *Trained on* holds the dataset's pictures as a 3 × 3
-  grid with *Export* (a click opens a picture in the lightbox, `?from=` bringing
-  it back to the run), and *Checkpoints* offers *Put step N on the shelf* for a
+  shows them larger), and *Checkpoints* offers *Put step N on the shelf* for a
   run that is not training: its last checkpoint, unless that checkpoint is on
   the shelf already (per checkpoint, from the live view's `coverable`), imported
   with `POST /model-imports` into the default destination (`defaultDestination`
