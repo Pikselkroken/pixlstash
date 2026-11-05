@@ -57,9 +57,17 @@ class TrainingPreviewFacesTask(BaseTask):
             if VideoUtils.is_video_file(path):
                 # A video model previews as clips: read the frames the library
                 # samples for its own videos, and keep every face they hold.
-                images = [
-                    frame for _, frame in FaceExtractionTask._read_video_frames(path)[0]
-                ]
+                try:
+                    frames, _ = FaceExtractionTask._read_video_frames(path)
+                except Exception as exc:
+                    # A broken clip is that preview's problem, not the run's.
+                    logger.warning(
+                        "Could not read the frames of training preview %s: %s",
+                        path,
+                        exc,
+                    )
+                    frames = []
+                images = [frame for _, frame in frames]
             else:
                 img, _ = ImageUtils.load_image_bgr_reduced(
                     path, FaceExtractionTask.INFERENCE_MAX_SIDE

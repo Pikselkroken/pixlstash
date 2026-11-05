@@ -227,6 +227,45 @@ def test_a_clip_preview_is_scored_from_its_frames(tmp_path, monkeypatch):
     assert run["uuid"] in finder._settled
 
 
+def test_an_unreadable_clip_is_kept_as_such_and_spares_the_rest(tmp_path, monkeypatch):
+    run, handle = _run(tmp_path)
+    samples = os.path.join(handle.save_root, "samples")
+    empty, broken = (
+        os.path.join(samples, f"1700000000000__000000500_{i}.mp4") for i in (0, 1)
+    )
+    then = time.time() - 10.0
+    for path in (empty, broken):
+        open(path, "wb").close()
+        os.utime(path, (then, then))
+    still = _sample(handle, 500, 2)
+    read = FaceExtractionTask._read_video_frames
+
+    def read_frames(path):
+        if path == broken:
+            raise cv2.error("the container is broken")
+        return read(path)
+
+    monkeypatch.setattr(
+        FaceExtractionTask, "_read_video_frames", staticmethod(read_frames)
+    )
+    monkeypatch.setattr(
+        FaceExtractionTask,
+        "get_or_init_insightface",
+        classmethod(lambda cls, engine, cpu_spillover=False: "app"),
+    )
+    monkeypatch.setattr(
+        FaceExtractionTask,
+        "detect_faces_in_images",
+        staticmethod(lambda app, images: [[SimpleNamespace(embedding=ME)]]),
+    )
+    task = _finder(tmp_path, [run]).find_task()
+    assert task._run_task() == {"previews": 3}
+    faces = preview_likeness.read_faces(handle.work_dir, "buffalo_l")
+    assert faces[os.path.basename(empty)] is None
+    assert faces[os.path.basename(broken)] is None
+    assert np.array_equal(faces[still][0], ME)
+
+
 def test_the_task_writes_faces_and_an_ended_run_settles(tmp_path, monkeypatch):
     run, handle = _run(tmp_path, status="completed", completed_at="2026-11-02")
     with_face = _sample(handle, 500, 0)
