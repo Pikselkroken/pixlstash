@@ -482,12 +482,13 @@
     >
       <div class="tm-group-head tm-group-head--finished">
         <span id="tm-finished-head" class="section-label">Finished</span>
-        <!-- Clear takes the column label's place on hover or focus, as a row's
-             actions take its figure's. It never throws away unsaved changes. -->
-        <span class="tm-group-col tm-head-swap">
-          <span class="tm-head-col" aria-hidden="true">Made</span>
+        <!-- Clear all stands in the column label's place, always shown: on
+             hover alone nobody found it. It never throws away unsaved
+             changes. -->
+        <span class="tm-group-col">
+          <span v-if="isReadOnly" aria-hidden="true">Made</span>
           <button
-            v-if="!isReadOnly"
+            v-else
             class="tm-head-act"
             type="button"
             data-testid="tm-finished-clear"
@@ -495,7 +496,7 @@
             :disabled="Boolean(dismissing) || Boolean(busy)"
             @click="clearFinished"
           >
-            Clear
+            Clear all
           </button>
         </span>
       </div>
@@ -2523,18 +2524,7 @@ const tmSystemItems = computed(() => {
   display: none;
 }
 
-/* The column label and Clear share one cell; Clear shows on hover or focus. */
-.tm-head-swap {
-  display: inline-grid;
-  justify-items: end;
-}
-
-.tm-head-swap > * {
-  grid-area: 1 / 1;
-}
-
 .tm-head-act {
-  opacity: 0;
   padding: 0;
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.85);
@@ -2545,14 +2535,9 @@ const tmSystemItems = computed(() => {
   text-decoration: underline;
 }
 
-.tm-group-head--finished:hover .tm-head-act,
-.tm-group-head--finished:focus-within .tm-head-act {
-  opacity: 1;
-}
-
-.tm-group-head--finished:hover .tm-head-col,
-.tm-group-head--finished:focus-within .tm-head-col {
-  visibility: hidden;
+.tm-head-act:disabled {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  text-decoration: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
