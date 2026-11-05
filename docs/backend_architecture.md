@@ -11834,8 +11834,10 @@ exclusive lease gets them back before it is granted, except what ComfyUI keeps
 after unloading, which only quitting it releases: the room's `comfyui`
 (`{kept_mb, held_mb, can_quit, busy}`, None without a ComfyUI read on that card)
 says how much (#2558). The training routes point the arbiter's ComfyUI probe at
-the owner's ComfyUI before reading the room, since only a ComfyUI run registers
-it otherwise. `POST /training/resolve` answers `comfyui`
+the owner's ComfyUI before reading the room, and `Vault._watch_comfyui` does
+before every training lease (asked or adopted), since only a ComfyUI run
+registers it otherwise: a run queued by Train longer or resumed at start-up
+would wait with ComfyUI unseen, never cleared and never offered to quit. `POST /training/resolve` answers `comfyui`
 (`{kept_mb, short_mb, can_quit, busy, beside}`) when the resolved profile fits
 only with ComfyUI quit, `beside` being Save memory resolved beside it.
 `POST /training/jobs` takes the owner's answer as `comfyui` (`quit` or `queue`,
