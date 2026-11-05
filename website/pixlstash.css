@@ -194,6 +194,30 @@ a {
   gap: 8px;
 }
 
+/* The two header buttons, with the release-candidate link (nav.js) under
+   them while one is in flight. */
+.nav-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.nav-cta-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.nav-edge-link {
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+  transition: color 0.12s ease;
+}
+.nav-edge-link:hover,
+.nav-edge-link:focus-visible {
+  color: var(--accent);
+}
+
 /* Theme toggle: compact icon button; moon in dark, sun in light. */
 .theme-toggle {
   display: inline-flex;
@@ -534,6 +558,11 @@ a {
   }
   .nav-actions {
     order: 2;
+  }
+  /* Only Try demo is left above it, so drop the lead-in to keep the link
+     about as wide as that button. */
+  .nav-edge-lead {
+    display: none;
   }
   /* Every page link visible: wrap onto two centred rows rather than one row
      that scrolls three of them out of sight. */
