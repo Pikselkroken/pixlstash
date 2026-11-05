@@ -290,6 +290,20 @@ def create_router(server) -> APIRouter:
         show_keyboard_hint: Optional[bool] = None
         grid_open_gesture: Optional[str] = None
         viewer_wheel_action: Optional[str] = None
+        last_seen_version: Optional[str] = Field(
+            default=None,
+            description=(
+                "The app version whose What's changed panel the owner has seen. "
+                "Blank or null resets it."
+            ),
+        )
+        whats_changed: Optional[dict] = Field(
+            default=None,
+            description=(
+                'What\'s changed progress: {"done": [step ids], "checklist": bool, '
+                '"card": bool}. Null resets it.'
+            ),
+        )
         embed_watermark: Optional[bool] = None
         keep_workflow_on_export: Optional[bool] = Field(
             default=None,

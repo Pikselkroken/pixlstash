@@ -33,6 +33,7 @@ import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useOperationStore } from "./stores/useOperationStore";
 import { DEFAULT_TIMEOUTS, useNoticeStore } from "./stores/useNoticeStore";
+import { useWhatsChangedStore } from "./stores/useWhatsChangedStore";
 import {
   useLibrariesStore,
   useLibrarySwitchStore,
@@ -65,6 +66,8 @@ import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue"
 import TelemetryConsentDialog from "./components/dialogs/TelemetryConsentDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
+import WhatsChangedRail from "./components/panels/WhatsChangedRail.vue";
+import WhatsChangedTour from "./components/widgets/WhatsChangedTour.vue";
 import InspectorEdgeTab from "./components/widgets/InspectorEdgeTab.vue";
 import NoticeHost from "./components/widgets/NoticeHost.vue";
 import ShortcutsDialog from "./components/widgets/ShortcutsDialog.vue";
@@ -157,6 +160,7 @@ const { activeLibrary, importingName } = storeToRefs(librariesStore);
 const { overlayOpen: librarySwitchOverlayOpen } =
   storeToRefs(librarySwitchStore);
 const noticeStore = useNoticeStore();
+const whatsChanged = useWhatsChangedStore();
 // Owns route → view resolution (the app's single route watcher). Route pushing
 // stays here in App.vue; see stores/useViewStore.js.
 // Keycap labels for the shortcuts dialog. The binding accepts Ctrl and Meta
@@ -589,8 +593,54 @@ function offerLoosePictures() {
   return sidebarRef.value?.offerLoosePictures?.();
 }
 
+// ── What's changed in 2.0 (#2145) ──────────────────────────────────────────
+// Whether this launch is the upgrade needs the stored config, the running
+// version and whether the library holds pictures; decided once all three are
+// in. The upgrade launch puts both rails on screen, so the checklist and the
+// tour card are seen: the one time the app opens a rail by itself.
+const libraryEmpty = ref(null);
+watch(
+  [() => whatsChanged.loaded, appVersion, libraryEmpty],
+  ([loaded, version, empty]) => {
+    if (!loaded || !version || empty === null) return;
+    whatsChanged.evaluate({ version, libraryEmpty: empty });
+  },
+);
+
+// Settings' What's new: the checklist lives on the media rail, which the
+// Workflows and Models workspaces do not have.
+watch(
+  () => whatsChanged.reopened,
+  () => {
+    if (isModelsView.value || isWorkflowsView.value) router.push("/");
+  },
+);
+
+// The training tour's moves through the app (WhatsChangedTour.vue).
+const tourActions = {
+  select: (s) =>
+    s.type === "character"
+      ? handleSelectCharacter({ id: s.id, label: s.name })
+      : handleSelectSet({ id: s.id, label: s.name }),
+  openMenu: (s) => sidebarRef.value?.openEntityMenu?.(s),
+  closeMenu: () => sidebarRef.value?.closeEntityMenu?.(),
+  openTrain: (s) => {
+    sidebarRef.value?.closeEntityMenu?.();
+    return handleTrainLora({ type: s.type, id: s.id, name: s.name });
+  },
+  closeTrain: () => trainingStore.closeDialog(),
+  goModels: () => router.push("/models/runs"),
+  isSelected: (s) =>
+    s.type === "character"
+      ? selectionStore.selectedCharacter === s.id
+      : selectionStore.selectedSet === s.id,
+  trainOpen: () => trainingStore.trainDialogOpen,
+  onModels: () => isModelsView.value,
+};
+
 /** The first count is in; an empty library gets its import offer first. */
-async function onLibraryLoaded({ empty }) {
+async function onLibraryLoaded({ empty, pictures }) {
+  libraryEmpty.value = pictures === 0;
   // The sidebar's pending-mapping auto-open watches the libraries listing, so
   // `mappingStore.wizardOpen` only answers honestly once that listing is in
   // and the watcher it feeds has flushed. Settling before either is what let
@@ -659,6 +709,7 @@ watch(
 
 /** What the closed rail would describe: the rail's own head, or `N pictures`. */
 const statsEdgeTabLabel = computed(() => {
+  if (whatsChanged.railShown) return "What's changed";
   const count = selectionStore.selectedImageIds.length;
   if (count > 1) return `${count.toLocaleString()} pictures`;
   if (count === 0) return "";
@@ -1121,6 +1172,9 @@ defineExpose({
              stats rail to inspect, so on any route it rides over the rail is
              its Reviews inspector (open reviews, archived receipts, stickers)
              instead. -->
+        <!-- The 2.0 What's changed checklist (#2145) is a second pane on the
+             media rail, beside Details in the band both panes draw, so it
+             sits just ahead of the stats panel. -->
         <ReviewsInspector v-if="reviewSessionsStore.overlayOpen" />
         <template v-else>
         <TemplateInspector
@@ -1128,6 +1182,7 @@ defineExpose({
         />
         <WorkflowTab v-else-if="isWorkflowsView" />
         <ModelsRail v-else-if="isModelsView" />
+        <WhatsChangedRail v-else-if="whatsChanged.railShown" />
         <StatsSidebar v-else
           ref="statsSidebarRef"
           :view-name="activeCategoryLabel"
@@ -1209,6 +1264,7 @@ defineExpose({
       @train="handleTrainLora"
     />
     <LibrarySwitchOverlay />
+    <WhatsChangedTour v-if="whatsChanged.tourStep" :actions="tourActions" />
   </v-app>
 </template>
 <style src="./App.css"></style>

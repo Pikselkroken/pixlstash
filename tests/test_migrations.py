@@ -1592,6 +1592,53 @@ def test_0136_adds_comfyui_connections_and_keeps_the_saved_address():
         assert again.returncode == 0, again.stderr
 
 
+def test_0143_adds_whats_changed_on_a_fresh_and_a_populated_vault():
+    """Both columns arrive either way, an existing user reads NULL (never seen,
+    nothing done), and a re-run is a no-op."""
+    columns = ("last_seen_version", "whats_changed")
+
+    def present_columns(conn):
+        return {row[1] for row in conn.execute("PRAGMA table_info(user)")}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert set(columns) <= present_columns(conn), "the baseline's create_all()"
+
+        down = _run_alembic(
+            ["downgrade", "0142_recompute_smart_score_for_face_resolution"],
+            db_url,
+            _MIGRATIONS_DIR,
+        )
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            # Each column on its own: a downgrade that drops only one leaves
+            # the other behind, which a combined check would not see.
+            for column in columns:
+                assert column not in present_columns(conn), column
+            _insert_minimal_row(conn, "user", username="owner")
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            for column in columns:
+                assert column in present_columns(conn), column
+            assert conn.execute(
+                "SELECT username, last_seen_version, whats_changed FROM user"
+            ).fetchall() == [("owner", None, None)]
+            conn.execute(
+                "UPDATE alembic_version SET version_num = ?",
+                ("0142_recompute_smart_score_for_face_resolution",),
+            )
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
 def test_0128_adds_prompt_match_once_on_a_fresh_and_a_populated_vault():
     """Column and probe index arrive either way, existing pictures read NULL
     (not scored), and a second upgrade over a vault that has both is a no-op."""

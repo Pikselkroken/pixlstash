@@ -19,6 +19,7 @@ import SidebarScopeSlot from "./SidebarScopeSlot.vue";
 import SidebarResizeHandle from "./SidebarResizeHandle.vue";
 import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
+import HeadlineTourCard from "./HeadlineTourCard.vue";
 import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import ReviewEndDialog from "../reviews/ReviewEndDialog.vue";
@@ -104,6 +105,7 @@ import {
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useWhatsChangedStore } from "../../stores/useWhatsChangedStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSetTreeExpansion } from "../../composables/useSetTreeExpansion";
@@ -139,6 +141,7 @@ const entityNames = useEntityNamesStore();
 // context menu and the review scope pickers, so they live in one store (§4).
 const entityLists = useEntityListsStore();
 const sidebarStore = useSidebarStore();
+const whatsChanged = useWhatsChangedStore();
 const lockedSetsStore = useLockedSetsStore();
 // Failures and outcomes report through the notice surface rather than a
 // blocking native alert() (docs/design/notice-surface.md §1).
@@ -4546,7 +4549,30 @@ function openCurrentSelectionEditor() {
   }
 }
 
+/**
+ * The training tour (#2145): open a person's or a set's menu on its row, as a
+ * right-click there would. False when the row is not on screen (docked, or
+ * filtered out), so the tour can say so instead of pointing at nothing.
+ */
+function openEntityMenu({ type, id }) {
+  const el = document.querySelector(`[data-tour-row="${type}:${id}"]`);
+  const item = (type === "character" ? characters.value : pictureSets.value)?.find(
+    (row) => String(row.id) === String(id),
+  );
+  if (!el || !item) return false;
+  el.scrollIntoView({ block: "nearest" });
+  const rect = el.getBoundingClientRect();
+  openSidebarCtxMenu(type, item, {
+    clientX: rect.left + rect.width / 2,
+    clientY: rect.top + rect.height / 2,
+    currentTarget: el,
+  });
+  return true;
+}
+
 defineExpose({
+  openEntityMenu,
+  closeEntityMenu: closeSidebarCtxMenu,
   refreshSidebar,
   openSettingsDialog,
   chooseLibraryFolder,
@@ -5384,6 +5410,7 @@ defineExpose({
                         },
                       ]"
                       :ref="(el) => registerCharacterRef(char.id, el)"
+                      :data-tour-row="`character:${char.id}`"
                       role="button"
                       tabindex="0"
                       :aria-pressed="
@@ -5553,6 +5580,7 @@ defineExpose({
                       @keydown="
                         onTreeRowKeydown(`s:${row.set.id}`, row.childCount, $event)
                       "
+                      :data-tour-row="`set:${row.set.id}`"
                       @contextmenu.prevent="
                         openSidebarCtxMenu('set', row.set, $event)
                       "
@@ -5802,6 +5830,7 @@ defineExpose({
                       @keydown="
                         onTreeRowKeydown(`s:${row.set.id}`, row.childCount, $event)
                       "
+                      :data-tour-row="`set:${row.set.id}`"
                       @contextmenu.prevent="
                         openSidebarCtxMenu('set', row.set, $event)
                       "
@@ -6272,6 +6301,10 @@ defineExpose({
       </template>
     </div>
     <!-- end sidebar-scroll -->
+    <!-- The 2.0 training tour's card (#2145), at the foot until dismissed. -->
+    <HeadlineTourCard
+      v-if="!sidebarStore.effectiveDocked && whatsChanged.cardShown"
+    />
     <!-- The footer band (#2159): one amber Import that names where the
          pictures will land. Owner only, and not on the docked rail. -->
     <div
@@ -6510,6 +6543,7 @@ defineExpose({
         </button>
         <button
           class="ctx-item"
+          data-tour="train-lora"
           :disabled="isReadOnly"
           @click="
             emit('train-lora', {
@@ -6605,6 +6639,7 @@ defineExpose({
              under it lead the menu. -->
         <button
           class="ctx-item"
+          data-tour="train-lora"
           :disabled="isReadOnly"
           @click="
             emit('train-lora', {

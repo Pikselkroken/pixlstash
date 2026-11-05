@@ -17,12 +17,45 @@
       v-if="open || lightbox"
       v-show="open"
       class="inspector-content"
-      :class="{ 'inspector-content--footed': $slots.footer || $slots.head }"
+      :class="{
+        'inspector-content--footed': $slots.footer || $slots.head || band.length,
+      }"
     >
       <!-- A pane that names its subject (the grid's rail, #2161) has a head
            row instead: pinned to the toolbar height, so the toolbar and this
            row share one bottom rule across the window. Its tabs then sit
            under it, after the `lead` slot, one level down. -->
+      <!-- The band (#2145): a second subject beside the pane's own, the
+           What's changed checklist beside Details. Above everything else, on
+           the toolbar's line; a closable tab ends in its own × button. -->
+      <div v-if="band.length" class="inspector-tabs inspector-band">
+        <template v-for="tab in band" :key="tab.value">
+          <button
+            class="inspector-tab"
+            :class="{
+              'inspector-tab--active': tab.value === bandValue,
+              'inspector-tab--closable': tab.closeLabel,
+            }"
+            type="button"
+            :data-band="tab.value"
+            :aria-pressed="tab.value === bandValue ? 'true' : 'false'"
+            @click="emit('update:bandValue', tab.value)"
+          >
+            {{ tab.label }}
+          </button>
+          <button
+            v-if="tab.closeLabel"
+            class="inspector-band-close"
+            :class="{ 'inspector-band-close--active': tab.value === bandValue }"
+            type="button"
+            :aria-label="tab.closeLabel"
+            @click="emit('close-band', tab.value)"
+          >
+            <Tooltip :text="tab.closeLabel" activator="parent" :describe="false" />
+            <v-icon size="14">mdi-close</v-icon>
+          </button>
+        </template>
+      </div>
       <div v-if="$slots.head" class="inspector-head">
         <slot name="head" />
       </div>
@@ -98,9 +131,16 @@ defineProps({
    * became the first pane here to need `tabs` (#1313).
    */
   lightbox: { type: Boolean, default: false },
+  /**
+   * `[{ value, label, closeLabel? }]`: the band above the head (#2145). A tab
+   * with `closeLabel` gets a × button named by it, which emits `close-band`.
+   */
+  band: { type: Array, default: () => [] },
+  /** The band's active `value`. */
+  bandValue: { type: String, default: "" },
 });
 
-const emit = defineEmits(["update:modelValue"]);
+const emit = defineEmits(["update:modelValue", "update:bandValue", "close-band"]);
 </script>
 
 <style scoped>
@@ -190,6 +230,33 @@ const emit = defineEmits(["update:modelValue"]);
   height: var(--toolbar-height);
   flex-shrink: 0;
   border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+
+/* A closable tab and its × read as one tab: the × sits inside the tab's
+   underline, and the pair shares the band's width with the other tabs. */
+.inspector-tab--closable {
+  padding-right: 0;
+}
+
+.inspector-band-close {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  margin-right: var(--space-2);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  cursor: pointer;
+}
+
+.inspector-band-close:hover {
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .inspector-head {

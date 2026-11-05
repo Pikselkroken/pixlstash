@@ -1297,6 +1297,7 @@ import {
   isSupportedImportFile,
 } from "../../utils/media";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { useWhatsChangedStore } from "../../stores/useWhatsChangedStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { usePublishTransientProgress } from "../../composables/usePublishTransientProgress";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -1319,7 +1320,6 @@ import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
 import { lightboxCloseTarget } from "../../utils/lightboxRoute";
 import { markEnd, markStart } from "../../utils/perfMarks";
 import { useScopedNotice } from "../../composables/useScopedNotice";
-import { useOneTimeNotice } from "../../composables/useOneTimeNotice";
 import { buildPurgeBadge } from "../../utils/retention.js";
 import { buildLockedDeleteMessage } from "../../utils/lockedDelete.js";
 import { buildLibraryMoveMessage } from "../../utils/libraryMove.js";
@@ -1519,6 +1519,8 @@ const searchStore = useSearchStore();
 const gridStore = useGridStore();
 const sidebarStore = useSidebarStore();
 const userPrefsStore = useUserPrefsStore();
+// The 2.0 checklist ticks a gesture when it is done for real (#2145).
+const whatsChanged = useWhatsChangedStore();
 
 const emit = defineEmits([
   "update:lightbox-open",
@@ -2688,7 +2690,6 @@ watch(
 );
 
 onUnmounted(() => {
-  clearTimeout(doubleClickHintTimer);
   window.removeEventListener("resize", triggerFaceOverlayRedraw);
   window.removeEventListener("drop", clearGridDragOverlay, true);
   window.removeEventListener("dragend", clearGridDragOverlay, true);
@@ -5961,6 +5962,7 @@ async function handleArrivingGridDrop(event) {
     isFileDrag(dataTransfer) &&
     !isInternalImageDrag(dataTransfer);
   if (external) {
+    whatsChanged.tick("drop");
     importArrivals.beginReading(
       Array.from(dataTransfer.files || []).filter(
         (file) =>
@@ -7733,7 +7735,13 @@ watch(showLibraryEmptyState, (shown) => {
 // telemetry question until it knows, so a fresh install meets the library
 // before it meets the privacy dialog.
 watch(totalAllPicturesCountLoaded, (loaded) => {
-  if (loaded) emit("library-loaded", { empty: showLibraryEmptyState.value });
+  // `pictures` is the count itself: `empty` waits on the empty state's
+  // appearance delay, so it can still read false for an empty library here.
+  if (loaded)
+    emit("library-loaded", {
+      empty: showLibraryEmptyState.value,
+      pictures: totalAllPicturesCount.value,
+    });
 });
 
 /**
@@ -8324,47 +8332,22 @@ function handleThumbnailClick(img, idx, event) {
   if (userPrefsStore.gridOpenGesture !== "single") {
     handleImageCardClick(img, idx, event);
     event.stopPropagation();
-    scheduleDoubleClickHint();
+    whatsChanged.tick("click");
     return;
   }
   // Desktop, single-click mode: open lightbox directly
   openLightbox(img);
   event.stopPropagation();
+  whatsChanged.tick("click");
 }
 
 function handleThumbnailDblClick(img, event) {
-  // Whoever double-clicks already knows; no hint for them.
-  clearTimeout(doubleClickHintTimer);
   // In single-click mode the first click already opened the lightbox, and so
   // has a touch two-tap where the browser synthesises a dblclick after it.
   if (userPrefsStore.gridOpenGesture === "single" || lightboxOpen.value) return;
   if (!img?.id || isImageGhosted(img) || touchSelectMode.value) return;
   if (event.ctrlKey || event.metaKey || event.shiftKey) return;
-  doubleClickHint.dismiss();
   openLightbox(img);
-}
-
-// Tell an upgrading user, once, why a click no longer opens the picture.
-// Deferred past the double-click window so a double-click never raises it.
-const doubleClickHint = useOneTimeNotice("grid-double-click-to-open");
-let doubleClickHintTimer = null;
-function scheduleDoubleClickHint() {
-  if (!doubleClickHint.visible.value) return;
-  clearTimeout(doubleClickHintTimer);
-  doubleClickHintTimer = setTimeout(() => {
-    // Opened some other way meanwhile (Enter): not over the lightbox.
-    if (!doubleClickHint.visible.value || lightboxOpen.value) return;
-    doubleClickHint.dismiss();
-    noticeStore.push({
-      level: "info",
-      text: "Double-click a picture to open it.",
-      key: "grid-double-click-to-open",
-      action: {
-        label: "Settings",
-        handler: () => emit("open-settings", "appearance"),
-      },
-    });
-  }, 500);
 }
 
 // Clear selection when clicking grid background
@@ -8399,6 +8382,7 @@ function handleImageContextMenu(img, event) {
   contextMenuX.value = event.clientX;
   contextMenuY.value = event.clientY;
   contextMenuVisible.value = true;
+  whatsChanged.tick("menu");
 }
 
 function handleFaceBboxContextMenu(img, overlay, event) {
@@ -8412,6 +8396,7 @@ function handleFaceBboxContextMenu(img, overlay, event) {
   contextMenuX.value = event.clientX;
   contextMenuY.value = event.clientY;
   contextMenuVisible.value = true;
+  whatsChanged.tick("menu");
 }
 
 // ── Lightbox context menu ─────────────────────────────────────────

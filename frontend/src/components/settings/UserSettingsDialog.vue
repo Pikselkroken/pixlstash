@@ -19,8 +19,17 @@ import SnapshotsSection from "./SnapshotsSection.vue";
 import GhostsSection from "./GhostsSection.vue";
 import SmartScoreSection from "./SmartScoreSection.vue";
 import { VIcon } from "vuetify/components";
+import { useWhatsChangedStore } from "../../stores/useWhatsChangedStore";
 
 const appVersion = __APP_VERSION__;
+
+// The version and the What's new pill beside it bring back the 2.0 checklist
+// and the training tour card, whichever were dismissed (#2145). The store is
+// read on the click, so the dialog still mounts where no Pinia is installed.
+function openWhatsNew() {
+  useWhatsChangedStore().reopen();
+  dialogOpen.value = false;
+}
 
 // The desktop app injects this bridge (Electron preload); a plain browser does
 // not, so the Server pane is desktop-only.
@@ -228,6 +237,24 @@ watch(
     :pad-body="false"
     @close="dialogOpen = false"
   >
+    <template v-if="!isReadOnly" #subtitle>
+      <button
+        type="button"
+        class="settings-version"
+        data-testid="settings-version"
+        @click="openWhatsNew"
+      >
+        v{{ appVersion }}
+      </button>
+      <button
+        type="button"
+        class="settings-whats-new"
+        data-testid="settings-whats-new"
+        @click="openWhatsNew"
+      >
+        What's new
+      </button>
+    </template>
     <template #header-right>
       <!-- The desktop app runs on loopback and auto-logs the owner back in, so
            logging out there does nothing. A browser session against the same
@@ -441,6 +468,41 @@ watch(
 </template>
 
 <style scoped>
+/* The version reads as the subtitle it was; both it and the pill reopen
+   What's new. */
+.settings-version {
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-version:hover {
+  color: rgb(var(--v-theme-on-surface));
+  text-decoration: underline;
+}
+
+.settings-whats-new {
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-pill);
+  background: none;
+  font-family: var(--font-ui);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-body);
+  color: rgb(var(--v-theme-on-surface));
+  cursor: pointer;
+}
+
+.settings-whats-new:hover {
+  background: var(--hover-wash);
+}
+
 /* Two-pane Settings: a left nav rail and a content area, both inside the
    flush AppDialog body. */
 .settings-nav {
