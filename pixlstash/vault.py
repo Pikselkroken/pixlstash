@@ -1374,16 +1374,32 @@ class Vault:
                         f"The shelf's copy of {name} could not make room for the "
                         "longer-trained file."
                     ) from exc
-                with hub.transaction() as conn:
-                    conn.execute(
-                        "UPDATE model_file SET relpath = ? "
-                        "WHERE model_folder_id = ? AND relpath = ?",
-                        (relpath, folder["id"], location["relpath"]),
-                    )
-                    conn.execute(
-                        "UPDATE model SET filename = ? WHERE id = ?",
-                        (renamed, location["model_id"]),
-                    )
+                try:
+                    with hub.transaction() as conn:
+                        conn.execute(
+                            "UPDATE model_file SET relpath = ? "
+                            "WHERE model_folder_id = ? AND relpath = ?",
+                            (relpath, folder["id"], location["relpath"]),
+                        )
+                        conn.execute(
+                            "UPDATE model SET filename = ? WHERE id = ?",
+                            (renamed, location["model_id"]),
+                        )
+                except Exception:
+                    # The rows still name the old file: give it its name back.
+                    try:
+                        os.rename(os.path.join(folder["path"], relpath), source)
+                    except OSError as undo_exc:
+                        logger.error(
+                            "Could not rename %s back to %s after the shelf rows "
+                            "for run %s refused the new name (%s); the model's "
+                            "file is missing under its recorded name.",
+                            relpath,
+                            source,
+                            info["uuid"],
+                            undo_exc,
+                        )
+                    raise
             stack = hub.fetchone(
                 "SELECT stack_id, MAX(stack_position) AS last FROM model "
                 "WHERE training_run_id = ? AND stack_id IS NOT NULL "

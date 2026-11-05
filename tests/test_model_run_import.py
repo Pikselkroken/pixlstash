@@ -29,6 +29,7 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import struct
 from types import SimpleNamespace
 
@@ -1038,6 +1039,35 @@ def test_a_run_trained_longer_joins_its_stack_and_takes_the_finals_name(shelf):
     assert file_digest(
         str(shelf["destination_dir"] / "Clementine.safetensors")
     ) == file_digest(str(run_dir / "Clementine.safetensors"))
+
+
+def test_a_shelf_rename_its_rows_refuse_is_put_back(shelf):
+    """A failed row update gives the renamed shelf copy its old name back."""
+    stand_in, info, run_id = _imported_then_trained_on(shelf)
+    hub = shelf["hub"]
+    run_dir = shelf["run_dir"]
+    os.rename(
+        run_dir / "Clementine.safetensors", run_dir / "Clementine_000000750.safetensors"
+    )
+    write_adapter(run_dir / "Clementine.safetensors", seed=b"final-1250")
+    on_disk = sorted(os.listdir(shelf["destination_dir"]))
+    rows = _shelf_files(hub, run_id)
+
+    class _LockedHub:
+        def __getattr__(self, name):
+            return getattr(hub, name)
+
+        def transaction(self):
+            raise sqlite3.OperationalError("database is locked")
+
+    stand_in._hub = _LockedHub()
+    with pytest.raises(sqlite3.OperationalError):
+        Vault._import_training_run(
+            stand_in, str(run_dir), {**info, "continued_from_step": 750}
+        )
+
+    assert sorted(os.listdir(shelf["destination_dir"])) == on_disk
+    assert _shelf_files(hub, run_id) == rows
 
 
 def test_a_rewound_run_renames_its_first_takes_copies_into_the_take(shelf):
