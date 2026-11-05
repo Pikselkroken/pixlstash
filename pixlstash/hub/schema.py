@@ -782,7 +782,10 @@ CREATE TABLE IF NOT EXISTS training_run (
     cover_step             INTEGER,
     finished_unwatched     INTEGER NOT NULL DEFAULT 0,
     dataset_snapshot_id    INTEGER,
-    comfyui_quit           TEXT
+    comfyui_quit           TEXT,
+    continued_from_step    INTEGER,
+    continued_at           TEXT,
+    set_aside_take         TEXT
 )
 """
 
@@ -2285,6 +2288,11 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         ("dataset_snapshot_id", "INTEGER"),
         # Whether ComfyUI may be, or was, quit for the run (#2558).
         ("comfyui_quit", "TEXT"),
+        # Where the run was last trained on from, when, and the take folder
+        # its later checkpoints were set aside in (Train longer).
+        ("continued_from_step", "INTEGER"),
+        ("continued_at", "TEXT"),
+        ("set_aside_take", "TEXT"),
     ):
         if column not in run_columns:
             conn.execute(f"ALTER TABLE training_run ADD COLUMN {column} {ddl}")

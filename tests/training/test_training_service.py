@@ -2500,3 +2500,334 @@ def test_progress_and_cancel_write_the_stopping_flag_under_the_active_lock(
     written.clear()
     service.cancel(training_runs.get_run_by_uuid(hub, "racing-job")["id"])
     assert written[0] == ("stopping", True)
+
+
+# ---------------------------------------------------------------------------
+# Train longer: the same run carried on from a step it kept
+# ---------------------------------------------------------------------------
+
+
+def _finished_run(hub, repo_dir, service, name="longer"):
+    """Train a 4-step run saving every 2 to completion; return its row."""
+    template = _write_template(repo_dir, steps=4, save_every=2)
+    job = service.enqueue(
+        set_id=_SET_ID,
+        name=name,
+        base_model="m",
+        trigger_word="t",
+        template_path=template,
+        resolution=_RESOLUTION,
+    )
+    _run_to_finished(hub, service, job["uuid"], total=4)
+    return training_runs.get_run_by_uuid(hub, job["uuid"])
+
+
+def _run_to_finished(hub, service, job_uuid, *, total):
+    """Run the worker until the run completes at *total* and is imported."""
+    service.start()
+    try:
+        assert _poll_until(
+            lambda: (
+                (row := _job_status(hub, job_uuid)).status == "completed"
+                and row.completed_at
+                and row.total_steps == total
+            )
+        ), f"run ended {_job_status(hub, job_uuid)}"
+    finally:
+        service.stop()
+
+
+def _recorded_step(path):
+    return LocalAiToolkit._recorded_step(path)
+
+
+def test_a_finished_run_trains_longer_from_its_final_keeping_the_optimizer(
+    hub, repo_dir, tmp_path, monkeypatch
+):
+    launches = tmp_path / "launches.txt"
+    monkeypatch.setenv("FAKE_RUN_LAUNCHES", str(launches))
+    importer = _RecordingImport()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+        importer=importer,
+    )
+    run = _finished_run(hub, repo_dir, service)
+    stem = f"longer_{run['uuid'][:8]}"
+    save_root = os.path.join(repo_dir, "output", stem)
+
+    options = service.train_longer_options(run)
+    assert options["reason"] is None
+    assert options["steps"] == [
+        {"step": 4, "final": True, "keeps_optimizer": True},
+        {"step": 2, "final": False, "keeps_optimizer": False},
+    ]
+
+    service.train_longer(run["id"], from_step=4, more_steps=2)
+    queued = _job_status(hub, run["uuid"])
+    assert (queued.status, queued.total_steps, queued.continued_from_step) == (
+        "queued",
+        6,
+        4,
+    )
+    assert queued.set_aside_take is None
+    # The final now carries its step, so the trainer resumes it as a checkpoint.
+    assert _recorded_step(os.path.join(save_root, f"{stem}_000000004.safetensors")) == 4
+
+    _run_to_finished(hub, service, run["uuid"], total=6)
+
+    # Carried on: from step 4 with the optimizer saved there, not from 0.
+    assert launches.read_text().splitlines()[-1] == (
+        "steps=6 from=4 optimizer=optimizer at 4"
+    )
+    assert _recorded_step(os.path.join(save_root, f"{stem}.safetensors")) == 6
+    assert os.path.isfile(os.path.join(save_root, f"{stem}_000000004.safetensors"))
+    # The same run, imported again and told where it trained on from.
+    assert len(importer.calls) == 2
+    assert importer.calls[1][1]["continued_from_step"] == 4
+    assert importer.calls[1][1]["id"] == run["id"]
+
+
+def test_training_longer_from_an_earlier_step_sets_the_later_ones_aside(
+    hub, repo_dir, tmp_path, monkeypatch
+):
+    launches = tmp_path / "launches.txt"
+    monkeypatch.setenv("FAKE_RUN_LAUNCHES", str(launches))
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    run = _finished_run(hub, repo_dir, service, name="rewound")
+    stem = f"rewound_{run['uuid'][:8]}"
+    save_root = os.path.join(repo_dir, "output", stem)
+
+    service.train_longer(run["id"], from_step=2, more_steps=4)
+
+    take = os.path.join(save_root, "take-1")
+    # Set aside, never deleted: the final and the optimizer that belongs to it.
+    assert sorted(os.listdir(take)) == ["optimizer.pt", f"{stem}.safetensors"]
+    assert _job_status(hub, run["uuid"]).set_aside_take == "take-1"
+
+    _run_to_finished(hub, service, run["uuid"], total=6)
+
+    # From step 2 with a fresh optimizer: the saved one was the final's.
+    assert launches.read_text().splitlines()[-1] == "steps=6 from=2 optimizer=None"
+    assert _recorded_step(os.path.join(save_root, f"{stem}.safetensors")) == 6
+    assert _recorded_step(os.path.join(take, f"{stem}.safetensors")) == 4
+
+
+def test_a_run_is_not_trained_longer_from_a_step_it_did_not_keep_or_while_busy(
+    hub, repo_dir
+):
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    run = _finished_run(hub, repo_dir, service, name="kept")
+    with pytest.raises(ValueError, match="no checkpoint at step 3"):
+        service.train_longer(run["id"], from_step=3, more_steps=2)
+    with pytest.raises(LookupError):
+        service.train_longer(run["id"] + 999, from_step=4, more_steps=2)
+
+    service.train_longer(run["id"], from_step=4, more_steps=2)
+    # Queued now, so a second press is refused and moves nothing.
+    with pytest.raises(ValueError, match="still training"):
+        service.train_longer(run["id"], from_step=4, more_steps=2)
+
+
+def test_a_cut_off_checkpoint_is_not_offered(hub, repo_dir):
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    run = _finished_run(hub, repo_dir, service, name="cut")
+    stem = f"cut_{run['uuid'][:8]}"
+    stamped = os.path.join(repo_dir, "output", stem, f"{stem}_000000002.safetensors")
+    with open(stamped, "r+b") as fh:
+        fh.truncate(12)  # mid-header, as a save cut off would leave it
+
+    steps = [o["step"] for o in service.train_longer_options(run)["steps"]]
+    assert steps == [4]
+
+
+@pytest.mark.parametrize("schedule", [None, "constant", "cosine", "linear"])
+def test_every_schedule_is_trained_longer(hub, repo_dir, schedule):
+    """ai-toolkit spreads the LR schedule over the new length; none is refused."""
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    run = _finished_run(hub, repo_dir, service, name=f"sched-{schedule}")
+    config = json.loads(run["rendered_config"])
+    if schedule:
+        config["config"]["process"][0]["train"]["lr_scheduler"] = schedule
+    training_runs.update_run(hub, run["uuid"], rendered_config=json.dumps(config))
+
+    reason = service.train_longer_options(
+        training_runs.get_run_by_uuid(hub, run["uuid"])
+    )["reason"]
+    assert reason is None
+
+
+def test_a_run_trained_longer_draws_deferred_previews_only_for_its_new_steps(
+    hub, repo_dir, watched
+):
+    """The steps it had were drawn when it first finished."""
+    for profile in _ZIT["fit"]["auto"]:
+        _record_big_previews(hub, profile)
+    resolution = _resolve_small(hub)
+    assert resolution["previews_deferred"]
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    job = _enqueue_resolved(
+        service, resolution, _write_template(repo_dir, steps=4, save_every=2)
+    )
+    assert _run_to_end(hub, service, job).status == "completed"
+    assert watched() == ["steps=4", "steps=2", "steps=4"]
+
+    service.train_longer(job["id"], from_step=4, more_steps=2)
+    _run_to_finished(hub, service, job["uuid"], total=6)
+
+    # The run carried on from 4, then one preview pass: step 6 alone.
+    assert watched()[3:] == ["steps=6 from=4 optimizer=optimizer at 4", "steps=6"]
+
+
+def test_a_run_trained_longer_waits_behind_the_runs_queued_before_it(hub):
+    def make(run_uuid, created):
+        training_runs.create_run(
+            hub,
+            library_uuid=_LIBRARY_UUID,
+            uuid=run_uuid,
+            name=run_uuid,
+            set_id=_SET_ID,
+            character_id=None,
+            base_model="m",
+            trigger_word="t",
+        )
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE training_run SET created_at = ? WHERE uuid = ?",
+                (created, run_uuid),
+            )
+
+    make("old-run", "2026-10-01T00:00:00+00:00")
+    make("newer-run", "2026-11-01T00:00:00+00:00")
+    training_runs.update_run(hub, "old-run", continued_at="2026-11-05T00:00:00+00:00")
+    assert training_runs.next_queued_run(hub, _LIBRARY_UUID)["uuid"] == "newer-run"
+
+
+def test_a_stamped_file_at_the_finals_step_is_set_aside_too(tmp_path):
+    """ai-toolkit never writes one, but if it is there it must not be resumed."""
+    handle = LocalAiToolkit.handle_for(str(tmp_path / "work"), "abcdef12", "twice")
+    os.makedirs(handle.save_root)
+    stem = os.path.basename(handle.save_root)
+
+    def save(name, step):
+        header = json.dumps(
+            {"__metadata__": {"training_info": json.dumps({"step": step})}}
+        ).encode()
+        with open(os.path.join(handle.save_root, name), "wb") as fh:
+            fh.write(len(header).to_bytes(8, "little") + header)
+
+    save(f"{stem}_000000002.safetensors", 2)
+    save(f"{stem}_000000004.safetensors", 4)
+    save(f"{stem}.safetensors", 4)
+
+    with pytest.raises(FileExistsError, match="kept twice"):
+        LocalAiToolkit.carry_on_from(handle, 4)
+    assert LocalAiToolkit.carry_on_from(handle, 2) == "take-1"
+    assert set(os.listdir(handle.save_root)) == {
+        f"{stem}_000000002.safetensors",
+        "take-1",
+    }
+
+
+def test_a_failed_rename_of_the_final_puts_the_set_aside_back(tmp_path, monkeypatch):
+    """The final's rename comes after the set-aside; failing, it undoes it."""
+    handle = LocalAiToolkit.handle_for(str(tmp_path / "work"), "abcdef12", "late")
+    os.makedirs(handle.save_root)
+    stem = os.path.basename(handle.save_root)
+    final = os.path.join(handle.save_root, f"{stem}.safetensors")
+    for name, step in (
+        (f"{stem}_000000006.safetensors", 6),  # later than the final's step
+        (f"{stem}.safetensors", 4),
+    ):
+        header = json.dumps(
+            {"__metadata__": {"training_info": json.dumps({"step": step})}}
+        ).encode()
+        with open(os.path.join(handle.save_root, name), "wb") as fh:
+            fh.write(len(header).to_bytes(8, "little") + header)
+    with open(os.path.join(handle.save_root, "optimizer.pt"), "w") as fh:
+        fh.write("state")
+    before = sorted(os.listdir(handle.save_root))
+
+    real_rename = os.rename
+
+    def final_locked(source, dest):
+        if source == final:
+            raise PermissionError("locked")
+        real_rename(source, dest)
+
+    monkeypatch.setattr(os, "rename", final_locked)
+    with pytest.raises(PermissionError):
+        LocalAiToolkit.carry_on_from(handle, 4)
+    monkeypatch.setattr(os, "rename", real_rename)
+
+    assert sorted(os.listdir(handle.save_root)) == before
+
+
+def test_a_set_aside_that_fails_midway_leaves_the_folder_as_it_was(
+    tmp_path, monkeypatch
+):
+    handle = LocalAiToolkit.handle_for(str(tmp_path / "work"), "abcdef12", "midway")
+    os.makedirs(handle.save_root)
+    stem = os.path.basename(handle.save_root)
+    for name, step in (
+        (f"{stem}_000000002.safetensors", 2),
+        (f"{stem}_000000004.safetensors", 4),
+        (f"{stem}.safetensors", 6),
+    ):
+        header = json.dumps(
+            {"__metadata__": {"training_info": json.dumps({"step": step})}}
+        ).encode()
+        with open(os.path.join(handle.save_root, name), "wb") as fh:
+            fh.write(len(header).to_bytes(8, "little") + header)
+    with open(os.path.join(handle.save_root, "optimizer.pt"), "w") as fh:
+        fh.write("state")
+    before = sorted(os.listdir(handle.save_root))
+
+    real_rename = os.rename
+    calls = []
+
+    def flaky_rename(source, dest):
+        calls.append(source)
+        if len(calls) == 3:  # the third file to move is locked
+            raise PermissionError("locked")
+        real_rename(source, dest)
+
+    monkeypatch.setattr(os, "rename", flaky_rename)
+    with pytest.raises(PermissionError):
+        LocalAiToolkit.carry_on_from(handle, 2)
+    monkeypatch.setattr(os, "rename", real_rename)
+
+    assert sorted(os.listdir(handle.save_root)) == before

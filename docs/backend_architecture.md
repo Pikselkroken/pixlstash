@@ -875,6 +875,8 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/training/jobs/{job_id}/snapshot                                       |                 | What a training job trained on                                |
 | GET    | /api/v1/training/jobs/{job_id}/snapshot/export                                |                 | Download what a training job trained on, as a zip             |
 | GET    | /api/v1/training/jobs/{job_id}/status                                         |                 | Poll training job status                                      |
+| GET    | /api/v1/training/jobs/{job_id}/train-longer                                   |                 | What a training job can be trained on from                    |
+| POST   | /api/v1/training/jobs/{job_id}/train-longer                                   |                 | Train a training job longer                                   |
 | GET    | /api/v1/training/presets                                                      |                 | List training recipes                                         |
 | POST   | /api/v1/training/presets/check                                                |                 | Check pixlstash.dev for newer training recipes                |
 | POST   | /api/v1/training/resolve                                                      |                 | Preview what a training run would use                         |
@@ -11669,6 +11671,24 @@ pointing at that row. The id is written in the same `INSERT` as the model
 (`RunImporter.import_run(training_run_id=...)`), and a model that already existed
 keeps the run that first made it. A run trained elsewhere names no run.
 `model.lineage_id` is not set by training.
+
+**Train longer** (`POST /training/jobs/{id}/train-longer`, its offer at the
+`GET` beside it) queues the *same* row again rather than a new one: the run
+trains on in its own folder from a step it kept, with the same dataset folder
+and rendered config, `train.steps` raised. `TrainingService.train_longer`
+leaves that step as the trainer's resume point (`LocalAiToolkit.carry_on_from`,
+SEAM.md "Training on"), writes the run's rendered config back into a template
+(`template_from_rendered`) as its pending spec with `continuation`, and records
+`continued_from_step`, `continued_at` and `set_aside_take` on the row. The
+worker skips the dataset build and the memory check for it. A checkpoint that
+does not read whole is not offered; the LR schedule is spread over the new
+length, so a decaying one restarts warm (SEAM.md). When it is imported,
+`Vault._import_trained_longer` renames the shelf's own copies out of the way
+(the old final to its stamped step, a rewound take's later steps to
+`<stem>_take-<n>_<step>`) and adds only the new steps and the new final to the
+run's existing stack, after its members, so the cover and the set's LoRA stay
+where they were. The old final's `model.training_step` is set when the run is
+queued, so the cover maps to its own step meanwhile.
 
 `/training/jobs*` lists and addresses only the open library's runs; another
 library's run answers as one that does not exist. The worker claims and

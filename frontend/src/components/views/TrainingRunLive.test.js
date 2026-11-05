@@ -41,6 +41,11 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const stubs = {
   "v-icon": true,
+  // The run bar's Train longer menu: its activator inline, its panel unopened.
+  "v-menu": {
+    props: ["modelValue"],
+    template: "<div><slot name='activator' :props='{}' /><slot v-if='modelValue' /></div>",
+  },
   LoraLossChart: { template: "<div class='chart-stub' />" },
   AppBarButton: {
     props: ["ariaLabel"],
@@ -374,7 +379,8 @@ describe("TrainingRunLive", () => {
       expect(wrapper.find(".trl-notice--ok").text()).toContain(
         "Finished while PixlStash was closed",
       );
-      expect(wrapper.find(".app-btn").exists()).toBe(false);
+      // Nothing to stop: the bar's one button trains it longer.
+      expect(wrapper.findAll(".app-btn").map((b) => b.text())).toEqual(["Train longer"]);
       getTrainingJobLive.mockClear();
       await vi.advanceTimersByTimeAsync(10_000);
       expect(getTrainingJobLive).not.toHaveBeenCalled();
@@ -604,7 +610,7 @@ describe("TrainingRunLive", () => {
     await wrapper.find(".app-btn").trigger("click");
     await flushPromises();
     expect(confirm).toHaveBeenCalledWith(
-      'Stop training "ohwx-portrait-v2"? The run will stop and cannot be resumed.',
+      'Stop training "ohwx-portrait-v2"? The checkpoints it saved are kept.',
     );
     expect(cancelTrainingJob).not.toHaveBeenCalled();
 
@@ -664,6 +670,32 @@ describe("TrainingRunLive", () => {
     expect(failed.find(".trl-notice--err").text()).toContain(
       "ComfyUI was quit for this run and can be started again.",
     );
+  });
+
+  it("offers Train longer on an ended run that kept a step, never on a live one", async () => {
+    const button = '[data-testid="trl-train-longer"]';
+    const ended = { phase: null, previews: null, coverable: [500, 1000] };
+    const done = await open(
+      payload({ ...ended, status: "completed", completed_at: "2026-10-26T09:00:00+00:00" }),
+    );
+    expect(done.find(button).exists()).toBe(true);
+    const stopped = await open(payload({ ...ended, status: "stopped" }));
+    expect(stopped.find(button).exists()).toBe(true);
+    const nothingKept = await open(payload({ ...ended, status: "stopped", coverable: [] }));
+    expect(nothingKept.find(button).exists()).toBe(false);
+    const training = await open(payload({ coverable: [500] }));
+    expect(training.find(button).exists()).toBe(false);
+  });
+
+  it("says where a run trained longer from while it trains on", async () => {
+    const rewound = await open(
+      payload({
+        phase: "training",
+        previews: null,
+        continued: { from_step: 2500, at: "2026-11-05T14:02:00", take: "take-1" },
+      }),
+    );
+    expect(rewound.text()).toContain("from step 2,500 · first take kept");
   });
 
   it("says a run queued behind another run waits for that run, not the GPU", async () => {

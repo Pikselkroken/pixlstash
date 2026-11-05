@@ -6787,6 +6787,26 @@ The tab wears the amber attention dot while any AI Toolkit lease is held or
 waiting, read from `useTasksStore().resources`, the poll that already runs; the
 listing itself is still not polled.
 
+**Train longer** (owner ruling 2026-11-04, "same run"). `io/TrainLongerPopover.vue`
+is a `.tbm` panel (340 px) with two decisions: *From*, an `OptionRows` of the steps
+`GET /training/jobs/{id}/train-longer` offers (newest preselected; only it says
+"keeps the optimizer"), and *More steps*, a native range (+250 to +3,000, snapping to
+the run's `save_every`, `accent-color` primary as the DS Slider) and an `AppInput`
+bound to one value; a typed value past the range pins the thumb. Under them, "Ends at
+step N · about M min" from the run's own `seconds_per_step`. The default is +1,000 for
+a finished run, what is left of its target for a stopped or failed one. The server's
+`reason` replaces the form when the run cannot be trained on. Start posts
+`POST .../train-longer` and the host re-reads. Three doors open it: the run bar's
+outline **Train longer** (an ended run whose `coverable` is not empty), the grid
+card's menu **Train longer…** below Open run, and the selection pill, only while
+exactly one such run is picked (hidden, not greyed, for more). The grid's popover is
+anchored to the card or the pill and hands focus back to the card on close. While
+the run trains on, the run bar's subline reads `continued`: "trained longer at
+HH:MM", or "from step N · first take kept" after a rewind. Not built from the design:
+the dashed future columns while the popover is open, the seam marker on the board
+and the dimmed first-take columns (a rewind's later previews move into the take
+folder with its checkpoints).
+
 **One step axis.** The page is the "step axis" design: a CSS grid of a 224 px
 label column and one pitch per checkpoint column. The timeline is
 the column header (step, tick, and "before training" / Cover / Use this step /

@@ -43,11 +43,13 @@ from pixlstash.resources.aitoolkit_tenant import AiToolkitProbe
 from pixlstash.resources.arbiter import Lease
 from pixlstash.resources.ledger import ledger
 from pixlstash.resources.ledger import ram as read_ram
+from pixlstash.services.downloads_intake import safetensors_complete
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
 from pixlstash.training import ai_toolkit_install, live_view, measurements, presets
 from pixlstash.training.backend import TrainerBackend, TrainingProgress, TrainingSpec
 from pixlstash.training.config_render import deep_merge
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
+from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 logger = get_logger(__name__)
@@ -255,6 +257,8 @@ class TrainingService:
         self._adopted: dict[str, Lease] = {}
         # Runs whose remaining after-training previews were cancelled.
         self._skip_previews: set[str] = set()
+        # One Train longer at a time: it renames files in the run's folder.
+        self._train_longer_lock = threading.Lock()
 
         # Per-job work dirs (job.db, the rendered config, the pending sidecar).
         # The run itself lives in the shelf's source folder, the dataset under
@@ -430,6 +434,174 @@ class TrainingService:
         )
         self._wake.set()
         return job
+
+    def train_longer_options(self, run: dict) -> dict:
+        """What Train longer offers *run*: the steps it kept, newest first.
+
+        A checkpoint that does not read whole (cut off mid-save) is not
+        offered. Only the newest kept checkpoint keeps the optimizer, which
+        ai-toolkit saves beside every checkpoint and so belongs to the newest.
+
+        Args:
+            run: The ``training_run`` row.
+
+        Returns:
+            ``{"steps": [{"step", "final", "keeps_optimizer"}], "reason"}``.
+            ``reason`` says why the run cannot be trained on, or is None.
+        """
+        handle = handle_for_run(self._training_root, run)
+        kept = LocalAiToolkit.kept_checkpoints(handle, run.get("total_steps"))
+        final = os.path.join(
+            handle.save_root, f"{os.path.basename(handle.save_root)}.safetensors"
+        )
+        newest = max(kept, default=None)
+        optimizer = os.path.isfile(os.path.join(handle.save_root, "optimizer.pt"))
+        steps = []
+        for step, path in sorted(kept.items(), reverse=True):
+            if not safetensors_complete(path):
+                logger.warning(
+                    "Run %s: %s does not read whole; not offered to train on from.",
+                    run["uuid"],
+                    path,
+                )
+                continue
+            steps.append(
+                {
+                    "step": step,
+                    "final": path == final,
+                    "keeps_optimizer": step == newest and optimizer,
+                }
+            )
+        reason = None
+        busy = run["status"] not in _TERMINAL_JOB_STATUSES or (
+            run["status"] == "completed" and not run.get("completed_at")
+        )
+        if busy:
+            reason = "It is still training."
+        elif not steps:
+            reason = "It kept no checkpoint to train on from."
+        elif not self._read_json(run.get("rendered_config")):
+            reason = "Its settings were not recorded."
+        elif not run.get("dataset_snapshot_path") or not os.path.isdir(
+            run["dataset_snapshot_path"]
+        ):
+            reason = "The pictures it trained on are gone from its dataset folder."
+        return {"steps": steps, "reason": reason}
+
+    def train_longer(self, run_id: int, *, from_step: int, more_steps: int) -> dict:
+        """Queue *run_id* to train on from *from_step*, *more_steps* further.
+
+        The same run, in the same folder, with the same pictures and settings:
+        ai-toolkit resumes from the newest checkpoint it finds, so the run
+        folder is left with *from_step* as that (see
+        :meth:`LocalAiToolkit.carry_on_from`), and the config the run trained
+        with is rendered again with only ``train.steps`` raised and the
+        first-step preview skipped. The worker then skips the dataset build
+        and the memory check: both are the run's own already.
+
+        Args:
+            run_id: The ``training_run`` id.
+            from_step: A step :meth:`train_longer_options` offers.
+            more_steps: How many steps to train past *from_step*.
+
+        Returns:
+            The run's row, queued.
+
+        Raises:
+            LookupError: No such run in this library.
+            ValueError: The run cannot be trained on from *from_step*; the
+                message says why.
+        """
+        hub, library_uuid = self._store()
+        with self._train_longer_lock:
+            run = training_runs.get_run(hub, library_uuid, run_id)
+            if run is None:
+                raise LookupError(f"No training run {run_id}.")
+            options = self.train_longer_options(run)
+            if options["reason"]:
+                raise ValueError(
+                    f"{run['name']} cannot be trained longer. {options['reason']}"
+                )
+            if from_step not in {o["step"] for o in options["steps"]}:
+                raise ValueError(
+                    f"{run['name']} kept no checkpoint at step {from_step}."
+                )
+            if more_steps < 1:
+                raise ValueError("Train at least one more step.")
+            config = json.loads(run["rendered_config"])
+            work_dir = os.path.join(self._training_root, run["uuid"])
+            handle = handle_for_run(self._training_root, run)
+            final_step = next((o["step"] for o in options["steps"] if o["final"]), None)
+            template_path = os.path.join(work_dir, "trained_on_template.json")
+            write_json_atomic(
+                template_path, LocalAiToolkit.template_from_rendered(config)
+            )
+            total = from_step + more_steps
+            pending = {
+                "template_path": template_path,
+                "config_overrides": None,
+                "locked": {
+                    "config": {
+                        "process": [
+                            {"train": {"steps": total, "skip_first_sample": True}}
+                        ]
+                    }
+                },
+                "caption_mode": None,
+                "continuation": True,
+            }
+            # Everything that can be written first is: the run's folder is the
+            # one step that cannot be taken back by writing the row again.
+            with self._pending_specs_lock:
+                self._pending_specs[run["uuid"]] = pending
+            self._write_pending_sidecar(run["uuid"], pending)
+            try:
+                take = LocalAiToolkit.carry_on_from(
+                    handle, from_step, run.get("total_steps")
+                )
+            except OSError:
+                with self._pending_specs_lock:
+                    self._pending_specs.pop(run["uuid"], None)
+                self._remove_pending_sidecar(run["uuid"])
+                raise
+            if final_step is not None:
+                # The shelf's copy of the final is that step from now on; the
+                # bare name is the longer-trained file's once it is imported.
+                with hub.transaction() as conn:
+                    conn.execute(
+                        "UPDATE model SET training_step = ? "
+                        "WHERE training_run_id = ? AND training_step IS NULL",
+                        (final_step, run["id"]),
+                    )
+            self._update_job(
+                run["uuid"],
+                status="queued",
+                step=from_step,
+                total_steps=total,
+                error=None,
+                report=None,
+                pid=None,
+                completed_at=None,
+                finished_unwatched=0,
+                comfyui_quit=None,
+                continued_from_step=from_step,
+                continued_at=now_iso(),
+                set_aside_take=take,
+                # This stretch's phases are timed from its own start.
+                phase_log=None,
+            )
+            with self._phase_lock:
+                self._phase_logs.pop(run["uuid"], None)
+            self._note_phase(run["uuid"], "waiting_gpu")
+            logger.info(
+                "Run %s trains on from step %s to %s%s.",
+                run["uuid"],
+                from_step,
+                total,
+                f" (later steps set aside in {take})" if take else "",
+            )
+        self._wake.set()
+        return training_runs.get_run(hub, library_uuid, run_id)
 
     def set_source_folder_registrar(self, register: Callable[[str], None]) -> None:
         """Bind the function that registers the shelf's ``source`` folder.
@@ -763,15 +935,9 @@ class TrainingService:
         """
         job_uuid = info["uuid"]
         work_dir = os.path.join(self._training_root, job_uuid)
-
-        # 0. Where the run lands and where its dataset is written.
-        try:
-            training_folder, dataset_dir = self._run_folders(job_uuid)
-        except RuntimeError as exc:
-            logger.error("Job %s: %s", job_uuid, exc)
-            self._update_job(job_uuid, status="error", error=str(exc))
-            self._emit_progress(job_uuid, status="error", message=str(exc))
-            return
+        # Trained longer (train_longer): its folder, pictures and memory
+        # profile are the ones it already trained with.
+        continuing = bool(self._load_pending_spec(job_uuid).get("continuation"))
 
         need = self._lease_need(info)
         if need is None:
@@ -780,24 +946,46 @@ class TrainingService:
             self._emit_progress(job_uuid, status="error", message=msg)
             return
 
-        # 1. Build the dataset snapshot.
-        manifest = self._build_dataset(info, dataset_dir)
-        if manifest is None:
-            return  # dataset error already recorded
-        if int(manifest.get("image_count") or 0) <= 0:
-            msg = "Training dataset is empty (no eligible images)."
-            logger.warning("Job %s: %s", job_uuid, msg)
-            self._update_job(job_uuid, status="error", error=msg)
-            self._emit_progress(job_uuid, status="error", message=msg)
-            return
+        if continuing:
+            training_folder = handle_for_run(self._training_root, info).training_folder
+            if training_folder == os.path.join(os.path.abspath(work_dir), "output"):
+                training_folder = None  # a run from before the shelf took runs
+            manifest = {"dest_dir": info.get("dataset_snapshot_path")}
+            if not manifest["dest_dir"] or not os.path.isdir(manifest["dest_dir"]):
+                self._fail(
+                    job_uuid,
+                    "The pictures this run trained on are gone from its dataset "
+                    "folder, so it cannot be trained longer.",
+                )
+                return
+        else:
+            # 0. Where the run lands and where its dataset is written.
+            try:
+                training_folder, dataset_dir = self._run_folders(job_uuid)
+            except RuntimeError as exc:
+                logger.error("Job %s: %s", job_uuid, exc)
+                self._update_job(job_uuid, status="error", error=str(exc))
+                self._emit_progress(job_uuid, status="error", message=str(exc))
+                return
 
-        self._update_job(
-            job_uuid,
-            dataset_snapshot_path=manifest.get("dest_dir"),
-            dataset_picture_ids=json.dumps(manifest.get("picture_ids") or []),
-        )
-        if not self._record_snapshot(info, manifest):
-            return  # snapshot error already recorded
+            # 1. Build the dataset snapshot.
+            manifest = self._build_dataset(info, dataset_dir)
+            if manifest is None:
+                return  # dataset error already recorded
+            if int(manifest.get("image_count") or 0) <= 0:
+                msg = "Training dataset is empty (no eligible images)."
+                logger.warning("Job %s: %s", job_uuid, msg)
+                self._update_job(job_uuid, status="error", error=msg)
+                self._emit_progress(job_uuid, status="error", message=msg)
+                return
+
+            self._update_job(
+                job_uuid,
+                dataset_snapshot_path=manifest.get("dest_dir"),
+                dataset_picture_ids=json.dumps(manifest.get("picture_ids") or []),
+            )
+            if not self._record_snapshot(info, manifest):
+                return  # snapshot error already recorded
 
         # 2. Wait for the arbiter: PixlStash yields the card, an idle ComfyUI
         # frees it, and the Tasks tab shows the job waiting until then.
@@ -830,7 +1018,7 @@ class TrainingService:
                     self._emit_progress(job_uuid, status="stopped", message=msg)
                 return  # on shutdown it stays queued for the next start
             backend = self._make_backend()
-            if not self._check_memory_and_speed(
+            if not continuing and not self._check_memory_and_speed(
                 backend, info, work_dir, manifest, lease
             ):
                 return  # stopped, failed or shut down; the row says which
@@ -1622,6 +1810,8 @@ class TrainingService:
 
         checkpoints = [*progress.checkpoints, progress.final_checkpoint]
         drawn: set[int] = set()
+        # A run trained longer drew the steps it had before then.
+        done = info.get("continued_from_step")
         for path in checkpoints:
             # The final is ``<job_name>.safetensors``, with no step to read: a
             # job name ending in digits would otherwise read as one.
@@ -1631,7 +1821,7 @@ class TrainingService:
                 else _CHECKPOINT_STEP_RE.search(os.path.basename(path))
             )
             step = int(match.group(1)) if match else int(progress.step)
-            if step in drawn:
+            if step in drawn or (done is not None and step <= done):
                 continue  # the final can share its step with the last save
             drawn.add(step)
             if stop() is not None:
@@ -2238,6 +2428,16 @@ class TrainingService:
     # ------------------------------------------------------------------
     # Small static helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _read_json(raw: str | None) -> dict | None:
+        """A JSON column as a dict, or None when it does not parse."""
+        try:
+            value = json.loads(raw) if raw else None
+        except ValueError as exc:
+            logger.warning("Unreadable JSON column: %s", exc)
+            return None
+        return value if isinstance(value, dict) else None
 
     @staticmethod
     def _read_rendered_config(config_path: str) -> dict | None:

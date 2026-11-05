@@ -454,6 +454,38 @@ describe("drawing the grid", () => {
       expect(createTrainingJob).toHaveBeenCalledTimes(1);
       expect(deleteTrainingJob).toHaveBeenCalledWith(7);
     });
+
+    it("offers Train longer on an ended run with a checkpoint, in the menu and on a one-run pill", async () => {
+      const ended = (name, id, status) => ({
+        id,
+        uuid: `u-${name}`,
+        name,
+        status,
+        run_name: name,
+        started_at: "2026-10-01T00:00:00Z",
+        completed_at: "2026-10-01T02:00:00Z",
+        created_at: "2026-10-01T00:00:00Z",
+      });
+      listTrainingJobs.mockResolvedValue([
+        ended("Clementine", 21, "completed"),
+        ended("Foxglove", 22, "stopped"),
+        { ...ended("Heron", 23, "running") },
+      ]);
+      const wrapper = await openWith([run("Clementine"), run("Foxglove"), run("Heron")]);
+      const item = "[data-testid='tr-menu-train-longer']";
+      const pill = "[data-testid='tr-pill-train-longer']";
+
+      await cardNamed(wrapper, "Heron").trigger("contextmenu");
+      expect(wrapper.find(item).exists()).toBe(false);
+
+      await cardNamed(wrapper, "Clementine").trigger("contextmenu");
+      expect(wrapper.find(item).text()).toContain("Train longer…");
+      expect(wrapper.find(pill).exists()).toBe(true);
+
+      // Two picked: one popover cannot set two runs' steps, so it is hidden.
+      await cardNamed(wrapper, "Foxglove").trigger("click", { ctrlKey: true });
+      expect(wrapper.find(pill).exists()).toBe(false);
+    });
   });
 
   it("keeps a run importable when its config could not be read", async () => {

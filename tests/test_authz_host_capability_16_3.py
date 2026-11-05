@@ -577,6 +577,11 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     the owner's yes to PixlStash terminating the local ComfyUI process for a
     queued run: ``POST /training/jobs/{job_id}/cancel``'s host-process signal,
     aimed at ComfyUI's pid. Nothing spawns, so the loopback count is unchanged.
+    93 = 75 + 18 with ``POST /training/jobs/{job_id}/train-longer``: it renames
+    and moves checkpoints inside a run's host folder and queues the trainer to
+    run on it again, ``POST /training/jobs``' class. It takes no path. Its
+    ``GET`` reads the run's checkpoint headers and returns no path, so it is
+    ``owner_only``.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -591,7 +596,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 18, sorted(loopback)
-    assert len(local) == 74, sorted(local)
+    assert len(local) == 75, sorted(local)
 
 
 # ===========================================================================

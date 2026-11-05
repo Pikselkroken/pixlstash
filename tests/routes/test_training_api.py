@@ -19,6 +19,7 @@ import hashlib
 import io
 import json
 import os
+import struct
 import shutil
 import sqlite3
 import sys
@@ -39,6 +40,7 @@ from pixlstash.routes import training as training_routes
 from pixlstash.routes.training import _redact_host_paths
 from pixlstash.training import preset_updates, presets
 from pixlstash.server import Server
+from pixlstash.services.training_service import TrainingService
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 from pixlstash.utils.service.export_utils import ExportUtils
 
@@ -3050,5 +3052,78 @@ def test_delete_job_removes_its_dataset_and_work_dir_never_the_shelf_run():
         assert owner.delete(f"/training/jobs/{in_shelf_id}").status_code == 200
         assert os.path.isdir(in_shelf), "a dataset inside the shelf is left alone"
         assert os.path.exists(shelf_file)
+    finally:
+        _teardown(temp_dir, server)
+
+
+def _whole_checkpoint(path, step):
+    """A tensorless safetensors that records its step, as ai-toolkit's do."""
+    header = json.dumps(
+        {"__metadata__": {"training_info": json.dumps({"step": step})}}
+    ).encode()
+    with open(path, "wb") as fh:
+        fh.write(struct.pack("<Q", len(header)) + header)
+
+
+def test_a_stopped_run_is_offered_its_kept_steps_and_trained_longer():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        dataset = os.path.join(temp_dir.name, "datasets", "pixlstash-kept")
+        os.makedirs(dataset)
+        job_id, job_uuid, _, stem = _live_run(
+            server,
+            temp_dir,
+            status="stopped",
+            completed_at="2026-10-26T02:00:00+00:00",
+            dataset_snapshot_path=dataset,
+        )
+        job = training_runs.get_run(server.vault.hub, server.vault.library_uuid, job_id)
+        # The real service, its worker never started: the route's answer is
+        # the service's reading of the run's folder.
+        server.vault.training_service = TrainingService(
+            server.vault.hub,
+            server.vault.library_uuid,
+            server.vault.image_root,
+            request_gpu=None,
+            import_run=None,
+            notify=lambda *args: None,
+            config_provider=dict,
+            dataset_builder=None,
+            disable_background_workers=True,
+        )
+        save_root = os.path.join(job["training_folder"], stem)
+        for step in (750, 1000):
+            _whole_checkpoint(
+                os.path.join(save_root, f"{stem}_{step:09d}.safetensors"), step
+            )
+
+        scoped = _scoped_client(server, read_token)
+        url = f"/training/jobs/{job_id}/train-longer"
+        assert scoped.get(url).status_code == 403
+        r = scoped.post(url, json={"from_step": 1000, "more_steps": 500})
+        assert r.status_code == 403, r.text
+
+        r = owner.get(url)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["reason"] is None
+        assert [s["step"] for s in body["steps"]] == [1000, 750]
+        # No optimizer.pt was saved beside them, so none carries it on.
+        assert not any(s["keeps_optimizer"] for s in body["steps"])
+        assert body["seconds_per_step"] == pytest.approx(2.0)
+        assert job_uuid not in json.dumps(body) and temp_dir.name not in r.text
+
+        r = owner.post(url, json={"from_step": 900, "more_steps": 500})
+        assert r.status_code == 409, r.text
+        assert "no checkpoint at step 900" in r.json()["detail"]
+
+        r = owner.post(url, json={"from_step": 1000, "more_steps": 500})
+        assert r.status_code == 200, r.text
+        assert r.json() == {"job_id": job_id, "status": "queued", "total_steps": 1500}
+        live = owner.get(f"/training/jobs/{job_id}/live").json()
+        assert live["continued"]["from_step"] == 1000
+        assert live["continued"]["take"] is None
+
+        assert owner.get("/training/jobs/999999/train-longer").status_code == 404
     finally:
         _teardown(temp_dir, server)

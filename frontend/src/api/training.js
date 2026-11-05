@@ -96,6 +96,21 @@ export function exportTrainingSnapshot(jobId) {
   return downloadExport(`/training/jobs/${jobId}/snapshot/export`);
 }
 
+/** The steps a run kept that it can be trained on from, newest first. */
+export function getTrainLongerOptions(jobId) {
+  return unwrap(apiClient.get(`/training/jobs/${jobId}/train-longer`));
+}
+
+/** Queue the same run to train on from `fromStep`, `moreSteps` further. */
+export function trainJobLonger(jobId, fromStep, moreSteps) {
+  return unwrap(
+    apiClient.post(`/training/jobs/${jobId}/train-longer`, {
+      from_step: fromStep,
+      more_steps: moreSteps,
+    }),
+  );
+}
+
 /** Request a stop; the job finishes its current step and reports `stopped`. */
 export function cancelTrainingJob(jobId) {
   return unwrap(apiClient.post(`/training/jobs/${jobId}/cancel`, {}));

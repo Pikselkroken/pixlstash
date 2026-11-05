@@ -35,6 +35,7 @@ from pixlstash.training.backend import (
     TrainingSpec,
 )
 from pixlstash.training.config_render import render_job_config
+from pixlstash.utils.adapter_header import read_safetensors_header
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.sqlite_uri import sqlite_file_uri
 
@@ -51,7 +52,8 @@ CREATE TABLE IF NOT EXISTS Job (
   stop            INTEGER NOT NULL DEFAULT 0,
   return_to_queue INTEGER NOT NULL DEFAULT 0,
   save_now        INTEGER NOT NULL DEFAULT 0,
-  sample_now      INTEGER NOT NULL DEFAULT 0
+  sample_now      INTEGER NOT NULL DEFAULT 0,
+  job_config      TEXT
 );
 """
 # Flags added since a job.db could have been created, for a table that exists.
@@ -115,6 +117,8 @@ _JOB_STEM_SEP_RUN = re.compile(r"[._-]{2,}")
 # Leading/trailing separators to strip so the stem is never "..", a hidden file,
 # or a name that argv-parses as a flag ("-rf").
 _JOB_STEM_STRIP = "._-"
+# A preview's step: ``<time>__<step:09d>_<n>.<ext>`` (SEAM.md, "Outputs").
+_SAMPLE_STEP_RE = re.compile(r"^\d+__(\d+)_\d+\.")
 
 
 def safe_job_stem(name: str, job_id: str) -> str:
@@ -275,6 +279,202 @@ class LocalAiToolkit(TrainerBackend):
         return os.path.join(os.path.abspath(work_dir), "allocator_peaks")
 
     # ------------------------------------------------------------------
+    # Training a run on from a kept checkpoint
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def kept_checkpoints(
+        handle: TrainingHandle, final_step: int | None = None
+    ) -> dict[int, str]:
+        """The checkpoints a run can be trained on from, by step.
+
+        The stamped ``<stem>_<step:09d>.safetensors`` files and the bare final,
+        at the step its ``training_info`` metadata records (every save writes
+        it, and it is what the trainer resumes at), else *final_step*. Paths
+        only; whether a file reads whole is the caller's check.
+
+        Args:
+            handle: The run's handle.
+            final_step: The final's step when its metadata does not say.
+
+        Returns:
+            ``{step: path}``.
+        """
+        if not os.path.isdir(handle.save_root):
+            return {}
+        stem = os.path.basename(handle.save_root)
+        stamped = re.compile(rf"^{re.escape(stem)}_(\d{{4,}})\.safetensors$")
+        kept: dict[int, str] = {}
+        for name in os.listdir(handle.save_root):
+            match = stamped.match(name)
+            if match:
+                kept[int(match.group(1))] = os.path.join(handle.save_root, name)
+        final = os.path.join(handle.save_root, f"{stem}.safetensors")
+        if os.path.isfile(final):
+            step = LocalAiToolkit._recorded_step(final) or final_step
+            if step:
+                kept[step] = final
+        return kept
+
+    @staticmethod
+    def _recorded_step(path: str) -> int | None:
+        """The step a checkpoint's ``training_info`` metadata records, or None."""
+        header = read_safetensors_header(path) or {}
+        raw = (header.get("__metadata__") or {}).get("training_info")
+        try:
+            step = int(json.loads(raw)["step"]) if raw else None
+        except (ValueError, KeyError, TypeError) as exc:
+            logger.warning("%s has unreadable training_info %r: %s", path, raw, exc)
+            return None
+        return step if step and step > 0 else None
+
+    @staticmethod
+    def carry_on_from(
+        handle: TrainingHandle, step: int, final_step: int | None = None
+    ) -> str | None:
+        """Leave *step* as the checkpoint the trainer resumes from.
+
+        ai-toolkit resumes from the newest ``<stem>*`` file in ``save_root`` by
+        ctime, reads its step from the file's metadata, and reloads
+        ``optimizer.pt`` from beside it (SEAM.md, "Training on"). So:
+
+        - From the bare final, it is renamed to its stamped name, keeping the
+          optimizer: the run carries on exactly. On POSIX the rename makes it
+          the newest ctime; on Windows ctime is creation time, and the final
+          was created after every checkpoint left beside it.
+        - From an earlier step, every later checkpoint, the final, the
+          optimizer and the later previews move into ``take-<n>/`` (never
+          deleted); the chosen file is then the newest left, and the trainer
+          starts a fresh optimizer from it.
+
+        Args:
+            handle: The run's handle.
+            step: A step from :meth:`kept_checkpoints`.
+            final_step: As for :meth:`kept_checkpoints`.
+
+        Returns:
+            The take folder's name when later files were set aside, else None.
+
+        Raises:
+            FileNotFoundError: The run kept no checkpoint at *step*.
+            FileExistsError: The stamped name for the final is taken.
+        """
+        kept = LocalAiToolkit.kept_checkpoints(handle, final_step)
+        if step not in kept:
+            raise FileNotFoundError(f"The run kept no checkpoint at step {step}.")
+        root = handle.save_root
+        stem = os.path.basename(root)
+        final = os.path.join(root, f"{stem}.safetensors")
+        # Every stamped file past the step, read from the folder rather than
+        # from *kept*, which has one path per step: a stamped file sharing the
+        # final's step would otherwise stay behind and be resumed from.
+        stamped_re = re.compile(rf"^{re.escape(stem)}_(\d{{4,}})\.safetensors$")
+        stamped_steps = {
+            os.path.join(root, name): int(match.group(1))
+            for name in os.listdir(root)
+            if (match := stamped_re.match(name))
+        }
+        later = [
+            path
+            for path, s in sorted(stamped_steps.items(), key=lambda item: item[1])
+            if s > step
+        ]
+        if os.path.isfile(final) and kept[step] != final:
+            later.append(final)
+        # Checked before anything moves, so the refusal changes nothing.
+        stamped = os.path.join(root, f"{stem}_{step:09d}.safetensors")
+        if kept[step] == final and os.path.exists(stamped):
+            raise FileExistsError(
+                f"Step {step} is kept twice, as the final and as "
+                f"{os.path.basename(stamped)}; train on from an earlier step."
+            )
+        moves: list[tuple[str, str]] = []
+        take_name = folder = None
+        if later:
+            take = 1
+            while os.path.exists(os.path.join(root, f"take-{take}")):
+                take += 1
+            take_name = f"take-{take}"
+            folder = os.path.join(root, take_name)
+            set_aside = list(later)
+            optimizer = os.path.join(root, "optimizer.pt")
+            if os.path.isfile(optimizer):
+                set_aside.append(optimizer)
+            samples = os.path.join(root, "samples")
+            if os.path.isdir(samples):
+                for name in os.listdir(samples):
+                    match = _SAMPLE_STEP_RE.match(name)
+                    if match and int(match.group(1)) > step:
+                        set_aside.append(os.path.join(samples, name))
+            for path in set_aside:
+                under = "samples" if os.path.dirname(path) == samples else ""
+                moves.append(
+                    (path, os.path.join(folder, under, os.path.basename(path)))
+                )
+        if kept[step] == final:
+            moves.append((final, stamped))
+        # A failed move puts back what moved, so a refusal leaves the folder
+        # as it was and nothing is queued over half a take.
+        moved: list[tuple[str, str]] = []
+        try:
+            for source, dest in moves:
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                os.rename(source, dest)
+                moved.append((dest, source))
+        except OSError:
+            for dest, source in reversed(moved):
+                try:
+                    os.rename(dest, source)
+                except OSError as exc:
+                    logger.error(
+                        "Could not move %s back to %s after a failed "
+                        "set-aside (%s); the run folder is left partly moved.",
+                        dest,
+                        source,
+                        exc,
+                    )
+            for empty in (folder and os.path.join(folder, "samples"), folder):
+                try:
+                    if empty and os.path.isdir(empty) and not os.listdir(empty):
+                        os.rmdir(empty)
+                except OSError as exc:
+                    logger.warning("Could not remove empty %s: %s", empty, exc)
+            raise
+        return take_name
+
+    @staticmethod
+    def template_from_rendered(config: dict) -> dict:
+        """A run's rendered config, turned back into its template.
+
+        The five PixlStash placeholders are put back where :func:`render_job_config`
+        filled them (SEAM.md, "Config"), so a run trained on renders exactly
+        what it trained with, and its after-training preview passes can still
+        point the same config at their own folders. The trigger word stays as
+        it was rendered: it is the same word.
+
+        Args:
+            config: The run's rendered config.
+
+        Returns:
+            A new dict holding the template.
+        """
+        template = json.loads(json.dumps(config))
+        inner = template.get("config") or {}
+        if "name" in inner:
+            inner["name"] = "{{JOB_NAME}}"
+        if isinstance(template.get("meta"), dict) and "name" in template["meta"]:
+            template["meta"]["name"] = "{{JOB_NAME}}"
+        for process in inner.get("process") or []:
+            if "training_folder" in process:
+                process["training_folder"] = "{{TRAINING_FOLDER}}"
+            if "sqlite_db_path" in process:
+                process["sqlite_db_path"] = "{{SQLITE_DB_PATH}}"
+            for dataset in process.get("datasets") or []:
+                if "folder_path" in dataset:
+                    dataset["folder_path"] = "{{DATASET_FOLDER}}"
+        return template
+
+    # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
@@ -317,8 +517,6 @@ class LocalAiToolkit(TrainerBackend):
         os.makedirs(save_root, exist_ok=True)
 
         self._rotate_existing_log(log_path)
-        self._create_job_db(sqlite_db_path, spec.job_id)
-
         config = render_job_config(
             spec.template_path,
             job_name=stem,
@@ -332,6 +530,7 @@ class LocalAiToolkit(TrainerBackend):
         # write_json_atomic uses json.dump, whose default ensure_ascii=True
         # already escapes non-ASCII to \uXXXX, matching the SEAM requirement.
         write_json_atomic(config_path, config)
+        self._create_job_db(sqlite_db_path, spec.job_id, config)
         logger.info(
             "Prepared training job %s: save_root=%s config=%s",
             spec.job_id,
@@ -953,15 +1152,19 @@ class LocalAiToolkit(TrainerBackend):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _create_job_db(sqlite_db_path: str, job_id: str) -> None:
+    def _create_job_db(sqlite_db_path: str, job_id: str, config: dict) -> None:
         """Create the per-job ``Job`` table and insert the single job row.
 
         The INSERT is mandatory: the trainer's UPDATEs are keyed ``WHERE id=?``
         with no upsert, so they silently no-op if the row is absent (SEAM.md).
+        The row carries the rendered config as ``job_config``, as ai-toolkit's
+        own UI does: a trainer that reads its step count from there every step
+        (Extend Training) fails the run on a missing or empty column.
 
         Args:
             sqlite_db_path: Path to the per-job DB file to create.
             job_id: The job id used as the ``Job.id`` primary key.
+            config: The rendered job config.
         """
         os.makedirs(os.path.dirname(os.path.abspath(sqlite_db_path)), exist_ok=True)
         conn = sqlite3.connect(sqlite_db_path, timeout=30.0)
@@ -975,9 +1178,12 @@ class LocalAiToolkit(TrainerBackend):
                     conn.execute(
                         f"ALTER TABLE Job ADD COLUMN {flag} INTEGER NOT NULL DEFAULT 0"
                     )
+            if "job_config" not in columns:
+                conn.execute("ALTER TABLE Job ADD COLUMN job_config TEXT")
             conn.execute(
-                "INSERT OR REPLACE INTO Job (id, status) VALUES (?, 'queued')",
-                (job_id,),
+                "INSERT OR REPLACE INTO Job (id, status, job_config) "
+                "VALUES (?, 'queued', ?)",
+                (job_id, json.dumps(config)),
             )
             conn.commit()
         finally:

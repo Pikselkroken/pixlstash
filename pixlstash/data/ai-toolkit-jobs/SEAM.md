@@ -75,6 +75,37 @@ the config: a bad config fails the run, so the adapter does not re-validate the 
 - **Samples:** `<save_root>/samples/[time]__<step:09d>_<n>.<ext>`.
 - **Loss DB:** `<save_root>/loss_log.db` (always written when `use_ui_logger=true`).
 
+## Training on (Train longer)
+
+Verified against the local clone at v0.13.32 (`jobs/process/BaseSDTrainProcess.py`,
+`toolkit/scheduler.py`); re-verify on every bump.
+
+- **Resume is automatic.** At start the trainer globs `save_root` for `<name>*.safetensors`,
+  `<name>*.pt` and `<name>*`, takes the newest by **ctime**, loads its weights and reads its step
+  from the `training_info` metadata (`{"step", "epoch"}`) every save writes, **the final included**.
+  It then trains from that step to `train.steps`. The loop's step runs `start .. steps-1` and a
+  stamped save is written where it divides by `save_every`, except at `start`; so no stamped file is
+  ever at `train.steps`, which is the final's step.
+- **The optimizer** is `<save_root>/optimizer.pt`, overwritten beside every save, so it belongs to the
+  newest checkpoint. Absent, the optimizer starts fresh. Its LR groups are reset to the configured
+  LR after loading.
+- **The LR schedule is not resumed.** It is built afresh over the new `train.steps` and stepped to the
+  resumed step (closed form), so it is spread over the new length. `constant` (the default; no
+  recipe sets one) is unchanged. A decaying one restarts warm: a cosine run trained on from its end
+  at 3,000 to 4,000 starts again at 15% of its base rate and decays to the new end; carried on as it
+  was, it would sit near zero and the extra steps would train nothing. Training on from an earlier
+  step to the old total repeats the original schedule exactly. Every schedule is offered.
+- **`loss_log.db`** drops rows past the resumed step by itself.
+- **From the final:** PixlStash renames `<name>.safetensors` to `<name>_<step:09d>.safetensors` (on
+  POSIX the rename makes it the newest ctime; on Windows ctime is creation time and the final was
+  created last anyway), raises `train.steps`, sets `train.skip_first_sample`, and
+  relaunches in the same `save_root`: weights, step and optimizer carry on.
+- **From an earlier step:** the later checkpoints, the final, `optimizer.pt` and the later previews
+  move into `<save_root>/take-<n>/` (no `<name>*` match, so the trainer never sees them); the chosen
+  file is then the newest, with a fresh optimizer.
+- `network.pretrained_lora_path` is only read when `save_root` holds no checkpoint, so it plays no
+  part here.
+
 ## Progress / status: TWO independent sqlite files
 
 ### 1. `loss_log.db` (`<save_root>/loss_log.db`): step + loss. WAL mode; read WAL-aware.
@@ -97,9 +128,11 @@ CREATE TABLE Job (
   stop            INTEGER NOT NULL DEFAULT 0,     -- set to 1 to request cooperative stop
   return_to_queue INTEGER NOT NULL DEFAULT 0,
   save_now        INTEGER NOT NULL DEFAULT 0,
-  sample_now      INTEGER NOT NULL DEFAULT 0     -- read every step since 0.12 ("Sample Next Step")
+  sample_now      INTEGER NOT NULL DEFAULT 0,    -- read every step since 0.12 ("Sample Next Step")
+  job_config      TEXT                           -- the rendered config; an Extend Training
+                                                 -- trainer reads train.steps from it every step
 );
-INSERT INTO Job (id) VALUES ('<job uuid>');
+INSERT INTO Job (id, status, job_config) VALUES ('<job uuid>', 'queued', '<rendered config JSON>');
 ```
 - **Read progress/status:** `SELECT status, info, step, speed_string FROM Job WHERE id=?`.
 - Trainer UPDATEs are keyed `WHERE id=?` (no upsert) → silently no-op if the row is absent, so the

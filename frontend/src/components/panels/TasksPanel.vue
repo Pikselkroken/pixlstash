@@ -1065,7 +1065,7 @@ async function cancelWait(entry) {
   if (
     entry.lease.tenant === "aitoolkit" &&
     !window.confirm(
-      `Stop training "${entry.label}"? The run will stop and cannot be resumed.`,
+      `Stop training "${entry.label}"? The checkpoints it saved are kept.`,
     )
   ) {
     return;

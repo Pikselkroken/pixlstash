@@ -78,7 +78,8 @@ from pixlstash.services.comfyui_service import RUN_CLIENT_ID
 from pixlstash.services.stack_detector import set_cover
 from pixlstash.hub import training_runs
 from pixlstash.services.run_importer import STATUS_IMPORTED, RunImporter
-from pixlstash.services.model_mover import SHELF_IO_LOCK
+from pixlstash.services.model_mover import SHELF_IO_LOCK, publish_no_clobber
+from pixlstash.utils.aitoolkit_run import read_run
 from pixlstash.services.managed_model_store import find_download_folder
 from pixlstash.services.model_shelf_service import (
     fetch_attachments,
@@ -1222,6 +1223,12 @@ class Vault:
             if under_root:
                 delete_source = bool(row["delete_after_import"])
                 break
+        if info.get("continued_from_step") is not None and hub.fetchone(
+            "SELECT 1 FROM model WHERE training_run_id = ?", (info["id"],)
+        ):
+            return self._import_trained_longer(
+                run_dir, info, folder, subfolder, delete_source
+            )
         with SHELF_IO_LOCK:
             report = RunImporter(hub).import_run(
                 run_dir,
@@ -1297,6 +1304,132 @@ class Vault:
             "stack_id": report.stack_id,
             "imported": len(landed),
             "cover_sha256": cover_sha,
+        }
+
+    def _import_trained_longer(
+        self,
+        run_dir: str,
+        info: dict,
+        folder,
+        subfolder: Optional[str],
+        delete_source: bool,
+    ) -> dict:
+        """Add a run trained longer to the stack its first import made.
+
+        The shelf's own copies give their names up first, as the run folder's
+        did: the bare final becomes its stamped step, so the longer-trained
+        final takes ``<stem>.safetensors`` and everything that loads that name
+        gets it. After a rewind, the copies past the step it trained on from
+        are renamed into the take that set them aside (``<stem>_take-1_<step>``),
+        because the new take writes the same steps again. Only the steps past
+        that one and the new final are imported, after the stack's members, so
+        the cover stays where the owner put it.
+
+        Returns:
+            ``{"stack_id", "imported", "cover_sha256"}`` as
+            :meth:`_import_training_run`; ``cover_sha256`` is None, since the
+            cover and its attachment are left as they are.
+
+        Raises:
+            RuntimeError: No checkpoint imported, or a shelf copy could not be
+                renamed out of the way.
+            MoveRefused: The importer refused the batch.
+        """
+        hub = self._hub
+        from_step = int(info["continued_from_step"])
+        take = info.get("set_aside_take")
+        stem = os.path.basename(os.path.normpath(run_dir))
+        with SHELF_IO_LOCK:
+            locations = hub.fetchall(
+                "SELECT mf.relpath, m.id AS model_id, m.training_step "
+                "FROM model_file mf JOIN model m ON m.id = mf.model_id "
+                "WHERE mf.model_folder_id = ? AND m.training_run_id = ?",
+                (folder["id"], info["id"]),
+            )
+            for location in locations:
+                name = os.path.basename(location["relpath"])
+                step = location["training_step"]
+                if step is None:
+                    continue
+                if take and step > from_step:
+                    renamed = f"{stem}_{take}_{step:09d}.safetensors"
+                elif name == f"{stem}.safetensors":
+                    renamed = f"{stem}_{step:09d}.safetensors"
+                else:
+                    continue
+                if renamed == name:
+                    continue
+                source = os.path.join(folder["path"], location["relpath"])
+                relpath = os.path.join(os.path.dirname(location["relpath"]), renamed)
+                relpath = relpath.replace(os.sep, "/")
+                try:
+                    publish_no_clobber(source, os.path.join(folder["path"], relpath))
+                except OSError as exc:
+                    logger.error(
+                        "Could not rename %s to %s on the shelf for run %s: %s",
+                        source,
+                        renamed,
+                        info["uuid"],
+                        exc,
+                    )
+                    raise RuntimeError(
+                        f"The shelf's copy of {name} could not make room for the "
+                        "longer-trained file."
+                    ) from exc
+                try:
+                    with hub.transaction() as conn:
+                        conn.execute(
+                            "UPDATE model_file SET relpath = ? "
+                            "WHERE model_folder_id = ? AND relpath = ?",
+                            (relpath, folder["id"], location["relpath"]),
+                        )
+                        conn.execute(
+                            "UPDATE model SET filename = ? WHERE id = ?",
+                            (renamed, location["model_id"]),
+                        )
+                except Exception:
+                    # The rows still name the old file: give it its name back.
+                    try:
+                        os.rename(os.path.join(folder["path"], relpath), source)
+                    except OSError as undo_exc:
+                        logger.error(
+                            "Could not rename %s back to %s after the shelf rows "
+                            "for run %s refused the new name (%s); the model's "
+                            "file is missing under its recorded name.",
+                            relpath,
+                            source,
+                            info["uuid"],
+                            undo_exc,
+                        )
+                    raise
+            stack = hub.fetchone(
+                "SELECT stack_id, MAX(stack_position) AS last FROM model "
+                "WHERE training_run_id = ? AND stack_id IS NOT NULL "
+                "GROUP BY stack_id ORDER BY COUNT(*) DESC LIMIT 1",
+                (info["id"],),
+            )
+            steps = [
+                c.step
+                for c in read_run(run_dir).checkpoints
+                if c.step is None or c.step > from_step
+            ]
+            report = RunImporter(hub).import_run(
+                run_dir,
+                folder["id"],
+                steps=steps,
+                subfolder=subfolder,
+                delete_source=delete_source,
+                training_run_id=info["id"],
+                stack_id=stack["stack_id"] if stack else None,
+                first_position=(stack["last"] or 0) + 1 if stack else 0,
+            )
+        landed = [o for o in report.outcomes if o.status == STATUS_IMPORTED]
+        if not landed:
+            raise RuntimeError(f"No checkpoint of {report.run_name} could be imported.")
+        return {
+            "stack_id": report.stack_id,
+            "imported": len(landed),
+            "cover_sha256": None,
         }
 
     def choose_training_cover(self, run: dict, step: int) -> bool:
