@@ -1,56 +1,5 @@
 <template>
   <div class="mrr">
-    <!-- With the run's page open the rail says what the run was made of; the
-         page already says how it went, larger (Training and Samples). -->
-    <ModelsRailSection v-if="open" section-key="setup" title="Set-up">
-      <dl class="mrs-facts">
-        <div v-for="fact in setup" :key="fact.label" class="mrs-fact">
-          <dt>{{ fact.label }}</dt>
-          <dd :class="fact.class">{{ fact.value }}</dd>
-        </div>
-      </dl>
-    </ModelsRailSection>
-
-    <ModelsRailSection
-      v-if="open"
-      section-key="trained"
-      title="Trained on"
-      :count="pictures.length || null"
-    >
-      <template v-if="live?.dataset_snapshot_id != null" #end>
-        <!-- The frozen dataset (#2123): what the LoRA was trained on,
-             whatever has happened to the pictures since. -->
-        <button
-          class="mrs-link-btn"
-          type="button"
-          :disabled="exporting"
-          data-testid="mrr-export"
-          @click="exportDataset"
-        >
-          Export
-        </button>
-      </template>
-      <span v-if="subjectName" class="mrs-name">{{ subjectName }}</span>
-      <div v-if="pictures.length" class="mrr-pics" data-testid="mrr-pictures">
-        <img
-          v-for="id in shownPictures"
-          :key="id"
-          :src="pictureThumbnailUrl(id)"
-          alt="Training picture"
-          loading="lazy"
-          role="button"
-          tabindex="0"
-          @click="openPicture(id)"
-          @keydown.enter="openPicture(id)"
-          @keydown.space.prevent="openPicture(id)"
-        />
-        <span v-if="morePictures" class="mrs-hint mrr-more"
-          >+{{ morePictures.toLocaleString() }} more</span
-        >
-      </div>
-      <p v-else class="mrs-hint">The pictures were not recorded.</p>
-    </ModelsRailSection>
-
     <ModelsRailSection
       v-if="!open"
       section-key="progress"
@@ -179,6 +128,58 @@
       <p v-else class="mrs-hint">No samples drawn yet.</p>
     </ModelsRailSection>
 
+    <!-- What the run was made of, in the grid and on its page alike. -->
+    <ModelsRailSection section-key="setup" title="Set-up">
+      <dl class="mrs-facts">
+        <div v-for="fact in setup" :key="fact.label" class="mrs-fact">
+          <dt>{{ fact.label }}</dt>
+          <dd :class="fact.class">{{ fact.value }}</dd>
+        </div>
+      </dl>
+    </ModelsRailSection>
+
+    <ModelsRailSection
+      section-key="trained"
+      title="Trained on"
+      :count="pictures.length || null"
+    >
+      <template v-if="live?.dataset_snapshot_id != null" #end>
+        <!-- The frozen dataset (#2123): what the LoRA was trained on,
+             whatever has happened to the pictures since. -->
+        <button
+          class="mrs-link-btn"
+          type="button"
+          :disabled="exporting"
+          data-testid="mrr-export"
+          @click="exportDataset"
+        >
+          Export
+        </button>
+      </template>
+      <span v-if="subjectName" class="mrs-name">{{ subjectName }}</span>
+      <div v-if="pictures.length" class="mrr-pics" data-testid="mrr-pictures">
+        <img
+          v-for="id in shownPictures"
+          :key="id"
+          :src="pictureThumbnailUrl(id)"
+          alt="Training picture"
+          loading="lazy"
+          role="button"
+          tabindex="0"
+          @click="openPicture(id)"
+          @keydown.enter="openPicture(id)"
+          @keydown.space.prevent="openPicture(id)"
+        />
+        <span v-if="morePictures" class="mrs-hint mrr-more"
+          >+{{ morePictures.toLocaleString() }} more</span
+        >
+      </div>
+      <!-- Not while the live view is unread or failed: that is unknown. -->
+      <p v-else-if="!card.job || live" class="mrs-hint">
+        The pictures were not recorded.
+      </p>
+    </ModelsRailSection>
+
     <ModelsRailSection
       section-key="ckpts"
       title="Checkpoints"
@@ -221,14 +222,6 @@
       </template>
     </ModelsRailSection>
 
-    <ModelsRailSection v-if="!open" section-key="setup" title="Set-up">
-      <dl class="mrs-facts">
-        <div v-for="fact in setup" :key="fact.label" class="mrs-fact">
-          <dt>{{ fact.label }}</dt>
-          <dd :class="fact.class">{{ fact.value }}</dd>
-        </div>
-      </dl>
-    </ModelsRailSection>
     <TrainingSampleDialog :sample="openedSample" @close="openedSample = null" />
   </div>
 </template>
@@ -237,12 +230,13 @@
 /**
  * One training run, in the Models rail (#2169). Picked in the runs grid, where
  * nothing else on screen describes it, the rail is its whole summary: how it is
- * going (with Stop while it trains), its samples as prompts × steps, the
- * checkpoints it saved and what it was set up with.
+ * going (with Stop while it trains), its samples as prompts × steps, what it
+ * was set up with (the plan included), the pictures it learned from and the
+ * checkpoints it saved.
  *
  * With the run's own page open the two split by question: the page says how it
- * went (failure, loss, samples) and the rail what it was made of (set-up, the
- * pictures it learned from, the checkpoints it left), so nothing is said twice.
+ * went (failure, loss, samples) and the rail keeps only what it was made of
+ * (set-up, pictures, checkpoints), so nothing is said twice.
  *
  * A run PixlStash trains is read from its live view, polled while it trains; a
  * run trained elsewhere is described from the folder listing alone.
@@ -409,14 +403,6 @@ const shownPictures = computed(() =>
   pictures.value.slice(0, morePictures.value ? PICTURES_SHOWN - 1 : PICTURES_SHOWN),
 );
 
-const trainedOn = computed(() => {
-  if (!props.card.job) return "–";
-  const n = pictures.value.length;
-  return [subjectName.value || "–", n ? `${n.toLocaleString()} pictures` : ""]
-    .filter(Boolean)
-    .join(" · ");
-});
-
 const trigger = computed(
   () =>
     props.card.job?.trigger_word || (props.card.run?.trigger_words || []).join(", "),
@@ -456,14 +442,13 @@ const plan = computed(() => {
   return even ? `${steps}, a sample every ${every.toLocaleString()}` : steps;
 });
 
-/** The set-up facts; in the grid they also say what it trained on. */
+/** The set-up facts; what it trained on has its own section. */
 const setup = computed(() =>
   [
-    !props.open && { label: "Trained on", value: trainedOn.value },
     { label: "Base", value: baseOf(props.card), class: "mrr-wrap" },
     { label: "Trigger word", value: trigger.value || "–", class: "mrr-mono" },
     { label: "Rank · LR", value: rankLr.value },
-    props.open && plan.value && { label: "Plan", value: plan.value },
+    plan.value && { label: "Plan", value: plan.value },
     { label: "Folder", value: folder.value, class: "mrr-mono mrr-wrap" },
   ].filter(Boolean),
 );

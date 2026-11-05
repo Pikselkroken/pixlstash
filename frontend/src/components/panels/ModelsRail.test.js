@@ -656,7 +656,9 @@ describe("a picked training run (#2169)", () => {
     expect(wrapper.text()).toContain("1,200 / 3,000 steps");
     expect(wrapper.text()).toContain("about 1 h 10 min");
     expect(wrapper.text()).toContain("0.310");
-    expect(wrapper.text()).toContain("Aria · 3 pictures");
+    // The pictures it learns from, in the grid as on its page.
+    expect(wrapper.text()).toContain("Aria");
+    expect(wrapper.findAll("[data-testid='mrr-pictures'] img")).toHaveLength(3);
     // Only the steps that have drawn a sample are columns.
     expect(wrapper.findAll(".mrr-col").map((c) => c.text())).toEqual(["0", "500"]);
     expect(wrapper.find('[data-testid="mrr-open"]').exists()).toBe(true);

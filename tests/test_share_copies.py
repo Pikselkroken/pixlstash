@@ -1,6 +1,7 @@
 """Share-ready copies (#2417): generation data stripped by default, pixels kept."""
 
 import datetime
+import functools
 import json
 import os
 import tempfile
@@ -62,7 +63,10 @@ def _pattern(mode="RGB", size=(48, 32)):
     return img
 
 
+@functools.cache
 def _srgb_icc() -> bytes:
+    # One profile per run: lcms stamps each new one with the current second,
+    # so a fixture and its expected value built a second apart differ.
     return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 
 
