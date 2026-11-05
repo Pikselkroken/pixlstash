@@ -492,7 +492,7 @@
             class="tm-head-act"
             type="button"
             data-testid="tm-finished-clear"
-            aria-label="Clear the finished runs. Runs with unsaved changes stay."
+            aria-label="Clear all finished runs. Runs with unsaved changes stay."
             :disabled="Boolean(dismissing) || Boolean(busy)"
             @click="clearFinished"
           >

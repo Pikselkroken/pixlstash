@@ -22698,6 +22698,21 @@ def test_a_finished_run_is_listed_and_carries_the_offer_to_save_it(saving):
     run_log.queued(hub, "run-prune-2", "run-prune-2", None, "Prune", library)
     assert not held("run-long"), "a run lost with a restart never ages out"
 
+    # A finished run is listed for KEPT_FOR (two hours), not a day.
+    for run_id, hours in (("run-hour", 1), ("run-3h", 3)):
+        run_log.queued(hub, run_id, run_id, None, "Aged", library)
+        run_log.ended(hub, {"run_id": run_id, "status": "completed"})
+        at = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE workflow_run_log SET queued_at = ?, ended_at = ? "
+                "WHERE run_id = ?",
+                (at, at, run_id),
+            )
+    listed = {b["id"] for b in run_log.finished(hub, library, lambda _ids: set())}
+    assert "run-hour" in listed
+    assert "run-3h" not in listed
+
 
 @pytest.fixture
 def sampled(saving):
