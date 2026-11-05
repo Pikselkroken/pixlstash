@@ -136,6 +136,11 @@ export const useWhatsChangedStore = defineStore("whatsChanged", () => {
         : [];
       checklist.value = state.checklist === true;
       card.value = state.card === true;
+    } else {
+      // Nothing stored: nothing to show, whatever an earlier read held.
+      done.value = [];
+      checklist.value = false;
+      card.value = false;
     }
     loaded.value = true;
   }

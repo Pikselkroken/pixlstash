@@ -110,6 +110,15 @@ describe("the upgrade test", () => {
     expect(store.card).toBe(false);
   });
 
+  it("a config with nothing stored clears what an earlier read held", () => {
+    const store = useWhatsChangedStore();
+    store.hydrate({ whats_changed: { done: ["click"], checklist: true, card: true } });
+    store.hydrate({ whats_changed: null });
+    expect(store.done).toEqual([]);
+    expect(store.checklist).toBe(false);
+    expect(store.card).toBe(false);
+  });
+
   it("a 1.x build, a read-only session or an unread config do nothing", async () => {
     expect((await launch({ version: "1.12.0" })).upgraded).toBeFalsy();
     setActivePinia(createPinia());
