@@ -911,11 +911,16 @@ class TestTheReadOnlyWorkflowListing:
         alpha, beta, set_id = self._setup(server, client)
         shared = auto_workflow_id(CORE_SHARED, "")
         other = auto_workflow_id(CORE_OTHER, "")
-        # Nothing here may reach ComfyUI or any other host.
+        # Nothing here may reach ComfyUI or any other host. Every HTTP client
+        # the app uses resolves through getaddrinfo first; patching connect
+        # instead hangs Windows, whose event-loop socketpair is a real connect.
         dialled = []
-        monkeypatch.setattr(
-            socket.socket, "connect", lambda sock, addr: dialled.append(addr)
-        )
+
+        def refuse(host, *args, **kwargs):
+            dialled.append(host)
+            raise OSError(f"test refuses to resolve {host}")
+
+        monkeypatch.setattr(socket, "getaddrinfo", refuse)
 
         scoped = self._listing(
             self._reader(
