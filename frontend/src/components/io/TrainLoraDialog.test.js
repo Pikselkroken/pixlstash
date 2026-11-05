@@ -55,6 +55,7 @@ import * as training from "../../api/training";
 import * as config from "../../api/config";
 import * as pictureSets from "../../api/pictureSets";
 import { useTrainingStore } from "../../stores/useTrainingStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import TrainLoraDialog from "./TrainLoraDialog.vue";
 
 const T = "{{TRIGGER_WORD}}";
@@ -1147,6 +1148,12 @@ describe("when the run does not fit beside ComfyUI (#2558)", () => {
     expect(wrapper.find('[data-testid="cq-clear"]').text()).toBe("Clear after its jobs");
     expect(wrapper.find('[data-testid="cq-quit"]').text()).toBe("Quit after its jobs");
     expect(wrapper.text()).toContain("after 2 jobs");
+    const notices = useNoticeStore();
+    await wrapper.find('[data-testid="cq-quit"]').trigger("click");
+    await flushPromises();
+    expect(notices.notices.at(-1).text).toBe(
+      "Training waits for ComfyUI's 2 jobs, then clears its memory and quits it if that is not enough.",
+    );
   });
 
   it("sends the quit only when the owner picks it", async () => {

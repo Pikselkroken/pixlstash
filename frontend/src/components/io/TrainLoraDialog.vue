@@ -1425,7 +1425,10 @@ async function onStart() {
     const jobs = store.comfyuiAnswer ? Number(comfyNeed.value?.jobs) || 0 : 0;
     store.showQueuedToast(
       jobs
-        ? `Training waits for ComfyUI's ${jobs === 1 ? "job" : `${jobs} jobs`}, then clears its memory.`
+        ? `Training waits for ComfyUI's ${jobs === 1 ? "job" : `${jobs} jobs`}, then clears its memory${
+            // A quit is the ladder's last rung: only if the clear falls short.
+            store.comfyuiAnswer === "quit" ? " and quits it if that is not enough" : ""
+          }.`
         : profile
           ? `Training queued: ${profile}.`
           : "Training queued.",
