@@ -346,6 +346,41 @@ describe("the rail's training card", () => {
     expect(wrapper.find('[data-testid="mrr-reason"]').exists()).toBe(false);
   });
 
+  it("shows a run's new failure, not the one before it was trained longer", async () => {
+    // The listing missed it training: it reads failed, then failed again.
+    const wrapper = await openRail(
+      { card: failedCard },
+      { ...failedLive, error: "no such column: job_config", report: null },
+    );
+    getTrainingJobLive.mockResolvedValue({ ...failedLive, error: "CUDA out of memory." });
+    await wrapper.setProps({
+      card: { ...failedCard, job: { ...failedCard.job, error: "CUDA out of memory." } },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="mrr-reason"]').text()).toBe("CUDA out of memory.");
+  });
+
+  it("polls a run trained longer as it polls any live run", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const wrapper = await openRail(
+        { card: failedCard },
+        { ...failedLive, error: "no such column: job_config", report: null },
+      );
+      getTrainingJobLive.mockResolvedValue({ ...failedLive, status: "running", error: null });
+      await wrapper.setProps({
+        card: { ...failedCard, live: true, job: { ...failedCard.job, status: "running" } },
+      });
+      await flushPromises();
+      // Training again, so the rail polls it as it does any live run.
+      const reads = getTrainingJobLive.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(getTrainingJobLive.mock.calls.length).toBe(reads + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("exports the frozen dataset from the rail", async () => {
     const blob = new Blob(["zip"]);
     exportTrainingSnapshot.mockResolvedValue({ blob, filename: "run_dataset.zip" });
