@@ -913,10 +913,15 @@ async function openLonger(card, anchor) {
   longerOpen.value = true;
 }
 
-// Opened programmatically, so Vuetify has no activator to hand focus back to.
+// Opened programmatically, so Vuetify has no activator to hand focus back to:
+// it goes back to the card or pill button it was opened from, or to the card
+// when a reload has taken that button away.
 watch(longerOpen, (open, wasOpen) => {
   if (open || !wasOpen) return;
-  nextTick(() => cardElement(cards.value[cursor.value])?.focus());
+  nextTick(() => {
+    const anchor = longerTarget.value?.isConnected ? longerTarget.value : null;
+    (anchor ?? cardElement(cards.value[cursor.value]))?.focus();
+  });
 });
 
 /** The failed job being queued again, so its Retry cannot fire twice. */

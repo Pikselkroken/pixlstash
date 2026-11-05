@@ -2774,3 +2774,40 @@ def test_a_stamped_file_at_the_finals_step_is_set_aside_too(tmp_path):
         f"{stem}_000000002.safetensors",
         "take-1",
     }
+
+
+def test_a_set_aside_that_fails_midway_leaves_the_folder_as_it_was(
+    tmp_path, monkeypatch
+):
+    handle = LocalAiToolkit.handle_for(str(tmp_path / "work"), "abcdef12", "midway")
+    os.makedirs(handle.save_root)
+    stem = os.path.basename(handle.save_root)
+    for name, step in (
+        (f"{stem}_000000002.safetensors", 2),
+        (f"{stem}_000000004.safetensors", 4),
+        (f"{stem}.safetensors", 6),
+    ):
+        header = json.dumps(
+            {"__metadata__": {"training_info": json.dumps({"step": step})}}
+        ).encode()
+        with open(os.path.join(handle.save_root, name), "wb") as fh:
+            fh.write(len(header).to_bytes(8, "little") + header)
+    with open(os.path.join(handle.save_root, "optimizer.pt"), "w") as fh:
+        fh.write("state")
+    before = sorted(os.listdir(handle.save_root))
+
+    real_rename = os.rename
+    calls = []
+
+    def flaky_rename(source, dest):
+        calls.append(source)
+        if len(calls) == 3:  # the third file to move is locked
+            raise PermissionError("locked")
+        real_rename(source, dest)
+
+    monkeypatch.setattr(os, "rename", flaky_rename)
+    with pytest.raises(PermissionError):
+        LocalAiToolkit.carry_on_from(handle, 2)
+    monkeypatch.setattr(os, "rename", real_rename)
+
+    assert sorted(os.listdir(handle.save_root)) == before

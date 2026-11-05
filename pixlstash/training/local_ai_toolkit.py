@@ -392,18 +392,41 @@ class LocalAiToolkit(TrainerBackend):
             optimizer = os.path.join(root, "optimizer.pt")
             if os.path.isfile(optimizer):
                 set_aside.append(optimizer)
-            for path in set_aside:
-                os.rename(path, os.path.join(folder, os.path.basename(path)))
             samples = os.path.join(root, "samples")
             if os.path.isdir(samples):
                 for name in os.listdir(samples):
                     match = _SAMPLE_STEP_RE.match(name)
                     if match and int(match.group(1)) > step:
-                        os.makedirs(os.path.join(folder, "samples"), exist_ok=True)
-                        os.rename(
-                            os.path.join(samples, name),
-                            os.path.join(folder, "samples", name),
+                        set_aside.append(os.path.join(samples, name))
+            # A failed move puts back what moved, so a refusal leaves the
+            # folder as it was and nothing is queued over half a take.
+            moved: list[tuple[str, str]] = []
+            try:
+                for path in set_aside:
+                    under = "samples" if os.path.dirname(path) == samples else ""
+                    dest = os.path.join(folder, under, os.path.basename(path))
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    os.rename(path, dest)
+                    moved.append((dest, path))
+            except OSError:
+                for dest, source in reversed(moved):
+                    try:
+                        os.rename(dest, source)
+                    except OSError as exc:
+                        logger.error(
+                            "Could not move %s back to %s after a failed "
+                            "set-aside (%s); the run folder is left partly moved.",
+                            dest,
+                            source,
+                            exc,
                         )
+                for empty in (os.path.join(folder, "samples"), folder):
+                    try:
+                        if os.path.isdir(empty) and not os.listdir(empty):
+                            os.rmdir(empty)
+                    except OSError as exc:
+                        logger.warning("Could not remove empty %s: %s", empty, exc)
+                raise
         if kept[step] == final:
             stamped = os.path.join(root, f"{stem}_{step:09d}.safetensors")
             if os.path.exists(stamped):
