@@ -336,7 +336,7 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   pointer-events: auto;
-  background: rgba(var(--v-theme-scrim), 0.8);
+  background: rgba(var(--v-theme-scrim), 0.4);
 }
 
 /* Amber, because it means "click here". The ring takes no clicks: the
