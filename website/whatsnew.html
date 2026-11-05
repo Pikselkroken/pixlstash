@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>What's New in PixlStash 1.13</title>
+    <title>What's New in PixlStash 2.0</title>
     <meta
       name="description"
-      content="What's new in PixlStash 1.13: paint tools and inpainting in the picture viewer, every ComfyUI template as a workflow you can add, missing models downloaded into the folder you choose, and runs that wait for GPU memory instead of running out of it."
+      content="What's new in PixlStash 2.0: train a LoRA from a person or a set and use it right away, a Models workspace that sorts and moves model files, tags that copy, paste and suggest themselves in search, and pictures copied out as their original files."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -758,6 +758,321 @@
           right: 12px;
         }
       }
+      /* -- 2.0: the app map hero, a numbered section per pin -- */
+      .map-hero-head {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 32px;
+        align-items: center;
+        padding: 22px 26px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .map-hero-head h1 {
+        margin: 10px 0 0;
+        font-size: clamp(2rem, 3.6vw, 2.5rem);
+        line-height: 1.05;
+        letter-spacing: -0.01em;
+        white-space: nowrap;
+      }
+
+      .map-hero-head p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.58;
+        max-width: 62ch;
+      }
+
+      .map-hero-body {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 330px;
+      }
+
+      .map-hero-body .app-map > img {
+        cursor: zoom-in;
+      }
+
+      .map-legend {
+        list-style: none;
+        margin: 0;
+        padding: 8px 0;
+        border-left: 1px solid var(--border);
+        display: grid;
+        align-content: start;
+      }
+
+      .map-legend li {
+        display: grid;
+        grid-template-columns: 30px 1fr;
+        gap: 14px;
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--divider);
+      }
+
+      .map-legend li:last-child {
+        border-bottom: 0;
+      }
+
+      .map-legend h2 {
+        margin: 2px 0 6px;
+        font-size: 1.06rem;
+        line-height: 1.25;
+      }
+
+      .map-legend h2 a:hover {
+        color: var(--accent-2);
+      }
+
+      .map-legend p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+        line-height: 1.5;
+      }
+
+      .map-detail {
+        margin-top: 44px;
+        display: grid;
+        grid-template-columns: 52px minmax(0, 1fr);
+        gap: 18px;
+        scroll-margin-top: 16px;
+      }
+
+      .map-detail > .app-pin {
+        width: 44px;
+        height: 44px;
+        font-size: 1.15rem;
+        margin-top: 4px;
+      }
+
+      .map-detail > div > h2 {
+        margin: 0 0 14px;
+        font-size: 1.8rem;
+      }
+
+      .map-detail .update-card > img {
+        max-height: none;
+      }
+
+      /* A side-by-side card shows the part of the screen the section is
+         about, cropped from a corner; the lightbox still opens all of it. */
+      .map-detail .update-card--solo > img {
+        align-self: stretch;
+        contain: size;
+        height: auto;
+        min-height: 360px;
+        object-fit: cover;
+        object-position: left top;
+      }
+
+      .map-detail .update-card--flip > img {
+        object-position: right top;
+      }
+
+      .update-card-cols {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .update-card-cols .update-card-body + .update-card-body {
+        border-left: 1px solid var(--divider);
+      }
+
+      .update-card--solo.update-card--flip {
+        grid-template-columns: minmax(280px, 1fr) minmax(0, 1.6fr);
+      }
+
+      kbd {
+        font-family: var(--sans);
+        font-size: 0.8em;
+        font-weight: 600;
+        color: var(--text);
+        background: var(--panel-strong);
+        border: 1px solid var(--border);
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        padding: 1px 6px;
+      }
+
+      /* Copying pictures out: thumbnails from the grid shot into a folder
+         window. The folder is drawn as a light file manager in both themes. */
+      .clip {
+        display: grid;
+        grid-template-columns: auto 64px minmax(0, 1fr);
+        align-items: center;
+        gap: 14px;
+        padding: 22px;
+        background: #15181c;
+      }
+
+      .clip-thumbs {
+        display: grid;
+        grid-template-columns: repeat(3, 74px);
+        gap: 4px;
+      }
+
+      .clip-thumbs i,
+      .clip-folder li i {
+        display: block;
+        background-image: url("assets/ScreenshotGridSelection.jpg");
+        background-repeat: no-repeat;
+      }
+
+      .clip-thumbs i {
+        width: 74px;
+        height: 74px;
+        background-size: 707px auto;
+        outline: 2px solid #8ea604;
+        outline-offset: -2px;
+        border-radius: 2px;
+      }
+
+      .clip-arrow {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        color: rgba(242, 229, 218, 0.6);
+        font-size: 0.75rem;
+      }
+
+      .clip-arrow svg {
+        width: 40px;
+        height: 24px;
+      }
+
+      .clip-arrow kbd {
+        color: #f2e5da;
+        background: #2b3138;
+        border-color: #363d45;
+      }
+
+      .clip-folder {
+        background: #f3f1ed;
+        color: #23211d;
+        border-radius: 8px;
+        overflow: hidden;
+        font-size: 0.8rem;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
+      }
+
+      .clip-folder header {
+        background: #dedbd5;
+        padding: 7px 10px;
+        font-weight: 600;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .clip-folder header b {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: #c9c4bb;
+      }
+
+      .clip-folder ul {
+        list-style: none;
+        margin: 0;
+        padding: 6px 0;
+      }
+
+      .clip-folder li {
+        display: grid;
+        grid-template-columns: 22px minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+        padding: 4px 10px;
+        font-family: var(--mono);
+        font-size: 0.74rem;
+        overflow-wrap: anywhere;
+      }
+
+      .clip-folder li i {
+        width: 22px;
+        height: 22px;
+        border-radius: 3px;
+        background-size: 500px auto;
+      }
+
+      .clip-folder li em {
+        font-style: normal;
+        color: #6b665d;
+        font-family: var(--sans);
+      }
+
+      @media (max-width: 980px) {
+        .map-hero-head,
+        .map-hero-body,
+        .update-card--solo.update-card--flip {
+          grid-template-columns: 1fr;
+        }
+
+        .map-hero-head {
+          gap: 12px;
+        }
+
+        .map-hero-head h1 {
+          white-space: normal;
+        }
+
+        .map-detail .update-card--solo > img {
+          contain: none;
+          min-height: 0;
+          aspect-ratio: 4 / 3;
+        }
+
+        .map-legend {
+          border-left: 0;
+          border-top: 1px solid var(--border);
+        }
+      }
+
+      @media (max-width: 700px) {
+        .map-hero-head {
+          padding: 18px;
+        }
+
+        .map-detail {
+          grid-template-columns: 1fr;
+          gap: 10px;
+        }
+
+        .map-detail > .app-pin {
+          width: 36px;
+          height: 36px;
+          font-size: 1rem;
+          margin-top: 0;
+        }
+
+        .map-detail > div > h2 {
+          font-size: 1.4rem;
+        }
+
+        .update-card-cols {
+          grid-template-columns: 1fr;
+        }
+
+        .update-card-cols .update-card-body + .update-card-body {
+          border-left: 0;
+          border-top: 1px solid var(--divider);
+        }
+
+        .clip {
+          grid-template-columns: 1fr;
+          justify-items: center;
+          padding: 16px;
+        }
+
+        .clip-arrow svg {
+          transform: rotate(90deg);
+        }
+
+        .clip-folder {
+          width: 100%;
+        }
+      }
     </style>
   </head>
   <body>
@@ -765,306 +1080,263 @@
       <div id="nav-placeholder"></div>
       <script src="nav.js"></script>
 
-      <!-- PixlStash 1.13 -->
+      <!-- PixlStash 2.0 -->
       <section class="release-hero">
-        <div class="release-hero-inner">
-          <div class="release-copy">
-            <span class="release-kicker">PixlStash 1.13</span>
-            <h1>Draw what to change, and press Run</h1>
-            <p>
-              PixlStash 1.13 is about getting a workflow to run. The picture
-              viewer's Edit tab has paint tools, so you can mark a part of a
-              picture and have an inpaint workflow change only that part. Every
-              workflow template your ComfyUI provides is now easily downloadable
-              and
-              <strong>PixlStash gets the models for you </strong>
-              A workflow you add is wired to take its pictures, models and LoRAs
-              from PixlStash and send its results back.
-            </p>
-            <ul class="release-bullets">
-              <li>
-                <strong>Paint tools</strong> in the Edit tab: rectangle,
-                ellipse, lasso, brush, eraser and colour wand, then inpaint just
-                the selection
-              </li>
-              <li>
-                Three inpaint workflows come with PixlStash, Qwen Image 2.1,
-                Qwen Image Edit 2511 and FLUX.2 Klein 9B, and your own inpaint
-                workflows work too
-              </li>
-              <li>
-                A <strong>Templates</strong> tab: every ComfyUI template, what
-                it downloads and which of those files you already have
-              </li>
-              <li>
-                Download a missing model or LoRA in one press, with progress and
-                cancel in the Tasks tab
-              </li>
-              <li>
-                Pick where downloads land in Settings › Models, and drop a model
-                file on a folder to put it there
-              </li>
-              <li>
-                Runs wait for GPU memory instead of running out of it, and
-                PixlStash steps aside for ComfyUI
-              </li>
-              <li>
-                Compare any two pictures on a before/after slider, and crop
-                without ComfyUI
-              </li>
-            </ul>
+        <div class="map-hero-head">
+          <div>
+            <span class="release-kicker">PixlStash 2.0</span>
+            <h1>A new shape, and LoRA training</h1>
           </div>
-          <div class="release-hero-media release-hero-media--video">
-            <video
-              class="zoomable-video"
-              src="assets/Inpainting.mp4"
-              autoplay
-              loop
-              muted
-              playsinline
-              preload="metadata"
-            ></video>
+          <p>
+            PixlStash 2.0 is split into three workspaces and trains LoRAs from
+            your people and sets. The numbers on the screenshot show where each
+            change lives.
+          </p>
+        </div>
+        <div class="map-hero-body">
+          <div class="app-map">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotGridSelection.jpg"
+              alt="The Media workspace in PixlStash 2.0: the workspace switcher in the title bar, the browsing toolbar, a grid with five pictures selected and the selection bar at the bottom"
+            />
+            <span class="app-ring" style="left: 52.8%; top: 0.4%; width: 6.4%; height: 3.2%"></span>
+            <span class="app-pin" style="left: 61.6%; top: 2.1%" aria-hidden="true">2</span>
+            <span class="app-ring" style="left: 61.7%; top: 4%; width: 36.3%; height: 3.6%"></span>
+            <span class="app-pin" style="left: 63.4%; top: 10.6%" aria-hidden="true">3</span>
+            <span class="app-ring" style="left: 64.2%; top: 93.6%; width: 7.4%; height: 5.2%"></span>
+            <span class="app-pin" style="left: 67.9%; top: 90%" aria-hidden="true">1</span>
+            <span class="app-ring" style="left: 35.3%; top: 93.6%; width: 5.9%; height: 5.2%"></span>
+            <span class="app-pin" style="left: 38.3%; top: 89.8%" aria-hidden="true">4</span>
           </div>
+          <ol class="map-legend">
+            <li>
+              <span class="app-pin" aria-hidden="true">1</span>
+              <div>
+                <h2><a href="#v2-training">Train a LoRA and use it right away</a></h2>
+                <p>
+                  Select a person or a set and press Train LoRA. The finished
+                  LoRA is on the shelf and attached to them.
+                </p>
+              </div>
+            </li>
+            <li>
+              <span class="app-pin" aria-hidden="true">2</span>
+              <div>
+                <h2><a href="#v2-models">Much improved model browser</a></h2>
+                <p>
+                  Models is its own workspace. Sort and move model files, and
+                  PixlStash keeps finding them.
+                </p>
+              </div>
+            </li>
+            <li>
+              <span class="app-pin" aria-hidden="true">3</span>
+              <div>
+                <h2><a href="#v2-tags">Search suggests tags</a></h2>
+                <p>
+                  Tags copy and paste, and a pasted prompt turns into one filter
+                  per item.
+                </p>
+              </div>
+            </li>
+            <li>
+              <span class="app-pin" aria-hidden="true">4</span>
+              <div>
+                <h2><a href="#v2-files">Original files out</a></h2>
+                <p>
+                  Ctrl+C on a selection copies the files themselves into a
+                  folder, an email or a chat.
+                </p>
+              </div>
+            </li>
+          </ol>
         </div>
       </section>
 
-      <section class="section-grid">
-        <article class="update-card">
-          <div class="update-card-body">
-            <h2>Inpaint from the picture viewer</h2>
-            <p>
-              Open a picture, go to the <strong>Edit</strong> tab and mark where
-              the change goes with a rectangle, ellipse, lasso, brush, eraser or
-              colour wand. Drag on from the wand's click to widen or narrow what
-              it picks, as in GIMP. Grow, feather or fill the holes in the
-              selection, say what should change, and press
-              <strong>Run edit</strong>. Only the marked part is redrawn, the
-              result joins the original's stack, and a before/after slider shows
-              what changed. You can keep browsing while it runs.
-            </p>
-            <p>
-              Three inpaint workflows come with PixlStash:
-              <strong>Qwen Image 2.1</strong>,
-              <strong>Qwen Image Edit 2511</strong> and
-              <strong>FLUX.2 Klein 9B</strong>. Each cuts the selection out with
-              some context around it, edit it at full resolution and stitch it
-              back into the untouched picture. If their models are not on your
-              shelf yet, the Edit tab offers to download them.
-            </p>
-          </div>
-        </article>
-
-        <article class="update-card">
-          <video
-            class="zoomable-video"
-            src="assets/InpaintingOwnWorkflow.mp4"
-            autoplay
-            loop
-            muted
-            playsinline
-            preload="metadata"
-          ></video>
-          <div class="update-card-body">
-            <h2>Or bring your own inpaint workflow</h2>
-            <p>
-              Any inpaint workflow in your library shows up in the Edit tab's
-              list, and the selection you painted is the mask it gets. Here the
-              same selection runs through a MOSS-Image inpaint workflow instead.
-              With several pictures selected in the grid, <strong>Edit…</strong>
-              applies one edit to all of them.
-            </p>
-          </div>
-        </article>
+      <section class="map-detail" id="v2-training">
+        <span class="app-pin" aria-hidden="true">1</span>
+        <div>
+          <h2>Train a LoRA from a person or a set, and use it right away</h2>
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/TrainingReport.jpg"
+              alt="A finished training run: the loss curve, previews under each checkpoint, and the last checkpoint marked Cover"
+              loading="lazy"
+            />
+            <div class="update-card-cols">
+              <div class="update-card-body">
+                <p>
+                  Select a person or a set and press
+                  <strong>Train LoRA</strong> in the selection bar, or
+                  right-click it in the sidebar. The Train dialog asks what the
+                  pictures are of, how hard to train and how to fit your GPU,
+                  then works out the rest and says how long it will take.
+                </p>
+                <p>
+                  Training runs with AI-toolkit on your own GPU. Each checkpoint
+                  gets previews under its point on the loss curve.
+                </p>
+              </div>
+              <div class="update-card-body">
+                <p>
+                  When training finishes, the LoRA is on your model shelf and
+                  attached to the person or set. It is ready for your next
+                  generation, with no copying files into ComfyUI and no
+                  reloading.
+                </p>
+                <p>
+                  If an earlier checkpoint looks better,
+                  <strong>Use this step</strong> under it makes that the one the
+                  person or set uses.
+                </p>
+              </div>
+            </div>
+          </article>
+        </div>
       </section>
 
-      <section class="section-grid">
-        <article class="update-card update-card--video">
-          <video
-            class="zoomable-video"
-            src="assets/InpaintBoth.mp4"
-            autoplay
-            loop
-            muted
-            playsinline
-            preload="metadata"
-          ></video>
-          <div class="update-card-body">
-            <h2>One edit after another</h2>
-            <p>
-              Drag a rectangle over the gnome's wooden rod and write "the wooden
-              rod has an axe head so that it is a proper axe". Only the rod
-              changes; the picture around it, down to the grass, is the
-              original's. Then circle another gnome's mouth and ask for blue
-              lipstick. Each edit is a new picture in the original's stack and
-              the before/after slider shows exactly what each one changed.
-            </p>
-          </div>
-        </article>
+      <section class="map-detail" id="v2-models">
+        <span class="app-pin" aria-hidden="true">2</span>
+        <div>
+          <h2>Much improved model browser</h2>
+          <article class="update-card update-card--solo">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotModelShelf.jpg"
+              alt="The Models workspace: a Folders tree with each drive's free space, and the model list with Name, Type, Base, Size and Date added columns"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <p>
+                Models is now a workspace of its own, beside Media and Workflows
+                in the title bar. Its sidebar has a Folders tree with every
+                drive, its free space and the model folders on it. Click a
+                folder to list its models and sort them by any column.
+              </p>
+              <p>
+                You can now sort and move model files while PixlStash keeps
+                finding them. Drag models onto a folder, cut and paste them with
+                <kbd>Ctrl</kbd>+<kbd>X</kbd> and <kbd>Ctrl</kbd>+<kbd>V</kbd>,
+                or create and rename folders from the tree. A move to another
+                drive checks every model when it arrives.
+              </p>
+            </div>
+          </article>
+        </div>
       </section>
 
-      <section class="section-grid">
-        <article class="update-card update-card--solo">
-          <img
-            class="zoomable-image"
-            src="assets/TemplateDownloads.jpg"
-            alt="The Workflows screen's Templates tab: a grid of ComfyUI template cards marked Ready to run or with how many files are missing, and the inspector for FLUX.2 Klein 9B Image Edit listing its three models, two of them on the shelf and one with a download button"
-            loading="lazy"
-          />
-          <div class="update-card-body">
-            <h2>Every ComfyUI template, one press from running</h2>
-            <p>
-              The Workflows screen has a <strong>Templates</strong> tab beside
-              your own workflows. It lists every template your ComfyUI serves,
-              ComfyUI's own and those of your custom-node packs, sorted with the
-              ones you can run right now first. Each card says how many of its
-              files you are missing, and the inspector lists them, with how much
-              there is to download. With ComfyUI not running the tab still lists
-              ComfyUI's own templates, from a copy that comes with PixlStash.
-            </p>
-            <p>
-              <strong>Add to my workflows</strong> takes one or several at once.
-              A template you add is wired for PixlStash the way
-              <strong>Open in ComfyUI</strong> is: it loads pictures from your
-              library, models and LoRAs from your shelf, and sends what it makes
-              back into your library.
-            </p>
-          </div>
-        </article>
+      <section class="map-detail" id="v2-tags">
+        <span class="app-pin" aria-hidden="true">3</span>
+        <div>
+          <h2>Copy and paste tags</h2>
+          <article class="update-card update-card--solo update-card--flip">
+            <div class="update-card-body">
+              <p>
+                Click tag chips on a picture to select them and press
+                <kbd>Ctrl</kbd>+<kbd>C</kbd>. Press <kbd>Ctrl</kbd>+<kbd>V</kbd>
+                on another picture or on a selection in the grid to add them.
+              </p>
+              <p>
+                The search suggests tags as you type, along with faces, models
+                and workflows. <kbd>Tab</kbd> finds pictures with the tag and
+                <kbd>Shift</kbd>+<kbd>Tab</kbd> finds pictures without it. A
+                pasted prompt turns into one tag or one search filter per item.
+              </p>
+            </div>
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotTagging.jpg"
+              alt="The tag field suggesting suit, sunglasses and suspenders after typing su"
+              loading="lazy"
+            />
+          </article>
+        </div>
       </section>
 
-      <section class="section-grid">
-        <article class="update-card">
-          <img
-            class="zoomable-image"
-            src="assets/ModelDownload.jpg"
-            alt="The Tasks tab during a model download: the GPU memory bar, and a running row for a 19 GB Qwen Image checkpoint with a progress bar and a cancel button"
-            style="height: auto"
-            loading="lazy"
-          />
-          <div class="update-card-body">
-            <h2>Download missing models, into your folders</h2>
-            <p>
-              When a workflow is missing a model and the ComfyUI template list
-              knows where to get it, a download button sits beside its name: in
-              the Workflow tab, in the Run window, in the Edit tab, on a
-              template and in a workflow set. A LoRA a run would leave out gets
-              the same button.
-            </p>
-            <p>
-              There is no browser download to move afterwards and no models
-              subfolder to guess. The file goes into the
-              <strong>Download folder</strong> you set in Settings › Models, is
-              checked against the template's hash where it lists one, and joins
-              your model shelf. The Tasks tab shows its progress and can cancel
-              it. Drop a model file on a folder in the Models screen and it goes
-              there instead.
-            </p>
-          </div>
-        </article>
-
-        <article class="update-card">
-          <img
-            class="zoomable-image"
-            src="assets/WaitingForGPU.png"
-            alt="The Tasks tab with a ComfyUI inpaint run under Waiting for the GPU, needing 16.1 GB while 4.4 GB of 31.8 GB is free, and PixlStash's own CPU, RAM and VRAM use below"
-            style="height: auto"
-            loading="lazy"
-          />
-          <div class="update-card-body">
-            <h2>Runs wait for the GPU</h2>
-            <p>
-              A run that does not fit in GPU memory waits in the Tasks tab under
-              <strong>Waiting for the GPU</strong>, saying what it needs, what
-              is free and who holds the rest, and starts by itself once there is
-              room. Start it anyway or cancel it. PixlStash pauses its own GPU
-              work and unloads its models when ComfyUI needs the room.
-            </p>
-            <p>
-              A memory bar per GPU shows what PixlStash, ComfyUI and other apps
-              hold. PixlStash learns how much each workflow needs from its runs,
-              and a workflow that ran out of memory runs alone from then on.
-            </p>
-          </div>
-        </article>
+      <section class="map-detail" id="v2-files">
+        <span class="app-pin" aria-hidden="true">4</span>
+        <div>
+          <h2>Pictures leave as the original files</h2>
+          <article class="update-card update-card--solo">
+            <div
+              class="clip"
+              role="img"
+              aria-label="Six selected pictures copied with Ctrl+C into a folder, where each arrives as its original file named after when it was made"
+            >
+              <div class="clip-thumbs">
+                <i style="background-position: -255px -33px"></i>
+                <i style="background-position: -478px -108px"></i>
+                <i style="background-position: -627px -108px"></i>
+                <i style="background-position: -255px -182px"></i>
+                <i style="background-position: -329px -182px"></i>
+                <i style="background-position: -478px -182px"></i>
+              </div>
+              <div class="clip-arrow">
+                <svg viewBox="0 0 40 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h34M28 4l8 8-8 8" /></svg>
+                <span><kbd>Ctrl</kbd>+<kbd>C</kbd></span>
+              </div>
+              <div class="clip-folder">
+                <header><b></b><b></b><b></b>&nbsp;Pictures to send</header>
+                <ul>
+                  <li><i style="background-position: -76px -10px"></i>PixlStash-2026-10-24-14.22.42.png<em>2.4 MB</em></li>
+                  <li><i style="background-position: -142px -32px"></i>PixlStash-2026-10-24-14.31.07.png<em>2.1 MB</em></li>
+                  <li><i style="background-position: -186px -32px"></i>PixlStash-2026-10-25-09.12.55.png<em>2.6 MB</em></li>
+                  <li><i style="background-position: -76px -54px"></i>PixlStash-2026-10-25-09.40.13.jpg<em>1.8 MB</em></li>
+                  <li><i style="background-position: -98px -54px"></i>PixlStash-2026-10-26-18.03.21.png<em>3.0 MB</em></li>
+                  <li><i style="background-position: -142px -54px"></i>PixlStash-2026-10-27-11.47.09.png<em>2.2 MB</em></li>
+                </ul>
+              </div>
+            </div>
+            <div class="update-card-body">
+              <p>
+                In the desktop app, <kbd>Ctrl</kbd>+<kbd>C</kbd> on selected
+                pictures copies them as files. Paste them into a folder, an email
+                or a chat and they arrive at full quality, however many you
+                selected.
+              </p>
+              <p>
+                Hold <kbd>Ctrl</kbd> and drag the selection out of the grid to do
+                the same. On a Mac it is <kbd>⌘</kbd>+<kbd>C</kbd> and
+                Option-drag.
+              </p>
+            </div>
+          </article>
+        </div>
       </section>
 
-      <section class="section-grid">
-        <article class="update-card">
-          <div class="update-card-body">
-            <h2>Crop and compare, no ComfyUI needed</h2>
-            <p>
-              Crop a picture from the Edit tab to a square on the face, to 3:4,
-              to the nearest training bucket, or to a frame you drag. The crop
-              is a new picture in the original's stack, and the original stays
-              as it was.
-            </p>
-            <p>
-              Compare any two pictures: select two in the grid and choose
-              <strong>Compare</strong>, or right-click a second picture in the
-              viewer's filmstrip. One is laid over the other with a slider.
-            </p>
-          </div>
-        </article>
-
-        <article class="update-card">
-          <div class="update-card-body">
-            <h2>Workflow sets follow their checkpoint</h2>
-            <p>
-              A workflow set made on a checkpoint now holds every model the
-              pictures made with it used, and a model new pictures start using
-              joins it by itself, marked New. What you add or remove by hand
-              stays that way, and <strong>Reset to automatic</strong> undoes it.
-              <strong>New workflow set</strong> starts from ComfyUI's templates,
-              and a set from a template suggests the rest of its files, with a
-              download for the ones you do not have.
-            </p>
-          </div>
-        </article>
-      </section>
-
-      <article class="update-card" style="margin-top: 20px">
+      <article class="update-card" style="margin-top: 44px">
         <div class="update-card-body">
-          <h2>Also in 1.13</h2>
+          <h2>Also in 2.0</h2>
           <ul class="release-bullets">
             <li>
-              Favourites for models, workflow sets and workflows: press H, and
-              they come first in every list you pick from
+              Sets can sit inside a person or another set, so a LoRA dataset
+              lives under the person it is of
             </li>
+            <li>Tags are filed into groups such as Hair, Clothing and Pose</li>
             <li>
-              Drop workflow <code>.json</code> files on the Workflows screen to
-              add them
+              A picture opens inside the library window, with the filmstrip
+              along the bottom
             </li>
+            <li>The right-hand panel shows what you have selected in the grid</li>
             <li>
-              Pick your own picture for a workflow card with
-              <strong>Choose thumbnail…</strong>
+              Keep more than one ComfyUI and choose which one runs a workflow
             </li>
-            <li>
-              A workflow's version menu can duplicate an older version or open
-              it in ComfyUI
-            </li>
-            <li>
-              Pick which GPU PixlStash uses on a machine with more than one
-            </li>
-            <li>
-              A missing checkpoint's picker sorts replacements by how likely
-              they are to work
-            </li>
-            <li>LTX-2 workflows saved from the ComfyUI editor now run</li>
           </ul>
         </div>
       </article>
 
       <article class="update-card" style="margin-top: 20px">
         <div class="update-card-body">
-          <h2>Upgrading to 1.13</h2>
+          <h2>Upgrading to 2.0</h2>
           <p>
-            Opening a library with 1.13 updates its database, and workflow sets
-            you already have pick up the models their checkpoint's pictures
-            used, marked New. Update the ComfyUI-PixlStash nodes from Settings ›
-            ComfyUI as well. The inpaint workflows that come with PixlStash also
-            need the ComfyUI-Inpaint-CropAndStitch nodes in your ComfyUI. Back
-            up the library folder first by copying it somewhere safe while
-            PixlStash is stopped. See the
+            Opening a library with 2.0 updates its database. Things have moved:
+            Settings is in the title bar, Export and Train LoRA are in the
+            selection bar, and Models and Workflows have left the sidebar for
+            their own workspaces. Training uses AI-toolkit, which Settings ›
+            AI-toolkit helps you find or get. Back up the library folder first
+            by copying it somewhere safe while PixlStash is stopped. See the
             <a href="upgrade.html">upgrade guide</a> for the steps for your
             install type.
           </p>
@@ -1073,10 +1345,10 @@
 
       <section class="release-cta">
         <div>
-          <h3>Get PixlStash 1.13</h3>
+          <h3>Get PixlStash 2.0</h3>
           <p>
-            Download the desktop app for Windows, macOS, or Linux. Or keep using
-            pip, Docker, or the source build, and read the upgrade guide first.
+            Download the desktop app for Windows, macOS or Linux. Or keep using
+            pip, Docker or the source build, and read the upgrade guide first.
           </p>
         </div>
         <div class="release-cta-actions">
@@ -1088,6 +1360,336 @@
           >
         </div>
       </section>
+
+      <!-- ── PixlStash 1.13 (previous release) ───────────────────────── -->
+      <div class="prev-release">
+        <span class="prev-release-label">Previous release: PixlStash 1.13</span>
+
+        <!-- PixlStash 1.13 -->
+        <section class="release-hero">
+          <div class="release-hero-inner">
+            <div class="release-copy">
+              <span class="release-kicker">PixlStash 1.13</span>
+              <h1>Draw what to change, and press Run</h1>
+              <p>
+                PixlStash 1.13 is about getting a workflow to run. The picture
+                viewer's Edit tab has paint tools, so you can mark a part of a
+                picture and have an inpaint workflow change only that part. Every
+                workflow template your ComfyUI provides is now easily downloadable
+                and
+                <strong>PixlStash gets the models for you </strong>
+                A workflow you add is wired to take its pictures, models and LoRAs
+                from PixlStash and send its results back.
+              </p>
+              <ul class="release-bullets">
+                <li>
+                  <strong>Paint tools</strong> in the Edit tab: rectangle,
+                  ellipse, lasso, brush, eraser and colour wand, then inpaint just
+                  the selection
+                </li>
+                <li>
+                  Three inpaint workflows come with PixlStash, Qwen Image 2.1,
+                  Qwen Image Edit 2511 and FLUX.2 Klein 9B, and your own inpaint
+                  workflows work too
+                </li>
+                <li>
+                  A <strong>Templates</strong> tab: every ComfyUI template, what
+                  it downloads and which of those files you already have
+                </li>
+                <li>
+                  Download a missing model or LoRA in one press, with progress and
+                  cancel in the Tasks tab
+                </li>
+                <li>
+                  Pick where downloads land in Settings › Models, and drop a model
+                  file on a folder to put it there
+                </li>
+                <li>
+                  Runs wait for GPU memory instead of running out of it, and
+                  PixlStash steps aside for ComfyUI
+                </li>
+                <li>
+                  Compare any two pictures on a before/after slider, and crop
+                  without ComfyUI
+                </li>
+              </ul>
+            </div>
+            <div class="release-hero-media release-hero-media--video">
+              <video
+                class="zoomable-video"
+                src="assets/Inpainting.mp4"
+                autoplay
+                loop
+                muted
+                playsinline
+                preload="metadata"
+              ></video>
+            </div>
+          </div>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card">
+            <div class="update-card-body">
+              <h2>Inpaint from the picture viewer</h2>
+              <p>
+                Open a picture, go to the <strong>Edit</strong> tab and mark where
+                the change goes with a rectangle, ellipse, lasso, brush, eraser or
+                colour wand. Drag on from the wand's click to widen or narrow what
+                it picks, as in GIMP. Grow, feather or fill the holes in the
+                selection, say what should change, and press
+                <strong>Run edit</strong>. Only the marked part is redrawn, the
+                result joins the original's stack, and a before/after slider shows
+                what changed. You can keep browsing while it runs.
+              </p>
+              <p>
+                Three inpaint workflows come with PixlStash:
+                <strong>Qwen Image 2.1</strong>,
+                <strong>Qwen Image Edit 2511</strong> and
+                <strong>FLUX.2 Klein 9B</strong>. Each cuts the selection out with
+                some context around it, edit it at full resolution and stitch it
+                back into the untouched picture. If their models are not on your
+                shelf yet, the Edit tab offers to download them.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <video
+              class="zoomable-video"
+              src="assets/InpaintingOwnWorkflow.mp4"
+              autoplay
+              loop
+              muted
+              playsinline
+              preload="metadata"
+            ></video>
+            <div class="update-card-body">
+              <h2>Or bring your own inpaint workflow</h2>
+              <p>
+                Any inpaint workflow in your library shows up in the Edit tab's
+                list, and the selection you painted is the mask it gets. Here the
+                same selection runs through a MOSS-Image inpaint workflow instead.
+                With several pictures selected in the grid, <strong>Edit…</strong>
+                applies one edit to all of them.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--video">
+            <video
+              class="zoomable-video"
+              src="assets/InpaintBoth.mp4"
+              autoplay
+              loop
+              muted
+              playsinline
+              preload="metadata"
+            ></video>
+            <div class="update-card-body">
+              <h2>One edit after another</h2>
+              <p>
+                Drag a rectangle over the gnome's wooden rod and write "the wooden
+                rod has an axe head so that it is a proper axe". Only the rod
+                changes; the picture around it, down to the grass, is the
+                original's. Then circle another gnome's mouth and ask for blue
+                lipstick. Each edit is a new picture in the original's stack and
+                the before/after slider shows exactly what each one changed.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--solo">
+            <img
+              class="zoomable-image"
+              src="assets/TemplateDownloads.jpg"
+              alt="The Workflows screen's Templates tab: a grid of ComfyUI template cards marked Ready to run or with how many files are missing, and the inspector for FLUX.2 Klein 9B Image Edit listing its three models, two of them on the shelf and one with a download button"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <h2>Every ComfyUI template, one press from running</h2>
+              <p>
+                The Workflows screen has a <strong>Templates</strong> tab beside
+                your own workflows. It lists every template your ComfyUI serves,
+                ComfyUI's own and those of your custom-node packs, sorted with the
+                ones you can run right now first. Each card says how many of its
+                files you are missing, and the inspector lists them, with how much
+                there is to download. With ComfyUI not running the tab still lists
+                ComfyUI's own templates, from a copy that comes with PixlStash.
+              </p>
+              <p>
+                <strong>Add to my workflows</strong> takes one or several at once.
+                A template you add is wired for PixlStash the way
+                <strong>Open in ComfyUI</strong> is: it loads pictures from your
+                library, models and LoRAs from your shelf, and sends what it makes
+                back into your library.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/ModelDownload.jpg"
+              alt="The Tasks tab during a model download: the GPU memory bar, and a running row for a 19 GB Qwen Image checkpoint with a progress bar and a cancel button"
+              style="height: auto"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <h2>Download missing models, into your folders</h2>
+              <p>
+                When a workflow is missing a model and the ComfyUI template list
+                knows where to get it, a download button sits beside its name: in
+                the Workflow tab, in the Run window, in the Edit tab, on a
+                template and in a workflow set. A LoRA a run would leave out gets
+                the same button.
+              </p>
+              <p>
+                There is no browser download to move afterwards and no models
+                subfolder to guess. The file goes into the
+                <strong>Download folder</strong> you set in Settings › Models, is
+                checked against the template's hash where it lists one, and joins
+                your model shelf. The Tasks tab shows its progress and can cancel
+                it. Drop a model file on a folder in the Models screen and it goes
+                there instead.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <img
+              class="zoomable-image"
+              src="assets/WaitingForGPU.png"
+              alt="The Tasks tab with a ComfyUI inpaint run under Waiting for the GPU, needing 16.1 GB while 4.4 GB of 31.8 GB is free, and PixlStash's own CPU, RAM and VRAM use below"
+              style="height: auto"
+              loading="lazy"
+            />
+            <div class="update-card-body">
+              <h2>Runs wait for the GPU</h2>
+              <p>
+                A run that does not fit in GPU memory waits in the Tasks tab under
+                <strong>Waiting for the GPU</strong>, saying what it needs, what
+                is free and who holds the rest, and starts by itself once there is
+                room. Start it anyway or cancel it. PixlStash pauses its own GPU
+                work and unloads its models when ComfyUI needs the room.
+              </p>
+              <p>
+                A memory bar per GPU shows what PixlStash, ComfyUI and other apps
+                hold. PixlStash learns how much each workflow needs from its runs,
+                and a workflow that ran out of memory runs alone from then on.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card">
+            <div class="update-card-body">
+              <h2>Crop and compare, no ComfyUI needed</h2>
+              <p>
+                Crop a picture from the Edit tab to a square on the face, to 3:4,
+                to the nearest training bucket, or to a frame you drag. The crop
+                is a new picture in the original's stack, and the original stays
+                as it was.
+              </p>
+              <p>
+                Compare any two pictures: select two in the grid and choose
+                <strong>Compare</strong>, or right-click a second picture in the
+                viewer's filmstrip. One is laid over the other with a slider.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <div class="update-card-body">
+              <h2>Workflow sets follow their checkpoint</h2>
+              <p>
+                A workflow set made on a checkpoint now holds every model the
+                pictures made with it used, and a model new pictures start using
+                joins it by itself, marked New. What you add or remove by hand
+                stays that way, and <strong>Reset to automatic</strong> undoes it.
+                <strong>New workflow set</strong> starts from ComfyUI's templates,
+                and a set from a template suggests the rest of its files, with a
+                download for the ones you do not have.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <article class="update-card" style="margin-top: 20px">
+          <div class="update-card-body">
+            <h2>Also in 1.13</h2>
+            <ul class="release-bullets">
+              <li>
+                Favourites for models, workflow sets and workflows: press H, and
+                they come first in every list you pick from
+              </li>
+              <li>
+                Drop workflow <code>.json</code> files on the Workflows screen to
+                add them
+              </li>
+              <li>
+                Pick your own picture for a workflow card with
+                <strong>Choose thumbnail…</strong>
+              </li>
+              <li>
+                A workflow's version menu can duplicate an older version or open
+                it in ComfyUI
+              </li>
+              <li>
+                Pick which GPU PixlStash uses on a machine with more than one
+              </li>
+              <li>
+                A missing checkpoint's picker sorts replacements by how likely
+                they are to work
+              </li>
+              <li>LTX-2 workflows saved from the ComfyUI editor now run</li>
+            </ul>
+          </div>
+        </article>
+
+        <article class="update-card" style="margin-top: 20px">
+          <div class="update-card-body">
+            <h2>Upgrading to 1.13</h2>
+            <p>
+              Opening a library with 1.13 updates its database, and workflow sets
+              you already have pick up the models their checkpoint's pictures
+              used, marked New. Update the ComfyUI-PixlStash nodes from Settings ›
+              ComfyUI as well. The inpaint workflows that come with PixlStash also
+              need the ComfyUI-Inpaint-CropAndStitch nodes in your ComfyUI. Back
+              up the library folder first by copying it somewhere safe while
+              PixlStash is stopped. See the
+              <a href="upgrade.html">upgrade guide</a> for the steps for your
+              install type.
+            </p>
+          </div>
+        </article>
+
+        <section class="release-cta">
+          <div>
+            <h3>Get PixlStash 1.13</h3>
+            <p>
+              Download the desktop app for Windows, macOS, or Linux. Or keep using
+              pip, Docker, or the source build, and read the upgrade guide first.
+            </p>
+          </div>
+          <div class="release-cta-actions">
+            <a class="release-btn release-btn-primary" href="install.html"
+              >Download</a
+            >
+            <a class="release-btn release-btn-secondary" href="upgrade.html"
+              >Upgrade guide</a
+            >
+          </div>
+        </section>
+      </div>
+      <!-- end prev-release 1.13 -->
 
       <!-- ── PixlStash 1.12 (previous release) ───────────────────────── -->
       <div class="prev-release">
