@@ -480,8 +480,9 @@ def register_routes(router, server):
                 groups[workflow_id][variant or ""].append(pic_id)
 
         result = []
-        # ponytail: one file read per variant per call, uncached; cache the
-        # LoRA list on the variant if a large library makes this slow.
+        # ponytail: one metadata read per variant per call (the extractor's
+        # own LRU aside); store the LoRA list on the variant if a large
+        # library makes this slow.
         for workflow_id, variants in groups.items():
             entries = [
                 {

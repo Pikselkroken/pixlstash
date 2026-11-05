@@ -940,9 +940,34 @@ class TestTheReadOnlyWorkflowListing:
         assert dialled == []
 
         # The scope's other door stays shut: the owner-only listing refuses
-        # the same token that was just answered above.
+        # an unscoped READ token, which this route answers.
         reader = self._reader(server, client)
         assert reader.get(f"{API}/workflows").status_code == 403
+
+    def test_out_of_scope_and_deleted_pictures_never_count(self, env):
+        """A workflow shared across the scope's edge counts only its own side."""
+        server, client, _pic_id = env
+        alpha, _beta, set_id = self._setup(server, client)
+        # Outside the set, on the set's own workflow.
+        gamma = _upload_one(
+            client, "gamma.png", _recipe_png_bytes(FULL_GRAPH, (9, 8, 7))
+        )
+        _card_picture(server, gamma, "key-alpha", CORE_SHARED)
+        shared = auto_workflow_id(CORE_SHARED, "")
+        scoped = self._reader(
+            server, client, resource_type="picture_set", resource_id=set_id
+        )
+        reader = self._reader(server, client)
+
+        assert self._listing(reader)[shared]["picture_count"] == 2
+        assert self._listing(scoped)[shared]["picture_count"] == 1
+        assert self._listing(scoped)[shared]["variants"][0]["example_picture_id"] == (
+            alpha
+        )
+
+        # Deleted, it leaves every listing.
+        assert client.delete(f"{API}/pictures/{gamma}").status_code == 200
+        assert self._listing(reader)[shared]["picture_count"] == 1
 
     def test_a_scope_with_no_pictures_lists_nothing(self, env):
         server, client, _pic_id = env
