@@ -30,8 +30,14 @@
     <!-- The Models workspace's door has no set or person in view, so it asks
          first (#2169): people, then sets, each with its picture count. -->
     <div v-if="store.pickable" class="tld-field" data-testid="tld-train-on">
-      <div class="tld-label-row">
-        <FieldLabel :id="sourceLabelId">Train on</FieldLabel>
+      <FieldLabel :id="sourceLabelId">Train on</FieldLabel>
+      <div class="tld-source-bar">
+        <Segmented
+          aria-label="Show"
+          :options="sourceKinds"
+          :model-value="sourceKind"
+          @update:model-value="(v) => (sourceKind = v)"
+        />
         <AppInput
           v-model="sourceQuery"
           class="tld-source-find"
@@ -48,47 +54,52 @@
         :aria-labelledby="sourceLabelId"
         @keydown="onSourceKey"
       >
-        <button
-          v-for="o in shownSources"
-          :key="o.id"
-          type="button"
-          role="radio"
-          class="tld-source"
-          :class="{ 'tld-opt--on': o.id === pickedSource }"
-          :aria-checked="o.id === pickedSource ? 'true' : 'false'"
-          :tabindex="o.id === sourceTabStop ? 0 : -1"
-          :data-testid="`tld-source-${o.id}`"
-          @click="pickSource(o)"
-        >
-          <img
-            v-if="o.thumb && !broken.has(o.id)"
-            class="tld-source__img"
-            :class="{ 'tld-source__img--person': o.type === 'character' }"
-            :src="o.thumb"
-            alt=""
-            loading="lazy"
-            @error="broken.add(o.id)"
-          />
-          <span
-            v-else
-            class="tld-source__img tld-source__img--blank"
-            :class="{ 'tld-source__img--person': o.type === 'character' }"
-            aria-hidden="true"
+        <template v-for="g in sourceGroups" :key="g.type">
+          <span class="tld-source-group" aria-hidden="true">{{
+            g.label
+          }}</span>
+          <button
+            v-for="o in g.options"
+            :key="o.id"
+            type="button"
+            role="radio"
+            class="tld-source"
+            :class="{ 'tld-opt--on': o.id === pickedSource }"
+            :aria-checked="o.id === pickedSource ? 'true' : 'false'"
+            :tabindex="o.id === sourceTabStop ? 0 : -1"
+            :data-testid="`tld-source-${o.id}`"
+            @click="pickSource(o)"
           >
-            <v-icon size="20">{{
-              o.type === "character" ? "mdi-account-outline" : "mdi-image-album"
-            }}</v-icon>
-          </span>
-          <span class="tld-source__text">
-            <span class="tld-source__name">{{ o.name }}</span>
-            <small>{{ o.detail }}</small>
-          </span>
-        </button>
+            <img
+              v-if="o.thumb && !broken.has(o.id)"
+              class="tld-source__img"
+              :class="{ 'tld-source__img--person': o.type === 'character' }"
+              :src="o.thumb"
+              alt=""
+              loading="lazy"
+              @error="broken.add(o.id)"
+            />
+            <span
+              v-else
+              class="tld-source__img tld-source__img--blank"
+              :class="{ 'tld-source__img--person': o.type === 'character' }"
+              aria-hidden="true"
+            >
+              <v-icon size="20">{{
+                o.type === "character" ? "mdi-account-outline" : "mdi-image-album"
+              }}</v-icon>
+            </span>
+            <span class="tld-source__text">
+              <span class="tld-source__name">{{ o.name }}</span>
+              <small>{{ o.detail }}</small>
+            </span>
+          </button>
+        </template>
         <p v-if="!sourceOptions.length" class="tld-hint">
           No people or sets to train on yet.
         </p>
         <p v-else-if="!shownSources.length" class="tld-hint">
-          No person or set matches “{{ sourceQuery.trim() }}”.
+          {{ emptySourcesHint }}
         </p>
       </div>
     </div>
@@ -958,16 +969,50 @@ const sourceOptions = computed(() => [
 ]);
 
 /**
- * The Find field: narrows the tiles by name, case-insensitively. The picked
- * tile always stays, so the run's subject is never one you cannot see.
+ * People, sets or both, then the Find field by name, case-insensitively. The
+ * picked tile always stays, so the run's subject is never one you cannot see.
  */
+const sourceKind = ref("all");
 const sourceQuery = ref("");
-const shownSources = computed(() => {
+const sourceKinds = computed(() => {
+  const n = (type) =>
+    sourceOptions.value.filter((o) => o.type === type).length;
+  return [
+    { id: "all", label: "All", testid: "tld-kind-all" },
+    {
+      id: "character",
+      label: `People · ${n("character")}`,
+      testid: "tld-kind-character",
+    },
+    { id: "set", label: `Sets · ${n("set")}`, testid: "tld-kind-set" },
+  ];
+});
+const sourceGroups = computed(() => {
   const q = sourceQuery.value.trim().toLowerCase();
-  if (!q) return sourceOptions.value;
-  return sourceOptions.value.filter(
-    (o) => o.id === pickedSource.value || o.name.toLowerCase().includes(q),
-  );
+  const shown = (o) =>
+    o.id === pickedSource.value ||
+    ((sourceKind.value === "all" || o.type === sourceKind.value) &&
+      o.name.toLowerCase().includes(q));
+  return [
+    { type: "character", label: "People" },
+    { type: "set", label: "Sets" },
+  ]
+    .map((g) => ({
+      ...g,
+      options: sourceOptions.value.filter((o) => o.type === g.type && shown(o)),
+    }))
+    .filter((g) => g.options.length);
+});
+/** The tiles in the order drawn, for the arrow keys and the tab stop. */
+const shownSources = computed(() =>
+  sourceGroups.value.flatMap((g) => g.options),
+);
+const emptySourcesHint = computed(() => {
+  const q = sourceQuery.value.trim();
+  if (q) return `Nothing here matches “${q}”.`;
+  return sourceKind.value === "character"
+    ? "No people to train on yet."
+    : "No sets to train on yet.";
 });
 
 /** Sources whose thumbnail would not load: they keep their tile, with a glyph. */
@@ -979,6 +1024,7 @@ watch(
   (open) => {
     if (!open) return;
     broken.clear();
+    sourceKind.value = "all";
     sourceQuery.value = "";
   },
 );
@@ -1715,7 +1761,29 @@ function goToSettings() {
   padding: var(--space-1);
 }
 
-/* The Find field sits over the third column, from its left edge out. */
+/* Show (all / people / sets) on the left, Find over the third column. */
+.tld-source-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+/* A group's caption, across the grid: People, then Sets. */
+.tld-source-group {
+  grid-column: 1 / -1;
+  padding-top: var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.tld-source-group:first-child {
+  padding-top: 0;
+}
+
 .tld-source-find {
   flex: 0 0
     calc(
