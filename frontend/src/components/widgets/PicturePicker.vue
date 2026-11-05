@@ -510,8 +510,8 @@ function onCellKeydown(event, index) {
 // **This component does not handle the paste, and deliberately says nothing
 // about it.** `useWindowFileImport` already claims a pasted image anywhere in
 // the window, and `ImageImporter` - the thing it hands off to - is what
-// announces the import, from inside the import, where the truth is: it opens
-// its own progress dialog on the same keystroke, counts the files, and reports
+// announces the import, from inside the import, where the truth is: it draws
+// the arriving tiles on the same keystroke, counts the files, and reports
 // the buckets at the end. A second announcement from here could only ever be a
 // guess, and it guessed wrong in three ways worth writing down, because they
 // are the reason this is subtraction rather than a fix:

@@ -72,7 +72,7 @@ const STEPS = {
   },
   drop: {
     title: "Drop a picture onto the grid",
-    todo: "It lands at the top as a tile. The upload dialog is gone.",
+    todo: "It lands at the top as a tile. The import progress dialog is gone.",
     said: () =>
       "It landed at the top of the grid as a tile, with its progress on it.",
   },
