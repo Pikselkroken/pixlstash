@@ -42,6 +42,7 @@ from pixlstash.utils.library_roots import refuse_path_inside_a_library
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.serialization_utils import safe_model_dict
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services import plugin_service
 from pixlstash.services.model_shelf_service import recipe_asset_index
 from pixlstash.services.workflow_hash import normalized_filename
@@ -458,13 +459,20 @@ def register_routes(router, server):
             return []
 
         def fetch(session: Session):
-            return session.exec(
-                select(
-                    Picture.id,
-                    Picture.workflow_structural_hash,
-                    Picture.run_workflow_id,
-                ).where(Picture.deleted.is_(False))
-            ).all()
+            stmt = select(
+                Picture.id,
+                Picture.workflow_structural_hash,
+                Picture.run_workflow_id,
+            ).where(Picture.deleted.is_(False))
+            if allowed is None:
+                return session.exec(stmt).all()
+            # The scope narrows in SQL, chunked under SQLite's bound-parameter
+            # limit: a project scope can hold more pictures than one IN takes.
+            return [
+                row
+                for ids in chunked(sorted(allowed))
+                for row in session.exec(stmt.where(Picture.id.in_(ids))).all()
+            ]
 
         rows = server.vault.db.run_immediate_read_task(fetch)
         live = set(run_filed_workflow_ids(hub))
@@ -473,8 +481,6 @@ def register_routes(router, server):
         # `routes/comfyui._picture_workflow` makes for one picture.
         groups: dict[str, dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
         for pic_id, variant, made_by in rows:
-            if allowed is not None and pic_id not in allowed:
-                continue
             workflow_id = made_by if made_by in live else placed.get(variant)
             if workflow_id:
                 groups[workflow_id][variant or ""].append(pic_id)
