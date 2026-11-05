@@ -619,6 +619,18 @@ export async function detectPictures(pictureIds, prompt) {
 }
 
 /**
+ * Queue a fresh face detection for pictures; people stay with their faces.
+ * @param {number[]} pictureIds
+ * @returns {Promise<Object>} the response body.
+ */
+export async function detectFaces(pictureIds) {
+  return unwrap(apiClient.post(`/pictures/detect`, {
+    picture_ids: pictureIds,
+    target: "faces",
+  }));
+}
+
+/**
  * List the installed picture plugins.
  * @returns {Promise<Object>} the response body, whose `plugins` is the list.
  */

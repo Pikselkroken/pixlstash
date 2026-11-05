@@ -130,9 +130,8 @@
         <span class="ctx-shortcut" aria-hidden="true">T</span>
       </button>
 
-      <!-- Analyse ▸: the bare Segment row when there is no model to list. -->
+      <!-- Analyse ▸: always has Segment and Detect faces again. -->
       <div
-        v-if="taggerPlugins.length || captionerPlugins.length"
         class="ctx-submenu-wrap"
         data-group="analyse"
         @mouseenter="openGroup = 'analyse'"
@@ -203,24 +202,23 @@
             <v-icon class="ctx-icon">mdi-shape-outline</v-icon>
             Segment
           </button>
+          <button
+            class="ctx-item"
+            :disabled="selectedCount === 0 || isReadOnly"
+            @click="
+              $emit('detect-faces');
+              $emit('close');
+            "
+          >
+            <Tooltip
+              text="Find the faces again; a face named as a person keeps its person"
+              activator="parent"
+            />
+            <v-icon class="ctx-icon">mdi-face-recognition</v-icon>
+            Detect faces again
+          </button>
         </div>
       </div>
-      <button
-        v-else
-        class="ctx-item"
-        :disabled="selectedCount === 0 || isReadOnly"
-        @click="
-          $emit('segment');
-          $emit('close');
-        "
-      >
-        <Tooltip
-          text="Detect objects and store bounding boxes"
-          activator="parent"
-        />
-        <v-icon class="ctx-icon">mdi-shape-outline</v-icon>
-        Segment
-      </button>
 
       <!-- Generate ▸: the three run entries, mirrored word for word in
            ImageGridContextMenu.vue and asserted by menuRunEntryParity.test.js. -->
@@ -591,6 +589,7 @@ const emit = defineEmits([
   "compare-pictures",
   "reverse-image-search",
   "segment",
+  "detect-faces",
   "rotate-left",
   "rotate-right",
   "remove-from-group",

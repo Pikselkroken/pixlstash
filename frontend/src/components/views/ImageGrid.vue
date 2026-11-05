@@ -154,6 +154,7 @@
       @edit-pictures="editSelection"
       @compare-pictures="compareSelection"
       @segment="openSegmentDialog"
+      @detect-faces="detectFacesOnSelection"
       @auto-tag="handleAutoTag"
       @generate-description="handleGenerateDescription"
       @share-picture="sharePicture"
@@ -1245,6 +1246,7 @@
           @generate-description="handleGenerateDescription"
           @reverse-image-search="handleReverseImageSearch"
           @segment="openSegmentDialog"
+          @detect-faces="detectFacesOnSelection"
           @rotate-left="rotateSelectedPictures(ROTATE_CCW)"
           @rotate-right="rotateSelectedPictures(ROTATE_CW)"
           @selection-menu-open="toolbarSelectionMenuOpen = $event"
@@ -1396,6 +1398,7 @@ import {
   openPictureLocation,
   openPictureWith,
   detectPictures,
+  detectFaces,
   listPicturePlugins,
   runPicturePlugin,
   resetPicturesTags,
@@ -8577,6 +8580,22 @@ async function confirmSegment() {
     tasksStore.nudge();
   } catch (err) {
     console.error("Object detection request failed:", err);
+  }
+}
+
+async function detectFacesOnSelection() {
+  if (isReadOnly.value) return;
+  const ids = selectedImageIds.value
+    .map((id) => Number(getPictureId(id)))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!ids.length || !props.backendUrl) return;
+  // A background GPU task; the cards re-read their face boxes on its
+  // CHANGED_PICTURES `faces` event.
+  try {
+    await detectFaces(ids);
+    tasksStore.nudge();
+  } catch (err) {
+    console.error("Face detection request failed:", err);
   }
 }
 

@@ -986,6 +986,137 @@ def test_refresh_no_detection_preserves_manual_face(tmp_path):
     assert faces[0].bbox == [200, 200, 240, 240]
 
 
+# --------------------------------------------------------------------------- #
+# §5c - "Detect faces again" (redetect=True) never takes a person off a picture
+# --------------------------------------------------------------------------- #
+
+
+def _unit(index, dim=512):
+    """A unit embedding pointing along one axis: orthogonal per index."""
+    vec = np.zeros(dim, dtype="float32")
+    vec[index] = 1.0
+    return vec.tobytes()
+
+
+def _picture_with_person_face(engine, bbox, features, face_index=0):
+    """One picture holding one detected face assigned to a person."""
+    with Session(engine) as session:
+        char = Character(name="Alice")
+        pic = Picture(file_path="p.jpg")
+        session.add(char)
+        session.add(pic)
+        session.commit()
+        face = Face(
+            picture_id=pic.id,
+            frame_index=0,
+            face_index=face_index,
+            bbox=bbox,
+            features=features,
+            model_pack="buffalo_l",
+            character_id=char.id,
+        )
+        session.add(face)
+        session.commit()
+        return pic.id, char.id, face.id
+
+
+def _detected(pic_id, bbox, features, face_index=0):
+    return Face(
+        picture_id=pic_id,
+        frame_index=0,
+        face_index=face_index,
+        bbox=bbox,
+        features=features,
+        model_pack="buffalo_l",
+    )
+
+
+def _faces(engine, pic_id):
+    with Session(engine) as session:
+        return session.exec(select(Face).where(Face.picture_id == pic_id)).all()
+
+
+@pytest.mark.parametrize("redetect", [False, True])
+def test_redetect_matches_a_turned_face_by_embedding(tmp_path, redetect):
+    """After a turn the box moves but the face embeds the same: a redetect keeps
+    the row and its person, while the pack refresh (no embedding match) does not."""
+    engine = _make_sqlite(tmp_path)
+    pic_id, char_id, face_id = _picture_with_person_face(
+        engine, [10, 10, 30, 30], _unit(0)
+    )
+    turned = _detected(pic_id, [300, 300, 320, 320], _unit(0))
+
+    with Session(engine) as session:
+        FaceModelRefreshTask._refresh_picture_faces(
+            session, pic_id, [turned], "buffalo_l", redetect
+        )
+
+    faces = _faces(engine, pic_id)
+    if redetect:
+        assert [(f.id, f.character_id, f.bbox) for f in faces] == [
+            (face_id, char_id, [300, 300, 320, 320])
+        ]
+    else:
+        assert [f.character_id for f in faces] == [None]
+
+
+def test_redetect_keeps_an_unmatched_face_that_names_a_person(tmp_path):
+    """A different face found elsewhere is added; the person's face is kept."""
+    engine = _make_sqlite(tmp_path)
+    pic_id, char_id, face_id = _picture_with_person_face(
+        engine, [10, 10, 30, 30], _unit(0)
+    )
+    other = _detected(pic_id, [300, 300, 320, 320], _unit(1))
+
+    with Session(engine) as session:
+        FaceModelRefreshTask._refresh_picture_faces(
+            session, pic_id, [other], "buffalo_l", True
+        )
+
+    faces = {f.id: f for f in _faces(engine, pic_id)}
+    assert faces[face_id].character_id == char_id
+    assert faces[face_id].bbox == [10, 10, 30, 30]
+    assert len(faces) == 2
+    indices = sorted((f.frame_index, f.face_index) for f in faces.values())
+    assert len(set(indices)) == 2
+
+
+def test_redetect_finding_nothing_keeps_the_persons_face(tmp_path):
+    engine = _make_sqlite(tmp_path)
+    pic_id, char_id, face_id = _picture_with_person_face(
+        engine, [10, 10, 30, 30], _unit(0)
+    )
+
+    with Session(engine) as session:
+        FaceModelRefreshTask._refresh_picture_faces(
+            session, pic_id, [], "buffalo_l", True
+        )
+
+    faces = _faces(engine, pic_id)
+    assert [(f.id, f.character_id) for f in faces] == [(face_id, char_id)]
+
+
+def test_a_new_face_above_does_not_take_the_persons_row(tmp_path):
+    """Index 0 goes to a face found above the person's; the index match must not
+    pair the two, or the person moves onto a stranger."""
+    engine = _make_sqlite(tmp_path)
+    pic_id, char_id, face_id = _picture_with_person_face(
+        engine, [100, 100, 130, 130], _unit(0)
+    )
+    above = _detected(pic_id, [10, 10, 30, 30], _unit(1), face_index=0)
+    same = _detected(pic_id, [100, 100, 130, 130], _unit(0), face_index=1)
+
+    with Session(engine) as session:
+        FaceModelRefreshTask._refresh_picture_faces(
+            session, pic_id, [above, same], "auraface"
+        )
+
+    by_box = {tuple(f.bbox): f for f in _faces(engine, pic_id)}
+    assert by_box[(100, 100, 130, 130)].id == face_id
+    assert by_box[(100, 100, 130, 130)].character_id == char_id
+    assert by_box[(10, 10, 30, 30)].character_id is None
+
+
 def test_bbox_iou_basics():
     assert _bbox_iou([0, 0, 10, 10], [0, 0, 10, 10]) == 1.0
     assert _bbox_iou([0, 0, 10, 10], [20, 20, 30, 30]) == 0.0

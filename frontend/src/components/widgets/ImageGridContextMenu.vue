@@ -437,11 +437,9 @@
           <span class="ctx-shortcut" aria-hidden="true">T</span>
         </button>
 
-        <!-- Analyse ▸: what reads the picture. Drawn as the bare Segment row
-             when there is no tagger or captioner, since a one-row group is
-             a hover for nothing. -->
+        <!-- Analyse ▸: what reads the picture. Segment and Detect faces
+             again are always there, so the group always has rows. -->
         <div
-          v-if="taggerPlugins.length || captionerPlugins.length"
           class="ctx-submenu-wrap"
           data-group="analyse"
           @mouseenter="openGroup = 'analyse'"
@@ -505,21 +503,20 @@
               <v-icon class="ctx-icon">mdi-shape-outline</v-icon>
               Segment
             </button>
+            <button
+              class="ctx-item"
+              :disabled="!selectedImageIds.length || isReadOnly"
+              @click="onAction('detect-faces')"
+            >
+              <Tooltip
+                text="Find the faces again; a face named as a person keeps its person"
+                activator="parent"
+              />
+              <v-icon class="ctx-icon">mdi-face-recognition</v-icon>
+              Detect faces again
+            </button>
           </div>
         </div>
-        <button
-          v-else
-          class="ctx-item"
-          :disabled="!selectedImageIds.length || isReadOnly"
-          @click="onAction('segment')"
-        >
-          <Tooltip
-            text="Detect objects and store bounding boxes"
-            activator="parent"
-          />
-          <v-icon class="ctx-icon">mdi-shape-outline</v-icon>
-          Segment
-        </button>
 
         <!-- Generate ▸: the three ComfyUI runs, mirrored word for word in
              SelectionMenu.vue and asserted by menuRunEntryParity.test.js. All
@@ -1010,6 +1007,7 @@ const emit = defineEmits([
   "compare-pictures",
   "use-as-input",
   "segment",
+  "detect-faces",
   "auto-tag",
   "generate-description",
   "save-picture",

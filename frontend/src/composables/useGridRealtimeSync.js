@@ -58,7 +58,13 @@ const SERVER_COMPUTED_SORT_FIELDS = new Set([
 // needs one thing `detections` does not, handled at the branch below: the
 // thumbnail URL lives on the batch-thumbnail endpoint, not on /metadata, so a
 // card refresh alone repaints the pre-rotate bitmap.
-const CARD_CONTENT_FIELDS = new Set(["detections", "pixels", "orientation"]);
+// `faces` (Detect faces again) is the same case for the face boxes.
+const CARD_CONTENT_FIELDS = new Set([
+  "detections",
+  "faces",
+  "pixels",
+  "orientation",
+]);
 
 // Stack membership. `stack_count` is the number of LIVE members a card's stack
 // badge renders, and it is the one facet neither of the branches above can

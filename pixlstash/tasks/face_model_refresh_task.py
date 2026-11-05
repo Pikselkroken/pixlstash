@@ -20,6 +20,14 @@ Matching strategy (per picture):
    or count delta between runs).
 3. Genuinely new detections are inserted; existing rows with no match are removed
    (logged), respecting ``UniqueConstraint(picture_id, frame_index, face_index)``.
+
+The same task is the owner's "Detect faces again" (``redetect=True``, queued by
+``POST /pictures/detect`` with ``target: "faces"``). A re-detection follows a
+change the pack refresh never sees - typically a rotate, which moves every box -
+so two things differ there: leftovers are also matched by embedding similarity
+(a turned face embeds the same, its box does not overlap), and an existing face
+that names a person is kept rather than removed when nothing matches it, so a
+re-detection never takes a person off a picture.
 """
 
 from __future__ import annotations
@@ -28,6 +36,7 @@ import os
 import threading
 
 import cv2
+import numpy as np
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
@@ -43,6 +52,10 @@ logger = get_logger(__name__)
 
 # Minimum IoU for the fallback bbox match to be accepted as the same face.
 _IOU_MATCH_THRESHOLD = 0.3
+# Minimum cosine similarity for the redetect-only embedding match. One face
+# embedded twice, before and after a turn, lands well above this; two different
+# people in one picture land well below it.
+_EMBEDDING_MATCH_THRESHOLD = 0.5
 
 
 def _bbox_iou(a, b) -> float:
@@ -65,6 +78,18 @@ def _bbox_iou(a, b) -> float:
     return inter / union
 
 
+def _embedding_similarity(a, b) -> float:
+    """Return the cosine similarity of two float32 embedding blobs (0 if unusable)."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    va = np.frombuffer(a, dtype=np.float32)
+    vb = np.frombuffer(b, dtype=np.float32)
+    denom = float(np.linalg.norm(va) * np.linalg.norm(vb))
+    if denom <= 0.0:
+        return 0.0
+    return float(np.dot(va, vb)) / denom
+
+
 class FaceModelRefreshTask(BaseTask):
     """Re-compute face embeddings for a batch of pictures and update in place.
 
@@ -73,6 +98,9 @@ class FaceModelRefreshTask(BaseTask):
         engine: :class:`~pixlstash.inference.engine.InferenceEngine` providing the
             currently configured ``insightface_model_pack``.
         pictures: Pictures whose faces should be refreshed to the current pack.
+        redetect: The owner asked for these pictures to be detected again (see
+            the module docstring); runs ahead of background work.
+        origin_client_id: The requesting tab, for the completion event.
     """
 
     _IMAGE_EXTS = FaceExtractionTask._IMAGE_EXTS
@@ -82,12 +110,25 @@ class FaceModelRefreshTask(BaseTask):
     # pass across many faces in a single ONNX call.
     _DETECT_BATCH_IMAGES = 64
 
-    def __init__(self, database, engine, pictures: list):
+    def __init__(
+        self,
+        database,
+        engine,
+        pictures: list,
+        redetect: bool = False,
+        origin_client_id: str | None = None,
+    ):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
         super().__init__(
             task_type="FaceModelRefreshTask",
-            params={"picture_ids": picture_ids, "batch_size": len(picture_ids)},
+            params={
+                "picture_ids": picture_ids,
+                "batch_size": len(picture_ids),
+                "redetect": redetect,
+                "origin_client_id": origin_client_id,
+            },
         )
+        self._redetect = redetect
         self._db = database
         self._engine = engine
         self._pictures = pictures or []
@@ -98,8 +139,9 @@ class FaceModelRefreshTask(BaseTask):
     @property
     def priority(self) -> TaskPriority:
         # Lower than initial FACE_EXTRACTION (HIGH) so refresh never preempts the
-        # processing of brand-new pictures.
-        return TaskPriority.MEDIUM
+        # processing of brand-new pictures. A redetect is a click waiting on its
+        # answer, so it sits with extraction instead of behind tagging.
+        return TaskPriority.HIGH if self._redetect else TaskPriority.MEDIUM
 
     @property
     def queue_type(self) -> QueueType:
@@ -367,6 +409,7 @@ class FaceModelRefreshTask(BaseTask):
                 pic.id,
                 new_faces,
                 model_pack,
+                self._redetect,
                 priority=DBPriority.HIGH,
             )
             pending.append((pic.id, future))
@@ -395,12 +438,17 @@ class FaceModelRefreshTask(BaseTask):
         return {"changed_count": len(changed_ids), "picture_ids": sorted(changed_ids)}
 
     @staticmethod
-    def _match_existing(existing: list[Face], new_faces: list[Face]):
+    def _match_existing(
+        existing: list[Face], new_faces: list[Face], by_embedding: bool = False
+    ):
         """Pair existing rows with new detections.
 
         Returns ``(pairs, unmatched_new, unmatched_existing)`` where ``pairs`` is a
         list of ``(existing_face, new_face)``. Matching is by
-        ``(frame_index, face_index)`` first, then by bbox IoU for the leftovers.
+        ``(frame_index, face_index)`` first - only where the two boxes overlap, so
+        a face that appeared above another cannot take over its row and its
+        person - then by bbox IoU for the leftovers, then (``by_embedding``) by
+        embedding similarity within the same frame and pack.
         """
         existing_by_key = {(f.frame_index, f.face_index): f for f in existing}
         pairs: list[tuple[Face, Face]] = []
@@ -410,7 +458,11 @@ class FaceModelRefreshTask(BaseTask):
         for nf in new_faces:
             key = (nf.frame_index, nf.face_index)
             ef = existing_by_key.get(key)
-            if ef is not None and id(ef) not in matched_existing:
+            if (
+                ef is not None
+                and id(ef) not in matched_existing
+                and _bbox_iou(ef.bbox, nf.bbox) >= _IOU_MATCH_THRESHOLD
+            ):
                 pairs.append((ef, nf))
                 matched_existing.add(id(ef))
             else:
@@ -435,6 +487,29 @@ class FaceModelRefreshTask(BaseTask):
                 matched_existing.add(id(best_ef))
             else:
                 still_unmatched_new.append(nf)
+
+        if by_embedding:
+            unmatched_new = still_unmatched_new
+            still_unmatched_new = []
+            for nf in unmatched_new:
+                best_ef = None
+                best_sim = _EMBEDDING_MATCH_THRESHOLD
+                for ef in leftover_existing:
+                    if (
+                        ef.frame_index != nf.frame_index
+                        or ef.model_pack != nf.model_pack
+                        or id(ef) in matched_existing
+                    ):
+                        continue
+                    sim = _embedding_similarity(ef.features, nf.features)
+                    if sim >= best_sim:
+                        best_sim = sim
+                        best_ef = ef
+                if best_ef is not None:
+                    pairs.append((best_ef, nf))
+                    matched_existing.add(id(best_ef))
+                else:
+                    still_unmatched_new.append(nf)
 
         unmatched_existing = [f for f in existing if id(f) not in matched_existing]
         return pairs, still_unmatched_new, unmatched_existing
@@ -477,9 +552,17 @@ class FaceModelRefreshTask(BaseTask):
 
     @classmethod
     def _refresh_picture_faces(
-        cls, session, picture_id: int, new_faces: list[Face], model_pack: str
+        cls,
+        session,
+        picture_id: int,
+        new_faces: list[Face],
+        model_pack: str,
+        redetect: bool = False,
     ) -> None:
         """Update one picture's face rows in place, preserving character_id.
+
+        With ``redetect`` a detected face that names a person and matches nothing
+        is kept as it is, slot reserved like a manual one, instead of removed.
 
         Manual annotations - a human-drawn bbox with no embedding
         (``features IS NULL``) - are NOT managed by this pack-refresh sweep: there
@@ -511,8 +594,12 @@ class FaceModelRefreshTask(BaseTask):
             # No faces detected now. Remove the detected rows (their embeddings are
             # stale and the current pack no longer finds them) but KEEP manual
             # annotations - they were never detector output.
+            kept = cls._keep_assigned(real_existing, picture_id) if redetect else []
             if real_existing:
+                kept_ids = {id(f) for f in kept}
                 for f in real_existing:
+                    if id(f) in kept_ids:
+                        continue
                     logger.info(
                         "FaceModelRefreshTask: face %s on picture %s no longer "
                         "detected by pack %s; removing.",
@@ -521,8 +608,8 @@ class FaceModelRefreshTask(BaseTask):
                         model_pack,
                     )
                     session.delete(f)
-            if manual_existing:
-                # Picture still holds real (manual) faces, so it is not empty:
+            if manual_existing or kept:
+                # Picture still holds real (manual or kept) faces, so it is not empty:
                 # drop any stray sentinel rather than marking it as no-faces.
                 for s in sentinels:
                     session.delete(s)
@@ -550,8 +637,17 @@ class FaceModelRefreshTask(BaseTask):
         # Match only against detected faces; manual rows are never matched, moved,
         # or deleted by the refresh.
         pairs, unmatched_new, unmatched_existing = cls._match_existing(
-            real_existing, new_faces
+            real_existing, new_faces, by_embedding=redetect
         )
+
+        if redetect:
+            kept = cls._keep_assigned(unmatched_existing, picture_id)
+            kept_ids = {id(f) for f in kept}
+            unmatched_existing = [
+                f for f in unmatched_existing if id(f) not in kept_ids
+            ]
+            for f in kept:
+                reserved.setdefault(f.frame_index, set()).add(f.face_index)
 
         for f in unmatched_existing:
             logger.info(
@@ -587,6 +683,20 @@ class FaceModelRefreshTask(BaseTask):
             session.add(nf)
 
         cls._commit(session, picture_id)
+
+    @staticmethod
+    def _keep_assigned(faces: list[Face], picture_id: int) -> list[Face]:
+        """The faces among *faces* that name a person, logged as kept."""
+        kept = [f for f in faces if f.character_id is not None]
+        for f in kept:
+            logger.info(
+                "FaceModelRefreshTask: face %s (char=%s) on picture %s not found "
+                "again; kept so the picture stays with its person.",
+                f.face_index,
+                f.character_id,
+                picture_id,
+            )
+        return kept
 
     @staticmethod
     def _commit(session, picture_id: int) -> None:
