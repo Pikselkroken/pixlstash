@@ -610,7 +610,7 @@ describe("TrainingRunLive", () => {
     await wrapper.find(".app-btn").trigger("click");
     await flushPromises();
     expect(confirm).toHaveBeenCalledWith(
-      'Stop training "ohwx-portrait-v2"? It can be trained longer later, from the last step it saved.',
+      'Stop training "ohwx-portrait-v2"? The checkpoints it saved are kept.',
     );
     expect(cancelTrainingJob).not.toHaveBeenCalled();
 

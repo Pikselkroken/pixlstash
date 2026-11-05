@@ -334,7 +334,7 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     if (
       job.status !== "completed" &&
       !window.confirm(
-        `Stop training "${name}"? It can be trained longer later, from the last step it saved.`,
+        `Stop training "${name}"? The checkpoints it saved are kept.`,
       )
     ) {
       return false;

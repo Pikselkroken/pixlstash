@@ -2310,7 +2310,21 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=404, detail="Training job not found"
             ) from exc
-        except (ValueError, OSError) as exc:
+        except FileExistsError as exc:
+            # Its message names a file, never a folder.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except OSError as exc:
+            logger.exception(
+                "Training job id=%s: its folder could not be made ready to train "
+                "on; nothing was queued.",
+                job_id,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="The run's folder could not be made ready to train on, "
+                "so nothing was queued.",
+            ) from exc
+        except ValueError as exc:
             logger.warning(
                 "Training job id=%s cannot be trained longer: %s", job_id, exc
             )

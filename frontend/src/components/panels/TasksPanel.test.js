@@ -1475,7 +1475,7 @@ describe("the GPU queue in the task manager", () => {
     await wrapper.find('[data-testid="tm-cancel-wait"]').trigger("click");
     await flushPromises();
     expect(confirm).toHaveBeenCalledWith(
-      'Stop training "Clementine"? It can be trained longer later, from the last step it saved.',
+      'Stop training "Clementine"? The checkpoints it saved are kept.',
     );
     expect(cancelLease).not.toHaveBeenCalled();
 

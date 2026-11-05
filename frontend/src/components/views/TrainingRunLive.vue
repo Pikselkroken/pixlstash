@@ -1253,7 +1253,7 @@ async function stop() {
   if (
     live.value?.status !== "completed" &&
     !window.confirm(
-      `Stop training "${live.value?.name}"? It can be trained longer later, from the last step it saved.`,
+      `Stop training "${live.value?.name}"? The checkpoints it saved are kept.`,
     )
   ) {
     return;

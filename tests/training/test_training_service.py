@@ -2696,3 +2696,81 @@ def test_only_a_schedule_that_resumes_cleanly_is_trained_longer(
         assert reason is None
     else:
         assert schedule in reason
+
+
+def test_a_run_trained_longer_draws_deferred_previews_only_for_its_new_steps(
+    hub, repo_dir, watched
+):
+    """The steps it had were drawn when it first finished."""
+    for profile in _ZIT["fit"]["auto"]:
+        _record_big_previews(hub, profile)
+    resolution = _resolve_small(hub)
+    assert resolution["previews_deferred"]
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    job = _enqueue_resolved(
+        service, resolution, _write_template(repo_dir, steps=4, save_every=2)
+    )
+    assert _run_to_end(hub, service, job).status == "completed"
+    assert watched() == ["steps=4", "steps=2", "steps=4"]
+
+    service.train_longer(job["id"], from_step=4, more_steps=2)
+    _run_to_finished(hub, service, job["uuid"], total=6)
+
+    # The run carried on from 4, then one preview pass: step 6 alone.
+    assert watched()[3:] == ["steps=6 from=4 optimizer=optimizer at 4", "steps=6"]
+
+
+def test_a_run_trained_longer_waits_behind_the_runs_queued_before_it(hub):
+    def make(run_uuid, created):
+        training_runs.create_run(
+            hub,
+            library_uuid=_LIBRARY_UUID,
+            uuid=run_uuid,
+            name=run_uuid,
+            set_id=_SET_ID,
+            character_id=None,
+            base_model="m",
+            trigger_word="t",
+        )
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE training_run SET created_at = ? WHERE uuid = ?",
+                (created, run_uuid),
+            )
+
+    make("old-run", "2026-10-01T00:00:00+00:00")
+    make("newer-run", "2026-11-01T00:00:00+00:00")
+    training_runs.update_run(hub, "old-run", continued_at="2026-11-05T00:00:00+00:00")
+    assert training_runs.next_queued_run(hub, _LIBRARY_UUID)["uuid"] == "newer-run"
+
+
+def test_a_stamped_file_at_the_finals_step_is_set_aside_too(tmp_path):
+    """ai-toolkit never writes one, but if it is there it must not be resumed."""
+    handle = LocalAiToolkit.handle_for(str(tmp_path / "work"), "abcdef12", "twice")
+    os.makedirs(handle.save_root)
+    stem = os.path.basename(handle.save_root)
+
+    def save(name, step):
+        header = json.dumps(
+            {"__metadata__": {"training_info": json.dumps({"step": step})}}
+        ).encode()
+        with open(os.path.join(handle.save_root, name), "wb") as fh:
+            fh.write(len(header).to_bytes(8, "little") + header)
+
+    save(f"{stem}_000000002.safetensors", 2)
+    save(f"{stem}_000000004.safetensors", 4)
+    save(f"{stem}.safetensors", 4)
+
+    with pytest.raises(FileExistsError, match="kept twice"):
+        LocalAiToolkit.carry_on_from(handle, 4)
+    assert LocalAiToolkit.carry_on_from(handle, 2) == "take-1"
+    assert set(os.listdir(handle.save_root)) == {
+        f"{stem}_000000002.safetensors",
+        "take-1",
+    }

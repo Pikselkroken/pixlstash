@@ -162,10 +162,14 @@ def list_runs(
 
 
 def next_queued_run(hub: HubDatabase, library_uuid: str) -> Optional[dict]:
-    """The oldest queued run of the library (FIFO), or None."""
+    """The run queued longest ago (FIFO), or None.
+
+    A run trained longer is queued when it was asked to train on, not when it
+    was first made, so it waits behind the runs queued before it.
+    """
     row = hub.fetchone(
         "SELECT * FROM training_run WHERE library_uuid = ? AND status = 'queued' "
-        "ORDER BY created_at, id LIMIT 1",
+        "ORDER BY COALESCE(continued_at, created_at), id LIMIT 1",
         (library_uuid,),
     )
     return dict(row) if row is not None else None

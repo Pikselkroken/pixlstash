@@ -536,9 +536,6 @@ class TrainingService:
             work_dir = os.path.join(self._training_root, run["uuid"])
             handle = handle_for_run(self._training_root, run)
             final_step = next((o["step"] for o in options["steps"] if o["final"]), None)
-            take = LocalAiToolkit.carry_on_from(
-                handle, from_step, run.get("total_steps")
-            )
             template_path = os.path.join(work_dir, "trained_on_template.json")
             write_json_atomic(
                 template_path, LocalAiToolkit.template_from_rendered(config)
@@ -557,9 +554,20 @@ class TrainingService:
                 "caption_mode": None,
                 "continuation": True,
             }
+            # Everything that can be written first is: the run's folder is the
+            # one step that cannot be taken back by writing the row again.
             with self._pending_specs_lock:
                 self._pending_specs[run["uuid"]] = pending
             self._write_pending_sidecar(run["uuid"], pending)
+            try:
+                take = LocalAiToolkit.carry_on_from(
+                    handle, from_step, run.get("total_steps")
+                )
+            except OSError:
+                with self._pending_specs_lock:
+                    self._pending_specs.pop(run["uuid"], None)
+                self._remove_pending_sidecar(run["uuid"])
+                raise
             if final_step is not None:
                 # The shelf's copy of the final is that step from now on; the
                 # bare name is the longer-trained file's once it is imported.

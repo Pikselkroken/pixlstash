@@ -338,7 +338,9 @@ class LocalAiToolkit(TrainerBackend):
         ``optimizer.pt`` from beside it (SEAM.md, "Training on"). So:
 
         - From the bare final, it is renamed to its stamped name, keeping the
-          optimizer: the run carries on exactly. A rename is the newest ctime.
+          optimizer: the run carries on exactly. On POSIX the rename makes it
+          the newest ctime; on Windows ctime is creation time, and the final
+          was created after every checkpoint left beside it.
         - From an earlier step, every later checkpoint, the final, the
           optimizer and the later previews move into ``take-<n>/`` (never
           deleted); the chosen file is then the newest left, and the trainer
@@ -362,7 +364,22 @@ class LocalAiToolkit(TrainerBackend):
         root = handle.save_root
         stem = os.path.basename(root)
         final = os.path.join(root, f"{stem}.safetensors")
-        later = [path for s, path in sorted(kept.items()) if s > step]
+        # Every stamped file past the step, read from the folder rather than
+        # from *kept*, which has one path per step: a stamped file sharing the
+        # final's step would otherwise stay behind and be resumed from.
+        stamped_re = re.compile(rf"^{re.escape(stem)}_(\d{{4,}})\.safetensors$")
+        stamped_steps = {
+            os.path.join(root, name): int(match.group(1))
+            for name in os.listdir(root)
+            if (match := stamped_re.match(name))
+        }
+        later = [
+            path
+            for path, s in sorted(stamped_steps.items(), key=lambda item: item[1])
+            if s > step
+        ]
+        if os.path.isfile(final) and kept[step] != final:
+            later.append(final)
         take_name = None
         if later:
             take = 1
@@ -372,8 +389,6 @@ class LocalAiToolkit(TrainerBackend):
             folder = os.path.join(root, take_name)
             os.makedirs(folder)
             set_aside = list(later)
-            if os.path.isfile(final) and kept[step] != final and final not in later:
-                set_aside.append(final)
             optimizer = os.path.join(root, "optimizer.pt")
             if os.path.isfile(optimizer):
                 set_aside.append(optimizer)
@@ -392,7 +407,10 @@ class LocalAiToolkit(TrainerBackend):
         if kept[step] == final:
             stamped = os.path.join(root, f"{stem}_{step:09d}.safetensors")
             if os.path.exists(stamped):
-                raise FileExistsError(f"{stamped} already exists.")
+                raise FileExistsError(
+                    f"Step {step} is kept twice, as the final and as "
+                    f"{os.path.basename(stamped)}; train on from an earlier step."
+                )
             os.rename(final, stamped)
         return take_name
 

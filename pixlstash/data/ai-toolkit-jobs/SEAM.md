@@ -83,8 +83,9 @@ Verified against the local clone at v0.13.32 (`jobs/process/BaseSDTrainProcess.p
 - **Resume is automatic.** At start the trainer globs `save_root` for `<name>*.safetensors`,
   `<name>*.pt` and `<name>*`, takes the newest by **ctime**, loads its weights and reads its step
   from the `training_info` metadata (`{"step", "epoch"}`) every save writes, **the final included**.
-  It then trains from that step to `train.steps`. Steps run `start .. steps-1`, a stamped save is
-  never written at the start step or the last one, and the final is that last step.
+  It then trains from that step to `train.steps`. The loop's step runs `start .. steps-1` and a
+  stamped save is written where it divides by `save_every`, except at `start`; so no stamped file is
+  ever at `train.steps`, which is the final's step.
 - **The optimizer** is `<save_root>/optimizer.pt`, overwritten beside every save, so it belongs to the
   newest checkpoint. Absent, the optimizer starts fresh. Its LR groups are reset to the configured
   LR after loading.
@@ -94,8 +95,9 @@ Verified against the local clone at v0.13.32 (`jobs/process/BaseSDTrainProcess.p
   diffusers ones) depends on the total, so a longer run stretches it and the rate jumps where
   training restarts: PixlStash refuses to train those on (`LocalAiToolkit.resume_refusal`).
 - **`loss_log.db`** drops rows past the resumed step by itself.
-- **From the final:** PixlStash renames `<name>.safetensors` to `<name>_<step:09d>.safetensors` (the
-  rename makes it the newest ctime), raises `train.steps`, sets `train.skip_first_sample`, and
+- **From the final:** PixlStash renames `<name>.safetensors` to `<name>_<step:09d>.safetensors` (on
+  POSIX the rename makes it the newest ctime; on Windows ctime is creation time and the final was
+  created last anyway), raises `train.steps`, sets `train.skip_first_sample`, and
   relaunches in the same `save_root`: weights, step and optimizer carry on.
 - **From an earlier step:** the later checkpoints, the final, `optimizer.pt` and the later previews
   move into `<save_root>/take-<n>/` (no `<name>*` match, so the trainer never sees them); the chosen
