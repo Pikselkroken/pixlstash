@@ -39,7 +39,7 @@ from pixlstash.hub import training_runs
 from pixlstash.routes.model_imports import _to_run_response
 from pixlstash.services import model_mover as mover_module
 from pixlstash.services import run_importer as importer_module
-from pixlstash.services.model_mover import MoveRefused
+from pixlstash.services.model_mover import MoveRefused, file_digest
 from pixlstash.services.run_importer import (
     PROVENANCE_TRAINED,
     STATUS_CANCELLED,
@@ -963,3 +963,105 @@ def test_choosing_a_step_after_the_import_moves_the_cover_and_the_sets_lora(
     assert held[shas[500]] == [("set", 7)]
     with pytest.raises(LookupError):
         Vault.choose_training_cover(stand_in, {**run, "total_steps": 750}, 125)
+
+
+def _train_longer_stand_in(hub):
+    stand_in = SimpleNamespace(_hub=hub)
+    stand_in._import_trained_longer = lambda *args: Vault._import_trained_longer(
+        stand_in, *args
+    )
+    return stand_in
+
+
+def _imported_then_trained_on(shelf):
+    """The run imported once, its final then given its step as Train longer does."""
+    hub = shelf["hub"]
+    run_id = _a_training_run(hub)
+    _download_target(shelf)
+    stand_in = _train_longer_stand_in(hub)
+    info = {"id": run_id, "uuid": "run-clementine", "name": "Clementine"}
+    Vault._import_training_run(stand_in, str(shelf["run_dir"]), info)
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET training_step = 750 "
+            "WHERE training_run_id = ? AND training_step IS NULL",
+            (run_id,),
+        )
+    return stand_in, info, run_id
+
+
+def _shelf_files(hub, run_id):
+    return {
+        row["relpath"]: (row["training_step"], row["stack_position"], row["stack_id"])
+        for row in hub.fetchall(
+            "SELECT mf.relpath, m.training_step, m.stack_position, m.stack_id "
+            "FROM model m JOIN model_file mf ON mf.model_id = m.id "
+            "WHERE m.training_run_id = ?",
+            (run_id,),
+        )
+    }
+
+
+def test_a_run_trained_longer_joins_its_stack_and_takes_the_finals_name(shelf):
+    """The final's shelf copy becomes its step; the longer one takes its name."""
+    stand_in, info, run_id = _imported_then_trained_on(shelf)
+    run_dir = shelf["run_dir"]
+    os.rename(
+        run_dir / "Clementine.safetensors", run_dir / "Clementine_000000750.safetensors"
+    )
+    write_adapter(run_dir / "Clementine_000001000.safetensors", seed=b"step1000")
+    write_adapter(run_dir / "Clementine.safetensors", seed=b"final-1250")
+    final_before = file_digest(str(shelf["destination_dir"] / "Clementine.safetensors"))
+
+    result = Vault._import_training_run(
+        stand_in, str(run_dir), {**info, "continued_from_step": 750}
+    )
+
+    assert result["imported"] == 2
+    files = _shelf_files(shelf["hub"], run_id)
+    assert sorted(files) == [
+        "Clementine.safetensors",
+        "Clementine_000000250.safetensors",
+        "Clementine_000000500.safetensors",
+        "Clementine_000000750.safetensors",
+        "Clementine_000001000.safetensors",
+    ]
+    assert len({stack for _, _, stack in files.values()}) == 1
+    # The old final keeps the cover, under its step's name.
+    assert files["Clementine_000000750.safetensors"][:2] == (750, 0)
+    assert (
+        file_digest(str(shelf["destination_dir"] / "Clementine_000000750.safetensors"))
+        == final_before
+    )
+    # The bare name is the longer-trained file now.
+    assert files["Clementine.safetensors"][0] is None
+    assert file_digest(
+        str(shelf["destination_dir"] / "Clementine.safetensors")
+    ) == file_digest(str(run_dir / "Clementine.safetensors"))
+
+
+def test_a_rewound_run_renames_its_first_takes_copies_into_the_take(shelf):
+    stand_in, info, run_id = _imported_then_trained_on(shelf)
+    run_dir = shelf["run_dir"]
+    take = run_dir / "take-1"
+    take.mkdir()
+    for name in ("Clementine_000000500.safetensors", "Clementine.safetensors"):
+        os.rename(run_dir / name, take / name)
+    write_adapter(run_dir / "Clementine_000000500.safetensors", seed=b"take2-500")
+    write_adapter(run_dir / "Clementine.safetensors", seed=b"take2-final")
+
+    Vault._import_training_run(
+        stand_in,
+        str(run_dir),
+        {**info, "continued_from_step": 250, "set_aside_take": "take-1"},
+    )
+
+    files = _shelf_files(shelf["hub"], run_id)
+    assert sorted(files) == [
+        "Clementine.safetensors",
+        "Clementine_000000250.safetensors",
+        "Clementine_000000500.safetensors",
+        "Clementine_take-1_000000500.safetensors",
+        "Clementine_take-1_000000750.safetensors",
+    ]
+    assert files["Clementine_take-1_000000750.safetensors"][:2] == (750, 0)

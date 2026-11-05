@@ -292,6 +292,17 @@
           <v-icon class="ctx-icon">mdi-open-in-new</v-icon>
           <span class="ctx-label-text">Open run</span>
         </button>
+        <button
+          v-if="canTrainLonger(menuCard)"
+          class="ctx-item"
+          type="button"
+          role="menuitem"
+          data-testid="tr-menu-train-longer"
+          @click="openLonger(menuCard, cardElement(menuCard))"
+        >
+          <v-icon class="ctx-icon">mdi-arrow-expand-right</v-icon>
+          <span class="ctx-label-text">Train longer…</span>
+        </button>
         <!-- The LoRA the run put on the shelf, opened on that row. -->
         <button
           v-if="resultModelId(menuCard) != null"
@@ -371,6 +382,23 @@
           <span class="ctx-shortcut">Esc</span>
         </button>
       </div>
+    </v-menu>
+
+    <!-- Train longer's popover, anchored to the card or the pill it came from. -->
+    <v-menu
+      v-model="longerOpen"
+      :target="longerTarget"
+      location="bottom center"
+      :offset="6"
+      :close-on-content-click="false"
+    >
+      <TrainLongerPopover
+        v-if="longerOpen && longerCard"
+        :job-id="longerCard.job.id"
+        :title="`Train ${longerCard.name} longer`"
+        @close="longerOpen = false"
+        @started="reload"
+      />
     </v-menu>
 
     <!-- The closed Models rail's handle, the one the shelf and Workflows show
@@ -559,6 +587,21 @@
           <span class="selbar-sep"></span>
         </template>
 
+        <!-- Train longer, for exactly one run that can: one popover cannot
+             set two runs' steps, so with more picked it is hidden, not greyed. -->
+        <template v-if="longerPick">
+          <AppButton
+            size="sm"
+            variant="secondary"
+            icon-left="arrow-expand-right"
+            data-testid="tr-pill-train-longer"
+            @click="openLonger(longerPick, $event.currentTarget)"
+          >
+            Train longer
+          </AppButton>
+          <span class="selbar-sep"></span>
+        </template>
+
         <!-- Delete, in the error colour, beside Clear: the shelf pill's
              destructive verb in the same place. -->
         <AppBarButton
@@ -630,6 +673,7 @@ import { useRoute, useRouter } from "vue-router";
 
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import TrainingRunLive from "./TrainingRunLive.vue";
+import TrainLongerPopover from "../io/TrainLongerPopover.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
@@ -674,6 +718,7 @@ const {
   runs,
   cards,
   chosen,
+  chosenCards,
   chosenSteps,
   importable,
   deletable,
@@ -829,6 +874,50 @@ function canStop(card) {
     card?.live && card.job && !["completed", "stopping"].includes(card.job.status),
   );
 }
+
+/** A run PixlStash trained that has ended and kept a checkpoint. */
+function canTrainLonger(card) {
+  return Boolean(
+    card?.job &&
+      !card.live &&
+      card.run?.checkpoints?.length &&
+      ["completed", "stopped", "error"].includes(card.job.status),
+  );
+}
+
+const longerOpen = ref(false);
+const longerKey = ref("");
+const longerTarget = ref(null);
+const longerCard = computed(
+  () => cards.value.find((card) => card.key === longerKey.value) ?? null,
+);
+/** The one picked run the pill offers Train longer for, or null. */
+const longerPick = computed(() =>
+  chosenCards.value.length === 1 && canTrainLonger(chosenCards.value[0])
+    ? chosenCards.value[0]
+    : null,
+);
+
+function cardElement(card) {
+  return gridEl.value?.querySelector(`[data-run-index="${cards.value.indexOf(card)}"]`);
+}
+
+/** Open Train longer for *card*, anchored to *anchor*. */
+async function openLonger(card, anchor) {
+  cardMenuOpen.value = false;
+  longerOpen.value = false;
+  await nextTick();
+  cursor.value = cards.value.indexOf(card);
+  longerKey.value = card.key;
+  longerTarget.value = anchor ?? null;
+  longerOpen.value = true;
+}
+
+// Opened programmatically, so Vuetify has no activator to hand focus back to.
+watch(longerOpen, (open, wasOpen) => {
+  if (open || !wasOpen) return;
+  nextTick(() => cardElement(cards.value[cursor.value])?.focus());
+});
 
 /** The failed job being queued again, so its Retry cannot fire twice. */
 const retrying = ref(null);

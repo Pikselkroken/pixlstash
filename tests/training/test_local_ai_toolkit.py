@@ -239,8 +239,9 @@ def test_full_run_progresses_to_completed(tmp_path):
     assert steps == sorted(steps)
     assert all("loss" in point for point in progress.loss_curve)
 
-    # Checkpoints (every 4 of 12 steps → 3 intermediate) + final + a sample.
-    assert len(progress.checkpoints) == 3
+    # Checkpoints (every 4 of 12 steps, none at the last: the final is that
+    # step) → 2 intermediate + final + a sample.
+    assert len(progress.checkpoints) == 2
     assert progress.final_checkpoint is not None
     assert progress.final_checkpoint.endswith("testjob.safetensors")
     assert os.path.exists(progress.final_checkpoint)

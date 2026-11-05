@@ -45,6 +45,9 @@ _MUTABLE_COLUMNS = frozenset(
         "cover_step",
         "finished_unwatched",
         "comfyui_quit",
+        "continued_from_step",
+        "continued_at",
+        "set_aside_take",
     }
 )
 

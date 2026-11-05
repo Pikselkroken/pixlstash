@@ -52,6 +52,32 @@
           >
             {{ stopLabel }}
           </AppButton>
+          <!-- Train longer: the same run trains on from a step it kept. -->
+          <v-menu
+            v-if="canTrainLonger"
+            v-model="longerOpen"
+            location="bottom end"
+            :offset="6"
+            :close-on-content-click="false"
+          >
+            <template #activator="{ props: menuProps }">
+              <AppButton
+                v-bind="menuProps"
+                size="sm"
+                variant="outline"
+                icon-left="arrow-expand-right"
+                data-testid="trl-train-longer"
+              >
+                Train longer
+              </AppButton>
+            </template>
+            <TrainLongerPopover
+              v-if="longerOpen"
+              :job-id="jobId"
+              @close="longerOpen = false"
+              @started="trainedLonger"
+            />
+          </v-menu>
         </template>
       </div>
     </Teleport>
@@ -534,9 +560,10 @@ import {
   unref,
   watch,
 } from "vue";
-import { VIcon } from "vuetify/components";
+import { VIcon, VMenu } from "vuetify/components";
 
 import AppButton from "../widgets/AppButton.vue";
+import TrainLongerPopover from "../io/TrainLongerPopover.vue";
 import LoraLossChart from "../widgets/LoraLossChart.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import SectionHeader from "../widgets/SectionHeader.vue";
@@ -613,6 +640,7 @@ const hasBar = unref(inject("shelf-run-bar", false));
 const hoverColumn = ref(null);
 const choosing = ref(false);
 const stopping = ref(false);
+const longerOpen = ref(false);
 const showFull = ref(false);
 const chartRef = ref(null);
 const bodyRef = ref(null);
@@ -676,6 +704,16 @@ const canStop = computed(
   () => LIVE_STATUSES.includes(live.value?.status) || live.value?.phase === "previews",
 );
 const busy = computed(() => ["previews", "saving", "importing"].includes(live.value?.phase));
+// A run that has ended and kept a step can train on from it; the popover
+// says why not when its checkpoints turn out to be gone.
+const canTrainLonger = computed(() => {
+  const run = live.value;
+  if (!run || fromFolder.value || props.jobId == null) return false;
+  const ended =
+    ["stopped", "error"].includes(run.status) ||
+    (run.status === "completed" && Boolean(run.completed_at));
+  return ended && (run.coverable?.length ?? 0) > 0;
+});
 // Before training starts: the corner names the step, step 0 says it comes next.
 const settingUp = computed(
   () =>
@@ -925,6 +963,15 @@ const subline = computed(() => {
   if (run.phase === "saving") return "Saving a checkpoint";
   if (run.downloading) return "Downloading the model, once per model";
   if (run.status === "completed" && run.imported) return "On the shelf";
+  const on = run.continued;
+  if (on && LIVE_STATUSES.includes(run.status)) {
+    if (on.take) return `from step ${on.from_step.toLocaleString()} · first take kept`;
+    const at = new Date(on.at);
+    if (!Number.isNaN(at.getTime())) {
+      const clockTime = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      return `trained longer at ${clockTime}`;
+    }
+  }
   return "";
 });
 
@@ -1206,7 +1253,7 @@ async function stop() {
   if (
     live.value?.status !== "completed" &&
     !window.confirm(
-      `Stop training "${live.value?.name}"? The run will stop and cannot be resumed.`,
+      `Stop training "${live.value?.name}"? It can be trained longer later, from the last step it saved.`,
     )
   ) {
     return;
@@ -1224,6 +1271,11 @@ async function stop() {
   } finally {
     stopping.value = false;
   }
+}
+
+async function trainedLonger() {
+  await load();
+  schedule();
 }
 
 async function copyFull(text) {

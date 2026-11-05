@@ -888,7 +888,7 @@ async function cancelWait(entry) {
   if (
     entry.lease.tenant === "aitoolkit" &&
     !window.confirm(
-      `Stop training "${entry.label}"? The run will stop and cannot be resumed.`,
+      `Stop training "${entry.label}"? It can be trained longer later, from the last step it saved.`,
     )
   ) {
     return;

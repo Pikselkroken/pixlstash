@@ -334,7 +334,7 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     if (
       job.status !== "completed" &&
       !window.confirm(
-        `Stop training "${name}"? The run will stop and cannot be resumed.`,
+        `Stop training "${name}"? It can be trained longer later, from the last step it saved.`,
       )
     ) {
       return false;

@@ -2500,3 +2500,199 @@ def test_progress_and_cancel_write_the_stopping_flag_under_the_active_lock(
     written.clear()
     service.cancel(training_runs.get_run_by_uuid(hub, "racing-job")["id"])
     assert written[0] == ("stopping", True)
+
+
+# ---------------------------------------------------------------------------
+# Train longer: the same run carried on from a step it kept
+# ---------------------------------------------------------------------------
+
+
+def _finished_run(hub, repo_dir, service, name="longer"):
+    """Train a 4-step run saving every 2 to completion; return its row."""
+    template = _write_template(repo_dir, steps=4, save_every=2)
+    job = service.enqueue(
+        set_id=_SET_ID,
+        name=name,
+        base_model="m",
+        trigger_word="t",
+        template_path=template,
+        resolution=_RESOLUTION,
+    )
+    _run_to_finished(hub, service, job["uuid"], total=4)
+    return training_runs.get_run_by_uuid(hub, job["uuid"])
+
+
+def _run_to_finished(hub, service, job_uuid, *, total):
+    """Run the worker until the run completes at *total* and is imported."""
+    service.start()
+    try:
+        assert _poll_until(
+            lambda: (
+                (row := _job_status(hub, job_uuid)).status == "completed"
+                and row.completed_at
+                and row.total_steps == total
+            )
+        ), f"run ended {_job_status(hub, job_uuid)}"
+    finally:
+        service.stop()
+
+
+def _recorded_step(path):
+    return LocalAiToolkit._recorded_step(path)
+
+
+def test_a_finished_run_trains_longer_from_its_final_keeping_the_optimizer(
+    hub, repo_dir, tmp_path, monkeypatch
+):
+    launches = tmp_path / "launches.txt"
+    monkeypatch.setenv("FAKE_RUN_LAUNCHES", str(launches))
+    importer = _RecordingImport()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+        importer=importer,
+    )
+    run = _finished_run(hub, repo_dir, service)
+    stem = f"longer_{run['uuid'][:8]}"
+    save_root = os.path.join(repo_dir, "output", stem)
+
+    options = service.train_longer_options(run)
+    assert options["reason"] is None
+    assert options["steps"] == [
+        {"step": 4, "final": True, "keeps_optimizer": True},
+        {"step": 2, "final": False, "keeps_optimizer": False},
+    ]
+
+    service.train_longer(run["id"], from_step=4, more_steps=2)
+    queued = _job_status(hub, run["uuid"])
+    assert (queued.status, queued.total_steps, queued.continued_from_step) == (
+        "queued",
+        6,
+        4,
+    )
+    assert queued.set_aside_take is None
+    # The final now carries its step, so the trainer resumes it as a checkpoint.
+    assert _recorded_step(os.path.join(save_root, f"{stem}_000000004.safetensors")) == 4
+
+    _run_to_finished(hub, service, run["uuid"], total=6)
+
+    # Carried on: from step 4 with the optimizer saved there, not from 0.
+    assert launches.read_text().splitlines()[-1] == (
+        "steps=6 from=4 optimizer=optimizer at 4"
+    )
+    assert _recorded_step(os.path.join(save_root, f"{stem}.safetensors")) == 6
+    assert os.path.isfile(os.path.join(save_root, f"{stem}_000000004.safetensors"))
+    # The same run, imported again and told where it trained on from.
+    assert len(importer.calls) == 2
+    assert importer.calls[1][1]["continued_from_step"] == 4
+    assert importer.calls[1][1]["id"] == run["id"]
+
+
+def test_training_longer_from_an_earlier_step_sets_the_later_ones_aside(
+    hub, repo_dir, tmp_path, monkeypatch
+):
+    launches = tmp_path / "launches.txt"
+    monkeypatch.setenv("FAKE_RUN_LAUNCHES", str(launches))
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    run = _finished_run(hub, repo_dir, service, name="rewound")
+    stem = f"rewound_{run['uuid'][:8]}"
+    save_root = os.path.join(repo_dir, "output", stem)
+
+    service.train_longer(run["id"], from_step=2, more_steps=4)
+
+    take = os.path.join(save_root, "take-1")
+    # Set aside, never deleted: the final and the optimizer that belongs to it.
+    assert sorted(os.listdir(take)) == ["optimizer.pt", f"{stem}.safetensors"]
+    assert _job_status(hub, run["uuid"]).set_aside_take == "take-1"
+
+    _run_to_finished(hub, service, run["uuid"], total=6)
+
+    # From step 2 with a fresh optimizer: the saved one was the final's.
+    assert launches.read_text().splitlines()[-1] == "steps=6 from=2 optimizer=None"
+    assert _recorded_step(os.path.join(save_root, f"{stem}.safetensors")) == 6
+    assert _recorded_step(os.path.join(take, f"{stem}.safetensors")) == 4
+
+
+def test_a_run_is_not_trained_longer_from_a_step_it_did_not_keep_or_while_busy(
+    hub, repo_dir
+):
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    run = _finished_run(hub, repo_dir, service, name="kept")
+    with pytest.raises(ValueError, match="no checkpoint at step 3"):
+        service.train_longer(run["id"], from_step=3, more_steps=2)
+    with pytest.raises(LookupError):
+        service.train_longer(run["id"] + 999, from_step=4, more_steps=2)
+
+    service.train_longer(run["id"], from_step=4, more_steps=2)
+    # Queued now, so a second press is refused and moves nothing.
+    with pytest.raises(ValueError, match="still training"):
+        service.train_longer(run["id"], from_step=4, more_steps=2)
+
+
+def test_a_cut_off_checkpoint_is_not_offered(hub, repo_dir):
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    run = _finished_run(hub, repo_dir, service, name="cut")
+    stem = f"cut_{run['uuid'][:8]}"
+    stamped = os.path.join(repo_dir, "output", stem, f"{stem}_000000002.safetensors")
+    with open(stamped, "r+b") as fh:
+        fh.truncate(12)  # mid-header, as a save cut off would leave it
+
+    steps = [o["step"] for o in service.train_longer_options(run)["steps"]]
+    assert steps == [4]
+
+
+@pytest.mark.parametrize(
+    ("schedule", "offered"),
+    [
+        (None, True),
+        ("constant", True),
+        ("constant_with_warmup", True),
+        ("cosine", False),
+        ("linear", False),
+    ],
+)
+def test_only_a_schedule_that_resumes_cleanly_is_trained_longer(
+    hub, repo_dir, schedule, offered
+):
+    """ai-toolkit rebuilds the LR schedule over the new length on a resume."""
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    run = _finished_run(hub, repo_dir, service, name=f"sched-{schedule}")
+    config = json.loads(run["rendered_config"])
+    if schedule:
+        config["config"]["process"][0]["train"]["lr_scheduler"] = schedule
+    training_runs.update_run(hub, run["uuid"], rendered_config=json.dumps(config))
+
+    reason = service.train_longer_options(
+        training_runs.get_run_by_uuid(hub, run["uuid"])
+    )["reason"]
+    if offered:
+        assert reason is None
+    else:
+        assert schedule in reason

@@ -866,6 +866,46 @@ def create_router(server) -> APIRouter:
 
         step: int = Field(..., ge=0, description="A checkpoint step of the run.")
 
+    class TrainLongerStep(BaseModel):
+        """A step a run can be trained on from."""
+
+        step: int = Field(..., description="The checkpoint's step.")
+        final: bool = Field(..., description="The run's bare final file.")
+        keeps_optimizer: bool = Field(
+            ..., description="Training on from it carries the optimizer on."
+        )
+
+    class TrainLongerOptionsResponse(BaseModel):
+        """What Train longer offers one run."""
+
+        steps: list[TrainLongerStep] = Field(..., description="Newest first.")
+        reason: Optional[str] = Field(
+            None, description="Why it cannot be trained longer; null when it can."
+        )
+        status: str = Field(..., description="Lifecycle status.")
+        total_steps: Optional[int] = Field(None, description="Its target.")
+        save_every: Optional[int] = Field(None, description="Its save interval.")
+        seconds_per_step: Optional[float] = Field(
+            None, description="Its measured speed; null when unknown."
+        )
+
+    class TrainLongerRequest(BaseModel):
+        """Body for training a run longer."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        from_step: int = Field(..., ge=1, description="A step the run kept.")
+        more_steps: int = Field(
+            ..., ge=1, le=100000, description="How many steps past from_step."
+        )
+
+    class TrainLongerResponse(BaseModel):
+        """The run, queued again."""
+
+        job_id: int = Field(..., description="Primary key of the job.")
+        status: str = Field(..., description="Lifecycle status.")
+        total_steps: Optional[int] = Field(None, description="Its new target.")
+
     class CoverStepResponse(BaseModel):
         """The step chosen, and whether the shelf already changed."""
 
@@ -1774,6 +1814,16 @@ def create_router(server) -> APIRouter:
             "started_at": job["started_at"],
             "completed_at": job["completed_at"],
             "dataset_snapshot_id": job["dataset_snapshot_id"],
+            # Trained longer: from which step, when, and whether a take was set aside.
+            "continued": (
+                {
+                    "from_step": job["continued_from_step"],
+                    "at": job["continued_at"],
+                    "take": job["set_aside_take"],
+                }
+                if job.get("continued_from_step") is not None
+                else None
+            ),
         }
 
     def _scope(set_id, character_id) -> tuple[Optional[int], Optional[int]]:
@@ -2195,6 +2245,81 @@ def create_router(server) -> APIRouter:
             applied,
         )
         return {"job_id": job_id, "cover_step": payload.step, "applied": applied}
+
+    @router.get(
+        "/training/jobs/{job_id}/train-longer",
+        summary="What a training job can be trained on from",
+        response_model=TrainLongerOptionsResponse,
+        description=(
+            "The steps the run kept that it can be trained on from, newest "
+            "first, the newest one keeping the optimizer; a checkpoint that "
+            "does not read whole is left out. Also its save interval and its "
+            "speed, for the time a longer run takes, and why it cannot be "
+            "trained longer when it cannot. Reads the run folder and the "
+            "trainer's step log; returns no host path. Owner-only."
+        ),
+    )
+    def get_training_job_train_longer(job_id: int, request: Request):
+        _ensure_secure(request)
+        hub, library_uuid = _store()
+        job = training_runs.get_run(hub, library_uuid, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Training job not found")
+        options = server.vault.training_service.train_longer_options(job)
+        config = _parse_json_field(
+            job["rendered_config"], "rendered_config", job["uuid"]
+        )
+        handle, _ = _run_dir(job)
+        step_times = (
+            live_view.read_step_times(handle.loss_db_path)
+            if os.path.exists(handle.loss_db_path)
+            else []
+        )
+        return {
+            **options,
+            "status": job["status"],
+            "total_steps": job["total_steps"],
+            "save_every": live_view.sample_settings(config)["save_every"],
+            "seconds_per_step": live_view.speed(step_times, None)["seconds_per_step"],
+        }
+
+    @router.post(
+        "/training/jobs/{job_id}/train-longer",
+        summary="Train a training job longer",
+        response_model=TrainLongerResponse,
+        description=(
+            "Queues the same run to train on from a step it kept, with the same "
+            "pictures and settings, to that step plus more_steps. From its final "
+            "checkpoint the optimizer carries on; from an earlier one, the later "
+            "checkpoints are set aside in a take folder in the run's folder, "
+            "never deleted. When it is imported, the new steps join the run's "
+            "stack on the shelf and the longer-trained final takes the final's "
+            "file name. 404 for an unknown job, 409 when it cannot be trained "
+            "on from that step (the detail says why). Owner on this machine."
+        ),
+    )
+    def train_training_job_longer(
+        job_id: int, payload: TrainLongerRequest, request: Request
+    ):
+        _ensure_secure(request)
+        try:
+            job = server.vault.training_service.train_longer(
+                job_id, from_step=payload.from_step, more_steps=payload.more_steps
+            )
+        except LookupError as exc:
+            raise HTTPException(
+                status_code=404, detail="Training job not found"
+            ) from exc
+        except (ValueError, OSError) as exc:
+            logger.warning(
+                "Training job id=%s cannot be trained longer: %s", job_id, exc
+            )
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            "job_id": job_id,
+            "status": job["status"],
+            "total_steps": job["total_steps"],
+        }
 
     def _snapshot_of(job_id: int) -> tuple[dict, dict]:
         """One run of the open library and its dataset snapshot, or a 404."""

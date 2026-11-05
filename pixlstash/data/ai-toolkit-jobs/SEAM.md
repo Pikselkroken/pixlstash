@@ -75,6 +75,34 @@ the config: a bad config fails the run, so the adapter does not re-validate the 
 - **Samples:** `<save_root>/samples/[time]__<step:09d>_<n>.<ext>`.
 - **Loss DB:** `<save_root>/loss_log.db` (always written when `use_ui_logger=true`).
 
+## Training on (Train longer)
+
+Verified against the local clone at v0.13.32 (`jobs/process/BaseSDTrainProcess.py`,
+`toolkit/scheduler.py`); re-verify on every bump.
+
+- **Resume is automatic.** At start the trainer globs `save_root` for `<name>*.safetensors`,
+  `<name>*.pt` and `<name>*`, takes the newest by **ctime**, loads its weights and reads its step
+  from the `training_info` metadata (`{"step", "epoch"}`) every save writes, **the final included**.
+  It then trains from that step to `train.steps`. Steps run `start .. steps-1`, a stamped save is
+  never written at the start step or the last one, and the final is that last step.
+- **The optimizer** is `<save_root>/optimizer.pt`, overwritten beside every save, so it belongs to the
+  newest checkpoint. Absent, the optimizer starts fresh. Its LR groups are reset to the configured
+  LR after loading.
+- **The LR schedule is not resumed.** It is built afresh over the new `train.steps` and stepped to the
+  resumed step. `constant` (the default; no recipe sets one) and `constant_with_warmup` past its
+  warmup are the same either side of a restart. Every other schedule (cosine, linear, step, the
+  diffusers ones) depends on the total, so a longer run stretches it and the rate jumps where
+  training restarts: PixlStash refuses to train those on (`LocalAiToolkit.resume_refusal`).
+- **`loss_log.db`** drops rows past the resumed step by itself.
+- **From the final:** PixlStash renames `<name>.safetensors` to `<name>_<step:09d>.safetensors` (the
+  rename makes it the newest ctime), raises `train.steps`, sets `train.skip_first_sample`, and
+  relaunches in the same `save_root`: weights, step and optimizer carry on.
+- **From an earlier step:** the later checkpoints, the final, `optimizer.pt` and the later previews
+  move into `<save_root>/take-<n>/` (no `<name>*` match, so the trainer never sees them); the chosen
+  file is then the newest, with a fresh optimizer.
+- `network.pretrained_lora_path` is only read when `save_root` holds no checkpoint, so it plays no
+  part here.
+
 ## Progress / status: TWO independent sqlite files
 
 ### 1. `loss_log.db` (`<save_root>/loss_log.db`): step + loss. WAL mode; read WAL-aware.

@@ -17,7 +17,11 @@ This reproduces, in miniature, exactly the on-disk side effects PixlStash's
   ``steps`` / ``metric_keys`` / ``metrics`` schema, one row per step, plus a
   decaying ``loss/loss`` metric.
 - Writes a ``<name>_<step:09d>.safetensors`` checkpoint every ``save.save_every``
-  steps, a final ``<name>.safetensors`` at the end, and one ``samples/`` file.
+  steps, a final ``<name>.safetensors`` at the end, and one ``samples/`` file;
+  each checkpoint records its step in ``training_info``, with ``optimizer.pt``
+  beside it.
+- Resumes as ai-toolkit does: from the newest ``<name>*`` checkpoint in
+  ``save_root`` by ctime, at the step it records.
 
 It runs entirely on CPU and in well under a second: the per-step delay defaults
 to ~1ms and is overridable via ``FAKE_RUN_STEP_DELAY`` (seconds).
@@ -41,10 +45,12 @@ as small placeholder byte blobs.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import math
 import os
 import sqlite3
+import struct
 import sys
 import time
 
@@ -187,19 +193,52 @@ def _stop_requested(job_db_path: str, job_id: str) -> bool:
         con.close()
 
 
-def _write_safetensors(path: str) -> None:
-    """Write a tiny placeholder ``.safetensors`` file (no torch needed).
+def _write_safetensors(path: str, step: int) -> None:
+    """Write a tiny tensorless ``.safetensors`` file (no torch needed).
+
+    Its header records ``training_info`` with *step*, as every ai-toolkit save
+    does, and the file name and launch time, which make each one unique, as
+    real checkpoints are: the shelf keys models by hash, so identical bytes
+    would make a second run's LoRA a copy of the first's.
 
     Args:
         path: Destination path.
+        step: The step it was saved at.
     """
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    header = json.dumps(
+        {
+            "__metadata__": {
+                "training_info": json.dumps({"step": step, "epoch": 0}),
+                "fake_name": f"{os.path.basename(path)}@{time.time_ns()}",
+            }
+        }
+    ).encode()
     with open(path, "wb") as handle:
-        # A minimal, recognisable placeholder; the adapter only globs by name.
-        # The file name makes each one unique, as real checkpoints are: the
-        # shelf keys models by hash, so identical bytes would make a second
-        # run's LoRA a copy of the first's.
-        handle.write(b"FAKE_SAFETENSORS\x00" + os.path.basename(path).encode())
+        handle.write(struct.pack("<Q", len(header)) + header)
+    # ai-toolkit writes the optimizer beside every save.
+    with open(os.path.join(os.path.dirname(path), "optimizer.pt"), "w") as handle:
+        handle.write(f"optimizer at {step}")
+
+
+def _resume_point(save_root: str, name: str) -> tuple[int, str | None]:
+    """Where ai-toolkit resumes: the newest ``<name>*`` by ctime, its step.
+
+    Returns:
+        ``(step, optimizer state)``: 0 and None for a fresh run.
+    """
+    paths = glob.glob(os.path.join(save_root, f"{name}*.safetensors"))
+    if not paths:
+        return 0, None
+    with open(max(paths, key=os.path.getctime), "rb") as handle:
+        (length,) = struct.unpack("<Q", handle.read(8))
+        meta = json.loads(handle.read(length))["__metadata__"]
+    optimizer = os.path.join(save_root, "optimizer.pt")
+    state = None
+    if os.path.isfile(optimizer):
+        with open(optimizer, encoding="utf-8") as handle:
+            state = handle.read()
+    return int(json.loads(meta["training_info"])["step"]), state
 
 
 def main(argv: list[str]) -> int:
@@ -245,10 +284,14 @@ def main(argv: list[str]) -> int:
             )
             log_handle.write(f"fake_run start name={name} env_keys={present_keys}\n")
 
+    start, optimizer = _resume_point(save_root, name)
     launches = os.environ.get("FAKE_RUN_LAUNCHES")
     if launches:
         with open(launches, "a", encoding="utf-8") as launch_handle:
-            launch_handle.write(f"steps={total_steps}\n")
+            line = f"steps={total_steps}"
+            if start:
+                line += f" from={start} optimizer={optimizer}"
+            launch_handle.write(line + "\n")
 
     oom = os.environ.get("FAKE_RUN_OOM_UNLESS_OFFLOAD") and not (
         process.get("model") or {}
@@ -276,7 +319,7 @@ def main(argv: list[str]) -> int:
                 _set_job_status(job_db_path, job_id, "running", "Loading model")
             time.sleep(load_seconds)
 
-        for step in range(1, total_steps + 1):
+        for step in range(start + 1, total_steps + 1):
             if job_id and _stop_requested(job_db_path, job_id):
                 _set_job_status(job_db_path, job_id, "stopped", "Job stopped")
                 if args.log:
@@ -301,15 +344,17 @@ def main(argv: list[str]) -> int:
                     speed="2.31 iter/sec",
                 )
 
-            if save_every > 0 and step % save_every == 0:
+            # Never at the last step: ai-toolkit's loop ends before it, and
+            # the final file is that step.
+            if save_every > 0 and step % save_every == 0 and step < total_steps:
                 ckpt = os.path.join(save_root, f"{name}_{step:09d}.safetensors")
-                _write_safetensors(ckpt)
+                _write_safetensors(ckpt, step)
 
             if step_delay > 0:
                 time.sleep(step_delay)
 
         # Final checkpoint + one sample, then mark completed.
-        _write_safetensors(os.path.join(save_root, f"{name}.safetensors"))
+        _write_safetensors(os.path.join(save_root, f"{name}.safetensors"), total_steps)
         if not (process.get("train") or {}).get("disable_sampling"):
             samples_dir = os.path.join(save_root, "samples")
             os.makedirs(samples_dir, exist_ok=True)

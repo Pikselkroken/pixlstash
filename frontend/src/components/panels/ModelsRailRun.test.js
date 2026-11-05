@@ -181,7 +181,7 @@ describe("the rail's training card", () => {
     await wrapper.find('[data-testid="mrr-stop"]').trigger("click");
     await flushPromises();
     expect(confirm).toHaveBeenCalledWith(
-      'Stop training "ohwx-portrait-v2"? The run will stop and cannot be resumed.',
+      'Stop training "ohwx-portrait-v2"? It can be trained longer later, from the last step it saved.',
     );
     expect(cancelTrainingJob).not.toHaveBeenCalled();
 

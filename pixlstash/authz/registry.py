@@ -2370,6 +2370,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Chooses which checkpoint covers one of the owner's own trained runs; renumbers stack_position in the hub and moves the set's or character's LoRA attachment in the vault, touching no file on disk; PUT blocked for READ tokens; owner only",
     ),
+    ("GET", "/api/v1/training/jobs/{job_id}/train-longer"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/training/jobs/{job_id}/train-longer"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 renames and moves checkpoints in the run's host folder and queues the ai-toolkit trainer process to run again on the host; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("GET", "/api/v1/training/presets"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/training/presets/check"): RoutePolicy(
         _OWNER,

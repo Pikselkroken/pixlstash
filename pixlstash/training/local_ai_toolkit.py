@@ -35,6 +35,7 @@ from pixlstash.training.backend import (
     TrainingSpec,
 )
 from pixlstash.training.config_render import render_job_config
+from pixlstash.utils.adapter_header import read_safetensors_header
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.sqlite_uri import sqlite_file_uri
 
@@ -115,6 +116,8 @@ _JOB_STEM_SEP_RUN = re.compile(r"[._-]{2,}")
 # Leading/trailing separators to strip so the stem is never "..", a hidden file,
 # or a name that argv-parses as a flag ("-rf").
 _JOB_STEM_STRIP = "._-"
+# A preview's step: ``<time>__<step:09d>_<n>.<ext>`` (SEAM.md, "Outputs").
+_SAMPLE_STEP_RE = re.compile(r"^\d+__(\d+)_\d+\.")
 
 
 def safe_job_stem(name: str, job_id: str) -> str:
@@ -273,6 +276,188 @@ class LocalAiToolkit(TrainerBackend):
         :func:`pixlstash.training.measurements.allocator_overshoot_mb`.
         """
         return os.path.join(os.path.abspath(work_dir), "allocator_peaks")
+
+    # ------------------------------------------------------------------
+    # Training a run on from a kept checkpoint
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def kept_checkpoints(
+        handle: TrainingHandle, final_step: int | None = None
+    ) -> dict[int, str]:
+        """The checkpoints a run can be trained on from, by step.
+
+        The stamped ``<stem>_<step:09d>.safetensors`` files and the bare final,
+        at the step its ``training_info`` metadata records (every save writes
+        it, and it is what the trainer resumes at), else *final_step*. Paths
+        only; whether a file reads whole is the caller's check.
+
+        Args:
+            handle: The run's handle.
+            final_step: The final's step when its metadata does not say.
+
+        Returns:
+            ``{step: path}``.
+        """
+        if not os.path.isdir(handle.save_root):
+            return {}
+        stem = os.path.basename(handle.save_root)
+        stamped = re.compile(rf"^{re.escape(stem)}_(\d{{4,}})\.safetensors$")
+        kept: dict[int, str] = {}
+        for name in os.listdir(handle.save_root):
+            match = stamped.match(name)
+            if match:
+                kept[int(match.group(1))] = os.path.join(handle.save_root, name)
+        final = os.path.join(handle.save_root, f"{stem}.safetensors")
+        if os.path.isfile(final):
+            step = LocalAiToolkit._recorded_step(final) or final_step
+            if step:
+                kept[step] = final
+        return kept
+
+    @staticmethod
+    def _recorded_step(path: str) -> int | None:
+        """The step a checkpoint's ``training_info`` metadata records, or None."""
+        header = read_safetensors_header(path) or {}
+        raw = (header.get("__metadata__") or {}).get("training_info")
+        try:
+            step = int(json.loads(raw)["step"]) if raw else None
+        except (ValueError, KeyError, TypeError) as exc:
+            logger.warning("%s has unreadable training_info %r: %s", path, raw, exc)
+            return None
+        return step if step and step > 0 else None
+
+    @staticmethod
+    def carry_on_from(
+        handle: TrainingHandle, step: int, final_step: int | None = None
+    ) -> str | None:
+        """Leave *step* as the checkpoint the trainer resumes from.
+
+        ai-toolkit resumes from the newest ``<stem>*`` file in ``save_root`` by
+        ctime, reads its step from the file's metadata, and reloads
+        ``optimizer.pt`` from beside it (SEAM.md, "Training on"). So:
+
+        - From the bare final, it is renamed to its stamped name, keeping the
+          optimizer: the run carries on exactly. A rename is the newest ctime.
+        - From an earlier step, every later checkpoint, the final, the
+          optimizer and the later previews move into ``take-<n>/`` (never
+          deleted); the chosen file is then the newest left, and the trainer
+          starts a fresh optimizer from it.
+
+        Args:
+            handle: The run's handle.
+            step: A step from :meth:`kept_checkpoints`.
+            final_step: As for :meth:`kept_checkpoints`.
+
+        Returns:
+            The take folder's name when later files were set aside, else None.
+
+        Raises:
+            FileNotFoundError: The run kept no checkpoint at *step*.
+            FileExistsError: The stamped name for the final is taken.
+        """
+        kept = LocalAiToolkit.kept_checkpoints(handle, final_step)
+        if step not in kept:
+            raise FileNotFoundError(f"The run kept no checkpoint at step {step}.")
+        root = handle.save_root
+        stem = os.path.basename(root)
+        final = os.path.join(root, f"{stem}.safetensors")
+        later = [path for s, path in sorted(kept.items()) if s > step]
+        take_name = None
+        if later:
+            take = 1
+            while os.path.exists(os.path.join(root, f"take-{take}")):
+                take += 1
+            take_name = f"take-{take}"
+            folder = os.path.join(root, take_name)
+            os.makedirs(folder)
+            set_aside = list(later)
+            if os.path.isfile(final) and kept[step] != final and final not in later:
+                set_aside.append(final)
+            optimizer = os.path.join(root, "optimizer.pt")
+            if os.path.isfile(optimizer):
+                set_aside.append(optimizer)
+            for path in set_aside:
+                os.rename(path, os.path.join(folder, os.path.basename(path)))
+            samples = os.path.join(root, "samples")
+            if os.path.isdir(samples):
+                for name in os.listdir(samples):
+                    match = _SAMPLE_STEP_RE.match(name)
+                    if match and int(match.group(1)) > step:
+                        os.makedirs(os.path.join(folder, "samples"), exist_ok=True)
+                        os.rename(
+                            os.path.join(samples, name),
+                            os.path.join(folder, "samples", name),
+                        )
+        if kept[step] == final:
+            stamped = os.path.join(root, f"{stem}_{step:09d}.safetensors")
+            if os.path.exists(stamped):
+                raise FileExistsError(f"{stamped} already exists.")
+            os.rename(final, stamped)
+        return take_name
+
+    @staticmethod
+    def resume_refusal(config: dict) -> str | None:
+        """Why a run with this rendered config does not train on cleanly, or None.
+
+        On a resume ai-toolkit restores the optimizer but builds its learning
+        rate schedule afresh over the new ``train.steps`` and steps it to the
+        resumed step; the schedule's own state is never saved. A constant
+        rate (its default, which no recipe changes) and a warmup-then-constant
+        one past their warmup are the same either side of the restart. Every
+        other schedule depends on the total, so a longer run would stretch it
+        and the rate would jump where training starts again.
+
+        Args:
+            config: The run's rendered config.
+
+        Returns:
+            A sentence naming the schedule, or None when it resumes cleanly.
+        """
+        try:
+            train = config["config"]["process"][0].get("train") or {}
+        except (KeyError, IndexError, TypeError, AttributeError):
+            return "Its settings could not be read."
+        schedule = train.get("lr_scheduler") or "constant"
+        if schedule in ("constant", "constant_with_warmup"):
+            return None
+        return (
+            f"It trained with a {schedule} learning-rate schedule, which "
+            "ai-toolkit stretches over the new length, so the rate would jump "
+            "where training starts again."
+        )
+
+    @staticmethod
+    def template_from_rendered(config: dict) -> dict:
+        """A run's rendered config, turned back into its template.
+
+        The five PixlStash placeholders are put back where :func:`render_job_config`
+        filled them (SEAM.md, "Config"), so a run trained on renders exactly
+        what it trained with, and its after-training preview passes can still
+        point the same config at their own folders. The trigger word stays as
+        it was rendered: it is the same word.
+
+        Args:
+            config: The run's rendered config.
+
+        Returns:
+            A new dict holding the template.
+        """
+        template = json.loads(json.dumps(config))
+        inner = template.get("config") or {}
+        if "name" in inner:
+            inner["name"] = "{{JOB_NAME}}"
+        if isinstance(template.get("meta"), dict) and "name" in template["meta"]:
+            template["meta"]["name"] = "{{JOB_NAME}}"
+        for process in inner.get("process") or []:
+            if "training_folder" in process:
+                process["training_folder"] = "{{TRAINING_FOLDER}}"
+            if "sqlite_db_path" in process:
+                process["sqlite_db_path"] = "{{SQLITE_DB_PATH}}"
+            for dataset in process.get("datasets") or []:
+                if "folder_path" in dataset:
+                    dataset["folder_path"] = "{{DATASET_FOLDER}}"
+        return template
 
     # ------------------------------------------------------------------
     # Public interface

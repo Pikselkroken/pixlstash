@@ -141,6 +141,8 @@ class RunImporter:
         should_cancel: Optional[Callable[[], bool]] = None,
         on_progress: Optional[Callable[[ImportOutcome], None]] = None,
         training_run_id: Optional[int] = None,
+        stack_id: Optional[int] = None,
+        first_position: int = 0,
     ) -> ImportReport:
         """Import the selected checkpoints of one run.
 
@@ -162,6 +164,10 @@ class RunImporter:
                 PixlStash trained it. Written into each new ``model`` row, so a
                 trained model names the run it came from. None for a run
                 trained elsewhere.
+            stack_id: An existing stack to add the checkpoints to (a run
+                trained longer), instead of a new one.
+            first_position: The ``stack_position`` the first file takes;
+                after an existing stack's members, so its cover stays.
 
         Returns:
             An :class:`ImportReport`, with the stack the run landed in.
@@ -192,8 +198,8 @@ class RunImporter:
             os.makedirs(os.path.join(destination, subfolder), exist_ok=True)
 
         report = ImportReport(run_name=run.name)
-        report.stack_id = self._create_stack(run.name)
-        for position, checkpoint in enumerate(_cover_first(wanted)):
+        report.stack_id = stack_id or self._create_stack(run.name)
+        for position, checkpoint in enumerate(_cover_first(wanted), first_position):
             if should_cancel is not None and should_cancel():
                 report.cancelled = True
                 report.outcomes.append(
