@@ -16,8 +16,9 @@ links and install commands pointed at the RC, and writes
 tag it writes a redirect to the stable site and ``{"tag": null}``.
 
 Every deploy replaces the whole Pages site, so both halves are rebuilt each
-run. Raise only on real faults (a rewrite that matched nothing, a missing
-checkout): a failure here stops the stable site deploying too.
+run. ``build`` raises on real faults (a rewrite that matched nothing, a missing
+checkout); ``pages.yml`` then falls back to ``build`` without a tag so the
+stable site still deploys, and fails the run after the deploy.
 
 Versions are parsed with a pattern rather than ``packaging`` so the Pages job,
 which can deploy, installs nothing.
@@ -85,8 +86,6 @@ def _rewrites(tag: str, version: str) -> list[tuple[str, re.Pattern, str]]:
             re.compile(re.escape(f"{REPO_URL}/releases/latest")),
             f"{REPO_URL}/releases/tag/{tag}",
         ),
-        # gpu first, so ":latest" does not turn ":latest-gpu" into ":<v>-gpu"
-        # by accident of order. Same result, but stated rather than implied.
         (
             ":latest-gpu",
             re.compile(re.escape(f"{IMAGE}:latest-gpu")),
@@ -94,6 +93,7 @@ def _rewrites(tag: str, version: str) -> list[tuple[str, re.Pattern, str]]:
         ),
         (
             ":latest",
+            # The lookahead leaves :latest-gpu to the rule above.
             re.compile(re.escape(f"{IMAGE}:latest") + r"(?![\w-])"),
             f"{IMAGE}:{version}",
         ),
@@ -189,13 +189,13 @@ def build(site_dir: Path, rc_website: Path, tag: str) -> None:
         depth = len(page.relative_to(out).parts) - 1
         root = "../" * (depth + 1)
         text = re.sub(
-            r"(<head[^>]*>)",
+            r"(<head(?:\s[^>]*)?>)",
             r'\1\n    <meta name="robots" content="noindex" />',
             text,
             count=1,
         )
         text = re.sub(
-            r"(<body[^>]*>)",
+            r"(<body(?:\s[^>]*)?>)",
             lambda m: m.group(1) + chrome.replace("{root}", root),
             text,
             count=1,

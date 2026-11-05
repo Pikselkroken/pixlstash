@@ -54,8 +54,12 @@ jobs:
           python3 scripts/build_prerelease_site.py select \
             --releases-json "$RUNNER_TEMP/releases.json"
 
+      # A broken RC half must not stop the stable site deploying: on any
+      # failure the mirror falls back to the redirect, and the last step turns
+      # the run red after the deploy.
       - name: Check out release candidate website
         if: steps.select.outputs.tag != ''
+        continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.select.outputs.tag }}
@@ -64,14 +68,18 @@ jobs:
           persist-credentials: false
 
       - name: Assemble site
+        id: assemble
         env:
           RC_TAG: ${{ steps.select.outputs.tag }}
         run: |
           cp -r website _site
-          if [ -n "$RC_TAG" ]; then
-            python3 scripts/build_prerelease_site.py build --site-dir _site \
-              --rc-website rc/website --tag "$RC_TAG"
-          else
+          if [ -n "$RC_TAG" ] && ! python3 scripts/build_prerelease_site.py build \
+              --site-dir _site --rc-website rc/website --tag "$RC_TAG"; then
+            echo "::error::Could not build the $RC_TAG mirror; deploying without it."
+            echo "rc_failed=true" >> "$GITHUB_OUTPUT"
+            RC_TAG=""
+          fi
+          if [ -z "$RC_TAG" ]; then
             python3 scripts/build_prerelease_site.py build --site-dir _site
           fi
 
@@ -83,3 +91,9 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+      - name: Fail if the release-candidate mirror was dropped
+        if: steps.assemble.outputs.rc_failed == 'true'
+        run: |
+          echo "::error::The stable site deployed, but /prerelease/ is a redirect. See Assemble site."
+          exit 1
