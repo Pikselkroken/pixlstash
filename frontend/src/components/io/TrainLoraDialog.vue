@@ -30,7 +30,18 @@
     <!-- The Models workspace's door has no set or person in view, so it asks
          first (#2169): people, then sets, each with its picture count. -->
     <div v-if="store.pickable" class="tld-field" data-testid="tld-train-on">
-      <FieldLabel :id="sourceLabelId">Train on</FieldLabel>
+      <div class="tld-label-row">
+        <FieldLabel :id="sourceLabelId">Train on</FieldLabel>
+        <AppInput
+          v-model="sourceQuery"
+          class="tld-source-find"
+          icon="magnify"
+          placeholder="Find a person or set"
+          aria-label="Find a person or set"
+          data-testid="tld-source-find"
+          @keydown.enter="keepEnterInField"
+        />
+      </div>
       <div
         role="radiogroup"
         class="tld-sources"
@@ -38,7 +49,7 @@
         @keydown="onSourceKey"
       >
         <button
-          v-for="o in sourceOptions"
+          v-for="o in shownSources"
           :key="o.id"
           type="button"
           role="radio"
@@ -75,6 +86,9 @@
         </button>
         <p v-if="!sourceOptions.length" class="tld-hint">
           No people or sets to train on yet.
+        </p>
+        <p v-else-if="!shownSources.length" class="tld-hint">
+          No person or set matches “{{ sourceQuery.trim() }}”.
         </p>
       </div>
     </div>
@@ -943,13 +957,29 @@ const sourceOptions = computed(() => [
     })),
 ]);
 
+/**
+ * The Find field: narrows the tiles by name, case-insensitively. The picked
+ * tile always stays, so the run's subject is never one you cannot see.
+ */
+const sourceQuery = ref("");
+const shownSources = computed(() => {
+  const q = sourceQuery.value.trim().toLowerCase();
+  if (!q) return sourceOptions.value;
+  return sourceOptions.value.filter(
+    (o) => o.id === pickedSource.value || o.name.toLowerCase().includes(q),
+  );
+});
+
 /** Sources whose thumbnail would not load: they keep their tile, with a glyph. */
 const broken = reactive(new Set());
-// The dialog stays mounted between opens: each open retries every thumbnail.
+// The dialog stays mounted between opens: each open retries every thumbnail
+// and starts with the whole list.
 watch(
   () => store.trainDialogOpen,
   (open) => {
-    if (open) broken.clear();
+    if (!open) return;
+    broken.clear();
+    sourceQuery.value = "";
   },
 );
 
@@ -960,7 +990,7 @@ const pickedSource = computed(() =>
 );
 
 const sourceTabStop = computed(() =>
-  tabStopId(sourceOptions.value, pickedSource.value),
+  tabStopId(shownSources.value, pickedSource.value),
 );
 
 function pickSource(option) {
@@ -970,8 +1000,8 @@ function pickSource(option) {
 
 function onSourceKey(event) {
   const group = event.currentTarget;
-  const id = arrowStep(event, sourceOptions.value, pickedSource.value);
-  const option = sourceOptions.value.find((o) => o.id === id);
+  const id = arrowStep(event, shownSources.value, pickedSource.value);
+  const option = shownSources.value.find((o) => o.id === id);
   if (!option) return;
   pickSource(option);
   // The roving stop moves with the choice, and focus with it.
@@ -1676,13 +1706,27 @@ function goToSettings() {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-3);
-  /* Three rows, then it scrolls. */
+  /* Five rows, then it scrolls. */
   max-height: calc(
-    3 * (var(--control-h-bar) + var(--space-4)) + 2 * var(--space-3) +
+    5 * (var(--control-h-bar) + var(--space-4)) + 4 * var(--space-3) +
       2 * var(--space-1)
   );
   overflow-y: auto;
   padding: var(--space-1);
+}
+
+/* The Find field sits over the third column, from its left edge out. */
+.tld-source-find {
+  flex: 0 0
+    calc(
+      (100% - 2 * var(--space-1) - 2 * var(--space-3)) / 3 + var(--space-1)
+    );
+  min-width: 0;
+}
+
+.tld-sources > .tld-hint {
+  grid-column: 1 / -1;
+  margin: 0;
 }
 
 .tld-source {
