@@ -21,9 +21,9 @@
       <header class="app-dialog__header">
         <div class="app-dialog__titlewrap">
           <h2 :id="titleId" class="app-dialog__title">{{ title }}</h2>
-          <span v-if="subtitle" class="app-dialog__subtitle">{{
-            subtitle
-          }}</span>
+          <span v-if="subtitle || $slots.subtitle" class="app-dialog__subtitle"
+            ><slot name="subtitle">{{ subtitle }}</slot></span
+          >
         </div>
         <div class="app-dialog__actions">
           <slot name="header-right" />

@@ -9,6 +9,7 @@ import { setActivePinia, createPinia } from "pinia";
 import { ref } from "vue";
 import { useNoticeStore } from "../../stores/useNoticeStore.js";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore.js";
+import { useWhatsChangedStore } from "../../stores/useWhatsChangedStore";
 import { useSelectionStore } from "../../stores/useSelectionStore.js";
 import { useProjectStore } from "../../stores/useProjectStore.js";
 import { useSortStore } from "../../stores/useSortStore.js";
@@ -160,26 +161,35 @@ describe("grid open gesture", () => {
     expect(wrapper.vm.lightboxOpen).toBe(false);
   });
 
-  it("the first plain click explains the change once, with a Settings action", () => {
+  // The 2.0 What's changed checklist (#2145) replaced the one-time hint: the
+  // grid reports the gesture, the store decides whether a list is up.
+  it("a plain click ticks the checklist's click step, in either mode", () => {
+    const tick = vi.spyOn(useWhatsChangedStore(), "tick");
     const wrapper = mountGrid();
     wrapper.vm.handleThumbnailClick(IMG, 0, click());
-    vi.advanceTimersByTime(600);
-    expect(hints()).toHaveLength(1);
-    hints()[0].action.handler();
-    expect(wrapper.emitted("open-settings")).toEqual([["appearance"]]);
-    // Gone from the stack; it must not come back.
-    useNoticeStore().notices = [];
+    expect(tick).toHaveBeenCalledWith("click");
+    tick.mockClear();
+    useUserPrefsStore().gridOpenGesture = "single";
     wrapper.vm.handleThumbnailClick(IMG, 0, click());
-    vi.advanceTimersByTime(600);
-    expect(hints()).toHaveLength(0);
-    // Remembered across a reload.
-    const again = mountGrid();
-    again.vm.handleThumbnailClick(IMG, 0, click());
-    vi.advanceTimersByTime(600);
+    expect(tick).toHaveBeenCalledWith("click");
     expect(hints()).toHaveLength(0);
   });
 
-  it("a double-click while the lightbox is already up neither reopens it nor hints", () => {
+  it("a modified click is not the gesture and ticks nothing", () => {
+    const tick = vi.spyOn(useWhatsChangedStore(), "tick");
+    const wrapper = mountGrid();
+    wrapper.vm.handleThumbnailClick(IMG, 0, click({ ctrlKey: true }));
+    expect(tick).not.toHaveBeenCalled();
+  });
+
+  it("right-clicking a picture ticks the menu step", () => {
+    const tick = vi.spyOn(useWhatsChangedStore(), "tick");
+    const wrapper = mountGrid();
+    wrapper.vm.handleImageContextMenu(IMG, { clientX: 5, clientY: 5 });
+    expect(tick).toHaveBeenCalledWith("menu");
+  });
+
+  it("a double-click while the lightbox is already up does not reopen it", () => {
     const wrapper = mountGrid();
     wrapper.vm.handleThumbnailClick(IMG, 0, click());
     wrapper.vm.openLightbox(IMG);
@@ -188,23 +198,6 @@ describe("grid open gesture", () => {
     vi.advanceTimersByTime(600);
     // openLightbox re-captures this; untouched means it did not run again.
     expect(wrapper.vm.lightboxInitialExpandedStackIds).toEqual(["sentinel"]);
-    expect(hints()).toHaveLength(0);
-  });
-
-  it("a modified double-click still cancels the pending hint", () => {
-    const wrapper = mountGrid();
-    wrapper.vm.handleThumbnailClick(IMG, 0, click());
-    wrapper.vm.handleThumbnailDblClick(IMG, click({ ctrlKey: true }));
-    vi.advanceTimersByTime(600);
-    expect(hints()).toHaveLength(0);
-  });
-
-  it("a double-click never raises the hint", () => {
-    const wrapper = mountGrid();
-    wrapper.vm.handleThumbnailClick(IMG, 0, click());
-    wrapper.vm.handleThumbnailDblClick(IMG, click());
-    vi.advanceTimersByTime(600);
-    expect(hints()).toHaveLength(0);
   });
 });
 

@@ -96,6 +96,12 @@ class User(SQLModel, table=True):
     # workflow, prompt and A1111 parameters. Off (strip) by default (#2417);
     # NULL reads as off. Copy and drag-out always keep them.
     keep_workflow_on_export: bool = Field(default=False)
+    # "What's changed" panel (#2145). last_seen_version is the app version whose
+    # panel the owner has already been shown; NULL means never. whats_changed is
+    # JSON: {"done": [step ids], "checklist": bool, "card": bool}; NULL reads as
+    # nothing done, checklist and card shown.
+    last_seen_version: Optional[str] = Field(default=None)
+    whats_changed: Optional[str] = Field(default=None)
     watermark_image: Optional[bytes] = Field(
         default=None,
         sa_column=Column(LargeBinary, nullable=True),

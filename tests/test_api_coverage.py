@@ -145,6 +145,46 @@ def test_patch_user_config():
         cfg = client.get("/users/me/config").json()
         assert cfg["grid_open_gesture"] == "double"
         assert cfg["viewer_wheel_action"] == "zoom"
+
+        # What's changed (#2145): defaults, a round trip, refusals, and a reset.
+        cfg = client.get("/users/me/config").json()
+        assert cfg["last_seen_version"] is None
+        assert cfg["whats_changed"] is None
+        resp = client.patch(
+            "/users/me/config",
+            json={
+                "last_seen_version": " 2.0.0 ",
+                "whats_changed": {
+                    "done": ["click", "close", "click"],
+                    "checklist": False,
+                    "card": True,
+                },
+            },
+        )
+        assert resp.status_code == 200
+        cfg = client.get("/users/me/config").json()
+        assert cfg["last_seen_version"] == "2.0.0"
+        assert cfg["whats_changed"] == {
+            "done": ["click", "close"],
+            "checklist": False,
+            "card": True,
+        }
+        for bad in (
+            {"last_seen_version": "v" * 65},
+            {"whats_changed": {"done": ["click"], "mystery": True}},
+            {"whats_changed": {"checklist": "yes"}},
+            {"whats_changed": {"card": 1}},
+            {"whats_changed": {"done": [3]}},
+        ):
+            assert client.patch("/users/me/config", json=bad).status_code == 400, bad
+        resp = client.patch(
+            "/users/me/config",
+            json={"last_seen_version": "", "whats_changed": None},
+        )
+        assert resp.status_code == 200
+        cfg = client.get("/users/me/config").json()
+        assert cfg["last_seen_version"] is None
+        assert cfg["whats_changed"] is None
     finally:
         server.close()
         temp_dir.cleanup()

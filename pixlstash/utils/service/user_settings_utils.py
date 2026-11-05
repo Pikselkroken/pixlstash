@@ -2,7 +2,9 @@
 
 import json
 import os
+import re
 
+from pixlstash.pixl_logging import get_logger
 from pixlstash.services import comfyui_connections
 from pixlstash.training import ai_toolkit_install
 
@@ -11,6 +13,13 @@ from pixlstash.utils.system_utils import (  # noqa: F401
     default_max_vram_gb,
     max_vram_budget_gb,
 )
+
+logger = get_logger(__name__)
+
+LAST_SEEN_VERSION_MAX_LENGTH = 64
+WHATS_CHANGED_KEYS = frozenset({"done", "checklist", "card"})
+WHATS_CHANGED_MAX_DONE = 16
+WHATS_CHANGED_STEP_RE = re.compile(r"[a-z0-9_-]{1,32}")
 
 
 def validate_ai_toolkit_settings(repo_path: str | None, python: str | None) -> None:
@@ -154,6 +163,7 @@ def serialize_user_config(user) -> dict:
         "viewer_wheel_action",
         "embed_watermark",
         "keep_workflow_on_export",
+        "last_seen_version",
     }
 
     # ``getattr(..., None)`` (not bare ``getattr``) so a source object that
@@ -206,6 +216,7 @@ def serialize_user_config(user) -> dict:
 
     # Include tagger_settings, filling in defaults for any missing entries.
     config["tagger_settings"] = _load_tagger_settings(source)
+    config["whats_changed"] = _load_whats_changed(source)
 
     return config
 
@@ -224,6 +235,76 @@ def _load_tagger_settings(user) -> dict:
     else:
         parsed = {}
     return manager.fill_defaults(parsed)
+
+
+def _load_whats_changed(user) -> dict | None:
+    """Return the stored What's changed progress as a dict, or None when unset."""
+    raw = getattr(user, "whats_changed", None)
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        logger.warning(
+            "Stored whats_changed is not JSON (%s); reading it as unset. value=%r",
+            exc,
+            raw,
+        )
+        return None
+    if not isinstance(parsed, dict):
+        logger.warning(
+            "Stored whats_changed is not a JSON object; reading it as unset. value=%r",
+            raw,
+        )
+        return None
+    return parsed
+
+
+def _normalize_last_seen_version(value) -> str | None:
+    """Validate a last_seen_version patch; blank, null or whitespace clears it."""
+    if value in ("", None, "null"):
+        return None
+    if not isinstance(value, str):
+        raise ValueError("last_seen_version must be a string")
+    text = value.strip()
+    if len(text) > LAST_SEEN_VERSION_MAX_LENGTH:
+        raise ValueError(
+            f"last_seen_version must be at most {LAST_SEEN_VERSION_MAX_LENGTH} characters"
+        )
+    return text or None
+
+
+def _normalize_whats_changed(value) -> str | None:
+    """Validate a whats_changed patch and return the JSON to store, or None to clear."""
+    if value in (None, "null"):
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("whats_changed must be a JSON object")
+    unknown = set(value) - WHATS_CHANGED_KEYS
+    if unknown:
+        raise ValueError(f"whats_changed has unknown keys: {sorted(unknown)}")
+    normalized = {}
+    if "done" in value:
+        done = value["done"]
+        if not isinstance(done, list) or len(done) > WHATS_CHANGED_MAX_DONE:
+            raise ValueError(
+                f"whats_changed.done must be a list of at most {WHATS_CHANGED_MAX_DONE} step ids"
+            )
+        steps = []
+        for step in done:
+            if not isinstance(step, str) or not WHATS_CHANGED_STEP_RE.fullmatch(step):
+                raise ValueError(
+                    "whats_changed.done entries must be 1-32 characters of a-z, 0-9, _ or -"
+                )
+            if step not in steps:
+                steps.append(step)
+        normalized["done"] = steps
+    for flag in ("checklist", "card"):
+        if flag in value:
+            if not isinstance(value[flag], bool):
+                raise ValueError(f"whats_changed.{flag} must be true or false")
+            normalized[flag] = value[flag]
+    return json.dumps(normalized)
 
 
 def apply_user_config_patch(user, patch_data) -> bool:
@@ -286,6 +367,8 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "viewer_wheel_action",
         "embed_watermark",
         "keep_workflow_on_export",
+        "last_seen_version",
+        "whats_changed",
         "tagger_settings",
     }
 
@@ -585,6 +668,18 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = bool(value)
             if user.hide_purge_snapshot_warning != new_value:
                 user.hide_purge_snapshot_warning = new_value
+                updated = True
+            continue
+        if key == "last_seen_version":
+            new_value = _normalize_last_seen_version(value)
+            if user.last_seen_version != new_value:
+                user.last_seen_version = new_value
+                updated = True
+            continue
+        if key == "whats_changed":
+            new_value = _normalize_whats_changed(value)
+            if user.whats_changed != new_value:
+                user.whats_changed = new_value
                 updated = True
             continue
         if key == "tagger_settings":

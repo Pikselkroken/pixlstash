@@ -7,6 +7,7 @@ import {
 } from "../utils/thumbnailSizes";
 import { useUserPrefsStore } from "../stores/useUserPrefsStore";
 import { useTagClipboardStore } from "../stores/useTagClipboardStore";
+import { useWhatsChangedStore } from "../stores/useWhatsChangedStore";
 import { useGridStore } from "../stores/useGridStore";
 import { useSortStore } from "../stores/useSortStore";
 import { useFilterStore } from "../stores/useFilterStore";
@@ -74,6 +75,7 @@ export function useAppConfig({
 } = {}) {
   const userPrefsStore = useUserPrefsStore();
   const tagClipboardStore = useTagClipboardStore();
+  const whatsChangedStore = useWhatsChangedStore();
   const gridStore = useGridStore();
   const sortStore = useSortStore();
   const filterStore = useFilterStore();
@@ -232,6 +234,7 @@ export function useAppConfig({
       }
       userPrefsStore.applyTagFilter = Boolean(cfg.apply_tag_filter);
       tagClipboardStore.hydrate(cfg);
+      whatsChangedStore.hydrate(cfg);
       const rawPt = cfg.smart_score_penalised_tags;
       if (rawPt && typeof rawPt === "object" && !Array.isArray(rawPt)) {
         userPrefsStore.penalisedTagWeights = Object.fromEntries(

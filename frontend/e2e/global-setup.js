@@ -63,9 +63,13 @@ export default async function globalSetup(config) {
 
   // Decide first-run prompts up front so their modal scrims never block test
   // interactions. Telemetry remains explicitly opted out; its prompted flag
-  // only records that this throwaway e2e user has already answered.
+  // only records that this throwaway e2e user has already answered. The
+  // running version counts as seen, or the fixture library (pictures, no
+  // stored version) reads as an upgrade and opens What's changed (#2145).
+  const { version } = await (await ctx.get('/version')).json()
   const cfg = await ctx.patch('/api/v1/users/me/config', {
     data: {
+      last_seen_version: version,
       check_for_updates: false,
       telemetry_send_install_id: false,
       telemetry_send_feature_usage: false,

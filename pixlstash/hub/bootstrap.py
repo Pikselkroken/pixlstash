@@ -248,6 +248,8 @@ _USER_COLUMNS_TO_COPY = (
     "embed_watermark",
     "watermark_image",
     "keep_workflow_on_export",
+    "last_seen_version",
+    "whats_changed",
 )
 
 _TOKEN_COLUMNS_TO_COPY = (

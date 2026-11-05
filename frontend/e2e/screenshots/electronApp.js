@@ -104,7 +104,7 @@ function resolveRelativeGoto(page, base) {
 // starts from cleared storage, which reads as a first sight. Set by an init
 // script, before the app reads them on each load: written from a test just
 // before a navigation, they did not survive it.
-const ONE_TIME_NOTICES = ['dedup-migration', 'dedup-sort-migration', 'grid-double-click-to-open']
+const ONE_TIME_NOTICES = ['dedup-migration', 'dedup-sort-migration']
 
 function markNoticesSeen(notices) {
   for (const name of notices) localStorage.setItem(`pixlstash:seen:${name}`, '1')
@@ -233,8 +233,12 @@ export const test = base.extend({
       // collapsed rail shows only icons). The first-run prompts are answered
       // so no consent scrim lands in a shot, and the update check and
       // telemetry stay off a throwaway install.
+      // The running version counts as seen, so no shot carries the 2.0
+      // What's changed checklist (#2145).
+      const { version } = await (await ctx.get('/version')).json()
       const config = await ctx.patch('/api/v1/users/me/config', {
         data: {
+          last_seen_version: version,
           check_for_updates: false,
           telemetry_send_install_id: false,
           telemetry_send_feature_usage: false,
