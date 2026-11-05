@@ -1,8 +1,8 @@
 """Add the What's changed columns ``last_seen_version`` and ``whats_changed``.
 
 Both nullable TEXT. NULL reads as never seen (``last_seen_version``) and as
-nothing done with the checklist and card shown (``whats_changed``), so an
-existing user needs no data step.
+nothing to show (``whats_changed``); the frontend fills both the first time
+it runs 2.0, so an existing user needs no data step.
 
 Schema-only and additive.
 

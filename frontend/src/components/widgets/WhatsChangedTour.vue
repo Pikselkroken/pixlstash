@@ -166,8 +166,13 @@ function previous() {
   return go(3, () => a.openTrain(s));
 }
 
-/** End tour, Esc: stop where you are. The card stays, to start again. */
+/**
+ * End tour, Esc: stop where you are, and the card stays to start again. The
+ * one exception is the Train dialog the tour opened: it goes too, since the
+ * Enter guard goes with the tour and Enter there would start a run.
+ */
 function end() {
+  if (step.value === 3 && a.trainOpen()) a.closeTrain();
   whatsChanged.tourStep = 0;
 }
 

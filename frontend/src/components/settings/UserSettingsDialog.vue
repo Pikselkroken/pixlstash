@@ -494,7 +494,7 @@ watch(
   font-family: var(--font-ui);
   font-size: var(--text-2xs);
   font-weight: var(--weight-medium);
-  line-height: 1.6;
+  line-height: var(--leading-body);
   color: rgb(var(--v-theme-on-surface));
   cursor: pointer;
 }

@@ -7735,7 +7735,13 @@ watch(showLibraryEmptyState, (shown) => {
 // telemetry question until it knows, so a fresh install meets the library
 // before it meets the privacy dialog.
 watch(totalAllPicturesCountLoaded, (loaded) => {
-  if (loaded) emit("library-loaded", { empty: showLibraryEmptyState.value });
+  // `pictures` is the count itself: `empty` waits on the empty state's
+  // appearance delay, so it can still read false for an empty library here.
+  if (loaded)
+    emit("library-loaded", {
+      empty: showLibraryEmptyState.value,
+      pictures: totalAllPicturesCount.value,
+    });
 });
 
 /**

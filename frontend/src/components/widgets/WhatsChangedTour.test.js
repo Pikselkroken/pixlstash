@@ -144,6 +144,26 @@ describe("the training tour", () => {
     expect(app.state.value.menu).toBe(true);
   });
 
+  it("ending on the Train dialog step closes the dialog it opened", async () => {
+    for (const how of ["esc", "button"]) {
+      const { app, store } = await start(3);
+      app.state.value.train = true;
+      await nextTick();
+      if (how === "esc")
+        dialog.querySelector(".field").dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+        );
+      else
+        await wrapper.findAll("button").find((b) => b.text().includes("End tour")).trigger("click");
+      await flushPromises();
+      expect(store.tourStep).toBe(0);
+      expect(app.state.value.train).toBe(false);
+      expect(store.card).toBe(true);
+      wrapper.unmount();
+      wrapper = null;
+    }
+  });
+
   it("Esc ends the tour where you are and keeps the card", async () => {
     const { store } = await start(2);
     const inner = vi.fn();

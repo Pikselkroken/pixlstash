@@ -607,11 +607,12 @@ watch(
   },
 );
 
-// Settings' What's new: the checklist lives on the grid's rail.
+// Settings' What's new: the checklist lives on the media rail, which the
+// Workflows and Models workspaces do not have.
 watch(
   () => whatsChanged.reopened,
   () => {
-    if (!isGridView.value) router.push("/");
+    if (isModelsView.value || isWorkflowsView.value) router.push("/");
   },
 );
 
@@ -638,8 +639,8 @@ const tourActions = {
 };
 
 /** The first count is in; an empty library gets its import offer first. */
-async function onLibraryLoaded({ empty }) {
-  libraryEmpty.value = empty;
+async function onLibraryLoaded({ empty, pictures }) {
+  libraryEmpty.value = pictures === 0;
   // The sidebar's pending-mapping auto-open watches the libraries listing, so
   // `mappingStore.wizardOpen` only answers honestly once that listing is in
   // and the watcher it feeds has flushed. Settling before either is what let
@@ -1180,7 +1181,7 @@ defineExpose({
         <ModelsRail v-else-if="isModelsView" />
         <!-- The 2.0 checklist (#2145): a second pane on the grid's rail,
              beside Details in the band both panes draw. -->
-        <WhatsChangedRail v-else-if="whatsChanged.railShown && isGridView" />
+        <WhatsChangedRail v-else-if="whatsChanged.railShown" />
         <StatsSidebar v-else
           ref="statsSidebarRef"
           :view-name="activeCategoryLabel"

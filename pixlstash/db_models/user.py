@@ -98,8 +98,8 @@ class User(SQLModel, table=True):
     keep_workflow_on_export: bool = Field(default=False)
     # "What's changed" panel (#2145). last_seen_version is the app version whose
     # panel the owner has already been shown; NULL means never. whats_changed is
-    # JSON: {"done": [step ids], "checklist": bool, "card": bool}; NULL reads as
-    # nothing done, checklist and card shown.
+    # JSON: {"done": [step ids], "checklist": bool, "card": bool}; NULL means
+    # nothing to show. The frontend writes it when it finds the upgrade.
     last_seen_version: Optional[str] = Field(default=None)
     whats_changed: Optional[str] = Field(default=None)
     watermark_image: Optional[bytes] = Field(

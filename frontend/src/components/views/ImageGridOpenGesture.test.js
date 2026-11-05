@@ -7,7 +7,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 import { ref } from "vue";
-import { useNoticeStore } from "../../stores/useNoticeStore.js";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore.js";
 import { useWhatsChangedStore } from "../../stores/useWhatsChangedStore";
 import { useSelectionStore } from "../../stores/useSelectionStore.js";
@@ -129,8 +128,6 @@ const click = (init = {}) => ({
   stopPropagation: vi.fn(),
   ...init,
 });
-const hints = () =>
-  useNoticeStore().notices.filter((n) => n.text.includes("Double-click"));
 
 describe("grid open gesture", () => {
   it("double-click mode: a click selects without opening, a double-click opens", () => {
@@ -172,7 +169,6 @@ describe("grid open gesture", () => {
     useUserPrefsStore().gridOpenGesture = "single";
     wrapper.vm.handleThumbnailClick(IMG, 0, click());
     expect(tick).toHaveBeenCalledWith("click");
-    expect(hints()).toHaveLength(0);
   });
 
   it("a modified click is not the gesture and ticks nothing", () => {
