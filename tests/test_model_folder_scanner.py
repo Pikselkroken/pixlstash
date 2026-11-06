@@ -1791,3 +1791,32 @@ class TestModelFolderScanFinder:
             )
         finder.find_task()
         assert watcher.watched == {own: str(renamed)}
+
+    def test_the_managed_store_is_walked_not_redeclared(self, hub, tmp_path):
+        """It shares PixlStash's owner with the declared roots but holds plain
+        files: read as declared, a file deleted from it stayed ``present`` and
+        a PixlStash loader was sent to fetch bytes that were gone."""
+        from pixlstash.services.managed_model_store import ensure_managed_folder
+        from pixlstash.tasks.model_folder_scan_finder import scanned_folders
+
+        store = ensure_managed_folder(hub, str(tmp_path))
+        folder = tmp_path / "models"
+        path = folder / "encoder.safetensors"
+        write_adapter(path)
+        _not_empty(folder)
+        watcher = _FakeWatcher()
+        finder = self._finder(hub, watcher)
+
+        task = finder.find_task()
+        assert task.folder_id == store["id"]
+        task._run_task()
+        self._finish(task)
+        assert located(hub)["encoder.safetensors"]["state"] == "present"
+        assert watcher.watched == {store["id"]: str(folder)}
+        assert [row["id"] for row in scanned_folders(hub)] == [store["id"]]
+
+        os.remove(path)
+        finder.mark_due(store["id"])
+        again = finder.find_task()
+        again._run_task()
+        assert located(hub)["encoder.safetensors"]["state"] == STATE_MISSING

@@ -30,7 +30,7 @@ from typing import Any, Callable, Optional
 from pixlstash.event_types import EventType
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.builtin_models import BUILTIN_OWNER
+from pixlstash.services.builtin_models import is_declared_root
 from pixlstash.services.model_folder_scanner import (
     ARRIVING_SETTLE_S,
     TAKEN_FROM_KINDS,
@@ -69,7 +69,7 @@ def scanned_folders(hub: HubDatabase, include_declared: bool = False) -> list[di
             "SELECT id, path, kind, owner, last_checked FROM model_folder ORDER BY id"
         )
         if row["kind"] not in TAKEN_FROM_KINDS
-        and (include_declared or row["owner"] != BUILTIN_OWNER)
+        and (include_declared or not is_declared_root(row["owner"], row["kind"]))
     ]
 
 
@@ -154,7 +154,7 @@ class ModelFolderScanFinder(BaseTaskFinder):
         # index (the HuggingFace cache's blobs and symlinks), not model files a
         # watch would see arrive.
         self._sync_watches(
-            [row for row in folders if row["owner"] != BUILTIN_OWNER],
+            [row for row in folders if not is_declared_root(row["owner"], row["kind"])],
             ids,
         )
         with self._lock:
