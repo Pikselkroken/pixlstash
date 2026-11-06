@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 import { useGridStore } from "../stores/useGridStore.js";
 import { useSearchStore } from "../stores/useSearchStore.js";
+import { useSidebarStore } from "../stores/useSidebarStore.js";
 import { useTagClipboardStore } from "../stores/useTagClipboardStore.js";
 
 // The composable imports the singleton apiClient for isReadOnly; mock it so no
@@ -39,6 +40,7 @@ function makeNav({
   showSelectionBar = true,
   searchResultsActive = false,
   searchQuery = "",
+  filtersActive = false,
   moveStackMember = undefined,
   getOpenStackPlace = () => ({ position: 1, count: 3 }),
   scrapheap = false,
@@ -58,6 +60,7 @@ function makeNav({
     reviewOverlayOpen: ref(reviewOverlayOpen),
     showSelectionBar: ref(showSelectionBar),
     searchResultsActive: ref(searchResultsActive),
+    filtersActive: ref(filtersActive),
     selectedImageIds,
     lastSelectedImageId,
     cursorIdx: ref(cursorIdx),
@@ -73,11 +76,13 @@ function makeNav({
 
   const openLightbox = vi.fn();
   const clearSearchQuery = vi.fn();
+  const clearFilters = vi.fn();
   const focusCursor = vi.fn();
   const toggleFavourite = vi.fn();
   const callbacks = {
     clearFaceSelection: vi.fn(),
     clearSearchQuery,
+    clearFilters,
     scrollCursorIntoView: vi.fn(),
     focusCursor,
     openLightbox,
@@ -99,15 +104,13 @@ function makeNav({
   useSearchStore().searchQuery = searchQuery;
   const props = {};
   const emit = vi.fn();
-  const { handleKeyDown, onGlobalKeyPress } = useGridKeyboardNav(
-    deps,
-    props,
-    emit,
-    callbacks,
-  );
+  const { handleKeyDown, onGlobalKeyPress, escapeClearsFilters } =
+    useGridKeyboardNav(deps, props, emit, callbacks);
   return {
     handleKeyDown,
     onGlobalKeyPress,
+    escapeClearsFilters,
+    clearFilters,
     deps,
     deleteSelected,
     applyScoresForSelection,
@@ -355,9 +358,9 @@ describe("useGridKeyboardNav - ghosted tiles", () => {
 });
 
 // Esc peels one layer per press: an open menu, then the selection, then the
-// search. The grid action pill puts an Esc keycap on whichever button the key
-// will actually reach, so the ladder has to match what the keycap promises
-// (merged-grid-action-pill.md §6.1).
+// search, then the filters. The grid action pill puts an Esc keycap on
+// whichever button the key will actually reach, so the ladder has to match
+// what the keycap promises (merged-grid-action-pill.md §6.1).
 describe("Escape ladder", () => {
   it("clears the selection first and leaves the search alone", () => {
     const { handleKeyDown, deps, clearSearchQuery } = makeNav({
@@ -400,6 +403,116 @@ describe("Escape ladder", () => {
     });
     handleKeyDown(keyEvent({ key: "Escape" }));
     expect(clearSearchQuery).not.toHaveBeenCalled();
+  });
+
+  it("clears the filters once nothing is selected and no search runs", () => {
+    const {
+      handleKeyDown,
+      clearFilters,
+      clearSearchQuery,
+      escapeClearsFilters,
+    } = makeNav({ showSelectionBar: false, filtersActive: true });
+    expect(escapeClearsFilters.value).toBe(true);
+    handleKeyDown(keyEvent({ key: "Escape" }));
+    expect(clearFilters).toHaveBeenCalledTimes(1);
+    expect(clearSearchQuery).not.toHaveBeenCalled();
+  });
+
+  it("clears the search before the filters", () => {
+    const {
+      handleKeyDown,
+      clearFilters,
+      clearSearchQuery,
+      escapeClearsFilters,
+    } = makeNav({
+      showSelectionBar: false,
+      searchQuery: "sunset",
+      filtersActive: true,
+    });
+    expect(escapeClearsFilters.value).toBe(false);
+    handleKeyDown(keyEvent({ key: "Escape" }));
+    expect(clearSearchQuery).toHaveBeenCalledTimes(1);
+    expect(clearFilters).not.toHaveBeenCalled();
+  });
+
+  it("clears the selection before the filters", () => {
+    const { handleKeyDown, deps, clearFilters, escapeClearsFilters } = makeNav({
+      showSelectionBar: true,
+      filtersActive: true,
+    });
+    expect(escapeClearsFilters.value).toBe(false);
+    handleKeyDown(keyEvent({ key: "Escape" }));
+    expect(deps.selectedImageIds.value).toEqual([]);
+    expect(clearFilters).not.toHaveBeenCalled();
+  });
+
+  it("does not clear filters that are not on", () => {
+    const { handleKeyDown, clearFilters, escapeClearsFilters } = makeNav({
+      showSelectionBar: false,
+      filtersActive: false,
+    });
+    expect(escapeClearsFilters.value).toBe(false);
+    handleKeyDown(keyEvent({ key: "Escape" }));
+    expect(clearFilters).not.toHaveBeenCalled();
+  });
+
+  it("stands aside while a menu is open, so its Esc only closes it", () => {
+    // Vuetify adds a menu's own Esc listener on window when it opens, after
+    // the grid's: the Esc that closes the Filters menu reaches the grid first.
+    const menu = document.createElement("div");
+    menu.className = "v-overlay v-menu v-overlay--active";
+    document.body.appendChild(menu);
+    try {
+      const { handleKeyDown, clearFilters, clearSearchQuery } = makeNav({
+        showSelectionBar: false,
+        filtersActive: true,
+      });
+      handleKeyDown(keyEvent({ key: "Escape" }));
+      expect(clearFilters).not.toHaveBeenCalled();
+      expect(clearSearchQuery).not.toHaveBeenCalled();
+    } finally {
+      menu.remove();
+    }
+  });
+
+  it("stands aside while the auto-hide sidebar floats over the grid", () => {
+    // useGlobalKeydown hides the revealed sidebar on the same Esc, so Clear
+    // all must not advertise it either.
+    const { handleKeyDown, clearFilters, escapeClearsFilters } = makeNav({
+      showSelectionBar: false,
+      filtersActive: true,
+    });
+    const sidebar = useSidebarStore();
+    sidebar.setSidebarPinned(false); // unpinned: revealed, floating
+    try {
+      expect(sidebar.sidebarOverlay && sidebar.sidebarVisible).toBe(true);
+      expect(escapeClearsFilters.value).toBe(false);
+      handleKeyDown(keyEvent({ key: "Escape" }));
+      expect(clearFilters).not.toHaveBeenCalled();
+      sidebar.hideAutoSidebar();
+      expect(escapeClearsFilters.value).toBe(true);
+      handleKeyDown(keyEvent({ key: "Escape" }));
+      expect(clearFilters).toHaveBeenCalledTimes(1);
+    } finally {
+      // The preference is saved to localStorage, which outlives this pinia.
+      sidebar.setSidebarPinned(true);
+    }
+  });
+
+  it("is not held back by a tooltip", () => {
+    const tip = document.createElement("div");
+    tip.className = "v-overlay v-tooltip v-overlay--active";
+    document.body.appendChild(tip);
+    try {
+      const { handleKeyDown, clearFilters } = makeNav({
+        showSelectionBar: false,
+        filtersActive: true,
+      });
+      handleKeyDown(keyEvent({ key: "Escape" }));
+      expect(clearFilters).toHaveBeenCalledTimes(1);
+    } finally {
+      tip.remove();
+    }
   });
 });
 
@@ -455,7 +568,9 @@ describe("useGridKeyboardNav - reordering an open stack", () => {
     const move = vi.fn(() => true);
     const { handleKeyDown } = makeNav({ cursorIdx: 1, moveStackMember: move });
     handleKeyDown(keyEvent({ key: "ArrowRight" }));
-    handleKeyDown(keyEvent({ key: "ArrowRight", ctrlKey: true, shiftKey: true }));
+    handleKeyDown(
+      keyEvent({ key: "ArrowRight", ctrlKey: true, shiftKey: true }),
+    );
     expect(move).not.toHaveBeenCalled();
   });
 
@@ -576,7 +691,9 @@ describe("useGridKeyboardNav - star keys and Ctrl+V (#2139)", () => {
 
   it("Ctrl+Shift+V and Ctrl+V with nothing selected are left to the browser", () => {
     const { handleKeyDown, deps } = makeNav();
-    const paste = vi.spyOn(useTagClipboardStore(), "pasteClipboard").mockResolvedValue(null);
+    const paste = vi
+      .spyOn(useTagClipboardStore(), "pasteClipboard")
+      .mockResolvedValue(null);
 
     handleKeyDown(keyEvent({ key: "V", ctrlKey: true, shiftKey: true }));
     expect(paste).not.toHaveBeenCalled();
@@ -588,8 +705,12 @@ describe("useGridKeyboardNav - star keys and Ctrl+V (#2139)", () => {
 
   it("Ctrl+V does nothing on auto-repeat or behind a modal dialog", () => {
     const { handleKeyDown } = makeNav();
-    const paste = vi.spyOn(useTagClipboardStore(), "pasteClipboard").mockResolvedValue(null);
-    handleKeyDown(keyEvent({ key: "v", code: "KeyV", ctrlKey: true, repeat: true }));
+    const paste = vi
+      .spyOn(useTagClipboardStore(), "pasteClipboard")
+      .mockResolvedValue(null);
+    handleKeyDown(
+      keyEvent({ key: "v", code: "KeyV", ctrlKey: true, repeat: true }),
+    );
     const overlay = document.createElement("div");
     overlay.className = "v-overlay--active";
     overlay.innerHTML = '<div class="v-overlay__scrim"></div>';
@@ -605,7 +726,9 @@ describe("useGridKeyboardNav - star keys and Ctrl+V (#2139)", () => {
 
   it("does not paste on a read-only library", () => {
     const { handleKeyDown } = makeNav();
-    const paste = vi.spyOn(useTagClipboardStore(), "pasteClipboard").mockResolvedValue(null);
+    const paste = vi
+      .spyOn(useTagClipboardStore(), "pasteClipboard")
+      .mockResolvedValue(null);
     isReadOnly.value = true;
     try {
       handleKeyDown(keyEvent({ key: "v", ctrlKey: true }));

@@ -68,6 +68,7 @@
     <FilterStrip
       :count-base-query="filterCountBaseQuery"
       :all-pictures-view="isAllPicturesFilterView"
+      :owns-escape="escapeClearsFilters"
     />
     <!-- ── Visible range pill ── -->
     <transition name="grid-range-fade">
@@ -5506,12 +5507,14 @@ const SCRAPHEAP_BAR_HEIGHT_PX = 30;
 const isAllPicturesFilterView = computed(
   () => String(selectionStore.selectedCharacter) === String(ALL_PICTURES_ID),
 );
-const filterStripVisible = computed(
-  () =>
-    filterChips(filterStore, {
-      allPicturesView: isAllPicturesFilterView.value,
-    }).length > 0,
+const activeFilterChips = computed(() =>
+  filterChips(filterStore, { allPicturesView: isAllPicturesFilterView.value }),
 );
+const filterStripVisible = computed(() => activeFilterChips.value.length > 0);
+// Esc's last rung: what the strip's Clear all does, chip by chip.
+function clearFilters() {
+  for (const chip of activeFilterChips.value) chip.remove();
+}
 const wrapperStyle = computed(() => ({
   position: "relative",
   height: "100%",
@@ -7002,7 +7005,7 @@ async function applyLightboxFavourite(img, on) {
 // KEYBOARD NAVIGATION
 // (moved to useGridKeyboardNav composable)
 // ============================================================
-const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
+const gridKeyboard = useGridKeyboardNav(
   {
     scrollWrapper,
     allGridImages,
@@ -7012,6 +7015,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     reviewOverlayOpen,
     showSelectionBar,
     searchResultsActive,
+    filtersActive: filterStripVisible,
     selectedImageIds,
     lastSelectedImageId,
     cursorIdx,
@@ -7029,6 +7033,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
   {
     clearFaceSelection,
     clearSearchQuery,
+    clearFilters,
     scrollCursorIntoView,
     focusCursor: focusGridCursor,
     openLightbox,
@@ -7042,6 +7047,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     onPasteResult: handlePasteResult,
   },
 );
+const { onGlobalKeyPress, handleKeyDown, escapeClearsFilters } = gridKeyboard;
 
 // ============================================================
 // OVERLAY FUNCTIONS

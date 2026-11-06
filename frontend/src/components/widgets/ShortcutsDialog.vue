@@ -145,7 +145,7 @@ const open = computed(() => props.modelValue);
         </tr>
         <tr>
           <td><kbd>Esc</kbd></td>
-          <td>Clear selection</td>
+          <td>Clear the selection, then the search, then the filters</td>
         </tr>
         <tr :class="{ 'shortcut-disabled': isReadOnly }">
           <td><KeyCap :k="stackModKey" /><kbd>X</kbd></td>
