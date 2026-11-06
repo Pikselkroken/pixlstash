@@ -351,4 +351,64 @@ describe("SearchTokenField", () => {
     );
     expect(description.text()).toBe("rain · lacks umbrella");
   });
+
+  // The amber ×: one click drops the words and every filter, at rest or open.
+  it("offers no clear at rest while nothing narrows the grid", () => {
+    wrapper = mount(SearchTokenField, {
+      global: { stubs: { "v-icon": true, Tooltip: true } },
+    });
+    expect(wrapper.find("button.stf-clear").exists()).toBe(false);
+  });
+
+  it("clears the search and every filter from the resting field", async () => {
+    const filters = useFilterStore();
+    const search = useSearchStore();
+    search.searchQuery = "rain";
+    search.searchInput = "rain";
+    filters.tagFilter = ["umbrella"];
+    filters.mediaTypeFilter = "videos";
+    wrapper = mount(SearchTokenField, {
+      attachTo: document.body,
+      global: { stubs: { "v-icon": true, Tooltip: true } },
+    });
+    // Both filters are on show, so the × clears what the field names.
+    expect(wrapper.find("button.stf-rest").text()).toContain(
+      "rain · video · umbrella",
+    );
+    const clear = wrapper.find("button.stf-clear");
+    expect(clear.attributes("aria-label")).toBe("Clear search and filters");
+    await clear.trigger("click");
+    await flushPromises();
+    expect(search.searchQuery).toBe("");
+    expect(search.searchInput).toBe("");
+    expect(filters.tagFilter).toEqual([]);
+    expect(filters.mediaTypeFilter).toBe("all");
+    expect(wrapper.find("button.stf-clear").exists()).toBe(false);
+    expect(wrapper.find("button.stf-rest").text()).toContain("Search");
+    // The × it was focused on is gone; focus lands on the field, not the body.
+    expect(document.activeElement).toBe(
+      wrapper.find("button.stf-rest").element,
+    );
+  });
+
+  it("clears typed words and tokens while open, and stays open", async () => {
+    useFilterStore().tagFilter = ["rain"];
+    wrapper = mount(SearchTokenField, {
+      attachTo: document.body,
+      global: { stubs: { "v-icon": true, Tooltip: true } },
+    });
+    await wrapper.vm.focus();
+    await flushPromises();
+    await type("look");
+    // As a keyboard press leaves it: focus on the ×, not the input.
+    const clear = wrapper.find("button.stf-clear");
+    clear.element.focus();
+    await clear.trigger("click");
+    await flushPromises();
+    expect(document.activeElement).toBe(input().element);
+    expect(useSearchStore().searchInput).toBe("");
+    expect(useFilterStore().tagFilter).toEqual([]);
+    expect(wrapper.find("input.stf-input").exists()).toBe(true);
+    expect(wrapper.find("button.stf-clear").exists()).toBe(false);
+  });
 });
