@@ -3570,7 +3570,9 @@ and every input that reads them; `places` lists one such splice per copy of
 a model the graph loads several times, and `model` is then null with a
 `reason` telling a node from before `places` to update, since it would place
 the first alone), `null` where the Run popup would show no
-Person field (`people_who_fit` offers nobody and counts nobody), and a
+Person field (`people_who_fit` offers nobody and counts nobody) and for an
+open without `pixlstash_nodes` (*Open original*: the loader is a
+ComfyUI-PixlStash node, and the original holds only its own), and a
 `reason` in the planner's own words where the graph cannot be spliced.
 ComfyUI-PixlStash carries it out on the canvas; PixlStash never stores the
 node or what is picked in it.
@@ -3585,7 +3587,11 @@ that file** (`_imported_layout`), by the same rules (a person's LoRA in the
 graph keeps none) and only over the wiring of the conversion stored beside it,
 until a save from ComfyUI replaces it: without it the first open went through
 `app.loadApiJson`, which flattens every subgraph, and a save from that canvas
-then kept the flattened layout for good.
+then kept the flattened layout for good. A save from PixlStash (Save, the MCP
+server's import) stores the API graph over the file without ending it: the
+file is read from the newest version that holds one with its conversion, back
+to the last save from ComfyUI, so a model changed in the Workflow tab still
+opens with the file's subgraphs.
 
 - **Two checks stand between a layout and a canvas, and the second is the one
   that binds.** `_keep_layout` stores `workflow_run_service.graph_structure`
