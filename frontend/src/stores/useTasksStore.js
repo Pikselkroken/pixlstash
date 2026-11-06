@@ -222,9 +222,21 @@ export const useTasksStore = defineStore("tasks", () => {
           key: `model-download-${download.id}`,
         });
       } else if (download.status === "failed") {
+        // A gated model's page, where its licence is accepted. The action
+        // makes the card sticky, so it waits for the owner to read it.
+        const page = download.page_url;
         notices.error(
           `Could not download ${download.file}: ${download.error || "it failed."}`,
-          { key: `model-download-${download.id}` },
+          {
+            key: `model-download-${download.id}`,
+            action: page
+              ? {
+                  label: "Open page",
+                  handler: () =>
+                    window.open(page, "_blank", "noopener,noreferrer"),
+                }
+              : null,
+          },
         );
       }
     }

@@ -345,6 +345,8 @@ def start_download(
         "received": 0,
         "total": 0,
         "error": None,
+        # The model's page, where a gated one's licence is accepted.
+        "page_url": None,
         "model_id": None,
         "ended_at": None,
         # What a workflow or a set can name it by while it is still on its way:
@@ -532,6 +534,21 @@ def _run(
             )
 
 
+def model_page(url: str) -> Optional[str]:
+    """The Hugging Face page of the repository *url* downloads from, or None.
+
+    ``https://huggingface.co/<org>/<repo>/resolve/...`` gives
+    ``https://huggingface.co/<org>/<repo>``: where a gated model's licence is
+    accepted. Only for that host, so the link handed to the browser is never
+    one a template could point anywhere.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.netloc not in LIVE_HOSTS:
+        return None
+    repo, sep, _rest = parsed.path.partition("/resolve/")
+    return f"https://{parsed.netloc}{repo}" if sep and repo.count("/") >= 2 else None
+
+
 def _left_https(url: str, response) -> bool:
     """Whether an https link was redirected onto plain http at any hop.
 
@@ -591,6 +608,16 @@ def _fetch(
     os.makedirs(os.path.dirname(partial), exist_ok=True)
     sha = hashlib.sha256()
     with _open(url, live) as response:
+        if response.headers.get("X-Error-Code") == "GatedRepo":
+            # No Hugging Face token is sent, so a gated file is never served
+            # here; the owner accepts its licence and downloads it themselves.
+            entry["page_url"] = model_page(url)
+            raise ValueError(
+                "Hugging Face only gives it to someone who has accepted the "
+                "model's licence. Open its page, accept it there and download "
+                f"the file into {entry['folder_path']}: PixlStash picks it up "
+                "from there."
+            )
         response.raise_for_status()
         if _left_https(url, response):
             raise ValueError("The download was redirected away from https.")

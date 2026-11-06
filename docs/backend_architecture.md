@@ -11548,7 +11548,11 @@ an address of its choosing.
   polling client sees how it ended. `POST /model-downloads/{id}/cancel` stops
   one. ponytail: a restart forgets a download in flight and leaves its partial
   file behind (inert: no row names it and the scanner skips the suffix); no
-  Hugging Face or Civitai token is sent, so a gated file fails as a web page;
+  Hugging Face or Civitai token is sent, so a gated file cannot be fetched:
+  Hugging Face answers it `401` with `X-Error-Code: GatedRepo`, and the
+  download fails saying its licence must be accepted, with the entry's
+  `page_url` set to the repository's page (`model_page`, `huggingface.co`
+  links only) for the owner to accept it and download the file by hand;
   relocating the download folder mid-download fails that download.
 
 ### 25.13 Folders scan themselves, and picking up a model before they do (#1985)
