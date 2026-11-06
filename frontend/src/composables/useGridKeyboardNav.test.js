@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 import { useGridStore } from "../stores/useGridStore.js";
 import { useSearchStore } from "../stores/useSearchStore.js";
+import { useSidebarStore } from "../stores/useSidebarStore.js";
 import { useTagClipboardStore } from "../stores/useTagClipboardStore.js";
 
 // The composable imports the singleton apiClient for isReadOnly; mock it so no
@@ -471,6 +472,27 @@ describe("Escape ladder", () => {
       expect(clearSearchQuery).not.toHaveBeenCalled();
     } finally {
       menu.remove();
+    }
+  });
+
+  it("stands aside while the auto-hide sidebar floats over the grid", () => {
+    // useGlobalKeydown hides the revealed sidebar on the same Esc.
+    const { handleKeyDown, clearFilters } = makeNav({
+      showSelectionBar: false,
+      filtersActive: true,
+    });
+    const sidebar = useSidebarStore();
+    sidebar.setSidebarPinned(false); // unpinned: revealed, floating
+    try {
+      expect(sidebar.sidebarOverlay && sidebar.sidebarVisible).toBe(true);
+      handleKeyDown(keyEvent({ key: "Escape" }));
+      expect(clearFilters).not.toHaveBeenCalled();
+      sidebar.hideAutoSidebar();
+      handleKeyDown(keyEvent({ key: "Escape" }));
+      expect(clearFilters).toHaveBeenCalledTimes(1);
+    } finally {
+      // The preference is saved to localStorage, which outlives this pinia.
+      sidebar.setSidebarPinned(true);
     }
   });
 

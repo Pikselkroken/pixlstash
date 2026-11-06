@@ -9,6 +9,7 @@ import {
 } from "./useJustifiedLayout.js";
 import { useGridStore } from "../stores/useGridStore";
 import { useSearchStore } from "../stores/useSearchStore";
+import { useSidebarStore } from "../stores/useSidebarStore";
 import { FAVOURITE_KEY } from "../stores/useFavouritesStore";
 import { useTagClipboardStore } from "../stores/useTagClipboardStore";
 import { bareDigit } from "../utils/shortcutKeys";
@@ -76,6 +77,7 @@ export function useGridKeyboardNav(
   },
 ) {
   const searchStore = useSearchStore();
+  const sidebarStore = useSidebarStore();
   const gridStore = useGridStore();
   const tagClipboard = useTagClipboardStore();
 
@@ -110,11 +112,14 @@ export function useGridKeyboardNav(
   const escapeClearsFilters = computed(() => escapeTarget() === "filters");
 
   /**
-   * A Vuetify menu or dialog is open. Its own Esc listener goes on `window`
-   * when it opens, after the grid's, so the grid sees the key first: without
-   * this the Esc that closes the Filters menu would also clear the filters.
+   * Something on top of the grid takes this Esc: a Vuetify menu or dialog, or
+   * the auto-hide sidebar floating over it (useGlobalKeydown hides that). A
+   * Vuetify overlay's own Esc listener goes on `window` when it opens, after
+   * the grid's, so the grid sees the key first: without this the Esc that
+   * closes the Filters menu would also clear the filters.
    */
   function overlayOwnsEscape() {
+    if (sidebarStore.sidebarOverlay && sidebarStore.sidebarVisible) return true;
     return (
       typeof document !== "undefined" &&
       document.querySelector(
