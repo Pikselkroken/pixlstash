@@ -201,23 +201,33 @@ describe("models arriving from the Downloads folder", () => {
     // The notice's Show opens the shelf, which re-reads: that ordinary fetch
     // clears `newIds`, and the row must still say it is new.
     const store = useModelShelfStore();
-    store.onModelsArrived([2], { fromDownloads: true });
-    store.onModelsArrived([3]);
+    listAdapters.mockResolvedValue([adapter({ id: 1 })]);
+    await store.fetchRows();
     listAdapters.mockResolvedValue([
       adapter({ id: 1 }),
       adapter({ id: 2 }),
       adapter({ id: 3 }),
     ]);
-    await store.fetchRows();
-
+    store.onModelsArrived([2], { fromDownloads: true });
+    await vi.waitFor(() => expect(store.loading).toBe(false));
     const isNew = (id) => store.visibleRows.find((r) => r.id === id)?.isNew;
+    // A scan's arrival (3) wears the markNew badge until the next fetch.
+    expect(isNew(3)).toBe(true);
+
+    await store.fetchRows();
     expect(isNew(2)).toBe(true);
-    // A scan's arrival is not held past the fetch.
     expect(isNew(3)).toBe(false);
     expect(isNew(1)).toBe(false);
 
     store.arrivedIds = new Set();
     expect(isNew(2)).toBe(false);
+  });
+
+  it("forgets intake arrivals on a session reset", () => {
+    const store = useModelShelfStore();
+    store.onModelsArrived([2], { fromDownloads: true });
+    store.resetForSession();
+    expect(store.arrivedIds.size).toBe(0);
   });
 });
 
