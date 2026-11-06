@@ -1843,6 +1843,14 @@ describe("clearing ComfyUI's memory from Tasks", () => {
     const run = wrapper.find('[data-testid="tm-comfy-row"]');
     expect(run.find(".tm-fig-text").text()).toBe("18.6 GB");
 
+    // Queued only, no run shows what ComfyUI holds, so the standing row stays.
+    tasks.comfyuiRuns = [{ prompt_id: "p-1", label: "Night market", status: "queued", percent: 0 }];
+    await nextTick();
+    expect(wrapper.find('[data-testid="tm-comfy-host"]').exists()).toBe(true);
+    tasks.comfyuiRuns = [{ prompt_id: "p-1", label: "Night market", status: "running", percent: 20 }];
+    await nextTick();
+    expect(wrapper.find('[data-testid="tm-comfy-host"]').exists()).toBe(false);
+
     // A job PixlStash did not submit has no run row, so the standing row returns.
     tasks.resources = gpuAnswer({ comfyui: { device: "GPU-1", held_mb: 19046, idle: false, jobs: 2 } });
     await nextTick();

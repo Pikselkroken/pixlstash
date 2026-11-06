@@ -1004,14 +1004,17 @@ async function quitComfyui(entry) {
 }
 
 const clearingHost = ref(false);
-// The standing row says nothing the run rows do not while each of ComfyUI's
-// jobs is one of them; it stays for jobs PixlStash did not submit, and for
-// the broom once ComfyUI is idle.
+// The standing row says nothing the run rows do not while there are as many of
+// them as ComfyUI has jobs and one is running, which then shows what ComfyUI
+// holds. It stays while ComfyUI has more jobs than rows, and for the broom
+// once ComfyUI is idle. ComfyUI reports a count, not which jobs, so this
+// compares counts.
 const showComfyuiHost = computed(() => {
   const host = tasksStore.comfyuiHost;
   if (!host) return false;
-  const runRows = tasksStore.runningEntries.filter((e) => e.kind === "comfyui").length;
-  return !(host.jobs > 0 && runRows >= host.jobs);
+  const runs = tasksStore.runningEntries.filter((e) => e.kind === "comfyui");
+  const oneRunning = runs.some((e) => e.run.status === "running");
+  return !(host.jobs > 0 && oneRunning && runs.length >= host.jobs);
 });
 const hostClearable = computed(
   () => Boolean(tasksStore.comfyuiHost?.idle) && !clearingHost.value,
