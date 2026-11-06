@@ -536,7 +536,11 @@ export const useTasksStore = defineStore("tasks", () => {
           message:
             run.status === "running" ? "ComfyUI running…" : "Queued in ComfyUI",
         },
-        figureMb: leaseOfRun(run)?.held_mb ?? null,
+        // A run PixlStash holds no lease for shows what ComfyUI holds while it
+        // is the one on the GPU, since the standing ComfyUI row steps aside.
+        figureMb:
+          leaseOfRun(run)?.held_mb ??
+          (run.status === "running" ? (comfyuiHost.value?.held_mb ?? null) : null),
       })),
   );
 

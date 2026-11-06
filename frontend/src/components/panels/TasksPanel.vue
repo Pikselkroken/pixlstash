@@ -57,9 +57,10 @@
       </ul>
       <!-- ComfyUI, standing: what it holds, and the broom that has it unload
            its models whenever it is idle, with no run involved. Unavailable,
-           not hidden, while it has jobs: it is never cleared mid-job. -->
+           not hidden, while it has jobs: it is never cleared mid-job. Left out
+           while every job it has is already a run row under Running. -->
       <div
-        v-if="tasksStore.comfyuiHost"
+        v-if="showComfyuiHost"
         class="tm-row"
         data-testid="tm-comfy-host"
       >
@@ -127,6 +128,19 @@
             ></span>
             <ComfyuiIcon :size="18" class="tm-app" aria-hidden="true" />
             <span class="tm-name">{{ entry.run.label }}</span>
+            <!-- The run's percent as a hairline under its name, sharing the
+                 name's grid cell so the row keeps its height. -->
+            <span
+              class="tm-run-line"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-valuenow="Math.round(entry.run.percent)"
+              :aria-label="`${entry.run.label} progress`"
+              data-testid="tm-comfy-progress"
+            >
+              <span class="tm-run-line-fill" :style="{ width: barWidth(entry.run) }"></span>
+            </span>
             <span class="tm-figure">
               <span class="tm-fig-text">{{ formatGb(entry.figureMb) }}</span>
               <span v-if="!isReadOnly" class="tm-acts">
@@ -990,6 +1004,18 @@ async function quitComfyui(entry) {
 }
 
 const clearingHost = ref(false);
+// The standing row says nothing the run rows do not while there are as many of
+// them as ComfyUI has jobs and one is running, which then shows what ComfyUI
+// holds. It stays while ComfyUI has more jobs than rows, and for the broom
+// once ComfyUI is idle. ComfyUI reports a count, not which jobs, so this
+// compares counts.
+const showComfyuiHost = computed(() => {
+  const host = tasksStore.comfyuiHost;
+  if (!host) return false;
+  const runs = tasksStore.runningEntries.filter((e) => e.kind === "comfyui");
+  const oneRunning = runs.some((e) => e.run.status === "running");
+  return !(host.jobs > 0 && oneRunning && runs.length >= host.jobs);
+});
 const hostClearable = computed(
   () => Boolean(tasksStore.comfyuiHost?.idle) && !clearingHost.value,
 );
@@ -1793,6 +1819,29 @@ const tmSystemItems = computed(() => {
   border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-primary));
   transition: width 0.25s ease;
+}
+
+/* A run row's progress: a hairline in the name's own grid cell, at its foot and
+   nudged into the row padding, so it sits under the name without adding height. */
+.tm-row--run > .tm-name,
+.tm-run-line {
+  grid-area: 1 / 3;
+}
+
+.tm-run-line {
+  align-self: end;
+  height: 2px;
+  margin-bottom: calc(-1 * var(--space-1));
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-surface), 0.12);
+  overflow: hidden;
+}
+
+.tm-run-line-fill {
+  display: block;
+  height: 100%;
+  background: rgb(var(--v-theme-primary));
+  transition: width var(--dur-3) var(--ease-standard);
 }
 
 .tm-comfy-message {
