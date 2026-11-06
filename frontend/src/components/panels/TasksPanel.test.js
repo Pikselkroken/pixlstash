@@ -166,6 +166,10 @@ describe("what the task manager shows", () => {
       true,
       false,
     ]);
+    // Each run's percent is a line under its name.
+    const lines = rows.map((row) => row.find('[data-testid="tm-comfy-progress"]'));
+    expect(lines.map((line) => line.attributes("aria-valuenow"))).toEqual(["0", "40", "0"]);
+    expect(lines[1].find(".tm-run-line-fill").attributes("style")).toContain("width: 40%");
 
     // The stop asks the backend, not a handler some view registered.
     const stop = wrapper.find('button[aria-label="Stop ComfyUI"]');
@@ -1825,6 +1829,24 @@ describe("clearing ComfyUI's memory from Tasks", () => {
     await flushPromises();
     expect(freeComfyui).toHaveBeenCalledTimes(1);
     expect(useNoticeStore().notices.map((n) => n.text)).toContain("Cleared 12.6 GB from ComfyUI.");
+  });
+
+  it("leaves the standing row out while its jobs are run rows, the running one showing what ComfyUI holds", async () => {
+    const tasks = setGpu(
+      gpuAnswer({ comfyui: { device: "GPU-1", held_mb: 19046, idle: false, jobs: 1 } }),
+    );
+    tasks.comfyuiRuns = [
+      { prompt_id: "p-1", label: "Night market", status: "running", percent: 20 },
+    ];
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find('[data-testid="tm-comfy-host"]').exists()).toBe(false);
+    const run = wrapper.find('[data-testid="tm-comfy-row"]');
+    expect(run.find(".tm-fig-text").text()).toBe("18.6 GB");
+
+    // A job PixlStash did not submit has no run row, so the standing row returns.
+    tasks.resources = gpuAnswer({ comfyui: { device: "GPU-1", held_mb: 19046, idle: false, jobs: 2 } });
+    await nextTick();
+    expect(wrapper.find('[data-testid="tm-comfy-host"]').exists()).toBe(true);
   });
 
   it("draws no ComfyUI row before ComfyUI has been read", () => {
