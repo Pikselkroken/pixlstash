@@ -1,3 +1,4 @@
+import { computed } from "vue";
 import { getPictureId } from "../utils/media.js";
 import { isReadOnly } from "../utils/apiClient";
 import {
@@ -40,6 +41,8 @@ export function useGridKeyboardNav(
     reviewOverlayOpen,
     showSelectionBar,
     searchResultsActive,
+    // Any filter chip is showing: Esc's last rung clears them.
+    filtersActive = { value: false },
     selectedImageIds,
     lastSelectedImageId,
     cursorIdx,
@@ -58,6 +61,7 @@ export function useGridKeyboardNav(
   {
     clearFaceSelection,
     clearSearchQuery,
+    clearFilters = () => {},
     scrollCursorIntoView,
     focusCursor = () => {},
     openLightbox,
@@ -82,6 +86,41 @@ export function useGridKeyboardNav(
   function starRating(event) {
     const digit = bareDigit(event);
     return digit !== null && digit <= 5 ? digit : null;
+  }
+
+  /**
+   * What the next Esc clears, one layer per press: the selection, then the
+   * multi-selection bar, then the search, then the filters. Null when there is
+   * nothing left to clear.
+   */
+  function escapeTarget() {
+    if (showSelectionBar.value) return "selection";
+    if (isMultiCharacterView.value || isSetOverlapView.value) return "multi";
+    // `searchResultsActive` covers the modes with no query string behind them
+    // (reverse image, similar faces, a person face search), which
+    // `clearSearchQuery` resets as well (merged-grid-action-pill.md §6.1).
+    if (searchResultsActive?.value || searchStore.searchQuery?.trim()) {
+      return "search";
+    }
+    if (filtersActive.value) return "filters";
+    return null;
+  }
+
+  // Whether Esc reaches the filter strip's Clear all, so it can say so.
+  const escapeClearsFilters = computed(() => escapeTarget() === "filters");
+
+  /**
+   * A Vuetify menu or dialog is open. Its own Esc listener goes on `window`
+   * when it opens, after the grid's, so the grid sees the key first: without
+   * this the Esc that closes the Filters menu would also clear the filters.
+   */
+  function overlayOwnsEscape() {
+    return (
+      typeof document !== "undefined" &&
+      document.querySelector(
+        ".v-overlay--active:not(.v-tooltip):not(.v-snackbar)",
+      ) != null
+    );
   }
 
   /** Ctrl+V on the grid selection: paste the copied tags. */
@@ -271,29 +310,21 @@ export function useGridKeyboardNav(
     if (reviewOverlayOpen?.value) return;
     if (toolbarSelectionMenuOpen?.value) return; // Ignore when selection menu is open
     if (event.key === "Escape") {
-      if (showSelectionBar.value) {
+      if (overlayOwnsEscape()) return;
+      const target = escapeTarget();
+      if (target === "selection") {
         // First ESC clears selection only
         selectedImageIds.value = [];
         lastSelectedImageId = null;
         cursorIdx.value = null;
         clearFaceSelection();
-      } else if (isMultiCharacterView.value || isSetOverlapView.value) {
+      } else if (target === "multi") {
         // No images selected - ESC closes the union/intersect/overlap bar
         emit("clear-multi-selection");
-      } else if (
-        searchResultsActive?.value ||
-        (searchStore.searchQuery && searchStore.searchQuery.trim())
-      ) {
-        // No selection active - ESC also clears search. The query now comes
-        // from `searchStore` rather than a prop (App.vue slim-down, #661).
-        // `searchResultsActive` covers the modes that have no query string
-        // behind them (reverse image, similar faces, a person face search):
-        // `clearSearchQuery` has always reset all of them, but the gate here
-        // only ever asked about the text query, so Esc silently did nothing in
-        // those modes. The pill puts an Esc keycap on the button that clears
-        // them, so the key now has to actually reach it
-        // (merged-grid-action-pill.md §6.1).
+      } else if (target === "search") {
         clearSearchQuery();
+      } else if (target === "filters") {
+        clearFilters();
       } else {
         selectedImageIds.value = [];
         lastSelectedImageId = null;
@@ -594,5 +625,5 @@ export function useGridKeyboardNav(
     }
   }
 
-  return { onGlobalKeyPress, handleKeyDown };
+  return { onGlobalKeyPress, handleKeyDown, escapeClearsFilters };
 }

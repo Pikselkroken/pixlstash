@@ -416,6 +416,8 @@ Order, one layer per press, innermost and most reversible first:
    contracting is the feedback; no extra chrome needed.
 3. No selection, multi-character/set-overlap view → clear the multi-selection.
 4. No selection, search active → clear the search. The pill unmounts.
+5. No selection, no search, filters on → clear the filters, as the filter
+   strip's Clear all does. Clear all carries the Esc hint only in this state.
 
 The Esc keycap belongs to exactly **one** visible control at a time — the one Esc
 will actually hit — rendered as the `<kbd>` chip from `visual-language.md` §13,
@@ -610,7 +612,7 @@ user no signal it opens anything. Add both, plus `aria-keyshortcuts="S"`.
 | Key | Action | Change |
 |---|---|---|
 | `F` | Focus the toolbar search field | unchanged |
-| `Esc` | The 4-step ladder in §6.1 | behaviour unchanged; the keycap now moves |
+| `Esc` | The ladder in §6.1 | behaviour unchanged; the keycap now moves |
 | `Del` / `Backspace` | Delete selected | unchanged |
 | `S` | Add to set (#2160; it used to toggle the selection menu) | changed |
 | `ArrowDown` | Menu open, focus outside panel → first item | unchanged |

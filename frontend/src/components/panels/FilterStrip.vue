@@ -24,7 +24,13 @@
     </div>
     <span class="filter-strip-tail">
       <span class="filter-strip-count">{{ ofLabel }}</span>
-      <button class="filter-strip-clear" type="button" @click="clearAll">
+      <button
+        class="filter-strip-clear"
+        type="button"
+        :title="ownsEscape ? 'Clear all filters (Esc)' : undefined"
+        :aria-keyshortcuts="ownsEscape ? 'Escape' : undefined"
+        @click="clearAll"
+      >
         Clear all
       </button>
     </span>
@@ -66,6 +72,8 @@ const props = defineProps({
   // Workflows screen, where two of the filters are the server's and each
   // removal costs a grid read.
   onClearAll: { type: Function, default: null },
+  // Esc reaches Clear all: nothing selected and no search left to clear.
+  ownsEscape: { type: Boolean, default: false },
 });
 
 const store = useFilterStore();
