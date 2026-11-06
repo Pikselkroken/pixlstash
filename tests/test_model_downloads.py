@@ -359,10 +359,10 @@ def test_a_web_page_is_not_saved_as_a_model(hub, target, linked):
     assert os.listdir(chosen) == ["loras"]
 
 
-def test_a_gated_model_fails_saying_its_licence_must_be_accepted(hub, target, linked):
-    """Hugging Face answers a gated file with 401 and ``X-Error-Code:
-    GatedRepo``. Wrong if the error is the bare 401, or if a link is offered
-    for a host that is not Hugging Face (this one is loopback)."""
+def test_a_gated_header_from_another_host_is_its_plain_error(hub, target, linked):
+    """Only a Hugging Face link is said to be gated on Hugging Face. Wrong if
+    this loopback host's ``X-Error-Code: GatedRepo`` reads as one, or offers
+    a page."""
     chosen, _ = target
     with serve_bytes(
         b"Access to model a/b is restricted.",
@@ -373,9 +373,7 @@ def test_a_gated_model_fails_saying_its_licence_must_be_accepted(hub, target, li
         linked(url, "loras")
         done = _wait(start_download(hub, "gated.safetensors")["id"])
     assert done["status"] == STATUS_FAILED
-    assert done["error"].startswith("It is gated on Hugging Face."), done["error"]
-    # Where the download would have put it: the ComfyUI subfolder too.
-    assert f"into {chosen / 'loras'};" in done["error"]
+    assert done["error"].startswith("401 Client Error"), done["error"]
     assert done["page_url"] is None
     assert os.listdir(chosen) == ["loras"]
 
@@ -409,14 +407,19 @@ class _Answer:
 def test_a_gated_hugging_face_file_links_its_model_page(
     tmp_path, monkeypatch, headers, page
 ):
+    """Wrong if a gated file's error is the bare 401, or does not name where
+    the download would have put it, its ComfyUI subfolder included."""
     url = "https://huggingface.co/org/repo/resolve/main/x.safetensors"
     monkeypatch.setattr(model_downloads, "_open", lambda u, live: _Answer(401, headers))
-    entry = {"_target": str(tmp_path / "x"), "page_url": None}
+    entry = {"_target": str(tmp_path / "loras" / "x"), "page_url": None}
     with pytest.raises(
         model_downloads.requests.HTTPError if page is None else ValueError
-    ):
+    ) as caught:
         model_downloads._fetch(url, str(tmp_path / "x.part"), entry, threading.Event())
     assert entry["page_url"] == page
+    if page:
+        assert str(caught.value).startswith("It is gated on Hugging Face.")
+        assert f"into {tmp_path / 'loras'};" in str(caught.value)
     assert not (tmp_path / "x.part").exists()
 
 

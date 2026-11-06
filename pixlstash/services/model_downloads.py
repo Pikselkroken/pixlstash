@@ -608,10 +608,13 @@ def _fetch(
     os.makedirs(os.path.dirname(partial), exist_ok=True)
     sha = hashlib.sha256()
     with _open(url, live) as response:
-        if response.headers.get("X-Error-Code") == "GatedRepo":
+        page = model_page(url)
+        if page and response.headers.get("X-Error-Code") == "GatedRepo":
             # No Hugging Face token is sent, so a gated file is never served
             # here; the owner accepts its licence and downloads it themselves.
-            entry["page_url"] = model_page(url)
+            # Said only of a Hugging Face link: another host's header falls
+            # through to its plain error below.
+            entry["page_url"] = page
             # Instruction first: the notice shows three lines. Where the
             # download would have put it, its ComfyUI subfolder included, so
             # the folder still says what kind of model it is.
