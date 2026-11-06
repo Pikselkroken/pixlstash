@@ -2773,7 +2773,8 @@ class WorkflowRunnableGraph(BaseModel):
         description=(
             "Where the loader for picking people goes on the canvas. Null "
             "when no person has a LoRA the Run popup would count for this "
-            "workflow, so no loader is put on."
+            "workflow, or for an open without `pixlstash_nodes` (the "
+            "workflow's own nodes), so no loader is put on."
         ),
     )
 
@@ -9532,21 +9533,45 @@ def create_router(server) -> APIRouter:
         flattened one. The file is the layout until a save from ComfyUI
         replaces it, by the rules a saved one is kept by
         (:func:`_layout_to_keep`, with the people's LoRAs the graph loads), and
-        only over the wiring of the conversion stored beside it. ``None`` for a
-        document that is a graph rather than an editor file, or not converted.
+        only over the wiring of the conversion stored beside it.
+
+        **A save from PixlStash does not end it.** Save, or the MCP server's
+        import, stores the API graph over the file, so the file is read from
+        the newest version that holds one, as long as no save from ComfyUI
+        came after it: a model or value changed in PixlStash leaves the
+        wiring, and with it the file's subgraphs, as they were. ``None`` where
+        no version holds a converted editor file, or a save from ComfyUI came
+        after the newest that does: that save's layout is the one, kept or not.
         """
-        row = hub.fetchone(
+        # Only the version numbers walked: a document is read once it is one.
+        current = hub.fetchone(
             "SELECT document, api_document FROM workflow_document "
             "WHERE workflow_id = ?",
             (workflow_id,),
         )
-        if row is None or not row["api_document"]:
-            return None
-        editor = json.loads(row["document"])
-        if not is_ui_graph(editor):
-            return None
-        graph = api_graph(json.loads(row["api_document"]))
-        if graph is None:
+        candidates = [current] if current is not None else []
+        candidates += hub.fetchall(
+            "SELECT version, source FROM workflow_version "
+            "WHERE workflow_id = ? AND (api_document IS NOT NULL OR source = ?) "
+            "ORDER BY version DESC",
+            (workflow_id, workflow_versions.FROM_COMFYUI),
+        )
+        for row in candidates:
+            if "source" in row.keys():
+                if row["source"] == workflow_versions.FROM_COMFYUI:
+                    return None
+                row = hub.fetchone(
+                    "SELECT document, api_document FROM workflow_version "
+                    "WHERE workflow_id = ? AND version = ?",
+                    (workflow_id, row["version"]),
+                )
+            if row is None or not row["api_document"]:
+                continue
+            editor = json.loads(row["document"])
+            graph = api_graph(json.loads(row["api_document"]))
+            if is_ui_graph(editor) and graph is not None:
+                break
+        else:
             return None
         # What a save of this graph would leave out, as `PUT …/graph` reads it.
         people = people_loras_in(hub, server.vault, graph)
@@ -10336,8 +10361,11 @@ def create_router(server) -> APIRouter:
             version=source.workflow_version,
             waiting_applied=waiting_applied,
             editor=_layout_for(hub, workflow.workflow_id, graph, own_nodes),
-            people_loader=_people_loader_place(
-                workflow.workflow_id, graph, object_info
+            # The loader is a ComfyUI-PixlStash node: the original has none.
+            people_loader=(
+                _people_loader_place(workflow.workflow_id, graph, object_info)
+                if pixlstash_nodes
+                else None
             ),
         )
 

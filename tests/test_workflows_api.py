@@ -26056,11 +26056,51 @@ def test_an_imported_editor_file_opens_as_its_own_layout(saving):
         editor["definitions"],
     )
 
+    # A value saved from PixlStash stores the API graph over the file, and
+    # the wiring is the file's still: it opens with the file, subgraphs and
+    # all, and with the value saved, rather than flattened.
+    graph = json.loads(json.dumps(CHAIN_DOCUMENT))
+    graph["5"]["inputs"]["strength_model"] = 0.3
+    r = _put_graph(saving, imported, graph, source="mcp")
+    assert r.status_code == 200 and r.json()["version"] == 2, r.text
+    opened = _opened(saving, imported, all_stages="true")
+    assert opened["editor"]["definitions"] == editor["definitions"]
+    assert opened["workflow"]["5"]["inputs"]["strength_model"] == 0.3
+
     # A loader skipped and not yet saved rewires what opens: not the file's.
     _put_changes(saving, imported, **SKIP_FIVE)
     opened = _opened(saving, imported, waiting="true", all_stages="true")
     assert opened["waiting_applied"] is True
     assert opened["editor"] is None
+
+    # A save from PixlStash that rewires it: the file no longer fits.
+    r = _save(saving, imported)
+    assert r.status_code == 200, r.text
+    assert _opened(saving, imported, all_stages="true")["editor"] is None
+
+
+def test_a_save_from_comfyui_ends_the_imported_file_as_layout(saving):
+    """A save from ComfyUI is the layout's word from then on: one that sent
+    none leaves no file to fall back on, though the wiring still fits.
+
+    Wrong if the imported file reopens over a save from ComfyUI.
+    """
+    hub = saving.server.hub
+    editor = _editor(definitions={"subgraphs": [{"id": "a-subgraph", "nodes": []}]})
+    imported = workflows_routes.store_manual_workflow(hub, "Imported", editor, "import")
+    workflow_group_writes.set_manual_api_document(
+        hub, [imported], json.loads(json.dumps(CHAIN_DOCUMENT))
+    )
+    graph = json.loads(json.dumps(CHAIN_DOCUMENT))
+    graph["5"]["inputs"]["strength_model"] = 0.2
+    r = _put_graph(saving, imported, graph, source="comfyui")
+    assert r.status_code == 200 and r.json()["version"] == 2, r.text
+    assert _opened(saving, imported, all_stages="true")["editor"] is None
+    # And a PixlStash save after it does not reach past it either.
+    graph["5"]["inputs"]["strength_model"] = 0.3
+    r = _put_graph(saving, imported, graph, source="mcp")
+    assert r.status_code == 200 and r.json()["version"] == 3, r.text
+    assert _opened(saving, imported, all_stages="true")["editor"] is None
 
 
 def test_an_imported_file_with_a_persons_lora_opens_with_no_layout(a_persons_lora):
@@ -26234,11 +26274,14 @@ def test_a_layout_holds_no_credential_the_graph_holds(saving):
 def test_open_says_where_the_people_loader_goes(a_persons_lora):
     """Where a run splices a person's LoRA: straight after the model source.
 
-    Wrong if a loader is placed for a library where nobody has a LoRA, or if
-    the place is anywhere but after node 1.
+    Wrong if a loader is placed for a library where nobody has a LoRA, if
+    the place is anywhere but after node 1, or if *Open original* (no
+    `pixlstash_nodes`) is told to put one on: the loader is PixlStash's node,
+    and the original holds only the workflow's own.
     """
     env = a_persons_lora
-    place = _opened(env, env.manual)["people_loader"]
+    assert _opened(env, env.manual)["people_loader"] is None
+    place = _opened(env, env.manual, pixlstash_nodes="true")["people_loader"]
     assert (place["model"], place["clip"], place["reason"]) == (
         {"node_id": "1", "output": 0},
         {"node_id": "1", "output": 1},
@@ -26293,7 +26336,7 @@ def test_open_places_a_people_loader_after_every_copy_of_the_model(
         "plan_lora_insertion",
         lambda graph, object_info: planner(_two_copies(), LOADERLESS_OBJECT_INFO),
     )
-    place = _opened(env, env.manual)["people_loader"]
+    place = _opened(env, env.manual, pixlstash_nodes="true")["people_loader"]
     assert place["places"] == [
         {
             "model": {"node_id": "1", "output": 0},
@@ -26311,7 +26354,9 @@ def test_open_places_a_people_loader_after_every_copy_of_the_model(
 
 
 def test_no_people_loader_where_nobody_has_a_lora(saving):
-    assert _opened(saving, saving.manual)["people_loader"] is None
+    assert (
+        _opened(saving, saving.manual, pixlstash_nodes="true")["people_loader"] is None
+    )
 
 
 def test_an_export_from_comfyui_goes_without_a_persons_lora(a_persons_lora):
