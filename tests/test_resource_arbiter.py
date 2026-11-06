@@ -853,6 +853,42 @@ def test_comfyui_is_never_asked_to_free_for_its_own_run():
     lease.release()
 
 
+def test_a_comfyui_run_short_of_only_comfyuis_own_memory_goes_once_pixlstash_yields():
+    """ComfyUI holds the card: a run short by less than that is ComfyUI's to
+    fit, so other apps moving by a few hundred MB never hold it."""
+    # 23000 used: ComfyUI 19000, other apps 4000. ComfyUI's budget is 19348.
+    arb, _fake, _ = make(used_mb=23000, thread=False)
+    comfy = FakeComfy(usage=19000)
+    arb.register_probe(Tenant.COMFYUI, comfy)
+    yielded = []
+    arb.add_yielder(lambda lease: yielded.append(lease.id) or [])
+    lease = arb.request(Tenant.COMFYUI, "run", need_mb=19800)
+    assert lease.waiting_reason["code"] == "vram", "PixlStash moves off first"
+    assert arb._reclaim_step()
+    with arb._lock:
+        arb._evaluate_locked()
+    assert yielded == [lease.id]
+    assert lease.state is LeaseState.GRANTED
+    assert comfy.freed == 0
+    # Anyone else still waits, short by far less than ComfyUI holds: it is
+    # not their memory to manage.
+    train = arb.request(Tenant.AITOOLKIT, "train", device=CARD, need_mb=1000)
+    assert arb._reclaim_step()
+    with arb._lock:
+        arb._evaluate_locked()
+    assert train.state is LeaseState.WAITING
+    for held in (train, lease):
+        held.release()
+    # Short by more than ComfyUI holds, other apps fill the card: it waits.
+    comfy.usage = 400
+    big = arb.request(Tenant.COMFYUI, "big", need_mb=1500)
+    while arb._reclaim_step():
+        with arb._lock:
+            arb._evaluate_locked()
+    assert big.waiting_reason["code"] == "vram"
+    big.release()
+
+
 def test_exclusive_makes_pixlstash_yield_before_it_is_granted():
     arb, _fake, _ = make(thread=False)
     yielded = []

@@ -1225,7 +1225,9 @@ class ResourceArbiter:
         if reading is None or not reading.measurable:
             return None
         budget = self._budget_locked(reading, lease.tenant)
-        if lease.need_mb > budget:
+        if lease.need_mb > budget and not self._comfyui_makes_room_locked(
+            lease, budget
+        ):
             return self._reason(lease, "vram", None, reading, budget=budget)
         if (
             lease.ram_mb
@@ -1240,6 +1242,37 @@ class ResourceArbiter:
                 reading,
             )
         return None
+
+    def _comfyui_makes_room_locked(self, lease: Lease, budget: int) -> bool:
+        """Whether a ComfyUI run short of *budget* goes anyway: ComfyUI's call.
+
+        A run's need is ComfyUI's whole allocation at a past peak, which it
+        grows into while the card has room and offloads from when it has not.
+        Short by no more than ComfyUI already holds, the run is short of
+        ComfyUI's own memory, which ComfyUI manages: it goes once PixlStash has
+        moved its own work off the card (the ladder's first rung), instead of
+        waiting for other apps to give back a few hundred MB. Short by more,
+        other apps fill the card and it waits as before.
+        """
+        if lease.tenant is not Tenant.COMFYUI:
+            return False
+        held = self._tenant_usage_locked(Tenant.COMFYUI, lease.device) or 0
+        short = lease.need_mb - budget
+        if short > held:
+            return False
+        if "pixlstash" not in lease.reclaimed and (
+            self._yielders and lease.device == self._tenant_device(Tenant.PIXLSTASH)
+        ):
+            return False
+        logger.info(
+            "ComfyUI run %s (%s) is %s MB short of its need but ComfyUI holds "
+            "%s MB, which it manages itself: not held for memory",
+            lease.id,
+            lease.label,
+            short,
+            held,
+        )
+        return True
 
     def _reason(
         self,
