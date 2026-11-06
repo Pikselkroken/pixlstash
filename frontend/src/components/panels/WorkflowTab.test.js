@@ -1477,6 +1477,24 @@ describe("a checkpoint that will not load", () => {
       expect(useNoticeStore().notices.length).toBe(before);
     });
 
+    it("does not blame the loader when the check itself failed", async () => {
+      preflightWorkflowRun.mockResolvedValue(
+        missingFile("SDXL/realvisXL_v5.safetensors"),
+      );
+      getWorkflowCard.mockResolvedValue(detail({ card: named }));
+      const { wrapper } = await mountWith([KEY], [named]);
+      await settle(wrapper);
+
+      // The tab's own re-check reads the swaps through allSettled; the drop's
+      // read is the one that fails.
+      readModelSwap.mockRejectedValue(new Error("network down"));
+      await landed(wrapper, "realvis-new.safetensors");
+      expect(setWorkflowChanges).not.toHaveBeenCalled();
+      const text = useNoticeStore().notices.at(-1).text;
+      expect(text).toContain("could not be checked");
+      expect(text).not.toContain("cannot load it");
+    });
+
     it("does not call the missing file itself a pick", async () => {
       // Still missing after the drop (ComfyUI's list not yet read again), and
       // the shelf answers with that very file.

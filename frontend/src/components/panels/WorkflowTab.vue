@@ -2590,14 +2590,20 @@ async function replaceWithDropped(address, event) {
     answer = await readModelSwap(key, swapAsk(row.kind, row.file, true));
   } catch (err) {
     console.warn(`[workflows] could not read replacements for ${row.file}`, err);
+    // Not "cannot load it": only the check failed, and the file did land.
+    if (selectedKey.value === key) {
+      notices.push({
+        level: "warning",
+        text: `${modelLabel(fileName(added[0]))} is on your shelf, but whether this ${fileKindLabel(row.kind).toLowerCase()} loader can load it could not be checked, so nothing was picked. Choose it in the picker.`,
+      });
+    }
+    return;
   }
   if (selectedKey.value !== key) return;
-  if (answer) {
-    replacementsByFile.value = {
-      ...replacementsByFile.value,
-      [`${row.kind}:${row.file}`]: answer,
-    };
-  }
+  replacementsByFile.value = {
+    ...replacementsByFile.value,
+    [`${row.kind}:${row.file}`]: answer,
+  };
   // Never the row's own file: picking that is no change at all.
   const match = answer?.replacements?.find(
     (candidate) =>
