@@ -1964,6 +1964,9 @@ async function closeFolderRemove() {
 
 // A batch waiting on a dialog that is going away stops rather than hanging.
 onUnmounted(() => store.settleFolderRemove(false));
+// The Downloads arrivals keep their `New` badge until the shelf is left: they
+// have been seen by then.
+onUnmounted(() => (store.arrivedIds = new Set()));
 
 /** *Move the models out first…*: the move dialog, on the folder's copies. */
 async function moveModelsOutFirst(copies) {

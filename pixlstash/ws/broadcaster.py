@@ -368,12 +368,15 @@ class WsBroadcasterMixin:
             }
         elif event_type == EventType.MODELS_ARRIVED:
             # Another "look again": the shelf re-reads its rows. The ids only
-            # say how many arrived.
+            # say how many arrived; ``from_downloads`` says the Downloads
+            # intake moved them, which the owner's tab announces. No names:
+            # the event reaches every socket, and filenames are owner-only.
             info = data if isinstance(data, dict) else {}
             payload = {
                 "type": "models_arrived",
                 "event": event_type.name,
                 "model_ids": [int(i) for i in (info.get("model_ids") or [])],
+                "from_downloads": info.get("from_downloads") is True,
             }
         elif event_type in _WS_SNAPSHOT_EVENT_TYPES:
             info = data if isinstance(data, dict) else {}

@@ -285,3 +285,25 @@ def test_a_face_redetect_carries_how_many_faces_it_added():
 
     assert sent[0]["new_faces"] == 0
     assert "new_faces" not in sent[1]
+
+
+def test_models_arrived_says_whether_the_downloads_intake_moved_them():
+    """The owner's tab raises its notice only for the Downloads intake."""
+    sent = []
+
+    class _Ws:
+        async def send_json(self, payload):
+            sent.append(payload)
+
+    hub = WsBroadcasterMixin()
+    hub._ws_clients_lock = threading.Lock()
+    hub._ws_clients = [{"ws": _Ws(), "owner": True}]
+    asyncio.run(
+        hub._broadcast_ws_event(
+            EventType.MODELS_ARRIVED, {"model_ids": [3], "from_downloads": True}
+        )
+    )
+    asyncio.run(hub._broadcast_ws_event(EventType.MODELS_ARRIVED, {"model_ids": [4]}))
+
+    assert sent[0]["from_downloads"] is True
+    assert sent[1]["from_downloads"] is False

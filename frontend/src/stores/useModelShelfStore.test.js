@@ -196,6 +196,29 @@ describe("models arriving from the Downloads folder", () => {
     expect(store.unseenArrivals).toBe(true);
     expect(listAdapters).not.toHaveBeenCalled();
   });
+
+  it("keeps the badge on an intake arrival through the fetch the shelf makes on opening", async () => {
+    // The notice's Show opens the shelf, which re-reads: that ordinary fetch
+    // clears `newIds`, and the row must still say it is new.
+    const store = useModelShelfStore();
+    store.onModelsArrived([2], { fromDownloads: true });
+    store.onModelsArrived([3]);
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1 }),
+      adapter({ id: 2 }),
+      adapter({ id: 3 }),
+    ]);
+    await store.fetchRows();
+
+    const isNew = (id) => store.visibleRows.find((r) => r.id === id)?.isNew;
+    expect(isNew(2)).toBe(true);
+    // A scan's arrival is not held past the fetch.
+    expect(isNew(3)).toBe(false);
+    expect(isNew(1)).toBe(false);
+
+    store.arrivedIds = new Set();
+    expect(isNew(2)).toBe(false);
+  });
 });
 
 describe("defaults", () => {

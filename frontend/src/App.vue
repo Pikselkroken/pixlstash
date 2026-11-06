@@ -281,6 +281,9 @@ const {
   refreshSidebar: (options) => refreshSidebar(options),
   refreshSidebarPicturesDebounced: (flash) =>
     refreshSidebarPicturesDebounced(flash),
+  // `?model=` scrolls the shelf to that row and selects it.
+  openModel: (modelId) =>
+    router.push({ name: "models", query: { model: String(modelId) } }),
 });
 
 const {
