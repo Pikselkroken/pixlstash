@@ -1419,7 +1419,6 @@ def register_routes(router, server):
         response_model=ScrapheapRestoreResponse,
     )
     def restore_scrapheap(request: Request, payload: dict | None = Body(None)):
-        origin_client_id = getattr(request.state, "origin_client_id", None)
         picture_ids = None
         if payload:
             ids = payload.get("picture_ids")
@@ -1431,77 +1430,12 @@ def register_routes(router, server):
                     )
                 picture_ids = ids
 
-        def restore_pictures(session: Session, ids: list[int] | None):
-            query = select(Picture).where(
-                Picture.deleted.is_(True),
+        restored_count = len(
+            scrapheap_service.restore_pictures(
+                server.vault,
+                picture_ids,
+                **operation_log_service.request_context(request),
             )
-            if ids is not None:
-                query = query.where(Picture.id.in_(ids))
-            pics = session.exec(query).all()
-            restored_count = 0
-            affected_stack_ids: set[int] = set()
-            for pic in pics:
-                pic.deleted = False
-                # Leaving a stale deleted_at on a live picture would let any
-                # future reader mistake it for a scrapheap deadline. The stamp
-                # describes the CURRENT stay in the scrapheap only; a re-delete
-                # writes a fresh one.
-                pic.deleted_at = None
-                session.add(pic)
-                if pic.stack_id is not None:
-                    affected_stack_ids.add(pic.stack_id)
-                restored_count += 1
-            # Re-fold restored pictures into their stack ordering so a restored
-            # member is not left behind a (now lower-ranked) deleted leader.
-            for stack_id in affected_stack_ids:
-                normalize_stack_positions(session, stack_id)
-            session.flush()
-            return restored_count
-
-        def _scrapheaped_targets(session: Session):
-            # The endpoint's targets are not knowable from the request: an absent
-            # picture_ids means "restore the entire scrapheap", and even a named
-            # subset may include already-live ids that will not change. Resolve
-            # the real set on the mutation's own session so the snapshot covers
-            # exactly what the write is about to touch.
-            query = select(Picture.id).where(Picture.deleted.is_(True))
-            if picture_ids is not None:
-                query = query.where(Picture.id.in_(picture_ids))
-            return list(session.exec(query).all())
-
-        restored_count, _operation = operation_log_service.run_recorded_metadata_task(
-            server.vault,
-            restore_pictures,
-            picture_ids,
-            op_type=operation_log_service.OP_SCRAPHEAP_RESTORE,
-            picture_ids=[],
-            resolve_picture_ids=_scrapheaped_targets,
-            # Same stack caveat as the soft-delete: normalize_stack_positions
-            # renumbers every member of an affected stack, deleted ones included.
-            expand_stacks=True,
-            expand_stacks_include_deleted=True,
-            summary=operation_log_service.scrapheap_restore_summary,
-            # Always batched: the caller's gesture id when it sent one, a
-            # server-minted ``srv-…`` otherwise.
-            **operation_log_service.request_context(
-                request, fallback_batch_id=operation_log_service.new_batch_id()
-            ),
-        )
-        # A restored picture re-enters active views. ``picture_ids`` is the
-        # caller-supplied subset (None == "restore all"); pass it through when
-        # known so the originating tab can target the affected cards.
-        #
-        # ``restored``, not ``added``: the card comes back, but the picture is
-        # not new to the vault. The SPA's sidebar treats ``added`` as a fresh
-        # import and flashes its NEW marker on the counts that grew, which is
-        # wrong for something that was in the library the whole time.
-        server.vault.notify(
-            EventType.CHANGED_PICTURES,
-            {
-                "picture_ids": list(picture_ids) if picture_ids else [],
-                "origin_client_id": origin_client_id,
-                "change_kind": "restored",
-            },
         )
         return {"status": "success", "restored_count": restored_count}
 

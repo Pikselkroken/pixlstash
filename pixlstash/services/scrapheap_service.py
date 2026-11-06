@@ -113,8 +113,11 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Character, DeletedFileLog, Picture, ReferenceFolder
+from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services import operation_log_service
 from pixlstash.services.set_lock_service import locked_picture_ids
+from pixlstash.stacking import normalize_stack_positions
 from pixlstash.services.workflow_ghost_service import (
     GhostPurgeContext,
     apply_purge_to_hub,
@@ -518,6 +521,106 @@ def still_scrapheaped_ids_in_session(
         select(Picture.id).where(Picture.id.in_(scope), Picture.deleted.is_(True))
     ).all()
     return {int(pid) for pid in rows if pid is not None}
+
+
+def restore_pictures(
+    vault,
+    picture_ids: Optional[list[int]],
+    *,
+    actor: Optional[str] = None,
+    source: str = "external",
+    origin_client_id: Optional[str] = None,
+    batch_id: Optional[str] = None,
+) -> list[int]:
+    """Bring pictures back out of the Scrapheap, recorded and announced.
+
+    The one restore: ``POST /pictures/scrapheap/restore`` and an import that
+    matches a scrapheaped picture both come through here, so both re-fold the
+    picture into its stack, land in the operation log as one undoable
+    ``pictures.scrapheap.restore`` and tell the grid the card is back.
+
+    Args:
+        vault: The vault owning the DB queue and the event bus.
+        picture_ids: The pictures to restore, or ``None`` for the whole
+            Scrapheap. Ids that are live or gone are skipped.
+        actor: Who restored them, for the operation log.
+        source: WS-envelope source (``ui`` or ``external``).
+        origin_client_id: The originating tab, for origin-stamped events.
+        batch_id: The gesture's batch id; a server one is minted when absent.
+
+    Returns:
+        The ids that actually left the Scrapheap: a requested id that is live,
+        or was purged meanwhile, is not in it.
+    """
+
+    def restore(session: Session, ids: Optional[list[int]]):
+        query = select(Picture).where(Picture.deleted.is_(True))
+        if ids is not None:
+            query = query.where(Picture.id.in_(ids))
+        pics = session.exec(query).all()
+        affected_stack_ids: set[int] = set()
+        for pic in pics:
+            pic.deleted = False
+            # Leaving a stale deleted_at on a live picture would let any future
+            # reader mistake it for a scrapheap deadline. The stamp describes
+            # the CURRENT stay in the scrapheap only; a re-delete writes a
+            # fresh one.
+            pic.deleted_at = None
+            session.add(pic)
+            if pic.stack_id is not None:
+                affected_stack_ids.add(pic.stack_id)
+        # Re-fold restored pictures into their stack ordering so a restored
+        # member is not left behind a (now lower-ranked) deleted leader.
+        for stack_id in affected_stack_ids:
+            normalize_stack_positions(session, stack_id)
+        session.flush()
+        return [int(pic.id) for pic in pics]
+
+    def scrapheaped_targets(session: Session):
+        # The targets are not knowable from the arguments: ``None`` means "the
+        # entire scrapheap", and even a named subset may include already-live
+        # ids that will not change. Resolve the real set on the mutation's own
+        # session so the snapshot covers exactly what the write touches.
+        query = select(Picture.id).where(Picture.deleted.is_(True))
+        if picture_ids is not None:
+            query = query.where(Picture.id.in_(picture_ids))
+        return list(session.exec(query).all())
+
+    restored_ids, _operation = operation_log_service.run_recorded_metadata_task(
+        vault,
+        restore,
+        picture_ids,
+        op_type=operation_log_service.OP_SCRAPHEAP_RESTORE,
+        picture_ids=[],
+        resolve_picture_ids=scrapheaped_targets,
+        # Same stack caveat as the soft-delete: normalize_stack_positions
+        # renumbers every member of an affected stack, deleted ones included.
+        expand_stacks=True,
+        expand_stacks_include_deleted=True,
+        summary=operation_log_service.scrapheap_restore_summary,
+        actor=actor,
+        source=source,
+        origin_client_id=origin_client_id,
+        # Always batched: the caller's gesture id when it sent one, a
+        # server-minted ``srv-…`` otherwise.
+        batch_id=batch_id or operation_log_service.new_batch_id(),
+    )
+    # ``restored``, not ``added``: the card comes back, but the picture is not
+    # new to the vault. The SPA's sidebar treats ``added`` as a fresh import and
+    # flashes its NEW marker on the counts that grew, which is wrong for
+    # something that was in the library the whole time. The ids are the ones
+    # that actually came back, so the grid inserts exactly those (an empty list
+    # would make it reload everything) and a no-op restore announces nothing.
+    if restored_ids:
+        vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": restored_ids,
+                "origin_client_id": origin_client_id,
+                "change_kind": "restored",
+            },
+        )
+    return restored_ids
 
 
 def existing_picture_ids_in_session(

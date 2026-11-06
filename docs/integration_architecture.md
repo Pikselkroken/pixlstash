@@ -2357,9 +2357,8 @@ The decision to watermark is made server-side per request based on `User.embed_w
 
 A file whose `pixel_sha` matches a **soft-deleted** picture is neither imported nor an ordinary duplicate.
 Importing it again would put a second copy of every scrapheaped picture back on disk (a bulk "Keep cover only"
-cleanup makes that a predictable way to undo the cleanup and double the bytes); restoring it automatically would
-be the opposite surprise, because the user scrapheapped it deliberately. So the server reports it and the SPA
-**offers** the restore.
+cleanup makes that a predictable way to undo the cleanup and double the bytes). Re-importing it means the user
+wants it back, so the server **restores** the picture and reports the file in its own bucket.
 
 Both status endpoints carry it, and the buckets are disjoint and sum to the total (never derived by subtraction,
 so no summary line can overstate what happened):
@@ -2386,11 +2385,10 @@ policy. Every `POST` sibling that starts an import is already owner only, so no
 caller that could have a task to poll loses access.
 
 `scrapheaped_count` is per **file**; `scrapheaped_picture_ids` is per **picture**, so several incoming copies of one
-scrapheaped picture name its id once. The SPA feeds those ids straight to the **shipped**
-`POST /pictures/scrapheap/restore` (there is deliberately no second restore route, and therefore no new
-`AccessPolicy` declaration): `ImageImporter.vue` raises one sticky notice whose action restores them and reports
-`restored_count` honestly, since retention can sweep a match away between the import and the click. The restore
-broadcasts `CHANGED_PICTURES` with `change_kind: "restored"` (§8), which the grid already consumes.
+scrapheaped picture name its id once; they are the pictures the import restored. Both import paths restore through
+`scrapheap_service.restore_pictures`, the same function behind `POST /pictures/scrapheap/restore`, so the restore
+is one undoable `pictures.scrapheap.restore` operation and broadcasts `CHANGED_PICTURES` with
+`change_kind: "restored"` (§8), which the grid already consumes.
 
 
 ---

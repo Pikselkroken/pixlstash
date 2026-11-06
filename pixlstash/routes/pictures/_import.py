@@ -32,6 +32,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services import operation_log_service, scrapheap_service
 from pixlstash.tasks import TaskType
 from pixlstash.tasks.picture_import_task import PictureImportTask
 from pixlstash.db_models.tag import (
@@ -205,7 +206,8 @@ class StagingOutcome(BaseModel):
     outcome: Literal["new", "duplicate", "scrapheaped", "failed"]
 
     picture_id: Optional[int] = None
-    """The picture a duplicate or scrapheaped file matched, when known."""
+    """The picture a duplicate or scrapheaped file matched, when known. A
+    scrapheaped match is restored by the import."""
 
 
 class StagingStatusResponse(BaseModel):
@@ -230,17 +232,17 @@ class StagingStatusResponse(BaseModel):
     (including a second copy inside this same batch)."""
 
     scrapheaped_count: Optional[int] = None
-    """Staged files whose content matches a picture in the Scrapheap.
+    """Staged files whose content matched a picture in the Scrapheap.
 
-    Not imported again and not restored: the restore is *offered*, because the
-    user scrapheapped those pictures on purpose. Counted per FILE, so
+    Not imported again: the import restores the picture instead, so a re-import
+    brings it back rather than writing a second copy. Counted per FILE, so
     ``imported + duplicate + scrapheaped + failed + cancelled == total``.
     """
 
     scrapheaped_picture_ids: Optional[list[int]] = None
-    """Distinct scrapheaped pictures behind ``scrapheaped_count``, per PICTURE,
-    so several incoming copies of one content name its id once. Feed these
-    straight to ``POST /pictures/scrapheap/restore``."""
+    """Distinct pictures behind ``scrapheaped_count`` that the import restored
+    from the Scrapheap, per PICTURE, so several incoming copies of one content
+    name its id once."""
 
     failed_count: Optional[int] = None
     """Staged files that could not be hashed or ingested."""
@@ -276,8 +278,8 @@ class ImportResultEntry(BaseModel):
 
     status: str
     """``success`` (a new picture), ``duplicate`` (content already live in the
-    vault), or ``scrapheaped`` (content matches a picture in the Scrapheap: not
-    imported again, offered for restore instead)."""
+    vault), or ``scrapheaped`` (content matched a picture in the Scrapheap: not
+    imported again, the picture is restored instead)."""
 
     picture_id: Optional[int] = None
     file: Optional[str] = None
@@ -299,20 +301,19 @@ class ImportStatusResponse(BaseModel):
     """Files whose content is already in the vault as a LIVE picture."""
 
     scrapheaped_count: Optional[int] = None
-    """Files whose content matches a picture in the Scrapheap.
+    """Files whose content matched a picture in the Scrapheap.
 
     Counted per FILE, so ``imported_count + duplicate_count +
-    scrapheaped_count == total``. These files were deliberately not imported
-    again (that would double the bytes on disk and refill the duplicate queue)
-    and deliberately not restored either: the user scrapheapped them on
-    purpose, so restoring is offered, not performed.
+    scrapheaped_count == total``. These files were not imported again (that
+    would double the bytes on disk and refill the duplicate queue); the import
+    restored the matching picture instead.
     """
 
     scrapheaped_picture_ids: Optional[list[int]] = None
-    """Distinct scrapheaped pictures behind ``scrapheaped_count``.
+    """Distinct pictures behind ``scrapheaped_count`` that the import restored.
 
     Per PICTURE, not per file: several incoming copies of the same content name
-    one id once. Feed these straight to ``POST /pictures/scrapheap/restore``.
+    one id once.
     """
 
     error: Optional[str] = None
@@ -335,6 +336,9 @@ def register_routes(router, server):
         # contextvar is dead, so we stash this on the task record and carry it
         # explicitly into the PICTURE_IMPORTED event below.
         origin_client_id = getattr(request.state, "origin_client_id", None)
+        # Who is importing, for the operation-log entry of any Scrapheap match
+        # this import restores. Read here for the same reason as above.
+        restore_context = operation_log_service.request_context(request)
         _MAX_UPLOAD_BYTES = 20 * 1024**3  # 20 GB per uploaded file / zip
         _MAX_ZIP_ENTRIES = 50_000  # max files inside a zip
         _MAX_ZIP_DECOMPRESSED_BYTES = 50 * 1024**3  # 50 GB total decompressed
@@ -632,11 +636,10 @@ def register_routes(router, server):
                 scrapheaped_count = 0
                 picture_id_sidecar_tags: dict[int, set[str]] = defaultdict(set)
                 duplicate_picture_id_set: set[int] = set()
-                # Distinct scrapheaped pictures the caller may restore. Several
+                # Distinct scrapheaped pictures this import restores. Several
                 # incoming files can match the SAME scrapheaped picture: the
                 # count is per FILE (so the buckets sum to the file total) while
-                # this list is per PICTURE (so the restore offer is honest about
-                # how many rows come back).
+                # this list is per PICTURE (how many rows come back).
                 scrapheaped_picture_ids: list[int] = []
                 seen_scrapheaped_ids: set[int] = set()
                 seen_new_fingerprints = set()
@@ -702,9 +705,8 @@ def register_routes(router, server):
                         pic.id is not None
                         and stem in sidecar_tags_by_stem
                         and sidecar_tags_by_stem[stem]
-                        # A scrapheaped match is not being imported and the user
-                        # has not decided to restore it yet, so this import must
-                        # not edit its tags behind its back.
+                        # A restored match comes back as it was: its tags are
+                        # not replaced (it may sit in a locked set).
                         and fingerprint not in scrapheaped_map
                     ):
                         picture_id_sidecar_tags[pic.id].update(
@@ -717,14 +719,21 @@ def register_routes(router, server):
                         duplicate_count,
                         len(uploaded_files),
                     )
-                if scrapheaped_count:
-                    logger.warning(
-                        "Import completed with %d file(s) out of %d matching %d "
-                        "scrapheaped picture(s) %s: NOT imported again, offered "
-                        "for restore instead.",
+                if scrapheaped_picture_ids:
+                    matched_ids = scrapheaped_picture_ids
+                    # Report what was restored, not what matched: a match the
+                    # retention sweep purged meanwhile did not come back.
+                    scrapheaped_picture_ids = scrapheap_service.restore_pictures(
+                        vault, matched_ids, **restore_context
+                    )
+                    logger.info(
+                        "Import task %s: %d file(s) out of %d matched "
+                        "scrapheaped picture(s) %s; restored %s instead of "
+                        "importing a second copy.",
+                        task_id,
                         scrapheaped_count,
                         len(uploaded_files),
-                        len(scrapheaped_picture_ids),
+                        matched_ids,
                         scrapheaped_picture_ids,
                     )
                 bucket_total = imported_count + duplicate_count + scrapheaped_count
@@ -756,10 +765,8 @@ def register_routes(router, server):
                 )
                 # Only apply import context to pictures that were actually
                 # touched by this request (one results row per uploaded file).
-                # Scrapheaped matches are deliberately excluded: they were not
-                # imported, and stamping `imported_at` / joining them to the
-                # target project would quietly act on a picture the user has not
-                # chosen to restore.
+                # Restored Scrapheap matches come back as they were, as on the
+                # staging path: no new project, no "added" announcement.
                 all_imported_ids = list(
                     dict.fromkeys(
                         entry.get("picture_id")
@@ -1567,7 +1574,7 @@ def register_routes(router, server):
             )
 
         task = PictureImportTask(
-            server.vault.db,
+            server.vault,
             list(staged_files),
             project_id=session["project_id"],
             set_id=session["set_id"],
@@ -1576,6 +1583,7 @@ def register_routes(router, server):
             staging_id=staging_id,
             staging_dir=session["staging_dir"],
             origin_client_id=session["origin_client_id"],
+            restore_context=operation_log_service.request_context(request),
         )
         task_id = server.vault.submit_task(task)
         if task_id is None:

@@ -11,9 +11,6 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 import { useImportArrivalsStore } from "../../stores/useImportArrivalsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
-import { useNoticeStore } from "../../stores/useNoticeStore";
-import { restoreScrapheap } from "../../api/pictures";
-import { errorDetail } from "../../utils/apiError";
 import AppBarButton from "../widgets/AppBarButton.vue";
 
 const props = defineProps({
@@ -29,7 +26,6 @@ const COLLAPSED_ROWS = 2;
 
 const arrivals = useImportArrivalsStore();
 const tasksStore = useTasksStore();
-const noticeStore = useNoticeStore();
 
 /** runId → true once its counter tile was clicked. */
 const expanded = ref({});
@@ -105,7 +101,7 @@ function chips(run) {
     {
       id: "scrapheaped",
       icon: "mdi-delete-restore",
-      text: `${count(c.scrapheaped)} in Scrapheap`,
+      text: `${count(c.scrapheaped)} restored from Scrapheap`,
       action: "Show",
       n: c.scrapheaped,
     },
@@ -176,34 +172,6 @@ function markBroken(tile) {
   broken.value = new Set(broken.value).add(tile.key);
 }
 
-const restoring = ref(new Set());
-async function restore(run, tile) {
-  if (!tile.pictureId || restoring.value.has(tile.key)) return;
-  restoring.value = new Set(restoring.value).add(tile.key);
-  try {
-    const data = await restoreScrapheap([tile.pictureId]);
-    if (Number(data?.restored_count ?? 0) > 0) {
-      arrivals.markRestored(run.id, tile.key);
-      noticeStore.success("Restored from the Scrapheap.");
-    } else {
-      noticeStore.warning("That picture had already left the Scrapheap.");
-    }
-  } catch (error) {
-    console.error(
-      "Restoring a scrapheaped import match failed",
-      tile.pictureId,
-      error,
-    );
-    noticeStore.error(
-      errorDetail(error) || "Could not restore that picture. Please try again.",
-    );
-  } finally {
-    const next = new Set(restoring.value);
-    next.delete(tile.key);
-    restoring.value = next;
-  }
-}
-
 function markIcon(tile) {
   if (tile.state === "uploading") return "mdi-tray-arrow-up";
   if (tile.state === "landed") return "mdi-check";
@@ -217,7 +185,7 @@ function tileLabel(tile) {
     new: "new, importing",
     landed: "added",
     duplicate: "already in library",
-    scrapheaped: "in the Scrapheap",
+    scrapheaped: "restored from the Scrapheap",
     unsupported: "not a supported format",
     failed: "could not be read",
   }[tile.state];
@@ -399,24 +367,15 @@ onBeforeUnmount(() => {
                 ? "In library"
                 : tile.state === "failed"
                   ? "Could not be read"
-                  : "In Scrapheap"
+                  : "Restored"
             }}
             <button
-              v-if="tile.state === 'duplicate' && tile.pictureId"
+              v-if="tile.state !== 'failed' && tile.pictureId"
               type="button"
               class="arr-strip-link"
               @click="emit('show-picture', tile.pictureId)"
             >
               Show
-            </button>
-            <button
-              v-else-if="tile.state === 'scrapheaped' && tile.pictureId"
-              type="button"
-              class="arr-strip-link"
-              :disabled="restoring.has(tile.key)"
-              @click="restore(run, tile)"
-            >
-              Restore
             </button>
           </div>
         </div>

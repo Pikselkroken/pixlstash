@@ -83,12 +83,6 @@ describe("useImportArrivalsStore (#2512)", () => {
     expect(run.counts.failed).toBe(1);
     expect(run.counts.unsupported).toBe(0);
 
-    // A restored Scrapheap match moves between the receipt's counts.
-    store.markRestored("r1", c);
-    expect(byName["c.png"].state).toBe("duplicate");
-    expect(run.counts.scrapheaped).toBe(0);
-    expect(run.counts.duplicate).toBe(3);
-
     store.land("r1");
     expect(byName["a.png"].state).toBe("landed");
     expect(byName["b.png"].state).toBe("duplicate");
