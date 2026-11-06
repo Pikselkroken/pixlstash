@@ -268,7 +268,8 @@
                  beneath, and a picker of what on the shelf could replace it.
                  Changing a file that loads is the set menu's, in the header. -->
             <!-- A model file dropped on a missing row goes onto the shelf
-                 (useModelDropTarget), and the row then takes it. -->
+                 (useWindowFileImport, useModelDropTarget), and the row then
+                 takes it. -->
             <div
               v-for="row in modelRows"
               :key="row.address"
@@ -2573,6 +2574,8 @@ function takesDrop(row) {
  * (`useWindowFileImport`): ask again, and where the row is still missing, pick
  * the file just added, as an unsaved change. One under the missing file's own
  * name needs no pick: once the shelf holds it, the row is no longer missing.
+ * Its replacements are read here rather than off `checkInstalled`, which a
+ * newer check may have superseded before it wrote them.
  */
 async function replaceWithDropped(address, event) {
   const key = selectedKey.value;
@@ -2582,10 +2585,24 @@ async function replaceWithDropped(address, event) {
   if (selectedKey.value !== key) return;
   const row = modelRows.value.find((entry) => entry.address === address);
   if (!row?.missing) return;
-  const match = replacementsByFile.value[
-    `${row.kind}:${row.file}`
-  ]?.replacements?.find((candidate) =>
-    added.some((file) => sameFile(candidate.filename, file)),
+  let answer;
+  try {
+    answer = await readModelSwap(key, swapAsk(row.kind, row.file, true));
+  } catch (err) {
+    console.warn(`[workflows] could not read replacements for ${row.file}`, err);
+  }
+  if (selectedKey.value !== key) return;
+  if (answer) {
+    replacementsByFile.value = {
+      ...replacementsByFile.value,
+      [`${row.kind}:${row.file}`]: answer,
+    };
+  }
+  // Never the row's own file: picking that is no change at all.
+  const match = answer?.replacements?.find(
+    (candidate) =>
+      !sameFile(candidate.filename, row.file) &&
+      added.some((file) => sameFile(candidate.filename, file)),
   );
   const named = modelLabel(fileName(match?.filename ?? added[0]));
   if (!match) {

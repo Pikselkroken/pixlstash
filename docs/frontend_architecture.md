@@ -6616,8 +6616,9 @@ models — a Workflows-screen card (its slots' hashes) or a workflow set card on
 shelf grid (its members' ids). `data-model-drop-replace="<loader address>"` is a
 missing model's row in the Workflow tab: the file goes to the default folder, and
 once it is registered the handler dispatches `model-file-added` (`{ files }`) on
-the row, which asks the pre-flight again and, if the row is still missing, picks
-the new shelf model as an unsaved change. Anywhere else sends no destination and the server
+the row, which asks the pre-flight and its replacements again and, if the row is
+still missing, picks the new shelf model as an unsaved change, or says its loader
+cannot load it. Anywhere else sends no destination and the server
 uses the default folder. For a card, the shelf rows are read fresh
 (`/checkpoints` and `/adapters` for every kind a card can name, VAEs and text
 encoders included; the shelf store holds only what its filters fetched) and the
