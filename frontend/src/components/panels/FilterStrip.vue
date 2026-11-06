@@ -27,11 +27,15 @@
       <button
         class="filter-strip-clear"
         type="button"
-        :title="ownsEscape ? 'Clear all filters (Esc)' : undefined"
         :aria-keyshortcuts="ownsEscape ? 'Escape' : undefined"
         @click="clearAll"
       >
         Clear all
+        <Tooltip
+          v-if="ownsEscape"
+          text="Clear all filters (Esc)"
+          activator="parent"
+        />
       </button>
     </span>
   </div>
@@ -55,6 +59,7 @@ import { useFilterCounts } from "../../composables/useFilterCounts";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { filterChips } from "../../utils/filterChips";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   // The grid's view with no filters, pre-encoded (buildFilterCountBaseQuery).
