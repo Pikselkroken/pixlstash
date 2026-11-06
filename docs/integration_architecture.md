@@ -866,11 +866,13 @@ Seven rules the client must not re-derive:
    /api/v1/model-downloads {file}` can fetch it, which the Workflow tab and the
    Run popup offer as a download icon beside the name. The download's row is
    `downloads` on `GET /api/v1/workers/progress`, `[{id, file, host,
-   folder_path, status, received, total, percent, error, model_id, sha256,
-   directory, slot}]` with
+   folder_path, status, received, total, percent, error, page_url, model_id,
+   sha256, directory, slot}]` with
    `status` `running`, `done`, `failed` or `cancelled`, an ended one listed for
    30 s (`sha256` the digest the template list records, null without one;
-   `directory` the ComfyUI folder; `slot` the set slot it fills);
+   `directory` the ComfyUI folder; `slot` the set slot it fills; `page_url`
+   the Hugging Face page of a model whose download was gated, which the
+   failure notice offers as *Open page*);
    `POST /api/v1/model-downloads/{id}/cancel` stops one; backend
    §25.12),
    `models_downloading: {models: [{file, folder, sha256?, percent}]}` (a model

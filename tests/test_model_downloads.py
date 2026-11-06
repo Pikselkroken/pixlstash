@@ -370,11 +370,12 @@ def test_a_gated_model_fails_saying_its_licence_must_be_accepted(hub, target, li
         status=401,
         headers={"X-Error-Code": "GatedRepo"},
     ) as url:
-        linked(url, None)
+        linked(url, "loras")
         done = _wait(start_download(hub, "gated.safetensors")["id"])
     assert done["status"] == STATUS_FAILED
-    assert "accepted the model's licence" in done["error"], done["error"]
-    assert str(chosen) in done["error"]
+    assert done["error"].startswith("It is gated on Hugging Face."), done["error"]
+    # Where the download would have put it: the ComfyUI subfolder too.
+    assert f"into {chosen / 'loras'};" in done["error"]
     assert done["page_url"] is None
     assert os.listdir(chosen) == ["loras"]
 
@@ -410,7 +411,7 @@ def test_a_gated_hugging_face_file_links_its_model_page(
 ):
     url = "https://huggingface.co/org/repo/resolve/main/x.safetensors"
     monkeypatch.setattr(model_downloads, "_open", lambda u, live: _Answer(401, headers))
-    entry = {"folder_path": str(tmp_path), "page_url": None}
+    entry = {"_target": str(tmp_path / "x"), "page_url": None}
     with pytest.raises(
         model_downloads.requests.HTTPError if page is None else ValueError
     ):

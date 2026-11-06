@@ -612,11 +612,13 @@ def _fetch(
             # No Hugging Face token is sent, so a gated file is never served
             # here; the owner accepts its licence and downloads it themselves.
             entry["page_url"] = model_page(url)
+            # Instruction first: the notice shows three lines. Where the
+            # download would have put it, its ComfyUI subfolder included, so
+            # the folder still says what kind of model it is.
             raise ValueError(
-                "Hugging Face only gives it to someone who has accepted the "
-                "model's licence. Open its page, accept it there and download "
-                f"the file into {entry['folder_path']}: PixlStash picks it up "
-                "from there."
+                "It is gated on Hugging Face. Open its page, get access there, "
+                f"and save the file into {os.path.dirname(entry['_target'])}; "
+                "PixlStash picks it up from there."
             )
         response.raise_for_status()
         if _left_https(url, response):

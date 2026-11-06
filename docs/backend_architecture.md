@@ -11550,9 +11550,10 @@ an address of its choosing.
   file behind (inert: no row names it and the scanner skips the suffix); no
   Hugging Face or Civitai token is sent, so a gated file cannot be fetched:
   Hugging Face answers it `401` with `X-Error-Code: GatedRepo`, and the
-  download fails saying its licence must be accepted, with the entry's
-  `page_url` set to the repository's page (`model_page`, `huggingface.co`
-  links only) for the owner to accept it and download the file by hand;
+  download fails saying it is gated and naming the folder it would have gone
+  into, with the entry's `page_url` set to the repository's page
+  (`model_page`, `huggingface.co` links only) for the owner to get access and
+  download the file by hand;
   relocating the download folder mid-download fails that download.
 
 ### 25.13 Folders scan themselves, and picking up a model before they do (#1985)
