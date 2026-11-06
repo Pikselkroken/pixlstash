@@ -637,10 +637,14 @@ function clearAll() {
   searchStore.searchQuery = "";
   filters.resetFilters();
   selectionSize.value = 0;
-  // At rest the × vanishes with what it cleared; focus goes to the field.
-  if (!open.value) {
-    nextTick(() => rootRef.value?.querySelector(".stf-rest")?.focus());
-  }
+  // The × vanishes with what it cleared, so focus goes to the field: the
+  // input when open (a keyboard press on the × would otherwise drop it to the
+  // body), the resting field when closed.
+  nextTick(() =>
+    open.value
+      ? focusInput()
+      : rootRef.value?.querySelector(".stf-rest")?.focus(),
+  );
 }
 
 function removeSelectedOrLast() {

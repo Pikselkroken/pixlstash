@@ -366,11 +366,15 @@ describe("SearchTokenField", () => {
     search.searchQuery = "rain";
     search.searchInput = "rain";
     filters.tagFilter = ["umbrella"];
-    filters.mediaTypeFilter = "video";
+    filters.mediaTypeFilter = "videos";
     wrapper = mount(SearchTokenField, {
       attachTo: document.body,
       global: { stubs: { "v-icon": true, Tooltip: true } },
     });
+    // Both filters are on show, so the × clears what the field names.
+    expect(wrapper.find("button.stf-rest").text()).toContain(
+      "rain · video · umbrella",
+    );
     const clear = wrapper.find("button.stf-clear");
     expect(clear.attributes("aria-label")).toBe("Clear search and filters");
     await clear.trigger("click");
@@ -389,10 +393,19 @@ describe("SearchTokenField", () => {
 
   it("clears typed words and tokens while open, and stays open", async () => {
     useFilterStore().tagFilter = ["rain"];
-    await mountField();
-    await type("look");
-    await wrapper.find("button.stf-clear").trigger("click");
+    wrapper = mount(SearchTokenField, {
+      attachTo: document.body,
+      global: { stubs: { "v-icon": true, Tooltip: true } },
+    });
+    await wrapper.vm.focus();
     await flushPromises();
+    await type("look");
+    // As a keyboard press leaves it: focus on the ×, not the input.
+    const clear = wrapper.find("button.stf-clear");
+    clear.element.focus();
+    await clear.trigger("click");
+    await flushPromises();
+    expect(document.activeElement).toBe(input().element);
     expect(useSearchStore().searchInput).toBe("");
     expect(useFilterStore().tagFilter).toEqual([]);
     expect(wrapper.find("input.stf-input").exists()).toBe(true);
