@@ -729,7 +729,7 @@ describe("DedupCompareDialog: the verdict footer", () => {
     const buttons = footerButtons(mountDialog());
     expect(buttons[1].find("kbd").text()).toBe("K");
     expect(buttons[1].find("button").attributes("aria-keyshortcuts")).toBe("K");
-    expect(buttons[2].find("kbd").text()).toBe("↵");
+    expect(buttons[2].find("kbd").html()).toContain("mdi-subdirectory-arrow-left");
   });
 
   it("emits the verdict the user picked", () => {
@@ -2038,7 +2038,7 @@ describe("DedupCompareDialog: the mixed verdict footer", () => {
     const buttons = footerButtons(mountMixed());
     expect(buttons[2].text()).toContain("Split off 1");
     expect(buttons[2].props("iconLeft")).toBe("call-split");
-    expect(buttons[2].find("kbd").text()).toBe("↵");
+    expect(buttons[2].find("kbd").html()).toContain("mdi-subdirectory-arrow-left");
 
     const dissolving = footerButtons(
       mountMixed({ primaryLabel: "Unstack all 4", primaryIcon: "layers-off" }),

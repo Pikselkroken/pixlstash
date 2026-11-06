@@ -94,11 +94,11 @@
             :tabindex="focused ? 0 : -1"
             :disabled="busy"
             aria-keyshortcuts="Enter"
+            :key-hint="focused ? 'enter' : ''"
             v-bind="mergeProps(tipProps, primaryLockAttrs)"
             @click.stop="emit('resolve')"
           >
             {{ plan.label }}
-            <kbd v-if="focused" aria-hidden="true">Enter</kbd>
           </AppButton>
         </template>
       </Tooltip>
@@ -125,6 +125,7 @@
         :tabindex="focused ? 0 : -1"
         :disabled="busy"
         aria-keyshortcuts="K"
+        :key-hint="showsKeepKey ? 'k' : ''"
         :tooltip="
           bulk
             ? `Leave all ${selectionCount} selected stacks exactly as they are. They stop being listed until their pictures change.`
@@ -133,17 +134,16 @@
         @click.stop="emit('keep')"
       >
         {{ bulk ? `Keep ${selectionCount} stacks` : "Keep" }}
-        <kbd v-if="showsKeepKey" aria-hidden="true">K</kbd>
       </AppButton>
       <AppButton
         variant="ghost"
         icon-left="compare-horizontal"
         data-testid="mixed-compare"
+        :key-hint="focused ? 'c' : ''"
         :tabindex="focused ? 0 : -1"
         @click.stop="emit('compare')"
       >
         Compare all {{ members.length }}
-        <kbd v-if="focused" aria-hidden="true">C</kbd>
       </AppButton>
       <!-- Back to the review queue, but only when there is somewhere real to
            land: that queue is paged, and a shortcut that scrolled to a guessed
@@ -677,15 +677,5 @@ function onDblClick(event) {
    refused primary (`aria-disabled`) takes AppButton's own disabled fade. */
 .gact > button {
   justify-content: flex-start;
-}
-
-kbd {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  line-height: var(--leading-snug);
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-sm);
-  border: 1px solid currentColor;
-  opacity: 0.7;
 }
 </style>

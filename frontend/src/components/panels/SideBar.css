@@ -1259,7 +1259,8 @@
 
 .sidebar-kbd {
   display: inline-block;
-  padding: 0 var(--space-2);
+  padding: var(--kbd-pad);
+  line-height: var(--kbd-leading);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
   background: rgb(var(--v-theme-input-background));

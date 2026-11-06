@@ -139,12 +139,12 @@
               >
               <!-- What Enter would add, where the size was: says which row
                    the key acts on without making it look pressed. -->
-              <span
+              <KeyCap
                 v-if="pick && item.id === targetKey"
+                k="Enter"
                 class="fm-kbd wsc__enter"
                 aria-hidden="true"
-                >⏎</span
-              >
+              />
             </div>
             <button
               v-if="section.more"
@@ -224,6 +224,7 @@ import {
 import AppButton from "../widgets/AppButton.vue";
 import DownloadingMark from "../widgets/DownloadingMark.vue";
 import FavouriteHeart from "../widgets/FavouriteHeart.vue";
+import KeyCap from "../widgets/KeyCap.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import Segmented from "../widgets/Segmented.vue";
 

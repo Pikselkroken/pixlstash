@@ -93,8 +93,17 @@
       <div class="rs-keys" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
         <h3 class="rs-keys-title">Keyboard shortcuts</h3>
         <dl class="rs-keys-list">
-          <template v-for="[k, label] in SHORTCUTS" :key="k">
-            <dt><kbd>{{ k }}</kbd></dt>
+          <template v-for="[alternatives, label] in SHORTCUTS" :key="label">
+            <dt>
+              <template v-for="(keys, i) in alternatives" :key="i"
+                >{{ i ? " / " : ""
+                }}<KeyCap
+                  v-for="(key, j) in keys"
+                  :key="key"
+                  :k="key"
+                  :class="{ 'kbd-or': i && !j }"
+              /></template>
+            </dt>
             <dd>{{ label }}</dd>
           </template>
         </dl>
@@ -176,6 +185,7 @@ import ReviewSessionView from "../reviews/ReviewSessionView.vue";
 import ReviewArchivedReceipt from "../reviews/ReviewArchivedReceipt.vue";
 import NewReviewDialog from "../reviews/NewReviewDialog.vue";
 import RailTags from "../panels/RailTags.vue";
+import KeyCap from "../widgets/KeyCap.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import ViewBackButton from "../widgets/ViewBackButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -184,7 +194,7 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useProjectStore } from "../../stores/useProjectStore";
-import { formatKeyHint, undoKeyHint } from "../../utils/shortcutHints";
+import { undoKeyHint } from "../../utils/shortcutHints";
 import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
@@ -290,19 +300,20 @@ const archivedReview = computed(() =>
 // and `U` is the reviewer muscle memory that keeps working. "in this review" is
 // the whole point of the row: it is the only place the scope boundary between
 // the review's undo and the app-wide one is taught before the user hits it.
+// Each row's keys are its alternatives, each one the keys of a chord.
 const SHORTCUTS = computed(() => [
-  ["Y / N", "Answer a binary card (yes / no)"],
-  ["B / N / L / R", "Answer a pair card (both / neither / left / right)"],
-  ["S", "Skip - leaves the queue undecided, no change made"],
+  [[["Y"], ["N"]], "Answer a binary card (yes / no)"],
   [
-    `U / ${formatKeyHint(undoKeyHint())}`,
-    "Undo the last decision in this review",
+    [["B"], ["N"], ["L"], ["R"]],
+    "Answer a pair card (both / neither / left / right)",
   ],
-  ["H", "Show / hide the evidence region"],
-  ["T", "Apply tags to the pictured image(s)"],
-  ["/", "Filter the tag health board"],
-  ["?", "This cheat-sheet"],
-  ["Esc", "Close the topmost layer"],
+  [[["S"]], "Skip - leaves the queue undecided, no change made"],
+  [[["U"], undoKeyHint()], "Undo the last decision in this review"],
+  [[["H"]], "Show / hide the evidence region"],
+  [[["T"]], "Apply tags to the pictured image(s)"],
+  [[["/"]], "Filter the tag health board"],
+  [[["?"]], "This cheat-sheet"],
+  [[["Esc"]], "Close the topmost layer"],
 ]);
 
 // Translate the app's current selection into the dialog's scope prefill, so a
@@ -828,7 +839,7 @@ onUnmounted(() => {
 .rs-keys-list kbd {
   font-family: var(--font-mono, monospace);
   font-size: var(--text-2xs);
-  padding: 1px 6px;
+  padding: var(--kbd-pad);
   border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.3);
   background: rgba(var(--v-theme-on-dark-surface), 0.08);

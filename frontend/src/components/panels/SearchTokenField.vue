@@ -148,7 +148,7 @@
             <span class="stf-row-label"
               >Search descriptions and text for “{{ query }}”</span
             >
-            <span class="stf-row-keys"><kbd>↵</kbd></span>
+            <span class="stf-row-keys"><KeyCap k="Enter" /></span>
           </div>
           <template v-for="section in sections" :key="section.label">
             <div class="stf-sec tbm-label" role="presentation">
@@ -186,10 +186,10 @@
           </template>
         </div>
         <div class="stf-foot">
-          <span><kbd>↵</kbd> search words</span>
+          <span><KeyCap k="Enter" /> search words</span>
           <span><kbd>Tab</kbd> add filter</span>
-          <span><kbd>⇧Tab</kbd> without tag</span>
-          <span><kbd>⌫</kbd> remove</span>
+          <span><KeyCap k="Shift" /><KeyCap k="Tab" /> without tag</span>
+          <span><KeyCap k="Backspace" /> remove</span>
           <span><kbd>Esc</kbd> close</span>
         </div>
       </div>
@@ -235,6 +235,7 @@ import {
 } from "../../utils/filterChips";
 import { isGroupToken } from "../../stores/useTagGroupsStore";
 import Tooltip from "../widgets/Tooltip.vue";
+import KeyCap from "../widgets/KeyCap.vue";
 
 const props = defineProps({
   // "No character" and "In no set" only exist in All Pictures.
@@ -864,8 +865,16 @@ defineExpose({ focus });
   white-space: nowrap;
   text-align: left;
 }
+/* A lone mono 2xs F is a speck at arm's length: the field's keycap takes the UI
+   face a step up, as FilterTagField's do, in the tightest keycap inset. The
+   text-coloured border is kept from before: on the field's own fill the
+   theme border of `.fm-kbd` all but vanishes. */
 .stf-rest-kbd {
   flex-shrink: 0;
+  font-family: var(--kbd-font-field);
+  font-size: var(--kbd-size-field);
+  padding: var(--kbd-pad-field);
+  border-color: currentColor;
 }
 /* Room for the × laid over the resting field's end. */
 .stf-rest--active {
@@ -1068,12 +1077,20 @@ defineExpose({ focus });
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
-kbd {
+/* The list's and the footer's hints. Scoped to them: a bare `kbd` here also
+   out-ranked `.fm-kbd` on the at-rest F. */
+.stf-row-keys kbd,
+.stf-foot kbd {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  padding: 0 var(--space-1);
+  padding: var(--kbd-pad);
   border: 1px solid currentColor;
   border-radius: var(--radius-sm);
+}
+/* An icon key is a tall cap, as on the dialog buttons. */
+.stf-row-keys .keycap--icon,
+.stf-foot .keycap--icon {
+  padding-inline: var(--space-1);
 }
 /* The field matches the bar buttons beside it on touch. */
 @media (hover: none) and (pointer: coarse) {

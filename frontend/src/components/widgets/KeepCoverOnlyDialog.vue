@@ -44,6 +44,7 @@ import {
   keepCoverOnlySkippedCount,
   keepCoverOnlyTitle,
 } from "../../utils/keepCoverOnly";
+import KeyCap from "./KeyCap.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -269,7 +270,9 @@ watch(
 
     <p class="kco-reversible">
       <v-icon size="16" class="kco-icon">mdi-information-outline</v-icon>
-      Reversible as one step with <kbd>Ctrl</kbd>+<kbd>Z</kbd>.
+      Reversible as one step with
+      <!-- One flex item, so the paragraph's gap does not split the chord. -->
+      <span><KeyCap k="Ctrl" /><kbd>Z</kbd></span>.
     </p>
 
     <template #footer>
@@ -421,7 +424,7 @@ watch(
 .kco-reversible kbd {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  padding: var(--space-1) var(--space-2);
+  padding: var(--kbd-pad);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.3);
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.08);

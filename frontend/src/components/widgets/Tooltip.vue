@@ -398,10 +398,10 @@ function onDocumentKeydown(e) {
 
 .app-tooltip__key {
   flex-shrink: 0;
-  padding: 0 var(--space-2);
+  padding: var(--kbd-pad);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  line-height: 1.5;
+  line-height: var(--kbd-leading);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
   background: color-mix(

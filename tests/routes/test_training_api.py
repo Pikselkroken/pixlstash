@@ -171,7 +171,9 @@ def _setup(checkout=True):
     server.vault.training_room = lambda: dict(_ROOM_24GB)
 
     client = TestClient(server.api, raise_server_exceptions=True)
-    resp = client.post("/login", json={"username": "owner", "password": "ownerpass1"})
+    resp = client.post(
+        "/login", json={"username": "owner", "password": "example-ownerpass1"}
+    )
     assert resp.status_code == 200, resp.text
 
     # Mint a global READ token (scoped → token_scope set → must be rejected).
@@ -2488,11 +2490,11 @@ def test_host_path_redaction_covers_spaces_file_uris_and_windows_paths():
     """A path with spaces is redacted to its end, a file:// URI is redacted, and
     a Windows path still is. Found by review F5: the old pattern stopped at the
     first space and never matched a URI."""
-    assert _redact_host_paths("/Users/Alice Smith/AI Toolkit/run.py") == "<host path>"
-    assert _redact_host_paths("file:///home/alice/x") == "<host path>"
-    assert _redact_host_paths(r"C:\Users\alice\ai\run.py") == "<host path>"
+    assert _redact_host_paths("/home/me/AI Toolkit/run.py") == "<host path>"
+    assert _redact_host_paths("file:///home/me/x") == "<host path>"
+    assert _redact_host_paths(r"D:\ai\run.py") == "<host path>"
     assert (
-        _redact_host_paths('{"python": "/home/alice/.venv/bin/python"}')
+        _redact_host_paths('{"python": "/home/me/.venv/bin/python"}')
         == '{"python": "<host path>"}'
     )
     # URLs and ratios are not paths.
@@ -2512,14 +2514,15 @@ def test_job_error_with_spaced_path_and_file_uri_is_redacted():
             server,
             name=name,
             trigger_word=trigger,
-            report="wrote /Users/Alice Smith/AI Toolkit/run.py",
-            error="cannot open file:///home/alice/x",
+            report="wrote /home/me/AI Toolkit/run.py",
+            error="cannot open file:///home/me/x",
         )
         detail = owner.get(f"/training/jobs/{job_id}").json()
         assert detail["report"] == "wrote <host path>", detail["report"]
         assert detail["error"] == "cannot open <host path>", detail["error"]
         for text in _walk_strings(detail):
-            assert "Smith" not in text and "alice" not in text, text
+            # The tail past the space is what the old pattern leaked.
+            assert "Toolkit" not in text and "/home/me" not in text, text
 
         (listed,) = [j for j in owner.get("/training/jobs").json() if j["id"] == job_id]
         live = owner.get(f"/training/jobs/{job_id}/live").json()

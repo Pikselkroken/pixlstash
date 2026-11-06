@@ -214,7 +214,7 @@
               text="Apply this decision despite the earlier call (Enter)."
               activator="parent"
             />
-            <kbd>↵</kbd> Apply
+            <KeyCap k="Enter" /> Apply
           </button>
           <button class="rs-confirm-btn" type="button" @click="cancelPending">
             <Tooltip
@@ -274,6 +274,7 @@ import {
 import ReviewBinaryCard from "./ReviewBinaryCard.vue";
 import ReviewPairCard from "./ReviewPairCard.vue";
 import ReviewDecisionBar from "./ReviewDecisionBar.vue";
+import KeyCap from "../widgets/KeyCap.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import ReviewCelebration from "./ReviewCelebration.vue";
 
@@ -1042,7 +1043,7 @@ defineExpose({ handleKey });
 .rs-confirm-btn kbd {
   font-family: var(--font-mono, monospace);
   font-size: 10px;
-  padding: 0 var(--space-2);
+  padding: var(--kbd-pad-tight);
   border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.3);
 }

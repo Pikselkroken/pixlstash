@@ -82,6 +82,25 @@
   --control-h-sm: 24px;
   --control-h-bar: 32px;
 
+  /* ---------------------------------------------------------------------------
+     KEYCAP - the keyboard-hint badge (`kbd`; visual-language.md, "The key-hint
+     badge"). One box everywhere so the border never hugs the glyph. Each site
+     keeps its own font and colour; only the inset is shared. The 6px side is
+     deliberately between steps, the owner's call (2026-10-28): 8px is too loose
+     inside a pill or a 28px button, 4px too tight.
+     --------------------------------------------------------------------------- */
+  --kbd-pad: var(--space-1) var(--space-3);  /* 2px 8px - the default keycap */
+  --kbd-side-tight: 6px;
+  --kbd-pad-tight: var(--space-1) var(--kbd-side-tight); /* inside a control: pills, bars */
+  --kbd-pad-field: 0 var(--space-2);         /* the F inside the search field */
+  --kbd-font-field: var(--font-ui);          /* ...set in the UI face, the one exception */
+  --kbd-size-field: var(--text-sm);
+  --kbd-leading: var(--leading-snug);
+  --kbd-chord-gap: var(--space-1);           /* Shift + Tab: tight, so it reads as one press */
+  /* AppButton's hint: 4px clear above and below inside the button. */
+  --kbd-h-button: calc(var(--control-h) - 2 * var(--space-2));
+  --kbd-h-button-sm: calc(var(--control-h-sm) - 2 * var(--space-2));
+
   /* SEGMENTED TRACK, stacked variant (buttons.md, "Pick one"): a media box
      above the label, for a picker whose icon draws the shape of the outcome.
      8 + 40 + 4 + 16 + 8 = 76, and the track adds --space-2 either side. The

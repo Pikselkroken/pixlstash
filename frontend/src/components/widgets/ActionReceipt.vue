@@ -30,6 +30,7 @@
 import { computed, ref } from "vue";
 
 import { useActionReceipt } from "../../composables/useActionReceipt";
+import KeyCap from "./KeyCap.vue";
 import { useBottomAnchor } from "../../composables/useBottomAnchor";
 import AppBarButton from "./AppBarButton.vue";
 
@@ -154,7 +155,7 @@ function onUndo(event) {
             >{{ actionLabel }}</AppBarButton
           >
           <span class="kbdhint" aria-hidden="true">
-            <kbd v-for="key in keyHint" :key="key">{{ key }}</kbd>
+            <KeyCap v-for="key in keyHint" :key="key" :k="key" />
           </span>
         </template>
         <span class="r-progress run" aria-hidden="true"></span>
@@ -258,10 +259,10 @@ function onUndo(event) {
   background: transparent;
 }
 
+/* The chord's gap is the global `kbd + kbd` rule's. */
 .kbdhint {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
   flex-shrink: 0;
 }
 

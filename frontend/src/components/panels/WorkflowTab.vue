@@ -1227,10 +1227,10 @@
           block
           :aria-disabled="runTarget && !runTarget.draft ? undefined : 'true'"
           :aria-describedby="runDescribedBy"
+          key-hint="r"
           @click="run"
         >
           {{ changeCount && !multiple ? "Run with changes…" : "Run…" }}
-          <kbd class="wftab-key" aria-hidden="true">R</kbd>
         </AppButton>
         <!-- Beside Run…, as the ComfyUI mark: the ComfyUI-PixlStash node reads
              `?pixlstash_workflow=` and loads the graph, so without the node
@@ -5836,22 +5836,6 @@ async function checkInstalled(key, { quiet = false, fresh = false } = {}) {
   object-fit: cover;
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.06);
-}
-
-/* The Run… keycap: the letter in a small bordered box, dimmed to the button's
-   own ink. */
-.wftab-key {
-  display: inline-block;
-  min-width: var(--space-4);
-  margin-left: var(--space-2);
-  padding: 0 var(--space-1);
-  border: 1px solid currentColor;
-  border-radius: var(--radius-sm);
-  font-family: inherit;
-  font-size: var(--text-2xs);
-  line-height: var(--space-4);
-  text-align: center;
-  opacity: var(--opacity-text-secondary);
 }
 
 /* Open in ComfyUI: a bordered square, the shelf's own icon-button edge. */
