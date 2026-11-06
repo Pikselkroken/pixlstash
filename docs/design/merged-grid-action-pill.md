@@ -418,7 +418,8 @@ Order, one layer per press, innermost and most reversible first:
 4. No selection, search active → clear the search. The pill unmounts.
 5. No selection, no search, filters on → clear the filters, as the filter
    strip's Clear all does. Clear all carries the Esc hint while nothing is
-   selected and no search runs. The ladder stands aside while a menu, a dialog
+   selected, no search runs and the auto-hide sidebar is not floating over
+   the grid. The ladder stands aside while a menu, a dialog
    or the floating auto-hide sidebar is open: that Esc only closes it.
 
 The Esc keycap belongs to exactly **one** visible control at a time — the one Esc

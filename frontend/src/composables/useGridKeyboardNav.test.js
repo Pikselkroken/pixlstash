@@ -476,8 +476,9 @@ describe("Escape ladder", () => {
   });
 
   it("stands aside while the auto-hide sidebar floats over the grid", () => {
-    // useGlobalKeydown hides the revealed sidebar on the same Esc.
-    const { handleKeyDown, clearFilters } = makeNav({
+    // useGlobalKeydown hides the revealed sidebar on the same Esc, so Clear
+    // all must not advertise it either.
+    const { handleKeyDown, clearFilters, escapeClearsFilters } = makeNav({
       showSelectionBar: false,
       filtersActive: true,
     });
@@ -485,9 +486,11 @@ describe("Escape ladder", () => {
     sidebar.setSidebarPinned(false); // unpinned: revealed, floating
     try {
       expect(sidebar.sidebarOverlay && sidebar.sidebarVisible).toBe(true);
+      expect(escapeClearsFilters.value).toBe(false);
       handleKeyDown(keyEvent({ key: "Escape" }));
       expect(clearFilters).not.toHaveBeenCalled();
       sidebar.hideAutoSidebar();
+      expect(escapeClearsFilters.value).toBe(true);
       handleKeyDown(keyEvent({ key: "Escape" }));
       expect(clearFilters).toHaveBeenCalledTimes(1);
     } finally {

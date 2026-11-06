@@ -108,18 +108,27 @@ export function useGridKeyboardNav(
     return null;
   }
 
-  // Whether Esc reaches the filter strip's Clear all, so it can say so.
-  const escapeClearsFilters = computed(() => escapeTarget() === "filters");
+  // The auto-hide sidebar floats over the grid; Esc hides it (useGlobalKeydown).
+  function sidebarOwnsEscape() {
+    return sidebarStore.sidebarOverlay && sidebarStore.sidebarVisible;
+  }
+
+  // Whether Esc reaches the filter strip's Clear all, so it can say so. The
+  // sidebar is store state and gates it; an open menu or dialog is DOM state a
+  // computed cannot watch, so the hint would cache a stale answer either way.
+  const escapeClearsFilters = computed(
+    () => !sidebarOwnsEscape() && escapeTarget() === "filters",
+  );
 
   /**
-   * Something on top of the grid takes this Esc: a Vuetify menu or dialog, or
-   * the auto-hide sidebar floating over it (useGlobalKeydown hides that). A
-   * Vuetify overlay's own Esc listener goes on `window` when it opens, after
-   * the grid's, so the grid sees the key first: without this the Esc that
-   * closes the Filters menu would also clear the filters.
+   * Something on top of the grid takes this Esc: the floating sidebar, or a
+   * Vuetify menu or dialog. A Vuetify overlay's own Esc listener goes on
+   * `window` when it opens, after the grid's, so the grid sees the key first:
+   * without this the Esc that closes the Filters menu would also clear the
+   * filters.
    */
   function overlayOwnsEscape() {
-    if (sidebarStore.sidebarOverlay && sidebarStore.sidebarVisible) return true;
+    if (sidebarOwnsEscape()) return true;
     return (
       typeof document !== "undefined" &&
       document.querySelector(
