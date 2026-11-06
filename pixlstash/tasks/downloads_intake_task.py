@@ -60,5 +60,10 @@ class DownloadsIntakeTask(BaseTask):
                 moved,
             )
             if self._notifier is not None:
-                self._notifier(EventType.MODELS_ARRIVED, {"model_ids": moved})
+                # ``from_downloads`` is what raises the "arrived from Downloads"
+                # notice; a folder scan announces the same event without it.
+                self._notifier(
+                    EventType.MODELS_ARRIVED,
+                    {"model_ids": moved, "from_downloads": True},
+                )
         return {"moved": moved, "retry": list(self.retry_paths)}

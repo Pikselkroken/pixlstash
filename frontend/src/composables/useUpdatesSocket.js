@@ -134,11 +134,14 @@ export function vramOomNotice({
  * @param {import("vue").Ref} deps.gridContainer - the grid's template ref.
  * @param {Function} deps.refreshSidebar
  * @param {Function} deps.refreshSidebarPicturesDebounced
+ * @param {(modelId: number) => void} [deps.openModel] - opens the shelf on that
+ *   model, the "Show" of the notice a Downloads arrival raises.
  */
 export function useUpdatesSocket({
   gridContainer,
   refreshSidebar,
   refreshSidebarPicturesDebounced,
+  openModel,
 }) {
   const wsStore = useWsStore();
   const tasksStore = useTasksStore();
@@ -597,9 +600,30 @@ export function useUpdatesSocket({
         // like every /models route; the store re-reads its rows and raises the
         // sidebar's `new` tag, and says so when the arrival completed a
         // ComfyUI template (#2001).
-        modelShelfStore.onModelsArrived(
-          Array.isArray(payload.model_ids) ? payload.model_ids : [],
-        );
+        const modelIds = Array.isArray(payload.model_ids)
+          ? payload.model_ids
+          : [];
+        const fromDownloads = payload.from_downloads === true;
+        modelShelfStore.onModelsArrived(modelIds, { fromDownloads });
+        // Only the Downloads intake is announced: it moves files the owner did
+        // not hand to PixlStash by any gesture, so nothing else says they came.
+        // A folder scan has its own notice (useModelFoldersStore).
+        if (fromDownloads && modelIds.length) {
+          noticeStore.push({
+            level: "success",
+            text:
+              modelIds.length === 1
+                ? "A new model arrived from your Downloads folder."
+                : `${modelIds.length} new models arrived from your Downloads folder.`,
+            // Not sticky, as an action would make it: it is news, not a
+            // question. The hover / focus pause keeps it up while it is read.
+            timeout: 10000,
+            action: openModel && {
+              label: "Show",
+              handler: () => openModel(modelIds[0]),
+            },
+          });
+        }
         // A template's files are marked on the shelf or not as of its read.
         useWorkflowTemplatesStore().onModelsArrived();
         // And the folders' counts, which a scan that found them has changed.

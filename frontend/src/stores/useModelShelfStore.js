@@ -1245,6 +1245,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * it while the shelf is open. Never persisted.
    */
   const unseenArrivals = ref(false);
+  /**
+   * Model ids the Downloads intake moved in since the shelf was last left.
+   * They wear the `New` badge too, and outlive the fetch that clears
+   * `newIds`: the shelf re-reads on mount, so the notice's `Show` would
+   * otherwise land on a row that has just lost its badge. Never persisted.
+   */
+  const arrivedIds = ref(new Set());
   const loading = ref(false);
   const error = ref("");
   /** True once a fetch has completed, so "empty" and "not asked yet" differ. */
@@ -1586,7 +1593,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // Counted HERE, off the row's whole `locations`, and carried on the row
       // from then on, so every draw of the row reports the same count.
       copies: presentCopies(row.locations),
-      isNew: newIds.value.has(row.id),
+      isNew: newIds.value.has(row.id) || arrivedIds.value.has(row.id),
       // The store's list, not the row's own field: a hide lands here first.
       hidden: hiddenModelIds.value.has(row.id),
     };
@@ -5076,9 +5083,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * diff against the last fetch, and against no fetch every row would be new.
    *
    * @param {number[]} [modelIds] - the `model.id`s that arrived.
+   * @param {{fromDownloads?: boolean}} [options] - true when the Downloads
+   *   intake moved them, so they keep their badge until the shelf is left.
    */
-  function onModelsArrived(modelIds = []) {
+  function onModelsArrived(modelIds = [], { fromDownloads = false } = {}) {
     unseenArrivals.value = true;
+    if (fromDownloads && modelIds.length) {
+      arrivedIds.value = new Set([...arrivedIds.value, ...modelIds]);
+    }
     if (loaded.value) fetchRows({ markNew: true });
     if (modelIds.length) announceReadyTemplates(modelIds);
   }
@@ -5228,6 +5240,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     epoch += 1;
     rows.value = [];
     newIds.value = new Set();
+    arrivedIds.value = new Set();
     unseenArrivals.value = false;
     selectedIds.value = new Set();
     verbRequest.value = null;
@@ -5340,6 +5353,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     error,
     fetchRows,
     unseenArrivals,
+    arrivedIds,
     onModelsArrived,
     workflowTemplates,
     templatesLoading,

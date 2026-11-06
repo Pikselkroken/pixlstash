@@ -218,6 +218,8 @@ def test_the_finder_waits_for_a_file_to_settle_then_moves_it(hub, folders, monke
 
     assert _located(hub, default_id) == {"Settled.safetensors"}
     assert [event for event, _ in events] == [EventType.MODELS_ARRIVED]
+    # The flag is what raises the "arrived from Downloads" notice.
+    assert events[0][1]["from_downloads"] is True
     assert finder.find_task() is None
 
 

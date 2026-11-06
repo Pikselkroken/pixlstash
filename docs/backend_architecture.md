@@ -11372,7 +11372,9 @@ already" refusal would send the owner nowhere.
 `DownloadsIntakeFinder` (a hub finder registered in `vault.py` beside the
 checkpoint hasher) lists its top level every two seconds and hands out what is
 finished; `DownloadsIntakeTask` calls `downloads_intake.take_in` for each file
-and announces `models_arrived` with the model ids it registered.
+and announces `models_arrived` with the model ids it registered and
+`from_downloads: true`, the flag that has the owner's tab raise a notice (a
+folder scan and a model download announce the same event without it).
 
 - **Finished means three checks.** A `.safetensors`/`.gguf` regular file (never
   a symlink) with bytes in it and no `.part`/`.crdownload`/`.download`/`.partial`
@@ -11422,7 +11424,12 @@ and announces `models_arrived` with the model ids it registered.
   `useModelShelfStore().unseenArrivals`, which puts a dot on the title bar's
   Models workspace segment until the shelf is opened, and re-reads a shelf already
   read with `markNew`, so the arrivals wear the row `New` badge. An unread shelf
-  is not fetched: against no previous fetch every row would be new.
+  is not fetched: against no previous fetch every row would be new. An arrival
+  with `from_downloads` also raises a notice, *A new model arrived from your
+  Downloads folder.*, whose *Show* opens `/models?model=<first id>` (the row is
+  scrolled to and selected); its ids are held in `arrivedIds` and keep the
+  `New` badge through the fetch the shelf makes on opening, until the shelf is
+  left.
 - **The arrival is recorded** (#2001): a move stamps `model.arrived_at` (UTC
   ISO) after the row is registered, and a failed stamp is logged and leaves the
   move standing. It is the only place the column is written, so a file a scan

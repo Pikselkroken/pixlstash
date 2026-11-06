@@ -154,13 +154,14 @@ afterEach(() => {
  * The composable registers an `onUnmounted` cleanup, so calling it bare would
  * both warn and leave the socket open between cases.
  */
-function connect() {
+function connect({ openModel } = {}) {
   host = mount({
     setup() {
       useUpdatesSocket({
         gridContainer: ref(null),
         refreshSidebar: vi.fn(),
         refreshSidebarPicturesDebounced: vi.fn(),
+        openModel,
       }).connectUpdatesSocket();
       return () => null;
     },
@@ -713,7 +714,29 @@ describe("useUpdatesSocket: models_arrived", () => {
     receive({ type: "models_arrived", model_ids: [4] });
     expect(arrived).toHaveBeenCalledTimes(1);
     // The ids go along: they are what says an arrival completed a template.
-    expect(arrived).toHaveBeenCalledWith([4]);
+    expect(arrived).toHaveBeenCalledWith([4], { fromDownloads: false });
+  });
+
+  it("announces a Downloads arrival with a Show that opens the shelf on it", () => {
+    const openModel = vi.fn();
+    connect({ openModel });
+    const arrived = vi.spyOn(useModelShelfStore(), "onModelsArrived");
+    receive({ type: "models_arrived", model_ids: [7, 8], from_downloads: true });
+
+    expect(arrived).toHaveBeenCalledWith([7, 8], { fromDownloads: true });
+    const notices = useNoticeStore().notices;
+    expect(notices).toHaveLength(1);
+    expect(notices[0].text).toBe(
+      "2 new models arrived from your Downloads folder.",
+    );
+    notices[0].action.handler();
+    expect(openModel).toHaveBeenCalledWith(7);
+  });
+
+  it("says nothing for a folder scan's arrival", () => {
+    connect({ openModel: vi.fn() });
+    receive({ type: "models_arrived", model_ids: [7] });
+    expect(useNoticeStore().notices).toHaveLength(0);
   });
 
   it("has the Templates tab re-read which of its files are on the shelf", () => {
