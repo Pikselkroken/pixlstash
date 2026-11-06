@@ -6613,7 +6613,12 @@ own `drop` fires, so a surface declares what a drop on it means with a data
 attribute the handler reads from `event.target.closest(...)`:
 `data-model-drop-folder="<id>"` is still read (only a `user` or `managed` folder that is plugged in), but no shelf surface sets it any more, and `data-model-drop-models="<id|sha256> …"` on a card that stands for
 models — a Workflows-screen card (its slots' hashes) or a workflow set card on the
-shelf grid (its members' ids). Anywhere else sends no destination and the server
+shelf grid (its members' ids). `data-model-drop-replace="<loader address>"` is a
+missing model's row in the Workflow tab: the file goes to the default folder, and
+once it is registered the handler dispatches `model-file-added` (`{ files }`) on
+the row, which asks the pre-flight and its replacements again and, if the row is
+still missing, picks the new shelf model as an unsaved change, or says its loader
+cannot load it. Anywhere else sends no destination and the server
 uses the default folder. For a card, the shelf rows are read fresh
 (`/checkpoints` and `/adapters` for every kind a card can name, VAEs and text
 encoders included; the shelf store holds only what its filters fetched) and the

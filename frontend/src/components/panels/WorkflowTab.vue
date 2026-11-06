@@ -267,12 +267,20 @@
                  file it loads. A missing file is amber, with what to do about it
                  beneath, and a picker of what on the shelf could replace it.
                  Changing a file that loads is the set menu's, in the header. -->
+            <!-- A model file dropped on a missing row goes onto the shelf
+                 (useWindowFileImport, useModelDropTarget), and the row then
+                 takes it. -->
             <div
               v-for="row in modelRows"
               :key="row.address"
               class="wftab-row"
+              :class="{ 'wftab-row--drop': modelDropKey === row.address }"
               :data-testid="`wftab-row-${row.kind}`"
               :data-address="row.address"
+              :data-model-drop-replace="takesDrop(row) ? row.address : undefined"
+              @dragover="takesDrop(row) && onModelDragOver(row.address, $event)"
+              @dragleave="onModelDragLeave(row.address, $event)"
+              @model-file-added="replaceWithDropped(row.address, $event)"
             >
               <span class="wftab-row__label">{{ row.name }}</span>
               <div class="wftab-row__value">
@@ -1459,6 +1467,7 @@ import {
   openWorkflowInComfyui,
   useComfyuiOpen,
 } from "../../composables/useComfyuiOpen";
+import { useFileDropHighlight } from "../../composables/useModelDropTarget";
 import { pickUpKey, useModelPickUp } from "../../composables/useModelPickUp";
 import { usePixlstashPackUpdate } from "../../composables/usePixlstashPackUpdate";
 import { useSectionCollapse } from "../../composables/useSectionCollapse";
@@ -2547,6 +2556,75 @@ function autoFixNote(fix) {
 /** Pick a file for a model row; the saved one ("") takes the change back. */
 function pickModel(row, file) {
   return edit((set) => withModel(set, row.address, file, row.file));
+}
+
+const {
+  dropKey: modelDropKey,
+  onDragOver: onModelDragOver,
+  onDragLeave: onModelDragLeave,
+} = useFileDropHighlight();
+
+/** Whether a model file dropped on this row is taken as its replacement. */
+function takesDrop(row) {
+  return Boolean(row.settable && row.missing && canEdit.value);
+}
+
+/**
+ * A model file dropped on a missing row is on the shelf now
+ * (`useWindowFileImport`): ask again, and where the row is still missing, pick
+ * the file just added, as an unsaved change. One under the missing file's own
+ * name needs no pick: once the shelf holds it, the row is no longer missing.
+ * Its replacements are read here rather than off `checkInstalled`, which a
+ * newer check may have superseded before it wrote them.
+ */
+async function replaceWithDropped(address, event) {
+  const key = selectedKey.value;
+  const added = event.detail?.files ?? [];
+  if (!key || !added.length) return;
+  await checkInstalled(key, { quiet: true });
+  if (selectedKey.value !== key) return;
+  const row = modelRows.value.find((entry) => entry.address === address);
+  if (!row?.missing) return;
+  let answer;
+  try {
+    answer = await readModelSwap(key, swapAsk(row.kind, row.file, true));
+  } catch (err) {
+    console.warn(`[workflows] could not read replacements for ${row.file}`, err);
+    // Not "cannot load it": only the check failed, and the file did land.
+    if (selectedKey.value === key) {
+      notices.push({
+        level: "warning",
+        text: `${modelLabel(fileName(added[0]))} is on your shelf, but whether this ${fileKindLabel(row.kind).toLowerCase()} loader can load it could not be checked, so nothing was picked. Choose it in the picker.`,
+      });
+    }
+    return;
+  }
+  if (selectedKey.value !== key) return;
+  replacementsByFile.value = {
+    ...replacementsByFile.value,
+    [`${row.kind}:${row.file}`]: answer,
+  };
+  // Never the row's own file: picking that is no change at all.
+  const match = answer?.replacements?.find(
+    (candidate) =>
+      !sameFile(candidate.filename, row.file) &&
+      added.some((file) => sameFile(candidate.filename, file)),
+  );
+  const named = modelLabel(fileName(match?.filename ?? added[0]));
+  if (!match) {
+    notices.push({
+      level: "warning",
+      text: `${named} is on your shelf, but this ${fileKindLabel(row.kind).toLowerCase()} loader cannot load it, so nothing was picked.`,
+    });
+    return;
+  }
+  // `edit` refuses while the changes are being written or read, and says so.
+  if (pickModel(row, match.filename)) {
+    notices.push({
+      level: "success",
+      text: `${named} is picked for ${row.name}: save to keep it.`,
+    });
+  }
 }
 
 /**
@@ -5618,6 +5696,12 @@ async function checkInstalled(key, { quiet = false, fresh = false } = {}) {
   gap: var(--space-1) var(--space-3);
   min-width: 0;
   font-size: var(--text-xs);
+}
+
+/* A model file dragged over a missing row: the Workflows card's drop ring. */
+.wftab-row--drop {
+  outline: 2px solid var(--active-bar);
+  outline-offset: 2px;
 }
 
 .wftab-row__label {

@@ -10,6 +10,10 @@
 //       A workflow card, or a workflow set card on the shelf grid: the models it
 //       holds. The file goes to the default folder when that is where they are,
 //       and the owner is asked when they are somewhere else.
+//   data-model-drop-replace="<loader address>"
+//       A missing model's row in the Workflow tab: the file goes to the default
+//       folder, and the row hears `model-file-added` (detail `{ files }`, the
+//       names the shelf registered) to take it as its replacement.
 //
 // Anywhere else is the default folder, the server's own choice when no
 // destination is named.
@@ -21,7 +25,7 @@ import { SUPPORT_KINDS } from "../stores/useModelShelfStore";
 import { isFileDrag, isInternalImageDrag } from "../utils/media.js";
 
 const DROP_TARGET_SELECTOR =
-  "[data-model-drop-folder], [data-model-drop-models]";
+  "[data-model-drop-folder], [data-model-drop-models], [data-model-drop-replace]";
 
 /** The element a drop landed on that names a destination, or null. */
 export function modelDropTargetOf(target) {

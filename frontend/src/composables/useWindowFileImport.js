@@ -258,6 +258,17 @@ export function useWindowFileImport({ sidebarRef }) {
         { key: dropKey },
       );
     }
+    // A missing model's row the file was dropped on takes it from here; it
+    // may have gone (another workflow selected) while the copy ran.
+    if (
+      added.length &&
+      dropTarget?.isConnected &&
+      dropTarget.dataset.modelDropReplace
+    ) {
+      dropTarget.dispatchEvent(
+        new CustomEvent("model-file-added", { detail: { files: added } }),
+      );
+    }
     // Reported separately rather than folded into the success line: a partial
     // drop has to name what did NOT land, or the count is the only clue.
     for (const failure of failures) {

@@ -1403,6 +1403,139 @@ describe("a checkpoint that will not load", () => {
     expect(textOf(wrapper)).toContain("Checkpoint missing");
   });
 
+  describe("a model file dropped on the missing row", () => {
+    const row = (wrapper) => wrapper.find('[data-testid="wftab-row-checkpoint"]');
+    /** What `useWindowFileImport` tells the row once the copy has landed. */
+    async function landed(wrapper, ...files) {
+      row(wrapper).element.dispatchEvent(
+        new CustomEvent("model-file-added", { detail: { files } }),
+      );
+      await settle(wrapper);
+    }
+
+    it("is a drop target only while the file is missing", async () => {
+      preflightWorkflowRun.mockResolvedValue(
+        missingFile("SDXL/realvisXL_v5.safetensors"),
+      );
+      getWorkflowCard.mockResolvedValue(detail({ card: named }));
+      let { wrapper } = await mountWith([KEY], [named]);
+      await settle(wrapper);
+      expect(row(wrapper).attributes("data-model-drop-replace")).toBe(
+        row(wrapper).attributes("data-address"),
+      );
+      wrapper.unmount();
+
+      preflightWorkflowRun.mockResolvedValue({ groups: [] });
+      ({ wrapper } = await mountWith([KEY], [named]));
+      await settle(wrapper);
+      expect(row(wrapper).attributes("data-model-drop-replace")).toBeUndefined();
+    });
+
+    it("picks the file just added, asking the shelf again first", async () => {
+      preflightWorkflowRun.mockResolvedValue(
+        missingFile("SDXL/realvisXL_v5.safetensors"),
+      );
+      getWorkflowCard.mockResolvedValue(detail({ card: named }));
+      const shelf = [
+        { id: 8, filename: "juggernaut.safetensors", display_name: "Juggernaut" },
+      ];
+      readModelSwap
+        .mockReset()
+        .mockImplementation(replacementsByKind({ checkpoint: shelf }));
+      const { wrapper } = await mountWith([KEY], [named]);
+      await settle(wrapper);
+      expect(setWorkflowChanges).not.toHaveBeenCalled();
+
+      // On the shelf now, under another name, so the row is still missing.
+      shelf.push({ id: 9, filename: "SDXL/realvis-new.safetensors" });
+      await landed(wrapper, "realvis-new.safetensors");
+      expect(setWorkflowChanges.mock.calls.at(-1)[1].models).toEqual([
+        {
+          address: "core:n1/ckpt_name/ckpt_name",
+          filename: "SDXL/realvis-new.safetensors",
+        },
+      ]);
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "realvis-new is picked for Checkpoint: save to keep it.",
+      );
+    });
+
+    it("picks nothing once the file it was missing is on the shelf", async () => {
+      preflightWorkflowRun.mockResolvedValue(
+        missingFile("SDXL/realvisXL_v5.safetensors"),
+      );
+      getWorkflowCard.mockResolvedValue(detail({ card: named }));
+      const { wrapper } = await mountWith([KEY], [named]);
+      await settle(wrapper);
+
+      const before = useNoticeStore().notices.length;
+      preflightWorkflowRun.mockResolvedValue({ groups: [] });
+      await landed(wrapper, "realvisXL_v5.safetensors");
+      expect(textOf(wrapper)).not.toContain("Checkpoint missing");
+      expect(setWorkflowChanges).not.toHaveBeenCalled();
+      // Nothing to say: the row simply loads now.
+      expect(useNoticeStore().notices.length).toBe(before);
+    });
+
+    it("does not blame the loader when the check itself failed", async () => {
+      preflightWorkflowRun.mockResolvedValue(
+        missingFile("SDXL/realvisXL_v5.safetensors"),
+      );
+      getWorkflowCard.mockResolvedValue(detail({ card: named }));
+      const { wrapper } = await mountWith([KEY], [named]);
+      await settle(wrapper);
+
+      // The tab's own re-check reads the swaps through allSettled; the drop's
+      // read is the one that fails.
+      readModelSwap.mockRejectedValue(new Error("network down"));
+      await landed(wrapper, "realvis-new.safetensors");
+      expect(setWorkflowChanges).not.toHaveBeenCalled();
+      const text = useNoticeStore().notices.at(-1).text;
+      expect(text).toContain("could not be checked");
+      expect(text).not.toContain("cannot load it");
+    });
+
+    it("does not call the missing file itself a pick", async () => {
+      // Still missing after the drop (ComfyUI's list not yet read again), and
+      // the shelf answers with that very file.
+      preflightWorkflowRun.mockResolvedValue(
+        missingFile("SDXL/realvisXL_v5.safetensors"),
+      );
+      getWorkflowCard.mockResolvedValue(detail({ card: named }));
+      readModelSwap.mockReset().mockImplementation(
+        replacementsByKind({
+          checkpoint: [{ id: 9, filename: "realvisXL_v5.safetensors" }],
+        }),
+      );
+      const { wrapper } = await mountWith([KEY], [named]);
+      await settle(wrapper);
+
+      await landed(wrapper, "realvisXL_v5.safetensors");
+      expect(setWorkflowChanges).not.toHaveBeenCalled();
+      expect(useNoticeStore().notices.at(-1).text).toContain(
+        "nothing was picked",
+      );
+    });
+
+    it("says so when the loader cannot take the file added", async () => {
+      preflightWorkflowRun.mockResolvedValue(
+        missingFile("SDXL/realvisXL_v5.safetensors"),
+      );
+      getWorkflowCard.mockResolvedValue(detail({ card: named }));
+      readModelSwap
+        .mockReset()
+        .mockImplementation(replacementsByKind({ checkpoint: [] }));
+      const { wrapper } = await mountWith([KEY], [named]);
+      await settle(wrapper);
+
+      await landed(wrapper, "a-lora.safetensors");
+      expect(setWorkflowChanges).not.toHaveBeenCalled();
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "a-lora is on your shelf, but this checkpoint loader cannot load it, so nothing was picked.",
+      );
+    });
+  });
+
   it("files a missing checkpoint's candidates under how likely each is to work", async () => {
     preflightWorkflowRun.mockResolvedValue(
       missingFile("SDXL/realvisXL_v5_fp8.safetensors"),

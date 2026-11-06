@@ -390,6 +390,35 @@ describe("useWindowFileImport", () => {
       );
     });
 
+    it("tells a missing model's row what landed, once it has", async () => {
+      target.dataset.modelDropReplace = "core:n1/ckpt_name/ckpt_name";
+      const heard = vi.fn();
+      target.addEventListener("model-file-added", heard);
+      await dropOn(target.firstChild, "lora.safetensors");
+      await settle();
+      // The default folder: a missing model names no folder to go beside.
+      expect(addModelFile).toHaveBeenCalledWith(
+        "/home/me/Downloads/lora.safetensors",
+        null,
+      );
+      expect(heard).toHaveBeenCalledTimes(1);
+      expect(heard.mock.calls[0][0].detail).toEqual({
+        files: ["lora.safetensors"],
+      });
+    });
+
+    it("tells the row nothing when the copy was refused", async () => {
+      target.dataset.modelDropReplace = "core:n1/ckpt_name/ckpt_name";
+      addModelFile.mockRejectedValue({
+        response: { data: { detail: "lora.safetensors already exists." } },
+      });
+      const heard = vi.fn();
+      target.addEventListener("model-file-added", heard);
+      await dropOn(target.firstChild, "lora.safetensors");
+      await settle();
+      expect(heard).not.toHaveBeenCalled();
+    });
+
     it("asks where to put it when a card's models are elsewhere", async () => {
       // A checkpoint by id and a LoRA by hash, both in folder 3, and one more
       // LoRA in folder 4.
