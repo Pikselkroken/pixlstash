@@ -10,6 +10,7 @@
   under the menu's own names. ↵ always searches the words; Tab adds the
   highlighted filter and ⇧Tab its opposite (Lacks, for a tag). Pasting comma
   or newline text makes one Has token per tag; clicking a tag token copies it.
+  The amber × at the field's end clears the words and every filter at once.
 -->
 <template>
   <div
@@ -18,23 +19,39 @@
     :class="{ 'stf--open': open }"
     @focusout="onFocusOut"
   >
-    <button
-      v-if="!open"
-      type="button"
-      class="stf-rest"
-      :class="{ 'stf-rest--active': summary }"
-      aria-label="Search"
-      :aria-describedby="summary ? 'search-token-summary' : null"
-      aria-keyshortcuts="F"
-      @click="focus"
-    >
-      <v-icon size="18" class="stf-icon">mdi-magnify</v-icon>
-      <!-- The name stays "Search"; what narrows the grid is its description. -->
-      <span id="search-token-summary" class="stf-rest-text">{{
-        summary || "Search"
-      }}</span>
-      <kbd class="fm-kbd stf-rest-kbd" aria-hidden="true">F</kbd>
-    </button>
+    <template v-if="!open">
+      <button
+        type="button"
+        class="stf-rest"
+        :class="{ 'stf-rest--active': summary }"
+        aria-label="Search"
+        :aria-describedby="summary ? 'search-token-summary' : null"
+        aria-keyshortcuts="F"
+        @click="focus"
+      >
+        <v-icon size="18" class="stf-icon">mdi-magnify</v-icon>
+        <!-- The name stays "Search"; what narrows the grid is its description. -->
+        <span id="search-token-summary" class="stf-rest-text">{{
+          summary || "Search"
+        }}</span>
+        <kbd class="fm-kbd stf-rest-kbd" aria-hidden="true">F</kbd>
+      </button>
+      <!-- A sibling, not a child: a button cannot hold a button. -->
+      <button
+        v-if="summary"
+        type="button"
+        class="stf-clear stf-clear--rest"
+        aria-label="Clear search and filters"
+        @click="clearAll"
+      >
+        <v-icon size="16">mdi-close</v-icon>
+        <Tooltip
+          text="Clear search and filters"
+          activator="parent"
+          :describe="false"
+        />
+      </button>
+    </template>
     <template v-else>
       <div class="stf-field" @mousedown.self.prevent @click.self="focusInput">
         <v-icon size="18" class="stf-icon">mdi-magnify</v-icon>
@@ -93,6 +110,21 @@
           @keydown="onKeydown"
           @paste="onPaste"
         />
+        <button
+          v-if="hasAnything"
+          type="button"
+          class="stf-clear"
+          aria-label="Clear search and filters"
+          @mousedown.prevent
+          @click="clearAll"
+        >
+          <v-icon size="16">mdi-close</v-icon>
+          <Tooltip
+            text="Clear search and filters"
+            activator="parent"
+            :describe="false"
+          />
+        </button>
       </div>
       <p class="visually-hidden" role="status">
         {{ copiedKey ? "Copied to the Clipboard" : "" }}
@@ -202,6 +234,7 @@ import {
   modelLabel,
 } from "../../utils/filterChips";
 import { isGroupToken } from "../../stores/useTagGroupsStore";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   // "No character" and "In no set" only exist in All Pictures.
@@ -287,6 +320,12 @@ const summary = computed(() =>
   ]
     .filter(Boolean)
     .join(" · "),
+);
+
+// Open, the × shows for anything the field holds: typed words, a committed
+// search, or a token.
+const hasAnything = computed(
+  () => Boolean(summary.value || searchStore.searchInput?.trim()),
 );
 
 // Shift+← selects from the end, one token per press.
@@ -592,6 +631,18 @@ function removeToken(token) {
   token.remove();
 }
 
+/** The ×: drop the words, the committed search and every filter at once. */
+function clearAll() {
+  searchStore.searchInput = "";
+  searchStore.searchQuery = "";
+  filters.resetFilters();
+  selectionSize.value = 0;
+  // At rest the × vanishes with what it cleared; focus goes to the field.
+  if (!open.value) {
+    nextTick(() => rootRef.value?.querySelector(".stf-rest")?.focus());
+  }
+}
+
 function removeSelectedOrLast() {
   const targets = selectedTokens.value.length
     ? selectedTokens.value
@@ -811,6 +862,45 @@ defineExpose({ focus });
 }
 .stf-rest-kbd {
   flex-shrink: 0;
+}
+/* Room for the × laid over the resting field's end. */
+.stf-rest--active {
+  padding-right: calc(var(--control-h-sm) + var(--space-2));
+}
+/* The ×: amber, the action colour, because clearing is the act here. */
+.stf-clear {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 0;
+  color: rgb(var(--v-theme-accent));
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.stf-clear:hover {
+  background: var(--hover-wash);
+}
+.stf-clear--rest {
+  position: absolute;
+  top: 50%;
+  right: var(--space-1);
+  transform: translateY(-50%);
+}
+/* Open, it stays at the end while the tokens scroll beneath it. */
+.stf-field .stf-clear {
+  position: sticky;
+  right: 0;
+  background: rgb(var(--v-theme-input-background));
+}
+.stf-field .stf-clear:hover {
+  background:
+    linear-gradient(var(--hover-wash), var(--hover-wash)),
+    rgb(var(--v-theme-input-background));
 }
 /* Open, the tokens stay on one line and scroll, so the bar keeps its height. */
 .stf-field:focus-within {
