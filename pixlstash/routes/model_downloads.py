@@ -56,6 +56,13 @@ class ModelDownloadResponse(BaseModel):
     total: int = Field(default=0, description="0 while the size is not known.")
     percent: float = 0
     error: Optional[str] = None
+    page_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "The model's Hugging Face page, where a failed download was gated "
+            "behind a licence to accept there."
+        ),
+    )
     model_id: Optional[int] = None
     sha256: Optional[str] = Field(
         default=None,

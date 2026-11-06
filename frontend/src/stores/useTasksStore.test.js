@@ -229,8 +229,35 @@ describe("model downloads", () => {
       expect(notices.notices.at(-1).text).toBe(
         "Could not download flux1-dev.safetensors: 404",
       );
+      // A plain failure has nothing to open.
+      expect(notices.notices.at(-1).action).toBeNull();
       expect(store.downloadsLanded).toBe(1);
     } finally {
+      store.stopPolling();
+    }
+  });
+
+  it("offer a gated model's page, where its licence is accepted", async () => {
+    const store = useTasksStore();
+    const notices = useNoticeStore();
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    getWorkerProgress.mockResolvedValue({ ...answer([]), downloads: [] });
+    store.startPolling();
+    await flushPromises();
+    try {
+      const page = "https://huggingface.co/org/repo";
+      store.downloadStarted(RUNNING);
+      await poll(store, [
+        { ...RUNNING, status: "failed", error: "Accept it.", page_url: page },
+      ]);
+      const card = notices.notices.at(-1);
+      expect(card.action.label).toBe("Open page");
+      // Sticky: the owner has a page to go to, not a sentence to skim.
+      expect(card.timeout).toBe(0);
+      notices.invokeAction(card.id);
+      expect(open).toHaveBeenCalledWith(page, "_blank", "noopener,noreferrer");
+    } finally {
+      open.mockRestore();
       store.stopPolling();
     }
   });

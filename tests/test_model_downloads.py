@@ -52,20 +52,25 @@ def serve_bytes(
     length=None,
     encoding=None,
     asked=None,
+    status=200,
+    headers=None,
 ):
     """Serve *body* at a loopback URL; *gate*, when set, holds the second half.
 
     *length* is the Content-Length claimed, the body's own unless given;
     ``-1`` sends none. *encoding* is a Content-Encoding to claim, and *asked*,
-    a list, collects each request's headers.
+    a list, collects each request's headers. *status* and *headers* are the
+    answer's status and any further headers.
     """
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             if asked is not None:
                 asked.append(dict(self.headers))
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", content_type)
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             if encoding:
                 self.send_header("Content-Encoding", encoding)
             if length != -1:
@@ -352,6 +357,92 @@ def test_a_web_page_is_not_saved_as_a_model(hub, target, linked):
     assert done["status"] == STATUS_FAILED
     assert "web page" in done["error"]
     assert os.listdir(chosen) == ["loras"]
+
+
+def test_a_gated_header_from_another_host_is_its_plain_error(hub, target, linked):
+    """Only a Hugging Face link is said to be gated on Hugging Face. Wrong if
+    this loopback host's ``X-Error-Code: GatedRepo`` reads as one, or offers
+    a page."""
+    chosen, _ = target
+    with serve_bytes(
+        b"Access to model a/b is restricted.",
+        content_type="text/plain",
+        status=401,
+        headers={"X-Error-Code": "GatedRepo"},
+    ) as url:
+        linked(url, "loras")
+        done = _wait(start_download(hub, "gated.safetensors")["id"])
+    assert done["status"] == STATUS_FAILED
+    assert done["error"].startswith("401 Client Error"), done["error"]
+    assert done["page_url"] is None
+    assert os.listdir(chosen) == ["loras"]
+
+
+class _Answer:
+    """A response with *status* and *headers*, for `_fetch` to read."""
+
+    def __init__(self, status, headers):
+        self.status_code = status
+        self.headers = headers
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise model_downloads.requests.HTTPError(f"{self.status_code} Error")
+
+
+@pytest.mark.parametrize(
+    "headers, page",
+    [
+        ({"X-Error-Code": "GatedRepo"}, "https://huggingface.co/org/repo"),
+        # Any other 401 (a repository that is not there) is not a licence.
+        ({}, None),
+    ],
+)
+def test_a_gated_hugging_face_file_links_its_model_page(
+    tmp_path, monkeypatch, headers, page
+):
+    """Wrong if a gated file's error is the bare 401, or does not name where
+    the download would have put it, its ComfyUI subfolder included."""
+    url = "https://huggingface.co/org/repo/resolve/main/x.safetensors"
+    monkeypatch.setattr(model_downloads, "_open", lambda u, live: _Answer(401, headers))
+    entry = {"_target": str(tmp_path / "loras" / "x"), "page_url": None}
+    with pytest.raises(
+        model_downloads.requests.HTTPError if page is None else ValueError
+    ) as caught:
+        model_downloads._fetch(url, str(tmp_path / "x.part"), entry, threading.Event())
+    assert entry["page_url"] == page
+    if page:
+        assert str(caught.value).startswith("It is gated on Hugging Face.")
+        assert f"into {tmp_path / 'loras'};" in str(caught.value)
+    assert not (tmp_path / "x.part").exists()
+
+
+@pytest.mark.parametrize(
+    "url, page",
+    [
+        (
+            "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/f.safetensors",
+            "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8",
+        ),
+        (
+            "https://huggingface.co/org/repo/resolve/main/sub/f.safetensors",
+            "https://huggingface.co/org/repo",
+        ),
+        ("https://huggingface.co/resolve/main/f.safetensors", None),
+        ("https://huggingface.co/org/repo/blob/main/f.safetensors", None),
+        ("http://huggingface.co/org/repo/resolve/main/f.safetensors", None),
+        ("https://cdn.hf.co/org/repo/resolve/main/f.safetensors", None),
+        ("https://example.com/org/repo/resolve/main/f.safetensors", None),
+    ],
+)
+def test_the_model_page_is_only_ever_a_hugging_face_repository(url, page):
+    assert model_downloads.model_page(url) == page
 
 
 def test_a_compressed_body_is_asked_against_and_refused(
