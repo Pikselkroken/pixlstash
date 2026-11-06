@@ -89,7 +89,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_caches import huggingface_cache_dir
-from pixlstash.services.builtin_models import BUILTIN_OWNER
+from pixlstash.services.builtin_models import is_declared_root
 from pixlstash.services import comfyui_link_service, model_downloads
 from pixlstash.services.comfyui_service import (
     comfyui_folder_paths,
@@ -1964,7 +1964,7 @@ def create_router(server) -> APIRouter:
     def delete_model_folder(folder_id: int, request: Request):
         server.auth.ensure_secure_when_required(request)
         folder = _fetch_folder(folder_id)
-        if folder["owner"] == BUILTIN_OWNER:
+        if is_declared_root(folder["owner"], folder["kind"]):
             # Same 409 reasoning as the managed store one line down: the caller
             # is authorized and the request is well formed, and what refuses it
             # is that this folder is PixlStash's own. Forgetting it would only

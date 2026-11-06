@@ -62,6 +62,20 @@ logger = get_logger(__name__)
 BUILTIN_KIND = "foreign"
 BUILTIN_OWNER = "pixlstash"
 
+
+def is_declared_root(owner: Optional[str], kind: Optional[str]) -> bool:
+    """Whether a ``model_folder`` row is a root PixlStash declares, not walks.
+
+    The owner alone does not say it: the managed store
+    (``managed_model_store.MANAGED_KIND``) is owned by ``pixlstash`` too, but
+    holds plain files and is scanned like any folder. Read as declared, its
+    scan went to a re-declaration that refuses it, so a file deleted from it
+    stayed ``present`` on the shelf for good and a PixlStash loader was sent
+    to fetch bytes that were gone.
+    """
+    return owner == BUILTIN_OWNER and kind != "managed"
+
+
 # The rows the hash worker still owes a digest, as a predicate over `model m`.
 # A NULL `sha256` alone does not say that: an engine carries none by design,
 # and neither does anything in a folder declared here, which

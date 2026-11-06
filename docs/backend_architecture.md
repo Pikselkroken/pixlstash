@@ -9374,10 +9374,13 @@ a machine that has never run face detection has no InsightFace directory, and on
 that has downloaded nothing through the library has no cache. Both are normal.
 
 **The background scan of one of these roots is its declaration again**
-(`builtin_caches.redeclare_model_root`, from `ModelFolderScanTask` when the
-folder's `owner` is PixlStash). Without it a repo deleted from the HuggingFace
-cache stayed `present` until the next restart. `ModelFolderScanFinder` hands
-these out on its ten-minute timer only, with no watch (the cache's contents are
+(`builtin_caches.redeclare_model_root`, from `ModelFolderScanTask` when
+`builtin_models.is_declared_root` says so: PixlStash's owner on a folder that is
+not the managed store). The managed store carries the same owner but holds plain
+files, so it is walked, watched and picked up from like any folder. Without the
+re-declaration a repo deleted from the HuggingFace cache stayed `present` until
+the next restart. `ModelFolderScanFinder` hands these out on its ten-minute
+timer only, with no watch (the cache's contents are
 an index, not model files a watch would see arrive); the declaration stamps
 `last_checked`, which is the timer's clock. It waits up to 5 s for
 `SHELF_IO_LOCK`, because a relocation repoints the row's path and a declaration

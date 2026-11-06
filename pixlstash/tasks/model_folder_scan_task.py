@@ -27,7 +27,7 @@ from pixlstash.event_types import EventType
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_caches import redeclare_model_root
-from pixlstash.services.builtin_models import BUILTIN_OWNER
+from pixlstash.services.builtin_models import is_declared_root
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.services.model_mover import SHELF_IO_LOCK
 from pixlstash.tasks.base_task import BaseTask, TaskPriority, TaskStatus
@@ -176,7 +176,7 @@ class ModelFolderScanTask(BaseTask):
         return self._priority
 
     def _run_task(self) -> dict[str, Any]:
-        if self._owner == BUILTIN_OWNER:
+        if is_declared_root(self._owner, self._kind):
             return self._redeclare()
         result = ModelFolderScanner(self._hub).scan_folder(
             self._folder_id, self._path, self._kind, progress=self._report_progress
