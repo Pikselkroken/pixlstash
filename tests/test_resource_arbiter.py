@@ -29,6 +29,7 @@ from pixlstash.resources.ledger import DeviceReading, Ledger
 
 CARD = "GPU-00000000-0000-0000-0000-000000000001"
 TOTAL = 24576  # 24 GB; margin is 5 % = 1228 MB
+MARGIN = safety_margin_mb(TOTAL)
 
 
 class FakeLedger:
@@ -879,6 +880,14 @@ def test_a_comfyui_run_short_of_only_comfyuis_own_memory_goes_once_pixlstash_yie
     assert train.state is LeaseState.WAITING
     for held in (train, lease):
         held.release()
+    # Short by more than the margin, however much ComfyUI holds: it waits.
+    comfy.usage = 19000
+    over = arb.request(Tenant.COMFYUI, "over", need_mb=19348 + MARGIN + 1)
+    while arb._reclaim_step():
+        with arb._lock:
+            arb._evaluate_locked()
+    assert over.waiting_reason["code"] == "vram"
+    over.release()
     # Short by more than ComfyUI holds, other apps fill the card: it waits.
     comfy.usage = 400
     big = arb.request(Tenant.COMFYUI, "big", need_mb=1500)

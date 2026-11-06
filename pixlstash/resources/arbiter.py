@@ -1248,25 +1248,27 @@ class ResourceArbiter:
 
         A run's need is ComfyUI's whole allocation at a past peak, which it
         grows into while the card has room and offloads from when it has not.
-        Short by no more than ComfyUI already holds, the run is short of
-        ComfyUI's own memory, which ComfyUI manages: it goes once PixlStash has
-        moved its own work off the card (the ladder's first rung), instead of
-        waiting for other apps to give back a few hundred MB. Short by more,
-        other apps fill the card and it waits as before.
+        Short by no more than the safety margin and no more than ComfyUI
+        already holds, the run still fits the card's real room and ComfyUI
+        manages its own headroom within it: it goes once PixlStash has moved
+        its own work off the card (the ladder's first rung, where PixlStash is
+        on it), instead of waiting for other apps to give back a few hundred
+        MB. Short by more, it waits as before.
         """
         if lease.tenant is not Tenant.COMFYUI:
             return False
+        reading = next((d for d in self._devices if d.uuid == lease.device), None)
         held = self._tenant_usage_locked(Tenant.COMFYUI, lease.device) or 0
         short = lease.need_mb - budget
-        if short > held:
+        if reading is None or short > min(held, safety_margin_mb(reading.total_mb)):
             return False
         if "pixlstash" not in lease.reclaimed and (
             self._yielders and lease.device == self._tenant_device(Tenant.PIXLSTASH)
         ):
             return False
         logger.info(
-            "ComfyUI run %s (%s) is %s MB short of its need but ComfyUI holds "
-            "%s MB, which it manages itself: not held for memory",
+            "ComfyUI run %s (%s) is %s MB short of its need, within the safety "
+            "margin and the %s MB ComfyUI holds: ComfyUI makes the room itself",
             lease.id,
             lease.label,
             short,
