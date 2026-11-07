@@ -408,6 +408,12 @@
         align-items: center;
       }
 
+      .launch-head + .launch-head {
+        margin-top: 24px;
+        padding-top: 24px;
+        border-top: 1px solid var(--border);
+      }
+
       .launch-kicker {
         font-size: 0.78rem;
         letter-spacing: 0.08em;
@@ -736,6 +742,28 @@
             />
             <span class="app-pin" style="left: 19.6%; top: 62.9%" aria-hidden="true">1</span>
             <span class="app-pin" style="left: 59.4%; top: 1.9%" aria-hidden="true">2</span>
+          </div>
+        </div>
+        <div class="launch-head">
+          <div>
+            <span class="launch-kicker">PixlStash 1.13</span>
+            <h2>Draw what to change, set a prompt, press Run</h2>
+            <p class="launch-lead">
+              The picture viewer has paint tools. Mark a part of a picture,
+              describe the change, and an inpaint workflow redraws only that
+              part. Three inpaint workflows come with PixlStash, and your own
+              inpaint workflows run there too.
+            </p>
+          </div>
+          <div class="launch-video">
+            <video
+              src="assets/InpaintBoth.mp4"
+              aria-label="Two inpaint edits on a picture of garden gnomes: an axe head on one rod, blue lipstick on another gnome"
+              autoplay
+              loop
+              muted
+              playsinline
+            ></video>
           </div>
         </div>
         <div class="launch-foot">
