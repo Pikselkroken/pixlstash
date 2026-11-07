@@ -879,6 +879,36 @@ describe("the lightbox Edit tab", () => {
     expect(shellHidden()).toBe(true);
   });
 
+  it("lets go of the instruction box on Escape, then clears the selection", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    wrapper.vm.paint.setTool("wand");
+    wrapper.vm.paint.begin({ x: 0.5, y: 0.5 });
+    wrapper.vm.paint.end();
+    wrapper.vm.paint.setTool(null);
+    // The Edit tab's "What goes there?" box, as the stubbed panel lacks it.
+    const pane = document.createElement("div");
+    pane.className = "edit-pane";
+    const box = document.createElement("textarea");
+    pane.appendChild(box);
+    document.body.appendChild(pane);
+    try {
+      box.focus();
+      box.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      expect(document.activeElement).not.toBe(box);
+      expect(wrapper.vm.paint.hasSelection.value).toBe(true);
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      expect(wrapper.vm.paint.hasSelection.value).toBe(false);
+      expect(wrapper.emitted("close")).toBeUndefined();
+    } finally {
+      pane.remove();
+    }
+  });
+
   it("puts the tool down, then clears the selection, then closes on Escape", async () => {
     const wrapper = await openOn(7, undefined, configured);
     await wrapper.findAll(".inspector-tab")[2].trigger("click");

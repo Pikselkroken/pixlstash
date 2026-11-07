@@ -3336,6 +3336,12 @@ function handleKeydown(e) {
         // Nothing is typed into a slider or a checkbox: a Refine slider
         // just let go of must not stop Escape clearing the selection.
         target.blur();
+      } else if (target.closest(".edit-pane") && !e.isComposing) {
+        // A text field in the Edit tab (the instruction box) lets go on Escape
+        // and nothing more: the next Escape carries on down the order below.
+        e.preventDefault();
+        target.blur();
+        return;
       } else {
         return;
       }
