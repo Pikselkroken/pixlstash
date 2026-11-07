@@ -892,16 +892,21 @@ describe("the lightbox Edit tab", () => {
     const box = document.createElement("textarea");
     pane.appendChild(box);
     document.body.appendChild(pane);
-    box.focus();
-    box.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-    );
-    expect(document.activeElement).not.toBe(box);
-    expect(wrapper.vm.paint.hasSelection.value).toBe(true);
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    expect(wrapper.vm.paint.hasSelection.value).toBe(false);
-    expect(wrapper.emitted("close")).toBeUndefined();
-    pane.remove();
+    try {
+      box.focus();
+      box.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      expect(document.activeElement).not.toBe(box);
+      expect(wrapper.vm.paint.hasSelection.value).toBe(true);
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      expect(wrapper.vm.paint.hasSelection.value).toBe(false);
+      expect(wrapper.emitted("close")).toBeUndefined();
+    } finally {
+      pane.remove();
+    }
   });
 
   it("puts the tool down, then clears the selection, then closes on Escape", async () => {
