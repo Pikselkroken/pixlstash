@@ -5,11 +5,21 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to rebuild with this workflow (e.g. v1.13.2). Run from main; see rebuild-release.yml."
+        required: false
+        type: string
 
 # Least privilege: every job uses a read-only GITHUB_TOKEN. Release uploads use
 # RELEASE_BOT_TOKEN only in the action step that attaches each artifact.
 permissions:
   contents: read
+
+env:
+  # The source to build: the release_tag input on a rebuild (see
+  # rebuild-release.yml), else '' (checkout's default, the triggering ref).
+  SOURCE_REF: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || '' }}
 
 jobs:
   build-installer:
@@ -24,6 +34,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.SOURCE_REF }}
           # npm ci runs third-party dependency lifecycle scripts; this job needs
           # no git credentials once the tree is on disk.
           persist-credentials: false
@@ -68,12 +79,19 @@ jobs:
           "is_prerelease=$isPrerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Validate tag matches pyproject version
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          REBUILD_TAG: ${{ inputs.release_tag }}
+          DISPATCH_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
           EXPECTED_VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # A rebuild runs main's workflow, so it must be dispatched from main.
+          if ($env:REBUILD_TAG -and $env:DISPATCH_REF -ne 'refs/heads/main') {
+            Write-Output "::error::release_tag rebuilds must be dispatched from main, not $env:DISPATCH_REF"
+            exit 1
+          }
           python -m pip install --upgrade packaging
           python scripts/check_release_tag.py "$env:RELEASE_TAG" "$env:EXPECTED_VERSION"
 
@@ -114,7 +132,7 @@ jobs:
       group: certum-simplysign-session
       cancel-in-progress: false
     needs: build-installer
-    if: startsWith(github.ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == 'true'
+    if: (inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v')) && vars.WINDOWS_SIGNING_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment: windows-signing
     container:
@@ -161,6 +179,7 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
           files: signing/*.exe
           prerelease: ${{ needs.build-installer.outputs.is_prerelease == 'true' }}
 
@@ -171,7 +190,7 @@ jobs:
   # silently shipping unsigned while the operator believes signing is on.
   attach-windows-server-unsigned:
     needs: build-installer
-    if: startsWith(github.ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == ''
+    if: (inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v')) && vars.WINDOWS_SIGNING_ENABLED == ''
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -191,5 +210,6 @@ jobs:
         with:
           # PAT, not GITHUB_TOKEN — see the comment on sign-windows-server.
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
           files: signing/*.exe
           prerelease: ${{ needs.build-installer.outputs.is_prerelease == 'true' }}

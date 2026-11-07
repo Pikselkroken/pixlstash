@@ -16,12 +16,27 @@ on:
     paths:
       - "electron/**"
       - ".github/workflows/electron.yml"
+  # Run from main with release_tag set to rebuild an already-released tag's
+  # source with main's current workflow (e.g. after a runner image retires),
+  # attaching the installers to that tag's existing release. Left empty, a
+  # dispatch builds the dispatched ref as before.
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to rebuild with this workflow (e.g. v1.13.2). Run from main; see rebuild-release.yml."
+        required: false
+        type: string
 
 # Least privilege: all jobs use a read-only GITHUB_TOKEN. Release uploads use
 # RELEASE_BOT_TOKEN only in the action step that attaches each artifact.
 permissions:
   contents: read
+
+env:
+  # The source to build: the release_tag input when given, else '' (checkout's
+  # default, the triggering ref). Only checkouts of the source to build use it;
+  # sign-windows-desktop checks out the dispatching ref for its signing action.
+  SOURCE_REF: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || '' }}
 
 jobs:
   # Fast desktop-shell logic gate: the node --test suite in electron/test/
@@ -35,6 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.SOURCE_REF }}
           # CSO hardening: untrusted fork `npm ci` scripts run after checkout,
           # and this job needs no git credentials once the tree is on disk.
           persist-credentials: false
@@ -59,9 +75,14 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       is_prerelease: ${{ steps.version.outputs.is_prerelease }}
       validated_release_tag: ${{ steps.release-ref.outputs.validated_release_tag }}
+      # The ref and tag being released: the release_tag input on a rebuild,
+      # else the triggering ref. Downstream jobs read these, never github.ref.
+      release_ref: ${{ steps.release-ref.outputs.release_ref }}
+      release_tag: ${{ steps.release-ref.outputs.release_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.SOURCE_REF }}
           persist-credentials: false
           # The wheel carries the ComfyUI-PixlStash nodes (a public submodule).
           submodules: true
@@ -92,10 +113,20 @@ jobs:
       - name: Classify and validate release ref
         id: release-ref
         env:
-          RELEASE_REF: ${{ github.ref }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          REBUILD_TAG: ${{ inputs.release_tag }}
+          DISPATCH_REF: ${{ github.ref }}
+          RELEASE_REF: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
           EXPECTED_VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # A rebuild runs main's workflow, so it must be dispatched from main:
+          # from any other branch it would be that branch's workflow building
+          # and signing a released tag.
+          if [ -n "$REBUILD_TAG" ] && [ "$DISPATCH_REF" != "refs/heads/main" ]; then
+            echo "::error::release_tag rebuilds must be dispatched from main, not $DISPATCH_REF" >&2
+            exit 1
+          fi
+          { echo "release_ref=$RELEASE_REF"; echo "release_tag=$RELEASE_TAG"; } >> "$GITHUB_OUTPUT"
           if [[ "$RELEASE_REF" != refs/tags/* ]]; then
             echo "validated_release_tag=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -140,7 +171,9 @@ jobs:
           # only an exact validated release tag can reach the Apple signing step.
           # If the tag is valid but signing secrets are absent, the artifact still
           # receives the explicit "-unsigned" suffix.
-          - runner: macos-14
+          # macos-15, not macos-14: GitHub retired the macos-14 image on
+          # 2026-11-02, and its brownouts cancelled this leg before it started.
+          - runner: macos-15
             os: mac
             arch: arm64
             accel: metal
@@ -150,6 +183,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.SOURCE_REF }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -267,10 +301,11 @@ jobs:
             electron/release/*.dmg
             electron/release/*.zip
       - name: Attach installers to release
-        if: startsWith(github.ref, 'refs/tags/v') && matrix.release_files != ''
+        if: startsWith(needs.build-wheel.outputs.release_ref, 'refs/tags/v') && matrix.release_files != ''
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
+          tag_name: ${{ needs.build-wheel.outputs.release_tag }}
           files: ${{ matrix.release_files }}
           prerelease: ${{ needs.build-wheel.outputs.is_prerelease == 'true' }}
           # The release notes ("which download do I want?"), set here because
@@ -300,8 +335,15 @@ jobs:
     concurrency:
       group: certum-simplysign-session
       cancel-in-progress: false
+    # Depends on the Windows installer artifact, not on the whole matrix: the
+    # default success() gate skipped this job whenever the macOS leg failed or
+    # was cancelled, so a mac-only problem cost the release its Windows exe.
+    # !cancelled() keeps a cancelled run from signing; a missing Windows
+    # artifact fails the download step below, loudly.
     needs: [build-wheel, build-electron]
-    if: startsWith(github.ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == 'true'
+    if: >-
+      !cancelled() && needs.build-wheel.result == 'success'
+      && startsWith(needs.build-wheel.outputs.release_ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment: windows-signing
     container:
@@ -348,6 +390,7 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
+          tag_name: ${{ needs.build-wheel.outputs.release_tag }}
           files: signing/*.exe
           prerelease: ${{ needs.build-wheel.outputs.is_prerelease == 'true' }}
 
@@ -357,8 +400,11 @@ jobs:
   # '1') then attaches no Windows exe at all — loud — instead of silently
   # shipping unsigned while the operator believes signing is on.
   attach-windows-desktop-unsigned:
+    # Same independence from the macOS leg as sign-windows-desktop above.
     needs: [build-wheel, build-electron]
-    if: startsWith(github.ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == ''
+    if: >-
+      !cancelled() && needs.build-wheel.result == 'success'
+      && startsWith(needs.build-wheel.outputs.release_ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == ''
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -377,5 +423,6 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
+          tag_name: ${{ needs.build-wheel.outputs.release_tag }}
           files: signing/*.exe
           prerelease: ${{ needs.build-wheel.outputs.is_prerelease == 'true' }}

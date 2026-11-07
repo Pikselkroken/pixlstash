@@ -15,6 +15,11 @@ name: Install smoke (pip, 3 OSes)
 # be asserted from a runner. Those rows remain in the release plan.
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to rebuild with this workflow (e.g. v1.13.2). Run from main; see rebuild-release.yml."
+        required: false
+        type: string
   push:
     branches:
       - 'release-**'
@@ -24,6 +29,11 @@ on:
 
 permissions:
   contents: read
+
+env:
+  # The source to build: the release_tag input on a rebuild (see
+  # rebuild-release.yml), else '' (checkout's default, the triggering ref).
+  SOURCE_REF: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || '' }}
 
 jobs:
   smoke:
@@ -52,6 +62,7 @@ jobs:
       # to git after checkout, so the credential has no reason to stay.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.SOURCE_REF }}
           persist-credentials: false
           # The wheel carries the ComfyUI-PixlStash nodes (a public submodule).
           submodules: true
