@@ -167,7 +167,15 @@ jobs:
           tags: ${{ steps.push-tags-cpu.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=cpu
-          cache-to: type=gha,scope=cpu,mode=max
+          # No cache write from a tag push. A cache saved there is scoped to
+          # that tag's ref, which no later run can restore (a run reads its own
+          # ref, its PR's base branch and the default branch), so it is dead on
+          # arrival while still counting against the repo's 10 GB Actions
+          # cache. v2.0.0rc3's GPU write alone was 4.66 GB, and develop's Linux
+          # model cache was LRU-evicted behind it, sending every PR's backend
+          # shards in cold. Dispatches (rebuild-release.yml, from main) still
+          # write, to main, where every later run can read it.
+          cache-to: ${{ github.ref_type != 'tag' && 'type=gha,scope=cpu,mode=max' || '' }}
 
   build-gpu:
     name: Build GPU image (NVIDIA CUDA)
@@ -309,4 +317,5 @@ jobs:
           tags: ${{ steps.push-tags-gpu.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=gpu
-          cache-to: type=gha,scope=gpu,mode=max
+          # Never from a tag push; see the CPU build above.
+          cache-to: ${{ github.ref_type != 'tag' && 'type=gha,scope=gpu,mode=max' || '' }}
