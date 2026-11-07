@@ -1262,6 +1262,22 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
     expect(h.grid.applyRotatedCards).toHaveBeenCalledWith([1368]);
     expect(h.wsStore.addSortChangedExternalIds).not.toHaveBeenCalled();
     expect(h.reload).not.toHaveBeenCalled();
+    // The sidebar's Folders counts are read from the paths, so they re-read.
+    expect(h.refreshSidebar).toHaveBeenCalledTimes(1);
+  });
+
+  // A path change with no `pixels` has nothing to repaint the thumbnail with
+  // on the card path, so it is not treated as card content.
+  it("does not take a bare file_path change as card content", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      picture_ids: [1368],
+      change_kind: "updated",
+      fields: ["file_path"],
+    });
+    expect(res.reason).toBe("external-updated-invisible-field");
+    expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
   });
 
   // The control: in a folder view the move can take the card out of the view,
