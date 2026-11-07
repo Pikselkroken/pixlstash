@@ -154,6 +154,26 @@ describe("the Edit tab", () => {
       expect(wrapper.findComponent({ name: "RunReasonNotice" }).exists()).toBe(false);
     });
 
+    it("keeps a card chosen by hand through Retry, with a selection up", async () => {
+      const PACKED = { id: "p", name: "Packed", type: "img2img", type_label: "Image to Image" };
+      refuse({ p: [needsPack] });
+      listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT, PACKED] });
+      const paint = fakePaint();
+      const wrapper = await mountPanel({ paint });
+      const widen = wrapper
+        .findAll("[role=menuitemradio]")
+        .find((row) => row.text().includes("Widen"));
+      await widen.trigger("click");
+      paint.hasSelection.value = true;
+      await flush();
+      refuse({});
+      wrapper.findComponent({ name: "RunReasonNotice" }).vm.$emit("retry");
+      await flush();
+      await flush();
+      expect(listWorkflowCards).toHaveBeenCalledTimes(2);
+      expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
+    });
+
     it("is offered when a re-check after a download turns one up", async () => {
       let after = false;
       preflightWorkflowRun.mockImplementation(async ({ target }) => ({
@@ -826,15 +846,12 @@ describe("the Edit tab with the Paint tools", () => {
     );
   });
 
-  it("puts Inpaint first for a selection, over a hand choice, and goes back after", async () => {
+  it("puts Inpaint first for a selection and goes back after", async () => {
     listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
     const paint = fakePaint();
     const wrapper = await mountPanel({ paint });
     const rows = () => wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
-    const out = wrapper
-      .findAll("[role=menuitemradio]")
-      .find((row) => row.text().includes("Widen"));
-    await out.trigger("click");
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
     expect(rows()[0]).toBe("Widen, Outpaint");
     expect(wrapper.text()).toContain("What should change?");
     paint.hasSelection.value = true;
@@ -846,8 +863,26 @@ describe("the Edit tab with the Paint tools", () => {
     expect(wrapper.find("textarea").attributes("placeholder")).toContain("scarf");
     paint.hasSelection.value = false;
     await flush();
-    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
     expect(rows()[0]).toBe("Widen, Outpaint");
+  });
+
+  it("keeps a card chosen by hand when a selection is drawn", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    const widen = wrapper
+      .findAll("[role=menuitemradio]")
+      .find((row) => row.text().includes("Widen"));
+    await widen.trigger("click");
+    paint.hasSelection.value = true;
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
+    // It stays, and says the selection would not narrow it.
+    expect(wrapper.text()).toContain("do not use a mask");
+    paint.hasSelection.value = false;
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
   });
 
   it("keeps a card chosen while there is a selection, and the last one run on one", async () => {
@@ -874,7 +909,19 @@ describe("the Edit tab with the Paint tools", () => {
     await relight.trigger("click");
     paint.hasSelection.value = true;
     await flush();
-    // The next selection goes to the inpaint workflow last run on one.
+    // A card chosen by hand outlasts the next selection.
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+  });
+
+  it("moves a fresh tab onto the inpaint workflow last run on a selection", async () => {
+    const other = { id: "fill2", name: "Patch", type: "inpaint", type_label: "Inpaint" };
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT, other] });
+    window.localStorage.setItem("pixlstash:editTabMaskedWorkflow:", "fill2");
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+    paint.hasSelection.value = true;
+    await flush();
     expect(checkedRow(wrapper)).toBe("Patch, Inpaint");
   });
 

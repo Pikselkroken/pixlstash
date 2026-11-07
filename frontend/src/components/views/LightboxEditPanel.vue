@@ -671,12 +671,12 @@ function moveToMasked() {
   workflowId.value = masked.id;
 }
 
-// A selection moves the tab onto a workflow that reads it, even off a card
-// chosen by hand before there was one: that choice was for the whole picture.
-// Clearing it goes back, unless the reader has chosen since.
+// A selection moves the tab onto a workflow that reads it, unless the reader
+// chose a card by hand: that stays, and the no-mask note says what it would
+// do. Clearing the selection goes back, unless the reader has chosen since.
 watch(hasSelection, (has) => {
   if (has) {
-    moveToMasked();
+    if (!choseByHand) moveToMasked();
   } else if (beforeSelection) {
     if (runsHere(beforeSelection)) workflowId.value = beforeSelection;
     beforeSelection = "";
@@ -803,11 +803,16 @@ async function loadCards({ cached = true } = {}) {
     );
     unrunnable.value = edits.length - cards.value.length;
     rememberedKey.value = readRemembered();
-    workflowId.value = runsHere(rememberedKey.value)
-      ? rememberedKey.value
-      : defaultKey();
-    // Drawn before the tab was first shown.
-    if (hasSelection.value) moveToMasked();
+    // A re-read (a pack install's retry) keeps a card chosen by hand that
+    // still runs.
+    if (!(choseByHand && runsHere(workflowId.value))) {
+      choseByHand = false;
+      workflowId.value = runsHere(rememberedKey.value)
+        ? rememberedKey.value
+        : defaultKey();
+      // Drawn before the tab was first shown.
+      if (hasSelection.value) moveToMasked();
+    }
     loaded.value = true;
     // A download that landed during the read may postdate its answers.
     if (tasksStore.downloadsLanded !== landed) void recheckMissing();
