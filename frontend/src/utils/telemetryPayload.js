@@ -53,8 +53,9 @@ const INSTALL_TYPE_PLACEHOLDER = "__PIXLSTASH_INSTALL_TYPE__";
  * `Server.INSTALL_TYPES`, and re-listing the buckets here would add a sixth
  * copy of a list that `tests/test_install_type_buckets.py` exists to keep in
  * sync. Only the un-substituted placeholder is rejected, which is the Vite dev
- * server, where "pip" is the historical answer and a real dev machine is
- * declared through `PIXLSTASH_TELEMETRY_DEV` anyway.
+ * server: anyone running that is developing PixlStash, so it reports "dev".
+ * It used to report "pip", which counted every developer's first check of the
+ * day as a real install whatever their backend declared.
  *
  * @returns {string} The install type to report on the first version check.
  */
@@ -65,7 +66,8 @@ export function defaultInstallType() {
           .querySelector('meta[name="pixlstash-install-type"]')
           ?.getAttribute("content")
       : null;
-  return injected && injected !== INSTALL_TYPE_PLACEHOLDER ? injected : "pip";
+  if (injected && injected !== INSTALL_TYPE_PLACEHOLDER) return injected;
+  return import.meta.env.DEV ? "dev" : "pip";
 }
 
 export function buildVersionCheckRequest(version, installType) {

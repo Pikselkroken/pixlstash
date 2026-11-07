@@ -33,6 +33,10 @@ permissions:
   contents: read
 
 env:
+  # Every PixlStash this workflow boots reports itself as ours, never as a real
+  # install (Server.DEV_MACHINE_ENV_VAR; guarded by tests/test_install_type_buckets.py).
+  PIXLSTASH_TELEMETRY_DEV: '1'
+
   # The source to build: the release_tag input when given, else '' (checkout's
   # default, the triggering ref). Only checkouts of the source to build use it;
   # sign-windows-desktop checks out the dispatching ref for its signing action.

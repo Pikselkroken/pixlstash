@@ -259,62 +259,85 @@ def _job(workflow: str, name: str) -> dict:
     return jobs[name]
 
 
-def test_the_e2e_job_declares_itself_dev():
-    """The one CI job that boots the app behind a browser says it is ours.
+_DECLARED = {"1", "true", "yes", "on"}
 
-    Belt and braces with the Playwright route block above: anything reaching
-    the network by a path the route interception does not cover still arrives
-    labelled ``dev`` rather than a real install. See
+
+def _workflows() -> list[Path]:
+    """Every workflow file, so a new one cannot slip past the declaration."""
+    workflows = sorted((REPO_ROOT / ".github" / "workflows").glob("*.y*ml"))
+    assert workflows, "found no workflow files; the guardrail would pass on nothing"
+    return workflows
+
+
+@pytest.mark.parametrize("path", _workflows(), ids=lambda path: path.name)
+def test_every_workflow_declares_itself_dev(path):
+    """All CI is ours: every workflow declares the dev machine at the top.
+
+    Workflow-level, so every job and step inherits it, including a job added
+    later by somebody who never heard of telemetry. The ``CI`` suppression in
+    ``telemetry/sender.py`` only stops the server's own ping; it does nothing
+    for a browser that loads the app, a container that does not inherit the
+    runner's environment, or anything a future job boots. See
     ``Server.DEV_MACHINE_ENV_VAR``.
 
-    Only this job. ``install-smoke.yml`` is covered by the ``CI`` suppression
-    in ``telemetry/sender.py`` and asserts that a plain install detects itself
-    as ``pip``, which a declaration would overwrite; ``docker-build.yml``
-    deliberately stays undeclared so its ``/version`` payload remains the only
-    real-container evidence that docker detection works (pinned below).
-
-    Parsed rather than pattern-matched. ``tests/test_ci_shards.py`` already
-    reads these files with ``yaml.safe_load`` for the same kind of assertion,
-    and a parser is immune to the things that have nothing to do with the
-    guardrail: which job comes last in the file, how the value is quoted, and
-    how deeply the block is indented.
+    Parsed rather than pattern-matched, and checked against the server's own
+    acceptance set rather than the literal ``'1'``: a workflow rewritten to
+    ``true`` (or unquoted ``1``, which YAML hands back as an int) still
+    declares the machine.
     """
-    e2e = _job("ci.yml", "e2e")
-    value = (e2e.get("env") or {}).get(Server.DEV_MACHINE_ENV_VAR)
-    # Mirrors the server's own acceptance set rather than pinning the literal
-    # `'1'`: a workflow rewritten to `true` (or unquoted `1`, which YAML hands
-    # back as an int) still declares the machine.
-    assert str(value).strip().lower() in {"1", "true", "yes", "on"}, (
-        "ci.yml's e2e job no longer declares PIXLSTASH_TELEMETRY_DEV"
+    workflow = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    value = (workflow.get("env") or {}).get(Server.DEV_MACHINE_ENV_VAR)
+    assert str(value).strip().lower() in _DECLARED, (
+        f"{path.name} does not declare {Server.DEV_MACHINE_ENV_VAR} in its "
+        "top-level env, so what it boots can be counted as a real install"
     )
 
+    # A job or step that sets it again may only keep it declared: a blank or
+    # falsy override there silently undoes the line above for that scope.
+    for job_name, job in (workflow.get("jobs") or {}).items():
+        scopes = [job] + [step for step in job.get("steps") or [] if step]
+        for scope in scopes:
+            env = scope.get("env") or {}
+            if Server.DEV_MACHINE_ENV_VAR in env:
+                override = str(env[Server.DEV_MACHINE_ENV_VAR]).strip().lower()
+                assert override in _DECLARED, (
+                    f"{path.name} job `{job_name}` overrides "
+                    f"{Server.DEV_MACHINE_ENV_VAR} with a non-declaring value"
+                )
 
-def test_the_docker_smoke_pins_real_container_detection():
-    """The smoked container must keep reporting ``docker``, and be checked.
 
-    This is the only place any workflow observes ``running_in_docker()``
-    against a real container. Labelling the container a dev machine would
-    replace that reading with ``dev`` and leave docker detection with no
-    real-container coverage at all - so the job must NOT declare the marker,
-    and must assert what ``/version`` says.
+def test_the_docker_smoke_declares_the_container_and_still_checks_detection():
+    """The smoked container is ours too, and docker detection stays covered.
+
+    A container does not inherit the runner's environment, so the workflow's
+    declaration has to be forwarded with ``-e`` or the container reports as a
+    real docker install. The declaration then hides ``running_in_docker()``
+    from ``/version``, the only place a real container's detection used to be
+    observed, so the smoke must re-run detection inside the container with the
+    declaration blanked and expect ``docker``.
     """
     docker = _job("docker-build.yml", "build")
-    assert Server.DEV_MACHINE_ENV_VAR not in (docker.get("env") or {}), (
-        "docker-build.yml now declares the dev marker, which makes its "
-        "container report 'dev' and destroys the only real-container check "
-        "that docker detection works"
-    )
-    run_steps = " ".join(
+    run_steps = "\n".join(
         step.get("run", "")
         for step in (docker.get("steps") or [])
         if isinstance(step, dict)
     )
-    assert Server.DEV_MACHINE_ENV_VAR not in run_steps, (
-        "docker-build.yml forwards the dev marker into the smoked container"
+    docker_run = run_steps[run_steps.index("docker run ") :].split(
+        "pixlstash:ci-smoke"
+    )[0]
+    assert f"-e {Server.DEV_MACHINE_ENV_VAR} " in docker_run, (
+        "docker-build.yml no longer forwards the dev marker into the container"
     )
-    assert 'install_type" != "docker"' in run_steps or (
-        "install_type" in run_steps and "docker" in run_steps
-    ), "docker-build.yml's smoke no longer asserts the container reports docker"
+    assert 'install_type" != "dev"' in run_steps, (
+        "docker-build.yml's smoke no longer asserts the container reports dev"
+    )
+    assert f"docker exec -e {Server.DEV_MACHINE_ENV_VAR}= " in run_steps, (
+        "docker-build.yml no longer re-runs detection with the marker blanked"
+    )
+    assert '"$detected" != "docker"' in run_steps, (
+        "docker-build.yml no longer asserts undeclared detection gives docker; "
+        "running_in_docker() has no real-container coverage without it"
+    )
 
 
 def test_marker_file_declares_dev_machine(isolate_the_machine):
