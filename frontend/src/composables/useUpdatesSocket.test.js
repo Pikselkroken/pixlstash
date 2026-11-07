@@ -69,6 +69,7 @@ import { useNoticeStore } from "../stores/useNoticeStore";
 import { useWsStore } from "../stores/useWsStore";
 import { useTasksStore } from "../stores/useTasksStore";
 import { useGridStore } from "../stores/useGridStore";
+import { useSelectionStore } from "../stores/useSelectionStore";
 import { useWorkflowsStore } from "../stores/useWorkflowsStore";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
 import { useWorkflowTemplatesStore } from "../stores/useWorkflowTemplatesStore";
@@ -704,6 +705,35 @@ describe("useUpdatesSocket: a picture was turned (#1419)", () => {
     ).toBe(false);
     // The control: an unknown field still does.
     expect(realtimeDeps.pictureChangeAffectsView(["tags"])).toBe(true);
+  });
+});
+
+// A layout move of a fresh workflow output arrives with no origin. Outside a
+// folder view the file's path selects nothing, so it must not count as a
+// view change; inside one the move can take the card out of the view.
+describe("useUpdatesSocket: a moved file affects only a folder view", () => {
+  it("is invisible to a view that does not filter by folder", () => {
+    connect();
+    useSelectionStore().selectedFolderFilter = null;
+    expect(realtimeDeps.pictureChangeAffectsView(["file_path"])).toBe(false);
+    expect(
+      realtimeDeps.pictureChangeAffectsView(["file_path", "pixels"]),
+    ).toBe(false);
+  });
+
+  it("affects a folder view, by path or by reference folder", () => {
+    connect();
+    const selection = useSelectionStore();
+    selection.selectedFolderFilter = { pathPrefix: "/people/", label: "people" };
+    expect(realtimeDeps.pictureChangeAffectsView(["file_path"])).toBe(true);
+    selection.selectedFolderFilter = { referenceFolderId: 3, label: "refs" };
+    expect(realtimeDeps.pictureChangeAffectsView(["file_path"])).toBe(true);
+  });
+
+  it("does not count the Inbox as a folder view", () => {
+    connect();
+    useSelectionStore().selectedFolderFilter = { inbox: true };
+    expect(realtimeDeps.pictureChangeAffectsView(["file_path"])).toBe(false);
   });
 });
 

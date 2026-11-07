@@ -2210,6 +2210,16 @@ of them the origin makes no difference to what has to happen:
   reshuffle. `detections` and `faces` take a targeted per-card `refreshGridImage`; `pixels`
   takes `applyRotatedCards` instead, and is the one card op that is **not**
   deferred under an open lightbox. See §8.3.
+
+  `file_path` counts as card content **outside a folder view** (no
+  `selectedFolderFilter.pathPrefix` / `referenceFolderId`): only a folder view
+  selects on where the file lives, so a layout move (`["file_path", "pixels"]`)
+  elsewhere is the same card with a new thumbnail URL. `LayoutMoveTask` emits
+  with no origin, typically seconds after a workflow run when a face assignment
+  makes the new output's folder untrue; classing the path as an unknown field
+  raised the "View changed externally" pill after every run. In a folder view
+  the move can take the card out of the view, so it keeps the ordinary dispatch
+  (and the pill, from outside the UI).
 - **Stack facets** (`stack_count`) → **one batched** `refreshStackFacets(ids)`
   read for the whole event, never a pill, never a reshuffle, and never the
   per-card path: `stack_count` is derived per stack by the listing endpoint and

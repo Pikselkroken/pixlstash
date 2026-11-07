@@ -351,9 +351,18 @@ export function useGridRealtimeSync(deps) {
   // True when every changed field is a card-content-only field (and there is at
   // least one). These fields are, by construction, not view-affecting, so this
   // can be handled uniformly for all origins with a targeted in-place refresh.
+  //
+  // `file_path` joins them wherever the view does not select on it (anywhere
+  // but a folder view): a layout move is the same card with a new thumbnail
+  // URL, and its event carries `pixels` for that. In a folder view the move can
+  // take the card out of the view, so it keeps the ordinary dispatch.
   function fieldsAreCardContentOnly(fields) {
     if (!Array.isArray(fields) || !fields.length) return false;
-    return fields.every((field) => CARD_CONTENT_FIELDS.has(field));
+    return fields.every(
+      (field) =>
+        CARD_CONTENT_FIELDS.has(field) ||
+        (field === "file_path" && !pictureChangeAffectsView([field])),
+    );
   }
 
   // True when every changed field is a stack facet (and there is at least one).

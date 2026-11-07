@@ -41,6 +41,8 @@ function makeHarness(overrides = {}) {
       // mirror App.vue.pictureChangeFieldAffectsView.
       if (f === "detections") return false;
       if (f === "pixels") return false;
+      // A moved file only matters to a folder view.
+      if (f === "file_path") return overrides.folderView === true;
       return true; // unknown field assumed relevant
     });
   });
@@ -1210,8 +1212,8 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
   });
 
   // A byte rewrite that turned nothing: the thumbnail regeneration task, and
-  // the layout move (`["file_path", "pixels"]` reaches the ordinary dispatch
-  // instead, since file_path is not card content). The card's bitmap still has
+  // the layout move (`["file_path", "pixels"]`, card content too outside a
+  // folder view - see below). The card's bitmap still has
   // to be re-read - the metadata endpoint carries no thumbnail URL - but this
   // is background work rather than a gesture waiting to land, so under an open
   // lightbox it keeps the ordinary deferral rather than running the applier's
@@ -1242,6 +1244,39 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
     expect(res.reason).toBe("card-content-bytes");
     expect(h.grid.applyRotatedCards).toHaveBeenCalledWith([18, 19]);
     expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
+  });
+
+  // The reported bug: a workflow run's output is filed, a face assignment
+  // makes its folder untrue, and LayoutMoveTask moves it with no origin. Under
+  // a plain view that is the same card with a new thumbnail URL, not a view
+  // change, so it repaints in place and raises no pill.
+  it("repaints a background layout move in place, without the pill", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      picture_ids: [1368],
+      change_kind: "updated",
+      fields: ["file_path", "pixels"],
+    });
+    expect(res.reason).toBe("card-content-bytes");
+    expect(h.grid.applyRotatedCards).toHaveBeenCalledWith([1368]);
+    expect(h.wsStore.addSortChangedExternalIds).not.toHaveBeenCalled();
+    expect(h.reload).not.toHaveBeenCalled();
+  });
+
+  // The control: in a folder view the move can take the card out of the view,
+  // so an external one still offers the refresh rather than moving it silently.
+  it("keeps the pill for a background layout move in a folder view", () => {
+    const h = makeHarness({ folderView: true });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      picture_ids: [1368],
+      change_kind: "updated",
+      fields: ["file_path", "pixels"],
+    });
+    expect(res.reason).toBe("external-updated-sort-affecting");
+    expect(h.wsStore.addSortChangedExternalIds).toHaveBeenCalledWith([1368]);
+    expect(h.grid.applyRotatedCards).not.toHaveBeenCalled();
   });
 
   it("leaves the thumbnail alone for a change that did not touch the file", () => {
