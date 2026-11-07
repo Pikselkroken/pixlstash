@@ -42,6 +42,10 @@ on:
   workflow_dispatch:
 
 env:
+  # Every PixlStash this workflow boots reports itself as ours, never as a real
+  # install (Server.DEV_MACHINE_ENV_VAR; guarded by tests/test_install_type_buckets.py).
+  PIXLSTASH_TELEMETRY_DEV: '1'
+
   # Shared pytest flags for every backend job.
   #
   # Verbosity is deliberately lower than the local command documented in
@@ -816,12 +820,6 @@ jobs:
     # disabled, no ML models needed). The fixture is committed release input:
     # its absence is a coverage failure, never permission to skip the lane.
     runs-on: ubuntu-latest
-    env:
-      # Belt-and-braces with frontend/e2e/fixtures/test.js's production route
-      # block: declares this CI-booted backend as ours, so anything reaching
-      # the network by a path Playwright's route interception does not cover
-      # still arrives labelled dev rather than a real install. See #1213.
-      PIXLSTASH_TELEMETRY_DEV: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

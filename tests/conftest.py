@@ -454,8 +454,8 @@ def isolate_the_machine(tmp_path, monkeypatch):
     hypothetical: it is precisely the maintainer box the release checklist
     tells you to create the marker on.
 
-    CI cannot catch this - a runner has neither the marker nor the env var -
-    so the isolation has to be here. Points the probe at an empty per-test
+    CI declares the env var in every workflow, and a runner has no marker, so
+    the isolation has to be here for both. Points the probe at an empty per-test
     directory and clears both declaring variables; a test that wants either
     sets it itself afterwards.
     """

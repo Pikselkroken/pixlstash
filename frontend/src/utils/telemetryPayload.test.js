@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   buildInstallPingRequest,
   buildPayloadForChoice,
@@ -134,7 +134,10 @@ describe("defaultInstallType", () => {
     document.head.appendChild(el);
   };
 
-  afterEach(() => document.querySelector(META)?.remove());
+  afterEach(() => {
+    document.querySelector(META)?.remove();
+    vi.unstubAllEnvs();
+  });
 
   // Regression guard. This value is what the version check reports, because it
   // fires from TitleBar's onMounted before App.vue's GET /version resolves and
@@ -149,12 +152,33 @@ describe("defaultInstallType", () => {
     },
   );
 
-  it("ignores the placeholder the dev server leaves behind", () => {
+  // The Vite dev server is the only thing that leaves the placeholder in, and
+  // only developers run it: reporting "pip" there counted them as users.
+  it("reports dev for the placeholder the dev server leaves behind", () => {
+    vi.stubEnv("DEV", true);
+    setMeta("__PIXLSTASH_INSTALL_TYPE__");
+    expect(defaultInstallType()).toBe("dev");
+  });
+
+  it("reports dev from the dev server even with no marker at all", () => {
+    vi.stubEnv("DEV", true);
+    expect(defaultInstallType()).toBe("dev");
+  });
+
+  it("falls back to pip in a built app whose marker was not substituted", () => {
+    vi.stubEnv("DEV", false);
     setMeta("__PIXLSTASH_INSTALL_TYPE__");
     expect(defaultInstallType()).toBe("pip");
   });
 
-  it("falls back to pip when the document carries no marker at all", () => {
+  it("falls back to pip in a built app with no marker at all", () => {
+    vi.stubEnv("DEV", false);
     expect(defaultInstallType()).toBe("pip");
+  });
+
+  it("never lets the dev fallback override what the server substituted", () => {
+    vi.stubEnv("DEV", true);
+    setMeta("docker");
+    expect(defaultInstallType()).toBe("docker");
   });
 });

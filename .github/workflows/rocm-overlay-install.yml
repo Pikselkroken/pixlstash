@@ -27,6 +27,11 @@ concurrency:
   group: rocm-overlay-install
   cancel-in-progress: false
 
+env:
+  # Every PixlStash this workflow boots reports itself as ours, never as a real
+  # install (Server.DEV_MACHINE_ENV_VAR; guarded by tests/test_install_type_buckets.py).
+  PIXLSTASH_TELEMETRY_DEV: '1'
+
 jobs:
   rocm-overlay-install:
     runs-on: ubuntu-latest

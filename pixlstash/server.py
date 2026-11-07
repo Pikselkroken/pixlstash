@@ -458,7 +458,8 @@ class Server(
     #: when a developer's environment says ``dev``, and it sets this instead so
     #: the machine can still be labelled ours without changing how it runs.
     #:
-    #: Set to 1 by the shell for a dev backend (``PIXLSTASH_DESKTOP_DEV``); a
+    #: Set to 1 by the shell for a dev backend (``PIXLSTASH_DESKTOP_DEV``), and
+    #: at the top of every GitHub workflow so nothing CI boots is counted; a
     #: developer running a *bundled* desktop build can export it by hand.
     DEV_MACHINE_ENV_VAR = "PIXLSTASH_TELEMETRY_DEV"
 
