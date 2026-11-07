@@ -227,6 +227,14 @@ export function useUpdatesSocket({
     // A text search reads it, but the results are fetched once per query, so
     // a re-read must not reload the grid or raise the "view changed" pill.
     if (field === "ocr_text") return false;
+    // Where the file lives. Only a folder view selects on it; anywhere else a
+    // moved file is the same card in the same place. A layout move of a fresh
+    // workflow output arrives with no origin, so treating this as "unknown"
+    // raised the "view changed externally" pill after every run.
+    if (field === "file_path") {
+      const folder = selectionStore.selectedFolderFilter;
+      return folder?.pathPrefix != null || folder?.referenceFolderId != null;
+    }
     // Unknown field → assume it can affect the view, so refresh to be safe.
     return true;
   }

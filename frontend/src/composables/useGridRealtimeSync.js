@@ -349,11 +349,24 @@ export function useGridRealtimeSync(deps) {
   }
 
   // True when every changed field is a card-content-only field (and there is at
-  // least one). These fields are, by construction, not view-affecting, so this
-  // can be handled uniformly for all origins with a targeted in-place refresh.
+  // least one). The CARD_CONTENT_FIELDS are, by construction, not
+  // view-affecting, so this can be handled uniformly for all origins with a
+  // targeted in-place refresh.
+  //
+  // `file_path` joins them only beside `pixels`, and only where the view does
+  // not select on it (anywhere but a folder view): a layout move is the same
+  // card with a new thumbnail URL, which only the `pixels` branch re-reads. In
+  // a folder view the move can take the card out of the view, so it keeps the
+  // ordinary dispatch.
   function fieldsAreCardContentOnly(fields) {
     if (!Array.isArray(fields) || !fields.length) return false;
-    return fields.every((field) => CARD_CONTENT_FIELDS.has(field));
+    const movedFileRepaints =
+      fields.includes("pixels") && !pictureChangeAffectsView(["file_path"]);
+    return fields.every(
+      (field) =>
+        CARD_CONTENT_FIELDS.has(field) ||
+        (field === "file_path" && movedFileRepaints),
+    );
   }
 
   // True when every changed field is a stack facet (and there is at least one).
@@ -775,8 +788,11 @@ export function useGridRealtimeSync(deps) {
     // reported bug, and it is why `restored` is a kind of its own rather than
     // the `added` the undo path used to send.
     const changeKind = resolveChangeKind(payload);
+    // A moved file changes the sidebar's Folders counts, which are read from
+    // the stored paths, even where it changes nothing in the grid.
     const touchesSidebar =
       affectsView ||
+      (Array.isArray(payload?.fields) && payload.fields.includes("file_path")) ||
       changeKind === "added" ||
       changeKind === "removed" ||
       changeKind === "restored";

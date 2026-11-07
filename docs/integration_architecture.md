@@ -2210,6 +2210,18 @@ of them the origin makes no difference to what has to happen:
   reshuffle. `detections` and `faces` take a targeted per-card `refreshGridImage`; `pixels`
   takes `applyRotatedCards` instead, and is the one card op that is **not**
   deferred under an open lightbox. See §8.3.
+
+  `file_path` counts as card content **beside `pixels` and outside a folder
+  view** (no `selectedFolderFilter.pathPrefix` / `referenceFolderId`): only a
+  folder view selects on where the file lives, so a layout move
+  (`["file_path", "pixels"]`) elsewhere is the same card with a new thumbnail
+  URL, for every origin. The sidebar is still refreshed for it, because the
+  Folders counts are read from the stored paths. `LayoutMoveTask` emits
+  with no origin, typically seconds after a workflow run when a face assignment
+  makes the new output's folder untrue; classing the path as an unknown field
+  raised the "View changed externally" pill after every run. In a folder view
+  the move can take the card out of the view, so it keeps the ordinary dispatch
+  (and the pill, from outside the UI).
 - **Stack facets** (`stack_count`) → **one batched** `refreshStackFacets(ids)`
   read for the whole event, never a pill, never a reshuffle, and never the
   per-card path: `stack_count` is derived per stack by the listing endpoint and
@@ -2243,7 +2255,7 @@ stamp `orientation` alongside it, which is how a client tells them apart:**
 | `POST /pictures/rotate` | `["orientation", "pixels"]` | yes |
 | the operation-log restore behind undo/redo (`_emit`) | `["orientation", "pixels"]` for an orientation; `["pixels"]` for a location | orientation only |
 | `ThumbnailGenerationTask` | `["pixels"]` | no — a regenerated bitmap, up to 64 ids per batch |
-| `POST /pictures/layout/move-to-match` and `LayoutMoveTask` | `["file_path", "pixels"]` | no — the path moved |
+| `POST /pictures/layout/move-to-match` and `LayoutMoveTask` | `["file_path", "pixels"]` | no — the path moved (card content outside a folder view, §8.2) |
 
 The grid does not care which it was: the thumbnail is re-read either way, so it
 keys its applier on `pixels` and uses `orientation` only to decide whether to
