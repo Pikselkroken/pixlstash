@@ -176,6 +176,11 @@ jobs:
   warm_models:
     name: warm model cache
     runs-on: ubuntu-latest
+    # A ceiling on the cold path. InsightFace fetches buffalo_l from a GitHub
+    # release asset with `requests.get` and no timeout, so a stalled asset would
+    # otherwise hold this job - and every shard that `needs:` it - for the
+    # default 360 minutes. A warm hit finishes in well under a minute.
+    timeout-minutes: 60
     # Draft PRs skip the gate; see `on: pull_request`.
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     # See the `backend` job for the rationale and the read-only token
@@ -374,6 +379,11 @@ jobs:
   warm_models_windows:
     name: warm model cache (Windows)
     runs-on: windows-latest
+    # A ceiling on the cold path. InsightFace fetches buffalo_l from a GitHub
+    # release asset with `requests.get` and no timeout, so a stalled asset would
+    # otherwise hold this job - and every shard that `needs:` it - for the
+    # default 360 minutes. A warm hit finishes in well under a minute.
+    timeout-minutes: 60
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     # Only a `push` can save this cache (see the save step), so only a `push`
     # runs the prefetch — and a run that never fetches has no use for the
