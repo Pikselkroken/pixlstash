@@ -216,8 +216,8 @@
             :open="filterMenuOpen"
             aria-haspopup="menu"
             :aria-expanded="filterMenuOpen"
-            :aria-label="filterCount ? `Filter, ${filterCount} on` : 'Filter'"
-            :tooltip="filterCount ? `Filter, ${filterCount} on` : 'Filter'"
+            :aria-label="filterCount ? `${filterCount} Filter` : 'Filter'"
+            tooltip="Filter"
             ><span class="wfv-filter-label">Filter</span></AppBarButton
           >
         </template>

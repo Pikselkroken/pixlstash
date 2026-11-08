@@ -1397,7 +1397,7 @@ describe("the browse toolbar when narrow", () => {
     expect(filter().attributes("aria-label")).toBe("Filter");
     useWorkflowsStore().setFilters({ type: "upscale" });
     await flush();
-    expect(filter().attributes("aria-label")).toBe("Filter, 1 on");
+    expect(filter().attributes("aria-label")).toBe("1 Filter");
     // The word is its own element, which is what the last rung hides.
     expect(filter().find(".wfv-filter-label").text()).toBe("Filter");
   });
