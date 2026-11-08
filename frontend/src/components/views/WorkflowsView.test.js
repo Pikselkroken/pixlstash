@@ -1445,6 +1445,31 @@ describe("the browse toolbar when narrow", () => {
     expect(store.sortDirection).toBe("desc");
   });
 
+  it("the ⋯ opens with focus on the current sort, and the arrows move between rows", async () => {
+    const wrapper = await grid();
+    await openOverflow(wrapper);
+    const current = () => document.activeElement;
+    // "Your ratings" is the store's default key.
+    expect(current().getAttribute("aria-checked")).toBe("true");
+    expect(current().textContent).toContain("Your ratings");
+
+    const panel = wrapper.find('[data-testid="wfv-overflow"] .tbo-panel');
+    await panel.trigger("keydown", { key: "ArrowDown" });
+    expect(current().textContent).toContain("Recently used");
+    await panel.trigger("keydown", { key: "ArrowUp" });
+    await panel.trigger("keydown", { key: "ArrowUp" });
+    // Up from the first row wraps to the last: Favourites first.
+    expect(current().dataset.testid).toBe("wfv-overflow-favourites");
+    await panel.trigger("keydown", { key: "Home" });
+    expect(current().textContent).toContain("Your ratings");
+    // The heading names its rows and is no row itself.
+    const group = panel.find('[role="group"]');
+    expect(
+      wrapper.find(`#${group.attributes("aria-labelledby")}`).text(),
+    ).toBe("Sort by");
+    expect(group.findAll('[role="menuitemradio"]')).toHaveLength(6);
+  });
+
   it("the ⋯ carries Mine's Favourites first, and Templates has none", async () => {
     listTemplates.mockResolvedValue({ reachable: true, templates: [] });
     const wrapper = await grid();

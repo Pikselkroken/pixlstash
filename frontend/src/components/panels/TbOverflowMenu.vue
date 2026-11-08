@@ -10,12 +10,18 @@
       :aria-expanded="open ? 'true' : 'false'"
       @click="toggle"
     />
+    <!-- The arrows, Home and End move between rows (`onMenuKeydown`, the
+         shared menu surface's roving focus); the rows are real buttons, so
+         Enter and Space are the browser's. -->
     <div
       v-if="open"
+      ref="panelEl"
       class="ctx-menu tbo-panel"
       :class="`tbo-panel--${align}`"
       role="menu"
       aria-label="More actions"
+      tabindex="-1"
+      @keydown="onMenuKeydown"
     >
       <slot :close="close" />
     </div>
@@ -39,7 +45,8 @@
 // trigger, a pointer press outside dismisses, and the rows are the one menu
 // row, `.ctx-item` (styles/context-menu.css).
 
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import AppBarButton from "../widgets/AppBarButton.vue";
 
 defineProps({
@@ -60,9 +67,23 @@ defineProps({
 const open = ref(false);
 const wrapEl = ref(null);
 const triggerEl = ref(null);
+const panelEl = ref(null);
 
 function toggle() {
-  open.value ? close({ focusTrigger: false }) : (open.value = true);
+  if (open.value) {
+    close({ focusTrigger: false });
+    return;
+  }
+  open.value = true;
+  // Focus goes into the menu as it opens, onto the row holding the current
+  // value if one is checked, else the first row, so the arrows work at once.
+  nextTick(() => {
+    const panel = panelEl.value;
+    const row =
+      panel?.querySelector('.ctx-item[aria-checked="true"]') ??
+      panel?.querySelector(".ctx-item");
+    (row ?? panel)?.focus?.();
+  });
 }
 
 /**

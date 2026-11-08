@@ -109,25 +109,31 @@
         data-testid="wfv-overflow"
       >
         <template #default="{ close }">
-          <div class="section-label ctx-label">Sort by</div>
-          <button
-            v-for="option in onTemplates ? templateSortOptions : sortOptions"
-            :key="option.id"
-            type="button"
-            role="menuitemradio"
-            class="ctx-item"
-            :aria-checked="option.id === activeSortKey ? 'true' : 'false'"
-            data-testid="wfv-overflow-sort"
-            @click="
-              setSortKey(option.id);
-              close();
-            "
-          >
-            <span class="ctx-label-text">{{ option.label }}</span>
-            <v-icon v-if="option.id === activeSortKey" class="ctx-check"
-              >mdi-check</v-icon
+          <!-- A group, so the heading names its rows and is not a stray
+               child of the menu. -->
+          <div role="group" aria-labelledby="wfv-overflow-sort-label">
+            <div id="wfv-overflow-sort-label" class="section-label ctx-label">
+              Sort by
+            </div>
+            <button
+              v-for="option in onTemplates ? templateSortOptions : sortOptions"
+              :key="option.id"
+              type="button"
+              role="menuitemradio"
+              class="ctx-item"
+              :aria-checked="option.id === activeSortKey ? 'true' : 'false'"
+              data-testid="wfv-overflow-sort"
+              @click="
+                setSortKey(option.id);
+                close();
+              "
             >
-          </button>
+              <span class="ctx-label-text">{{ option.label }}</span>
+              <v-icon v-if="option.id === activeSortKey" class="ctx-check"
+                >mdi-check</v-icon
+              >
+            </button>
+          </div>
           <div class="ctx-sep" role="separator"></div>
           <button
             v-for="direction in SORT_DIRECTIONS"

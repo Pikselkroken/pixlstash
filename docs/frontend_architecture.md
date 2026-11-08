@@ -770,7 +770,10 @@ no `min-width: 0`, so the same failure is available to it once its own content
 outgrows its ladder; that is a known gap, not a decision.
 `TbOverflowMenu`'s panel hangs from the edge its `align` prop names (`end` by
 default, `start` for a trigger near the bar's left edge), and it exposes
-`isOpen()` for a host whose surface owns the keyboard.
+`isOpen()` for a host whose surface owns the keyboard. Opening it puts focus
+on the checked row if there is one, else the first, and the panel takes the
+shared menu surface's roving focus (`utils/menuKeyboard.js`: the arrows,
+Home and End); the rows are buttons, so Enter and Space are the browser's.
 
 Responsibilities:
 - Lens run: the sort split button (direction, then the value with no prefix or icon), Filter, View (size, stacks, overlays).
