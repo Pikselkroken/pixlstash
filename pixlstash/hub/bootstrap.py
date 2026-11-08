@@ -914,9 +914,14 @@ def _replace_unavailable_library(
         replacement = _register_first_library(
             registry, resolved, name=os.path.basename(resolved) or "Library 1"
         )
+        # Checked before anything changes which library opens, so a failure
+        # here leaves the missing library active and attached, and the screen
+        # that comes back still describes the registry as it is.
+        replacement = registry.adopt_vault_fingerprint(replacement)
+        prevalidate_library_fingerprint(replacement)
         replacement = registry.set_active(replacement.id)
         registry.detach(library.id)
-    except (LibraryError, UnusableVaultError, OSError) as exc:
+    except (LibraryError, HubBootstrapError, OSError) as exc:
         raise refuse(f"Could not start a new library in {resolved}: {exc}") from exc
     logger.warning(
         "Started a new library at %s in place of %s, which could not be opened "
@@ -927,8 +932,6 @@ def _replace_unavailable_library(
         library.path,
         unavailable.reason,
     )
-    replacement = registry.adopt_vault_fingerprint(replacement)
-    prevalidate_library_fingerprint(replacement)
     return replacement
 
 

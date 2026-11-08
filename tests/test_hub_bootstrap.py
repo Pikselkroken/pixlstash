@@ -19,6 +19,7 @@ import pytest
 from sqlalchemy.exc import NoSuchTableError, OperationalError
 
 from pixlstash import app as app_module
+from pixlstash.hub import bootstrap as bootstrap_module
 from pixlstash.hub.bootstrap import (
     LIBRARY_REPLACE_ENV,
     HubBootstrapError,
@@ -1648,6 +1649,56 @@ class TestTheRecoveryReport:
         assert len(line) <= 3000
         record = json.loads(line.split("=", 1)[1])
         assert record["library"]["path"] == gone
+
+    def test_a_new_library_in_a_folder_of_pictures_is_a_pending_import(
+        self, hub_with_two, tmp_path, monkeypatch
+    ):
+        """As on first run: the pictures are offered for import, not a failure."""
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        shutil.rmtree(gone)
+        fresh = tmp_path / "pictures"
+        fresh.mkdir()
+        (fresh / "holiday.jpg").write_bytes(b"not really a jpeg")
+        monkeypatch.setenv(LIBRARY_REPLACE_ENV, gone_uuid)
+
+        result = bootstrap_hub(str(fresh), hub_path)
+        try:
+            assert result.library.path == os.path.realpath(fresh)
+            assert result.library.is_active
+            assert result.library.pending_import_at is not None
+            assert not LibraryRegistry(result.hub).by_uuid(gone_uuid).attached
+        finally:
+            result.engine.close()
+            result.hub.close()
+
+    def test_a_replacement_that_fails_its_check_leaves_the_missing_one_active(
+        self, hub_with_two, tmp_path, monkeypatch
+    ):
+        """The screen that comes back must still describe the registry as it is."""
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        shutil.rmtree(gone)
+        fresh = str(tmp_path / "fresh")
+        monkeypatch.setenv(LIBRARY_REPLACE_ENV, gone_uuid)
+        real_check = bootstrap_module.prevalidate_library_fingerprint
+
+        def check(library):
+            if library.path == os.path.realpath(fresh):
+                raise HubBootstrapError("simulated: the new vault would not verify")
+            return real_check(library)
+
+        monkeypatch.setattr(bootstrap_module, "prevalidate_library_fingerprint", check)
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(fresh, hub_path)
+
+        assert "simulated" in raised.value.reason
+        hub = HubDatabase(hub_path)
+        try:
+            registry = LibraryRegistry(hub)
+            assert registry.active_library().uuid == gone_uuid
+            assert registry.by_uuid(gone_uuid).attached
+        finally:
+            hub.close()
 
     def test_an_oversized_record_is_still_emitted_rather_than_hanging(
         self, hub_with_two
