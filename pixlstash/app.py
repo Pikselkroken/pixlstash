@@ -23,9 +23,11 @@ from pixlstash.startup_checks import StartupCheckError  # noqa: E402
 from pixlstash.telemetry import ensure_install_identity  # noqa: E402
 from pixlstash.hub.bootstrap import (  # noqa: E402
     HubBootstrapError,
+    LibraryUnavailableError,
     UnusableVaultError,
     VAULT_RECREATE_ENV,
 )
+from pixlstash.hub.cli_hint import cli_hint  # noqa: E402
 from pixlstash.hub.db import HubPermissionError  # noqa: E402
 from pixlstash.startup_permissions import (  # noqa: E402
     PERMISSION_REPAIR_ENV,
@@ -203,6 +205,108 @@ def _offer_vault_recreation(exc: UnusableVaultError) -> bool:
         file=sys.stderr,
     )
     return False
+
+
+LIBRARY_UNAVAILABLE_PREFIX = "PIXLSTASH_LIBRARY_UNAVAILABLE="
+
+# The shell keeps only the last few thousand characters of our output, and the
+# record has to arrive whole. A hub with more attached libraries than this
+# still names them all in the human text above it.
+_MAX_REPORTED_ALTERNATIVES = 8
+
+
+def _describe_library(library) -> dict:
+    return {
+        "id": library.id,
+        "uuid": library.uuid,
+        "name": library.name,
+        "path": library.path,
+    }
+
+
+def _library_unavailable_signal(exc: LibraryUnavailableError) -> str:
+    """The single-line record the desktop shell turns into its recovery screen."""
+
+    return LIBRARY_UNAVAILABLE_PREFIX + json.dumps(
+        {
+            "version": 1,
+            "kind": exc.kind,
+            "library": _describe_library(exc.library),
+            "vault_path": exc.library.vault_path,
+            "reason": exc.reason,
+            "alternatives": [
+                _describe_library(other)
+                for other in exc.alternatives[:_MAX_REPORTED_ALTERNATIVES]
+            ],
+        },
+        separators=(",", ":"),
+    )
+
+
+def _format_library_unavailable(exc: LibraryUnavailableError) -> str:
+    """What is missing, the likely cause, and every way out, as commands."""
+
+    library = exc.library
+    likely = {
+        LibraryUnavailableError.FOLDER_MISSING: (
+            f"The folder {library.path} is not there. It may have been "
+            "deleted, moved or renamed, or it is on a drive that is not "
+            "connected."
+        ),
+        LibraryUnavailableError.VAULT_MISSING: (
+            f"The folder {library.path} is there, but the library database "
+            f"({os.path.basename(library.vault_path)}) in it is not. The folder "
+            "may have been emptied or recreated, or it is where a drive that "
+            "is not connected should be."
+        ),
+        LibraryUnavailableError.UNREADABLE: (
+            f"{library.vault_path} is there but could not be read. That is "
+            "usually a permissions, locking or disk problem."
+        ),
+        LibraryUnavailableError.FOREIGN: (
+            f"{library.vault_path} belongs to a different library, so it was "
+            "not opened."
+        ),
+    }.get(exc.kind, "")
+    hub = exc.hub_path
+    lines = [
+        f'PixlStash could not open its library "{library.name}":',
+        f"- {exc.reason}",
+        "",
+        likely,
+        "Nothing was created or changed, and no pictures were touched.",
+        "",
+        "To carry on, do one of these and start PixlStash again:",
+        "- Reconnect the drive, or put the folder back where it was.",
+        "- If the library moved, point PixlStash at where it lives now:",
+        f"    {cli_hint(f'libraries relocate {library.id} <folder> --same-library', hub)}",
+    ]
+    if exc.alternatives:
+        lines.append("- Open another library instead:")
+        lines.extend(
+            f"    {cli_hint(f'libraries activate {other.id}', hub)}   ({other.name})"
+            for other in exc.alternatives
+        )
+    lines.extend(
+        [
+            "- Start a new library, then make it the one that opens:",
+            f"    {cli_hint('libraries create <folder>', hub)}",
+            f"    {cli_hint('libraries activate <name>', hub)}",
+            f"  {library.name} can then be forgotten (its files are kept):",
+            f"    {cli_hint(f'libraries detach {library.id}', hub)}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _report_library_unavailable(exc: LibraryUnavailableError) -> None:
+    """Explain, and hand the desktop shell the record its recovery screen reads."""
+
+    with hold_log_output():
+        print(_format_library_unavailable(exc), file=sys.stderr)
+        if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron":
+            # Last, so it is inside the bounded tail the shell keeps.
+            print(_library_unavailable_signal(exc), file=sys.stderr)
 
 
 def _prompt_legacy_identity_migration(library) -> bool:
@@ -597,6 +701,9 @@ def main():
         # startup error rather than an implementation traceback.
         print("PixlStash could not safely open its database:", file=sys.stderr)
         print(f"- {exc}", file=sys.stderr)
+        return 1
+    except LibraryUnavailableError as exc:
+        _report_library_unavailable(exc)
         return 1
     except HubBootstrapError as exc:
         print("PixlStash could not prepare its library:", file=sys.stderr)

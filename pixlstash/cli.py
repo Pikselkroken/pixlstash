@@ -177,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
             "register it. A folder that already holds vault.db is refused; "
             "use `attach` for that one. The first library on an installation "
             "becomes the active one; any later library has to be switched to "
-            "in Settings › Libraries & imports."
+            "in Settings › Libraries & imports, or with `activate`."
         ),
     )
     create_parser.add_argument("folder", help="Folder to create the library in.")
@@ -233,7 +233,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     relocate_parser.add_argument("library", help=LIBRARY_ARG_HELP)
     relocate_parser.add_argument("folder", help="Where the library now lives.")
+    relocate_parser.add_argument(
+        "--same-library",
+        action="store_true",
+        help=(
+            "Refuse unless the folder holds this same library (its fingerprint "
+            "matches). Without it a different library there is moved to with a "
+            "warning, and inherits this one's share links."
+        ),
+    )
     relocate_parser.set_defaults(handler=_cmd_relocate)
+
+    activate_parser = subparsers.add_parser(
+        "activate",
+        help="Choose the library PixlStash opens the next time it starts.",
+        description=(
+            "Make a library the active one: the one PixlStash opens when it "
+            "starts. This is the way out when the active library's folder is "
+            "gone and the server will not start, so Settings cannot be "
+            "reached. Run it with PixlStash stopped; while it is running, "
+            "switch in Settings › Libraries & imports instead, which also "
+            "reloads the open windows. A library whose folder or vault.db "
+            "cannot be opened is refused, so this never swaps one dead end for "
+            "another. Nothing on disk changes."
+        ),
+    )
+    activate_parser.add_argument("library", help=LIBRARY_ARG_HELP)
+    activate_parser.set_defaults(handler=_cmd_activate)
 
     backup_parser = subparsers.add_parser(
         "backup",
@@ -897,9 +923,62 @@ def _cmd_detach(registry: LibraryRegistry, args: argparse.Namespace) -> int:
 
 def _cmd_relocate(registry: LibraryRegistry, args: argparse.Namespace) -> int:
     """Move a registration to a new folder, keeping its identity."""
-    library = registry.relocate(args.library, args.folder)
+    library = registry.relocate(
+        args.library, args.folder, require_same_library=args.same_library
+    )
     print(f'Library "{library.name}" now lives at {library.path}')
     print("Its share links and API tokens keep working.")
+    return EXIT_OK
+
+
+def _cmd_activate(registry: LibraryRegistry, args: argparse.Namespace) -> int:
+    """Make a library the one start-up opens, refusing one that would not open."""
+    # Local import: bootstrap pulls in the hub engine and the media helpers,
+    # which the other verbs have no use for (CLAUDE.md's start-up exception).
+    from pixlstash.hub.bootstrap import (
+        HubBootstrapError,
+        prevalidate_library_fingerprint,
+    )
+
+    library = registry.get(args.library)
+    if not library.attached:
+        print(
+            f'error: "{library.name}" is detached. Attach it again first:  '
+            f'{invoked_as()} libraries attach "{library.path}"',
+            file=sys.stderr,
+        )
+        return EXIT_REFUSED
+    if library.pending_import_at:
+        print(
+            f'error: "{library.name}" is still being imported and is not a '
+            "library yet.",
+            file=sys.stderr,
+        )
+        return EXIT_REFUSED
+    if library.is_active:
+        print(f'"{library.name}" is already the active library.')
+        return EXIT_OK
+    if not library.is_reachable:
+        print(
+            f'error: "{library.name}" cannot be opened: there is no '
+            f"{library.vault_filename} at {library.path}. Reconnect the drive, "
+            f"or point it at where it lives now with `{invoked_as()} libraries "
+            "relocate`. Nothing was changed.",
+            file=sys.stderr,
+        )
+        return EXIT_REFUSED
+    try:
+        prevalidate_library_fingerprint(library)
+    except HubBootstrapError as exc:
+        print(
+            f'error: "{library.name}" cannot be opened: {exc} Nothing was changed.',
+            file=sys.stderr,
+        )
+        return EXIT_REFUSED
+
+    library = registry.set_active(library.id)
+    print(f'"{library.name}" at {library.path} is now the active library.')
+    print("PixlStash opens it the next time it starts.")
     return EXIT_OK
 
 
@@ -1873,7 +1952,10 @@ def _print_activation_note(library: Library) -> None:
     if library.is_active:
         print("It is the active library.")
     else:
-        print("Switch to it in Settings › Libraries & imports.")
+        print(
+            "Switch to it in Settings › Libraries & imports, or, with "
+            f"PixlStash stopped:  {invoked_as()} libraries activate {library.id}"
+        )
 
 
 if __name__ == "__main__":

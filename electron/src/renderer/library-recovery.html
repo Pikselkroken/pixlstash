@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'; script-src 'self'"
+    />
+    <title>PixlStash could not find your library</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="winbar" class="winbar"></div>
+    <div class="app setup repair recovery">
+      <div class="setup-header">
+        <!-- A folder with a sad face: something is missing, not broken.
+             Inline so it needs no asset and inherits the theme's colours. -->
+        <svg
+          class="repair-art recovery-art"
+          viewBox="0 0 96 72"
+          role="img"
+          aria-label="A sad folder"
+          focusable="false"
+        >
+          <path
+            class="recovery-art-folder"
+            d="M8 20a6 6 0 0 1 6-6h20l7 8h41a6 6 0 0 1 6 6v30a6 6 0 0 1-6 6H14a6 6 0 0 1-6-6z"
+          />
+          <circle class="recovery-art-eye" cx="38" cy="38" r="3" />
+          <circle class="recovery-art-eye" cx="58" cy="38" r="3" />
+          <path class="recovery-art-mouth" d="M37 54a12 9 0 0 1 22 0" />
+        </svg>
+        <h1 id="title" class="setup-title">Your library could not be found</h1>
+        <p id="intro" class="setup-intro"></p>
+      </div>
+
+      <div class="panel">
+        <div class="hw">What probably happened</div>
+        <p id="cause" class="recovery-cause"></p>
+        <details class="recovery-detail">
+          <summary>Details</summary>
+          <code id="reason" class="repair-path"></code>
+        </details>
+        <div class="sub">
+          None of these deletes a picture or changes anything in the library's folder.
+        </div>
+      </div>
+
+      <div id="notice" class="error hidden" role="status"></div>
+      <div id="error" class="error hidden" role="alert"></div>
+
+      <ul class="recovery-actions" aria-label="Ways to carry on">
+        <li class="recovery-action">
+          <button id="retry" type="button">Try again</button>
+          <span class="sub">Reconnect the drive or put the folder back first.</span>
+        </li>
+        <li class="recovery-action">
+          <button id="find" type="button" class="secondary">Find it…</button>
+          <span class="sub">
+            Choose the folder where it is now. Its share links keep working.
+          </span>
+        </li>
+        <li id="others" class="recovery-action hidden">
+          <span class="recovery-label">Open another library</span>
+          <ul id="alternatives" class="repair-list recovery-alternatives"></ul>
+        </li>
+        <li class="recovery-action">
+          <button id="create" type="button" class="secondary">Create a new library…</button>
+          <span id="create-note" class="sub"></span>
+        </li>
+      </ul>
+
+      <div class="repair-actions">
+        <button id="quit" class="secondary" type="button">Quit</button>
+      </div>
+    </div>
+    <script src="winbar.js"></script>
+    <script src="library-recovery.js"></script>
+  </body>
+</html>

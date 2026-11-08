@@ -19,6 +19,14 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   permissionRepairRequest: () => ipcRenderer.invoke('permissions:request'),
   resolvePermissionRepair: (accepted: boolean) =>
     ipcRenderer.invoke('permissions:resolve', accepted),
+  // Startup recovery for an active library that will not open: main holds the
+  // backend's report, and each action ends in a relaunch or a quit.
+  libraryRecoveryRequest: () => ipcRenderer.invoke('libraryRecovery:request'),
+  findMissingLibrary: () => ipcRenderer.invoke('libraryRecovery:find'),
+  switchToLibrary: (uuid: string) => ipcRenderer.invoke('libraryRecovery:switch', uuid),
+  createReplacementLibrary: () => ipcRenderer.invoke('libraryRecovery:create'),
+  retryLibrary: () => ipcRenderer.invoke('libraryRecovery:retry'),
+  quitLibraryRecovery: () => ipcRenderer.invoke('libraryRecovery:quit'),
   listAccelerators: () => ipcRenderer.invoke('accel:list'),
   installAccelerator: (accel: string) => ipcRenderer.invoke('accel:install', accel),
   useAccelerator: (accel: string | null) => ipcRenderer.invoke('accel:use', accel),

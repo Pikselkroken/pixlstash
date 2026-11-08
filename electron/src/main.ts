@@ -56,6 +56,15 @@ import {
   VaultUnusableError,
 } from './backend/VaultRecovery';
 import {
+  activateLibrary,
+  isLibraryUnavailable,
+  isSameOrInside,
+  LibraryUnavailableError,
+  LibraryUnavailableReport,
+  relocateLibrary,
+  withImageRoot,
+} from './backend/LibraryRecovery';
+import {
   Accel,
   ACCEL_LABELS,
   RuntimeInfo,
@@ -1045,7 +1054,8 @@ async function startWithOverlayFallback(
     // an accelerator: retrying on the CPU env fails identically and throws the
     // typed error away. Preserve the active overlay and let the caller offer
     // the dedicated recovery dialog.
-    shouldFallback: (error) => !isPermissionRepairRequired(error) && !isVaultUnusable(error),
+    shouldFallback: (error) =>
+      !isPermissionRepairRequired(error) && !isVaultUnusable(error) && !isLibraryUnavailable(error),
   });
 }
 
@@ -1182,6 +1192,195 @@ async function offerPermissionRepair(error: PermissionRepairRequiredError): Prom
   }
 }
 
+/**
+ * The missing-library report the recovery screen is showing, and a note about
+ * the attempt that just failed. Held in main, like the permission report, so
+ * the page can only ever act on a library the backend actually named.
+ */
+let pendingLibraryRecovery: { report: LibraryUnavailableReport; notice: string | null } | null =
+  null;
+
+/** What the person chose on the recovery screen; each one ends in a relaunch or a quit. */
+type LibraryRecoveryChoice = { quit: true } | { quit: false; recovery: StartupRecovery };
+
+const LIBRARY_RECOVERY_CHANNELS = [
+  'libraryRecovery:find',
+  'libraryRecovery:switch',
+  'libraryRecovery:create',
+  'libraryRecovery:retry',
+  'libraryRecovery:quit',
+] as const;
+
+/** Refuse a recovery action that did not come from the recovery screen itself. */
+function requireLibraryRecoveryRenderer(event: Electron.IpcMainInvokeEvent, channel: string): void {
+  const sender = event.senderFrame?.url ?? event.sender.getURL();
+  if (isBundledRendererPage(sender, RENDERER_DIR, 'library-recovery.html')) return;
+  console.warn(`[ipc] refusing ${channel} from ${redactUrl(sender)}: not the recovery screen`);
+  throw new Error(`${channel} is only available on the library recovery screen.`);
+}
+
+/** Run a `pixlstash-cli libraries` verb with the backend's interpreter and hub. */
+function libraryCliRunner(): (
+  file: string,
+  args: string[],
+  options: { timeout: number },
+) => Promise<{ stdout: string; stderr: string }> {
+  return (file, args, options) => execFileP(file, args, { ...options, env: backendEnv() });
+}
+
+/**
+ * Show the recovery screen for a library that will not open, and wait for a
+ * choice that ends in a relaunch or a quit.
+ *
+ * The screen does the work for "Find it" and "Open another library" itself,
+ * through the CLI, while the backend is stopped - so a wrong folder is answered
+ * on the screen ("that is a different library") instead of by another failed
+ * start. "Create a new library" only records the folder; the backend registers
+ * it on the relaunch, through exactly the code a first run uses, and detaches
+ * the old registration only once the new one exists. Nothing here deletes a
+ * file, and nothing creates a database where the missing library belongs.
+ */
+async function askLibraryRecovery(
+  report: LibraryUnavailableReport,
+  notice: string | null,
+): Promise<LibraryRecoveryChoice> {
+  const window = mainWindow;
+  if (!window) return { quit: true };
+  pendingLibraryRecovery = { report, notice };
+  let settle: (choice: LibraryRecoveryChoice) => void = () => undefined;
+  const choice = new Promise<LibraryRecoveryChoice>((resolveChoice) => {
+    let settled = false;
+    settle = (value) => {
+      if (settled) return;
+      settled = true;
+      resolveChoice(value);
+    };
+  });
+  // Closing the window is a quit, not a hang: the boot promise has to settle.
+  const onClosed = () => settle({ quit: true });
+  window.on('closed', onClosed);
+
+  const interpreter = backendInterpreter();
+  const run = libraryCliRunner();
+  const failed = (error: unknown) => ({ ok: false, message: (error as Error).message });
+
+  ipcMain.handle('libraryRecovery:find', async (event) => {
+    requireLibraryRecoveryRenderer(event, 'libraryRecovery:find');
+    const result = await dialog.showOpenDialog(window, {
+      title: `Where is "${report.library.name}" now?`,
+      defaultPath: existsSync(dirname(report.library.path))
+        ? dirname(report.library.path)
+        : homedir(),
+      properties: ['openDirectory'],
+    });
+    const folder = result.canceled ? null : result.filePaths[0];
+    if (!folder) return { ok: false, canceled: true };
+    try {
+      await relocateLibrary(interpreter, hubPath(), report.library, folder, run);
+    } catch (error) {
+      return failed(error);
+    }
+    settle({ quit: false, recovery: {} });
+    return { ok: true };
+  });
+
+  ipcMain.handle('libraryRecovery:switch', async (event, uuid: unknown) => {
+    requireLibraryRecoveryRenderer(event, 'libraryRecovery:switch');
+    // Only a library the backend itself offered - it checked that each opens.
+    const target = report.alternatives.find((other) => other.uuid === uuid);
+    if (!target) return { ok: false, message: 'That library is not one of those offered.' };
+    try {
+      await activateLibrary(interpreter, hubPath(), target, run);
+    } catch (error) {
+      return failed(error);
+    }
+    settle({ quit: false, recovery: {} });
+    return { ok: true };
+  });
+
+  ipcMain.handle('libraryRecovery:create', async (event) => {
+    requireLibraryRecoveryRenderer(event, 'libraryRecovery:create');
+    const result = await dialog.showOpenDialog(window, {
+      title: 'Choose a folder for the new library',
+      defaultPath: defaultLibraryDir(),
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    const folder = result.canceled ? null : result.filePaths[0];
+    if (!folder) return { ok: false, canceled: true };
+    if (isSameOrInside(folder, report.library.path)) {
+      return {
+        ok: false,
+        message:
+          `That is where "${report.library.name}" belongs. A new library there would hide it ` +
+          'if the folder comes back, so choose a different folder.',
+      };
+    }
+    try {
+      // Only `image_root` changes; the port, remote access and every other
+      // setting the person chose stay as they were. The active library still
+      // wins over this until the relaunch below replaces it.
+      writeFileSync(serverConfigPath(), withImageRoot(readFileSync(serverConfigPath(), 'utf8'), folder));
+    } catch (error) {
+      return failed(error);
+    }
+    settle({ quit: false, recovery: { replaceLibrary: report.library.uuid } });
+    return { ok: true };
+  });
+
+  ipcMain.handle('libraryRecovery:retry', (event) => {
+    requireLibraryRecoveryRenderer(event, 'libraryRecovery:retry');
+    settle({ quit: false, recovery: {} });
+    return { ok: true };
+  });
+
+  ipcMain.handle('libraryRecovery:quit', (event) => {
+    requireLibraryRecoveryRenderer(event, 'libraryRecovery:quit');
+    settle({ quit: true });
+    return { ok: true };
+  });
+
+  try {
+    await window.loadFile(join(__dirname, 'renderer', 'library-recovery.html'));
+    return await choice;
+  } finally {
+    for (const channel of LIBRARY_RECOVERY_CHANNELS) ipcMain.removeHandler(channel);
+    window.off('closed', onClosed);
+    pendingLibraryRecovery = null;
+  }
+}
+
+/**
+ * Keep offering the recovery screen until the library opens or the person quits.
+ *
+ * A relaunch that fails the same way comes back to the screen with a note -
+ * "Try again" with the drive still unplugged is the obvious case - rather than
+ * to a process-exit message. Any other failure is returned for the caller to
+ * report on the splash screen.
+ */
+async function recoverUnavailableLibrary(first: LibraryUnavailableError): Promise<unknown> {
+  let current = first;
+  let notice: string | null = null;
+  for (;;) {
+    const choice = await askLibraryRecovery(current.report, notice);
+    if (choice.quit) {
+      app.quit();
+      return null;
+    }
+    // The splash shows the start-up progress while the backend relaunches.
+    await mainWindow?.loadFile(join(__dirname, 'renderer', 'index.html'));
+    try {
+      await retryLaunch(choice.recovery);
+      return null;
+    } catch (retryError) {
+      if (!isLibraryUnavailable(retryError)) return retryError;
+      current = retryError;
+      notice =
+        'PixlStash tried again and still could not open a library. ' +
+        (retryError.report.reason || '');
+    }
+  }
+}
+
 /** Launch: dev passthrough, or the bundled env (+ active GPU overlay), straight into the library. */
 async function boot(): Promise<void> {
   try {
@@ -1250,6 +1449,12 @@ async function boot(): Promise<void> {
       } catch (retryError) {
         error = retryError;
       }
+    } else if (isLibraryUnavailable(error)) {
+      // The active library's folder or database is gone, unreadable, or a
+      // different library. Settings could fix that but needs the server this
+      // stops, so the recovery screen offers the ways out instead.
+      error = await recoverUnavailableLibrary(error);
+      if (error === null) return;
     }
     sendPhase({ phase: 'error', message: (error as Error).message });
   }
@@ -1498,6 +1703,10 @@ function registerIpc(): void {
   // Read-only: the screen renders the report; `permissions:resolve` is
   // registered only while that screen is actually waiting for an answer.
   ipcMain.handle('permissions:request', () => pendingPermissionRepair);
+
+  // Read-only, likewise: the recovery screen renders the report; its actions
+  // are registered only while askLibraryRecovery is waiting for one.
+  ipcMain.handle('libraryRecovery:request', () => pendingLibraryRecovery);
 
   // ---- The startup framework ----
   //

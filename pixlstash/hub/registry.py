@@ -166,6 +166,10 @@ class ActiveLibraryError(LibraryError):
     """The operation is refused because the library is the active one."""
 
 
+class ForeignLibraryError(LibraryError):
+    """The folder holds a library, but not the one that was asked for."""
+
+
 class LibraryOverlapError(LibraryError):
     """The folder overlaps a registered library's watch or reference folder."""
 
@@ -1067,6 +1071,7 @@ class LibraryRegistry:
         new_folder: str,
         *,
         check_folder_overlap: bool = True,
+        require_same_library: bool = False,
     ) -> Library:
         """Point an existing library at a folder that has moved.
 
@@ -1075,8 +1080,18 @@ class LibraryRegistry:
         attaching at the new path would mint a new identity and leave the old
         share links inert.
 
+        Args:
+            require_same_library: Refuse unless the vault at the new folder
+                carries this library's fingerprint. For "I found it" - the
+                desktop's recovery screen - where a different library picked by
+                mistake must not take over this one's share links. Without it a
+                mismatch is only logged, because an explicit move by somebody
+                at a terminal may be deliberate.
+
         Raises:
             NotAVaultError: The new folder does not hold a vault.
+            ForeignLibraryError: *require_same_library* and the vault there is
+                a different library (or carries no fingerprint).
             LibraryExistsError: Another library is registered at that path.
             LibraryOverlapError: The folder overlaps a registered library's watch
                 or reference folder (skipped when *check_folder_overlap* is off).
@@ -1093,7 +1108,21 @@ class LibraryRegistry:
                 )
 
             fingerprint = read_vault_uuid(resolved)
-            if not _fingerprints_match(library.vault_uuid, fingerprint):
+            matches = _fingerprints_match(library.vault_uuid, fingerprint)
+            if require_same_library and not matches:
+                logger.warning(
+                    "Refused to relocate %s to %s: the library there carries "
+                    "fingerprint %s, expected %s.",
+                    library.name,
+                    resolved,
+                    fingerprint,
+                    library.vault_uuid,
+                )
+                raise ForeignLibraryError(
+                    f'{resolved} holds a different library, not "{library.name}". '
+                    "Nothing was changed."
+                )
+            if not matches:
                 logger.warning(
                     "Relocating %s to %s, where the library carries a different "
                     "fingerprint (%s, expected %s). Proceeding because the move was "
