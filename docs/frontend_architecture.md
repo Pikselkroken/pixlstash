@@ -2219,6 +2219,17 @@ filtered by.
   input, so the import is still `POST /comfyui/workflows/import`. Replacing
   the grid replaces the grid's toolbar, so without the tail nothing on this
   screen opens the right rail, where `WorkflowTab` is drawn (#1415).
+  **A narrow bar folds in three rungs** (#2629), container queries on the
+  bar's own `wfvbar` name (content box, so 24px under the outer width), with
+  no measuring: at ≤960px the chips leave the bar and are left to the Filter
+  menu, whose header already carries the "N of M" and Clear all, while the
+  button keeps its badge and lit state; at ≤700px Sort's split-button folds
+  into a `TbOverflowMenu` ⋯ standing where it stood (`align="start"`), whose
+  rows are the shown tab's sort keys and its two directions in the key's own
+  words (`menuitemradio`, the current one checked), plus Mine's Favourites first; at ≤480px Filter drops
+  its word and keeps its funnel and badge, named by its `aria-label`. The
+  app-wide tail is in none of the rungs; UndoControl's own `toolbar` steps
+  still apply inside it.
 - **Keys on the grid**: arrows move the cursor, Space adds to the selection,
   Ctrl/Cmd+A selects all shown, `H` favourites, `R` runs (the rail footer's
   keycap; the focused card is selected alone first if it was not in the

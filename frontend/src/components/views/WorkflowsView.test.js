@@ -1337,6 +1337,165 @@ describe("the browse toolbar", () => {
   });
 });
 
+// ── A narrow bar (#2629): the chips leave, Sort folds into the ⋯ ─────────
+describe("the browse toolbar when narrow", () => {
+  const overflow = (wrapper) => wrapper.find('[data-testid="wfv-overflow"]');
+  async function openOverflow(wrapper) {
+    await overflow(wrapper).find("button").trigger("click");
+    await flush();
+  }
+  const sortRows = (wrapper) =>
+    wrapper.findAll('[data-testid="wfv-overflow-sort"]');
+  const directionRows = (wrapper) =>
+    wrapper.findAll('[data-testid="wfv-overflow-direction"]');
+  // A row's words, without its glyphs' ligature names.
+  const words = (rows) => rows.map((r) => r.find(".ctx-label-text").text());
+
+  // jsdom has no container queries, so the ladder is pinned in the source:
+  // each rung's rule inside the `wfvbar` query that is meant to carry it.
+  function rung(source, width) {
+    const at = source.indexOf(`@container wfvbar (max-width: ${width}px) {`);
+    expect(at).toBeGreaterThan(-1);
+    // A rung's block ends at the first line that closes it at column 0.
+    const rest = source.slice(at);
+    return rest.slice(0, rest.search(/\r?\n\}\r?\n/));
+  }
+
+  it("folds in steps, and the app-wide tail is in none of them", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(
+      `${process.cwd()}/src/components/views/WorkflowsView.vue`,
+      "utf8",
+    );
+    // The bar is the container the rungs query.
+    expect(source).toMatch(
+      /\.wfv-toolbar \{[^}]*container-name: wfvbar[^;]*;/,
+    );
+    // Above the fold the ⋯ is not drawn.
+    expect(source).toMatch(/\.wfv-toolbar \.wfv-overflow \{\s*display: none;/);
+
+    const chips = rung(source, 960);
+    expect(chips).toMatch(/\.wfv-strip \{\s*display: none;/);
+    expect(chips).not.toContain(".wfv-sort");
+
+    const sort = rung(source, 700);
+    expect(sort).toMatch(/\.wfv-sort \{\s*display: none;/);
+    expect(sort).toMatch(/\.wfv-overflow \{\s*display: flex;/);
+
+    const filter = rung(source, 480);
+    expect(filter).toMatch(/\.wfv-filter-label \{\s*display: none;/);
+
+    for (const block of [chips, sort, filter]) {
+      expect(block).not.toMatch(/wfv-bar-tail|tb-stats-btn|wfv-search/);
+    }
+  });
+
+  it("the Filter button keeps its name and count when its word drops", async () => {
+    const wrapper = await grid();
+    const filter = () =>
+      wrapper.findAll(".wfv-toolbar button").find((b) => b.text().includes("Filter"));
+    expect(filter().attributes("aria-label")).toBe("Filter");
+    useWorkflowsStore().setFilters({ type: "upscale" });
+    await flush();
+    expect(filter().attributes("aria-label")).toBe("Filter, 1 on");
+    // The word is its own element, which is what the last rung hides.
+    expect(filter().find(".wfv-filter-label").text()).toBe("Filter");
+  });
+
+  it("the ⋯ rows set the workflow sort key and its direction", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    await openOverflow(wrapper);
+    expect(words(sortRows(wrapper))).toEqual([
+      "Your ratings",
+      "Recently used",
+      "Recently changed",
+      "Recently created",
+      "Picture count",
+      "Name",
+    ]);
+    const checked = () =>
+      sortRows(wrapper).filter((r) => r.attributes("aria-checked") === "true");
+    expect(words(checked())).toEqual(["Your ratings"]);
+
+    await sortRows(wrapper)
+      .find((r) => r.find(".ctx-label-text").text() === "Name")
+      .trigger("click");
+    await flush();
+    expect(store.sortKey).toBe("name");
+    // A row closes the menu, as a pick from any menu does.
+    expect(sortRows(wrapper)).toHaveLength(0);
+
+    await openOverflow(wrapper);
+    // The direction rows speak the key's own words, the current one checked.
+    expect(words(directionRows(wrapper))).toEqual([
+      "A to Z",
+      "Z to A",
+    ]);
+    expect(store.sortDirection).toBe("asc");
+    expect(directionRows(wrapper)[0].attributes("aria-checked")).toBe("true");
+    // Picking the direction already in force changes nothing.
+    await directionRows(wrapper)[0].trigger("click");
+    await flush();
+    expect(store.sortDirection).toBe("asc");
+
+    await openOverflow(wrapper);
+    await directionRows(wrapper)[1].trigger("click");
+    await flush();
+    expect(store.sortDirection).toBe("desc");
+  });
+
+  it("the ⋯ carries Mine's Favourites first, and Templates has none", async () => {
+    listTemplates.mockResolvedValue({ reachable: true, templates: [] });
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    const favourites = () =>
+      wrapper.find('[data-testid="wfv-overflow-favourites"]');
+    const before = store.favouritesLead;
+    await openOverflow(wrapper);
+    expect(favourites().attributes("aria-checked")).toBe(String(before));
+    await favourites().trigger("click");
+    await flush();
+    expect(store.favouritesLead).toBe(!before);
+
+    await showTemplates();
+    await openOverflow(wrapper);
+    expect(sortRows(wrapper).length).toBeGreaterThan(0);
+    expect(favourites().exists()).toBe(false);
+  });
+
+  it("while Templates is shown the ⋯ sorts the templates", async () => {
+    listTemplates.mockResolvedValue({ reachable: true, templates: [] });
+    const wrapper = await grid();
+    await showTemplates();
+    const templates = useWorkflowTemplatesStore();
+    const mineKey = useWorkflowsStore().sortKey;
+    await openOverflow(wrapper);
+    expect(words(sortRows(wrapper))).toEqual([
+      "Readiness",
+      "Most used",
+      "Newest",
+      "Name",
+      "Model size",
+    ]);
+    await sortRows(wrapper)
+      .find((r) => r.find(".ctx-label-text").text() === "Model size")
+      .trigger("click");
+    await flush();
+    expect(templates.sortKey).toBe("size");
+    expect(useWorkflowsStore().sortKey).toBe(mineKey);
+
+    await openOverflow(wrapper);
+    expect(words(directionRows(wrapper))).toEqual([
+      "Smallest first",
+      "Largest first",
+    ]);
+    await directionRows(wrapper)[1].trigger("click");
+    await flush();
+    expect(templates.sortDirection).toBe("desc");
+  });
+});
+
 // ── Opening a picture is a MENU verb, never a click (#1455) ──────────────
 describe("a cover tile", () => {
   const WITH_COVERS = [
