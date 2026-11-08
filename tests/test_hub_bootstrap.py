@@ -1649,6 +1649,29 @@ class TestTheRecoveryReport:
         record = json.loads(line.split("=", 1)[1])
         assert record["library"]["path"] == gone
 
+    def test_an_oversized_record_is_still_emitted_rather_than_hanging(
+        self, hub_with_two
+    ):
+        """A library path too long to ever fit must not loop truncating the reason."""
+        hub_path, kept, gone, _uuid = hub_with_two
+        shutil.rmtree(gone)
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(kept, hub_path)
+        raised.value.library = SimpleNamespace(
+            id=1,
+            uuid=_uuid,
+            name="Gone",
+            path="p" * 4000,
+            vault_path="p" * 4000 + "/vault.db",
+        )
+        raised.value.reason = "r" * 3000
+
+        line = app_module._library_unavailable_signal(raised.value)
+
+        record = json.loads(line.split("=", 1)[1])
+        assert record["alternatives"] == []
+        assert record["reason"] == "r" * 200 + "…"
+
     def test_a_refused_new_library_changes_nothing_and_says_why(
         self, hub_with_two, monkeypatch
     ):

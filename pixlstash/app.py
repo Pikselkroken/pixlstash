@@ -258,7 +258,8 @@ def _library_unavailable_signal(exc: LibraryUnavailableError) -> str:
             return line
         if alternatives:
             alternatives.pop()
-        elif len(reason) > 200:
+        elif reason is exc.reason and len(reason) > 200:
+            # Once: the shortened reason is itself over 200 characters.
             reason = reason[:200] + "…"
         else:
             # Only the library's own path is left to blame; send it anyway.
