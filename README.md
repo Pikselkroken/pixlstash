@@ -53,6 +53,10 @@ same in the desktop app and in a browser.
   GPU of an Apple Silicon Mac, or an AMD GPU with ROCm (experimental). No
   cloud API.
 
+<p align="center">
+  <img src="website/assets/ScreenshotSemanticSearch.jpg" alt="Semantic search for an old man surrounded by photographs" width="800"/>
+</p>
+
 ### Workflows and recipes
 
 These use a ComfyUI, on this machine or another one. Settings › ComfyUI finds
@@ -124,6 +128,10 @@ a local one, installs the PixlStash nodes into it and links the two apps.
 - In the desktop app, Ctrl+C or a Ctrl-drag copies the selected pictures out
   as the original files.
 
+<p align="center">
+  <img src="website/assets/ScreenshotMapPreview.jpg" alt="Folder import preview listing the projects and sets the folders become" width="800"/>
+</p>
+
 ### Libraries, models and training
 
 - **Multiple libraries** in one installation, one open at a time and switched
@@ -155,6 +163,10 @@ a local one, installs the PixlStash nodes into it and links the two apps.
   filters you apply to a selection from the grid.
 - **`pixlstash-cli`** manages libraries, writes and restores backups, and
   installs plugins.
+
+<p align="center">
+  <img src="website/assets/TrainingReport.jpg" alt="A training run's page with loss and likeness curves and previews per checkpoint" width="800"/>
+</p>
 
 ### Browse and organise
 
