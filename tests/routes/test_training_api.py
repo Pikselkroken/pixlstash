@@ -2699,7 +2699,7 @@ def test_ai_toolkit_status_is_unconfigured_until_a_checkout_is_saved():
 
 
 def test_ai_toolkit_status_reports_the_saved_checkout_and_its_folders():
-    temp_dir, owner, server, read_token = _setup()
+    temp_dir, owner, server, read_token = _setup(checkout=False)
     try:
         repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
         python = _venv_python(repo)
@@ -2716,12 +2716,55 @@ def test_ai_toolkit_status_reports_the_saved_checkout_and_its_folders():
             "path": os.path.join(repo, "datasets"),
             "writable": True,
         }
-        # No shelf folder: runs go to <repo>/output and are not on the shelf.
+        # Linking the checkout put <repo>/output on the shelf: runs go there.
         assert status["runs"] == {
-            "path": os.path.join(repo, "output"),
+            "path": os.path.realpath(os.path.join(repo, "output")),
             "run_count": 0,
-            "on_shelf": False,
+            "on_shelf": True,
         }
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_linking_a_checkout_puts_its_output_folder_on_the_shelf():
+    """With no ai-toolkit folder on the shelf, saving a checkout creates
+    <repo>/output and registers it as one, so the first run has somewhere to
+    land. Linking another checkout later keeps the folder already there."""
+    temp_dir, owner, server, read_token = _setup(checkout=False)
+    try:
+        repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
+        output = os.path.join(repo, "output")
+        assert not os.path.exists(output)
+        _save_checkout(owner, repo, _venv_python(repo))
+
+        assert os.path.isdir(output)
+        rows = server.hub.fetchall(
+            "SELECT path FROM model_folder WHERE kind = 'source'"
+        )
+        assert [row["path"] for row in rows] == [os.path.realpath(output)]
+
+        other = _fake_checkout(os.path.join(temp_dir.name, "kit2"))
+        _save_checkout(owner, other, _venv_python(other))
+        rows = server.hub.fetchall(
+            "SELECT path FROM model_folder WHERE kind = 'source'"
+        )
+        assert [row["path"] for row in rows] == [os.path.realpath(output)]
+        assert not os.path.exists(os.path.join(other, "output"))
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_disconnecting_ai_toolkit_puts_nothing_on_the_shelf():
+    temp_dir, owner, server, read_token = _setup(checkout=False)
+    try:
+        r = owner.put(
+            "/training/ai-toolkit/config", json={"repo_path": None, "python": None}
+        )
+        assert r.status_code == 200, r.text
+        assert (
+            server.hub.fetchone("SELECT 1 FROM model_folder WHERE kind = 'source'")
+            is None
+        )
     finally:
         _teardown(temp_dir, server)
 
@@ -2731,15 +2774,16 @@ def test_ai_toolkit_status_counts_runs_in_the_registered_shelf_folder():
     on_shelf says so. A run folder is one holding a checkpoint."""
     from pixlstash.routes.model_folders import register_model_folder
 
-    temp_dir, owner, server, read_token = _setup()
+    temp_dir, owner, server, read_token = _setup(checkout=False)
     try:
-        repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
-        _save_checkout(owner, repo, _venv_python(repo))
         shelf = os.path.join(temp_dir.name, "shelf-output")
         run = os.path.join(shelf, "trained_abcd1234")
         os.makedirs(run)
         open(os.path.join(run, "trained_abcd1234.safetensors"), "wb").close()
         register_model_folder(server, shelf, "source")
+        # Linked after: the shelf already has a folder, so it keeps that one.
+        repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
+        _save_checkout(owner, repo, _venv_python(repo))
 
         runs = owner.get("/training/ai-toolkit/status").json()["runs"]
         assert runs == {
@@ -2752,7 +2796,7 @@ def test_ai_toolkit_status_counts_runs_in_the_registered_shelf_folder():
 
 
 def test_ai_toolkit_discover_finds_the_saved_checkout_and_its_python(monkeypatch):
-    temp_dir, owner, server, read_token = _setup()
+    temp_dir, owner, server, read_token = _setup(checkout=False)
     try:
         repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
         _venv_python(repo)
@@ -2971,6 +3015,37 @@ def test_the_server_binds_the_shelf_folder_registrar_at_start_up():
             os.makedirs(folder)
             service._register_source_folder(folder)
             assert service._shelf_source_folder() == os.path.realpath(folder)
+        finally:
+            server.close()
+    finally:
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_a_vault_opened_after_start_up_gets_the_shelf_folder_registrar_too():
+    """A library switch opens its vault through build_vault; that vault's
+    training service must be able to register the shelf folder as well, or its
+    first job fails with "No model shelf folder is set up"."""
+    temp_dir = tempfile.TemporaryDirectory()
+    try:
+        server_config_path = os.path.join(temp_dir.name, "server-config.json")
+        with open(server_config_path, "w") as f:
+            f.write(json.dumps({"port": 8000, "disable_background_workers": True}))
+        server = Server(server_config_path)
+        try:
+            other_root = os.path.join(temp_dir.name, "other-library")
+            os.makedirs(other_root)
+            vault = server.build_vault(other_root, workers=False)
+            try:
+                service = vault.training_service
+                assert service._register_source_folder is not None
+                repo = os.path.join(temp_dir.name, "kit")
+                os.makedirs(repo)
+                folder = service.ensure_source_folder(repo)
+                assert folder == os.path.realpath(os.path.join(repo, "output"))
+                assert os.path.isdir(folder)
+            finally:
+                vault.close()
         finally:
             server.close()
     finally:

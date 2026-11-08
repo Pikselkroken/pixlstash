@@ -1260,7 +1260,7 @@ class Server(
             names = self._server_config.get("e2e_planner_finders")
             if names is not None:
                 planner_finders = frozenset(TaskType(name) for name in names)
-        return Vault(
+        vault = Vault(
             image_root=image_root,
             description=User().description,
             server_config_path=self._server_config_path,
@@ -1284,6 +1284,15 @@ class Server(
                 self._server_config
             ),
         )
+        # A training job writes its run into the shelf's ai-toolkit (source)
+        # folder, registered through the same function the folder routes call.
+        # Bound here, not once at start-up, so a vault opened by a library
+        # switch can register it too: one without it fails its first job with
+        # "No model shelf folder is set up".
+        vault.training_service.set_source_folder_registrar(
+            lambda path: register_model_folder(self, path, SOURCE_FOLDER_KIND)
+        )
+        return vault
 
     def _active_library_uuid(self):
         """Return the active library's uuid, for stamping newly minted tokens."""
@@ -2145,11 +2154,6 @@ class Server(
             create_training_router(self),
             prefix=API_V1_PREFIX,
             dependencies=gate,
-        )
-        # A training job writes its run into the shelf's ai-toolkit (source)
-        # folder, registered through the same function the folder routes call.
-        self.vault.training_service.set_source_folder_registrar(
-            lambda path: register_model_folder(self, path, SOURCE_FOLDER_KIND)
         )
         # The workflow library's read side (implementation plan §F1/§F2). No
         # router-level ``tags=``: the module declares ``tags=["workflows"]``
