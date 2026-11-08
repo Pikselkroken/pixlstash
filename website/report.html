@@ -1,0 +1,969 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Report a problem | PixlStash</title>
+    <meta
+      name="description"
+      content="Found a bug in PixlStash or missing something? A short wizard turns it into a ready-to-send report for GitHub or email. Reports get answered fast, and they change the app."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <script>try{if(localStorage.getItem('pixlstash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
+    <link rel="stylesheet" href="pixlstash.css" />
+    <style>
+      /* ── The recruiting poster and the pitch ── */
+      .needs-hero {
+        display: grid;
+        grid-template-columns: minmax(0, 256px) minmax(0, 1fr);
+        gap: 36px;
+        align-items: center;
+        margin: 24px auto 0;
+        max-width: 960px;
+      }
+
+      .needs-hero img {
+        width: 100%;
+        height: auto;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--border);
+        box-shadow: 0 18px 40px var(--shadow);
+      }
+
+      .needs-hero h1 {
+        font-size: clamp(2rem, 4vw, 3rem);
+        line-height: 1.1;
+        margin: 0 0 14px;
+        letter-spacing: -0.01em;
+      }
+
+      .needs-hero p {
+        color: var(--muted);
+        font-size: 1.05rem;
+        line-height: 1.6;
+        margin: 0 0 14px;
+      }
+
+      .needs-hero .cta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 20px;
+      }
+
+      /* ── The record ── */
+      .record {
+        max-width: 960px;
+        margin: 48px auto 0;
+      }
+
+      .record h2,
+      .wizard h2 {
+        font-size: 1.5rem;
+        margin: 0 0 6px;
+      }
+
+      .record > p {
+        color: var(--muted);
+        line-height: 1.6;
+        margin: 0 0 18px;
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .stat {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: 18px 20px;
+      }
+
+      .stat-value {
+        font-family: var(--display);
+        font-size: 2rem;
+        font-weight: 700;
+        color: var(--accent-2);
+        line-height: 1.1;
+      }
+
+      .stat-label {
+        margin-top: 6px;
+        color: var(--text);
+        line-height: 1.45;
+        font-size: 0.95rem;
+      }
+
+      .record-note {
+        margin-top: 12px;
+        font-size: 0.8rem;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      /* ── The wizard ── */
+      .wizard {
+        max-width: 760px;
+        margin: 56px auto 0;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        padding: 28px 32px;
+      }
+
+      .wizard > p {
+        color: var(--muted);
+        line-height: 1.6;
+        margin: 0 0 18px;
+      }
+
+      .stepper {
+        display: flex;
+        gap: 8px;
+        list-style: none;
+        padding: 0;
+        margin: 0 0 22px;
+        counter-reset: step;
+      }
+
+      .stepper li {
+        flex: 1;
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
+        border-top: 3px solid var(--border);
+        padding-top: 8px;
+      }
+
+      .stepper li[aria-current="step"] {
+        color: var(--text);
+        border-top-color: var(--accent);
+      }
+
+      .stepper li.done {
+        border-top-color: color-mix(in srgb, var(--accent) 45%, transparent);
+      }
+
+      .wizard-step[hidden] {
+        display: none;
+      }
+
+      .wizard-step h3 {
+        font-family: var(--display);
+        font-size: 1.15rem;
+        margin: 0 0 14px;
+      }
+
+      .kinds {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        border: 0;
+        padding: 0;
+        margin: 0;
+      }
+
+      .kind {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 16px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--panel-strong);
+        cursor: pointer;
+      }
+
+      .kind:hover {
+        background: var(--hover-wash);
+      }
+
+      .kind input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      /* Without :has(), the title alone marks the choice and the focus. */
+      .kind input:checked ~ .kind-title {
+        color: var(--accent-2);
+      }
+
+      .kind input:focus-visible ~ .kind-title {
+        text-decoration: underline;
+      }
+
+      .kind:has(input:checked) {
+        border-color: var(--accent);
+        box-shadow: inset 0 0 0 1px var(--accent);
+      }
+
+      .kind:has(input:focus-visible) {
+        outline: 2px solid var(--accent-2);
+        outline-offset: 2px;
+      }
+
+      .kind-title {
+        font-weight: 600;
+      }
+
+      .kind-sub {
+        font-size: 0.85rem;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 16px;
+      }
+
+      .field label {
+        font-weight: 600;
+        font-size: 0.92rem;
+      }
+
+      .field .hint {
+        font-size: 0.82rem;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .field input,
+      .field select,
+      .field textarea {
+        font: inherit;
+        font-size: 0.95rem;
+        color: var(--text);
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 9px 12px;
+        width: 100%;
+      }
+
+      .field textarea {
+        min-height: 96px;
+        resize: vertical;
+        line-height: 1.5;
+      }
+
+      .field input:focus-visible,
+      .field select:focus-visible,
+      .field textarea:focus-visible {
+        outline: 2px solid var(--accent-2);
+        outline-offset: 1px;
+      }
+
+      .field [aria-invalid="true"] {
+        border-color: var(--warning);
+      }
+
+      .two-col {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0 16px;
+      }
+
+      .wizard-nav {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 8px;
+      }
+
+      .wizard-nav button[hidden] {
+        display: none;
+      }
+
+      button.demo-btn,
+      button.download-btn {
+        font-family: inherit;
+      }
+
+      .wizard-error {
+        color: var(--warning);
+        font-size: 0.88rem;
+        margin: 0 0 12px;
+        min-height: 1.2em;
+      }
+
+      .preview {
+        margin: 0 0 18px;
+        padding: 14px 16px;
+        max-height: 320px;
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg);
+        font-family: var(--mono);
+        font-size: 0.82rem;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .send-options {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .send-option {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 16px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--panel-strong);
+      }
+
+      .send-option p {
+        margin: 0;
+        font-size: 0.85rem;
+        color: var(--muted);
+        line-height: 1.45;
+        flex: 1;
+      }
+
+      .send-option .demo-btn,
+      .send-option .download-btn {
+        justify-content: center;
+      }
+
+      .send-status {
+        font-size: 0.88rem;
+        color: var(--accent-3);
+        min-height: 1.2em;
+        margin: 0 0 12px;
+      }
+
+      .wizard a {
+        color: var(--accent);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      @media (max-width: 760px) {
+        .needs-hero {
+          grid-template-columns: 1fr;
+          text-align: center;
+        }
+
+        .needs-hero img {
+          max-width: 220px;
+          margin: 0 auto;
+        }
+
+        .needs-hero .cta-row {
+          justify-content: center;
+        }
+
+        .stats,
+        .kinds,
+        .send-options,
+        .two-col {
+          grid-template-columns: 1fr;
+        }
+
+        .wizard {
+          padding: 20px;
+        }
+
+        .stepper li {
+          font-size: 0.7rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div id="nav-placeholder"></div>
+      <script src="nav.js"></script>
+
+      <section class="needs-hero">
+        <img
+          src="assets/PixlStashNeedsYou.jpg"
+          width="256"
+          height="256"
+          alt="PixlStash needs you!"
+        />
+        <div>
+          <h1>Found a bug? Missing something?</h1>
+          <p>
+            You do not need to know the technical details. Answer a few
+            questions below and we will turn them into a tidy report you can
+            send with one click.
+          </p>
+          <div class="cta-row">
+            <a class="download-btn" href="#wizard">Start a report</a>
+            <a
+              class="demo-btn"
+              href="https://github.com/pikselkroken/pixlstash/issues"
+              target="_blank"
+              rel="noopener noreferrer"
+              >See what others reported</a
+            >
+          </div>
+        </div>
+      </section>
+
+      <section class="record" aria-labelledby="record-heading">
+        <h2 id="record-heading">Reports get answered, and they change things</h2>
+        <p>
+          A report is not a message in a bottle. It goes straight to the person
+          who writes the code, and most get a reply within a day.
+        </p>
+        <div class="stats">
+          <div class="stat">
+            <div class="stat-value">7&#189; hours</div>
+            <div class="stat-label">median time to a first reply</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">27 of 36</div>
+            <div class="stat-label">reports answered within a day</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value">34 of 36</div>
+            <div class="stat-label">
+              reports closed as done, 30 of them within a week
+            </div>
+          </div>
+        </div>
+        <p class="record-note">
+          Counted over every GitHub issue opened by someone outside the project
+          from March to November 2026. The other two were still open when we
+          counted.
+        </p>
+      </section>
+
+      <section class="wizard" id="wizard" aria-labelledby="wizard-heading">
+        <h2 id="wizard-heading">Write your report</h2>
+        <p>
+          Nothing on this page is sent anywhere while you type. Your report only
+          leaves your computer when you press one of the send buttons at the
+          end.
+        </p>
+
+        <ol class="stepper" aria-label="Report steps">
+          <li data-step-label="0">1. What kind</li>
+          <li data-step-label="1">2. What happened</li>
+          <li data-step-label="2">3. Your setup</li>
+          <li data-step-label="3">4. Send</li>
+        </ol>
+
+        <form id="report-form" novalidate>
+          <!-- Step 1 -->
+          <div class="wizard-step" data-step="0">
+            <h3>What would you like to tell us?</h3>
+            <fieldset class="kinds">
+              <legend class="sr-only">Kind of report</legend>
+              <label class="kind">
+                <input type="radio" name="kind" value="bug" checked />
+                <span class="kind-title">Something is broken</span>
+                <span class="kind-sub"
+                  >An error, a crash, or something that does not do what it
+                  should.</span
+                >
+              </label>
+              <label class="kind">
+                <input type="radio" name="kind" value="idea" />
+                <span class="kind-title">I have an idea</span>
+                <span class="kind-sub"
+                  >Something missing, or something that could work
+                  better.</span
+                >
+              </label>
+              <label class="kind">
+                <input type="radio" name="kind" value="question" />
+                <span class="kind-title">I have a question</span>
+                <span class="kind-sub"
+                  >Not sure how something works, or whether it is meant to work
+                  that way.</span
+                >
+              </label>
+            </fieldset>
+          </div>
+
+          <!-- Step 2 -->
+          <div class="wizard-step" data-step="1" hidden>
+            <h3 id="details-heading">What happened?</h3>
+            <div class="field">
+              <label for="f-title">Sum it up in one line</label>
+              <span class="hint" id="f-title-hint"
+                >This becomes the title, e.g. "Import stops halfway on a folder
+                of PNGs".</span
+              >
+              <input
+                id="f-title"
+                name="title"
+                type="text"
+                maxlength="140"
+                aria-describedby="f-title-hint"
+                required
+              />
+            </div>
+
+            <div data-kind="bug">
+              <div class="field">
+                <label for="f-what">What happened?</label>
+                <textarea id="f-what" name="what" required></textarea>
+              </div>
+              <div class="field">
+                <label for="f-expected">What did you expect to happen?</label>
+                <textarea id="f-expected" name="expected"></textarea>
+              </div>
+              <div class="field">
+                <label for="f-steps">How can we make it happen too?</label>
+                <span class="hint" id="f-steps-hint"
+                  >The clicks or steps that lead to it, one per line. "I don't
+                  know" is a fine answer.</span
+                >
+                <textarea
+                  id="f-steps"
+                  name="steps"
+                  aria-describedby="f-steps-hint"
+                ></textarea>
+              </div>
+            </div>
+
+            <div data-kind="idea" hidden>
+              <div class="field">
+                <label for="f-goal">What are you trying to do?</label>
+                <span class="hint" id="f-goal-hint"
+                  >The task you have in mind, more than the button you would
+                  add.</span
+                >
+                <textarea
+                  id="f-goal"
+                  name="goal"
+                  aria-describedby="f-goal-hint"
+                  required
+                ></textarea>
+              </div>
+              <div class="field">
+                <label for="f-help">What would help?</label>
+                <textarea id="f-help" name="help"></textarea>
+              </div>
+            </div>
+
+            <div data-kind="question" hidden>
+              <div class="field">
+                <label for="f-question">Your question</label>
+                <textarea id="f-question" name="question" required></textarea>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 3 -->
+          <div class="wizard-step" data-step="2" hidden>
+            <h3>Your setup</h3>
+            <p class="step-note" style="margin: -6px 0 16px">
+              All optional, but it often saves a round of questions. If you came
+              here from the app, the first two are already filled in.
+            </p>
+            <div class="two-col">
+              <div class="field">
+                <label for="f-version">PixlStash version</label>
+                <span class="hint" id="f-version-hint"
+                  >Shown at the top of Settings, e.g. 2.0.3.</span
+                >
+                <input
+                  id="f-version"
+                  name="version"
+                  type="text"
+                  maxlength="40"
+                  aria-describedby="f-version-hint"
+                />
+              </div>
+              <div class="field">
+                <label for="f-install">How you installed it</label>
+                <span class="hint">&nbsp;</span>
+                <select id="f-install" name="install">
+                  <option value="">Not sure</option>
+                  <option value="Desktop app">Desktop app</option>
+                  <option value="Windows server installer">
+                    Windows server installer
+                  </option>
+                  <option value="pip">pip</option>
+                  <option value="Docker">Docker</option>
+                  <option value="From source">From source</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="f-os">Operating system</label>
+                <select id="f-os" name="os">
+                  <option value="">Not sure</option>
+                  <option value="Windows">Windows</option>
+                  <option value="macOS">macOS</option>
+                  <option value="Linux">Linux</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="f-gpu">Graphics card</label>
+                <input
+                  id="f-gpu"
+                  name="gpu"
+                  type="text"
+                  maxlength="80"
+                  placeholder="e.g. RTX 4070, or none"
+                />
+              </div>
+            </div>
+            <div class="field">
+              <label for="f-extra">Anything else?</label>
+              <span class="hint" id="f-extra-hint"
+                >An error message, a log excerpt, a link. Read it through first:
+                a GitHub report is public, so take out file paths, names or
+                anything private.</span
+              >
+              <textarea
+                id="f-extra"
+                name="extra"
+                aria-describedby="f-extra-hint"
+              ></textarea>
+            </div>
+          </div>
+
+          <!-- Step 4 -->
+          <div class="wizard-step" data-step="3" hidden>
+            <h3>Your report is ready</h3>
+            <pre class="preview" id="preview" tabindex="0" aria-label="Report preview"></pre>
+            <div class="send-options">
+              <div class="send-option">
+                <button type="button" class="download-btn" id="send-github">
+                  Open on GitHub
+                </button>
+                <p>
+                  Opens a new GitHub issue with everything filled in. Add
+                  screenshots there, then press Create. Needs a free GitHub
+                  account; reports there are public.
+                </p>
+              </div>
+              <div class="send-option">
+                <button type="button" class="demo-btn" id="send-email">
+                  Send by email
+                </button>
+                <p>
+                  No GitHub account? This opens your email app with the report
+                  written out. Attach screenshots there.
+                </p>
+              </div>
+              <div class="send-option">
+                <button type="button" class="demo-btn" id="copy-report">
+                  Copy report
+                </button>
+                <p>
+                  Copies the text so you can paste it anywhere you like.
+                </p>
+              </div>
+            </div>
+            <p class="send-status" id="send-status" role="status"></p>
+          </div>
+
+          <p class="wizard-error" id="wizard-error" role="alert"></p>
+
+          <div class="wizard-nav">
+            <button type="button" class="demo-btn" id="wizard-back" hidden>
+              Back
+            </button>
+            <span></span>
+            <button type="button" class="download-btn" id="wizard-next">
+              Next
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <div class="page-footer">
+        <p>
+          Found a security problem? Please follow the
+          <a
+            href="https://github.com/pikselkroken/pixlstash/blob/main/SECURITY.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            >security policy</a
+          >
+          instead of filing a public report.
+        </p>
+        <p>
+          <a href="index.html">Back to PixlStash home</a> &middot;
+          <a href="privacy.html">Privacy</a>
+        </p>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        const REPO_ISSUES =
+          "https://github.com/pikselkroken/pixlstash/issues/new";
+        const EMAIL = "lindkvis@gmail.com";
+        // Some mail apps refuse or cut a mailto: link much past 2000
+        // characters, so a longer report goes on the clipboard instead.
+        const MAILTO_LIMIT = 1900;
+        // GitHub answers a URL much past 8000 characters with an error page.
+        const GITHUB_URL_LIMIT = 7500;
+        const LABELS = { bug: "bug", idea: "enhancement", question: "question" };
+        const TITLE_PREFIX = { bug: "", idea: "Idea: ", question: "Question: " };
+        // The app's install types (Server.INSTALL_TYPES) as the select names them.
+        const INSTALL_NAMES = {
+          electron: "Desktop app",
+          other: "Windows server installer",
+          pip: "pip",
+          docker: "Docker",
+          dev: "From source",
+        };
+
+        const form = document.getElementById("report-form");
+        const steps = Array.from(form.querySelectorAll(".wizard-step"));
+        const stepLabels = Array.from(
+          document.querySelectorAll(".stepper li"),
+        );
+        const backBtn = document.getElementById("wizard-back");
+        const nextBtn = document.getElementById("wizard-next");
+        const errorEl = document.getElementById("wizard-error");
+        const statusEl = document.getElementById("send-status");
+        const previewEl = document.getElementById("preview");
+        let current = 0;
+
+        // ── Prefill what the app passed along, and guess the OS ──
+        const params = new URLSearchParams(window.location.search);
+        const version = (params.get("version") || "").slice(0, 40);
+        if (version) form.elements.version.value = version;
+        const install = INSTALL_NAMES[params.get("install") || ""];
+        if (install) form.elements.install.value = install;
+        const ua = navigator.userAgent || "";
+        if (/Windows/i.test(ua)) form.elements.os.value = "Windows";
+        else if (/Mac OS X|Macintosh/i.test(ua)) form.elements.os.value = "macOS";
+        else if (/Linux|X11/i.test(ua) && !/Android/i.test(ua))
+          form.elements.os.value = "Linux";
+
+        function kind() {
+          return form.elements.kind.value || "bug";
+        }
+
+        function value(name) {
+          return (form.elements[name].value || "").trim();
+        }
+
+        // ── Kind-specific fields on step 2 ──
+        function showKindFields() {
+          const k = kind();
+          form.querySelectorAll("[data-kind]").forEach((el) => {
+            el.hidden = el.dataset.kind !== k;
+          });
+          document.getElementById("details-heading").textContent =
+            k === "bug"
+              ? "What happened?"
+              : k === "idea"
+                ? "Tell us about your idea"
+                : "What would you like to know?";
+        }
+        form.querySelectorAll('input[name="kind"]').forEach((el) =>
+          el.addEventListener("change", showKindFields),
+        );
+
+        // ── The report itself ──
+        function section(heading, text) {
+          return text ? `### ${heading}\n${text}\n\n` : "";
+        }
+
+        function buildTitle() {
+          return TITLE_PREFIX[kind()] + value("title");
+        }
+
+        function buildBody() {
+          const k = kind();
+          let body = "";
+          if (k === "bug") {
+            body += section("What happened", value("what"));
+            body += section("What I expected", value("expected"));
+            body += section("How to reproduce", value("steps"));
+          } else if (k === "idea") {
+            body += section("What I am trying to do", value("goal"));
+            body += section("What would help", value("help"));
+          } else {
+            body += section("Question", value("question"));
+          }
+          const setup = [
+            ["PixlStash version", value("version")],
+            ["Installed with", value("install")],
+            ["Operating system", value("os")],
+            ["Graphics card", value("gpu")],
+          ]
+            .filter(([, v]) => v)
+            .map(([k2, v]) => `- ${k2}: ${v}`)
+            .join("\n");
+          body += section("Setup", setup);
+          body += section("Anything else", value("extra"));
+          body += "_Written with the report wizard on pixlstash.dev._\n";
+          return body;
+        }
+
+        // ── Validation: only what each step cannot do without ──
+        function requiredFields(step) {
+          return Array.from(
+            steps[step].querySelectorAll("[required]"),
+          ).filter((el) => !el.closest("[hidden]"));
+        }
+
+        function validate(step) {
+          let firstBad = null;
+          requiredFields(step).forEach((el) => {
+            const bad = !el.value.trim();
+            el.setAttribute("aria-invalid", bad ? "true" : "false");
+            if (bad && !firstBad) firstBad = el;
+          });
+          if (firstBad) {
+            const label = form.querySelector(`label[for="${firstBad.id}"]`);
+            errorEl.textContent = `Please fill in "${label ? label.textContent.trim() : "this field"}".`;
+            firstBad.focus();
+            return false;
+          }
+          errorEl.textContent = "";
+          return true;
+        }
+
+        // ── Step navigation ──
+        function show(step) {
+          current = step;
+          steps.forEach((el, i) => (el.hidden = i !== step));
+          stepLabels.forEach((el, i) => {
+            if (i === step) el.setAttribute("aria-current", "step");
+            else el.removeAttribute("aria-current");
+            el.classList.toggle("done", i < step);
+          });
+          backBtn.hidden = step === 0;
+          nextBtn.hidden = step === steps.length - 1;
+          errorEl.textContent = "";
+          statusEl.textContent = "";
+          if (step === 1) showKindFields();
+          if (step === steps.length - 1) {
+            previewEl.textContent = `${buildTitle()}\n\n${buildBody()}`;
+          }
+          const heading = steps[step].querySelector("h3");
+          if (heading) {
+            heading.setAttribute("tabindex", "-1");
+            heading.focus({ preventScroll: true });
+          }
+        }
+
+        nextBtn.addEventListener("click", () => {
+          if (!validate(current)) return;
+          show(Math.min(current + 1, steps.length - 1));
+        });
+        backBtn.addEventListener("click", () => show(Math.max(current - 1, 0)));
+        form.addEventListener("submit", (e) => e.preventDefault());
+
+        // ── Sending ──
+        async function copyText(text) {
+          try {
+            await navigator.clipboard.writeText(text);
+            return true;
+          } catch (e) {
+            console.warn("Clipboard write failed, selecting the preview instead:", e);
+            const range = document.createRange();
+            range.selectNodeContents(previewEl);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+            return false;
+          }
+        }
+
+        // A blocked tab cannot be detected (noopener makes window.open return
+        // null either way), so the status always carries a link to try again.
+        function showStatus(message, href, linkText) {
+          statusEl.textContent = message;
+          if (!href) return;
+          const link = document.createElement("a");
+          link.href = href;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.textContent = linkText;
+          statusEl.append(" Nothing opened? ", link, ".");
+        }
+
+        document
+          .getElementById("send-github")
+          .addEventListener("click", async () => {
+            const title = buildTitle();
+            const body = buildBody();
+            const query = new URLSearchParams({ title, labels: LABELS[kind()] });
+            let url = `${REPO_ISSUES}?${query}&body=${encodeURIComponent(body)}`;
+            // Both the clipboard write and the new tab need the click's user
+            // activation, so both start before anything is awaited.
+            let copying = null;
+            if (url.length > GITHUB_URL_LIMIT) {
+              copying = copyText(body);
+              url = `${REPO_ISSUES}?${query}&body=${encodeURIComponent(
+                "<!-- Paste your report here: the wizard copied it to your clipboard. -->\n",
+              )}`;
+            }
+            window.open(url, "_blank", "noopener");
+            let message =
+              "GitHub should have opened in a new tab. Press Create there to send it.";
+            if (copying) {
+              message = (await copying)
+                ? "Your report is long, so it is on your clipboard: paste it into the GitHub page."
+                : "Your report is long: copy it from the box above and paste it into the GitHub page.";
+            }
+            showStatus(message, url, "Open GitHub");
+          });
+
+        document
+          .getElementById("send-email")
+          .addEventListener("click", async () => {
+            const subject = `[PixlStash] ${buildTitle()}`;
+            const body = buildBody();
+            let url = `mailto:${EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+            let copying = null;
+            if (url.length > MAILTO_LIMIT) {
+              copying = copyText(body);
+              url = `mailto:${EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(
+                "(Paste your report here: the wizard copied it to your clipboard.)\n",
+              )}`;
+            }
+            window.location.href = url;
+            let message = `Your email app should open now. If nothing happens, send the report to ${EMAIL}.`;
+            if (copying) {
+              message = (await copying)
+                ? `Your report is long, so it is on your clipboard: paste it into the email. If no email opened, send it to ${EMAIL}.`
+                : `Your report is long: copy it from the box above and paste it into an email to ${EMAIL}.`;
+            }
+            showStatus(message);
+          });
+
+        document
+          .getElementById("copy-report")
+          .addEventListener("click", async () => {
+            const copied = await copyText(`${buildTitle()}\n\n${buildBody()}`);
+            statusEl.textContent = copied
+              ? "Copied. Paste it wherever you like."
+              : "Could not reach the clipboard: the report is selected above, press Ctrl+C (or Cmd+C).";
+          });
+
+        show(0);
+        // The first step's heading should not steal focus on page load.
+        document.activeElement && document.activeElement.blur();
+      })();
+    </script>
+  </body>
+</html>

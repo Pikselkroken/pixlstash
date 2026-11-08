@@ -18,6 +18,7 @@ import ScrapheapSection from "./ScrapheapSection.vue";
 import SnapshotsSection from "./SnapshotsSection.vue";
 import GhostsSection from "./GhostsSection.vue";
 import SmartScoreSection from "./SmartScoreSection.vue";
+import NeedsYouBox from "./NeedsYouBox.vue";
 import { VIcon } from "vuetify/components";
 import { useWhatsChangedStore } from "../../stores/useWhatsChangedStore";
 
@@ -293,6 +294,11 @@ watch(
           {{ item.label }}
         </button>
       </template>
+      <!-- "PixlStash needs you!": the way to the report page, held at the foot
+           of the rail so it shows whichever pane is open. -->
+      <div v-if="!isReadOnly" class="settings-nav-foot">
+        <NeedsYouBox :version="appVersion" />
+      </div>
     </nav>
 
     <div class="settings-content">
@@ -509,9 +515,24 @@ watch(
   width: 196px;
   flex-shrink: 0;
   border-right: 1px solid rgb(var(--v-theme-divider));
-  padding: var(--space-3) 0;
+  padding: var(--space-3) 0 0;
   background: rgb(var(--v-theme-background));
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  /* An item scrolled into view (keyboard focus, a test's click) lands above
+     the pinned report card rather than under it. */
+  scroll-padding-bottom: calc(var(--space-9) + var(--space-5));
+}
+
+/* The report box: pushed to the bottom when the rail has room, and sticky
+   when it does not, so the items scroll under it instead of hiding it. */
+.settings-nav-foot {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+  padding: var(--space-4) var(--space-3) var(--space-3);
+  background: rgb(var(--v-theme-background));
 }
 
 /* A group heading: the design system's SectionLabel. Plain text in the nav,
@@ -526,7 +547,8 @@ watch(
 }
 
 /* One bar-control height per item, so twelve items under five headings fit
-   the rail without it scrolling. */
+   the rail; with the report card pinned below them the last one or two
+   scroll under the card. */
 .settings-nav-item {
   display: flex;
   align-items: center;
@@ -643,6 +665,11 @@ watch(
     flex-shrink: 1;
     border-right: none;
     border-bottom: 1px solid rgb(var(--v-theme-divider));
+  }
+
+  /* A 180px rail cannot spare a pinned card: it ends the list instead. */
+  .settings-nav-foot {
+    position: static;
   }
 
   .settings-content {
