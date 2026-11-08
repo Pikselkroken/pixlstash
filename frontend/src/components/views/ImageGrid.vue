@@ -5948,7 +5948,8 @@ onUnmounted(() => {
   arrivingResizeObserver?.disconnect();
   arrivingResizeObserver = null;
 });
-// The receipt stays until Done or the next navigation. The path, not the
+// A receipt leaves on Done, its countdown, the next import, or the next
+// navigation (ArrivingTiles, useImportArrivalsStore). The path, not the
 // whole URL: opening the lightbox from a duplicate tile is not navigating.
 const arrivalsRoute = useRoute();
 watch(

@@ -111,4 +111,20 @@ describe("useImportArrivalsStore (#2512)", () => {
     expect(store.runs.map((run) => run.id)).toEqual(["running"]);
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:b.png");
   });
+
+  it("replaces a finished receipt with the next import, not under it", () => {
+    const store = useImportArrivalsStore();
+    store.begin("running", [file("a.png")]);
+    store.begin("landed", [file("b.png")]);
+    store.begin("failed", [file("c.png")]);
+    store.land("landed");
+    store.fail("failed", "boom");
+    expect(store.runs).toHaveLength(3);
+
+    store.begin("next", [file("d.png")]);
+
+    expect(store.runs.map((run) => run.id)).toEqual(["next", "running"]);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:b.png");
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:c.png");
+  });
 });
