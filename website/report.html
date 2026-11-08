@@ -174,11 +174,16 @@
         margin: 0;
       }
 
+      /* Icon in its own column, title and description stacked beside it;
+         the icon centres on the title's line. */
       .kind {
         position: relative;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
+        display: grid;
+        grid-template-columns: 24px minmax(0, 1fr);
+        grid-template-rows: auto auto;
+        align-content: start;
+        align-items: center;
+        gap: 4px 12px;
         padding: 16px;
         border: 1px solid var(--border);
         border-radius: var(--radius-md);
@@ -215,11 +220,24 @@
         outline-offset: 2px;
       }
 
+      .kind-icon {
+        grid-column: 1;
+        grid-row: 1;
+        width: 24px;
+        height: 24px;
+        fill: var(--accent);
+      }
+
       .kind-title {
+        grid-column: 2;
+        grid-row: 1;
         font-weight: 600;
       }
 
       .kind-sub {
+        grid-column: 2;
+        grid-row: 2;
+        align-self: start;
         font-size: 0.85rem;
         color: var(--muted);
         line-height: 1.45;
@@ -479,6 +497,9 @@
               <legend class="sr-only">Kind of report</legend>
               <label class="kind">
                 <input type="radio" name="kind" value="bug" checked />
+                <svg class="kind-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M20.02 8.02H17.2Q16.5 6.75 15.38 6L17.02 4.41L15.61 3L13.41 5.16Q12.7 5.02 12 5.02Q11.3 5.02 10.59 5.16L8.39 3L6.98 4.41L8.62 6Q7.55 6.7 6.8 8.02H3.98V9.98H6.09Q6 10.5 6 11.02V12H3.98V14.02H6V15Q6 15.52 6.09 15.98H3.98V18H6.8Q7.64 19.41 9.02 20.2Q10.41 21 12 21Q13.59 21 15 20.2Q16.41 19.41 17.2 18H20.02V15.98H17.91Q18 15.52 18 15V14.02H20.02V12H18V11.02Q18 10.5 17.91 9.98H20.02ZM15.98 15Q15.98 16.64 14.81 17.81Q13.64 18.98 12 18.98Q10.36 18.98 9.19 17.81Q8.02 16.64 8.02 15V11.02Q8.02 9.33 9.19 8.16Q10.36 6.98 12 6.98Q13.64 6.98 14.81 8.16Q15.98 9.33 15.98 11.02ZM14.02 9.98V12H9.98V9.98ZM9.98 14.02H14.02V15.98H9.98Z" />
+                </svg>
                 <span class="kind-title">Something is broken</span>
                 <span class="kind-sub"
                   >An error, a crash, or something that does not do what it
@@ -487,6 +508,9 @@
               </label>
               <label class="kind">
                 <input type="radio" name="kind" value="idea" />
+                <svg class="kind-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 2.02Q13.92 2.02 15.52 2.95Q17.11 3.89 18.05 5.48Q18.98 7.08 18.98 9Q18.98 10.73 18.19 12.26Q17.39 13.78 15.98 14.72V17.02Q15.98 17.44 15.7 17.72Q15.42 18 15 18H9Q8.58 18 8.3 17.72Q8.02 17.44 8.02 17.02V14.72Q6.61 13.78 5.81 12.26Q5.02 10.73 5.02 9Q5.02 7.08 5.95 5.48Q6.89 3.89 8.48 2.95Q10.08 2.02 12 2.02ZM9 21V20.02H15V21Q15 21.42 14.72 21.7Q14.44 21.98 14.02 21.98H9.98Q9.56 21.98 9.28 21.7Q9 21.42 9 21ZM12 3.98Q10.64 3.98 9.49 4.66Q8.34 5.34 7.66 6.49Q6.98 7.64 6.98 9Q6.98 10.5 7.83 11.74Q8.67 12.98 9.98 13.59V15.98H14.02V13.59Q15.33 12.98 16.17 11.74Q17.02 10.5 17.02 9Q17.02 7.64 16.34 6.49Q15.66 5.34 14.51 4.66Q13.36 3.98 12 3.98Z" />
+                </svg>
                 <span class="kind-title">I have an idea</span>
                 <span class="kind-sub"
                   >Something missing, or something that could work
@@ -495,6 +519,9 @@
               </label>
               <label class="kind">
                 <input type="radio" name="kind" value="question" />
+                <svg class="kind-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M11.02 18H12.98V15.98H11.02ZM12 2.02Q10.03 2.02 8.18 2.77Q6.33 3.52 4.92 4.92Q3.52 6.33 2.77 8.18Q2.02 10.03 2.02 12Q2.02 13.97 2.77 15.82Q3.52 17.67 4.92 19.08Q6.33 20.48 8.18 21.23Q10.03 21.98 12 21.98Q13.97 21.98 15.82 21.23Q17.67 20.48 19.08 19.08Q20.48 17.67 21.23 15.82Q21.98 13.97 21.98 12Q21.98 10.03 21.23 8.18Q20.48 6.33 19.08 4.92Q17.67 3.52 15.82 2.77Q13.97 2.02 12 2.02ZM12 20.02Q9.84 20.02 7.99 18.94Q6.14 17.86 5.06 16.01Q3.98 14.16 3.98 12Q3.98 9.84 5.06 7.99Q6.14 6.14 7.99 5.06Q9.84 3.98 12 3.98Q14.16 3.98 16.01 5.06Q17.86 6.14 18.94 7.99Q20.02 9.84 20.02 12Q20.02 14.16 18.94 16.01Q17.86 17.86 16.01 18.94Q14.16 20.02 12 20.02ZM12 6Q10.36 6 9.19 7.17Q8.02 8.34 8.02 9.98H9.98Q9.98 9.19 10.57 8.6Q11.16 8.02 12 8.02Q12.84 8.02 13.43 8.6Q14.02 9.19 14.02 9.98Q14.02 10.59 13.64 11.06Q13.41 11.34 12.75 11.81Q11.91 12.47 11.58 12.98Q11.02 13.78 11.02 15H12.98Q12.98 14.25 13.45 13.64Q13.73 13.27 14.48 12.61Q15.23 11.95 15.52 11.53Q15.98 10.88 15.98 9.98Q15.98 8.34 14.81 7.17Q13.64 6 12 6Z" />
+                </svg>
                 <span class="kind-title">I have a question</span>
                 <span class="kind-sub"
                   >Not sure how something works, or whether it is meant to work
@@ -503,6 +530,9 @@
               </label>
               <label class="kind">
                 <input type="radio" name="kind" value="security" />
+                <svg class="kind-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 11.02Q21 13.73 19.83 16.27Q18.66 18.8 16.59 20.58Q14.53 22.36 12 23.02Q9.47 22.36 7.41 20.58Q5.34 18.8 4.17 16.27Q3 13.73 3 11.02V5.02L12 0.98L21 5.02ZM12 21Q13.83 20.48 15.45 18.98Q17.06 17.48 18.02 15.42Q18.98 13.36 18.98 11.2V6.28L12 3.19L5.02 6.28V11.2Q5.02 13.36 5.98 15.42Q6.94 17.48 8.55 18.98Q10.17 20.48 12 21ZM11.02 6.98H12.98V12.98H11.02ZM11.02 15H12.98V17.02H11.02Z" />
+                </svg>
                 <span class="kind-title">I found a security problem</span>
                 <span class="kind-sub"
                   >Something that could expose someone's pictures, account or
