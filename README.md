@@ -3,16 +3,6 @@
   <img src="website/assets/ScreenshotGrid.jpg" alt="PixlStash Screenshot" width="800"/>
 </p>
 
-PixlStash is an image library for photographers and creators. It searches,
-tags, scores and organises large picture collections. Connect ComfyUI to
-generate and edit pictures, and AI-toolkit to train LoRAs. Every model runs on
-your own machine.
-
-PixlStash is first of all a desktop app. The headless server, with the full
-interface in a browser, is maintained alongside it.
-
-## Install or try PixlStash
-
 <p align="center">
   <a href="https://pixlstash.dev/install.html">
     <img src="website/assets/install-banner.svg" alt="Install PixlStash" width="320"/>
@@ -23,16 +13,13 @@ interface in a browser, is maintained alongside it.
   </a>
 </p>
 
-PixlStash is available as a **native desktop app for Windows, macOS (Apple
-Silicon), and Linux** (no Python or browser tab required), as a Docker image, or
-as a pip package that runs anywhere Python does (including Intel Macs). The
-desktop app ships a ready-to-run CPU runtime,
-so it works offline out of the box, and auto-detects your hardware to offer
-optional GPU acceleration (NVIDIA CUDA, or experimental AMD ROCm), which it
-installs on demand straight from PyPI / PyTorch.
+PixlStash is an image library for photographers and creators. It searches,
+tags, scores and organises large picture collections. Connect ComfyUI to
+generate and edit pictures, and AI-toolkit to train LoRAs. Every model runs on
+your own machine.
 
-Detailed installation instructions on <a href="http://pixlstash.dev/install.html">pixlstash.dev</a>.
-
+PixlStash is first of all a desktop app. The headless server, with the full
+interface in a browser, is maintained alongside it.
 
 ## The 2.0 layout
 
@@ -110,6 +97,14 @@ a local one, installs the PixlStash nodes into it and links the two apps.
   room instead of running out of it. Tasks shows a memory bar per GPU and a
   ComfyUI row that can clear ComfyUI's memory, and Settings › GPU & compute picks
   which GPU PixlStash uses.
+
+<p align="center">
+  <img src="website/assets/ScreenshotComfyUi.jpg" alt="The Workflows workspace with workflow cards and the selected workflow's models, LoRAs and parameters" width="800"/>
+</p>
+
+<p align="center">
+  <img src="website/assets/ComfyWorkflow.png" alt="PixlStash loader and saver nodes in a ComfyUI workflow" width="800"/>
+</p>
 
 ### Inpaint, crop and compare
 
@@ -243,6 +238,29 @@ though it works as a home server too:
 
 Full breakdown, including a capability-by-capability comparison table:
 [pixlstash.dev/ai.html](https://pixlstash.dev/ai.html).
+
+## Install or try PixlStash
+
+<p align="center">
+  <a href="https://pixlstash.dev/install.html">
+    <img src="website/assets/install-banner.svg" alt="Install PixlStash" width="200"/>
+  </a>
+  &nbsp;
+  <a href="https://demo.pixlstash.dev?token=o75qQ-w0fy_FraPb2sdxcGOVTBoKFmmZwStycljomSs">
+    <img src="website/assets/demo-banner.svg" alt="Try the Demo" width="200"/>
+  </a>
+</p>
+
+PixlStash is available as a **native desktop app for Windows, macOS (Apple
+Silicon), and Linux** (no Python or browser tab required), as a Docker image, or
+as a pip package that runs anywhere Python does (including Intel Macs). The
+desktop app ships a ready-to-run CPU runtime,
+so it works offline out of the box, and auto-detects your hardware to offer
+optional GPU acceleration (NVIDIA CUDA, or experimental AMD ROCm), which it
+installs on demand straight from PyPI / PyTorch.
+
+Detailed installation instructions on <a href="http://pixlstash.dev/install.html">pixlstash.dev</a>.
+
 
 ## First run and data location
 
