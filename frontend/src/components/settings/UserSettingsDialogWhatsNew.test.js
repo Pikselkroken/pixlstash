@@ -82,3 +82,19 @@ describe("Settings' What's new", () => {
     expect(w.find('[data-testid="settings-version"]').exists()).toBe(false);
   });
 });
+
+// The rail's "PixlStash needs you!" card asks the person who runs PixlStash
+// for reports, so a guest on someone else's server does not get it.
+describe("Settings' report card", () => {
+  it("is at the foot of the rail for the owner", () => {
+    const w = mount(UserSettingsDialog, { props: { open: true } });
+    const card = w.find('.settings-nav [data-testid="needs-you-box"]');
+    expect(card.exists()).toBe(true);
+  });
+
+  it("is not shown in a read-only session", () => {
+    isReadOnly.value = true;
+    const w = mount(UserSettingsDialog, { props: { open: true } });
+    expect(w.find('[data-testid="needs-you-box"]').exists()).toBe(false);
+  });
+});

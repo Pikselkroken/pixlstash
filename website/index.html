@@ -652,6 +652,64 @@
       .lightbox-close:hover {
         background: rgba(255, 255, 255, 1);
       }
+      /* The hero's text on the left, the "PixlStash needs you!" card on the
+         right; stacked, card last, on a narrow screen. */
+      .hero-split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 220px;
+        gap: 32px;
+        align-items: center;
+      }
+
+      .needs-you-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        padding: 16px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        text-align: center;
+        transition:
+          border-color 0.15s ease,
+          transform 0.2s ease;
+      }
+
+      .needs-you-card:hover {
+        border-color: var(--accent);
+        transform: translateY(-2px);
+      }
+
+      .needs-you-card img {
+        width: 128px;
+        height: 128px;
+        border-radius: var(--radius-md);
+      }
+
+      .needs-you-text {
+        color: var(--muted);
+        font-size: 0.85rem;
+        line-height: 1.5;
+      }
+
+      .needs-you-link {
+        color: var(--accent);
+        font-weight: 600;
+        font-size: 0.9rem;
+      }
+
+      @media (max-width: 900px) {
+        .hero-split {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 20px;
+        }
+
+        .needs-you-card {
+          justify-self: center;
+          max-width: 320px;
+        }
+      }
     </style>
     <script type="application/ld+json">
       {
@@ -691,7 +749,8 @@
       <div id="nav-placeholder"></div>
       <script src="nav.js"></script>
 
-      <div class="page-hero">
+      <div class="page-hero hero-split">
+        <div class="hero-main">
         <a class="launch-pill" href="whatsnew.html"
           ><span>New</span> PixlStash 2.0: LoRA training and streamlined UI →</a
         >
@@ -722,6 +781,21 @@
             >Try the live demo</a
           >
         </div>
+        </div>
+
+        <a class="needs-you-card" href="report.html">
+          <img
+            src="assets/PixlStashNeedsYou.jpg"
+            width="256"
+            height="256"
+            alt="PixlStash needs you!"
+          />
+          <span class="needs-you-text"
+            >Found a bug, or missing something? Most reports get a reply within
+            a day.</span
+          >
+          <span class="needs-you-link">Report it &rarr;</span>
+        </a>
       </div>
 
       <section class="launch">
@@ -945,7 +1019,8 @@
             href="https://github.com/Pikselkroken/pixlstash/blob/main/pixlstash/LICENSE"
             >GPLv3</a
           >) • Easy install • Cross-platform •
-          <a href="privacy.html">Privacy</a></span
+          <a href="privacy.html">Privacy</a> •
+          <a href="report.html">Report a problem</a></span
         >
       </footer>
     </div>
