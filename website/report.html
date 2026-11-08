@@ -167,7 +167,7 @@
 
       .kinds {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 12px;
         border: 0;
         padding: 0;
@@ -334,6 +334,10 @@
         background: var(--panel-strong);
       }
 
+      .send-option[hidden] {
+        display: none;
+      }
+
       .send-option p {
         margin: 0;
         font-size: 0.85rem;
@@ -497,6 +501,14 @@
                   that way.</span
                 >
               </label>
+              <label class="kind">
+                <input type="radio" name="kind" value="security" />
+                <span class="kind-title">I found a security problem</span>
+                <span class="kind-sub"
+                  >Something that could expose someone's pictures, account or
+                  machine. Reported privately, never in public.</span
+                >
+              </label>
             </fieldset>
           </div>
 
@@ -568,6 +580,30 @@
                 <textarea id="f-question" name="question" required></textarea>
               </div>
             </div>
+
+            <div data-kind="security" hidden>
+              <div class="field">
+                <label for="f-vuln">What is the problem?</label>
+                <textarea id="f-vuln" name="vuln" required></textarea>
+              </div>
+              <div class="field">
+                <label for="f-impact">What could someone do with it?</label>
+                <span class="hint" id="f-impact-hint"
+                  >Who could use it (anyone on the network, a guest with a
+                  share link, another program on the machine) and what they
+                  would get.</span
+                >
+                <textarea
+                  id="f-impact"
+                  name="impact"
+                  aria-describedby="f-impact-hint"
+                ></textarea>
+              </div>
+              <div class="field">
+                <label for="f-vsteps">How to reproduce it</label>
+                <textarea id="f-vsteps" name="vsteps"></textarea>
+              </div>
+            </div>
           </div>
 
           <!-- Step 3 -->
@@ -629,9 +665,9 @@
             <div class="field">
               <label for="f-extra">Anything else?</label>
               <span class="hint" id="f-extra-hint"
-                >An error message, a log excerpt, a link. Read it through first:
-                a GitHub report is public, so take out file paths, names or
-                anything private.</span
+                >An error message, a log excerpt, a link. Read it through first
+                and take out file paths, names or anything private: a GitHub
+                issue is public.</span
               >
               <textarea
                 id="f-extra"
@@ -646,7 +682,7 @@
             <h3>Your report is ready</h3>
             <pre class="preview" id="preview" tabindex="0" aria-label="Report preview"></pre>
             <div class="send-options">
-              <div class="send-option">
+              <div class="send-option" data-send="public">
                 <button type="button" class="download-btn" id="send-github">
                   Open on GitHub
                 </button>
@@ -656,11 +692,21 @@
                   account; reports there are public.
                 </p>
               </div>
+              <div class="send-option" data-send="private" hidden>
+                <button type="button" class="download-btn" id="send-advisory">
+                  Report privately on GitHub
+                </button>
+                <p>
+                  Copies your report and opens a private security advisory.
+                  Paste it there. Only the maintainers can see it. Needs a free
+                  GitHub account.
+                </p>
+              </div>
               <div class="send-option">
                 <button type="button" class="demo-btn" id="send-email">
                   Send by email
                 </button>
-                <p>
+                <p id="send-email-note">
                   No GitHub account? This opens your email app with the report
                   written out. Attach screenshots there.
                 </p>
@@ -693,14 +739,14 @@
 
       <div class="page-footer">
         <p>
-          Found a security problem? Please follow the
+          Found a security problem? Choose <em>I found a security problem</em>
+          above so it is reported privately, or see the
           <a
             href="https://github.com/pikselkroken/pixlstash/blob/main/SECURITY.md"
             target="_blank"
             rel="noopener noreferrer"
             >security policy</a
-          >
-          instead of filing a public report.
+          >.
         </p>
         <p>
           <a href="index.html">Back to PixlStash home</a> &middot;
@@ -719,8 +765,17 @@
         const MAILTO_LIMIT = 1900;
         // GitHub answers a URL much past 8000 characters with an error page.
         const GITHUB_URL_LIMIT = 7500;
+        // Private vulnerability reporting: only maintainers see what is filed
+        // here. It takes no prefill, so the report goes on the clipboard.
+        const REPO_ADVISORY =
+          "https://github.com/pikselkroken/pixlstash/security/advisories/new";
         const LABELS = { bug: "bug", idea: "enhancement", question: "question" };
-        const TITLE_PREFIX = { bug: "", idea: "Idea: ", question: "Question: " };
+        const TITLE_PREFIX = {
+          bug: "",
+          idea: "Idea: ",
+          question: "Question: ",
+          security: "Security: ",
+        };
         // The app's install types (Server.INSTALL_TYPES) as the select names them.
         const INSTALL_NAMES = {
           electron: "Desktop app",
@@ -769,11 +824,12 @@
             el.hidden = el.dataset.kind !== k;
           });
           document.getElementById("details-heading").textContent =
-            k === "bug"
-              ? "What happened?"
-              : k === "idea"
-                ? "Tell us about your idea"
-                : "What would you like to know?";
+            {
+              bug: "What happened?",
+              idea: "Tell us about your idea",
+              question: "What would you like to know?",
+              security: "Tell us about the problem",
+            }[k];
         }
         form.querySelectorAll('input[name="kind"]').forEach((el) =>
           el.addEventListener("change", showKindFields),
@@ -798,6 +854,10 @@
           } else if (k === "idea") {
             body += section("What I am trying to do", value("goal"));
             body += section("What would help", value("help"));
+          } else if (k === "security") {
+            body += section("The problem", value("vuln"));
+            body += section("What someone could do with it", value("impact"));
+            body += section("How to reproduce", value("vsteps"));
           } else {
             body += section("Question", value("question"));
           }
@@ -856,6 +916,14 @@
           if (step === 1) showKindFields();
           if (step === steps.length - 1) {
             previewEl.textContent = `${buildTitle()}\n\n${buildBody()}`;
+            // A security report never gets the public-issue button.
+            const secret = kind() === "security";
+            form.querySelectorAll("[data-send]").forEach((el) => {
+              el.hidden = (el.dataset.send === "private") !== secret;
+            });
+            document.getElementById("send-email-note").textContent = secret
+              ? "Opens your email app with the report written out, addressed straight to the maintainer."
+              : "No GitHub account? This opens your email app with the report written out. Attach screenshots there.";
           }
           const heading = steps[step].querySelector("h3");
           if (heading) {
@@ -925,6 +993,17 @@
                 : "Your report is long: copy it from the box above and paste it into the GitHub page.";
             }
             showStatus(message, url, "Open GitHub");
+          });
+
+        document
+          .getElementById("send-advisory")
+          .addEventListener("click", async () => {
+            const copying = copyText(`${buildTitle()}\n\n${buildBody()}`);
+            window.open(REPO_ADVISORY, "_blank", "noopener");
+            const message = (await copying)
+              ? "Your report is on your clipboard: paste it into the advisory form on GitHub."
+              : "Copy your report from the box above and paste it into the advisory form on GitHub.";
+            showStatus(message, REPO_ADVISORY, "Open the advisory form");
           });
 
         document
