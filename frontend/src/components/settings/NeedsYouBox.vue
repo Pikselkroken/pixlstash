@@ -43,7 +43,6 @@ const href = computed(() => {
     :href="href"
     target="_blank"
     rel="noopener noreferrer"
-    title="Report a bug or suggest an idea on pixlstash.dev"
   >
     <img
       class="needs-you__poster"
