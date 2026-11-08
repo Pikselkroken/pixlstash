@@ -55,11 +55,19 @@ function show(el, text) {
   el.classList.toggle('hidden', !text);
 }
 
+// Restores each button to what it was before, rather than enabling them all:
+// with no report, Find it and Create stay off after a failed Try again.
 function setBusy(value) {
   busy = value;
   for (const button of document.querySelectorAll('button')) {
     if (button.closest('.winbar')) continue;
-    button.disabled = value;
+    if (value) {
+      button.dataset.wasDisabled = button.disabled ? '1' : '';
+      button.disabled = true;
+    } else {
+      button.disabled = button.dataset.wasDisabled === '1';
+      delete button.dataset.wasDisabled;
+    }
   }
 }
 

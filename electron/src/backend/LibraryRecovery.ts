@@ -120,7 +120,8 @@ export function isSameOrInside(path: string, folder: string, platform = process.
   const paths = platform === 'win32' ? win32 : posix;
   const fold = (p: string) => (platform === 'win32' || platform === 'darwin' ? p.toLowerCase() : p);
   const rel = paths.relative(fold(paths.resolve(folder)), fold(paths.resolve(path)));
-  return rel === '' || (!rel.startsWith('..') && !paths.isAbsolute(rel));
+  // The first segment exactly: a child named `..scratch` is inside, `../x` is not.
+  return rel === '' || (rel.split(paths.sep)[0] !== '..' && !paths.isAbsolute(rel));
 }
 
 /** `server-config.json` with `image_root` pointed at *imageRoot*, everything else kept. */

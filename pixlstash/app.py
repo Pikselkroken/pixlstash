@@ -216,6 +216,10 @@ _MAX_REPORTED_ALTERNATIVES = 8
 # Under the shell's 4000-character output tail, with room for a log line or
 # two released after it by ``hold_log_output``.
 _MAX_SIGNAL_CHARS = 3000
+# A path is halved (plus "…") until it is no longer than this. Above it the
+# length strictly falls, so shortening always ends; a floor of 1 or 2 would
+# halve to the same length forever.
+_MIN_SHORTENED_PATH = 40
 
 
 def _describe_library(library) -> dict:
@@ -234,7 +238,7 @@ def _library_unavailable_signal(exc: LibraryUnavailableError) -> str:
     characters of our output, and a record whose prefix falls off the front no
     longer parses - which is the dead end this record exists to remove. Long
     paths cost alternatives first (the screen still offers every other way
-    out), then the length of the reason.
+    out), then the length of the reason, then the paths, which are only shown.
     """
 
     alternatives = [
@@ -242,13 +246,15 @@ def _library_unavailable_signal(exc: LibraryUnavailableError) -> str:
         for other in exc.alternatives[:_MAX_REPORTED_ALTERNATIVES]
     ]
     reason = exc.reason
+    library = _describe_library(exc.library)
+    vault_path = exc.library.vault_path
     while True:
         line = LIBRARY_UNAVAILABLE_PREFIX + json.dumps(
             {
                 "version": 1,
                 "kind": exc.kind,
-                "library": _describe_library(exc.library),
-                "vault_path": exc.library.vault_path,
+                "library": library,
+                "vault_path": vault_path,
                 "reason": reason,
                 "alternatives": alternatives,
             },
@@ -261,8 +267,15 @@ def _library_unavailable_signal(exc: LibraryUnavailableError) -> str:
         elif reason is exc.reason and len(reason) > 200:
             # Once: the shortened reason is itself over 200 characters.
             reason = reason[:200] + "…"
+        elif len(vault_path) > _MIN_SHORTENED_PATH:
+            # Shown only as a fallback for the reason, so it goes first.
+            vault_path = vault_path[: len(vault_path) // 2] + "…"
+        elif len(library["path"]) > _MIN_SHORTENED_PATH:
+            # Display only from here: the shell acts on the uuid, and the
+            # backend re-checks any folder against the real path.
+            library["path"] = library["path"][: len(library["path"]) // 2] + "…"
         else:
-            # Only the library's own path is left to blame; send it anyway.
+            # Nothing left to shorten; send it anyway.
             return line
 
 

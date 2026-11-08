@@ -137,6 +137,13 @@ describe('the recovery actions', () => {
     assert.ok(!isSameOrInside('/home/me/Downloads', report.library.path, 'linux'));
   });
 
+  it('counts a child whose name starts with two dots as inside', () => {
+    assert.ok(isSameOrInside('/home/me/Downloads/my-library/..scratch', report.library.path, 'linux'));
+    assert.ok(isSameOrInside('C:\\Users\\me\\lib\\..scratch', 'C:\\Users\\me\\lib', 'win32'));
+    assert.ok(!isSameOrInside('C:\\Users\\me\\other', 'C:\\Users\\me\\lib', 'win32'));
+    assert.ok(!isSameOrInside('/home/me/Downloads/other', report.library.path, 'linux'));
+  });
+
   it('folds case where the filesystem does, and only there', () => {
     const upper = '/home/me/Downloads/MY-LIBRARY/sub';
     assert.ok(isSameOrInside(upper, report.library.path, 'darwin'));
@@ -178,6 +185,10 @@ describe('the recovery screen assets', () => {
     ]) {
       assert.match(script, new RegExp(`api\\.${call}\\(`), `the screen must call ${call}`);
     }
+    // A failed action must not re-enable what the screen disabled on purpose
+    // (Find it and Create, when there is no report to act on).
+    assert.match(script, /button\.dataset\.wasDisabled/);
+    assert.doesNotMatch(script, /button\.disabled = value;/);
     // One wording per kind the backend reports.
     for (const kind of ['folder_missing', 'vault_missing', 'unreadable', 'foreign']) {
       assert.match(script, new RegExp(`${kind}:`));

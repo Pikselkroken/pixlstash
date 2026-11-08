@@ -1765,9 +1765,12 @@ class TestTheRecoveryReport:
 
         line = app_module._library_unavailable_signal(raised.value)
 
+        # Whole, so the shell still finds the prefix in its 4000-character tail.
+        assert len(line) <= 3000
         record = json.loads(line.split("=", 1)[1])
         assert record["alternatives"] == []
         assert record["reason"] == "r" * 200 + "…"
+        assert record["library"]["uuid"] == _uuid
 
     def test_a_refused_new_library_changes_nothing_and_says_why(
         self, hub_with_two, monkeypatch
