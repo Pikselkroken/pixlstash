@@ -139,7 +139,7 @@ const showFolders = computed(
 );
 const shelfLine = computed(() =>
   folders.value?.runs?.on_shelf === false
-    ? "Runs land in your model shelf's ai-toolkit folder. PixlStash adds this folder to the shelf when the first run starts."
+    ? "Runs land in your model shelf's ai-toolkit folder. PixlStash adds this folder to the shelf when you connect, or else when the first run starts."
     : "Runs land in your model shelf's ai-toolkit folder.",
 );
 

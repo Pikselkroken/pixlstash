@@ -11754,9 +11754,10 @@ takes the first `model_folder` row of kind `source`. When there is none, it
 registers `<repo>/output` (creating it first) through `register_model_folder`,
 the same function the folder routes call. `Server.build_vault` binds that
 registrar with `set_source_folder_registrar`, so a vault opened by a library
-switch has it too. Saving a checkout (`PUT /training/ai-toolkit/config`)
-registers `<repo>/output` the same way when the shelf has no `source` folder. The run's `save_root` is `<source>/<stem>_<job
-id[:8]>`. The suffix is there because the folder is shared, so two runs with one
+switch has it too. Linking a checkout (`PUT /training/ai-toolkit/config` with
+a new `repo_path`) also registers `<repo>/output` when the shelf has no `source`
+folder, outside Docker; a failure there is logged and the save stands.
+The run's `save_root` is `<source>/<stem>_<job id[:8]>`. The suffix is there because the folder is shared, so two runs with one
 name must not share a directory. The dataset goes to
 `<repo>/datasets/pixlstash-<uuid>`. The per-job work dir (`job.db`, the rendered
 config, `trainer_output.log`) stays under `<image_root>/training/<uuid>`.

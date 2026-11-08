@@ -2754,6 +2754,45 @@ def test_linking_a_checkout_puts_its_output_folder_on_the_shelf():
         _teardown(temp_dir, server)
 
 
+def test_linking_saves_even_when_the_shelf_folder_cannot_be_added(monkeypatch):
+    """The save is committed before the shelf is touched, so a failure there is
+    logged, not a 500, and the paths read back as saved."""
+    import pixlstash.routes.training as training_routes
+
+    def refuse(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(training_routes, "register_model_folder", refuse)
+    temp_dir, owner, server, read_token = _setup(checkout=False)
+    try:
+        repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
+        _save_checkout(owner, repo, _venv_python(repo))
+        status = owner.get("/training/ai-toolkit/status").json()
+        assert status["configured"] is True
+        assert status["runs"]["on_shelf"] is False
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_resaving_the_same_checkout_does_not_put_a_forgotten_folder_back():
+    """Only linking a checkout sets the default. Saving it again (a new Python,
+    say) leaves a shelf the owner emptied alone."""
+    temp_dir, owner, server, read_token = _setup(checkout=False)
+    try:
+        repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
+        python = _venv_python(repo)
+        _save_checkout(owner, repo, python)
+        with server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model_folder WHERE kind = 'source'")
+        _save_checkout(owner, repo, python)
+        assert (
+            server.hub.fetchone("SELECT 1 FROM model_folder WHERE kind = 'source'")
+            is None
+        )
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_disconnecting_ai_toolkit_puts_nothing_on_the_shelf():
     temp_dir, owner, server, read_token = _setup(checkout=False)
     try:
