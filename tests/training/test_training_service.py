@@ -1464,6 +1464,9 @@ def test_first_job_registers_the_checkouts_output_as_the_shelf_source_folder(
 
     output = os.path.join(repo_dir, "output")
     assert registrar.paths == [output], "the output folder is registered once"
+    # A fresh checkout has no output folder; it is created before registering,
+    # since the shelf refuses a folder that does not exist.
+    assert os.path.isdir(output)
     final = _job_status(hub, job["uuid"])
     assert final.training_folder == output
     assert importer.calls, "the completed run reached the importer"

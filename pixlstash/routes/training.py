@@ -47,6 +47,7 @@ from pixlstash.resources.arbiter import arbiter
 from pixlstash.resources.comfyui_tenant import probe as comfyui_probe
 from pixlstash.resources.ledger import ledger
 from pixlstash.resources.ledger import ram as read_ram
+from pixlstash.routes.model_folders import register_model_folder
 from pixlstash.scoring import select_reference_faces_for_character
 from pixlstash.services.dedup_tier_service import (
     DEFAULT_THRESHOLD,
@@ -2768,6 +2769,38 @@ def create_router(server) -> APIRouter:
             ),
         )
 
+    def _shelve_default_runs_folder(repo: str) -> None:
+        """Put ``<repo>/output`` on the shelf as its ai-toolkit folder, if none.
+
+        Linking a checkout is what sets the default, so the first run has
+        somewhere to land and the shelf shows it from the start. A shelf that
+        already has an ai-toolkit folder keeps it. Failing here does not fail
+        the save, which is already committed: the first job tries the same
+        registration again and reports it there. In Docker a shelf folder needs
+        its host path, which only the folder dialog can give, so nothing is
+        registered here.
+        """
+        if server.running_in_docker():
+            return
+        output = os.path.join(repo, "output")
+        try:
+            if _shelf_source_folders():
+                return
+            os.makedirs(output, exist_ok=True)
+            register_model_folder(server, output, SOURCE_FOLDER_KIND)
+        except HTTPException as exc:
+            logger.warning(
+                "Could not put %s on the shelf as its ai-toolkit folder: %s",
+                output,
+                exc.detail,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not put %s on the shelf as its ai-toolkit folder: %s",
+                output,
+                exc,
+            )
+
     @router.put(
         "/training/ai-toolkit/config",
         response_model=AiToolkitConfigResponse,
@@ -2777,8 +2810,10 @@ def create_router(server) -> APIRouter:
             "Each is checked on this host first: the checkout must hold run.py and "
             "toolkit/, and the Python must be an executable in its .venv or venv, "
             "or the python3 AI-toolkit itself would use. Both null disconnects the "
-            "install. The Python is the trainer's argv[0] and the checkout its "
-            "working directory, so only this computer (loopback) may set them."
+            "install. Linking a checkout puts its output folder on the model shelf "
+            "as its ai-toolkit folder when the shelf has none (not in Docker). The Python is the "
+            "trainer's argv[0] and the checkout its working directory, so only "
+            "this computer (loopback) may set them."
         ),
     )
     def put_ai_toolkit_config(payload: AiToolkitConfigRequest, request: Request):
@@ -2790,6 +2825,8 @@ def create_router(server) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         user_id = server.auth.require_user_id(request)
+        previous = server.auth.get_user()
+        previous_repo = previous.ai_toolkit_repo_path if previous is not None else None
 
         def save(session, user_id: int):
             user = session.get(User, user_id)
@@ -2809,6 +2846,10 @@ def create_router(server) -> APIRouter:
         # config PATCH does.
         server.auth.user = user
         server._user = user
+        # Only when a checkout is linked, not on every save: a shelf folder the
+        # owner forgot is not put back by changing the Python.
+        if repo_path and repo_path != previous_repo:
+            _shelve_default_runs_folder(repo_path)
         return {
             "repo_path": user.ai_toolkit_repo_path,
             "python": user.ai_toolkit_python,

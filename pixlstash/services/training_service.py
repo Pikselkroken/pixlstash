@@ -2209,32 +2209,53 @@ class TrainingService:
         if not repo_path:
             raise RuntimeError("ai-toolkit is not configured; cannot run training.")
 
-        training_folder = self._shelf_source_folder()
-        if training_folder is None:
-            if self._register_source_folder is None:
-                raise RuntimeError(
-                    "No model shelf folder is set up for ai-toolkit runs."
-                )
-            output = os.path.join(repo_path, "output")
-            try:
-                self._register_source_folder(output)
-            except Exception as exc:
-                logger.exception(
-                    "Could not register %s as the shelf's ai-toolkit folder: %s",
-                    output,
-                    exc,
-                )
-                raise RuntimeError(
-                    "Could not add the ai-toolkit output folder to the model shelf."
-                ) from exc
-            training_folder = self._shelf_source_folder()
-            if training_folder is None:
-                raise RuntimeError(
-                    "No model shelf folder is set up for ai-toolkit runs."
-                )
-
+        training_folder = self.ensure_source_folder(repo_path)
         dataset_dir = os.path.join(repo_path, "datasets", f"pixlstash-{job_uuid}")
         return training_folder, dataset_dir
+
+    def ensure_source_folder(self, repo_path: str) -> str:
+        """The shelf's ``source`` folder, registering ``<repo>/output`` if none.
+
+        A fresh checkout may not have ``output`` yet, and the registration
+        refuses a folder that does not exist, so it is created first.
+
+        Args:
+            repo_path: The ai-toolkit checkout.
+
+        Returns:
+            The stored path of the shelf's first ``source`` folder.
+
+        Raises:
+            RuntimeError: No shelf folder could be found or registered. The
+                message names no host path; the detail is logged.
+        """
+        training_folder = self._shelf_source_folder()
+        if training_folder is not None:
+            return training_folder
+        if self._register_source_folder is None:
+            raise RuntimeError("No model shelf folder is set up for ai-toolkit runs.")
+        output = os.path.join(repo_path, "output")
+        try:
+            os.makedirs(output, exist_ok=True)
+            self._register_source_folder(output)
+        except Exception as exc:
+            # A registration that lost a race to another one is fine: the
+            # folder is on the shelf either way, and is read back below.
+            training_folder = self._shelf_source_folder()
+            if training_folder is not None:
+                return training_folder
+            logger.exception(
+                "Could not register %s as the shelf's ai-toolkit folder: %s",
+                output,
+                exc,
+            )
+            raise RuntimeError(
+                "Could not add the ai-toolkit output folder to the model shelf."
+            ) from exc
+        training_folder = self._shelf_source_folder()
+        if training_folder is None:
+            raise RuntimeError("No model shelf folder is set up for ai-toolkit runs.")
+        return training_folder
 
     def _shelf_source_folder(self) -> str | None:
         """The path of the first registered shelf ``source`` folder, or None.
