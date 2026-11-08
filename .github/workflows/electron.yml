@@ -286,6 +286,16 @@ jobs:
               *) export CSC_LINK="data:application/x-pkcs12;base64,${CSC_LINK}" ;;
             esac
             export CSC_IDENTITY_AUTO_DISCOVERY=true
+            # Notarised build: a staple or DMG-detach fault after notarisation
+            # is recovered in this job (staple with backoff, then rebuild the
+            # zip/DMG from the notarised app) instead of re-notarising (#2634).
+            # A release_tag rebuild of a tag older than the script falls through
+            # to the plain build below.
+            if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ] \
+              && [ -f scripts/mac-signed-dist.sh ]; then
+              bash scripts/mac-signed-dist.sh
+              exit 0
+            fi
             if [ -z "${APPLE_ID:-}" ] && [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -z "${APPLE_TEAM_ID:-}" ]; then
               echo "::warning title=macOS signed but not notarised::Signing certificate is present but no notarisation credentials are set. The app will be signed but NOT notarised, so Gatekeeper still blocks it on download. Add APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID to finish the chain."
             fi
