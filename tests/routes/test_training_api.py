@@ -2861,7 +2861,9 @@ def test_ai_toolkit_check_with_no_python_finds_the_checkouts_own_and_reports_fol
     from pixlstash.training import ai_toolkit_install
 
     monkeypatch.setattr(ai_toolkit_install, "run_host_process", _probe_ok_runner)
-    temp_dir, owner, server, read_token = _setup()
+    # No checkout linked yet, so the shelf has no ai-toolkit folder: linking one
+    # would put its output folder there, and runs would land in that instead.
+    temp_dir, owner, server, read_token = _setup(checkout=False)
     try:
         repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
         venv_python = _venv_python(repo)
