@@ -34,7 +34,7 @@ from pixlstash.hub.bootstrap import (
 )
 from pixlstash.hub.db import HubDatabase
 from pixlstash.server import Server
-from pixlstash.hub.registry import LibraryRegistry, read_vault_uuid
+from pixlstash.hub.registry import LibraryError, LibraryRegistry, read_vault_uuid
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 from pixlstash.vault import Vault
 
@@ -1697,6 +1697,52 @@ class TestTheRecoveryReport:
             registry = LibraryRegistry(hub)
             assert registry.active_library().uuid == gone_uuid
             assert registry.by_uuid(gone_uuid).attached
+            # Rolled back, so it cannot block the next attempt as an overlap.
+            assert not any(
+                lib.path == os.path.realpath(fresh) for lib in registry.list_libraries()
+            )
+        finally:
+            hub.close()
+
+        monkeypatch.setattr(
+            bootstrap_module, "prevalidate_library_fingerprint", real_check
+        )
+        result = bootstrap_hub(fresh, hub_path)
+        try:
+            assert result.library.path == os.path.realpath(fresh)
+            assert result.library.is_active
+        finally:
+            result.engine.close()
+            result.hub.close()
+
+    def test_a_failure_after_switching_puts_the_missing_one_back(
+        self, hub_with_two, tmp_path, monkeypatch
+    ):
+        """Detaching the old library is the last step; if it fails, nothing moved."""
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        shutil.rmtree(gone)
+        fresh = str(tmp_path / "fresh")
+        monkeypatch.setenv(LIBRARY_REPLACE_ENV, gone_uuid)
+        real_detach = LibraryRegistry.detach
+
+        def detach(self, name_or_id):
+            if self.get(name_or_id).uuid == gone_uuid:
+                raise LibraryError("simulated: the hub refused the detach")
+            return real_detach(self, name_or_id)
+
+        monkeypatch.setattr(LibraryRegistry, "detach", detach)
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(fresh, hub_path)
+
+        assert "simulated" in raised.value.reason
+        hub = HubDatabase(hub_path)
+        try:
+            registry = LibraryRegistry(hub)
+            assert registry.active_library().uuid == gone_uuid
+            assert not any(
+                lib.path == os.path.realpath(fresh) for lib in registry.list_libraries()
+            )
         finally:
             hub.close()
 

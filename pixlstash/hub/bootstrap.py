@@ -845,6 +845,41 @@ def _folders_overlap(first: str, second: str) -> bool:
     return common in (a, b)
 
 
+def _roll_back_replacement(
+    registry: LibraryRegistry, library: Library, replacement: Library
+) -> None:
+    """Undo a half-made replacement, so trying the same folder again works.
+
+    Left registered, the replacement would make every retry of that folder an
+    overlap with a library this recovery made itself, and nothing on the
+    recovery screen could remove it. The missing library goes back to being
+    the active one first (detach refuses the active library), then the
+    replacement is detached - not forgotten: a row this call revived rather
+    than created is a library somebody detached before, with share links that
+    must survive, and a detached row at the same path is revived by the retry.
+    Nothing in either folder is touched.
+    """
+    try:
+        active = registry.active_library()
+        if active is None or active.uuid != library.uuid:
+            registry.set_active(library.id)
+        current = registry.by_uuid(replacement.uuid)
+        if current is not None and current.attached:
+            registry.detach(replacement.id)
+    except LibraryError as exc:
+        logger.error(
+            "Could not roll back the replacement library %s at %s after it "
+            "failed; %s at %s may need `libraries activate`, and %s "
+            "`libraries detach`: %s",
+            replacement.name,
+            replacement.path,
+            library.name,
+            library.path,
+            replacement.name,
+            exc,
+        )
+
+
 def _replace_unavailable_library(
     registry: LibraryRegistry,
     library: Library,
@@ -861,9 +896,11 @@ def _replace_unavailable_library(
     Every refusal below is checked before anything is written, and each one is
     raised as :class:`LibraryUnavailableError` so the recovery screen comes
     back with the reason rather than the app ending on a start-up error. The
-    new library is made active before the old one is detached, so a failure
-    late in the registration leaves the missing library active and attached
-    (though the new folder may by then exist, empty).
+    new library is checked, then made active, and only then is the old one
+    detached. A failure after the new one was registered is rolled back by
+    :func:`_roll_back_replacement`: the missing library is active and attached
+    again, the replacement is detached, and trying the same folder again works.
+    The new folder may by then exist, empty.
 
     Refused folders:
 
@@ -909,6 +946,7 @@ def _replace_unavailable_library(
             f'"{others[0].name}" at {others[0].path}. Choose a folder of its own, '
             "or open that library instead."
         )
+    replacement: Optional[Library] = None
     try:
         registry.refuse_overlapping_watch_or_reference_folder(resolved)
         replacement = _register_first_library(
@@ -922,6 +960,8 @@ def _replace_unavailable_library(
         replacement = registry.set_active(replacement.id)
         registry.detach(library.id)
     except (LibraryError, HubBootstrapError, OSError) as exc:
+        if replacement is not None:
+            _roll_back_replacement(registry, library, replacement)
         raise refuse(f"Could not start a new library in {resolved}: {exc}") from exc
     logger.warning(
         "Started a new library at %s in place of %s, which could not be opened "
