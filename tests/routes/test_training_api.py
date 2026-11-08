@@ -3039,11 +3039,13 @@ def test_a_vault_opened_after_start_up_gets_the_shelf_folder_registrar_too():
             try:
                 service = vault.training_service
                 assert service._register_source_folder is not None
-                repo = os.path.join(temp_dir.name, "kit")
-                os.makedirs(repo)
-                folder = service.ensure_source_folder(repo)
-                assert folder == os.path.realpath(os.path.join(repo, "output"))
-                assert os.path.isdir(folder)
+                folder = os.path.join(temp_dir.name, "kit", "output")
+                os.makedirs(folder)
+                service._register_source_folder(folder)
+                row = server.hub.fetchone(
+                    "SELECT path FROM model_folder WHERE kind = 'source'"
+                )
+                assert row["path"] == os.path.realpath(folder)
             finally:
                 vault.close()
         finally:
