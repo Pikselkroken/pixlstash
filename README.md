@@ -122,6 +122,10 @@ a local one, installs the PixlStash nodes into it and links the two apps.
 - *Open with* sends a picture to another app; save over it there and the edit
   comes back stacked on the original.
 
+<p align="center">
+  <img src="website/assets/InpaintAxe.gif" alt="Inpainting an axe head into a gnome's hand in the Edit tab" width="800"/>
+</p>
+
 ### Your folders
 
 - **Watched folders.** The library folder itself and any reference folders are
