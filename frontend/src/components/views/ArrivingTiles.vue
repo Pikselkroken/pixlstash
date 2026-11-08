@@ -4,10 +4,11 @@
 // current view, under one band that carries the stage and the counts. Each
 // tile wears its file's state as a corner mark (never dimming: pending is not
 // disabled), a duplicate says so on the tile with a link to the picture it
-// matched, and when the import commits the band becomes the receipt until Done
-// or the next navigation. State lives in useImportArrivalsStore, written by
-// ImageImporter; this component only draws it.
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+// matched, and when the import commits the band becomes the receipt until Done,
+// the next navigation or import, or its countdown runs out. State lives in
+// useImportArrivalsStore, written by ImageImporter; this component draws it and
+// owns the receipt's countdown.
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 import { useImportArrivalsStore } from "../../stores/useImportArrivalsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
@@ -145,6 +146,114 @@ function hiddenCount(run) {
   return shownTiles(run).length - visibleTiles(run).length;
 }
 
+// ── The receipt's countdown ────────────────────────────────────────────────
+// A landed receipt leaves by itself after this long, draining a hairline as
+// it goes. A dismissal window, not a motion token (the action receipt's is the
+// same kind of value). Hover, focus inside it and a hidden tab pause it
+// (WCAG 2.2.1). It never runs on a receipt that reports files the server could
+// not read, nor once the receipt was used (a chip filtered, the rest shown):
+// those stay until Done.
+const RECEIPT_DWELL_MS = 8000;
+
+/** runId → { hover, focus }: whether the receipt is being read. */
+const beingRead = new Map();
+/** runId → { handle, remaining, startedAt } for each counting receipt. */
+const timers = new Map();
+/** runId → { key, remaining, running }: what each countdown bar draws. */
+const countdowns = ref({});
+let countdownKey = 0;
+let tabHidden = false;
+
+function countsDown(run) {
+  return (
+    run.stage === "landed" &&
+    !run.counts.failed &&
+    !expanded.value[run.id] &&
+    // `in`, not truthiness: a filter toggled back off still means it was used.
+    !(run.id in receiptFilter.value)
+  );
+}
+
+/** Start or stop a receipt's timer to match whether anyone is reading it. */
+function syncTimer(id) {
+  const timer = timers.get(id);
+  if (!timer) return;
+  const held = beingRead.get(id);
+  const run = !tabHidden && !held?.hover && !held?.focus;
+  if (run === (timer.handle !== null)) return;
+  if (run) {
+    timer.startedAt = Date.now();
+    timer.handle = setTimeout(() => arrivals.dismiss(id), timer.remaining);
+  } else {
+    clearTimeout(timer.handle);
+    timer.handle = null;
+    timer.remaining = Math.max(
+      0,
+      timer.remaining - (Date.now() - timer.startedAt),
+    );
+  }
+  // A fresh key restarts the bar from the banked time, so it never drifts
+  // from the timer (its CSS clock keeps moving in a hidden tab).
+  countdowns.value = {
+    ...countdowns.value,
+    [id]: { key: ++countdownKey, remaining: timer.remaining, running: run },
+  };
+}
+
+function setReading(run, how, on) {
+  beingRead.set(run.id, { ...beingRead.get(run.id), [how]: on });
+  syncTimer(run.id);
+}
+
+function onFocusOut(run, event) {
+  // Focus moving between the receipt's own controls is still reading it.
+  if (event.currentTarget?.contains?.(event.relatedTarget)) return;
+  setReading(run, "focus", false);
+}
+
+function countdownStyle(id) {
+  const elapsed = RECEIPT_DWELL_MS - countdowns.value[id].remaining;
+  // The duration goes as a property so the reduced-motion rule can restore it.
+  return {
+    "--arr-dwell": `${RECEIPT_DWELL_MS}ms`,
+    animationDelay: `-${elapsed}ms`,
+  };
+}
+
+watch(
+  () => arrivals.runs.filter(countsDown).map((run) => run.id),
+  (ids) => {
+    for (const [id, timer] of timers) {
+      if (ids.includes(id)) continue;
+      clearTimeout(timer.handle);
+      timers.delete(id);
+    }
+    for (const id of ids) {
+      if (timers.has(id)) continue;
+      timers.set(id, {
+        handle: null,
+        remaining: RECEIPT_DWELL_MS,
+        startedAt: 0,
+      });
+      syncTimer(id);
+    }
+    countdowns.value = Object.fromEntries(
+      Object.entries(countdowns.value).filter(([id]) => timers.has(id)),
+    );
+  },
+  { immediate: true },
+);
+
+function onVisibilityChange() {
+  tabHidden = document.hidden;
+  for (const id of timers.keys()) syncTimer(id);
+}
+
+onMounted(() => {
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  onVisibilityChange();
+});
+
 function toggleFilter(run, chip) {
   if (run.stage !== "landed" || !chip.action) return;
   const current = receiptFilter.value[run.id];
@@ -204,11 +313,17 @@ watch(
       Object.fromEntries(Object.entries(map).filter(([id]) => ids.includes(id)));
     expanded.value = keep(expanded.value);
     receiptFilter.value = keep(receiptFilter.value);
+    for (const id of beingRead.keys()) {
+      if (!ids.includes(id)) beingRead.delete(id);
+    }
   },
 );
 
 onBeforeUnmount(() => {
   broken.value = new Set();
+  document.removeEventListener("visibilitychange", onVisibilityChange);
+  for (const timer of timers.values()) clearTimeout(timer.handle);
+  timers.clear();
 });
 </script>
 
@@ -230,6 +345,10 @@ onBeforeUnmount(() => {
       :class="`arr-run--${run.stage}`"
       :data-arriving-run="run.id"
       :aria-label="`${sectionLabel(run)}: ${stageText(run)}`"
+      @mouseenter="setReading(run, 'hover', true)"
+      @mouseleave="setReading(run, 'hover', false)"
+      @focusin="setReading(run, 'focus', true)"
+      @focusout="onFocusOut(run, $event)"
     >
       <div class="arr-band">
         <span class="arr-label">{{
@@ -287,6 +406,15 @@ onBeforeUnmount(() => {
         >
           {{ run.stage === "error" ? "Dismiss" : "Done" }}
         </AppBarButton>
+        <span
+          v-if="countdowns[run.id]"
+          :key="countdowns[run.id].key"
+          class="arr-countdown"
+          :class="{ 'arr-countdown--paused': !countdowns[run.id].running }"
+          data-testid="arriving-countdown"
+          aria-hidden="true"
+          ><i :style="countdownStyle(run.id)"></i
+        ></span>
       </div>
       <div v-if="run.stage === 'uploading'" class="arr-note">
         <VIcon size="14">mdi-tray-arrow-up</VIcon>
@@ -411,6 +539,7 @@ onBeforeUnmount(() => {
 }
 
 .arr-band {
+  position: relative;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -463,6 +592,44 @@ onBeforeUnmount(() => {
   background: rgb(var(--v-theme-tertiary));
   border-radius: var(--radius-pill);
   transition: width var(--dur-2) var(--ease-standard);
+}
+
+/* The receipt's countdown: the drain hairline along the band's foot. scaleX,
+   never an animated width, so the band does not relayout every frame. The
+   timer in the script is the truth; the delay starts the drain where it is. */
+.arr-countdown {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: var(--countdown-h);
+  border-radius: var(--radius-pill);
+  background: var(--track-trough);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.arr-countdown i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: rgb(var(--v-theme-tertiary));
+  transform-origin: left center;
+  animation-name: arr-drain;
+  animation-duration: var(--arr-dwell);
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.arr-countdown--paused i {
+  animation-play-state: paused;
+}
+
+@keyframes arr-drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
 }
 
 .arr-grow {
@@ -664,6 +831,13 @@ button.arr-chip:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* The drain stays, as the action receipt's does (WCAG 2.3.3): it is the
+     time-left readout, and the global collapse would leave it at empty over a
+     receipt that is still up. */
+  .arr-countdown i {
+    animation-duration: var(--arr-dwell) !important;
+  }
+
   .arr-mark--beat {
     animation-delay: 1.2s;
     animation-duration: 0s;

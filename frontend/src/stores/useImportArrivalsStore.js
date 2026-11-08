@@ -86,9 +86,13 @@ export const useImportArrivalsStore = defineStore("importArrivals", () => {
    * Start a run with a tile per picture file. Returns one key per entry of
    * `files`, in order, to stream beside each file; caption sidecars get a key
    * but no tile, since they are not pictures.
+   *
+   * The new run replaces any finished one's receipt rather than stacking a
+   * second group under it; a run still in flight (the other importer's) stays.
    */
   function begin(runId, files, { bytesTotal = 0 } = {}) {
     remove(runId);
+    dismissFinished();
     const unsupported = reading.refused;
     reading.active = false;
     reading.refused = [];
@@ -237,7 +241,10 @@ export const useImportArrivalsStore = defineStore("importArrivals", () => {
     remove(runId);
   }
 
-  /** The receipt stays until Done or the next navigation. */
+  /**
+   * The receipt stays until Done, the next navigation, the next import, or
+   * the grid's countdown (ArrivingTiles) runs out.
+   */
   function dismissFinished() {
     for (const run of [...runs]) {
       if (run.stage === "landed" || run.stage === "error") remove(run.id);

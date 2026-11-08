@@ -312,7 +312,7 @@ test.describe('picture import', () => {
     await page.unroute('**/pictures/import/staging/*/files')
 
     expect(await done).toMatchObject({ imported_count: 1, duplicate_count: 0 })
-    // The band becomes the receipt and stays until Done.
+    // The band becomes the receipt; Done takes it down before its countdown does.
     await expect(arriving).toContainText('Added just now')
     await expect(arriving).toContainText('1 picture')
     await arriving.getByRole('button', { name: 'Done' }).click()
