@@ -1168,7 +1168,7 @@ Because Docker containers have an isolated filesystem, folders on your host mach
 ```bash
 docker rm -f pixlstash-gpu 2>/dev/null || true
 docker run -d \
-  --runtime nvidia \
+  --gpus all \
   -e HOME=/home/pixlstash \
   -e PIXLSTASH_HOST=0.0.0.0 \
   -p 9537:9537 \
