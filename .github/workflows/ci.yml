@@ -627,6 +627,7 @@ jobs:
           tests/test_openapi_response_schemas.py
           tests/test_operation_log.py
           tests/test_orientation.py
+          tests/test_package_data.py
           tests/test_path_containment.py
           tests/test_pending_score_invalidation.py
           tests/test_picture_is_video.py
