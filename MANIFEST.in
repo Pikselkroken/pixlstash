@@ -15,3 +15,5 @@ include pixlstash/data/workflow_templates.json
 include pixlstash/data/workflow_templates_index.json
 recursive-include pixlstash/data/workflow_templates *.json
 recursive-include pixlstash/data/comfyui-pack *
+recursive-include pixlstash/data/training-presets *.json
+recursive-include pixlstash/data/ai-toolkit-jobs/built-in *.json
