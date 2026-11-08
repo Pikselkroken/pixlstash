@@ -7,15 +7,9 @@ services:
     container_name: pixlstash
     restart: unless-stopped
 
-    # GPU access, the compose form of `docker run --gpus all`.
-    # Requires the NVIDIA Container Toolkit on the host.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # GPU access via nvidia-container-runtime.
+    # Requires: sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+    runtime: nvidia
 
     ports:
       - "9537:9537"
