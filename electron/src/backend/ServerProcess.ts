@@ -12,6 +12,7 @@ import {
   PermissionRepairRequiredError,
 } from './StartupPermissions';
 import { parseUnusableVaultReport, VaultUnusableError } from './VaultRecovery';
+import { LibraryUnavailableError, parseLibraryUnavailableReport } from './LibraryRecovery';
 
 /**
  * One-shot authorisations carried into a relaunch, each standing for a native
@@ -23,6 +24,13 @@ export interface StartupRecovery {
   repairPermissions?: boolean;
   /** Set the unopenable library database aside and start with a new one. */
   recreateVault?: boolean;
+  /**
+   * The uuid of the active library that will not open, which the user chose to
+   * replace with a new library at the configured folder. The old registration
+   * is detached, never deleted; naming the library rather than passing "1"
+   * means the flag can only ever act on the one the screen was showing.
+   */
+  replaceLibrary?: string;
 }
 
 export interface RunningServer {
@@ -224,6 +232,8 @@ export function startupFailureError(
   if (request) return new PermissionRepairRequiredError(request);
   const unusableVault = parseUnusableVaultReport(tail);
   if (unusableVault) return new VaultUnusableError(unusableVault);
+  const unavailable = parseLibraryUnavailableReport(tail);
+  if (unavailable) return new LibraryUnavailableError(unavailable);
   return new Error(startupFailureMessage(code, signal, tail));
 }
 
@@ -373,6 +383,9 @@ export class ServerProcess {
       // and has agreed. The backend renames the old database rather than
       // deleting it, but this is still the one flag that abandons a library.
       PIXLSTASH_RECREATE_VAULT: recovery.recreateVault ? '1' : '0',
+      // Only after "Create a new library" on the recovery screen. Explicitly
+      // empty otherwise, so a parent-shell value never reaches the backend.
+      PIXLSTASH_REPLACE_LIBRARY: recovery.replaceLibrary ?? '',
       // Force the inference device to match this runtime (the bundled env is
       // CPU-only); overrides default_device in the shared on-disk config.
       ...(device ? { PIXLSTASH_DEFAULT_DEVICE: device } : {}),

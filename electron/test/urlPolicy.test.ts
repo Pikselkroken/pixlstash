@@ -306,6 +306,8 @@ const DELIBERATELY_OPEN: Record<string, string> = {
   // ---- Read-only reports about this install ----
   'app:bootstrap': 'read-only: version, detected hardware, bundled/active accel',
   'permissions:request': 'read-only: hands back the repair report main already built',
+  'libraryRecovery:request':
+    'read-only: hands back the missing-library report main already built',
 
   // ---- Registered only while something is waiting for the answer ----
   'permissions:resolve':
@@ -481,7 +483,7 @@ describe('IPC gating is complete, not opt-in', () => {
 
   /** The gate a handler declares for ITS OWN channel, not for a neighbour's. */
   const gateFor = (channel: string) =>
-    new RegExp(`require(?:Setup|App)Renderer\\(event, '${channel}'\\)`);
+    new RegExp(`require(?:Setup|App|LibraryRecovery)Renderer\\(event, '${channel}'\\)`);
 
   it('EVERY channel is gated or written down as deliberately open', () => {
     const ungated = handlers
@@ -536,6 +538,31 @@ describe('IPC gating is complete, not opt-in', () => {
     assert.match(main, /const settle = \(accepted: boolean\) => \{[\s\S]{0,200}?removeHandler/);
   });
 
+  it('EVERY libraryRecovery action is gated on the recovery page, and only while it waits', () => {
+    // These run CLI verbs that change which library opens, and rewrite the
+    // config's image_root. Only the recovery screen may ask, and only while
+    // askLibraryRecovery is waiting - so every one is removed when it settles.
+    const actions = handlers.filter(
+      ([c]) => c.startsWith('libraryRecovery:') && c !== 'libraryRecovery:request',
+    );
+    assert.equal(actions.length, 5, `found ${actions.map(([c]) => c).join(', ')}`);
+    const listStart = main.indexOf('const LIBRARY_RECOVERY_CHANNELS = [');
+    assert.ok(listStart >= 0, 'LIBRARY_RECOVERY_CHANNELS not found');
+    const removalList = main.slice(listStart, main.indexOf('] as const', listStart));
+    for (const [channel, body] of actions) {
+      assert.match(
+        body,
+        new RegExp(`requireLibraryRecoveryRenderer\\(event, '${channel}'\\)`),
+        `${channel} must be gated on the recovery page`,
+      );
+      assert.ok(removalList.includes(`'${channel}'`), `${channel} must be in the removal list`);
+    }
+    assert.match(
+      main,
+      /for \(const channel of LIBRARY_RECOVERY_CHANNELS\) ipcMain\.removeHandler\(channel\)/,
+    );
+  });
+
   it('finds the handlers at all, so an empty sweep cannot pass vacuously', () => {
     const channels = handlers.map(([c]) => c);
     assert.ok(channels.length > 20, `only found ${channels.length} handlers`);
@@ -582,12 +609,17 @@ describe('IPC gating is complete, not opt-in', () => {
     }
   });
 
-  it('both guards read the sending frame rather than the webContents', () => {
+  it('every guard reads the sending frame rather than the webContents', () => {
     // The wizard and the app are the same window behind the same preload, so
     // getURL() alone would report the top document for a frame the page made.
     const guards = main.match(/event\.senderFrame\?\.url \?\? event\.sender\.getURL\(\)/g);
-    assert.equal(guards?.length, 2, 'requireSetupRenderer and requireAppRenderer');
+    assert.equal(
+      guards?.length,
+      3,
+      'requireSetupRenderer, requireAppRenderer and requireLibraryRecoveryRenderer',
+    );
     assert.match(main, /isBundledRendererPage\(sender, RENDERER_DIR, 'setup\.html'\)/);
+    assert.match(main, /isBundledRendererPage\(sender, RENDERER_DIR, 'library-recovery\.html'\)/);
     assert.match(main, /isBackendOrigin\(sender, currentUrl\)/);
   });
 

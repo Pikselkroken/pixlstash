@@ -312,6 +312,29 @@ from setup it is **Choose Another Folder** and returns to the picker, from
 back to the CPU overlay first — the database has nothing to do with the
 accelerator, and retrying there would throw the typed error away.
 
+**The third is an active library that will not open at all** (#2637): its
+folder is gone, its `vault.db` is gone, it cannot be read, or it is a different
+library. The backend prints `PIXLSTASH_LIBRARY_UNAVAILABLE=` and the shell turns
+it into `LibraryUnavailableError` (`backend/LibraryRecovery.ts`). This one gets
+a full window (`renderer/library-recovery.html`) rather than a native box,
+because there are several answers, not one: **Try again** (relaunch, for a
+disconnected drive), **Find it…** (a folder picker, then `libraries relocate
+--same-library` through the CLI while the backend is stopped, so a wrong folder
+is answered on the screen rather than by another failed start), **Open another
+library** (`libraries activate`, only for a library the backend's own report
+offered), and **Create a new library…** (writes only `image_root` into the
+config and relaunches with `PIXLSTASH_REPLACE_LIBRARY=<uuid>`; the backend
+registers the folder the way first run does and then detaches the old
+registration; if that relaunch fails, the previous config is written back). A
+folder that is, contains or is inside the missing library's is refused on the
+screen and again by the backend. The action channels are gated on that page
+(`requireLibraryRecoveryRenderer`) and registered only while it waits. A
+relaunch that fails the same way, or on the chosen folder (a database that
+will not open, a declined permission repair), returns to the screen with a
+note; a permission repair is offered first, as `boot()` does. Only an unrelated
+failure goes to the splash. The overlay fallback is skipped, for the same
+reason as the database case.
+
 Subsequent launches see the config exists → no steps to run → straight into the
 library.
 

@@ -830,6 +830,91 @@ input[type="text"]:focus-visible,
   padding: 11px 22px;
 }
 
+/* Missing-library recovery screen (library-recovery.html). The permission
+   screen's single centred column, with a list of ways out instead of one
+   decision. The drawing is the same folder with a face in place of the lock:
+   strokes only, error ink for the face, so it reads as "missing", not "broken". */
+.recovery-art-folder {
+  stroke: var(--border);
+}
+
+.recovery-art-eye {
+  fill: var(--err);
+  stroke: none;
+}
+
+.recovery-art-mouth {
+  stroke: var(--err);
+}
+
+.recovery-cause {
+  margin: 8px 0 10px;
+  line-height: 1.45;
+}
+
+.recovery-detail {
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.recovery-detail summary {
+  cursor: pointer;
+}
+
+.recovery-detail .repair-path {
+  display: block;
+  margin-top: 6px;
+}
+
+.recovery-actions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.recovery-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.recovery-action > button {
+  flex: none;
+  min-width: 200px;
+  padding: 11px 22px;
+}
+
+/* The alternatives are a list under their own label, not a button row. */
+#others {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.recovery-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.recovery-alternatives {
+  margin: 0;
+}
+
+.recovery-alternative {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+
+.recovery-alternative button {
+  flex: none;
+}
+
 /* ---- The library step: two illustrated answers, then the folder ---------- */
 
 /* One card, one hue. The hue is spent on the border, the drawing and a wash,

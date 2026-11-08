@@ -18,6 +18,7 @@ from pixlstash.hub.db import HUB_FILE_MODE, HubDatabase
 from pixlstash.hub.engine import HubEngine
 from pixlstash.hub.registry import (
     ActiveLibraryError,
+    ForeignLibraryError,
     LibraryError,
     LibraryExistsError,
     LibraryNotFoundError,
@@ -753,6 +754,35 @@ class TestRelocate:
         with pytest.raises(NotAVaultError):
             registry.relocate(library.id, str(empty))
 
+    def test_same_library_relocate_refuses_a_different_library(
+        self, registry, tmp_path
+    ):
+        """ "I found it" must not let another library take over this one's links."""
+        folder = make_vault_folder(tmp_path, "mine")
+        set_vault_uuid(folder, "00000000-0000-4000-8000-0000000000aa")
+        library = registry.attach(folder)
+        other = make_vault_folder(tmp_path, "someone-elses")
+        set_vault_uuid(other, "00000000-0000-4000-8000-0000000000bb")
+
+        with pytest.raises(ForeignLibraryError):
+            registry.relocate(library.id, other, require_same_library=True)
+
+        assert registry.get(library.id).path == library.path
+        # Without the flag the explicit move still goes ahead, as it always has.
+        assert registry.relocate(library.id, other).path == os.path.realpath(other)
+
+    def test_same_library_relocate_accepts_the_library_it_was(self, registry, tmp_path):
+        folder = make_vault_folder(tmp_path, "before")
+        set_vault_uuid(folder, "00000000-0000-4000-8000-0000000000aa")
+        library = registry.attach(folder)
+        moved_to = os.path.join(str(tmp_path), "after")
+        shutil.move(folder, moved_to)
+
+        relocated = registry.relocate(library.id, moved_to, require_same_library=True)
+
+        assert relocated.uuid == library.uuid
+        assert relocated.path == os.path.realpath(moved_to)
+
 
 class TestOverlapDetection:
     def test_nested_library_is_reported_as_overlapping(self, registry, tmp_path):
@@ -852,3 +882,86 @@ class TestCli:
         captured = capsys.readouterr()
         assert code == 0
         assert "overlaps" in captured.err
+
+    def test_activate_makes_another_library_the_one_that_opens(self, tmp_path, capsys):
+        """The way out when the active library is gone and Settings is unreachable."""
+        hub_path = str(tmp_path / "hub.db")
+        first = make_vault_folder(tmp_path, "first")
+        second = make_vault_folder(tmp_path, "second")
+        set_vault_uuid(second, "00000000-0000-4000-8000-0000000000bb")
+        cli_main(["--hub", hub_path, "libraries", "attach", first])
+        cli_main(["--hub", hub_path, "libraries", "attach", second])
+        shutil.rmtree(first)
+        capsys.readouterr()
+
+        code = cli_main(["--hub", hub_path, "libraries", "activate", "second"])
+
+        assert code == 0, capsys.readouterr().err
+        hub = HubDatabase(hub_path)
+        try:
+            registry = LibraryRegistry(hub)
+            assert registry.active_library().path == os.path.realpath(second)
+            # And with the gone one no longer active, it can now be detached.
+            assert not registry.detach("first").attached
+        finally:
+            hub.close()
+
+    def test_activate_refuses_a_library_that_would_not_open(self, tmp_path, capsys):
+        hub_path = str(tmp_path / "hub.db")
+        first = make_vault_folder(tmp_path, "first")
+        second = make_vault_folder(tmp_path, "second")
+        cli_main(["--hub", hub_path, "libraries", "attach", first])
+        cli_main(["--hub", hub_path, "libraries", "attach", second])
+        os.remove(os.path.join(second, "vault.db"))
+        capsys.readouterr()
+
+        code = cli_main(["--hub", hub_path, "libraries", "activate", "second"])
+
+        assert code == 1
+        assert "Nothing was changed." in capsys.readouterr().err
+        hub = HubDatabase(hub_path)
+        try:
+            assert LibraryRegistry(hub).active_library().path == os.path.realpath(first)
+        finally:
+            hub.close()
+        # Refusing must not have created anything where the vault was.
+        assert not os.path.exists(os.path.join(second, "vault.db"))
+
+    def test_activate_refuses_a_foreign_vault(self, tmp_path, capsys):
+        hub_path = str(tmp_path / "hub.db")
+        first = make_vault_folder(tmp_path, "first")
+        second = make_vault_folder(tmp_path, "second")
+        set_vault_uuid(second, "00000000-0000-4000-8000-0000000000bb")
+        cli_main(["--hub", hub_path, "libraries", "attach", first])
+        cli_main(["--hub", hub_path, "libraries", "attach", second])
+        set_vault_uuid(second, "00000000-0000-4000-8000-0000000000cc")
+        capsys.readouterr()
+
+        code = cli_main(["--hub", hub_path, "libraries", "activate", "second"])
+
+        assert code == 1
+        assert "fingerprint conflict" in capsys.readouterr().err
+
+    def test_relocate_same_library_refusal_reaches_the_terminal(self, tmp_path, capsys):
+        hub_path = str(tmp_path / "hub.db")
+        folder = make_vault_folder(tmp_path, "mine")
+        set_vault_uuid(folder, "00000000-0000-4000-8000-0000000000aa")
+        other = make_vault_folder(tmp_path, "other")
+        set_vault_uuid(other, "00000000-0000-4000-8000-0000000000bb")
+        cli_main(["--hub", hub_path, "libraries", "attach", folder])
+        capsys.readouterr()
+
+        code = cli_main(
+            [
+                "--hub",
+                hub_path,
+                "libraries",
+                "relocate",
+                "mine",
+                other,
+                "--same-library",
+            ]
+        )
+
+        assert code == 1
+        assert "different library" in capsys.readouterr().err

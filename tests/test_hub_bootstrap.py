@@ -5,7 +5,9 @@ login still works, share links survive, the library they already had becomes
 library 1, and a lost hub costs preferences rather than pictures.
 """
 
+import json
 import os
+import shutil
 import sqlite3
 import stat
 import threading
@@ -16,8 +18,12 @@ import pytest
 
 from sqlalchemy.exc import NoSuchTableError, OperationalError
 
+from pixlstash import app as app_module
+from pixlstash.hub import bootstrap as bootstrap_module
 from pixlstash.hub.bootstrap import (
+    LIBRARY_REPLACE_ENV,
     HubBootstrapError,
+    LibraryUnavailableError,
     UnusableVaultError,
     bootstrap_hub,
     finalize_opened_library,
@@ -28,7 +34,7 @@ from pixlstash.hub.bootstrap import (
 )
 from pixlstash.hub.db import HubDatabase
 from pixlstash.server import Server
-from pixlstash.hub.registry import LibraryRegistry, read_vault_uuid
+from pixlstash.hub.registry import LibraryError, LibraryRegistry, read_vault_uuid
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 from pixlstash.vault import Vault
 
@@ -1438,6 +1444,388 @@ class TestAVanishedVault:
             bootstrap_hub(kept, hub_path, library_switch_prompt=lambda *_: "no")
 
         assert "Kept" not in str(raised.value)
+
+
+GONE_UUID = "00000000-0000-4000-8000-0000000000bb"
+
+
+class TestTheRecoveryReport:
+    """Every way the active library can fail to open reaches the recovery path.
+
+    The desktop's recovery screen can only offer a way out of a failure it can
+    recognise, so each case has to arrive as a ``LibraryUnavailableError`` that
+    says which case it is - and none of them may leave a vault behind where
+    the library used to be, which is what the fingerprint check prevents.
+    """
+
+    @pytest.fixture
+    def hub_with_two(self, tmp_path):
+        hub_path = str(tmp_path / "hub.db")
+        kept = TestAVanishedVault._stamped(
+            str(tmp_path / "kept"), "00000000-0000-4000-8000-0000000000aa"
+        )
+        gone = TestAVanishedVault._stamped(str(tmp_path / "gone"), GONE_UUID)
+        hub = HubDatabase(hub_path)
+        registry = LibraryRegistry(hub)
+        registry.attach(kept, "Kept")
+        gone_library = registry.attach(gone, "Gone")
+        registry.set_active("Gone")
+        hub.close()
+        return hub_path, kept, gone, gone_library.uuid
+
+    @staticmethod
+    def _active_path(hub_path):
+        hub = HubDatabase(hub_path)
+        try:
+            return LibraryRegistry(hub).active_library().path
+        finally:
+            hub.close()
+
+    def test_a_missing_folder(self, hub_with_two):
+        hub_path, kept, gone, _uuid = hub_with_two
+        shutil.rmtree(gone)
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(kept, hub_path)
+
+        report = raised.value
+        assert report.kind == LibraryUnavailableError.FOLDER_MISSING
+        assert report.library.name == "Gone"
+        assert [lib.name for lib in report.alternatives] == ["Kept"]
+        assert not os.path.exists(gone)
+        assert self._active_path(hub_path) == gone
+
+    def test_a_deleted_vault(self, hub_with_two):
+        hub_path, kept, gone, _uuid = hub_with_two
+        os.remove(os.path.join(gone, "vault.db"))
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(kept, hub_path)
+
+        assert raised.value.kind == LibraryUnavailableError.VAULT_MISSING
+        assert os.listdir(gone) == []
+
+    def test_a_vault_of_a_different_library(self, hub_with_two):
+        hub_path, kept, gone, _uuid = hub_with_two
+        conn = sqlite3.connect(os.path.join(gone, "vault.db"))
+        conn.execute(
+            "UPDATE library_settings SET library_uuid = ?",
+            ("00000000-0000-4000-8000-0000000000cc",),
+        )
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(kept, hub_path)
+
+        assert raised.value.kind == LibraryUnavailableError.FOREIGN
+        assert "fingerprint conflict" in raised.value.reason
+        # Not opened, so not migrated or re-stamped.
+        assert vault_query(gone, "SELECT library_uuid FROM library_settings") == [
+            ("00000000-0000-4000-8000-0000000000cc",)
+        ]
+
+    @pytest.mark.skipif(
+        os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+        reason="needs POSIX file modes and a non-root user to make a file unreadable",
+    )
+    def test_an_unreadable_vault(self, hub_with_two):
+        hub_path, kept, gone, _uuid = hub_with_two
+        vault_path = os.path.join(gone, "vault.db")
+        os.chmod(vault_path, 0)
+        try:
+            with pytest.raises(LibraryUnavailableError) as raised:
+                bootstrap_hub(kept, hub_path)
+        finally:
+            os.chmod(vault_path, 0o600)
+
+        assert raised.value.kind == LibraryUnavailableError.UNREADABLE
+        # A permissions glitch is never offered "start over": the file is kept.
+        assert os.listdir(gone) == ["vault.db"]
+
+    def test_a_vault_that_is_not_a_database_still_asks_first(self, hub_with_two):
+        """Garbage where the vault was is the start-over question, never an
+        automatic new vault."""
+        hub_path, kept, gone, _uuid = hub_with_two
+        with open(os.path.join(gone, "vault.db"), "wb") as handle:
+            handle.write(b"this is not a database at all" * 64)
+
+        with pytest.raises(UnusableVaultError):
+            bootstrap_hub(kept, hub_path)
+
+        assert os.listdir(gone) == ["vault.db"]
+        with open(os.path.join(gone, "vault.db"), "rb") as handle:
+            assert handle.read().startswith(b"this is not a database")
+
+    def test_starting_a_new_library_detaches_the_missing_one(
+        self, hub_with_two, tmp_path, monkeypatch
+    ):
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        shutil.rmtree(gone)
+        fresh = str(tmp_path / "fresh")
+        monkeypatch.setenv(LIBRARY_REPLACE_ENV, gone_uuid)
+
+        result = bootstrap_hub(fresh, hub_path)
+        try:
+            assert result.library.path == os.path.realpath(fresh)
+            assert result.library.is_active
+            assert result.library.name == "fresh"
+            old = LibraryRegistry(result.hub).by_uuid(gone_uuid)
+            # Detached, not forgotten: attaching it later revives its links.
+            assert old is not None and not old.attached and not old.is_active
+        finally:
+            result.engine.close()
+            result.hub.close()
+        assert not os.path.exists(gone)
+
+    def test_a_new_library_is_never_started_where_the_missing_one_was(
+        self, hub_with_two, monkeypatch
+    ):
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        os.remove(os.path.join(gone, "vault.db"))
+        monkeypatch.setenv(LIBRARY_REPLACE_ENV, gone_uuid)
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(gone, hub_path)
+
+        assert "Choose a different folder" in raised.value.reason
+        assert os.listdir(gone) == []
+        assert self._active_path(hub_path) == gone
+
+    @pytest.mark.parametrize("where", ["inside", "parent", "other-library"])
+    def test_a_new_library_never_overlaps_another(
+        self, hub_with_two, tmp_path, monkeypatch, where
+    ):
+        """Inside or around the missing library, or around another one: refused
+        before anything is created."""
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        shutil.rmtree(gone)
+        target = {
+            "inside": os.path.join(gone, "sub"),
+            "parent": str(tmp_path),
+            "other-library": os.path.join(kept, "nested"),
+        }[where]
+        monkeypatch.setenv(LIBRARY_REPLACE_ENV, gone_uuid)
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(target, hub_path)
+
+        assert "Not starting a new library" in raised.value.reason
+        assert not os.path.exists(gone)
+        assert not os.path.exists(os.path.join(kept, "nested"))
+        assert self._active_path(hub_path) == gone
+
+    def test_a_replacement_folder_with_a_broken_vault_comes_back_to_the_screen(
+        self, hub_with_two, tmp_path, monkeypatch
+    ):
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        shutil.rmtree(gone)
+        fresh = tmp_path / "fresh"
+        fresh.mkdir()
+        (fresh / "vault.db").write_bytes(b"not a database" * 64)
+        monkeypatch.setenv(LIBRARY_REPLACE_ENV, gone_uuid)
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(str(fresh), hub_path)
+
+        assert "Could not start a new library" in raised.value.reason
+        assert (fresh / "vault.db").read_bytes().startswith(b"not a database")
+        assert self._active_path(hub_path) == gone
+
+    def test_the_desktop_record_fits_the_shells_output_tail(self, hub_with_two):
+        hub_path, kept, gone, _uuid = hub_with_two
+        shutil.rmtree(gone)
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(kept, hub_path)
+        long = raised.value.alternatives[0]
+        raised.value.alternatives = [
+            SimpleNamespace(id=n, uuid=long.uuid, name=f"lib {n}", path="x" * 900)
+            for n in range(8)
+        ]
+        raised.value.reason = "r" * 3000
+
+        line = app_module._library_unavailable_signal(raised.value)
+
+        assert len(line) <= 3000
+        record = json.loads(line.split("=", 1)[1])
+        assert record["library"]["path"] == gone
+
+    def test_a_new_library_in_a_folder_of_pictures_is_a_pending_import(
+        self, hub_with_two, tmp_path, monkeypatch
+    ):
+        """As on first run: the pictures are offered for import, not a failure."""
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        shutil.rmtree(gone)
+        fresh = tmp_path / "pictures"
+        fresh.mkdir()
+        (fresh / "holiday.jpg").write_bytes(b"not really a jpeg")
+        monkeypatch.setenv(LIBRARY_REPLACE_ENV, gone_uuid)
+
+        result = bootstrap_hub(str(fresh), hub_path)
+        try:
+            assert result.library.path == os.path.realpath(fresh)
+            assert result.library.is_active
+            assert result.library.pending_import_at is not None
+            assert not LibraryRegistry(result.hub).by_uuid(gone_uuid).attached
+        finally:
+            result.engine.close()
+            result.hub.close()
+
+    def test_a_replacement_that_fails_its_check_leaves_the_missing_one_active(
+        self, hub_with_two, tmp_path, monkeypatch
+    ):
+        """The screen that comes back must still describe the registry as it is."""
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        shutil.rmtree(gone)
+        fresh = str(tmp_path / "fresh")
+        monkeypatch.setenv(LIBRARY_REPLACE_ENV, gone_uuid)
+        real_check = bootstrap_module.prevalidate_library_fingerprint
+
+        def check(library):
+            if library.path == os.path.realpath(fresh):
+                raise HubBootstrapError("simulated: the new vault would not verify")
+            return real_check(library)
+
+        monkeypatch.setattr(bootstrap_module, "prevalidate_library_fingerprint", check)
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(fresh, hub_path)
+
+        assert "simulated" in raised.value.reason
+        hub = HubDatabase(hub_path)
+        try:
+            registry = LibraryRegistry(hub)
+            assert registry.active_library().uuid == gone_uuid
+            assert registry.by_uuid(gone_uuid).attached
+            # Rolled back, so it cannot block the next attempt as an overlap.
+            assert not any(
+                lib.path == os.path.realpath(fresh) for lib in registry.list_libraries()
+            )
+        finally:
+            hub.close()
+
+        monkeypatch.setattr(
+            bootstrap_module, "prevalidate_library_fingerprint", real_check
+        )
+        result = bootstrap_hub(fresh, hub_path)
+        try:
+            assert result.library.path == os.path.realpath(fresh)
+            assert result.library.is_active
+        finally:
+            result.engine.close()
+            result.hub.close()
+
+    def test_a_failure_after_switching_puts_the_missing_one_back(
+        self, hub_with_two, tmp_path, monkeypatch
+    ):
+        """Detaching the old library is the last step; if it fails, nothing moved."""
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        shutil.rmtree(gone)
+        fresh = str(tmp_path / "fresh")
+        monkeypatch.setenv(LIBRARY_REPLACE_ENV, gone_uuid)
+        real_detach = LibraryRegistry.detach
+
+        def detach(self, name_or_id):
+            if self.get(name_or_id).uuid == gone_uuid:
+                raise LibraryError("simulated: the hub refused the detach")
+            return real_detach(self, name_or_id)
+
+        monkeypatch.setattr(LibraryRegistry, "detach", detach)
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(fresh, hub_path)
+
+        assert "simulated" in raised.value.reason
+        hub = HubDatabase(hub_path)
+        try:
+            registry = LibraryRegistry(hub)
+            assert registry.active_library().uuid == gone_uuid
+            assert not any(
+                lib.path == os.path.realpath(fresh) for lib in registry.list_libraries()
+            )
+        finally:
+            hub.close()
+
+    def test_an_oversized_record_is_still_emitted_rather_than_hanging(
+        self, hub_with_two
+    ):
+        """A library path too long to ever fit must not loop truncating the reason."""
+        hub_path, kept, gone, _uuid = hub_with_two
+        shutil.rmtree(gone)
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(kept, hub_path)
+        raised.value.library = SimpleNamespace(
+            id=1,
+            uuid=_uuid,
+            name="Gone",
+            path="p" * 4000,
+            vault_path="p" * 4000 + "/vault.db",
+        )
+        raised.value.reason = "r" * 3000
+
+        line = app_module._library_unavailable_signal(raised.value)
+
+        # Whole, so the shell still finds the prefix in its 4000-character tail.
+        assert len(line) <= 3000
+        record = json.loads(line.split("=", 1)[1])
+        assert record["alternatives"] == []
+        assert record["reason"] == "r" * 200 + "…"
+        assert record["library"]["uuid"] == _uuid
+
+    def test_a_refused_new_library_changes_nothing_and_says_why(
+        self, hub_with_two, monkeypatch
+    ):
+        """Picking a folder that is already a library leaves the registry as it was."""
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        shutil.rmtree(gone)
+        monkeypatch.setenv(LIBRARY_REPLACE_ENV, gone_uuid)
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(kept, hub_path)
+
+        assert 'overlaps the library "Kept"' in raised.value.reason
+        hub = HubDatabase(hub_path)
+        try:
+            registry = LibraryRegistry(hub)
+            assert registry.active_library().uuid == gone_uuid
+            assert registry.by_uuid(gone_uuid).attached
+        finally:
+            hub.close()
+
+    def test_the_replacement_names_one_library_only(
+        self, hub_with_two, tmp_path, monkeypatch
+    ):
+        """A value meant for another library - or left in a shell - acts on nothing."""
+        hub_path, kept, gone, _uuid = hub_with_two
+        shutil.rmtree(gone)
+        monkeypatch.setenv(LIBRARY_REPLACE_ENV, "1")
+
+        with pytest.raises(LibraryUnavailableError):
+            bootstrap_hub(str(tmp_path / "fresh"), hub_path)
+
+        assert not os.path.exists(tmp_path / "fresh")
+        assert self._active_path(hub_path) == gone
+
+    def test_the_desktop_record_carries_what_the_screen_needs(self, hub_with_two):
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        shutil.rmtree(gone)
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(kept, hub_path)
+
+        line = app_module._library_unavailable_signal(raised.value)
+        assert line.startswith("PIXLSTASH_LIBRARY_UNAVAILABLE=")
+        assert "\n" not in line
+        record = json.loads(line.split("=", 1)[1])
+        assert record["version"] == 1
+        assert record["kind"] == "folder_missing"
+        assert record["library"]["uuid"] == gone_uuid
+        assert record["library"]["path"] == gone
+        assert [alt["name"] for alt in record["alternatives"]] == ["Kept"]
+
+        text = app_module._format_library_unavailable(raised.value)
+        assert "libraries relocate" in text and "--same-library" in text
+        assert "libraries activate" in text
+        assert "Nothing was created or changed" in text
 
 
 class TestLosingTheHub:

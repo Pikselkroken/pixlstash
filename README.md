@@ -349,6 +349,7 @@ pixlstash-cli libraries create /path/to/new-library --name "New library"
 pixlstash-cli libraries attach /path/to/existing-library --name "Existing library"
 pixlstash-cli libraries rename "Existing library" "Better name"
 pixlstash-cli libraries relocate "Existing library" /new/path
+pixlstash-cli libraries activate "Existing library"
 pixlstash-cli libraries detach "Existing library"
 pixlstash-cli libraries backup "Existing library" /path/to/backups/
 pixlstash-cli libraries backup "Existing library" /path/to/backups/monday.tar.zst
@@ -361,14 +362,20 @@ pixlstash-cli libraries restore /path/to/backups/monday.tar.zst /path/to/new-lib
 | `create` | Creates the folder, starts an empty library in it, and registers it. |
 | `attach` | Registers a library folder that already exists on disk. |
 | `rename` | Changes the display name. Nothing on disk moves. |
-| `relocate` | Points an existing registration at a new path, keeping its identity and share links. |
+| `relocate` | Points an existing registration at a new path, keeping its identity and share links. `--same-library` refuses a folder holding any other library. |
+| `activate` | Makes a library the one PixlStash opens next time it starts. For when the active library is missing and the server will not start; run it with PixlStash stopped. |
 | `detach` | Forgets a library. **No files are removed and nothing inside the folder changes.** |
 | `backup` | Writes the library and the hub to a single archive. |
 | `restore` | Unpacks an archive into a **new** folder and makes it the library that opens. |
 
 Notes worth knowing before you need them:
 
-- `detach` refuses the **active** library. Switch to another one first.
+- `detach` refuses the **active** library. Switch to another one first (in
+  Settings, or with `activate` while PixlStash is stopped).
+- If the active library's folder is deleted, moved or on a drive that is not
+  connected, PixlStash will not start, and says so with the exact commands to
+  `relocate` it, `activate` another one, or `create` a new one. Nothing is
+  created in the old folder. The desktop app shows the same choices as buttons.
 - Reattaching the same folder revives its original registration, including its
   share links, because a library carries a fingerprint of its own identity.
 - A backup is a **zstd-compressed tar**, named `.tar.zst` — not `.tar.gz`.

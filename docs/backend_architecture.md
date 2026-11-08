@@ -315,7 +315,7 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | [pixlstash/pixl_logging.py](../pixlstash/pixl_logging.py) | Uvicorn log config + coloured formatter. |
 | [pixlstash/stacking.py](../pixlstash/stacking.py) | Picture stacking (duplicates / variants). |
 | [pixlstash/image_loading_dataset_prepper.py](../pixlstash/image_loading_dataset_prepper.py) | Dataset preparation utilities for offline training scripts. |
-| [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (list/create/attach/detach/relocate/backup/prepare-legacy-identity/rename) and `plugins` (install/test/list/remove). Only the `libraries` group opens the hub — see §8.1. |
+| [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (list/create/attach/detach/relocate/activate/backup/restore/prepare-legacy-identity/rename) and `plugins` (install/test/list/remove). Only the `libraries` group opens the hub — see §8.1. |
 | [pixlstash/mcp_server.py](../pixlstash/mcp_server.py) | MCP server (`pixlstash-mcp`, stdio). An HTTP client of a running server: every tool is a fixed request on an existing route, sent with the token in `PIXLSTASH_TOKEN`, so token scope is enforced by the auth middleware and the authz gate (§16), not here. No routes of its own. Read tools are `GET`s; `--allow-write` adds the workflow tools (list, graph export/import, preflight, run), all owner-only routes, so they need an `ALL` token. The export and import tools also write and read a JSON file on this machine: the handoff to ComfyUI's own MCP server, whose tools take workflows by path. |
 | [pixlstash/plugin_install.py](../pixlstash/plugin_install.py) | Backs `pixlstash-cli plugins available/install/list/remove`. Classifies a plugin source with `ast` (never by importing it), resolves the destination, and copies it; also lists what the plugins repository publishes. See §8.1. |
 | [pixlstash/plugin_check.py](../pixlstash/plugin_check.py) | Backs `pixlstash-cli plugins test`. The one plugin verb that *does* import, through the server's own loader, and the only place the parameter schema is checked against what the UI renders. See §8.1. |
@@ -2450,6 +2450,48 @@ with the attached libraries that do open named in the error and offered in an
 interactive terminal: an unmounted external drive looks exactly like an empty
 folder, and a fresh vault inside the mount point would lock the real library
 out once the drive came back.
+
+**That refusal is a recovery path, not a dead end** (#2637). The Settings pane
+that changes the active library needs the server the refusal stops, so the
+refusal itself carries the way out. `_offer_a_usable_library` raises
+`LibraryUnavailableError` (a `HubBootstrapError`) naming the library, a `kind`
+read from the filesystem as it is now — `folder_missing`, `vault_missing`,
+`unreadable`, or `foreign` (`prevalidate_library_fingerprint` raises
+`LibraryFingerprintConflictError` for a readable vault that is another library)
+— the reason, and the attached libraries that pass the same read-only check.
+`app.main` prints what is missing, the likely cause and every way out as
+copy-pasteable commands (`cli_hint`), and for Electron a final
+`PIXLSTASH_LIBRARY_UNAVAILABLE=` JSON line the shell turns into its recovery
+screen (`electron/src/backend/LibraryRecovery.ts`). The ways out:
+
+- **Find it**: `pixlstash-cli libraries relocate <id> <folder> --same-library`.
+  `--same-library` (`LibraryRegistry.relocate(require_same_library=True)`)
+  refuses a folder whose vault carries another fingerprint, so a wrong pick
+  cannot inherit this library's share links; without it a mismatch is only
+  logged, as before.
+- **Open another library**: `pixlstash-cli libraries activate <library>`, which
+  refuses a detached, pending, unreachable or fingerprint-conflicted target so
+  it never swaps one dead end for another. Meant for a stopped server; while
+  one runs, the Settings switch is the one that drains and reloads.
+- **Create a new library**: `PIXLSTASH_REPLACE_LIBRARY=<uuid of the broken
+  library>` on the next start, with `image_root` pointed at the new folder.
+  `_replace_unavailable_library` registers that folder through
+  `_register_first_library` — the first-run path, so a folder of pictures
+  becomes a pending import — makes it active, and only then detaches the old
+  registration (kept, so attaching it later revives its links). Before writing
+  anything it refuses a folder that is, contains or is inside the missing
+  library's path (case-folded where the filesystem folds it): that is the empty
+  vault the fingerprint check exists to prevent. It also refuses one
+  overlapping any other registered library or a watch or reference folder,
+  which first run never had to check on an empty hub. Every refusal, and a
+  folder whose own `vault.db` will not open, comes back as
+  `LibraryUnavailableError` with the reason, so the screen returns rather than
+  the app ending. A uuid rather than `1`, so a value left in a shell cannot act
+  on a library it was not meant for.
+- **Try again**, for a drive that was only disconnected.
+
+None of them deletes a file, and none creates a vault where the missing
+library was.
 
 **A vault that is present but will not open is a question, not a crash.** It is
 the third case beside "gone" and "fine", and it used to be neither: `attach`
