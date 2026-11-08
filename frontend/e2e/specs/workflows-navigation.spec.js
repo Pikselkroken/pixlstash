@@ -229,6 +229,8 @@ const row = (page, id) => page.locator(`.wfv-row[data-key="${id}"]`);
 const selected = (page) => page.locator('.wfv-row[aria-selected="true"]');
 const rail = (page) => page.getByRole("complementary", { name: "Inspector" });
 const strip = (page) => page.getByRole("region", { name: "Active filters" });
+// A window whose toolbar is wide enough to keep the filter chips (#2629).
+const WIDE = { width: 1920, height: 1080 };
 const notices = (page) => page.locator(".wfv-note");
 const verbs = (page) => page.getByTestId("wf-verbs");
 
@@ -464,6 +466,9 @@ test.describe("sort, filters and search", () => {
   });
 
   test("a Filters menu row narrows the cards to a chip, and Clear all restores them", async ({ page }) => {
+    // Wide enough that the chips stay in the bar: below its 960px rung they
+    // are left to the Filter menu (#2629, "a narrow bar" below).
+    await page.setViewportSize(WIDE);
     await openGrid(page);
     // Named "Filter", and "1 Filter" with its badge.
     const filter = page.getByRole("button", { name: /^(\d+ )?Filter$/ });
@@ -494,6 +499,7 @@ test.describe("sort, filters and search", () => {
   });
 
   test("the name search narrows to a chip, and an empty result offers Clear all", async ({ page }) => {
+    await page.setViewportSize(WIDE);
     await openGrid(page);
     const search = page.getByRole("textbox", { name: "Search workflows by name" });
 
@@ -507,6 +513,47 @@ test.describe("sort, filters and search", () => {
     await empty.getByRole("button", { name: "Clear all" }).click();
     await expect.poll(() => order(page)).toEqual([PORTRAIT, LANDSCAPE, ANIME]);
     await expect(search).toHaveValue("");
+  });
+
+  test("a narrow bar leaves the chips to the Filter menu and folds Sort into the ⋯ (#2629)", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1024, height: 800 });
+    await openGrid(page);
+    const bar = page.locator(".wfv-toolbar");
+    const filter = page.getByRole("button", { name: /^(\d+ )?Filter$/ });
+
+    // Sort has left the bar for the ⋯, which stands in its place.
+    await expect(page.getByRole("button", { name: /^Sort:/ })).toBeHidden();
+    const more = bar.getByRole("button", { name: "More actions" });
+    await expect(more).toBeVisible();
+
+    // A filter in force: lit and counted on the button, no chip in the bar,
+    // and the menu's own header carries Clear all.
+    await page.getByRole("textbox", { name: "Search workflows by name" }).fill("golden");
+    await expect.poll(() => order(page)).toEqual([LANDSCAPE]);
+    await expect(strip(page)).toBeHidden();
+    await expect(filter).toHaveAccessibleName("1 Filter");
+    await filter.click();
+    await page.locator(".wff-root").getByRole("button", { name: "Clear all" }).click();
+    await page.keyboard.press("Escape");
+    await expect.poll(() => order(page)).toEqual([PORTRAIT, LANDSCAPE, ANIME]);
+
+    // The ⋯ sorts: a key, then the other direction.
+    await more.click();
+    await page.getByRole("menuitemradio", { name: "Name" }).click();
+    await expect.poll(() => order(page)).toEqual([ANIME, LANDSCAPE, PORTRAIT]);
+    await more.click();
+    await page.getByRole("menuitemradio", { name: "Z to A" }).click();
+    await expect.poll(() => order(page)).toEqual([PORTRAIT, LANDSCAPE, ANIME]);
+
+    // Nothing in the bar runs past its right edge: the rail toggle is the
+    // last control, and it ends inside the bar.
+    const edges = await bar.evaluate((element) => {
+      const toggle = element.querySelector(".tb-stats-btn").getBoundingClientRect();
+      return { bar: element.getBoundingClientRect().right, toggle: toggle.right };
+    });
+    expect(edges.toggle).toBeLessThanOrEqual(edges.bar);
   });
 
   test("favourites lead, the Favourites place narrows to them, and a reload keeps them", async ({

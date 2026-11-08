@@ -28,7 +28,7 @@
              the menu trigger. -->
         <template #activator="{ props: menuProps }">
           <div
-            class="bar-split-button"
+            class="bar-split-button wfv-sort"
             :class="{ 'bar-split-button--open': sortMenuOpen }"
             role="group"
             aria-label="Sort"
@@ -97,6 +97,87 @@
         </div>
       </v-menu>
 
+      <!-- The ⋯, standing where Sort stood: in a narrow bar (#2629) the
+           split-button leaves and its two choices land here as rows, the sort
+           key and then the direction, in the shown tab's own words. Fold = CSS
+           both ways (`.wfv-sort` and `.wfv-overflow` swap at the `wfvbar`
+           rung below), so nothing here measures. It opens rightward because
+           it sits at the bar's left edge. -->
+      <TbOverflowMenu
+        class="wfv-overflow"
+        align="start"
+        data-testid="wfv-overflow"
+      >
+        <template #default="{ close }">
+          <!-- A group, so the heading names its rows and is not a stray
+               child of the menu. -->
+          <div role="group" aria-labelledby="wfv-overflow-sort-label">
+            <div id="wfv-overflow-sort-label" class="section-label ctx-label">
+              Sort by
+            </div>
+            <button
+              v-for="option in onTemplates ? templateSortOptions : sortOptions"
+              :key="option.id"
+              type="button"
+              role="menuitemradio"
+              class="ctx-item"
+              :aria-checked="option.id === activeSortKey ? 'true' : 'false'"
+              data-testid="wfv-overflow-sort"
+              @click="
+                setSortKey(option.id);
+                close();
+              "
+            >
+              <span class="ctx-label-text">{{ option.label }}</span>
+              <v-icon v-if="option.id === activeSortKey" class="ctx-check"
+                >mdi-check</v-icon
+              >
+            </button>
+          </div>
+          <div class="ctx-sep" role="separator"></div>
+          <button
+            v-for="direction in SORT_DIRECTIONS"
+            :key="direction"
+            type="button"
+            role="menuitemradio"
+            class="ctx-item"
+            :aria-checked="direction === activeDirection ? 'true' : 'false'"
+            data-testid="wfv-overflow-direction"
+            @click="
+              setSortDirection(direction);
+              close();
+            "
+          >
+            <v-icon class="ctx-icon">{{ directionIcon(direction) }}</v-icon>
+            <span class="ctx-label-text">{{ directionLabel(direction) }}</span>
+            <v-icon v-if="direction === activeDirection" class="ctx-check"
+              >mdi-check</v-icon
+            >
+          </button>
+          <!-- The Sort panel's Favourites first box, Mine's alone there too. -->
+          <template v-if="!onTemplates">
+            <div class="ctx-sep" role="separator"></div>
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              class="ctx-item"
+              :aria-checked="store.favouritesLead ? 'true' : 'false'"
+              data-testid="wfv-overflow-favourites"
+              @click="
+                store.setFavouritesLead(!store.favouritesLead);
+                close();
+              "
+            >
+              <v-icon class="ctx-icon">mdi-heart-outline</v-icon>
+              <span class="ctx-label-text">Favourites first</span>
+              <v-icon v-if="store.favouritesLead" class="ctx-check"
+                >mdi-check</v-icon
+              >
+            </button>
+          </template>
+        </template>
+      </TbOverflowMenu>
+
       <!-- The hidden inputs: *Choose thumbnail…* from the card menu (one image
            for one card), and the workflow file picker, which the empty state's
            button and the sidebar's Add workflow (`addRequest`) both open. -->
@@ -141,7 +222,9 @@
             :open="filterMenuOpen"
             aria-haspopup="menu"
             :aria-expanded="filterMenuOpen"
-            >Filter</AppBarButton
+            :aria-label="filterCount ? `${filterCount} Filter` : 'Filter'"
+            tooltip="Filter"
+            ><span class="wfv-filter-label">Filter</span></AppBarButton
           >
         </template>
         <WorkflowTemplateFilterMenu v-if="onTemplates" :open="filterMenuOpen" />
@@ -555,6 +638,7 @@ import { isInternalImageDrag, isWorkflowFile } from "../../utils/media";
 import { outputNoun } from "../../utils/workflowCard";
 import FilterStrip from "../panels/FilterStrip.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
+import TbOverflowMenu from "../panels/TbOverflowMenu.vue";
 import WorkflowFilterMenu from "../panels/WorkflowFilterMenu.vue";
 import WorkflowRecipesTab from "../panels/WorkflowRecipesTab.vue";
 import WorkflowSelectionBar from "../panels/WorkflowSelectionBar.vue";
@@ -695,6 +779,26 @@ const sortDirectionIcon = computed(() =>
 function toggleSortDirection() {
   if (onTemplates.value) templates.toggleSortDirection();
   else store.toggleSortDirection();
+}
+
+// The ⋯'s sort rows (a narrow bar folds the split-button into them): the
+// shown tab's key, and each direction in that key's own words.
+const SORT_DIRECTIONS = ["asc", "desc"];
+const activeSortKey = computed(() =>
+  onTemplates.value ? templates.sortKey : store.sortKey,
+);
+function setSortKey(key) {
+  if (onTemplates.value) templates.setSortKey(key);
+  else store.setSortKey(key);
+}
+function setSortDirection(direction) {
+  if (direction !== activeDirection.value) toggleSortDirection();
+}
+function directionLabel(direction) {
+  return activeSort.value.words[direction === "asc" ? 0 : 1];
+}
+function directionIcon(direction) {
+  return direction === "asc" ? "mdi-sort-ascending" : "mdi-sort-descending";
 }
 
 /** The Filters button's badge: the filters the shown tab has on. */
@@ -2124,7 +2228,13 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: var(--space-4);
   container-type: inline-size;
-  container-name: shelfbar toolbar;
+  container-name: wfvbar shelfbar toolbar;
+  /* The containment `container-type` brings makes this bar a stacking
+     context, so the ⋯'s panel can rise no higher than the bar itself; lifted
+     to the sticky-toolbar layer, it opens over the cards' badges and selection
+     wash (`--z-raised`) rather than under them. */
+  position: relative;
+  z-index: var(--z-sticky);
   box-sizing: border-box;
   flex: none;
   height: 36px;
@@ -2184,6 +2294,51 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: var(--space-3);
   flex: 0 0 auto;
+}
+
+/* ── The ladder (#2629) ─────────────────────────────────────────────────────
+
+   Every member of this bar is `nowrap`, and with a filter or two on it ran
+   out of room well before the window got small: the chips scrolled inside a
+   sliver and the tail was pushed at the edge. So it gives in steps, cheapest
+   first, and never touches the app-wide tail (undo, the rail toggle).
+
+   The queries are 24px under the bar's outer width: `container-type:
+   inline-size` queries the CONTENT box, and the inset is `0 --space-3 0
+   --space-5`. `wfvbar` is this bar's own name; `toolbar` is the shared one
+   UndoControl writes its own steps against (redo and History drop at 420 and
+   480). The ⋯ is hidden above its rung. */
+.wfv-toolbar .wfv-overflow {
+  display: none;
+}
+
+/* Rung 1. The active filters leave the bar and are left to the Filter menu,
+   which carries the same "N of M" and Clear all in its header; the button
+   keeps its badge and its lit state, so a filter in force is still said. */
+@container wfvbar (max-width: 960px) {
+  .wfv-toolbar .wfv-strip {
+    display: none;
+  }
+}
+
+/* Rung 2. Sort folds into the ⋯, which takes its place at the left edge:
+   the biggest single bite on the bar. 700 leaves room for the longest
+   sort label ("Recently changed") beside a lit Filter and the tail. */
+@container wfvbar (max-width: 700px) {
+  .wfv-toolbar .wfv-sort {
+    display: none;
+  }
+  .wfv-toolbar .wfv-overflow {
+    display: flex;
+  }
+}
+
+/* Rung 3. Filter keeps its funnel and badge and drops its word; its name
+   stays in its `aria-label`. */
+@container wfvbar (max-width: 480px) {
+  .wfv-filter-label {
+    display: none;
+  }
 }
 
 /* The pill's container: its words drop below this width (WorkflowSelectionBar's
