@@ -1,6 +1,7 @@
-name: HuggingFace model cache
+name: Model cache
 description: >-
-  Restore (default) or save the HuggingFace model set the backend tests load.
+  Restore (default) or save the model set the backend tests load: the
+  HuggingFace models plus the InsightFace face pack.
   The single source of truth for the cache's paths and key: every job restores,
   and exactly one job — `warm_models` in ci.yml — saves.
 
@@ -39,7 +40,7 @@ outputs:
 runs:
   using: composite
   steps:
-    # Two distinct on-disk locations, both required:
+    # Four on-disk locations, all required:
     #  * ~/.cache/huggingface — the HF hub cache used by CLIP, SBert and
     #    Florence.
     #  * ~/.local/share/pixlstash/downloaded_models — platformdirs
@@ -52,6 +53,14 @@ runs:
     #    a `runner.os` branch so there stays exactly ONE path list and ONE key
     #    expression; `actions/cache` skips a path that does not exist, so each
     #    OS simply ignores the other's.
+    #  * ~/.insightface/models — InsightFace's default root
+    #    (DEFAULT_INSIGHTFACE_ROOT in pixlstash/utils/insightface_model_utils.py),
+    #    the same on both OSes. FaceAnalysis downloads buffalo_l there from a
+    #    GitHub release asset when it is missing; with that asset unreachable,
+    #    face extraction never finished and every test waiting on it errored
+    #    (run 42467486129, backend-windows shard 3: 110 download attempts, none
+    #    completed). Only `models/` is cached, not the whole root, so nothing
+    #    else InsightFace might write there ends up in the entry.
     # A warm cache makes needs_download() (a pure file-existence check) return
     # False, so download() is never issued; and for the models that have no such
     # check, a cache hit lets huggingface_hub fall back to the cached file when
@@ -62,7 +71,12 @@ runs:
     # previous set warm across unrelated commits, so a bust only costs the
     # delta.
     #
-    # `-v2-` is a manual bust, and it is not decoration. `actions/cache` writes
+    # `-v3-` is a manual bust, and it is not decoration. (v2 -> v3 added
+    # ~/.insightface/models.) The face pack's name lives in
+    # pixlstash/utils/insightface_model_utils.py (DEFAULT_MODEL_PACK), which is
+    # NOT hashed: that file is mostly relocation and backoff logic, and hashing
+    # it would re-warm both entries on every unrelated edit. Changing the
+    # default pack therefore needs a bump of this literal too. `actions/cache` writes
     # only on a key MISS and `warm_models*` skips its save on a hit, so widening
     # the path list alone can never reach an entry that keeps hitting: the
     # Windows entry saved without `downloaded_models` would have gone on hitting
@@ -79,7 +93,8 @@ runs:
           ~/.cache/huggingface
           ~/.local/share/pixlstash/downloaded_models
           ~/AppData/Local/pixlstash/pixlstash/downloaded_models
-        key: hf-models-${{ runner.os }}-v2-${{ hashFiles('pixlstash/tagger_plugins/clip_service.py', 'pixlstash/tagger_plugins/sbert.py', 'pixlstash/tagger_plugins/wd14.py', 'pixlstash/tagger_plugins/pixlstash_tagger.py', 'pixlstash/tagger_plugins/florence2.py', 'scripts/prefetch_ci_models.py') }}
+          ~/.insightface/models
+        key: hf-models-${{ runner.os }}-v3-${{ hashFiles('pixlstash/tagger_plugins/clip_service.py', 'pixlstash/tagger_plugins/sbert.py', 'pixlstash/tagger_plugins/wd14.py', 'pixlstash/tagger_plugins/pixlstash_tagger.py', 'pixlstash/tagger_plugins/florence2.py', 'scripts/prefetch_ci_models.py') }}
         restore-keys: hf-models-${{ runner.os }}-
 
     - name: Save the model cache
@@ -90,4 +105,5 @@ runs:
           ~/.cache/huggingface
           ~/.local/share/pixlstash/downloaded_models
           ~/AppData/Local/pixlstash/pixlstash/downloaded_models
+          ~/.insightface/models
         key: ${{ inputs.key }}
