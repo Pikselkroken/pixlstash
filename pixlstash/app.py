@@ -213,6 +213,9 @@ LIBRARY_UNAVAILABLE_PREFIX = "PIXLSTASH_LIBRARY_UNAVAILABLE="
 # record has to arrive whole. A hub with more attached libraries than this
 # still names them all in the human text above it.
 _MAX_REPORTED_ALTERNATIVES = 8
+# Under the shell's 4000-character output tail, with room for a log line or
+# two released after it by ``hold_log_output``.
+_MAX_SIGNAL_CHARS = 3000
 
 
 def _describe_library(library) -> dict:
@@ -225,22 +228,41 @@ def _describe_library(library) -> dict:
 
 
 def _library_unavailable_signal(exc: LibraryUnavailableError) -> str:
-    """The single-line record the desktop shell turns into its recovery screen."""
+    """The single-line record the desktop shell turns into its recovery screen.
 
-    return LIBRARY_UNAVAILABLE_PREFIX + json.dumps(
-        {
-            "version": 1,
-            "kind": exc.kind,
-            "library": _describe_library(exc.library),
-            "vault_path": exc.library.vault_path,
-            "reason": exc.reason,
-            "alternatives": [
-                _describe_library(other)
-                for other in exc.alternatives[:_MAX_REPORTED_ALTERNATIVES]
-            ],
-        },
-        separators=(",", ":"),
-    )
+    Kept under :data:`_MAX_SIGNAL_CHARS`: the shell keeps only the last 4000
+    characters of our output, and a record whose prefix falls off the front no
+    longer parses - which is the dead end this record exists to remove. Long
+    paths cost alternatives first (the screen still offers every other way
+    out), then the length of the reason.
+    """
+
+    alternatives = [
+        _describe_library(other)
+        for other in exc.alternatives[:_MAX_REPORTED_ALTERNATIVES]
+    ]
+    reason = exc.reason
+    while True:
+        line = LIBRARY_UNAVAILABLE_PREFIX + json.dumps(
+            {
+                "version": 1,
+                "kind": exc.kind,
+                "library": _describe_library(exc.library),
+                "vault_path": exc.library.vault_path,
+                "reason": reason,
+                "alternatives": alternatives,
+            },
+            separators=(",", ":"),
+        )
+        if len(line) <= _MAX_SIGNAL_CHARS:
+            return line
+        if alternatives:
+            alternatives.pop()
+        elif len(reason) > 200:
+            reason = reason[:200] + "…"
+        else:
+            # Only the library's own path is left to blame; send it anyway.
+            return line
 
 
 def _format_library_unavailable(exc: LibraryUnavailableError) -> str:

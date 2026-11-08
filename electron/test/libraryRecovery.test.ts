@@ -137,6 +137,17 @@ describe('the recovery actions', () => {
     assert.ok(!isSameOrInside('/home/me/Downloads', report.library.path, 'linux'));
   });
 
+  it('folds case where the filesystem does, and only there', () => {
+    const upper = '/home/me/Downloads/MY-LIBRARY/sub';
+    assert.ok(isSameOrInside(upper, report.library.path, 'darwin'));
+    assert.ok(isSameOrInside(upper, report.library.path, 'win32'));
+    assert.ok(!isSameOrInside(upper, report.library.path, 'linux'));
+  });
+
+  it('carries the backend reason in the error message for paths that show only that', () => {
+    assert.match(new LibraryUnavailableError(report).message, /unable to open database file/);
+  });
+
   it('points the config at the new folder and keeps every other setting', () => {
     const before = JSON.stringify({ host: '127.0.0.1', port: 9537, image_root: '/home/me/old' });
     const after = JSON.parse(withImageRoot(before, '/home/me/new')) as Record<string, unknown>;

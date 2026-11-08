@@ -13,7 +13,7 @@ import {
   Tray,
 } from 'electron';
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { cp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { homedir, networkInterfaces } from 'node:os';
@@ -1201,7 +1201,22 @@ let pendingLibraryRecovery: { report: LibraryUnavailableReport; notice: string |
   null;
 
 /** What the person chose on the recovery screen; each one ends in a relaunch or a quit. */
-type LibraryRecoveryChoice = { quit: true } | { quit: false; recovery: StartupRecovery };
+type LibraryRecoveryChoice =
+  | { quit: true }
+  | {
+      quit: false;
+      recovery: StartupRecovery;
+      /** The config as it was before "Create" changed `image_root`, to put back if that fails. */
+      previousConfig?: string;
+    };
+
+/** Replace the server config in one rename, so a crash cannot leave half a file. */
+function writeServerConfigAtomically(text: string): void {
+  const target = serverConfigPath();
+  const staging = `${target}.recovery-${process.pid}.tmp`;
+  writeFileSync(staging, text);
+  renameSync(staging, target);
+}
 
 const LIBRARY_RECOVERY_CHANNELS = [
   'libraryRecovery:find',
@@ -1307,23 +1322,26 @@ async function askLibraryRecovery(
     });
     const folder = result.canceled ? null : result.filePaths[0];
     if (!folder) return { ok: false, canceled: true };
-    if (isSameOrInside(folder, report.library.path)) {
+    if (isSameOrInside(folder, report.library.path) || isSameOrInside(report.library.path, folder)) {
       return {
         ok: false,
         message:
-          `That is where "${report.library.name}" belongs. A new library there would hide it ` +
-          'if the folder comes back, so choose a different folder.',
+          `That folder is, contains or is inside where "${report.library.name}" belongs. A new ` +
+          'library there would hide it if the folder comes back, so choose a different folder.',
       };
     }
+    let previousConfig: string;
     try {
       // Only `image_root` changes; the port, remote access and every other
       // setting the person chose stay as they were. The active library still
-      // wins over this until the relaunch below replaces it.
-      writeFileSync(serverConfigPath(), withImageRoot(readFileSync(serverConfigPath(), 'utf8'), folder));
+      // wins over this until the relaunch below replaces it, and if the
+      // backend refuses the folder the old config is put back.
+      previousConfig = readFileSync(serverConfigPath(), 'utf8');
+      writeServerConfigAtomically(withImageRoot(previousConfig, folder));
     } catch (error) {
       return failed(error);
     }
-    settle({ quit: false, recovery: { replaceLibrary: report.library.uuid } });
+    settle({ quit: false, recovery: { replaceLibrary: report.library.uuid }, previousConfig });
     return { ok: true };
   });
 
@@ -1368,15 +1386,50 @@ async function recoverUnavailableLibrary(first: LibraryUnavailableError): Promis
     }
     // The splash shows the start-up progress while the backend relaunches.
     await mainWindow?.loadFile(join(__dirname, 'renderer', 'index.html'));
+    let recovery = choice.recovery;
+    let failure: unknown = null;
     try {
-      await retryLaunch(choice.recovery);
+      await retryLaunch(recovery);
       return null;
     } catch (retryError) {
-      if (!isLibraryUnavailable(retryError)) return retryError;
-      current = retryError;
+      failure = retryError;
+    }
+    // A folder the person picked that needs the permission repair gets the
+    // same offer boot() makes, once, before anything else.
+    if (isPermissionRepairRequired(failure) && (await offerPermissionRepair(failure))) {
+      recovery = { ...recovery, repairPermissions: true };
+      await mainWindow?.loadFile(join(__dirname, 'renderer', 'index.html'));
+      try {
+        await retryLaunch(recovery);
+        return null;
+      } catch (retryError) {
+        failure = retryError;
+      }
+    }
+    if (choice.previousConfig !== undefined) {
+      // "Create" did not take: the config goes back to naming the library it
+      // named before, so a later lost hub cannot register the abandoned folder.
+      try {
+        writeServerConfigAtomically(choice.previousConfig);
+      } catch (restoreError) {
+        console.error(`[recovery] could not restore the server config: ${String(restoreError)}`);
+      }
+    }
+    if (isLibraryUnavailable(failure)) {
+      current = failure;
       notice =
         'PixlStash tried again and still could not open a library. ' +
-        (retryError.report.reason || '');
+        (failure.report.reason || '');
+    } else if (isPermissionRepairRequired(failure) || isVaultUnusable(failure)) {
+      // Both are about the folder just chosen, not the missing library, so the
+      // way forward is still one of this screen's other choices.
+      notice = isVaultUnusable(failure)
+        ? `That folder holds a library database PixlStash cannot open (${failure.report.reason}). ` +
+          'Nothing was changed. Choose another folder.'
+        : 'That folder needs its permissions repaired before PixlStash will open it. ' +
+          'Nothing was changed.';
+    } else {
+      return failure;
     }
   }
 }

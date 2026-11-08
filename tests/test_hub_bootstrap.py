@@ -1591,6 +1591,64 @@ class TestTheRecoveryReport:
         assert os.listdir(gone) == []
         assert self._active_path(hub_path) == gone
 
+    @pytest.mark.parametrize("where", ["inside", "parent", "other-library"])
+    def test_a_new_library_never_overlaps_another(
+        self, hub_with_two, tmp_path, monkeypatch, where
+    ):
+        """Inside or around the missing library, or around another one: refused
+        before anything is created."""
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        shutil.rmtree(gone)
+        target = {
+            "inside": os.path.join(gone, "sub"),
+            "parent": str(tmp_path),
+            "other-library": os.path.join(kept, "nested"),
+        }[where]
+        monkeypatch.setenv(LIBRARY_REPLACE_ENV, gone_uuid)
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(target, hub_path)
+
+        assert "Not starting a new library" in raised.value.reason
+        assert not os.path.exists(gone)
+        assert not os.path.exists(os.path.join(kept, "nested"))
+        assert self._active_path(hub_path) == gone
+
+    def test_a_replacement_folder_with_a_broken_vault_comes_back_to_the_screen(
+        self, hub_with_two, tmp_path, monkeypatch
+    ):
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        shutil.rmtree(gone)
+        fresh = tmp_path / "fresh"
+        fresh.mkdir()
+        (fresh / "vault.db").write_bytes(b"not a database" * 64)
+        monkeypatch.setenv(LIBRARY_REPLACE_ENV, gone_uuid)
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(str(fresh), hub_path)
+
+        assert "Could not start a new library" in raised.value.reason
+        assert (fresh / "vault.db").read_bytes().startswith(b"not a database")
+        assert self._active_path(hub_path) == gone
+
+    def test_the_desktop_record_fits_the_shells_output_tail(self, hub_with_two):
+        hub_path, kept, gone, _uuid = hub_with_two
+        shutil.rmtree(gone)
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(kept, hub_path)
+        long = raised.value.alternatives[0]
+        raised.value.alternatives = [
+            SimpleNamespace(id=n, uuid=long.uuid, name=f"lib {n}", path="x" * 900)
+            for n in range(8)
+        ]
+        raised.value.reason = "r" * 3000
+
+        line = app_module._library_unavailable_signal(raised.value)
+
+        assert len(line) <= 3000
+        record = json.loads(line.split("=", 1)[1])
+        assert record["library"]["path"] == gone
+
     def test_a_refused_new_library_changes_nothing_and_says_why(
         self, hub_with_two, monkeypatch
     ):
@@ -1602,7 +1660,7 @@ class TestTheRecoveryReport:
         with pytest.raises(LibraryUnavailableError) as raised:
             bootstrap_hub(kept, hub_path)
 
-        assert "Could not start a new library" in raised.value.reason
+        assert 'overlaps the library "Kept"' in raised.value.reason
         hub = HubDatabase(hub_path)
         try:
             registry = LibraryRegistry(hub)

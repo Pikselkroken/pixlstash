@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 import hashlib
 import json
 import re
@@ -822,13 +823,26 @@ def _unavailable_kind(library: Library, failure: HubBootstrapError) -> str:
     return LibraryUnavailableError.UNREADABLE
 
 
-def _is_same_or_inside(path: str, folder: str) -> bool:
-    """True when *path* is *folder* or somewhere beneath it."""
+def _same_folder_key(path: str) -> str:
+    """*path* as the filesystem compares it: case-folded where names fold.
+
+    ``realpath`` does not settle case for a folder that no longer exists, so a
+    missing ``Photos/Lib`` and a typed ``photos/lib`` must still read as one
+    folder on Windows and macOS.
+    """
+    path = os.path.normcase(os.path.normpath(path))
+    return path.casefold() if sys.platform == "darwin" else path
+
+
+def _folders_overlap(first: str, second: str) -> bool:
+    """True when either folder is the other or contains it."""
+    a, b = _same_folder_key(first), _same_folder_key(second)
     try:
-        return os.path.commonpath([path, folder]) == folder
+        common = os.path.commonpath([a, b])
     except ValueError:
         # Different drives on Windows: never the same folder.
         return False
+    return common in (a, b)
 
 
 def _replace_unavailable_library(
@@ -840,52 +854,70 @@ def _replace_unavailable_library(
     """Start a new library at the configured folder, as a first run would.
 
     Asked for by :data:`LIBRARY_REPLACE_ENV`, i.e. by a person on the recovery
-    screen. The new library is registered and made active *before* the old one
-    is detached, so a refusal on the way (the folder is already a registered
-    library, say) leaves the registry exactly as it was. The old registration
-    is detached rather than forgotten: its uuid, share links and tokens are
-    kept, and attaching or relocating it later brings them back. Nothing in
-    either folder is deleted.
+    screen. The old registration is detached rather than forgotten: its uuid,
+    share links and tokens are kept, and attaching or relocating it later
+    brings them back. Nothing in either folder is deleted.
 
-    Refuses a folder that is, or is inside, the one the missing library was
-    registered at. A new vault there is the one outcome the fingerprint check
-    exists to prevent - when the drive comes back, the real library would be
-    shadowed by an empty one.
+    Every refusal below is checked before anything is written, and each one is
+    raised as :class:`LibraryUnavailableError` so the recovery screen comes
+    back with the reason rather than the app ending on a start-up error. The
+    new library is made active before the old one is detached, so a failure
+    late in the registration leaves the missing library active and attached
+    (though the new folder may by then exist, empty).
+
+    Refused folders:
+
+    * one that is, contains, or sits inside the missing library's folder. A new
+      vault there is the one outcome the fingerprint check exists to prevent -
+      when the drive comes back, the real library would be shadowed or nested.
+    * one overlapping any other registered library, or a watch or reference
+      folder. First run reaches ``_register_first_library`` on an empty hub,
+      where none of these can exist; here the hub is populated.
     """
-    resolved = resolve_path(configured_image_root) if configured_image_root else ""
-    if not resolved or _is_same_or_inside(resolved, library.path):
-        raise LibraryUnavailableError(
+
+    def refuse(reason: str) -> LibraryUnavailableError:
+        logger.error(
+            "Not starting a new library in place of %s (%s): %s",
+            library.name,
+            library.path,
+            reason,
+        )
+        return LibraryUnavailableError(
             library,
             unavailable.kind,
-            f"Not starting a new library in {resolved or 'an unnamed folder'}: "
-            f'that is where "{library.name}" belongs, and a new library there '
-            "would hide it if the folder comes back. Choose a different folder.",
+            reason,
             unavailable.alternatives,
             registry.hub_path,
         )
+
+    resolved = resolve_path(configured_image_root) if configured_image_root else ""
+    if not resolved or _folders_overlap(resolved, library.path):
+        raise refuse(
+            f"Not starting a new library in {resolved or 'an unnamed folder'}: "
+            f'it is, contains or is inside where "{library.name}" belongs, and a '
+            "new library there would hide it if the folder comes back. Choose a "
+            "different folder."
+        )
+    others = [
+        other
+        for other in registry.list_libraries()
+        if other.id != library.id and _folders_overlap(resolved, other.path)
+    ]
+    if others:
+        raise refuse(
+            f"Not starting a new library in {resolved}: it overlaps the library "
+            f'"{others[0].name}" at {others[0].path}. Choose a folder of its own, '
+            "or open that library instead."
+        )
     try:
+        registry.refuse_overlapping_watch_or_reference_folder(resolved)
         replacement = _register_first_library(
             registry, resolved, name=os.path.basename(resolved) or "Library 1"
         )
         replacement = registry.set_active(replacement.id)
         registry.detach(library.id)
-    except LibraryError as exc:
-        logger.error(
-            "Could not start a new library at %s in place of %s (%s): %s",
-            resolved,
-            library.name,
-            library.path,
-            exc,
-        )
-        # Still the recovery case, so the screen comes back with the reason
-        # rather than the app ending on a start-up error.
-        raise LibraryUnavailableError(
-            library,
-            unavailable.kind,
-            f"Could not start a new library in {resolved}: {exc}",
-            unavailable.alternatives,
-            registry.hub_path,
-        ) from exc
+    except (LibraryError, UnusableVaultError, OSError) as exc:
+        raise refuse(f"Could not start a new library in {resolved}: {exc}") from exc
     logger.warning(
         "Started a new library at %s in place of %s, which could not be opened "
         "at %s (%s). The old registration is detached, not deleted; nothing in "

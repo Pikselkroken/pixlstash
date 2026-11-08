@@ -325,12 +325,15 @@ library** (`libraries activate`, only for a library the backend's own report
 offered), and **Create a new library…** (writes only `image_root` into the
 config and relaunches with `PIXLSTASH_REPLACE_LIBRARY=<uuid>`; the backend
 registers the folder the way first run does and then detaches the old
-registration). A folder that is, or is inside, the missing library's is refused
-on the screen and again by the backend. The action channels are gated on that
-page (`requireLibraryRecoveryRenderer`) and registered only while it waits. A
-relaunch that fails the same way returns to the screen with a note; any other
-failure goes to the splash as before, and so does skipping the overlay
-fallback, for the same reason as the database case.
+registration; if that relaunch fails, the previous config is written back). A
+folder that is, contains or is inside the missing library's is refused on the
+screen and again by the backend. The action channels are gated on that page
+(`requireLibraryRecoveryRenderer`) and registered only while it waits. A
+relaunch that fails the same way, or on the chosen folder (a database that
+will not open, a declined permission repair), returns to the screen with a
+note; a permission repair is offered first, as `boot()` does. Only an unrelated
+failure goes to the splash. The overlay fallback is skipped, for the same
+reason as the database case.
 
 Subsequent launches see the config exists → no steps to run → straight into the
 library.

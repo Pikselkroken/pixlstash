@@ -10,7 +10,7 @@
  * turns it into a recovery screen with a way out.
  */
 import { execFile } from 'node:child_process';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { posix, win32 } from 'node:path';
 import { promisify } from 'node:util';
 
 export const LIBRARY_UNAVAILABLE_PREFIX = 'PIXLSTASH_LIBRARY_UNAVAILABLE=';
@@ -47,7 +47,9 @@ export interface LibraryUnavailableReport {
 /** A backend startup failure the recovery screen can offer a way out of. */
 export class LibraryUnavailableError extends Error {
   constructor(public readonly report: LibraryUnavailableReport) {
-    super(`PixlStash could not open the library "${report.library.name}".`);
+    // The backend's reason travels in the message too, for the launch paths
+    // (first-run setup, a runtime switch) that show it rather than the screen.
+    super(`PixlStash could not open the library "${report.library.name}": ${report.reason}`);
     this.name = 'LibraryUnavailableError';
   }
 }
@@ -113,9 +115,12 @@ export function parseLibraryUnavailableReport(output: string): LibraryUnavailabl
  * backend refuses it too; this is so the screen can say so before a relaunch.
  */
 export function isSameOrInside(path: string, folder: string, platform = process.platform): boolean {
+  // The platform's own path rules, not the host's: a test can then exercise
+  // all three, and the comparison never depends on where it happens to run.
+  const paths = platform === 'win32' ? win32 : posix;
   const fold = (p: string) => (platform === 'win32' || platform === 'darwin' ? p.toLowerCase() : p);
-  const rel = relative(fold(resolve(folder)), fold(resolve(path)));
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  const rel = paths.relative(fold(paths.resolve(folder)), fold(paths.resolve(path)));
+  return rel === '' || (!rel.startsWith('..') && !paths.isAbsolute(rel));
 }
 
 /** `server-config.json` with `image_root` pointed at *imageRoot*, everything else kept. */

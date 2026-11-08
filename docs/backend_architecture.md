@@ -2478,10 +2478,16 @@ screen (`electron/src/backend/LibraryRecovery.ts`). The ways out:
   `_replace_unavailable_library` registers that folder through
   `_register_first_library` — the first-run path, so a folder of pictures
   becomes a pending import — makes it active, and only then detaches the old
-  registration (kept, so attaching it later revives its links). It refuses a
-  folder that is, or is inside, the missing library's path: that is the empty
-  vault the fingerprint check exists to prevent. A uuid rather than `1`, so a
-  value left in a shell cannot act on a library it was not meant for.
+  registration (kept, so attaching it later revives its links). Before writing
+  anything it refuses a folder that is, contains or is inside the missing
+  library's path (case-folded where the filesystem folds it): that is the empty
+  vault the fingerprint check exists to prevent. It also refuses one
+  overlapping any other registered library or a watch or reference folder,
+  which first run never had to check on an empty hub. Every refusal, and a
+  folder whose own `vault.db` will not open, comes back as
+  `LibraryUnavailableError` with the reason, so the screen returns rather than
+  the app ending. A uuid rather than `1`, so a value left in a shell cannot act
+  on a library it was not meant for.
 - **Try again**, for a drive that was only disconnected.
 
 None of them deletes a file, and none creates a vault where the missing
