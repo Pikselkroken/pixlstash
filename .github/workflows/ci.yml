@@ -130,12 +130,36 @@ jobs:
       # `npm run lint` is `tsc --noEmit`. `npm test` compiles with
       # tsconfig.test.json, which only covers src/ + test/; the lint pass is
       # what type-checks the main-process build as electron-builder will.
+      # Electron's install script fetches its binary from a GitHub release on
+      # every `npm ci`, and a 504 there has failed this job with nothing wrong
+      # in the tree (runs 42467486129 and 42469975695). @electron/get looks in
+      # ~/.cache/electron first and verifies the zip against the checksums
+      # shipped inside the npm package, so a restored zip installs with no
+      # network at all. Keyed on the lockfile, which pins the Electron version.
+      # Restore always; save only from a branch push, for the cache-budget
+      # reason given at `warm_models`.
+      - name: Restore the Electron binary cache
+        id: electron-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('electron/package-lock.json') }}
+
       - name: Test Electron shell
         working-directory: electron
         run: |
           npm ci
           npm run lint
           npm test
+
+      - name: Save the Electron binary cache
+        if: >-
+          success() && steps.electron-cache.outputs.cache-hit != 'true'
+          && github.event_name == 'push'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/electron
+          key: ${{ steps.electron-cache.outputs.cache-primary-key }}
 
       - name: Install telemetry Worker dependencies
         working-directory: website/telemetry-worker
