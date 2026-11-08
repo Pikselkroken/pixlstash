@@ -8,10 +8,31 @@ tags, scores and organises large picture collections. Connect ComfyUI to
 generate and edit pictures, and AI-toolkit to train LoRAs. Every model runs on
 your own machine.
 
-PixlStash is first of all a desktop app for Windows, macOS (Apple Silicon) and
-Linux. The same server also runs headless, from Docker or pip, with the full
-interface in a browser, and that version is maintained alongside the desktop
-app.
+PixlStash is first of all a desktop app. The headless server, with the full
+interface in a browser, is maintained alongside it.
+
+## Install or try PixlStash
+
+<p align="center">
+  <a href="https://pixlstash.dev/install.html">
+    <img src="website/assets/install-banner.svg" alt="Install PixlStash" width="320"/>
+  </a>
+  &nbsp;
+  <a href="https://demo.pixlstash.dev?token=o75qQ-w0fy_FraPb2sdxcGOVTBoKFmmZwStycljomSs">
+    <img src="website/assets/demo-banner.svg" alt="Try the Demo" width="320"/>
+  </a>
+</p>
+
+PixlStash is available as a **native desktop app for Windows, macOS (Apple
+Silicon), and Linux** (no Python or browser tab required), as a Docker image, or
+as a pip package that runs anywhere Python does (including Intel Macs). The
+desktop app ships a ready-to-run CPU runtime,
+so it works offline out of the box, and auto-detects your hardware to offer
+optional GPU acceleration (NVIDIA CUDA, or experimental AMD ROCm), which it
+installs on demand straight from PyPI / PyTorch.
+
+Detailed installation instructions on <a href="http://pixlstash.dev/install.html">pixlstash.dev</a>.
+
 
 ## The 2.0 layout
 
@@ -222,29 +243,6 @@ though it works as a home server too:
 
 Full breakdown, including a capability-by-capability comparison table:
 [pixlstash.dev/ai.html](https://pixlstash.dev/ai.html).
-
-## Install or try PixlStash
-
-<p align="center">
-  <a href="https://pixlstash.dev/install.html">
-    <img src="website/assets/install-banner.svg" alt="Install PixlStash" width="320"/>
-  </a>
-  &nbsp;
-  <a href="https://demo.pixlstash.dev?token=o75qQ-w0fy_FraPb2sdxcGOVTBoKFmmZwStycljomSs">
-    <img src="website/assets/demo-banner.svg" alt="Try the Demo" width="320"/>
-  </a>
-</p>
-
-PixlStash is available as a **native desktop app for Windows, macOS (Apple
-Silicon), and Linux** (no Python or browser tab required), as a Docker image, or
-as a pip package that runs anywhere Python does (including Intel Macs). The
-desktop app ships a ready-to-run CPU runtime,
-so it works offline out of the box, and auto-detects your hardware to offer
-optional GPU acceleration (NVIDIA CUDA, or experimental AMD ROCm), which it
-installs on demand straight from PyPI / PyTorch.
-
-Detailed installation instructions on <a href="http://pixlstash.dev/install.html">pixlstash.dev</a>.
-
 
 ## First run and data location
 
