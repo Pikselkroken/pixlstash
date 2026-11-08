@@ -4,9 +4,9 @@
 </p>
 
 PixlStash is an image library for photographers and creators. It searches,
-tags, scores and organises large picture collections. With ComfyUI and
-AI-toolkit beside it, it also makes and edits pictures and trains LoRAs from
-the ones you keep. Every model runs on your own machine.
+tags, scores and organises large picture collections. Connect ComfyUI to
+generate and edit pictures, and AI-toolkit to train LoRAs. Every model runs on
+your own machine.
 
 PixlStash is first of all a desktop app for Windows, macOS (Apple Silicon) and
 Linux. The same server also runs headless, from Docker or pip, with the full
