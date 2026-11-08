@@ -69,27 +69,46 @@ const wrapEl = ref(null);
 const triggerEl = ref(null);
 const panelEl = ref(null);
 
+/**
+ * Whether a row is drawn. A host's container queries can hide a slotted row
+ * while its bar button is still on the bar, and focusing a hidden element is
+ * a silent no-op. `checkVisibility` where the engine has it (every browser
+ * and Electron this ships in); the row's own computed `display` otherwise.
+ *
+ * @param {HTMLElement} el
+ * @returns {boolean}
+ */
+function isDrawn(el) {
+  if (typeof el.checkVisibility === "function") return el.checkVisibility();
+  return getComputedStyle(el).display !== "none";
+}
+
 function toggle() {
   if (open.value) {
-    close({ focusTrigger: false });
+    // Focus went into the panel when it opened, so closing must hand it back
+    // to the trigger, or it falls to <body> with the panel it was in.
+    close();
     return;
   }
   open.value = true;
-  // Focus goes into the menu as it opens, onto the row holding the current
-  // value if one is checked, else the first row, so the arrows work at once.
+  // Focus goes into the menu as it opens, onto the drawn row holding the
+  // current value if one is checked, else the first drawn row, so the arrows
+  // work at once. The panel itself only when no row is drawn.
   nextTick(() => {
     const panel = panelEl.value;
+    const rows = panel
+      ? [...panel.querySelectorAll(".ctx-item")].filter(isDrawn)
+      : [];
     const row =
-      panel?.querySelector('.ctx-item[aria-checked="true"]') ??
-      panel?.querySelector(".ctx-item");
+      rows.find((el) => el.getAttribute("aria-checked") === "true") ?? rows[0];
     (row ?? panel)?.focus?.();
   });
 }
 
 /**
  * Dismiss the panel. Escape (and a row's own close) return focus to the
- * trigger so the keyboard never has to hunt for where it went; the trigger's
- * own toggle click keeps focus where the click put it.
+ * trigger so the keyboard never has to hunt for where it went, and so does
+ * the trigger's own toggle click (focus is in the panel by then).
  */
 function close({ focusTrigger = true } = {}) {
   if (!open.value) return;
