@@ -26217,6 +26217,7 @@ def test_a_layout_never_holds_what_a_workflow_may_not(a_persons_lora):
     assert r.status_code == 200 and r.json()["unchanged"] is True, r.text
     assert _opened(env, env.manual, all_stages="true")["editor"] is None
     r = _put_graph(env, env.manual, picked, editor=_editor(nodes=[loader]))
+    assert r.status_code == 200, r.text
     assert _opened(env, env.manual, all_stages="true")["editor"] is not None
 
     # The person's LoRA back in an ordinary loader: no layout is kept.

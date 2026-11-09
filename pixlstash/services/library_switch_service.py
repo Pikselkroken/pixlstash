@@ -24,7 +24,6 @@ worse, a plausible answer from the wrong library.
 from __future__ import annotations
 
 import os
-import pathlib
 import shutil
 import threading
 from contextlib import contextmanager
@@ -61,10 +60,6 @@ _BUSY_MESSAGE = (
     "Another library switch, or a move of pictures between libraries, is "
     "already in progress. Try again in a moment."
 )
-
-# Where the vault's Alembic revisions live. Used to answer "is this vault newer
-# than this build?" without opening it for migration.
-_MIGRATIONS_DIR = pathlib.Path(__file__).resolve().parent.parent / "migrations/versions"
 
 
 class SwitchState(str, Enum):
