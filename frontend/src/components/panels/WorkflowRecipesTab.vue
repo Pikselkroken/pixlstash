@@ -135,7 +135,7 @@
               >
                 {{ expanded[`r:${recipe.id}`] ? "Fewer" : `+${hidden[`r:${recipe.id}`]} more` }}
               </button>
-              <p v-if="recipe.prompt" class="wfrt-prompt">{{ recipe.prompt }}</p>
+              <p v-if="recipe.prompt" class="wfrt-prompt">{{ promptPreview(recipe.prompt) }}</p>
             </div>
           </div>
         </li>
@@ -328,7 +328,7 @@
                   >
                     {{ expanded[`r:${recipe.id}`] ? "Fewer" : `+${hidden[`r:${recipe.id}`]} more` }}
                   </button>
-                  <p v-if="recipe.prompt" class="wfrt-prompt">{{ recipe.prompt }}</p>
+                  <p v-if="recipe.prompt" class="wfrt-prompt">{{ promptPreview(recipe.prompt) }}</p>
 
                   <div class="wfrt-bot">
                     <!-- On the card, not in its ⋯ menu, where nobody found it.
@@ -431,11 +431,11 @@
                     >
                       {{ expanded[`l:${look.key}`] ? "Fewer" : `+${hidden[`l:${look.key}`]} more` }}
                     </button>
-                    <p v-if="look.prompt" class="wfrt-prompt">{{ look.prompt }}</p>
+                    <p v-if="look.prompt" class="wfrt-prompt">{{ promptPreview(look.prompt) }}</p>
                   </template>
 
                   <template v-else>
-                    <p v-if="look.prompt" class="wfrt-prompt">{{ look.prompt }}</p>
+                    <p v-if="look.prompt" class="wfrt-prompt">{{ promptPreview(look.prompt) }}</p>
                     <div v-if="look.loras?.length" class="wfrt-chips">
                       <span
                         v-for="(lora, slot) in look.loras"
@@ -553,6 +553,7 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
+import { promptPreview } from "../../utils/jsonPrompt";
 import { lookLoraDiff, recipeDiff } from "../../utils/recipeDiff";
 import { loraKey, promptKey } from "../../utils/recipeKey";
 import { resolveRecipeLoras } from "../../utils/recipeLoras";
