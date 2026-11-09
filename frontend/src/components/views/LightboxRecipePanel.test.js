@@ -249,6 +249,30 @@ describe("LightboxRecipePanel", () => {
     expect(copyText).toHaveBeenCalledWith(RECIPE.positive_prompt);
   });
 
+  it("draws a JSON prompt as its fields and still copies the raw text", async () => {
+    const json = JSON.stringify({
+      summary: { caption: "A reference sheet." },
+      items: [{ caption: "Panel 1.", bbox: [1, 2, 3, 4] }],
+    });
+    const wrapper = render({ recipe: { ...RECIPE, positive_prompt: json } });
+    const rows = wrapper
+      .findAll(".recipe-prompt-row")
+      .map((row) => row.findAll("span").map((span) => span.text()));
+    expect(rows).toEqual([
+      ["Summary"],
+      ["Caption", "A reference sheet."],
+      ["Items"],
+      ["Caption", "Panel 1."],
+      ["Bbox", "1, 2, 3, 4"],
+    ]);
+    expect(wrapper.text()).not.toContain('{"summary"');
+    const promptHeading = wrapper
+      .findAll(".recipe-sec")
+      .find((sec) => sec.text().startsWith("Prompt"));
+    await promptHeading.find(".recipe-sec-act").trigger("click");
+    expect(copyText).toHaveBeenCalledWith(json);
+  });
+
   // The v1.12 design drops the raw graph; it is kept because pasting a
   // workflow into ComfyUI and saving the JSON are both real uses of it. It is
   // fetched only when the box is opened: it is the one large thing here, and

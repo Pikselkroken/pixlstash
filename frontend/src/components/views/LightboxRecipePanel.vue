@@ -79,7 +79,28 @@
               <v-icon size="14">mdi-content-copy</v-icon>
             </button>
           </div>
-          <p class="recipe-prompt">{{ recipe.positive_prompt }}</p>
+          <!-- A JSON prompt is drawn as its fields, not its braces. The copy
+               button above still copies the raw text, which is what a re-run
+               or a paste into ComfyUI needs. -->
+          <div v-if="promptRows" class="recipe-prompt recipe-prompt--fields">
+            <p
+              v-for="(row, index) in promptRows"
+              :key="index"
+              class="recipe-prompt-row"
+              :class="{ 'recipe-prompt-row--divider': row.divider }"
+              :style="{ '--prompt-depth': Math.min(row.depth, 3) }"
+            >
+              <span v-if="row.key" class="recipe-prompt-key">{{
+                row.key
+              }}</span>
+              <span
+                v-if="row.text"
+                :class="{ 'recipe-prompt-numbers': row.numeric }"
+                >{{ row.text }}</span
+              >
+            </p>
+          </div>
+          <p v-else class="recipe-prompt">{{ recipe.positive_prompt }}</p>
         </template>
 
         <!-- Models. A chip that reached a shelf row is a link to it; one that
@@ -386,6 +407,7 @@ import { errorMessage } from "../../utils/apiError";
 import { isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
 import { saveJsonAs } from "../../utils/downloadFile";
+import { promptOutline } from "../../utils/jsonPrompt";
 import { formatStrength } from "../../utils/loraChain";
 import { deriveModelName, quantBadge } from "../../utils/modelShelf";
 import { keepsTheSameLook } from "../../utils/recipeKey";
@@ -574,6 +596,7 @@ watch(
 );
 
 const models = computed(() => props.recipe?.modelSlots || []);
+const promptRows = computed(() => promptOutline(props.recipe?.positive_prompt));
 
 // ── Saved recipes: does one of them already keep this look? ─────────────────
 //
@@ -1146,6 +1169,38 @@ async function copyPrompt() {
   line-height: 1.45;
   color: rgb(var(--v-theme-on-dark-surface));
   overflow-wrap: anywhere;
+}
+
+.recipe-prompt--fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.recipe-prompt-row {
+  margin: 0;
+  padding-left: calc(var(--prompt-depth, 0) * var(--space-4));
+}
+
+.recipe-prompt-row--divider {
+  margin-top: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
+}
+
+/* The field name sits on its own line above its value, quieter than it. */
+.recipe-prompt-key {
+  display: block;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+/* Coordinates and other number lists: data, not prose. */
+.recipe-prompt-numbers {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
 }
 
 .recipe-chip-row {
