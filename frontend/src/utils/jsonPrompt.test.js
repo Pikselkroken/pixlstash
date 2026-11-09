@@ -21,6 +21,22 @@ describe("promptOutline", () => {
     expect(promptOutline("{}")).toBeNull();
   });
 
+  it("leaves bare lists as typed", () => {
+    expect(promptOutline("[1]")).toBeNull();
+    expect(promptOutline('["fur", "snow"]')).toBeNull();
+  });
+
+  it("gives up, without throwing, on JSON too deep or too big to outline", () => {
+    // Deep enough to overflow an unguarded recursive walk.
+    expect(promptOutline("[".repeat(5000) + "]".repeat(5000))).toBeNull();
+    expect(promptOutline('{"a":'.repeat(13) + '"x"' + "}".repeat(13))).toBeNull();
+    expect(promptOutline('{"a":'.repeat(12) + '"x"' + "}".repeat(12))).not.toBeNull();
+    const many = Object.fromEntries(
+      Array.from({ length: 500 }, (_, i) => [`k${i}`, "v"]),
+    );
+    expect(promptOutline(JSON.stringify(many))).toBeNull();
+  });
+
   it("outlines a captioner's JSON by field, entry by entry", () => {
     expect(promptOutline(CAPTIONED)).toEqual([
       { depth: 0, key: "Summary", text: null },
@@ -58,5 +74,6 @@ describe("promptPreview", () => {
   it("returns plain text unchanged", () => {
     expect(promptPreview("a castle on a hill")).toBe("a castle on a hill");
     expect(promptPreview(null)).toBe("");
+    expect(promptPreview('{"bbox": [1, 2, 3, 4]}')).toBe('{"bbox": [1, 2, 3, 4]}');
   });
 });
