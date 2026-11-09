@@ -2742,6 +2742,7 @@ def probe_comfyui(url: str, timeout: float = 2.0) -> dict:
 # the torch device first, the allocator last.
 _SHARED_MEMORY_DEVICES = {"cpu": "CPU", "mps": "Apple silicon"}
 _DEVICE_NAME_RE = re.compile(r"^(?:\w+:\d+\s+)?(.*?)(?:\s+:\s+\S+)?$")
+_DEVICE_NAME_MAX = 200
 
 
 def _comfyui_device(devices) -> tuple[str | None, int | None]:
@@ -2757,7 +2758,9 @@ def _comfyui_device(devices) -> tuple[str | None, int | None]:
     # Both report the machine's RAM as vram_total.
     if first.get("type") in _SHARED_MEMORY_DEVICES:
         return _SHARED_MEMORY_DEVICES[first["type"]], None
-    name = _DEVICE_NAME_RE.match(str(first.get("name") or "").strip()).group(1)
+    # Capped first: the regex is quadratic on a long run of spaces (CodeQL #137).
+    raw_name = str(first.get("name") or "")[:_DEVICE_NAME_MAX].strip()
+    name = _DEVICE_NAME_RE.match(raw_name).group(1)
     total = first.get("vram_total")
     # JSON allows NaN and Infinity, which int() refuses; a size at or below
     # zero is an error state, not a card.
