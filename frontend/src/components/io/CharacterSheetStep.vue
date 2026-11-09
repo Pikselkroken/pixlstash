@@ -714,7 +714,12 @@ async function use() {
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
   }
   working.value = false;
-  if (alive) emit("done", ids);
+  if (!alive) return;
+  // Back on the sheets for a return through the step row, none chosen: this
+  // one is used.
+  phase.value = "pick";
+  chosen.value = null;
+  emit("done", ids);
 }
 
 const canDraw = computed(

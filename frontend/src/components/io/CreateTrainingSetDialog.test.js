@@ -735,6 +735,12 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
       .find((b) => b.text() === "New only");
     await newOnly.trigger("click");
     expect(shownIds(wrapper)).toEqual(["/thumb/601.webp"]);
+
+    // Back to Sheets through the step row: the step is live, not left filing.
+    await wrapper.find("button.cts-stp__s").trigger("click");
+    expect(wrapper.find('[data-testid="cs-main"]').isVisible()).toBe(true);
+    expect(button(wrapper, "Draw 4 more").attributes("disabled")).toBeUndefined();
+    expect(wrapper.findAll('[data-testid="cs-sheet"]').every((b) => b.attributes("aria-pressed") === "false")).toBe(true);
     wrapper.unmount();
   });
 
