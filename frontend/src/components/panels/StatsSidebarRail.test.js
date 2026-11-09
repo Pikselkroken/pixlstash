@@ -815,6 +815,10 @@ describe("one picture's Recipe tab", () => {
     expect(tabNames(wrapper)).toEqual(["Info", "Recipe"]);
     expect(wrapper.find(".recipe-stub").exists()).toBe(false);
     expect(infoShown(wrapper)).toBe(true);
+    // Info inks the lightbox's dark-surface parts in this theme's colours.
+    expect(wrapper.find(".rail-picture").classes()).toContain(
+      "dark-inks-on-theme",
+    );
 
     await tab(wrapper, "Recipe").trigger("click");
     const panel = wrapper.find(".recipe-stub");
@@ -839,6 +843,49 @@ describe("one picture's Recipe tab", () => {
       pictureIds: [7],
       pickWorkflow: true,
     });
+  });
+
+  it("offers no Use as input in a read-only session", async () => {
+    sessionContext.value = { is_owner: false, scope: "READ" };
+    try {
+      const wrapper = mountRail();
+      await select(wrapper, [7]);
+      await tab(wrapper, "Recipe").trigger("click");
+      wrapper.findComponent(".recipe-stub").vm.$emit("use-as-input");
+      expect(useRunDialogStore().source).toBe(null);
+    } finally {
+      sessionContext.value = null;
+    }
+  });
+
+  it("shows nothing, not the last recipe or a false empty state, during the next read", async () => {
+    let answerNine;
+    getPictureRecipe.mockImplementation((id) =>
+      id === 9
+        ? new Promise((resolve) => (answerNine = resolve))
+        : Promise.resolve(RECIPES[id]),
+    );
+    const wrapper = mountRail();
+    await select(wrapper, [7]);
+    await tab(wrapper, "Recipe").trigger("click");
+    await select(wrapper, [9]);
+    expect(tabNames(wrapper)).toEqual(["Info", "Recipe"]);
+    expect(wrapper.find(".recipe-stub").exists()).toBe(false);
+    answerNine(RECIPES[9]);
+    await flush();
+    expect(wrapper.find(".recipe-stub").attributes("data-summary")).toBe(
+      RECIPES[9].summary,
+    );
+  });
+
+  it("hands focus to the head when the band goes from under it", async () => {
+    const wrapper = mountRail({}, { attachTo: document.body });
+    await select(wrapper, [7]);
+    tab(wrapper, "Recipe").element.focus();
+    await tab(wrapper, "Recipe").trigger("click");
+    expect(document.activeElement.textContent).toContain("Recipe");
+    await select(wrapper, [8]);
+    expect(document.activeElement).toBe(wrapper.find(".rail-clear").element);
   });
 
   it("is absent on a picture with no recipe, and the choice comes back", async () => {

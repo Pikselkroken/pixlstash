@@ -254,8 +254,10 @@ const tabs = computed(() => [
 // The lightbox's band (#1313) on the grid's inspector: Info is the picture as
 // the rail has always shown it, Recipe is how it was made, in the lightbox's
 // own Recipe panel. By the lightbox's rules: absent rather than disabled on a
-// picture with no recipe, held across the next picture's read so it does not
-// blink under the cursor, and the reader's choice outlives the selection.
+// picture with no recipe, the tab held across the next picture's read so it
+// does not blink under the cursor, and the reader's choice outlives the
+// selection. Unlike the lightbox, the panel waits for that read rather than
+// saying "nothing here was made in ComfyUI" about a picture that may have been.
 const PICTURE_TABS = [
   { value: "info", label: "Info", icon: "mdi-information-outline" },
   { value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" },
@@ -286,8 +288,9 @@ watch(
     try {
       next = recipeForPanel(await getPictureRecipe(id, { preflight: false }));
     } catch (err) {
-      // A picture with no recipe answers 200, so this is a picture or file
-      // gone under the read; the rail falls back to Info alone.
+      // A picture with no recipe answers 200, so this is a failed read (the
+      // picture or its file gone, the server down). The rail falls back to
+      // Info alone, as the lightbox does.
       console.error(`Failed to read the recipe of picture ${id}:`, err);
     }
     if (read !== recipeRead) return;
@@ -314,6 +317,25 @@ const bandValue = computed({
     else pictureTab.value = value;
   },
 });
+// The band or the panel going under a focused control (the next picture has no
+// recipe) would drop focus to `body`, where the ring is gone and nothing says
+// so: the lightbox's focus rescue, onto the rail's own head instead of a canvas.
+watch(
+  () => [bandTabs.value.length, shownPictureTab.value, !!recipe.value],
+  () => {
+    const active = document.activeElement;
+    if (!active?.closest?.(".stats-sidebar .inspector-tabs, .rail-recipe")) {
+      return;
+    }
+    nextTick(() => {
+      if (active.isConnected) return;
+      document
+        .querySelector(".stats-sidebar .rail-clear, .stats-sidebar .rail-close")
+        ?.focus();
+    });
+  },
+);
+
 // T on Recipe: back to Info, where the tag field is, rather than a caret in
 // a hidden field. The field focuses after the render that shows it.
 watch(
@@ -1309,7 +1331,9 @@ function handleResolutionBarClick(label) {
          read-only and costs nothing to rebuild, while Info holds the tag
          field and an edit in progress. -->
     <div
-      v-if="railMode === 'one' && !covered && shownPictureTab === 'recipe'"
+      v-if="
+        railMode === 'one' && !covered && shownPictureTab === 'recipe' && recipe
+      "
       class="rail-recipe dark-inks-on-theme"
     >
       <LightboxRecipePanel
