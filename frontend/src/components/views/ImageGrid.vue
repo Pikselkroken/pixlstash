@@ -1951,7 +1951,7 @@ async function fetchAvailablePlugins() {
     return;
   }
   try {
-    const body = await listPicturePlugins({ baseUrl: props.backendUrl });
+    const body = await listPicturePlugins();
     const plugins = Array.isArray(body?.plugins) ? body.plugins : [];
     availablePlugins.value = plugins.filter((plugin) => plugin && plugin.name);
   } catch (err) {
@@ -1971,7 +1971,7 @@ const captionerPlugins = computed(() =>
 async function fetchTaggerPlugins() {
   if (!props.backendUrl) return;
   try {
-    const body = await listTaggers({ baseUrl: props.backendUrl });
+    const body = await listTaggers();
     allTaggerPlugins.value = body?.plugins ?? [];
   } catch (err) {
     console.warn("Failed to load tagger plugins:", err);
@@ -3880,17 +3880,16 @@ async function handleCreateCharacterFromMenu(query) {
     faceEntries: selectedFaceIds.value.slice(),
   });
   const typed = typeof query === "string" ? query.trim() : "";
-  const apiOpts = { baseUrl: props.backendUrl };
   // Projects feed the dialog's project select; the character list is only
   // needed to derive the next free default name when nothing was typed.
   const [projects, characters] = await Promise.all([
-    listProjects(apiOpts).catch((e) => {
+    listProjects().catch((e) => {
       console.warn("Couldn't list projects for the person editor", e);
       return [];
     }),
     typed
       ? Promise.resolve([])
-      : listCharacters(apiOpts).catch((e) => {
+      : listCharacters().catch((e) => {
           console.warn(
             "Couldn't list characters to derive a default person name",
             e,

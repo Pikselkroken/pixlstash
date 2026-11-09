@@ -28,7 +28,6 @@ import { errorDetail } from "../utils/apiError";
  * @param {Object} deps - Grid state and callbacks, same shape as useGridFetch's.
  */
 export function useGridScoring({
-  backendUrl,
   allGridImages,
   lastFetchedGridImages,
   loadedRanges,
@@ -177,7 +176,7 @@ export function useGridScoring({
     // Kept only as a fallback / explicit refresh. The main listing
     // (GET /pictures) now overlays guest scores onto img.score server-side.
     try {
-      const resp = await getGuestScores({ baseUrl: backendUrl });
+      const resp = await getGuestScores();
       const scores = resp?.scores ?? {};
       const map = new Map();
       for (const [k, v] of Object.entries(scores)) {

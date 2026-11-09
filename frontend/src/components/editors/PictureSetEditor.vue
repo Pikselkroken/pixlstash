@@ -409,12 +409,11 @@ function handleKeydown(event) {
 
 async function saveSetFromEditor(setData) {
   try {
-    const opts = { baseUrl: props.backendUrl };
     let saved = null;
     if (setData.id) {
-      await patchPictureSet(setData.id, setData, opts);
+      await patchPictureSet(setData.id, setData);
     } else {
-      const created = await createPictureSet(setData, opts);
+      const created = await createPictureSet(setData);
       saved = created?.picture_set ?? null;
       if (!saved) {
         // The route declares `{status, picture_set}`; anything else is a

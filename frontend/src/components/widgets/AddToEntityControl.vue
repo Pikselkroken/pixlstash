@@ -627,15 +627,6 @@ function sizeMenu() {
   });
 }
 
-// --- URL helpers ---
-const baseUrl = computed(() =>
-  props.backendUrl ? String(props.backendUrl).replace(/\/$/, "") : "",
-);
-
-// The resource modules take the backend base as an option; an empty string
-// means "address the API relatively", which is what a missing prop implies.
-const apiOpts = computed(() => ({ baseUrl: baseUrl.value || "" }));
-
 // --- Normalised subject IDs ---
 const normalisedPictureIds = computed(() =>
   (Array.isArray(props.subjectIds) ? props.subjectIds : [])
@@ -939,11 +930,11 @@ function openMenu() {
   // Stale-while-revalidate, both halves fired without awaiting: the list is
   // already on screen from the store's cache, and revalidating on open is the
   // only invalidation a share/scoped session gets (the ws stream is owner-only).
-  entityLists.refresh(entityKind.value, { baseUrl: baseUrl.value });
+  entityLists.refresh(entityKind.value);
   // The pinned person block names a person, so a set list needs the people too;
   // once is enough, since nothing on it is a membership.
   if (isSet.value && !entityLists.has("characters")) {
-    entityLists.refresh("characters", { baseUrl: baseUrl.value });
+    entityLists.refresh("characters");
   }
   fetchMembers();
   sizeMenu();
@@ -1118,7 +1109,6 @@ async function readSetMembers(ids) {
   // Side by side: the person read must not hold up the rows' membership.
   const [read, solePerson] = await Promise.all([
     getPictureSetMembership(ids, {
-      ...apiOpts.value,
       includeDeleted: props.includeDeletedMembers ?? false,
     }),
     soleSelectionPerson(ids),
@@ -1141,7 +1131,7 @@ async function readSetMembers(ids) {
 async function soleSelectionPerson(ids) {
   if (viewPersonId.value != null || !props.allowCreate) return null;
   try {
-    const data = (await getCharacterMembership(ids, apiOpts.value)) ?? {};
+    const data = (await getCharacterMembership(ids)) ?? {};
     const people = Object.entries(data.character_assignments ?? {}).filter(
       ([, picIds]) => (picIds ?? []).length > 0,
     );
@@ -1159,7 +1149,7 @@ async function soleSelectionPerson(ids) {
 }
 
 async function readProjectMembers(ids) {
-  const data = (await getProjectMembership(ids, apiOpts.value)) ?? {};
+  const data = (await getProjectMembership(ids)) ?? {};
   const assignments = data.project_assignments ?? {};
   const unassignedIds = data.unassigned_picture_ids ?? [];
   const members = { unassigned: new Set(unassignedIds.map(String)) };
@@ -1170,7 +1160,7 @@ async function readProjectMembers(ids) {
 }
 
 async function readCharacterMembers(ids) {
-  const data = (await getCharacterMembership(ids, apiOpts.value)) ?? {};
+  const data = (await getCharacterMembership(ids)) ?? {};
   const members = {};
   Object.entries(data.character_assignments ?? {}).forEach(
     ([charId, picIds]) => {
@@ -1200,7 +1190,7 @@ function reportToggleFailure(e, fallback) {
     e,
   );
   if (status === 404) {
-    entityLists.invalidate([entityKind.value], { baseUrl: baseUrl.value });
+    entityLists.invalidate([entityKind.value]);
     return `${effectiveLabel.value} no longer exists`;
   }
   return detail ? String(detail) : fallback;
@@ -1309,7 +1299,7 @@ async function toggleSet(item) {
     if (shouldRemove) {
       await Promise.all(
         idsToRemove.map((id) =>
-          removePictureFromSet(item.id, id, apiOpts.value),
+          removePictureFromSet(item.id, id),
         ),
       );
       statusMessage.value = `Removed from ${item.name}`;
@@ -1334,7 +1324,7 @@ async function toggleSet(item) {
     }
     // The membership just moved, so the list's picture counts did too: ask the
     // server again rather than patching the shared cache from here.
-    entityLists.invalidate(["sets"], { baseUrl: baseUrl.value });
+    entityLists.invalidate(["sets"]);
   } catch (e) {
     const detail = errorDetail(e) || e?.message || String(e);
     statusMessage.value = String(detail).includes("already in set")
@@ -1439,7 +1429,7 @@ async function toggleCharacter(item) {
   if (state === "checked") {
     statusMessage.value = "Removing...";
     try {
-      await removeCharacterFaces(item.id, ids, apiOpts.value);
+      await removeCharacterFaces(item.id, ids);
       statusMessage.value = `Removed from ${item.name}`;
       emit("removed", { characterId: item.id, pictureIds: ids });
       applyOptimisticMembership(item.key, "removed", ids);
@@ -1454,7 +1444,7 @@ async function toggleCharacter(item) {
     if (!idsToAdd.length) return;
     statusMessage.value = "Assigning...";
     try {
-      await addCharacterFaces(item.id, idsToAdd, apiOpts.value);
+      await addCharacterFaces(item.id, idsToAdd);
       statusMessage.value = `Assigned to ${item.name}`;
       emit("added", { characterId: item.id, pictureIds: ids });
       // Only pictures that actually have faces - a faceless picture cannot be

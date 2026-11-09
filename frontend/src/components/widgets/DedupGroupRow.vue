@@ -594,8 +594,6 @@ function isFlashing(unit) {
  * @returns {string}
  */
 function thumbUrl(unit) {
-  // baseUrl is load-bearing: the SPA and the backend are different origins in
-  // the dev server, the demo and Electron, so a relative /pictures/... 404s.
   return pictureThumbnailUrl(unit.coverPictureId, {
     version: unit.thumbnailVersion,
   });

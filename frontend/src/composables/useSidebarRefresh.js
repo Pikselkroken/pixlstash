@@ -1,5 +1,5 @@
 import { onUnmounted, watch } from "vue";
-import { API_BASE_URL, isReadOnly } from "../utils/apiClient";
+import { isReadOnly } from "../utils/apiClient";
 import { useDedupStore } from "../stores/useDedupStore";
 import { useEntityListsStore } from "../stores/useEntityListsStore";
 import { useLockedSetsStore } from "../stores/useLockedSetsStore";
@@ -57,7 +57,7 @@ export function useSidebarRefresh({ sidebarRef }) {
     // (integration_architecture.md §8.1). The call is de-duplicated against the
     // sidebar's own refresh above, and it also covers the case where the sidebar
     // is unmounted but a context menu is still reading the lists.
-    entityListsStore.invalidate(undefined, { baseUrl: API_BASE_URL });
+    entityListsStore.invalidate();
     // The locked-sets store shares the sidebar's refresh triggers (manual emits,
     // characters_changed, and pictures_changed via the debounced pictures path,
     // which also fires on a lock/unlock PATCH's CHANGED_PICTURES event). The store
