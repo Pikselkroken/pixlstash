@@ -1703,6 +1703,12 @@ def test_the_probe_recognises_comfyui_and_normalises_the_address(
         ({"name": "cuda:0 X : a", "type": "cuda", "vram_total": -(2**34)}, "X", None),
         # vram_total is the machine's RAM on the CPU, not a card's memory.
         ({"name": "cpu", "type": "cpu", "vram_total": 68_719_476_736}, "CPU", None),
+        # A huge name is cut before the regex, which is slow on long space runs.
+        (
+            {"name": "cuda:0 " + "G" * 100 + " " * 100_000 + ": x", "type": "cuda"},
+            "G" * 100,
+            None,
+        ),
     ],
 )
 def test_the_probe_names_the_card_comfyui_runs_on(
