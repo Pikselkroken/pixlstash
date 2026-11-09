@@ -1,6 +1,6 @@
 {
  "source": "comfyui-workflow-templates-json",
- "version": "0.1.126",
+ "version": "0.1.129",
  "templates": [
   {
    "name": "3d_hunyuan3d-v2.1",
@@ -19,7 +19,7 @@
    "min_comfyui_version": "0.3.28",
    "requires_custom_nodes": false,
    "size": 4939212390,
-   "usage": 154,
+   "usage": 163,
    "files": [
     {
      "name": "hunyuan_3d_v2.1.safetensors",
@@ -46,7 +46,7 @@
    "min_comfyui_version": "0.3.28",
    "requires_custom_nodes": false,
    "size": 4939212390,
-   "usage": 31,
+   "usage": 51,
    "files": [
     {
      "name": "hunyuan3d-dit-v2_fp16.safetensors",
@@ -73,7 +73,7 @@
    "min_comfyui_version": "0.3.28",
    "requires_custom_nodes": false,
    "size": 4928474972,
-   "usage": 55,
+   "usage": 59,
    "files": [
     {
      "name": "hunyuan3d-dit-v2-mv_fp16.safetensors",
@@ -100,13 +100,64 @@
    "min_comfyui_version": "0.3.28",
    "requires_custom_nodes": false,
    "size": 4928474972,
-   "usage": 13,
+   "usage": 29,
    "files": [
     {
      "name": "hunyuan3d-dit-v2-mv-turbo_fp16.safetensors",
      "url": "https://huggingface.co/Comfy-Org/hunyuan3D_2.0_repackaged/resolve/main/split_files/hunyuan3d-dit-v2-mv-turbo_fp16.safetensors",
      "directory": "checkpoints",
      "sha256": "172d7a989b99f66af760da0080d8c6f6350c72609536cf0c55b87a4afa574e45"
+    }
+   ]
+  },
+  {
+   "name": "3d_idol_image_to_gaussian_splat",
+   "title": "Idol: Image to Gaussian Splat",
+   "description": "Turn a single image into a 3D Gaussian splat with Idol, Comfy-Org's fine-tune of TripoSplat: BiRefNet removes the backdrop, DINOv3 and the Flux2 VAE encode the view, and one pass decodes a 262k-point splat. Exports a .spz splat, an orbit preview and an experimental .glb mesh. Best on stylized characters and props.",
+   "kind": "3d",
+   "tags": [
+    "3D",
+    "Image to 3D"
+   ],
+   "models": [
+    "Idol",
+    "TripoSplat"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.23.0",
+   "requires_custom_nodes": false,
+   "size": 3758096384,
+   "usage": 20,
+   "files": [
+    {
+     "name": "birefnet.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors",
+     "directory": "background_removal",
+     "sha256": "9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154"
+    },
+    {
+     "name": "dino_v3_vit_h_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Idol/resolve/main/clip_vision/dino_v3_vit_h_bf16.safetensors",
+     "directory": "clip_vision",
+     "sha256": "a29ef35101a16966972a0d50732a6f3a608ff7cfffb2afa9bbe9007cb842cc53"
+    },
+    {
+     "name": "idol_decoder_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Idol/resolve/main/vae/idol_decoder_fp16.safetensors",
+     "directory": "vae",
+     "sha256": "6a146a1e6b2653f74422f7ea835eb8715c547c7de8fc4545051f15c247ae54a9"
+    },
+    {
+     "name": "flux2-vae.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Idol/resolve/main/vae/flux2-vae.safetensors",
+     "directory": "vae",
+     "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
+    },
+    {
+     "name": "idol_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Idol/resolve/main/diffusion_models/idol_fp16.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "9abf6a99fc6bdad701901b12de8fe1b256f02cae4948f7489d25d86b11b52a93"
     }
    ]
   },
@@ -126,7 +177,7 @@
    "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 644245094,
-   "usage": 22,
+   "usage": 31,
    "files": [
     {
      "name": "moge_2_vitl_normal_fp16.safetensors",
@@ -152,7 +203,7 @@
    "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 644245094,
-   "usage": 68,
+   "usage": 83,
    "files": [
     {
      "name": "moge_2_vitl_normal_fp16.safetensors",
@@ -179,7 +230,7 @@
    "min_comfyui_version": "0.35.0",
    "requires_custom_nodes": false,
    "size": 9341553869,
-   "usage": 242,
+   "usage": 235,
    "files": [
     {
      "name": "trellis_2_texture_vae_bf16.safetensors",
@@ -231,7 +282,7 @@
    "min_comfyui_version": "0.34.0",
    "requires_custom_nodes": false,
    "size": 15354508083,
-   "usage": 777,
+   "usage": 831,
    "files": [
     {
      "name": "trellis_2_texture_vae_bf16.safetensors",
@@ -293,7 +344,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 3972844749,
-   "usage": 296,
+   "usage": 198,
    "files": [
     {
      "name": "birefnet.safetensors",
@@ -342,7 +393,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 37044092928,
-   "usage": 18,
+   "usage": 11,
    "files": [
     {
      "name": "capybara_v0.1.safetensors",
@@ -478,7 +529,7 @@
    "min_comfyui_version": "0.12.0",
    "requires_custom_nodes": false,
    "size": 19864223744,
-   "usage": 114,
+   "usage": 72,
    "files": [
     {
      "name": "acestep_v1.5_xl_sft_bf16.safetensors",
@@ -522,7 +573,7 @@
    "min_comfyui_version": "0.12.0",
    "requires_custom_nodes": false,
    "size": 19864223744,
-   "usage": 262,
+   "usage": 244,
    "files": [
     {
      "name": "acestep_v1.5_xl_turbo_bf16.safetensors",
@@ -567,7 +618,7 @@
    "min_comfyui_version": "0.12.0",
    "requires_custom_nodes": false,
    "size": 10737418240,
-   "usage": 143,
+   "usage": 112,
    "files": [
     {
      "name": "ace_step_1.5_turbo_aio.safetensors",
@@ -594,7 +645,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 10737418240,
-   "usage": 45,
+   "usage": 34,
    "files": [
     {
      "name": "acestep_v1.5_turbo.safetensors",
@@ -639,7 +690,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 14710262989,
-   "usage": 112,
+   "usage": 79,
    "files": [
     {
      "name": "acestep_v1.5_turbo.safetensors",
@@ -684,7 +735,7 @@
    "min_comfyui_version": "0.35.2",
    "requires_custom_nodes": false,
    "size": 9985798963,
-   "usage": 57,
+   "usage": 65,
    "files": [
     {
      "name": "qwen_0.6b_ace15.safetensors",
@@ -728,7 +779,7 @@
    "min_comfyui_version": "0.3.35",
    "requires_custom_nodes": false,
    "size": 7698728878,
-   "usage": 43,
+   "usage": 35,
    "files": [
     {
      "name": "ace_step_v1_3.5b.safetensors",
@@ -806,7 +857,7 @@
    "min_comfyui_version": "0.33.1",
    "requires_custom_nodes": false,
    "size": 15354508083,
-   "usage": 797,
+   "usage": 645,
    "files": [
     {
      "name": "minimax_music3_dit_fp16.safetensors",
@@ -843,7 +894,7 @@
    "min_comfyui_version": "0.19.2",
    "requires_custom_nodes": false,
    "size": 15676630630,
-   "usage": 390,
+   "usage": 183,
    "files": [
     {
      "name": "qwen3.5_2b_bf16.safetensors",
@@ -880,7 +931,7 @@
    "min_comfyui_version": "0.19.2",
    "requires_custom_nodes": false,
    "size": 15891378995,
-   "usage": 231,
+   "usage": 41,
    "files": [
     {
      "name": "qwen3.5_2b_bf16.safetensors",
@@ -919,7 +970,7 @@
    "min_comfyui_version": "0.3.35",
    "requires_custom_nodes": false,
    "size": 5690831667,
-   "usage": 17,
+   "usage": 32,
    "files": [
     {
      "name": "stable-audio-open-1.0.safetensors",
@@ -1008,7 +1059,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 20723217203,
-   "usage": 2,
+   "usage": 14,
    "files": [
     {
      "name": "pixel_art_style_z_image_turbo.safetensors",
@@ -1053,7 +1104,7 @@
    "min_comfyui_version": "0.3.57",
    "requires_custom_nodes": false,
    "size": 18575733555,
-   "usage": 292,
+   "usage": 214,
    "files": [
     {
      "name": "flux1-dev-fp8.safetensors",
@@ -1098,7 +1149,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 22226455757,
-   "usage": 195,
+   "usage": 105,
    "files": [
     {
      "name": "clip_l.safetensors",
@@ -1143,7 +1194,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 34177202258,
-   "usage": 51,
+   "usage": 151,
    "files": [
     {
      "name": "clip_l.safetensors",
@@ -1251,7 +1302,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 34144990003,
-   "usage": 224,
+   "usage": 152,
    "files": [
     {
      "name": "ae.safetensors",
@@ -1296,7 +1347,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 34144990003,
-   "usage": 140,
+   "usage": 178,
    "files": [
     {
      "name": "ae.safetensors",
@@ -1341,7 +1392,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 34144990003,
-   "usage": 513,
+   "usage": 564,
    "files": [
     {
      "name": "clip_l.safetensors",
@@ -1386,7 +1437,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 10372346020,
-   "usage": 67,
+   "usage": 144,
    "files": [
     {
      "name": "clip_l.safetensors",
@@ -1430,7 +1481,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 17609365914,
-   "usage": 239,
+   "usage": 262,
    "files": [
     {
      "name": "ae.safetensors",
@@ -1475,7 +1526,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 35154307318,
-   "usage": 23,
+   "usage": 20,
    "files": [
     {
      "name": "flux1-dev.safetensors",
@@ -1532,7 +1583,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 17233556275,
-   "usage": 23,
+   "usage": 35,
    "files": [
     {
      "name": "flux1-schnell-fp8.safetensors",
@@ -1559,7 +1610,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 34144990003,
-   "usage": 43,
+   "usage": 48,
    "files": [
     {
      "name": "ae.safetensors",
@@ -1603,7 +1654,7 @@
    "min_comfyui_version": "0.3.45",
    "requires_custom_nodes": false,
    "size": 50465865728,
-   "usage": 53,
+   "usage": 36,
    "files": [
     {
      "name": "hidream_e1_1_bf16.safetensors",
@@ -1928,7 +1979,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 50787988275,
-   "usage": 23,
+   "usage": 52,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -1972,7 +2023,7 @@
    "min_comfyui_version": "0.16.0",
    "requires_custom_nodes": false,
    "size": 5798205850,
-   "usage": 760,
+   "usage": 734,
    "files": [
     {
      "name": "qwen_3_06b_base.safetensors",
@@ -2016,7 +2067,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 5798205850,
-   "usage": 26,
+   "usage": 38,
    "files": [
     {
      "name": "qwen_3_06b_base.safetensors",
@@ -2121,7 +2172,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 5798205850,
-   "usage": 47,
+   "usage": 64,
    "files": [
     {
      "name": "qwen_3_06b_base.safetensors",
@@ -2171,7 +2222,7 @@
    "min_comfyui_version": "0.11.0",
    "requires_custom_nodes": false,
    "size": 5583457485,
-   "usage": 202,
+   "usage": 270,
    "files": [
     {
      "name": "qwen_3_06b_base.safetensors",
@@ -2208,7 +2259,7 @@
    "min_comfyui_version": "0.26.0",
    "requires_custom_nodes": false,
    "size": 21260088115,
-   "usage": 22,
+   "usage": 27,
    "files": [
     {
      "name": "boogu_image_edit_fp8_scaled.safetensors",
@@ -2355,7 +2406,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 23300197581,
-   "usage": 86,
+   "usage": 107,
    "files": [
     {
      "name": "ae.safetensors",
@@ -2394,7 +2445,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 41446434406,
-   "usage": 15,
+   "usage": 32,
    "files": [
     {
      "name": "wan_2.1_vae.safetensors",
@@ -2487,7 +2538,7 @@
    "min_comfyui_version": "0.15.0",
    "requires_custom_nodes": false,
    "size": 25984552141,
-   "usage": 73,
+   "usage": 28,
    "files": [
     {
      "name": "ernie-image-turbo.safetensors",
@@ -2618,7 +2669,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 51324859187,
-   "usage": 900,
+   "usage": 762,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -2663,7 +2714,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 22333829939,
-   "usage": 45,
+   "usage": 79,
    "files": [
     {
      "name": "ae.safetensors",
@@ -2715,7 +2766,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 74088185856,
-   "usage": 1756,
+   "usage": 904,
    "files": [
     {
      "name": "full_encoder_small_decoder.safetensors",
@@ -2761,7 +2812,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 56586194125,
-   "usage": 31,
+   "usage": 100,
    "files": [
     {
      "name": "flux2-vae.safetensors",
@@ -2844,7 +2895,7 @@
    "min_comfyui_version": "0.3.72",
    "requires_custom_nodes": false,
    "size": 17072495002,
-   "usage": 325,
+   "usage": 282,
    "files": [
     {
      "name": "flux-2-klein-base-4b-fp8.safetensors",
@@ -2883,7 +2934,7 @@
    "min_comfyui_version": "0.3.72",
    "requires_custom_nodes": false,
    "size": 12455405158,
-   "usage": 390,
+   "usage": 300,
    "files": [
     {
      "name": "flux-2-klein-4b-fp8.safetensors",
@@ -2922,7 +2973,7 @@
    "min_comfyui_version": "0.3.72",
    "requires_custom_nodes": false,
    "size": 19327352832,
-   "usage": 1218,
+   "usage": 727,
    "files": [
     {
      "name": "flux-2-klein-base-9b-fp8.safetensors",
@@ -2960,7 +3011,7 @@
    "min_comfyui_version": "0.3.72",
    "requires_custom_nodes": false,
    "size": 19112604467,
-   "usage": 50,
+   "usage": 56,
    "files": [
     {
      "name": "flux-2-klein-9b-fp8.safetensors",
@@ -2998,7 +3049,7 @@
    "min_comfyui_version": "0.3.72",
    "requires_custom_nodes": false,
    "size": 17072495002,
-   "usage": 103,
+   "usage": 108,
    "files": [
     {
      "name": "flux-2-klein-base-4b.safetensors",
@@ -3043,7 +3094,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 71403831296,
-   "usage": 465,
+   "usage": 403,
    "files": [
     {
      "name": "full_encoder_small_decoder.safetensors",
@@ -3088,7 +3139,7 @@
    "min_comfyui_version": "0.3.72",
    "requires_custom_nodes": false,
    "size": 19219978650,
-   "usage": 202,
+   "usage": 244,
    "files": [
     {
      "name": "flux-2-klein-base-9b-fp8.safetensors",
@@ -3124,7 +3175,7 @@
    "min_comfyui_version": "0.41.0",
    "requires_custom_nodes": false,
    "size": 21474836480,
-   "usage": 942,
+   "usage": 614,
    "files": [
     {
      "name": "flux3-image-klein-int8-convrot.safetensors",
@@ -3163,7 +3214,7 @@
    "min_comfyui_version": "0.41.0",
    "requires_custom_nodes": false,
    "size": 22226455757,
-   "usage": 564,
+   "usage": 211,
    "files": [
     {
      "name": "qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors",
@@ -3202,7 +3253,7 @@
    "min_comfyui_version": "0.41.0",
    "requires_custom_nodes": false,
    "size": 21474836480,
-   "usage": 1795,
+   "usage": 1262,
    "files": [
     {
      "name": "qwen3vl_4b_int8_convrot.safetensors",
@@ -3241,7 +3292,7 @@
    "min_comfyui_version": "0.41.0",
    "requires_custom_nodes": false,
    "size": 21474836480,
-   "usage": 1972,
+   "usage": 1394,
    "files": [
     {
      "name": "qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors",
@@ -3281,7 +3332,7 @@
    "min_comfyui_version": "0.21.1",
    "requires_custom_nodes": false,
    "size": 25447681229,
-   "usage": 37,
+   "usage": 20,
    "files": [
     {
      "name": "hidream_o1_image_bf16.safetensors",
@@ -3344,7 +3395,7 @@
    "min_comfyui_version": "0.24.0",
    "requires_custom_nodes": false,
    "size": 26521423053,
-   "usage": 20,
+   "usage": 26,
    "files": [
     {
      "name": "flux2-vae.safetensors",
@@ -3516,7 +3567,7 @@
    "min_comfyui_version": "0.24.1",
    "requires_custom_nodes": false,
    "size": 19434727014,
-   "usage": 472,
+   "usage": 353,
    "files": [
     {
      "name": "krea2_turbo_int8_convrot.safetensors",
@@ -3559,7 +3610,7 @@
    "min_comfyui_version": "0.24.1",
    "requires_custom_nodes": false,
    "size": 19112604467,
-   "usage": 10082,
+   "usage": 9480,
    "files": [
     {
      "name": "krea2_turbo_fp8_scaled.safetensors",
@@ -3603,7 +3654,7 @@
    "min_comfyui_version": "0.24.1",
    "requires_custom_nodes": false,
    "size": 19112604467,
-   "usage": 338,
+   "usage": 667,
    "files": [
     {
      "name": "krea2_turbo_int8_convrot.safetensors",
@@ -3830,7 +3881,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 13421772800,
-   "usage": 13,
+   "usage": 22,
    "files": [
     {
      "name": "mage_flow_edit_int8_convrot.safetensors",
@@ -3868,7 +3919,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 13421772800,
-   "usage": 56,
+   "usage": 30,
    "files": [
     {
      "name": "mage_flow_edit_turbo_int8_convrot.safetensors",
@@ -3906,7 +3957,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 13421772800,
-   "usage": 20,
+   "usage": 14,
    "files": [
     {
      "name": "mage_flow_int8_convrot.safetensors",
@@ -3945,7 +3996,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 13421772800,
-   "usage": 14,
+   "usage": 13,
    "files": [
     {
      "name": "mage_flow_turbo_int8_convrot.safetensors",
@@ -3983,7 +4034,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 22441204122,
-   "usage": 15,
+   "usage": 23,
    "files": [
     {
      "name": "qwen_image_edit_2509_int8_convrot.safetensors",
@@ -4027,7 +4078,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 22441204122,
-   "usage": 171,
+   "usage": 118,
    "files": [
     {
      "name": "qwen_image_edit_2509_int8_convrot.safetensors",
@@ -4152,7 +4203,7 @@
    "min_comfyui_version": "0.37.3",
    "requires_custom_nodes": false,
    "size": 43271795507,
-   "usage": 49,
+   "usage": 20,
    "files": [
     {
      "name": "qwen3.8_27b_w4a8.safetensors",
@@ -4196,7 +4247,7 @@
    "min_comfyui_version": "0.30.0",
    "requires_custom_nodes": false,
    "size": 41865330663,
-   "usage": 0,
+   "usage": 983,
    "files": [
     {
      "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
@@ -4239,7 +4290,7 @@
    "min_comfyui_version": "0.41.3",
    "requires_custom_nodes": false,
    "size": 22226455757,
-   "usage": 1600,
+   "usage": 2254,
    "files": [
     {
      "name": "moss_image_base_int8_convrot.safetensors",
@@ -4277,7 +4328,7 @@
    "min_comfyui_version": "0.41.3",
    "requires_custom_nodes": false,
    "size": 22226455757,
-   "usage": 116,
+   "usage": 128,
    "files": [
     {
      "name": "moss_image_base_int8_convrot.safetensors",
@@ -4315,7 +4366,7 @@
    "min_comfyui_version": "0.43.0",
    "requires_custom_nodes": false,
    "size": 18253611008,
-   "usage": 0,
+   "usage": 217,
    "files": [
     {
      "name": "moss_image_sft_int8_convrot.safetensors",
@@ -4364,7 +4415,7 @@
    "min_comfyui_version": "0.43.0",
    "requires_custom_nodes": false,
    "size": 13314398618,
-   "usage": 0,
+   "usage": 1703,
    "files": [
     {
      "name": "moss_image_sft_int8_convrot.safetensors",
@@ -4407,7 +4458,7 @@
    "min_comfyui_version": "0.41.3",
    "requires_custom_nodes": false,
    "size": 22222122562,
-   "usage": 6118,
+   "usage": 6885,
    "files": [
     {
      "name": "moss_image_sft_int8_convrot.safetensors",
@@ -4445,7 +4496,7 @@
    "min_comfyui_version": "0.41.3",
    "requires_custom_nodes": false,
    "size": 15461882266,
-   "usage": 369,
+   "usage": 352,
    "files": [
     {
      "name": "moss_image_sft_int8_convrot.safetensors",
@@ -4484,7 +4535,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 10630044058,
-   "usage": 111,
+   "usage": 80,
    "files": [
     {
      "name": "NetaYumev35_pretrained_all_in_one.safetensors",
@@ -4511,7 +4562,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 16213501542,
-   "usage": 44,
+   "usage": 38,
    "files": [
     {
      "name": "NewBie-Image-Exp0.1-bf16.safetensors",
@@ -4654,6 +4705,108 @@
    ]
   },
   {
+   "name": "image_p_h3_image_edit",
+   "title": "P-H3-Image: Image Edit",
+   "description": "Pruna AI's few-step image model built on MiniMax-H3: edit the source image with a short instruction, up to 9 reference images, 8-step sampling.",
+   "kind": "edit",
+   "tags": [
+    "Image Edit",
+    "Int8"
+   ],
+   "models": [
+    "P-H3-Image",
+    "MiniMax H3"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.44.0",
+   "requires_custom_nodes": false,
+   "size": 40355148082,
+   "usage": 269,
+   "files": [
+    {
+     "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+    },
+    {
+     "name": "p-h3-image_text_encoder_int8_convrot.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/text_encoders/p-h3-image_text_encoder_int8_convrot.safetensors",
+     "directory": "text_encoders",
+     "sha256": "fb42c9ff0597e61729475d0b48b69b591ffe06d0b442a79dde22b14fadbe1c0f"
+    },
+    {
+     "name": "p-h3-image_vae_int8_convrot.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/vae/p-h3-image_vae_int8_convrot.safetensors",
+     "directory": "vae",
+     "sha256": "583e0d43354b6b833aa9a0815a5fac831b1ef6d0c19a7eaa0616980a3dab5ffe"
+    },
+    {
+     "name": "p-h3-image_prompt_upsampler_w4a8.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/text_encoders/p-h3-image_prompt_upsampler_w4a8.safetensors",
+     "directory": "text_encoders",
+     "sha256": "74b206c0e3133aa0d1983fd8658c1526a53863cdcca5184538388e927f4e989b"
+    },
+    {
+     "name": "p-h3-image_lora_bf16.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/loras/p-h3-image_lora_bf16.safetensors",
+     "directory": "loras",
+     "sha256": "0e9013ae2873e3415dcb7bb59a9677293bdbdb6f663e138a79bb9bdced00ea61"
+    }
+   ]
+  },
+  {
+   "name": "image_p_h3_t2i",
+   "title": "P-H3-Image: Text to Image",
+   "description": "Pruna AI's few-step image model built on MiniMax-H3: write a plain-language request and a local prompt upsampler expands it into a detailed scene before an 8-step sample. Pick the aspect ratio and megapixel target on the Resolution Selector to move between square, 4:3, 16:9 and portrait canvases.",
+   "kind": "image",
+   "tags": [
+    "Text to Image",
+    "Int8"
+   ],
+   "models": [
+    "P-H3-Image",
+    "MiniMax H3"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.44.0",
+   "requires_custom_nodes": false,
+   "size": 37918538036,
+   "usage": 245,
+   "files": [
+    {
+     "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+    },
+    {
+     "name": "p-h3-image_text_encoder_int8_convrot.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/text_encoders/p-h3-image_text_encoder_int8_convrot.safetensors",
+     "directory": "text_encoders",
+     "sha256": "fb42c9ff0597e61729475d0b48b69b591ffe06d0b442a79dde22b14fadbe1c0f"
+    },
+    {
+     "name": "p-h3-image_lora_bf16.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/loras/p-h3-image_lora_bf16.safetensors",
+     "directory": "loras",
+     "sha256": "0e9013ae2873e3415dcb7bb59a9677293bdbdb6f663e138a79bb9bdced00ea61"
+    },
+    {
+     "name": "p-h3-image_vae_int8_convrot.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/vae/p-h3-image_vae_int8_convrot.safetensors",
+     "directory": "vae",
+     "sha256": "583e0d43354b6b833aa9a0815a5fac831b1ef6d0c19a7eaa0616980a3dab5ffe"
+    },
+    {
+     "name": "p-h3-image_prompt_upsampler_w4a8.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/text_encoders/p-h3-image_prompt_upsampler_w4a8.safetensors",
+     "directory": "text_encoders",
+     "sha256": "74b206c0e3133aa0d1983fd8658c1526a53863cdcca5184538388e927f4e989b"
+    }
+   ]
+  },
+  {
    "name": "image_pixeldit_t2i",
    "title": "PixelDiT: Text to Image",
    "description": "Input a text prompt and optional negative prompt. Generate a 1024px image using PixelDiT's VAE-free pixel diffusion transformer.",
@@ -4668,7 +4821,7 @@
    "min_comfyui_version": "0.16.0",
    "requires_custom_nodes": false,
    "size": 7838315315,
-   "usage": 63,
+   "usage": 20,
    "files": [
     {
      "name": "gemma_2_2b_it_elm_bf16.safetensors",
@@ -4701,7 +4854,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31782757990,
-   "usage": 363,
+   "usage": 273,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -4745,7 +4898,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 35326106010,
-   "usage": 53,
+   "usage": 39,
    "files": [
     {
      "name": "Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors",
@@ -4795,7 +4948,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31782757990,
-   "usage": 17,
+   "usage": 14,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -4840,7 +4993,7 @@
    "min_comfyui_version": "0.3.49",
    "requires_custom_nodes": false,
    "size": 32427003085,
-   "usage": 33,
+   "usage": 40,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -4884,7 +5037,7 @@
    "min_comfyui_version": "0.37.0",
    "requires_custom_nodes": false,
    "size": 21367462298,
-   "usage": 147,
+   "usage": 239,
    "files": [
     {
      "name": "qwen_image_2.1_int8_convrot.safetensors",
@@ -4922,7 +5075,7 @@
    "min_comfyui_version": "0.37.0",
    "requires_custom_nodes": false,
    "size": 26736171418,
-   "usage": 15978,
+   "usage": 15631,
    "files": [
     {
      "name": "qwen_image_2.1_int8_convrot.safetensors",
@@ -4966,7 +5119,7 @@
    "min_comfyui_version": "0.37.2",
    "requires_custom_nodes": false,
    "size": 26736171418,
-   "usage": 3935,
+   "usage": 2457,
    "files": [
     {
      "name": "qwen_image_2.1_int8_convrot.safetensors",
@@ -5009,7 +5162,7 @@
    "min_comfyui_version": "0.39.0",
    "requires_custom_nodes": false,
    "size": 41016937677,
-   "usage": 3308,
+   "usage": 2986,
    "files": [
     {
      "name": "qwen_image_2.1_turbo_int8_convrot.safetensors",
@@ -5054,7 +5207,7 @@
    "min_comfyui_version": "0.39.0",
    "requires_custom_nodes": false,
    "size": 40984448745,
-   "usage": 1259,
+   "usage": 1167,
    "files": [
     {
      "name": "qwen_image_2.1_turbo_int8_convrot.safetensors",
@@ -5099,7 +5252,7 @@
    "min_comfyui_version": "0.3.52",
    "requires_custom_nodes": false,
    "size": 34037615821,
-   "usage": 43,
+   "usage": 28,
    "files": [
     {
      "name": "qwen_image_canny_diffsynth_controlnet.safetensors",
@@ -5148,7 +5301,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31782757990,
-   "usage": 120,
+   "usage": 68,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5192,7 +5345,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 31782757990,
-   "usage": 3688,
+   "usage": 3470,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5236,7 +5389,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 31772020572,
-   "usage": 103,
+   "usage": 44,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5285,7 +5438,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 51324859187,
-   "usage": 527,
+   "usage": 432,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5329,7 +5482,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 31031138714,
-   "usage": 1131,
+   "usage": 1097,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5373,7 +5526,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 35304631173,
-   "usage": 99,
+   "usage": 45,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -5436,7 +5589,7 @@
    "min_comfyui_version": "0.3.57",
    "requires_custom_nodes": false,
    "size": 36013300777,
-   "usage": 136,
+   "usage": 185,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -5485,7 +5638,7 @@
    "min_comfyui_version": "0.6.0",
    "requires_custom_nodes": false,
    "size": 50465865728,
-   "usage": 83,
+   "usage": 70,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -5522,7 +5675,7 @@
    "min_comfyui_version": "0.6.0",
    "requires_custom_nodes": false,
    "size": 0,
-   "usage": 25,
+   "usage": 27,
    "files": [
     {
      "name": "qwen_image_layered_control_bf16.safetensors",
@@ -5561,7 +5714,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 32749125632,
-   "usage": 29,
+   "usage": 18,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5611,7 +5764,7 @@
    "min_comfyui_version": "0.0.1",
    "requires_custom_nodes": false,
    "size": 6979321856,
-   "usage": 395,
+   "usage": 456,
    "files": [
     {
      "name": "sd_xl_base_1.0.safetensors",
@@ -5638,7 +5791,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 41049149932,
-   "usage": 117,
+   "usage": 100,
    "files": [
     {
      "name": "wan2.1_i2v_480p_14B_fp16.safetensors",
@@ -5682,7 +5835,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 20830591386,
-   "usage": 149,
+   "usage": 318,
    "files": [
     {
      "name": "ae.safetensors",
@@ -5720,7 +5873,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 14602888806,
-   "usage": 31,
+   "usage": 29,
    "files": [
     {
      "name": "ae.safetensors",
@@ -5758,7 +5911,7 @@
    "min_comfyui_version": "0.11.0",
    "requires_custom_nodes": false,
    "size": 20830591386,
-   "usage": 14665,
+   "usage": 14712,
    "files": [
     {
      "name": "qwen_3_4b.safetensors",
@@ -5796,7 +5949,7 @@
    "min_comfyui_version": "0.3.57",
    "requires_custom_nodes": false,
    "size": 23837068493,
-   "usage": 310,
+   "usage": 356,
    "files": [
     {
      "name": "qwen_3_4b.safetensors",
@@ -5840,7 +5993,7 @@
    "min_comfyui_version": "0.11.0",
    "requires_custom_nodes": false,
    "size": 12133282611,
-   "usage": 157,
+   "usage": 90,
    "files": [
     {
      "name": "qwen_3_4b_fp8_mixed.safetensors",
@@ -5877,7 +6030,7 @@
    "min_comfyui_version": "0.15.0",
    "requires_custom_nodes": false,
    "size": 9019431322,
-   "usage": 76,
+   "usage": 73,
    "files": [
     {
      "name": "gemma4_e4b_it_fp8_scaled.safetensors",
@@ -5902,7 +6055,7 @@
    "min_comfyui_version": "0.15.0",
    "requires_custom_nodes": false,
    "size": 9341553869,
-   "usage": 163,
+   "usage": 118,
    "files": [
     {
      "name": "qwen3.5_4b_bf16.safetensors",
@@ -5927,7 +6080,7 @@
    "min_comfyui_version": "0.15.0",
    "requires_custom_nodes": false,
    "size": 8053063680,
-   "usage": 32,
+   "usage": 25,
    "files": [
     {
      "name": "qwen_3_4b.safetensors",
@@ -5952,7 +6105,7 @@
    "min_comfyui_version": "0.15.0",
    "requires_custom_nodes": false,
    "size": 5261334938,
-   "usage": 177,
+   "usage": 129,
    "files": [
     {
      "name": "qwen3vl_4b_fp8_scaled.safetensors",
@@ -5978,7 +6131,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 19155554140,
-   "usage": 19,
+   "usage": 15,
    "files": [
     {
      "name": "t5xxl_fp16.safetensors",
@@ -6076,7 +6229,7 @@
    "min_comfyui_version": "0.3.5",
    "requires_custom_nodes": false,
    "size": 23590107873,
-   "usage": 11,
+   "usage": 209,
    "files": [
     {
      "name": "sd3.5_large_fp8_scaled.safetensors",
@@ -6109,7 +6262,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 23590107873,
-   "usage": 28,
+   "usage": 38,
    "files": [
     {
      "name": "sd3.5_large_controlnet_depth.safetensors",
@@ -6154,7 +6307,7 @@
    "min_comfyui_version": "0.3.5",
    "requires_custom_nodes": false,
    "size": 14935748772,
-   "usage": 118,
+   "usage": 29,
    "files": [
     {
      "name": "sd3.5_large_fp8_scaled.safetensors",
@@ -6214,7 +6367,7 @@
    "min_comfyui_version": "0.0.1",
    "requires_custom_nodes": false,
    "size": 10630044058,
-   "usage": 12,
+   "usage": 19,
    "files": [
     {
      "name": "clip_vision_g.safetensors",
@@ -6247,7 +6400,7 @@
    "min_comfyui_version": "0.0.1",
    "requires_custom_nodes": false,
    "size": 13013750907,
-   "usage": 153,
+   "usage": 77,
    "files": [
     {
      "name": "sd_xl_base_1.0.safetensors",
@@ -6280,7 +6433,7 @@
    "min_comfyui_version": "0.0.1",
    "requires_custom_nodes": false,
    "size": 6936372183,
-   "usage": 198,
+   "usage": 117,
    "files": [
     {
      "name": "sd_xl_turbo_1.0_fp16.safetensors",
@@ -6307,7 +6460,7 @@
    "min_comfyui_version": "0.35.2",
    "requires_custom_nodes": false,
    "size": 48962627174,
-   "usage": 19,
+   "usage": 31,
    "files": [
     {
      "name": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
@@ -6362,7 +6515,7 @@
    "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 39621073306,
-   "usage": 88,
+   "usage": 72,
    "files": [
     {
      "name": "ltx-2.3-22b-distilled-fp8.safetensors",
@@ -6445,7 +6598,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 32534377267,
-   "usage": 15,
+   "usage": 25,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -6545,7 +6698,7 @@
    "min_comfyui_version": "0.3.49",
    "requires_custom_nodes": false,
    "size": 30816390349,
-   "usage": 106,
+   "usage": 50,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6588,7 +6741,7 @@
    "min_comfyui_version": "0.40.0",
    "requires_custom_nodes": false,
    "size": 31245887078,
-   "usage": 1221,
+   "usage": 928,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6640,7 +6793,7 @@
    "min_comfyui_version": "0.11.1",
    "requires_custom_nodes": false,
    "size": 20723217203,
-   "usage": 60,
+   "usage": 36,
    "files": [
     {
      "name": "z_image_turbo_bf16.safetensors",
@@ -6685,7 +6838,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 30709016166,
-   "usage": 18,
+   "usage": 12,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6728,7 +6881,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31245887078,
-   "usage": 268,
+   "usage": 249,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6777,7 +6930,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 31198642438,
-   "usage": 112,
+   "usage": 75,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6827,7 +6980,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 0,
-   "usage": 57,
+   "usage": 44,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -6889,7 +7042,7 @@
    "min_comfyui_version": "0.33.3",
    "requires_custom_nodes": false,
    "size": 134002979635,
-   "usage": 17,
+   "usage": 15,
    "files": [
     {
      "name": "flux-2-klein-base-4b-fp8.safetensors",
@@ -6956,7 +7109,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 0,
-   "usage": 80,
+   "usage": 52,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -7161,7 +7314,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31138512896,
-   "usage": 61,
+   "usage": 42,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -7213,7 +7366,7 @@
    "min_comfyui_version": "0.11.1",
    "requires_custom_nodes": false,
    "size": 20723217203,
-   "usage": 33,
+   "usage": 28,
    "files": [
     {
      "name": "z_image_turbo_bf16.safetensors",
@@ -7258,7 +7411,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 9824737690,
-   "usage": 87,
+   "usage": 52,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -7329,7 +7482,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 0,
-   "usage": 59,
+   "usage": 40,
    "files": [
     {
      "name": "RealESRGAN_x4plus.safetensors",
@@ -7354,7 +7507,7 @@
    "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 429496730,
-   "usage": 77,
+   "usage": 107,
    "files": [
     {
      "name": "birefnet.safetensors",
@@ -7379,7 +7532,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 1288490189,
-   "usage": 42,
+   "usage": 20,
    "files": [
     {
      "name": "depth_anything_3_mono_large.safetensors",
@@ -7404,7 +7557,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 1288490189,
-   "usage": 156,
+   "usage": 207,
    "files": [
     {
      "name": "depth_anything_3_mono_large.safetensors",
@@ -7429,7 +7582,7 @@
    "min_comfyui_version": "0.20.0",
    "requires_custom_nodes": false,
    "size": 1717986918,
-   "usage": 122,
+   "usage": 127,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -7455,7 +7608,7 @@
    "min_comfyui_version": "0.37.0",
    "requires_custom_nodes": false,
    "size": 2469606195,
-   "usage": 87,
+   "usage": 76,
    "files": [
     {
      "name": "moge_3_vitg_fp16.safetensors",
@@ -7554,7 +7707,7 @@
    "min_comfyui_version": "0.34.0",
    "requires_custom_nodes": false,
    "size": 5476083302,
-   "usage": 162,
+   "usage": 153,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -7597,7 +7750,7 @@
    "min_comfyui_version": "0.19.0",
    "requires_custom_nodes": false,
    "size": 2040109466,
-   "usage": 15,
+   "usage": 26,
    "files": [
     {
      "name": "sdpose_wholebody_fp16.safetensors",
@@ -7659,7 +7812,7 @@
    "min_comfyui_version": "0.16.0",
    "requires_custom_nodes": false,
    "size": 1932735283,
-   "usage": 37,
+   "usage": 71,
    "files": [
     {
      "name": "sdpose_wholebody_fp16.safetensors",
@@ -7684,7 +7837,7 @@
    "min_comfyui_version": "0.16.0",
    "requires_custom_nodes": false,
    "size": 1932735283,
-   "usage": 9,
+   "usage": 13,
    "files": [
     {
      "name": "sdpose_wholebody_fp16.safetensors",
@@ -7710,7 +7863,7 @@
    "min_comfyui_version": "0.28.0",
    "requires_custom_nodes": false,
    "size": 3972844749,
-   "usage": 161,
+   "usage": 247,
    "files": [
     {
      "name": "seedvr2_ema_vae_fp16.safetensors",
@@ -7742,7 +7895,7 @@
    "min_comfyui_version": "0.28.0",
    "requires_custom_nodes": false,
    "size": 3972844749,
-   "usage": 507,
+   "usage": 624,
    "files": [
     {
      "name": "seedvr2_ema_vae_fp16.safetensors",
@@ -7774,7 +7927,7 @@
    "min_comfyui_version": "0.28.0",
    "requires_custom_nodes": false,
    "size": 8804682957,
-   "usage": 555,
+   "usage": 646,
    "files": [
     {
      "name": "seedvr2_ema_vae_fp16.safetensors",
@@ -7806,7 +7959,7 @@
    "min_comfyui_version": "0.20.0",
    "requires_custom_nodes": false,
    "size": 107374182,
-   "usage": 56,
+   "usage": 59,
    "files": [
     {
      "name": "film_net_fp16.safetensors",
@@ -7831,7 +7984,7 @@
    "min_comfyui_version": "0.20.0",
    "requires_custom_nodes": false,
    "size": 1717986918,
-   "usage": 153,
+   "usage": 141,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -7857,7 +8010,7 @@
    "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 34252364186,
-   "usage": 123,
+   "usage": 108,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -7912,7 +8065,7 @@
    "min_comfyui_version": "0.9.0",
    "requires_custom_nodes": false,
    "size": 20723217203,
-   "usage": 300,
+   "usage": 308,
    "files": [
     {
      "name": "z_image_turbo_bf16.safetensors",
@@ -7955,7 +8108,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 38762079846,
-   "usage": 74,
+   "usage": 48,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -8004,7 +8157,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 38762079846,
-   "usage": 362,
+   "usage": 287,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -8054,7 +8207,7 @@
    "min_comfyui_version": "0.3.71",
    "requires_custom_nodes": false,
    "size": 37044092928,
-   "usage": 29,
+   "usage": 32,
    "files": [
     {
      "name": "capybara_v0.1.safetensors",
@@ -8103,7 +8256,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 37044092928,
-   "usage": 31,
+   "usage": 19,
    "files": [
     {
      "name": "capybara_v0.1.safetensors",
@@ -8152,7 +8305,7 @@
    "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 12670153523,
-   "usage": 42,
+   "usage": 52,
    "files": [
     {
      "name": "causal_forcing-framewise.safetensors",
@@ -8190,7 +8343,7 @@
    "min_comfyui_version": "0.43.0",
    "requires_custom_nodes": false,
    "size": 42949672960,
-   "usage": 1053,
+   "usage": 2141,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -8234,7 +8387,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 45097156608,
-   "usage": 2470,
+   "usage": 1657,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -8278,7 +8431,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 42949672960,
-   "usage": 696,
+   "usage": 464,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -8322,7 +8475,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 27895812588,
-   "usage": 18,
+   "usage": 17,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -8372,7 +8525,7 @@
    "min_comfyui_version": "0.3.71",
    "requires_custom_nodes": false,
    "size": 45384919416,
-   "usage": 90,
+   "usage": 114,
    "files": [
     {
      "name": "sigclip_vision_patch14_384.safetensors",
@@ -8578,7 +8731,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 38976828211,
-   "usage": 125,
+   "usage": 150,
    "files": [
     {
      "name": "ltx-2.3-22b-distilled-fp8.safetensors",
@@ -8611,7 +8764,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 47244640256,
-   "usage": 19017,
+   "usage": 18605,
    "files": [
     {
      "name": "ltx-2.3-22b-dev-fp8.safetensors",
@@ -8662,7 +8815,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 42949672960,
-   "usage": 1019,
+   "usage": 1274,
    "files": [
     {
      "name": "ltx-2.3-22b-dev-fp8.safetensors",
@@ -8712,7 +8865,7 @@
    "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 40909563494,
-   "usage": 77,
+   "usage": 85,
    "files": [
     {
      "name": "ltx-2.3-22b-distilled-fp8.safetensors",
@@ -8763,7 +8916,7 @@
    "min_comfyui_version": "0.19.0",
    "requires_custom_nodes": false,
    "size": 43486543872,
-   "usage": 110,
+   "usage": 117,
    "files": [
     {
      "name": "ltx-2.3-22b-dev-fp8.safetensors",
@@ -8814,7 +8967,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 47244640256,
-   "usage": 782,
+   "usage": 697,
    "files": [
     {
      "name": "ltx-2.3-22b-dev-fp8.safetensors",
@@ -8865,7 +9018,7 @@
    "min_comfyui_version": "0.32.0",
    "requires_custom_nodes": false,
    "size": 56908316672,
-   "usage": 790,
+   "usage": 939,
    "files": [
     {
      "name": "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
@@ -8912,7 +9065,7 @@
    "min_comfyui_version": "0.32.0",
    "requires_custom_nodes": false,
    "size": 56908316672,
-   "usage": 4347,
+   "usage": 4490,
    "files": [
     {
      "name": "gemma4_e2b_it_int8_convrot.safetensors",
@@ -8964,7 +9117,7 @@
    "min_comfyui_version": "0.32.0",
    "requires_custom_nodes": false,
    "size": 53150220288,
-   "usage": 1639,
+   "usage": 1545,
    "files": [
     {
      "name": "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
@@ -9142,7 +9295,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 38010460570,
-   "usage": 86,
+   "usage": 106,
    "files": [
     {
      "name": "ltx-2-19b-dev-fp8.safetensors",
@@ -9193,7 +9346,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 38010460570,
-   "usage": 28,
+   "usage": 23,
    "files": [
     {
      "name": "ltx-2-19b-distilled.safetensors",
@@ -9287,7 +9440,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 45526653338,
-   "usage": 19,
+   "usage": 20,
    "files": [
     {
      "name": "ltx-2-19b-dev-fp8.safetensors",
@@ -9382,7 +9535,7 @@
    "min_comfyui_version": "0.35.0",
    "requires_custom_nodes": false,
    "size": 48747878810,
-   "usage": 193,
+   "usage": 154,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9451,7 +9604,7 @@
    "min_comfyui_version": "0.30.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 21095,
+   "usage": 19644,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9502,7 +9655,7 @@
    "min_comfyui_version": "0.30.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 485,
+   "usage": 398,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9552,7 +9705,7 @@
    "min_comfyui_version": "0.34.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 354,
+   "usage": 296,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9603,7 +9756,7 @@
    "min_comfyui_version": "0.30.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 7937,
+   "usage": 6777,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9654,7 +9807,7 @@
    "min_comfyui_version": "0.30.0",
    "requires_custom_nodes": false,
    "size": 56908316672,
-   "usage": 3988,
+   "usage": 4356,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9702,10 +9855,10 @@
     "MiniMax H3"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.30.0",
+   "min_comfyui_version": "0.44.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 0,
+   "usage": 411,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9753,10 +9906,10 @@
     "MiniMax H3"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.30.0",
+   "min_comfyui_version": "0.44.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 0,
+   "usage": 1822,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9803,10 +9956,10 @@
     "MiniMax H3"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.43.2",
+   "min_comfyui_version": "0.44.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 0,
+   "usage": 873,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9857,7 +10010,7 @@
    "min_comfyui_version": "0.3.8",
    "requires_custom_nodes": false,
    "size": 22494891213,
-   "usage": 21,
+   "usage": 18,
    "files": [
     {
      "name": "wan2.1_t2v_14B_fp8_scaled.safetensors",
@@ -9959,7 +10112,7 @@
    "min_comfyui_version": "0.3.35",
    "requires_custom_nodes": false,
    "size": 42047729828,
-   "usage": 13,
+   "usage": 16,
    "files": [
     {
      "name": "wan2.1_fun_camera_v1.1_14B_bf16.safetensors",
@@ -10002,7 +10155,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 44775034061,
-   "usage": 942,
+   "usage": 882,
    "files": [
     {
      "name": "lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors",
@@ -10064,7 +10217,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 28668906701,
-   "usage": 597,
+   "usage": 615,
    "files": [
     {
      "name": "lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors",
@@ -10127,7 +10280,7 @@
    "min_comfyui_version": "0.17.0",
    "requires_custom_nodes": false,
    "size": 29635274342,
-   "usage": 59,
+   "usage": 73,
    "files": [
     {
      "name": "Wan2_1-I2V-14B-480p_fp8_e4m3fn_scaled_KJ.safetensors",
@@ -10184,7 +10337,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 38031935406,
-   "usage": 392,
+   "usage": 347,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -10241,7 +10394,7 @@
    "min_comfyui_version": "0.3.35",
    "requires_custom_nodes": false,
    "size": 40050570035,
-   "usage": 14,
+   "usage": 20,
    "files": [
     {
      "name": "wan2.2_fun_camera_high_noise_14B_fp8_scaled.safetensors",
@@ -10299,7 +10452,7 @@
    "min_comfyui_version": "0.3.50",
    "requires_custom_nodes": false,
    "size": 38031935406,
-   "usage": 59,
+   "usage": 41,
    "files": [
     {
      "name": "wan2.2_fun_control_high_noise_14B_fp8_scaled.safetensors",
@@ -10413,7 +10566,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 38010460570,
-   "usage": 10608,
+   "usage": 9549,
    "files": [
     {
      "name": "wan_2.1_vae.safetensors",
@@ -10470,7 +10623,7 @@
    "min_comfyui_version": "0.3.55",
    "requires_custom_nodes": false,
    "size": 25254407700,
-   "usage": 103,
+   "usage": 98,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -10521,7 +10674,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 38031935406,
-   "usage": 363,
+   "usage": 291,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -10579,7 +10732,7 @@
    "min_comfyui_version": "0.3.50",
    "requires_custom_nodes": false,
    "size": 18146236826,
-   "usage": 22,
+   "usage": 14,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -10657,7 +10810,7 @@
    "min_comfyui_version": "0.3.46",
    "requires_custom_nodes": false,
    "size": 18146236826,
-   "usage": 298,
+   "usage": 334,
    "files": [
     {
      "name": "wan2.2_ti2v_5B_fp16.safetensors",
@@ -10695,7 +10848,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 25662429594,
-   "usage": 1722,
+   "usage": 1757,
    "files": [
     {
      "name": "wan_animate_2_int8_convrot.safetensors",
@@ -10745,7 +10898,7 @@
    "min_comfyui_version": "0.31.0",
    "requires_custom_nodes": false,
    "size": 24910810317,
-   "usage": 213,
+   "usage": 191,
    "files": [
     {
      "name": "wan_animate_2_distill_int8_convrot.safetensors",
@@ -10833,7 +10986,7 @@
    "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 52935471923,
-   "usage": 28,
+   "usage": 32,
    "files": [
     {
      "name": "wan2.2_dancer_14b_global_fp8_scaled.safetensors",
@@ -11016,7 +11169,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 57756572713,
-   "usage": 198,
+   "usage": 156,
    "files": [
     {
      "name": "wan2.1_vace_14B_fp16.safetensors",
@@ -11079,7 +11232,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 57767310131,
-   "usage": 32,
+   "usage": 15,
    "files": [
     {
      "name": "wan_2.1_vae.safetensors",
@@ -11124,7 +11277,7 @@
    "min_comfyui_version": "0.20.0",
    "requires_custom_nodes": false,
    "size": 57767310131,
-   "usage": 233,
+   "usage": 206,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -11175,7 +11328,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 57756572713,
-   "usage": 63,
+   "usage": 40,
    "files": [
     {
      "name": "wan2.1_vace_1.3B_fp16.safetensors",
@@ -11335,7 +11488,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 11381663334,
-   "usage": 24,
+   "usage": 17,
    "files": [
     {
      "name": "wan2.1_fun_control_1.3B_bf16.safetensors",

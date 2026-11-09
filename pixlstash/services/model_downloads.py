@@ -115,21 +115,28 @@ class _Cancelled(Exception):
 
 @lru_cache(maxsize=1)
 def _sources() -> dict[str, dict]:
-    """Every file the template list links, by case-folded name."""
-    found: dict[str, dict] = {}
+    """Every file the template list links, by case-folded name.
+
+    Where one name links several files (``flux2-vae.safetensors`` is more than
+    one VAE), the one most templates link: list order alone would let a new
+    template's variant displace the file every other workflow means.
+    """
+    by_name: dict[str, dict[Optional[str], list[dict]]] = {}
     for template in load_templates().get("templates") or []:
         for entry in template.get("files") or []:
             name, url = entry.get("name"), entry.get("url")
             if name and isinstance(url, str) and url.startswith("https://"):
-                found.setdefault(
-                    name.casefold(),
+                by_name.setdefault(name.casefold(), {}).setdefault(
+                    entry.get("sha256"), []
+                ).append(
                     {
                         "url": url,
                         "directory": entry.get("directory"),
                         "sha256": entry.get("sha256"),
-                    },
+                    }
                 )
-    return found
+    # max() keeps the first on a tie, so an unambiguous name is unchanged.
+    return {name: max(files.values(), key=len)[0] for name, files in by_name.items()}
 
 
 def download_source(file: str) -> Optional[dict]:
