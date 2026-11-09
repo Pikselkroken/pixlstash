@@ -854,7 +854,9 @@ jobs:
     # throwaway copy of the committed test-data/ fixture (browse-only: workers
     # disabled, no ML models needed). The fixture is committed release input:
     # its absence is a coverage failure, never permission to skip the lane.
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, where Playwright 1.60 refuses to
+    # install chromium. Unpin once @playwright/test supports 26.04.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
