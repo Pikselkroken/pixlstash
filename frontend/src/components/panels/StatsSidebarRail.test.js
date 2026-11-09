@@ -19,6 +19,12 @@ vi.mock("../../api/pictures", () => ({
   pictureThumbnailUrl: (id) => `/thumbs/${id}.webp`,
   resetPicturesTags: vi.fn(async () => ({})),
 }));
+// A picture with no recipe unless a test says otherwise: the read answers 200
+// with `no_prompt_chunk` for a picture that was not generated.
+const getPictureRecipe = vi.fn();
+vi.mock("../../api/comfyui", () => ({
+  getPictureRecipe: (...args) => getPictureRecipe(...args),
+}));
 vi.mock("../../api/config", () => ({ getUserConfig: vi.fn(async () => ({})) }));
 vi.mock("../../api/users", () => ({ getPenalisedTags: vi.fn(async () => ({})) }));
 vi.mock("../../api/taggers", () => ({ listTaggers: vi.fn(async () => ({})) }));
@@ -42,6 +48,7 @@ import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { SCRAPHEAP_PICTURES_ID } from "../../stores/useViewStore";
 import { useSelectionTags } from "../../composables/useSelectionTags";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { sessionContext } from "../../utils/apiClient";
 import { fitWords, pictureTitle } from "../../composables/useRailPicture";
 import {
@@ -63,6 +70,11 @@ const STUBS = {
   LightboxDescriptionPanel: true,
   AddToEntityControl: true,
   TasksPanel: true,
+  LightboxRecipePanel: {
+    props: ["recipe", "pictureId", "canGenerateVariants", "comfyuiConfigured"],
+    emits: ["run", "use-as-input"],
+    template: '<div class="recipe-stub" :data-summary="recipe?.summary" />',
+  },
 };
 
 const CARDS = {
@@ -139,6 +151,9 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(async (id) => DETAILS[id] ?? { id, tags: [] });
   listPictureFaces.mockReset().mockResolvedValue([]);
+  getPictureRecipe
+    .mockReset()
+    .mockResolvedValue({ reason: "no_prompt_chunk", available: false });
 });
 
 describe("the rail's head row", () => {
@@ -771,5 +786,163 @@ describe("stats narrowed by a tag group (#2469)", () => {
     await flush();
     expect(getPictureStats.mock.calls.length).toBeGreaterThan(grouped);
     wrapper.unmount();
+  });
+});
+
+// The lightbox's Info | Recipe band on the grid's inspector, for one picture.
+describe("one picture's Recipe tab", () => {
+  const RECIPES = {
+    7: { available: true, summary: "API Workflow · 7 nodes", workflow_id: "w7" },
+    9: { available: true, summary: "API Workflow · 9 nodes", workflow_id: "w9" },
+  };
+  const tabNames = (wrapper) =>
+    wrapper.findAll("button.inspector-tab").map((t) => t.text());
+  const tab = (wrapper, label) =>
+    wrapper.findAll("button.inspector-tab").find((t) => t.text() === label);
+  const infoShown = (wrapper) =>
+    wrapper.find(".rail-picture").isVisible();
+
+  beforeEach(() => {
+    getPictureRecipe.mockImplementation(
+      async (id) => RECIPES[id] ?? { reason: "no_prompt_chunk" },
+    );
+  });
+
+  it("offers Info | Recipe and shows the picture's recipe in its panel", async () => {
+    const wrapper = mountRail({}, { attachTo: document.body });
+    await select(wrapper, [7]);
+    expect(getPictureRecipe).toHaveBeenCalledWith(7, { preflight: false });
+    expect(tabNames(wrapper)).toEqual(["Info", "Recipe"]);
+    expect(wrapper.find(".recipe-stub").exists()).toBe(false);
+    expect(infoShown(wrapper)).toBe(true);
+    // Info inks the lightbox's dark-surface parts in this theme's colours.
+    expect(wrapper.find(".rail-picture").classes()).toContain(
+      "dark-inks-on-theme",
+    );
+
+    await tab(wrapper, "Recipe").trigger("click");
+    const panel = wrapper.find(".recipe-stub");
+    expect(panel.attributes("data-summary")).toBe(RECIPES[7].summary);
+    expect(panel.element.parentElement.classList).toContain(
+      "dark-inks-on-theme",
+    );
+    expect(infoShown(wrapper)).toBe(false);
+  });
+
+  it("runs the recipe and opens Use as input through the Run popup", async () => {
+    const wrapper = mountRail();
+    await select(wrapper, [7]);
+    await tab(wrapper, "Recipe").trigger("click");
+    const runs = useRunDialogStore();
+    const panel = wrapper.findComponent(".recipe-stub");
+    panel.vm.$emit("run");
+    expect(runs.source).toEqual({ kind: "picture", pictureIds: [7] });
+    panel.vm.$emit("use-as-input");
+    expect(runs.source).toEqual({
+      kind: "selection",
+      pictureIds: [7],
+      pickWorkflow: true,
+    });
+  });
+
+  it("offers no Use as input in a read-only session", async () => {
+    sessionContext.value = { is_owner: false, scope: "READ" };
+    try {
+      const wrapper = mountRail();
+      await select(wrapper, [7]);
+      await tab(wrapper, "Recipe").trigger("click");
+      wrapper.findComponent(".recipe-stub").vm.$emit("use-as-input");
+      expect(useRunDialogStore().source).toBe(null);
+    } finally {
+      sessionContext.value = null;
+    }
+  });
+
+  it("shows nothing, not the last recipe or a false empty state, during the next read", async () => {
+    let answerNine;
+    getPictureRecipe.mockImplementation((id) =>
+      id === 9
+        ? new Promise((resolve) => (answerNine = resolve))
+        : Promise.resolve(RECIPES[id]),
+    );
+    const wrapper = mountRail();
+    await select(wrapper, [7]);
+    await tab(wrapper, "Recipe").trigger("click");
+    await select(wrapper, [9]);
+    expect(tabNames(wrapper)).toEqual(["Info", "Recipe"]);
+    expect(wrapper.find(".recipe-stub").exists()).toBe(false);
+    answerNine(RECIPES[9]);
+    await flush();
+    expect(wrapper.find(".recipe-stub").attributes("data-summary")).toBe(
+      RECIPES[9].summary,
+    );
+  });
+
+  it("hands focus to the head when the band goes from under it", async () => {
+    const wrapper = mountRail({}, { attachTo: document.body });
+    await select(wrapper, [7]);
+    tab(wrapper, "Recipe").element.focus();
+    await tab(wrapper, "Recipe").trigger("click");
+    expect(document.activeElement.textContent).toContain("Recipe");
+    await select(wrapper, [8]);
+    expect(document.activeElement).toBe(wrapper.find(".rail-clear").element);
+  });
+
+  it("is absent on a picture with no recipe, and the choice comes back", async () => {
+    const wrapper = mountRail({}, { attachTo: document.body });
+    await select(wrapper, [7]);
+    await tab(wrapper, "Recipe").trigger("click");
+    await select(wrapper, [8]);
+    expect(tabNames(wrapper)).toEqual([]);
+    expect(wrapper.find(".recipe-stub").exists()).toBe(false);
+    expect(infoShown(wrapper)).toBe(true);
+    await select(wrapper, [9]);
+    expect(wrapper.find(".recipe-stub").attributes("data-summary")).toBe(
+      RECIPES[9].summary,
+    );
+  });
+
+  it("never shows a slower read's recipe under the next picture", async () => {
+    let answerSeven;
+    getPictureRecipe.mockImplementation((id) =>
+      id === 7
+        ? new Promise((resolve) => (answerSeven = resolve))
+        : Promise.resolve(RECIPES[id]),
+    );
+    const wrapper = mountRail();
+    await select(wrapper, [7]);
+    await select(wrapper, [9]);
+    await tab(wrapper, "Recipe").trigger("click");
+    answerSeven(RECIPES[7]);
+    await flush();
+    expect(wrapper.find(".recipe-stub").attributes("data-summary")).toBe(
+      RECIPES[9].summary,
+    );
+  });
+
+  it("goes back to Info for T, so the caret lands in a field on screen", async () => {
+    const wrapper = mountRail({}, { attachTo: document.body });
+    await select(wrapper, [7]);
+    await tab(wrapper, "Recipe").trigger("click");
+    useSidebarStore().requestTagField();
+    await flush();
+    expect(infoShown(wrapper)).toBe(true);
+    expect(document.activeElement).toBe(
+      wrapper.find(".rail-tags__input").element,
+    );
+  });
+
+  it("reads nothing while the rail is shut or under the lightbox", async () => {
+    const sidebar = useSidebarStore();
+    sidebar.statsOpen = false;
+    const wrapper = mountRail();
+    await select(wrapper, [7]);
+    await wrapper.setProps({ covered: true });
+    sidebar.statsOpen = true;
+    await flush();
+    expect(getPictureRecipe).not.toHaveBeenCalled();
+    await wrapper.setProps({ covered: false });
+    await flush();
+    expect(getPictureRecipe).toHaveBeenCalledTimes(1);
   });
 });

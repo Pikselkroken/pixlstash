@@ -1191,6 +1191,7 @@ import {
 } from "../../api/characters";
 import { listStackPictures, setStackOrder } from "../../api/stacks";
 import { getPictureRecipe } from "../../api/comfyui";
+import { recipeForPanel } from "../../utils/pictureRecipe.js";
 import { listProjects } from "../../api/projects";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
@@ -5149,42 +5150,7 @@ async function fetchComfyWorkflow(imageId) {
       recipeTabShown.value = false;
       return;
     }
-    // `reason: "no_prompt_chunk"` is the recipe read's honest "this picture was
-    // not generated", not an error - and unlike the workflow read it is a 200,
-    // so the Recipe tab's empty state comes from here rather than from a 404.
-    comfyMetadata.value =
-      data && data.reason !== "no_prompt_chunk"
-        ? {
-            source: data.source || "comfyui",
-            // Whether this recipe can be REPLAYED, which is not the same as
-            // whether it can be read: an A1111 picture answers here in full
-            // and is still not a graph ComfyUI could be handed.
-            available: data.available,
-            reason: data.reason || null,
-            summary: data.summary,
-            positive_prompt: data.positive_prompt || null,
-            negativePrompt: data.negative_prompt || null,
-            // The seed as text: a 64-bit one loses digits as a JS number.
-            seedText: data.seed_text || null,
-            // `model_slots` carries the strengths and the shelf rows that the
-            // flat `models` name list cannot; `inputs` is the resolution lock.
-            modelSlots: data.model_slots || [],
-            settings: data.settings || {},
-            inputs: data.inputs || [],
-            topologyHash: data.topology_hash || null,
-            // Why the editor graph could not be rebuilt into something
-            // runnable. Empty for every other answer.
-            conversionProblems: data.conversion_problems || [],
-            // The workflow this picture's variant is in. The Recipe tab
-            // needs it to read the workflow's saved recipes and to file a new
-            // one under it (v1.12 F6); null when the hub has not keyed this
-            // picture.
-            workflowId: data.workflow_id || null,
-            // The plain file names, which is the form saved-recipe credit
-            // matches on - `model_slots` carries strengths the match ignores.
-            loraNames: data.loras || [],
-          }
-        : null;
+    comfyMetadata.value = recipeForPanel(data);
     recipeTabShown.value = comfyMetadata.value !== null;
   } catch (e) {
     // The recipe read answers 200 for a picture with no recipe, so a 404 here
