@@ -15,9 +15,12 @@ import RailPicture from "./RailPicture.vue";
 import RailPictures from "./RailPictures.vue";
 import StatsHistogram from "../widgets/StatsHistogram.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import LightboxRecipePanel from "../views/LightboxRecipePanel.vue";
+import { getPictureRecipe } from "../../api/comfyui";
 import { getPictureStats } from "../../api/pictures";
 import { isReadOnly } from "../../utils/apiClient";
 import { formatUserDate } from "../../utils/utils.js";
+import { recipeForPanel } from "../../utils/pictureRecipe.js";
 import {
   SECTION_SCOPE,
   useSectionCollapse,
@@ -31,6 +34,7 @@ import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useProjectStore } from "../../stores/useProjectStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWsStore } from "../../stores/useWsStore";
@@ -245,6 +249,93 @@ const tabs = computed(() => [
   { value: "tags", label: "Tags", icon: "mdi-tag-multiple-outline" },
   { value: "pictures", label: "Pictures", icon: "mdi-image-multiple-outline" },
 ]);
+
+// ─── One picture: Info | Recipe ───────────────────────────────────────────────
+// The lightbox's band (#1313) on the grid's inspector: Info is the picture as
+// the rail has always shown it, Recipe is how it was made, in the lightbox's
+// own Recipe panel. By the lightbox's rules: absent rather than disabled on a
+// picture with no recipe, held across the next picture's read so it does not
+// blink under the cursor, and the reader's choice outlives the selection.
+const PICTURE_TABS = [
+  { value: "info", label: "Info", icon: "mdi-information-outline" },
+  { value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" },
+];
+const pictureTab = ref("info");
+const recipe = ref(null);
+const recipeTabShown = ref(false);
+let recipeRead = 0;
+const runDialogStore = useRunDialogStore();
+
+// Read only while the rail shows the picture: a shut rail or the lightbox
+// over it (which reads its own) costs no read per selection change.
+const recipePictureId = computed(() =>
+  sidebarStore.statsOpen && !props.covered ? oneId.value : null,
+);
+watch(
+  recipePictureId,
+  async (id) => {
+    // Cleared before the read: the panel must never show the last picture's
+    // prompt under this one.
+    recipe.value = null;
+    const read = (recipeRead += 1);
+    if (id == null) {
+      recipeTabShown.value = false;
+      return;
+    }
+    let next = null;
+    try {
+      next = recipeForPanel(await getPictureRecipe(id, { preflight: false }));
+    } catch (err) {
+      // A picture with no recipe answers 200, so this is a picture or file
+      // gone under the read; the rail falls back to Info alone.
+      console.error(`Failed to read the recipe of picture ${id}:`, err);
+    }
+    if (read !== recipeRead) return;
+    recipe.value = next;
+    recipeTabShown.value = next !== null;
+  },
+  { immediate: true },
+);
+
+const shownPictureTab = computed(() =>
+  recipeTabShown.value ? pictureTab.value : "info",
+);
+// One band, two subjects: the view's Tags | Pictures with nothing selected,
+// the picture's Info | Recipe with one.
+const bandTabs = computed(() => {
+  if (railMode.value === "none") return tabs.value;
+  return railMode.value === "one" && recipeTabShown.value ? PICTURE_TABS : [];
+});
+const bandValue = computed({
+  get: () =>
+    railMode.value === "none" ? activeTab.value : shownPictureTab.value,
+  set: (value) => {
+    if (railMode.value === "none") activeTab.value = value;
+    else pictureTab.value = value;
+  },
+});
+// T on Recipe: back to Info, where the tag field is, rather than a caret in
+// a hidden field. The field focuses after the render that shows it.
+watch(
+  () => sidebarStore.tagFieldPending,
+  (pending) => {
+    if (pending) pictureTab.value = "info";
+  },
+);
+
+function runRecipe() {
+  if (oneId.value == null) return;
+  runDialogStore.openRun({ kind: "picture", pictureIds: [Number(oneId.value)] });
+}
+
+function runOnPicture() {
+  if (isReadOnly.value || oneId.value == null) return;
+  runDialogStore.openRun({
+    kind: "selection",
+    pictureIds: [Number(oneId.value)],
+    pickWorkflow: true,
+  });
+}
 
 // Picture stats
 const picStats = ref(null);
@@ -1130,11 +1221,11 @@ function handleResolutionBarClick(label) {
 
 <template>
   <AppInspector
-    v-model="activeTab"
+    v-model="bandValue"
     class="stats-sidebar"
     label="Inspector"
     :open="sidebarStore.statsOpen"
-    :tabs="railMode === 'none' ? tabs : []"
+    :tabs="bandTabs"
     :band="whatsChanged.checklistShown ? INSPECTOR_BAND : []"
     band-value="details"
     @update:band-value="whatsChanged.showTab($event)"
@@ -1214,8 +1305,27 @@ function handleResolutionBarClick(label) {
       </div>
     </template>
 
+    <!-- `v-if` beside the Info `v-show`, as in the lightbox: Recipe is
+         read-only and costs nothing to rebuild, while Info holds the tag
+         field and an edit in progress. -->
+    <div
+      v-if="railMode === 'one' && !covered && shownPictureTab === 'recipe'"
+      class="rail-recipe dark-inks-on-theme"
+    >
+      <LightboxRecipePanel
+        :recipe="recipe"
+        :picture-id="oneId"
+        :can-generate-variants="
+          filterStore.comfyuiConfigured && !isReadOnly && oneId != null
+        "
+        :comfyui-configured="filterStore.comfyuiConfigured"
+        @run="runRecipe"
+        @use-as-input="runOnPicture"
+      />
+    </div>
     <RailPicture
       v-if="railMode === 'one' && !covered"
+      v-show="shownPictureTab === 'info'"
       ref="railPictureRef"
       v-model:image="oneImage"
       v-model:faces="oneFaces"
@@ -1852,6 +1962,15 @@ function handleResolutionBarClick(label) {
 </template>
 
 <style scoped>
+/* The Recipe panel scrolls itself and pins its Run… footer, as in the
+   lightbox, so it takes the body's height rather than growing the body. */
+.rail-recipe {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 .stats-loading {
   display: flex;
   align-items: center;

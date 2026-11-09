@@ -279,6 +279,22 @@ body {
   color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
 }
 
+/* The lightbox's panels ink themselves for its always-dark surface. Where one
+   is drawn on the themed rail instead (the grid inspector's picture and Recipe
+   tab), each dark-surface ink is handed this theme's own. */
+.dark-inks-on-theme {
+  --v-theme-dark-surface: var(--v-theme-sidebar);
+  --v-theme-on-dark-surface: var(--v-theme-on-surface);
+  --v-theme-dark-surface-error: var(--v-theme-surface-error);
+  --v-theme-dark-surface-warning: var(--v-theme-surface-warning);
+  --v-theme-dark-surface-success: var(--v-theme-surface-success);
+  --v-theme-dark-surface-info: var(--v-theme-surface-info);
+  --v-theme-dark-surface-accent: var(--v-theme-accent);
+  --v-theme-dark-surface-primary: var(--v-theme-primary);
+  --v-theme-dark-surface-tertiary: var(--v-theme-tertiary);
+  --v-theme-dark-surface-favourite: var(--v-theme-favourite);
+}
+
 /* Screen-reader-only text. NEVER use `display: none` / `visibility: hidden` for
    this - those remove the node from the accessibility tree, so a live region
    built on them announces nothing. Clipping keeps it rendered and announced. */

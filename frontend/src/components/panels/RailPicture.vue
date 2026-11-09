@@ -4,7 +4,10 @@
        rejected tags, then the Description panel, as tall as its text, and
        Properties. The grid rail's one-picture view and the lightbox's Info
        tab are both this; `on-dark` is the lightbox's pane. -->
-  <div class="rail-picture" :class="{ 'rail-picture--on-dark': onDark }">
+  <div
+    class="rail-picture"
+    :class="onDark ? 'rail-picture--on-dark' : 'dark-inks-on-theme'"
+  >
     <!-- In the lightbox (`pinnable`) the faces stand beside the title and
          stars, as tall as them, with no thumbnail: the picture is beside the
          pane. Without faces the title takes the width and "No faces" ends the
@@ -623,21 +626,6 @@ defineExpose({
   flex-direction: column;
   gap: var(--space-3);
   font-size: var(--text-xs);
-}
-
-/* The lightbox's Description panel inks itself for its always-dark surface.
-   On the rail each dark-surface ink is handed this theme's own. */
-.rail-picture:not(.rail-picture--on-dark) {
-  --v-theme-dark-surface: var(--v-theme-sidebar);
-  --v-theme-on-dark-surface: var(--v-theme-on-surface);
-  --v-theme-dark-surface-error: var(--v-theme-surface-error);
-  --v-theme-dark-surface-warning: var(--v-theme-surface-warning);
-  --v-theme-dark-surface-success: var(--v-theme-surface-success);
-  --v-theme-dark-surface-info: var(--v-theme-surface-info);
-  --v-theme-dark-surface-accent: var(--v-theme-accent);
-  --v-theme-dark-surface-primary: var(--v-theme-primary);
-  --v-theme-dark-surface-tertiary: var(--v-theme-tertiary);
-  --v-theme-dark-surface-favourite: var(--v-theme-favourite);
 }
 
 /* The lightbox's pane is dark in both themes, so the other way round: every
