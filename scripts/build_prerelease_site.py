@@ -91,7 +91,7 @@ def pick_release_candidate(releases: list[dict]) -> str | None:
 
 
 def is_released(version: str, latest: str) -> bool:
-    """Return whether ``version`` (from pyproject.toml) has been published.
+    """Return whether ``version`` (pyproject.toml) is no newer than ``latest``.
 
     Args:
         version: The code's version, e.g. ``2.0.0rc5`` or ``2.0.0``.
