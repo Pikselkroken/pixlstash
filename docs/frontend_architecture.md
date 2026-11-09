@@ -1631,6 +1631,25 @@ the row element to hand focus back to on close).
   projects, then bulk-adds the picks; if the add fails it deletes the empty set
   and says so. After it, *Train a LoRA on it* emits `train`, which App routes
   to `handleTrainLora` on the new set.
+- **Drawing the pictures instead** (`CharacterSheetStep.vue`, backend §25.29).
+  *Generate pictures…* (*Generate more…* once there are pictures) puts a
+  two-step row under the title, *Sheets* then *Pick the set*, and a character
+  with no pictures opens on *Sheets*. The step is mounted once and kept with
+  `v-show`, so drawn sheets survive going back and forth; the dialog draws its
+  footer from the step's exposed `footer` (`lead`, `back`, `secondary`,
+  `primary`, each a label, an `enabled` and a `run`). The step reads the
+  character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
+  model is listed disabled, the newest MOSS-Image one preselected, and its name
+  rides in the step row as a neutral pill) and the MOSS-Image `txt2img`
+  workflows; *Draw* saves the typed description on a character that had none,
+  then runs the workflow (`runWorkflowCard`, the canvas as `values` at the
+  card's own width/height addresses) and polls each run's outcome and
+  `POST /characters/{id}/sheets/rank` every 2.5 s until every sheet's faces are
+  read. The best holding sheet is preselected; broken ones show only when every
+  sheet broke. *Use sheet N* cuts it, waits (90 s at most) for the six
+  pictures' faces, then hands their ids back: the picker reloads, marks them
+  *new*, and offers *All / New only*, which re-ranks the stills from 1 over the
+  new pictures so the slider, coverage and Create all read that one list.
 
 #### `TrainLoraDialog.vue` (`io/`, #2119)
 **Outcome choices, numbers derived** (design artifact "Outcome choices, numbers derived"). The Train a LoRA dialog, `AppDialog size="lg"`, mounted in **`App.vue`** and opened by `useTrainingStore.openForScope({type, id, name})` from the toolbar's Train button, its overflow row and the sidebar's *Train LoRA…*. It replaced the toolbar popover `TbTrainPanel`.

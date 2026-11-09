@@ -524,6 +524,7 @@ jobs:
           tests/test_build_prerelease_site.py
           tests/test_builtin_models.py
           tests/test_character_face_assignment.py
+          tests/test_character_sheet.py
           tests/test_characters_api.py
           tests/test_checkpoint_hash_finder.py
           tests/test_child_sets.py

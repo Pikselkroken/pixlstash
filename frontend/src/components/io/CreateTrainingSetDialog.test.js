@@ -1,7 +1,7 @@
 // "Create a training set…": the slider takes a prefix of one ranking, the
 // coverage column sorts gaps into kinds, and Create makes then fills a set.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 
 vi.mock("vuetify/components", async () => {
@@ -26,6 +26,38 @@ vi.mock("../../api/pictureSets", () => ({
 }));
 vi.mock("../../api/pictures", () => ({
   pictureThumbnailUrl: (id) => `/thumb/${id}.webp`,
+}));
+
+// The Sheets step (CharacterSheetStep): what it reads and what it runs.
+const gen = vi.hoisted(() => ({
+  buildSheetPrompt: vi.fn(),
+  rankSheets: vi.fn(),
+  useSheet: vi.fn(),
+  getCharacter: vi.fn(),
+  getReferencePictures: vi.fn(),
+  patchCharacter: vi.fn(),
+  listAdapters: vi.fn(),
+  getRunOutcome: vi.fn(),
+  getWorkflowCard: vi.fn(),
+  listWorkflowCards: vi.fn(),
+  runWorkflowCard: vi.fn(),
+}));
+vi.mock("../../api/characterSheets", () => ({
+  buildSheetPrompt: gen.buildSheetPrompt,
+  rankSheets: gen.rankSheets,
+  useSheet: gen.useSheet,
+}));
+vi.mock("../../api/characters", () => ({
+  getCharacter: gen.getCharacter,
+  getReferencePictures: gen.getReferencePictures,
+  patchCharacter: gen.patchCharacter,
+}));
+vi.mock("../../api/modelShelf", () => ({ listAdapters: gen.listAdapters }));
+vi.mock("../../api/workflows", () => ({
+  getRunOutcome: gen.getRunOutcome,
+  getWorkflowCard: gen.getWorkflowCard,
+  listWorkflowCards: gen.listWorkflowCards,
+  runWorkflowCard: gen.runWorkflowCard,
 }));
 
 import CreateTrainingSetDialog from "./CreateTrainingSetDialog.vue";
@@ -527,6 +559,211 @@ describe("CreateTrainingSetDialog", () => {
       [{ type: "set", id: 55, name: "Anna training set" }],
     ]);
     expect(wrapper.emitted("close")).toHaveLength(1);
+    wrapper.unmount();
+  });
+});
+
+const MOSS_CARD = {
+  id: "manual:moss",
+  name: "MOSS sheet",
+  type: "txt2img",
+  last_used: "2026-11-09T20:00:00Z",
+  models: [{ base_model_family: "moss_image" }],
+};
+
+/** Mock the Sheets step's reads: one MOSS workflow, LoRAs newest first. */
+function sheetsWorld({ description = "", loras = [] } = {}) {
+  gen.getCharacter.mockResolvedValue({ id: 7, name: "Anna", description });
+  gen.getReferencePictures.mockResolvedValue({ reference_picture_ids: [] });
+  gen.patchCharacter.mockResolvedValue({ status: "success" });
+  gen.listAdapters.mockResolvedValue(loras);
+  gen.listWorkflowCards.mockResolvedValue({
+    cards: [
+      MOSS_CARD,
+      { id: "auto:sdxl", name: "SDXL", type: "txt2img", models: [] },
+    ],
+  });
+  gen.getWorkflowCard.mockResolvedValue({
+    card: {
+      name: "MOSS sheet",
+      defaults: [
+        { slot_label: "ks", input_name: "steps", value: 25 },
+        { slot_label: "lat", input_name: "width", value: 1024 },
+        { slot_label: "lat", input_name: "height", value: 1024 },
+      ],
+    },
+  });
+  gen.buildSheetPrompt.mockResolvedValue({
+    prompt: "{layout}",
+    negative: "nsfw",
+    width: 2560,
+    height: 1536,
+  });
+  gen.runWorkflowCard.mockResolvedValue({
+    status: "success",
+    prompts: [
+      { run_id: "r1", status: "queued" },
+      { run_id: "r2", status: "queued" },
+    ],
+  });
+}
+
+function sheet(id, agreement, extra = {}) {
+  return {
+    picture_id: id,
+    faces_read: true,
+    faces: 6,
+    agreement,
+    agreement_words: agreement >= 0.55 ? "faces agree strongly" : "faces agree somewhat",
+    closeness: null,
+    close: null,
+    broken: false,
+    ...extra,
+  };
+}
+
+describe("CreateTrainingSetDialog: generating the pictures", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("opens a character with no pictures on the Sheets step", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cts-steps"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="cs-main"]').isVisible()).toBe(true);
+    expect(wrapper.find('[data-testid="cts-picks"]').isVisible()).toBe(false);
+    // Nothing to describe yet: drawing waits for a description.
+    const primary = wrapper.find('[data-testid="cts-generate-primary"]');
+    expect(primary.text()).toContain("Draw 4 sheets");
+    expect(primary.attributes("disabled")).toBeDefined();
+    wrapper.unmount();
+  });
+
+  it("draws, ranks, and files the chosen sheet as new pictures in the ranking", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({
+      loras: [
+        // Newest, but for another model: listed, never preselected.
+        { sha256: "sdxl", display_name: "Anna SDXL", base_model_family: "sdxl", added_at: "2026-11-09" },
+        { sha256: "moss1", display_name: "Anna v1", base_model_family: "moss_image", trigger_words: ["anna"], added_at: "2026-11-08" },
+      ],
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper
+      .find('[data-testid="cs-description"] textarea')
+      .setValue("Adult woman, copper bob");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+
+    // No description on the character: the typed one becomes hers.
+    expect(gen.patchCharacter).toHaveBeenCalledWith(7, {
+      description: "Adult woman, copper bob",
+    });
+    expect(gen.buildSheetPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ trigger: "anna", framing: "full_body" }),
+    );
+    expect(gen.runWorkflowCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflow_id: "manual:moss",
+        prompt: "{layout}",
+        count: 4,
+        character_ids: [],
+        values: [
+          { slot_label: "lat", input_name: "width", value: 2560 },
+          { slot_label: "lat", input_name: "height", value: 1536 },
+        ],
+        add_loras: [{ sha256: "moss1", strength_model: 0.8, strength_clip: 0.8 }],
+      }),
+    );
+    expect(wrapper.find('[data-testid="cts-steps"]').text()).toContain(
+      "with Anna v1",
+    );
+
+    gen.getRunOutcome.mockImplementation(async (key) => ({
+      status: "completed",
+      picture_ids: key === "r1" ? [501] : [502],
+    }));
+    gen.rankSheets.mockResolvedValue({
+      sheets: [sheet(501, 0.5), sheet(502, 0.66)],
+      references: 0,
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+    await flushPromises();
+    const sheets = wrapper.findAll('[data-testid="cs-sheet"]');
+    // Best first, and preselected.
+    expect(sheets.map((b) => b.attributes("aria-label"))).toEqual([
+      "Sheet 2: faces agree strongly",
+      "Sheet 1: faces agree somewhat",
+    ]);
+    expect(sheets[0].attributes("aria-pressed")).toBe("true");
+    expect(wrapper.find('[data-testid="cts-generate-primary"]').text()).toContain(
+      "Use sheet 2",
+    );
+
+    gen.useSheet.mockResolvedValue({ picture_ids: [601, 602] });
+    gen.rankSheets.mockResolvedValue({
+      sheets: [sheet(601, null), sheet(602, null)],
+      references: 0,
+    });
+    const after = stills(3);
+    after.picks[0].picture_id = 601;
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: after }),
+    );
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    expect(gen.useSheet).toHaveBeenCalledWith(7, 502);
+    expect(wrapper.find('[data-testid="cts-picks"]').isVisible()).toBe(true);
+    expect(wrapper.findAll('[data-testid="cts-new"]')).toHaveLength(1);
+
+    // "New only" keeps just what was made here.
+    const newOnly = wrapper
+      .find('[data-testid="cts-new-only"]')
+      .findAll("button")
+      .find((b) => b.text() === "New only");
+    await newOnly.trigger("click");
+    expect(shownIds(wrapper)).toEqual(["/thumb/601.webp"]);
+    wrapper.unmount();
+  });
+
+  it("keeps a character's own description and starts a picker from Generate more", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    sheetsWorld({ description: "Woman in her thirties, dark hair" });
+    const wrapper = mountDialog();
+    await flushPromises();
+    // Pictures exist: the picker first, generation one click away.
+    expect(wrapper.find('[data-testid="cts-steps"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="cts-generate"]').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="cs-description"] textarea').element.value,
+    ).toBe("Woman in her thirties, dark hair");
+    expect(wrapper.find('[data-testid="cs-likeness"]').text()).toContain(
+      "drawn from words, not from Anna's 300 pictures",
+    );
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    expect(gen.patchCharacter).not.toHaveBeenCalled();
+    expect(gen.runWorkflowCard).toHaveBeenCalledWith(
+      expect.objectContaining({ add_loras: [] }),
+    );
+    expect(gen.buildSheetPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ framing: "mid_thigh", trigger: "" }),
+    );
+    await wrapper.find('[data-testid="cts-generate-cancel"]').trigger("click");
+    expect(wrapper.find('[data-testid="cts-picks"]').isVisible()).toBe(true);
     wrapper.unmount();
   });
 });
