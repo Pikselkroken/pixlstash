@@ -305,8 +305,13 @@ function createMainWindow(): void {
     // Frameless so the app draws its own title bar that blends with the toolbar.
     // macOS keeps native traffic lights (positioned over the custom bar); other
     // platforms get fully custom controls drawn by the renderer.
+    // `titleBarOverlay.height` makes Electron centre the traffic lights in a
+    // strip that tall, whatever size this macOS draws them (Tahoe's are larger),
+    // so they line up with the bar's logo. A fixed `trafficLightPosition` would
+    // turn that centring off. 39 = `.titlebar { height }` in TitleBar.vue (40)
+    // less its 1px bottom border, the box the logo centres in. Keep them in sync.
     ...(process.platform === 'darwin'
-      ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 12, y: 11 } }
+      ? { titleBarStyle: 'hidden' as const, titleBarOverlay: { height: 39 } }
       : { frame: false }),
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
