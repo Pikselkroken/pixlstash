@@ -692,24 +692,29 @@ async function use() {
   working.value = true;
   error.value = "";
   phase.value = "filing";
+  let ids;
   try {
-    const { picture_ids: ids } = await useSheet(
-      props.character.id,
-      chosen.value,
-    );
-    const deadline = Date.now() + FACE_WAIT_MS;
-    while (alive && Date.now() < deadline) {
-      const answer = await rankSheets(props.character.id, ids);
-      if (answer.sheets.every((sheet) => sheet.faces_read)) break;
-      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-    }
-    if (alive) emit("done", ids);
+    ({ picture_ids: ids } = await useSheet(props.character.id, chosen.value));
   } catch (e) {
     phase.value = "pick";
     error.value = `Couldn't use the sheet. ${errorMessage(e, "Please try again.")}`;
-  } finally {
     working.value = false;
+    return;
   }
+  // The sheet is cut and filed now; only its faces may still be unread. A
+  // failure from here on is no reason to offer the cut again.
+  const deadline = Date.now() + FACE_WAIT_MS;
+  while (alive && Date.now() < deadline) {
+    try {
+      const answer = await rankSheets(props.character.id, ids);
+      if (answer.sheets.every((sheet) => sheet.faces_read)) break;
+    } catch (e) {
+      console.warn("Couldn't read the new pictures' faces", ids, e);
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+  }
+  working.value = false;
+  if (alive) emit("done", ids);
 }
 
 const canDraw = computed(

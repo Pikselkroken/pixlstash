@@ -775,6 +775,34 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("hands over a cut sheet even when reading its faces fails", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    gen.runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: [{ run_id: "r1", status: "queued" }],
+    });
+    gen.getRunOutcome.mockResolvedValue({ status: "completed", picture_ids: [501] });
+    gen.rankSheets.mockResolvedValue({ sheets: [sheet(501, 0.7)], references: 0 });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(3000);
+
+    gen.useSheet.mockResolvedValue({ picture_ids: [601] });
+    gen.rankSheets.mockRejectedValue(new Error("network down"));
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(95_000);
+    expect(gen.useSheet).toHaveBeenCalledTimes(1);
+    // The picker took over: the cut is not offered again.
+    expect(wrapper.find('[data-testid="cts-picks"]').isVisible()).toBe(true);
+    expect(wrapper.find('[data-testid="cs-main"]').isVisible()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("keeps a character's own description and starts a picker from Generate more", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
     sheetsWorld({ description: "Woman in her thirties, dark hair" });
