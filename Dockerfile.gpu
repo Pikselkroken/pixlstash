@@ -130,6 +130,10 @@ USER pixlstash
 # ── Copy application source ───────────────────────────────────────────────────
 COPY --chown=pixlstash:pixlstash pyproject.toml setup.py MANIFEST.in alembic.ini ./
 COPY --chown=pixlstash:pixlstash pixlstash/ pixlstash/
+# The ComfyUI-PixlStash nodes, read in place by the editable install below
+# (comfyui_pack_service checks /app/integrations first). Needs the submodule
+# checked out; the smoke test below fails the build when it is empty.
+COPY --chown=pixlstash:pixlstash integrations/ComfyUI-PixlStash integrations/ComfyUI-PixlStash
 
 # Install the pixlstash package itself (no deps — already installed above)
 RUN pip install --no-cache-dir --no-deps -e .
@@ -139,7 +143,9 @@ RUN pip install --no-cache-dir --no-deps -e .
 # to pyproject.toml but not to that list produces a green build and an image
 # that dies on start-up (send2trash did, in v1.10.0). This fails the build
 # instead, before anything is tagged or pushed.
-RUN python -c "import pixlstash.server"
+# It also asserts the image carries the ComfyUI nodes: without the submodule
+# the COPY above copies an empty folder and the app offers no node install.
+RUN python -c "import pixlstash.server; from pixlstash.services.comfyui_pack_service import bundled_pack; assert bundled_pack(), 'ComfyUI-PixlStash nodes missing: run git submodule update --init'"
 
 # Copy the pre-built frontend into the package's expected location
 COPY --chown=pixlstash:pixlstash --from=frontend-builder /build/pixlstash/frontend/dist pixlstash/frontend/dist/

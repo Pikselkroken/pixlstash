@@ -1102,9 +1102,11 @@ PixlStash maintains separate Dockerfiles:
 - `Dockerfile`: CPU image
 - `Dockerfile.gpu`: GPU image (NVIDIA CUDA)
 
-Build locally:
+Build locally (the images carry the ComfyUI nodes from the submodule, so check it out first):
 
 ```bash
+git submodule update --init
+
 # CPU
 docker build -f Dockerfile -t pixlstash:cpu .
 
