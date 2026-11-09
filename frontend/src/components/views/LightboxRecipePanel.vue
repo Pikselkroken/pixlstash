@@ -54,10 +54,18 @@
             <v-icon size="14">mdi-chevron-right</v-icon>
           </button>
         </div>
-        <!-- The design names the workflow and the stack it is in. Both come
-             from the workflow cards read, which is not built yet, so this says
-             what the file itself says: how big the graph is. -->
-        <div class="recipe-workflow">{{ recipe.summary }}</div>
+        <!-- The design names the workflow. The name is the card's, read from
+             the workflow cards; the file's own description (API or editor
+             graph, how big) stays under it, and is all there is when the
+             picture is on no card or the reader may not read the cards. -->
+        <div v-if="workflowName" class="recipe-workflow">
+          {{ workflowName }}
+        </div>
+        <div
+          :class="workflowName ? 'recipe-workflow-sub' : 'recipe-workflow'"
+        >
+          {{ recipe.summary }}
+        </div>
 
         <template v-if="recipe.positive_prompt">
           <div class="section-label section-label--on-dark recipe-sec">
@@ -357,9 +365,9 @@
  * action pinned in a footer.
  *
  * **Two things the design draws are still absent rather than faked**, because
- * the data behind each is a later step of that plan: the workflow's name and
- * the stack it is in (the workflow cards read), and the workflow's own value
- * beside an overridden setting (the workflow defaults read). Run… itself is
+ * the data behind each is a later step of that plan: the stack the workflow
+ * is in, and the workflow's own value beside an overridden setting (the
+ * workflow defaults read). Run… itself is
  * the Run popup (F5, #1407), and the "Matches your saved recipe X" banner and
  * the Save button are live (F6, #1408).
  */
@@ -370,6 +378,7 @@ import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { getPictureWorkflow } from "../../api/comfyui";
 import { listAdapters } from "../../api/modelShelf";
+import { listWorkflowCards } from "../../api/workflows";
 import { listSavedRecipes } from "../../api/recipes";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -699,6 +708,58 @@ async function loadSavedRecipes() {
 }
 
 watch(() => props.recipe?.workflowId, loadSavedRecipes, { immediate: true });
+
+// ── The workflow's name ─────────────────────────────────────────────────────
+//
+// The recipe read carries the workflow's id and not its name, because a card's
+// name is derived over the whole grid (a generated name that collides with a
+// sibling's is told apart there). So the cards are read once, every card at
+// once including hidden ones and one-offs, and kept by id: the filmstrip steps
+// through pictures of many workflows, and each step must not read the grid.
+
+/** `{workflowId: name}`; "" for an id the cards did not have. */
+const workflowNames = ref({});
+let namesRead = null;
+
+const workflowName = computed(
+  () => workflowNames.value[props.recipe?.workflowId] || "",
+);
+
+async function loadWorkflowName() {
+  const key = props.recipe?.workflowId;
+  // Every `/workflows` route is owner-only, so a read-only reader gets the
+  // file's own description and no guaranteed 403 per filmstrip step.
+  if (!key || isReadOnly.value || key in workflowNames.value) return;
+  // One read covers every card; a step that lands while it is out waits on it.
+  if (!namesRead) {
+    namesRead = listWorkflowCards({ includeHidden: true, includeOneOffs: true })
+      .then(({ cards }) => {
+        workflowNames.value = {
+          ...workflowNames.value,
+          ...Object.fromEntries(cards.map((card) => [card.id, card.name])),
+        };
+        return true;
+      })
+      .catch((err) => {
+        // The name is a nicety over the summary below it, never a failure of
+        // the tab, so this is logged and the summary stands alone.
+        console.warn("Could not read the workflow's name:", err);
+        return false;
+      })
+      .finally(() => {
+        namesRead = null;
+      });
+  }
+  // A failed read remembers nothing, so the next step asks again.
+  if (!(await namesRead)) return;
+  // Not on the cards (yet): remembered as unnamed so the next step on this
+  // workflow does not read the whole grid again.
+  if (!(key in workflowNames.value)) {
+    workflowNames.value = { ...workflowNames.value, [key]: "" };
+  }
+}
+
+watch(() => props.recipe?.workflowId, loadWorkflowName, { immediate: true });
 
 function onSaved(row) {
   // Straight into the list, so the footer says Saved without another read.
@@ -1071,6 +1132,11 @@ async function copyPrompt() {
 .recipe-workflow {
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.recipe-workflow-sub {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
 }
 
 /* A paragraph, not a scrolling box: the design reads the prompt as text. */

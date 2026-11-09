@@ -33,6 +33,8 @@ const listSavedRecipes = vi.hoisted(() => vi.fn(async () => []));
 vi.mock("../../api/recipes", () => ({ listSavedRecipes }));
 const listAdapters = vi.hoisted(() => vi.fn(async () => []));
 vi.mock("../../api/modelShelf", () => ({ listAdapters }));
+const listWorkflowCards = vi.hoisted(() => vi.fn(async () => ({ cards: [] })));
+vi.mock("../../api/workflows", () => ({ listWorkflowCards }));
 
 import LightboxRecipePanel from "./LightboxRecipePanel.vue";
 
@@ -165,6 +167,9 @@ beforeEach(() => {
   listSavedRecipes.mockResolvedValue([]);
   listAdapters.mockReset();
   listAdapters.mockResolvedValue([]);
+  listWorkflowCards.mockReset();
+  listWorkflowCards.mockResolvedValue({ cards: [] });
+  isReadOnly.value = false;
 });
 
 /** Open the workflow box and let its lazy read land. */
@@ -1016,5 +1021,81 @@ describe("LightboxRecipePanel", () => {
     expect(loras).toEqual([
       { filename: "style.safetensors", sha256: "", strength: 0.8 },
     ]);
+  });
+
+  // ── The workflow's name (the Recipe tab named only "API Workflow") ────────
+
+  describe("the workflow's name", () => {
+    const CARD = "auto:" + "a".repeat(64);
+    const OTHER = "auto:" + "b".repeat(64);
+
+    it("names the workflow from its card, the file's summary under it", async () => {
+      listWorkflowCards.mockResolvedValue({
+        cards: [{ id: CARD, name: "Forest Edit" }],
+      });
+      const wrapper = render({ recipe: { ...RECIPE, workflowId: CARD } });
+      await flushPromises();
+
+      // Hidden and one-off cards too: a picture's workflow can be either.
+      expect(listWorkflowCards).toHaveBeenCalledWith({
+        includeHidden: true,
+        includeOneOffs: true,
+      });
+      expect(wrapper.find(".recipe-workflow").text()).toBe("Forest Edit");
+      expect(wrapper.find(".recipe-workflow-sub").text()).toBe(RECIPE.summary);
+    });
+
+    it("reads the cards once as the filmstrip steps between workflows", async () => {
+      listWorkflowCards.mockResolvedValue({
+        cards: [
+          { id: CARD, name: "Forest Edit" },
+          { id: OTHER, name: "Portrait" },
+        ],
+      });
+      const wrapper = render({ recipe: { ...RECIPE, workflowId: CARD } });
+      await flushPromises();
+      await wrapper.setProps({ recipe: { ...RECIPE, workflowId: OTHER } });
+      await flushPromises();
+      await wrapper.setProps({ recipe: { ...RECIPE, workflowId: CARD } });
+      await flushPromises();
+
+      expect(listWorkflowCards).toHaveBeenCalledTimes(1);
+      expect(wrapper.find(".recipe-workflow").text()).toBe("Forest Edit");
+    });
+
+    it("keeps the summary alone for a workflow the cards do not have", async () => {
+      listWorkflowCards.mockResolvedValue({ cards: [{ id: OTHER, name: "X" }] });
+      const wrapper = render({ recipe: { ...RECIPE, workflowId: CARD } });
+      await flushPromises();
+      expect(wrapper.find(".recipe-workflow").text()).toBe(RECIPE.summary);
+      expect(wrapper.find(".recipe-workflow-sub").exists()).toBe(false);
+    });
+
+    it("does not read the owner-only cards for a read-only reader", async () => {
+      isReadOnly.value = true;
+      const wrapper = render({ recipe: { ...RECIPE, workflowId: CARD } });
+      await flushPromises();
+      expect(listWorkflowCards).not.toHaveBeenCalled();
+      expect(wrapper.find(".recipe-workflow").text()).toBe(RECIPE.summary);
+    });
+
+    it("keeps the summary when the cards cannot be read, and asks again", async () => {
+      listWorkflowCards.mockRejectedValueOnce(new Error("down"));
+      listWorkflowCards.mockResolvedValue({
+        cards: [{ id: CARD, name: "Forest Edit" }],
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const wrapper = render({ recipe: { ...RECIPE, workflowId: CARD } });
+      await flushPromises();
+      expect(wrapper.find(".recipe-workflow").text()).toBe(RECIPE.summary);
+      warn.mockRestore();
+
+      // The filmstrip steps away and back: the failure was not remembered.
+      await wrapper.setProps({ recipe: null });
+      await wrapper.setProps({ recipe: { ...RECIPE, workflowId: CARD } });
+      await flushPromises();
+      expect(listWorkflowCards).toHaveBeenCalledTimes(2);
+      expect(wrapper.find(".recipe-workflow").text()).toBe("Forest Edit");
+    });
   });
 });
