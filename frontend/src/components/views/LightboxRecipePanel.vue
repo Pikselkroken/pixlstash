@@ -364,9 +364,10 @@
  * strengths, then Settings, Seed and Negative in one key/value grid, with the
  * action pinned in a footer.
  *
- * **One thing the design draws is still absent rather than faked**, because
- * the data behind it is a later step of that plan: the workflow's own value
- * beside an overridden setting (the workflow defaults read). Run… itself is
+ * **Two things the design draws are still absent rather than faked**, because
+ * the data behind each is a later step of that plan: the stack the workflow
+ * is in, and the workflow's own value beside an overridden setting (the
+ * workflow defaults read). Run… itself is
  * the Run popup (F5, #1407), and the "Matches your saved recipe X" banner and
  * the Save button are live (F6, #1408).
  */
@@ -737,17 +738,20 @@ async function loadWorkflowName() {
           ...workflowNames.value,
           ...Object.fromEntries(cards.map((card) => [card.id, card.name])),
         };
+        return true;
       })
       .catch((err) => {
         // The name is a nicety over the summary below it, never a failure of
         // the tab, so this is logged and the summary stands alone.
         console.warn("Could not read the workflow's name:", err);
+        return false;
       })
       .finally(() => {
         namesRead = null;
       });
   }
-  await namesRead;
+  // A failed read remembers nothing, so the next step asks again.
+  if (!(await namesRead)) return;
   // Not on the cards (yet): remembered as unnamed so the next step on this
   // workflow does not read the whole grid again.
   if (!(key in workflowNames.value)) {

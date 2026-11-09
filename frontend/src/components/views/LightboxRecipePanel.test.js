@@ -1079,13 +1079,23 @@ describe("LightboxRecipePanel", () => {
       expect(wrapper.find(".recipe-workflow").text()).toBe(RECIPE.summary);
     });
 
-    it("keeps the summary when the cards cannot be read", async () => {
-      listWorkflowCards.mockRejectedValue(new Error("down"));
+    it("keeps the summary when the cards cannot be read, and asks again", async () => {
+      listWorkflowCards.mockRejectedValueOnce(new Error("down"));
+      listWorkflowCards.mockResolvedValue({
+        cards: [{ id: CARD, name: "Forest Edit" }],
+      });
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const wrapper = render({ recipe: { ...RECIPE, workflowId: CARD } });
       await flushPromises();
       expect(wrapper.find(".recipe-workflow").text()).toBe(RECIPE.summary);
       warn.mockRestore();
+
+      // The filmstrip steps away and back: the failure was not remembered.
+      await wrapper.setProps({ recipe: null });
+      await wrapper.setProps({ recipe: { ...RECIPE, workflowId: CARD } });
+      await flushPromises();
+      expect(listWorkflowCards).toHaveBeenCalledTimes(2);
+      expect(wrapper.find(".recipe-workflow").text()).toBe("Forest Edit");
     });
   });
 });
