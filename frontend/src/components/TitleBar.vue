@@ -361,7 +361,10 @@ const close = () => desktop?.windowClose?.();
   grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
   align-items: center;
   /* MUST stay in sync with --titlebar-h in style.css (the reserved strip every
-     full-screen overlay anchors its top at). If you change this, change that.
+     full-screen overlay anchors its top at) and with the macOS
+     `titleBarOverlay.height` in electron/src/main.ts (this less the 1px
+     border: the strip the traffic lights centre in). If you change this,
+     change those.
      The switch's track is --control-h-bar, with --space-2 above and below. */
   height: 40px;
   flex-shrink: 0;
