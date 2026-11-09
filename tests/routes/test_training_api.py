@@ -854,6 +854,24 @@ def test_live_view_of_a_run_that_finished_while_pixlstash_was_closed():
         _teardown(temp_dir, server)
 
 
+def test_live_view_rows_from_disk_keep_the_documented_shape():
+    """#2650: with no readable prompts, a row per sample index on disk, role null."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        config = {"config": {"process": [{"train": {"steps": 1500}}]}}
+        job_id, _, _, _ = _live_run(
+            server, temp_dir, rendered_config=json.dumps(config)
+        )
+        rows = owner.get(f"/training/jobs/{job_id}/live").json()["rows"]
+        assert [r["index"] for r in rows] == [0, 1]
+        for row in rows:
+            assert row["prompt"] == ""
+            assert "role" in row and row["role"] is None
+            assert row["with_trigger"] is None
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_a_run_that_ended_without_a_finish_time_has_no_growing_last_phase():
     temp_dir, owner, server, read_token = _setup()
     try:

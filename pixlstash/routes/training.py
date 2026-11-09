@@ -1690,7 +1690,7 @@ def create_router(server) -> APIRouter:
         )
         if not rows:
             rows = [
-                {"index": index, "prompt": "", "with_trigger": None}
+                {"index": index, "prompt": "", "with_trigger": None, "role": None}
                 for index in sorted({s.index for s in samples})
             ]
         for row in rows:
