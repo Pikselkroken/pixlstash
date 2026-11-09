@@ -156,3 +156,44 @@ def test_select_writes_the_tag_to_github_output(tmp_path, monkeypatch, capsys):
     output.unlink()
     bps.main(["select", "--releases-json", str(releases)])
     assert output.read_text() == "tag=\n"
+
+
+@pytest.mark.parametrize(
+    ("version", "latest", "expected"),
+    [
+        # #2645 on main before v2.0.0 ships: the 2.0 copy must not deploy.
+        ("2.0.0rc5", "1.13.2", False),
+        # The "Prepare v2.0.0" commit, tagged but not yet published.
+        ("2.0.0", "1.13.2", False),
+        # The release bot's latest-version PR has merged.
+        ("2.0.0", "2.0.0", True),
+        # A website-only fix on a released main.
+        ("1.13.2", "1.13.2", True),
+        ("1.13.2", "2.0.0", True),
+        # Numeric, not string, order.
+        ("1.10.0", "1.9.0", False),
+        ("1.9.0", "1.10.0", True),
+        # Anything unparseable waits for a manual run.
+        ("2.0.0.dev3", "1.13.2", False),
+        ("2.0.0", "", False),
+    ],
+)
+def test_is_released(version, latest, expected):
+    assert bps.is_released(version, latest) is expected
+
+
+def test_released_writes_the_verdict_to_github_output(tmp_path, monkeypatch):
+    pyproject = tmp_path / "pyproject.toml"
+    latest = tmp_path / "latest-version.json"
+    pyproject.write_text('[project]\nname = "pixlstash"\nversion = "2.0.0"\n')
+    latest.write_text('{"version": "1.13.2"}\n')
+    output = tmp_path / "out"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    args = ["released", "--pyproject", str(pyproject), "--latest-version", str(latest)]
+    bps.main(args)
+    assert output.read_text() == "released=false\n"
+
+    latest.write_text('{"version": "2.0.0"}\n')
+    output.unlink()
+    bps.main(args)
+    assert output.read_text() == "released=true\n"
