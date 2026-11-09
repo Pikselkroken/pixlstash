@@ -72,7 +72,7 @@ describe("api/pictures", () => {
 
   it("getPictureCount appends a filter query when there is one", async () => {
     apiClient.get.mockResolvedValue({ data: { count: 12 } });
-    const result = await getPictureCount("stack_leaders_only=true", { });
+    const result = await getPictureCount("stack_leaders_only=true");
     expect(apiClient.get).toHaveBeenCalledWith(
       "/pictures/count?stack_leaders_only=true",
     );

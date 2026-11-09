@@ -85,7 +85,6 @@ async function confirmCreate() {
 
   loading.value = true
   try {
-    const base = props.backendUrl || ''
     const created = await createToken({
       description: props.resourceLabel
         ? `Share – ${props.resourceLabel}`
@@ -99,7 +98,7 @@ async function confirmCreate() {
           ? includeAttachments.value
           : false,
       watermark: watermark.value,
-    }, { baseUrl: base })
+    })
     const tok = created?.token
     if (!tok) throw new Error('No token returned')
 
@@ -115,7 +114,7 @@ async function confirmCreate() {
     if (watermark.value !== props.embedWatermark) {
       // Fire-and-forget: the share link is already made, so a failed
       // preference save must not fail the dialog. Log it rather than drop it.
-      patchUserConfig({ embed_watermark: watermark.value }, { baseUrl: base })
+      patchUserConfig({ embed_watermark: watermark.value })
         .catch((e) => {
           console.warn('Failed to persist the embed-watermark preference:', e)
         })

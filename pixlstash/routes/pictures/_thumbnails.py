@@ -2,7 +2,7 @@ import ast
 import asyncio
 import os
 import re
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -61,14 +61,11 @@ _thumbnail_executor = ThreadPoolExecutor(
 
 def register_routes(router, server):
     thumbnail_generation_locks: dict[int, asyncio.Lock] = {}
-    thumbnail_memory_cache: OrderedDict[int, bytes] = OrderedDict()
-    thumbnail_memory_cache_max = 128
 
     def clear_thumbnail_runtime_cache() -> None:
-        thumbnail_memory_cache.clear()
         thumbnail_generation_locks.clear()
 
-    # The cache is route-local, so expose its one lifecycle operation to the
+    # The locks are route-local, so expose their one lifecycle operation to the
     # server's library switch coordinator without exposing the storage itself.
     server._clear_thumbnail_runtime_cache = clear_thumbnail_runtime_cache
 
@@ -78,13 +75,6 @@ def register_routes(router, server):
             lock = asyncio.Lock()
             thumbnail_generation_locks[picture_id] = lock
         return lock
-
-    def get_cached_thumbnail_bytes(picture_id: int) -> bytes | None:
-        data = thumbnail_memory_cache.pop(picture_id, None)
-        if data is None:
-            return None
-        thumbnail_memory_cache[picture_id] = data
-        return data
 
     def discard_stale_thumbnail(picture_id: int, file_path: str, thumb_path: str):
         """Drop a cached thumbnail whose source file has been rewritten since.
@@ -98,9 +88,6 @@ def register_routes(router, server):
         that runs on a background sweep - until it lands this route was handing
         back the pre-rotate bitmap, which is why a rotate used to paint the wrong
         way round and only correct itself on a second refresh.
-
-        Both caches go, not just the file: the in-memory copy is keyed on the
-        picture id alone and would otherwise be served in its place.
 
         Returns:
             Whether the thumbnail was stale (and has now been discarded).
@@ -124,21 +111,11 @@ def register_routes(router, server):
         logger.debug(
             "Thumbnail stale (source newer): id=%s source=%s", picture_id, source_path
         )
-        thumbnail_memory_cache.pop(picture_id, None)
         try:
             os.remove(thumb_path)
         except OSError as exc:
             logger.warning("Failed to remove stale thumbnail %s: %s", thumb_path, exc)
         return True
-
-    def cache_thumbnail_bytes(picture_id: int, thumbnail_bytes: bytes) -> None:
-        if not thumbnail_bytes:
-            return
-        if picture_id in thumbnail_memory_cache:
-            thumbnail_memory_cache.pop(picture_id, None)
-        thumbnail_memory_cache[picture_id] = thumbnail_bytes
-        while len(thumbnail_memory_cache) > thumbnail_memory_cache_max:
-            thumbnail_memory_cache.popitem(last=False)
 
     @router.get(
         "/pictures/thumbnails/{id}.webp",
@@ -193,22 +170,6 @@ def register_routes(router, server):
                     headers=_THUMBNAIL_CACHE_HEADERS,
                 )
 
-        cached_bytes = get_cached_thumbnail_bytes(id)
-        if cached_bytes:
-            elapsed_ms = (
-                datetime.now(timezone.utc) - started_at
-            ).total_seconds() * 1000.0
-            logger.debug(
-                "Thumbnail GET memory-hit: id=%s elapsed_ms=%.1f",
-                id,
-                elapsed_ms,
-            )
-            return Response(
-                content=cached_bytes,
-                media_type="image/webp",
-                headers=_THUMBNAIL_CACHE_HEADERS,
-            )
-
         lock = get_thumbnail_lock(id)
         async with lock:
             if thumb_path and os.path.exists(thumb_path):
@@ -229,22 +190,6 @@ def register_routes(router, server):
                         media_type="image/webp",
                         headers=_THUMBNAIL_CACHE_HEADERS,
                     )
-
-            cached_bytes = get_cached_thumbnail_bytes(id)
-            if cached_bytes:
-                elapsed_ms = (
-                    datetime.now(timezone.utc) - started_at
-                ).total_seconds() * 1000.0
-                logger.debug(
-                    "Thumbnail GET memory-hit-after-wait: id=%s elapsed_ms=%.1f",
-                    id,
-                    elapsed_ms,
-                )
-                return Response(
-                    content=cached_bytes,
-                    media_type="image/webp",
-                    headers=_THUMBNAIL_CACHE_HEADERS,
-                )
 
             def build_thumbnail_blocking() -> tuple[
                 str, str | None, bytes | None, str | None

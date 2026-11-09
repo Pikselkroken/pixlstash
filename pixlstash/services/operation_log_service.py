@@ -460,7 +460,7 @@ def diff_states(
     """
     before_delta: dict[str, dict] = {}
     after_delta: dict[str, dict] = {}
-    for picture_id in sorted(set(before) | set(after), key=lambda k: int(k)):
+    for picture_id in sorted(set(before) | set(after), key=int):
         old = before.get(picture_id)
         new = after.get(picture_id)
         if old is None and new is None:

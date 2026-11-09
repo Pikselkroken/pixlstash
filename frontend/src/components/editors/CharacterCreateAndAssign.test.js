@@ -191,9 +191,9 @@ async function gridHandleSaved(savedCharacter, pending, notices) {
     return;
   }
   if (pending.mode === "faces") {
-    await addCharacterFacesByFaceId(characterId, pending.ids, {});
+    await addCharacterFacesByFaceId(characterId, pending.ids);
   } else {
-    await addCharacterFaces(characterId, pending.ids, {});
+    await addCharacterFaces(characterId, pending.ids);
   }
   const n = pending.ids.length;
   const unit = pending.mode === "faces" ? "face" : "picture";
@@ -210,7 +210,7 @@ async function lightboxHandleSaved(savedCharacter, faceId, notices) {
     notices.error(`Created ${name}, but the face couldn't be assigned.`);
     return;
   }
-  await addCharacterFacesByFaceId(characterId, [faceId], {});
+  await addCharacterFacesByFaceId(characterId, [faceId]);
   notices.success(`Created ${name}, assigned to this face.`);
 }
 
@@ -229,7 +229,7 @@ describe("grid flow: the selection is actually assigned", () => {
 
     await gridHandleSaved(payload, pending, notices);
 
-    expect(addCharacterFaces).toHaveBeenCalledWith(99, ["10", "11"], {});
+    expect(addCharacterFaces).toHaveBeenCalledWith(99, ["10", "11"]);
     expect(addCharacterFacesByFaceId).not.toHaveBeenCalled();
     expect(notices.success).toHaveBeenCalledWith(
       "Created Alice, assigned 2 pictures.",
@@ -248,7 +248,7 @@ describe("grid flow: the selection is actually assigned", () => {
 
     await gridHandleSaved(payload, pending, notices);
 
-    expect(addCharacterFacesByFaceId).toHaveBeenCalledWith(99, [7], {});
+    expect(addCharacterFacesByFaceId).toHaveBeenCalledWith(99, [7]);
     expect(addCharacterFaces).not.toHaveBeenCalled();
     expect(notices.success).toHaveBeenCalledWith(
       "Created Alice, assigned 1 face.",
@@ -264,7 +264,7 @@ describe("overlay flow: the face is actually assigned", () => {
 
     await lightboxHandleSaved(payload, 4, notices);
 
-    expect(addCharacterFacesByFaceId).toHaveBeenCalledWith(99, [4], {});
+    expect(addCharacterFacesByFaceId).toHaveBeenCalledWith(99, [4]);
     expect(notices.success).toHaveBeenCalledWith(
       "Created Alice, assigned to this face.",
     );

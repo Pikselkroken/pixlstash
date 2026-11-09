@@ -34,7 +34,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _VIDEO_EXTS = frozenset({".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"})
-_MAX_CONCURRENT_CPU = 8
 
 
 class TaggingWorkflow:

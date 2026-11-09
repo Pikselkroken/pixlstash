@@ -164,18 +164,16 @@ describe("useEntityListsStore", () => {
 
   it("asks for the row counts when reading characters", async () => {
     const store = useEntityListsStore();
-    await store.refresh("characters", { baseUrl: "http://backend:8000" });
+    await store.refresh("characters");
     expect(listCharacters).toHaveBeenCalledWith({
-      baseUrl: "http://backend:8000",
       params: { include_counts: true },
     });
   });
 
   it("asks for the row counts when reading projects", async () => {
     const store = useEntityListsStore();
-    await store.refresh("projects", { baseUrl: "http://backend:8000" });
+    await store.refresh("projects");
     expect(listProjects).toHaveBeenCalledWith({
-      baseUrl: "http://backend:8000",
       params: { include_counts: true },
     });
   });
@@ -198,7 +196,7 @@ describe("useEntityListsStore", () => {
     // is already on every set row unconditionally.
     const store = useEntityListsStore();
     await store.refresh("sets");
-    expect(listPictureSets).toHaveBeenCalledWith({ baseUrl: "" });
+    expect(listPictureSets).toHaveBeenCalledWith();
   });
 
   it("keeps the count fields on the cached rows", async () => {

@@ -3699,7 +3699,7 @@ async function fetchCharacterThumbnail(characterId) {
 // --- Sorting & Pagination ---
 async function fetchSortOptions() {
   try {
-    const payload = await listSortMechanisms({ baseUrl: props.backendUrl });
+    const payload = await listSortMechanisms();
 
     const options = Array.isArray(payload)
       ? payload

@@ -348,7 +348,6 @@ const { fetchConfig } = useAppConfig({
 
 // --- Non-reactive internals ---
 let mainAreaResizeObserver = null;
-let columnsMenuCloseTimeout = null;
 // Unsubscribe handle for the desktop tray's "Settings" event (desktop only).
 let stopOpenSettings = null;
 
@@ -895,10 +894,6 @@ onBeforeUnmount(() => {
   if (mainAreaResizeObserver) {
     mainAreaResizeObserver.disconnect();
     mainAreaResizeObserver = null;
-  }
-  if (columnsMenuCloseTimeout) {
-    clearTimeout(columnsMenuCloseTimeout);
-    columnsMenuCloseTimeout = null;
   }
 });
 

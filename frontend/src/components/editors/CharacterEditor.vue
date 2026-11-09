@@ -489,12 +489,11 @@ function handleKeydown(event) {
 
 async function saveCharacter(charData) {
   try {
-    const opts = { baseUrl: props.backendUrl };
     let envelope;
     if (charData.id) {
-      envelope = await patchCharacter(charData.id, charData, opts);
+      envelope = await patchCharacter(charData.id, charData);
     } else {
-      envelope = await createCharacter(charData, opts);
+      envelope = await createCharacter(charData);
     }
     // BOTH routes answer with `CharacterMutationResponse`, i.e. `{status,
     // character}`, so the record, and the server-assigned id on create, is

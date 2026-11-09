@@ -2597,9 +2597,7 @@ async function ensureLightboxStackMembersLoaded(
   nextLoading.add(stackId);
   lightboxExpandedStackLoading.value = nextLoading;
   try {
-    const data = await listStackPictures(stackId, {
-      baseUrl: backendUrl.value,
-    });
+    const data = await listStackPictures(stackId);
     const images = Array.isArray(data) ? data : [];
     const ordered = normalizeLightboxStackMembersForStack(stackId, images);
     const ids = ordered
@@ -4543,13 +4541,10 @@ async function onDrawEnd(event) {
     return;
   }
   const capturedImageId = image.value.id;
-  const capturedBackendUrl = backendUrl.value;
   const payload = { bbox: [x1, y1, x2, y2], frame_index: 0 };
   try {
     if (drawMode.value === "face") {
-      await addPictureFace(capturedImageId, payload, {
-        baseUrl: capturedBackendUrl,
-      });
+      await addPictureFace(capturedImageId, payload);
       await fetchFaceBboxes(capturedImageId);
       emit("lightbox-change", {
         imageId: capturedImageId,
@@ -5207,7 +5202,6 @@ async function fetchLightboxMetadata(imageId) {
   try {
     const data = await getPictureMetadata(imageId, {
       smartScore: true,
-      baseUrl: backendUrl.value,
     });
     if (metadataRequestId !== requestId) return;
     if (!image.value || image.value.id !== imageId) return;
@@ -5304,9 +5298,7 @@ async function fetchFaceBboxes(imageId) {
   const requestId = (faceBboxesRequestId += 1);
   const requestedImageId = imageId;
   try {
-    const faces = await listPictureFaces(imageId, {
-      baseUrl: backendUrl.value,
-    });
+    const faces = await listPictureFaces(imageId);
     if (faceBboxesRequestId !== requestId) return;
     if (!image.value || image.value.id !== requestedImageId) return;
     const faceArray = Array.isArray(faces) ? faces : faces.faces;
@@ -5322,9 +5314,7 @@ async function fetchFaceBboxes(imageId) {
       firstFrameFaces.map(async (face) => {
         if (face.character_id) {
           try {
-            const data = await getCharacterName(face.character_id, {
-              baseUrl: backendUrl.value,
-            });
+            const data = await getCharacterName(face.character_id);
             face.character_name = data.name || null;
           } catch (e) {
             // Non-fatal: the box still renders, just without a name. Log it so
@@ -5358,9 +5348,7 @@ async function fetchDetections(imageId) {
   const requestId = (detectionBboxesRequestId += 1);
   const requestedImageId = imageId;
   try {
-    const rows = await listPictureDetections(imageId, {
-      baseUrl: backendUrl.value,
-    });
+    const rows = await listPictureDetections(imageId);
     if (detectionBboxesRequestId !== requestId) return;
     if (!image.value || image.value.id !== requestedImageId) return;
     // The endpoint returns a bare array of detection rows.
@@ -5397,7 +5385,7 @@ async function fetchCharacters() {
   charactersLoading.value = true;
   const requestEpoch = (characterThumbnailEpoch += 1);
   try {
-    const data = await listCharacters({ baseUrl: backendUrl.value });
+    const data = await listCharacters();
     const list = Array.isArray(data) ? data : [];
     characters.value = list;
     await Promise.all(
@@ -5418,7 +5406,6 @@ async function fetchCharacterThumbnail(characterId, requestEpoch) {
   try {
     const blob = await getCharacterThumbnail(characterId, {
       cacheBuster: Date.now(),
-      baseUrl: backendUrl.value,
     });
     if (requestEpoch !== characterThumbnailEpoch) return;
     const blobUrl = URL.createObjectURL(blob);
@@ -5466,7 +5453,7 @@ async function openCreatePersonForFace(face, query) {
   // The faces panel keys its rows by face id.
   createPersonFaceKey = face.id;
   const typed = typeof query === "string" ? query.trim() : "";
-  const projects = await listProjects({ baseUrl: backendUrl.value }).catch(
+  const projects = await listProjects().catch(
     (e) => {
       console.warn("Couldn't list projects for the person editor", e);
       return [];
@@ -5565,9 +5552,7 @@ async function handleCreatePersonSaved(savedCharacter) {
   try {
     // Always the face-level path: the user pointed at one specific detection,
     // so a picture-level assignment would claim faces they did not choose.
-    await addCharacterFacesByFaceId(characterId, [faceId], {
-      baseUrl: backendUrl.value,
-    });
+    await addCharacterFacesByFaceId(characterId, [faceId]);
     if (Array.isArray(faceBboxes.value)) {
       faceBboxes.value = faceBboxes.value.map((entry) =>
         entry?.id === faceId
@@ -5857,7 +5842,6 @@ function triggerMediaDownload(blob, filename) {
 async function fetchOriginalMedia(info) {
   return downloadPicture(info.id, info.format, {
     version: info.pixel_sha,
-    baseUrl: backendUrl.value,
   });
 }
 

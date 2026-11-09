@@ -65,11 +65,9 @@ export const ENTITY_KINDS = ["characters", "sets", "projects"];
  * per row (see the header note).
  */
 const FETCHERS = {
-  characters: ({ baseUrl }) =>
-    listCharacters({ baseUrl, params: { include_counts: true } }),
-  sets: listPictureSets,
-  projects: ({ baseUrl }) =>
-    listProjects({ baseUrl, params: { include_counts: true } }),
+  characters: () => listCharacters({ params: { include_counts: true } }),
+  sets: () => listPictureSets(),
+  projects: () => listProjects({ params: { include_counts: true } }),
 };
 
 function emptyLists() {
@@ -101,7 +99,7 @@ export const useEntityListsStore = defineStore("entityLists", () => {
   // An invalidation is stronger than an ordinary cache read: when it arrives
   // during an in-flight read, that response may predate the mutation/event.
   // Remember one trailing read per kind so the final cache is authoritative.
-  const trailingInvalidations = new Map();
+  const trailingInvalidations = new Set();
 
   // Bumped by reset(). A response tagged with a stale epoch is dropped instead
   // of being written into the cache - otherwise a list fetched under the
@@ -181,16 +179,13 @@ export const useEntityListsStore = defineStore("entityLists", () => {
    * the previous list, and this call swaps in the fresh one when it lands.
    *
    * On failure the previous list is kept (a stale menu beats an empty one) and
-   * the error is logged with the kind and base URL.
+   * the error is logged with the kind.
    *
-   * @param {string} kind - one of {@link ENTITY_KINDS}.
-   * @param {Object} [options]
-   * @param {string} [options.baseUrl=""] - backend base; "" addresses the API
-   *   relatively. Requests are de-duplicated on `kind` alone, since the whole
-   *   app talks to one backend.
+   * @param {string} kind - one of {@link ENTITY_KINDS}. Requests are
+   *   de-duplicated on `kind` alone, since the whole app talks to one backend.
    * @returns {Promise<Array>} the list now in the cache.
    */
-  function refresh(kind, { baseUrl = "" } = {}) {
+  function refresh(kind) {
     if (!FETCHERS[kind]) {
       console.warn(
         `[entityLists] refresh called with an unknown kind: ${kind}`,
@@ -207,7 +202,7 @@ export const useEntityListsStore = defineStore("entityLists", () => {
 
     const requestEpoch = epoch;
     pending.value = { ...pending.value, [kind]: true };
-    const request = FETCHERS[kind]({ baseUrl })
+    const request = FETCHERS[kind]()
       .then((rows) => {
         // The credential changed while this was in flight - this response
         // belongs to the previous session and must not be shown.
@@ -223,7 +218,7 @@ export const useEntityListsStore = defineStore("entityLists", () => {
       })
       .catch((err) => {
         console.warn(
-          `[entityLists] failed to fetch ${kind} (baseUrl=${baseUrl || "relative"}):`,
+          `[entityLists] failed to fetch ${kind}:`,
           err,
         );
         // Keep whatever was cached: a stale list is still usable, and blanking
@@ -253,27 +248,24 @@ export const useEntityListsStore = defineStore("entityLists", () => {
    * the refetch runs, so an event never blanks an open menu.
    *
    * @param {string[]} [kinds=ENTITY_KINDS]
-   * @param {Object} [options]
-   * @param {string} [options.baseUrl=""]
    * @returns {Promise<Array[]>}
    */
-  function invalidate(kinds = ENTITY_KINDS, options = {}) {
+  function invalidate(kinds = ENTITY_KINDS) {
     const targets = Array.isArray(kinds) ? kinds : [kinds];
     return Promise.all(
       targets.map((kind) => {
         const existing = inFlight.get(kind);
-        if (!existing) return refresh(kind, options);
+        if (!existing) return refresh(kind);
 
-        trailingInvalidations.set(kind, options);
+        trailingInvalidations.add(kind);
         return existing.then(() => {
           // Another invalidation callback may already have started the shared
           // trailing read. Join it instead of creating a third request.
           const successor = inFlight.get(kind);
           if (successor) return successor;
-          const trailing = trailingInvalidations.get(kind);
-          if (!trailing) return lists.value[kind] ?? [];
+          if (!trailingInvalidations.has(kind)) return lists.value[kind] ?? [];
           trailingInvalidations.delete(kind);
-          return refresh(kind, trailing);
+          return refresh(kind);
         });
       }),
     );
