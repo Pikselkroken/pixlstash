@@ -1,3 +1,4 @@
+import sys
 import time
 import types
 
@@ -14,6 +15,12 @@ from pixlstash.db_models.picture_set import PictureSet
 from pixlstash.db_models.project import Project
 
 API_PREFIX = "/api/v1"
+
+# A folder name with the characters a SQLite URI or SQLAlchemy URL reserves,
+# plus the space and ``%`` that percent-encoding and Alembic's ConfigParser
+# then have to survive (#2210). Windows forbids ``?`` in a file name
+# (WinError 123), so there it is left out and ``#`` and ``%`` still run.
+URI_HOSTILE_FOLDER = "odd #1%" if sys.platform == "win32" else "odd #1?%"
 
 _DEFAULT_TIMEOUT_S = 180
 

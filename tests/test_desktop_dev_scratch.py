@@ -12,6 +12,7 @@ import pytest
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.registry import LibraryRegistry
+from tests.utils import URI_HOSTILE_FOLDER
 
 _SCRIPT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -301,7 +302,7 @@ def test_migration_source_skips_a_later_commit_that_deleted_it(tmp_path):
 
 def test_snapshot_reads_a_path_with_uri_characters(tmp_path):
     scratch_mod = _load_module()
-    folder = tmp_path / "pictures #1?"
+    folder = tmp_path / URI_HOSTILE_FOLDER
     folder.mkdir()
     with contextlib.closing(sqlite3.connect(folder / "vault.db")) as conn:
         conn.execute("CREATE TABLE t (x INTEGER)")
@@ -332,7 +333,7 @@ def test_image_root_never_names_a_real_folder_left_out_of_the_copy(tmp_path):
 def test_downgrade_opens_a_vault_whose_folder_name_has_uri_characters(tmp_path):
     scratch_mod = _load_module()
     _real_dir, library_dir = _make_real_data(tmp_path)
-    vault = tmp_path / "odd #1?" / "vault.db"
+    vault = tmp_path / URI_HOSTILE_FOLDER / "vault.db"
     vault.parent.mkdir()
     with contextlib.closing(sqlite3.connect(library_dir / "vault.db")) as src:
         (head,) = src.execute("SELECT version_num FROM alembic_version").fetchone()

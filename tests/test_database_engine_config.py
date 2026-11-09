@@ -25,11 +25,7 @@ from pixlstash.database import (
 )
 from pixlstash.services.restore.schema_upgrade import _alembic_config
 from pixlstash.utils.sqlite_uri import sqlite_url
-
-# A folder name with every character a SQLite URI or SQLAlchemy URL reserves,
-# plus the space and ``%`` that percent-encoding and Alembic's ConfigParser
-# then have to survive (#2210).
-URI_HOSTILE_FOLDER = "odd #1?%"
+from tests.utils import URI_HOSTILE_FOLDER
 
 
 @pytest.fixture

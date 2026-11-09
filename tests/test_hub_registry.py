@@ -29,6 +29,7 @@ from pixlstash.hub.registry import (
 from pixlstash.hub.schema import CURRENT_SCHEMA_VERSION, read_schema_version
 from pixlstash.cli import main as cli_main
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
+from tests.utils import URI_HOSTILE_FOLDER
 
 
 def make_vault_folder(root, name="library", *, with_credentials=False):
@@ -132,7 +133,7 @@ class TestHubDatabase:
         assert read_schema_version(hub.connection) == CURRENT_SCHEMA_VERSION
 
     def test_engine_opens_a_hub_in_a_folder_with_uri_characters(self, tmp_path):
-        folder = tmp_path / "odd #1?%"
+        folder = tmp_path / URI_HOSTILE_FOLDER
         folder.mkdir()
         path = str(folder / "hub.db")
         HubDatabase(path).close()
@@ -144,7 +145,7 @@ class TestHubDatabase:
                 assert version.scalar() == CURRENT_SCHEMA_VERSION
         finally:
             engine.close()
-        assert os.listdir(tmp_path) == ["odd #1?%"]
+        assert os.listdir(tmp_path) == [URI_HOSTILE_FOLDER]
 
     def test_created_owner_only(self, tmp_path):
         path = str(tmp_path / "hub.db")
@@ -728,7 +729,7 @@ class TestRelocate:
         """``?`` and ``#`` cut a raw ``file:`` URI short, so the vault check
         opened a stray file beside the folder and refused a real vault (#2210)."""
         library = registry.attach(make_vault_folder(tmp_path, "plain"))
-        moved_to = os.path.join(str(tmp_path), "odd #1?%")
+        moved_to = os.path.join(str(tmp_path), URI_HOSTILE_FOLDER)
         shutil.move(library.path, moved_to)
 
         relocated = registry.relocate(library.id, moved_to)
@@ -736,7 +737,7 @@ class TestRelocate:
         assert relocated.uuid == library.uuid
         assert relocated.path == os.path.realpath(moved_to)
         strays = [n for n in os.listdir(tmp_path) if not n.startswith("hub.db")]
-        assert strays == ["odd #1?%"]
+        assert strays == [URI_HOSTILE_FOLDER]
 
     def test_relocate_to_an_occupied_path_is_refused(self, registry, tmp_path):
         first = registry.attach(make_vault_folder(tmp_path, "first"))
