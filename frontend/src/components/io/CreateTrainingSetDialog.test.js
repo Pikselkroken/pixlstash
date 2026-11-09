@@ -738,6 +738,43 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("stops waiting for faces that never come and lets the sheet be used", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    gen.runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: [{ run_id: "r1", status: "queued" }],
+    });
+    gen.getRunOutcome.mockResolvedValue({ status: "completed", picture_ids: [501] });
+    gen.rankSheets.mockResolvedValue({
+      sheets: [{ ...sheet(501, null), faces_read: false, faces: 0 }],
+      references: 0,
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(10_000);
+    const tile = () => wrapper.find('[data-testid="cs-sheet"]');
+    expect(tile().attributes("aria-label")).toBe("Sheet 1: reading faces…");
+    expect(tile().attributes("disabled")).toBeDefined();
+
+    await vi.advanceTimersByTimeAsync(125_000);
+    expect(tile().attributes("aria-label")).toBe("Sheet 1: faces not read");
+    expect(tile().attributes("disabled")).toBeUndefined();
+    // Polling has stopped.
+    const calls = gen.rankSheets.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(gen.rankSheets.mock.calls.length).toBe(calls);
+    await tile().trigger("click");
+    expect(
+      wrapper.find('[data-testid="cts-generate-primary"]').attributes("disabled"),
+    ).toBeUndefined();
+    wrapper.unmount();
+  });
+
   it("keeps a character's own description and starts a picker from Generate more", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
     sheetsWorld({ description: "Woman in her thirties, dark hair" });

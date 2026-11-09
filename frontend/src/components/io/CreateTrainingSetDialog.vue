@@ -618,15 +618,12 @@ const subtitle = computed(() => {
   if (!data.value) return characterName.value;
   const s = data.value.stills.candidates;
   const fresh = generated.value.length;
-  const old = Math.max(s - fresh, 0);
   const parts = [
     characterName.value,
-    fresh
-      ? `${old} + ${fresh} new`
-      : s
-        ? `${s} ${s === 1 ? "picture" : "pictures"}`
-        : "no pictures yet",
+    s ? `${s} ${s === 1 ? "picture" : "pictures"}` : "no pictures yet",
   ];
+  // Made here: a panel whose face was never found is made but not filed.
+  if (fresh) parts.push(`${fresh} new`);
   if (data.value.has_clips) {
     const c = data.value.clips.candidates;
     parts.push(`${c} ${c === 1 ? "clip" : "clips"}`);

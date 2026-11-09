@@ -1636,8 +1636,8 @@ the row element to hand focus back to on close).
   two-step row under the title, *Sheets* then *Pick the set*, and a character
   with no pictures opens on *Sheets*. The step is mounted once and kept with
   `v-show`, so drawn sheets survive going back and forth; the dialog draws its
-  footer from the step's exposed `footer` (`lead`, `back`, `secondary`,
-  `primary`, each a label, an `enabled` and a `run`). The step reads the
+  footer from the step's exposed `footer` (`lead`; `back`, a label and a
+  `run`; `secondary` and `primary`, each with an `enabled` too). The step reads the
   character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
   model is listed disabled, the newest MOSS-Image one preselected, and its name
   rides in the step row as a neutral pill) and the MOSS-Image `txt2img`
@@ -1645,7 +1645,10 @@ the row element to hand focus back to on close).
   then runs the workflow (`runWorkflowCard`, the canvas as `values` at the
   card's own width/height addresses) and polls each run's outcome and
   `POST /characters/{id}/sheets/rank` every 2.5 s until every sheet's faces are
-  read. The best holding sheet is preselected; broken ones show only when every
+  read, or two minutes after the last run ended: a sheet still unread then (no
+  face model, a deleted picture) can be chosen unscored and polling stops.
+  Drawing waits for the character to load, so a typed description never
+  overwrites a stored one. The best holding sheet is preselected; broken ones show only when every
   sheet broke. *Use sheet N* cuts it, waits (90 s at most) for the six
   pictures' faces, then hands their ids back: the picker reloads, marks them
   *new*, and offers *All / New only*, which re-ranks the stills from 1 over the

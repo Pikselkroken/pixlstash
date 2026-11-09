@@ -180,7 +180,11 @@
               :class="{ 'cs-sheetimg--on': sheet.picture_id === chosen }"
               :aria-pressed="sheet.picture_id === chosen"
               :aria-label="`Sheet ${sheet.n}: ${sheetWords(sheet)}`"
-              :disabled="!sheet.faces_read || working || phase === 'filing'"
+              :disabled="
+                (!sheet.faces_read && !gaveUpOnFaces) ||
+                working ||
+                phase === 'filing'
+              "
               data-testid="cs-sheet"
               @click="chosen = sheet.picture_id"
             >
@@ -340,6 +344,10 @@ const POLL_MS = 2500;
 // Panels are filed before their faces are read; the picker ranks by face, so
 // it waits for them, but not forever: a slow queue still hands over.
 const FACE_WAIT_MS = 90_000;
+// A sheet whose faces are still unread this long after its runs ended (no face
+// model, a failed extraction, a deleted picture) stops being waited for: it
+// can be chosen unscored, and the polling stops.
+const SHEET_FACE_WAIT_MS = 120_000;
 const HEIGHT_WORDS = /\b(tall|short|petite|height|legs?|leggy|long-legged)\b/i;
 
 const name = computed(() => props.character?.name || "");
@@ -369,7 +377,13 @@ const order = ref([]); // sheet picture ids in the order they arrived
 const chosen = ref(null);
 const working = ref(false);
 const error = ref("");
+// Drawing waits for the character's stored description, so a typed one never
+// overwrites it.
+const loaded = ref(false);
+const gaveUpOnFaces = ref(false);
 let timer = null;
+let ticking = false;
+let runsEndedAt = 0;
 let alive = true;
 
 const chosenLora = computed(
@@ -472,10 +486,15 @@ const holding = computed(() =>
   ),
 );
 
+const runsEnded = computed(() =>
+  runs.value.every((run) => ["completed", "failed"].includes(run.status)),
+);
+
 const allEnded = computed(
   () =>
-    runs.value.every((run) => ["completed", "failed"].includes(run.status)) &&
-    order.value.every((id) => ranking.value[id]?.faces_read),
+    runsEnded.value &&
+    (gaveUpOnFaces.value ||
+      order.value.every((id) => ranking.value[id]?.faces_read)),
 );
 
 const noneHold = computed(
@@ -517,7 +536,9 @@ const pickIntro = computed(() => {
 });
 
 function sheetWords(sheet) {
-  if (!sheet.faces_read) return "reading faces…";
+  if (!sheet.faces_read) {
+    return gaveUpOnFaces.value ? "faces not read" : "reading faces…";
+  }
   if (sheet.broken) return "more than one person in a photo";
   const words = [sheet.agreement_words];
   if (sheet.close === true) words.push(`close to ${name.value}`);
@@ -531,8 +552,9 @@ function stopPolling() {
 }
 
 function schedule() {
-  stopPolling();
-  if (alive) timer = setTimeout(tick, POLL_MS);
+  // A tick in flight schedules the next one itself when it ends.
+  if (ticking || timer || !alive) return;
+  timer = setTimeout(tick, POLL_MS);
 }
 
 async function followRuns() {
@@ -558,6 +580,7 @@ async function followRuns() {
 
 async function tick() {
   timer = null;
+  ticking = true;
   try {
     await followRuns();
     if (order.value.length) {
@@ -568,8 +591,15 @@ async function tick() {
     }
   } catch (e) {
     console.warn("Couldn't rank the character sheets", e);
+  } finally {
+    ticking = false;
   }
   if (!alive) return;
+  if (!runsEnded.value) runsEndedAt = 0;
+  else if (!runsEndedAt) runsEndedAt = Date.now();
+  if (runsEndedAt && Date.now() - runsEndedAt > SHEET_FACE_WAIT_MS) {
+    gaveUpOnFaces.value = true;
+  }
   if (!chosen.value && holding.value.length) {
     chosen.value = holding.value[0].picture_id;
   }
@@ -648,6 +678,7 @@ async function draw() {
       })),
     );
     phase.value = "drawing";
+    gaveUpOnFaces.value = false;
     schedule();
   } catch (e) {
     error.value = `Couldn't start the sheets. ${errorMessage(e, "Please try again.")}`;
@@ -683,6 +714,7 @@ async function use() {
 
 const canDraw = computed(
   () =>
+    loaded.value &&
     !!workflowId.value &&
     !!form.description.trim() &&
     phase.value !== "filing",
@@ -713,7 +745,7 @@ const footer = computed(() => {
   const waiting = pendingSlots.value.length;
   return {
     lead: waiting
-      ? `Drawing ${waiting} more, about a minute each. They keep drawing in Tasks if you close this.`
+      ? `Drawing ${waiting} more, about a minute each. Closing this leaves them drawing in Tasks; they land in the library.`
       : chosenSheet.value
         ? `Sheet ${chosenSheet.value.n} becomes ${name.value}'s pictures.`
         : "",
@@ -729,7 +761,10 @@ const footer = computed(() => {
     },
     primary: {
       label: chosenSheet.value ? `Use sheet ${chosenSheet.value.n}` : "Use a sheet",
-      enabled: !!chosenSheet.value?.faces_read && !working.value,
+      enabled:
+        !!chosenSheet.value &&
+        (chosenSheet.value.faces_read || gaveUpOnFaces.value) &&
+        !working.value,
       run: use,
     },
   };
@@ -774,6 +809,10 @@ async function load() {
       0,
       4,
     );
+  }
+  loaded.value = character.status === "fulfilled";
+  if (!loaded.value) {
+    error.value = `Couldn't read ${name.value}. Close and open the dialog to try again.`;
   }
   for (const result of [character, adapters, cards, references]) {
     if (result.status === "rejected") {

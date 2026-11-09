@@ -176,6 +176,30 @@ def test_agreement_and_closeness():
     assert agreement_words(0.7) == "faces agree strongly"
 
 
+def test_ranking_measures_closeness_against_references_never_the_sheet_itself():
+    """A reference face on the sheet itself is left out; close follows the threshold."""
+    person = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    other = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    seen = {}
+
+    class Db:
+        def run_immediate_read_task(self, fn, *args):
+            seen["args"] = args
+            return (
+                {5: [person.tobytes()] * 6, 6: [other.tobytes()] * 6, 7: []},
+                [person.tobytes()],
+            )
+
+    vault = type("Vault", (), {"db": Db()})()
+    sheets, references = character_sheet.rank_sheets(vault, 1, [5, 6, 7, 5])
+    assert seen["args"] == (1, [5, 6, 7])
+    assert references == 1
+    near, far, unread = sheets
+    assert (near["close"], far["close"]) == (True, False)
+    assert near["closeness"] == pytest.approx(1.0)
+    assert unread["faces_read"] is False and unread["agreement"] is None
+
+
 @pytest.fixture(scope="module")
 def client():
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -298,6 +322,7 @@ def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
     response = client.post(url, json={"picture_ids": [sheet_id, sheet_id]})
     assert response.status_code == 200, response.text
     body = response.json()
+    # The sheet's own faces are never its references.
     assert body["references"] == 0
     (sheet,) = body["sheets"]
     assert sheet["faces"] == 7
