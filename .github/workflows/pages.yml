@@ -12,17 +12,54 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: pages
-  cancel-in-progress: true
-
 env:
   # Every PixlStash this workflow boots reports itself as ours, never as a real
   # install (Server.DEV_MACHINE_ENV_VAR; guarded by tests/test_install_type_buckets.py).
   PIXLSTASH_TELEMETRY_DEV: '1'
 
 jobs:
+  # A push to main can carry copy for a version that is not out yet: site
+  # pages saying 2.0 while latest-version.json, which the download links are
+  # built from, still names 1.13.2 (#2647). A push deploys only once
+  # pyproject.toml's version is published, i.e. after the release bot's
+  # latest-version PR merges (that merge is itself a push here). A manual run
+  # always deploys: gh workflow run pages.yml --ref main
+  gate:
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.released.outputs.released }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /pyproject.toml
+            /scripts/build_prerelease_site.py
+            /website/latest-version.json
+          sparse-checkout-cone-mode: false
+
+      - name: Is this version released?
+        id: released
+        run: |
+          python3 scripts/build_prerelease_site.py released \
+            --pyproject pyproject.toml --latest-version website/latest-version.json
+          if ! grep -qx 'released=true' "$GITHUB_OUTPUT"; then
+            echo "::notice::Not deploying: this version is not released yet. Run pages.yml by hand once it is."
+          fi
+
   deploy:
+    needs: gate
+    if: >-
+      always() && (github.event_name == 'workflow_dispatch' ||
+      needs.gate.outputs.released == 'true')
+    # Job-level, so a held push run never cancels a deploy in progress.
+    concurrency:
+      group: pages
+      cancel-in-progress: true
     permissions:
       contents: read
       pages: write
