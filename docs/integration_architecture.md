@@ -1404,9 +1404,10 @@ the two sides have agreed:
    family of the base model the shelf identified it as
    (`model_shelf_service.base_model_family`: filename guesses included, the
    same value as `base_model_family` on its `GET /adapters` or
-   `GET /checkpoints` row, where `family` stays the stated-only one). Both are
-   null where the shelf does not hold the file or the name could be more than
-   one file. They let a client narrow workflows to a LoRA's base model, and
+   `GET /checkpoints` row, where `family` stays the stated-only one). `sha256`
+   is null where the shelf does not hold the file or the name could be more
+   than one file; a base model's `base_model_family` is then the one its
+   filename names (`flux1-dev` is `flux1`), null only where that names none. They let a client narrow workflows to a LoRA's base model, and
    match the checkpoint against a hand-made workflow set, without another
    request: Create with LoRA… does both (`frontend/src/utils/loraWorkflows.js`).
 

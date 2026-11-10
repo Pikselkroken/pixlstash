@@ -147,11 +147,11 @@ describe("pickerOption", () => {
     });
   });
 
-  it("leads with the picker's own note, and says nothing it has not read", () => {
-    expect(pickerOption({ id: "auto:2", name: "Bare" }, "Base model not known")).toEqual({
+  it("says nothing it has not read", () => {
+    expect(pickerOption({ id: "auto:2", name: "Bare" })).toEqual({
       value: "auto:2",
       label: "Bare",
-      chips: ["Base model not known"],
+      chips: [],
       chipDetails: {},
     });
   });

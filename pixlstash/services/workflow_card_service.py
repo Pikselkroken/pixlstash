@@ -124,6 +124,7 @@ from pixlstash.utils.adapter_header import (
     FILE_UNKNOWN,
 )
 from pixlstash.utils.known_base_models import (
+    family_of,
     fold,
     identify,
     model_tile,
@@ -254,9 +255,9 @@ class SlotModel:
     base_model_folded: Optional[str] = None
     # Which shelf file this is, and the family of the base model the shelf
     # identified it as (``base_model_family``), so a client can ask "does this
-    # LoRA fit this workflow's checkpoint?" with the shelf's own answer. Both
-    # ``None`` for a model the shelf does not hold or cannot pin down to one
-    # file.
+    # LoRA fit this workflow's checkpoint?" with the shelf's own answer.
+    # ``sha256`` is ``None`` for a model the shelf does not hold or cannot pin
+    # down to one file; a base model's family is then its filename's.
     sha256: Optional[str] = None
     base_model_family: Optional[str] = None
     # The tile a model with no icon is drawn with
@@ -840,7 +841,10 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
                     canonical,
                     canonical_quant(row["quant"]),
                     row["sha256"],
-                    base_model_family(row),
+                    # A base model the shelf holds under a spelling no family
+                    # is listed for is read as its filename would be.
+                    base_model_family(row)
+                    or family_of(identify([row["base_model"]], [row["filename"]])[0]),
                     row["filename"],
                     tile,
                 )
@@ -1294,15 +1298,19 @@ def _mark_fields(
     imported graph.
     """
     quant = (mark.quant if mark else None) or quant_from_filename(name or "")
+    canonical, _source = identify((), (name,))
+    # A base model the shelf cannot answer for (not held, or a name several
+    # files share) still has the family its filename names: a guess, as the
+    # shelf's own is, and what the workflow grouping reads (`_family_of_name`).
+    guessed = family_of(canonical) if kind in BASE_MODEL_KINDS else None
     if mark is None:
-        canonical, _source = identify((), (name,))
         tile = model_tile(
             canonical,
             name,
             checkpoint=kind in BASE_MODEL_KINDS,
             adapter=kind == "lora",
         )
-        return {"quant": quant, **(tile or {})}
+        return {"quant": quant, "base_model_family": guessed, **(tile or {})}
     return {
         "title": mark.title,
         "icon": mark.icon,
@@ -1310,7 +1318,7 @@ def _mark_fields(
         "base_model_folded": mark.base_model_folded,
         "quant": quant,
         "sha256": mark.sha256,
-        "base_model_family": mark.base_model_family,
+        "base_model_family": mark.base_model_family or guessed,
         **(mark.tile or {}),
     }
 

@@ -564,10 +564,9 @@ export function factChips(card, { short = false } = {}) {
  * A card as one option of an `AppSelect`: the name over the facts the
  * Workflows grid prints under it, so a picker reads like the grid. The chips
  * are the card's base model (row 3) and then its facts row, spelled the way
- * the card spells them. `note` leads them: what the picker itself has to say
- * about the row, which must not be the chip that clips away.
+ * the card spells them.
  */
-export function pickerOption(card, note = null) {
+export function pickerOption(card) {
   const facts = factChips(card, { short: true });
   const type = shortTypeLabel(card);
   const chipDetails = Object.fromEntries(
@@ -581,7 +580,6 @@ export function pickerOption(card, note = null) {
     value: card.id,
     label: card.name,
     chips: [
-      note,
       baseModelText(baseModels(card)) || null,
       ...facts.map((chip) => chip.label),
     ].filter(Boolean),

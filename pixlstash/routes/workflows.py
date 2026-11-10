@@ -508,7 +508,9 @@ class WorkflowSlotModel(BaseModel):
             "The family of the base model the shelf identified this file as "
             "(`sdxl`, `flux1`, `krea2`, …), filename guesses included: the "
             "same value as `base_model_family` on its `GET /adapters` or "
-            "`GET /checkpoints` row, or null where the shelf cannot say. What "
+            "`GET /checkpoints` row. A base model the shelf does not hold, "
+            "cannot pin down to one file or has no family for takes the "
+            "family its filename names; null where that names none. What "
             "a client compares a LoRA's `base_model_family` against to narrow "
             "the workflows it fits."
         ),

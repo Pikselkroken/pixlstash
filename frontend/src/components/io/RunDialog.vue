@@ -2722,7 +2722,18 @@ const loraFits = computed(() => {
   const loras = attached
     ? attachedLoras.value
     : adapters.value.filter((row) => row.sha256 === sha).slice(0, 1);
-  return { loras, ...fitWorkflows(cards.value, loras, handMadeSets.value) };
+  const fits = fitWorkflows(cards.value, loras, handMadeSets.value);
+  // A workflow whose own base model nobody has read is not one the LoRA is
+  // for: beside a LoRA with a known base model it is left out and counted.
+  // (A LoRA with no base model recorded narrows nothing, so it stays.)
+  const known = loras.some((lora) => lora.base_model_family);
+  const unread = (entry) => known && !entry.checkpoint?.base_model_family;
+  return {
+    loras,
+    ...fits,
+    unknown: fits.unknown.filter((entry) => !unread(entry)),
+    unread: fits.unknown.filter(unread),
+  };
 });
 
 /** What the narrowing left out, said rather than hidden without a word. */
@@ -2744,6 +2755,9 @@ const loraFitNote = computed(() => {
   const parts = [];
   if (fits.clash.length) {
     parts.push(`${fits.clash.length} for another base model`);
+  }
+  if (fits.unread.length) {
+    parts.push(`${fits.unread.length} whose base model is not known`);
   }
   if (fits.needsPicture.length) {
     parts.push(`${fits.needsPicture.length} that start from a picture`);
@@ -2781,24 +2795,15 @@ const favouriteWorkflow = (option) =>
 const workflowOptions = computed(() => {
   const fits = loraFits.value;
   if (fits) {
-    // Matches first, then the workflows whose base model nobody has read,
-    // said so: they may fit, and hiding them would hide every workflow on a
-    // model the shelf has not identified. A favourite leads inside each.
-    const known = fits.loras.some((lora) => lora.base_model_family);
+    // Matches first, then the workflows a LoRA with no base model recorded
+    // may fit. A favourite leads inside each.
     return [
       ...favouritesFirst(
         fits.match.map((entry) => pickerOption(entry.card)),
         favouriteWorkflow,
       ),
       ...favouritesFirst(
-        fits.unknown.map((entry) =>
-          pickerOption(
-            entry.card,
-            known && !entry.checkpoint?.base_model_family
-              ? "Base model not known"
-              : null,
-          ),
-        ),
+        fits.unknown.map((entry) => pickerOption(entry.card)),
         favouriteWorkflow,
       ),
     ];
