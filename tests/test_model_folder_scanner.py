@@ -20,6 +20,7 @@ about the claims the rest of the feature is built on:
 import json
 import os
 import struct
+import time
 
 import pytest
 
@@ -1583,10 +1584,37 @@ class TestScansThatRunByThemselves:
         scanner.scan_folder(folder_id, str(folder), "user")
 
         os.remove(folder / "a.safetensors")
+        # A mount point was made before anything was ever seen in it.
+        os.utime(folder, (0, 0))
         result = scanner.scan_folder(folder_id, str(folder), "user")
 
         assert result.state == STATE_UNREACHABLE
         assert located(hub)["a.safetensors"]["state"] == STATE_UNREACHABLE
+
+    def test_a_folder_emptied_after_its_last_scan_is_a_folder_of_deletions(
+        self, hub, scanner, tmp_path
+    ):
+        """Deleting the last file stamps the folder later than any scan that saw
+        it, which an unmounted drive's mount point never is (and stays true on
+        the scans after the one that first read it as unreachable)."""
+        folder = tmp_path / "models"
+        folder.mkdir()
+        write_adapter(folder / "a.safetensors")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        os.remove(folder / "a.safetensors")
+        os.utime(folder, (0, 0))
+        scanner.scan_folder(folder_id, str(folder), "user")
+        assert located(hub)["a.safetensors"]["state"] == STATE_UNREACHABLE
+
+        later = time.time() + 60
+        os.utime(folder, (later, later))
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert result.state == STATE_PRESENT
+        assert result.missing == 1
+        assert located(hub)["a.safetensors"]["state"] == STATE_MISSING
 
 
 class _FakeWatcher:

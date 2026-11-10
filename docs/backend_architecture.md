@@ -11671,8 +11671,12 @@ on start-up and on a timer, sweeping it would mark every model `missing` and
 hash it all again when the drive comes back. A walk that finds a directory with
 nothing in it at all, of a folder that still has rows to sweep, marks them
 `unreachable` instead (`_mark_unreachable`). A folder whose models were deleted
-but that still holds anything else is swept as before; one emptied completely
-reads `unreachable` until the owner forgets it.
+but that still holds anything else is swept as before, and so is one emptied
+completely: removing the last entry stamps the directory's mtime later than the
+newest `seen_at` of its rows, which a mount point made before the drive was
+mounted over it is not (`_emptied_since_seen`). A mount point re-created on
+every boot does read as emptied, and a share whose clock runs behind this
+machine's can keep an emptied folder `unreachable`.
 
 **The shelf hears about it.** A scan that found copies the folder had no
 `present` row for announces their ids as `models_arrived`, the event a download
