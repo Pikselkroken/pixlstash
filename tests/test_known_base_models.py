@@ -30,6 +30,7 @@ from pixlstash.utils.known_base_models import (
     model_tile,
     suggest,
     tile_canonical,
+    training_base_tile,
 )
 
 
@@ -836,3 +837,30 @@ def test_a_card_slot_the_shelf_does_not_hold_is_named_from_its_filename():
     assert "mark" not in _mark_fields(None, "add_detail.safetensors", "lora")
     # A slot whose name was never recorded names no tile, and does not fail.
     assert _mark_fields(None, None, "unet") == {"quant": None}
+
+
+def test_a_training_run_wears_its_base_models_release_tile():
+    """What a run trains on is named by repo id or path; it wears the release's tile."""
+    tile = training_base_tile("black-forest-labs/FLUX.2-klein-base-9B")
+    assert (tile["label"], tile["mark_icon"], tile["mark_band"]) == (
+        "FLUX.2 Klein",
+        "flux",
+        True,
+    )
+    assert training_base_tile("Tongyi-MAI/Z-Image-Turbo")["label"] == "Z-Image Turbo"
+    # No tab: free text claims no role, and an undistilled base no bolt.
+    assert tile["mark_tab"] is None
+    assert training_base_tile("someone/my-sdxl-anime-lora")["mark_tab"] is None
+    # A re-branded fine-tune wears its own mark, with no canonical label.
+    assert training_base_tile("RunDiffusion/Juggernaut-XL")["label"] is None
+    # Even where its id names the base it was tuned from.
+    assert training_base_tile("someone/juggernaut_sdxl_v9")["label"] is None
+    assert training_base_tile("/home/me/models/flux1-dev.safetensors")["mark"] == [
+        "Dev",
+        "1",
+    ]
+    # An unknown base, or none, keeps the generated mark.
+    assert training_base_tile("someone/my-private-base") is None
+    assert training_base_tile("") is None
+    assert training_base_tile("   ") is None
+    assert training_base_tile(None) is None

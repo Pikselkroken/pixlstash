@@ -16,8 +16,9 @@ const read = (name) =>
   readFileSync(fileURLToPath(new URL(name, import.meta.url)), "utf8");
 
 const globalCss = read("./SideBar.global.css");
-const scopedCss = read("./SideBar.css");
-const folderTreeNode = read("../editors/FolderTreeNode.vue");
+// The scoped sheets: Media's own, and the nav rows every workspace's sidebar
+// shares (SidebarNav.css), checked as one.
+const scopedCss = read("./SideBar.css") + "\n" + read("./SidebarNav.css");
 
 /** Strip comments so prose about a bug is never mistaken for the bug. */
 const code = (css) => css.replace(/\/\*[\s\S]*?\*\//g, "");
@@ -54,46 +55,49 @@ function ruleBody(css, selector) {
 }
 
 describe("the row system is defined once, unscoped", () => {
-  it("lives in the unscoped sheet so it reaches FolderTreeNode", () => {
-    // SideBar.css is `<style scoped>`, so a rule there cannot style a row
-    // rendered by a child component. This placement is the fix.
-    expect(globalCss).toContain(".sidebar-row-glyph");
+  it("lives in the unscoped sheet", () => {
+    expect(globalCss).toContain(".ps-row-glyph");
     expect(globalCss).toContain("--indent-step");
   });
 
   it("the refused-drop state is unscoped too", () => {
-    // #757 shipped `.not-droppable` twice: once in SideBar.css and once copied
-    // into FolderTreeNode under a comment explaining that the copy was needed
-    // because the styles are scoped. It is not needed once the folder-row
-    // family lives in the unscoped sheet, and a second copy is how the two
+    // #757 shipped `.not-droppable` twice, and a second copy is how the two
     // drift apart again.
-    expect(globalCss).toContain(".sidebar-folder-row.not-droppable");
+    expect(globalCss).toContain(".sidebar-list-item.not-droppable");
     expect(scopedCss).not.toContain("not-droppable");
-    const style = folderTreeNode.split("<style")[1] ?? "";
-    expect(style).not.toContain("not-droppable");
   });
+});
 
-  it("FolderTreeNode keeps no private copy of the row styles", () => {
-    // It used to, and the copy had drifted to a different inset with no base
-    // rail, so selecting a nested folder shifted its label 3px right.
-    const style = folderTreeNode.split("<style")[1] ?? "";
-    for (const dup of [
-      ".sidebar-folder-row {",
-      ".sidebar-folder-children {",
-      ".sidebar-folder-label {",
-    ]) {
-      expect(style).not.toContain(dup);
-    }
+describe("every workspace's sidebar is one sidebar", () => {
+  // Media, Workflows and Models each drew their own rows and only Media could
+  // be resized; the three drifted apart in glyph size, gaps and type.
+  for (const file of [
+    "./SideBar.vue",
+    "./WorkflowsSidebar.vue",
+    "./ModelsSideBar.vue",
+  ]) {
+    it(`${file} wears the shared nav sheet, rows and resize handle`, () => {
+      const sfc = read(file);
+      expect(sfc).toContain('<style scoped src="./SidebarNav.css"></style>');
+      expect(sfc).toMatch(/<SidebarResizeHandle\b/);
+      expect(sfc).toMatch(/class="[^"]*\bsidebar-panel\b/);
+      expect(sfc).toMatch(/class="[^"]*\bsidebar-nav-list\b/);
+      expect(sfc).toContain('class="sidebar-list-icon');
+      expect(sfc).toContain('class="sidebar-section-header"');
+    });
+  }
+
+  it("Media imports the shared sheet before its own, so its rules refine it", () => {
+    const sfc = read("./SideBar.vue");
+    expect(sfc.indexOf('src="./SidebarNav.css"')).toBeLessThan(
+      sfc.indexOf('src="./SideBar.css"'),
+    );
   });
 });
 
 describe("every row starts at one left edge", () => {
   const ROW_TYPES = [
     ".sidebar-list-item",
-    ".sidebar-project-tree-row",
-    ".sidebar-project-tree-subheader",
-    ".sidebar-folder-row",
-    ".sidebar-folder-section-header",
     ".sidebar-section-header",
   ];
 
@@ -103,7 +107,7 @@ describe("every row starts at one left edge", () => {
     expect(body).toContain("var(--depth, 0) * var(--indent-step)");
   });
 
-  it("covers all six row types in that rule", () => {
+  it("covers every row type in that rule", () => {
     const shared = code(globalCss)
       .split("}")
       .find((r) => r.includes("var(--depth, 0) * var(--indent-step)"));
@@ -163,69 +167,34 @@ describe("the selection rail is reserved, never added on select", () => {
 
 describe("optional glyphs keep their box", () => {
   it("hides an absent glyph with visibility, not display", () => {
-    const body = ruleBody(globalCss, ".sidebar-row-glyph--empty");
+    const body = ruleBody(globalCss, ".ps-row-glyph--empty");
     expect(body).toContain("visibility: hidden");
     expect(body).not.toContain("display");
   });
 
   it("keeps a fixed width so an absent glyph still holds its column", () => {
-    const body = ruleBody(globalCss, ".sidebar-row-glyph");
+    const body = ruleBody(globalCss, ".ps-row-glyph");
     expect(body).toContain("width: var(--gutter-glyph)");
   });
 
-  it("an empty caption goes inert but keeps its add action operable", () => {
-    // The way out of an empty group is its `+`. Fading or disabling the whole
-    // row would take that with it and strand the user.
-    const body = ruleBody(
-      scopedCss,
-      ".sidebar-project-tree-subheader--empty .sidebar-project-tree-subheader-label",
-    );
-    expect(body, "the label, not the row, carries the fade").toContain(
-      "opacity: var(--opacity-disabled",
-    );
-
-    const sideBar = read("./SideBar.vue");
-    // The chevron's visibility and the row's inert state read the SAME helper,
-    // so they cannot disagree.
-    for (const group of ["projectHasPeople", "projectHasSets"]) {
-      expect(sideBar).toContain(`'sidebar-row-glyph--empty': !${group}(p.id)`);
-      expect(sideBar).toContain(
-        `:aria-disabled="!${group}(p.id) || undefined"`,
-      );
-    }
-  });
-
-  it("rank is carried by type, not indent alone", () => {
-    // A project and the captions nested under it must differ in type. When they
-    // did not, indent had to signal rank as well as depth, which is what forced
-    // a 24px step and pushed names to 91px in a 240px rail.
-    const project = ruleBody(scopedCss, ".sidebar-project-tree-label");
-    const caption = ruleBody(
-      scopedCss,
-      ".sidebar-project-tree-subheader-label",
-    );
-    expect(project).toContain("font-size: var(--text-sm)");
-    expect(caption).toContain("font-size: var(--text-2xs)");
-  });
-
-  it("no structural label or caret in the project tree is dimmed", () => {
-    // Three separate defects came out of dimming things in this column:
-    //   - caption at 0.7 became quieter than the names it heads, inverting the
-    //     hierarchy;
-    //   - its caret was not dimmed with it, so the caret outshone its label,
-    //     while the project's caret at 0.5 was far dimmer than its own;
-    //   - a caret at 0.7 of a 0.7 label measures 2.95:1 in light, under the
-    //     3:1 a disclosure glyph owes as a graphical object (WCAG 1.4.11).
-    // Rank is size, weight, tracking and indent. Not opacity.
+  it("section heads wear the section label's ink, and only that", () => {
+    // Full ink made an 11px caps head read as one more row (design "Quiet
+    // label"). The head takes .section-label's 70%; nothing dims it further.
+    const ink =
+      "color: rgba(var(--v-theme-sidebar-text), var(--opacity-text-secondary))";
+    expect(
+      ruleBodies(scopedCss, ".sidebar-section-header").some((b) =>
+        b.includes(ink),
+      ),
+    ).toBe(true);
     for (const sel of [
-      ".sidebar-project-tree-label",
-      ".sidebar-project-tree-chevron",
-      ".sidebar-project-tree-subheader-label",
-      ".sidebar-project-tree-sub-chevron",
+      ".sidebar-section-header",
+      ".sidebar-section-title",
+      ".sidebar-media-list .sidebar-section-header",
     ]) {
       for (const body of ruleBodies(scopedCss, sel)) {
         expect(body, `${sel} must not carry its own opacity`).not.toMatch(
-          /opacity\s*:/,
+          /(^|[;{\s])opacity\s*:/,
         );
       }
     }
@@ -239,6 +208,26 @@ describe("optional glyphs keep their box", () => {
     expect(sideBar).not.toContain('style="visibility: hidden"');
     for (const m of sideBar.matchAll(/<v-icon[^>]*sidebar-row-glyph[^>]*>/g)) {
       expect(m[0]).not.toContain("v-show");
+    }
+  });
+});
+
+describe("a hovered row's thumbnail stays put", () => {
+  it("no thumbnail rule moves or zooms the picture", () => {
+    // A 4% hover zoom on a 20px picture resampled it and made it flutter.
+    // Hover is the row's wash (visual-language.md §11), not the picture.
+    const thumbs = [
+      ".sidebar-character-thumb",
+      ".sidebar-set-thumb-image",
+      ".sidebar-collapsed-flyout-thumb",
+    ];
+    for (const rule of code(scopedCss).split("}")) {
+      // The last two parts, so a rule nested in @media keeps its selector.
+      const parts = rule.split("{");
+      if (parts.length < 2) continue;
+      const [sel, body] = parts.slice(-2);
+      if (!thumbs.some((t) => sel.includes(t))) continue;
+      expect(body, sel.trim()).not.toMatch(/transform|scale|translate|zoom/);
     }
   });
 });

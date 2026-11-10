@@ -107,7 +107,8 @@ FILE_TEXT_ENCODER = "text_encoder"
 FILE_CONTROLNET = "controlnet"
 # An image upscaler (ESRGAN, SwinIR, DAT...), loaded by its own loader, which
 # the ComfyUI-PixlStash Upscale Model Loader stands in for. Mostly `.pth`,
-# which has no header to read, so it is told by its folder alone.
+# which has no header to read, so it is told by its folder, or for a
+# `.safetensors` RRDBNet by `_UPSCALER_LAYOUT`.
 FILE_UPSCALER = "upscaler"
 
 # Tensors only a ControlNet carries: diffusers' (SD, SDXL, SD3.5, Flux) and the
@@ -119,15 +120,28 @@ _CONTROLNET_RE = re.compile(
     r"cond_embedding|x_embedder)|input_hint_block|zero_convs)\."
 )
 
-# The first convolution of an autoencoder's two halves, at the top level of the
+# The first layer of an autoencoder's two halves, at the top level of the
 # file, one pair per layout: SD, SDXL, FLUX and SD3.5 VAEs (and SeedVR2's 3D
 # one) name it `conv_in`, Wan's video VAE and the Qwen Image ones built on it
-# `conv1`. Both halves, so a decoder-only or encoder-only file is not taken for
-# a whole VAE. A checkpoint bakes its VAE in under `first_stage_model.`, which
-# never matches.
+# `conv1`. MiniMax H3's video VAE decodes with a transformer, whose first layer
+# is `x_embedder`; at 2.6B parameters it clears the checkpoint threshold, so
+# without it a flat-folder copy reads as a `checkpoint`. Both halves, so a
+# decoder-only or encoder-only file is not taken for a whole VAE. A checkpoint
+# bakes its VAE in under `first_stage_model.`, which never matches.
+VIT_DECODER_VAE_LAYOUT = frozenset(
+    ("encoder.conv_in.weight", "decoder.x_embedder.weight")
+)
 _VAE_LAYOUTS = (
     frozenset(("encoder.conv_in.weight", "decoder.conv_in.weight")),
     frozenset(("encoder.conv1.weight", "decoder.conv1.weight")),
+    VIT_DECODER_VAE_LAYOUT,
+)
+
+# BasicSR's RRDBNet (Real-ESRGAN and the ESRGAN models retrained on it), at
+# the top level of the file. The download offered for an upscale lands in a
+# flat folder, where nothing else would say what it is.
+_UPSCALER_LAYOUT = frozenset(
+    ("conv_first.weight", "conv_body.weight", "conv_last.weight")
 )
 
 # What a directory NAMES the files inside it, normalised by `_normalise_folder`.
@@ -421,6 +435,11 @@ def has_vae_markers(tensor_names) -> bool:
     return any(layout <= names for layout in _VAE_LAYOUTS)
 
 
+def has_upscaler_markers(tensor_names) -> bool:
+    """Return whether *tensor_names* are an RRDBNet image upscaler's."""
+    return _UPSCALER_LAYOUT <= set(tensor_names)
+
+
 def count_parameters(header: dict) -> int:
     """Return the total parameter count implied by a safetensors *header*.
 
@@ -620,10 +639,12 @@ def role_from_folder(path: str) -> Optional[str]:
         ``"checkpoint"``, or ``None`` when the directory names no role we recognise - which is the answer for a flat folder of mixed
         downloads and must never be read as "not a VAE".
     """
-    folder = os.path.basename(os.path.dirname(path))
-    if not folder:
-        return None
-    return _ROLE_FOLDERS.get(_normalise_folder(folder))
+    return folder_name_role(os.path.basename(os.path.dirname(path)))
+
+
+def folder_name_role(name: str) -> Optional[str]:
+    """The ``file_kind`` a directory called *name* names, or ``None``."""
+    return _ROLE_FOLDERS.get(_normalise_folder(name)) if name else None
 
 
 def classify_model_file(
@@ -681,6 +702,8 @@ def classify_model_file(
         return FILE_CONTROLNET
     if has_vae_markers(tensor_names):
         return FILE_VAE
+    if has_upscaler_markers(tensor_names):
+        return FILE_UPSCALER
     if header is not None and has_text_encoder_markers(header):
         return FILE_TEXT_ENCODER
     role = role_from_folder(path) if path else None

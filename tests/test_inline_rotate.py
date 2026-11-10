@@ -643,6 +643,33 @@ def test_a_180_rotate_changes_the_thumbnail_cache_version(client, server):
     assert after == "320x240o3"
 
 
+def test_a_rotate_before_the_thumbnail_is_processed_changes_the_url(client, server):
+    """A turn changes the served URL even while the bitmap's size is unknown.
+
+    The rotate NULLs ``thumbnail_width`` / ``thumbnail_height`` until the
+    sweep regenerates the bitmap, so the version falls back to ``"0"``. With the
+    orientation dropped there, a picture not yet processed, or a second turn
+    inside that window, kept the same URL and the grid painted the old bitmap
+    (#2324's rotate spec, which runs with the sweep off, caught it).
+    """
+    picture_id = _upload(client)
+
+    def _thumbnail_url():
+        resp = client.post(f"{API}/pictures/thumbnails", json={"ids": [picture_id]})
+        assert resp.status_code == 200, resp.text
+        return resp.json()[str(picture_id)]["thumbnail"]
+
+    first = _thumbnail_url()
+    assert _rotate(client, [picture_id], "cw").status_code == 200
+    second = _thumbnail_url()
+    assert _rotate(client, [picture_id], "cw").status_code == 200
+    third = _thumbnail_url()
+
+    assert len({first, second, third}) == 3, (
+        f"each turn must give the thumbnail a new URL, got {first}, {second}, {third}"
+    )
+
+
 def test_the_thumbnail_route_regenerates_a_turned_bitmap_on_the_next_request(
     client, server
 ):
@@ -798,6 +825,32 @@ def test_the_grid_projection_carries_the_orientation(client, server):
 
     assert _rotate(client, [picture_id], "cw").status_code == 200
     assert _grid_row()["orientation"] == 6
+
+
+def test_a_listing_asked_for_size_and_models_returns_them(client, server):
+    """The stats rail reads several pictures' size and models this way (#2161).
+
+    ``GridPicture`` drops every key it does not declare, so a projection that
+    names a column the model lacks comes back without it and the rail's Total
+    size and Models rows silently go missing.
+    """
+    picture_id = _upload(client)
+    resp = client.get(
+        f"{API}/pictures",
+        params=[("id", picture_id), ("fields", "id,size_bytes,comfyui_models")],
+    )
+    assert resp.status_code == 200, resp.text
+    rows = [row for row in resp.json() if row["id"] == picture_id]
+    assert rows, f"picture {picture_id} is not in the listing"
+    stored = _picture_row(server, picture_id)["size_bytes"]
+    assert stored and rows[0]["size_bytes"] == stored
+    assert "comfyui_models" in rows[0]
+
+    # The grid projection does not carry them.
+    grid = client.get(f"{API}/pictures", params={"fields": "grid"})
+    assert grid.status_code == 200, grid.text
+    grid_row = next(row for row in grid.json() if row["id"] == picture_id)
+    assert grid_row.get("size_bytes") is None
 
 
 # ---------------------------------------------------------------------------

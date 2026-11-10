@@ -99,12 +99,7 @@ const FOLDER = {
 const WIN_FOLDER = { id: 6, folder: WIN_ROOT, label: "Win refs", active: true };
 const ODD_FOLDER = { id: 7, folder: ODD_ROOT, label: "Odd refs", active: true };
 
-const IMPORT_FOLDER = { id: 9, folder: "/home/me/inbox", label: "Inbox" };
-
 function respond(url) {
-  if (String(url).includes("/import-folders")) {
-    return { data: { folders: [IMPORT_FOLDER] } };
-  }
   if (String(url).includes("/reference-folders")) {
     return { data: { folders: [FOLDER, WIN_FOLDER, ODD_FOLDER], in_docker: true } };
   }
@@ -450,38 +445,6 @@ describe("restoring /ref-folder/:id", () => {
     });
   });
 
-  // `selectedFolderRouteKey` is the one crossing from the sidebar's row-key
-  // space into the route's. It reads `selectedFolderReferenceId`, which is
-  // `null` when no reference folder is selected - and `Number(null)` is `0`,
-  // which `Number.isFinite` accepts. So it used to answer `rf-0` for "nothing
-  // selected", which made the teardown believe a phantom folder was showing,
-  // and made the `if-` branch unreachable in exactly the case it exists for.
-  it("clears an import-folder selection when the route leaves it", async () => {
-    // An import folder is selected with `selectedFolderReferenceId` left null,
-    // and `Number(null)` is `0`, which `Number.isFinite` accepts - so the
-    // crossing into the route's key space answered `rf-0` for a selection that
-    // is really `if-9`. The teardown then compared `rf-0` against the `if-9`
-    // it was leaving, found no match, and left the import folder highlighted
-    // (and its scanning light on) after the app had navigated away.
-    const wrapper = await mountSidebar();
-    const sidebarStore = useSidebarStore();
-    useViewStore().view = { folderKey: "if-9", folderFilter: null };
-    await flushPromises();
-    expect(lastFolderPayload(wrapper)).toEqual({
-      importSourceFolder: IMPORT_FOLDER.folder,
-      importFolderId: 9,
-      label: "Inbox",
-    });
-    expect(sidebarStore.folderScanning).toBe(true);
-
-    useViewStore().view = null;
-    await flushPromises();
-
-    expect(sidebarStore.folderScanning).toBe(false);
-
-    wrapper.unmount();
-  });
-
   it("does not read a slash-spelled URL as inside a POSIX folder named a\\b", async () => {
     // The other direction of the same rule. Folding `\` to `/` on a POSIX root
     // makes `/home/me/refs/a/b/2024` and `/home/me/refs/a\b/2024` the same
@@ -551,34 +514,6 @@ describe("restoring /ref-folder/:id", () => {
     wrapper.unmount();
   });
 
-  // #1206 item 12. The cleanup matched `rf-<id>`, which is the ROOT row's key;
-  // a selected subfolder's key is `path-<abs path>`, so removing the folder
-  // under it left the highlight and the scanning light on a folder that no
-  // longer existed. Matching on the folder the selection belongs to is what the
-  // import-folder branch already did.
-  it("clears a selected subfolder when its reference folder is removed", async () => {
-    const wrapper = await mountSidebar({ teleport: true });
-    const sidebarStore = useSidebarStore();
-    routeToFolder(SUB);
-    await flushPromises();
-    expect(sidebarStore.folderScanning).toBe(true);
-
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-    const rows = wrapper.findAll(".sidebar-folder-root-row");
-    await rows[0].trigger("contextmenu");
-    await flushPromises();
-    // The context menu is teleported to <body>, so it is not under `wrapper`.
-    const remove = document.querySelector(".sidebar-ctx-menu .ctx-item--danger");
-    expect(remove).not.toBe(null);
-    remove.click();
-    await flushPromises();
-
-    expect(lastFolderPayload(wrapper)).toBe(null);
-    expect(sidebarStore.folderScanning).toBe(false);
-
-    wrapper.unmount();
-  });
-
   it("ignores a path that is not inside this folder", async () => {
     // A `?path=` left over from an "About your library" destination names a
     // folder with no id at all. Applying it under this folder's id would build
@@ -601,7 +536,7 @@ describe("restoring /ref-folder/:id", () => {
 // upward from a fixed 190px height estimate, so a taller menu (a picture set's)
 // opened downward one row too long and lost its last entry off the window.
 describe("sidebar context menu placement", () => {
-  /** Right-click the first folder row at y=550 with the menu `menuH` tall. */
+  /** Right-click the list's empty space at y=550 with the menu `menuH` tall. */
   async function openMenuAt550(menuH) {
     vi.spyOn(window, "innerHeight", "get").mockReturnValue(800);
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
@@ -610,10 +545,10 @@ describe("sidebar context menu placement", () => {
       },
     );
     const wrapper = await mountSidebar({ teleport: true });
-    routeToFolder(SUB); // expands the folder section so its rows render
     await flushPromises();
-    const rows = wrapper.findAll(".sidebar-folder-root-row");
-    await rows[0].trigger("contextmenu", { clientX: 20, clientY: 550 });
+    await wrapper
+      .find(".sidebar-scroll")
+      .trigger("contextmenu", { clientX: 20, clientY: 550 });
     await flushPromises();
     return { wrapper, menu: document.querySelector(".sidebar-ctx-menu") };
   }

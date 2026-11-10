@@ -203,6 +203,15 @@ def test_the_wd14_session_says_so_when_it_did_not_get_the_accelerator(monkeypatc
     service._warn_if_the_session_fell_back_to_cpu()
     assert len(warnings) == 1, warnings
     assert "CPUExecutionProvider" in warnings[0]
+    assert "onnxruntime-gpu" in warnings[0][-1]
+
+    # ROCm torch also says "cuda": it must not be sent to the NVIDIA wheel.
+    monkeypatch.setattr(wd14_module.torch.version, "hip", "6.4", raising=False)
+    service._warn_if_the_session_fell_back_to_cpu()
+    assert "onnxruntime-migraphx" in warnings[-1][-1], warnings[-1]
+    assert "onnxruntime-gpu" not in warnings[-1][-1]
+    monkeypatch.setattr(wd14_module.torch.version, "hip", None, raising=False)
+    warnings.pop()
 
     # The positive control: a session that did get CUDA stays quiet, or the
     # warning is noise every GPU box learns to ignore.
@@ -381,7 +390,7 @@ def test_a_full_card_is_never_recorded_as_no_faces():
         pass
 
     class _Runner:
-        def __init__(self, _app):
+        def __init__(self, _app, **_kwargs):
             pass
 
         def run_batch(self, _images):
@@ -410,7 +419,7 @@ def test_a_non_memory_detector_failure_still_degrades_to_no_faces():
     import pixlstash.tasks.face_extraction_task as module
 
     class _Runner:
-        def __init__(self, _app):
+        def __init__(self, _app, **_kwargs):
             pass
 
         def run_batch(self, _images):
@@ -505,7 +514,7 @@ def _clip_with_failing_runner(tmp_path, monkeypatch, exc, picture_id):
     """One clip whose detector raises *exc*; returns ``(task, picture)``."""
 
     class _FailingRunner:
-        def __init__(self, _app):
+        def __init__(self, _app, **_kwargs):
             pass
 
         def run_batch(self, _images):

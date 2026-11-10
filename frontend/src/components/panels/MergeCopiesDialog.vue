@@ -172,7 +172,7 @@ const refusal = computed(() => {
   const reason = plan.value?.refused?.[0]?.reason;
   if (!reason) return "";
   if (reason === "keeper_not_present") {
-    return "That copy is not on your disk any more. Rescan the folder, or keep another one.";
+    return "That copy is not on your disk any more. Keep another one.";
   }
   if (reason === "keeper_is_that_copy") {
     return "These two are one file — one is a shortcut to the other. There is nothing to reclaim.";
@@ -326,14 +326,14 @@ async function submit() {
 .mcd-note {
   margin: 0;
   font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .mcd-status {
   margin: 0;
   min-height: 1.5em;
   font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 /* The hue drawn as TEXT, which is `surface-warning` and never the fill: the
@@ -356,7 +356,7 @@ async function submit() {
   margin-bottom: var(--space-2);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .mcd-copy {
@@ -390,10 +390,10 @@ async function submit() {
 .mcd-fate {
   flex: none;
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .mcd-copy--going .mcd-path {
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 </style>

@@ -266,16 +266,15 @@
                       ? store.selectedMissingKeys.has(entry.missingKey)
                       : cardSelected(entry)
                 "
-                :panel-id="store.openSetKey === entry.key ? PANEL_ID : ''"
                 favouritable
                 :favourite="favourites.isFavourite('set', entry.key)"
                 @favourite="store.toggleFavourites({ kind: 'set', keys: [entry.key] })"
-                @toggle="store.toggleSet(entry.key)"
                 @offer="openOffer(entry.setId)"
                 @add="answerOffer(entry, true)"
                 @keep-separate="answerOffer(entry, false)"
                 @hide="hideCard(entry)"
                 @unhide="unhideCard(entry)"
+                @edit="onCardEdit(entry)"
               />
               <span
                 v-if="railTargets.has(entry.key)"
@@ -353,7 +352,7 @@
  *
  * **A card is one base model, and its tray holds the models that have run with
  * it.** One card per checkpoint - or per diffusion file, where a graph loads one
- * instead - and ▸ opens the union of everything it has co-occurred with, as cards
+ * instead - and its tray opens the union of everything it has co-occurred with, as cards
  * or as a comparison list. The card's SHAPE and the tray's are the shipped
  * workflow grid's, because a reader should not have to learn a second card or a
  * second switch; the components are this screen's own, because that grid's card
@@ -419,6 +418,7 @@ import {
   fillFromSets,
   handMadeName,
   headModel,
+  rowBaseModel,
   rowMatches,
   SET_SLOTS,
   setCheckpoint,
@@ -435,17 +435,23 @@ import WorkflowTemplatePicker from "../panels/WorkflowTemplatePicker.vue";
 import AppButton from "../widgets/AppButton.vue";
 import ModelSetCard from "../widgets/ModelSetCard.vue";
 import { useFileDropHighlight } from "../../composables/useModelDropTarget";
+import { activityOf, combinationsOfSet } from "../../utils/setActivity";
+import { relativeDate } from "../../utils/snapshots";
 
 /**
  * The two numbers the column count is derived from, and the only copy of them.
  *
- * The workflows grid's own figures, because the card is the same card: written
- * onto the grid as custom properties rather than read back out of the sheet, so
- * the arithmetic here and the track the browser paints are the same two numbers
- * by construction.
+ * The count is worked out here, not by CSS `auto-fill`, because the cursor's
+ * `index ± columns` arithmetic has to know it. Written onto the grid as custom
+ * properties so the track the browser paints is the same two numbers by
+ * construction. At the design board's 1440px frame (240px sidebar, 8px gutters)
+ * a 1184px grid gives three columns for any minimum from about 291 to 389px; 320
+ * sits in that range. A narrower pane drops to two columns, a wider one adds one.
+ *
+ * The gap is `--space-3` (8px), the board's gap between cards.
  */
-const COLUMN_MIN = 240;
-const COLUMN_GAP = 12;
+const COLUMN_MIN = 320;
+const COLUMN_GAP = 8;
 
 const PANEL_ID = "msg-set-panel";
 
@@ -624,7 +630,7 @@ const trayColumns = computed(() =>
  * is drawn in.
  */
 const flatRows = computed(() => {
-  const hand = store.handMadeGroups.map((group, cardIndex) => ({
+  const handCard = (group) => ({
     kind: "card",
     hand: true,
     id: `card:${group.key}`,
@@ -632,27 +638,33 @@ const flatRows = computed(() => {
     // A hand-made card IS its set: selecting it selects the set, never a file.
     setId: group.set.id,
     card: {
-      ...group.card,
+      ...withFacts(group, group.card),
       markIcon: iconsById.value.get(group.card.markModel?.id) ?? null,
     },
     headId: null,
     dropModels: dropModelIds(group),
-    cardIndex,
-  }));
-  const evidence = store.setGroups.map((group, cardIndex) => ({
+  });
+  const evidenceCard = (group) => ({
     kind: "card",
     id: `card:${group.key}`,
     key: group.key,
-    card: group.card,
+    card: withFacts(group, group.card),
     // The model the card IS, which is what a selection or a verb is aimed at.
     headId: group.head?.id ?? null,
     // Named after a file the shelf does not hold: no row to select, so the
     // card is selected as itself, for Replace (`selectedMissingKeys`).
     missingKey: group.head?.missing ? group.key : null,
     dropModels: dropModelIds(group),
-    cardIndex: hand.length + cardIndex,
-  }));
-  const cards = [{ kind: "new", id: "new", key: "new" }, ...hand, ...evidence];
+  });
+  // A set made by Edit set is drawn in its card's place (`setGridCards`).
+  const { lead, sets } = store.setGridCards;
+  const cards = [
+    { kind: "new", id: "new", key: "new" },
+    ...[
+      ...lead.map(handCard),
+      ...sets.map((group) => (group.set ? handCard(group) : evidenceCard(group))),
+    ].map((entry, cardIndex) => ({ ...entry, cardIndex })),
+  ];
   const openKey = store.openSetKey;
   if (!openKey) return cards;
   const at = cards.findIndex((entry) => entry.key === openKey);
@@ -858,10 +870,24 @@ function onCardDblClick(entry) {
 }
 
 /**
+ * A card's Edit button: the double-click's work, on one press.
+ *
+ * Moving a tray that is open on another card moves the rows, so a double
+ * click's second press lands on whatever slid under the pointer; arm the same
+ * guard a click that moves the tray does (`swallowAfterTrayMove`).
+ */
+function onCardEdit(entry) {
+  if (store.openSetKey && store.openSetKey !== entry.key) {
+    trayMovedByClick = true;
+  }
+  onCardDblClick(entry);
+}
+
+/**
  * Close the panel and put the cursor back on the card that opened it.
  *
- * Esc and the panel's own Close come through here. ▸ does not: that is a click
- * on a card, and the cursor belongs where the reader left it.
+ * Esc and the panel's own Close come through here. A card's click does not: that
+ * is a click on a card, and the cursor belongs where the reader left it.
  */
 function closePanel() {
   const key = store.openSetKey;
@@ -989,6 +1015,42 @@ const selectedCardGroups = computed(() =>
   ),
 );
 
+// The store's Edit set and the bar's Hide read the picked cards from here, not
+// from this grid's ref: a mirror kept in step with what is drawn selected.
+watch(
+  () => selectedCardGroups.value.map((group) => group.key),
+  (keys) => {
+    store.pickedCardKeys = keys;
+  },
+  { immediate: true },
+);
+
+onBeforeUnmount(() => {
+  store.pickedCardKeys = [];
+});
+
+/**
+ * A card's facts the store does not carry, read from the same payload the rail's
+ * *Works in* reads: the base model its head is read as, and when its pictures
+ * last ran ("never" when none has). A hand-made card keeps the base it was given.
+ *
+ * @param {Object} group - a `setGroups` or `handMadeGroups` entry.
+ * @param {Object} card - the group's own card.
+ */
+function withFacts(group, card) {
+  const activity = activityOf(
+    combinationsOfSet(group, store.workflowSets.combinations),
+  );
+  return {
+    ...card,
+    baseModel:
+      card.baseModel ??
+      rowBaseModel(rowsById.value.get(group.head?.id)) ??
+      "",
+    lastUsed: relativeDate(activity.lastUsedAt) || "never",
+  };
+}
+
 /**
  * The card heads a Shift-range from the anchor to `occurrence` passes over, or
  * null when the store will not take it as a range (no anchor on this screen).
@@ -1034,7 +1096,8 @@ function onBackgroundClick(event) {
  * A card was clicked: it takes the cursor, and it takes the selection.
  *
  * The cursor moves either way - a click inside the card is still a statement
- * about where the reader is - but a click the card's own ▸ owns stops there.
+ * about where the reader is - but a click one of the card's own buttons owns stops
+ * there.
  */
 function onRowClick(entry, event) {
   cursorId.value = entry.id;
@@ -1048,7 +1111,7 @@ function onRowClick(entry, event) {
 /**
  * With a tray open, a plain click on another card moves the tray to it.
  *
- * Opening the first tray is still a double click (or ▸, or Enter): a click on a
+ * Opening the first tray is still a double click (or Enter): a click on a
  * closed grid only selects. Ctrl and Shift are left out because they build a
  * selection across cards, and the tray would follow none of them in particular.
  */
@@ -1618,7 +1681,7 @@ async function keepSeparate(models) {
   settleCursor("");
 }
 
-// ── Drops from the Models rail (design B) ─────────────────────────────────
+// ── Drops from the Models rail's Models tab ─────────────────────────────
 //
 // A hand-made card takes each model into the slot its kind goes to, a slot in
 // the open tray takes the models it fits (`ModelSetSlotsPanel` refuses the
@@ -1627,7 +1690,7 @@ async function keepSeparate(models) {
 // receipt with Undo, the ＋ chooser's own.
 //
 // Every target says so from the moment the drag starts, not only under the
-// pointer. The drag is the rail's own pointer drag (see `ModelsRail.vue`):
+// pointer. The drag is the rail's own pointer drag (see `ModelsRailShelf.vue`):
 // targets carry `data-rail-drop`, light up from `store.railOver`, and take
 // the drop as a `rail-drop` event.
 
@@ -1659,7 +1722,7 @@ const railTargets = computed(() => {
       if (!set) continue;
       targets.set(entry.key, {
         label: `Add ${store.railDragWhat}`,
-        refused: store.railDropRefusal(set, rows),
+        refused: store.setAddRefusal(set, rows),
       });
     }
   }
@@ -1706,6 +1769,7 @@ const openFitCount = computed(() =>
 function showFitsInRail() {
   if (!openHand.value) return;
   store.railFitsSetId = openHand.value.set.id;
+  store.railShelfRequest += 1;
   sidebarStore.setModelsRailOpen(true);
 }
 
@@ -2431,7 +2495,7 @@ function onKeyDown(event) {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-4);
+  padding: var(--space-3);
 }
 
 /* The closed Models rail's edge tab (34px) floats over this edge: the cards
@@ -2598,7 +2662,7 @@ function onKeyDown(event) {
 }
 
 .msg__kbd {
-  padding: 0 var(--space-2);
+  padding: var(--kbd-pad);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
   font-family: inherit;

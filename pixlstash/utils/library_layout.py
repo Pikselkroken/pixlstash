@@ -110,6 +110,41 @@ def folder_name(name: str) -> str:
     return cleaned
 
 
+def refusal_for_folder_name(name: str) -> str | None:
+    """Say why *name* cannot be a folder the owner creates, or None if it can.
+
+    The refusing twin of :func:`folder_name`: the same character class and the
+    same reserved names, but a name the owner typed is refused with the reason
+    rather than rewritten, because a folder that silently becomes ``con_`` or
+    ``a_b`` is not the folder they asked for (#2206).
+
+    Args:
+        name: One path component, as typed.
+
+    Returns:
+        A sentence saying what is wrong, or None when the name is usable.
+    """
+    if not name or not name.strip():
+        return "A folder needs a name."
+    if name in (".", ".."):
+        return f"{name!r} is not a folder name."
+    if _UNSAFE_FOLDER_CHARS_RE.search(name):
+        return 'A folder name cannot contain / \\ : * ? " < > | or control characters.'
+    if name.startswith("."):
+        return "A name starting with a dot is hidden, so the tree would not show it."
+    if name != name.rstrip(". "):
+        return "A folder name cannot end with a dot or a space; Windows drops them."
+    if name != name.lstrip(" "):
+        return "A folder name cannot start with a space."
+    if name.split(".")[0].lower() in _WINDOWS_RESERVED:
+        return (
+            f"{name!r} is a name Windows reserves, so the folder could not exist there."
+        )
+    if len(name.encode("utf-8")) > 255:
+        return "That name is too long for a folder."
+    return None
+
+
 @dataclass(frozen=True)
 class Layout:
     """An ordered list of folder levels.
@@ -602,6 +637,20 @@ def read_named_components(
         component text, so a folder-name-safe rendering of the entity (e.g.
         punctuation replaced by ``_``) still resolves to the real name.
     """
+    return [
+        reading
+        for reading in read_components(components, layout, known_names)
+        if reading is not None
+    ]
+
+
+def name_index(known_names: FacetVocabulary) -> dict[Facet, dict[str, str]]:
+    """Map each facet's folder match keys to the one name they read as.
+
+    A key two distinct names share is left out: unreadable rather than a guess
+    (see :func:`read_named_components`). Built once by a caller reading many
+    paths against one vocabulary and passed to :func:`read_components`.
+    """
     _AMBIGUOUS = object()
     name_by_key: dict[Facet, dict[str, str]] = {}
     for facet in Facet:
@@ -619,7 +668,25 @@ def read_named_components(
         name_by_key[facet] = {
             key: name for key, name in keyed.items() if name is not _AMBIGUOUS
         }
-    result: list[tuple[Facet, str]] = []
+    return name_by_key
+
+
+def read_components(
+    components: Sequence[str],
+    layout: Layout,
+    known_names: FacetVocabulary,
+    index: dict[Facet, dict[str, str]] | None = None,
+) -> list[tuple[Facet, str] | None]:
+    """:func:`read_named_components`, one entry per component consumed.
+
+    A ``Global`` component consumes its segment and names nothing, so it is
+    ``None`` here and absent there. The Media sidebar's Folders tree (#2458)
+    labels every level of a real folder with this, so it has to know which
+    component each reading belongs to, and passes *index* (from
+    :func:`name_index` over *known_names*) so it is not rebuilt per folder.
+    """
+    name_by_key = index if index is not None else name_index(known_names)
+    result: list[tuple[Facet, str] | None] = []
     global_key = _match_key(GLOBAL_FOLDER)
     next_segment = 0
     for component in components:
@@ -641,6 +708,7 @@ def read_named_components(
             # of this read as a removal, which is the whole point. A real entity
             # named ``Global`` wins: the facet search above runs first.
             next_segment += 1
+            result.append(None)
             continue
         if found is None:
             break

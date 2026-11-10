@@ -1,4 +1,4 @@
-"""What the overlay's Recipe section is told about a picture (#1313).
+"""What the lightbox's Recipe section is told about a picture (#1313).
 
 No server: every assertion here is about reading one graph, so a ``Server`` would
 cost 1.35 s to prove nothing extra. The two halves that need a live library - the

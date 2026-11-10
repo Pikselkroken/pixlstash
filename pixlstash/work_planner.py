@@ -757,7 +757,9 @@ class WorkPlanner:
     def _notify_all_tasks_complete(self, finder, finder_name: str):
         self._log_pipeline_pass(finder_name)
         try:
-            finder.on_all_tasks_complete()
+            release = finder.on_all_tasks_complete()
+            if release is not None:
+                self._task_runner.submit(release)
         except Exception as exc:
             logger.warning(
                 "Finder all-complete callback failed for %s: %s",

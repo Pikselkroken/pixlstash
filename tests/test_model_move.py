@@ -30,7 +30,12 @@ import os
 import pytest
 
 from pixlstash.hub.db import HubDatabase
+from pixlstash.services import model_dir_mover as dir_mover_module
 from pixlstash.services import model_mover as mover_module
+from pixlstash.services.model_dir_mover import (
+    execute_directory_move,
+    plan_directory_move,
+)
 from pixlstash.services.model_mover import (
     PARTIAL_SUFFIX,
     STATUS_CANCELLED,
@@ -164,11 +169,10 @@ def test_crash_after_the_copy_and_before_the_commit_leaves_a_duplicate(
 
     Nothing has been unlinked, because the unlink is last. The residue is a
     duplicate - one content row, one location row, and a second file on disk
-    that a **manual** rescan of the destination folder will register as a second
+    that the next scan of the destination folder will register as a second
     location of the same model, which is exactly what a duplicate is here.
-    ``ModelFolderScanner`` has one caller, ``POST .../rescan``; nothing scans a
-    model folder on start or on a schedule, so the residue has to be serviceable
-    on its own and not merely repairable.
+    That scan may be ten minutes off (a watch can miss it), so the residue has
+    to be serviceable on its own and not merely repairable.
     """
     monkeypatch.setattr(
         ModelMover,
@@ -236,13 +240,13 @@ def test_the_steps_happen_in_the_only_safe_order(
     original_repoint = ModelMover._repoint
     original_unlink = mover_module.unlink_source
 
-    def traced_copy(source, destination):
+    def traced_copy(source, destination, **kwargs):
         events.append("copy")
-        return original_copy(source, destination)
+        return original_copy(source, destination, **kwargs)
 
-    def traced_digest(path):
+    def traced_digest(path, **kwargs):
         events.append("verify")
-        return original_digest(path)
+        return original_digest(path, **kwargs)
 
     def traced_repoint(self, *args, **kwargs):
         events.append("commit")
@@ -298,6 +302,44 @@ def test_a_cross_device_move_ends_with_one_copy_and_a_repointed_row(
     assert_no_dangling_rows(two_folders["hub"])
 
 
+def test_a_copy_reports_its_bytes_as_they_are_copied_and_verified(
+    two_folders, cross_device
+):
+    """A single large file must fill the progress bar while it copies, rather
+    than sitting at ``0 / 1`` until it lands. Every byte is counted once by the
+    copy and once by the read-back that verifies it, and the count arrives in
+    chunks, before the outcome does."""
+    size = os.path.getsize(two_folders["source_path"])
+    counts: list[int] = []
+    decided_after: list[int] = []
+    mover = ModelMover(two_folders["hub"])
+    mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        ),
+        on_bytes=counts.append,
+        on_progress=lambda _outcome: decided_after.append(sum(counts)),
+    )
+
+    assert size > 0
+    assert sum(counts) == 2 * size
+    assert decided_after == [2 * size], "the bytes were reported after the outcome"
+
+
+def test_a_rename_reports_no_bytes(two_folders):
+    counts: list[int] = []
+    mover = ModelMover(two_folders["hub"])
+    mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        ),
+        on_bytes=counts.append,
+    )
+    assert counts == []
+
+
 def test_a_same_drive_move_is_a_rename_and_copies_nothing(two_folders):
     """The ruling: same drive skips the copy, the verify and the space check.
     Proved by the inode surviving - a copy would allocate a new one - and by no
@@ -325,7 +367,7 @@ def test_a_copy_that_does_not_verify_leaves_the_original_alone(
     """A bad write must cost the copy, never the original. The failure is
     reported per file and the source is still exactly where the row says."""
     # The destination reads back as something else entirely.
-    monkeypatch.setattr(mover_module, "file_digest", lambda path: "0" * 64)
+    monkeypatch.setattr(mover_module, "file_digest", lambda path, **_: "0" * 64)
     mover = ModelMover(two_folders["hub"])
     report = mover.execute(
         mover.plan(
@@ -1213,6 +1255,253 @@ def test_a_file_already_in_the_destination_is_reported_skipped_not_dropped(
     assert report.outcomes[0].detail
 
 
+def test_a_file_at_the_root_moves_into_a_subfolder_of_its_own_folder(hub, tmp_path):
+    """The case #2204 was filed for: LoRAs at the root of a StabilityMatrix
+    ``Models`` folder dropped onto ``Models/Lora``. One registered folder, so the
+    old "already there" test - folder ids alone - skipped them and nothing moved.
+
+    A rename, because it is one filesystem, and the row keeps its model: the
+    sets and people hung off that model come along by construction.
+    """
+    models = tmp_path / "Models"
+    (models / "Lora").mkdir(parents=True)
+    folder_id = register_folder(hub, models)
+    model_id, source_path = register_file(hub, folder_id, models, "alice.safetensors")
+
+    mover = ModelMover(hub)
+    plan = mover.plan(
+        [(folder_id, "alice.safetensors")], folder_id, destination_subpath="Lora"
+    )
+    assert plan.skipped == [], "a root file was taken as already in Lora"
+    assert plan.destination_subpath == "Lora"
+    assert [move.same_device for move in plan.moves] == [True]
+
+    report = mover.execute(plan)
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_MOVED]
+    assert not os.path.exists(source_path)
+    assert (models / "Lora" / "alice.safetensors").exists()
+    relpath = os.path.join("Lora", "alice.safetensors")
+    assert set(locations(hub)) == {(folder_id, relpath)}
+    assert locations(hub)[(folder_id, relpath)]["model_id"] == model_id
+    assert_no_dangling_rows(hub)
+
+
+def test_a_file_already_in_the_target_subfolder_is_skipped(hub, tmp_path):
+    """The skip rule's other half: a file directly in ``Lora`` dropped onto
+    ``Lora`` is nothing to do, and one in ``Lora/old`` is not already there."""
+    models = tmp_path / "Models"
+    (models / "Lora" / "old").mkdir(parents=True)
+    folder_id = register_folder(hub, models)
+    here = os.path.join("Lora", "here.safetensors")
+    deeper = os.path.join("Lora", "old", "deeper.safetensors")
+    register_file(hub, folder_id, models, here)
+    register_file(hub, folder_id, models, deeper)
+
+    plan = ModelMover(hub).plan(
+        [(folder_id, here), (folder_id, deeper)],
+        folder_id,
+        destination_subpath="Lora",
+    )
+
+    assert [(o.source_relpath, o.status) for o in plan.skipped] == [
+        (here, STATUS_SKIPPED)
+    ]
+    assert [move.destination_relpath for move in plan.moves] == [
+        os.path.join("Lora", "deeper.safetensors")
+    ]
+
+
+def test_a_cross_device_move_into_a_subfolder_copies_there(
+    two_folders, cross_device, monkeypatch
+):
+    """The copy path lands in the subfolder too, and the space check is made
+    against the directory the bytes go to."""
+    hub = two_folders["hub"]
+    (two_folders["destination_dir"] / "Lora").mkdir()
+    checked = []
+    real_require_space = mover_module.require_space
+
+    def spy(path, needed):
+        checked.append((path, needed))
+        return real_require_space(path, needed)
+
+    monkeypatch.setattr(mover_module, "require_space", spy)
+    mover = ModelMover(hub)
+    plan = mover.plan(
+        [(two_folders["source_id"], "alice.safetensors")],
+        two_folders["destination_id"],
+        destination_subpath="Lora",
+    )
+    landing = os.path.realpath(two_folders["destination_dir"] / "Lora")
+    assert checked == [(landing, plan.bytes_to_copy)]
+    assert plan.bytes_to_copy > 0
+
+    report = mover.execute(plan)
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_MOVED]
+    relpath = os.path.join("Lora", "alice.safetensors")
+    assert (two_folders["destination_dir"] / relpath).exists()
+    assert set(locations(hub)) == {(two_folders["destination_id"], relpath)}
+    assert_no_dangling_rows(hub)
+
+
+def test_two_files_landing_on_one_name_in_a_subfolder_are_refused(hub, tmp_path):
+    """The duplicate-destination check holds with a subpath: ``v1/a`` and
+    ``v2/a`` both flatten to ``Lora/a``."""
+    models = tmp_path / "Models"
+    (models / "Lora").mkdir(parents=True)
+    folder_id = register_folder(hub, models)
+    first = os.path.join("v1", "alice.safetensors")
+    second = os.path.join("v2", "alice.safetensors")
+    register_file(hub, folder_id, models, first)
+    register_file(hub, folder_id, models, second)
+
+    with pytest.raises(MoveRefused, match="would both land on"):
+        ModelMover(hub).plan(
+            [(folder_id, first), (folder_id, second)],
+            folder_id,
+            destination_subpath="Lora",
+        )
+
+
+def test_an_existing_file_in_the_subfolder_is_never_overwritten(two_folders):
+    """The free check is made at the subfolder's name, not the root's."""
+    lora = two_folders["destination_dir"] / "Lora"
+    lora.mkdir()
+    (lora / "alice.safetensors").write_bytes(b"theirs")
+
+    with pytest.raises(MoveRefused, match="already exists"):
+        ModelMover(two_folders["hub"]).plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+            destination_subpath="Lora",
+        )
+    assert (lora / "alice.safetensors").read_bytes() == b"theirs"
+
+
+@pytest.mark.parametrize(
+    "subpath",
+    [
+        "..",
+        "../loras",
+        "Lora/../..",
+        "/etc",
+        "Lora/",
+        "./Lora",
+        "Lora\\x",
+        "out",
+        "inner",
+        ".hidden",
+    ],
+    ids=[
+        "dotdot",
+        "dotdot-sibling",
+        "dotdot-nested",
+        "absolute",
+        "trailing",
+        "dot",
+        "backslash",
+        "symlink-out",
+        "symlink-inside",
+        "hidden",
+    ],
+)
+def test_a_subpath_that_leaves_the_folder_is_refused(two_folders, subpath):
+    """Every escape is a 400 before anything is written. ``out`` is a symlink
+    inside the destination pointing at the source folder: plain by name, and
+    only ``resolve_path_within`` can see where it leads. ``inner`` links to
+    ``Lora`` and ``.hidden`` is a dot-name: both stay inside, and both are
+    refused because the listing never offers them and a rescan would not find
+    a file moved through the link."""
+    destination_dir = two_folders["destination_dir"]
+    (destination_dir / "Lora").mkdir()
+    (destination_dir / ".hidden").mkdir()
+    os.symlink(two_folders["source_dir"], destination_dir / "out")
+    os.symlink(destination_dir / "Lora", destination_dir / "inner")
+
+    with pytest.raises(MoveRefused) as refused:
+        ModelMover(two_folders["hub"]).plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+            destination_subpath=subpath,
+        )
+    assert refused.value.status_code == 400
+    assert os.path.exists(two_folders["source_path"])
+    assert sorted(os.listdir(destination_dir / "Lora")) == []
+
+
+def test_a_subfolder_removed_after_the_plan_is_not_recreated(two_folders):
+    """The plan saw ``Lora``; it is gone by the time the worker writes. The
+    file fails and stays where it was, and no ``Lora`` appears."""
+    lora = two_folders["destination_dir"] / "Lora"
+    lora.mkdir()
+    mover = ModelMover(two_folders["hub"])
+    plan = mover.plan(
+        [(two_folders["source_id"], "alice.safetensors")],
+        two_folders["destination_id"],
+        destination_subpath="Lora",
+    )
+    lora.rmdir()
+
+    report = mover.execute(plan)
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_FAILED]
+    assert not lora.exists()
+    assert os.path.exists(two_folders["source_path"])
+    assert_no_dangling_rows(two_folders["hub"])
+
+
+def test_a_missing_subfolder_is_refused_not_created(two_folders):
+    with pytest.raises(MoveRefused, match="Create it first") as refused:
+        ModelMover(two_folders["hub"]).plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+            destination_subpath="Lora",
+        )
+    assert refused.value.status_code == 409
+    assert not (two_folders["destination_dir"] / "Lora").exists()
+
+
+@pytest.mark.parametrize("movable", ["root_only", "fixed"])
+def test_a_locked_destination_is_refused(two_folders, movable):
+    """The managed store, the HuggingFace cache and the InsightFace packs take
+    no drop: files do not leave them one at a time, and none arrive either."""
+    hub = two_folders["hub"]
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET movable = ? WHERE id = ?",
+            (movable, two_folders["destination_id"]),
+        )
+
+    with pytest.raises(MoveRefused, match="locked") as refused:
+        ModelMover(hub).plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    assert refused.value.status_code == 409
+    assert os.path.exists(two_folders["source_path"])
+
+
+def test_a_relocation_cannot_target_a_subfolder(hub, tmp_path):
+    store = tmp_path / "store"
+    target = tmp_path / "elsewhere"
+    store.mkdir()
+    (target / "sub").mkdir(parents=True)
+    store_id = register_folder(hub, store)
+    target_id = register_folder(hub, target)
+    register_file(hub, store_id, store, "model.safetensors")
+
+    with pytest.raises(MoveRefused, match="relocation"):
+        ModelMover(hub).plan(
+            [(store_id, "model.safetensors")],
+            target_id,
+            destination_subpath="sub",
+            flatten=False,
+            relocating=True,
+        )
+
+
 def test_a_cancel_after_a_skipped_item_still_cancels_every_move(hub, tmp_path):
     """The skipped items lead the report, so the cancelled tail must be indexed
     off ``plan.moves`` and not off how many outcomes exist. Off by the number of
@@ -1412,7 +1701,362 @@ def test_a_root_only_folder_refuses_a_per_item_move(tmp_path):
                 "'2026-08-12T00:00:00Z')",
                 (int(cursor.lastrowid),),
             )
-        plan = mover.plan([(2, "a.safetensors")], 1)
+        # Into a third, unlocked folder: a locked one takes no drop (#2204).
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model_folder (id, path, kind, movable, created_at) "
+                "VALUES (3, ?, 'user', 'per_item', '2026-08-12T00:00:00Z')",
+                (str(elsewhere),),
+            )
+        plan = mover.plan([(2, "a.safetensors")], 3)
         assert len(plan.moves) == 1, "a per_item source was wrongly refused"
     finally:
         hub.close()
+
+
+# ===========================================================================
+# Moving and renaming a directory inside a model folder (#2206)
+# ===========================================================================
+#
+# A directory moves whole: its models, their `<stem>_samples/` and the files the
+# shelf does not list. Every row under it is repointed in one transaction, and a
+# refusal touches nothing. The route half is in tests/test_model_shelf_api.py.
+
+
+@pytest.fixture
+def dir_tree(hub, tmp_path):
+    """``loras/sdxl`` with one catalogued model, its samples and a note, and an
+    empty ``archive`` folder, both registered."""
+    source_dir = tmp_path / "loras"
+    destination_dir = tmp_path / "archive"
+    source_dir.mkdir()
+    destination_dir.mkdir()
+    source_id = register_folder(hub, source_dir)
+    destination_id = register_folder(hub, destination_dir)
+    relpath = os.path.join("sdxl", "alice.safetensors")
+    model_id, _ = register_file(hub, source_id, source_dir, relpath)
+    samples = source_dir / "sdxl" / "alice_samples"
+    samples.mkdir()
+    (samples / "step_100.png").write_bytes(b"png")
+    (source_dir / "sdxl" / "notes.txt").write_text("trained on 40 pictures")
+    return {
+        "hub": hub,
+        "source_dir": source_dir,
+        "destination_dir": destination_dir,
+        "source_id": source_id,
+        "destination_id": destination_id,
+        "model_id": model_id,
+        "relpath": relpath,
+    }
+
+
+@pytest.fixture
+def dir_cross_device(monkeypatch):
+    """Force the directory mover's copy path; see ``cross_device``."""
+    monkeypatch.setattr(dir_mover_module, "same_device", lambda *_: False)
+
+
+def _move_sdxl(tree, **kwargs):
+    plan = plan_directory_move(
+        tree["hub"],
+        tree["source_id"],
+        "sdxl",
+        tree["destination_id"],
+        kwargs.pop("destination_subpath", ""),
+        kwargs.pop("new_name", None),
+    )
+    return plan, execute_directory_move(tree["hub"], plan, **kwargs)
+
+
+def _assert_moved_to(tree, folder_dir, folder_id, new_dir):
+    moved = folder_dir / new_dir
+    assert (moved / "alice.safetensors").is_file()
+    assert (moved / "alice_samples" / "step_100.png").read_bytes() == b"png"
+    assert (moved / "notes.txt").read_text() == "trained on 40 pictures"
+    assert not (tree["source_dir"] / "sdxl").exists()
+    assert set(locations(tree["hub"])) == {
+        (folder_id, os.path.join(new_dir, "alice.safetensors"))
+    }
+    row = locations(tree["hub"])[
+        (folder_id, os.path.join(new_dir, "alice.safetensors"))
+    ]
+    assert row["model_id"] == tree["model_id"], "the move lost the model's curation"
+    assert not list(folder_dir.glob("*" + PARTIAL_SUFFIX))
+    assert_no_dangling_rows(tree["hub"])
+
+
+def test_a_same_drive_directory_move_renames_and_repoints_every_row(dir_tree):
+    plan, outcome = _move_sdxl(dir_tree)
+    assert plan.same_drive is True
+    assert (plan.models, plan.files, plan.other_files) == (1, 3, 2)
+    assert outcome.status == STATUS_MOVED, outcome.detail
+    _assert_moved_to(
+        dir_tree, dir_tree["destination_dir"], dir_tree["destination_id"], "sdxl"
+    )
+
+
+def test_a_cross_drive_directory_move_copies_verifies_and_removes(
+    dir_tree, dir_cross_device
+):
+    plan, outcome = _move_sdxl(dir_tree)
+    assert plan.same_drive is False
+    assert plan.bytes_to_copy == plan.bytes > 0
+    assert outcome.status == STATUS_MOVED, outcome.detail
+    _assert_moved_to(
+        dir_tree, dir_tree["destination_dir"], dir_tree["destination_id"], "sdxl"
+    )
+
+
+def test_renaming_a_directory_is_a_move_into_its_own_parent(dir_tree):
+    plan = plan_directory_move(
+        dir_tree["hub"],
+        dir_tree["source_id"],
+        "sdxl",
+        dir_tree["source_id"],
+        "",
+        "sdxl-1.0",
+    )
+    outcome = execute_directory_move(dir_tree["hub"], plan)
+    assert outcome.status == STATUS_MOVED, outcome.detail
+    _assert_moved_to(
+        dir_tree, dir_tree["source_dir"], dir_tree["source_id"], "sdxl-1.0"
+    )
+
+
+def test_a_taken_name_is_refused_and_nothing_is_merged(dir_tree):
+    (dir_tree["destination_dir"] / "sdxl").mkdir()
+    (dir_tree["destination_dir"] / "sdxl" / "theirs.txt").write_text("keep")
+    before = locations(dir_tree["hub"])
+    with pytest.raises(MoveRefused) as refused:
+        _move_sdxl(dir_tree)
+    assert refused.value.status_code == 409
+    assert (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert sorted(p.name for p in (dir_tree["destination_dir"] / "sdxl").iterdir()) == [
+        "theirs.txt"
+    ]
+    assert locations(dir_tree["hub"]).keys() == before.keys()
+
+
+def test_a_directory_cannot_move_into_itself_or_below(dir_tree):
+    (dir_tree["source_dir"] / "sdxl" / "inner").mkdir()
+    for into in ("sdxl", "sdxl/inner"):
+        with pytest.raises(MoveRefused) as refused:
+            plan_directory_move(
+                dir_tree["hub"],
+                dir_tree["source_id"],
+                "sdxl",
+                dir_tree["source_id"],
+                into,
+            )
+        assert refused.value.status_code == 400, into
+    assert (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").is_file()
+
+
+def test_the_registered_root_and_a_locked_folder_are_refused(dir_tree):
+    hub = dir_tree["hub"]
+    with pytest.raises(MoveRefused) as refused:
+        plan_directory_move(
+            hub, dir_tree["source_id"], "", dir_tree["destination_id"], ""
+        )
+    assert refused.value.status_code == 400
+    assert "registered folder itself" in str(refused.value)
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET movable = 'root_only' WHERE id = ?",
+            (dir_tree["destination_id"],),
+        )
+    with pytest.raises(MoveRefused) as refused:
+        _move_sdxl(dir_tree)
+    assert refused.value.status_code == 409
+
+
+def test_a_directory_holding_a_registered_folder_is_refused(dir_tree):
+    nested = dir_tree["source_dir"] / "sdxl" / "watched"
+    nested.mkdir()
+    register_folder(dir_tree["hub"], nested)
+    with pytest.raises(MoveRefused) as refused:
+        _move_sdxl(dir_tree)
+    assert refused.value.status_code == 409
+    assert nested.is_dir()
+
+
+def test_a_cancelled_cross_drive_move_leaves_no_partial_and_repoints_nothing(
+    dir_tree, dir_cross_device
+):
+    before = locations(dir_tree["hub"])
+    _, outcome = _move_sdxl(dir_tree, should_cancel=lambda: True)
+    assert outcome.status == STATUS_CANCELLED
+    assert not list(dir_tree["destination_dir"].iterdir()), "the partial was left"
+    assert (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert locations(dir_tree["hub"]).keys() == before.keys()
+    assert_no_dangling_rows(dir_tree["hub"])
+
+
+def test_a_copy_that_does_not_verify_is_discarded_and_the_source_kept(
+    dir_tree, dir_cross_device, monkeypatch
+):
+    monkeypatch.setattr(dir_mover_module, "file_digest", lambda path, **_: "0" * 64)
+    before = locations(dir_tree["hub"])
+    _, outcome = _move_sdxl(dir_tree)
+    assert outcome.status == STATUS_FAILED
+    assert "registered as" in outcome.detail
+    assert not list(dir_tree["destination_dir"].iterdir())
+    assert (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert locations(dir_tree["hub"]).keys() == before.keys()
+
+
+def test_a_failed_repoint_renames_the_directory_back(dir_tree, monkeypatch):
+    def lost(hub, plan):
+        raise mover_module.RepointLost("simulated: the rows went away")
+
+    monkeypatch.setattr(dir_mover_module, "_repoint", lost)
+    _, outcome = _move_sdxl(dir_tree)
+    assert outcome.status == STATUS_FAILED
+    assert (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert not (dir_tree["destination_dir"] / "sdxl").exists()
+    assert_no_dangling_rows(dir_tree["hub"])
+
+
+def test_a_row_added_after_the_plan_is_repointed_too(dir_tree):
+    """The rows are re-read inside the repoint: a rescan is not under the lock."""
+    plan = plan_directory_move(
+        dir_tree["hub"], dir_tree["source_id"], "sdxl", dir_tree["destination_id"], ""
+    )
+    register_file(
+        dir_tree["hub"],
+        dir_tree["source_id"],
+        dir_tree["source_dir"],
+        os.path.join("sdxl", "late.safetensors"),
+    )
+    assert execute_directory_move(dir_tree["hub"], plan).status == STATUS_MOVED
+    assert_no_dangling_rows(dir_tree["hub"])
+
+
+def test_a_file_written_into_the_source_during_the_copy_keeps_the_source(
+    dir_tree, dir_cross_device, monkeypatch
+):
+    """The verify only knows the catalogued files; the removal must not take a
+    preview a running job saved into the source after the copy began."""
+    verify = dir_mover_module._verify
+    late = dir_tree["source_dir"] / "sdxl" / "alice_samples" / "step_200.png"
+
+    def verify_then_a_job_writes(plan, copy_root, **kwargs):
+        verify(plan, copy_root, **kwargs)
+        late.write_bytes(b"written mid-move")
+
+    monkeypatch.setattr(dir_mover_module, "_verify", verify_then_a_job_writes)
+    _, outcome = _move_sdxl(dir_tree)
+    assert outcome.status == STATUS_MOVED
+    assert "original was kept" in outcome.detail
+    assert late.read_bytes() == b"written mid-move"
+    assert (dir_tree["destination_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert_no_dangling_rows(dir_tree["hub"])
+
+
+def test_a_cross_drive_folder_move_reports_its_bytes(dir_tree, dir_cross_device):
+    """Every file in the tree is counted as it copies, and the hashed model is
+    counted again as it is read back - so a folder holding one large model
+    fills the bar instead of sitting at ``0 / 1``."""
+    sdxl = dir_tree["source_dir"] / "sdxl"
+    tree_bytes = sum(p.stat().st_size for p in sdxl.rglob("*") if p.is_file())
+    model_bytes = (sdxl / "alice.safetensors").stat().st_size
+    counts: list[int] = []
+
+    _, outcome = _move_sdxl(dir_tree, on_bytes=counts.append)
+
+    assert outcome.status == STATUS_MOVED
+    assert model_bytes > 0
+    assert sum(counts) == tree_bytes + model_bytes
+
+
+def test_a_file_rewritten_at_the_same_size_during_the_copy_keeps_the_source(
+    dir_tree, dir_cross_device, monkeypatch
+):
+    """Size alone cannot tell a same-size rewrite from the file that was copied,
+    so the source is kept when a file was written to after its copy began."""
+    real_copy = dir_mover_module.copy_and_digest
+    notes = dir_tree["source_dir"] / "sdxl" / "notes.txt"
+
+    def copy_then_a_job_rewrites(source, destination, **kwargs):
+        copied = real_copy(source, destination, **kwargs)
+        if source == str(notes):
+            notes.write_text("trained on 41 pictures")
+            stat = notes.stat()
+            os.utime(notes, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+        return copied
+
+    monkeypatch.setattr(dir_mover_module, "copy_and_digest", copy_then_a_job_rewrites)
+    _, outcome = _move_sdxl(dir_tree)
+    assert outcome.status == STATUS_MOVED
+    assert "original was kept" in outcome.detail
+    assert notes.read_text() == "trained on 41 pictures"
+    assert_no_dangling_rows(dir_tree["hub"])
+
+
+def test_a_partial_that_appeared_after_the_plan_is_not_discarded(
+    dir_tree, dir_cross_device
+):
+    """The plan refuses a left-over partial; one that appears after it is not
+    this move's, and the failed move must not remove it."""
+    plan = plan_directory_move(
+        dir_tree["hub"], dir_tree["source_id"], "sdxl", dir_tree["destination_id"], ""
+    )
+    foreign = dir_tree["destination_dir"] / ("sdxl" + PARTIAL_SUFFIX)
+    foreign.mkdir()
+    (foreign / "theirs.txt").write_text("keep")
+    outcome = execute_directory_move(dir_tree["hub"], plan)
+    assert outcome.status == STATUS_FAILED
+    assert (foreign / "theirs.txt").read_text() == "keep"
+    assert (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert_no_dangling_rows(dir_tree["hub"])
+
+
+def test_a_file_written_after_the_final_check_is_left_not_deleted(
+    dir_tree, dir_cross_device, monkeypatch
+):
+    """The source goes file by file from the list just compared, never by
+    ``rmtree``: a file that lands after that list is in no copy, so it stays."""
+    listing = dir_mover_module._tree_listing
+    late = dir_tree["source_dir"] / "sdxl" / "alice_samples" / "step_300.png"
+
+    def list_then_a_job_writes(path):
+        found = listing(path)
+        if path == str(dir_tree["source_dir"] / "sdxl") or path.endswith(
+            os.path.join("loras", "sdxl")
+        ):
+            late.write_bytes(b"written after the check")
+        return found
+
+    monkeypatch.setattr(dir_mover_module, "_tree_listing", list_then_a_job_writes)
+    _, outcome = _move_sdxl(dir_tree)
+    assert outcome.status == STATUS_MOVED
+    assert "left there" in outcome.detail
+    assert late.read_bytes() == b"written after the check"
+    assert not (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").exists()
+    assert (dir_tree["destination_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert_no_dangling_rows(dir_tree["hub"])
+
+
+def test_an_empty_folder_made_after_the_final_check_is_left_not_swept(
+    dir_tree, dir_cross_device, monkeypatch
+):
+    """An empty directory has no file to compare, so the sweep that tidies the
+    source after the move must not take one the copy does not have."""
+    listing = dir_mover_module._tree_listing
+    made = dir_tree["source_dir"] / "sdxl" / "portraits"
+
+    def list_then_a_folder_is_made(path):
+        found = listing(path)
+        if path.endswith(os.path.join("loras", "sdxl")):
+            made.mkdir(exist_ok=True)
+        return found
+
+    monkeypatch.setattr(dir_mover_module, "_tree_listing", list_then_a_folder_is_made)
+    _, outcome = _move_sdxl(dir_tree)
+    assert outcome.status == STATUS_MOVED
+    assert "left there" in outcome.detail
+    assert made.is_dir()
+    assert (dir_tree["destination_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert_no_dangling_rows(dir_tree["hub"])

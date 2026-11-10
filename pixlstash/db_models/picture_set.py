@@ -53,6 +53,12 @@ class PictureSet(SQLModel, table=True):
     # nor the label data of any member picture may be mutated until it is unlocked
     # (mirrors the boolean `deleted` flag pattern on Picture).
     locked: bool = Field(default=False)
+    # A child set sits under one parent: another set or a person, never both
+    # (a LoRA dataset under the person or set it is of). Plain ids rather than
+    # foreign keys, like ``Picture.pending_character_id``: the set and character
+    # delete handlers lift a deleted parent's children themselves.
+    parent_set_id: Optional[int] = Field(default=None, index=True)
+    parent_character_id: Optional[int] = Field(default=None, index=True)
 
     # Relationships
     members: List["Picture"] = Relationship(

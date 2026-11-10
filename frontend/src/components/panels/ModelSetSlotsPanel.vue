@@ -872,7 +872,8 @@ const notchStyle = computed(() => {
   flex: 1 1 16rem;
 }
 
-.mss__baseinput {
+/* `:deep()`: `BaseModelInput` is not a root this file's scope reaches. */
+.mss__base :deep(.mss__baseinput) {
   flex: 0 1 14rem;
   width: auto;
 }
@@ -1062,6 +1063,7 @@ const notchStyle = computed(() => {
 .mss__offer:focus-visible {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--focus-offset);
+  box-shadow: var(--focus-glow);
 }
 
 .mss__offercell {

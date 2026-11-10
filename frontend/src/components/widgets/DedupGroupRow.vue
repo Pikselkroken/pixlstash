@@ -140,6 +140,7 @@
         :tabindex="focused ? 0 : -1"
         :disabled="busy || readOnly || noLegalStack"
         aria-keyshortcuts="Enter S"
+        :key-hint="showsVerdictKeys ? 'enter' : ''"
         :tooltip="
           noLegalStack
             ? lockedStackReason
@@ -168,7 +169,6 @@
             <span class="gsl gsl--short">{{ verdictLabel.short }}</span>
           </template>
         </template>
-        <kbd v-if="showsVerdictKeys" aria-hidden="true">Enter</kbd>
       </AppButton>
       <AppButton
         variant="outline"
@@ -177,6 +177,7 @@
         :tabindex="focused ? 0 : -1"
         :disabled="busy || readOnly"
         aria-keyshortcuts="K"
+        :key-hint="showsVerdictKeys ? 'k' : ''"
         :tooltip="
           bulk
             ? `Leave all ${selectionCount} selected groups as separate pictures. They stay in your library and stop being suggested.`
@@ -185,17 +186,16 @@
         @click.stop="emit('keep-separate')"
       >
         {{ bulk ? `Keep ${selectionCount} separate` : "Keep separate" }}
-        <kbd v-if="showsVerdictKeys" aria-hidden="true">K</kbd>
       </AppButton>
       <AppButton
         variant="ghost"
         icon-left="compare-horizontal"
         data-testid="dedup-compare"
+        :key-hint="focused ? 'c' : ''"
         :tabindex="focused ? 0 : -1"
         @click.stop="emit('compare')"
       >
         Compare all {{ units.length }}
-        <kbd v-if="focused" aria-hidden="true">C</kbd>
       </AppButton>
     </div>
 
@@ -594,8 +594,6 @@ function isFlashing(unit) {
  * @returns {string}
  */
 function thumbUrl(unit) {
-  // baseUrl is load-bearing: the SPA and the backend are different origins in
-  // the dev server, the demo and Electron, so a relative /pictures/... 404s.
   return pictureThumbnailUrl(unit.coverPictureId, {
     version: unit.thumbnailVersion,
   });
@@ -1190,15 +1188,5 @@ function onDblClick(event) {
   .gsl--short {
     display: inline;
   }
-}
-
-kbd {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  line-height: var(--leading-snug);
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-sm);
-  border: 1px solid currentColor;
-  opacity: 0.7;
 }
 </style>

@@ -418,9 +418,9 @@ Terms used below:
   CPU for search queries (see "Searching").
 
 Two sources of a second Metal thread are closed at their source rather than
-synchronised: transformers' loader pool and search queries. A third, the
-anomaly-region route, is routed onto the GPU worker. The rest are listed under
-"Not covered".
+synchronised: transformers' loader pool and search queries. Two more, the
+anomaly-region route and the device-cache flushes that unload models, are
+routed onto the GPU worker. The rest are listed under "Not covered".
 
 ### Loading: one loader thread wherever Metal exists
 
@@ -484,15 +484,31 @@ they took boot from 1.95 s to 9.11 s on a real library (2026-09-21), and the
 server does not listen until they are in. Part of that is import cost the first
 tagging or embedding load would otherwise pay a little later.
 
-The copies then stay resident for the life of the engine, even with "keep
-models in memory" off: `engine.close()` and the idle sweep leave them, and they
-go with the engine on a library switch or shutdown. On unified memory that is
-about 0.7 GB the owner cannot reclaim; unloading and reloading them safely is
-#1774. Nothing reloads them, so if either copy fails to load, every search
-answers 503 rather than fall back to the Metal services, because that fallback
-is the crash. The pair serves only when **both** loaded: the services call
-`ensure_ready()` outside their own `try`, so a copy with no model would load
-lazily on the search thread.
+After that the copies are released and reloaded like other models (#1774).
+They are about 0.7 GB of unified memory, so `engine.close()` (the idle sweep
+under "keep models in memory" off, and making room for another GPU tenant)
+releases them, with two guards: it only *tries* the query lock, so it never
+waits for or releases under a running encode, and it skips copies a search used
+in the last `IDLE_UNLOAD_S` (180 s), so a search session does not pay a reload
+each time the sweep comes round. The next search reloads them itself, inside
+`query_services()`, on its own thread and under the query lock: no waiters to
+wake and no timeout, and it never queues behind a GPU batch. A reload is safe
+off the GPU worker because the first load already did the imports that race,
+`MODEL_CONSTRUCTION_LOCK` serialises the construction against the worker's own
+loads, and a CPU load never touches Metal. That is reasoning, not a
+measurement: no reload beside a running worker has been recorded on an M-series
+Mac, and the weight copy and casts run outside `MODEL_CONSTRUCTION_LOCK`. Nor has
+how long a warm reload makes that first search wait. A reload that fails
+refuses that one search with a 503 and the next search tries again. The sweep
+runs only from the worker-progress poll and only while every worker is idle, so
+"180 s" is the earliest the copies go, not a promise that they do.
+
+The first load is different: if either copy fails it, nothing retries it and
+every search answers 503 until a restart, rather than fall back to the Metal
+services, because that fallback is the crash, and a retry on a search thread
+would redo the racy imports beside the worker. The pair serves only when
+**both** loaded: the services call `ensure_ready()` outside their own `try`, so
+a copy with no model would load lazily inside the encode.
 
 `query_services()` also lets one query encode run at a time, on every host. The
 encodes run on request threads and share one pair of service instances, which
@@ -517,13 +533,56 @@ retags, and the route's work beside tag batches in a harness failed 10 of 10
 
 The cost is latency. A task already on the worker is never pre-empted, so the
 hint waits it out: about 3.7 s per call beside retags, but 53 s in the one run
-where a Florence-2 caption batch was running, because on Metal Florence-2 is
-held on the CPU in fp32 (see #1775).
+where a Florence-2 caption batch was running, because on Metal Florence-2 was
+then held on the CPU in fp32 (see #1775). It runs on Metal in fp16 since #1786;
+how that changes the wait is not measured.
 
 This is not Metal-only. The cast is in place on the shared model, so on any
 host a tag batch on the worker beside it would have met fp32 weights (the CPU
 model is fp32 throughout, so only accelerators were affected). One worker
 thread closes both.
+
+### Device-cache flushes: on the GPU worker
+
+Unloading models ends in `empty_device_cache()`, which on Metal is
+`torch.mps.empty_cache()` (cause 3). Four paths used to run it on their own
+thread beside the GPU worker; each now queues a `DeviceReleaseTask`
+(`tasks/device_release_task.py`) on the GPU queue at `URGENT` priority, so the
+unload runs between tasks on the worker and never under one:
+
+- **The idle sweep.** With "keep models in memory" off,
+  `Vault._maybe_aggressive_unload` runs from the worker-progress poll (a request
+  thread) and from `PATCH /users/me/config` when the setting is switched off
+  (the event loop). With a GPU worker running it now only queues
+  `Vault.unload_models` and returns, so the event loop no longer waits for an
+  unload either. Its idle check and its timestamp are taken under one lock, so
+  two polls at once queue one unload, and the unload is skipped if the setting
+  was switched back on meanwhile. A batch already running when the unload
+  is queued finishes first; one queued but not started runs after it and
+  reloads its model.
+- **Making room for another tenant.** `Vault._yield_gpu`, on the arbiter's
+  thread, used to wait for the worker to be idle and then unload there, so an
+  interactive task taken in between met the flush. It queues the unload and
+  waits for it up to `YIELD_WAIT_S`; past that the unload still runs once the
+  batch ends, and is skipped if the lease was granted meanwhile.
+- **The face finder's end-of-work release.**
+  `MissingFaceExtractionFinder.on_all_tasks_complete` returns the release as a
+  task instead of running it on the planner's thread, and the planner queues
+  whatever a finder's `on_all_tasks_complete` returns.
+- **Stopping the vault.** `TaskRunner.stop()` gives a worker 60 s to finish.
+  If the GPU worker is still alive after that, `Vault.stop()` skips the
+  face-model and embedding-model release and `engine.close()` and logs a
+  warning, leaving the models for the process exit rather than flushing under
+  it.
+
+`URGENT` matters for the arbiter: a non-urgent GPU task is refused while
+another tenant's exclusive lease waits, which is exactly when making room has
+to unload. The task holds no memory and is never stopped to make room.
+
+With no running GPU worker (tests, the CLI tools) the unload runs inline,
+since nothing else is on the device. None of this was measured on Metal: the
+crash it removes is the one the anomaly route showed (5 of 5 runs, see
+"Measured in PixlStash"), but no run of the sweep race itself is recorded.
 
 ### Not covered
 
@@ -536,25 +595,12 @@ These do, or may do, Metal work on a thread other than the GPU worker:
   model built on the CPU, then `.to(mps)` and `.half()` over its 344 weights; a
   third-party tag plugin's `setup()` and `init()` run there too. Measured on
   2026-09-27 (see "What reproduces where"): it overlapped CLIP on the worker in
-  8 of 8 restarts with the CPU copies on, and nothing crashed.
-- **The idle sweep.** `Vault._maybe_aggressive_unload` runs `engine.close()`,
-  which flushes with `torch.mps.empty_cache()` (cause 3). It runs from the
-  worker-progress poll, on a request thread, and from `PATCH /users/me/config`
-  when "keep models in memory" is switched off, on the event loop. It runs only
-  with that setting off. Its idle check reads the planner's
-  progress and whether a GPU task is running at that instant, so a batch the
-  worker starts just after the check can meet the flush, and it does not see
-  the tagger preload. Nothing stops two polls sweeping at
-  once. Not measured.
-- **The face finder's end-of-work flush.** With "keep models in memory" off,
-  `MissingFaceExtractionFinder.on_all_tasks_complete` runs
-  `FaceExtractionTask.release_detection_models()` on the planner thread, which
-  ends in `empty_device_cache()`: another cause-3 flush, with no check on the
-  GPU worker. Not measured.
-- **Stopping the vault.** `TaskRunner.stop()` gives the GPU worker up to 60 s
-  to finish, then carries on. `Vault.stop()` then releases the face models and
-  runs `engine.close()`, flushing and freeing on the stopping thread, which a
-  worker that outlived the wait may still be using. Not measured.
+  8 of 8 restarts with the CPU copies on, and nothing crashed. The unloads
+  queued on the worker (see "Device-cache flushes") do not wait for it.
+- **CPU-queue tasks granted GPU memory.** The runner lets a CPU-queue task ask
+  for a GPU lease and flushes after it on its CPU worker; making room no longer
+  waits for one. No CPU-queue task asks for GPU memory today, and one that did
+  would be a second thread on the device whatever the flushes do.
 - **Image plugins.** They run on `asyncio.to_thread`
   (`services/plugin_service.py`), so a torch plugin that uses Metal is a second
   thread on it. No built-in image plugin imports torch.
@@ -580,7 +626,7 @@ does not do.
 | Boot, real app and real library, before the CPU copies existed | 2026-09-21 | 1.95 s (`create` builds the engine in 0.003 s) |
 | Boot with the copies loaded inline in `create` | 2026-09-21 | **9.11 s** — they became the first models in the process and paid every import; `create` alone took 7.3 s |
 | The load itself, in a harness on throwaway libraries | 2026-09-27 | 4.9–7.1 s, cold imports included |
-| Memory the CPU copies hold, Metal hosts only | 2026-09-28 | About 0.7 GB: 696 MB of fp32 weights by parameter count (CLIP 605 MB, SBERT 91 MB); the process grew by 610 MB loading them. Kept resident (#1774) |
+| Memory the CPU copies hold, Metal hosts only | 2026-09-28 | About 0.7 GB: 696 MB of fp32 weights by parameter count (CLIP 605 MB, SBERT 91 MB); the process grew by 610 MB loading them. Released by the idle sweep after 180 s unused, reloaded by the next search (#1774) |
 | The anomaly route in a real server, before and after #1775: a throwaway library of 12 pictures, one thread queueing `POST /pictures/{id}/reset_tags` every 0.7 s, another calling `GET /pictures/{id}/anomaly_region` with the region cache cleared, 60 s per run. M1, macOS 15.7.3, torch 2.13.0, transformers 5.17.0 | 2026-10-06 | Before: **5 of 5 runs aborted** with `Cannot form weak reference to instance … of class MPSGraph` (cause 3), the request thread in `_compute_gradcam` and the GPU worker in `empty_device_cache` after a task. After: 0 of 5, with 64–72 tag tasks and 2–16 region calls per run; median call 3.7 s, but 53 s and 32 s in the one run where a Florence-2 caption batch held the worker |
 | The anomaly route's work before and after #1775: the real PixlStash tagger on Metal, tag batches of 8 on one thread and Grad-CAM on another, 20 s per process. M1, macOS 15.7.3, torch 2.13.0, transformers 5.17.0 | 2026-10-06 | **10 of 10 failed**, all `SIGABRT`: 9 with `Destination NDArray and Accumulator NDArray cannot have different datatype in MPSNDArrayMatrixMultiplication` (a tag batch meeting the model mid-cast to fp32), 1 with `original module failed verification`. The same work interleaved on one thread, as the GPU worker now runs it: 0 of 10 |
 | Do fp32 CLIP query vectors rank differently from the fp16 ones they replace? (SBERT was fp32 on Metal already.) | 2026-09-23 | No. 20 queries over a real library of several thousand pictures: top-1 identical 20/20, top-10 identical 20/20, largest rank move 1 place, max per-dim delta 4.91e-04 |

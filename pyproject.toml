@@ -1,7 +1,7 @@
 [project]
 name = "pixlstash"
-version = "1.13.2"
-description = "Self-hosted picture library with AI tagging, semantic search, and a clean web UI"
+version = "2.0.0"
+description = "Image library for photographers and creators, with local AI tagging, search, ComfyUI workflows, editing and LoRA training"
 readme = "README.md"
 license = "GPL-3.0-only AND MIT"
 license-files = [
@@ -133,11 +133,15 @@ pixlstash = [
     "image_plugins/built-in/*.py",
     "data/anchors/*.npy",
     "data/comfyui-workflows/built-in/*.json",
+    "data/tag_groups/*.json",
+    "data/tag_groups/*.txt",
     "data/scalar-assets/*",
     "data/workflow_templates.json",
     "data/workflow_templates_index.json",
     "data/workflow_templates/*.json",
     "data/comfyui-pack/**/*",
+    "data/training-presets/*.json",
+    "data/ai-toolkit-jobs/built-in/*.json",
 ]
 
 [tool.ruff]

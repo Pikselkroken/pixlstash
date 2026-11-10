@@ -65,6 +65,10 @@ class LibrarySettings(SQLModel, table=True):
             cannot live in the hub: character 7 in one library and character 7 in
             another are different people, so a per-user value silently names the
             wrong person after a switch.
+        tag_groups_seeded_version: The version of the default tag-group file this
+            library was last seeded from. NULL means never seeded. Seeding runs
+            on open when this is NULL or older than the file, and only ever adds
+            filings that do not exist yet.
     """
 
     __tablename__ = "library_settings"
@@ -74,6 +78,9 @@ class LibrarySettings(SQLModel, table=True):
         default=None, sa_column=Column(String, nullable=True)
     )
     similarity_character: Optional[int] = Field(
+        default=None, sa_column=Column(Integer, nullable=True)
+    )
+    tag_groups_seeded_version: Optional[int] = Field(
         default=None, sa_column=Column(Integer, nullable=True)
     )
     settings_fingerprint: Optional[str] = Field(

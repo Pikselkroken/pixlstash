@@ -23,15 +23,24 @@ query vector is comparable with the stored ones. They are built only when the
 engine's device is Metal: a CUDA or CPU host has nothing to protect against and
 pays nothing.
 
-**Loaded once, before the engine is published, and then kept.** The Vault
+**Loaded first, before the engine is published.** The Vault
 builds the engine, loads these, and only then assigns ``Vault._engine``
 (``Vault._create_engine``). The planner's model finders queue nothing until the
 engine exists, so the load never runs beside another model load - which would
 race transformers' and accelerate's *imports* rather than Metal, and failed
 with ``ImportError: cannot import name 'AcceleratorState' from partially
-initialized module 'accelerate.state'``. The copies then stay resident for the
-life of the engine, about 0.7 GB of unified memory, even with "Keep models in
-memory" off; releasing them under the idle sweep is #1774.
+initialized module 'accelerate.state'``.
+
+**Released when unused, reloaded by the next search.** The copies hold about
+0.7 GB of unified memory, so the idle sweep releases them like any other model
+(``InferenceEngine.close``), but only once no search has used them for
+:data:`IDLE_UNLOAD_S`, and never under a running encode. The next search
+reloads them on its own thread, inside ``query_services``: it waits for that
+load (and for any model the worker is building at that moment), never for a
+GPU batch. That is safe off the GPU worker because the first load
+has already done the imports that race, the construction itself is serialised
+by ``MODEL_CONSTRUCTION_LOCK``, and a CPU load never touches Metal. A pair that
+never loaded at all is not retried: its imports may be what failed.
 
 Every query encode, on any host, goes through
 :meth:`~pixlstash.inference.engine.InferenceEngine.query_services`, which picks
@@ -40,6 +49,7 @@ these copies or the engine's own services and lets one encode run at a time.
 
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 from pixlstash.pixl_logging import get_logger
@@ -47,11 +57,25 @@ from pixlstash.utils.accelerator import CPU, MPS, normalise_device
 
 logger = get_logger(__name__)
 
-#: What a route says when the copies failed to load. Worded for the owner: the
-#: load runs once, at start-up, so trying the search again will not help.
+#: What a route says when the copies failed their first load. Worded for the
+#: owner: that load runs at start-up and is not retried, so trying the search
+#: again will not help.
 LOAD_FAILED_DETAIL = (
     "Search could not load its models. Restart PixlStash; the log says why."
 )
+
+
+#: What a route says when a reload after an idle release failed. The next
+#: search tries the load again.
+RELOAD_FAILED_DETAIL = (
+    "Search could not reload its models. Try again; the log says why."
+)
+
+#: How long the copies go unused before the idle sweep may release them, so a
+#: search session does not pay a reload every few queries. The earliest they go,
+#: not a deadline: the sweep runs only from the worker-progress poll, at most
+#: every 180 s, and only while every worker is idle.
+IDLE_UNLOAD_S = 180.0
 
 
 class CpuQueryEncodersNotReadyError(RuntimeError):
@@ -95,14 +119,17 @@ class CpuQueryEncoders:
     def __init__(self, clip_service, sbert_service) -> None:
         self._clip_service = clip_service
         self._sbert_service = sbert_service
+        # Set by the first complete load; only a pair that loaded once reloads.
+        self._loaded_once = False
+        self._last_used = 0.0
 
     def is_loaded(self) -> bool:
         """Whether **both** copies hold a model.
 
         Both or neither: the services call ``ensure_ready()`` outside their own
         ``try`` (``clip_service.encode_text``, ``SBertService.encode``), and on
-        a copy with no model that is a lazy load on the search thread - the
-        import race the up-front load exists to avoid.
+        a copy with no model that is a lazy load inside the encode, outside
+        :meth:`services`' reload and its checks.
         """
         return bool(self._clip_service.is_loaded() and self._sbert_service.is_loaded())
 
@@ -111,7 +138,8 @@ class CpuQueryEncoders:
 
         A failure in one copy is logged and does not stop the other from
         loading, so the log names which half is missing. Nothing raises: a
-        partial load makes :meth:`services` refuse every search instead.
+        partial first load makes :meth:`services` refuse every search instead,
+        and a partial reload refuses that search and is retried by the next.
         """
         for label, service in (
             ("CLIP", self._clip_service),
@@ -127,19 +155,47 @@ class CpuQueryEncoders:
                     "(docs/apple-metal-thread-safety.md)",
                     label,
                 )
-        if self.is_loaded():
+        if self.is_loaded() and not self._loaded_once:
+            self._loaded_once = True
             logger.info(
                 "Search queries will be encoded on CPU copies of CLIP and "
                 "SBERT, so they never touch the inference device while the "
                 "GPU worker is using it."
             )
 
+    def unload_if_idle(self) -> bool:
+        """Release both copies if no search has used them for :data:`IDLE_UNLOAD_S`.
+
+        The caller holds the engine's query lock, so no encode is running.
+
+        Returns:
+            Whether the copies were released.
+        """
+        # Either half: a partial reload leaves one copy that serves nobody.
+        if not (self._clip_service.is_loaded() or self._sbert_service.is_loaded()):
+            return False
+        if time.monotonic() - self._last_used < IDLE_UNLOAD_S:
+            return False
+        self._clip_service.unload()
+        self._sbert_service.unload()
+        logger.info("Released the CPU query encoders; the next search reloads them.")
+        return True
+
     def services(self) -> tuple:
         """Return ``(clip_service, sbert_service)`` for one query encode.
+
+        Reloads the copies first if the idle sweep released them. The caller
+        holds the engine's query lock, so later searches wait for this load.
 
         Raises:
             CpuQueryEncodersNotReadyError: A copy failed to load.
         """
         if not self.is_loaded():
-            raise CpuQueryEncodersNotReadyError(LOAD_FAILED_DETAIL)
+            if not self._loaded_once:
+                raise CpuQueryEncodersNotReadyError(LOAD_FAILED_DETAIL)
+            logger.info("Reloading the CPU query encoders for a search.")
+            self.load()
+            if not self.is_loaded():
+                raise CpuQueryEncodersNotReadyError(RELOAD_FAILED_DETAIL)
+        self._last_used = time.monotonic()
         return self._clip_service, self._sbert_service

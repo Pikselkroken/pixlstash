@@ -151,6 +151,7 @@ import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { API_BASE_URL } from "../../utils/apiClient";
+import { isOwnShareCopyDrop } from "../../utils/shareDrag.js";
 const props = defineProps({
   projectId: { type: Number, required: true },
   backendUrl: { type: String, default: () => API_BASE_URL },
@@ -234,6 +235,8 @@ async function onDrop(e) {
   }
 
   // --- File drop ---
+  // A drag-out dropped back is PixlStash's own copies; the window says so.
+  if (isOwnShareCopyDrop(dt)) return;
   const droppedFiles = Array.from(dt?.files ?? []);
   if (!droppedFiles.length) return;
 

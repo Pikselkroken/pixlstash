@@ -1,15 +1,15 @@
 import { test, expect } from '../fixtures/test.js'
 
 // Release plan §14 — Tag predictions. The current UI surfaces predictions as
-// the "Rejected Tags" chips in the overlay side panel: deleting an applied tag
+// the "Rejected Tags" chips in the lightbox side panel: deleting an applied tag
 // rejects its prediction, dropping the label down to a prediction chip with a
-// confidence badge (only predictions the tagger actually scored ≥ 0.3 render —
+// confidence badge (only predictions the tagger actually scored ≥ 0.25 show —
 // a synthetic manual reject gets confidence 0.0 and stays hidden by design),
 // and the chip's ✓ button confirms the prediction back into the applied list.
 //
 // The fixture vault carries real tagger predictions, so the spec discovers a
 // picture whose APPLIED tag has a live prediction ≥ 0.35 via the API, then
-// drives the full round trip in the overlay:
+// drives the full round trip in the lightbox:
 //
 //   delete tag → drops to prediction chip → Confirm → returns to applied tags.
 //
@@ -26,7 +26,7 @@ function idFromThumbSrc(src) {
 /**
  * Find a picture (among the visible grid thumbnails) with an applied tag whose
  * prediction row has a real confidence ≥ 0.35 — high enough that a reject
- * keeps the chip above the UI's 0.3 near-miss render threshold.
+ * keeps the chip above the 25% under which Rejected folds a chip away.
  */
 async function findPredictedAppliedTag(grid, apiContext) {
   const srcs = await grid.thumbnailImages.evaluateAll((imgs) =>
@@ -61,7 +61,7 @@ test.describe('tag predictions', () => {
   test('a deleted tag drops to a prediction chip and Confirm restores it (§14)', async ({
     page,
     grid,
-    overlay,
+    lightbox,
     apiContext,
   }) => {
     await grid.goto()
@@ -76,28 +76,26 @@ test.describe('tag predictions', () => {
 
     // Deep-link the overlay to the discovered picture (?overlay=<id>).
     await page.goto(`/?overlay=${pictureId}`)
-    await expect(overlay.root).toBeVisible({ timeout: 15_000 })
-    await expect(overlay.tag(tag)).toBeVisible()
+    await expect(lightbox.root).toBeVisible({ timeout: 15_000 })
+    await lightbox.openRail()
+    await expect(lightbox.tag(tag)).toBeVisible()
 
-    const predictionChip = page
-      .locator('.tag-drop-zone--predictions .overlay-tag--prediction')
-      .filter({ hasText: tag })
-      .first()
+    const predictionChip = lightbox.rejectedTags.filter({ hasText: tag }).first()
 
     // Delete the applied tag: it must drop down to the predictions zone with
     // its confidence badge, not vanish (plan: "Deleting a tag causes it to
     // drop down to prediction IF it had a > 0.0 prediction").
-    await overlay.removeTag(tag)
-    await expect(overlay.tag(tag)).toBeHidden()
+    await lightbox.removeTag(tag)
+    await expect(lightbox.tag(tag)).toBeHidden()
     await expect(predictionChip).toBeVisible()
-    await expect(predictionChip.locator('.tag-pred-confidence')).toHaveText(/\d+%/)
+    await expect(predictionChip.locator('.rail-chip__n')).toHaveText(/\d+%/)
 
     // Confirm the prediction: the tag returns to the applied list and the chip
     // leaves the predictions zone (plan: "Accept moves it to the confirmed tag
     // list and it disappears from predictions"). This restores the fixture.
     await predictionChip.hover()
-    await predictionChip.locator('.tag-pred-btn--confirm').click()
-    await expect(overlay.tag(tag)).toBeVisible()
+    await predictionChip.locator('.rail-chip__x').click()
+    await expect(lightbox.tag(tag)).toBeVisible()
     await expect(predictionChip).toBeHidden()
 
     // Backend truth: the tag row really is back.

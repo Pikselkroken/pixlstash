@@ -3,12 +3,15 @@ import { defineStore } from "pinia";
 
 import {
   createModelFolder,
+  createModelFolderDir,
   DOWNLOADS_KIND,
   forgetModelFolder,
+  getComfyuiReads,
   listModelFolderDevices,
+  listModelFolderDirs,
   listModelFolders,
   MANAGED_KIND,
-  rescanModelFolder,
+  renameModelFolder,
   setDefaultModelFolder,
   setDownloadModelFolder,
   SOURCE_KIND,
@@ -18,25 +21,25 @@ import { errorDetail } from "../utils/apiError";
 import { useModelShelfStore } from "./useModelShelfStore";
 import { useNoticeStore } from "./useNoticeStore";
 
-/** How often the list is re-read while a scan is believed to be running. */
+/** How often the list is re-read while a folder is being scanned. */
 const POLL_MS = 3000;
 
-/**
- * How long a scan may be waited on before the poll gives up.
- *
- * The scanner logs and returns without touching `last_checked` when it throws,
- * so a crashed scan is indistinguishable from a slow one on the wire. Without a
- * ceiling the poll would run for the life of the tab.
- */
-const SCAN_WAIT_CEILING_MS = 10 * 60 * 1000;
+/** The `scan_status` values that mean a scan is queued or walking. */
+const SCAN_IN_FLIGHT = new Set(["pending", "running"]);
+
+/** Where ComfyUI loads from, before it is read or when it cannot be. */
+const NO_COMFYUI_READS = Object.freeze({ known: false, reads: [] });
 
 /**
  * The registered model folders, and the scans running against them.
  *
- * This is a STORE rather than dialog state because a scan outlives the dialog:
- * the owner starts one on a 57 GB folder and closes the panel, and the shelf
- * still has to refresh and the notice still has to fire when it lands. The
- * dialog is a view onto this.
+ * Nobody starts a scan: the server scans a folder when it is added, whenever a
+ * model file in it changes, and every ten minutes besides, and announces what
+ * arrived as `models_arrived`, which the shelf listens for. This store only
+ * shows it: a folder is scanning while its `scan_status` says so, and the list
+ * is re-read until none is. It is a STORE rather than dialog state because the
+ * notice for a folder just added must still fire when its scan lands after
+ * the dialog has closed.
  *
  * The list is owner-only host data (absolute paths on this machine), so a
  * session reset drops it whole. Nothing here is persisted.
@@ -50,15 +53,22 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   /** True once a read has completed, so "none registered" and "not asked" differ. */
   const loaded = ref(false);
 
-  /** folder id → `{ startedAt, lastChecked }` for the scans being waited on. */
-  const scanning = ref(new Map());
+  /** Folders added this session whose first scan has not been announced yet. */
+  const announcing = new Set();
 
   let pollHandle = null;
   // Discards a read that was already on the wire when the credential changed,
   // the same guard `useLibrariesStore.refresh` takes.
   let epoch = 0;
 
-  const scanningIds = computed(() => new Set(scanning.value.keys()));
+  const scanningIds = computed(
+    () =>
+      new Set(
+        folders.value
+          .filter((folder) => SCAN_IN_FLIGHT.has(folder.scan_status))
+          .map((folder) => folder.id),
+      ),
+  );
 
   /**
    * folder id → the drive it sits on.
@@ -77,6 +87,9 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     }
     return byId;
   });
+
+  /** folder id → its row name, told apart from its namesakes. */
+  const labelByFolderId = computed(() => folderLabels(folders.value));
 
   /** The one folder that is PixlStash's own storage. Always exactly one. */
   const managedFolder = computed(() =>
@@ -128,6 +141,107 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   );
 
   /**
+   * One level of subfolders per `"<folder id>:<path>"`: `{loading, listing,
+   * error}`. Shared by the Folders tree and the folder view, so the folder
+   * that is open is read once. Replaced wholesale so templates react.
+   */
+  const dirListings = ref(new Map());
+  const dirsInFlight = new Map();
+  /** Per key, the newest request: only it may write its answer. */
+  const dirsLatest = new Map();
+
+  /**
+   * The sidebar tree's open rows, kept here so they outlive the sidebar: a
+   * trip to another view and back finds the tree as it was left. Expanded
+   * folder keys, and the drives closed (drives start open).
+   */
+  const treeExpanded = ref(new Set());
+  const treeClosedDrives = ref(new Set());
+
+  /** The cache key for one listing. */
+  function dirsKey(id, path = "") {
+    return `${Number(id)}:${path}`;
+  }
+
+  /**
+   * Read one level of a registered folder, once unless `force`.
+   *
+   * @param {number} id - the registered folder.
+   * @param {string} [path=""] - POSIX, relative to it.
+   * @param {{force?: boolean}} [options]
+   * @returns {Promise<Object|null>} the listing, or null when it could not be
+   *   read (a remote owner is refused the route; the tree then offers no
+   *   subfolders rather than an error per row).
+   */
+  async function loadDirs(id, path = "", { force = false } = {}) {
+    const key = dirsKey(id, path);
+    const known = dirListings.value.get(key);
+    if (!force && known?.listing) return known.listing;
+    // A forced read supersedes one in flight: that one may have left before
+    // the scan or move that asked for this.
+    if (!force && dirsInFlight.has(key)) return dirsInFlight.get(key);
+    const startedAt = epoch;
+    const ticket = {};
+    dirsLatest.set(key, ticket);
+    const put = (entry) => {
+      if (startedAt !== epoch || dirsLatest.get(key) !== ticket) return;
+      dirListings.value = new Map(dirListings.value).set(key, entry);
+    };
+    put({ loading: true, listing: known?.listing ?? null, error: "" });
+    const request = listModelFolderDirs(id, path)
+      .then((listing) => {
+        put({ loading: false, listing, error: "" });
+        return listing;
+      })
+      .catch((err) => {
+        console.warn(`Could not list model folder ${id} at "${path}"`, err);
+        put({
+          loading: false,
+          listing: null,
+          error: errorDetail(err) || "Could not read this folder.",
+        });
+        return null;
+      })
+      .finally(() => {
+        if (dirsInFlight.get(key) === request) dirsInFlight.delete(key);
+      });
+    dirsInFlight.set(key, request);
+    return request;
+  }
+
+  /**
+   * Where ComfyUI loads each kind from (#2205): `{known, reads}`. Unknown
+   * until read, and unknown when the read fails (a remote owner is refused
+   * it), so no folder is marked and no model called misplaced on a guess.
+   */
+  const comfyuiReads = ref(NO_COMFYUI_READS);
+
+  /** Ask once per shelf visit; ComfyUI's folders rarely move under it. */
+  async function loadComfyuiReads() {
+    const startedAt = epoch;
+    let answer = NO_COMFYUI_READS;
+    try {
+      const body = await getComfyuiReads();
+      if (body?.known && Array.isArray(body.reads)) answer = body;
+    } catch (err) {
+      console.warn("Could not read where ComfyUI loads models from", err);
+    }
+    if (startedAt === epoch) comfyuiReads.value = answer;
+  }
+
+  /**
+   * Re-read every listing already shown, in place: a scan, a move or an added
+   * file changes counts and folders under rows that are open. Clearing instead
+   * would fold every open row shut.
+   */
+  function reloadDirs() {
+    for (const key of dirListings.value.keys()) {
+      const at = key.indexOf(":");
+      loadDirs(Number(key.slice(0, at)), key.slice(at + 1), { force: true });
+    }
+  }
+
+  /**
    * Re-read the registry.
    *
    * @param {Object} [options]
@@ -167,7 +281,9 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
       if (startedAt !== epoch) return;
       folders.value = next;
       loaded.value = true;
-      settleFinishedScans();
+      announceFinishedScans();
+      if (scanningIds.value.size) startPolling();
+      else stopPolling();
     } catch (err) {
       if (startedAt !== epoch) return;
       error.value =
@@ -178,53 +294,33 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   }
 
   /**
-   * Retire the scans whose folder has been re-stamped, or which have waited out
-   * the ceiling.
+   * Say how the first scan of a folder added here went, once it has finished.
    *
-   * `last_checked` advancing is the only completion signal the API offers, so a
-   * scan is "finished" when the stamp differs from the one taken when it
-   * started. A folder that vanished from the list (forgotten mid-scan) settles
-   * too, or its entry would keep the poll alive forever.
+   * Only those: every other scan is the server keeping up by itself, and a
+   * notice each time would be noise. What it found reaches the shelf as
+   * `models_arrived`. A folder that vanished from the list (forgotten
+   * mid-scan) is dropped silently.
    */
-  function settleFinishedScans() {
-    if (!scanning.value.size) return;
+  function announceFinishedScans() {
+    if (!announcing.size) return;
     const notices = useNoticeStore();
     const byId = new Map(folders.value.map((folder) => [folder.id, folder]));
-    let changed = false;
-    let landed = false;
-
-    for (const [id, watch] of [...scanning.value]) {
+    for (const id of [...announcing]) {
       const folder = byId.get(id);
-      const timedOut = Date.now() - watch.startedAt > SCAN_WAIT_CEILING_MS;
-      const finished =
-        folder && (folder.last_checked || null) !== watch.lastChecked;
-
-      if (!folder || finished) {
-        scanning.value.delete(id);
-        changed = true;
-        if (finished) {
-          landed = true;
-          notices.push({
-            level: "success",
-            text: `Scanned ${basename(folder.path)}. ${countLabel(folder.file_count)} listed.`,
-          });
-        }
-      } else if (timedOut) {
-        scanning.value.delete(id);
-        changed = true;
+      if (folder && SCAN_IN_FLIGHT.has(folder.scan_status)) continue;
+      announcing.delete(id);
+      if (folder?.scan_status === "completed") {
         notices.push({
-          level: "warning",
-          text: `Still scanning ${basename(folder.path)}. It will appear on the shelf when it finishes.`,
+          level: "success",
+          text: `Scanned ${basename(folder.path)}. ${countLabel(folder.file_count)} listed.`,
+        });
+      } else if (folder?.scan_status === "failed") {
+        notices.push({
+          level: "error",
+          text: `Could not scan ${basename(folder.path)}${folder.scan_error ? `: ${folder.scan_error}` : "."}`,
         });
       }
     }
-
-    if (changed) scanning.value = new Map(scanning.value);
-    // Only a scan that actually landed changed what the shelf holds. `markNew`
-    // is what puts the `New` badge on the rows it brought in: a 1,800-row shelf
-    // gaining forty is otherwise a change nobody can see.
-    if (landed) useModelShelfStore().fetchRows({ markNew: true });
-    if (!scanning.value.size) stopPolling();
   }
 
   function startPolling() {
@@ -239,16 +335,11 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   }
 
   /**
-   * Register a folder and, unless it is taken from, immediately scan it.
+   * Register a folder. The server queues its first scan itself, so the row
+   * comes back already `pending` rather than reading as an empty failure.
    *
-   * Registering alone puts an empty row on screen, which reads as a failure;
-   * the scan is what the owner actually asked for.
-   *
-   * A `source` folder is the exception on both counts. It is an ai-toolkit
-   * output root, catalogued nowhere: the server answers its scan with
-   * `skipped` (`model_folder_scanner.py`), so submitting one spends a task to
-   * do nothing, and the toast that promises it would be describing work that
-   * never happens. Its runs are read live by the training-runs view instead.
+   * A `source` or Downloads folder is never scanned (it is taken from, not
+   * catalogued), so its notice promises no scan and none is waited for.
    *
    * @param {Object} options - forwarded to the API's `createModelFolder`.
    * @returns {Promise<boolean>} true when the folder was registered.
@@ -268,8 +359,10 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
             ? `Added ${name}. Its training runs are ready to import.`
             : `Added ${name}. Looking for models in it now.`;
       notices.push({ level: "success", text });
-      if (!takenFrom && created?.id != null)
-        await scan(created.id, { silent: true });
+      if (!takenFrom && created?.id != null) {
+        announcing.add(created.id);
+        announceFinishedScans();
+      }
       return true;
     } catch (err) {
       notices.push({
@@ -377,38 +470,45 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   }
 
   /**
-   * Start a scan and watch for it to land.
+   * Make one directory inside a registered folder (#2206).
    *
-   * @param {number} id
-   * @param {Object} [options]
-   * @param {boolean} [options.silent=false] - true when the caller has already
-   *   said what is happening (the add flow), so this does not say it twice.
+   * Refusals throw, with the server's `detail` in the response, so the field
+   * that asked can show them under itself and stay open. Only the parent's
+   * listing is re-read here; the caller reveals the new row in the tree it
+   * owns, since the tree's open state is its own.
+   *
+   * @param {number} folderId
+   * @param {string} parentPath - POSIX, `""` for the folder's root.
+   * @param {string} name - one segment.
+   * @returns {Promise<{folder_id: number, path: string}>} the new directory.
    */
-  async function scan(id, { silent = false } = {}) {
-    const notices = useNoticeStore();
-    const folder = folders.value.find((row) => row.id === id);
-    try {
-      const body = await rescanModelFolder(id);
-      if (body?.status === "already_running" && !silent) {
-        notices.push({
-          level: "info",
-          text: `${basename(folder?.path)} is already being scanned.`,
-        });
-      }
-      // `skipped` means a source folder, which carries no scan control at all,
-      // so there is nothing to watch and nothing to say.
-      if (body?.status === "skipped") return;
-      scanning.value = new Map(scanning.value).set(id, {
-        startedAt: Date.now(),
-        lastChecked: folder?.last_checked || null,
-      });
-      startPolling();
-    } catch (err) {
-      notices.push({
-        level: "error",
-        text: errorDetail(err) || "Could not start that scan.",
-      });
-    }
+  async function createDir(folderId, parentPath, name) {
+    const created = await createModelFolderDir(folderId, {
+      path: parentPath,
+      name,
+    });
+    await loadDirs(folderId, parentPath, { force: true });
+    useNoticeStore().push({ level: "success", text: `Created ${name}.` });
+    return created;
+  }
+
+  /**
+   * Rename a registered folder on disk. Refusals throw, with the server's
+   * `detail`, so the field that asked shows them and stays open. The list
+   * (and with it the settings dialog), where ComfyUI loads from and the
+   * shelf's copies are all re-read, since each names the folder's path.
+   *
+   * @param {number} folderId
+   * @param {string} name - one segment.
+   * @returns {Promise<Object>} the folder as now registered.
+   */
+  async function renameFolder(folderId, name) {
+    const renamed = await renameModelFolder(folderId, name);
+    await refresh({ quiet: true });
+    void loadComfyuiReads();
+    useModelShelfStore().fetchRows();
+    useNoticeStore().push({ level: "success", text: `Renamed to ${name}.` });
+    return renamed;
   }
 
   /**
@@ -417,14 +517,18 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
    * The paths are host facts about this machine and the registry is owner-only,
    * so none of it may survive into a share or read-only session that is never
    * allowed to ask for it. Any scan being waited on is abandoned with it: the
-   * server thread carries on, but this session no longer has standing to poll.
+   * server carries on, but this session no longer has standing to poll.
    */
   function resetForSession() {
     epoch += 1;
     stopPolling();
     folders.value = [];
     devices.value = [];
-    scanning.value = new Map();
+    announcing.clear();
+    dirListings.value = new Map();
+    treeExpanded.value = new Set();
+    treeClosedDrives.value = new Set();
+    comfyuiReads.value = NO_COMFYUI_READS;
     loading.value = false;
     loaded.value = false;
     error.value = "";
@@ -440,6 +544,7 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     folders,
     devices,
     deviceByFolderId,
+    labelByFolderId,
     loading,
     loaded,
     error,
@@ -451,13 +556,22 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     downloadFolder,
     defaultCandidates,
     registeredPaths,
+    dirListings,
+    treeExpanded,
+    treeClosedDrives,
+    dirsKey,
+    comfyuiReads,
+    loadComfyuiReads,
+    loadDirs,
+    reloadDirs,
     refresh,
     refreshDevices,
     add,
     forget,
-    scan,
     setDefault,
     setDownloadTarget,
+    createDir,
+    renameFolder,
     resetForSession,
   };
 });
@@ -467,6 +581,55 @@ export function basename(path) {
   const trimmed = String(path || "").replace(/[\\/]+$/, "");
   const parts = trimmed.split(/[\\/]/);
   return parts[parts.length - 1] || trimmed || "the folder";
+}
+
+/**
+ * folder id → the name a folder row goes by.
+ *
+ * A folder is named for its tool, else its last segment. Folders that would
+ * share a name (every StabilityMatrix folder reads "StabilityMatrix") are told
+ * apart by the shortest tail of their paths no other in the group shares, with
+ * the tool after it: "Lora (StabilityMatrix)", "Models/Lora", "Other/Lora".
+ *
+ * @param {Array<Object>} folders - the registry rows.
+ * @returns {Map<number, string>}
+ */
+export function folderLabels(folders) {
+  const nameOf = (folder) => folder.tool || basename(folder.path);
+  const groups = new Map();
+  for (const folder of folders) {
+    const name = nameOf(folder);
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(folder);
+  }
+  const labels = new Map();
+  for (const [name, group] of groups) {
+    if (group.length === 1) {
+      labels.set(Number(group[0].id), name);
+      continue;
+    }
+    const segments = group.map((folder) =>
+      String(folder.path || "")
+        .split(/[\\/]/)
+        .filter(Boolean),
+    );
+    group.forEach((folder, i) => {
+      const own = segments[i];
+      let tail = own.join("/") || name;
+      for (let n = 1; n <= own.length; n += 1) {
+        const candidate = own.slice(-n).join("/");
+        const shared = segments.some(
+          (other, j) => j !== i && other.slice(-n).join("/") === candidate,
+        );
+        if (!shared) {
+          tail = candidate;
+          break;
+        }
+      }
+      labels.set(Number(folder.id), folder.tool ? `${tail} (${folder.tool})` : tail);
+    });
+  }
+  return labels;
 }
 
 /** "1 file" / "12 files", so a sentence never reads "1 files". */

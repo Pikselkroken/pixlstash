@@ -10,10 +10,10 @@
 /**
  * Every route the model shelf answers to.
  *
- * TWO places decide things from this - `useAppNavigation`, which decides
- * whether the shelf is showing, and `SideBar`, which decides whether its Models
- * entry is the current page and whether a picture selection may light a row of
- * its own. They were separate literals, and adding the runs tab broke the
+ * Three places decide things from this - `useAppNavigation`, which decides
+ * whether the shelf is showing, `TitleBar`, which decides whether the Models
+ * workspace is the current page, and `SideBar`, which decides whether a
+ * picture selection may light a row of its own. They were separate literals, and adding the runs tab broke the
  * sidebar half silently: on `/models/runs` the Models entry went dark AND the
  * underlying selection lit a second destination, which is the exact
  * two-active-destinations defect the sidebar guard exists to prevent.
@@ -21,8 +21,9 @@
  * The two predicates built from this list are deliberately not identical.
  * `useAppNavigation` additionally requires `!isReadOnly`, because its predicate
  * decides whether `App.vue` MOUNTS the shelf, and a READ session must never
- * mount it (#1014). `SideBar` asks the narrower question - is this a shelf
- * route - which is what `aria-current` and `selectionOwnsHighlight` want. The
+ * mount it (#1014). `TitleBar` and `SideBar` ask the narrower question - is
+ * this a shelf route - which is what `aria-current` and
+ * `selectionOwnsHighlight` want. The
  * route list is the part that has to agree, and it is the part this constant
  * holds.
  */
@@ -33,8 +34,8 @@ export const MODEL_SHELF_ROUTES = ["models", "models-runs"];
  *
  * A list of one today, and a constant rather than a literal for exactly the
  * reason the shelf's is: the same three places have to agree about it —
- * `useAppNavigation` (mount the view), `SideBar` (light the entry, and refuse
- * to light a second destination underneath it), and `App.vue` through the
- * first. When a second workflow route lands, adding it here is the whole edit.
+ * `useAppNavigation` (mount the view), `TitleBar` (light the workspace),
+ * `SideBar` (refuse to light a destination underneath it), and `App.vue`
+ * through the first. When a second workflow route lands, adding it here is the whole edit.
  */
 export const WORKFLOW_ROUTES = ["workflows"];

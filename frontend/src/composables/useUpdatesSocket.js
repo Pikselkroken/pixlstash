@@ -16,10 +16,13 @@ import { useOperationStore } from "../stores/useOperationStore";
 import { useSnapshotsStore } from "../stores/useSnapshotsStore";
 import { useDedupStore } from "../stores/useDedupStore";
 import { useMovesStore } from "../stores/useMovesStore";
+import { useImportFoldersStore } from "../stores/useImportFoldersStore";
+import { useInboxStore } from "../stores/useInboxStore";
 import { useNoticeStore } from "../stores/useNoticeStore";
 import { useTasksStore } from "../stores/useTasksStore";
 import { useWorkflowsStore } from "../stores/useWorkflowsStore";
 import { patchWorkflowCard } from "../api/workflows";
+import { useModelFoldersStore } from "../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
 import { useWorkflowTemplatesStore } from "../stores/useWorkflowTemplatesStore";
 import {
@@ -131,11 +134,14 @@ export function vramOomNotice({
  * @param {import("vue").Ref} deps.gridContainer - the grid's template ref.
  * @param {Function} deps.refreshSidebar
  * @param {Function} deps.refreshSidebarPicturesDebounced
+ * @param {(modelId: number) => void} [deps.openModel] - opens the shelf on that
+ *   model, the "Show" of the notice a Downloads arrival raises.
  */
 export function useUpdatesSocket({
   gridContainer,
   refreshSidebar,
   refreshSidebarPicturesDebounced,
+  openModel,
 }) {
   const wsStore = useWsStore();
   const tasksStore = useTasksStore();
@@ -148,6 +154,8 @@ export function useUpdatesSocket({
   const snapshotsStore = useSnapshotsStore();
   const dedupStore = useDedupStore();
   const movesStore = useMovesStore();
+  const importFoldersStore = useImportFoldersStore();
+  const inboxStore = useInboxStore();
   const noticeStore = useNoticeStore();
   const workflowsStore = useWorkflowsStore();
   const modelShelfStore = useModelShelfStore();
@@ -219,6 +227,14 @@ export function useUpdatesSocket({
     // A text search reads it, but the results are fetched once per query, so
     // a re-read must not reload the grid or raise the "view changed" pill.
     if (field === "ocr_text") return false;
+    // Where the file lives. Only a folder view selects on it; anywhere else a
+    // moved file is the same card in the same place. A layout move of a fresh
+    // workflow output arrives with no origin, so treating this as "unknown"
+    // raised the "view changed externally" pill after every run.
+    if (field === "file_path") {
+      const folder = selectionStore.selectedFolderFilter;
+      return folder?.pathPrefix != null || folder?.referenceFolderId != null;
+    }
     // Unknown field → assume it can affect the view, so refresh to be safe.
     return true;
   }
@@ -264,9 +280,9 @@ export function useUpdatesSocket({
       gridContainer.value?.refreshSmartScoreForImage?.(id),
     removeImagesById: (ids) => gridContainer.value?.removeImagesById?.(ids),
     isImagesLoading: () => gridContainer.value?.isImagesLoading?.() ?? false,
-    isOverlayOpen: () => gridContainer.value?.isOverlayOpen?.() ?? false,
-    markOverlayDeferredRefresh: () =>
-      gridContainer.value?.markOverlayDeferredRefresh?.(),
+    isLightboxOpen: () => gridContainer.value?.isLightboxOpen?.() ?? false,
+    markLightboxDeferredRefresh: () =>
+      gridContainer.value?.markLightboxDeferredRefresh?.(),
   };
 
   function fullGridReload() {
@@ -359,14 +375,25 @@ export function useUpdatesSocket({
       const isPictureChange =
         payload?.type === "pictures_changed" ||
         payload?.type === "picture_imported";
+      // An arrival joins the Inbox and a filing (a set is a picture change, a
+      // person a character change) takes one out: its counts follow.
+      if (
+        !isReadOnly.value &&
+        (isPictureChange || payload?.type === "characters_changed")
+      ) {
+        inboxStore.refreshSoon();
+      }
       if (isPictureChange) {
+        // An arrival from an import folder: the Settings table's counts and
+        // the Filter menu's "Imported from" follow.
+        if (!isReadOnly.value) importFoldersStore.refreshSoon();
         // LIKENESS_GROUPS reorders the whole grid wholesale, so a targeted op
         // can't reconcile it - keep the existing wsTagUpdate signal that lets the
         // grid re-rank in place. (Imports still flow through the normal path.)
         const pictureIds = Array.isArray(payload.picture_ids)
           ? payload.picture_ids
           : [];
-        // Signal the open lightbox to re-fetch its card's smart_score. The overlay
+        // Signal the open lightbox to re-fetch its card's smart_score. The lightbox
         // always displays the score (independent of grid sort), so this fires for
         // any smart_score change regardless of the current sort and regardless of
         // origin - matching on picture id + field, not origin, so it covers both
@@ -405,8 +432,18 @@ export function useUpdatesSocket({
           // a moved file leaves it untouched, while a turn moves the
           // `?v=o<n>` AND invalidates the boxes and the text drawn in the
           // file's own coordinate space. The grid's own card refresh for this
-          // is deferred under an open overlay (§9.1), so the lightbox needs a
+          // is deferred under an open lightbox (§9.1), so the lightbox needs a
           // signal of its own to turn without being closed and reopened.
+          if (changedFields.includes("faces")) {
+            wsStore.wsFacesUpdate = {
+              key: (wsStore.wsFacesUpdate?.key || 0) + 1,
+              pictureIds,
+              newFaces: Number.isInteger(payload.new_faces)
+                ? payload.new_faces
+                : null,
+              originClientId: payload.origin_client_id ?? null,
+            };
+          }
           if (changedFields.includes("orientation")) {
             const nextKey = (wsStore.wsOrientationUpdate?.key || 0) + 1;
             wsStore.wsOrientationUpdate = { key: nextKey, pictureIds };
@@ -445,7 +482,7 @@ export function useUpdatesSocket({
         // grid in place. A tag change from outside (background tagging, another
         // tab) must not reshuffle the user's filtered view - the grid raises a
         // click-to-refresh pill instead (see ImageGrid's wsTagUpdate watcher).
-        // The flag rides on wsTagUpdate; the overlay still refreshes its open
+        // The flag rides on wsTagUpdate; the lightbox still refreshes its open
         // card's tags for any origin.
         const isOwn = !!(
           payload.origin_client_id &&
@@ -469,7 +506,15 @@ export function useUpdatesSocket({
         // The GPU's queue moved: the Tasks tab re-reads it from the poll rather
         // than patching rows from the event. `preempted` stays quiet.
         tasksStore.nudge();
-        if (
+        if (payload.change === "warning" && payload.code === "aitoolkit_memory_not_released") {
+          // A trainer exited without giving its GPU memory back (#2120); other
+          // GPU work counts it as used until those processes end.
+          noticeStore.push({
+            level: "warning",
+            text: payload.text || "AI-toolkit exited but its GPU memory was not released.",
+            key: `resource-lease-not-released-${payload.lease_id}`,
+          });
+        } else if (
           payload.change === "warning" &&
           payload.code === "vram_oom_exclusive" &&
           payload.workflow_id
@@ -558,15 +603,40 @@ export function useUpdatesSocket({
           }, WORKFLOWS_CHANGED_DEBOUNCE_MS);
         }
       } else if (payload?.type === "models_arrived" && !isReadOnly.value) {
-        // Models moved onto the shelf from the Downloads folder. Owner-only,
+        // Models moved onto the shelf from the Downloads folder, or found by a
+        // folder's own scan. Owner-only,
         // like every /models route; the store re-reads its rows and raises the
         // sidebar's `new` tag, and says so when the arrival completed a
         // ComfyUI template (#2001).
-        modelShelfStore.onModelsArrived(
-          Array.isArray(payload.model_ids) ? payload.model_ids : [],
-        );
+        const modelIds = Array.isArray(payload.model_ids)
+          ? payload.model_ids
+          : [];
+        const fromDownloads = payload.from_downloads === true;
+        modelShelfStore.onModelsArrived(modelIds, { fromDownloads });
+        // Only the Downloads intake is announced: it moves files the owner did
+        // not hand to PixlStash by any gesture, so nothing else says they came.
+        // A folder scan has its own notice (useModelFoldersStore).
+        if (fromDownloads && modelIds.length) {
+          noticeStore.push({
+            level: "success",
+            text:
+              modelIds.length === 1
+                ? "A new model arrived from your Downloads folder."
+                : `${modelIds.length} new models arrived from your Downloads folder.`,
+            // Not sticky, as an action would make it: it is news, not a
+            // question. The hover / focus pause keeps it up while it is read.
+            timeout: 10000,
+            action: openModel && {
+              label: "Show",
+              handler: () => openModel(modelIds[0]),
+            },
+          });
+        }
         // A template's files are marked on the shelf or not as of its read.
         useWorkflowTemplatesStore().onModelsArrived();
+        // And the folders' counts, which a scan that found them has changed.
+        const modelFolders = useModelFoldersStore();
+        if (modelFolders.loaded) modelFolders.refresh({ quiet: true });
       } else if (payload?.type === "snapshot_created" && !isReadOnly.value) {
         snapshotsStore.onSnapshotCreated();
       } else if (payload?.type === "snapshot_deleted" && !isReadOnly.value) {

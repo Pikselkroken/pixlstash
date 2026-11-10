@@ -259,7 +259,7 @@ describe("exact backend-origin credential policy", () => {
   });
 });
 
-describe("appendShareToken for ImageOverlay media URLs", () => {
+describe("appendShareToken for Lightbox media URLs", () => {
   const backend = new URL(API_BASE_URL);
 
   beforeEach(() => activateShareToken("overlay-secret"));

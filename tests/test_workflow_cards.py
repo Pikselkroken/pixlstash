@@ -1365,7 +1365,7 @@ def test_forgetting_a_replaced_model_forgets_the_replacement(hub):
 
 
 def test_forgetting_model_ghosts_forgets_their_replacements(hub):
-    """Settings › Privacy's purge: a replaced model is a ghost by definition."""
+    """Settings › Recovery's purge: a replaced model is a ghost by definition."""
     keys = record_api_graph(hub, _graph(ckpt="test-private-name.safetensors"))
     set_model_fix(
         hub,

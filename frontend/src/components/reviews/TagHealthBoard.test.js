@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 import { mount } from "@vue/test-utils";
-import { h } from "vue";
+import { h, nextTick } from "vue";
 
 vi.mock("../../utils/apiClient", () => ({
   API_BASE_URL: "/api/v1",
@@ -24,6 +24,10 @@ vi.mock("../../utils/apiClient", () => ({
 import TagHealthBoard from "./TagHealthBoard.vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
+import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
+import { isReadOnly } from "../../utils/apiClient";
+import TagGroupsBoard from "./TagGroupsBoard.vue";
+import ReviewsInspector from "./ReviewsInspector.vue";
 
 const VIcon = {
   name: "v-icon",
@@ -76,6 +80,8 @@ function seedSets(rows) {
 }
 
 beforeEach(() => {
+  // The board opens on Groups by default; these tests are about Health.
+  window.localStorage.setItem("pixlstash.tagReview.view", "health");
   setActivePinia(createPinia());
   store = useReviewSessionsStore();
 });
@@ -316,29 +322,35 @@ describe("TagHealthBoard: provably-empty Start review gate", () => {
     expect(startBtn(w).attributes("disabled")).toBeUndefined();
   });
 
-  it("leaves every button enabled on an UNSCOPED board, where scopes can differ", () => {
-    // ReviewSessionsOverlay only inherits the board scope into the dialog when
-    // store.healthScoped is true; unscoped, the dialog prefills from the app
-    // selection, so this row's numbers may not describe the resulting review.
+  it("gates an UNSCOPED board too: a row-started review takes the board scope", () => {
+    // ReviewSessionsOverlay prefills a row-started review with the board scope
+    // even when unscoped (whole library), so the row's numbers describe it.
     const w = mountRows(
       [healthRow({ ground_truth: 0, est_wrong: 0, est_missing: 0, mismatch: 0 })],
       { projectId: null, setId: null, characterId: null },
     );
     expect(store.healthScoped).toBe(false);
-    expect(startBtn(w).attributes("disabled")).toBeUndefined();
-    expect(w.find(".rs-board-action").attributes("data-tip")).toBeUndefined();
+    expect(startBtn(w).attributes("disabled")).toBeDefined();
   });
 
-  it("re-evaluates when the scope changes", async () => {
+  it("does not gate on a stale cache, whose zeros may predate new tags", () => {
+    store.healthStale = true;
     const w = mountRows(
       [healthRow({ ground_truth: 0, est_wrong: 0, est_missing: 0, mismatch: 0 })],
       { projectId: null, setId: null, characterId: null },
     );
     expect(startBtn(w).attributes("disabled")).toBeUndefined();
+  });
 
-    store.healthScope = { projectId: 3, setId: null, characterId: null };
-    await w.vm.$nextTick();
+  it("re-evaluates when the rows change", async () => {
+    const w = mountRows([
+      healthRow({ ground_truth: 0, est_wrong: 0, est_missing: 0, mismatch: 0 }),
+    ]);
     expect(startBtn(w).attributes("disabled")).toBeDefined();
+
+    store.healthRows = [healthRow({ ground_truth: 5 })];
+    await w.vm.$nextTick();
+    expect(startBtn(w).attributes("disabled")).toBeUndefined();
   });
 
   it("does not blocked-tag a row that already has an open session", () => {
@@ -618,5 +630,138 @@ describe("TagHealthBoard: locked-set scope terminal state", () => {
     const w = mount(TagHealthBoard, { global: globalOpts });
     expect(w.find(".rs-board-locked").exists()).toBe(false);
     expect(w.find(".rs-board-table").exists()).toBe(true);
+  });
+});
+
+describe("TagHealthBoard: Health | Groups switch", () => {
+  const VIEW_KEY = "pixlstash.tagReview.view";
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    isReadOnly.value = false;
+  });
+
+  function viewButton(w, label) {
+    return w
+      .findAll(".rs-board-view [role='radio']")
+      .find((b) => b.text() === label);
+  }
+
+  it("puts Groups first and opens on it, and Health brings the table back", async () => {
+    setActivePinia(createPinia());
+    store = useReviewSessionsStore();
+    store.healthRows = [healthRow({ tag: "shirt" })];
+    const w = mount(TagHealthBoard, { global: globalOpts });
+    expect(
+      w.findAll(".rs-board-view [role='radio']").map((b) => b.text()),
+    ).toEqual(["Groups", "Health"]);
+    expect(viewButton(w, "Groups").attributes("aria-checked")).toBe("true");
+    expect(w.findComponent(TagGroupsBoard).exists()).toBe(true);
+    expect(w.find(".rs-board-table").exists()).toBe(false);
+
+    await viewButton(w, "Health").trigger("click");
+    expect(w.find(".rs-board-table").exists()).toBe(true);
+    expect(w.findComponent(TagGroupsBoard).exists()).toBe(false);
+
+    await viewButton(w, "Groups").trigger("click");
+    expect(w.findComponent(TagGroupsBoard).exists()).toBe(true);
+    expect(w.find(".rs-board-table").exists()).toBe(false);
+    // The health-only controls leave the toolbar with the view.
+    expect(w.find(".rs-board-anomaly-toggle").exists()).toBe(false);
+    expect(w.find(".rs-board-sort").exists()).toBe(false);
+    expect(w.find(".rs-board-scope").exists()).toBe(false);
+    // Nothing sits under the board any more: archived receipts and stickers
+    // are the Reviews inspector's, which App.vue mounts in the right rail.
+    expect(w.findComponent(ReviewsInspector).exists()).toBe(false);
+  });
+
+  it("the choice is remembered on this machine, and read back on the next mount", async () => {
+    setActivePinia(createPinia());
+    const w = mount(TagHealthBoard, { global: globalOpts });
+    await viewButton(w, "Health").trigger("click");
+    expect(window.localStorage.getItem(VIEW_KEY)).toBe("health");
+
+    setActivePinia(createPinia());
+    const again = mount(TagHealthBoard, { global: globalOpts });
+    expect(useTagGroupsStore().boardView).toBe("health");
+    expect(again.findComponent(TagGroupsBoard).exists()).toBe(false);
+
+    await viewButton(again, "Groups").trigger("click");
+    expect(window.localStorage.getItem(VIEW_KEY)).toBe("groups");
+  });
+
+  it("is not drawn for a read-only session, which stays on Health", () => {
+    isReadOnly.value = true;
+    window.localStorage.setItem(VIEW_KEY, "groups");
+    setActivePinia(createPinia());
+    useReviewSessionsStore().healthRows = [healthRow({ tag: "shirt" })];
+    const w = mount(TagHealthBoard, { global: globalOpts });
+    expect(w.find(".rs-board-view").exists()).toBe(false);
+    expect(w.findComponent(TagGroupsBoard).exists()).toBe(false);
+    expect(w.find(".rs-board-table").exists()).toBe(true);
+  });
+});
+
+describe("TagHealthBoard: Group scope in Health", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    window.localStorage.setItem("pixlstash.tagReview.view", "health");
+    setActivePinia(createPinia());
+    store = useReviewSessionsStore();
+  });
+
+  function seedGroups() {
+    const tg = useTagGroupsStore();
+    tg.groups = [{ id: 1, name: "Character", position: 0 }];
+    tg.groupOf = new Map([["shirt", 1]]);
+    return tg;
+  }
+
+  function groupSelect(w) {
+    return w.find('select[aria-label="Tag group"]');
+  }
+
+  function shownTags(w) {
+    return w.findAll(".rs-board-tag-name").map((n) => n.text());
+  }
+
+  it("is not drawn while the library has no groups", () => {
+    store.healthRows = [healthRow({ tag: "shirt" })];
+    const w = mount(TagHealthBoard, { global: globalOpts });
+    expect(groupSelect(w).exists()).toBe(false);
+  });
+
+  it("Group: Any narrows rows to one group, to Ungrouped, and back", async () => {
+    seedGroups();
+    store.healthRows = [
+      healthRow({ tag: "shirt" }),
+      healthRow({ tag: "hat" }),
+    ];
+    const w = mount(TagHealthBoard, { global: globalOpts });
+    // Default Priority order; compared sorted, since the ranking is not the point.
+    expect(shownTags(w).sort()).toEqual(["hat", "shirt"]);
+
+    await groupSelect(w).setValue("1");
+    expect(shownTags(w)).toEqual(["shirt"]);
+
+    await groupSelect(w).setValue("none");
+    expect(shownTags(w)).toEqual(["hat"]);
+
+    await groupSelect(w).setValue("");
+    expect(shownTags(w).sort()).toEqual(["hat", "shirt"]);
+  });
+
+  it("falls back to Any when the chosen group leaves the map", async () => {
+    const tg = seedGroups();
+    store.healthRows = [healthRow({ tag: "shirt" }), healthRow({ tag: "hat" })];
+    const w = mount(TagHealthBoard, { global: globalOpts });
+    await groupSelect(w).setValue("1");
+    expect(shownTags(w)).toEqual(["shirt"]);
+
+    tg.groups = [{ id: 2, name: "Meta", position: 0 }];
+    tg.groupOf = new Map();
+    await nextTick();
+    expect(shownTags(w).sort()).toEqual(["hat", "shirt"]);
+    expect(groupSelect(w).element.value).toBe("");
   });
 });

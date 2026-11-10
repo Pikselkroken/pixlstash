@@ -21,7 +21,7 @@ from pixlstash.resources.ledger import DeviceReading
 from pixlstash.task_runner import TaskCancelledError, TaskRunner
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 from pixlstash.tasks.missing_ocr_finder import MissingOcrFinder
-from pixlstash.vault import YIELD_WAIT_S, Vault
+from pixlstash.vault import Vault
 
 
 class _NoCard:
@@ -364,15 +364,13 @@ def test_pixlstash_yields_only_for_a_lease_that_still_waits(meanwhile, stopped):
         def release(self, owner):
             done.append(f"release {owner}")
 
-    vault = SimpleNamespace(
-        _task_runner=SimpleNamespace(
+    vault = _vault_on(
+        SimpleNamespace(
             preempt_gpu=lambda reason: done.append(reason) or [],
-            wait_for_gpu_idle=lambda timeout_s=60.0: True,
+            gpu_worker_alive=lambda: False,
         ),
-        _closed=False,
+        lambda: done.append("unload"),
         _work_planner=_Planner(),
-        _yield_holds=set(),
-        unload_models=lambda: done.append("unload"),
     )
     vault._release_yield_hold = lambda lease_id: Vault._release_yield_hold(
         vault, lease_id
@@ -411,61 +409,166 @@ def test_a_grant_landing_before_the_hold_does_not_leave_the_planner_held():
     assert holds == set(), "the planner stays held for the rest of the session"
 
 
-def test_making_room_waits_only_briefly_on_the_arbiters_thread():
-    """Every other lease waits on that thread; a long batch is waited for off it."""
-    waited = []
-    lease = SimpleNamespace(id="lease-1", label="Portrait", state=LeaseState.WAITING)
+class _HeldGpuTask(BaseTask):
+    """A batch that ignores cancellation and ends only when released."""
+
+    def __init__(self):
+        super().__init__(task_type="CaptionTask")
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    @property
+    def queue_type(self):
+        return QueueType.GPU
+
+    def _run_task(self):
+        self.started.set()
+        self.release.wait(5)
+        return "done"
+
+
+def _vault_on(task_runner, unload_models, **fields):
+    """The slice of a ``Vault`` that unloading and making room read."""
     vault = SimpleNamespace(
-        _task_runner=SimpleNamespace(
-            preempt_gpu=lambda reason: [],
-            wait_for_gpu_idle=lambda timeout_s=60.0: waited.append(timeout_s) or True,
-        ),
-        _closed=False,
-        _work_planner=None,
-        _yield_holds=set(),
-        unload_models=lambda: None,
+        **{
+            "_task_runner": task_runner,
+            "_closed": False,
+            "_work_planner": None,
+            "_yield_holds": set(),
+            "_keep_models_in_memory": False,
+            "_engine": object(),
+            "_last_aggressive_unload_at": 0.0,
+            "AGGRESSIVE_UNLOAD_INTERVAL": Vault.AGGRESSIVE_UNLOAD_INTERVAL,
+            "_aggressive_unload_lock": threading.Lock(),
+            "unload_models": unload_models,
+            **fields,
+        }
     )
-    Vault._yield_gpu(vault, lease)
-    assert waited == [YIELD_WAIT_S] and waited[0] <= 5
+    vault._unload_models_on_worker = lambda when=None: Vault._unload_models_on_worker(
+        vault, when
+    )
+    return vault
 
 
-def test_a_lease_granted_during_the_wait_unloads_nothing():
-    """The room is there; unloading now would only cost the next batch a reload."""
-    lease = SimpleNamespace(id="lease-1", label="Portrait", state=LeaseState.WAITING)
+def _record_thread(into):
+    return lambda: into.append(threading.current_thread().name)
+
+
+# ── device-cache flushes run on the GPU worker (#1775) ─────────────────────
+# Unloading ends in ``torch.mps.empty_cache()`` on Metal, which kills the
+# process when another thread runs a model at that moment. So every unload is
+# a task on the GPU worker, behind the batch in flight, never beside it.
+
+
+def test_making_room_unloads_on_the_gpu_worker_once_the_batch_ends(runner, monkeypatch):
+    """The arbiter waits briefly; the unload lands after the batch, not under it."""
+    monkeypatch.setattr("pixlstash.vault.YIELD_WAIT_S", 0.2)
     unloaded = []
+    batch = _HeldGpuTask()
+    runner.runner.submit(batch)
+    assert batch.started.wait(5)
+    lease = SimpleNamespace(id="lease-1", label="Portrait", state=LeaseState.WAITING)
+    vault = _vault_on(runner.runner, _record_thread(unloaded))
 
-    def granted_meanwhile(timeout_s=60.0):
-        lease.state = LeaseState.GRANTED
-        return True
+    began = time.monotonic()
+    Vault._yield_gpu(vault, lease)
+    assert time.monotonic() - began < 2, "the arbiter's thread waited out the batch"
+    assert unloaded == [], "the models were unloaded under the running batch"
 
-    vault = SimpleNamespace(_closed=False, unload_models=lambda: unloaded.append(1))
-    Vault._unload_once_idle(
-        vault, lease, SimpleNamespace(wait_for_gpu_idle=granted_meanwhile)
-    )
+    batch.release.set()
+    assert _until(lambda: unloaded), "the models were never unloaded"
+    assert unloaded == ["preempt-test-gpu"]
+
+
+def test_a_lease_granted_during_the_wait_unloads_nothing(runner, monkeypatch):
+    """The room is there; unloading now would only cost the next batch a reload."""
+    monkeypatch.setattr("pixlstash.vault.YIELD_WAIT_S", 0.1)
+    unloaded = []
+    batch = _HeldGpuTask()
+    runner.runner.submit(batch)
+    assert batch.started.wait(5)
+    lease = SimpleNamespace(id="lease-1", label="Portrait", state=LeaseState.WAITING)
+    vault = _vault_on(runner.runner, _record_thread(unloaded))
+
+    Vault._yield_gpu(vault, lease)
+    lease.state = LeaseState.GRANTED
+    batch.release.set()
+    assert _until(lambda: "UnloadModels" in runner.endings)
     assert unloaded == []
 
 
-def test_models_are_unloaded_once_a_batch_that_outran_the_wait_ends():
-    """The waiting lease is not left short of the memory the models hold."""
-    unloaded = threading.Event()
-    answers = iter([False, False, True])
-    runner = SimpleNamespace(
-        preempt_gpu=lambda reason: [],
-        wait_for_gpu_idle=lambda timeout_s=60.0: next(answers),
+def test_the_idle_sweep_unloads_on_the_gpu_worker_once(runner):
+    """Reached from a request thread and the event loop: it queues, never flushes.
+
+    Two progress polls at once used to sweep twice; the second one here enters
+    while the first is still reading the snapshot.
+    """
+    unloaded = []
+    vault = _vault_on(runner.runner, _record_thread(unloaded))
+    reading = threading.Event()
+
+    class _SlowSnapshot(dict):
+        def values(self):
+            reading.set()
+            time.sleep(0.3)
+            return super().values()
+
+    first = threading.Thread(
+        target=Vault._maybe_aggressive_unload, args=(vault, _SlowSnapshot())
     )
-    lease = SimpleNamespace(id="lease-1", label="Portrait", state=LeaseState.WAITING)
-    vault = SimpleNamespace(
-        _task_runner=runner,
-        _closed=False,
-        _work_planner=None,
-        _yield_holds=set(),
-        unload_models=unloaded.set,
+    first.start()
+    assert reading.wait(5)
+    Vault._maybe_aggressive_unload(vault, {})
+    first.join(5)
+
+    assert _until(lambda: unloaded)
+    time.sleep(0.2)
+    assert unloaded == ["preempt-test-gpu"]
+
+
+def test_an_unload_queued_before_the_setting_is_switched_back_on_is_skipped(runner):
+    """The sweep queues and returns; the owner's later "keep" wins on the worker."""
+    unloaded = []
+    vault = _vault_on(runner.runner, _record_thread(unloaded))
+    vault._task_runner = SimpleNamespace(
+        has_active_gpu_tasks=lambda: False,
+        gpu_worker_alive=runner.runner.gpu_worker_alive,
+        submit=runner.runner.submit,
     )
-    vault._unload_once_idle = lambda lease, runner: Vault._unload_once_idle(
-        vault, lease, runner
+    batch = _HeldGpuTask()
+    runner.runner.submit(batch)
+    assert batch.started.wait(5)
+
+    Vault._maybe_aggressive_unload(vault, {})
+    vault._keep_models_in_memory = True
+    batch.release.set()
+    assert _until(lambda: "UnloadModels" in runner.endings)
+    assert unloaded == []
+
+
+def test_stop_leaves_the_models_to_a_worker_that_outlived_the_wait(monkeypatch):
+    """``TaskRunner.stop()`` gives up after 60 s; a flush beside it would crash."""
+    released = []
+    monkeypatch.setattr(
+        "pixlstash.vault.FaceExtractionTask.release_detection_models",
+        lambda: released.append("faces"),
     )
-    Vault._yield_gpu(vault, lease)
-    assert unloaded.wait(5), "the models were never unloaded"
+    for alive in (True, False):
+        vault = SimpleNamespace(
+            _changed_tags_notify_lock=threading.Lock(),
+            _changed_tags_flush_timer=None,
+            _changed_tags_pending_ids=set(),
+            _started=False,
+            _task_runner=SimpleNamespace(gpu_worker_alive=lambda alive=alive: alive),
+            _disable_background_workers=False,
+            _engine=SimpleNamespace(close=lambda: released.append("engine")),
+            db=None,
+        )
+        Vault.stop(vault)
+        assert vault._engine is None
+        if alive:
+            assert released == [], "flushed beside a worker that is still running"
+    assert released == ["faces", "engine"], "a stopped runner releases as before"
 
 
 def test_a_task_requeued_as_the_runner_stops_is_cancelled_not_stranded():

@@ -285,22 +285,11 @@ describe("the character row's single-selection fallback", () => {
 describe("the shelf's two routes are one destination", () => {
   // `SideBar` keeps its own `isModelsView`, separate from the one
   // `useAppNavigation` exports, and adding the runs tab broke this half
-  // silently: on `/models/runs` the Models entry went dark AND the underlying
-  // picture selection lit a row of its own, which is the two-active-
-  // destinations defect the guard exists to prevent. Both now read
-  // `MODEL_SHELF_ROUTES`, so the pair cannot drift apart again.
-  it("treats /models/runs as the Models destination", async () => {
-    nav.route.name = "models-runs";
-    const wrapper = await mountSidebar();
-    const models = wrapper
-      .findAll("button")
-      .find((b) => b.text().includes("Models"));
-    expect(models).toBeTruthy();
-    expect(models.attributes("aria-current")).toBe("page");
-    wrapper.unmount();
-    nav.route.name = "all-pictures";
-  });
-
+  // silently: on `/models/runs` the underlying picture selection lit a row of
+  // its own, which is the two-active-destinations defect the guard exists to
+  // prevent. Both now read `MODEL_SHELF_ROUTES`, so the pair cannot drift
+  // apart again. (That the runs route lights the Models workspace is the title
+  // bar's now: TitleBar.test.js.)
   it("does not let a picture selection light a second destination there", async () => {
     nav.route.name = "models-runs";
     useSelectionStore().selectedCharacter = ADA.id;
@@ -313,12 +302,12 @@ describe("the shelf's two routes are one destination", () => {
   });
 });
 
-describe("the docked library menu", () => {
-  it("uses menu semantics and supports arrow, submenu, and Escape focus", async () => {
+describe("the docked rail's node flyout (#2448)", () => {
+  it("uses menu semantics, arrow keys, and Escape back to its button", async () => {
     const wrapper = await mountSidebar({ docked: true });
-    const trigger = wrapper.find(
-      ".sidebar-collapsed-row--project .sidebar-collapsed-item",
-    );
+    const trigger = wrapper
+      .findAll(".sidebar-collapsed-item")
+      .find((b) => b.attributes("aria-label") === "Any project");
 
     expect(trigger.element.tagName).toBe("BUTTON");
     expect(trigger.attributes()).toMatchObject({
@@ -326,48 +315,41 @@ describe("the docked library menu", () => {
       "aria-expanded": "false",
     });
 
-    await trigger.trigger("keydown", { key: "ArrowDown" });
+    await trigger.trigger("click");
     await flushPromises();
 
-    const menu = document.querySelector("#sidebar-project-menu");
+    const menu = document.querySelector(".sidebar-rail-flyout");
     expect(menu.getAttribute("role")).toBe("menu");
-    expect(menu.getAttribute("aria-label")).toBe("Library navigation");
-    const rootItems = Array.from(
-      menu.querySelectorAll(':scope > [role="menuitem"]'),
+    expect(menu.getAttribute("aria-label")).toBe("Any project");
+    // Limit view to (radios), then the people of its scope (Any project:
+    // everyone) as plain items.
+    const people = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+    const labels = people.map((item) => item.querySelector(".ctx-label-text").textContent);
+    expect(labels).toEqual(
+      expect.arrayContaining(["Ada", "Grace"]),
     );
-    expect(rootItems.map((item) => item.tagName)).toEqual([
-      "BUTTON",
-      "BUTTON",
-      "BUTTON",
-    ]);
-    expect(document.activeElement).toBe(rootItems[0]);
+    const items = Array.from(menu.querySelectorAll(".ctx-item"));
+    expect(items[0].getAttribute("role")).toBe("menuitemradio");
+    // Every row carries a glyph and every heading after the first a rule, so
+    // the groups do not run together as one flat list.
+    expect(items.every((item) => item.querySelector(".ctx-icon")?.textContent.trim())).toBe(true);
+    const later = Array.from(menu.querySelectorAll(".section-label")).slice(1);
+    expect(later.length).toBeGreaterThan(0);
+    expect(
+      later.every((label) => label.previousElementSibling?.classList.contains("ctx-sep")),
+    ).toBe(true);
+    expect(document.activeElement).toBe(items[0]);
 
-    rootItems[0].dispatchEvent(
+    items[0].dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "ArrowDown",
         bubbles: true,
         cancelable: true,
       }),
     );
-    expect(document.activeElement).toBe(rootItems[1]);
+    expect(document.activeElement).toBe(items[1]);
 
-    rootItems[1].dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "ArrowRight",
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    await flushPromises();
-
-    const submenu = document.querySelector("#sidebar-project-submenu");
-    expect(submenu.getAttribute("role")).toBe("menu");
-    expect(submenu.getAttribute("aria-label")).toBe("Projects");
-    const submenuItem = submenu.querySelector('[role="menuitem"]');
-    expect(submenuItem.tagName).toBe("BUTTON");
-    expect(document.activeElement).toBe(submenuItem);
-
-    submenuItem.dispatchEvent(
+    items[1].dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Escape",
         bubbles: true,
@@ -375,18 +357,7 @@ describe("the docked library menu", () => {
       }),
     );
     await flushPromises();
-    expect(document.querySelector("#sidebar-project-submenu")).toBeNull();
-    expect(document.activeElement).toBe(rootItems[1]);
-
-    rootItems[1].dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    await flushPromises();
-    expect(document.querySelector("#sidebar-project-menu")).toBeNull();
+    expect(document.querySelector(".sidebar-rail-flyout")).toBeNull();
     expect(document.activeElement).toBe(trigger.element);
 
     wrapper.unmount();

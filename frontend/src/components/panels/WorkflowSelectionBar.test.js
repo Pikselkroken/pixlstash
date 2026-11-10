@@ -23,10 +23,17 @@ vi.mock("../../api/comfyui", () => ({
   getPixlstashNode: (...args) => getPixlstashNode(...args),
 }));
 
+const preflightWorkflowRun = vi.fn();
+vi.mock("../../api/workflows", async (importOriginal) => ({
+  ...(await importOriginal()),
+  preflightWorkflowRun: (...args) => preflightWorkflowRun(...args),
+}));
+
 import WorkflowSelectionBar from "./WorkflowSelectionBar.vue";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { useFavouritesStore } from "../../stores/useFavouritesStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 // `v-menu` is stubbed because Vuetify is not installed in these mounts, and an
 // UNRESOLVED component renders its default slot while silently dropping its
@@ -113,14 +120,36 @@ function bar(keys = []) {
   return { wrapper, store };
 }
 
-/** One pill button, by the verb it carries. */
-const verb = (wrapper, name) => wrapper.find(`[data-verb="${name}"]`);
+/**
+ * One pill button, by the verb it carries. The pill's face only: the `⋯` menu
+ * and the card menu repeat the same `data-verb`s, and they are not the pill.
+ */
+const verb = (wrapper, name) =>
+  wrapper
+    .findAll(`.selbar [data-verb="${name}"]`)
+    .find((el) => !el.element.closest(".ctx-menu"));
+
+/** The face's verbs, in the order they are drawn. */
+const faceVerbs = (wrapper) =>
+  wrapper
+    .findAll(".selbar [data-verb]")
+    .filter((el) => !el.element.closest(".ctx-menu"))
+    .map((el) => el.attributes("data-verb"));
 
 const enabled = (wrapper, name) =>
   verb(wrapper, name).attributes("data-disabled") === "false";
 
 const tooltip = (wrapper, name) =>
   verb(wrapper, name).attributes("data-tooltip");
+
+/** A row of the `⋯` menu: the verb's row, the one a refused verb keeps. */
+const menuRow = (wrapper, name) =>
+  verbMenus(wrapper)[0].find(`[data-verb="${name}"]`);
+
+const rowEnabled = (row) => row.attributes("aria-disabled") !== "true";
+
+/** The refusal a verb row carries, read from its tooltip. */
+const rowTooltip = (row) => row.find(".tip").attributes("data-text");
 
 /** A verb menu's rows, as a reader would read them aloud. */
 const rowLabels = (root) =>
@@ -150,18 +179,18 @@ describe("the pill's gates", () => {
   });
 
   it("Run and Rename are single-selection, and say why when they are not", () => {
+    // Off the face since #2165: they are `⋯` rows, which keep their refusal
+    // as a tooltip, one row each, so the reason stays one hover away.
     const { wrapper } = bar(["a"]);
-    expect(enabled(wrapper, "run")).toBe(true);
-    expect(enabled(wrapper, "rename")).toBe(true);
+    expect(rowEnabled(menuRow(wrapper, "run"))).toBe(true);
+    expect(rowEnabled(menuRow(wrapper, "rename"))).toBe(true);
 
     const many = bar(["a", "b"]).wrapper;
-    expect(enabled(many, "run")).toBe(false);
-    expect(enabled(many, "rename")).toBe(false);
-    // The refusal is in the tooltip and the verb stays in the aria-label: the
-    // button keeps its place so the row never reflows, which is the whole
-    // argument for disabling rather than hiding.
-    expect(verb(many, "rename").attributes("aria-label")).toBe("Rename");
-    expect(tooltip(many, "rename")).toContain("Select one workflow");
+    expect(rowEnabled(menuRow(many, "run"))).toBe(false);
+    expect(rowEnabled(menuRow(many, "rename"))).toBe(false);
+    expect(rowTooltip(menuRow(many, "rename"))).toContain("Select one workflow");
+    expect(verb(many, "rename"), "Rename is not on the face").toBeUndefined();
+    expect(verb(many, "run"), "Run is not on the face").toBeUndefined();
   });
 
   it("Delete needs EVERY selected workflow to be manual, not merely one", () => {
@@ -196,16 +225,12 @@ describe("the pill's gates", () => {
   });
 
   it("Hide reads as Unhide only when there is nothing left to hide", () => {
-    expect(
-      bar(["d"]).wrapper.find('[data-verb="hide"]').attributes("aria-label"),
-    ).toBe("Unhide these workflows");
+    const label = (wrapper) =>
+      menuRow(wrapper, "hide").find(".ctx-label-text").text();
+    expect(label(bar(["d"]).wrapper)).toBe("Unhide");
     // Mixed is Hide: the gesture on "these, and that one already hidden" is to
     // get them all out of the grid.
-    expect(
-      bar(["a", "d"])
-        .wrapper.find('[data-verb="hide"]')
-        .attributes("aria-label"),
-    ).toBe("Hide these workflows");
+    expect(label(bar(["a", "d"]).wrapper)).toBe("Hide");
   });
 
   it("does not read as Unhide when the store cannot resolve the selection", () => {
@@ -213,9 +238,27 @@ describe("the pill's gates", () => {
     // empty list is vacuously true — which would turn the button into Unhide
     // over a selection nobody has hidden.
     const { wrapper } = bar(["gone"]);
-    expect(wrapper.find('[data-verb="hide"]').attributes("aria-label")).toBe(
-      "Hide these workflows",
+    expect(menuRow(wrapper, "hide").find(".ctx-label-text").text()).toBe("Hide");
+  });
+
+  it("names every verb on its face with an aria-label of its own, never its tooltip", () => {
+    // The file's rule: the label is the stable verb, the tooltip the refusal.
+    const { wrapper } = bar(["a", "b"]);
+    const unnamed = faceVerbs(wrapper).filter(
+      (name) => !verb(wrapper, name).attributes("aria-label"),
     );
+    expect(unnamed).toEqual([]);
+    expect(verb(wrapper, "clear").attributes("aria-label")).toBe("Clear selection");
+  });
+
+  it("Clear is the pill's last verb, and clears the selection", async () => {
+    const { wrapper, store } = bar(["a", "b"]);
+    expect(faceVerbs(wrapper).at(-1)).toBe("clear");
+    expect(verb(wrapper, "clear").attributes("data-tooltip")).toBe(
+      "Clear selection (Esc)",
+    );
+    await verb(wrapper, "clear").trigger("click");
+    expect(store.selectedKeys).toEqual([]);
   });
 });
 
@@ -430,6 +473,103 @@ describe("the two menus cannot diverge", () => {
 
 // #1850, part 3: the clone dialogs went, and what they did is the Workflow
 // tab's *Change model set…*, which this row asks for.
+describe("the pill's face", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  it("is Show pictures, Open in ComfyUI, Export, the menu, Delete, Clear, in that order", () => {
+    // The ComfyUI verb is drawn only with a ComfyUI to open (see its describe);
+    // without one the face is the rest, in the same order.
+    const { wrapper } = bar(["a"]);
+    expect(faceVerbs(wrapper)).toEqual([
+      "show-pictures",
+      "export",
+      "more",
+      "delete",
+      "clear",
+    ]);
+  });
+
+  it("Export is single-selection, and says why when it is not", () => {
+    expect(enabled(bar(["a"]).wrapper, "export")).toBe(true);
+    const many = bar(["a", "b"]).wrapper;
+    expect(enabled(many, "export")).toBe(false);
+    expect(tooltip(many, "export")).toContain("Select one workflow to export it");
+  });
+
+  it("Export on the face emits export, as its row does", async () => {
+    const { wrapper } = bar(["a"]);
+    await verb(wrapper, "export").trigger("click");
+    expect(wrapper.emitted("export")).toHaveLength(1);
+  });
+
+  it("Open in ComfyUI on the face takes the menu row's gate, and opens adapted", async () => {
+    useFilterStore().comfyuiUrl = "http://127.0.0.1:8188/";
+    getPixlstashNode.mockResolvedValue({ can_open_workflows: true });
+    const store = useWorkflowsStore();
+    store.cards = CARDS;
+    store.selectRange(["a"]);
+    const wrapper = mount(WorkflowSelectionBar, globalOpts);
+    await flushPromises();
+    expect(enabled(wrapper, "open-comfyui")).toBe(true);
+    await verb(wrapper, "open-comfyui").trigger("click");
+    expect(wrapper.emitted("open-comfyui")).toEqual([[false]]);
+
+    store.selectRange(["a", "b"]);
+    await flushPromises();
+    expect(enabled(wrapper, "open-comfyui")).toBe(false);
+    expect(tooltip(wrapper, "open-comfyui")).toContain("Select one workflow");
+  });
+});
+
+describe("Convert to Inpainting workflow", () => {
+  const rowOf = (wrapper) =>
+    verbMenus(wrapper)[0]
+      .findAll(".ctx-item")
+      .find((el) => el.attributes("data-verb") === "inpaint-copy");
+
+  const one = (extra) => {
+    const store = useWorkflowsStore();
+    store.cards = [...CARDS, card("x", extra)];
+    store.selectRange(["x"]);
+    return mount(WorkflowSelectionBar, globalOpts);
+  };
+
+  it("is offered for an edit workflow typed text to image, and asks for it", async () => {
+    // An edit graph starting from an empty latent is typed txt2img: the server
+    // decides whether it converts, not the badge.
+    const wrapper = one({ type: "txt2img" });
+    const row = rowOf(wrapper);
+    expect(row.find(".ctx-label-text").text()).toBe("Convert to Inpainting workflow");
+    expect(row.attributes("aria-disabled")).toBeUndefined();
+    await row.trigger("click");
+    expect(wrapper.emitted("inpaint-copy")).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it.each(["inpaint", "outpaint", "video", "upscale"])(
+    "is refused for the %s type, with why",
+    async (type) => {
+      const wrapper = one({ type });
+      const row = rowOf(wrapper);
+      expect(row.attributes("aria-disabled")).toBe("true");
+      expect(row.find(".tip").attributes("data-text")).not.toContain("Make a new");
+      await row.trigger("click");
+      expect(wrapper.emitted("inpaint-copy")).toBeUndefined();
+      wrapper.unmount();
+    },
+  );
+
+  it("is refused for several", async () => {
+    const { wrapper } = bar(["a", "b"]);
+    const row = rowOf(wrapper);
+    expect(row.attributes("aria-disabled")).toBe("true");
+    expect(row.find(".tip").attributes("data-text")).toBe(
+      "Select one workflow to convert it to inpainting",
+    );
+    wrapper.unmount();
+  });
+});
+
 describe("Change model set…", () => {
   const rowOf = (wrapper, name) =>
     verbMenus(wrapper)[0]
@@ -472,6 +612,7 @@ describe("Change model set…", () => {
       "use-set",
       "export",
       "duplicate",
+      "inpaint-copy",
       "delete",
     ]);
     wrapper.unmount();
@@ -630,6 +771,24 @@ describe("Open in ComfyUI", () => {
     wrapper.unmount();
   });
 
+  it("is refused while ComfyUI is not running, saying so", async () => {
+    getPixlstashNode.mockResolvedValue({
+      can_open_workflows: null,
+      saves_back: null,
+      opens_runs: null,
+    });
+    const wrapper = await withComfyui(["a"]);
+    const row = trigger(wrapper);
+    expect(row.attributes("aria-disabled")).toBe("true");
+    expect(row.find(".tip").attributes("data-text")).toBe(
+      "ComfyUI is not running at http://127.0.0.1:8188/. " +
+        "Start ComfyUI to open it there",
+    );
+    expect(enabled(wrapper, "open-comfyui")).toBe(false);
+    expect(tooltip(wrapper, "open-comfyui")).toContain("not running");
+    wrapper.unmount();
+  });
+
   it("Right arrow opens it on its first row, Left goes back", async () => {
     const wrapper = await withComfyui(["a"], { attachTo: document.body });
     const row = trigger(wrapper);
@@ -666,14 +825,14 @@ describe("a draft's gates", () => {
     store.cards = [...CARDS, card("x", { manual: true, draft: true })];
     store.selectRange(["x"]);
     const wrapper = mount(WorkflowSelectionBar, globalOpts);
-    expect(enabled(wrapper, "run")).toBe(false);
-    expect(tooltip(wrapper, "run")).toBe(
+    expect(rowEnabled(menuRow(wrapper, "run"))).toBe(false);
+    expect(rowTooltip(menuRow(wrapper, "run"))).toBe(
       "Finish it in ComfyUI first: open it there and save it",
     );
     // A workflow that is not a draft still runs.
     store.selectRange(["a"]);
     await flushPromises();
-    expect(enabled(wrapper, "run")).toBe(true);
+    expect(rowEnabled(menuRow(wrapper, "run"))).toBe(true);
   });
 });
 
@@ -689,22 +848,36 @@ describe("Favourite (#1578)", () => {
   it("reads Favourite over a mixed selection, and Unfavourite over one that is all favourites", () => {
     useFavouritesStore().keys = { model: [], workflow: ["a"], set: [] };
     const mixed = bar(["a", "b"]).wrapper;
-    expect(verb(mixed, "favourite").attributes("aria-label")).toBe("Favourite");
     expect(favouriteRow(mixed).find(".ctx-label-text").text()).toBe("Favourite");
     expect(favouriteRow(mixed).find(".ctx-shortcut").text()).toBe("H");
 
     useFavouritesStore().keys = { model: [], workflow: ["a", "b"], set: [] };
     const all = bar(["a", "b"]).wrapper;
-    expect(verb(all, "favourite").attributes("aria-label")).toBe("Unfavourite");
     expect(favouriteRow(all).find(".ctx-label-text").text()).toBe("Unfavourite");
   });
 
-  it("emits favourite from the pill and from its menu row", async () => {
+  it("is a `⋯` row, not a face verb, and emits favourite from it", async () => {
+    // Off the face since #2165: the pill's face is Show pictures, Open in
+    // ComfyUI, Export, Delete and Clear. Favourite keeps its row and its H.
     const { wrapper } = bar(["a"]);
-    await verb(wrapper, "favourite").trigger("click");
-    expect(wrapper.emitted("favourite")).toHaveLength(1);
+    expect(verb(wrapper, "favourite")).toBeUndefined();
     await favouriteRow(wrapper).trigger("click");
-    expect(wrapper.emitted("favourite")).toHaveLength(2);
+    expect(wrapper.emitted("favourite")).toHaveLength(1);
+  });
+
+  it("the ⋯ menu holds rename, thumbnail, duplicate, use a set, hide and favourite", () => {
+    const { wrapper } = bar(["a"]);
+    expect(rowVerbs(verbMenus(wrapper)[0])).toEqual(
+      expect.arrayContaining([
+        "favourite",
+        "rename",
+        "set-thumbnail",
+        "duplicate",
+        "use-set",
+        "hide",
+        "run",
+      ]),
+    );
   });
 });
 
@@ -742,6 +915,135 @@ describe("Download missing models", () => {
     );
     await row.trigger("click");
     expect(wrapper.emitted("download-missing")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  // The menu opening asks each selected workflow's pre-flight what it lacks.
+  const answer = (...files) => ({
+    groups: [
+      {
+        reasons: [
+          {
+            code: "missing_models",
+            models: files.map((file) => ({ file, downloadable: true })),
+          },
+        ],
+      },
+    ],
+  });
+  async function opened(keys) {
+    const store = useWorkflowsStore();
+    store.cards = CARDS;
+    store.selectRange(keys);
+    const wrapper = mount(WorkflowSelectionBar, globalOpts);
+    await wrapper.vm.openContextMenu(0, 0);
+    await flushPromises();
+    return wrapper;
+  }
+
+  it("is refused once the workflows lack nothing it can fetch", async () => {
+    preflightWorkflowRun.mockReset().mockResolvedValue(answer());
+    const wrapper = await opened(["a", "b"]);
+    expect(preflightWorkflowRun.mock.calls.map(([body]) => body.workflow_id)).toEqual([
+      "a",
+      "b",
+    ]);
+    const row = rowOf(wrapper);
+    expect(row.attributes("aria-disabled")).toBe("true");
+    expect(row.find(".tip").attributes("data-text")).toBe(
+      "Nothing these workflows are missing can be downloaded",
+    );
+    await row.trigger("click");
+    expect(wrapper.emitted("download-missing")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("is offered when one of them lacks a file it can fetch", async () => {
+    preflightWorkflowRun
+      .mockReset()
+      .mockResolvedValueOnce(answer())
+      .mockResolvedValueOnce(answer("vae.safetensors"));
+    const wrapper = await opened(["a", "b"]);
+    expect(rowOf(wrapper).attributes("aria-disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("stays offered when a workflow could not be asked", async () => {
+    preflightWorkflowRun.mockReset().mockRejectedValue(new Error("gone"));
+    const wrapper = await opened(["a"]);
+    expect(rowOf(wrapper).attributes("aria-disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("stays offered when ComfyUI did not answer the check", async () => {
+    preflightWorkflowRun.mockReset().mockResolvedValue({
+      groups: [{ reasons: [{ code: "comfyui_unreachable" }] }],
+    });
+    const wrapper = await opened(["a"]);
+    expect(rowOf(wrapper).attributes("aria-disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("stays offered when there was no graph to judge", async () => {
+    preflightWorkflowRun.mockReset().mockResolvedValue({
+      groups: [{ source: null, reasons: [{ code: "ui_format" }] }],
+    });
+    const wrapper = await opened(["a"]);
+    expect(rowOf(wrapper).attributes("aria-disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("says a file the pre-flight reports on its way is downloading, and rechecks when it stops", async () => {
+    const downloading = {
+      groups: [
+        {
+          reasons: [
+            {
+              code: "models_downloading",
+              models: [{ file: "vae.safetensors", percent: 40 }],
+            },
+          ],
+        },
+      ],
+    };
+    preflightWorkflowRun
+      .mockReset()
+      .mockResolvedValueOnce(downloading)
+      .mockResolvedValueOnce(answer("vae.safetensors"));
+    const tasks = useTasksStore();
+    tasks.modelDownloads = [
+      { id: "d1", file: "vae.safetensors", status: "running" },
+    ];
+    const wrapper = await opened(["a"]);
+    let row = rowOf(wrapper);
+    expect(row.attributes("aria-disabled")).toBe("true");
+    expect(row.find(".tip").attributes("data-text")).toBe(
+      "Already downloading: the Tasks list in the title bar shows how far",
+    );
+    // It failed: off the running list, and the pre-flight offers it again.
+    tasks.modelDownloads = [
+      { id: "d1", file: "vae.safetensors", status: "failed" },
+    ];
+    await flushPromises();
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(2);
+    row = rowOf(wrapper);
+    expect(row.attributes("aria-disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("is refused while everything it lacks is already downloading", async () => {
+    preflightWorkflowRun
+      .mockReset()
+      .mockResolvedValue(answer("vae/vae.safetensors"));
+    useTasksStore().modelDownloads = [
+      { id: "d1", file: "vae.safetensors", status: "running" },
+    ];
+    const wrapper = await opened(["a"]);
+    const row = rowOf(wrapper);
+    expect(row.attributes("aria-disabled")).toBe("true");
+    expect(row.find(".tip").attributes("data-text")).toBe(
+      "Already downloading: the Tasks list in the title bar shows how far",
+    );
     wrapper.unmount();
   });
 });

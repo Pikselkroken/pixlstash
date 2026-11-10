@@ -4,6 +4,7 @@ import { setActivePinia, createPinia } from "pinia";
 import { useSortStore } from "../stores/useSortStore.js";
 import { useFilterStore } from "../stores/useFilterStore.js";
 import { useSelectionStore } from "../stores/useSelectionStore.js";
+import { useInboxStore } from "../stores/useInboxStore.js";
 import { useDedupStore } from "../stores/useDedupStore.js";
 import { useGridFetch } from "./useGridFetch.js";
 import { useSearchStore } from "../stores/useSearchStore.js";
@@ -15,7 +16,7 @@ import {
 } from "../api/pictures";
 
 // Mock the pictures API module so streaming-path tests can control the count
-// and stream responses. The overlay-defer test below returns before any
+// and stream responses. The lightbox-defer test below returns before any
 // network call, so the mock is inert there.
 vi.mock("../api/pictures", () => ({
   getPictureCount: vi.fn(),
@@ -27,12 +28,12 @@ vi.mock("../api/pictures", () => ({
   listPicturesByIds: vi.fn(),
 }));
 
-// Build a minimal harness for useGridFetch. Covers the overlay-defer path
+// Build a minimal harness for useGridFetch. Covers the lightbox-defer path
 // (returns before any network call) and the streaming path (count + stream
 // mocked above). Sort, selection and filter state come from the stores;
 // `storeOverrides` writes them.
 function makeHarness({
-  overlayOpen = false,
+  lightboxOpen = false,
   selectedSort = "DATE_TAKEN",
   storeOverrides = {},
 } = {}) {
@@ -48,9 +49,9 @@ function makeHarness({
     scrollWrapper: ref(null),
     preserveScrollOnNextFetch: ref(false),
     pendingScrollTop: ref(null),
-    overlayOpen: ref(overlayOpen),
+    lightboxOpen: ref(lightboxOpen),
     pendingGridImages: ref(null),
-    pendingOverlayGridRefresh: ref(false),
+    pendingLightboxGridRefresh: ref(false),
     visibleStart: ref(0),
     visibleEnd: ref(0),
     divisibleViewWindow: ref(40),
@@ -112,14 +113,14 @@ function makeHarness({
 describe("useGridFetch sort-progress lifecycle", () => {
   it("dismisses the sort progress bar when a sorted fetch is deferred for an open overlay", async () => {
     const { grid, refs, startSmartScoreProgress, completeSmartScoreProgress } =
-      makeHarness({ overlayOpen: true });
+      makeHarness({ lightboxOpen: true });
 
     await grid.fetchAllGridImages({ force: true, showProgress: true });
 
     // The bar was started…
     expect(startSmartScoreProgress).toHaveBeenCalledTimes(1);
-    // …the refresh was deferred to overlay-close…
-    expect(refs.pendingOverlayGridRefresh.value).toBe(true);
+    // …the refresh was deferred to lightbox-close…
+    expect(refs.pendingLightboxGridRefresh.value).toBe(true);
     // …and crucially the bar was dismissed instead of being stranded forever.
     expect(completeSmartScoreProgress).toHaveBeenCalledTimes(1);
   });
@@ -398,5 +399,39 @@ describe("useGridFetch text search: narrowing to text matches (#1197)", () => {
     await grid.fetchAllGridImages({ force: true });
     await grid.fetchAllGridImages({ force: true });
     expect(searchPictures).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useGridFetch: the Inbox and Imported from", () => {
+  it("asks for the Inbox's period, and follows it when it changes", () => {
+    const { grid } = makeHarness();
+    useSelectionStore().selectedFolderFilter = { inbox: true, label: "Inbox" };
+    const listing = new URLSearchParams(grid.buildPictureIdsQueryParams());
+    expect(listing.get("inbox")).toBe("14d");
+    // The filter menu counts from the view, and the Inbox IS the view.
+    const base = new URLSearchParams(grid.buildFilterCountBaseQuery());
+    expect(base.get("inbox")).toBe("14d");
+    useInboxStore().period = "90d";
+    expect(
+      new URLSearchParams(grid.buildPictureIdsQueryParams()).get("inbox"),
+    ).toBe("90d");
+  });
+
+  it("asks for no Inbox outside it, whatever the period", () => {
+    const { grid } = makeHarness();
+    useInboxStore().period = "90d";
+    const listing = new URLSearchParams(grid.buildPictureIdsQueryParams());
+    expect(listing.has("inbox")).toBe(false);
+  });
+
+  it("narrows any view by Imported from, without moving the menu's base", () => {
+    const { grid } = makeHarness();
+    useFilterStore().importedFromFilter = "/home/me/renders";
+    const listing = new URLSearchParams(grid.buildPictureIdsQueryParams());
+    expect(listing.get("import_source_folder")).toBe("/home/me/renders");
+    expect(listing.has("inbox")).toBe(false);
+    // A filter, not the view: its row in the menu adds it to the base itself.
+    const base = new URLSearchParams(grid.buildFilterCountBaseQuery());
+    expect(base.has("import_source_folder")).toBe(false);
   });
 });

@@ -6,7 +6,7 @@
  * Placement (§2.2): fixed, bottom-centre of the app viewport, spanning the full
  * width and centring on it - deliberately NOT tracking the sidebar or stats
  * panel, because the host also has to render on the login screen, over
- * ImageOverlay, over ReviewSessionsOverlay and inside Settings, none of which
+ * Lightbox, over ReviewSessionsOverlay and inside Settings, none of which
  * have a grid column to centre on. One stable anchor beats a conditional one.
  *
  * The column is `pointer-events: none` so it never eats clicks aimed at the grid
@@ -25,6 +25,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { VIcon } from "vuetify/components";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import AppBarButton from "./AppBarButton.vue";
+import Tooltip from "./Tooltip.vue";
 import { NARROW_VIEWPORT_MAX_PX } from "../../utils/floatingBottom";
 
 const props = defineProps({
@@ -136,6 +137,19 @@ const hostEl = ref(null);
           {{ GLYPHS[card.level] || GLYPHS.info }}
         </v-icon>
         <span class="notice-message" :title="card.text">{{ card.text }}</span>
+        <span
+          v-if="card.badge"
+          class="notice-badge"
+          role="img"
+          :aria-label="card.badge.label"
+        >
+          <v-icon size="16" aria-hidden="true">{{ card.badge.icon }}</v-icon>
+          <Tooltip
+            :text="card.badge.label"
+            :describe="false"
+            activator="parent"
+          />
+        </span>
         <span
           v-if="card.count > 1"
           class="notice-count"
@@ -302,6 +316,17 @@ const hostEl = ref(null);
   margin-top: 1px;
 }
 
+/* A privacy fact the sentence does not carry, in warning ink (#2417). */
+.notice-badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: rgb(var(--v-theme-surface-warning));
+}
+.notice-host--on-dark .notice-badge {
+  color: rgb(var(--v-theme-dark-surface-warning));
+}
+
 .notice-message {
   flex: 1;
   min-width: 0;
@@ -369,9 +394,6 @@ const hostEl = ref(null);
 }
 .notice-host--on-dark .notice-action:hover {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
-}
-.notice-host--on-dark :focus-visible {
-  outline-color: rgb(var(--v-theme-on-dark-surface));
 }
 /* The hue swaps too, not just the alpha. A `dark-surface` stays dark in both
    themes, so the theme's own status hues are the wrong values on it - the light

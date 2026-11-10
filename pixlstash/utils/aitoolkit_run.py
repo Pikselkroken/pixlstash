@@ -26,6 +26,7 @@ none of them reliably. Other trainers get their own reader later, or not at all.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -35,7 +36,10 @@ from pixlstash.pixl_logging import get_logger
 logger = get_logger(__name__)
 
 CHECKPOINT_SUFFIX = ".safetensors"
-SAMPLE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
+IMAGE_SAMPLE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
+# A video model's previews (MiniMax H3 motion, Wan) are clips.
+VIDEO_SAMPLE_SUFFIXES = (".mp4",)
+SAMPLE_SUFFIXES = IMAGE_SAMPLE_SUFFIXES + VIDEO_SAMPLE_SUFFIXES
 CONFIG_NAMES = ("config.yaml", "config.yml")
 SAMPLES_DIRNAME = "samples"
 
@@ -66,13 +70,17 @@ class Checkpoint:
 
 @dataclass(frozen=True)
 class Sample:
-    """One preview image ai-toolkit rendered at a given step."""
+    """One preview ai-toolkit rendered at a given step: an image, or a clip."""
 
     path: str
     filename: str
     step: int
     index: int
     timestamp: str
+
+    @property
+    def is_video(self) -> bool:
+        return self.filename.lower().endswith(VIDEO_SAMPLE_SUFFIXES)
 
 
 @dataclass
@@ -86,6 +94,11 @@ class TrainingRun:
     base_model: str | None = None
     trigger_words: list[str] = field(default_factory=list)
     rank: int | None = None
+    total_steps: int | None = None
+    """``train.steps``: the steps the run was asked for, not how far it got."""
+    learning_rate: float | None = None
+    sample_prompts: list[str] = field(default_factory=list)
+    """The preview prompts in sample-index order, so ``index`` names a row."""
     config_error: str | None = None
     """Why the config could not be read, when it could not. The run is still
     usable without it: steps and samples come from filenames."""
@@ -101,29 +114,11 @@ class TrainingRun:
             (s for s in self.samples if s.step == step), key=lambda s: s.index
         )
 
-    def samples_for(self, checkpoint: Checkpoint) -> list[Sample]:
-        """Previews that belong to one checkpoint, final included.
-
-        A stepped checkpoint takes the samples naming its step. **The bare final
-        takes the highest sample step's**, because it carries no step of its own
-        and is the stack cover: a rule that left it blank would make the most
-        visible row of a fresh import the only empty one. When a stepped
-        checkpoint is imported at that same step the previews are taken twice,
-        which is 15 MB of duplication against a cover that reads.
-
-        Returns an empty list for a run with no samples at all.
-        """
-        if not checkpoint.is_final:
-            return self.samples_for_step(checkpoint.step)
-        if not self.samples:
-            return []
-        return self.samples_for_step(max(sample.step for sample in self.samples))
-
 
 def is_sample_filename(filename: str) -> bool:
     """Whether a filename is one ai-toolkit wrote as a step preview.
 
-    The same two tests :func:`_read_samples` applies - an image extension and
+    The same two tests :func:`_read_samples` applies - a preview extension and
     the ``<timestamp>__<step>_<index>`` shape - exposed because a *caller* needs
     to ask it of a file it did not read here: the delete verb decides whether a
     ``<stem>_samples/`` directory holds only the trainer's previews, and so is
@@ -232,7 +227,10 @@ def _config_path(run_dir: str) -> str | None:
 
 
 def _apply_config(run: TrainingRun) -> None:
-    """Fill in base model, triggers and rank from ``config.yaml``, best effort.
+    """Fill in what the run was asked for from ``config.yaml``, best effort.
+
+    Base model, triggers, rank, planned steps, learning rate and the preview
+    prompts.
 
     Every failure here is recorded on the run and logged, never raised: the
     checkpoints and samples are the point, and they come from filenames. A run
@@ -292,6 +290,48 @@ def _apply_config(run: TrainingRun) -> None:
         logger.debug("Ignoring boolean `linear` in %s; it is not a rank.", path)
     elif isinstance(rank, int):
         run.rank = rank
+
+    train = _find_key(parsed, "train")
+    if isinstance(train, dict):
+        steps = train.get("steps")
+        if isinstance(steps, int) and not isinstance(steps, bool) and steps > 0:
+            run.total_steps = steps
+        lr = train.get("lr")
+        # PyYAML reads `1e-4` (no decimal point) as a string, not a float.
+        if isinstance(lr, str):
+            try:
+                lr = float(lr)
+            except ValueError:
+                logger.debug("Ignoring unreadable `lr` %r in %s.", lr, path)
+        if isinstance(lr, (int, float)) and not isinstance(lr, bool):
+            # `.nan` / `.inf` would make the listing's JSON unreadable.
+            if math.isfinite(lr):
+                run.learning_rate = float(lr)
+            else:
+                logger.debug("Ignoring non-finite `lr` %r in %s.", lr, path)
+
+    run.sample_prompts = _sample_prompts(_find_key(parsed, "sample"))
+
+
+def _sample_prompts(sample: object) -> list[str]:
+    """The preview prompts, from either layout ai-toolkit has written.
+
+    Newer configs list ``samples: [{prompt: ...}]``; older ones a bare
+    ``prompts: [...]`` of strings.
+    """
+    if not isinstance(sample, dict):
+        return []
+    entries = sample.get("samples")
+    if isinstance(entries, list):
+        # One per entry, malformed ones blank, so `index` still names a row.
+        return [
+            str(entry.get("prompt") or "") if isinstance(entry, dict) else ""
+            for entry in entries
+        ]
+    prompts = sample.get("prompts")
+    if isinstance(prompts, list):
+        return [prompt if isinstance(prompt, str) else "" for prompt in prompts]
+    return []
 
 
 def read_run(run_dir: str) -> TrainingRun:

@@ -1,7 +1,7 @@
 <template>
   <div class="s-section" :class="{ 's-section--first': first }">
     <div v-if="title || $slots.action" class="s-section__head">
-      <div v-if="title" class="s-section__title">{{ title }}</div>
+      <div v-if="title" class="s-section__title section-label">{{ title }}</div>
       <div v-if="$slots.action" class="s-section__action">
         <slot name="action" />
       </div>
@@ -37,7 +37,7 @@ defineProps({
   justify-content: space-between;
   gap: var(--space-4);
   min-height: 24px;
-  margin-bottom: var(--space-2);
+  margin-bottom: var(--space-1);
 }
 
 /* A section may carry more than one action (API Tokens has two), and two
@@ -48,9 +48,10 @@ defineProps({
   gap: var(--space-3);
 }
 
+/* The design system's SectionLabel (global `.section-label`): settings
+   groups are ALL-CAPS labels, not Title Case headings. */
 .s-section__title {
-  font-weight: var(--weight-semibold);
-  font-size: var(--text-base);
+  line-height: var(--leading-snug);
 }
 
 .s-section__desc {

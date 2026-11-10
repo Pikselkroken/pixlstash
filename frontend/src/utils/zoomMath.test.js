@@ -225,7 +225,7 @@ describe("anchorZoomOffset - the transform-space twin", () => {
     expect(after.y).toBeCloseTo(before.y, 6);
   });
 
-  // The overlay enters at fit - offset zero, image centred. The first in-tick
+  // The lightbox enters at fit - offset zero, image centred. The first in-tick
   // must anchor from that centred state without a jump.
   it("holds the invariant zooming out of the centred fit state", () => {
     const fit = 0.8; // 1000×750 fits 800×600 exactly at 0.8

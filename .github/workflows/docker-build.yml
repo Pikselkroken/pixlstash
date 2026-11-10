@@ -16,6 +16,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Every PixlStash this workflow boots reports itself as ours, never as a real
+  # install (Server.DEV_MACHINE_ENV_VAR; guarded by tests/test_install_type_buckets.py).
+  PIXLSTASH_TELEMETRY_DEV: '1'
+
 jobs:
   build:
     name: Build ${{ matrix.name }} image
@@ -33,6 +38,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The image carries the ComfyUI-PixlStash nodes from the submodule.
+          submodules: true
 
       # `load: true` exports the built image into the docker daemon, so the
       # layers land on disk a second time on top of the buildx cache. The
@@ -87,8 +95,13 @@ jobs:
           # Published to 127.0.0.1 only. `-p 19537:9537` binds 0.0.0.0, which
           # would expose an unauthenticated first-run server on every runner
           # interface for the life of the job.
+          #
+          # `-e PIXLSTASH_TELEMETRY_DEV` forwards the workflow's declaration:
+          # the container does not inherit the runner's environment (not even
+          # CI, which is what suppresses the server's own ping elsewhere).
           docker run -d --name pixlstash-smoke \
             -e PIXLSTASH_HOST=0.0.0.0 \
+            -e PIXLSTASH_TELEMETRY_DEV \
             -p 127.0.0.1:19537:9537 \
             pixlstash:ci-smoke
 
@@ -130,19 +143,23 @@ jobs:
             echo "::error::Dockerfile produced docker_variant='${variant}', expected 'cpu'."
             exit 1
           fi
-          # The container is NOT labelled a dev machine, deliberately. This
-          # `/version` payload is the only place any workflow observes a real
-          # container's running_in_docker() result, and labelling it would
-          # replace that with "dev" and leave docker detection with no
-          # real-container coverage at all. Nothing can be sent from here:
-          # the install ping needs consent (telemetry_send_install_id on a
-          # user, and a first-run container has none) and there is no browser,
-          # so the frontend version check never runs either. Revisit if either
-          # of those two stops being true.
+          # The container is declared a dev machine like everything else CI
+          # boots, so /version must say so: a container that reports anything
+          # else here would be counted as a real install.
           install_type=$(python3 -c "import json;print(json.load(open('/tmp/version.json')).get('install_type'))")
           echo "install_type=${install_type}"
-          if [ "$install_type" != "docker" ]; then
-            echo "::error::Container reported install_type='${install_type}', expected 'docker'."
+          if [ "$install_type" != "dev" ]; then
+            echo "::error::Container reported install_type='${install_type}', expected 'dev'."
+            exit 1
+          fi
+          # The declaration outranks docker detection, so run the detection
+          # once more in the container with it blanked. This is the only place
+          # any workflow observes running_in_docker() inside a real container.
+          detected=$(docker exec -e PIXLSTASH_TELEMETRY_DEV= pixlstash-smoke \
+            python -c "from pixlstash.server import Server; print(Server.detect_install_type())" | tail -n 1)
+          echo "undeclared install_type=${detected}"
+          if [ "$detected" != "docker" ]; then
+            echo "::error::Undeclared detection inside the container gave '${detected}', expected 'docker'."
             exit 1
           fi
 

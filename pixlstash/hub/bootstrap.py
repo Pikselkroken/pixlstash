@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 import hashlib
 import json
 import re
@@ -24,6 +25,7 @@ from typing import Callable, Optional
 from pixlstash.hub.db import HubDatabase, default_hub_path
 from pixlstash.hub.engine import HubEngine
 from pixlstash.utils.media_files import has_media_files
+from pixlstash.utils.sqlite_uri import sqlite_file_uri
 from pixlstash.hub.registry import (
     Library,
     LibraryError,
@@ -31,6 +33,7 @@ from pixlstash.hub.registry import (
     NotAVaultError,
     VAULT_FILENAME,
     remove_library_made_entries,
+    resolve_path,
     validate_vault_folder,
 )
 from pixlstash.pixl_logging import get_logger
@@ -70,6 +73,56 @@ class UnusableVaultError(HubBootstrapError):
         self.folder = folder
         self.vault_path = vault_path
         self.reason = reason
+
+
+# Set to the uuid of the active library that will not open, by a caller that
+# has asked a human to start a new library instead (the desktop's recovery
+# screen). The configured ``image_root`` is registered the way a first run
+# registers it, made active, and the broken registration is detached - never
+# deleted, and nothing in its folder is touched. A uuid rather than "1" so a
+# value left in a shell cannot act on a library it was not meant for.
+LIBRARY_REPLACE_ENV = "PIXLSTASH_REPLACE_LIBRARY"
+
+
+class LibraryFingerprintConflictError(HubBootstrapError):
+    """The registered folder holds a readable vault that is another library."""
+
+
+class LibraryUnavailableError(HubBootstrapError):
+    """The active library cannot be opened, and nothing was done about it.
+
+    Raised before any vault is opened, so the folder is exactly as it was
+    found: no empty ``vault.db`` was created where the library used to be,
+    which is what the fingerprint check exists to prevent. Carries what a
+    recovery screen needs to offer a way out - which library, why, and the
+    attached libraries that do still open - because the Settings pane that
+    could otherwise fix this needs the server this failure is stopping.
+
+    ``kind`` is one of :attr:`FOLDER_MISSING` (no folder at the path),
+    :attr:`VAULT_MISSING` (the folder is there, its ``vault.db`` is not),
+    :attr:`UNREADABLE` (the file is there and could not be read) and
+    :attr:`FOREIGN` (the file is a different library).
+    """
+
+    FOLDER_MISSING = "folder_missing"
+    VAULT_MISSING = "vault_missing"
+    UNREADABLE = "unreadable"
+    FOREIGN = "foreign"
+
+    def __init__(
+        self,
+        library: Library,
+        kind: str,
+        reason: str,
+        alternatives: list[Library],
+        hub_path: Optional[str] = None,
+    ):
+        super().__init__(f"{reason}{_alternatives_note(alternatives)}")
+        self.library = library
+        self.kind = kind
+        self.reason = reason
+        self.alternatives = list(alternatives)
+        self.hub_path = hub_path
 
 
 # Failures that are about the machine rather than the database. Offering to
@@ -227,8 +280,14 @@ _USER_COLUMNS_TO_COPY = (
     "show_problem_icon",
     "show_stacks",
     "show_keyboard_hint",
+    "grid_open_gesture",
+    "viewer_wheel_action",
     "hide_purge_snapshot_warning",
     "comfyui_url",
+    "ai_toolkit_repo_path",
+    "ai_toolkit_python",
+    "ai_toolkit_commit",
+    "training_presets_auto_check",
     "public_url",
     "keep_models_in_memory",
     "max_vram_gb",
@@ -240,6 +299,9 @@ _USER_COLUMNS_TO_COPY = (
     "check_for_updates",
     "embed_watermark",
     "watermark_image",
+    "keep_workflow_on_export",
+    "last_seen_version",
+    "whats_changed",
 )
 
 _TOKEN_COLUMNS_TO_COPY = (
@@ -315,7 +377,9 @@ def bootstrap_hub(
     # carried no fingerprint would otherwise conflict forever with whatever
     # stamped it first.
     library = registry.adopt_vault_fingerprint(library)
-    library = _offer_a_usable_library(registry, library, library_switch_prompt)
+    library = _offer_a_usable_library(
+        registry, library, library_switch_prompt, configured_image_root
+    )
 
     if (
         legacy_identity_prompt is not None
@@ -348,7 +412,9 @@ def _legacy_owner_present(vault_path: str) -> bool:
     if not os.path.isfile(vault_path):
         return False
     try:
-        vault = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+        vault = sqlite3.connect(
+            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
+        )
     except sqlite3.Error as exc:
         logger.warning(
             "Could not open %s to check for a legacy owner (%s); not offering "
@@ -434,6 +500,7 @@ def _sweep_unfinished_imports(registry: LibraryRegistry) -> None:
 def _register_first_library(
     registry: LibraryRegistry,
     image_root: str,
+    name: str = "Library 1",
 ) -> Library:
     # Creation only, and it must still raise on a path that is not one: an
     # empty string or an existing *file* has to end start-up here rather than
@@ -459,7 +526,7 @@ def _register_first_library(
             # label, not something a person typed, and a hub already holding a
             # "Library 1" must not be a hub that cannot boot.
             return registry.attach(
-                image_root, "Library 1", unique_name=False, check_folder_overlap=False
+                image_root, name, unique_name=False, check_folder_overlap=False
             )
         except NotAVaultError as exc:
             if _is_environmental_failure(exc):
@@ -489,7 +556,7 @@ def _register_first_library(
                 exc,
             )
             set_aside_unusable_vault(vault_path)
-            return registry.register_pending(image_root, "Library 1")
+            return registry.register_pending(image_root, name)
 
     # A folder the owner pointed at that already holds pictures is a folder
     # they have not answered the import question for yet, exactly as it would
@@ -497,7 +564,7 @@ def _register_first_library(
     # run takes, so the rule has to live here too or it covers Settings only.
     return registry.register_pending(
         image_root,
-        "Library 1",
+        name,
         pending_import=has_media_files(image_root),
     )
 
@@ -551,7 +618,9 @@ def prepare_legacy_identity(hub: HubDatabase, folder: str) -> Library:
                 "reauthorize it."
             )
     try:
-        vault = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+        vault = sqlite3.connect(
+            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
+        )
     except sqlite3.Error as exc:
         raise HubBootstrapError(
             f"Could not open legacy vault {vault_path}: {exc}"
@@ -588,7 +657,9 @@ def _copy_legacy_identity_if_needed(hub: HubDatabase, library: Library) -> bool:
         )
 
     try:
-        vault = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+        vault = sqlite3.connect(
+            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
+        )
     except sqlite3.Error as exc:
         raise HubBootstrapError(
             f"Could not open legacy identity database {vault_path}: {exc}"
@@ -645,7 +716,7 @@ def prevalidate_library_fingerprint(library: Library) -> None:
         return
     try:
         conn = sqlite3.connect(
-            f"file:{library.vault_path}?mode=ro", uri=True, timeout=5
+            sqlite_file_uri(library.vault_path, read_only=True), uri=True, timeout=5
         )
         try:
             row = conn.execute(
@@ -660,7 +731,7 @@ def prevalidate_library_fingerprint(library: Library) -> None:
         ) from exc
     observed = row[0] if row and row[0] else None
     if observed != expected:
-        raise HubBootstrapError(
+        raise LibraryFingerprintConflictError(
             f"Library fingerprint conflict at {library.vault_path}: the vault "
             f"contains {observed or 'no fingerprint'}, but the hub expects "
             f"{expected}. The vault was not opened or migrated."
@@ -736,10 +807,179 @@ def _alternatives_note(alternatives: list[Library]) -> str:
     )
 
 
+def _unavailable_kind(library: Library, failure: HubBootstrapError) -> str:
+    """Say which of the four ways a registered library fails to open this is.
+
+    Read from the filesystem as it is now, not from the error text, because
+    the recovery screen words its explanation by it: "the folder is gone" and
+    "the folder is there but empty" send somebody looking in different places.
+    """
+    if isinstance(failure, LibraryFingerprintConflictError):
+        return LibraryUnavailableError.FOREIGN
+    if not os.path.isdir(library.path):
+        return LibraryUnavailableError.FOLDER_MISSING
+    if not os.path.isfile(library.vault_path):
+        return LibraryUnavailableError.VAULT_MISSING
+    return LibraryUnavailableError.UNREADABLE
+
+
+def _same_folder_key(path: str) -> str:
+    """*path* as the filesystem compares it: case-folded where names fold.
+
+    ``realpath`` does not settle case for a folder that no longer exists, so a
+    missing ``Photos/Lib`` and a typed ``photos/lib`` must still read as one
+    folder on Windows and macOS.
+    """
+    path = os.path.normcase(os.path.normpath(path))
+    return path.casefold() if sys.platform == "darwin" else path
+
+
+def _folders_overlap(first: str, second: str) -> bool:
+    """True when either folder is the other or contains it."""
+    a, b = _same_folder_key(first), _same_folder_key(second)
+    try:
+        common = os.path.commonpath([a, b])
+    except ValueError:
+        # Different drives on Windows: never the same folder.
+        return False
+    return common in (a, b)
+
+
+def _roll_back_replacement(
+    registry: LibraryRegistry, library: Library, replacement: Library
+) -> None:
+    """Undo a half-made replacement, so trying the same folder again works.
+
+    Left registered, the replacement would make every retry of that folder an
+    overlap with a library this recovery made itself, and nothing on the
+    recovery screen could remove it. The missing library goes back to being
+    the active one first (detach refuses the active library), then the
+    replacement is detached - not forgotten: a row this call revived rather
+    than created is a library somebody detached before, with share links that
+    must survive, and a detached row at the same path is revived by the retry.
+    Nothing in either folder is touched.
+    """
+    try:
+        active = registry.active_library()
+        if active is None or active.uuid != library.uuid:
+            registry.set_active(library.id)
+        current = registry.by_uuid(replacement.uuid)
+        if current is not None and current.attached:
+            registry.detach(replacement.id)
+    except LibraryError as exc:
+        logger.error(
+            "Could not roll back the replacement library %s at %s after it "
+            "failed; %s at %s may need `libraries activate`, and %s "
+            "`libraries detach`: %s",
+            replacement.name,
+            replacement.path,
+            library.name,
+            library.path,
+            replacement.name,
+            exc,
+        )
+
+
+def _replace_unavailable_library(
+    registry: LibraryRegistry,
+    library: Library,
+    configured_image_root: str,
+    unavailable: LibraryUnavailableError,
+) -> Library:
+    """Start a new library at the configured folder, as a first run would.
+
+    Asked for by :data:`LIBRARY_REPLACE_ENV`, i.e. by a person on the recovery
+    screen. The old registration is detached rather than forgotten: its uuid,
+    share links and tokens are kept, and attaching or relocating it later
+    brings them back. Nothing in either folder is deleted.
+
+    Every refusal below is checked before anything is written, and each one is
+    raised as :class:`LibraryUnavailableError` so the recovery screen comes
+    back with the reason rather than the app ending on a start-up error. The
+    new library is checked, then made active, and only then is the old one
+    detached. A failure after the new one was registered is rolled back by
+    :func:`_roll_back_replacement`: the missing library is active and attached
+    again, the replacement is detached, and trying the same folder again works.
+    The new folder may by then exist, empty.
+
+    Refused folders:
+
+    * one that is, contains, or sits inside the missing library's folder. A new
+      vault there is the one outcome the fingerprint check exists to prevent -
+      when the drive comes back, the real library would be shadowed or nested.
+    * one overlapping any other registered library, or a watch or reference
+      folder. First run reaches ``_register_first_library`` on an empty hub,
+      where none of these can exist; here the hub is populated.
+    """
+
+    def refuse(reason: str) -> LibraryUnavailableError:
+        logger.error(
+            "Not starting a new library in place of %s (%s): %s",
+            library.name,
+            library.path,
+            reason,
+        )
+        return LibraryUnavailableError(
+            library,
+            unavailable.kind,
+            reason,
+            unavailable.alternatives,
+            registry.hub_path,
+        )
+
+    resolved = resolve_path(configured_image_root) if configured_image_root else ""
+    if not resolved or _folders_overlap(resolved, library.path):
+        raise refuse(
+            f"Not starting a new library in {resolved or 'an unnamed folder'}: "
+            f'it is, contains or is inside where "{library.name}" belongs, and a '
+            "new library there would hide it if the folder comes back. Choose a "
+            "different folder."
+        )
+    others = [
+        other
+        for other in registry.list_libraries()
+        if other.id != library.id and _folders_overlap(resolved, other.path)
+    ]
+    if others:
+        raise refuse(
+            f"Not starting a new library in {resolved}: it overlaps the library "
+            f'"{others[0].name}" at {others[0].path}. Choose a folder of its own, '
+            "or open that library instead."
+        )
+    replacement: Optional[Library] = None
+    try:
+        registry.refuse_overlapping_watch_or_reference_folder(resolved)
+        replacement = _register_first_library(
+            registry, resolved, name=os.path.basename(resolved) or "Library 1"
+        )
+        # Checked before anything changes which library opens, so a failure
+        # here leaves the missing library active and attached, and the screen
+        # that comes back still describes the registry as it is.
+        replacement = registry.adopt_vault_fingerprint(replacement)
+        prevalidate_library_fingerprint(replacement)
+        replacement = registry.set_active(replacement.id)
+        registry.detach(library.id)
+    except (LibraryError, HubBootstrapError, OSError) as exc:
+        if replacement is not None:
+            _roll_back_replacement(registry, library, replacement)
+        raise refuse(f"Could not start a new library in {resolved}: {exc}") from exc
+    logger.warning(
+        "Started a new library at %s in place of %s, which could not be opened "
+        "at %s (%s). The old registration is detached, not deleted; nothing in "
+        "either folder was removed.",
+        resolved,
+        library.name,
+        library.path,
+        unavailable.reason,
+    )
+    return replacement
+
+
 def _offer_a_usable_library(
     registry: LibraryRegistry,
     library: Library,
     prompt: Optional[Callable[[Library, str, list[Library]], Optional[Library]]],
+    configured_image_root: str = "",
 ) -> Library:
     """Recover, before the vault is opened, from an active library that is gone.
 
@@ -760,6 +1000,7 @@ def _offer_a_usable_library(
         prevalidate_library_fingerprint(library)
         return library
     except HubBootstrapError as exc:
+        failure = exc
         reason = str(exc)
 
     if _vault_gone_from_a_populated_folder(library):
@@ -790,7 +1031,18 @@ def _offer_a_usable_library(
                 set_aside_unusable_vault(library.vault_path)
                 return registry.forget_vault_fingerprint(library)
             raise UnusableVaultError(library.path, library.vault_path, reason)
-        raise HubBootstrapError(f"{reason}{_alternatives_note(alternatives)}")
+        unavailable = LibraryUnavailableError(
+            library,
+            _unavailable_kind(library, failure),
+            reason,
+            alternatives,
+            registry.hub_path,
+        )
+        if os.environ.get(LIBRARY_REPLACE_ENV, "").strip() == library.uuid:
+            return _replace_unavailable_library(
+                registry, library, configured_image_root, unavailable
+            )
+        raise unavailable
     logger.warning(
         "%s could not be opened (%s); the active library is now %s at %s, as "
         "chosen at start-up.",

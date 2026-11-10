@@ -22,22 +22,13 @@ import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
-  // The proposal splits this into two tabs sharing one component: 'compute'
-  // (acceleration) and 'backend' (remote access + desktop + updates). Each
-  // instance loads and renders only its own half.
+  // Two panes share this component: 'compute' (GPU & compute: the GPU,
+  // sharing it, and acceleration) and 'backend' (Server: remote access and
+  // desktop). Each instance loads and renders only its own half.
   view: { type: String, default: "compute" },
-  checkForUpdates: { type: Boolean, default: null },
 });
-
-const emit = defineEmits(["update:check-for-updates"]);
 
 const isBackend = computed(() => props.view === "backend");
-
-// "Check for updates automatically" - lives on the Backend tab's Desktop block.
-const checkForUpdatesModel = computed({
-  get: () => props.checkForUpdates ?? false,
-  set: (value) => emit("update:check-for-updates", value),
-});
 
 const desktop = typeof window !== "undefined" ? window.pixlstashDesktop : null;
 
@@ -607,7 +598,7 @@ watch(
 </script>
 
 <template>
-  <!-- ── Backend tab: remote access + desktop ───────────────────────────── -->
+  <!-- ── Server pane: remote access + desktop ───────────────────────────── -->
   <div v-if="isBackend" class="compute-backend">
     <SettingsSection
       title="Remote access"
@@ -758,35 +749,22 @@ watch(
       <div v-else class="compute-loading">Loading…</div>
     </SettingsSection>
 
+    <!-- "Check for updates" is not here: it lives once, under Privacy. -->
     <SettingsSection title="Desktop">
-      <SettingsTwoCol>
-        <SettingsRow
-          label="Hide to tray on close"
-          sub="Keeps PixlStash and any remote server running; reopen it from the tray icon."
-        >
-          <v-switch
-            :model-value="hideToTrayOnClose"
-            color="primary"
-            density="compact"
-            hide-details
-            @update:model-value="setHideToTray($event)"
-          />
-        </SettingsRow>
-        <SettingsRow
-          label="Check for updates"
-          sub="Checks daily. Sends only your version and install type, anonymously."
-        >
-          <v-switch
-            v-model="checkForUpdatesModel"
-            color="primary"
-            density="compact"
-            hide-details
-          />
-        </SettingsRow>
-      </SettingsTwoCol>
-      <!-- Full width, not a half of the pair above: its sub names a path, and
-           the Windows one wraps to four lines in a half-width row - most of what
-           pushed this pane past its fixed height. -->
+      <SettingsRow
+        label="Hide to tray on close"
+        sub="Keeps PixlStash and any remote server running; reopen it from the tray icon."
+      >
+        <v-switch
+          :model-value="hideToTrayOnClose"
+          color="primary"
+          density="compact"
+          hide-details
+          @update:model-value="setHideToTray($event)"
+        />
+      </SettingsRow>
+      <!-- Full width: its sub names a path, and the Windows one wraps to four
+           lines in a half-width row. -->
       <SettingsRow
         v-if="shellCommand !== null"
         label="Shell command"
@@ -805,7 +783,7 @@ watch(
       <div v-if="error" class="settings-error">{{ error }}</div>
     </SettingsSection>
 
-    <!-- Pinned to the bottom of the Backend pane. -->
+    <!-- Pinned to the bottom of the Server pane. -->
     <div class="compute-links">
       <AppButton
         variant="ghost"
@@ -826,51 +804,58 @@ watch(
     </div>
   </div>
 
-  <!-- ── Compute tab: which GPU, what PixlStash may take, and the runtime ─── -->
+  <!-- ── GPU & compute pane: which GPU, what PixlStash may take, the runtime -->
   <div v-else>
     <!-- Which GPU PixlStash uses: on every install, headless included. Choosing
          stages; Apply & restart commits it, and restarts the server to use it. -->
     <SettingsSection
       title="Which GPU PixlStash uses"
-      desc="PixlStash uses one GPU. Auto picks a spare one that ComfyUI and AI Toolkit are not using, so all three can work at once. Changing it restarts the local server."
+      desc="Auto picks one ComfyUI and AI-toolkit are not using, so all three can work at once. Changing it restarts the local server."
       first
     >
-      <div v-if="gpus" class="gpu-picker" role="radiogroup" aria-label="Which GPU PixlStash uses">
-        <SettingsRow label="Auto" :sub="gpus.auto_reason">
-          <input
-            v-model="gpuPick"
-            class="gpu-radio"
-            type="radio"
-            name="gpu-pick"
-            value="auto"
-            :disabled="gpuBusy"
-          />
-        </SettingsRow>
-        <SettingsRow
-          v-for="gpu in gpus.gpus"
-          :key="gpu.uuid"
-          :label="gpu.name"
-          :sub="gpuSub(gpu)"
-          :dim="!gpu.pickable"
+      <!-- On the heading row, so committing a pick costs no row of its own. -->
+      <template v-if="gpus" #action>
+        <AppButton
+          size="sm"
+          :disabled="!gpuDirty || gpuBusy"
+          :loading="gpuBusy"
+          @click="applyGpu"
         >
-          <input
-            v-model="gpuPick"
-            class="gpu-radio"
-            type="radio"
-            name="gpu-pick"
-            :value="gpu.uuid"
-            :disabled="!gpu.pickable || gpuBusy"
-          />
-        </SettingsRow>
-        <div class="gpu-apply">
-          <AppButton
-            size="sm"
-            :disabled="!gpuDirty || gpuBusy"
-            :loading="gpuBusy"
-            @click="applyGpu"
+          Apply &amp; restart
+        </AppButton>
+      </template>
+      <div v-if="gpus" class="gpu-picker">
+        <div
+          class="compute-list"
+          role="radiogroup"
+          aria-label="Which GPU PixlStash uses"
+        >
+          <SettingsRow label="Auto" :sub="gpus.auto_reason">
+            <input
+              v-model="gpuPick"
+              class="gpu-radio"
+              type="radio"
+              name="gpu-pick"
+              value="auto"
+              :disabled="gpuBusy"
+            />
+          </SettingsRow>
+          <SettingsRow
+            v-for="gpu in gpus.gpus"
+            :key="gpu.uuid"
+            :label="gpu.name"
+            :sub="gpuSub(gpu)"
+            :dim="!gpu.pickable"
           >
-            Apply &amp; restart
-          </AppButton>
+            <input
+              v-model="gpuPick"
+              class="gpu-radio"
+              type="radio"
+              name="gpu-pick"
+              :value="gpu.uuid"
+              :disabled="!gpu.pickable || gpuBusy"
+            />
+          </SettingsRow>
         </div>
         <div v-if="!gpuDirty && gpus.restart_required" class="compute-note">
           Restart PixlStash to use it.
@@ -881,55 +866,54 @@ watch(
     </SettingsSection>
 
     <!-- What PixlStash may take, and what a run that ran out of memory does. -->
-    <SettingsSection
-      title="Sharing the GPU"
-      desc="PixlStash's own work is capped by the limit below. ComfyUI and training are not."
-    >
-      <SettingsRow
-        label="PixlStash's VRAM limit"
-        sub="The most PixlStash's own tagging and search may use. ComfyUI and training are not limited by this."
-      >
-        <div class="vram-row">
-          <span class="vram-value">{{ maxVramGbValue }} GB</span>
-          <div class="vram-track">
-            <v-slider
-              v-model="maxVramGbValue"
-              :min="VRAM_BUDGET_MIN_GB"
-              :max="maxVramGbMax"
-              :step="VRAM_BUDGET_STEP_GB"
-              hide-details
-              density="compact"
-              color="primary"
-              track-color="rgba(var(--v-theme-on-surface), 0.2)"
-              aria-label="PixlStash's VRAM limit"
-              :disabled="maxVramGbLoading || maxVramGbHydrating || !maxVramGbAutoSaveReady"
-            />
+    <SettingsSection title="Sharing the GPU">
+      <div class="compute-list">
+        <SettingsRow
+          label="PixlStash's VRAM limit"
+          sub="Caps PixlStash's own tagging and search. ComfyUI and training are not limited."
+        >
+          <div class="vram-row">
+            <span class="vram-value">{{ maxVramGbValue }} GB</span>
+            <div class="vram-track">
+              <v-slider
+                v-model="maxVramGbValue"
+                :min="VRAM_BUDGET_MIN_GB"
+                :max="maxVramGbMax"
+                :step="VRAM_BUDGET_STEP_GB"
+                hide-details
+                density="compact"
+                color="primary"
+                track-color="rgba(var(--v-theme-on-surface), 0.2)"
+                aria-label="PixlStash's VRAM limit"
+                :disabled="maxVramGbLoading || maxVramGbHydrating || !maxVramGbAutoSaveReady"
+              />
+            </div>
+            <span class="vram-meta">
+              max {{ maxVramGbMax }} GB
+              <template v-if="maxVramGbError">
+                · <span class="vram-err">{{ maxVramGbError }}</span>
+              </template>
+              <template v-else-if="maxVramGbSuccess">
+                · {{ maxVramGbSuccess }}
+              </template>
+            </span>
           </div>
-          <span class="vram-meta">
-            max {{ maxVramGbMax }} GB
-            <template v-if="maxVramGbError">
-              · <span class="vram-err">{{ maxVramGbError }}</span>
-            </template>
-            <template v-else-if="maxVramGbSuccess">
-              · {{ maxVramGbSuccess }}
-            </template>
-          </span>
-        </div>
-      </SettingsRow>
-      <SettingsRow
-        label="Run a workflow alone after it runs out of memory"
-        sub='Once its last 3 runs ran out of memory, marks it "Runs alone" so it gets the whole GPU. You can turn it off per workflow.'
-      >
-        <v-switch
-          :model-value="autoExclusive"
-          :disabled="!autoExclusiveLoaded"
-          color="primary"
-          density="compact"
-          hide-details
-          aria-label="Run a workflow alone after it runs out of memory"
-          @update:model-value="setAutoExclusive"
-        />
-      </SettingsRow>
+        </SettingsRow>
+        <SettingsRow
+          label="Run a workflow alone after it runs out of memory"
+          sub='Once its last 3 runs ran out of memory, marks it "Runs alone" so it gets the whole GPU. You can turn it off per workflow.'
+        >
+          <v-switch
+            :model-value="autoExclusive"
+            :disabled="!autoExclusiveLoaded"
+            color="primary"
+            density="compact"
+            hide-details
+            aria-label="Run a workflow alone after it runs out of memory"
+            @update:model-value="setAutoExclusive"
+          />
+        </SettingsRow>
+      </div>
       <div v-if="autoExclusiveError" class="settings-error">{{ autoExclusiveError }}</div>
       <div v-if="sharingError" class="settings-error">{{ sharingError }}</div>
     </SettingsSection>
@@ -937,75 +921,92 @@ watch(
     <SettingsSection
       v-if="desktop"
       title="Compute acceleration"
-      desc="PixlStash includes a built-in runtime that works out of the box. If this machine has a discrete GPU, add acceleration for faster tagging and search. Switching the runtime restarts the local server."
+      desc="The built-in runtime works out of the box. With a discrete GPU, add acceleration for faster tagging and search. Switching restarts the local server."
     >
       <template v-if="state">
-        <!-- One unified runtime list: the built-in runtime first, then every
-             GPU overlay. Exactly one row reads "· active" (each row derives it
-             from its own `active` flag), and rows never appear, disappear, or
-             move as the active runtime changes - only status text and actions
-             swap. That keeps the section legible right after a failed GPU
-             activation reverts to the built-in runtime. -->
-        <SettingsRow
-          :label="state.bundled.label"
-          :sub="
-            state.dev
-              ? 'The Python environment this run started from · active'
-              : state.bundled.active
-                ? 'Built-in runtime · active'
-                : 'Built-in runtime'
-          "
-        >
-          <AppButton
-            v-if="!state.bundled.active"
-            variant="ghost"
-            size="sm"
-            :disabled="busy"
-            :aria-label="`Use ${state.bundled.label}`"
-            @click="useBuiltIn"
+        <div class="compute-list">
+          <!-- One unified runtime list: the built-in runtime first, then every
+               GPU overlay. Exactly one row reads "· active" (each row derives it
+               from its own `active` flag), and rows never appear, disappear, or
+               move as the active runtime changes - only status text and actions
+               swap. That keeps the section legible right after a failed GPU
+               activation reverts to the built-in runtime. -->
+          <SettingsRow
+            :label="state.bundled.label"
+            :sub="
+              state.dev
+                ? 'The Python environment this run started from · active'
+                : state.bundled.active
+                  ? 'Built-in runtime · active'
+                  : 'Built-in runtime'
+            "
           >
-            Use
-          </AppButton>
-        </SettingsRow>
-
-        <SettingsRow
-          v-for="item in state.items"
-          :key="item.accel"
-          :label="item.label"
-          :sub="subFor(item)"
-        >
-          <AppButton
-            v-if="!item.installed"
-            variant="primary"
-            size="sm"
-            :disabled="busy"
-            :aria-label="`Install ${item.label}`"
-            @click="install(item.accel)"
-          >
-            {{ item.recommended ? "Install (recommended)" : "Install" }}
-          </AppButton>
-          <template v-else>
             <AppButton
-              v-if="!item.active"
-              variant="primary"
+              v-if="!state.bundled.active"
+              variant="ghost"
               size="sm"
               :disabled="busy"
-              :aria-label="`Use ${item.label}`"
-              @click="use(item.accel)"
+              :aria-label="`Use ${state.bundled.label}`"
+              @click="useBuiltIn"
             >
               Use
             </AppButton>
+          </SettingsRow>
+
+          <SettingsRow
+            v-for="item in state.items"
+            :key="item.accel"
+            :label="item.label"
+            :sub="subFor(item)"
+          >
+            <AppButton
+              v-if="!item.installed"
+              variant="primary"
+              size="sm"
+              :disabled="busy"
+              :aria-label="`Install ${item.label}`"
+              @click="install(item.accel)"
+            >
+              {{ item.recommended ? "Install (recommended)" : "Install" }}
+            </AppButton>
+            <template v-else>
+              <AppButton
+                v-if="!item.active"
+                variant="primary"
+                size="sm"
+                :disabled="busy"
+                :aria-label="`Use ${item.label}`"
+                @click="use(item.accel)"
+              >
+                Use
+              </AppButton>
+              <AppButton
+                variant="ghost"
+                size="sm"
+                :disabled="busy"
+                :aria-label="`Remove ${item.label}`"
+                @click="remove(item.accel)"
+              >
+                Remove
+              </AppButton>
+            </template>
+          </SettingsRow>
+
+          <SettingsRow
+            v-if="state.items.length && backendLocation"
+            label="Install location"
+            :sub="backendLocation"
+          >
             <AppButton
               variant="ghost"
               size="sm"
               :disabled="busy"
-              :aria-label="`Remove ${item.label}`"
-              @click="remove(item.accel)"
+              @click="changeLocation"
             >
-              Remove
+              Change…
             </AppButton>
-          </template>
-        </SettingsRow>
+          </SettingsRow>
+        </div>
 
         <div v-if="state.dev" class="compute-note">
           Development run: GPU support comes from that Python environment. GPU
@@ -1015,21 +1016,6 @@ watch(
           No discrete GPU detected - the built-in runtime is the best fit for
           this machine.
         </div>
-
-        <SettingsRow
-          v-if="state.items.length && backendLocation"
-          label="Install location"
-          :sub="backendLocation"
-        >
-          <AppButton
-            variant="ghost"
-            size="sm"
-            :disabled="busy"
-            @click="changeLocation"
-          >
-            Change…
-          </AppButton>
-        </SettingsRow>
 
         <div v-if="progress" class="compute-progress">
           <v-progress-linear
@@ -1086,7 +1072,7 @@ watch(
   display: flex;
   gap: var(--space-3);
   flex-wrap: wrap;
-  /* Pinned to the bottom of the Backend pane. */
+  /* Pinned to the bottom of the Server pane. */
   margin-top: auto;
   padding-top: var(--space-5);
 }
@@ -1186,7 +1172,26 @@ watch(
   font-size: var(--text-xs);
   white-space: pre-wrap;
 }
-/* Which GPU: a radio per row, and the one button that commits it. */
+/* One bordered card per list, its rows split by dividers, rather than a
+   bordered box per row: the design system's settings card, and what keeps
+   this pane from scrolling. */
+.compute-list {
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+}
+
+.compute-list :deep(.s-row) {
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+}
+
+.compute-list :deep(.s-row + .s-row) {
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+/* Which GPU: a radio per row; Apply & restart sits on the heading. */
 .gpu-picker {
   display: flex;
   flex-direction: column;
@@ -1198,12 +1203,6 @@ watch(
   width: var(--space-4);
   height: var(--space-4);
   accent-color: rgb(var(--v-theme-accent));
-}
-
-.gpu-apply {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: var(--space-2);
 }
 
 /* Compact one-line VRAM control: value · slider · inline max/status. */

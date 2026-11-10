@@ -32,7 +32,6 @@ export const useEntityNamesStore = defineStore("entityNames", () => {
   const setNames = ref({}); // id -> name
   const projectNames = ref({}); // id -> name
   const refFolderLabels = ref({}); // id -> label
-  const importFolderLabels = ref({}); // id -> label
 
   function _merge(target, list, nameKey) {
     if (!Array.isArray(list) || list.length === 0) return;
@@ -57,9 +56,6 @@ export const useEntityNamesStore = defineStore("entityNames", () => {
   function mergeRefFolderLabels(list) {
     _merge(refFolderLabels, list, "label");
   }
-  function mergeImportFolderLabels(list) {
-    _merge(importFolderLabels, list, "label");
-  }
 
   /** Drop every resolved name. Called on every auth-context transition. */
   function reset() {
@@ -67,7 +63,6 @@ export const useEntityNamesStore = defineStore("entityNames", () => {
     setNames.value = {};
     projectNames.value = {};
     refFolderLabels.value = {};
-    importFolderLabels.value = {};
   }
 
   // This store has no fetches of its own - the sidebar publishes into it - so
@@ -80,12 +75,10 @@ export const useEntityNamesStore = defineStore("entityNames", () => {
     setNames,
     projectNames,
     refFolderLabels,
-    importFolderLabels,
     mergeCharacterNames,
     mergeSetNames,
     mergeProjectNames,
     mergeRefFolderLabels,
-    mergeImportFolderLabels,
     reset,
   };
 });

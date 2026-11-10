@@ -46,6 +46,7 @@ function makeDeps(overrides: Partial<SetupDeps<Accel>> = {}): SetupDeps<Accel> {
     prepareLegacyIdentity: async (source) => {
       log.push(`prepareIdentity:${source}`);
     },
+    recordInstallIdentity: async () => log.push('installId'),
     writeConfig: (imageRoot) => log.push(`config:${imageRoot}`),
     clearConfig: () => log.push('clearConfig'),
     parkTelemetry: (patch) => {
@@ -108,6 +109,7 @@ describe('first-run setup, with a GPU runtime to install', () => {
     await runFirstRunSetup(CHOICES, makeDeps());
 
     assert.deepEqual(log, [
+      'installId',
       'config:/home/me/Pictures',
       'parkTelemetry',
       'install:cu128',
@@ -314,6 +316,47 @@ describe('first-run setup that must refuse', () => {
   it('leaves the config alone when the setup finished', async () => {
     await runFirstRunSetup(CHOICES, makeDeps());
     assert.ok(!log.includes('clearConfig'), log.join(' → '));
+  });
+});
+
+describe('the install ID', () => {
+  // The backend classes the install ID as new only while there is no config,
+  // and setup writes the config before the backend ever runs.
+  it('is recorded before the config is written', async () => {
+    await runFirstRunSetup(CHOICES, makeDeps());
+    const recordedAt = log.indexOf('installId');
+    assert.ok(
+      recordedAt >= 0 && recordedAt < log.indexOf('config:/home/me/Pictures'),
+      log.join(' → '),
+    );
+  });
+
+  it('is left to the backend for an imported library, which is not a new install', async () => {
+    await runFirstRunSetup(
+      { ...CHOICES, importLegacyIdentity: true },
+      makeDeps({ legacyIdentitySource: '/home/me/Pictures' }),
+    );
+    assert.ok(!log.includes('installId'), log.join(' → '));
+  });
+
+  it('is left to the backend whenever a standalone library was detected', async () => {
+    // The import box defaults to unticked; an existing user who leaves it so
+    // is still not a new install.
+    await runFirstRunSetup(CHOICES, makeDeps({ legacyIdentitySource: '/home/me/Pictures' }));
+    assert.ok(log.includes('config:/home/me/Pictures'), log.join(' → '));
+    assert.ok(!log.includes('installId'), log.join(' → '));
+  });
+
+  it('does not stop the setup when it could not be recorded', async () => {
+    await runFirstRunSetup(
+      CHOICES,
+      makeDeps({
+        recordInstallIdentity: async () => {
+          throw new Error('python not found');
+        },
+      }),
+    );
+    assert.ok(log.includes('navigate'), log.join(' → '));
   });
 });
 

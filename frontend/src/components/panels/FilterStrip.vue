@@ -24,8 +24,18 @@
     </div>
     <span class="filter-strip-tail">
       <span class="filter-strip-count">{{ ofLabel }}</span>
-      <button class="filter-strip-clear" type="button" @click="clearAll">
+      <button
+        class="filter-strip-clear"
+        type="button"
+        :aria-keyshortcuts="ownsEscape ? 'Escape' : undefined"
+        @click="clearAll"
+      >
         Clear all
+        <Tooltip
+          v-if="ownsEscape"
+          text="Clear all filters (Esc)"
+          activator="parent"
+        />
       </button>
     </span>
   </div>
@@ -49,6 +59,7 @@ import { useFilterCounts } from "../../composables/useFilterCounts";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { filterChips } from "../../utils/filterChips";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   // The grid's view with no filters, pre-encoded (buildFilterCountBaseQuery).
@@ -66,6 +77,8 @@ const props = defineProps({
   // Workflows screen, where two of the filters are the server's and each
   // removal costs a grid read.
   onClearAll: { type: Function, default: null },
+  // Esc reaches Clear all: nothing selected and no search left to clear.
+  ownsEscape: { type: Boolean, default: false },
 });
 
 const store = useFilterStore();

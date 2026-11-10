@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import { contrastRatio } from "./contrastAudit.js";
 import { ICON_CARDS, SET_COLORS } from "./setAppearance";
 import {
+  isInFoldersTree,
   adapterKindKey,
   adapterKindLabel,
   assignmentRing,
@@ -14,14 +15,20 @@ import {
   trashName,
   companionsSentences,
   RING_STYLES,
-  bandGroups,
-  bandProjection,
-  bandUsage,
   baseModelCell,
   baseModelKey,
   capabilityLabel,
   collapseStacks,
+  comfyuiLoadsTitle,
+  comfyuiMarks,
+  layoutKind,
+  modelDestinations,
+  unsaidTypes,
+  comfyuiName,
+  comfyuiReadFor,
   copyPathsTitle,
+  isMisplaced,
+  SHELF_TYPES,
   modelFileTitle,
   dateColumnKey,
   quantBadge,
@@ -29,7 +36,6 @@ import {
   triggerChip,
   quantFromFilename,
   modelDate,
-  withEmptyFolders,
   cleanAssetName,
   deriveModelName,
   formatModelSize,
@@ -40,6 +46,8 @@ import {
   locationState,
   modelName,
   movableCopies,
+  moveMechanism,
+  allAlreadyIn,
   offlineFolders,
   stackReceipt,
   unstackReceipt,
@@ -47,8 +55,6 @@ import {
   modelVersion,
   versionSortKey,
   trainingStep,
-  withFolderSignals,
-  FOLDER_TIERS,
   CAPABILITY_LABELS,
   capabilityIcon,
 } from "./modelShelf";
@@ -674,545 +680,6 @@ describe("offlineFolders", () => {
   });
 });
 
-describe("bandGroups", () => {
-  const group = (folderId, label) => ({
-    key: label,
-    label,
-    labelKind: "path",
-    folderId,
-    rows: [],
-  });
-
-  const drive = (id, mount, folderIds, extra = {}) => ({
-    device_id: id,
-    mount_point: mount,
-    total_bytes: 1000,
-    free_bytes: 400,
-    shelf_bytes: 200,
-    folder_ids: folderIds,
-    ...extra,
-  });
-
-  it("makes a band's folders contiguous even when they arrive apart", () => {
-    // The alphabetical order of the folders interleaves the two drives. A band
-    // drawn over a non-contiguous run would claim a grouping the list has not
-    // got, so the groups are re-ordered rather than the header repeated.
-    const devices = new Map([
-      [1, drive("A", "/mnt/fast", [1, 3])],
-      [3, drive("A", "/mnt/fast", [1, 3])],
-      [2, drive("B", "/mnt/bulk", [2])],
-    ]);
-    const arranged = bandGroups(
-      [
-        group(1, "/mnt/fast/a"),
-        group(2, "/mnt/bulk/b"),
-        group(3, "/mnt/fast/c"),
-      ],
-      devices,
-    );
-    expect(arranged.map((g) => g.band.label)).toEqual([
-      "/mnt/bulk",
-      "/mnt/fast",
-      "/mnt/fast",
-    ]);
-    expect(arranged.map((g) => g.bandStart)).toEqual([true, true, false]);
-  });
-
-  it("leaves a group that names no folder unbanded", () => {
-    // "No registered copy" is the group for a model whose folders have all been
-    // forgotten. It is not on a drive, so a disk glyph and a capacity line over
-    // it would describe the one group that exists because there is no disk.
-    const orphan = {
-      key: "\u0000unset",
-      label: "No registered copy",
-      labelKind: "name",
-      folderId: null,
-      rows: [],
-    };
-    const arranged = bandGroups(
-      [orphan, group(1, "/mnt/fast/a")],
-      new Map([[1, drive("A", "/mnt/fast", [1])]]),
-    );
-    expect(arranged.map((g) => g.label)).toEqual([
-      "/mnt/fast/a",
-      "No registered copy",
-    ]);
-    expect(arranged.at(-1).band).toBe(null);
-    expect(arranged.at(-1).bandStart).toBe(false);
-  });
-
-  it("bands an unmeasured folder alone and puts it last", () => {
-    // Two drives we cannot stat are not thereby the same drive, and an offline
-    // one is not what the reader is scanning for space on.
-    const arranged = bandGroups(
-      [group(1, "/net/one"), group(2, "/net/two"), group(3, "/local")],
-      new Map([[3, drive("A", "/", [3])]]),
-    );
-    expect(arranged[0].band.label).toBe("/");
-    expect(arranged[0].band.measured).toBe(true);
-    expect(arranged.slice(1).map((g) => g.band.key)).toEqual(["f:1", "f:2"]);
-    expect(arranged.slice(1).every((g) => g.bandStart)).toBe(true);
-  });
-});
-
-describe("bandUsage", () => {
-  it("splits the drive into three segments that carve up what is used", () => {
-    // The shelf's share is a PART of what is used, so `other` is the rest of
-    // the used space and not the whole of it. Drawing `used` and `shelf` as
-    // two overlaid fills was the original shape and it left the reader unable
-    // to tell which of the two a given boundary marked.
-    const usage = bandUsage({
-      totalBytes: 1000,
-      freeBytes: 250,
-      shelfBytes: 500,
-    });
-    expect(usage.shelfPct).toBe(50);
-    expect(usage.otherPct).toBe(25);
-    expect(usage.freePct).toBe(25);
-    expect(usage.usedPct).toBe(75);
-  });
-
-  it("keeps the three segments summing to exactly one full track", () => {
-    // Laid out in a row rather than overlaid, so anything short of 100 opens a
-    // sliver of bare track at the right-hand end that reads as free space.
-    for (const band of [
-      { totalBytes: 3, freeBytes: 1, shelfBytes: 1 },
-      { totalBytes: 1024 ** 4, freeBytes: 7, shelfBytes: 123456789 },
-      { totalBytes: 1000, freeBytes: 1000, shelfBytes: 0 },
-      { totalBytes: 1000, freeBytes: 0, shelfBytes: 1000 },
-    ]) {
-      const usage = bandUsage(band);
-      expect(usage.shelfPct + usage.otherPct + usage.freePct).toBeCloseTo(
-        100,
-        10,
-      );
-      expect(usage.otherPct).toBeGreaterThanOrEqual(0);
-    }
-  });
-
-  it("measures low space in checkpoints that would fit, not in percentages", () => {
-    const GB = 1024 ** 3;
-    // 400 GB left on a 4 TB drive is a tenth of it, and dozens more models.
-    // The fraction rule would warn here, which is the cry-wolf case.
-    expect(
-      bandUsage({ totalBytes: 4000 * GB, freeBytes: 400 * GB, shelfBytes: 0 })
-        .lowFree,
-    ).toBe(false);
-    // The same drive with room for two more checkpoints IS worth saying, even
-    // though it is only 1% and no fraction rule set for the small disk would
-    // have caught it.
-    expect(
-      bandUsage({ totalBytes: 4000 * GB, freeBytes: 40 * GB, shelfBytes: 0 })
-        .lowFree,
-    ).toBe(true);
-    // And 60 GB on a small SSD is nearly half of it but still not low, which
-    // is the direction a fraction rule gets backwards.
-    expect(
-      bandUsage({ totalBytes: 128 * GB, freeBytes: 60 * GB, shelfBytes: 0 })
-        .lowFree,
-    ).toBe(false);
-  });
-
-  it("never lets a drive report more free space than it holds", () => {
-    // Thin provisioning and transparent compression (ZFS, btrfs) report this
-    // by design, and a network mount's statvfs can simply be wrong. `free` and
-    // `total` are two separate reads, so nothing upstream reconciles them.
-    // Unclamped this gives freePct 150 and a segment running off the track.
-    const usage = bandUsage({
-      totalBytes: 1000,
-      freeBytes: 1500,
-      shelfBytes: 0,
-    });
-    expect(usage.freePct).toBe(100);
-    expect(usage.usedPct).toBe(0);
-    expect(usage.otherPct).toBe(0);
-    expect(usage.shelfPct).toBe(0);
-    expect(usage.shelfPct + usage.otherPct + usage.freePct).toBe(100);
-  });
-
-  it("refuses to draw a meter for a drive it could not measure", () => {
-    // Null rather than zero: an empty bar reads as a drive with nothing on it,
-    // which is the opposite of "we do not know".
-    expect(bandUsage({ totalBytes: null, freeBytes: null })).toBe(null);
-    expect(bandUsage({ totalBytes: 0, freeBytes: 0 })).toBe(null);
-    expect(bandUsage(undefined)).toBe(null);
-  });
-
-  it("never lets a stale shelf figure overflow the track", () => {
-    // `shelf_bytes` is counted from the hub and the capacity from the disk, so
-    // a scan mid-flight can make the first exceed the second for a moment.
-    // `other` must absorb the clamp and stay at zero rather than going
-    // negative, which would draw a segment growing leftwards.
-    const usage = bandUsage({
-      totalBytes: 1000,
-      freeBytes: 900,
-      shelfBytes: 5000,
-    });
-    expect(usage.shelfPct).toBe(usage.usedPct);
-    expect(usage.otherPct).toBe(0);
-  });
-});
-
-describe("bandProjection", () => {
-  it("carves the ghost out of the free segment rather than laying it over", () => {
-    // Four segments still summing to one track, which is what lets the caller
-    // keep the same flex row and the same no-clamp guarantee `bandUsage` has.
-    const projected = bandProjection(
-      { totalBytes: 1000, freeBytes: 400, shelfBytes: 300 },
-      200,
-    );
-    expect(projected.shelfPct).toBe(30);
-    expect(projected.otherPct).toBe(30);
-    expect(projected.addedPct).toBe(20);
-    expect(projected.freePct).toBe(20);
-    expect(
-      projected.shelfPct +
-        projected.otherPct +
-        projected.addedPct +
-        projected.freePct,
-    ).toBe(100);
-    expect(projected.fits).toBe(true);
-    expect(projected.freeAfter).toBe(200);
-  });
-
-  it("projects every derived field, not only the segments", () => {
-    // The object REPLACES `bandUsage`'s, so a field measured before the drop
-    // riding along on it is a trap: it would be read next to segments drawn
-    // from after the drop and answer about a different drive state.
-    const GB = 1024 ** 3;
-    const projected = bandProjection(
-      { totalBytes: 1000 * GB, freeBytes: 400 * GB, shelfBytes: 300 * GB },
-      380 * GB,
-    );
-    // 20 GB left is well under the 50 GiB floor, though the drive was not low
-    // before the drop and `bandUsage` still says so.
-    expect(projected.lowFree).toBe(true);
-    expect(
-      bandUsage({
-        totalBytes: 1000 * GB,
-        freeBytes: 400 * GB,
-        shelfBytes: 300 * GB,
-      }).lowFree,
-    ).toBe(false);
-    // `usedPct` is what the three filled segments add up to, or a caller could
-    // read a fullness that contradicts the bar beside it.
-    expect(projected.usedPct).toBeCloseTo(
-      projected.shelfPct + projected.otherPct + projected.addedPct,
-      10,
-    );
-    expect(projected.usedPct + projected.freePct).toBeCloseTo(100, 10);
-  });
-
-  it("reports a drop that overruns the drive as low, not as freshly empty", () => {
-    // `freePct` is clamped to zero because a bar cannot draw past its track;
-    // `lowFree` must read the UNCLAMPED figure or the most over-full case on
-    // the shelf would be the one that stops reporting low.
-    const projected = bandProjection(
-      { totalBytes: 1000, freeBytes: 100, shelfBytes: 0 },
-      400,
-    );
-    expect(projected.freePct).toBe(0);
-    expect(projected.usedPct).toBe(100);
-    expect(projected.lowFree).toBe(true);
-  });
-
-  it("clamps the bar but not the verdict when the drop does not fit", () => {
-    // A bar cannot draw past its own track, so the segment stops at the free
-    // space - but `fits` is decided on the unclamped figure, or an over-full
-    // drop would quietly stop looking wrong at exactly 100%.
-    const projected = bandProjection(
-      { totalBytes: 1000, freeBytes: 100, shelfBytes: 0 },
-      400,
-    );
-    expect(projected.addedPct).toBe(10);
-    expect(projected.freePct).toBe(0);
-    expect(projected.fits).toBe(false);
-    // How far short the drive is, which is what the label states.
-    expect(projected.freeAfter).toBe(-300);
-  });
-
-  it("treats a drop that exactly fills the drive as fitting", () => {
-    const projected = bandProjection(
-      { totalBytes: 1000, freeBytes: 250, shelfBytes: 0 },
-      250,
-    );
-    expect(projected.fits).toBe(true);
-    expect(projected.freeAfter).toBe(0);
-    expect(projected.freePct).toBe(0);
-  });
-
-  it("says nothing changes when the drop adds no bytes", () => {
-    // Every copy already on this drive: the move is a rename and the server
-    // reports `bytes_to_copy` of zero for it.
-    const projected = bandProjection(
-      { totalBytes: 1000, freeBytes: 400, shelfBytes: 300 },
-      0,
-    );
-    expect(projected.addedPct).toBe(0);
-    expect(projected.freePct).toBe(40);
-    expect(projected.fits).toBe(true);
-  });
-
-  it("cannot say for a drive it could not measure, which is not a refusal", () => {
-    // Null rather than `fits: false`. "We do not know" must not be drawn as
-    // "does not fit" - the drop is left to the server to judge.
-    expect(bandProjection({ totalBytes: null, freeBytes: null }, 100)).toBe(
-      null,
-    );
-    expect(bandProjection(undefined, 100)).toBe(null);
-  });
-});
-
-describe("withEmptyFolders", () => {
-  const group = (path) => ({
-    key: path,
-    label: path,
-    labelKind: "path",
-    folderId: 1,
-    rows: [{ id: 1 }],
-  });
-
-  it("adds the registered folder that produced no group", () => {
-    // The managed store is exactly this on a fresh install: registered, ruled
-    // to be the default drop destination, and holding nothing - so it has no
-    // rows, no group, and no way to be seen.
-    const arranged = withEmptyFolders(
-      [group("/models/loras")],
-      [
-        { id: 1, path: "/models/loras", last_checked: "2026-08-10T00:00:00Z" },
-        { id: 2, path: "/models/store", last_checked: "2026-08-10T00:00:00Z" },
-      ],
-    );
-    expect(arranged.map((g) => g.label)).toEqual([
-      "/models/loras",
-      "/models/store",
-    ]);
-    expect(arranged[1].rows).toEqual([]);
-    expect(arranged[1].folderId).toBe(2);
-  });
-
-  it("does not call a folder empty just because a filter hid its models", () => {
-    // The failure this guards: `groups` is built from the VISIBLE rows, so a
-    // folder full of adapters has no group while Show is narrowed to
-    // checkpoints. Reading "no group" as "no models" would print "No models in
-    // this folder" over a folder holding ninety.
-    const arranged = withEmptyFolders(
-      [],
-      [
-        {
-          id: 1,
-          path: "/models/loras",
-          last_checked: "2026-08-10T00:00:00Z",
-          file_count: 91,
-        },
-        {
-          id: 2,
-          path: "/models/store",
-          last_checked: "2026-08-10T00:00:00Z",
-          file_count: 0,
-        },
-      ],
-    );
-    expect(arranged.map((g) => g.label)).toEqual(["/models/store"]);
-  });
-
-  it("still shows a folder nothing has looked in, whatever its count says", () => {
-    // `file_count` is 0 for an unscanned folder too, but the two are different
-    // facts and only this one is the owner's to act on.
-    const [only] = withEmptyFolders(
-      [],
-      [{ id: 1, path: "/models/new", last_checked: null, file_count: 0 }],
-    );
-    expect(only.emptyReason).toBe("unscanned");
-  });
-
-  it("keeps 'never scanned' apart from 'scanned and empty'", () => {
-    // Only one of the two is the owner's to act on, and `last_checked` is the
-    // discriminator: a folder that has never been walked has no count to be
-    // zero.
-    const [never, walked] = withEmptyFolders(
-      [],
-      [
-        { id: 1, path: "/a", last_checked: null },
-        { id: 2, path: "/b", last_checked: "2026-08-10T00:00:00Z" },
-      ],
-    );
-    expect(never.emptyReason).toBe("unscanned");
-    expect(walked.emptyReason).toBe("empty");
-  });
-
-  it("never duplicates a folder that already has rows", () => {
-    const arranged = withEmptyFolders(
-      [group("/models/loras")],
-      [{ id: 1, path: "/models/loras", last_checked: null }],
-    );
-    expect(arranged).toHaveLength(1);
-    expect(arranged[0].rows).toHaveLength(1);
-  });
-
-  it("returns the groups untouched when every folder has some", () => {
-    // Identity, not a copy: the caller bands this result, and a needless new
-    // array would invalidate every downstream computed on each keystroke.
-    const groups = [group("/models/loras")];
-    expect(withEmptyFolders(groups, [{ id: 1, path: "/models/loras" }])).toBe(
-      groups,
-    );
-  });
-});
-
-describe("withFolderSignals", () => {
-  const group = (folderId, path) => ({
-    key: path,
-    label: path,
-    labelKind: "path",
-    folderId,
-    rows: [],
-  });
-
-  const devices = (entries) => {
-    const byFolder = new Map();
-    for (const device of entries) {
-      for (const id of device.folder_ids) byFolder.set(id, device);
-    }
-    return byFolder;
-  };
-
-  it("gives folders on one drive one rail colour, and two drives two", () => {
-    // The whole point of the hue: "these are on the same physical disk" read
-    // off the header, without opening the folders dialog.
-    const [a, b, c] = withFolderSignals(
-      [
-        group(1, "/mnt/fast/loras"),
-        group(2, "/mnt/fast/ckpt"),
-        group(3, "/ext"),
-      ],
-      {
-        folders: [
-          { id: 1, path: "/mnt/fast/loras", kind: "user" },
-          { id: 2, path: "/mnt/fast/ckpt", kind: "user" },
-          { id: 3, path: "/ext", kind: "user" },
-        ],
-        deviceByFolderId: devices([
-          { device_id: "9", label: "FastModels", folder_ids: [1, 2] },
-          { device_id: "12", label: "Archive", folder_ids: [3] },
-        ]),
-      },
-    );
-    expect(a.drive.rail).toBe(b.drive.rail);
-    expect(c.drive.rail).not.toBe(a.drive.rail);
-    // The chip carries the identity; the colour is only a grouping hint.
-    expect(a.drive.label).toBe("FastModels");
-    expect(c.drive.label).toBe("Archive");
-  });
-
-  it("numbers the drives by device id, not by the order groups arrive in", () => {
-    // A group order that decided the colours would repaint every folder's rail
-    // when a filter emptied a group or a new disk was plugged in.
-    const context = {
-      folders: [
-        { id: 1, path: "/a", kind: "user" },
-        { id: 2, path: "/b", kind: "user" },
-      ],
-      deviceByFolderId: devices([
-        { device_id: "aaa", folder_ids: [1] },
-        { device_id: "bbb", folder_ids: [2] },
-      ]),
-    };
-    const forward = withFolderSignals(
-      [group(1, "/a"), group(2, "/b")],
-      context,
-    );
-    const reversed = withFolderSignals(
-      [group(2, "/b"), group(1, "/a")],
-      context,
-    );
-    expect(reversed[1].drive.rail).toBe(forward[0].drive.rail);
-    expect(reversed[0].drive.rail).toBe(forward[1].drive.rail);
-  });
-
-  it("gives an unmeasured drive no rail colour rather than inventing one", () => {
-    // We do not know which disk this is on, and a colour would claim a grouping
-    // nothing measured.
-    const [only] = withFolderSignals([group(7, "/net/models")], {
-      folders: [{ id: 7, path: "/net/models", kind: "user" }],
-      deviceByFolderId: devices([{ device_id: null, folder_ids: [7] }]),
-    });
-    expect(only.drive).toBe(null);
-  });
-
-  it("states each tier in a shape and a word, never in a colour", () => {
-    const [managed, locked, plain] = withFolderSignals(
-      [group(1, "/store"), group(2, "/hf"), group(3, "/mine")],
-      {
-        folders: [
-          { id: 1, path: "/store", kind: "managed" },
-          { id: 2, path: "/hf", kind: "foreign" },
-          { id: 3, path: "/mine", kind: "user" },
-        ],
-      },
-    );
-    expect(managed.icon).toBe(FOLDER_TIERS.managed.icon);
-    expect(managed.chip).toBe("Managed");
-    expect(locked.icon).toBe(FOLDER_TIERS.foreign.icon);
-    expect(locked.chip).toBe("Locked");
-    // The unmarked case: chipping every header would hide the two that matter.
-    expect(plain.icon).toBe(FOLDER_TIERS.user.icon);
-    expect(plain.chip).toBe("");
-  });
-
-  it("marks an unreachable folder offline, and keeps its tier chip", () => {
-    const [only] = withFolderSignals([group(2, "/hf")], {
-      folders: [{ id: 2, path: "/hf", kind: "foreign" }],
-      offlineFolderIds: new Set([2]),
-    });
-    expect(only.offline).toBe(true);
-    // A different GLYPH, so the reachability survives greyscale - and the tier
-    // is still stated, because a locked folder is locked whether or not the
-    // disk is plugged in.
-    expect(only.icon).toBe("mdi-lan-disconnect");
-    expect(only.chip).toBe("Locked");
-  });
-
-  it("nests a folder that sits inside another registered one, one level only", () => {
-    const [parent, child, sibling, deeper] = withFolderSignals(
-      [
-        group(1, "/models"),
-        group(2, "/models/loras"),
-        group(3, "/models-old"),
-        group(4, "/models/loras/flux"),
-      ],
-      {
-        folders: [
-          { id: 1, path: "/models", kind: "user" },
-          { id: 2, path: "/models/loras", kind: "user" },
-          { id: 3, path: "/models-old", kind: "user" },
-          { id: 4, path: "/models/loras/flux", kind: "user" },
-        ],
-      },
-    );
-    expect(parent.nested).toBe(false);
-    expect(child.nested).toBe(true);
-    // A prefix that is not a path boundary is a different folder, not a child.
-    expect(sibling.nested).toBe(false);
-    // Two registered folders above it, still one step: the indent says "inside
-    // another folder", which is a yes or a no.
-    expect(deeper.nested).toBe(true);
-  });
-
-  it("leaves a group that is not a folder alone", () => {
-    // "No registered copy" has no folder id, no disk and no tier - decorating
-    // it would put a drive rail over the one group that exists because there is
-    // no drive.
-    const [only] = withFolderSignals([{ key: "none", label: "x", rows: [] }], {
-      folders: [{ id: 1, path: "/models", kind: "user" }],
-    });
-    expect(only.tier).toBe(null);
-    expect(only.drive).toBe(null);
-    expect(only.chip).toBe("");
-    expect(only.nested).toBe(false);
-  });
-});
-
 describe("baseModelKey", () => {
   it("prefers the folded label, so four spellings make one bucket", () => {
     const rows = [
@@ -1302,6 +769,17 @@ describe("baseModelCell", () => {
     expect(typo.guess).toContain("Ilustrius");
   });
 
+  it("says a Civitai answer came from Civitai, without calling it a guess", () => {
+    const cell = baseModelCell({
+      base_model: "Illustrious",
+      base_model_canonical: "Illustrious XL",
+      base_model_source: "civitai",
+    });
+    expect(cell.text).toBe("Illustrious");
+    expect(cell.guess).toBeNull();
+    expect(cell.note).toMatch(/^From Civitai, matched by file hash/);
+  });
+
   it("is empty when nothing is recorded, including a cleared guess", () => {
     expect(baseModelCell({ base_model: null })).toEqual({
       text: "",
@@ -1364,39 +842,6 @@ describe("importReceipt", () => {
         files: [{ status: "failed" }, { status: "failed" }],
       }),
     ).toContain("2 checkpoints could not be copied and were left in the run.");
-  });
-
-  it("names a checkpoint that landed without its previews", () => {
-    // The server keeps such a file `imported` on purpose - losing a preview must
-    // not cost the weights - so the status counts cannot see it, and a receipt
-    // built from them alone would call this a clean import. It is not folded
-    // into the failure count either: the checkpoint is genuinely on the shelf.
-    expect(
-      importReceipt({
-        run_name: "Clementine",
-        files: [
-          { status: "imported", sample_count: 2 },
-          {
-            status: "imported",
-            sample_count: 0,
-            detail: "no room for previews",
-          },
-        ],
-      }),
-    ).toBe(
-      "Imported 2 checkpoints from Clementine. 1 checkpoint landed without its training previews.",
-    );
-  });
-
-  it("says nothing about previews for a run that had none", () => {
-    // `sample_count: 0` with no detail is a run with no samples at all, which is
-    // ordinary and not worth a sentence.
-    expect(
-      importReceipt({
-        run_name: "Clementine",
-        files: [{ status: "imported", sample_count: 0 }],
-      }),
-    ).toBe("Imported 1 checkpoint from Clementine.");
   });
 
   it("says the run is gone when it is", () => {
@@ -1761,6 +1206,146 @@ describe("modelVersion", () => {
   });
 });
 
+describe("moveMechanism", () => {
+  const devices = new Map([
+    [1, { device_id: "d1", label: "Fast" }],
+    [2, { device_id: "d1", label: "Fast" }],
+    [3, { device_id: "d2", label: "Slow" }],
+    [4, { device_id: null }],
+  ]);
+  const copies = (entries) => ({ bytesByFolderId: new Map(entries) });
+
+  it("is a rename when every copy is on the destination's drive", () => {
+    expect(moveMechanism(copies([[1, 500]]), 2, devices)).toEqual({
+      how: "rename",
+      freed: 0,
+      drives: [],
+    });
+  });
+
+  it("is a copy that frees the other drive's bytes", () => {
+    expect(moveMechanism(copies([[1, 500], [3, 200]]), 2, devices)).toEqual({
+      how: "copy",
+      freed: 200,
+      drives: ["Slow"],
+    });
+  });
+
+  it("never guesses an unmeasured drive as the same one", () => {
+    expect(moveMechanism(copies([[1, 500]]), 4, devices).how).toBe("unknown");
+  });
+});
+
+describe("allAlreadyIn", () => {
+  it("is true only when every copy sits directly in the destination", () => {
+    const items = [
+      { folder_id: 1, relpath: "Lora/a.st" },
+      { folder_id: 1, relpath: "Lora/b.st" },
+    ];
+    expect(allAlreadyIn(items, { folderId: 1, path: "Lora" })).toBe(true);
+    expect(allAlreadyIn(items, { folderId: 1, path: "" })).toBe(false);
+    expect(
+      allAlreadyIn([...items, { folder_id: 1, relpath: "c.st" }], {
+        folderId: 1,
+        path: "Lora",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("where ComfyUI loads from (#2205)", () => {
+  // Mixed case on purpose: every other shelf fixture is lowercase, which hides
+  // a lookup that folds case on one side only.
+  const reads = {
+    known: true,
+    reads: [
+      { folder_id: 1, subpath: "Lora/Flux", category: "loras", kind: "lora" },
+      { folder_id: 1, subpath: "Lora", category: "loras", kind: "lora" },
+      { folder_id: 2, subpath: "", category: "checkpoints", kind: "checkpoint" },
+      { folder_id: 1, subpath: "VAE", category: "vae", kind: "vae" },
+    ],
+  };
+  const at = (folder_id, relpath) => ({ folder_id, relpath });
+
+  it("names a copy by its path under the deepest folder that loads its kind", () => {
+    expect(comfyuiName(at(1, "Lora/Flux/Neon.safetensors"), "lora", reads)).toBe(
+      "Neon.safetensors",
+    );
+    expect(comfyuiName(at(1, "Lora/SDXL/Ink.safetensors"), "lora", reads)).toBe(
+      "SDXL/Ink.safetensors",
+    );
+    expect(comfyuiName(at(2, "Base/Big.safetensors"), "checkpoint", reads)).toBe(
+      "Base/Big.safetensors",
+    );
+    // The scanner stores Windows relpaths with backslashes.
+    expect(comfyuiName(at(1, "Lora\\SDXL\\Ink.safetensors"), "lora", reads)).toBe(
+      "SDXL/Ink.safetensors",
+    );
+    expect(comfyuiReadFor(at(1, "Lora/Flux/a.st"), "lora", reads).subpath).toBe(
+      "Lora/Flux",
+    );
+  });
+
+  it("calls a copy misplaced only outside every folder that loads its kind", () => {
+    expect(isMisplaced(at(1, "Lora/Neon.safetensors"), "lora", reads)).toBe(false);
+    expect(isMisplaced(at(1, "Neon.safetensors"), "lora", reads)).toBe(true);
+    // A VAE folder does not load LoRAs, and a folder that merely starts with
+    // the same letters is not inside it.
+    expect(isMisplaced(at(1, "VAE/Neon.safetensors"), "lora", reads)).toBe(true);
+    expect(isMisplaced(at(1, "LoraExtra/Neon.safetensors"), "lora", reads)).toBe(
+      true,
+    );
+    // The disk's spelling is the one ComfyUI reported: `lora` is not `Lora`.
+    expect(isMisplaced(at(1, "lora/Neon.safetensors"), "lora", reads)).toBe(true);
+    expect(comfyuiName(at(1, "lora/Neon.safetensors"), "lora", reads)).toBeNull();
+    // Another registered folder is another place.
+    expect(isMisplaced(at(2, "Lora/Neon.safetensors"), "lora", reads)).toBe(true);
+    // A file of no Type ComfyUI loads is never misplaced.
+    expect(isMisplaced(at(1, "x.onnx"), "", reads)).toBe(false);
+    // Nor one whose Type ComfyUI loads only from folders off the shelf: there
+    // is nowhere on the shelf to drag it to.
+    expect(isMisplaced(at(1, "4x.pth"), "upscaler", reads)).toBe(false);
+  });
+
+  it("puts a registered folder's own path inside ComfyUI's in front of the name", () => {
+    // Registered `.../checkpoints/Flux`, ComfyUI reading `.../checkpoints`.
+    const inside = {
+      known: true,
+      reads: [
+        { folder_id: 3, subpath: "", prefix: "Flux", category: "checkpoints", kind: "checkpoint" },
+      ],
+    };
+    expect(comfyuiName(at(3, "Dev/Big.safetensors"), "checkpoint", inside)).toBe(
+      "Flux/Dev/Big.safetensors",
+    );
+  });
+
+  it("guesses nothing while where ComfyUI loads from is not known", () => {
+    const unknown = { known: false, reads: reads.reads };
+    expect(isMisplaced(at(1, "Neon.safetensors"), "lora", unknown)).toBe(false);
+    expect(isMisplaced(at(1, "Neon.safetensors"), "lora", null)).toBe(false);
+    expect(comfyuiName(at(1, "Lora/Neon.safetensors"), "lora", unknown)).toBeNull();
+    expect(comfyuiMarks(1, "Lora", unknown)).toEqual([]);
+  });
+
+  it("marks a folder with each Type ComfyUI loads from exactly there", () => {
+    expect(comfyuiMarks(1, "Lora", reads).map((type) => type.mark)).toEqual(["L"]);
+    expect(comfyuiMarks(1, "lora", reads)).toEqual([]);
+    expect(comfyuiMarks(1, "", reads)).toEqual([]);
+    expect(comfyuiMarks(2, "", reads).map((type) => type.key)).toEqual([
+      "checkpoint",
+    ]);
+  });
+
+  it("words a mark the way a sentence spells each Type", () => {
+    const title = (key) =>
+      comfyuiLoadsTitle(SHELF_TYPES.find((type) => type.key === key));
+    expect(title("lora")).toBe("ComfyUI loads LoRAs from here");
+    expect(title("text_encoder")).toBe("ComfyUI loads text encoders from here");
+    expect(title("controlnet")).toBe("ComfyUI loads ControlNets from here");
+  });
+});
+
 describe("movableCopies", () => {
   const folders = new Map([
     [1, { id: 1, kind: "user", movable: "per_item" }],
@@ -1845,6 +1430,57 @@ describe("movableCopies", () => {
       folders,
     );
     expect(items).toEqual([]);
+  });
+
+  it("takes only the copy in the open folder (#2204)", () => {
+    // A model with a second copy elsewhere is "this file" in a folder view.
+    const row = locRow([
+      { folder_id: 1, relpath: "Lora\\a.st", state: "present" },
+      { folder_id: 1, relpath: "a.st", state: "present" },
+      { folder_id: 4, relpath: "Lora/a.st", state: "present" },
+    ]);
+    const { items } = movableCopies([row], folders, {
+      folderId: 1,
+      path: "Lora",
+    });
+    expect(items).toEqual([{ folder_id: 1, relpath: "Lora\\a.st" }]);
+    expect(
+      movableCopies([row], folders, { folderId: 1, path: "" }).items,
+    ).toEqual([{ folder_id: 1, relpath: "a.st" }]);
+  });
+
+  it("counts the rows it leaves behind, not their copies", () => {
+    // The drag tip says how many selected models stay; a row with one movable
+    // copy of two is carried, and a row with none is left.
+    const { items, stays } = movableCopies(
+      [
+        locRow([
+          { folder_id: 1, relpath: "a.st", state: "present" },
+          { folder_id: 3, relpath: "a.st", state: "present" },
+        ]),
+        locRow([{ folder_id: 3, relpath: "b.st", state: "present" }]),
+        locRow([{ folder_id: 1, relpath: "c.st", state: "missing" }]),
+      ],
+      folders,
+    );
+    expect(items).toEqual([{ folder_id: 1, relpath: "a.st" }]);
+    expect(stays).toBe(2);
+  });
+
+  it("does not count a row whose copies are outside the open folder", () => {
+    // In a folder view a copy elsewhere is not this file; it is not "can't
+    // move". A locked copy inside the folder still is.
+    const { items, stays } = movableCopies(
+      [
+        locRow([{ folder_id: 1, relpath: "Lora/a.st", state: "present" }]),
+        locRow([{ folder_id: 1, relpath: "b.st", state: "present" }]),
+        locRow([{ folder_id: 1, relpath: "c.st", state: "missing" }]),
+      ],
+      folders,
+      { folderId: 1, path: "" },
+    );
+    expect(items).toEqual([{ folder_id: 1, relpath: "b.st" }]);
+    expect(stays).toBe(1);
   });
 
   it("applies only the present rule when no folder map is given", () => {
@@ -2265,5 +1901,84 @@ describe("the date column's value", () => {
     const member = { added_at: ISO, newest_member_at: "2026-09-01T00:00:00" };
     expect(modelDate(member, "added_at")).toBe("2026-09-01T00:00:00");
     expect(modelDate(member, "added_at", true)).toBe(ISO);
+  });
+});
+
+describe("a key from the Folders tree (#2206)", () => {
+  it("is the tree's when it is pressed on a tree row, and not the shelf's", () => {
+    const tree = document.createElement("div");
+    tree.className = "mft";
+    const row = document.createElement("div");
+    tree.appendChild(row);
+    const shelf = document.createElement("div");
+    shelf.className = "shelf-row";
+    expect(isInFoldersTree({ target: row })).toBe(true);
+    expect(isInFoldersTree({ target: shelf })).toBe(false);
+    // A press with nothing focused lands on the body, which is nobody's tree.
+    expect(isInFoldersTree({ target: document.body })).toBe(false);
+    expect(isInFoldersTree({})).toBe(false);
+  });
+});
+
+describe("where a dragged model belongs", () => {
+  const sm = { id: 1, path: "/home/me/StabilityMatrix/Data/Models", tool: "StabilityMatrix" };
+  const comfy = { id: 2, path: "D:\\ComfyUI\\models" };
+  const plain = { id: 3, path: "/home/me/models" };
+  const listing = (dirs, direct = 0) => ({
+    listing: { direct_model_count: direct, dirs },
+  });
+  const dir = (path, direct) => ({ name: path.split("/").pop(), path, direct_model_count: direct });
+
+  it("reads a known tool's layout straight under its models folder", () => {
+    expect(layoutKind(sm, "DiffusionModels")).toBe("checkpoint");
+    expect(layoutKind(sm, "LyCORIS")).toBe("lora");
+    expect(layoutKind(sm, "ESRGAN")).toBe("upscaler");
+    expect(layoutKind(comfy, "diffusion_models")).toBe("checkpoint");
+    expect(layoutKind(comfy, "clip")).toBe("text_encoder");
+    // A folder registered at the Type folder itself.
+    expect(layoutKind({ ...sm, path: `${sm.path}/Lora` }, "")).toBe("lora");
+    // A Models folder moved behind a symlink is stored at its resolved path,
+    // named for wherever it went.
+    const moved = { ...sm, path: "/home/me/.vault/Models/StabilityMatrix" };
+    expect(layoutKind(moved, "Lora")).toBe("lora");
+    expect(layoutKind(moved, "Lora/flux")).toBe("");
+    // A registered Type folder's own subfolders are the owner's sorting.
+    expect(layoutKind({ ...sm, path: `${sm.path}/Lora` }, "vae")).toBe("");
+    // Deeper is the owner's own sorting, and no tool is never guessed.
+    expect(layoutKind(sm, "Lora/vae")).toBe("");
+    expect(layoutKind(sm, "Embeddings")).toBe("");
+    expect(layoutKind(plain, "loras")).toBe("");
+  });
+
+  it("asks ComfyUI first, and the layout only for a folder its reads miss", () => {
+    const listings = new Map([
+      ["1:", listing([dir("Lora", 40), dir("DiffusionModels", 6), dir("Embeddings", 2)], 3)],
+      ["2:", listing([dir("loras", 9), dir("unet", 1)])],
+    ]);
+    const reads = {
+      known: true,
+      reads: [{ folder_id: 2, subpath: "loras", kind: "lora" }],
+    };
+    expect(modelDestinations([sm, comfy], listings, reads)).toEqual([
+      { folderId: 1, path: "Lora", kind: "lora", count: 40 },
+      { folderId: 1, path: "DiffusionModels", kind: "checkpoint", count: 6 },
+      // ComfyUI does not load from unet here, so the layout is not asked.
+      { folderId: 2, path: "loras", kind: "lora", count: 9 },
+    ]);
+    expect(modelDestinations([comfy], listings, { known: false, reads: [] })).toEqual([
+      { folderId: 2, path: "loras", kind: "lora", count: 9 },
+      { folderId: 2, path: "unet", kind: "checkpoint", count: 1 },
+    ]);
+  });
+
+  it("puts a Type on a second line only where the name does not say it", () => {
+    const words = (name, ...kinds) =>
+      unsaidTypes(name, new Set(kinds)).map((type) => type.label);
+    expect(words("DiffusionModels", "checkpoint")).toEqual(["Checkpoints"]);
+    expect(words("CLIP", "text_encoder")).toEqual(["Text encoders"]);
+    expect(words("LyCORIS", "lora")).toEqual(["LoRAs"]);
+    expect(words("Lora", "lora")).toEqual([]);
+    expect(words("text_encoders", "text_encoder")).toEqual([]);
+    expect(words("upscale_models", "upscaler")).toEqual([]);
   });
 });

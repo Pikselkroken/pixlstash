@@ -164,20 +164,20 @@ describe("the Scrapheap count badge", () => {
 });
 
 describe("the sibling category badges are unchanged", () => {
-  it("All Pictures keeps rendering its zero and its number", async () => {
+  it("All media keeps rendering its zero and its number", async () => {
     // These already used `?? ""`. Asserted so the Scrapheap change is visibly a
     // convergence on the existing convention rather than a new rule.
     const wrapper = mountSidebar();
     await flushPromises();
 
     await setCounts(wrapper, { [ALL_ID]: 0 });
-    expect(countTextFor(wrapper, "All Pictures")).toBe("0");
+    expect(countTextFor(wrapper, "All media")).toBe("0");
 
     await setCounts(wrapper, { [ALL_ID]: 7 });
-    expect(countTextFor(wrapper, "All Pictures")).toBe("7");
+    expect(countTextFor(wrapper, "All media")).toBe("7");
 
     await setCounts(wrapper, { [ALL_ID]: undefined });
-    expect(countTextFor(wrapper, "All Pictures")).toBe("");
+    expect(countTextFor(wrapper, "All media")).toBe("");
 
     wrapper.unmount();
   });
@@ -189,7 +189,7 @@ describe("the sibling category badges are unchanged", () => {
     await setCounts(wrapper, { [ALL_ID]: 0, [SCRAPHEAP_ID]: 0 });
 
     expect(countTextFor(wrapper, "Scrapheap")).toBe(
-      countTextFor(wrapper, "All Pictures"),
+      countTextFor(wrapper, "All media"),
     );
 
     wrapper.unmount();

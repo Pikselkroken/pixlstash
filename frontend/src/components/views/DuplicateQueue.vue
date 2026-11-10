@@ -313,8 +313,7 @@
              lives in the left group, where the controls it collapses stood.
              Auto-stack compresses to an icon form and the size slider hides
              at ≤1040, its value persisting in the store. -->
-        <UndoControl />
-        <TbGlobalActions @open-settings="emit('open-settings')" />
+        <TbGlobalActions />
       </div>
     </div>
 
@@ -408,10 +407,12 @@
             <button
               type="button"
               class="qselclear"
+              aria-label="Clear the selection"
+              aria-keyshortcuts="Escape"
               @click="clearMixedSelection()"
             >
-              <Tooltip text="Clear the selection (Esc)" activator="parent" />
-              Clear
+              <Tooltip text="Clear the selection (Esc)" activator="parent" :describe="false" />
+              <v-icon size="14">mdi-selection-off</v-icon>
             </button>
           </span>
         </div>
@@ -519,10 +520,12 @@
           <button
             type="button"
             class="qselclear"
+            aria-label="Clear the selection"
+            aria-keyshortcuts="Escape"
             @click="store.clearSelection()"
           >
-            <Tooltip text="Clear the selection (Esc)" activator="parent" />
-            Clear
+            <Tooltip text="Clear the selection (Esc)" activator="parent" :describe="false" />
+            <v-icon size="14">mdi-selection-off</v-icon>
           </button>
         </span>
       </div>
@@ -806,7 +809,6 @@ import {
 import { pictureThumbnailUrl } from "../../api/pictures";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import TbOverflowMenu from "../panels/TbOverflowMenu.vue";
-import UndoControl from "../panels/UndoControl.vue";
 import DedupGroupRow from "../widgets/DedupGroupRow.vue";
 import MixedQueueRow from "../widgets/MixedQueueRow.vue";
 import DedupThresholdControl from "../widgets/DedupThresholdControl.vue";
@@ -894,10 +896,6 @@ const EMPTY_IDS = Object.freeze([]);
 function mixedFlashKey(stackId) {
   return stackId === null || stackId === undefined ? "" : `mixed:${stackId}`;
 }
-
-// The settings dialog is App.vue's; the queue only asks for it, the same way
-// the grid's toolbar does.
-const emit = defineEmits(["open-settings"]);
 
 const route = useRoute();
 const router = useRouter();
@@ -3263,11 +3261,9 @@ defineExpose({ windowedGroups, tierLabel });
 }
 
 .qselclear {
+  display: inline-flex;
   padding: 0;
-  font: inherit;
-  font-weight: var(--weight-semibold);
   color: var(--active-text);
-  text-decoration: underline;
   border-radius: var(--radius-sm);
 }
 

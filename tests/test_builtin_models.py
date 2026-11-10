@@ -52,7 +52,9 @@ def test_the_declaration_matches_what_the_downloaders_actually_write():
     imports too heavy for start-up, so they are restated in the declaration and
     pinned here, where the heavy import is free."""
     from pixlstash.tagger_plugins.pixlstash_tagger import (
+        PIXLSTASH_TAGGER_CONFIG_FILENAME,
         PIXLSTASH_TAGGER_FILENAME,
+        PIXLSTASH_TAGGER_LICENSE_FILENAME,
         PIXLSTASH_TAGGER_META_FILENAME,
     )
     from pixlstash.tagger_plugins.wd14 import WD14_CSV_FILE
@@ -60,6 +62,8 @@ def test_the_declaration_matches_what_the_downloaders_actually_write():
     declared = declared_paths()
     assert PIXLSTASH_TAGGER_FILENAME in declared
     assert PIXLSTASH_TAGGER_META_FILENAME in declared
+    assert PIXLSTASH_TAGGER_CONFIG_FILENAME in declared
+    assert PIXLSTASH_TAGGER_LICENSE_FILENAME in declared
     assert any(path.endswith(WD14_CSV_FILE) for path in declared)
 
 

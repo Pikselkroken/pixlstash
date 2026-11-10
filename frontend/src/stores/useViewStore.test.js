@@ -133,9 +133,14 @@ describe("parseRouteView", () => {
       selectedCharacter: "ALL",
       characterLabel: "All Pictures",
     });
-    expect(
-      parseRouteView(routeOf("import-folder", { id: "5" })).folderKey,
-    ).toBe("if-5");
+  });
+
+  it("reads the Inbox as a folder facet", () => {
+    expect(parseRouteView(routeOf("inbox"))).toMatchObject({
+      clearFolderFilter: false,
+      folderKey: null,
+      folderFilter: { inbox: true, label: "Inbox" },
+    });
   });
 
   it("carries a folder path on any grid route, and names the folder by its leaf", () => {
@@ -194,6 +199,32 @@ describe("parseRouteView", () => {
       parseRouteView(routeOf("all-pictures", {}, { face: "sideways" }))
         .faceFilter,
     ).toBeNull();
+  });
+
+  it("reads ?project=none as the Not in a project scope (#2159)", () => {
+    const none = { project: "none" };
+    for (const route of [
+      routeOf("all-pictures", {}, none),
+      routeOf("character", { id: "7" }, none),
+      routeOf("set", { id: "3" }, none),
+    ]) {
+      expect(parseRouteView(route), route.name).toMatchObject({
+        projectViewMode: "project",
+        selectedProjectId: null,
+      });
+    }
+    // The Scrapheap is library-wide, and a real project's route names its id.
+    expect(
+      parseRouteView(routeOf("scrapheap", {}, none)).projectViewMode,
+    ).toBe("global");
+    expect(
+      parseRouteView(routeOf("project", { id: "4" }, none)),
+    ).toMatchObject({ projectViewMode: "project", selectedProjectId: 4 });
+    // Anything else is not the scope.
+    expect(
+      parseRouteView(routeOf("all-pictures", {}, { project: "4" }))
+        .projectViewMode,
+    ).toBe("global");
   });
 
   it("returns null for a route the grid is not driven from", () => {

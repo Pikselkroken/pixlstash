@@ -27,6 +27,7 @@ thing that differs.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -44,6 +45,7 @@ from pixlstash.db_models.character import Character
 from pixlstash.db_models.picture_set import PictureSet
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import HASH_PENDING_SQL
+from pixlstash.services.civitai_lookup import LookupUnavailable, lookup_base_model
 from pixlstash.services.model_features import (
     FEATURE_CAPTIONER,
     FEATURE_DETECTOR,
@@ -52,6 +54,7 @@ from pixlstash.services.model_features import (
     FEATURE_SEARCH,
     FEATURE_TAGGER,
 )
+from pixlstash.services.model_folder_scanner import STATE_PRESENT
 from pixlstash.services.stack_detector import repair_stacks
 from pixlstash.services.workflow_hash import (
     SHA256_FIELD_RE,
@@ -65,6 +68,8 @@ from pixlstash.services.workflow_hash import (
 from pixlstash.services.workflow_identity import CHECKPOINT_WIDGETS, match_type
 from pixlstash.services.workflow_library_service import (
     cover_order,
+    recipe_filed_pictures,
+    recipe_latest_pictures,
     recipe_picture_counts,
     variant_cover_candidates,
 )
@@ -80,8 +85,10 @@ from pixlstash.utils.adapter_header import (
 )
 from pixlstash.utils.known_base_models import (
     COMPANION_LAYOUTS,
+    SOURCE_CIVITAI,
     SOURCE_DECLARED,
     SOURCE_FILENAME,
+    SOURCE_RANK,
     SOURCE_USER,
     family_of,
     fold,
@@ -1477,6 +1484,9 @@ def propose_companions(
 # fetch bitmaps nothing draws.
 SET_COVER_DEPTH = 3
 
+# How many of a combination's newest kept pictures it names (`latest`).
+SET_LATEST_DEPTH = 10
+
 
 def _history_runs(hub) -> dict[str, set[int]]:
     """Return each stored ComfyUI run's model ids, keyed on its ``prompt_id``.
@@ -1676,7 +1686,13 @@ def fetch_workflow_sets(hub, vault) -> dict:
         the shelf does not hold, each ``{"name", "workflow_ids"}``; see
         :func:`_missing_bases`), ``recipes``, ``history_runs``,
         ``picture_count`` and ``covers`` (up to :data:`SET_COVER_DEPTH` cover
-        candidates, best first). A combination with no base model, on the
+        candidates, best first). Three more come off the same kept pictures,
+        so they agree with ``picture_count``: ``workflows`` (each
+        ``{"id", "name", "picture_count"}``, the workflows its pictures were
+        made with, most pictures first; a picture in no workflow counts
+        toward none), ``last_used_at`` (ISO-8601 of the newest, or ``None``)
+        and ``latest`` (up to :data:`SET_LATEST_DEPTH` ``{"picture_id",
+        "at"}``, newest first). A combination with no base model, on the
         shelf or missing, is served but counts for no model's set.
         ``hub_combinations`` is every combination some recipe names,
         before the "a picture here" cut, so it holds every library's recipes
@@ -1690,14 +1706,56 @@ def fetch_workflow_sets(hub, vault) -> dict:
         hub, index[0], recipe_models, ambiguous, namesakes
     )
     runs = _history_runs(hub)
-    pictures = vault.db.run_immediate_read_task(
+    # Local: `hub.workflow_card_reads` imports this module (as in `_missing_bases`).
+    from pixlstash.hub.workflow_card_reads import (
+        card_index,
+        run_filed_workflow_ids,
+        variant_workflows,
+        workflow_index,
+    )
+
+    live = run_filed_workflow_ids(hub)
+    filed, latest_rows, candidates = vault.db.run_immediate_read_task(
         lambda session: (
-            recipe_picture_counts(session),
+            recipe_filed_pictures(session, live),
+            recipe_latest_pictures(session, SET_LATEST_DEPTH),
             variant_cover_candidates(session, SET_COVER_DEPTH),
         )
     )
-    missing_workflows = _fixable_workflows(hub, pictures[0], missing_workflows)
-    counts, candidates = pictures
+    # The recipe's count is the sum of its filed rows: the same predicates as
+    # `recipe_picture_counts`, so the workflows below always add up to it.
+    counts: dict[str, int] = {}
+    for recipe, _key, pictures in filed:
+        counts[recipe] = counts.get(recipe, 0) + pictures
+    missing_workflows = _fixable_workflows(hub, counts, missing_workflows)
+
+    # Which workflow each recipe's pictures were made with, by the same rule as
+    # the recipe route's `workflow_id`: a run of a live run-filed workflow
+    # belongs to that workflow, any other picture to its variant's.
+    variant_of = variant_workflows(hub)
+    live_set = set(live)
+    workflow_pictures: dict[str, dict[str, int]] = {}
+    for recipe, key, pictures in filed:
+        workflow_id = key if key in live_set else variant_of.get(key)
+        if workflow_id is None:
+            continue
+        held = workflow_pictures.setdefault(recipe, {})
+        held[workflow_id] = held.get(workflow_id, 0) + pictures
+    latest_by_recipe: dict[str, list[tuple[int, Optional[datetime]]]] = {}
+    for recipe, picture_id, used_at in latest_rows:
+        latest_by_recipe.setdefault(recipe, []).append((picture_id, used_at))
+    # A workflow's name is the owner's, else its base card's, else its id.
+    cards = card_index(hub)
+    card_by_key = {card.workflow_key: card for card in cards}
+    workflow_names: dict[str, str] = {}
+    for workflow in workflow_index(hub, cards=cards):
+        base = workflow.base_card or (workflow.cards[0] if workflow.cards else None)
+        card = card_by_key.get(base) if base else None
+        workflow_names[workflow.workflow_id] = (
+            workflow.name
+            or (card and (card.name or card.file_name))
+            or workflow.workflow_id
+        )
 
     covers_by_recipe: dict[str, list] = {}
     for candidate in candidates:
@@ -1722,6 +1780,8 @@ def fetch_workflow_sets(hub, vault) -> dict:
             "history_runs": 0,
             "picture_count": 0,
             "covers": [],
+            "workflows": {},
+            "latest": [],
             "unsure": set(),
             "namesakes": set(),
         }
@@ -1742,6 +1802,11 @@ def fetch_workflow_sets(hub, vault) -> dict:
         entry["recipes"] += 1
         entry["picture_count"] += counts.get(recipe, 0)
         entry["covers"].extend(covers_by_recipe.get(recipe, ()))
+        for workflow_id, pictures in workflow_pictures.get(recipe, {}).items():
+            entry["workflows"][workflow_id] = (
+                entry["workflows"].get(workflow_id, 0) + pictures
+            )
+        entry["latest"].extend(latest_by_recipe.get(recipe, ()))
         if recipe in unresolved:
             entry["unsure"].update(present)
         entry["unsure"].update(ambiguous.get(recipe, set()) & present)
@@ -1773,6 +1838,13 @@ def fetch_workflow_sets(hub, vault) -> dict:
             present, key=lambda m: (_set_kind_rank(models[m]), name(m).lower())
         )
         key = ",".join(str(m) for m in sorted(present))
+        # Newest first, the id breaking a tie; a picture with no date is no
+        # "latest" at all.
+        latest = sorted(
+            (p for p in entry["latest"] if p[1] is not None),
+            key=lambda p: (p[1].timestamp(), p[0]),
+            reverse=True,
+        )[:SET_LATEST_DEPTH]
         every.append(
             {
                 # JSON for the names: a filename may hold a comma.
@@ -1807,6 +1879,29 @@ def fetch_workflow_sets(hub, vault) -> dict:
                 "covers": sorted(entry["covers"], key=cover_order, reverse=True)[
                     :SET_COVER_DEPTH
                 ],
+                # The workflows its pictures were made with, most pictures first.
+                "workflows": [
+                    {
+                        "id": workflow_id,
+                        "name": workflow_names.get(workflow_id, workflow_id),
+                        "picture_count": pictures,
+                    }
+                    for workflow_id, pictures in sorted(
+                        entry["workflows"].items(),
+                        key=lambda item: (
+                            -item[1],
+                            workflow_names.get(item[0], item[0]).lower(),
+                            item[0],
+                        ),
+                    )
+                ],
+                # The newest kept pictures behind it, newest first. A picture
+                # with no date at all is no "latest".
+                "latest": [
+                    {"picture_id": picture_id, "at": used_at.isoformat()}
+                    for picture_id, used_at in latest
+                ],
+                "last_used_at": latest[0][1].isoformat() if latest else None,
             }
         )
     # Biggest evidence first, so the grid opens on the combinations the library
@@ -2364,6 +2459,152 @@ def update_models(hub, ids: list[int], changes: dict) -> list[int]:
     return sorted(existing)
 
 
+#: Seconds between two Civitai requests in one lookup, so a selection of a
+#: hundred is not a burst.
+CIVITAI_PAUSE_SECONDS = 0.25
+
+#: Seconds one lookup may spend asking before the rest go back unasked. A
+#: per-request timeout bounds each socket wait, not a slow answer, so without
+#: this a hundred slow answers would hold the owner's request for minutes.
+CIVITAI_BUDGET_SECONDS = 90
+
+# The sources a Civitai answer may replace: only those it outranks, as the
+# scanner replaces only what it outranks. Not `user` (a cleared base model is
+# `base_model NULL, source 'user'`, the owner's "none of these") and not
+# `declared` (a header can name the model through `modelspec.architecture`
+# with no `ss_base_model_version`, leaving `base_model` NULL).
+_LOOKUP_REPLACEABLE = tuple(s for s in SOURCE_RANK if rank(s) < rank(SOURCE_CIVITAI))
+
+# The write's guard: the eligibility the read already checked, asked again in
+# the UPDATE so a *Set base model* landing mid-batch still wins.
+_LOOKUP_FILLABLE_SQL = (
+    "base_model IS NULL AND (base_model_source IS NULL OR base_model_source "
+    f"IN ({', '.join('?' * len(_LOOKUP_REPLACEABLE))}))"
+)
+
+
+def fill_base_models_online(hub, ids: list[int], lookup=lookup_base_model) -> dict:
+    """Fill empty base models from Civitai, by each file's SHA-256.
+
+    Only a row with no ``base_model``, no ruling from the owner, a hash, and a
+    ``file_kind`` of adapter or checkpoint is asked about; every other id comes
+    back under ``skipped`` with a reason and costs no request. A hit is written
+    with source ``civitai`` (:data:`SOURCE_RANK`), under the same predicate, in
+    its own short transaction: the hub is never held across a network call.
+    The first :class:`LookupUnavailable` stops the batch, and that row and
+    every one after it come back under ``not_asked``.
+
+    Args:
+        hub: The open hub database.
+        ids: ``model.id`` values the owner selected.
+        lookup: Hash to base-model label, or ``None`` for a miss. Injectable so
+            tests never reach the network.
+
+    Returns:
+        ``{filled: [{id, base_model}], not_found: [id], skipped: [{id,
+        reason}], not_asked: [id]}``. ``reason`` is one of ``owner_set``,
+        ``already_set``, ``no_hash``, ``not_a_model`` or ``unknown_id``.
+    """
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return {"filled": [], "not_found": [], "skipped": [], "not_asked": []}
+    placeholders = ", ".join("?" for _ in ids)
+    rows = {
+        int(row["id"]): row
+        for row in hub.fetchall(
+            "SELECT id, sha256, file_kind, base_model, base_model_source "
+            f"FROM model WHERE id IN ({placeholders})",
+            tuple(ids),
+        )
+    }
+    filled, not_found, skipped, not_asked = [], [], [], []
+    eligible = []
+    for model_id in ids:
+        row = rows.get(model_id)
+        if row is None:
+            reason = "unknown_id"
+        elif row["base_model"] is not None:
+            reason = "already_set"
+        elif row["base_model_source"] == SOURCE_USER:
+            reason = "owner_set"
+        elif rank(row["base_model_source"]) > rank(SOURCE_CIVITAI):
+            reason = "already_set"
+        elif row["file_kind"] not in (FILE_ADAPTER, FILE_CHECKPOINT):
+            reason = "not_a_model"
+        elif not row["sha256"]:
+            reason = "no_hash"
+        else:
+            eligible.append((model_id, row["sha256"]))
+            continue
+        skipped.append({"id": model_id, "reason": reason})
+
+    started = time.monotonic()
+    for position, (model_id, sha256) in enumerate(eligible):
+        if time.monotonic() - started > CIVITAI_BUDGET_SECONDS:
+            not_asked = [model_id for model_id, _ in eligible[position:]]
+            break
+        if position:
+            time.sleep(CIVITAI_PAUSE_SECONDS)
+        try:
+            label = lookup(sha256)
+        except LookupUnavailable:
+            not_asked = [model_id for model_id, _ in eligible[position:]]
+            break
+        except ValueError:
+            # Every writer stores a lowercase hexdigest, so this is a row
+            # something else wrote. Not sent, and not worth failing the batch.
+            logger.warning(
+                "Model %s has a sha256 that is not lowercase hex (%r); not "
+                "asking Civitai about it.",
+                model_id,
+                sha256[:12],
+            )
+            skipped.append({"id": model_id, "reason": "no_hash"})
+            continue
+        if label is None:
+            not_found.append(model_id)
+            continue
+        with hub.transaction() as conn:
+            written = conn.execute(
+                "UPDATE model SET base_model = ?, base_model_canonical = ?, "
+                f"base_model_source = ? WHERE id = ? AND {_LOOKUP_FILLABLE_SQL}",
+                (label, fold(label), SOURCE_CIVITAI, model_id, *_LOOKUP_REPLACEABLE),
+            ).rowcount
+            # Lost to a write that landed mid-batch: say whose, read in the
+            # same transaction so it is the write that beat this one.
+            winner = (
+                None
+                if written
+                else conn.execute(
+                    "SELECT base_model_source FROM model WHERE id = ?", (model_id,)
+                ).fetchone()
+            )
+        if written:
+            filled.append({"id": model_id, "base_model": label})
+        elif winner is None:
+            skipped.append({"id": model_id, "reason": "unknown_id"})
+        elif winner["base_model_source"] == SOURCE_USER:
+            skipped.append({"id": model_id, "reason": "owner_set"})
+        else:
+            skipped.append({"id": model_id, "reason": "already_set"})
+
+    logger.info(
+        "Civitai base-model lookup over %d model(s): %d filled, %d not on "
+        "Civitai, %d skipped, %d not asked.",
+        len(ids),
+        len(filled),
+        len(not_found),
+        len(skipped),
+        len(not_asked),
+    )
+    return {
+        "filled": filled,
+        "not_found": not_found,
+        "skipped": skipped,
+        "not_asked": not_asked,
+    }
+
+
 def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
     """Drop models whose files are gone, with their location rows.
 
@@ -2521,6 +2762,143 @@ def _purge(conn, ids: list[int]) -> None:
     # only ever name nothing.
     conn.execute(f"DELETE FROM model_hidden WHERE model_id IN ({marks})", tuple(ids))
     repair_stacks(conn, stack_ids)
+
+
+def folder_removal_consequences(
+    hub, vault, inside: dict[int, set[tuple[int, str]]]
+) -> dict:
+    """What removing a directory of models breaks outside it (#2207).
+
+    **A model breaks something only when every present copy of it is inside the
+    directory.** One with a present copy anywhere else is still on the shelf
+    afterwards, under the same id and digest, so its people, sets and workflows
+    keep it. An ``unreachable`` copy is not present: the drive it is on is not
+    plugged in, and a warning too many is the safe side of that.
+
+    Composed from the shelf's own reads, so the dialog and the shelf agree
+    about each link: :func:`fetch_attachments` for the people and picture sets a
+    model is attached to, :func:`fetch_workflow_sets` for the workflows its
+    pictures were made with, and :func:`recipe_asset_index` with
+    :func:`resolve_recipe_models` for how many kept pictures in this library
+    used one of the lost models. That count goes through the recipes rather
+    than summing :func:`fetch_picture_counts` per model, so a picture made with
+    two of them is counted once.
+
+    Args:
+        hub: The open hub database.
+        vault: The active vault.
+        inside: ``model.id`` to the ``(model_folder_id, relpath)`` keys of
+            every row it has under the directory, whatever the state: the
+            removal drops them all, so a model whose only row there is
+            ``missing`` leaves the shelf as surely as one that is present.
+
+    Returns:
+        ``{"models", "breaks", "pictures"}``. ``models`` is one
+        ``{"id", "name", "elsewhere"}`` per model in *inside*, ``elsewhere``
+        true when a present copy outside keeps it on the shelf. ``breaks`` is
+        ``{"people", "sets", "workflows"}``, each a list of ``{"id", "name",
+        "models"}`` naming the lost models it uses, by name. ``pictures`` is
+        the kept pictures in this library made with a lost model.
+    """
+    locations = fetch_locations(hub)
+    lost = {
+        model_id
+        for model_id, keys in inside.items()
+        if not any(
+            loc["state"] == STATE_PRESENT
+            and (loc["folder_id"], loc["relpath"]) not in keys
+            for loc in locations.get(model_id, ())
+        )
+    }
+    index = recipe_asset_index(hub)
+    _by_name, by_digest, filenames, names = index
+
+    def name_of(model_id: int) -> str:
+        return names.get(model_id) or filenames.get(model_id) or f"Model {model_id}"
+
+    models = sorted(
+        (
+            {
+                "id": model_id,
+                "name": name_of(model_id),
+                "elsewhere": model_id not in lost,
+            }
+            for model_id in inside
+        ),
+        key=lambda entry: entry["name"].lower(),
+    )
+    breaks: dict[str, list[dict]] = {"people": [], "sets": [], "workflows": []}
+    if not lost:
+        return {"models": models, "breaks": breaks, "pictures": 0}
+
+    # People and picture sets: the attachments, keyed by digest.
+    attached: dict[tuple[str, int], set[int]] = {}
+    for sha256, rows in fetch_attachments(vault).items():
+        model_id = by_digest.get(str(sha256).lower())
+        if model_id not in lost:
+            continue
+        for row in rows:
+            key = (row["entity_type"], int(row["entity_id"]))
+            attached.setdefault(key, set()).add(model_id)
+    if attached:
+        wanted: dict[str, list[int]] = {}
+        for entity_type, entity_id in attached:
+            wanted.setdefault(entity_type, []).append(entity_id)
+
+        def entity_names(session: Session) -> dict[tuple[str, int], str]:
+            found: dict[tuple[str, int], str] = {}
+            for entity_type, ids in wanted.items():
+                table = _ENTITY_MODELS.get(entity_type)
+                if table is None:
+                    continue
+                for entity_id, name in session.exec(
+                    select(table.id, table.name).where(table.id.in_(ids))
+                ).all():
+                    found[(entity_type, int(entity_id))] = name or ""
+            return found
+
+        named = vault.db.run_task(entity_names, priority=DBPriority.IMMEDIATE)
+        for (entity_type, entity_id), model_ids in attached.items():
+            if (entity_type, entity_id) not in named:
+                # An attachment to a person or set this library no longer has
+                # breaks nothing anyone can see.
+                continue
+            bucket = "people" if entity_type == ENTITY_CHARACTER else "sets"
+            breaks[bucket].append(
+                {
+                    "id": entity_id,
+                    "name": named[(entity_type, entity_id)],
+                    "models": sorted(name_of(m) for m in model_ids),
+                }
+            )
+
+    # Workflows: those whose pictures were made with a combination holding a
+    # lost model.
+    workflows: dict[str, dict] = {}
+    for combination in fetch_workflow_sets(hub, vault)["combinations"]:
+        members = {int(m["id"]) for m in combination["models"]} & lost
+        if not members:
+            continue
+        for workflow in combination["workflows"]:
+            entry = workflows.setdefault(
+                workflow["id"],
+                {"id": workflow["id"], "name": workflow["name"], "models": set()},
+            )
+            entry["models"].update(name_of(m) for m in members)
+    breaks["workflows"] = [
+        {**entry, "models": sorted(entry["models"])} for entry in workflows.values()
+    ]
+    for bucket in breaks.values():
+        bucket.sort(key=lambda entry: str(entry["name"]).lower())
+
+    recipe_models = resolve_recipe_models(hub, index)[0]
+    counts = vault.db.run_task(recipe_picture_counts, priority=DBPriority.IMMEDIATE)
+    pictures = sum(
+        counts.get(recipe, 0)
+        for recipe, members in recipe_models.items()
+        if members & lost
+    )
+    return {"models": models, "breaks": breaks, "pictures": pictures}
 
 
 def purge_deleted_models(hub, emptied: dict[int, list[tuple[int, str]]]) -> list[int]:

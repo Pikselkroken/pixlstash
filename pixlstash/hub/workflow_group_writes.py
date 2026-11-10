@@ -30,6 +30,7 @@ from pixlstash.hub.workflow_origin import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import workflow_bindings
+from pixlstash.services.trash_undo import insert_rows, snapshot_rows
 from pixlstash.services.workflow_identity import model_fix_kind
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX, stamp_workflow_id
 
@@ -452,8 +453,9 @@ def create_manual_workflow(
 ) -> str:
     """Store *document* as a new manual workflow called *name*; return its id.
 
-    Always a new row, even for a document already stored: identical copies are
-    allowed, and deduplicating is the importer's decision, not this one's. The
+    Always a new row, even for a document already stored: refusing a copy is
+    the import route's decision, not this one's (a duplicate is a copy on
+    purpose). The
     row and the name go in one transaction, so a workflow never shows nameless.
 
     Args:
@@ -588,6 +590,56 @@ def _holds(document: str, canonical: str) -> bool:
         return False
 
 
+# A manual workflow's own rows, by `workflow_id`: what deleting it drops.
+MANUAL_WORKFLOW_TABLES = (
+    "workflow_group_default",
+    "workflow_group_parameter_name",
+    "workflow_group_pins",
+    "workflow_group_picture_input",
+    "workflow_group_attr",
+    "workflow_group_hidden",
+    "workflow_change",
+    "workflow_layout",
+    "workflow_thumbnail",
+    "workflow_version",
+    "workflow_document",
+)
+
+
+def snapshot_manual_workflow(hub: HubDatabase, workflow_id: str) -> dict:
+    """Every row :func:`delete_manual_workflow` drops or dismisses, by table."""
+    with hub.transaction() as conn:
+        rows = {
+            table: snapshot_rows(conn, table, "workflow_id", workflow_id)
+            for table in MANUAL_WORKFLOW_TABLES
+        }
+        rows["workflow_origin"] = snapshot_rows(
+            conn, "workflow_origin", "workflow_name", workflow_id
+        )
+    return rows
+
+
+def restore_manual_workflow(
+    hub: HubDatabase, workflow_id: str, rows: dict, file_rows: dict
+) -> None:
+    """Put a deleted manual workflow's snapshotted rows back, in one transaction.
+
+    *file_rows* are the rows keyed by its file's name, for a workflow that was
+    a file in the user folder (empty otherwise). Raises
+    ``sqlite3.IntegrityError`` when one of them has been taken since, and then
+    nothing is written.
+    """
+    with hub.transaction() as conn:
+        # Its dismissed origin rows are still there; the snapshot has them as
+        # they were before the delete.
+        conn.execute(
+            "DELETE FROM workflow_origin WHERE workflow_name = ?", (workflow_id,)
+        )
+        for table, table_rows in {**rows, **file_rows}.items():
+            insert_rows(conn, table, table_rows)
+    logger.info("Restored manual workflow %s.", workflow_id)
+
+
 def delete_manual_workflow(hub: HubDatabase, workflow_id: str) -> None:
     """Forget one manual workflow's rows, in one transaction.
 
@@ -609,18 +661,6 @@ def delete_manual_workflow(hub: HubDatabase, workflow_id: str) -> None:
             "UPDATE workflow_origin SET dismissed = 1 WHERE workflow_name = ?",
             (workflow_id,),
         )
-        for table in (
-            "workflow_group_default",
-            "workflow_group_parameter_name",
-            "workflow_group_pins",
-            "workflow_group_picture_input",
-            "workflow_group_attr",
-            "workflow_group_hidden",
-            "workflow_change",
-            "workflow_layout",
-            "workflow_thumbnail",
-            "workflow_version",
-            "workflow_document",
-        ):
+        for table in MANUAL_WORKFLOW_TABLES:
             conn.execute(f"DELETE FROM {table} WHERE workflow_id = ?", (workflow_id,))
     logger.info("Deleted manual workflow %s.", workflow_id)

@@ -137,6 +137,9 @@
 }
 
 /* ── Submenu (e.g. "Tag automatically" tagger picker) ──────────────── */
+/* `top: 0` hangs a submenu down from its row; put `v-submenu-fit`
+   (`utils/submenuFit.js`) on every `.ctx-submenu` so one near the bottom of
+   the window opens upwards instead. */
 .ctx-submenu-wrap {
   position: relative;
 }
@@ -195,7 +198,7 @@
   white-space: nowrap;
 }
 
-/* ── On a dark ground (lightbox / overlay chrome) ───────────────────────
+/* ── On a dark ground (lightbox chrome) ───────────────────────
    The `dark-surface` family stays dark in both themes, so a menu opened over
    it cannot take the theme's own values. Put `.ctx-menu--on-dark` on the menu
    root; teleported rows keep the plain `.ctx-*` classes. */
@@ -222,11 +225,6 @@
 
 .ctx-menu--on-dark .ctx-item:hover:not(:disabled, .ctx-item--disabled) {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
-}
-
-.ctx-menu--on-dark .ctx-item:focus-visible {
-  box-shadow: inset 0 0 0 var(--focus-width)
-    rgb(var(--v-theme-on-dark-surface));
 }
 
 .ctx-menu--on-dark .section-label {

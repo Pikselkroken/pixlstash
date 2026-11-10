@@ -157,6 +157,10 @@ CHECKPOINT_LOADER_ID = "checkpoint_id"
 # the file's name: a widget holding `x.safetensors` reads as a second model to
 # every walker that finds models by their extension.
 CHECKPOINT_LOADER_SHELF = "shelf"
+# The cast a diffusion model's loader applies to its weights (`UNETLoader`'s
+# `weight_dtype`). A pack from before it has no such widget, so it cannot
+# stand in for a loader that casts.
+CHECKPOINT_LOADER_CAST = "weight_dtype"
 
 # The ComfyUI-PixlStash ControlNet loader: core `ControlNetLoader`'s one
 # output with the file named by digest, so it can fetch one ComfyUI lacks.
@@ -1432,7 +1436,7 @@ def _shelf_name_in(filenames: list[str], options: list[str]) -> str | None:
 
 
 def apply_adapter(
-    prompt_graph: dict, targets: list[dict], adapter: dict, object_info: dict
+    prompt_graph: dict, targets: list[dict], adapter: dict, object_info: dict | None
 ) -> int:
     """Put one shelf adapter into every LoRA slot of *prompt_graph*.
 
@@ -1449,7 +1453,11 @@ def apply_adapter(
             digest and the names it is known by (its own filename and each
             copy's path relative to the folder holding it).
         object_info: The map from :func:`fetch_object_info`, for resolving a
-            filename slot against what this ComfyUI actually has.
+            filename slot against what this ComfyUI actually has. ``None`` is
+            a graph stored rather than run (an extract): a filename slot keeps
+            its name when that already names the file, else takes the shelf's
+            first name for it, and a run of the stored graph resolves it
+            against its own ComfyUI.
 
     Returns:
         How many slots were written.
@@ -1459,7 +1467,8 @@ def apply_adapter(
             file is not on that ComfyUI, its name is ambiguous there, or the
             loader does not enumerate its files. Refusing is the point: a name
             ComfyUI does not have comes back as an opaque 400 from ``/prompt``
-            after the run has been queued.
+            after the run has been queued. With no *object_info*, when the
+            shelf has no name for the file at all.
     """
     written = 0
     for target in targets or []:
@@ -1471,6 +1480,16 @@ def apply_adapter(
             continue
         if target.get("by") == "digest":
             inputs[target["field"]] = adapter["sha256"]
+            written += 1
+            continue
+        if object_info is None:
+            filenames = adapter.get("filenames") or []
+            if not filenames:
+                raise LookupError("That LoRA has no file name on the shelf.")
+            # A slot already naming this file keeps the spelling it has.
+            current = inputs.get(target["field"])
+            kept = isinstance(current, str) and _shelf_name_in(filenames, [current])
+            inputs[target["field"]] = kept or filenames[0]
             written += 1
             continue
         class_type = target.get("class_type")
@@ -2282,10 +2301,20 @@ def as_stock_loaders(
                 if isinstance(other, dict) and isinstance(other.get("inputs"), dict)
                 for value in other["inputs"].values()
             )
+            # The cast the swap carried onto the pack's loader goes back.
+            cast = inputs.get(CHECKPOINT_LOADER_CAST)
             now, fields = (
                 ("CheckpointLoaderSimple", {"ckpt_name": file})
                 if whole
-                else ("UNETLoader", {"unet_name": file, "weight_dtype": "default"})
+                else (
+                    "UNETLoader",
+                    {
+                        "unet_name": file,
+                        CHECKPOINT_LOADER_CAST: cast
+                        if isinstance(cast, str) and cast
+                        else "default",
+                    },
+                )
             )
         elif was in _DIGEST_WIDGETS_OF:
             digests = [
@@ -2364,9 +2393,10 @@ def swap_in_pack_nodes(
     A saver's setting the pack's saver has no place for (Save Video's
     ``codec``) is left to the pack's own default. A node is left as it is
     where this ComfyUI lacks the pack's class or has one that cannot stand in
-    (:func:`_stands_in`), where a diffusion model's loader casts its weights
-    (``weight_dtype``), which the pack's cannot, where the stock node has a
-    wire the pack's has no place for, and where nothing is wired into a saver.
+    (:func:`_stands_in`: a diffusion model's loader that casts its weights,
+    ``weight_dtype``, on a pack whose loader has no cast), where the stock
+    node has a wire the pack's has no place for, and where nothing is wired
+    into a saver. A cast goes with the file onto the pack's loader.
 
     Args:
         lora_digest: A ``lora_name`` -> the SHA-256 the pack's loader can
@@ -2466,13 +2496,14 @@ def swap_in_pack_nodes(
                     }
             else:
                 name = old.get(_CHECKPOINT_FIELDS[was])
+                cast = old.get(CHECKPOINT_LOADER_CAST, "default")
                 row = (
                     checkpoint_id(name)
                     if checkpoint_id
                     and shelf_uuid
                     and isinstance(name, str)
-                    # The pack's loader has no cast: an fp8 choice would go.
-                    and old.get("weight_dtype", "default") == "default"
+                    # A cast wired in from another node has no place to go.
+                    and isinstance(cast, str)
                     else None
                 )
                 if row:
@@ -2480,6 +2511,11 @@ def swap_in_pack_nodes(
                         CHECKPOINT_LOADER_ID: str(row),
                         CHECKPOINT_LOADER_SHELF: shelf_uuid,
                     }
+                    # The owner's fp8 choice goes with the file. A pack whose
+                    # loader cannot cast has no widget for it, so the stock
+                    # node stays rather than lose it.
+                    if cast != "default":
+                        owned[CHECKPOINT_LOADER_CAST] = cast
             spec = object_info.get(now)
             if owned is None or not _stands_in(spec, outputs, owned):
                 continue

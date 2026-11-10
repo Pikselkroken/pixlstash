@@ -1,6 +1,4 @@
 import os
-import subprocess
-import sys
 from collections import defaultdict, deque
 from datetime import datetime
 
@@ -24,14 +22,27 @@ from pixlstash.db_models import (
     PictureLikeness,
     SortMechanism,
 )
+from pixlstash.hub.workflow_card_reads import (
+    run_filed_workflow_ids,
+    variant_workflows,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.scoring import (
     fetch_smart_score_data,
     get_smart_score_penalised_tags_from_request,
     prepare_smart_score_inputs,
 )
+from pixlstash.services.comfyui_recipe_service import read_lora_chain_untyped
+from pixlstash.services.edit_copies import create_session, edit_copies_root
+from pixlstash.utils import open_with
+from pixlstash.utils.comfyui_utilities import find_comfy_api_prompt
+from pixlstash.utils.host_open import open_in_file_manager
+from pixlstash.utils.image_processing.video_utils import VideoUtils
+from pixlstash.utils.library_roots import refuse_path_inside_a_library
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.serialization_utils import safe_model_dict
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services import plugin_service
 from pixlstash.services.model_shelf_service import recipe_asset_index
 from pixlstash.services.workflow_hash import normalized_filename
@@ -155,10 +166,91 @@ def _with_shelf_names(server, values: list[str], owner: bool) -> list[dict]:
     return [{"value": value, "name": names.get(value)} for value in values]
 
 
+class PictureWorkflowLora(BaseModel):
+    node_id: str
+    name: Optional[str] = None
+
+
+class PictureWorkflowVariant(BaseModel):
+    picture_count: int
+    example_picture_id: int
+    # None when the picture carries no ComfyUI `prompt` chunk to read.
+    loras: Optional[list[PictureWorkflowLora]] = None
+
+
+class PictureWorkflowResponse(BaseModel):
+    workflow_id: str
+    picture_count: int
+    variants: list[PictureWorkflowVariant]
+
+
+def _embedded_loras(server, pic_id: int) -> list[dict] | None:
+    """The LoRA loaders in *pic_id*'s own ``prompt`` chunk, along the model path.
+
+    The API chunk only: rebuilding an editor graph needs ComfyUI's node
+    definitions, and this read never asks ComfyUI. ``None`` when the file has
+    no such chunk or cannot be read.
+    """
+    pics = server.vault.db.run_immediate_read_task(
+        Picture.find, id=pic_id, select_fields=["id", "file_path"]
+    )
+    path = (
+        ImageUtils.resolve_picture_path(server.vault.image_root, pics[0].file_path)
+        if pics
+        else None
+    )
+    if not path:
+        return None
+    try:
+        graph = find_comfy_api_prompt(ImageUtils.extract_embedded_metadata(path))
+    except Exception as exc:
+        logger.warning(
+            "Could not read the embedded workflow of picture id=%s (%s): %s; "
+            "listing its workflow without LoRAs.",
+            pic_id,
+            path,
+            exc,
+        )
+        return None
+    if not graph:
+        return None
+    return [
+        {"node_id": str(slot["node_id"]), "name": slot["name"]}
+        for slot in read_lora_chain_untyped(graph)["loaders"]
+    ]
+
+
 class OpenLocationResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     status: str
+
+
+class OpenWithApp(BaseModel):
+    id: str
+    name: str
+    default: bool = False
+    editor: bool = True
+
+
+class OpenWithListResponse(BaseModel):
+    apps: list[OpenWithApp]
+    other: bool
+
+
+class OpenWithRequest(BaseModel):
+    """An app from ``GET /open-with``, or the OS's chooser."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    picture_id: int
+    app_id: Optional[str] = None
+    other: bool = False
+
+
+class OpenWithResponse(BaseModel):
+    session: str
+    app_name: Optional[str] = None
 
 
 def register_routes(router, server):
@@ -344,6 +436,80 @@ def register_routes(router, server):
         )
 
     @router.get(
+        "/pictures/workflows",
+        include_in_schema=False,
+        summary="List the workflows the visible pictures were made with",
+        response_model=list[PictureWorkflowResponse],
+    )
+    def get_picture_workflows(request: Request):
+        """The workflows behind the pictures this token can see, with counts.
+
+        The read-only token's answer to "what workflows do I have" (#1616):
+        the owner-only ``/workflows`` routes also disclose card names, notes,
+        model fixes and covers no picture carries, so this groups only the
+        pictures in scope, by the ``workflow_id`` ``get_recipe`` reports for
+        each. Every variant's LoRAs are read off one in-scope picture's own
+        embedded ``prompt`` chunk, untyped: ComfyUI is never asked, so a fork
+        into sampler passes is not told apart here (``get_recipe`` on
+        ``example_picture_id`` reads it typed).
+        """
+        allowed = fetch_scope_allowed_picture_ids(server, request)
+        hub = getattr(server, "hub", None)
+        if hub is None or (allowed is not None and not allowed):
+            return []
+
+        def fetch(session: Session):
+            stmt = select(
+                Picture.id,
+                Picture.workflow_structural_hash,
+                Picture.run_workflow_id,
+            ).where(Picture.deleted.is_(False))
+            if allowed is None:
+                return session.exec(stmt).all()
+            # The scope narrows in SQL, chunked under SQLite's bound-parameter
+            # limit: a project scope can hold more pictures than one IN takes.
+            return [
+                row
+                for ids in chunked(sorted(allowed))
+                for row in session.exec(stmt.where(Picture.id.in_(ids))).all()
+            ]
+
+        rows = server.vault.db.run_immediate_read_task(fetch)
+        live = set(run_filed_workflow_ids(hub))
+        placed = variant_workflows(hub)
+        # {workflow_id: {variant: [picture ids]}}, the resolution
+        # `routes/comfyui._picture_workflow` makes for one picture.
+        groups: dict[str, dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
+        for pic_id, variant, made_by in rows:
+            workflow_id = made_by if made_by in live else placed.get(variant)
+            if workflow_id:
+                groups[workflow_id][variant or ""].append(pic_id)
+
+        result = []
+        # ponytail: one metadata read per variant per call (the extractor's
+        # own LRU aside); store the LoRA list on the variant if a large
+        # library makes this slow.
+        for workflow_id, variants in groups.items():
+            entries = [
+                {
+                    "picture_count": len(ids),
+                    "example_picture_id": max(ids),
+                    "loras": _embedded_loras(server, max(ids)),
+                }
+                for ids in variants.values()
+            ]
+            entries.sort(key=lambda e: (-e["picture_count"], e["example_picture_id"]))
+            result.append(
+                {
+                    "workflow_id": workflow_id,
+                    "picture_count": sum(e["picture_count"] for e in entries),
+                    "variants": entries,
+                }
+            )
+        result.sort(key=lambda w: (-w["picture_count"], w["workflow_id"]))
+        return result
+
+    @router.get(
         "/pictures/likeness-groups",
         include_in_schema=False,
         summary="List computed likeness groups",
@@ -370,6 +536,7 @@ def register_routes(router, server):
         min_score: int = Query(None),
         max_score: int = Query(None),
         unscored: bool = Query(False),
+        favourite: bool = Query(False),
     ):
         candidate_ids = None
         only_deleted = character_id == "SCRAPHEAP"
@@ -686,6 +853,7 @@ def register_routes(router, server):
                 min_score is not None,
                 max_score is not None,
                 unscored,
+                favourite,
                 tag,
                 rejected_tag,
                 tag_confidence_above,
@@ -709,6 +877,7 @@ def register_routes(router, server):
                 tags_confidence_below_filter_value,
                 comfyui_models_filter_value,
                 comfyui_loras_filter_value,
+                favourite_only_value=False,
             ):
                 query = select(Picture.id).where(Picture.id.in_(candidate_ids_list))
                 # This post-filter narrows an already-id-bounded set; only the
@@ -719,6 +888,7 @@ def register_routes(router, server):
                     min_score=min_score_value,
                     max_score=max_score_value,
                     unscored=unscored_value,
+                    favourite_only=favourite_only_value,
                     comfyui_models_filter=comfyui_models_filter_value,
                     comfyui_loras_filter=comfyui_loras_filter_value,
                     tags_filter=tags_filter_value,
@@ -742,6 +912,7 @@ def register_routes(router, server):
                 tag_confidence_below or None,
                 comfyui_model or None,
                 comfyui_lora or None,
+                favourite_only_value=favourite,
             )
             # Determine which group indices have at least one matching picture.
             matching_group_indices = {
@@ -850,7 +1021,7 @@ def register_routes(router, server):
         "/pictures/{id}/open-location",
         include_in_schema=False,
         summary="Open picture location",
-        description="Opens the containing folder of a reference picture in the OS file manager.",
+        description="Opens the containing folder of a picture in the OS file manager.",
         response_model=OpenLocationResponse,
     )
     def open_picture_location(id: str):
@@ -867,22 +1038,131 @@ def register_routes(router, server):
         if not file_path:
             raise HTTPException(status_code=404, detail="Picture not found")
 
-        folder = os.path.dirname(file_path)
+        # A library picture's path is relative to the library; a reference
+        # picture's is already absolute.
+        folder = os.path.dirname(
+            ImageUtils.resolve_picture_path(server.vault.image_root, file_path)
+        )
         if not os.path.isdir(folder):
             raise HTTPException(status_code=404, detail="Location not found on disk")
 
-        try:
-            if sys.platform.startswith("win"):
-                os.startfile(folder)
-            elif sys.platform == "darwin":
-                subprocess.run(["open", folder], check=False)
-            else:
-                subprocess.run(["xdg-open", folder], check=False)
-        except Exception as exc:
-            logger.warning("Failed to open folder %s: %s", folder, exc)
+        # The shared opener reads xdg-open's exit status, so a host with no
+        # desktop is a refusal rather than an "ok" that opened nothing.
+        if not open_in_file_manager(folder):
             raise HTTPException(status_code=500, detail="Failed to open location")
 
         return {"status": "ok"}
+
+    def _open_with_picture(request: Request, pic_id: int) -> tuple[dict, str]:
+        """The picture's copy fields and its file on disk; 404 when either is gone."""
+        vault = request.state.library_lease.vault
+
+        def fetch(session: Session):
+            pic = session.get(Picture, pic_id)
+            if pic is None or pic.deleted:
+                return None
+            return {
+                "id": pic.id,
+                "file_path": pic.file_path,
+                "original_file_name": pic.original_file_name,
+                "created_at": pic.created_at,
+            }
+
+        picture = vault.db.run_immediate_read_task(fetch)
+        if picture is None or not picture["file_path"]:
+            raise HTTPException(status_code=404, detail="Picture not found")
+        source = ImageUtils.resolve_picture_path(vault.image_root, picture["file_path"])
+        if not source or not os.path.isfile(source):
+            raise HTTPException(status_code=404, detail="Picture file not found")
+        return picture, source
+
+    # Not under /pictures/{id}/: the listing is owner data about the host, so
+    # the GET has to sit on the READ-token belt (auth.READ_BLOCKED_GET_PATHS),
+    # which matches exact paths and prefixes and so cannot single out one
+    # route under a path share tokens also read.
+    @router.get(
+        "/open-with",
+        include_in_schema=False,
+        summary="List the apps that can open a picture",
+        description=(
+            "The applications the operating system of the machine running "
+            "PixlStash offers for this picture's file type, editors first. "
+            "Videos answer an empty list."
+        ),
+        response_model=OpenWithListResponse,
+    )
+    def list_open_with_apps(request: Request, picture_id: int):
+        _picture, source = _open_with_picture(request, picture_id)
+        if VideoUtils.is_video_file(source):
+            return {"apps": [], "other": False}
+        return {
+            "apps": [app.public() for app in open_with.list_apps(source)],
+            "other": open_with.has_other_chooser(),
+        }
+
+    @router.post(
+        "/open-with",
+        include_in_schema=False,
+        summary="Open a picture in another app",
+        description=(
+            "Copies the picture into an edit folder on the machine running "
+            "PixlStash and opens the copy in an app from GET /open-with "
+            "(app_id), or in the OS's own chooser "
+            "(other). Saving the copy imports the edit stacked on the original."
+        ),
+        response_model=OpenWithResponse,
+    )
+    def open_picture_with(request: Request, payload: OpenWithRequest):
+        picture, source = _open_with_picture(request, payload.picture_id)
+        if VideoUtils.is_video_file(source):
+            raise HTTPException(status_code=415, detail="Videos cannot be opened with")
+        app = None
+        if payload.other:
+            if not open_with.has_other_chooser():
+                raise HTTPException(
+                    status_code=400, detail="This system has no app chooser"
+                )
+        else:
+            # The id must be one the OS lists for this type right now; nothing
+            # the request names is ever executed.
+            app = open_with.find_app(source, payload.app_id or "")
+            if app is None:
+                raise HTTPException(status_code=400, detail="Unknown app")
+        lease = request.state.library_lease
+        root = edit_copies_root(os.path.dirname(server.server_config_path))
+        # Copies written where a library reads would come straight back as
+        # pictures, before the edit does.
+        refuse_path_inside_a_library(os.path.realpath(root), server, lease.vault)
+        try:
+            session = create_session(
+                picture,
+                lease.vault.image_root,
+                root,
+                library_uuid=lease.library_uuid,
+                app_name=app.name if app else None,
+            )
+        except FileNotFoundError as exc:
+            logger.warning(
+                "Open with: no edit copy of picture %s: %s", payload.picture_id, exc
+            )
+            raise HTTPException(status_code=404, detail="Picture file not found")
+        try:
+            if app is None:
+                open_with.launch_other(session["path"])
+            else:
+                open_with.launch(app, session["path"])
+        except OSError as exc:
+            logger.error(
+                "Open with: could not start %s on %s: %s",
+                app.name if app else "the app chooser",
+                session["path"],
+                exc,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not start {app.name if app else 'the app chooser'}",
+            )
+        return {"session": session["session"], "app_name": app.name if app else None}
 
     @router.get(
         "/pictures/stats",
@@ -952,6 +1232,10 @@ def register_routes(router, server):
         only_deleted = character_id_raw == "SCRAPHEAP"
         if only_deleted:
             character_id_raw = None
+        # The Inbox is the unassigned view narrowed to its period, as the
+        # listing reads it (`select_pictures_for_listing`).
+        if request.query_params.get("inbox") is not None:
+            character_id_raw = "UNASSIGNED"
         set_mode = normalize_set_mode(set_mode_raw)
         set_filter_ids = collect_set_filter_ids(
             set_id_value=set_id_raw,
@@ -990,10 +1274,12 @@ def register_routes(router, server):
             min_score=min_score,
             max_score=max_score,
             unscored=_predicate_filter.unscored,
+            favourite_only=_predicate_filter.favourite_only,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,
             import_source_folder=import_source_folder,
+            imported_since=_predicate_filter.imported_since,
             tags_filter=tags_filter,
             rejected_tags=rejected_tags,
             face_filter=face_filter,

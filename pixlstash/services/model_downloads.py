@@ -7,6 +7,11 @@ it: a file of the same name in the committed template list
 (``data/workflow_templates.json``, #1999), which gives its link and its
 ComfyUI folder. **The link is the server's, never the caller's**: a request
 names a file, so no client can point the server at an address of its choosing.
+Where the committed list has no such file, the templates the owner's ComfyUI
+serves are asked (:func:`live_download_source`), for one ComfyUI shipped after
+the list was last rebuilt; a link from there is taken only when
+:func:`trusted_live_link` holds (https on ``huggingface.co``, a format loading
+cannot run as code), and carries no digest to check the download against.
 :func:`start_download` fetches it into the download folder (:func:`~pixlstash.services.managed_model_store.find_download_folder`:
 the one marked in the Model folders section, else the default folder) and
 registers it on the shelf, so the next run finds it there.
@@ -45,12 +50,13 @@ import time
 import uuid
 from functools import lru_cache
 from typing import Callable, Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services import comfyui_templates
 from pixlstash.services.managed_model_store import find_download_folder
 from pixlstash.services.model_folder_scanner import (
     SHELF_MODEL_SUFFIXES,
@@ -65,6 +71,7 @@ from pixlstash.services.model_mover import (
     publish_no_clobber,
     require_space,
 )
+from pixlstash.utils.adapter_header import folder_name_role
 from pixlstash.utils.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
@@ -76,6 +83,15 @@ STATUS_CANCELLED = "cancelled"
 
 # Long enough for a client on the idle 5 s poll to see the ending twice.
 FINISHED_KEEP_SECONDS = 30
+
+# What a link from a live ComfyUI template may be (`trusted_live_link`).
+LIVE_HOSTS = frozenset({"huggingface.co"})
+LIVE_SUFFIXES = (".safetensors", ".gguf")
+# Where a live link's redirects may go: Hugging Face and its CDN. Every hop is
+# checked before it is asked, since a live link has no digest to catch a file
+# that came from somewhere else.
+LIVE_HOP_DOMAINS = ("huggingface.co", "hf.co")
+_MAX_HOPS = 10
 
 _CHUNK_BYTES = 1 << 20
 # Connect, then the longest silence between two reads.
@@ -99,21 +115,28 @@ class _Cancelled(Exception):
 
 @lru_cache(maxsize=1)
 def _sources() -> dict[str, dict]:
-    """Every file the template list links, by case-folded name."""
-    found: dict[str, dict] = {}
+    """Every file the template list links, by case-folded name.
+
+    Where one name links several files (``flux2-vae.safetensors`` is more than
+    one VAE), the one most templates link: list order alone would let a new
+    template's variant displace the file every other workflow means.
+    """
+    by_name: dict[str, dict[Optional[str], list[dict]]] = {}
     for template in load_templates().get("templates") or []:
         for entry in template.get("files") or []:
             name, url = entry.get("name"), entry.get("url")
             if name and isinstance(url, str) and url.startswith("https://"):
-                found.setdefault(
-                    name.casefold(),
+                by_name.setdefault(name.casefold(), {}).setdefault(
+                    entry.get("sha256"), []
+                ).append(
                     {
                         "url": url,
                         "directory": entry.get("directory"),
                         "sha256": entry.get("sha256"),
-                    },
+                    }
                 )
-    return found
+    # max() keeps the first on a tie, so an unambiguous name is unchanged.
+    return {name: max(files.values(), key=len)[0] for name, files in by_name.items()}
 
 
 def download_source(file: str) -> Optional[dict]:
@@ -126,6 +149,71 @@ def download_source(file: str) -> Optional[dict]:
     """
     name = os.path.basename((file or "").replace("\\", "/"))
     return _sources().get(name.casefold()) if name else None
+
+
+def trusted_live_link(name: str, url: Optional[str]) -> bool:
+    """Whether a link a live ComfyUI template gives for *name* may be fetched.
+
+    Only ``https://huggingface.co/...``, exactly that host (no userinfo, no
+    port), and only for a file format that loading cannot run as code: not
+    ``.pth``, which is a pickle. The committed list's links were reviewed; a
+    live template's were not, so it gets the narrower rule.
+    """
+    if not isinstance(url, str) or not name.lower().endswith(LIVE_SUFFIXES):
+        return False
+    parsed = urlparse(url)
+    return parsed.scheme == "https" and parsed.netloc in LIVE_HOSTS
+
+
+def live_sources(comfyui_url: Optional[str], object_info: Optional[dict]) -> dict:
+    """Every file the templates *comfyui_url* serves link trustably, by name.
+
+    The fallback to :func:`download_source`, for a template ComfyUI shipped
+    after the committed list was last rebuilt: ``{case-folded name: {url,
+    directory, sha256: None, live: True}}`` for each file whose link passes
+    :func:`trusted_live_link` (a live template records no digest), the first
+    template's link where two share a name, as the committed list does.
+
+    The listing is the one ``GET /comfyui/templates`` keeps for ten minutes
+    (:func:`~pixlstash.services.comfyui_templates.read_listing`). Empty while
+    ComfyUI is not answering (*object_info* None): the read would only wait
+    out its timeouts, and the listing it kept would say no pack loaded.
+    """
+    if not comfyui_url or object_info is None:
+        return {}
+    try:
+        listing = comfyui_templates.read_listing(comfyui_url, object_info)
+    except comfyui_templates.TemplatesUnavailable as exc:
+        logger.info(
+            "No templates from ComfyUI at %s to find download links in: %s",
+            comfyui_url,
+            exc,
+        )
+        return {}
+    found: dict[str, dict] = {}
+    for template in listing.templates:
+        for item in template.files:
+            name = os.path.basename(item.name.replace("\\", "/"))
+            if trusted_live_link(name, item.url):
+                found.setdefault(
+                    name.casefold(),
+                    {
+                        "url": item.url,
+                        "directory": item.directory,
+                        "sha256": None,
+                        "live": True,
+                    },
+                )
+    return found
+
+
+def live_download_source(
+    file: str, comfyui_url: Optional[str], object_info: Optional[dict]
+) -> Optional[dict]:
+    """Where *file* can be downloaded from by the templates *comfyui_url*
+    serves (:func:`live_sources`), or None."""
+    name = os.path.basename((file or "").replace("\\", "/")).casefold()
+    return live_sources(comfyui_url, object_info).get(name) if name else None
 
 
 def digest_source(sha256: str) -> Optional[dict]:
@@ -161,17 +249,49 @@ def _relpath(folder_path: str, file: str, comfyui_folder: Optional[str]) -> str:
         return name
     head, sep, rest = name.partition("/")
     if sep and head.casefold() == comfyui_folder.casefold():
-        # Already under it, in whatever case: once, spelled as the list does.
-        return f"{comfyui_folder}/{rest}"
+        # Already under it, in whatever case: once, in the folder's own
+        # subfolder for it, else spelled as the list does.
+        return f"{_subfolder_for(folder_path, comfyui_folder) or comfyui_folder}/{rest}"
+    subfolder = _subfolder_for(folder_path, comfyui_folder)
+    return f"{subfolder}/{name}" if subfolder else name
+
+
+def _subfolder_for(folder_path: str, comfyui_folder: str) -> Optional[str]:
+    """The download folder's own subfolder for ComfyUI's *comfyui_folder*.
+
+    That name as spelled, else a subfolder naming the same role however a
+    launcher spells it (Stability Matrix's `VAE`, `TextEncoders`,
+    `DiffusionModels`). The folder is what tells the shelf a VAE or a text
+    encoder of a layout its tensors do not show (``role_from_folder``); one
+    left at the top level is filed by its parameter count. ``None`` when the
+    folder has neither.
+    """
     if os.path.isdir(os.path.join(folder_path, comfyui_folder)):
-        name = f"{comfyui_folder}/{name}"
-    return name
+        return comfyui_folder
+    role = folder_name_role(comfyui_folder)
+    if role is None:
+        return None
+    try:
+        names = sorted(
+            entry.name for entry in os.scandir(folder_path) if entry.is_dir()
+        )
+    except OSError as exc:
+        logger.warning(
+            "Could not list %s for a %s subfolder; downloading to its top: %s",
+            folder_path,
+            comfyui_folder,
+            exc,
+        )
+        return None
+    return next((name for name in names if folder_name_role(name) == role), None)
 
 
 def start_download(
     hub: HubDatabase,
     file: str,
     on_arrived: Optional[Callable[[int], None]] = None,
+    comfyui_url: Optional[str] = None,
+    object_info: Optional[dict] = None,
 ) -> dict:
     """Start fetching *file* onto the shelf, and return its entry.
 
@@ -179,11 +299,16 @@ def start_download(
         hub: The hub database holding the shelf tables.
         file: The model name the workflow asks for, as its loader spells it.
         on_arrived: Called with the new model id once it is on the shelf.
+        comfyui_url: The owner's ComfyUI, whose templates are asked for a link
+            when the committed list has none (:func:`live_download_source`).
+        object_info: That ComfyUI's map, for the listing should it be read.
 
     Raises:
         DownloadRefused: Nothing was fetched; ``status_code`` says why.
     """
-    source = download_source(file)
+    source = download_source(file) or live_download_source(
+        file, comfyui_url, object_info
+    )
     if source is None:
         raise DownloadRefused(
             f"PixlStash does not know where to download {file} from.", 404
@@ -227,6 +352,8 @@ def start_download(
         "received": 0,
         "total": 0,
         "error": None,
+        # The model's page, where a gated one's licence is accepted.
+        "page_url": None,
         "model_id": None,
         "ended_at": None,
         # What a workflow or a set can name it by while it is still on its way:
@@ -258,6 +385,7 @@ def start_download(
             relpath,
             on_arrived,
             source.get("sha256"),
+            bool(source.get("live")),
         ),
         name=f"model-download-{entry['id'][:8]}",
         daemon=True,
@@ -367,12 +495,13 @@ def _run(
     relpath: str,
     on_arrived: Optional[Callable[[int], None]],
     expected: Optional[str] = None,
+    live: bool = False,
 ) -> None:
     target = entry["_target"]
     partial = target + PARTIAL_SUFFIX
     cancel = entry["_cancel"]
     try:
-        digest = _fetch(url, partial, entry, cancel)
+        digest = _fetch(url, partial, entry, cancel, live=live)
         # The file the list names, or nothing: another file under the same
         # link would land on the shelf and leave a loader that asks for the
         # listed digest still missing, with nothing said.
@@ -412,6 +541,21 @@ def _run(
             )
 
 
+def model_page(url: str) -> Optional[str]:
+    """The Hugging Face page of the repository *url* downloads from, or None.
+
+    ``https://huggingface.co/<org>/<repo>/resolve/...`` gives
+    ``https://huggingface.co/<org>/<repo>``: where a gated model's licence is
+    accepted. Only for that host, so the link handed to the browser is never
+    one a template could point anywhere.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.netloc not in LIVE_HOSTS:
+        return None
+    repo, sep, _rest = parsed.path.partition("/resolve/")
+    return f"https://{parsed.netloc}{repo}" if sep and repo.count("/") >= 2 else None
+
+
 def _left_https(url: str, response) -> bool:
     """Whether an https link was redirected onto plain http at any hop.
 
@@ -425,18 +569,67 @@ def _left_https(url: str, response) -> bool:
     )
 
 
-def _fetch(url: str, partial: str, entry: dict, cancel: threading.Event) -> str:
+def _live_hop(url: str) -> bool:
+    """Whether a live link may be asked at *url*: https on Hugging Face."""
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc == host
+        and any(
+            host == domain or host.endswith("." + domain) for domain in LIVE_HOP_DOMAINS
+        )
+    )
+
+
+def _open(url: str, live: bool) -> requests.Response:
+    """GET *url* as a stream; for a *live* link, redirects followed by hand,
+    each hop's host checked (:func:`_live_hop`) before it is asked."""
+    kwargs = {
+        "stream": True,
+        "timeout": _TIMEOUT_SECONDS,
+        # Content-Length counts the bytes sent and requests decodes what it
+        # is sent, so a compressed body would outgrow the space checked for it.
+        "headers": {"User-Agent": "PixlStash", "Accept-Encoding": "identity"},
+    }
+    if not live:
+        return requests.get(url, **kwargs)
+    for _hop in range(_MAX_HOPS):
+        if not _live_hop(url):
+            raise ValueError(
+                f"The link led to {urlparse(url).netloc or url}, which is not "
+                "Hugging Face, so it was not followed."
+            )
+        response = requests.get(url, allow_redirects=False, **kwargs)
+        if not response.is_redirect:
+            return response
+        url = urljoin(url, response.headers.get("Location", ""))
+        response.close()
+    raise ValueError(f"The link redirected more than {_MAX_HOPS} times.")
+
+
+def _fetch(
+    url: str, partial: str, entry: dict, cancel: threading.Event, live: bool = False
+) -> str:
     """Stream *url* into *partial* and return the SHA-256 of what was written."""
     os.makedirs(os.path.dirname(partial), exist_ok=True)
     sha = hashlib.sha256()
-    with requests.get(
-        url,
-        stream=True,
-        timeout=_TIMEOUT_SECONDS,
-        # Content-Length counts the bytes sent and requests decodes what it
-        # is sent, so a compressed body would outgrow the space checked for it.
-        headers={"User-Agent": "PixlStash", "Accept-Encoding": "identity"},
-    ) as response:
+    with _open(url, live) as response:
+        page = model_page(url)
+        if page and response.headers.get("X-Error-Code") == "GatedRepo":
+            # No Hugging Face token is sent, so a gated file is never served
+            # here; the owner accepts its licence and downloads it themselves.
+            # Said only of a Hugging Face link: another host's header falls
+            # through to its plain error below.
+            entry["page_url"] = page
+            # Instruction first: the notice shows three lines. Where the
+            # download would have put it, its ComfyUI subfolder included, so
+            # the folder still says what kind of model it is.
+            raise ValueError(
+                "It is gated on Hugging Face. Open its page, get access there, "
+                f"and save the file into {os.path.dirname(entry['_target'])}; "
+                "PixlStash picks it up from there."
+            )
         response.raise_for_status()
         if _left_https(url, response):
             raise ValueError("The download was redirected away from https.")

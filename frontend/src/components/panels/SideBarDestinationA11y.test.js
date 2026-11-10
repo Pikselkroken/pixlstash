@@ -96,6 +96,7 @@ globalThis.IntersectionObserver = class {
 };
 
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
+import { useFilterStore } from "../../stores/useFilterStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import SideBar from "./SideBar.vue";
@@ -114,7 +115,14 @@ function tipText(el) {
 
 const ALL_ID = "ALL";
 const SCRAPHEAP_ID = "SCRAPHEAP";
-const DESTINATIONS = ["All Pictures", "Duplicates", "Scrapheap"];
+// The expanded list's places and Review rows (#2159), and the docked rail's.
+const DESTINATIONS = [
+  "All media",
+  "Favourites",
+  "Scrapheap",
+  "Duplicates",
+  "Tags",
+];
 
 function respond(url) {
   const u = String(url ?? "");
@@ -192,14 +200,18 @@ describe("the sidebar's destinations are keyboard-operable", () => {
     wrapper.unmount();
   });
 
-  it("renders the docked rail's destinations as buttons too", async () => {
-    // The rail is the same three destinations in the narrow layout. Fixing only
-    // the wide one leaves a keyboard user stranded whenever the sidebar docks.
+  it("gives the docked rail a button for every destination the expanded list has", async () => {
+    // The rail is the same destinations in the narrow layout: one added to the
+    // expanded list only (Inbox, Tags to review) is out of reach while docked.
     const wrapper = await mountSidebar();
+    const expanded = wrapper
+      .findAll(".sidebar-list-item .sidebar-list-label")
+      .map((el) => el.text());
+    expect(expanded).toEqual(expect.arrayContaining([...DESTINATIONS, "Inbox"]));
     useSidebarStore().setSidebarDocked(true);
     await wrapper.vm.$nextTick();
 
-    for (const label of DESTINATIONS) {
+    for (const label of expanded) {
       const item = dockedDestination(wrapper, label);
       expect(item, `${label} rail item is missing`).toBeTruthy();
       expect(item.element.tagName, label).toBe("BUTTON");
@@ -212,7 +224,7 @@ describe("the sidebar's destinations are keyboard-operable", () => {
 });
 
 describe("aria-current names the destination you are in", () => {
-  it("marks All Pictures and nothing else", async () => {
+  it("marks All media and nothing else", async () => {
     const selection = useSelectionStore();
     const wrapper = await mountSidebar();
     selection.selectedCharacter = ALL_ID;
@@ -220,13 +232,37 @@ describe("aria-current names the destination you are in", () => {
     await wrapper.vm.$nextTick();
 
     expect(
-      destination(wrapper, "All Pictures").attributes("aria-current"),
+      destination(wrapper, "All media").attributes("aria-current"),
     ).toBe("page");
     expect(
       destination(wrapper, "Scrapheap").attributes("aria-current"),
     ).toBeUndefined();
     expect(
       destination(wrapper, "Duplicates").attributes("aria-current"),
+    ).toBeUndefined();
+    expect(
+      destination(wrapper, "Favourites").attributes("aria-current"),
+    ).toBeUndefined();
+
+    wrapper.unmount();
+  });
+
+  it("hands All media's mark to Favourites when the filter is on", async () => {
+    // Favourites is All media plus `favourite=1`, so exactly one of the two is
+    // current, and which one follows the filter, however it was switched on.
+    const selection = useSelectionStore();
+    const filters = useFilterStore();
+    const wrapper = await mountSidebar();
+    selection.selectedCharacter = ALL_ID;
+    selection.selectedCharacterIds = [];
+    filters.favouriteOnlyFilter = true;
+    await wrapper.vm.$nextTick();
+
+    expect(
+      destination(wrapper, "Favourites").attributes("aria-current"),
+    ).toBe("page");
+    expect(
+      destination(wrapper, "All media").attributes("aria-current"),
     ).toBeUndefined();
 
     wrapper.unmount();
@@ -243,7 +279,7 @@ describe("aria-current names the destination you are in", () => {
       "page",
     );
     expect(
-      destination(wrapper, "All Pictures").attributes("aria-current"),
+      destination(wrapper, "All media").attributes("aria-current"),
     ).toBeUndefined();
 
     wrapper.unmount();
@@ -259,7 +295,7 @@ describe("aria-current names the destination you are in", () => {
       "page",
     );
     expect(
-      destination(wrapper, "All Pictures").attributes("aria-current"),
+      destination(wrapper, "All media").attributes("aria-current"),
     ).toBeUndefined();
 
     wrapper.unmount();

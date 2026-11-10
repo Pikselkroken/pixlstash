@@ -11,19 +11,21 @@
     aria-label="Model shelf"
   >
     <p id="shelf-help" class="visually-hidden">
-      Every adapter and checkpoint PixlStash has found on this machine. Group
-      and Sort choose the order and whether the list is cut into groups; Show
-      chooses which kinds are listed and which base models. Above the list, the
-      Name, Base and Size headings sort it too, as does the date column's, which
-      is named for the date it shows. Every column but Name begins with a handle
+      Every adapter and checkpoint PixlStash has found on this machine, one row
+      each: its Type, name, base model, size, the day it was added, and how many
+      sets hold it. The letter at a row's start is its Type: C for a checkpoint,
+      L for a LoRA. Sort and Group by live in the Sort panel; Show chooses which
+      kinds are listed and which base models. The Name, Base, Size and Added
+      headings sort the list too. Every column but Name begins with a handle
       that resizes it: Left and Right move the edge, Home and End take it to its
       widest and narrowest, Enter puts it back. The bar ends in the app-wide
-      controls: Settings and the Models and tasks toggle. Nothing on this screen
-      can be undone. A ring around a model's mark says who it is assigned to. A
-      name in italics has not been given one. A row that stands for a training
-      run says how many files it holds; Right and Left open and close it.
-      Right-click a row for everything that can be done to it, or a folder's
-      header to scan or move that folder. Escape clears the selection.
+      controls: Settings and the Models toggle. Nothing on this screen
+      can be undone. A heart after a name marks a favourite. A name in italics
+      has not been given one. A row that stands for a training run says how many
+      files it holds; Right and Left open and close it. Right-click a row for
+      everything that can be done to it. Escape clears the selection. In a
+      narrow window the Sets column, then the letter at a row's start, are left
+      out.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -32,401 +34,109 @@
          header already says it and a second announcer double-speaks. -->
     <p class="visually-hidden" role="status">{{ sortAnnouncement }}</p>
 
-    <!-- The toolbar changes the VIEW. The two things on it that are not view
-         controls are the ones with no selection to hang on - Add, which makes a
-         row that does not exist yet, and Model folders, which edits the
-         registry the shelf reads - so they sit together on the left, apart
-         from the view controls.
-         The test the left group applies: it opens something, it writes nothing
-         on the press, and it has no selection to hang on. Every other verb
-         lives on the row or in the selection pill (#904). -->
+    <!-- The toolbar is browse only (#2168): Sort, Filter, the name search and
+         the app's own controls. Adding, managing folders, and the training-runs
+         view are the sidebar's; the verbs are on the selection pill, the row
+         menu and the shortcuts. No `Models` title: the title bar's segment and
+         the sidebar already name the view. -->
     <div class="shelf-toolbar">
-      <span class="shelf-title shelf-fold-1262">Models</span>
+      <!-- An open run's status, Stop and back arrow (TrainingRunLive teleports
+           them here): the design puts run status in the shelf's own bar. -->
+      <div v-if="runOpen" id="shelf-run-bar" class="shelf-run-bar"></div>
 
-      <!-- Two views of one destination, not two destinations. The runs are
-           models too - still in ai-toolkit's output folder rather than on the
-           shelf, and importing one is the act of moving it from here to there.
-           This sits in the LEFT group because the bar has a flexible spacer
-           after `Model folders`, so anything added here costs the right cluster
-           nothing until they collide.
-
-           Text labels and no glyphs. `AiToolkitIcon` is a brand mark and names
-           ai-toolkit the product; these two name OUR views, and a filled mark
-           on one segment against mdi line art on the other unbalances a control
-           that has to read as symmetric.
-
-           Drawn in the popover's old `.tbm-seg` track, not `Segmented`: it
-           keeps `tablist`/`tab` because it switches which panel is on screen
-           rather than setting a value, and tabs are their own job. -->
-      <div
-        class="tbm-seg shelf-viewswitch"
-        role="tablist"
-        aria-label="Model view"
+      <span
+        v-if="!runOpen"
+        class="shelf-sub shelf-fold-1262"
+        >{{ isShelfTab ? countLabel : runsCountLabel }}</span
       >
-        <button
-          id="shelf-tab-shelf"
-          type="button"
-          role="tab"
-          class="tbm-seg-btn shelf-viewseg"
-          :class="{ 'tbm-seg-btn--on shelf-viewseg--on': isShelfTab }"
-          :aria-selected="isShelfTab"
-          :aria-controls="isShelfTab ? 'shelf-panel-shelf' : undefined"
-          :tabindex="isShelfTab ? 0 : -1"
-          @click="showTab('shelf')"
-          @keydown="onTabKeydown"
-        >
-          Shelf
-        </button>
-        <button
-          id="shelf-tab-runs"
-          type="button"
-          role="tab"
-          class="tbm-seg-btn shelf-viewseg"
-          :class="{ 'tbm-seg-btn--on shelf-viewseg--on': !isShelfTab }"
-          :aria-selected="!isShelfTab"
-          :aria-controls="!isShelfTab ? 'shelf-panel-runs' : undefined"
-          :tabindex="isShelfTab ? -1 : 0"
-          @click="showTab('runs')"
-          @keydown="onTabKeydown"
-        >
-          Training runs
-        </button>
-      </div>
 
-      <!-- The one accented, labelled button in the bar, because it is the only
-           thing here with a result behind it. Three ways in, one menu: a
-           folder, a loose file, or a training run somebody else's tool wrote. -->
-      <v-menu
-        v-model="addMenuOpen"
-        location="bottom start"
-        origin="top start"
-        :offset="8"
-        transition="scale-transition"
-      >
-        <template #activator="{ props: menuProps }">
-          <!-- A copy of a 6 GB checkpoint is not instant, and this button is
-               the only thing on screen that knows one is running, so the glyph
-               becomes the spinner. Not `loading`: that disables the button, and
-               the menu's other rows (Add folder, ai-toolkit) stay usable while
-               a file copies; only Add file refuses. -->
-          <AppBarButton
-            v-bind="withRef(menuProps, (el) => (addBtnRef = el))"
-            class="bar-btn--accent shelf-fold-680"
-            :icon="adding ? '' : 'plus'"
-            chevron
-            :aria-busy="adding || undefined"
-            aria-haspopup="menu"
-            :aria-expanded="addMenuOpen"
-            tooltip="Add models to the shelf"
-            ><v-icon v-if="adding" size="18" class="mdi-spin"
-              >mdi-loading</v-icon
-            >Add</AppBarButton
-          >
-        </template>
-        <div
-          class="ctx-menu shelf-menu"
-          role="menu"
-          tabindex="-1"
-          @keydown="onMenuKeydown"
+      <template v-if="isShelfTab">
+        <v-menu
+          v-model="sortMenuOpen"
+          :close-on-content-click="false"
+          location="bottom start"
+          origin="top start"
+          :offset="8"
+          transition="scale-transition"
         >
-          <button
-            class="ctx-item"
-            type="button"
-            role="menuitem"
-            @click="openFolders(addBtnRef?.el)"
-          >
-            <v-icon class="ctx-icon">mdi-folder-plus-outline</v-icon>
-            <span class="ctx-label-text">Add folder…</span>
-          </button>
-          <button
-            class="ctx-item"
-            type="button"
-            role="menuitem"
-            @click="openAddFile(addBtnRef?.el)"
-          >
-            <v-icon class="ctx-icon">mdi-file-plus-outline</v-icon>
-            <span class="ctx-label-text">Add file…</span>
-          </button>
-          <!-- Shown only while the output root is UNSET, because setting it is
-               a once-ever act: ai-toolkit writes every run under one folder.
-               Once it is set the runs have their own tab on this shelf, and
-               there is nothing left for this menu to add. Hidden
-               rather than disabled, unlike the selection pill's verbs: those
-               are about a selection the reader just made and owe an
-               explanation, and this is about a job already done. -->
-          <template v-if="!hasSourceFolder">
-            <div class="ctx-sep"></div>
-            <button
-              class="ctx-item"
-              type="button"
-              role="menuitem"
-              @click="openAddSource(addBtnRef?.el)"
+          <!-- The split-button: a direction toggle welded to a menu trigger.
+               `role="group"` names the pair; v-menu returns focus to the
+               trigger on Escape, on an outside click and on a selection. -->
+          <template #activator="{ props: menuProps }">
+            <div
+              class="bar-split-button"
+              :class="{ 'bar-split-button--open': sortMenuOpen }"
+              role="group"
+              aria-label="Sort"
             >
-              <AiToolkitIcon class="ctx-icon" />
-              <span class="ctx-label-text">Set ai-toolkit output folder…</span>
-            </button>
+              <AppBarButton
+                class="bar-split-toggle"
+                :icon="directionIcon"
+                :tooltip="directionLabel"
+                @click.stop="toggleDirection"
+              />
+              <AppBarButton
+                v-bind="menuProps"
+                class="bar-split-menu"
+                :icon="activeSort.icon"
+                chevron
+                aria-haspopup="dialog"
+                :aria-expanded="sortMenuOpen"
+                :tooltip="sortButtonTitle"
+              >
+                <span class="bar-btn-value">{{ activeSort.label }}</span>
+              </AppBarButton>
+            </div>
           </template>
-        </div>
-      </v-menu>
+          <ShelfSortPanel />
+        </v-menu>
 
-      <!-- The registry the shelf reads, and the only door to it once the empty
-           state is gone: Add ▾ spells this "Add folder…", which is the wrong
-           promise for rescan, relocate and forget.
-
-           No count badge: `bar-filter-badge` counts a deviation from a default
-           the reader set, and a folder count never returns to zero (the managed
-           store always exists), so a permanent number beside Show's identical
-           pill would mean something else entirely.
-
-           No `bar-btn--open`: `App.css` declares that class for "the toolbar
-           button while its MENU is open", and this one opens an `AppDialog`,
-           which sets `:scrim="true"`. The highlight is painted under the scrim
-           for exactly as long as it applies, and the button has none of the
-           chevron the rule
-           rotates. Group/Sort/Show keep it because they really are menus.
-           `aria-haspopup="dialog"` on both, and `aria-expanded` on neither:
-           focus moves into the dialog rather than into anything the button
-           owns. -->
-      <AppBarButton
-        ref="foldersBtnRef"
-        class="shelf-fold-680"
-        icon="folder-multiple-outline"
-        tooltip="Model folders - add, rescan, move or forget a folder"
-        aria-label="Model folders"
-        aria-haspopup="dialog"
-        @click="openFolders(foldersBtnRef?.el)"
-      />
-
-      <!-- Where those two land when the bar runs out of width. Only the
-           "opens something, writes nothing on the press" pair folds: the ⋯ is
-           for verbs, and Group, Sort and Show are menus that compress instead
-           (the Duplicates bar's rule - a menu inside a menu is a submenu, and
-           this bar would need three of them).
-
-           `align="start"` because the trigger sits near the LEFT edge, and the
-           rows are the same `.ctx-item` rows the Add menu already draws - one
-           recipe, so the folded form is the unfolded one moved. -->
-      <TbOverflowMenu ref="overflowRef" class="shelf-overflow" align="start">
-        <template #default="{ close }">
-          <button
-            class="ctx-item"
-            type="button"
-            role="menuitem"
-            @click="
-              close();
-              openFolders(overflowRef?.trigger?.());
-            "
-          >
-            <v-icon class="ctx-icon">mdi-folder-plus-outline</v-icon>
-            <span class="ctx-label-text">Add folder…</span>
-          </button>
-          <button
-            class="ctx-item"
-            type="button"
-            role="menuitem"
-            @click="
-              close();
-              openAddFile(overflowRef?.trigger?.());
-            "
-          >
-            <v-icon class="ctx-icon">mdi-file-plus-outline</v-icon>
-            <span class="ctx-label-text">Add file…</span>
-          </button>
-          <template v-if="!hasSourceFolder">
-            <button
-              class="ctx-item"
-              type="button"
-              role="menuitem"
-              @click="
-                close();
-                openAddSource(overflowRef?.trigger?.());
-              "
-            >
-              <AiToolkitIcon class="ctx-icon" />
-              <span class="ctx-label-text">Set ai-toolkit output folder…</span>
-            </button>
+        <v-menu
+          v-model="showMenuOpen"
+          :close-on-content-click="false"
+          location="bottom start"
+          origin="top start"
+          :offset="8"
+          transition="scale-transition"
+        >
+          <!-- The badge counts ACTIVE FILTERS, never results: it is the answer
+               to "why is this list short". -->
+          <template #activator="{ props: menuProps }">
+            <AppBarButton
+              v-bind="menuProps"
+              class="shelf-show-btn"
+              icon="filter-outline"
+              chevron
+              :badge="store.activeCount > 0 ? store.activeCount : null"
+              :active="store.activeCount > 0 && !showMenuOpen"
+              :open="showMenuOpen"
+              :tooltip="showButtonTitle"
+            />
           </template>
-          <div class="ctx-sep"></div>
-          <button
-            class="ctx-item"
-            type="button"
-            role="menuitem"
-            @click="
-              close();
-              openFolders(overflowRef?.trigger?.());
-            "
-          >
-            <v-icon class="ctx-icon">mdi-folder-multiple-outline</v-icon>
-            <span class="ctx-label-text">Model folders…</span>
-          </button>
-        </template>
-      </TbOverflowMenu>
-
-      <!-- Reports the list actually on screen, not always the shelf's - and it
-           sits AFTER the verbs, in the gap the spacer opens, for one reason:
-           the two labels are different widths ("1,842 models · 12 copies" vs
-           "8 runs"), so anywhere to their left it shoves Add and Model
-           folders sideways every time the tab changes. Here the spacer
-           absorbs the difference and nothing moves. -->
-      <span class="shelf-sub shelf-sub--ingap shelf-fold-1262">{{
-        isShelfTab ? countLabel : runsCountLabel
-      }}</span>
+          <ShelfShowPanel
+            :open="showMenuOpen"
+            :focus-name-request="nameFocusRequest"
+          />
+        </v-menu>
+      </template>
 
       <span class="shelf-spacer"></span>
 
-      <!-- The bar's own cluster gap. `.shelf-toolbar` separates the title from
-           its controls at --space-4; the controls separate from each other at
-           --space-3, which is what every other bar in the app uses. -->
       <div class="shelf-bar-cluster">
-        <!-- Group and Sort carry their current VALUE as the label, because
-             their glyphs are abstract and their state is the reason the list
-             looks the way it does. Filter keeps the universal funnel and says
-             the rest with a count. -->
-        <!-- Group, Sort and Show steer the ROW LIST. On the training-runs tab
-             that list is not on screen, so they are hidden rather than
-             disabled: a disabled control owes an explanation, and these are not
-             about a selection the reader just made - they are about a list that
-             is not in front of them. -->
-        <template v-if="isShelfTab">
-          <!-- The name filter's toolbar copy, bound to the same text as the
-               field at the top of Show, which is always there when this one
-               folds (rung 1b). On the set grid it narrows the cards as Show
-               does, and the hand-made ones by their own name too. -->
-          <NameFilterField
-            ref="nameFieldRef"
-            class="shelf-name-bar"
-            :model-value="store.filters.name"
-            label="Filter models by name"
-            @update:model-value="(name) => store.setFilters({ name })"
-          />
-          <v-menu
-            v-model="groupMenuOpen"
-            :close-on-content-click="false"
-            location="bottom end"
-            origin="top end"
-            :offset="8"
-            transition="scale-transition"
-          >
-            <template #activator="{ props: menuProps }">
-              <AppBarButton
-                v-bind="withRef(menuProps, (el) => (groupButtonRef = el))"
-                :icon="activeGroup.icon"
-                chevron
-                :open="groupMenuOpen"
-                aria-haspopup="dialog"
-                :aria-expanded="groupMenuOpen"
-                :tooltip="groupButtonTitle"
-              >
-                <span class="bar-btn-value">{{ activeGroup.label }}</span>
-              </AppBarButton>
-            </template>
-            <ShelfSortPanel
-              section="group"
-              @group-picked="closeGroupMenu"
-            />
-          </v-menu>
-
-          <!-- Hidden on the set grid, not disabled, exactly as the whole
-               cluster is hidden on the training-runs tab and for the same
-               reason: the five sort keys order the ROW LIST, and that list is
-               not on screen. The grid orders itself by evidence. A control that
-               is live and does nothing is worse than one that is absent - it
-               reads "Sort: Added" over a grid it has no effect on. -->
-          <v-menu
-            v-if="!isSetGrid"
-            v-model="sortMenuOpen"
-            :close-on-content-click="false"
-            location="bottom end"
-            origin="top end"
-            :offset="8"
-            transition="scale-transition"
-          >
-            <!-- The shipped split-button: a direction toggle welded to a menu
-             trigger. `role="group"` names the pair; the two halves keep their
-             own accessible names, and v-menu returns focus to the trigger on
-             Escape, on an outside click and on a selection. -->
-            <template #activator="{ props: menuProps }">
-              <div
-                class="bar-split-button"
-                :class="{ 'bar-split-button--open': sortMenuOpen }"
-                role="group"
-                aria-label="Sort"
-              >
-                <!-- The accessible name IS the current state and flips on press,
-                 which is what a keyboard user hears when focus returns. -->
-                <AppBarButton
-                  class="bar-split-toggle"
-                  :icon="directionIcon"
-                  :tooltip="directionLabel"
-                  @click.stop="toggleDirection"
-                />
-                <!-- `aria-haspopup="dialog"`, not `menu`: the panel is a div of
-                 grouped toggles, and claiming a menu would promise roving
-                 arrow keys nothing implements. Matches SearchResultBar. -->
-                <AppBarButton
-                  v-bind="menuProps"
-                  class="bar-split-menu"
-                  :icon="activeSort.icon"
-                  chevron
-                  aria-haspopup="dialog"
-                  :aria-expanded="sortMenuOpen"
-                  :tooltip="sortButtonTitle"
-                >
-                  <span class="bar-btn-value">{{ activeSort.label }}</span>
-                </AppBarButton>
-              </div>
-            </template>
-            <ShelfSortPanel section="sort" />
-          </v-menu>
-
-          <v-menu
-            v-model="showMenuOpen"
-            :close-on-content-click="false"
-            location="bottom end"
-            origin="top end"
-            :offset="8"
-            transition="scale-transition"
-          >
-            <!-- The boxed bar button, its badge and the panel shell are the
-             toolbar's shipped filter pattern; v-menu is also what returns
-             focus to this button on Escape and on an outside click, so none
-             of that is hand-rolled.
-
-             The badge counts ACTIVE FILTERS, never results: it is the answer to
-             "why is this list short", and the result counts are already on the
-             group headers. -->
-            <template #activator="{ props: menuProps }">
-              <AppBarButton
-                v-bind="menuProps"
-                class="shelf-show-btn"
-                icon="filter-outline"
-                chevron
-                :badge="store.activeCount > 0 ? store.activeCount : null"
-                :active="store.activeCount > 0 && !showMenuOpen"
-                :open="showMenuOpen"
-                :tooltip="showButtonTitle"
-              />
-            </template>
-            <ShelfShowPanel
-              :open="showMenuOpen"
-              :focus-name-request="nameFocusRequest"
-            />
-          </v-menu>
-        </template>
-
-        <!-- The tail, minus undo: [separator] [TbGlobalActions]
-             (docs/design/toolbar-responsive-decisions.md). The shelf records
-             nothing in the operation log, so every step the History popover
-             could offer here belongs to a screen the reader is not on - an
-             undo control that never answers for anything in front of you is
-             worse than no control. The separator is still required: proximity
-             alone cannot separate identical icon buttons into "this view's
-             controls" and "the app's". -->
+        <NameFilterField
+          v-if="isShelfTab"
+          ref="nameFieldRef"
+          class="shelf-name-bar"
+          :model-value="store.filters.name"
+          label="Filter models by name"
+          @update:model-value="(name) => store.setFilters({ name })"
+        />
+        <!-- The tail: [separator] [TbGlobalActions], which carries undo/redo
+             (docs/design/toolbar-responsive-decisions.md). -->
         <span class="bar-separator" aria-hidden="true"></span>
         <TbGlobalActions
           rail="models"
-          rail-name="Models and tasks"
-          @open-settings="emit('open-settings')"
+          rail-name="Models"
         />
       </div>
     </div>
@@ -474,8 +184,8 @@
       v-if="isShelfTab"
       id="shelf-panel-shelf"
       class="shelf-body"
-      role="tabpanel"
-      aria-labelledby="shelf-tab-shelf"
+      role="region"
+      aria-label="Model list"
       aria-describedby="shelf-help"
       :inert="moves.running || undefined"
     >
@@ -521,31 +231,32 @@
           @click="offlineDismissed = true"
         />
       </p>
-      <!-- Sets whose checkpoint is gone, said once. A selection shortcut, not a
-           second verb: Replace lives on the pill and the card's menu, and
-           replacing one is the same operation as replacing twelve. -->
+      <!-- Models ComfyUI's own loaders cannot see here (#2205). A note, not an
+           error: PixlStash's loaders find them by hash wherever they are. -->
       <p
-        v-if="isSetGrid && missingCount && !missingDismissed"
+        v-if="misplacedIds.size"
         class="shelf-banner"
-        data-testid="shelf-missing-banner"
+        role="status"
+        data-testid="shelf-misplaced-note"
       >
-        <v-icon size="16">mdi-file-alert-outline</v-icon>
-        <span class="shelf-banner-text"
-          ><b>{{
-            missingCount === 1
-              ? "1 set is missing its checkpoint"
-              : `${missingCount} sets are missing their checkpoint`
-          }}</b>
-          · not on your shelf; replace it in the workflows that load it</span
+        <v-icon size="16" class="shelf-banner-warn" aria-hidden="true"
+          >mdi-alert-outline</v-icon
         >
-        <AppButton size="sm" @click="store.selectAllMissing()">Select them</AppButton>
+        <span class="shelf-banner-text"
+          >{{ misplacedIds.size }}
+          {{ misplacedIds.size === 1 ? "model in this folder is" : "models in this folder are" }}
+          outside the folders ComfyUI loads from, so ComfyUI does not list
+          {{ misplacedIds.size === 1 ? "it" : "them" }}. PixlStash's own loaders
+          still find {{ misplacedIds.size === 1 ? "it" : "them" }}.</span
+        >
         <span class="shelf-spacer"></span>
-        <AppBarButton
-          icon="close"
-          tooltip="Dismiss"
-          aria-label="Dismiss the missing checkpoint notice"
-          @click="dismissedMissing = new Set(store.missingSetKeys)"
-        />
+        <AppButton
+          size="sm"
+          variant="outline"
+          data-testid="shelf-select-misplaced"
+          @click="selectMisplaced"
+          >Select {{ misplacedIds.size === 1 ? "it" : "them" }}</AppButton
+        >
       </p>
       <!-- The set grid, ahead of every row-list state: its groups OVERLAP, so
            it is a different screen rather than a banded version of this one. It
@@ -590,19 +301,16 @@
         <p>No models match these filters.</p>
         <AppButton @click="store.resetFilters()">Reset filters</AppButton>
       </div>
+      <!-- Loose needs the sets to know which models are in none of them. Until
+           they are read, "In no set yet" is a question not an answer. -->
+      <div
+        v-else-if="!store.visibleRows.length && store.place === 'loose' && !store.setsKnown"
+        class="shelf-state"
+      >
+        <p>Reading the sets…</p>
+      </div>
       <div v-else-if="!store.visibleRows.length" class="shelf-state">
-        <p>No models found.</p>
-        <p>
-          PixlStash lists what it finds in the model folders registered on this
-          machine. Add the folder where you keep them.
-        </p>
-        <AppButton
-          variant="primary"
-          aria-haspopup="dialog"
-          @click="openFolders()"
-        >
-          Add a model folder
-        </AppButton>
+        <p>{{ emptyPlaceLine }}</p>
       </div>
 
       <!-- The row itself is not a focus stop unless it holds the roving one:
@@ -627,10 +335,8 @@
           role="group"
           aria-label="Sort and size the columns"
         >
-          <!-- The favourite column's track (#1578): the same 24px lead the rows
-               draw before the mark, so the headings keep their left edges. -->
-          <span class="shelf-head-fav" aria-hidden="true"></span>
-          <!-- Matches `.shelf-row-ident`, which holds the mark and the ring.
+          <!-- Matches `.shelf-row-ident`, which holds the mark, so the
+               headings keep their left edges over the names.
                There is nothing to name: the mark IS the row's identity and the
                hidden `Model` columnheader already says so. -->
           <span class="shelf-head-ident" aria-hidden="true"></span>
@@ -667,7 +373,6 @@
             :class="`shelf-head-col--${col.key}`"
           >
             <button
-              v-if="col.sort"
               class="section-label shelf-head-cell"
               :class="{
                 'shelf-head-cell--on': store.view.sortKey === col.sort,
@@ -686,12 +391,6 @@
                 directionIcon
               }}</v-icon>
             </button>
-            <span
-              v-else
-              class="section-label shelf-head-cell shelf-head-cell--static"
-            >
-              <span class="shelf-head-text">{{ col.label }}</span>
-            </span>
             <!-- `separator` with a value, which is the window-splitter pattern
                  and the only reason this is focusable: a grip that answered
                  the pointer alone would put the column widths out of reach of
@@ -741,219 +440,21 @@
           "
           @click="onListBackgroundClick"
         >
-          <!-- The key to the meters, said ONCE for the view rather than once per
-               band: it is the same three segments every time, and repeating it
-               down the list would cost more room than the meters themselves.
-               Drawn only when a measured meter is actually on screen - an
-               unmeasured band renders no meter at all, so a shelf of offline
-               drives would otherwise key a picture nobody can see.
-
-               No ARIA and no `aria-describedby` back from the bands: each
-               heading already states its figures in words, so this is redundant
-               to a screen reader, and wiring it up would re-read all three
-               labels on every heading. -->
-          <p v-if="showsBandLegend" class="shelf-keys">
-            <span v-for="item in BAND_LEGEND" :key="item.key" class="shelf-key">
-              <span
-                class="shelf-key-swatch"
-                :class="`shelf-band-seg--${item.key}`"
-              ></span>
-              <span>{{ item.label }}</span>
-            </span>
-            <span class="shelf-key">
-              <v-icon size="14">mdi-cursor-move</v-icon>
-              <span>drag a selection onto a drive or folder to move it</span>
-            </span>
-          </p>
           <div
             v-for="group in shownGroups"
             :key="group.key"
             class="shelf-group"
           >
-            <!-- The drive band: the OUTER of the two levels the plan allows, and
-                 the second one is spent here rather than on stacks, which nest
-                 inside a row and not inside a header. Drawn on the first group of
-                 each band, never as a wrapper element, so the sticky folder
-                 headers below keep scrolling under it in one flow. -->
-            <!-- And the drop target for a move (#894). `dragover` carries no
-                 `.prevent` here either - calling preventDefault() is what ACCEPTS
-                 a drop, so a band with no room simply never calls it and the
-                 browser draws its own refusal cursor over a band already in the
-                 error treatment. -->
-            <h3
-              v-if="group.bandStart"
-              class="shelf-band"
-              :class="{
-                'shelf-band--unknown': !group.band.measured,
-                'shelf-band--drop': bandDropState(group.band) === 'drop',
-                'shelf-band--reject': bandDropState(group.band) === 'reject',
-              }"
-              @dragover="onBandDragOver(group.band, $event)"
-              @dragleave="onBandDragLeave(group.band)"
-              @drop="onBandDrop(group.band, $event)"
-            >
-              <!-- Which disk, as one group. It takes the slack so that every
-                   band's meter and figures begin at the same x - two meters
-                   that do not share a left edge cannot be compared down the
-                   column, which is the only reason to draw the meter twice. -->
-              <span class="shelf-band-id">
-                <!-- The kind rides the glyph rather than arriving as a chip:
-                     the disk mark is on every band already and says nothing,
-                     and a chip would be a fourth variable-width thing ahead of
-                     the meter as well as a second dialect of the `Locked` and
-                     `Managed` chips one level down. The word is in the title
-                     for the reader who wants it, and null draws the plain
-                     disk - never the word "Unknown". -->
-                <Tooltip :text="DRIVE_KINDS[group.band.kind]?.label || ''">
-                  <template #activator="{ props: tipProps }">
-                    <v-icon
-                      v-bind="tipProps"
-                      size="16"
-                      class="shelf-band-icon"
-                      >{{
-                        DRIVE_KINDS[group.band.kind]?.icon || "mdi-harddisk"
-                      }}</v-icon
-                    >
-                  </template>
-                </Tooltip>
-                <span class="shelf-band-name">{{ group.band.label }}</span>
-                <!-- Only when it says something the name did not. With no
-                     volume label the name IS the mount point, and drawing both
-                     rendered `/` twice, which reads as a fault rather than as
-                     detail. -->
-                <span
-                  v-if="group.band.mountPoint !== group.band.label"
-                  class="shelf-band-path"
-                  >{{ group.band.mountPoint }}</span
-                >
-              </span>
-              <!-- Three segments carving up one track, not fills stacked on top
-                   of each other. The shelf's share is a PART of what is used, so
-                   `other` is the REST of the used space: laid end to end the
-                   three are the drive, and no boundary is ambiguous. Overlaying
-                   them was the original shape and it meant a reader could see a
-                   boundary without being able to tell which of the two questions
-                   - "how full is this disk" and "how much of that is us" - it
-                   answered (#893).
-
-                   `aria-hidden`, and no `role="img"`: `.shelf-band-figures`
-                   below already renders the identical string as visible text in
-                   this same heading, so labelling the meter made every band
-                   announce its figures twice. `role="meter"` would be worse -
-                   it carries one `aria-valuenow` and this is three numbers. -->
-              <span class="shelf-band-usage">
-                <span
-                  v-if="usage(group.band)"
-                  class="shelf-band-meter"
-                  :class="{
-                    'shelf-band-meter--low': usage(group.band).lowFree,
-                  }"
-                  aria-hidden="true"
-                >
-                  <span
-                    class="shelf-band-seg shelf-band-seg--shelf"
-                    :style="{ width: `${meter(group.band).shelfPct}%` }"
-                  ></span>
-                  <span
-                    class="shelf-band-seg shelf-band-seg--other"
-                    :style="{ width: `${meter(group.band).otherPct}%` }"
-                  ></span>
-                  <!-- The ghost: what a drop would add, carved out of the free
-                     segment rather than laid over it, so the four still sum to
-                     the drive. Hatched, never a solid, because a projection is
-                     provisional and a measurement is not - and the two must not
-                     be one reading apart. -->
-                  <span
-                    v-if="projection(group.band)"
-                    class="shelf-band-seg shelf-band-seg--ghost"
-                    :class="{
-                      'shelf-band-seg--ghost-reject': !projection(group.band)
-                        .fits,
-                    }"
-                    :style="{ width: `${projection(group.band).addedPct}%` }"
-                  ></span>
-                  <span
-                    class="shelf-band-seg shelf-band-seg--free"
-                    :style="{ width: `${meter(group.band).freePct}%` }"
-                  ></span>
-                </span>
-                <span
-                  class="shelf-band-figures"
-                  :class="{
-                    'shelf-band-figures--low':
-                      !projection(group.band) && usage(group.band)?.lowFree,
-                    'shelf-band-figures--reject':
-                      bandDropState(group.band) === 'reject',
-                  }"
-                >
-                  <!-- The non-colour half of the low and reject states. Colour is
-                     additive here, never the carrier: the distinction has to
-                     survive greyscale, and the glyph and the words ("Only", "will
-                     not fit") both do. A drop that fits gets the tray glyph
-                     rather than none, so the label under a hatched meter is
-                     marked as being about the drag and not about the disk. -->
-                  <v-icon v-if="projection(group.band)" size="16">{{
-                    projection(group.band).fits
-                      ? "mdi-tray-arrow-down"
-                      : "mdi-alert-circle-outline"
-                  }}</v-icon>
-                  <v-icon v-else-if="usage(group.band)?.lowFree" size="16"
-                    >mdi-alert-outline</v-icon
-                  >
-                  <!-- One anchor number, then its context. The reader's
-                       question is "will this fit", and the run-on sentence
-                       gave the answer, what it is measured against and our own
-                       share the same size, weight and ink - three numbers to
-                       parse for one. Split, not shortened: the other two are
-                       the reason to believe the first.
-
-                       Two items, so the gap can give the anchor room to be one
-                       - but `rest` still carries its own leading space, and
-                       that is not redundant: the accessible name is the text
-                       nodes run together with no regard for a gap, so without
-                       it the line is read aloud as "GB freeof". -->
-                  <strong class="shelf-band-lead">{{
-                    meterLabel(group.band).lead
-                  }}</strong>
-                  <span>{{ meterLabel(group.band).rest }}</span>
-                </span>
-              </span>
-            </h3>
-
             <!-- The header IS the button, so its whole width is the drop target
                  and the collapse control. A heading as well as a button, so a
                  screen reader can jump group to group by heading. -->
             <h3 v-if="grouped" class="shelf-group-heading">
-              <!-- A folder header is also the drop target for a drag, which is
-                   why the drag handlers sit on the button and not on a wrapper:
-                   the button already spans the header's full width, and a second
-                   element would put a dead strip between the two. `dragover`
-                   does NOT carry `.prevent` - calling preventDefault() is what
-                   ACCEPTS a drop, so it happens inside the handler and only for
-                   a payload this target takes (#757). -->
               <button
                 class="shelf-group-btn"
-                :class="[
-                  `shelf-group-btn--${group.tier || 'plain'}`,
-                  {
-                    'shelf-group-btn--drop':
-                      (dropTargetKey === group.key && dropFits(group.band)) ||
-                      fileDropKey === group.key,
-                    'shelf-group-btn--offline': group.offline,
-                    'shelf-group-btn--nested': group.nested,
-                  },
-                ]"
-                :style="groupStyle(group)"
                 type="button"
                 :aria-expanded="!store.isCollapsed(group.key)"
                 :aria-label="groupLabel(group)"
-                :data-model-drop-folder="fileDropFolderId(group)"
                 @click="store.toggleGroup(group.key)"
-                @contextmenu="openFolderMenu(group, $event)"
-                @keydown="onFolderHeaderKeydown(group, $event)"
-                @dragover="onGroupDragOver(group, $event)"
-                @dragleave="onGroupDragLeave(group, $event)"
-                @drop="onGroupDrop(group, $event)"
               >
                 <v-icon
                   size="16"
@@ -973,7 +474,7 @@
                      an unrecognised value get, both of which mean "no feature
                      here to name" and so are exactly the axis. -->
                 <v-icon size="16" class="shelf-group-mark">{{
-                  group.icon || GROUP_BY_LABELS[store.view.groupBy].icon
+                  group.icon || GROUP_BY_LABELS[store.groupAxis].icon
                 }}</v-icon>
                 <!-- The label and everything that qualifies it. The chips are
                      WORDS on purpose: the rail's hue groups the folders on one
@@ -985,17 +486,6 @@
                   :class="`shelf-group-label--${group.labelKind}`"
                   >{{ group.label }}</span
                 >
-                <span v-if="group.chip" class="shelf-chip">{{
-                  group.chip
-                }}</span>
-                <!-- Only where no band names the drive already: under `Drive,
-                     then folder` the band above IS this chip, and repeating it on
-                     every folder under it is noise rather than a signal. -->
-                <span v-if="!group.band && group.drive" class="shelf-chip">
-                  <v-icon size="12">mdi-harddisk</v-icon>
-                  {{ group.drive.label }}
-                </span>
-                <span v-if="group.offline" class="shelf-chip">Offline</span>
                 <!-- Why the rows are not in date order: the favourites lead. -->
                 <span
                   v-if="group.favourites && store.view.favouritesFirst"
@@ -1027,9 +517,6 @@
               role="treegrid"
               aria-multiselectable="true"
               :aria-label="grouped ? group.label : 'Models'"
-              :data-model-drop-folder="fileDropFolderId(group)"
-              @dragover="onFolderFileDragOver(group, $event)"
-              @dragleave="onFileDragLeave(group.key, $event)"
             >
               <!-- The column names, on every grid and drawn on none of them.
                    `columnheader`s head the grid they are in and nothing else, so
@@ -1040,12 +527,12 @@
                    readable from inside the treegrid rather than only from the
                    control group above it. -->
               <li class="visually-hidden" role="row">
-                <span role="columnheader">Favourite</span>
-                <span role="columnheader">Model</span>
                 <span role="columnheader" :aria-sort="columnSortState('name')"
                   >Name</span
                 >
-                <span role="columnheader">Kind</span>
+                <span role="columnheader" :aria-sort="columnSortState('type')"
+                  >Type</span
+                >
                 <span
                   role="columnheader"
                   :aria-sort="columnSortState('base_model')"
@@ -1062,31 +549,32 @@
                   :aria-sort="columnSortState(DATE_COLUMN.sort)"
                   >{{ DATE_COLUMN.label }}</span
                 >
+                <span
+                  role="columnheader"
+                  class="shelf-sets-header"
+                  :aria-sort="columnSortState('sets')"
+                  >Sets</span
+                >
               </li>
-              <!-- A row with one spanning cell, because a grid takes nothing but
-                   rows: not selectable, because there is nothing here to select.
-                   A registered folder with no models says which of the two
-                   states it is in, because "we have not looked yet" is the
-                   owner's to act on and "we looked and it is empty" is not. -->
-              <li
-                v-if="!group.rows.length"
-                role="row"
-                class="shelf-empty-folder"
+              <!-- The `v-for` sits on a wrapper, not on the row, so a stack's
+                   expanded members can be siblings of their cover inside the
+                   same iteration and still see `row`. The wrapper is a
+                   `MemoBlock` rather than a template with `v-memo`, because
+                   this list is nested in the groups' and the directive's one
+                   cache slot per list would never hit (`rowMemo`). -->
+              <MemoBlock
+                v-for="row in group.rows"
+                :key="row.rowKey"
+                :deps="rowMemo(row)"
               >
-                <span role="gridcell" :aria-colspan="COLUMN_COUNT">
-                  {{ EMPTY_FOLDER_NOTE[group.emptyReason] }}
-                </span>
-              </li>
-              <!-- The `v-for` sits on a wrapping template, not on the row, so a
-                   stack's expanded members can be siblings of their cover inside
-                   the same iteration and still see `row`. -->
-              <template v-for="row in group.rows" :key="row.rowKey">
                 <li
                   class="shelf-row fav-host"
                   :class="{
                     'shelf-row--selected': store.isSelected(row.id),
                     'shelf-row--offline': row.locState === 'unreachable',
                     'shelf-row--broken': BROKEN_STATES.has(row.locState),
+                    'shelf-row--cut': store.isCut(row.id),
+                    'shelf-row--locked': !!lockedNote(row),
                   }"
                   role="row"
                   aria-level="1"
@@ -1097,66 +585,62 @@
                   aria-keyshortcuts="F2 Shift+F2 Shift+F10 H"
                   :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
                   :data-row-key="row.rowKey"
-                  :draggable="
-                    canDrag(row) &&
-                    editingRowKey !== row.rowKey &&
-                    editingBaseKey !== row.rowKey
-                  "
                   @click="pickRow(row, $event)"
+                  @pointerdown="onRowPointerDown($event, row)"
                   @contextmenu.prevent="openRowMenu(row, $event)"
                   @keydown="onRowKeydown(row, $event)"
                   @focus="focusedRowKey = row.rowKey"
-                  @dragstart="onRowDragStart(row, $event)"
-                  @dragend="clearDropState()"
                 >
-                  <!-- The favourite column (#1578): a run is favourited whole,
-                       so only its cover carries the heart. Unhashed models have
-                       no key to favourite by, and say why. -->
-                  <span role="gridcell" class="shelf-row-fav">
-                    <FavouriteHeart
-                      :on="store.isFavouriteRow(row)"
-                      :label="row.filename || ''"
-                      :disabled-reason="
-                        row.sha256 ? '' : 'Favourite once its hash is read'
-                      "
-                      @toggle="
-                        store.toggleFavourites({
-                          kind: 'model',
-                          keys: [row.sha256],
-                        })
-                      "
-                    />
-                  </span>
-                  <!-- The identity slot, and the assignment (#904). The RING is
-                       the assignment: its hue is the entity's own and its style
-                       is hashed off the entity, so the pair survives greyscale
-                       where the hue alone would not, and the mark's own label
-                       names every attachment out loud. That is what replaced the
-                       `Assigned to` column - one mark, two axes, no track that is
-                       empty on most rows. -->
                   <span role="gridcell" class="shelf-row-ident">
                     <!-- Deck ticks behind the mark say "this is more than one
                          file" before the count is read, exactly as they do on a
-                         picture tile. Count-only, so the component reuses cleanly
-                         here even though a model has no thumbnail. -->
-                    <StackEdgeTicks
-                      v-if="row.memberCount > 1"
-                      :count="row.memberCount"
-                    />
-                    <!-- The hue is bound as a custom property rather than a
-                         class, because it is per-entity DATA and there is no
-                         bounded set of them to name. Bound only when there IS
-                         one: an unassigned ring has no hue, and a custom
-                         property set to an empty string is a different thing
-                         from an unset one - `var(--mmark-ring, transparent)`
-                         would resolve to nothing rather than to its fallback,
-                         and an invalid-at-computed-value-time `border` takes the
-                         whole shorthand down with it, including the 2px. -->
-                    <ModelMark
-                      :row="row"
-                      :ring="ringFor(row)"
-                      :style="ringStyle(row)"
-                    />
+                         picture tile. The ticks fill their nearest positioned
+                         box, so they get one the mark's size: against the whole
+                         slot they drew a grey pill over it instead of a deck
+                         behind it. -->
+                    <span class="shelf-row-mark">
+                      <StackEdgeTicks
+                        v-if="row.memberCount > 1"
+                        :count="row.memberCount"
+                      />
+                      <!-- A file that is gone has nothing to picture, so the
+                           absence glyph takes the mark's place rather than
+                           leading the name. -->
+                      <Tooltip
+                        v-if="BROKEN_STATES.has(row.locState)"
+                        :text="LOC_TITLE[row.locState]"
+                      >
+                        <template #activator="{ props: tipProps }">
+                          <v-icon
+                            v-bind="tipProps"
+                            class="shelf-row-loc shelf-row-gone"
+                            :class="`shelf-row-loc--${row.locState}`"
+                            >{{ LOC_ICON[row.locState] }}</v-icon
+                          >
+                        </template>
+                      </Tooltip>
+                      <!-- The model's own picture, else the face of the person
+                           or set it is attached to, else the generated mark
+                           (#2168 took the ring off the list; `bare` keeps it
+                           off). -->
+                      <ModelMark v-else :row="row" :ring="ringFor(row)" bare />
+                      <!-- The lock rides the mark, where the eye already lands
+                           to tell one model from another; the hatch behind the
+                           row is what reads from across the list. The top-start
+                           corner, because the other three hold the version
+                           pill, the deck ticks and the cover chip. The words
+                           stay on the file line, so this is aria-hidden. -->
+                      <span
+                        v-if="lockedNote(row)"
+                        class="shelf-row-lock"
+                        aria-hidden="true"
+                        ><Tooltip
+                          text="In a locked folder"
+                          activator="parent"
+                          :describe="false"
+                        /><v-icon>mdi-lock</v-icon></span
+                      >
+                    </span>
                     <!-- Which file the run is being drawn from, said in words
                          rather than by position: once the strip is open the
                          reader is looking at six rows and choosing between
@@ -1188,9 +672,13 @@
                   <span role="gridcell" class="shelf-row-label">
                     <!-- The absence glyph leads the line, because it changes what
                          everything after it means: the name is still true, the
-                         file behind it is not there. -->
+                         file behind it is out of reach. A file that is gone
+                         draws it in the mark's place instead. -->
                     <Tooltip
-                      v-if="row.locState !== 'present'"
+                      v-if="
+                        row.locState !== 'present' &&
+                        !BROKEN_STATES.has(row.locState)
+                      "
                       :text="LOC_TITLE[row.locState]"
                     >
                       <template #activator="{ props: tipProps }">
@@ -1229,6 +717,14 @@
                         :class="`shelf-row-name--${row.name.state}`"
                         @dblclick.stop="startRename(row)"
                         >{{ row.name.text || "Name this model" }}</span
+                      >
+                      <v-icon
+                        v-if="store.isFavouriteRow(row)"
+                        class="shelf-row-heart"
+                        size="12"
+                        role="img"
+                        aria-label="Favourite"
+                        >mdi-heart</v-icon
                       >
                       <VerdictIcon
                         v-if="rowVerdict(row)"
@@ -1330,14 +826,25 @@
                          because it is a state of the listing and not of the
                          file. -->
                     <span v-if="row.hidden" class="shelf-chip">Hidden</span>
+                    <!-- A run PixlStash trained and imported. Neutral, like
+                         Hidden: it says where the file came from, not that
+                         anything needs doing. -->
+                    <span
+                      v-if="row.training_run_id"
+                      class="shelf-chip shelf-chip--trained"
+                      ><Tooltip
+                        text="Trained in PixlStash"
+                        activator="parent"
+                      />Trained</span
+                    >
                     <!-- The filename, on its own line under the name. It is what
                          the file is actually called, which the name above it may
                          well not be, and it is the string the reader pastes into
                          a ComfyUI node - so it is monospaced and it is always
                          there rather than living in a tooltip. What IS in the
-                         tooltip is the folder: the header names it only under
-                         `groupBy: 'folder'`, so on every other axis this line is
-                         the one place left that can say where the file is. The
+                         tooltip is the folder: no header names it since the
+                         folder grouping went (#2168), so this line is the one
+                         place in the list that can say where the file is. The
                          file's SHA-256 follows the paths (`modelFileTitle`). -->
                     <span class="shelf-row-file">
                       <Tooltip
@@ -1347,6 +854,8 @@
                       {{ row.filename
                       }}<template v-if="LOC_NOTE[row.locState]">
                         · {{ LOC_NOTE[row.locState] }}</template
+                      ><template v-else-if="lockedNote(row)">
+                        · {{ lockedNote(row) }}</template
                       ><!-- The same bytes written twice. It rides the file line
                         rather than taking a chip of its own because it is a
                         fact ABOUT the file, and because the tooltip already
@@ -1359,6 +868,11 @@
                         that draws the duplicate twice.
                         --><template v-if="row.copies > 1">
                         · {{ row.copies }} copies</template
+                      ><span
+                        v-if="misplacedIds.has(row.id)"
+                        class="shelf-row-nolist"
+                        data-testid="shelf-row-nolist"
+                        >ComfyUI does not list it here</span
                       >
                     </span>
                   </span>
@@ -1370,13 +884,13 @@
                     <span
                       v-if="row.file_kind === 'engine'"
                       class="shelf-chip"
-                      :title="kindLabel(row)"
-                      >{{ kindLabel(row) }}</span
+                      :title="shelfTypeLabel(row)"
+                      >{{ shelfTypeLabel(row) }}</span
                     >
                     <KindMenu
                       v-else
                       :file-kind="row.file_kind"
-                      :kind-text="kindLabel(row)"
+                      :kind-text="shelfTypeLabel(row)"
                       :subject="row.name.text || row.filename || 'this model'"
                       :suggested-kind="row.suggested_kind || ''"
                       :suggested-by="row.suggested_by || 0"
@@ -1416,7 +930,11 @@
                         v-if="baseModelCell(row).text"
                         class="shelf-base-text"
                         @dblclick.stop="startBaseModelEdit(row)"
-                        >{{ baseModelCell(row).text }}</span
+                        ><Tooltip
+                          v-if="baseModelCell(row).note"
+                          :text="baseModelCell(row).note"
+                          activator="parent"
+                        />{{ baseModelCell(row).text }}</span
                       >
                       <span
                         v-else
@@ -1425,17 +943,29 @@
                         >not set</span
                       >
                       <!-- A value we inferred rather than one the file or a
-                           person stated. The same tag the name column uses for
-                           the file's own string, with its own word: "from
-                           filename" there already means "verbatim". -->
-                      <span
+                           person stated. Under the label rather than beside it,
+                           so a narrow column ellipsises neither, and a button:
+                           pointing at it turns "guessed" into "confirm", and
+                           clicking writes the guess as the owner's answer. -->
+                      <button
                         v-if="baseModelCell(row).guess"
-                        class="shelf-name-tag"
-                        ><Tooltip
+                        type="button"
+                        class="shelf-name-tag shelf-base-guess"
+                        :aria-label="`Guessed: confirm ${baseModelCell(row).text} as the base model`"
+                        :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
+                        @click.stop="confirmBaseModel(row)"
+                        @dblclick.stop
+                        @keydown.enter.space.stop
+                      >
+                        <Tooltip
                           :text="baseModelCell(row).guess"
                           activator="parent"
-                        />guessed</span
-                      >
+                        /><span class="shelf-base-guess-word">guessed</span
+                        ><span class="shelf-base-guess-confirm"
+                          ><v-icon size="12" aria-hidden="true">mdi-check</v-icon
+                          >confirm</span
+                        >
+                      </button>
                     </template>
                   </span>
                   <span role="gridcell" class="shelf-col shelf-col--size">{{
@@ -1451,6 +981,9 @@
                       dateCell(row)
                     }}</span
                   >
+                  <span role="gridcell" class="shelf-col shelf-col--sets">{{
+                    setsCell(row)
+                  }}</span>
                 </li>
 
                 <!-- The stack's other members - later steps, earlier versions,
@@ -1467,12 +1000,27 @@
                 <template
                   v-if="row.memberCount > 1 && isStackOpen(row.stack_id)"
                 >
+                  <!-- The run's loss, first in its expansion: the curve of the
+                       training run these files came from. Only a trained run
+                       carries one; a run in another library draws nothing. -->
+                  <li
+                    v-if="row.training_run_id"
+                    class="shelf-run-loss-row"
+                    role="row"
+                    aria-level="2"
+                    data-testid="shelf-run-loss"
+                  >
+                    <span role="gridcell">
+                      <ShelfRunLoss :run-id="row.training_run_id" />
+                    </span>
+                  </li>
                   <li
                     v-for="member in row.members.slice(1)"
                     :key="memberKey(row, member)"
                     class="shelf-row shelf-row--member"
                     :class="{
                       'shelf-row--selected': store.isSelected(member.id),
+                      'shelf-row--cut': store.isCut(member.id),
                     }"
                     role="row"
                     aria-level="2"
@@ -1481,11 +1029,11 @@
                     :tabindex="memberKey(row, member) === rovingRowKey ? 0 : -1"
                     :data-row-key="memberKey(row, member)"
                     @click="pickMember(row, member, $event)"
+                    @pointerdown="onRowPointerDown($event, member)"
                     @contextmenu.prevent="openMemberMenu(row, member, $event)"
                     @keydown="onMemberKeydown(row, member, $event)"
                     @focus="focusedRowKey = memberKey(row, member)"
                   >
-                    <span class="shelf-row-fav" aria-hidden="true"></span>
                     <span role="gridcell" class="shelf-row-ident">
                       <v-icon size="14">mdi-subdirectory-arrow-right</v-icon>
                     </span>
@@ -1525,13 +1073,36 @@
                         activator="parent"
                       />{{ dateCell(member, true) }}</span
                     >
+                    <span role="gridcell" class="shelf-col shelf-col--sets"></span>
                   </li>
                 </template>
-              </template>
+              </MemoBlock>
             </ul>
           </div>
         </div>
       </template>
+      <!-- The open folder's drive: how much room is left on it. -->
+      <div
+        v-if="inFolder"
+        class="shelf-status"
+        role="status"
+        data-testid="shelf-status"
+      >
+        <template v-if="openDrive">
+          <span
+            >{{ openDriveName }}: {{ formatModelSize(openDrive.free) }} free of
+            {{ formatModelSize(openDrive.total) }}</span
+          >
+          <span
+            class="shelf-status-bar"
+            :class="{ 'shelf-status-bar--full': openDrive.used >= 90 }"
+            aria-hidden="true"
+            ><span :style="{ width: `${openDrive.used}%` }"></span
+          ></span>
+          <span>{{ openDrive.used }}% full</span>
+        </template>
+        <span v-else>{{ openDriveName || "This drive" }} could not be measured</span>
+      </div>
     </div>
 
     <!-- The other view of the same destination. `v-if` and not `v-show`: the
@@ -1541,10 +1112,9 @@
     <TrainingRuns
       v-else
       id="shelf-panel-runs"
-      role="tabpanel"
-      aria-labelledby="shelf-tab-runs"
+      role="region"
+      aria-label="Training runs"
       @set-folder="openAddSource"
-      @count="runsCount = $event"
     />
 
     <!-- The pill floats bottom-centre OVER the list, exactly like the photo
@@ -1596,10 +1166,11 @@
       :heads="replacingHeads"
       @close="replacingHeads = []"
     />
-    <!-- The set receipts (#1573): the grid's own pill, lifted clear of the
-         selection pill when both are up. Local receipts only - a library
-         action's Undo would revert something this screen cannot show. -->
-    <ActionReceipt v-if="isShelfTab" local-only :lift-px="receiptLift" />
+    <!-- The set receipts (#1573) and the toolbar's undo/redo narration: the
+         grid's own pill, lifted clear of the selection pill when both are up.
+         A local receipt is raised only on the list tab (the host flag below);
+         a library undo from the toolbar is narrated on every tab. -->
+    <ActionReceipt :lift-px="receiptLift" />
     <WorkflowSetRenameDialog
       :set="renamingSet"
       @close="renamingSet = null"
@@ -1617,58 +1188,32 @@
       :open="moveOpen"
       :items="moveItems"
       :total-bytes="moveBytes"
-      :destination-folder-id="movePreselected"
+      :initial-destination="moveDestination"
+      @started="onMoveStarted"
       @close="closeMove"
     />
-
-    <!-- A folder header's own menu (#1270): the two registry verbs that are
-         about one folder and need no selection. Anchored to the pointer like
-         the row menu. The gates and their reasons are the ones Settings ›
-         Models uses (`useModelFolderGates`), so the two cannot disagree. -->
-    <v-menu
-      v-model="folderMenuOpen"
-      :target="folderMenuAt"
-      location="bottom end"
-      origin="top start"
-      :offset="2"
-    >
-      <div
-        v-if="folderMenuFolder"
-        class="ctx-menu shelf-menu"
-        role="menu"
-        tabindex="-1"
-        @keydown="onMenuKeydown"
-      >
-        <button
-          v-if="canScanFolder(folderMenuFolder)"
-          class="ctx-item"
-          :class="{ 'ctx-item--disabled': folderScanReason }"
-          type="button"
-          role="menuitem"
-          :disabled="Boolean(folderScanReason)"
-          @click="rescanFromMenu"
-        >
-          <Tooltip :text="folderScanReason || ''" activator="parent" />
-          <v-icon class="ctx-icon">mdi-refresh</v-icon>
-          <span class="ctx-label-text">{{
-            folderMenuFolder.last_checked ? "Rescan folder" : "Scan folder"
-          }}</span>
-        </button>
-        <button
-          v-if="folderMenuFolder.relocatable"
-          class="ctx-item"
-          :class="{ 'ctx-item--disabled': folderMoveReason }"
-          type="button"
-          role="menuitem"
-          :disabled="Boolean(folderMoveReason)"
-          @click="relocateFromMenu"
-        >
-          <Tooltip :text="folderMoveReason || ''" activator="parent" />
-          <v-icon class="ctx-icon">mdi-folder-move-outline</v-icon>
-          <span class="ctx-label-text">Move folder…</span>
-        </button>
-      </div>
-    </v-menu>
+    <!-- A folder the Folders tree moved or was asked to move (#2206). -->
+    <FolderMoveDialog
+      :open="folderMoveOpen"
+      :source="folderMoveSource"
+      :initial-destination="folderMoveDestination"
+      :plan="folderMovePlan"
+      @close="closeFolderMove"
+    />
+    <!-- A folder the Folders tree asked to remove, holding files (#2207). -->
+    <!-- Keyed by the request, so a request that replaces an open one (a batch's
+         next folder racing a single Remove) redraws on its own facts. -->
+    <ShelfRemoveFolderDialog
+      :key="folderRemoveAt"
+      :open="folderRemoveOpen"
+      :source="folderRemoveSource"
+      :plan="folderRemovePlan"
+      :remaining="folderRemoveRemaining"
+      @removed="folderRemoved = true"
+      @move-models="moveModelsOutFirst"
+      @close="closeFolderRemove"
+    />
+    <ModelDropTip />
 
     <!-- The shipped host-path picker again, in its file mode. A server-side
          picker rather than an `<input type=file>`: the file is on the machine
@@ -1681,17 +1226,6 @@
       pick-model-file
       @select="onFilePicked"
       @close="closeAddFile"
-    />
-
-    <!-- The same picker in its directory mode, emptying a folder into what it
-         returns: the header menu's Move. `registeredPaths` for the same reason
-         as below - moving into a registered folder would swallow it. -->
-    <FolderBrowser
-      :open="Boolean(relocatingFolder)"
-      :registered-paths="foldersStore.registeredPaths"
-      already-registered-label="Already a model folder"
-      @select="onRelocatePicked"
-      @close="closeRelocate"
     />
 
     <!-- The same picker in its directory mode, registering what it returns as
@@ -1715,8 +1249,8 @@
         :status="moveProgressStatus"
         :message="moves.failure || moveProgressMessage"
         :percent="moves.failure ? 100 : moves.percent"
-        :count="moves.failure ? null : moves.done"
-        :total="moves.failure ? null : moves.total"
+        :count="moves.failure || moves.kind === 'folder' ? null : moves.done"
+        :total="moves.failure || moves.kind === 'folder' ? null : moves.total"
         :abort-label="moveProgressAction"
         @abort="moves.failure ? dismissMoveFailure() : moves.cancel()"
       />
@@ -1725,12 +1259,13 @@
 </template>
 
 <script setup>
-import { withRef } from "../../utils/withRef.js";
 import {
   computed,
   nextTick,
+  onBeforeUnmount,
   onMounted,
   onUnmounted,
+  provide,
   ref,
   shallowRef,
   watch,
@@ -1747,22 +1282,23 @@ import MissingSetSelectionBar from "../panels/MissingSetSelectionBar.vue";
 import ReplaceMissingDialog from "../io/ReplaceMissingDialog.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import KindMenu from "../widgets/KindMenu.vue";
+import MemoBlock from "../widgets/MemoBlock.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import MergeCopiesDialog from "../panels/MergeCopiesDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
+import FolderMoveDialog from "../panels/FolderMoveDialog.vue";
+import ShelfRemoveFolderDialog from "../panels/ShelfRemoveFolderDialog.vue";
+import ModelDropTip from "../panels/ModelDropTip.vue";
 import ModelWorksWithDialog from "../panels/ModelWorksWithDialog.vue";
 import ModelSetGrid from "./ModelSetGrid.vue";
 import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
 import ActionReceipt from "../widgets/ActionReceipt.vue";
 import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
-import TbOverflowMenu from "../panels/TbOverflowMenu.vue";
-import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import TrainingRuns from "./TrainingRuns.vue";
+import ShelfRunLoss from "./ShelfRunLoss.vue";
 import { SOURCE_KIND } from "../../api/modelFolders";
 import FolderBrowser from "../editors/FolderBrowser.vue";
-import ModelMark from "../widgets/ModelMark.vue";
-import FavouriteHeart from "../widgets/FavouriteHeart.vue";
 import {
   FAVOURITE_KEY,
   useFavouritesStore,
@@ -1773,12 +1309,16 @@ import PicturePicker from "../widgets/PicturePicker.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import ModelMark from "../widgets/ModelMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { addModelFile } from "../../api/modelFiles";
 import { getPictureThumbnailBlob } from "../../api/pictures";
-import { fetchModelCompanions, openModelLocation } from "../../api/modelShelf";
+import {
+  fetchModelCompanions,
+  openModelLocation,
+} from "../../api/modelShelf";
 import {
   createStack,
   removeStackMember,
@@ -1791,57 +1331,58 @@ import {
   GRID_GROUP_BY,
   MAX_COLUMN_WIDTH,
   MIN_COLUMN_WIDTHS,
+  SET_SORT_LABELS,
   useModelShelfStore,
 } from "../../stores/useModelShelfStore";
-import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
+import {
+  basename,
+  useModelFoldersStore,
+} from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
-import { useModelFolderGates } from "../../composables/useModelFolderGates";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { errorDetail } from "../../utils/apiError";
 import { formatUserDate, formatUserDay } from "../../utils/utils";
 import { isTypingTarget } from "../../utils/dom.js";
-import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
-import { useFileDropHighlight } from "../../composables/useModelDropTarget";
+import { driveFullness } from "../../utils/libraryChrome";
 import {
-  adapterKindLabel,
-  assignmentRing,
-  bandGroups,
-  bandKeyFor,
-  bandProjection,
-  bandUsage,
-  capabilityLabel,
   companionsSentences,
+  inFolderScopeOf,
+  isMisplaced,
   modelFileTitle,
   dateColumnKey,
   defaultSortDirection,
   deletableModels,
   fileKindLabel,
+  shelfTypeLabel,
   undeletableNotice,
   baseModelCell,
+  lookupEligible,
   trashName,
-  withEmptyFolders,
-  withFolderSignals,
   formatModelSize,
   modelDate,
   modelName,
   GROUP_BY_LABELS,
   modelVersion,
   movableCopies,
+  moveMechanism,
   quantBadge,
   triggerChip,
   releaseReceipt,
   SORT_LABELS,
+  shelfTypeOf,
   stackReceipt,
   trainingStep,
   unstackReceipt,
   sortDirectionLabel,
+  isInFoldersTree,
+  assignmentRing,
 } from "../../utils/modelShelf";
-import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 
 // Settings lives in App.vue's sidebar dialog, so the toolbar's Settings button
 // asks for it the way the duplicates queue does. The stats toggle needs no
@@ -1851,6 +1392,7 @@ const emit = defineEmits(["open-settings"]);
 const store = useModelShelfStore();
 const entityLists = useEntityListsStore();
 const foldersStore = useModelFoldersStore();
+const favourites = useFavouritesStore();
 const moves = useModelMovesStore();
 // Both read by the window-level Escape, which has to know what else on screen
 // owns the key before it clears anything. See `onShelfEscape`.
@@ -1858,7 +1400,9 @@ const reviewSessionsStore = useReviewSessionsStore();
 const sidebarStore = useSidebarStore();
 
 /** Every model the Models rail can offer: the count in its closed handle's name. */
-const railCount = computed(() => store.railRows.length);
+const railCount = computed(() =>
+  isSetGrid.value ? store.placeCounts.sets : store.visibleRows.length,
+);
 
 // ── The closed Models rail (visual-language "Closed inspector") ───────────
 //
@@ -1894,11 +1438,16 @@ const railLabel = computed(() => {
 });
 
 // The same act as the toolbar toggle, so it persists. The handle unmounts as
-// the rail opens, so focus is handed to the rail's active tab rather than
-// dropping to `body`.
+// the rail opens, so focus is handed into the rail (Clear while anything is
+// selected, else its title) rather than dropping to `body`.
 function openRailFromTab() {
   sidebarStore.setModelsRailOpen(true);
-  nextTick(() => document.querySelector(".mrail .inspector-tab--active")?.focus());
+  nextTick(() =>
+    (
+      document.querySelector(".mrail .mrail-clear") ??
+      document.querySelector(".mrail .mrail-title")
+    )?.focus(),
+  );
 }
 
 // A NEW selection nudges the rail: the handle bounces and the toolbar's rail
@@ -1946,19 +1495,6 @@ watch(
   },
 );
 const sortMenuOpen = ref(false);
-const folderMenuOpen = ref(false);
-const folderMenuAt = ref([0, 0]);
-const folderMenuFolder = ref(null);
-const folderMenuInvoker = ref(null);
-const addMenuOpen = ref(false);
-const groupMenuOpen = ref(false);
-const groupButtonRef = ref(null);
-// `v-menu` returns focus to its trigger on Escape only; a close written through
-// the model leaves it on <body>, so a keyboard pick hands it back here.
-function closeGroupMenu() {
-  groupMenuOpen.value = false;
-  groupButtonRef.value?.focus();
-}
 /** The model whose companions the Works with dialog is answering for, or null. */
 const worksWithModel = ref(null);
 // Held raw: a DOM node, not reactive state. `VDialog`
@@ -1970,15 +1506,9 @@ const worksWithInvoker = shallowRef(null);
 // The toolbar buttons behind the dialogs its left half opens, so focus has a
 // place to come back to however the reader got there. A menu item cannot be
 // that place - it unmounts with the menu.
-const addBtnRef = ref(null);
-const foldersBtnRef = ref(null);
 /**
  * Hand focus to the first candidate that will actually take it, in order.
- * `addBtnRef` and `foldersBtnRef` both carry `shelf-fold-680`: below that
- * width the ladder hides them and shows `overflowRef`'s trigger in their
- * place. `isConnected` alone doesn't see that - a folded button is still in
- * the document, just `display:none`, and can't take focus - so this confirms
- * each attempt actually landed rather than assuming it from DOM presence.
+ * The one candidate is the shelf root, which every door returns to.
  */
 function restoreFocus(...candidates) {
   for (const el of candidates) {
@@ -2019,6 +1549,27 @@ async function confirmForget() {
     danger: true,
   });
   if (ok) await store.forgetSelected();
+}
+
+/**
+ * Confirm, then ask Civitai for the selection's empty base models.
+ *
+ * Not `danger`: nothing is destroyed. The prompt is the consent for the one
+ * shelf verb that leaves the machine, so it names the host and what is sent.
+ */
+async function confirmLookupBaseModel() {
+  const ids = store.selectedModels.filter(lookupEligible).map((row) => row.id);
+  if (!ids.length) return;
+  const ok = await confirm({
+    title:
+      ids.length === 1
+        ? "Look up 1 base model on Civitai?"
+        : `Look up ${ids.length} base models on Civitai?`,
+    message:
+      "PixlStash sends only each file's SHA-256 hash to civitai.com. Files are not uploaded, and base models you set yourself are never changed.",
+    confirmLabel: "Look up on Civitai",
+  });
+  if (ok) await store.lookupBaseModels(ids);
 }
 
 // Set while the delete prompt is being prepared or shown. The companions read
@@ -2179,7 +1730,7 @@ async function openLocation() {
         status === 403
           ? "A file manager opens on the machine running PixlStash, so this only works when you are sitting at it."
           : status === 409
-            ? "That file is not where the shelf last saw it. Rescan its folder to catch up."
+            ? "That file is not where the shelf last saw it. The shelf catches up in a moment."
             : "Couldn't open that folder - the machine running PixlStash has no desktop file manager.",
       key: "shelf-open-location",
     });
@@ -2202,28 +1753,10 @@ async function openLocation() {
 const moveOpen = ref(false);
 const moveItems = ref([]);
 const moveBytes = ref(0);
-/** The group header the pointer is currently over, for the drop affordance. */
-const dropTargetKey = ref("");
-/**
- * The folder header lit while model files are dragged in from outside the app.
- * Apart from `dropTargetKey`, which is a move's and carries its fit check.
- */
-const {
-  dropKey: fileDropKey,
-  onDragOver: onFileDragOver,
-  onDragLeave: onFileDragLeave,
-} = useFileDropHighlight();
-/** The band the pointer is currently over, for its meter's projection (#894). */
-const dropBandKey = ref("");
-/**
- * The dragged bytes, by the folder they are in NOW.
- *
- * Kept for the length of the drag because `dataTransfer`'s DATA is unreadable
- * during `dragover` - only `types` is - and the projection has to be drawn
- * while the pointer is still down. The drag always starts in this component, so
- * this is a hand-off between two of its own handlers and not a guess.
- */
-const dragBytesByFolder = shallowRef(new Map());
+/** `{folderId, path}` a drop or a paste chose, or null from Move to…. */
+const moveDestination = ref(null);
+/** True when the open dialog is pasting what Ctrl X cut. */
+const moveFromCut = ref(false);
 const moveInvoker = shallowRef(null);
 
 /** `model_folder.id` to the folder row, for `movableCopies`' folder rules. */
@@ -2232,11 +1765,17 @@ const foldersById = computed(
     new Map(foldersStore.folders.map((folder) => [Number(folder.id), folder])),
 );
 
-const moveProgressMessage = computed(() =>
-  moves.cancelRequested
+const moveProgressMessage = computed(() => {
+  // A folder is one job of one item: say which folder, not "1 of 1 files".
+  if (moves.kind === "folder") {
+    return moves.cancelRequested
+      ? `Stopping ${moves.folderName}…`
+      : `Moving ${moves.folderName}…`;
+  }
+  return moves.cancelRequested
     ? "Stopping after the file in flight…"
-    : "Moving model files…",
-);
+    : "Moving model files…";
+});
 
 /**
  * What the corner card is saying: progress, or the failure it ended in.
@@ -2275,290 +1814,419 @@ async function dismissMoveFailure() {
  * Open the move dialog for a set of rows.
  *
  * @param {Array<Object>} rows - shelf rows.
- * @param {number|null} [destinationFolderId] - preselected, when a drop chose
- *   it. The dialog seeds the managed store otherwise.
  */
-function openMove(rows, destinationFolderId = null) {
-  const { items, totalBytes } = movableCopies(rows, foldersById.value);
-  if (!items.length) return;
+function openMove(rows) {
+  // In a folder view only the copy in the open folder: the file on screen.
+  showMove(
+    movableCopies(
+      rows,
+      foldersById.value,
+      inFolder.value ? store.folderScope : null,
+    ),
+  );
+}
+
+/**
+ * Open the dialog for copies already worked out.
+ *
+ * @param {{items: Array, totalBytes: number}} copies
+ * @param {{folderId: number, path: string}|null} [destination] - pre-chosen.
+ * @param {boolean} [fromCut] - pasting what Ctrl X cut.
+ */
+function showMove(copies, destination = null, fromCut = false) {
+  if (!copies?.items?.length) return;
   moveInvoker.value =
     document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-  moveItems.value = destinationFolderId
-    ? // A file already in the folder it was dropped on is dropped from the
-      // batch here rather than sent for the server to skip: the dialog states
-      // the move in numbers, and counting files that will not move would make
-      // that statement wrong.
-      items.filter((item) => item.folder_id !== destinationFolderId)
-    : items;
-  moveBytes.value = totalBytes;
-  movePreselected.value = destinationFolderId;
-  moveOpen.value = moveItems.value.length > 0;
+  moveItems.value = copies.items;
+  moveBytes.value = copies.totalBytes;
+  moveDestination.value = destination;
+  moveFromCut.value = fromCut;
+  moveOpen.value = true;
 }
 
-/** The destination a drop chose, or null when the bar's button opened this. */
-const movePreselected = ref(null);
+// A folder in the sidebar's tree took a drop, or a paste named one: the
+// destination is already chosen, so the only question left is whether to ask.
+// A rename on one drive copies nothing and starts at once, as a folder drop
+// does and as a file manager does; a copy across drives (or a drive that could
+// not be measured) states its cost in the dialog first.
+watch(
+  () => store.moveRequest,
+  async (request) => {
+    if (!request) return;
+    const { copies, destination } = request;
+    const fromCut = Boolean(request.fromCut);
+    const cut = store.cutCopies;
+    const { how } = moveMechanism(
+      copies,
+      destination.folderId,
+      foldersStore.deviceByFolderId,
+    );
+    if (how !== "rename" || moves.busy) {
+      showMove(copies, destination, fromCut);
+      return;
+    }
+    const started = await moves.start(
+      destination.folderId,
+      copies.items,
+      destination.path,
+    );
+    // Only the cut this pasted: a Ctrl X pressed during the POST is a new one.
+    if (started && fromCut && store.cutCopies === cut) store.clearCut();
+  },
+);
+
+/** A paste's cut is spent once its move starts; the rows stop drawing dim. */
+function onMoveStarted() {
+  if (moveFromCut.value) store.clearCut();
+}
+
+/** The folder move dialog: the tree or its menu asked for it (#2206). */
+const folderMoveOpen = ref(false);
+const folderMoveSource = ref({ folderId: 0, path: "", name: "" });
+const folderMoveDestination = ref(null);
+const folderMovePlan = ref(null);
+const folderMoveInvoker = shallowRef(null);
+
+watch(
+  () => store.folderMoveRequest,
+  (request) => {
+    if (!request) return;
+    folderMoveInvoker.value =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    folderMoveSource.value = request.source;
+    folderMoveDestination.value = request.destination;
+    folderMovePlan.value = request.plan;
+    folderMoveOpen.value = true;
+  },
+);
+
+/** Close the folder dialog and give the focus back to what opened it. */
+async function closeFolderMove() {
+  const returnTo = folderMoveInvoker.value;
+  folderMoveOpen.value = false;
+  folderMoveInvoker.value = null;
+  folderMoveDestination.value = null;
+  folderMovePlan.value = null;
+  await nextTick();
+  (returnTo?.isConnected ? returnTo : rootEl.value)?.focus();
+}
+
+/** The folder removal dialog: the tree asked, with the dry run read (#2207). */
+const folderRemoveOpen = ref(false);
+const folderRemoveSource = ref({ folderId: 0, path: "", name: "" });
+const folderRemovePlan = shallowRef(null);
+const folderRemoveInvoker = shallowRef(null);
+/** The open request's `at`, which keys the dialog. */
+const folderRemoveAt = ref(0);
+/** Picked folders still waiting behind the one shown. */
+const folderRemoveRemaining = ref(0);
+/** Whether the open dialog removed its folder, told to the tree on close. */
+const folderRemoved = ref(false);
+
+watch(
+  () => store.folderRemoveRequest,
+  (request) => {
+    if (!request) return;
+    folderRemoveInvoker.value =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    folderRemoveSource.value = request.source;
+    folderRemovePlan.value = request.plan;
+    folderRemoveRemaining.value = request.remaining ?? 0;
+    folderRemoveAt.value = request.at;
+    folderRemoved.value = false;
+    folderRemoveOpen.value = true;
+  },
+);
+
+/** Close the removal dialog and give the focus back to what opened it. */
+async function closeFolderRemove() {
+  const returnTo = folderRemoveInvoker.value;
+  const closingAt = folderRemoveAt.value;
+  const removed = folderRemoved.value;
+  folderRemoveOpen.value = false;
+  folderRemoveInvoker.value = null;
+  folderRemovePlan.value = null;
+  await nextTick();
+  (returnTo?.isConnected ? returnTo : rootEl.value)?.focus();
+  // Last, so a next picked folder's dialog opens after this one has gone. A
+  // request that replaced this one meanwhile was answered when it arrived,
+  // and its own dialog settles it.
+  if (store.folderRemoveRequest?.at === closingAt) {
+    store.settleFolderRemove(removed);
+  }
+}
+
+// A batch waiting on a dialog that is going away stops rather than hanging.
+onUnmounted(() => store.settleFolderRemove(false));
+// The Downloads arrivals keep their `New` badge until the shelf is left: they
+// have been seen by then.
+onUnmounted(() => (store.arrivedIds = new Set()));
+
+/** *Move the models out first…*: the move dialog, on the folder's copies. */
+async function moveModelsOutFirst(copies) {
+  await closeFolderRemove();
+  showMove(copies);
+}
+
+// ── Drag and cut (#2204) ─────────────────────────────────────────────────
+
+// A pointer drag, not the browser's. HTML5 drag-and-drop hands the gesture and
+// its image to the window system, which on the desktop shell (X11) lifted the
+// row late and lagged the whole drag, as it once did the Models rail's. Here
+// the drop tip follows the pointer as the drag's preview, `elementFromPoint`
+// finds the folder under it (`data-model-copies-drop`), and that folder takes
+// `model-copies-over`, `-leave` and `-drop` events, accepting a drop with
+// `preventDefault` as a `dragover` would (`useModelCopyDrop`).
+
+/** How far the pointer moves before a press becomes a drag. */
+const DRAG_START_PX = 4;
+/** How close to a scrolling list's edge a drag scrolls it, and how fast. */
+const EDGE_PX = 48;
+const EDGE_SPEED_PX = 18;
+
+/** `{row, x, y}` from the press, until it becomes a drag or is let go. */
+let press = null;
+let dragging = false;
+let point = { x: 0, y: 0 };
+let edgeFrame = 0;
+/** The folder row under the pointer, and whether it takes the drop. */
+let overEl = null;
+let overOk = false;
+
+function onRowPointerDown(event, row) {
+  // A mouse or pen press with the main button. Touch scrolls the list, and a
+  // press in the rename field selects its text.
+  if (event.button !== 0 || event.pointerType === "touch") return;
+  if (event.target.closest?.("input, textarea, button")) return;
+  endDrag();
+  press = { row, x: event.clientX, y: event.clientY };
+  window.addEventListener("pointermove", onDragMove);
+  window.addEventListener("pointerup", onDragRelease);
+  window.addEventListener("pointercancel", endDrag);
+  window.addEventListener("keydown", onDragKeydown, true);
+}
+
+function onDragMove(event) {
+  if (!press) return;
+  // The release happened somewhere this window never heard it (another
+  // window, a lost grab): the drag is over, and nothing drops.
+  if (event.buttons === 0) {
+    endDrag();
+    return;
+  }
+  point = { x: event.clientX, y: event.clientY };
+  if (!dragging) {
+    const travel = Math.hypot(
+      event.clientX - press.x,
+      event.clientY - press.y,
+    );
+    if (travel < DRAG_START_PX) return;
+    if (!startDrag(press.row)) {
+      endDrag();
+      return;
+    }
+  }
+  trackDrag(event.clientX, event.clientY);
+}
+
+/**
+ * A row picks up the selection's movable copies. An unselected row is made the
+ * selection first, alone, as a file manager does: what is dragged is what is
+ * under the pointer. A drop on the same drive moves at once, as a file manager
+ * does; across drives it asks first.
+ *
+ * @returns {boolean} whether anything was picked up.
+ */
+function startDrag(row) {
+  if (!store.isSelected(row.id)) {
+    // A row that cannot move refuses here, before it takes the selection: a
+    // stray drag on an offline row must not drop forty selected ones.
+    const scope = inFolder.value ? store.folderScope : null;
+    if (!movableCopies([row], foldersById.value, scope).items.length) {
+      noticeUnmovable();
+      return false;
+    }
+    store.selectFromClick(row.id, {}, orderedRowIds.value);
+  }
+  const copies = store.movableSelection(foldersById.value);
+  if (!copies.items.length) {
+    noticeUnmovable();
+    return false;
+  }
+  store.dragCopies = copies;
+  dragging = true;
+  // A wheel or the edge scroll moves a folder under a still pointer.
+  window.addEventListener("scroll", onDragScroll, true);
+  edgeFrame = requestAnimationFrame(edgeScroll);
+  return true;
+}
+
+function onDragScroll() {
+  trackDrag(point.x, point.y);
+}
+
+/**
+ * Scroll whatever list is under the pointer when the pointer nears its top or
+ * bottom edge, as the browser's own drag did: a folder further down the tree
+ * is otherwise out of reach.
+ */
+function edgeScroll() {
+  if (!dragging) return;
+  let list = document.elementFromPoint?.(point.x, point.y) ?? null;
+  while (
+    list &&
+    !(
+      list.scrollHeight > list.clientHeight &&
+      /auto|scroll/.test(getComputedStyle(list).overflowY)
+    )
+  ) {
+    list = list.parentElement;
+  }
+  if (list) {
+    const box = list.getBoundingClientRect();
+    const top = point.y - box.top;
+    const bottom = box.bottom - point.y;
+    if (top < EDGE_PX) list.scrollTop -= EDGE_SPEED_PX * (1 - top / EDGE_PX);
+    else if (bottom < EDGE_PX) {
+      list.scrollTop += EDGE_SPEED_PX * (1 - bottom / EDGE_PX);
+    }
+  }
+  edgeFrame = requestAnimationFrame(edgeScroll);
+}
+
+/** Light the folder under the pointer, and move the tip along with it. */
+function trackDrag(x, y) {
+  // The tip is `pointer-events: none`, so this is what is really underneath.
+  const hit =
+    document
+      .elementFromPoint?.(x, y)
+      ?.closest?.("[data-model-copies-drop]") ?? null;
+  if (overEl && overEl !== hit) {
+    overEl.dispatchEvent(new CustomEvent("model-copies-leave"));
+  }
+  overEl = hit;
+  // A folder that takes the drop writes the tip itself: where they go.
+  overOk = hit
+    ? !hit.dispatchEvent(
+        new CustomEvent("model-copies-over", {
+          cancelable: true,
+          detail: { x, y },
+        }),
+      )
+    : false;
+  // No drag cursor: a class on <html> restyles every element on the page,
+  // which cost more than the drag it decorated. The tip and the folder's ring
+  // or hatch say where the drop goes.
+  if (!overOk) store.dropTip = { x, y, text: carriedWords(store.dragCopies) };
+}
+
+/**
+ * What the tip says away from a folder: the file, or how many, and how many
+ * selected models stay behind (see `movableCopies`). Without the second half a
+ * three-model drag that carries one file reads as a lost selection. Models,
+ * not files: a model with two movable copies carries two files.
+ */
+function carriedWords(copies) {
+  const items = copies?.items ?? [];
+  const carried =
+    items.length === 1 ? basename(items[0].relpath) : `${items.length} files`;
+  const stays = copies?.stays ?? 0;
+  if (!stays) return carried;
+  return `${carried} · ${stays} ${stays === 1 ? "model" : "models"} can't move`;
+}
+
+function onDragRelease() {
+  const target = dragging && overOk ? overEl : null;
+  const wasDragging = dragging;
+  // Handed over before the drag is cleared: the folder reads `dragCopies`.
+  target?.dispatchEvent(
+    new CustomEvent("model-copies-drop", { cancelable: true }),
+  );
+  endDrag();
+  if (wasDragging) swallowReleaseClick();
+}
+
+/**
+ * The release would otherwise land as a click where the drag began, and
+ * narrow the selection to that row.
+ */
+function swallowReleaseClick() {
+  window.addEventListener("click", swallowClick, true);
+  setTimeout(() => window.removeEventListener("click", swallowClick, true));
+}
+
+function swallowClick(event) {
+  event.stopPropagation();
+  event.preventDefault();
+  window.removeEventListener("click", swallowClick, true);
+}
+
+function onDragKeydown(event) {
+  if (event.key !== "Escape" || !dragging) return;
+  // Escape puts the files back; it must not also clear the selection or a cut.
+  event.stopPropagation();
+  event.preventDefault();
+  endDrag();
+  // The button is still down, and its release is still a click to eat.
+  window.addEventListener("pointerup", swallowReleaseClick, { once: true });
+}
+
+function endDrag() {
+  window.removeEventListener("pointermove", onDragMove);
+  window.removeEventListener("pointerup", onDragRelease);
+  window.removeEventListener("pointercancel", endDrag);
+  window.removeEventListener("keydown", onDragKeydown, true);
+  window.removeEventListener("scroll", onDragScroll, true);
+  cancelAnimationFrame(edgeFrame);
+  overEl?.dispatchEvent(new CustomEvent("model-copies-leave"));
+  press = null;
+  overEl = null;
+  overOk = false;
+  if (dragging) {
+    dragging = false;
+    store.dragCopies = null;
+    store.dropTip = null;
+  }
+}
+
+onBeforeUnmount(endDrag);
+
+/** Why a drag or a cut took nothing: otherwise the gesture just fails. */
+function noticeUnmovable() {
+  useNoticeStore().push({
+    level: "info",
+    text: "None of these files can be moved: they are missing, offline or in a locked folder.",
+    // A few stray drags count up on one card rather than stacking.
+    key: "shelf-unmovable",
+  });
+}
+
+/** Ctrl X and the menu's Cut: hold the selection's movable copies. */
+function cutSelected() {
+  if (!store.cutSelection(foldersById.value)) noticeUnmovable();
+}
+
+/** Ctrl V and the menu's Paste: the cut copies into the open folder. */
+function pasteCut() {
+  store.pasteCut(store.folderScope);
+}
 
 async function closeMove() {
   const returnTo = moveInvoker.value;
   moveOpen.value = false;
   moveInvoker.value = null;
+  moveDestination.value = null;
+  moveFromCut.value = false;
   await nextTick();
   (returnTo?.isConnected ? returnTo : rootEl.value)?.focus();
 }
 
-/**
- * Whether a row may start a drag.
- *
- * Only rows with a copy actually on this machine: dragging one whose file is
- * `missing` or on an unplugged drive would offer a gesture that can only end in
- * a refusal, and the pointer would say it works the whole way.
- *
- * Engines are excluded for a harder reason than a refusal. They live in the
- * three roots PixlStash declares `root_only` - its own downloads, the
- * InsightFace packs, and the HuggingFace cache - and the cache is a symlink
- * store shared with every other HF tool, where a row's path is a whole repo
- * directory. The server refuses the move, and this stops the gesture being
- * offered at all: a drag that looks like it works on 116 GB of somebody else's
- * bookkeeping is not a thing to find out about at the drop.
- */
-function canDrag(row) {
-  return (
-    row.locState === "present" && row.file_kind !== "engine" && !moves.busy
-  );
-}
-
-/**
- * Start a drag of the selection, selecting the dragged row if it is not in it.
- *
- * The same rule a file manager uses, and the same one the grid uses: dragging a
- * row that is not selected drags THAT row and makes it the selection, while
- * dragging one that is drags the whole selection untouched.
- */
-function onRowDragStart(row, event) {
-  if (!canDrag(row)) {
-    event.preventDefault();
-    return;
-  }
-  if (!store.isSelected(row.id)) {
-    store.selectFromClick(row.id, {}, orderedRowIds.value);
-  }
-  const { items, bytesByFolderId } = movableCopies(
-    store.selectedRows,
-    foldersById.value,
-  );
-  if (!items.length) {
-    event.preventDefault();
-    return;
-  }
-  dragBytesByFolder.value = bytesByFolderId;
-  event.dataTransfer.effectAllowed = "move";
-  setInternalDragPayload(event.dataTransfer, { type: "model-files", items });
-}
-
-/** Everything the pointer was saying, cleared however the drag ended. */
-function clearDropState() {
-  dropTargetKey.value = "";
-  dropBandKey.value = "";
-  dragBytesByFolder.value = new Map();
-}
-
-/**
- * The bytes this drag would ADD to a drive.
- *
- * Copies already on it are excluded, because a move within one drive is a
- * rename: the server reports `bytes_to_copy` of zero for exactly that case, and
- * a meter projecting 438 GB onto the disk those bytes are already sitting on
- * would refuse a move that costs nothing.
- */
-function bytesLandingOn(band) {
-  if (!band) return 0;
-  let bytes = 0;
-  for (const [folderId, size] of dragBytesByFolder.value) {
-    if (bandKeyFor(folderId, foldersStore.deviceByFolderId) !== band.key) {
-      bytes += size;
-    }
-  }
-  return bytes;
-}
-
-/**
- * The projection for the band under the pointer, and only for that one.
- *
- * A computed rather than a per-band call, so the arithmetic runs once per drag
- * position however many times the template asks for it - the heading reads it
- * for its own state, for the ghost segment, for the glyph and for the label.
- */
-const dropProjection = computed(() => {
-  if (!dropBandKey.value) return null;
-  const group = shownGroups.value.find(
-    (item) => item.bandStart && item.band?.key === dropBandKey.value,
-  );
-  if (!group) return null;
-  return bandProjection(group.band, bytesLandingOn(group.band));
-});
-
-/** The projection if this band is the one being dragged over, else null. */
-function projection(band) {
-  return band && band.key === dropBandKey.value ? dropProjection.value : null;
-}
-
-/**
- * Whether a drop aimed at this drive has room for it.
- *
- * A drive we could not measure answers **true**: "we cannot say" must not read
- * as "does not fit", and refusing a drop on an unplugged-then-replugged disk
- * because its capacity never came back would be a refusal with no cause the
- * reader can see. The server still checks before it copies.
- */
-function dropFits(band) {
-  const projected = bandProjection(band, bytesLandingOn(band));
-  return projected ? projected.fits : true;
-}
-
-/**
- * What this band is saying to the drag right now: nothing, that it takes the
- * drop, or that it refuses it.
- *
- * Keyed on the pointer and the fit rather than on the projection, so a drive
- * whose capacity we could not read still highlights as a target. It has no
- * ghost to draw and no outcome to state, but it does accept the drop - and a
- * target that accepts without saying so is the one gap a projection-gated
- * highlight would open.
- */
-function bandDropState(band) {
-  if (!band || band.key !== dropBandKey.value) return "";
-  return dropFits(band) ? "drop" : "reject";
-}
-
-/**
- * The folder a drop on the BAND resolves to: the first on that drive a move may
- * be sent to, in the order the headers are drawn.
- *
- * A band is a disk and a move needs a folder, so one of them has to be chosen.
- * Choosing the first is safe because a drop does not move on release - the
- * dialog states the destination and its select corrects it - and it is kinder
- * than refusing a drive holding two eligible folders, which would be a refusal
- * the reject treatment does not mean.
- */
-function bandDropFolderId(band) {
-  const group = (band?.groups || []).find((item) => isDropTarget(item));
-  return group ? Number(group.folderId) : null;
-}
-
-/** True when this group is a folder a move may be sent to. */
-function isDropTarget(group) {
-  if (!Number.isInteger(group?.folderId)) return false;
-  const folder = foldersById.value.get(Number(group.folderId));
-  // Same two exclusions the dialog's destination list applies, checked here as
-  // well so the pointer never suggests a drop the dialog would then refuse.
-  return Boolean(
-    folder && folder.kind !== "source" && folder.movable !== "external",
-  );
-}
-
-/**
- * Accept the drag, or leave it refused.
- *
- * `preventDefault()` is what ACCEPTS a drop, so it is called inside the handler
- * and only for a payload this target takes - never as a `.prevent` modifier on
- * the template, which would accept everything including a picture drag from the
- * grid (#757, one payload kind later).
- */
-function onGroupDragOver(group, event) {
-  onFolderFileDragOver(group, event);
-  if (!isModelFileDrag(event.dataTransfer) || !isDropTarget(group)) return;
-  // Recorded BEFORE the fit is judged, so a refused header still has something
-  // for `dragleave` to clear and the band above it keeps projecting for exactly
-  // as long as the pointer is there. The highlight is what the fit gates.
-  dropTargetKey.value = group.key;
-  dropBandKey.value = group.band?.key || "";
-  // A folder on a full drive cannot take the files either - the refusal belongs
-  // to the disk, not to the header, which is why the check lives here as well
-  // and the band above is where it is drawn.
-  if (!dropFits(group.band)) return;
-  event.preventDefault();
-  event.dataTransfer.dropEffect = "move";
-}
-
-/**
- * The folder a model file dropped in from outside lands in, read by the window's
- * drop handler (`useModelDropTarget`): only one the owner may add a file to, and
- * only while it is plugged in. Undefined leaves the attribute off, and a drop
- * there goes to the default folder.
- */
-function fileDropFolderId(group) {
-  if (!Number.isInteger(group?.folderId) || group.offline) return undefined;
-  return foldersStore.defaultCandidates.some(
-    (folder) => Number(folder.id) === group.folderId,
-  )
-    ? group.folderId
-    : undefined;
-}
-
-function onFolderFileDragOver(group, event) {
-  if (fileDropFolderId(group) !== undefined) onFileDragOver(group.key, event);
-}
-
-function onGroupDragLeave(group, event) {
-  onFileDragLeave(group.key, event);
-  // Only when the pointer really left: moving header to header inside one band
-  // fires this AFTER `dragover` on the new one, so the key has already moved on
-  // and clearing here would blink the projection off between two targets.
-  if (dropTargetKey.value !== group.key) return;
-  dropTargetKey.value = "";
-  dropBandKey.value = "";
-}
-
-function onGroupDrop(group, event) {
-  const fits = dropFits(group.band);
-  clearDropState();
-  if (!isModelFileDrag(event.dataTransfer) || !isDropTarget(group)) return;
-  if (!fits) return;
-  event.preventDefault();
-  openMove(store.selectedRows, Number(group.folderId));
-}
-
-/**
- * The meter is the drop target (#894).
- *
- * It is where "which disk has room" stops being informational, and it is the
- * honest place to refuse: a drop that will not fit is refused while the pointer
- * is still down, next to the projection saying why, rather than as a message
- * after the release. The band is still marked as the target while it refuses -
- * `preventDefault()` is simply not called, so the browser draws its own "no
- * drop here" cursor over a band already in the error treatment.
- */
-function onBandDragOver(band, event) {
-  if (!isModelFileDrag(event.dataTransfer)) return;
-  // Nothing on this drive takes a drop at all. No projection either: it would
-  // promise an outcome for a gesture that has no destination to resolve to.
-  if (bandDropFolderId(band) === null) return;
-  dropTargetKey.value = "";
-  dropBandKey.value = band.key;
-  if (!dropFits(band)) return;
-  event.preventDefault();
-  event.dataTransfer.dropEffect = "move";
-}
-
-function onBandDragLeave(band) {
-  // `dropTargetKey` set means the pointer moved from the band DOWN onto one of
-  // its own folder headers, which is still inside this band's projection.
-  if (dropBandKey.value === band.key && !dropTargetKey.value) {
-    dropBandKey.value = "";
-  }
-}
-
-function onBandDrop(band, event) {
-  const folderId = bandDropFolderId(band);
-  const fits = dropFits(band);
-  clearDropState();
-  if (!isModelFileDrag(event.dataTransfer) || folderId === null) return;
-  if (!fits) return;
-  event.preventDefault();
-  openMove(store.selectedRows, folderId);
-}
 
 /**
  * Does the shelf own this press, or does something in front of it?
@@ -2631,10 +2299,16 @@ function shelfOwnsTheKey(event) {
   // model, the bar floats over it, and `selectVisible` answers the grid's own
   // idea of "shown". So Ctrl+A builds a selection the reader can see, and Delete
   // opens the confirmation for rows they can point at.
+  // The Folders tree (#2206) is in the sidebar, and its F2, Ctrl+Shift+N and
+  // Delete belong to the folder under the focus: Delete there is Remove
+  // folder (#2207). Here it would be a file deletion, so this must step aside
+  // even with no selection to delete.
+  if (isInFoldersTree(event)) return false;
   if (
     moveOpen.value ||
+    folderMoveOpen.value ||
+    folderRemoveOpen.value ||
     addSourceOpen.value ||
-    relocatingFolder.value ||
     addFileOpen.value ||
     thumbnailPickerOpen.value ||
     editVerb.value
@@ -2643,7 +2317,7 @@ function shelfOwnsTheKey(event) {
   }
   if (
     reviewSessionsStore.overlayOpen ||
-    document.querySelector(".v-overlay--active:not(.v-tooltip), .image-overlay")
+    document.querySelector(".v-overlay--active:not(.v-tooltip), .lightbox")
   ) {
     return false;
   }
@@ -2709,6 +2383,26 @@ function onShelfKeydown(event) {
     !event.altKey &&
     !event.shiftKey &&
     String(event.key).toLowerCase() === "a";
+  // Ctrl X cuts the selection's movable copies, Ctrl V pastes them into the
+  // open folder, as a drop does (#2204). Inside a text field the guard
+  // hands both back, so cutting text still cuts text.
+  const clip =
+    (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey
+      ? String(event.key).toLowerCase()
+      : "";
+  if (clip === "x" || clip === "v") {
+    if (!shelfOwnsTheKey(event) || event.repeat) return;
+    if (clip === "x") {
+      if (!ownSelection.value.length) return;
+      event.preventDefault();
+      cutSelected();
+      return;
+    }
+    if (!store.cutCopies || !inFolder.value) return;
+    event.preventDefault();
+    pasteCut();
+    return;
+  }
   // F2 is let through for a selected hand-made set, whose pill and menu
   // advertise it; a row's own F2 is handled on the row.
   const renamesSet = event.key === "F2" && store.selectedSets.length > 0;
@@ -2733,6 +2427,12 @@ function onShelfKeydown(event) {
     // way, or declining would hand it to the native select-all. On the set grid
     // it takes the owner's own sets as well as the models.
     store.selectVisible();
+    return;
+  }
+  // Escape first puts back a cut, one undo per press.
+  if (event.key === "Escape" && store.cutCopies) {
+    event.preventDefault();
+    store.clearCut();
     return;
   }
   // Selected hand-made SETS (#1520) answer the same two keys with the set
@@ -2803,9 +2503,7 @@ function isFavouriteKey(event) {
 
 /** The evidence cards picked on the set grid, by key: a set, not a model. */
 const gridCardKeys = computed(() =>
-  isSetGrid.value
-    ? (setGridRef.value?.selectedCardGroups ?? []).map((group) => group.key)
-    : [],
+  isSetGrid.value ? store.pickedCardKeys : [],
 );
 
 /**
@@ -2854,17 +2552,13 @@ function toggleFavouriteFromKey() {
 }
 
 /**
- * The rows the shelf's own keys act on. The Models rail's selection is not
- * among them: the rail answers Delete and Escape on its own list, and a press
- * made over here was aimed at something else.
+ * The rows the shelf's own keys act on.
  */
-const ownSelection = computed(() =>
-  store.railSelection ? [] : store.selectedRows,
-);
+const ownSelection = computed(() => store.selectedRows);
 
 onMounted(() => window.addEventListener("keydown", onShelfKeydown));
 // The favourites are read once for the shelf; the store shares that read.
-onMounted(() => useFavouritesStore().ensureLoaded());
+onMounted(() => favourites.ensureLoaded());
 onUnmounted(() => window.removeEventListener("keydown", onShelfKeydown));
 
 // ── Hand-made workflow sets (#1520) ─────────────────────────────────────────
@@ -2895,13 +2589,6 @@ const hideableSets = computed(() =>
 /** The missing-base heads the Replace dialog is open on, `[]` while closed. */
 const replacingHeads = ref([]);
 const missingBarRef = ref(null);
-const missingCount = computed(() => store.missingSetKeys.length);
-// The sets it was dismissed over: a missing set not among them brings the
-// banner back, which a count would not (fix one, lose another).
-const dismissedMissing = ref(new Set());
-const missingDismissed = computed(() =>
-  store.missingSetKeys.every((key) => dismissedMissing.value.has(key)),
-);
 const setBarRef = ref(null);
 
 // The set receipt sits above whichever selection pill is up, lifted by its
@@ -2954,7 +2641,9 @@ async function saveSetName(name) {
 async function newSetWithCheckpoint() {
   const row = store.selectedRows[0];
   if (!row) return;
-  if (!isSetGrid.value) store.setView({ groupBy: "workflow_set" });
+  // The Sets place, not just the grid's axis, so the sidebar lights Sets and
+  // the list's narrowing lets go of the grid.
+  if (!isSetGrid.value) store.setPlace("sets");
   await store.createHandMadeSet({
     members: [{ model_id: row.id, slot: "checkpoint" }],
   });
@@ -3385,6 +3074,18 @@ const router = useRouter();
 
 const isShelfTab = computed(() => route.name !== "models-runs");
 
+/** A training run's own page is open on the runs tab (#2118). */
+const runOpen = computed(
+  () =>
+    !isShelfTab.value &&
+    [route.query.run, route.query["folder-run"]].some(
+      (value) => typeof value === "string" && value !== "",
+    ),
+);
+// TrainingRunLive teleports its status into `#shelf-run-bar` while it is
+// rendered, and draws it in place otherwise.
+provide("shelf-run-bar", runOpen);
+
 // Set receipts exist only while this tab shows them: their Undo means nothing
 // on the runs tab or another screen, and a write landing after the reader left
 // must not raise one there.
@@ -3394,42 +3095,16 @@ watch(isShelfTab, (on) => operationStore.setLocalReceiptHost(on), {
 });
 onUnmounted(() => operationStore.setLocalReceiptHost(false));
 
-/** How many runs the other view is showing, for the count beside the tabs. */
-const runsCount = ref(null);
-const runsCountLabel = computed(() =>
-  runsCount.value == null
-    ? ""
-    : `${runsCount.value.toLocaleString()} ${runsCount.value === 1 ? "run" : "runs"}`,
-);
+/** How many runs the Training runs place holds, for the count in the bar. */
+const trainingRuns = useTrainingRunsStore();
+const runsCountLabel = computed(() => {
+  const n = trainingRuns.count;
+  return n == null ? "" : `${n.toLocaleString()} ${n === 1 ? "run" : "runs"}`;
+});
 
 function showTab(which) {
   const name = which === "runs" ? "models-runs" : "models";
   if (route.name !== name) router.push({ name });
-}
-
-/**
- * Arrow keys move between the tabs and activate on arrival.
- *
- * Automatic activation, per the APG: there are two tabs and neither panel is
- * expensive to show - the runs listing reads filenames and one `config.yaml`
- * per run and is re-run on every window focus anyway. Focus STAYS on the newly
- * selected tab, which is what makes Left/Right flickable; moving it into the
- * panel would strand someone comparing the two lists.
- */
-function onTabKeydown(event) {
-  const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
-  if (!keys.includes(event.key)) return;
-  event.preventDefault();
-  const toRuns =
-    event.key === "End" ||
-    (event.key === "ArrowRight" && isShelfTab.value) ||
-    (event.key === "ArrowLeft" && isShelfTab.value);
-  showTab(toRuns ? "runs" : "shelf");
-  nextTick(() => {
-    document
-      .getElementById(toRuns ? "shelf-tab-runs" : "shelf-tab-shelf")
-      ?.focus();
-  });
 }
 
 // ── Set the ai-toolkit output folder (shelf plan F6) ────────────────────────
@@ -3444,7 +3119,6 @@ const addSourceOpen = ref(false);
 const addSourceInvoker = shallowRef(null);
 
 /** Whether the ai-toolkit output root has been set. */
-const hasSourceFolder = computed(() => Boolean(foldersStore.sourceFolder));
 
 function openAddSource(invoker) {
   addSourceInvoker.value = invoker ?? null;
@@ -3456,12 +3130,7 @@ async function closeAddSource() {
   addSourceOpen.value = false;
   addSourceInvoker.value = null;
   await nextTick();
-  restoreFocus(
-    returnTo,
-    addBtnRef.value?.el,
-    overflowRef.value?.trigger?.(),
-    rootEl.value,
-  );
+  restoreFocus(returnTo, rootEl.value);
 }
 
 /**
@@ -3506,12 +3175,7 @@ async function closeAddFile() {
   addFileOpen.value = false;
   addFileInvoker.value = null;
   await nextTick();
-  restoreFocus(
-    returnTo,
-    addBtnRef.value?.el,
-    overflowRef.value?.trigger?.(),
-    rootEl.value,
-  );
+  restoreFocus(returnTo, rootEl.value);
 }
 
 /**
@@ -3545,20 +3209,11 @@ async function onFilePicked(path) {
   }
 }
 
-const {
-  canScan: canScanFolder,
-  scanReason: scanFolderReason,
-  relocateReason: relocateFolderReason,
-  scan: scanFolder,
-} = useModelFolderGates();
-// The folder the header menu's Move is emptying, while its picker is open.
-const relocatingFolder = ref(null);
 // The ⋯ the left group folds into below 690px; its rows open dialogs, so they
 // need its trigger to hand focus back to.
-const overflowRef = ref(null);
 
 /**
- * The folder registry lives in Settings › Models; every shelf door opens it
+ * The folder registry lives in Settings › Model folders; every shelf door opens it
  * there. Settings gives focus back to whatever held it when it opened, and a
  * menu item is gone by the time it closes, so a door names the durable control
  * it hangs off and that takes focus first.
@@ -3568,82 +3223,6 @@ const overflowRef = ref(null);
 function openFolders(invoker) {
   invoker?.focus?.();
   emit("open-settings", "models");
-}
-
-/** Why the open folder menu's Rescan is refused, or "" when it is not. */
-const folderScanReason = computed(() =>
-  folderMenuFolder.value
-    ? scanFolderReason(folderMenuFolder.value)
-    : "",
-);
-
-/** Why the open folder menu's Move is refused, or "" when it is not. */
-const folderMoveReason = computed(() =>
-  folderMenuFolder.value
-    ? relocateFolderReason(folderMenuFolder.value)
-    : "",
-);
-
-/**
- * Open a folder header's menu, when the header is a registered folder with
- * something to offer. Anything else keeps the browser's own menu rather than
- * swallowing the right button for an empty one.
- */
-function openFolderMenu(group, event) {
-  if (!Number.isInteger(group.folderId)) return;
-  const folder = foldersStore.folders.find(
-    (row) => Number(row.id) === group.folderId,
-  );
-  if (!folder || (!canScanFolder(folder) && !folder.relocatable)) {
-    return;
-  }
-  event.preventDefault();
-  folderMenuFolder.value = folder;
-  folderMenuInvoker.value = event.currentTarget;
-  folderMenuAt.value = [event.clientX, event.clientY];
-  folderMenuOpen.value = true;
-}
-
-/**
- * The context-menu key on a header, which does not reliably fire `contextmenu`
- * and carries no pointer position when it does. Opened over the header's own
- * box, the way `openMenuAtRow` does it for a row.
- */
-function onFolderHeaderKeydown(group, event) {
-  if (!isMenuKey(event)) return;
-  const box = event.currentTarget.getBoundingClientRect();
-  openFolderMenu(group, {
-    preventDefault: () => event.preventDefault(),
-    currentTarget: event.currentTarget,
-    clientX: box.left + 24,
-    clientY: box.bottom,
-  });
-}
-
-/** Rescan from the header menu. The menu has no activator, so focus goes back by hand. */
-function rescanFromMenu() {
-  scanFolder(folderMenuFolder.value);
-  folderMenuOpen.value = false;
-  folderMenuInvoker.value?.focus?.();
-}
-
-/** Move from the header menu: the shared picker, focus back to the header. */
-function relocateFromMenu() {
-  folderMenuOpen.value = false;
-  const folder = folderMenuFolder.value;
-  if (folder && !relocateFolderReason(folder)) relocatingFolder.value = folder;
-}
-
-async function onRelocatePicked(path) {
-  const folder = relocatingFolder.value;
-  closeRelocate();
-  if (!folder || relocateFolderReason(folder)) return;
-  await moves.relocate(folder.id, path);
-}
-
-function closeRelocate() {
-  relocatingFolder.value = null;
-  nextTick(() => restoreFocus(folderMenuInvoker.value, rootEl.value));
 }
 
 // `missing` is a fact (the folder was readable, the file was not in it);
@@ -3680,6 +3259,42 @@ const LOC_NOTE = {
   removed: "removed as a duplicate",
   forgotten: "every registered copy forgotten",
 };
+
+/**
+ * The file line's note for a file that is there but cannot be dragged: every
+ * copy sits in a folder whose files do not leave it one at a time (the lock in
+ * the Folders tree). Without it, All models draws such a row like any other
+ * and the drag that refuses it is the only answer.
+ *
+ * @param {Object} row - a shelf row.
+ * @returns {string}
+ */
+function lockedNote(row) {
+  return lockedRows.value.has(row) ? "in a locked folder" : "";
+}
+
+/**
+ * The rows {@link lockedNote} speaks for, worked out when the rows, folders or
+ * scope change rather than per row on every render: `rowMemo` reads the note
+ * for every row on each click, and `movableCopies` over 1,500 rows was a third
+ * of what a drag paid before its row lifted.
+ */
+const lockedRows = computed(() => {
+  // The drag's own scope, so the note and the refusal never disagree.
+  const scope = inFolder.value ? store.folderScope : null;
+  const locked = new Set();
+  for (const group of shownGroups.value) {
+    for (const row of group.rows) {
+      if (
+        row.locState === "present" &&
+        !movableCopies([row], foldersById.value, scope).items.length
+      ) {
+        locked.add(row);
+      }
+    }
+  }
+  return locked;
+});
 
 const LOC_TITLE = {
   present: "",
@@ -3849,23 +3464,33 @@ function focusDrawnRow(key) {
 //
 // `?model=<id>` picks that model and puts the cursor on it, so a chip clicked
 // in the lightbox lands on the file the picture used rather than at the top of
-// a shelf of a couple of thousand rows. A model the shelf is not drawing - a
-// filter hides it, its group is collapsed, its stack is closed - is left alone
-// rather than forced into view: the row the link names is a fact, and what the
-// reader has filtered the shelf down to is a decision of theirs.
+// a shelf of a couple of thousand rows. It opens All models first: Sets draws
+// a grid with no row to land on, and Favourites, Recently added, In no set yet
+// or a folder may not hold the model at all. A model All models is still not
+// drawing - a filter hides it, its group is collapsed, its stack is closed - is
+// left alone rather than forced into view: the row the link names is a fact,
+// and what the reader has filtered the shelf down to is a decision of theirs.
 //
 // Honoured once per value, because `drawnRows` recomputes on every filter,
 // sort and refresh while the query string stays put, and applying it twice
-// would take focus back off whatever the reader had moved to.
+// would take focus back off whatever the reader had moved to. The place is
+// switched once per value too, apart from the row: a model never found would
+// otherwise pull the reader back to All models on every refresh.
 let honouredModel = null;
+let placedModel = null;
 
 function honourModelQuery() {
   const wanted = route?.query?.model;
   if (!wanted) {
     honouredModel = null;
+    placedModel = null;
     return;
   }
   if (honouredModel === wanted) return;
+  if (placedModel !== wanted) {
+    placedModel = wanted;
+    if (store.place !== "all") store.setPlace("all");
+  }
   const row = drawnRows.value.find(
     (entry) => String(entry.id) === String(wanted),
   );
@@ -4019,12 +3644,10 @@ function startRenameSelected() {
   // and the dashed rule under a row is what makes an inline field honest. It
   // takes `ShelfEditDialog`'s `rename`, which already owns that one string, so
   // the verb is live there rather than being a menu item that does nothing.
-  // The Models rail's selection takes the dialog too: its row may not be drawn
-  // on the list at all.
   // The row list is left exactly as it was, including its silent no-op when the
   // selection is held but the row is not drawn - that is a separate question
   // and not this change's to answer.
-  if (isSetGrid.value || store.railSelection) {
+  if (isSetGrid.value) {
     editVerb.value = "rename";
     return;
   }
@@ -4221,9 +3844,10 @@ let editingBaseRow = null;
  *
  * That is the file's own string, or for a GUESSED row the label it was read
  * as (`baseModelCell`), so a correction is one word rather than a retype and
- * the commit below compares against the same value: leaving a guess as it is
- * writes nothing, and emptying the field says "none of these", which then
- * sticks across rescans.
+ * the commit below compares against the same value. Enter on a guess left as
+ * it is accepts it, the same write as the tag's confirm; clicking away leaves
+ * it a guess. Emptying the field says "none of these", which then sticks
+ * across rescans.
  */
 function startBaseModelEdit(row) {
   editingBaseRow = row;
@@ -4252,14 +3876,16 @@ function cancelBaseModel() {
 }
 
 /**
- * Commit the field, on Enter or on losing focus.
+ * Commit the field, on Enter (`byKey`) or on losing focus.
  *
- * Closes BEFORE it writes, so the blur the unmount fires finds nothing to do
- * and the row cannot be written twice - the same order the rename above uses.
+ * An unchanged value writes nothing, except that Enter on an untouched guess
+ * accepts it, as the tag's confirm does. Closes BEFORE it writes, so the blur
+ * the unmount fires finds nothing to do and the row cannot be written twice -
+ * the same order the rename above uses.
  * An empty box clears the base model back to `NULL`, which is the state the
  * shelf draws as "not set" and filters as `UNASSIGNED`.
  */
-async function commitBaseModel(restoreFocus = false) {
+async function commitBaseModel(byKey = false) {
   const row = editingBaseRow;
   if (!row) return;
   const next = editingBase.value.trim();
@@ -4268,12 +3894,27 @@ async function commitBaseModel(restoreFocus = false) {
   // Only when a KEY committed it. A blur committed it by moving the focus
   // somewhere the reader chose, and dragging it back to the row would undo
   // their click.
-  if (restoreFocus) nextTick(() => focusDrawnRow(key));
-  if (next === String(baseModelCell(row).text).trim()) return;
+  if (byKey) nextTick(() => focusDrawnRow(key));
+  const cell = baseModelCell(row);
+  // Enter on an untouched guess is the reader saying "yes, that one"; a blur
+  // is only them leaving, so it keeps the guess a guess.
+  if (next === String(cell.text).trim() && !(byKey && cell.guess)) return;
   // A cover stands for every file of the run, and one run was trained against
   // one base model.
   await store.editModelIds(row.memberIds ?? [row.id], {
     base_model: next || null,
+  });
+}
+
+/**
+ * Accept a guessed base model as it stands.
+ *
+ * Writes the label the cell shows, which the server records as the owner's
+ * own answer, so the tag goes and a rescan cannot guess over it.
+ */
+async function confirmBaseModel(row) {
+  await store.editModelIds(row.memberIds ?? [row.id], {
+    base_model: baseModelCell(row).text,
   });
 }
 
@@ -4295,7 +3936,7 @@ async function setKindFromMenu(row, fileKind) {
     {
       text:
         `Filed ${row.name.text || row.filename || "the model"} as ${label}.` +
-        (store.view.groupBy === "feature" ? ` It is now under ${label}.` : ""),
+        (store.groupAxis === "feature" ? ` It is now under ${label}.` : ""),
       action: { label: "Undo", handler: () => store.editModelIds(ids, undo) },
     },
   );
@@ -4342,42 +3983,6 @@ function focusKindMenu(modelId) {
 }
 
 /**
- * The ring one row's mark wears (#892, redrawn for #904).
- *
- * The lists are read from the shared entity store rather than fetched per row:
- * `attachments` comes back on the list read already, so the whole shelf costs
- * the two list reads the sidebar makes anyway, not one lookup per attachment.
- */
-function ringFor(row) {
-  return assignmentRing(row.attachments, {
-    characters: entityLists.characters,
-    sets: entityLists.pictureSets,
-  });
-}
-
-/**
- * The ring's hue, as an inline custom property, or nothing at all.
- *
- * `{}` and not `{ "--mmark-ring": "" }` for the unassigned ring: the dashed
- * grey treatment is drawn by `.mmark--none`, which needs the pseudo-element's
- * `border` shorthand to have applied first, and a custom property that is set
- * but empty makes `var(--mmark-ring, transparent)` resolve to nothing rather
- * than to its fallback. That is invalid at computed-value time, which drops the
- * whole shorthand - the 2px width with it.
- */
-function ringStyle(row) {
-  const { hue } = ringFor(row);
-  return hue ? { "--mmark-ring": hue } : {};
-}
-
-/**
- * Cells per row, so the rows, the column names and the empty-folder row's
- * `aria-colspan` cannot drift apart. A grid where one row has a different cell
- * count is a grid a reader is lied to about.
- */
-const COLUMN_COUNT = 7;
-
-/**
  * The date column, named and sorted by whichever date axis it is drawn in.
  *
  * The only entry in the header strip that is not a constant. There is ONE date
@@ -4417,193 +4022,140 @@ function dateTitle(row, own = false) {
     : undefined;
 }
 
-/**
- * What an empty folder group says, per reason.
- *
- * Never a bare "0 models": the count is already in the header, and the reader's
- * question is whether the shelf has looked.
- */
-const EMPTY_FOLDER_NOTE = {
-  unscanned: "Not scanned yet.",
-  empty: "No models in this folder.",
-};
-
 /** "1 model" / "12 models", so no line ever reads "1 models". */
 function modelCount(n) {
   return `${n.toLocaleString()} ${n === 1 ? "model" : "models"}`;
 }
 
-/** The folders every copy of which is unreachable, for the headers' rails. */
-const offlineFolderIds = computed(
-  () => new Set(store.offlineMounts.map((mount) => mount.folderId)),
+// ── The open folder (#2203) ──────────────────────────────────────────────
+
+/** True on a folder of the Folders tree. */
+const inFolder = computed(
+  () => store.place === "folder" && store.folderScope != null,
 );
 
-/**
- * The groups as drawn: banded by drive under `Folder` + `Drive, then folder`,
- * and the store's own order on every other axis, each folder group carrying
- * what its header states about the folder (#899).
- *
- * Banded HERE rather than in the store because the drives are the folder
- * store's data and the folder store already imports the shelf store; reaching
- * back the other way would close an import cycle. `bandGroups` is pure, so the
- * arrangement is still testable without a component.
- */
-const shownGroups = computed(() => {
-  if (store.view.groupBy !== "folder") return store.groups;
-  // A registered folder holding nothing has no rows and therefore no group.
-  // The managed store is exactly that on a fresh install, and it is the ruled
-  // default destination for a drop or an import - which it cannot be while the
-  // owner has no way to see it.
-  const groups = withEmptyFolders(store.groups, foldersStore.folders);
-  const arranged =
-    store.view.folderLayout === "drive"
-      ? bandGroups(groups, foldersStore.deviceByFolderId)
-      : groups;
-  // Last, so it decorates what is actually drawn under either layout. The
-  // offline set comes off the SHELF store rather than the registry: "wholly out
-  // of reach" is a fact about the copies, and the registry only knows a path.
-  return withFolderSignals(arranged, {
-    folders: foldersStore.folders,
-    deviceByFolderId: foldersStore.deviceByFolderId,
-    offlineFolderIds: offlineFolderIds.value,
-  });
+/** The registered folder the open one is in. */
+const openFolderRow = computed(() =>
+  inFolder.value
+    ? foldersStore.folders.find(
+        (one) => Number(one.id) === store.folderScope.folderId,
+      )
+    : null,
+);
+
+const openDevice = computed(() =>
+  openFolderRow.value
+    ? foldersStore.deviceByFolderId.get(Number(openFolderRow.value.id))
+    : null,
+);
+const openDrive = computed(() => driveFullness(openDevice.value));
+const openDriveName = computed(
+  () => openDevice.value?.label || openDevice.value?.mount_point || "",
+);
+
+// The open level, read fresh on every open: the tree's copy may be from
+// before a move.
+watch(
+  () => (inFolder.value ? store.folderScope : null),
+  (scope) => {
+    if (scope) foldersStore.loadDirs(scope.folderId, scope.path, { force: true });
+  },
+  { immediate: true },
+);
+
+/** The open folder's subfolders (a locked folder's listing has none). */
+const subfolders = computed(() => {
+  if (!inFolder.value) return [];
+  const { folderId, path } = store.folderScope;
+  return (
+    foldersStore.dirListings.get(foldersStore.dirsKey(folderId, path))?.listing
+      ?.dirs ?? []
+  );
 });
 
 /**
- * The rail, and the one step of nesting.
- *
- * Both ride machinery that is already there: `.ps-row`'s rail is always present
- * and always transparent (§5.1), so only its colour changes and a header that
- * gains a drive does not move a pixel; `--depth` is the shared row system's own
- * indent and is what every nested row in the sidebar uses.
+ * The open folder's models ComfyUI's own loaders cannot see there (#2205), by
+ * row id. Empty while where ComfyUI loads from is unknown, and in a locked
+ * folder, whose files cannot be dragged out to fix it.
  */
-function groupStyle(group) {
-  const style = {};
-  // Not on an offline header: that rail is muted and dashed, and a drive hue
-  // on it would say the disk is there.
-  if (group.drive && !group.offline) style.borderLeftColor = group.drive.rail;
-  if (group.nested) style["--depth"] = 1;
-  return style;
+const misplacedIds = computed(() => {
+  const ids = new Set();
+  const scope = inFolder.value ? store.folderScope : null;
+  const reads = foldersStore.comfyuiReads;
+  if (!scope || scope.locked || !reads.known) return ids;
+  for (const row of store.visibleRows) {
+    const kind = shelfTypeOf(row);
+    const here = (row.locations ?? []).filter(
+      (loc) => loc?.state === "present" && inFolderScopeOf(loc, scope),
+    );
+    if (here.some((loc) => isMisplaced(loc, kind, reads))) ids.add(row.id);
+  }
+  return ids;
+});
+
+function selectMisplaced() {
+  store.selectRows(
+    store.visibleRows.filter((row) => misplacedIds.value.has(row.id)),
+  );
 }
 
+const NO_MODELS_LINE =
+  "No models found. PixlStash lists what it finds in the model folders registered on this machine.";
+/** What an empty place says in its own words; Show's own empty state is above. */
+const emptyPlaceLine = computed(() => {
+  // An empty shelf says so on every place: "every model is in a set" would be
+  // true of nothing.
+  if (!store.placeCounts.all) return NO_MODELS_LINE;
+  if (store.place === "favourites") return "No favourite models yet.";
+  if (store.place === "recent") return "Nothing was added in the last 30 days.";
+  if (store.place === "loose") return "Every model is in a set.";
+  if (inFolder.value) {
+    // The models are known from the shelf; only "directly" waits on the
+    // listing. Until it has answered, the line claims no more than is known.
+    const { folderId, path } = store.folderScope;
+    const listing = foldersStore.dirListings.get(
+      foldersStore.dirsKey(folderId, path),
+    )?.listing;
+    return !listing || subfolders.value.length
+      ? "No models directly in this folder."
+      : "No models in this folder.";
+  }
+  return NO_MODELS_LINE;
+});
+
 /**
- * What a folder header says out loud.
- *
- * The same three facts the chips and the rail carry, because a rail has no
- * accessible name and a hue has none either: the tier, the drive and whether
- * the folder can be reached at all.
+ * The shelf runs the dialogs the sidebar asks for. Each one returns focus to the
+ * control that asked, which the sidebar passes along.
+ */
+watch(
+  () => store.shellRequest,
+  (request) => {
+    if (!request) return;
+    if (request.what === "add-folder" || request.what === "manage-folders") {
+      openFolders(request.el);
+    } else if (request.what === "add-file") {
+      openAddFile(request.el);
+    } else if (request.what === "set-source") {
+      openAddSource(request.el);
+    }
+  },
+);
+
+const shownGroups = computed(() => store.groups);
+
+/**
+ * What a group header says out loud: its label and how many models it holds.
  */
 function groupLabel(group) {
   return [
     group.label,
-    group.chip,
-    group.drive?.label,
-    group.offline ? "offline" : "",
     modelCount(group.rows.length),
   ]
     .filter(Boolean)
     .join(", ");
 }
 
-function usage(band) {
-  return bandUsage(band);
-}
 
-/**
- * The figures the meter draws: the projection while a drag is over this band,
- * the measurement otherwise.
- *
- * One object either way, because `bandProjection` returns a REPLACEMENT for
- * `bandUsage`'s - its `freePct` is already reduced by the ghost - so the three
- * measured segments need no branch of their own and the row still sums to 100.
- */
-function meter(band) {
-  return projection(band) || bandUsage(band);
-}
-
-/**
- * The meter's key, in the segments' own left-to-right order.
- *
- * The wording borrows `meterLabel`'s, so the key and the figures under it are
- * visibly the same vocabulary. Not "PixlStash" and not "used by other apps":
- * the shelf knows which bytes are its own and knows nothing whatever about
- * what put the rest there.
- */
-const BAND_LEGEND = [
-  { key: "shelf", label: "On the shelf" },
-  { key: "other", label: "Other files" },
-  { key: "free", label: "Free" },
-];
-
-/**
- * The drive kinds the backend will vouch for, and the glyph each one wears.
- *
- * Four, because these are the four whose evidence cannot lie: a filesystem type
- * and a removable flag are facts, where the SSD-versus-platter question is a
- * guess that a VM, an LVM mapper or a USB enclosure each answer wrongly. The
- * table is keyed by the wire value and an unlisted or null key falls through to
- * the plain disk - `local` therefore has a glyph of its own only so that the
- * three that matter are read as a difference rather than as decoration.
- *
- * The label is a `title`, never drawn: the row is short of horizontal room,
- * which is the whole reason this change exists.
- */
-const DRIVE_KINDS = {
-  local: { icon: "mdi-harddisk", label: "Disk in this machine" },
-  network: { icon: "mdi-nas", label: "Network share" },
-  removable: { icon: "mdi-usb-flash-drive", label: "Removable drive" },
-  ramdisk: { icon: "mdi-memory", label: "Memory disk - cleared on reboot" },
-};
-
-const showsBandLegend = computed(() =>
-  shownGroups.value.some((group) => group.bandStart && usage(group.band)),
-);
-
-/**
- * What a band's meter says in words.
- *
- * Free space leads, because it is the number that decides whether the next
- * checkpoint fits. A drive we could not measure says so rather than reporting
- * zero, which would draw an empty meter for a drive that may well be full.
- */
-function meterLabel(band) {
-  const projected = projection(band);
-  if (projected) return { lead: projectionLabel(projected), rest: "" };
-  const use = bandUsage(band);
-  if (!use) return { lead: "", rest: "Capacity unknown" };
-  const free = formatModelSize(band.freeBytes);
-  const total = formatModelSize(band.totalBytes);
-  const shelf = formatModelSize(band.shelfBytes);
-  // One word for the low state, and it states the fact and stops. Nothing is
-  // broken and there is nothing to click, so this is not the error voice and
-  // gets no action - the same register as the offline banner.
-  const only = use.lowFree ? "Only " : "";
-  return {
-    lead: `${only}${free} free`,
-    // `rest` carries the space that separates it from `lead`: the two are one
-    // text run, and the flex gap that would draw that space cannot be read
-    // aloud. The two branches above have no lead to separate from.
-    rest: ` of ${total} · ${shelf} on the shelf`,
-  };
-}
-
-/**
- * What a drop on this drive would do, said in words.
- *
- * The hatch says "provisional" and the colour says "refused", and neither is
- * readable aloud or in greyscale - this is the half that is. It states the
- * OUTCOME rather than the new total: the reader is deciding whether to release
- * the pointer, and "8.1 GB short" answers that where "1.9 TB used" does not.
- */
-function projectionLabel(projected) {
-  if (!projected.addedBytes) return "Already on this drive · nothing to copy";
-  const added = formatModelSize(projected.addedBytes);
-  if (!projected.fits) {
-    const short = formatModelSize(-projected.freeAfter);
-    return `${added} will not fit · ${short} short`;
-  }
-  return `${added} fits · ${formatModelSize(projected.freeAfter)} free after`;
-}
 
 /**
  * The offline mounts, said once, with the number of rows they take with them.
@@ -4636,7 +4188,7 @@ const offlineMountPaths = computed(() =>
 );
 
 /**
- * The count under the title.
+ * The count at the toolbar's start.
  *
  * Under folder grouping a model with copies in two folders is drawn under both,
  * so the group counts add up to more than the shelf holds. Both numbers are
@@ -4663,7 +4215,7 @@ const countLabel = computed(() => {
 });
 
 /** True while the list is cut into groups, i.e. headers are drawn. */
-const grouped = computed(() => store.view.groupBy !== "none");
+const grouped = computed(() => store.groupAxis !== "none");
 
 /**
  * True while the set grid has the content area instead of the row list.
@@ -4706,14 +4258,15 @@ function openWorksWith() {
  *
  * One map for two askers: the shelf's own bar, bound with `v-on`, and the
  * Models rail, which is not this view's child and asks through
- * `store.requestVerb`. Both act on `store.selectedRows`, which is the rail's
- * selection while the rail has one, so each confirmation exists once.
+ * `store.requestVerb`. Both act on `store.selectedRows`, so each confirmation
+ * exists once.
  */
 const verbListeners = {
   "hide-sets": () => store.toggleHiddenSets(hideableSets.value),
   "hide-models": () => store.toggleHiddenModels(store.selectedModels),
   rename: startRenameSelected,
   "set-base-model": () => (editVerb.value = "base-model"),
+  "lookup-base-model": confirmLookupBaseModel,
   "set-kind": () => (editVerb.value = "kind"),
   "set-trigger-words": () => (editVerb.value = "trigger-words"),
   stack: confirmStack,
@@ -4721,6 +4274,8 @@ const verbListeners = {
   "make-cover": makeCover,
   "remove-from-stack": confirmRemoveFromStack,
   move: () => openMove(store.selectedRows),
+  cut: cutSelected,
+  paste: pasteCut,
   "merge-copies": openMergeCopies,
   "open-location": openLocation,
   "set-icon": pickIcon,
@@ -4757,28 +4312,17 @@ function closeWorksWith() {
   nextTick(() => restoreFocus(returnTo, rootEl.value));
 }
 
-const activeSort = computed(
-  () => SORT_LABELS[store.view.sortKey] || SORT_LABELS.added_at,
+// The Sort button names whichever sort is on screen: the set grid keeps its
+// own keys and direction (`setSortKey`), the row list the column keys. The
+// column headings below are the list's alone and read `store.view` directly.
+const activeSort = computed(() =>
+  isSetGrid.value
+    ? SET_SORT_LABELS[store.view.setSortKey] || SET_SORT_LABELS.used
+    : SORT_LABELS[store.view.sortKey] || SORT_LABELS.added_at,
 );
-
-const activeGroup = computed(
-  () => GROUP_BY_LABELS[store.view.groupBy] || GROUP_BY_LABELS.none,
+const activeDirection = computed(() =>
+  isSetGrid.value ? store.view.setSortDirection : store.view.sortDirection,
 );
-
-/**
- * What the Group button says on hover.
- *
- * The layout is a sub-choice of Folder rather than a fourth axis, so it rides
- * in the tooltip beside the axis it belongs to instead of widening the label:
- * "Folder" is what the reader picked and "by drive" is how it is drawn.
- */
-const groupButtonTitle = computed(() => {
-  const axis = `Group: ${activeGroup.value.label}`;
-  if (store.view.groupBy !== "folder") return axis;
-  return store.view.folderLayout === "drive"
-    ? `${axis} · by drive`
-    : `${axis} · flat`;
-});
 
 // The badge already says HOW MANY sections deviate; the tooltip says what the
 // button is and nothing more, because naming the sections would be a sentence
@@ -4791,13 +4335,13 @@ const showButtonTitle = computed(() =>
 );
 
 const directionLabel = computed(() =>
-  sortDirectionLabel(store.view.sortKey, store.view.sortDirection),
+  isSetGrid.value
+    ? activeSort.value.words[activeDirection.value === "asc" ? 0 : 1]
+    : sortDirectionLabel(store.view.sortKey, store.view.sortDirection),
 );
 
 const directionIcon = computed(() =>
-  store.view.sortDirection === "asc"
-    ? "mdi-sort-ascending"
-    : "mdi-sort-descending",
+  activeDirection.value === "asc" ? "mdi-sort-ascending" : "mdi-sort-descending",
 );
 
 // The direction phrase keeps its own capital: "A to Z" lowercased is "a to z",
@@ -4814,17 +4358,15 @@ const sortAnnouncement = computed(
 );
 
 function toggleDirection() {
-  store.setView({
-    sortDirection: store.view.sortDirection === "asc" ? "desc" : "asc",
-  });
+  const next = activeDirection.value === "asc" ? "desc" : "asc";
+  store.setView(
+    isSetGrid.value ? { setSortDirection: next } : { sortDirection: next },
+  );
 }
 
 /* ── The header strip ──────────────────────────────────────────────────────
-   The four fixed data columns, in the order the rows draw them. `sort` is the
-   SORT_KEYS value the heading orders on, or null where the column answers no
-   sort key: `Kind` is a chip of whatever the row's capabilities happen to be
-   and the API's `SortKey` has no member for it, so its heading names the
-   column and offers a grip, but is not a button that would do nothing.
+   The fixed data columns, in the order the rows draw them. `sort` is the
+   SORT_KEYS value the heading orders on; every column has one.
 
    The Name column is not in this list. It is the flexible track - it takes
    whatever the others leave - so it has a heading and a sort but no width
@@ -4840,24 +4382,25 @@ const NAME_COLUMN = { key: "name", label: "Name", sort: "name" };
 /* A computed and not a constant, for one entry: `DATE_COLUMN` renames itself
    with the axis it is drawn in. The three ahead of it never move. */
 const SHELF_COLUMNS = computed(() => [
-  { key: "kind", label: "Kind", sort: null },
+  { key: "kind", label: "Type", sort: "type" },
   { key: "base", label: "Base", sort: "base_model" },
   { key: "size", label: "Size", sort: "size" },
   DATE_COLUMN.value,
+  { key: "sets", label: "Sets", sort: "sets" },
 ]);
 
 /** How far one arrow-key press moves a column edge. One --space-3. */
 const RESIZE_STEP = 8;
 
 /**
- * The Name track's floor, and the only thing standing between the grips and a
- * shelf that scrolls sideways.
+ * The Name track's floor, for the gesture AND the stylesheet.
  *
- * Not a `min-width` in the stylesheet: a genuinely narrow window is still
- * allowed to squeeze the name - that is what the flexible track IS - and a CSS
- * floor would make those windows overflow instead. This bounds the GESTURE, so
- * the reader cannot do it to themselves. 200px is about 24 characters of the
- * name line, past which the second line's filename is what is being read.
+ * It bounds the drag (`widenable`), so the reader cannot squeeze the name
+ * themselves, and it is the `min-width` of the Name track (`--shelf-name-min`),
+ * so a narrow PANEL cannot either: there the fixed columns give way instead,
+ * down to their own `MIN_COLUMN_WIDTHS`, after the `shelflist` rungs have
+ * dropped Sets and the thumbnail. 200px is about 24 characters of the name
+ * line, past which the second line's filename is what is being read.
  */
 const MIN_NAME_WIDTH = 200;
 
@@ -4868,16 +4411,19 @@ const resizing = ref(null);
  * The remembered widths, handed to the row rules as the custom properties they
  * already read. Bound on the root rather than per cell so the headings, the
  * rows and a stack's member rows cannot drift apart: there is one declaration
- * of each width and every cell resolves the same variable.
+ * of each width and every cell resolves the same variable. The floors ride
+ * along so a narrow panel shrinks the columns to the same minimums the grips
+ * stop at, rather than to a second set of figures in the stylesheet.
  */
-const columnStyle = computed(() =>
-  Object.fromEntries(
-    Object.entries(store.view.columnWidths).map(([key, px]) => [
-      `--shelf-col-${key}`,
-      `${px}px`,
+const columnStyle = computed(() => ({
+  ...Object.fromEntries(
+    Object.entries(store.view.columnWidths).flatMap(([key, px]) => [
+      [`--shelf-col-${key}`, `${px}px`],
+      [`--shelf-col-${key}-min`, `${MIN_COLUMN_WIDTHS[key]}px`],
     ]),
   ),
-);
+  "--shelf-name-min": `${MIN_NAME_WIDTH}px`,
+}));
 
 /** `"ascending"` / `"descending"` / `"none"`, for `aria-sort`. */
 function columnSortState(key) {
@@ -5051,28 +4597,68 @@ function resetColumn(key) {
   store.setColumnWidth(key, DEFAULT_COLUMN_WIDTHS[key]);
 }
 
+/** What a row's mark borrows a face from: the person or set it is attached to. */
+function ringFor(row) {
+  return assignmentRing(row.attachments, {
+    characters: entityLists.characters,
+    sets: entityLists.pictureSets,
+  });
+}
+
 /**
- * The always-present anchor of the metadata line, whatever else is null.
+ * The Sets cell: how many shown set cards hold the model, or a dash.
  *
- * A model that serves several features lists them ALL, because a single label
- * answers "what breaks if I delete this" wrongly for exactly the rows a reader
- * is most likely to be deciding about: Florence-2 captions and detects, and the
- * CLIP the embedder loads is both the search encoder and the aesthetic scorer's
- * backbone. `capabilities` arrives primary-first, so the first word is the one
- * `row.kind` holds and the column still reads as one thing at a glance.
+ * A stack's row is its cover, so the count is the cover's own - the same
+ * answer the rail's "In sets" gives for the same file.
+ *
+ * @param {Object} row - a shelf row.
+ * @returns {number|string}
  */
-function kindLabel(row) {
-  // One table with the `feature` group axis, which names its headings from the
-  // same one - the cell reading `Checkpoint` under a header saying something
-  // else is the contradiction that table exists to prevent.
-  const named = fileKindLabel(row.file_kind);
-  if (named) return named;
-  const capabilities = Array.isArray(row.capabilities) ? row.capabilities : [];
-  if (capabilities.length) return capabilities.map(capabilityLabel).join(", ");
-  // The axis still files `unknown` under `Other` where the cell says
-  // "Unclassified": a shrug is not a heading of its own. The CELL always names
-  // what the row is.
-  return adapterKindLabel(row.kind) || "Adapter";
+function setsCell(row) {
+  // Blank until the sets are read: a dash would say "in none" for every row.
+  if (!store.setsKnown) return "";
+  return store.setMembership.get(row.id)?.length || "\u2013";
+}
+
+/**
+ * Everything a row draws from outside its own object, for the list's `v-memo`.
+ *
+ * The rows are one component, so without it a selection change re-rendered all
+ * of them: 1,500 rows cost a quarter of a second per click, and a drag that
+ * selects its row paid it before the row would lift. `row` itself is a fresh
+ * object whenever `visibleRows` recomputes (`displayRow`), so its own fields
+ * need no entry; what belongs here is each other value the row's template or
+ * its helpers read. A value left out draws stale until the row next changes.
+ *
+ * An open run draws its members in the same iteration, each with its own
+ * selection, so it is never memoised: the `{}` differs every render.
+ *
+ * @param {Object} row - a shelf row.
+ * @returns {Array}
+ */
+function rowMemo(row) {
+  const key = row.rowKey;
+  // The sets themselves rather than `isSelected`, `isCut` and `isFavouriteRow`:
+  // a store function is a Pinia action, and its wrapper, paid three times per
+  // row on every render, cost more than the rest of this list together.
+  return [
+    row,
+    store.selectedIds.has(row.id),
+    store.cutCopies?.ids.has(row.id) ?? false,
+    favourites.byKind.model?.has(row.sha256) ?? false,
+    key === rovingRowKey.value,
+    key === editingRowKey.value && editingName.value,
+    key === editingBaseKey.value && editingBase.value,
+    misplacedIds.value.has(row.id),
+    lockedNote(row),
+    setsCell(row),
+    // The one thing a bare mark reads from the entity lists, which land after
+    // the rows: a set's chosen icon. A face is addressed by id alone.
+    ringFor(row).icon,
+    store.view.sortKey,
+    userPrefs.dateFormat,
+    isStackOpen(row.stack_id) && {},
+  ];
 }
 
 onMounted(() => {
@@ -5092,6 +4678,8 @@ onMounted(() => {
   // Unawaited already means it does not hold up the shelf.
   foldersStore.refreshDevices();
   foldersStore.refresh();
+  // Where ComfyUI loads each kind from, for the folder marks (#2205).
+  foldersStore.loadComfyuiReads();
   // The names, colours and thumbnails behind the assignment rings. Cached
   // and shared with the sidebar, so on a warm cache this repaints the marks
   // without a request; unawaited, because a row whose marks read `#12` for a
@@ -5138,7 +4726,7 @@ watch(
   color: rgb(var(--v-theme-on-background));
   outline: none;
   /* `--shelf-col-kind` / `--shelf-col-base` / `--shelf-col-size` /
-     `--shelf-col-date` are NOT declared here. `columnStyle` writes all four
+     `--shelf-col-date` / `--shelf-col-sets` are NOT declared here. `columnStyle` writes all five
      onto this element from `view.columnWidths`, whose defaults are the
      resolved design's own (ui_kits/app/model-shelf.html, row anatomy; the date
      column is this feature's, sized for the widest day format) - and a
@@ -5146,7 +4734,8 @@ watch(
      numbers with nothing keeping them equal, which is how a "cannot disagree"
      comment becomes false. One declaration, in the store.
 
-     FIXED widths, not `auto`: grouping makes one list per group, so `auto`
+     STATED widths, not `auto` (they are the flex basis, and shrink only to
+     their floors on a narrow panel): grouping makes one list per group, so `auto`
      tracks would be measured against that group's contents alone and the
      columns would step sideways from one folder to the next - the alignment
      #891 exists to hold. */
@@ -5180,9 +4769,8 @@ watch(
      pair the grid bar (`selbar toolbar`) and the queue's (`dqbar toolbar`)
      declare, so a shared control mounted here degrades exactly as it does
      there. `shelfbar` carries this bar's own ladder (the rungs at the bottom
-     of this block); `toolbar` is what a shared control mounted here would
-     write its own rules against, and nothing on the bar does today -
-     dropping UndoControl took the one control that did. `container-type:
+     of this block); `toolbar` is what UndoControl (inside TbGlobalActions)
+     writes its own rules against. `container-type:
      inline-size` is also what keeps the bar's width independent of its
      contents. */
   container-type: inline-size;
@@ -5202,30 +4790,22 @@ watch(
   box-sizing: border-box;
   /* Split inset, same as the queue's and for the same reason. RIGHT is
      --space-3, the grid bar's inset: the app-wide tail ([separator]
-     [TbGlobalActions]) is a stable anchor only if Settings and Stats land at
+     [TbGlobalActions]) is a stable anchor only if its rail toggle lands at
      the identical distance from the edge in every view - a uniform --space-5
      here put them 8px further left than the grid's, so the pair jumped
      sideways on every view switch. LEFT stays --space-5, the shelf's own
      content gutter (`.shelf-group-btn` and the rows inset by --space-5), so
-     the title sits flush over the list. */
+     the count sits flush over the list. */
   padding: 0 var(--space-3) 0 var(--space-5);
   /* Paint the chrome surface the other two bars paint. Unpainted, this strip
      showed `.shelf`'s `background` through it, which is a different hue and
      value from `toolbar` in both themes - the bar read as page, not chrome.
-     `toolbar-text` is what `.bar-btn` already uses, so the title and the count
-     now inherit the same ink as the buttons beside them. */
+     `toolbar-text` is what `.bar-btn` already uses, so the count now
+     inherits the same ink as the buttons beside it. */
   background: rgb(var(--v-theme-toolbar));
   color: rgb(var(--v-theme-toolbar-text));
   border-bottom: 1px solid rgb(var(--v-theme-divider));
   flex-shrink: 0;
-}
-
-/* --text-md, the queue's `.qtitle`, not --text-xl: 22px is a view heading and
-   does not sit in a 36px band. The two bars that lead with an identity now
-   lead with it at one size. */
-.shelf-title {
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
 }
 
 /* 0.6, the queue's `.qsub` alpha exactly. It was 0.7 on `on-background`, and
@@ -5242,7 +4822,7 @@ watch(
   flex: 1 1 auto;
 }
 
-/* The toolbar separates the title from its controls at --space-4; the controls
+/* The toolbar separates the count from its controls at --space-4; the controls
    separate from each other at --space-3, which is the gap the grid bar uses.
    Without the cluster every child of .shelf-toolbar sat at the wider gap. */
 .shelf-bar-cluster {
@@ -5253,40 +4833,16 @@ watch(
 
 /* ── The ladder ──────────────────────────────────────────────────────────────
 
-   MEASURED, not guessed. Rendering this bar's markup and this block in
-   Chromium at `width: max-content`, with the widest content each control can
-   hold (a 12ch Group value, a 12ch Sort value, the shelf tab's long count):
+   The bar has been browse-only since #2168: the count, Sort, Show
+   (Filter), the sidebar's chips, the name field and the rail toggle. Add and
+   Model folders moved to the Models sidebar, so the fold that hid them behind
+   a ⋯ went with them. The rungs below were measured on the wider bar this one
+   replaced, so they now fire later than they need to, never earlier; remeasure
+   at `width: max-content` when a control is next added.
 
-     full                1263px   (1071px before the name field)
-     after rung 1        1032px
-     after rung 1b        840px
-     after rung 2         679px
-     after rung 3         565px   ← the floor
-
-   So the bar has never fitted a 1280px window minus the sidebar, which is
-   what this ladder is for. **Each rung fires at the width the configuration
-   above it needs**, which is why the numbers are what they are and not round
-   ones - change a control and the rungs move with the measurement.
-
-   **The queries are 24px under the widths the classes are named for**, and
-   deliberately: `container-type: inline-size` queries the CONTENT box, while
-   the figures above are the bar's border box, and this bar's inset is
-   `0 var(--space-3) 0 var(--space-5)` = 24px. Named for the bar width because
-   that is the number a person measures with a window edge; written as the
-   content width because that is the number the query sees.
-
-   Rung 3 folds only the two verbs. `Group`, `Sort` and `Show` compress and
-   never fold: they are menus, and a menu inside the ⋯ is a submenu - the same
-   line the Duplicates bar draws, where the toggles fold and the tier menu
-   compresses.
-
-   Remeasure by loading `.shelf-toolbar` at `width: max-content`; the numbers
-   move whenever a control is added, and the rung widths are the sum, not a
-   guess about it. */
-
-.shelf-overflow {
-  display: none;
-}
+   **The queries are 24px under the widths the classes are named for**:
+   `container-type: inline-size` queries the CONTENT box, and this bar's inset
+   is `0 var(--space-3) 0 var(--space-5)` = 24px. */
 
 /* The toolbar's name field. A fixed width, so typing never moves the bar. */
 .shelf-name-bar {
@@ -5294,49 +4850,27 @@ watch(
   flex: none;
 }
 
-/* Rung 1. The two things on the bar that REPORT rather than control: the
-   view's own name, which the sidebar and the tab pair beside it both already
-   say, and the count, whose two widths ("1,842 models · 12 copies" vs "8
-   runs") are why the spacer sits where it does. They go before the name
-   field, a control: the full bar plus the field (180px and a 12px gap) is
-   1071 + 192 = 1263px. Buys 231px. */
+/* Rung 1. The one thing on the bar that REPORTS rather than controls: the
+   count. It goes before the name field, a control. */
 @container shelfbar (max-width: 1238px) {
   .shelf-fold-1262 {
     display: none;
   }
 }
 
-/* Rung 1b. The name field, a shortcut to the one at the top of Show: 840 +
-   192 = 1032px is what the bar needs with it after rung 1. */
+/* Rung 1b. The name field, a shortcut to the one at the top of Show. */
 @container shelfbar (max-width: 1007px) {
   .shelf-name-bar {
     display: none;
   }
 }
 
-/* Rung 2. `Group` and `Sort` drop their VALUE and keep their glyph and
-   chevron - the grid Filter trigger's compressed grammar. The value is the
-   reason the list looks the way it does, so it goes after the two labels that
-   mean nothing, and never silently: both buttons carry it in `title` and in
-   their accessible name at every width. Buys 161px. */
+/* Rung 2. `Sort` drops its VALUE and keeps its glyph and chevron, the grid
+   Filter trigger's compressed grammar. Never silently: the button carries it
+   in `title` and in its accessible name at every width. */
 @container shelfbar (max-width: 816px) {
   .bar-btn-value {
     display: none;
-  }
-}
-
-/* Rung 3. `Add ▾` and `Model folders` fold into the ⋯ that appears in their
-   place. They are the bar's only two verbs, they open something and write
-   nothing on the press, and their rows are the same `.ctx-item` rows the Add
-   menu already draws. Buys 114px net of the ⋯ itself, and what is left - the
-   tab pair, the ⋯, and the three compressed view menus - is the 565px floor:
-   below that the bar overflows and there is nothing left to give. */
-@container shelfbar (max-width: 656px) {
-  .shelf-fold-680 {
-    display: none;
-  }
-  .shelf-overflow {
-    display: flex;
   }
 }
 
@@ -5396,6 +4930,11 @@ watch(
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  /* `shelflist`: the list's own ladder (the rungs after the column rules),
+     measured on the panel the rows are laid out in, not the window - the
+     Models rail takes a third of it when open. */
+  container-type: inline-size;
+  container-name: shelflist;
 }
 
 .shelf-scroll {
@@ -5457,9 +4996,29 @@ watch(
   box-shadow: var(--elevation-1);
 }
 
-/* The gap the count sits in is the bar's cluster gap, not a hair. */
-.shelf-sub--ingap {
-  margin-left: var(--space-4);
+/* Amber is the attention dot: a run is training or waiting for the GPU. */
+.shelf-live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
+  vertical-align: middle;
+}
+
+/* TrainingRunLive's back arrow, run name, status and Stop. */
+.shelf-run-bar {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The run bar takes the free width itself: a second spacer split it in two
+   and left Stop half way along the toolbar. */
+.shelf-run-bar ~ .shelf-spacer {
+  display: none;
 }
 
 /* Raised so the focus ring is not clipped by the welded sibling. */
@@ -5472,6 +5031,43 @@ watch(
    One line, one verb, dismissible. Nothing here is broken and nothing needs
    fixing - the models come back the moment the drive does - so it states the
    fact and stops, and deliberately never takes the error surface. */
+/* The open folder's drive, under the list, on the toolbar's chrome: one of
+   the grounds the drive meter's track is audited on (contrastAudit.js). */
+.shelf-status {
+  flex-shrink: 0;
+  /* Pinned to the foot of the pane: an empty-folder or error state does not
+     grow to fill it the way the list's scrollport does. */
+  margin-top: auto;
+  background: rgb(var(--v-theme-toolbar));
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-h);
+  padding: 0 var(--space-5);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-toolbar-text), var(--opacity-text-secondary));
+}
+
+.shelf-status-bar {
+  display: flex;
+  width: 120px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--drive-meter-track);
+}
+
+.shelf-status-bar > span {
+  display: block;
+  background: rgb(var(--v-theme-surface-success));
+}
+
+.shelf-status-bar--full > span {
+  background: rgb(var(--v-theme-surface-warning));
+}
+
 .shelf-banner {
   display: flex;
   align-items: center;
@@ -5489,237 +5085,12 @@ watch(
   white-space: nowrap;
 }
 
-.shelf-banner b {
-  font-weight: var(--weight-semibold);
-}
-
-/* ── Drive bands ───────────────────────────────────────────────────────────
-   The OUTER of the two levels the plan allows, drawn only under `Folder` +
-   `Drive, then folder`. Deliberately NOT sticky: two sticky levels need
-   stacking arithmetic (the inner offset becomes the outer's measured height,
-   which no token knows), and the band is a label with a meter rather than
-   something the reader needs pinned while they scan a folder. */
-.shelf-band {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  /* The gap BETWEEN the two halves, not between five peers. One gap for
-     everything was what made the row read as five things of equal rank
-     rather than as "which disk" and "how full". */
-  gap: var(--space-3) var(--space-5);
-  margin: 0;
-  /* A step more block padding than the folder headers below it, because rank
-     here is size and space (§5.1) and a surface tint of a few luminance values
-     was carrying it alone. */
-  padding: var(--space-4);
-  background: rgb(var(--v-theme-surface));
-  border-top: 1px solid rgb(var(--v-theme-border));
-  border-bottom: 1px solid rgb(var(--v-theme-divider));
-  font-size: var(--text-sm);
-  font-weight: var(--weight-regular);
-  color: rgb(var(--v-theme-on-background));
-}
-
-/* The glyph says "this is a disk", which is what lets the label be a bare
-   volume name rather than a path the reader has to parse to know what it is. */
-.shelf-band-icon {
-  flex: none;
-  color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-/* Which disk. A track with a FLOOR rather than one that takes the slack: at
-   `flex: 1 1 auto` it swallowed every spare pixel on a wide window and left a
-   dead 1,200px band between the drive's name and its meter - the slack moved
-   rather than being used. 320px is what a volume label and a mount point ask
-   for, so most bands start their meter on the same x and can be read down the
-   column, and a longer name pushes its own meter right instead of being cut. */
-.shelf-band-id {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex: 0 1 auto;
-  min-width: 320px;
-}
-
-/* How full, and the half that takes the room. */
-.shelf-band-usage {
-  display: flex;
-  align-items: center;
-  gap: var(--space-5);
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-/* A step up the ramp, because this heads the folder headers below it and those
-   are `--text-sm` semibold too - the outer level was the quieter of the two. */
-.shelf-band-name {
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
-}
-
-/* The mount point beside the name, in the mono face §3 gives to paths: the
-   volume label answers "which disk" and the path answers "which one is that",
-   and on a machine with two Samsung 990s only the second one does. */
-.shelf-band-path {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-/* Rank is size and weight, never opacity: a header must not be dimmer than the
-   rows it heads. The unknown case loses the meter, not the contrast. */
-.shelf-band--unknown .shelf-band-figures {
-  font-style: italic;
-}
-
-/* The drop affordance, in the same inset ring the folder header below uses:
-   the shelf has one drop treatment and a second dialect on the outer level
-   would read as a different kind of target rather than the same one. */
-.shelf-band--drop {
-  background: var(--active-wash);
-  box-shadow: inset 0 0 0 2px var(--active-bar);
-}
-
-/* The refusal, while the pointer is still down. `no-drop` is the same cursor
-   `.not-droppable` uses in the sidebar, and it is the third carrier after the
-   hue and the hatch - the state has to survive greyscale and forced-colors. */
-.shelf-band--reject {
-  background: rgba(var(--v-theme-error), 0.1);
-  box-shadow: inset 0 0 0 2px rgba(var(--v-theme-surface-error), 0.65);
-  cursor: no-drop;
-}
-
-/* One track, three segments laid end to end. They sum to exactly 100% by
-   construction in `bandUsage`, so the row needs no arithmetic here and no
-   sliver of bare track can open at the right-hand end.
-
-   The ROUNDING lives on the track and nowhere else, which is the point of
-   `overflow: hidden`: the outer ends curve because the track clips them, while
-   every inner boundary stays square. A radius on a segment would put a curve
-   mid-stack where the data has no end, and a rounded edge reads as "the bar
-   stops here" when the next segment carries straight on (#893). */
-.shelf-band-meter {
-  display: flex;
-  /* GROWS, and takes ALL of what is left, which is what spends the row's slack
-     on something instead of pooling it in a gap. The segments are percentages,
-     so a wider track is the same three facts drawn where the small one is
-     legible: measured at a 2000px row, the shelf's own slice of a nearly-empty
-     900 GB drive is 77px here against 11px at the old fixed 190. There is
-     deliberately no ceiling - one only moves the empty space back between the
-     meter and the figures, which is the arrangement this replaced. 190 stays
-     as the floor a narrow panel falls back to. */
-  flex: 1 1 auto;
-  min-width: 190px;
-  height: 10px;
-  padding: 1px;
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-sm);
-  background: var(--band-meter-free);
-  overflow: hidden;
-}
-
-.shelf-band-seg {
-  height: 100%;
-  /* Never rounded, never shrunk: a segment is the width it was given, and
-     flex would otherwise take space back off the small ones. */
-  border-radius: 0;
-  flex: none;
-}
-
-/* The three fills. Separated by LUMINANCE, not hue, so the meter survives
-   greyscale and deuteranopia: the ramp runs .0085 → .1426 → .7687 in light and
-   .1426 → .5962 → .0073 in dark, and no pair depends on colour vision.
-   Measurements and the per-theme reasoning live in style.css. */
-.shelf-band-seg--shelf {
-  background: rgb(var(--v-theme-primary));
-}
-
-.shelf-band-seg--other {
-  background: var(--band-meter-other);
-}
-
-.shelf-band-seg--free {
-  background: var(--band-meter-free);
-}
-
-/* The projection. HATCHED, never a solid: the other three segments are things
-   that were measured and this one is a thing that has not happened, and a
-   fourth flat colour would have said "this is also on the disk". The same 45°
-   texture the sidebar's `.not-droppable` and the grid's ghosted tiles use.
-
-   Both stops carry a visible alpha rather than one of them being transparent:
-   a hatch that let the free track show through would read as a lighter free
-   segment on a nearly-empty drive rather than as a texture. */
-.shelf-band-seg--ghost {
-  background: repeating-linear-gradient(
-    45deg,
-    rgba(var(--v-theme-primary), 0.9) 0 var(--space-1),
-    rgba(var(--v-theme-primary), 0.4) var(--space-1) var(--space-2)
-  );
-}
-
-/* Does not fit. The segment is clamped to the free space it is drawing into -
-   a bar cannot run past its own track - so the hue and the hatch are what say
-   the drop was refused, and the label says by how much. */
-.shelf-band-seg--ghost-reject {
-  background: repeating-linear-gradient(
-    45deg,
-    rgba(var(--v-theme-error), 0.9) 0 var(--space-1),
-    rgba(var(--v-theme-error), 0.4) var(--space-1) var(--space-2)
-  );
-}
-
-/* Track as well as segment, so a sub-pixel seam between two segments cannot
-   show the neutral track through an amber bar. */
-.shelf-band-meter--low,
-.shelf-band-meter--low .shelf-band-seg--free {
-  background: var(--band-meter-free-low);
-}
-
-/* The figures do NOT take the warning hue: they are small body text, and light
-   `warning` measures 3.09:1 on the canvas - the 3:1 UI floor, not the 4.5:1
-   body floor this size needs. Weight carries the rank instead, the same way
-   `--unknown` above ranks by style. */
-.shelf-band-figures--low,
-.shelf-band-figures--reject {
-  font-weight: var(--weight-semibold);
-}
-
-/* The glyph is non-text at 16px, so it may carry the hue: 3.09 light, 6.72
-   dark, both over the 3:1 UI floor. */
-.shelf-band-figures--low .v-icon {
+.shelf-banner-warn {
   color: rgb(var(--v-theme-surface-warning));
 }
 
-.shelf-band-figures--reject .v-icon {
-  color: rgb(var(--v-theme-surface-error));
-}
-
-.shelf-band-figures {
-  display: inline-flex;
-  align-items: center;
-  /* Pinned to the row's right edge, so whatever the meter does not take is
-     spent BETWEEN the graphic and the numbers rather than pooled at one end. */
-  margin-left: auto;
-  gap: var(--space-3);
-  font-size: var(--text-2xs);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-/* The one number the reader is actually after, at full strength and a step up
-   the ramp from the context that follows it. The rest of the line keeps the
-   2xs and the 0.7 it always had, so this is a division of the existing line
-   rather than a louder one. */
-.shelf-band-lead {
-  font-size: var(--text-xs);
+.shelf-banner b {
   font-weight: var(--weight-semibold);
-  color: rgb(var(--v-theme-on-background));
 }
 
 /* ── The column strip ──────────────────────────────────────────────────────
@@ -5762,42 +5133,50 @@ watch(
   flex: none;
 }
 
-/* The favourite column (#1578): a heart is 24px, the same track the rows give
-   it, so the heading strip keeps its left edges with the column in it. */
-.shelf-head-fav {
-  width: var(--control-h-sm);
-  flex: none;
-}
-
 /* The wrapper that carries the column's width and anchors its grip. Its own
    width classes rather than the rows' `.shelf-col--*`: those are the DATA
    cells, several selectors reach for them by name, and a heading answering to
    the same class is how `.shelf-col--base span` came to find a column name
    instead of a base model. The variable is what the two share. */
+/* Shrinkable down to the column's floor, exactly as `.shelf-col` is: the two
+   must give way by the same amount or the headings leave their columns. */
 .shelf-head-col {
   position: relative;
-  flex: none;
+  flex: 0 1 auto;
 }
 
+/* Basis 0, not auto, here and on `.shelf-row-label`: an `auto` basis is the
+   row's own name, so when the fixed columns shrink they would shrink by a
+   different amount on every row. From 0 the name never shrinks (it is held at
+   its floor) and every row hands the columns the same room. */
 .shelf-head-col--label {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1 1 0;
+  min-width: var(--shelf-name-min);
 }
 
 .shelf-head-col--kind {
   width: var(--shelf-col-kind);
+  min-width: var(--shelf-col-kind-min);
 }
 
 .shelf-head-col--base {
   width: var(--shelf-col-base);
+  min-width: var(--shelf-col-base-min);
 }
 
 .shelf-head-col--size {
   width: var(--shelf-col-size);
+  min-width: var(--shelf-col-size-min);
 }
 
 .shelf-head-col--date {
   width: var(--shelf-col-date);
+  min-width: var(--shelf-col-date-min);
+}
+
+.shelf-head-col--sets {
+  width: var(--shelf-col-sets);
+  min-width: var(--shelf-col-sets-min);
 }
 
 /* The type, the weight, the tracking, the case and the 0.7 ink all come from
@@ -5816,10 +5195,6 @@ watch(
   background: none;
   cursor: pointer;
   transition: color var(--dur-1) var(--ease-standard);
-}
-
-.shelf-head-cell--static {
-  cursor: default;
 }
 
 button.shelf-head-cell:hover {
@@ -5904,40 +5279,6 @@ button.shelf-head-cell:hover {
   background: rgb(var(--v-theme-on-background));
 }
 
-/* The key, once for the view. Wraps rather than scrolls: four short pairs at a
-   narrow width belong on two lines, not behind a scrollbar. */
-.shelf-keys {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-5);
-  margin: 0;
-  padding: var(--space-3) var(--space-4);
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-.shelf-key {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-/* 10px squares rather than a scaled-down meter: the key names the three fills
-   and does not restate their proportions, which are per-drive. */
-.shelf-key-swatch {
-  width: 10px;
-  height: 10px;
-  flex: none;
-  border-radius: 2px;
-}
-
-/* Free is the ABSENCE of a fill, so its swatch is an outline. Filled, it would
-   be a fourth colour in a three-colour key. */
-.shelf-keys .shelf-band-seg--free {
-  background: transparent;
-  border: 1px solid rgb(var(--v-theme-border));
-}
-
 /* ── Folder headers ────────────────────────────────────────────────────────
    The header IS the button, so its whole width is the collapse control and the
    drop target; a second element would put a dead strip between the two. */
@@ -5981,45 +5322,6 @@ button.shelf-head-cell:hover {
   background: var(--hover-wash);
 }
 
-.shelf-group-btn--nested {
-  padding-left: var(--space-7);
-}
-
-/* Three tiers, three rails, and the glyph beside each is the shape half: the
-   hue groups the folders on one disk and the tier's mdi folder gives it a
-   form, but neither survives greyscale on its own - which is what the chip
-   beside the label is for. */
-.shelf-group-btn--registered {
-  --shelf-rail: rgb(var(--v-theme-primary));
-}
-
-.shelf-group-btn--managed,
-.shelf-group-btn--builtin {
-  --shelf-rail: rgb(var(--v-theme-surface-info));
-}
-
-/* An unplugged drive: muted ink and a muted rail, and deliberately NEVER the
-   error colour. Nothing is lost and the models come back with the drive, so
-   painting it as a failure is what trains a reader to ignore both. */
-.shelf-group-btn--offline {
-  --shelf-rail: rgba(var(--v-theme-on-background), 0.5);
-  background: rgba(var(--v-theme-on-background), 0.04);
-  color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-.shelf-group-btn--offline .shelf-group-mark {
-  opacity: 0.5;
-}
-
-/* The drop affordance keeps the tier rail beside it rather than replacing it:
-   which folder this is does not stop being true while a drag is over it. */
-.shelf-group-btn--drop {
-  background: var(--active-wash);
-  box-shadow:
-    inset 3px 0 0 var(--shelf-rail, transparent),
-    inset 0 0 0 2px var(--active-bar);
-}
-
 .shelf-group-chevron {
   flex: none;
   color: rgba(var(--v-theme-on-background), 0.7);
@@ -6060,6 +5362,14 @@ button.shelf-head-cell:hover {
    Flex rather than a grid, because the three data columns are fixed widths and
    the name takes the rest: a grid would have to be declared identically on the
    member rows and on the empty-folder row, and one of the three would drift. */
+/* The mark at `--space-8`, about the row's own height, where #2168 drew a
+   16px letter in a slot sized for 24. The headings
+   resolve the same value, so their left edges stay over the names. */
+.shelf-head,
+.shelf-row {
+  --entity-thumb: var(--space-8);
+}
+
 .shelf-row {
   display: flex;
   align-items: center;
@@ -6097,6 +5407,31 @@ button.shelf-head-cell:hover {
   box-shadow: var(--selection-edge);
 }
 
+/* Locked in place: every copy sits in a folder whose files do not leave it.
+   The hatch layers UNDER the hover and selection washes rather than being
+   replaced by them, so a locked row that is also selected reads as both. The
+   hover rule comes last, as `.shelf-row:hover` already outranks selection. */
+.shelf-row--locked {
+  background: var(--lock-hatch);
+}
+
+.shelf-row--locked.shelf-row--selected {
+  background:
+    linear-gradient(var(--active-wash), var(--active-wash)),
+    var(--lock-hatch);
+}
+
+.shelf-row--locked:hover {
+  background:
+    linear-gradient(var(--hover-wash), var(--hover-wash)),
+    var(--lock-hatch);
+}
+
+/* Cut, waiting for a paste (#2204): the file manager's dim. */
+.shelf-row--cut > * {
+  opacity: var(--opacity-disabled);
+}
+
 /* ── The three kinds of absence ────────────────────────────────────────────
    BROKEN is a fault: the file was registered and is gone. It takes the error
    rail and the error glyph in front of the name.
@@ -6131,19 +5466,8 @@ button.shelf-head-cell:hover {
   color: rgba(var(--v-theme-on-background), 0.7);
 }
 
-/* The favourite column: the heart's own 24px box, reserved on every row so the
-   column never moves, drawn only on the cover of a run and on a hover. */
-.shelf-row-fav {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--control-h-sm);
-  flex: none;
-}
-
-/* The identity slot, sized to hold the ring's widest treatment: the mark is
-   24px and a `thick`/`double` ring stands 6px off it on every side. Anything
-   narrower clips the ring on the two rows that most need it read. */
+/* The identity slot: the mark plus 6px either side, which is how far its
+   version pill hangs past the corner. */
 .shelf-row-ident {
   position: relative;
   display: flex;
@@ -6153,13 +5477,69 @@ button.shelf-head-cell:hover {
   flex: none;
 }
 
-/* The cover chip is the grid's (App.css), but a 24px mark is not a tile: it
+/* The box the deck ticks fill: the mark's own, so they peek out from behind
+   it. The mark is positioned so it paints over them in DOM order, and the
+   ticks take its corner rather than a picture tile's. */
+.shelf-row-mark {
+  position: relative;
+  display: inline-flex;
+  width: var(--entity-thumb);
+  height: var(--entity-thumb);
+}
+
+/* The lock badge: a disc in the row's own ground, cut out of the mark's
+   top-start corner and hung as far past it as the version pill hangs past the
+   other (half the slot's padding), so it reads as sitting ON the mark. The
+   disc follows the row's wash so it never shows as a hole in a selection. */
+.shelf-row-lock {
+  position: absolute;
+  top: calc(var(--space-4) / -2);
+  left: calc(var(--space-4) / -2);
+  z-index: var(--z-raised);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-5);
+  height: var(--space-5);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-background));
+  box-shadow: 0 0 0 1px rgb(var(--v-theme-border));
+  color: rgb(var(--v-theme-on-background));
+}
+
+.shelf-row--selected .shelf-row-lock {
+  background:
+    linear-gradient(var(--active-wash), var(--active-wash)),
+    rgb(var(--v-theme-background));
+}
+
+.shelf-row:hover .shelf-row-lock {
+  background:
+    linear-gradient(var(--hover-wash), var(--hover-wash)),
+    rgb(var(--v-theme-background));
+}
+
+.shelf-row-lock .v-icon {
+  font-size: var(--text-xs);
+}
+
+/* A missing file's glyph, in the mark's place and at its size. */
+.shelf-row-gone {
+  position: relative;
+  margin: auto;
+  font-size: var(--entity-thumb);
+}
+
+.shelf-row-mark :deep(.stick) {
+  border-radius: var(--radius-sm);
+}
+
+/* The cover chip is the grid's (App.css), but a row's mark is not a tile: it
    sits on the slot's own corner rather than inset from it, and straddles the
-   mark's bottom edge so the top of the face still shows. The slot plus the row
-   gap leave 48px before the name, and "COVER" at the grid's tracking and
-   padding measures up to 53px on DejaVu, so here it drops the tracking, takes
-   the hairline padding and starts in the row's own left padding: about 42px
-   at its widest, ending short of the name. The row's bottom padding (8px) is
+   mark's bottom edge so the top of the face still shows. It drops the grid's
+   tracking, takes the hairline padding and starts in the row's own left
+   padding, so it covers the mark's bottom-start corner and leaves the version
+   pill on the other one. The row's bottom padding (8px) is
    what keeps the 4px overhang out of `content-visibility`'s paint clip.
    Not hoverable, like the grid's: it overlaps the mark, whose own tooltip names
    the assignments, and the chip's tip still describes it to assistive tech. */
@@ -6175,8 +5555,8 @@ button.shelf-head-cell:hover {
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1 1 0;
+  min-width: var(--shelf-name-min);
 }
 
 /* The filename takes the whole of the second line. It is what the file is
@@ -6191,6 +5571,13 @@ button.shelf-head-cell:hover {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* A misplaced copy's quiet line (#2205), in the UI face after the filename. */
+.shelf-row-nolist {
+  margin-left: var(--space-3);
+  font-family: var(--font-ui);
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .shelf-row-name {
@@ -6268,9 +5655,11 @@ button.shelf-head-cell:hover {
    edited would be a field whose text cannot be dragged over or double-clicked. */
 /* One inline field, two columns. Two class names and not one, because
    `startRename` finds its field with a first-match `querySelector` and a shared
-   class would let it land on whichever of the two was drawn first. */
+   class would let it land on whichever of the two was drawn first. The base
+   field is `BaseModelInput`, whose input is not a root this file's scope
+   reaches, hence `:deep()` (see that component's docstring). */
 .shelf-row-rename,
-.shelf-row-base-edit {
+.shelf-col--base :deep(.shelf-row-base-edit) {
   min-width: 0;
   -webkit-user-select: text;
   user-select: text;
@@ -6286,7 +5675,8 @@ button.shelf-head-cell:hover {
 }
 
 /* The absence glyph leads the name line, because it changes what everything
-   after it means: the name is still true, the file behind it is not there. */
+   after it means: the name is still true, the file behind it is out of reach.
+   A file that is gone draws it in the mark's place instead. */
 .shelf-row-loc {
   flex: none;
 }
@@ -6400,8 +5790,12 @@ button.shelf-head-cell:hover {
   color: rgb(var(--v-theme-surface-success));
 }
 
+/* The remembered width is the BASIS, and a panel too narrow for it shrinks
+   every column in proportion down to its floor, never below: an explicit
+   `min-width` rather than `auto`, which would be each cell's content and
+   leave the rows disagreeing with each other and with the headings. */
 .shelf-col {
-  flex: none;
+  flex: 0 1 auto;
   font-size: var(--text-xs);
   white-space: nowrap;
   overflow: hidden;
@@ -6411,18 +5805,59 @@ button.shelf-head-cell:hover {
 
 .shelf-col--kind {
   width: var(--shelf-col-kind);
+  min-width: var(--shelf-col-kind-min);
 }
 
 .shelf-col--base {
   width: var(--shelf-col-base);
+  min-width: var(--shelf-col-base-min);
 }
 
-/* A guessed value carries a tag, and the tag is the part that must survive a
-   narrow column: the label ellipsises, the tag keeps its width. */
-.shelf-col--base:has(.shelf-name-tag) {
+/* A guessed value carries its tag UNDER the label, as the name carries its
+   filename, so the tag never takes the label's width. */
+.shelf-col--base:has(.shelf-base-guess) {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+/* A column item is as wide as its text unless held, and held is what lets
+   `.shelf-base-text` ellipsise rather than clip at the column edge. */
+.shelf-col--base:has(.shelf-base-guess) .shelf-base-text {
+  max-width: 100%;
+}
+
+/* Smaller than the name column's tag: it is a note on the value, not a label
+   of its own, so it drops the caps and the tracking. */
+.shelf-base-guess {
+  display: inline-flex;
+  align-items: center;
+  font-family: inherit;
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  letter-spacing: normal;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.shelf-base-guess-confirm {
+  display: none;
   align-items: center;
   gap: var(--space-2);
+}
+
+.shelf-base-guess:hover {
+  border-color: rgb(var(--v-theme-accent));
+}
+
+.shelf-base-guess:hover .shelf-base-guess-word,
+.shelf-base-guess:focus-visible .shelf-base-guess-word {
+  display: none;
+}
+
+.shelf-base-guess:hover .shelf-base-guess-confirm,
+.shelf-base-guess:focus-visible .shelf-base-guess-confirm {
+  display: inline-flex;
 }
 
 .shelf-base-text {
@@ -6436,7 +5871,7 @@ button.shelf-head-cell:hover {
    grid the moment somebody double-clicked one row. Regular weight, because the
    Base column is not the row's title and the name field's semibold would make
    it read as one. */
-.shelf-row-base-edit {
+.shelf-col--base :deep(.shelf-row-base-edit) {
   width: 100%;
   font-weight: var(--weight-regular);
 }
@@ -6446,6 +5881,7 @@ button.shelf-head-cell:hover {
    them being able to. */
 .shelf-col--size {
   width: var(--shelf-col-size);
+  min-width: var(--shelf-col-size-min);
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -6456,7 +5892,51 @@ button.shelf-head-cell:hover {
    as a magnitude rather than as one more figure in a row of them. */
 .shelf-col--date {
   width: var(--shelf-col-date);
+  min-width: var(--shelf-col-date-min);
   font-variant-numeric: tabular-nums;
+}
+
+/* The count of sets a model is in: a magnitude like Size, so it takes the
+   same right-aligned tabular figures. */
+.shelf-col--sets {
+  width: var(--shelf-col-sets);
+  min-width: var(--shelf-col-sets-min);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── The list's ladder ─────────────────────────────────────────────────────
+   What goes when the panel is too narrow for Name to keep its floor at the
+   default widths: Sets first (a count the rail and the set cards also give),
+   then the whole identity slot. That slot is more than the picture: the deck
+   ticks, a member's arrow, the broken-file glyph and an open run's Cover chip
+   go with it. The stack badge beside the name still counts the run, the
+   member indent still nests its steps, and a broken row keeps its error rail
+   and the filename line's note; the Cover chip has no stand-in, which is the
+   price of the room. Both rungs sit just under where Name would drop below
+   `--shelf-name-min` at the default widths - with a widened column they fire
+   late rather than early, and the columns' own shrink covers the gap. */
+@container shelflist (max-width: 820px) {
+  .shelf-head-col--sets,
+  .shelf-col--sets,
+  .shelf-sets-header {
+    display: none;
+  }
+}
+
+@container shelflist (max-width: 740px) {
+  .shelf-head-ident,
+  .shelf-row-ident {
+    display: none;
+  }
+}
+
+/* The favourite heart after the name: an indicator, not a control. Toggling it
+   is the F key, the pill and the row menu. */
+.shelf-row-heart {
+  flex: none;
+  margin-inline-start: var(--space-2);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .shelf-row--broken .shelf-row-name,
@@ -6471,19 +5951,25 @@ button.shelf-head-cell:hover {
    selected treatment. */
 .shelf-row--member {
   padding-left: var(--space-7);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The indent comes out of the name's floor, not the columns: at the floor a
+   full one would leave the member's columns that much narrower than the
+   cover's above it. */
+.shelf-row--member .shelf-row-label {
+  min-width: calc(var(--shelf-name-min) - var(--space-7) + var(--space-6));
+}
+
+/* The run's loss chart: a full-width band, not a grid cell, so the chart takes
+   the row's width under the cover and its members. */
+.shelf-run-loss-row {
+  display: block;
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-7);
 }
 
 .shelf-row--member .shelf-row-name {
   font-weight: var(--weight-regular);
-}
-
-.shelf-empty-folder {
-  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-6);
-  border-bottom: 1px solid rgb(var(--v-theme-divider));
-  font-size: var(--text-xs);
-  font-style: italic;
-  color: rgba(var(--v-theme-on-background), 0.7);
 }
 
 /* ── The busy state, scoped to the panel that is busy (#900) ─────────────── */

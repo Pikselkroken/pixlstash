@@ -81,6 +81,7 @@ import DedupWhyPills from "./DedupWhyPills.vue";
 import StackExpansionStrip from "./StackExpansionStrip.vue";
 import Tooltip from "./Tooltip.vue";
 import StackLayer from "./StackLayer.vue";
+import KeyCap from "./KeyCap.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { listStackMembers, MAX_STACK_MEMBER_PAGE } from "../../api/dedup";
 import { API_BASE_URL } from "../../utils/apiClient";
@@ -2306,14 +2307,15 @@ function onZoomContextMenu() {
       </div>
       <div class="dc-zv-foot" aria-hidden="true">
         <span
-          ><kbd>←</kbd><kbd>→</kbd> or <kbd>1</kbd>–<kbd>9</kbd> flip in place,
+          ><kbd>←</kbd> <kbd class="kbd-or">→</kbd> or
+          <kbd class="kbd-or">1</kbd>–<kbd class="kbd-or">9</kbd> flip in place,
           differences jump out as motion</span
         >
         <span>Scroll zooms, drag pans - zoom out past Fit to leave</span>
         <span><kbd>P</kbd> Fit ↔ 100%</span>
         <!-- The legend names the verdicts the footer is actually offering; the
              keys are the same two in both modes, the outcomes are not. -->
-        <span><kbd>Enter</kbd> {{ isMixed ? primaryLabel : "stack" }}</span>
+        <span><KeyCap k="Enter" /> {{ isMixed ? primaryLabel : "stack" }}</span>
         <span><kbd>K</kbd> {{ isMixed ? "keep" : "keep separate" }}</span>
         <span><kbd>Esc</kbd> back</span>
       </div>
@@ -2476,12 +2478,6 @@ function onZoomContextMenu() {
 
 .dc-zoom:hover {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
-}
-
-/* It sits on the photo scrim in both themes, so its focus ring is the on-dark
-   ink rather than the theme's. */
-.dc-zoom:focus-visible {
-  outline-color: rgb(var(--v-theme-on-dark-surface));
 }
 
 /* ── The compact meta grid: two columns, label over value ─────────────────── */
@@ -2737,11 +2733,6 @@ function onZoomContextMenu() {
   font-weight: var(--weight-semibold);
 }
 
-/* Near-black in both themes, so the theme's ink ring would vanish in light. */
-.dc-zv :focus-visible {
-  outline-color: rgb(var(--v-theme-on-dark-surface));
-}
-
 .dc-flag--zv {
   position: static;
 }
@@ -2764,7 +2755,6 @@ function onZoomContextMenu() {
   --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
   --track-trough: rgba(var(--v-theme-scrim), 0.34);
   --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
-  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
   /* The selected fill too. The deep olive is a dark fill on a dark trough and
      the elevation that carries the second cue is invisible on near-black; the
      bright olive is the dark-theme value for exactly this, under the surface's
@@ -2841,7 +2831,7 @@ function onZoomContextMenu() {
 }
 
 .dc-zv-foot kbd {
-  padding: 0 var(--space-2);
+  padding: var(--kbd-pad);
   border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.14);
   color: #fff;

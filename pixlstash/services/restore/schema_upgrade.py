@@ -17,11 +17,13 @@ from typing import Optional
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from sqlalchemy.engine import URL
 
 from pixlstash.database import create_configured_engine
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.portable_identity import sanitize_vault_file
+from pixlstash.utils.sqlite_uri import sqlite_url
 from pixlstash.utils.snapshot_compression import (
     materialize_snapshot,
     snapshot_scratch_dir,
@@ -100,13 +102,14 @@ def _alembic_paths() -> tuple[Path, Path]:
     raise RuntimeError("Alembic config not found for snapshot upgrade.")
 
 
-def _alembic_config(sqlalchemy_url: str = "") -> Config:
+def _alembic_config(sqlalchemy_url: Optional[URL] = None) -> Config:
     """Build an Alembic ``Config`` pointed at this package's migrations.
 
     Args:
-        sqlalchemy_url: Database URL to operate on. Only needed for commands
-            that actually connect (e.g. ``upgrade``); revision-graph lookups
-            can pass the empty default.
+        sqlalchemy_url: Database URL to operate on, from
+            :func:`~pixlstash.utils.sqlite_uri.sqlite_url`. Only needed for
+            commands that actually connect (e.g. ``upgrade``); revision-graph
+            lookups can pass the default.
 
     Returns:
         A configured Alembic ``Config``.
@@ -114,8 +117,8 @@ def _alembic_config(sqlalchemy_url: str = "") -> Config:
     alembic_ini, migrations_dir = _alembic_paths()
     config = Config(str(alembic_ini))
     config.set_main_option("script_location", str(migrations_dir))
-    if sqlalchemy_url:
-        config.set_main_option("sqlalchemy.url", sqlalchemy_url)
+    if sqlalchemy_url is not None:
+        config.attributes["sqlalchemy_url"] = sqlalchemy_url
     return config
 
 
@@ -274,7 +277,7 @@ class SchemaUpgradeMixin:
             return None
 
         try:
-            config = _alembic_config(f"sqlite:///{tmp_snapshot}")
+            config = _alembic_config(sqlite_url(tmp_snapshot))
             with _ALEMBIC_UPGRADE_LOCK:
                 command.upgrade(config, "head")
             # The upgraded scratch is the only file eligible for a live swap.

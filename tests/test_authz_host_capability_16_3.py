@@ -28,9 +28,11 @@ one-line rollback is ever taken.
 import contextlib
 import json
 import os
+import subprocess
 import tempfile
 
 import pytest
+from starlette.testclient import TestClient
 
 from pixlstash.auth import (
     READ_BLOCKED_GET_PATHS,
@@ -47,6 +49,7 @@ from pixlstash.authz.policy import (
     validate_policy_declarations,
 )
 from pixlstash.authz.registry import ROUTE_POLICIES
+from pixlstash.db_models import Picture, ReferenceFolder
 from pixlstash.route_inventory import api_endpoint_set
 from pixlstash.services import node_pack_install_service
 from tests.authz_guard import no_spa_fallback  # noqa: F401
@@ -84,11 +87,20 @@ _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/reference-folders/{folder_id}/open"),
     ("POST", "/api/v1/pictures/{id}/open-location"),
     ("POST", "/api/v1/models/{model_id}/open-location"),
+    ("POST", "/api/v1/model-folders/{folder_id}/open"),
     ("POST", "/api/v1/server-config/open"),
     ("POST", "/api/v1/pictures/export/folder"),
+    ("POST", "/api/v1/pictures/share-copies"),
+    ("GET", "/api/v1/open-with"),
+    ("POST", "/api/v1/open-with"),
+    ("POST", "/api/v1/library/folders/open"),
     ("POST", "/api/v1/test-hooks/ws-event"),
+    ("POST", "/api/v1/test-hooks/reference-folders/{folder_id}/rescan"),
+    ("POST", "/api/v1/test-hooks/file-pictures"),
     ("POST", "/api/v1/comfyui/pack/install"),
     ("POST", "/api/v1/comfyui/node-packs/{pack_id}/install"),
+    ("POST", "/api/v1/training/ai-toolkit/check"),
+    ("PUT", "/api/v1/training/ai-toolkit/config"),
 }
 
 
@@ -206,7 +218,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
 
     28 = 23 + 5 later still, when the shelf's **ai-toolkit import** block joined
     it: ``GET /model-folders/{folder_id}/runs`` and ``POST /model-imports``.
-    The listing walks a registered output root, which is ``rescan``'s authority;
+    The listing walks a registered output root, which is the folder scan's authority;
     the import writes into one registered folder and may unlink from the output
     root, which is ``POST /model-moves``' authority. Neither takes a host path -
     the import names a registered folder id and a run *name* - so they are on
@@ -221,7 +233,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     30 = 25 + 5 with ``GET /model-folders/{folder_id}/runs/{run_name}/samples/
     {filename}``, which serves one preview image out of a registered output root
     so a step can be judged before it is imported: it reads inside a registered
-    host root and writes nothing, which is ``rescan``'s authority class.
+    host root and writes nothing, which is the folder scan's authority class.
 
     31 = 26 + 5 with ``POST /model-files``, the shelf's ``Add file`` (plan F6).
     It is the second route on this tier for **both** reasons at once, and the
@@ -286,7 +298,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     them into ``<stem>_samples/`` beside the checkpoint. The byte route is
     ``GET /adapters/{sha256}/file`` again - raw bytes out of a registered model
     folder - and the listing walks one directory inside that folder, reporting
-    names of files PixlStash never registered, which is ``rescan``'s authority
+    names of files PixlStash never registered, which is the folder scan's authority
     narrowed to a directory. **The plan for that change asked for
     ``owner_only``**, on the grounds that both are addressed by a ``model.id``
     with no host path crossing the wire; that is the argument the
@@ -484,13 +496,92 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     names this host's GPUs and what runs on them, the second changes which one
     the server runs on at its next start.
     65 = 57 + 8 with ``POST /model-folders/pick-up`` (#1985): it walks every
-    folder a rescan walks and registers the files it finds by the names a
-    workflow reports missing, which is ``rescan``'s authority narrowed to those
+    folder the background scan walks and registers the files it finds by the names a
+    workflow reports missing, which is the folder scan's authority narrowed to those
     files. It takes filenames, not a host path.
     66 = 57 + 9 with ``POST /comfyui/node-packs/{pack_id}/install`` (#2054): it
     has ComfyUI-Manager install third-party code (a pack from
     ``node_packs.KNOWN_PACKS`` at its pinned version) into the saved ComfyUI and
     restarts it, the host-shell class, so loopback only.
+    69 = 66 + 3 with in-app LoRA training: ``POST /training/jobs`` starts the
+    owner's configured trainer on this machine, and ``POST
+    /training/jobs/{job_id}/cancel`` and ``DELETE /training/jobs/{job_id}`` stop
+    it and remove its host work folder. A finished run's LoRA is a model-shelf
+    row now, so the ``/loras`` routes that once removed and disclosed its file
+    are gone with the ``TrainedLora`` table.
+    72 = 69 + 3 with the ai-toolkit install: ``GET /training/ai-toolkit/discover``
+    and ``GET /training/ai-toolkit/status`` disclose the checkout's host paths,
+    and ``POST /training/ai-toolkit/check`` starts the checkout's Python.
+    64 = 63 + 1 with ``PUT /training/ai-toolkit/config``, which stores the checkout
+    and its Python (the trainer's argv[0]) out of ``PATCH /users/me/config``, so the
+    gate, not the PATCH handler, carries the locality rule (review F2).
+    65 = 64 + 1 with ``GET /model-folders/{folder_id}/dirs``, which lists one
+    directory level inside a registered folder and names subdirectories PixlStash
+    never registered: ``models/{model_id}/samples``' authority, so the tier, not
+    the ``owner_only`` the shelf's reads carry.
+    66 = 65 + 1 with ``GET /model-folders/comfyui-reads``, which returns the
+    subdirectories of registered folders the host ComfyUI loads from, names
+    PixlStash never registered: the authority of ``/dirs``.
+    74 = 65 + 9 when ``POST /model-folders/{folder_id}/rescan`` was removed: a
+    registered folder is scanned in the background (``ModelFolderScanFinder``),
+    so no route walks one on request. The routes that cited its authority walk
+    what that scan walks.
+    67 = 65 + 2 with the folder verbs: ``POST /model-folders/{folder_id}/dirs``
+    makes a directory inside a registered folder and ``POST
+    /model-folders/{folder_id}/dirs/move`` moves or renames one, repointing the
+    rows under it, which is ``POST /model-moves``' authority.
+    80 = 71 + 9 with ``PATCH`` and ``DELETE /comfyui/connections/{connection_id}``
+    and ``POST`` and ``DELETE /comfyui/connections/{connection_id}/link``
+    (#2194): each connection keeps its own link key, so these link, unlink,
+    move and remove one connection, revoking its key and writing into that
+    ComfyUI's settings on this server's network, as ``POST`` and ``DELETE
+    /comfyui/link`` do. Renaming rides on the PATCH, so it is local too.
+    72 = 71 + 1 with ``POST /model-folders/{folder_id}/dirs/remove``, which
+    trashes or deletes a directory inside a registered folder:
+    ``POST /model-files/delete``' authority over a subtree.
+    81 = 70 + 11 with ``POST /training/ai-toolkit/check`` and ``PUT
+    /training/ai-toolkit/config`` moved to the loopback tier (#2295): the first
+    runs the Python it is given at once and the second makes it argv[0] of every
+    later trainer, which is at least ``POST /server/restart``'s authority.
+    82 = 70 + 12 with ``POST /test-hooks/reference-folders/{folder_id}/rescan``
+    (#2325), the second e2e hook: it marks a reference folder due for a rescan,
+    as the filesystem watcher does, and is loopback for ``ws-event``'s reasons.
+    83 = 70 + 13 with ``POST /test-hooks/file-pictures`` (#2315), the third: it
+    files pictures on a workflow, as a run's import does, for the same reasons.
+    84 = 70 + 14 with ``POST /model-folders/{folder_id}/open``, the folder
+    tree's ``Open in file manager``: the host-GUI spawn of
+    ``models/{model_id}/open-location`` for a directory.
+    85 = 70 + 15 with ``POST /pictures/share-copies`` (#2417): it writes picture
+    copies into a staging folder on the host and answers with their absolute
+    host paths, which only a process on that machine can open. It is
+    ``export/folder``'s write without the caller-named destination and without
+    the spawn, on that route's tier because the paths it hands back are useless
+    and owner data anywhere but loopback.
+    87 = 70 + 17 with ``GET`` and ``POST /open-with``: the GET
+    lists the applications installed on the host, the POST writes an edit copy
+    to the host disk and spawns one of those applications on it, which is
+    ``open-location``'s authority.
+    88 = 71 + 17 with ``POST /model-folders/{folder_id}/rename``, which renames a
+    registered folder on the host within its parent: the ``dirs/move`` rename
+    applied to the registered root.
+    89 = 71 + 18 with ``POST /library/folders/open`` (#2448), the Folders
+    tree's ``Open in File Manager``: the host-GUI spawn of
+    ``pictures/{id}/open-location`` for a folder rendered from ids.
+    90 = 72 + 18 with ``POST /model-files/delete/undo``, which moves the files
+    a trash delete removed back into their registered folders: the delete's
+    authority from the other end.
+    91 = 73 + 18 with ``DELETE /model-folders/{folder_id}/runs/{run_name}``,
+    which moves one ai-toolkit run folder to the host trash: ``POST
+    /model-files/delete``' authority over a run.
+    92 = 74 + 18 with ``POST /training/jobs/{job_id}/quit-comfyui`` (#2558),
+    the owner's yes to PixlStash terminating the local ComfyUI process for a
+    queued run: ``POST /training/jobs/{job_id}/cancel``'s host-process signal,
+    aimed at ComfyUI's pid. Nothing spawns, so the loopback count is unchanged.
+    93 = 75 + 18 with ``POST /training/jobs/{job_id}/train-longer``: it renames
+    and moves checkpoints inside a run's host folder and queues the trainer to
+    run on it again, ``POST /training/jobs``' class. It takes no path. Its
+    ``GET`` reads the run's checkpoint headers and returns no path, so it is
+    ``owner_only``.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -504,8 +595,8 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
         if rp.policy is AccessPolicy.LOCAL_OWNER_ONLY
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
-    assert len(loopback) == 9, sorted(loopback)
-    assert len(local) == 57, sorted(local)
+    assert len(loopback) == 18, sorted(loopback)
+    assert len(local) == 75, sorted(local)
 
 
 # ===========================================================================
@@ -518,7 +609,6 @@ def _owner_env():
     """Real Server + owner cookie login. ``trusted_proxies=["testclient"]`` lets a
     test spoof the real client IP via ``X-Forwarded-For``; without the header the
     in-process ``testclient`` peer is treated as loopback."""
-    from starlette.testclient import TestClient
 
     tmp = tempfile.TemporaryDirectory()
     cfg = os.path.join(tmp.name, "server-config.json")
@@ -771,7 +861,6 @@ def test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path
             assert minted.status_code == 200, minted.text
             # A cookie-less client: the middleware prefers the owner's session
             # cookie over a Bearer token, which would never exercise the scope.
-            from starlette.testclient import TestClient
 
             anon = TestClient(server.api, raise_server_exceptions=True)
             share = {"Authorization": f"Bearer {minted.json()['token']}"}
@@ -890,7 +979,6 @@ def test_owner_only_path_disclosing_gets_survive_the_documented_gate_rollback():
             },
         )
         assert minted.status_code == 200, minted.text
-        from starlette.testclient import TestClient
 
         anon = TestClient(server.api, raise_server_exceptions=True)
         share = {"Authorization": f"Bearer {minted.json()['token']}"}
@@ -1036,6 +1124,70 @@ def test_loopback_owner_only_rfc1918_403_even_with_flag_on():
             )
 
 
+def test_choosing_the_trainers_python_is_loopback_only():
+    """#2295: ``/training/ai-toolkit/check`` runs the Python it is given and
+    ``PUT /training/ai-toolkit/config`` makes it the trainer's argv[0], so a LAN
+    or Tailscale owner is refused both even with ``allow_remote_host_ops``,
+    while a loopback owner reaches the handler (its 422 for a path that is not
+    a checkout, never a loopback 403)."""
+    body = {"repo_path": "/home/me/no-such-ai-toolkit", "python": None}
+    calls = (
+        ("post", f"{API}/training/ai-toolkit/check"),
+        ("put", f"{API}/training/ai-toolkit/config"),
+    )
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            for method, url in calls:
+                r = getattr(owner, method)(url, json=body)
+                assert not _is_loopback_403(r), (
+                    f"loopback owner must reach {url}; got {r.status_code}: {r.text}"
+                )
+                assert r.status_code == 422, (url, r.status_code, r.text)
+                for ip in (LAN_IPV4, "100.64.0.5", "8.8.8.8"):
+                    r = getattr(owner, method)(url, json=body, headers=_xff(ip))
+                    assert _is_loopback_403(r), (
+                        f"{ip} must be refused {url}; got {r.status_code}: {r.text}"
+                    )
+
+
+def test_config_names_the_ai_toolkit_paths_only_to_a_local_owner(tmp_path):
+    """#2295: ``GET /users/me/config`` is owner-only, so a remote owner reads it
+    too; the checkout and its Python are host paths, so they read as null there
+    with ``ai_toolkit_configured`` still saying an install is saved. A loopback
+    or LAN owner reads them, as ``/training/ai-toolkit/status`` gives them."""
+    repo = tmp_path / "ai-toolkit"
+    (repo / "toolkit").mkdir(parents=True)
+    (repo / "run.py").write_text("", encoding="utf-8")
+    python = repo / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    python.chmod(0o755)
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, False):
+            r = owner.put(
+                f"{API}/training/ai-toolkit/config",
+                json={"repo_path": str(repo), "python": str(python)},
+            )
+            assert r.status_code == 200, r.text
+            for headers in ({}, _xff(LAN_IPV4)):
+                cfg = owner.get(f"{API}/users/me/config", headers=headers).json()
+                assert cfg["ai_toolkit_repo_path"] == str(repo), cfg
+                assert cfg["ai_toolkit_python"] == str(python), cfg
+                assert cfg["ai_toolkit_configured"] is True
+            cfg = owner.get(f"{API}/users/me/config", headers=_xff("8.8.8.8")).json()
+            assert cfg["ai_toolkit_repo_path"] is None, cfg
+            assert cfg["ai_toolkit_python"] is None, cfg
+            assert cfg["ai_toolkit_configured"] is True
+            assert str(tmp_path) not in json.dumps(cfg)
+            r = owner.put(
+                f"{API}/training/ai-toolkit/config",
+                json={"repo_path": None, "python": None},
+            )
+            assert r.status_code == 200, r.text
+
+
 def test_loopback_owner_only_public_403():
     """A public remote owner is 403'd on the red-line route (flag off)."""
     with _owner_env() as env:
@@ -1045,6 +1197,101 @@ def test_loopback_owner_only_public_403():
             assert _is_loopback_403(r), (
                 f"public owner must be 403'd on the red line; got {r.status_code}: {r.text}"
             )
+
+
+# ---- library/folders/open - the Folders tree's Open in File Manager (#2448) --
+
+_OPEN_TREE_FOLDER = f"{API}/library/folders/open"
+
+
+def test_open_tree_folder_is_loopback_only_and_opens_only_a_listed_folder(
+    monkeypatch,
+):
+    """Both directions on one server. A loopback owner opens a folder the
+    Folders tree lists (one a picture is filed in, or above one), and nothing
+    else: an unlisted path, a climb out and an empty folder on disk are all
+    404. A LAN owner is refused with the flag on."""
+    from pixlstash.routes import library_layout as layout_routes
+
+    opened = []
+
+    def fake_open(path):
+        opened.append(path)
+        return True
+
+    monkeypatch.setattr(layout_routes, "open_in_file_manager", fake_open)
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        root = server.vault.image_root
+        os.makedirs(os.path.join(root, "Global", "Mira"), exist_ok=True)
+        os.makedirs(os.path.join(root, "Empty"), exist_ok=True)
+
+        def _add(session):
+            pic = Picture(file_path="Global/Mira/a.png")
+            session.add(pic)
+            session.commit()
+            return pic.id
+
+        server.vault.db.run_task(_add)
+        with _enforcing(server):
+            r = owner.get(f"{API}/library/folders")
+            assert r.status_code == 200, r.text
+            assert [f["path"] for f in r.json()["folders"]] == [
+                "Global",
+                "Global/Mira",
+            ]
+
+            r = owner.post(_OPEN_TREE_FOLDER, json={"path": "Global/Mira"})
+            assert r.status_code == 200, r.text
+            assert r.json()["folder"] == "Global/Mira"
+            assert opened == [os.path.realpath(os.path.join(root, "Global", "Mira"))]
+
+            # On disk but holding no picture, a climb out, and the root itself.
+            for path in ("Empty", "..", "Global/..", "", "/"):
+                r = owner.post(_OPEN_TREE_FOLDER, json={"path": path})
+                assert r.status_code == 404, (path, r.text)
+            r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "global"})
+            assert r.status_code == 422, r.text
+
+            # A listed folder replaced by a symlink leading out of the library
+            # is refused. Creating one needs a privilege Windows runners may
+            # lack; there the escape is not set up, so it is not asserted.
+            outside = tempfile.mkdtemp()
+            moved = os.path.join(root, "Global", "Mira-moved")
+            link = os.path.join(root, "Global", "Mira")
+            os.rename(link, moved)
+            try:
+                try:
+                    os.symlink(outside, link, target_is_directory=True)
+                except OSError as e:
+                    print(f"symlink refused on this host ({e}); escape check skipped")
+                else:
+                    try:
+                        r = owner.post(_OPEN_TREE_FOLDER, json={"path": "Global/Mira"})
+                        assert r.status_code == 404, r.text
+                    finally:
+                        os.unlink(link)
+                # Listed, but gone from disk.
+                r = owner.post(_OPEN_TREE_FOLDER, json={"path": "Global/Mira"})
+                assert r.status_code == 404, r.text
+            finally:
+                os.rename(moved, link)
+                os.rmdir(outside)
+
+            # A host with no desktop says so rather than answering ok.
+            monkeypatch.setattr(layout_routes, "open_in_file_manager", lambda p: False)
+            r = owner.post(_OPEN_TREE_FOLDER, json={"path": "Global"})
+            assert r.status_code == 500, r.text
+            monkeypatch.setattr(layout_routes, "open_in_file_manager", fake_open)
+
+            with _remote_host_ops(server, True):
+                r = owner.post(
+                    _OPEN_TREE_FOLDER,
+                    json={"path": "Global"},
+                    headers=_xff(LAN_IPV4),
+                )
+                assert _is_loopback_403(r), f"{r.status_code}: {r.text}"
+            assert len(opened) == 1
 
 
 # ---- comfyui/node-packs install - third-party code into ComfyUI (#2054) ----
@@ -1141,6 +1388,95 @@ def test_export_folder_loopback_owner_only_public_403():
             )
 
 
+_SHARE_COPIES = f"{API}/pictures/share-copies"  # #2417
+
+
+def test_share_copies_is_loopback_only_even_with_the_flag_on():
+    """#2417: share copies hand back absolute host paths, so only a loopback
+    owner passes the gate; RFC1918, Tailscale and public stay 403 with
+    ``allow_remote_host_ops`` on. The positive half names an id no vault holds,
+    so the handler answers 200 with it skipped and copies nothing."""
+    body = {"picture_ids": [999999]}
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server):
+            r = owner.post(_SHARE_COPIES, json=body)
+            assert r.status_code == 200, r.text
+            assert r.json()["skipped"] == [
+                {"picture_id": 999999, "reason": "not_found"}
+            ]
+        with _enforcing(server), _remote_host_ops(server, True):
+            for ip in (LAN_IPV4, "100.64.0.5", "8.8.8.8"):
+                r = owner.post(_SHARE_COPIES, json=body, headers=_xff(ip))
+                assert _is_loopback_403(r), (
+                    f"{ip} must be 403'd on share-copies; got {r.status_code}: {r.text}"
+                )
+
+
+_OPEN_WITH = f"{API}/open-with"
+_OPEN_WITH_LIST = {"picture_id": 999999}
+_OPEN_WITH_BODY = {"picture_id": 999999, "app_id": "x"}
+
+
+def test_open_with_is_loopback_only_and_closed_to_a_read_token(monkeypatch):
+    """Both open-with routes pass a loopback owner and 403 RFC1918, Tailscale
+    and public even with ``allow_remote_host_ops`` on. The GET lists the host's
+    installed applications, so a READ token is refused by each belt on its
+    own: the gate with the READ belt emptied of it, and the READ belt with the
+    gate rolled back. Emptying both lets the same token reach the handler's
+    404, which is what proves each refusal above was a refusal.
+
+    The id is one no vault holds, so the loopback owner gets the handler's 404:
+    the route resolves, and nothing is listed or launched."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            listed = owner.get(_OPEN_WITH, params=_OPEN_WITH_LIST)
+            assert listed.status_code == 404, listed.text
+            opened = owner.post(_OPEN_WITH, json=_OPEN_WITH_BODY)
+            assert opened.status_code == 404, opened.text
+            for ip in (LAN_IPV4, "100.64.0.5", "8.8.8.8"):
+                for r in (
+                    owner.get(_OPEN_WITH, params=_OPEN_WITH_LIST, headers=_xff(ip)),
+                    owner.post(_OPEN_WITH, json=_OPEN_WITH_BODY, headers=_xff(ip)),
+                ):
+                    assert _is_loopback_403(r), (
+                        f"{ip} must be 403'd on open-with; got {r.status_code}: {r.text}"
+                    )
+
+        minted = owner.post(
+            f"{API}/users/me/token",
+            json={"description": "full read", "scope": "READ"},
+        )
+        assert minted.status_code == 200, minted.text
+        anon = TestClient(server.api, raise_server_exceptions=True)
+        share = {"Authorization": f"Bearer {minted.json()['token']}"}
+        assert anon.get(f"{API}/pictures", headers=share).status_code == 200, (
+            "the READ token is dead; the refusals below would prove nothing"
+        )
+
+        def read_as_token():
+            return anon.get(_OPEN_WITH, params=_OPEN_WITH_LIST, headers=share)
+
+        assert "/api/v1/open-with" in READ_BLOCKED_GET_PATHS
+        previously_enforcing = server.authz._enforcing
+        try:
+            # The READ belt alone, with the gate rolled back.
+            server.authz._enforcing = False
+            assert read_as_token().status_code == 403
+            monkeypatch.setattr(
+                "pixlstash.auth.READ_BLOCKED_GET_PATHS",
+                READ_BLOCKED_GET_PATHS - {"/api/v1/open-with"},
+            )
+            # Neither: the token reaches the handler.
+            assert read_as_token().status_code == 404
+            # The gate alone.
+            server.authz._enforcing = True
+            assert read_as_token().status_code == 403
+        finally:
+            server.authz._enforcing = previously_enforcing
+
+
 _SHELF_OPEN = f"{API}/models/999999/open-location"  # the #933 red-line route
 
 
@@ -1172,6 +1508,45 @@ def test_the_shelf_open_location_is_on_the_red_line_too():
                 f"expected the handler's no-such-model 404 past the gate, "
                 f"got {r.status_code}: {r.text}"
             )
+
+
+def test_open_location_resolves_a_library_picture_against_the_library(
+    monkeypatch,
+):
+    """A library picture stores its path relative to the library, so the
+    folder opened is the library's own sub-folder, not one relative to the
+    server's working directory (which answered 404 for every such picture).
+    The spawn is stubbed so no file manager opens on the machine running this."""
+    opened = []
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        image_root = server.vault.image_root
+        os.makedirs(os.path.join(image_root, "show-in-folder"), exist_ok=True)
+
+        def _add(session):
+            pic = Picture(file_path=os.path.join("show-in-folder", "a.png"))
+            session.add(pic)
+            session.commit()
+            return pic.id
+
+        pic_id = server.vault.db.run_task(_add)
+        # `subprocess` is one module, and the server's own background probes
+        # run through it too: only the opener is caught.
+        real_run = subprocess.run
+
+        def _run(argv, **kw):
+            if argv[0] in ("open", "xdg-open"):
+                opened.append(argv[-1])
+                return subprocess.CompletedProcess(argv, 0)
+            return real_run(argv, **kw)
+
+        monkeypatch.setattr(subprocess, "run", _run)
+        monkeypatch.setattr(os, "startfile", opened.append, raising=False)
+        with _enforcing(server):
+            r = owner.post(f"{API}/pictures/{pic_id}/open-location")
+        monkeypatch.undo()
+        assert r.status_code == 200, r.text
+        assert opened == [os.path.join(image_root, "show-in-folder")]
 
 
 # ---- server-config/open - the CSO Condition-1 sibling hole -----------------
@@ -1253,12 +1628,13 @@ from pixlstash.server import Server  # noqa: E402
 
 _WS_HOOK = f"{API}/test-hooks/ws-event"
 _WS_HOOK_BODY = {"event_type": "CHANGED_PICTURES", "picture_ids": [1]}
+_RESCAN_HOOK = f"{API}/test-hooks/reference-folders/{{folder_id}}/rescan"
+_FILE_HOOK = f"{API}/test-hooks/file-pictures"
 
 
 @contextlib.contextmanager
 def _test_hooks_owner_env():
     """Owner-authenticated server with ``enable_test_hooks`` ON."""
-    from starlette.testclient import TestClient
 
     tmp = tempfile.TemporaryDirectory()
     cfg = os.path.join(tmp.name, "server-config.json")
@@ -1298,9 +1674,11 @@ def test_test_hooks_route_is_absent_unless_the_flag_is_on():
 
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
-        assert ("POST", _WS_HOOK) not in api_endpoint_set(server.api), (
-            "the test-hooks router must not be mounted without the flag"
-        )
+        mounted = api_endpoint_set(server.api)
+        for hook in (_WS_HOOK, _RESCAN_HOOK, _FILE_HOOK):
+            assert ("POST", hook) not in mounted, (
+                f"{hook} must not be mounted without the flag"
+            )
         with _enforcing(server):
             r = owner.post(_WS_HOOK, json=_WS_HOOK_BODY)
             assert r.status_code in (404, 405), (
@@ -1314,6 +1692,8 @@ def test_test_hooks_declaration_does_not_boot_fail_when_unmounted():
     from pixlstash.authz.registry import CONDITIONALLY_MOUNTED_ROUTES
 
     assert ("POST", _WS_HOOK) in CONDITIONALLY_MOUNTED_ROUTES
+    assert ("POST", _RESCAN_HOOK) in CONDITIONALLY_MOUNTED_ROUTES
+    assert ("POST", _FILE_HOOK) in CONDITIONALLY_MOUNTED_ROUTES
     with _owner_env() as env:
         server = env["server"]
         with _enforcing(server):
@@ -1354,6 +1734,158 @@ def test_test_hooks_non_loopback_owner_is_403_even_with_flag_on():
                 )
 
 
+def _insert_reference_folder(session, path):
+    """A reference folder row, last scanned long ago; its id."""
+    rf = ReferenceFolder(folder=path, label="r", last_scanned=1.0)
+    session.add(rf)
+    session.commit()
+    session.refresh(rf)
+    return rf.id
+
+
+def test_rescan_hook_loopback_owner_marks_the_folder_due():
+    """POSITIVE direction: a loopback owner reaches the rescan hook, which
+    marks the folder due exactly as the watcher does, and 404s a folder that
+    does not exist (so the 200 is the handler's, not a catch-all's)."""
+    with _test_hooks_owner_env() as env:
+        server, owner = env["server"], env["owner"]
+
+        folder_id = server.vault.db.run_task(
+            lambda session: _insert_reference_folder(session, env["tmp"].name)
+        )
+        with _enforcing(server):
+            r = owner.post(_RESCAN_HOOK.format(folder_id=folder_id))
+            assert r.status_code == 200, r.text
+            assert r.json() == {"status": "success", "folder_id": folder_id}
+            missing = owner.post(_RESCAN_HOOK.format(folder_id=folder_id + 1))
+            assert missing.status_code == 404, missing.text
+        last_scanned = server.vault.db.run_task(
+            lambda session: session.get(ReferenceFolder, folder_id).last_scanned
+        )
+        assert last_scanned == 0.0
+
+
+def test_rescan_hook_non_loopback_owner_is_403_even_with_flag_on():
+    """NEGATIVE direction, as for the ws-event hook: no remote owner reaches
+    it, whatever allow_remote_host_ops says."""
+    with _test_hooks_owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            for ip in (LAN_IPV4, PRIVATE_10_IPV4, "100.64.0.5", "8.8.8.8"):
+                r = owner.post(_RESCAN_HOOK.format(folder_id=1), headers=_xff(ip))
+                assert _is_loopback_403(r), (
+                    f"{ip} must be 403'd on the rescan hook even with "
+                    f"allow_remote_host_ops=true; got {r.status_code}: {r.text}"
+                )
+
+
+def _insert_picture(session):
+    """A picture row filed on no workflow; its id."""
+    pic = Picture(file_path="file-hook.png")
+    session.add(pic)
+    session.commit()
+    session.refresh(pic)
+    return pic.id
+
+
+def _filed_on(server, picture_id):
+    return server.vault.db.run_task(
+        lambda session: session.get(Picture, picture_id).run_workflow_id
+    )
+
+
+def test_file_hook_loopback_owner_files_and_unfiles_the_pictures():
+    """POSITIVE direction: a loopback owner files a picture on a workflow over
+    whatever it held, unfiles it with null, and gets a 404 for a picture that
+    does not exist (so the 200 is the handler's, not a catch-all's)."""
+    with _test_hooks_owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        picture_id = server.vault.db.run_task(_insert_picture)
+        with _enforcing(server):
+            for workflow_id in ("manual:a", "manual:b"):
+                r = owner.post(
+                    _FILE_HOOK,
+                    json={"picture_ids": [picture_id], "workflow_id": workflow_id},
+                )
+                assert r.status_code == 200, r.text
+                assert r.json() == {"status": "success", "filed": 1}
+                assert _filed_on(server, picture_id) == workflow_id
+            r = owner.post(_FILE_HOOK, json={"picture_ids": [picture_id]})
+            assert r.status_code == 200, r.text
+            assert _filed_on(server, picture_id) is None
+            missing = owner.post(
+                _FILE_HOOK,
+                json={"picture_ids": [picture_id, picture_id + 1], "workflow_id": "x"},
+            )
+            assert missing.status_code == 404, missing.text
+        # A refused call writes none of them.
+        assert _filed_on(server, picture_id) is None
+
+
+def test_file_hook_non_loopback_owner_is_403_even_with_flag_on():
+    """NEGATIVE direction, as for the other hooks: no remote owner reaches
+    it, whatever allow_remote_host_ops says, and nothing is written."""
+    with _test_hooks_owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        picture_id = server.vault.db.run_task(_insert_picture)
+        body = {"picture_ids": [picture_id], "workflow_id": "manual:a"}
+        with _enforcing(server), _remote_host_ops(server, True):
+            for ip in (LAN_IPV4, PRIVATE_10_IPV4, "100.64.0.5", "8.8.8.8"):
+                r = owner.post(_FILE_HOOK, json=body, headers=_xff(ip))
+                assert _is_loopback_403(r), (
+                    f"{ip} must be 403'd on the file hook even with "
+                    f"allow_remote_host_ops=true; got {r.status_code}: {r.text}"
+                )
+        assert _filed_on(server, picture_id) is None
+
+
+def test_test_hooks_refuse_read_and_share_tokens():
+    """NEGATIVE direction for tokens: neither an unscoped READ token nor a
+    resource-scoped share token reaches either hook, from loopback. The token
+    reads ``/pictures`` (it is live) and the owner reaches both hooks (they
+    resolve), so each 403 is a refusal, not a dead token or a dead path."""
+
+    with _test_hooks_owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        folder_id = server.vault.db.run_task(
+            lambda session: _insert_reference_folder(session, env["tmp"].name)
+        )
+        picture_id = server.vault.db.run_task(_insert_picture)
+        hooks = (
+            (_WS_HOOK, _WS_HOOK_BODY),
+            (_RESCAN_HOOK.format(folder_id=folder_id), None),
+            (_FILE_HOOK, {"picture_ids": [picture_id], "workflow_id": "manual:a"}),
+        )
+        minted = {
+            "read": {"description": "read", "scope": "READ"},
+            "share": {
+                "description": "set share",
+                "scope": "READ",
+                "resource_type": "picture_set",
+                "resource_id": 1,
+            },
+        }
+        with _enforcing(server):
+            for path, body in hooks:
+                r = owner.post(path, json=body)
+                assert r.status_code == 200, f"{path} must resolve: {r.text}"
+            # Cookie-less: the middleware prefers the owner's session cookie.
+            anon = TestClient(server.api, raise_server_exceptions=True)
+            for kind, request in minted.items():
+                token = owner.post(f"{API}/users/me/token", json=request)
+                assert token.status_code == 200, token.text
+                headers = {"Authorization": f"Bearer {token.json()['token']}"}
+                assert (
+                    anon.get(f"{API}/pictures", headers=headers).status_code == 200
+                ), f"the {kind} token is dead; its refusals would prove nothing"
+                for path, body in hooks:
+                    r = anon.post(path, json=body, headers=headers)
+                    assert r.status_code == 403, (
+                        f"a {kind} token must not reach {path}; "
+                        f"got {r.status_code}: {r.text}"
+                    )
+
+
 def test_conditionally_mounted_routes_are_all_declared():
     """The waiver is an ABSENCE waiver, not a coverage waiver: every conditional
     route must still carry a policy, or it could be used to smuggle an undeclared
@@ -1363,3 +1895,130 @@ def test_conditionally_mounted_routes_are_all_declared():
     assert CONDITIONALLY_MOUNTED_ROUTES, "the set must not silently empty out"
     missing = CONDITIONALLY_MOUNTED_ROUTES - set(ROUTE_POLICIES)
     assert not missing, f"conditional routes with no declaration: {sorted(missing)}"
+
+
+# ---- ai-toolkit training: host-process routes and the trainer's settings -------
+
+
+def test_training_host_routes_refuse_a_remote_owner_and_admit_lan():
+    """POST /training/jobs, POST .../cancel and DELETE /training/jobs/{id} are
+    LOCAL_OWNER_ONLY: a public owner is 403'd naming the flag, and the same
+    route answers from the LAN, which is the in-scope control that proves the
+    route resolves and the 403 is the locality gate, not a dead path."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, False):
+            # POST with an empty body: the gate admits the LAN owner, then the
+            # body fails validation (422), which proves the route handled it.
+            remote = owner.post(
+                f"{API}/training/jobs", json={}, headers=_xff("8.8.8.8")
+            )
+            assert remote.status_code == 403, remote.text
+            assert "allow_remote_host_ops" in remote.text, remote.text
+            lan = owner.post(f"{API}/training/jobs", json={}, headers=_xff(LAN_IPV4))
+            assert not _is_locality_403(lan), lan.text
+            assert lan.status_code == 422, lan.text
+
+            for method in ("cancel", "delete"):
+                path = f"{API}/training/jobs/999999" + (
+                    "/cancel" if method == "cancel" else ""
+                )
+                call = owner.post if method == "cancel" else owner.delete
+                remote = call(path, headers=_xff("8.8.8.8"))
+                assert remote.status_code == 403, (path, remote.text)
+                assert "allow_remote_host_ops" in remote.text, remote.text
+                # The LAN owner reaches the handler: an unknown job is its 404.
+                lan = call(path, headers=_xff(LAN_IPV4))
+                assert lan.status_code == 404, (path, lan.text)
+                assert "Training job not found" in lan.text, lan.text
+
+
+def test_training_host_routes_admit_a_remote_owner_with_the_flag_on():
+    """The dedicated flag is the one way a remote owner starts or deletes a
+    trainer job; the same route answers the handler, not the gate."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            r = owner.delete(f"{API}/training/jobs/999999", headers=_xff("8.8.8.8"))
+            assert r.status_code == 404, r.text
+            assert "Training job not found" in r.text, r.text
+
+
+def test_ai_toolkit_install_routes_refuse_a_remote_owner_and_admit_lan():
+    """discover and status disclose host paths, so they are LOCAL_OWNER_ONLY: a
+    remote owner is 403'd naming the flag, and the LAN owner reaches the handler.
+    check and PUT config moved to the loopback tier (#2295) and are covered by
+    test_choosing_the_trainers_python_is_loopback_only."""
+    cases = (
+        ("get", f"{API}/training/ai-toolkit/discover"),
+        ("get", f"{API}/training/ai-toolkit/status"),
+    )
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, False):
+            for method, path in cases:
+                call = getattr(owner, method)
+                remote = call(path, headers=_xff("8.8.8.8"))
+                assert remote.status_code == 403, (path, remote.text)
+                assert "allow_remote_host_ops" in remote.text, (path, remote.text)
+                lan = call(path, headers=_xff(LAN_IPV4))
+                assert not _is_locality_403(lan), (path, lan.text)
+                assert lan.status_code == 200, (path, lan.text)
+
+
+def test_ai_toolkit_discover_admits_a_remote_owner_with_the_flag_on():
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            r = owner.get(
+                f"{API}/training/ai-toolkit/discover", headers=_xff("8.8.8.8")
+            )
+            assert r.status_code == 200, r.text
+            assert "searched" in r.json(), r.text
+
+
+def test_ai_toolkit_config_is_saved_only_from_this_computer(tmp_path):
+    """PUT /training/ai-toolkit/config stores the checkout and the Python that is
+    argv[0] of the trainer, so it is LOOPBACK_OWNER_ONLY (#2295): a remote or LAN
+    owner is refused, even to disconnect and even with allow_remote_host_ops,
+    and the loopback owner saves the checkout's Python and reads it back. PATCH
+    /users/me/config does not write these keys: 422 from any address."""
+    repo = tmp_path / "ai-toolkit"
+    (repo / "toolkit").mkdir(parents=True)
+    (repo / "run.py").write_text("", encoding="utf-8")
+    python = repo / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    python.chmod(0o755)
+    body = {"repo_path": str(repo), "python": str(python)}
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        for flag in (False, True):
+            with _enforcing(server), _remote_host_ops(server, flag):
+                for address in ("8.8.8.8", LAN_IPV4):
+                    for attempt in (body, {"repo_path": None, "python": None}):
+                        refused = owner.put(
+                            f"{API}/training/ai-toolkit/config",
+                            json=attempt,
+                            headers=_xff(address),
+                        )
+                        assert _is_loopback_403(refused), (address, refused.text)
+
+        with _enforcing(server), _remote_host_ops(server, False):
+            saved = owner.put(f"{API}/training/ai-toolkit/config", json=body)
+            assert saved.status_code == 200, saved.text
+            for address in (LAN_IPV4, "8.8.8.8"):
+                patched = owner.patch(
+                    f"{API}/users/me/config",
+                    json={"ai_toolkit_python": None},
+                    headers=_xff(address),
+                )
+                assert patched.status_code == 422, (address, patched.text)
+                assert "PUT /api/v1/training/ai-toolkit/config" in patched.text
+            stored = owner.get(f"{API}/users/me/config").json()
+            assert stored["ai_toolkit_python"] == str(python)
+            cleared = owner.put(
+                f"{API}/training/ai-toolkit/config",
+                json={"repo_path": None, "python": None},
+            )
+            assert cleared.status_code == 200, cleared.text

@@ -18,9 +18,9 @@
     >
       <span
         v-for="segment in bar.segments"
-        :key="segment.kind"
+        :key="segment.key"
         class="ra-seg"
-        :class="`ra-seg--${segment.kind}`"
+        :class="[`ra-seg--${segment.kind}`, { 'ra-seg--reserved': segment.reserved }]"
         :style="{ width: pct(segment.pct) }"
       ></span>
       <span
@@ -41,13 +41,14 @@
     </div>
 
     <ul class="ra-legend">
-      <li v-for="segment in bar.segments" :key="segment.kind">
+      <li v-for="segment in bar.segments" :key="segment.key">
         <span
           class="ra-swatch"
-          :class="`ra-seg--${segment.kind}`"
+          :class="[`ra-seg--${segment.kind}`, { 'ra-seg--reserved': segment.reserved }]"
           aria-hidden="true"
         ></span>
-        {{ segmentName(segment.kind) }} {{ formatGb(segment.mb) }}
+        {{ segmentName(segment.kind) }}{{ segment.reserved ? " reserved" : "" }}
+        {{ formatGb(segment.mb) }}
       </li>
     </ul>
 
@@ -97,7 +98,7 @@ const SEGMENT_NAMES = {
   comfyui: "ComfyUI",
   aitoolkit: "Training",
   other: "Other apps",
-  spare: "Kept spare",
+  spare: "Headroom",
 };
 
 const title = computed(() => `Run ${props.label || "this run"} anyway?`);
@@ -108,8 +109,11 @@ const bar = computed(() =>
 
 const text = computed(() => {
   if (bar.value.overMb > 0) {
-    const spare = bar.value.segments.find((segment) => segment.kind === "spare");
-    const kept = spare ? ` even counting the ${formatGb(spare.mb)} PixlStash keeps spare` : "";
+    // Everything kept back: the spare margin and the reservations not yet used.
+    const keptMb = bar.value.segments
+      .filter((segment) => segment.kind === "spare" || segment.reserved)
+      .reduce((sum, segment) => sum + segment.mb, 0);
+    const kept = keptMb > 0 ? ` even counting the ${formatGb(keptMb)} held back from new requests` : "";
     return `That is more memory than this GPU has${kept}. This run or the other job can run out of GPU memory and fail.`;
   }
   return "Starting it now may run out of GPU memory, and this run or the other job could fail.";
@@ -202,9 +206,20 @@ function pct(value) {
 .ra-seg--aitoolkit {
   background: rgb(var(--tenant-aitoolkit));
 }
-.ra-seg--other,
-.ra-seg--spare {
+.ra-seg--pixlstash.ra-seg--reserved {
+  background: rgba(var(--tenant-pixlstash), 0.4);
+}
+.ra-seg--comfyui.ra-seg--reserved {
+  background: rgba(var(--tenant-comfyui), 0.4);
+}
+.ra-seg--aitoolkit.ra-seg--reserved {
+  background: rgba(var(--tenant-aitoolkit), 0.4);
+}
+.ra-seg--other {
   background: var(--hatch-not-ours);
+}
+.ra-seg--spare {
+  background: var(--spare-margin);
 }
 
 .ra-legend {

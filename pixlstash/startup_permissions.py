@@ -19,6 +19,7 @@ from typing import Iterable
 from platformdirs import user_config_dir
 
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation, TrustedSQLiteLocationError
+from pixlstash.utils.sqlite_uri import sqlite_file_uri
 
 
 PERMISSION_REPAIR_ENV = "PIXLSTASH_REPAIR_PERMISSIONS"
@@ -185,7 +186,9 @@ def _active_library_root(hub_path: str) -> str | None:
             private=True,
             trusted_root=os.path.dirname(hub_path),
         )
-        connection = sqlite3.connect(f"file:{guard.path}?mode=ro", uri=True, timeout=5)
+        connection = sqlite3.connect(
+            sqlite_file_uri(guard.path, read_only=True), uri=True, timeout=5
+        )
         row = connection.execute(
             "SELECT path FROM library WHERE is_active = 1 AND attached = 1 LIMIT 1"
         ).fetchone()

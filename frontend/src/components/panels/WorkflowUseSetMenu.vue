@@ -10,7 +10,7 @@
   <v-menu
     v-model="open"
     location="bottom end"
-    :offset="4"
+    :offset="MENU_GAP_PX"
     @after-enter="onOpened"
   >
     <template #activator="{ props: menuProps }">
@@ -33,32 +33,50 @@
     <div
       ref="surface"
       class="ctx-menu wfset-menu"
+      :style="surfaceMax ? { maxHeight: `${surfaceMax}px` } : undefined"
       role="menu"
       aria-label="Your sets"
       tabindex="-1"
       data-testid="wftab-use-set-menu"
       @keydown="onMenuKeydown"
     >
-      <div class="section-label ctx-label" aria-hidden="true">Your sets</div>
-      <!-- Hand-made sets first, then the ones read from the owner's pictures.
-           A set that cannot be used stays in the list, with why: one that is
-           missing would read as a set the owner has lost. Named outright: the
-           two spans would otherwise be read run together. -->
-      <button
-        v-for="row in rows ?? []"
-        :key="row.key"
-        class="ctx-item"
-        :class="{ 'ctx-item--disabled': row.off }"
-        type="button"
-        role="menuitem"
-        :aria-disabled="row.off ? 'true' : undefined"
-        :aria-label="`${row.name}, ${row.meta}`"
-        :data-set="row.key"
-        @click="choose(row)"
+      <!-- Grouped by what taking the set would do here: the sets that fit,
+           then the ones that ran in another kind of workflow, then the ones
+           that cannot be used. A set that cannot be used stays in the list,
+           with why: one that is missing would read as a set the owner has
+           lost. A row is named outright: the two spans would otherwise be
+           read run together. -->
+      <div
+        v-for="section in sections"
+        :key="section.id"
+        role="group"
+        :aria-label="section.label"
+        :data-section="section.id"
       >
-        <span class="ctx-label-text">{{ row.name }}</span>
-        <span class="ctx-meta">{{ row.meta }}</span>
-      </button>
+        <div class="section-label ctx-label" aria-hidden="true">
+          {{ section.label }}
+        </div>
+        <button
+          v-for="row in section.rows"
+          :key="row.key"
+          class="ctx-item"
+          :class="{ 'ctx-item--disabled': row.off }"
+          type="button"
+          role="menuitem"
+          :aria-disabled="row.off ? 'true' : undefined"
+          :aria-label="[row.name, row.meta, row.warning].filter(Boolean).join(', ')"
+          :data-set="row.key"
+          @click="choose(row)"
+        >
+          <span class="ctx-label-text">{{ row.name }}</span>
+          <span class="ctx-meta">{{ row.meta }}</span>
+          <!-- Its checkpoints only ran in another kind of workflow: said, in
+               amber, and still taken, since the owner may know better. -->
+          <span v-if="row.warning" class="ctx-meta wfset-warn">{{
+            row.warning
+          }}</span>
+        </button>
+      </div>
       <!-- The read is out, failed, or found nothing: a row that says so, never
            an empty surface. Opening the menu again asks again. -->
       <button
@@ -88,22 +106,27 @@ import { VMenu } from "vuetify/components";
 
 import { fetchWorkflowSets } from "../../api/modelShelf";
 import { planSetClones } from "../../api/workflows";
-import { useFavouritesStore } from "../../stores/useFavouritesStore";
+import {
+  favouritesFirst,
+  useFavouritesStore,
+} from "../../stores/useFavouritesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { loraBase } from "../../utils/loraChain";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
-import {
-  favouriteSetsFirst,
-  handMadeName,
-  headName,
-  setGroups,
-} from "../../utils/workflowSets";
+import { handMadeName, headName, setGroups } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 
 // The root is a wrapper round the menu, whose content is teleported: what the
 // tab puts on this component belongs on the button.
 defineOptions({ inheritAttrs: false });
+
+/** The menu's headings, in the order they are drawn. */
+const SECTIONS = [
+  { id: "fits", label: "Fits this workflow" },
+  { id: "other", label: "Used in other kinds of workflow" },
+  { id: "off", label: "Not usable here" },
+];
 
 const props = defineProps({
   /** The workflow whose rows are filled. */
@@ -151,6 +174,29 @@ const failed = ref(false);
 let asked = 0;
 /** The menu was opened from outside the tab, so nothing put focus in it. */
 let focusOnOpen = false;
+/**
+ * The surface's height cap: the room left between the button and the bottom
+ * of the window, measured as the menu opens. The rows arrive after `v-menu`
+ * has placed the surface, and its own re-placement then measures a box its
+ * previous max-height already cut short, which left a long list hanging out
+ * of the window. A surface that never grows past the room below is never
+ * re-placed.
+ */
+const surfaceMax = ref(null);
+
+/** The gap to the button, and how close the surface comes to the window's edge. */
+const MENU_GAP_PX = 4;
+const MENU_EDGE_PX = 12;
+/** Below this the surface is not squeezed further: `v-menu` moves it instead. */
+const MENU_MIN_HEIGHT_PX = 160;
+
+/** Cap the surface to the room below the button. */
+function sizeSurface() {
+  const button = buttonEl()?.getBoundingClientRect();
+  if (!button) return;
+  const room = window.innerHeight - button.bottom - MENU_GAP_PX - MENU_EDGE_PX;
+  surfaceMax.value = Math.max(MENU_MIN_HEIGHT_PX, Math.floor(room));
+}
 
 /**
  * A set member under the name the shelf reads it by (`headName`): its display
@@ -269,16 +315,25 @@ function fillOf(plan) {
 }
 
 /**
- * The sets in the order they are drawn: hand-made first, a favourite leading
- * inside each group. Null while the sets are unread.
+ * The sets in the order they are drawn: by name, so a set is where its name
+ * says it is, with a favourite leading (`sections` keeps this order, so it
+ * leads inside its own section). Two sets of one name keep the shelf's order,
+ * hand-made first. Null while the sets are unread.
  */
-const rankedSets = computed(
-  () =>
-    sets.value &&
-    favouriteSetsFirst(sets.value, (key) => favourites.isFavourite("set", key)),
-);
+const rankedSets = computed(() => {
+  if (!sets.value) return null;
+  const byName = [...sets.value].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    }),
+  );
+  return favouritesFirst(byName, (set) =>
+    favourites.isFavourite("set", set.key),
+  );
+});
 
-/** The rows as drawn, or null while the sets are unread. */
+/** The rows, unsectioned, or null while the sets are unread. */
 const rows = computed(
   () =>
     rankedSets.value?.map((set) => {
@@ -297,6 +352,7 @@ const rows = computed(
               .filter(Boolean)
               .join(" · ");
       const coming = set.downloading ?? [];
+      const off = wontLoad || !fill.length;
       return {
         key: set.key,
         name: set.name,
@@ -304,11 +360,21 @@ const rows = computed(
         meta: coming.length
           ? `${meta} · ${comingWhat(coming)} still downloading, left out`
           : meta,
-        off: wontLoad || !fill.length,
+        off,
+        warning: off ? "" : set.plan.warning || "",
         coming,
       };
     }) ?? null,
 );
+
+/** The rows under their headings, in order; a heading with no rows is left out. */
+const sections = computed(() => {
+  const sectionOf = (row) => (row.off ? "off" : row.warning ? "other" : "fits");
+  return SECTIONS.map((section) => ({
+    ...section,
+    rows: (rows.value ?? []).filter((row) => sectionOf(row) === section.id),
+  })).filter((section) => section.rows.length);
+});
 
 /** Every set on the shelf, and one plan request for all of them. */
 async function read() {
@@ -394,6 +460,7 @@ function onOpened() {
 // click that closed the menu landed on another control.
 watch(open, async (now) => {
   if (now) {
+    sizeSurface();
     void read();
     return;
   }
@@ -425,8 +492,15 @@ defineExpose({ open: openMenu, focus });
   display: inline-flex;
 }
 
+/* Its max-height is the room below the button (`sizeSurface`), and it
+   scrolls inside that rather than running off the bottom of the window.
+   `min-height: 0` lets it shrink in `v-menu`'s flex column as well. */
 .wfset-menu {
   width: 320px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 /* A row is a set's name over what taking it would do. On two lines, and the
@@ -457,5 +531,9 @@ defineExpose({ open: openMenu, focus });
 
 .wfset-menu .ctx-item--disabled .ctx-label-text {
   opacity: var(--opacity-disabled);
+}
+
+.wfset-menu .ctx-item[data-set] .wfset-warn {
+  color: rgb(var(--v-theme-surface-warning));
 }
 </style>

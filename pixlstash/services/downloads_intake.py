@@ -144,7 +144,7 @@ def safetensors_complete(path: str) -> bool:
     except (OSError, ValueError, UnicodeDecodeError, struct.error) as exc:
         logger.info(
             "%s does not read as a whole safetensors file yet (%s); leaving it "
-            "in Downloads.",
+            "where it is.",
             path,
             exc,
         )
@@ -167,7 +167,7 @@ def safetensors_complete(path: str) -> bool:
         if offset_end < 0:
             logger.info(
                 "%s has a malformed safetensors header (tensor %r ends at %r); "
-                "leaving it in Downloads.",
+                "leaving it where it is.",
                 path,
                 key,
                 offsets[1],

@@ -20,6 +20,17 @@ run. ``build`` raises on real faults (a rewrite that matched nothing, a missing
 checkout); ``pages.yml`` then falls back to ``build`` without a tag so the
 stable site still deploys, and fails the run after the deploy.
 
+``released`` guards the automatic deploy. A push to ``main`` can carry site
+copy for a version that is not out yet (``index.html`` saying 2.0 while
+``website/latest-version.json``, which the download links are built from, still
+names 1.13.2). It writes ``released=true`` only when ``pyproject.toml``'s
+version is no newer than ``latest-version.json``, which the release bot raises
+once a release is published; ``pages.yml`` skips a push deploy otherwise. A
+manual run always deploys::
+
+    python scripts/build_prerelease_site.py released \\
+        --pyproject pyproject.toml --latest-version website/latest-version.json
+
 Versions are parsed with a pattern rather than ``packaging`` so the Pages job,
 which can deploy, installs nothing.
 """
@@ -32,6 +43,7 @@ import os
 import re
 import shutil
 import sys
+import tomllib
 from pathlib import Path
 from urllib.parse import quote
 
@@ -76,6 +88,21 @@ def pick_release_candidate(releases: list[dict]) -> str | None:
             candidates.append((key, tag))
     newer = [(key, tag) for key, tag in candidates if key > stable]
     return max(newer)[1] if newer else None
+
+
+def is_released(version: str, latest: str) -> bool:
+    """Return whether ``version`` (pyproject.toml) is no newer than ``latest``.
+
+    Args:
+        version: The code's version, e.g. ``2.0.0rc5`` or ``2.0.0``.
+        latest: The published stable version from ``latest-version.json``.
+
+    A version this module cannot parse (a dev build, an alpha) counts as not
+    released, so the site waits for a manual run rather than guessing.
+    """
+    key = _version_key(f"v{version}")
+    published = _version_key(f"v{latest}")
+    return key is not None and published is not None and key <= published
 
 
 def _rewrites(tag: str, version: str) -> list[tuple[str, re.Pattern, str]]:
@@ -235,6 +262,14 @@ def build_empty(site_dir: Path) -> None:
     )
 
 
+def _write_output(name: str, value: str) -> None:
+    """Append ``name=value`` to ``$GITHUB_OUTPUT`` when running in Actions."""
+    output = os.environ.get("GITHUB_OUTPUT")
+    if output:
+        with open(output, "a", encoding="utf-8") as fh:
+            fh.write(f"{name}={value}\n")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -244,16 +279,29 @@ def main(argv: list[str] | None = None) -> None:
     build_cmd.add_argument("--site-dir", type=Path, required=True)
     build_cmd.add_argument("--rc-website", type=Path)
     build_cmd.add_argument("--tag", default="")
+    released = sub.add_parser("released", help="Is the code's version published?")
+    released.add_argument("--pyproject", type=Path, required=True)
+    released.add_argument("--latest-version", type=Path, required=True)
     args = parser.parse_args(argv)
+
+    if args.command == "released":
+        version = tomllib.loads(args.pyproject.read_text(encoding="utf-8"))["project"][
+            "version"
+        ]
+        latest = json.loads(args.latest_version.read_text(encoding="utf-8"))["version"]
+        ok = is_released(version, latest)
+        print(
+            f"pyproject.toml is {version}, latest-version.json is {latest}: "
+            + ("released" if ok else "not released yet")
+        )
+        _write_output("released", "true" if ok else "false")
+        return
 
     if args.command == "select":
         releases = json.loads(args.releases_json.read_text(encoding="utf-8"))
         tag = pick_release_candidate(releases) or ""
         print(tag or "no release candidate in flight")
-        output = os.environ.get("GITHUB_OUTPUT")
-        if output:
-            with open(output, "a", encoding="utf-8") as fh:
-                fh.write(f"tag={tag}\n")
+        _write_output("tag", tag)
     elif args.tag:
         if args.rc_website is None:
             parser.error("build --tag needs --rc-website")

@@ -23,13 +23,15 @@ import { computed, ref } from "vue";
 
 const LEVELS = new Set(["info", "success", "warning", "error"]);
 
-// Default auto-dismiss (ms) per level (spec §6). Errors persist until dismissed
-// so a failure is never lost; timeouts can be overridden per push.
+// Default auto-dismiss (ms) per level (spec §6). An error gets the longest
+// window, not a sticky one: a card that never leaves piles up behind the next
+// attempt. The hover / focus / hidden-tab pause (§9.3) keeps it up while it is
+// being read, and a caller passing `timeout: 0` still gets a sticky card.
 export const DEFAULT_TIMEOUTS = {
   info: 4000,
   success: 3000,
   warning: 6000,
-  error: 0, // 0 = sticky (manual dismiss)
+  error: 10000,
 };
 
 // Spec §5: beyond this the surface stops being a notification and becomes a
@@ -301,10 +303,15 @@ export const useNoticeStore = defineStore("notice", () => {
    *   this is passed explicitly, which overrides that default (§6 rule 1).
    * @param {{label: string, handler: Function}} [opts.action] - single optional
    *   action. Invoking it dismisses the notice unless the handler returns false.
+   * @param {{icon: string, label: string}} [opts.badge] - a small glyph in
+   *   warning ink after the message, for a privacy fact the sentence does not
+   *   carry (copied files that keep their workflow). `label` is what assistive
+   *   tech reads and the tooltip shows.
    * @param {string} [opts.key] - coalescing key (§9.1). Pushing with a key that
    *   is already live updates that notice and increments its `count` instead of
    *   appending a second card. This is what stops a bulk operation over 50
-   *   pictures pushing 50 sticky error cards.
+   *   pictures pushing 50 error cards. Without a key, a live keyless notice
+   *   with the same level and text and no action is the one coalesced onto.
    * @returns {number|null} the notice id, or null when the push was refused.
    */
   function push({
@@ -312,6 +319,7 @@ export const useNoticeStore = defineStore("notice", () => {
     text = "",
     timeout,
     action = null,
+    badge = null,
     key,
   } = {}) {
     const safeLevel = LEVELS.has(level) ? level : "info";
@@ -336,37 +344,53 @@ export const useNoticeStore = defineStore("notice", () => {
       explicit,
     });
 
-    // §9.1 - coalesce onto a live notice with the same key.
-    if (key != null) {
-      const existing = notices.value.find((n) => n.key === key);
-      if (existing) {
-        existing.count += 1;
-        existing.text = message;
-        existing.level = safeLevel;
-        existing.timeout = resolved;
-        existing.action = hasAction ? action : null;
-        // Restart the countdown: the event just happened again, so the reading
-        // window starts over rather than expiring mid-burst.
-        //
-        // The per-notice pause MUST survive this. `clearTimer` drops the whole
-        // entry including `paused`, so a repeat arriving while the cursor is on
-        // the card used to hand it a fresh countdown and dismiss it out from
-        // under the user - WCAG 2.2.1. Carry the flag across. (The global
-        // `document.hidden` pause was never affected: `startTimer` re-checks
-        // `globallyPaused` independently.)
-        const wasPaused = timers.get(existing.id)?.paused === true;
-        clearTimer(existing.id);
-        if (resolved > 0) {
-          timers.set(existing.id, {
-            handle: null,
-            remaining: resolved,
-            startedAt: 0,
-            paused: wasPaused,
-          });
-        }
-        reconcileTimers();
-        return existing.id;
+    // §9.1 - coalesce onto a live notice with the same key. Without a key,
+    // §5's rule: the same level and the same text is the same card. A notice
+    // carrying an action is left out of that, because a repeat would replace
+    // its handler and the first card's Undo would quietly act on the second;
+    // so is one with a different window, or a repeat would turn a card its
+    // caller made sticky into one that expires.
+    const existing =
+      key != null
+        ? notices.value.find((n) => n.key === key)
+        : hasAction
+          ? null
+          : notices.value.find(
+              (n) =>
+                n.key == null &&
+                !n.action &&
+                n.level === safeLevel &&
+                n.text === message &&
+                n.timeout === resolved,
+            );
+    if (existing) {
+      existing.count += 1;
+      existing.text = message;
+      existing.level = safeLevel;
+      existing.timeout = resolved;
+      existing.action = hasAction ? action : null;
+      existing.badge = badge;
+      // Restart the countdown: the event just happened again, so the reading
+      // window starts over rather than expiring mid-burst.
+      //
+      // The per-notice pause MUST survive this. `clearTimer` drops the whole
+      // entry including `paused`, so a repeat arriving while the cursor is on
+      // the card used to hand it a fresh countdown and dismiss it out from
+      // under the user - WCAG 2.2.1. Carry the flag across. (The global
+      // `document.hidden` pause was never affected: `startTimer` re-checks
+      // `globallyPaused` independently.)
+      const wasPaused = timers.get(existing.id)?.paused === true;
+      clearTimer(existing.id);
+      if (resolved > 0) {
+        timers.set(existing.id, {
+          handle: null,
+          remaining: resolved,
+          startedAt: 0,
+          paused: wasPaused,
+        });
       }
+      reconcileTimers();
+      return existing.id;
     }
 
     const id = nextId++;
@@ -376,6 +400,7 @@ export const useNoticeStore = defineStore("notice", () => {
       text: message,
       timeout: resolved,
       action: hasAction ? action : null,
+      badge,
       key: key ?? null,
       count: 1,
       // True while the auto-dismiss countdown is ticking (see `setRunning`).

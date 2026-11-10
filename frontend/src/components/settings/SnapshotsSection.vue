@@ -20,7 +20,6 @@ import AppInput from "../widgets/AppInput.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import SettingsSection from "./SettingsSection.vue";
-import SettingsInfoCard from "./SettingsInfoCard.vue";
 import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
@@ -189,8 +188,11 @@ function handleRestore(cp) {
     </div>
 
     <!-- ── Toggle + create ───────────────────────────────────────────────── -->
-    <SettingsSection first>
-      <div class="snapshot-toggle-row">
+    <!-- In the Recovery pane under the scrapheap, so not `first`. The
+         automatic switch sits on the heading row, where the pane's height
+         goes to the list instead. -->
+    <SettingsSection title="Snapshots">
+      <template #action>
         <v-switch
           :model-value="store.dailySnapshotsEnabled"
           label="Automatic snapshots"
@@ -199,7 +201,7 @@ function handleRestore(cp) {
           color="primary"
           @update:model-value="handleToggleDailySnapshots($event)"
         />
-      </div>
+      </template>
       <div v-if="dailyToggleError" class="snapshot-inline-error">
         {{ dailyToggleError }}
       </div>
@@ -367,25 +369,22 @@ function handleRestore(cp) {
     </div>
 
     <!-- ── Retention info ────────────────────────────────────────────────── -->
-    <div class="snapshot-notes">
-      <SettingsInfoCard>
-        GFS retention: 7 daily, 4 weekly, 12 monthly. Manual &amp; opportunistic
-        snapshots are kept until deleted.
-      </SettingsInfoCard>
-      <SettingsInfoCard>
-        Snapshots are not a backup solution. They store metadata only, on the
-        same storage as the live vault. For true backups, regularly export your
-        full vault and store it separately.
-      </SettingsInfoCard>
-    </div>
+    <p class="snapshot-notes">
+      Keeps 7 daily, 4 weekly and 12 monthly; manual and opportunistic ones
+      until deleted. Metadata only, on the same disk as the library:
+      <strong>not a backup.</strong> Export your vault for that.
+    </p>
   </div>
 </template>
 
 <style scoped>
+/* A column that fills the height the Recovery pane leaves it, so the list
+   below takes the remainder and scrolls on its own. */
 .snapshots-section {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
 }
 
 /* ── Active job banner ─────────────────────────────────────────────────── */
@@ -406,10 +405,6 @@ function handleRestore(cp) {
 }
 
 /* ── Toggle + create ───────────────────────────────────────────────────── */
-.snapshot-toggle-row {
-  margin-bottom: var(--space-4);
-}
-
 .snapshot-create-row {
   display: flex;
   gap: var(--space-3);
@@ -422,11 +417,15 @@ function handleRestore(cp) {
 }
 
 /* ── List ──────────────────────────────────────────────────────────────── */
+/* A boxed list that grows into the pane's leftover height and scrolls
+   internally, so the Recovery pane itself never does. */
 .snapshot-list {
-  border-top: 1px solid rgb(var(--v-theme-divider));
-  padding-top: var(--space-2);
-  /* The list scrolls internally so the Snapshots tab itself doesn't scroll. */
-  max-height: 260px;
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-3);
+  flex: 1 1 0;
+  /* Two rows at least, even on a short window. */
+  min-height: calc(2 * var(--space-8));
   overflow-y: auto;
 }
 
@@ -575,7 +574,9 @@ function handleRestore(cp) {
 
 /* ── Trailing notes ────────────────────────────────────────────────────── */
 .snapshot-notes {
-  margin-top: auto;
-  padding-top: var(--space-5);
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 </style>

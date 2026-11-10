@@ -21,6 +21,7 @@ import App from "../App.vue";
 //   /duplicates?scope=set&scope_id=12       → …scoped to one collection object
 //   /insights                               → About your library (read-only findings)
 //   /moves                                  → Moves made outside PixlStash (reconciliation queue)
+//   /inbox                                  → Added lately, no person and no set
 //   /models                                 → Model shelf (adapters/checkpoints)
 //   /models?model=<id>                      → …opened on that model (a Recipe chip's link)
 //   /models/runs                            → ai-toolkit training runs, the shelf's second view
@@ -43,16 +44,15 @@ import App from "../App.vue";
 //                                            Built by `utils/loraChain.editLorasRoute`,
 //                                            honoured by WorkflowTab.
 //   /ref-folder/:id                         → Reference folder view (id = numeric)
-//   /import-folder/:id                      → Import folder view (id = numeric)
 //
 //   Any of the above routes may also carry:
 //   ?path=<absolute folder>      → Narrow the grid to one folder by path. The
-//                                  facet the sidebar's ref-folder/import-folder
-//                                  routes carry as an id, for the folders that
+//                                  facet the sidebar's ref-folder route carries
+//                                  as an id, for the folders that
 //                                  have no id of their own (a subfolder, or a
 //                                  folder an insight points at).
-//   ?overlay=<pictureId>         → Open ImageOverlay for that picture
-//   ?from=<path>                 → Where closing that overlay goes, for the
+//   ?overlay=<pictureId>         → Open Lightbox for that picture
+//   ?from=<path>                 → Where closing that lightbox goes, for the
 //                                  destinations that replace the grid the
 //                                  lightbox lives in. Its producer is the
 //                                  Workflows grid's COVER TILES (#1455): a
@@ -60,7 +60,7 @@ import App from "../App.vue";
 //                                  library route, and the close comes back to
 //                                  /workflows. The shelf's picture tiles were
 //                                  the first producer and went with the shelf
-//                                  in F1b; anything else opening the overlay
+//                                  in F1b; anything else opening the lightbox
 //                                  sends no `from`, and its close takes the
 //                                  absent branch - stay put, drop ?overlay=.
 //                                  **F7's "Show all N pictures" deliberately
@@ -72,7 +72,7 @@ import App from "../App.vue";
 //                                  would send the first close back to
 //                                  /workflows and out of the 184 pictures the
 //                                  reader just asked to browse.
-//                                  (see utils/overlayRoute.js)
+//                                  (see utils/lightboxRoute.js)
 //   ?review=board                → Open the tag-review overlay on the health board
 //   ?review=<reviewId>           → …on that review (open session or archived receipt)
 //   ?review_project=<id>         → Board scope: project
@@ -95,6 +95,7 @@ const routes = [
   { path: "/duplicates", name: "duplicates", component: App },
   { path: "/insights", name: "insights", component: App },
   { path: "/moves", name: "moves", component: App },
+  { path: "/inbox", name: "inbox", component: App },
   { path: "/models", name: "models", component: App },
   { path: "/models/runs", name: "models-runs", component: App },
   { path: "/workflows", name: "workflows", component: App },
@@ -102,7 +103,9 @@ const routes = [
   // shelf, so the old path redirects rather than 404s - it was published.
   { path: "/training-runs", redirect: "/models/runs" },
   { path: "/ref-folder/:id", name: "ref-folder", component: App },
-  { path: "/import-folder/:id", name: "import-folder", component: App },
+  // Import folders lost their sidebar view to the Inbox. The path was
+  // published, so it lands there rather than on the catch-all's home.
+  { path: "/import-folder/:id", redirect: "/inbox" },
   // Catch-all: redirect unknown paths to home
   { path: "/:pathMatch(.*)*", redirect: "/" },
 ];

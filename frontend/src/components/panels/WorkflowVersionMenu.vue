@@ -92,6 +92,7 @@
             </button>
             <div
               v-if="sub === row.version"
+              v-submenu-fit
               class="ctx-submenu"
               role="menu"
               :aria-label="`Version ${row.version}`"
@@ -186,6 +187,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
 import { onMenuKeydown } from "../../utils/menuKeyboard";
+import { vSubmenuFit } from "../../utils/submenuFit";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 

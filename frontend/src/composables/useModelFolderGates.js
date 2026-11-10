@@ -1,13 +1,13 @@
 // What may be done to a registered model folder right now, and why not.
 //
 // One copy, read by the two places that offer the registry's verbs: the folder
-// list in Settings › Models and the shelf's folder-header menu (#1270). Every
+// list in Settings › Model folders and the shelf's folder-header menu (#1270). Every
 // reason here is said beforehand because the server would otherwise answer the
 // click with a 403 or a 409.
 
 import { computed } from "vue";
 
-import { DOWNLOADS_KIND, MANAGED_KIND } from "../api/modelFolders";
+import { DOWNLOADS_KIND } from "../api/modelFolders";
 import { useLibrariesStore } from "../stores/useLibrariesStore";
 import { useModelFoldersStore } from "../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../stores/useModelMovesStore";
@@ -58,18 +58,13 @@ export function useModelFolderGates() {
 
   const remoteReason = computed(() => (canManage.value ? "" : REMOTE_REASON));
 
-  /** Docker takes a host path this UI has no way to ask for (`FolderEditor`'s job). */
+  /** Docker takes a host path this UI has no way to ask for. */
   const addReason = computed(
     () => remoteReason.value || (librariesStore.inDocker ? DOCKER_REASON : ""),
   );
 
   function isScanning(folder) {
     return store.scanningIds.has(folder.id);
-  }
-
-  /** A source folder is taken from, never catalogued, so its scan is a no-op. */
-  function canScan(folder) {
-    return folder.kind === "user" || folder.kind === MANAGED_KIND;
   }
 
   /** Only what the owner associated can be disassociated. */
@@ -81,19 +76,13 @@ export function useModelFolderGates() {
     );
   }
 
-  /** Why this folder cannot be scanned right now, or "" when it can. */
-  function scanReason(folder) {
-    if (remoteReason.value) return remoteReason.value;
-    return isScanning(folder) ? SCANNING_REASON : "";
-  }
-
   function forgetReason(folder) {
     if (remoteReason.value) return remoteReason.value;
     // Forgetting deletes the very `model_file` rows a running move or import
     // is writing, so the server takes the one machine-wide slot for it too and
     // answers a second caller with a 409 (#1017).
     if (moves.busy) return MOVE_RUNNING_REASON;
-    // The scanner thread is still writing rows against this folder id.
+    // The scan is still writing rows against this folder id.
     return isScanning(folder) ? SCANNING_REASON : "";
   }
 
@@ -107,10 +96,16 @@ export function useModelFolderGates() {
     return isScanning(folder) ? SCANNING_REASON : "";
   }
 
-  /** Start a scan, unless the folder cannot be scanned or the server would refuse. */
-  async function scan(folder) {
-    if (!canScan(folder) || scanReason(folder)) return;
-    await store.scan(folder.id);
+  /**
+   * Why a verb on a folder row of the Folders tree (new, rename, move) cannot be
+   * done right now, or "". Takes the folder's registered id, since a subfolder
+   * row is refused for its registered folder's sake: a scan is writing that
+   * folder's rows, and a move is the one job machine-wide (#2206).
+   */
+  function folderVerbReason(folder) {
+    if (remoteReason.value) return remoteReason.value;
+    if (moves.busy) return MOVE_RUNNING_REASON;
+    return isScanning(folder) ? SCANNING_REASON : "";
   }
 
   return {
@@ -118,11 +113,9 @@ export function useModelFolderGates() {
     remoteReason,
     addReason,
     isScanning,
-    canScan,
     canForget,
-    scanReason,
     forgetReason,
     relocateReason,
-    scan,
+    folderVerbReason,
   };
 }

@@ -179,6 +179,7 @@ export const useFavouritesStore = defineStore("favourites", () => {
 
   return {
     keys,
+    byKind,
     loaded,
     isFavourite,
     allFavourite,

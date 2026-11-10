@@ -22,24 +22,10 @@
         </button>
       </div>
 
-      <!-- Favourites only (#1578): a box, not a pick-one row, because it is
-           one yes-or-no. It narrows the grid and re-sorts nothing. -->
-      <div class="tbm-section">
-        <label class="tbm-check fm-check">
-          <input
-            type="checkbox"
-            :checked="store.filters.favouritesOnly"
-            @change="
-              store.setFilters({ favouritesOnly: $event.target.checked })
-            "
-          />
-          <span class="fm-check-label">Favourites only</span>
-          <span class="fm-n">{{ store.favouriteCount }}</span>
-        </label>
-      </div>
-
-      <!-- First, above the kinds: the field the toolbar copy hands over to
-           when it folds. -->
+      <!-- No Favourites box since #2165: Favourites is a place in the
+           Workflows sidebar, which lights while it is on. -->
+      <!-- First, above the kinds: the name field, bound to the toolbar's
+           Search. -->
       <div class="tbm-section">
         <NameFilterField
           ref="nameRef"

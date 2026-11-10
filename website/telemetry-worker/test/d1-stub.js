@@ -140,7 +140,7 @@ class StubStatement {
     if (this.sql.startsWith("DELETE FROM install WHERE install_id IN")) {
       const [cutoff, limit] = this.args;
       let changes = 0;
-      for (const [id, row] of [...this.db.installs.entries()]
+      for (const [id] of [...this.db.installs.entries()]
         .sort((a, b) => (a[0] < b[0] ? -1 : 1))
         .filter(([, row]) => row.last_seen < cutoff)
         .slice(0, limit)) {

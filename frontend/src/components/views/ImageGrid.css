@@ -224,7 +224,10 @@
 /* ── Visible range pill overlay ── */
 .grid-range-pill {
   position: absolute;
-  top: calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px) + 10px);
+  top: calc(
+    var(--selbar-height, 48px) + var(--filter-strip-h, 0px) +
+      var(--arriving-h, 0px) + 10px
+  );
   left: 50%;
   transform: translateX(-50%);
   background: rgba(var(--v-theme-surface), 0.82);
@@ -454,9 +457,9 @@
 }
 
 /* A tile sits flush against its neighbours (a 2px seam, or none in compact
-   mode), so the gapped global outline would land on them. The ring is the inset
-   form, on the container's overlay layer (the hover glow's `::after`),
-   because in justified and compact modes the image covers the whole card. */
+   mode). Its ring is the inset form, on the container's overlay layer (the
+   hover glow's `::after`), because in justified and compact modes the image
+   covers the whole card; the glow around the card is the global rule's. */
 .image-card:focus-visible {
   outline: none;
 }
@@ -531,8 +534,8 @@
 .touch-select-mode .image-card:hover .resolution-hover-overlay,
 .touch-select-mode .image-card:hover .thumbnail-id-overlay,
 .touch-select-mode .image-card:hover .thumbnail-top-right-badges > *,
-/* The permanent stack badge must also clear the corner for the ✓ that a
-   touch-selection stamps at top-right. */
+/* A favourite's strip, drawn at rest, must also clear the corner for the ✓
+   that a touch-selection stamps at top-right. */
 .touch-select-mode .image-card:has(.selection-overlay) .thumbnail-top-right-badges > * {
   opacity: 0 !important;
   pointer-events: none !important;
@@ -811,6 +814,26 @@
   border-radius: 0;
 }
 
+/* Justified selection (#2162): an olive outline drawn OUTSIDE the tile, in the
+   JUSTIFIED_ROW_GAP gutter it exactly fills, and a glow from that edge fading
+   inwards, so the middle of the photo stays clear. A flat wash or a hard inset
+   edge reads five selected tiles in a row as one olive block; the ring in the
+   gutter and the fading edge keep every selected tile its own shape, and since
+   the gutter is the ring's width it never lands on a neighbour. The grid's
+   edge padding is the same gutter, so the outermost tiles are not clipped. */
+.image-grid--justified .selection-overlay {
+  background: none;
+  box-shadow: inset 0 0 var(--space-4) var(--space-2) var(--active-bar);
+  outline: var(--space-1) solid var(--active-bar);
+}
+
+/* The keyboard cursor's inset olive ring would read as a selection beside the
+   ring above, on a tile Ctrl+Arrow left unselected. The focus ring (ink) still
+   marks the cursor, since the cursor is the focused card. */
+.image-grid--justified .image-card-cursor .thumbnail-img {
+  outline: none;
+}
+
 .thumbnail-card-new {
   animation: gridNewPulse 2.2s ease-out;
   box-shadow: 0 0 0 rgba(var(--v-theme-accent), 0);
@@ -1028,11 +1051,18 @@
   pointer-events: auto;
 }
 
-/* Top-right hover badges column (stars, stack) */
+/* Top-right: the score strip, ending in the favourite heart. It spans the tile
+   (pointer-inert, so the top-left badges stay pressable) to be the size
+   container that shortens the strip to "3★" on a narrow tile. Its em is the
+   star size, so StarRatingOverlay's query can state the tile width it needs
+   in stars. */
 .thumbnail-top-right-badges {
   position: absolute;
   top: 2px;
   right: 2px;
+  left: 2px;
+  container: score-strip / inline-size;
+  font-size: var(--star-size);
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -1043,18 +1073,61 @@
   pointer-events: none;
 }
 
-/* Hover-only members of the badge column (the stars). The stack badge
-   (.sbadge) is exempt on purpose: the count is permanent. The opacity lives on
-   the CHILDREN, not the container, precisely so one column can hold both. */
-.thumbnail-top-right-badges > :not(.sbadge) {
+/* Hover-only, except a favourite's strip, which stays drawn at rest. The
+   opacity lives on the children, not the container, so one column can hold
+   both kinds. */
+.thumbnail-top-right-badges > * {
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-1) var(--ease-standard);
   pointer-events: none;
 }
 
-.image-card:hover .thumbnail-top-right-badges > :not(.sbadge) {
+.image-card:hover .thumbnail-top-right-badges > *,
+.thumbnail-top-right-badges > .star-overlay--fav-on {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* The strip is a pill on the STRONG scrim: the red heart needs it (3.12:1 over
+   a white photo; 1.36:1 on the 55% one). */
+.thumbnail-top-right-badges > .star-overlay {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--scrim-photo-strong);
+}
+
+/* The heart's SVG spans the pill's side padding, so a lone heart and its pill
+   are one box and snap to the same device pixels; the SVG centres its path in
+   it. Sized to the glyph, at a fractional display scale the two snapped apart
+   and the heart sat off centre (up to 0.7 device px measured at 1.1 and 1.2).
+   Pointer-inert, so the click target stays the glyph's own box and the padding
+   still reaches the card. */
+.thumbnail-top-right-badges > .star-overlay :deep(.star-overlay__heart svg) {
+  width: calc(100% + 2 * var(--space-2));
+  margin-inline: calc(-1 * var(--space-2));
+  pointer-events: none;
+}
+
+/* A favourite at rest is the same strip collapsed to its heart: same pill,
+   padding, glyph and height. Under the pointer only the stars move, sliding
+   out to the left, so the heart never moves under the pointer. Reduced motion
+   snaps it open (design-tokens.css). `:deep` because the stars are inside
+   StarRatingOverlay, which this scoped sheet does not otherwise reach. */
+.thumbnail-top-right-badges > .star-overlay--fav-on :deep(.star-overlay__stars) {
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    max-width var(--dur-2) var(--ease-decelerate),
+    opacity var(--dur-2) var(--ease-standard);
+}
+
+.image-card:hover
+  .thumbnail-top-right-badges
+  > .star-overlay--fav-on
+  :deep(.star-overlay__stars) {
+  max-width: calc(var(--star-size, 22px) * 5 + var(--space-5));
+  opacity: 1;
 }
 
 .thumbnail-placeholder {
@@ -1136,7 +1209,7 @@
 .multi-select-toolbar__label {
   padding: 0 var(--space-4);
   white-space: nowrap;
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: inherit;
   font-size: var(--text-sm);
 }
 
@@ -1156,7 +1229,7 @@
   padding: 0 6px 0 var(--space-2);
   font-size: var(--text-xs);
   font-weight: 600;
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: inherit;
   white-space: nowrap;
   flex: 0 0 auto;
 }
@@ -1167,7 +1240,7 @@
   border: none;
   border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   background: transparent;
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: inherit;
   font-size: var(--text-sm);
   cursor: pointer;
   appearance: auto;

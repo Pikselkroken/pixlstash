@@ -37,6 +37,7 @@ from pixlstash.utils.adapter_header import (
     FILE_UNKNOWN,
     FILE_UPSCALER,
     FILE_VAE,
+    VIT_DECODER_VAE_LAYOUT,
     has_controlnet_markers,
     has_text_encoder_markers,
     has_vae_markers,
@@ -77,7 +78,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 24
+CURRENT_DATA_VERSION = 25
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -143,10 +144,17 @@ CREATE TABLE IF NOT EXISTS user (
     show_problem_icon           INTEGER,
     show_stacks                 INTEGER,
     show_keyboard_hint          INTEGER,
+    grid_open_gesture           TEXT,
+    viewer_wheel_action         TEXT,
     hide_purge_snapshot_warning INTEGER,
 
     -- machine / deployment settings (owner-level, not library-level)
     comfyui_url                 TEXT,
+    comfyui_connections         TEXT,
+    ai_toolkit_repo_path        TEXT,
+    ai_toolkit_python           TEXT,
+    ai_toolkit_commit           TEXT,
+    training_presets_auto_check INTEGER,
     public_url                  TEXT,
     keep_models_in_memory       INTEGER,
     max_vram_gb                 REAL,
@@ -159,6 +167,9 @@ CREATE TABLE IF NOT EXISTS user (
     telemetry_consent_prompted INTEGER,
     embed_watermark             INTEGER,
     watermark_image             BLOB,
+    keep_workflow_on_export     INTEGER,
+    last_seen_version           TEXT,
+    whats_changed               TEXT,
 
     -- Library-scoped by §5; present only so the shared ``User`` model maps.
     -- Never read from the hub; the vault's library_settings row owns them.
@@ -414,7 +425,9 @@ CREATE TABLE IF NOT EXISTS model (
     weights_id            TEXT,
     -- The known base model (pixlstash.utils.known_base_models) this row was
     -- identified as, and which evidence said so: 'user' | 'declared' |
-    -- 'filename' | 'declared_fuzzy' | 'filename_fuzzy'. Unlike `family` this
+    -- 'civitai' | 'filename' | 'declared_fuzzy' | 'filename_fuzzy'. 'civitai'
+    -- is the owner's by-hash lookup, which also fills an empty base_model.
+    -- Unlike `family` this
     -- IS stored, because the shelf sorts and filters on it in SQL, so the
     -- staleness is closed at the write sites instead: a curated base_model
     -- recomputes both columns in the same UPDATE (source 'user'), and the
@@ -523,7 +536,11 @@ CREATE TABLE IF NOT EXISTS adapter_stack (
 # this machine's models, not about a library. AUTOINCREMENT so a deleted set's id
 # is never reissued to a client still holding it for an undo. `cloned` marks a
 # set the owner copied from a set from pictures on purpose, which is why it is
-# kept while it still holds exactly that set's models.
+# kept while it still holds exactly that set's models. `replaces` is the key of
+# the set from pictures it was made from by Edit set (`model:<id>` or
+# `missing:<file>`), so the grid draws it in that card's place; NULL for a set
+# made any other way. Said here rather than in the DDL: SQLite's DROP COLUMN
+# cannot cut a comment that runs up to the last column.
 _V2_MODEL_WORKFLOW_SET = """
 CREATE TABLE IF NOT EXISTS model_workflow_set (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -534,7 +551,8 @@ CREATE TABLE IF NOT EXISTS model_workflow_set (
     -- The ComfyUI template (services.workflow_templates) the set was made
     -- from, by name; NULL for a set made any other way. Covers that template
     -- in the picker whatever members the set holds since.
-    template    TEXT
+    template    TEXT,
+    replaces    TEXT
 )
 """
 
@@ -702,6 +720,138 @@ _V2_MODEL_SHELF_TABLES = (
 # *reshape*, so a developer hub opened on an earlier develop would keep the old
 # three tables and gain the new two, with the scanner writing to neither.
 _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
+
+# One ai-toolkit LoRA training run: the record `model.training_run_id` points at.
+#
+# It lives in the hub, not the vault, because the shelf it feeds is hub-wide and
+# a trained model is a hub row. Ids and set/character references are vault ids,
+# so every row names the library that owns them (`library_uuid`, the immutable
+# `library.uuid`, never the recycled integer id). No foreign key: `library` rows
+# are never purged while a run may still point at them, and `model.id` /
+# `training_run.id` are AUTOINCREMENT, so a stale reference names nothing rather
+# than a different run.
+#
+# `status` is queued | running | stopping | stopped | completed | error. The
+# progress columns are rewritten while the trainer runs; the terminal ones are
+# written once. Timestamps are the ISO strings every other hub table stores.
+#
+# `preset` is the recipe as `id@version`, `resolved_profile` the resolver's JSON
+# (choices, memory profile, every value and its source) and `advanced_pins` the
+# owner's Advanced values as JSON; all three are written at enqueue, and the
+# first two again when a probed run is re-resolved at launch (§25.20).
+#
+# The live view's three (#2118): `phase_log` is the JSON list of
+# `{phase, at}` the worker appends whenever the run enters a phase,
+# `cover_step` the step the owner chose as the stack cover (NULL: the final),
+# and `finished_unwatched` is 1 when the run ended while PixlStash was closed.
+#
+# `dataset_snapshot_id` names the frozen record of what the run trained on
+# (#2123), written once the dataset is built.
+#
+# `comfyui_quit` (#2558) is NULL, `allowed` once the owner said ComfyUI may be
+# quit to make room for the run, and `quit` once it was.
+_V2_TRAINING_RUN = """
+CREATE TABLE IF NOT EXISTS training_run (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid                   TEXT NOT NULL UNIQUE,
+    library_uuid           TEXT NOT NULL,
+    name                   TEXT NOT NULL,
+    status                 TEXT NOT NULL DEFAULT 'queued',
+    set_id                 INTEGER,
+    character_id          INTEGER,
+    base_model             TEXT,
+    trigger_word           TEXT,
+    preset                 TEXT,
+    resolved_profile       TEXT,
+    advanced_pins          TEXT,
+    rendered_config        TEXT,
+    dataset_snapshot_path  TEXT,
+    dataset_picture_ids    TEXT,
+    ai_toolkit_commit      TEXT,
+    training_folder        TEXT,
+    pid                    INTEGER,
+    step                   INTEGER NOT NULL DEFAULT 0,
+    total_steps            INTEGER,
+    loss_curve             TEXT,
+    sample_image_paths     TEXT,
+    log_tail               TEXT,
+    report                 TEXT,
+    error                  TEXT,
+    created_at             TEXT NOT NULL,
+    started_at             TEXT,
+    completed_at           TEXT,
+    phase_log              TEXT,
+    cover_step             INTEGER,
+    finished_unwatched     INTEGER NOT NULL DEFAULT 0,
+    dataset_snapshot_id    INTEGER,
+    comfyui_quit           TEXT,
+    continued_from_step    INTEGER,
+    continued_at           TEXT,
+    set_aside_take         TEXT
+)
+"""
+
+# The worker's claim and the startup reconcile both read a library's runs by
+# status, so one index covers both.
+_V2_TRAINING_RUN_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS ix_training_run_library_status "
+    "ON training_run(library_uuid, status)",
+)
+
+# What this machine measured a training setup to need (#2120), one row per
+# setup. `fingerprint` hashes everything that moves the peak or the speed
+# (`training/measurements.py`); `phase_peaks` is JSON `{phase: {vram_mb,
+# ram_mb}}`, the trainer's own highest figures per phase; the three timings are
+# a warm update, loading plus caching once, and one preview image. `source` is
+# `probe` or `run`, whichever wrote last. Machine-wide like the shelf, so no
+# `library_uuid`.
+_V2_TRAINING_PROFILE_MEASUREMENT = """
+CREATE TABLE IF NOT EXISTS training_profile_measurement (
+    fingerprint          TEXT PRIMARY KEY,
+    preset               TEXT NOT NULL,
+    profile              TEXT NOT NULL,
+    device_name          TEXT,
+    phase_peaks          TEXT NOT NULL,
+    seconds_per_update   REAL,
+    setup_seconds        REAL,
+    seconds_per_preview  REAL,
+    source               TEXT NOT NULL,
+    measured_at          TEXT NOT NULL
+)
+"""
+
+# What a run trained on, frozen at Train (#2123), so a LoRA's lineage is a
+# record and not a claim. One item per picture the trainer was given: its file
+# name in the dataset, the sha256 of those exact bytes and the caption file as
+# written. Nothing here is re-read from the vault, so the record outlives later
+# tag edits and deletes; `picture_id` is the vault id it came from and may name
+# nothing by now. Library-scoped like `training_run`; items go with their
+# snapshot (the hub runs with foreign keys on).
+_V2_DATASET_SNAPSHOT = """
+CREATE TABLE IF NOT EXISTS dataset_snapshot (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    library_uuid  TEXT NOT NULL,
+    set_id        INTEGER,
+    character_id  INTEGER,
+    trigger_word  TEXT,
+    caption_mode  TEXT,
+    image_count   INTEGER NOT NULL,
+    created_at    TEXT NOT NULL
+)
+"""
+
+_V2_DATASET_SNAPSHOT_ITEM = """
+CREATE TABLE IF NOT EXISTS dataset_snapshot_item (
+    snapshot_id  INTEGER NOT NULL
+                 REFERENCES dataset_snapshot(id) ON DELETE CASCADE,
+    position     INTEGER NOT NULL,
+    picture_id   INTEGER,
+    file_name    TEXT NOT NULL,
+    sha256       TEXT NOT NULL,
+    caption      TEXT,
+    PRIMARY KEY (snapshot_id, position)
+)
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -1644,8 +1794,9 @@ CREATE TABLE IF NOT EXISTS shelf_identity (
 # ``oom`` (``peak_mb`` is then the card's total) or ``aborted``, which the need
 # ignores. ``measured_by`` is ``torch_reserved`` or ``device_delta``.
 # ``pixels`` is the size of the image the run worked on (``run_pixels``), null
-# where it could not be read from the graph. The 50 newest rows per workflow
-# are kept.
+# where it could not be read from the graph. ``room_mb`` is the room the run
+# had at its peak, what ComfyUI held plus what was still free on the card,
+# null where it was not read. The 50 newest rows per workflow are kept.
 _V2_WORKFLOW_VRAM_PEAK = """
 CREATE TABLE IF NOT EXISTS workflow_vram_peak (
     id               INTEGER PRIMARY KEY,
@@ -1657,7 +1808,8 @@ CREATE TABLE IF NOT EXISTS workflow_vram_peak (
     measured_by      TEXT NOT NULL,
     outcome          TEXT NOT NULL,
     at               TEXT NOT NULL,
-    pixels           INTEGER
+    pixels           INTEGER,
+    room_mb          INTEGER
 )
 """
 
@@ -1679,6 +1831,15 @@ _V2_USER_VRAM_PREFERENCE = """
 CREATE TABLE IF NOT EXISTS user_vram_preference (
     user_id                   INTEGER PRIMARY KEY,
     auto_exclusive_after_oom  INTEGER NOT NULL DEFAULT 1
+)
+"""
+
+# The owner's tag chip size (#2139); see ``services/tag_preferences.py``.
+# No row means the default size.
+_V2_USER_TAG_PREFERENCE = """
+CREATE TABLE IF NOT EXISTS user_tag_preference (
+    user_id    INTEGER PRIMARY KEY,
+    chip_size  TEXT
 )
 """
 
@@ -1802,6 +1963,8 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_VRAM_POLICY,
     _V2_USER_VRAM_PREFERENCE,
     _V2_WORKFLOW_RUN_LOG,
+    # Tag chip size (#2139).
+    _V2_USER_TAG_PREFERENCE,
     *_V2_WORKFLOW_INDEXES,
 )
 
@@ -1962,6 +2125,29 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     ):
         if column not in user_columns:
             conn.execute(f"ALTER TABLE user ADD COLUMN {column} INTEGER")
+    # ai-toolkit training paths and the pinned trainer commit are owner-level
+    # machine settings, so they live on the hub's user row like comfyui_url.
+    for column in ("ai_toolkit_repo_path", "ai_toolkit_python", "ai_toolkit_commit"):
+        if column not in user_columns:
+            conn.execute(f"ALTER TABLE user ADD COLUMN {column} TEXT")
+    # Recipe updates from pixlstash.dev (#2122): NULL until the owner is asked.
+    if "training_presets_auto_check" not in user_columns:
+        conn.execute("ALTER TABLE user ADD COLUMN training_presets_auto_check INTEGER")
+    # Several ComfyUI connections (#2167): NULL reads as the one comfyui_url,
+    # so an existing owner needs no row rewritten.
+    if "comfyui_connections" not in user_columns:
+        conn.execute("ALTER TABLE user ADD COLUMN comfyui_connections TEXT")
+    # Mouse preferences (#2138): NULL reads as the model default.
+    for column in ("grid_open_gesture", "viewer_wheel_action"):
+        if column not in user_columns:
+            conn.execute(f"ALTER TABLE user ADD COLUMN {column} TEXT")
+    # An export keeps the workflow (#2417): NULL reads as strip.
+    if "keep_workflow_on_export" not in user_columns:
+        conn.execute("ALTER TABLE user ADD COLUMN keep_workflow_on_export INTEGER")
+    # "What's changed" panel (#2145): NULL reads as never seen / nothing done.
+    for column in ("last_seen_version", "whats_changed"):
+        if column not in user_columns:
+            conn.execute(f"ALTER TABLE user ADD COLUMN {column} TEXT")
     # A hub an earlier build opened also has ``user.pull_comfyui_workflows``
     # (NOT NULL DEFAULT 1), the switch of the removed pull of ComfyUI's saved
     # workflows (#1854). Nothing reads or adds it; it is not worth a migration
@@ -2080,6 +2266,43 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         )
         conn.execute("DROP TABLE workflow_picture_ghost_old")
 
+    # The training run (the keystone of the training feature). Amended into v2
+    # for the same reason as the shelf: CREATE IF NOT EXISTS, re-run on every
+    # open, so an existing hub picks it up without a version bump.
+    for statement in (
+        _V2_TRAINING_RUN,
+        *_V2_TRAINING_RUN_INDEXES,
+        _V2_TRAINING_PROFILE_MEASUREMENT,
+        _V2_DATASET_SNAPSHOT,
+        _V2_DATASET_SNAPSHOT_ITEM,
+    ):
+        conn.execute(statement)
+    # The recipe a run was resolved from (#2116), guarded the same way as the
+    # amendments below: a no-op on a fresh hub and on re-run.
+    run_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(training_run)").fetchall()
+    }
+    for column in ("preset", "resolved_profile", "advanced_pins"):
+        if column not in run_columns:
+            conn.execute(f"ALTER TABLE training_run ADD COLUMN {column} TEXT")
+    # The live view's columns (#2118), the same way.
+    for column, ddl in (
+        ("phase_log", "TEXT"),
+        ("cover_step", "INTEGER"),
+        ("finished_unwatched", "INTEGER NOT NULL DEFAULT 0"),
+        # The run's dataset snapshot (#2123), the same way.
+        ("dataset_snapshot_id", "INTEGER"),
+        # Whether ComfyUI may be, or was, quit for the run (#2558).
+        ("comfyui_quit", "TEXT"),
+        # Where the run was last trained on from, when, and the take folder
+        # its later checkpoints were set aside in (Train longer).
+        ("continued_from_step", "INTEGER"),
+        ("continued_at", "TEXT"),
+        ("set_aside_take", "TEXT"),
+    ):
+        if column not in run_columns:
+            conn.execute(f"ALTER TABLE training_run ADD COLUMN {column} {ddl}")
+
     for statement in _V2_WORKFLOW_TABLES:
         conn.execute(statement)
 
@@ -2145,6 +2368,10 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     }
     if "pixels" not in peak_columns:
         conn.execute("ALTER TABLE workflow_vram_peak ADD COLUMN pixels INTEGER")
+    # And the room the run had, which an older row has none of either: its
+    # need is judged against the card's total, as before.
+    if "room_mb" not in peak_columns:
+        conn.execute("ALTER TABLE workflow_vram_peak ADD COLUMN room_mb INTEGER")
 
     # The icon column (shelf plan, the sixth verb) lands the same way the rest
     # of v2 does: amended in place rather than as a v3, because a build shipped
@@ -2225,6 +2452,9 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     # The template a set was made from (#2001), guarded the same way.
     if "template" not in set_columns:
         conn.execute("ALTER TABLE model_workflow_set ADD COLUMN template TEXT")
+    # The card a set was made from by Edit set, guarded the same way.
+    if "replaces" not in set_columns:
+        conn.execute("ALTER TABLE model_workflow_set ADD COLUMN replaces TEXT")
 
     # The ComfyUI link token's source binding (#1810), guarded the same way.
     # NULL, every existing token, means "from any address".
@@ -2846,6 +3076,17 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     # still `unknown` and no run loads it off the shelf.
                     # Step 19 again, with the wider rule.
                     _refile_by_tensors(conn, FILE_VAE, has_vae_markers, (FILE_UNKNOWN,))
+                if data_version < 25:
+                    # MiniMax H3's video VAE decodes with a transformer, which
+                    # no VAE layout knew, and at 2.6B parameters a flat-folder
+                    # copy was a `checkpoint`, so no run loaded it off the
+                    # shelf. Its layout only, so, as in step 21, `checkpoint`
+                    # rows too: that is what the bug stored.
+                    _refile_by_tensors(
+                        conn,
+                        FILE_VAE,
+                        lambda header: VIT_DECODER_VAE_LAYOUT <= set(header),
+                    )
                 if data_version < CURRENT_DATA_VERSION:
                     # No placeholder: PRAGMA takes no parameters, and the value
                     # is this module's own constant, nothing from outside.

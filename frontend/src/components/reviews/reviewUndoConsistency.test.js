@@ -36,6 +36,8 @@ import ReviewSessionsOverlay from "../views/ReviewSessionsOverlay.vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useOperationStore } from "../../stores/useOperationStore";
+import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 
 
 const VIcon = {
@@ -129,6 +131,9 @@ function mountSession() {
 }
 
 beforeEach(() => {
+  // The board opens on Groups by default; these tests are about the health
+  // board and the review, and the Groups cases choose Groups themselves.
+  window.localStorage.setItem("pixlstash.tagReview.view", "health");
   setActivePinia(createPinia());
 });
 
@@ -241,11 +246,10 @@ const overlayOpts = {
       Tooltip: TooltipStub,
       "v-icon": VIcon,
       ReviewSessionView: SessionStub,
-      ReviewRail: Blank,
       TagHealthBoard: Blank,
       ReviewArchivedReceipt: Blank,
       NewReviewDialog: Blank,
-      TbTagPanel: Blank,
+      RailTags: Blank,
     },
   },
   attachTo: document.body,
@@ -335,6 +339,62 @@ describe("ReviewSessionsOverlay - Ctrl+Z is no longer dead", () => {
     w.unmount();
   });
 
+  it("on the Groups board, sends the chords to the app-wide stack a tag move is on", async () => {
+    const notices = useNoticeStore();
+    const tagGroups = useTagGroupsStore();
+    tagGroups.setBoardView("groups");
+    const ops = useOperationStore();
+    const undo = vi.spyOn(ops, "undo").mockResolvedValue(null);
+    const redo = vi.spyOn(ops, "redo").mockResolvedValue(null);
+    try {
+      const w = mount(ReviewSessionsOverlay, overlayOpts);
+      await flushPromises();
+      expect(press("z", { ctrlKey: true }).defaultPrevented).toBe(true);
+      expect(press("y", { ctrlKey: true }).defaultPrevented).toBe(true);
+      expect(undo).toHaveBeenCalledTimes(1);
+      expect(redo).toHaveBeenCalledTimes(1);
+      expect(notices.notices.map((n) => n.text).join(" ")).not.toContain(
+        "Nothing to",
+      );
+      w.unmount();
+    } finally {
+      tagGroups.setBoardView("health");
+    }
+  });
+
+  it("keeps a review's own undo when a review is open over the Groups board", async () => {
+    const tagGroups = useTagGroupsStore();
+    tagGroups.setBoardView("groups");
+    const undo = vi.spyOn(useOperationStore(), "undo").mockResolvedValue(null);
+    try {
+      const { w } = await mountOverlayWithSession();
+      press("z", { ctrlKey: true });
+      expect(SessionStub.lastHandleKey).toHaveBeenCalledWith("undo");
+      expect(undo).not.toHaveBeenCalled();
+      w.unmount();
+    } finally {
+      tagGroups.setBoardView("health");
+    }
+  });
+
+  it("stands down while the sidebar's abort dialog is up: Esc does not leave the review", async () => {
+    const { store, w } = await mountOverlayWithSession();
+    // The abort dialog is an AppDialog: a v-dialog overlay that is active.
+    const dialog = document.createElement("div");
+    dialog.className = "v-overlay v-overlay--active v-dialog";
+    document.body.appendChild(dialog);
+    try {
+      press("Escape");
+      press("z", { ctrlKey: true });
+      await nextTick();
+      expect(store.view.type).toBe("session");
+      expect(SessionStub.lastHandleKey).not.toHaveBeenCalled();
+    } finally {
+      dialog.remove();
+      w.unmount();
+    }
+  });
+
   it("teaches both keys, and the scope, in the cheat-sheet", async () => {
     const { w } = await mountOverlayWithSession();
 
@@ -342,8 +402,58 @@ describe("ReviewSessionsOverlay - Ctrl+Z is no longer dead", () => {
     await nextTick();
     const sheet = w.find(".rs-keys");
     expect(sheet.exists()).toBe(true);
-    expect(sheet.text()).toMatch(/U \/ (Ctrl\+Z|⌘\+Z)/);
+    // Separate caps, so the chord has no "+"; each cap's hidden space keeps
+    // the names apart, and ⌘ is an icon named Command.
+    expect(sheet.text().replace(/\s+/g, " ")).toMatch(/U \/ (Ctrl|Command) Z/);
     expect(sheet.text()).toContain("Undo the last decision in this review");
     w.unmount();
+  });
+});
+
+// ── The tag panel hands focus back ──────────────────────────────────────────
+// It opens from code (T, or a card's Tag manually), so nothing would return
+// focus when Esc in its field closes it: focus would drop to <body>.
+
+describe("ReviewSessionsOverlay - the tag panel", () => {
+  it("returns focus to what had it when Esc in its field closes it", async () => {
+    const TagsStub = {
+      name: "RailTags",
+      emits: ["leave"],
+      setup(_props, { emit }) {
+        return () =>
+          h("input", {
+            class: "tags-stub",
+            onVnodeMounted: ({ el }) => el.focus(),
+            onKeydown: () => emit("leave"),
+          });
+      },
+    };
+    const store = useReviewSessionsStore();
+    const w = mount(ReviewSessionsOverlay, {
+      ...overlayOpts,
+      global: {
+        ...overlayOpts.global,
+        stubs: { ...overlayOpts.global.stubs, RailTags: TagsStub },
+      },
+    });
+    await flushPromises();
+    seedWithHistory(store);
+    await nextTick();
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    try {
+      trigger.focus();
+      press("t");
+      await flushPromises();
+      const field = w.find(".tags-stub");
+      expect(document.activeElement).toBe(field.element);
+      await field.trigger("keydown", { key: "Escape" });
+      await flushPromises();
+      expect(w.find(".tags-stub").exists()).toBe(false);
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      trigger.remove();
+      w.unmount();
+    }
   });
 });

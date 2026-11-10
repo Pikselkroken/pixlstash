@@ -345,7 +345,7 @@ describe("useReviewRoute - writing the URL", () => {
     expect(route.query.review).toBeUndefined();
   });
 
-  it("preserves the image-overlay param alongside the review param", async () => {
+  it("preserves the lightbox param alongside the review param", async () => {
     const { route, router } = makeRouter({ overlay: "12" });
     const store = makeStore();
     useReviewRoute(route, router, store, { watch });

@@ -43,3 +43,18 @@ downloaded_models/
 
 # Installer artefacts
 installer/
+
+# The ComfyUI-PixlStash pack's own tests, media and git plumbing (~7 MB); the
+# image carries only what ComfyUI loads, as the wheel does
+# (comfyui_pack_service.PACK_LEFT_OUT).
+integrations/ComfyUI-PixlStash/.git*
+integrations/ComfyUI-PixlStash/.ruff_cache/
+integrations/ComfyUI-PixlStash/.pytest_cache/
+integrations/ComfyUI-PixlStash/tests/
+integrations/ComfyUI-PixlStash/examples/
+integrations/ComfyUI-PixlStash/screenshots/
+integrations/ComfyUI-PixlStash/**/__pycache__/
+
+# A wheel build's staged copy of the pack is an older build's: keep it out, so
+# the image reads the submodule and the build's pack check cannot pass on it.
+pixlstash/data/comfyui-pack/

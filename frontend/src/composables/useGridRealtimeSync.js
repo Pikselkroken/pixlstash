@@ -30,7 +30,7 @@ const IGNORED = "ignored";
 // Above this many ids, the per-id targeted-update loop (one /metadata +
 // thumbnail fetch each) becomes a fetch storm. A foreign-tab "set project on
 // 400 pictures" or "apply scores" lands here; doing one reload (or deferring it
-// under an open overlay) is cheaper than hundreds of single-card refreshes.
+// under an open lightbox) is cheaper than hundreds of single-card refreshes.
 // Applied to the COALESCED batch, not to a single event - a window that
 // accumulates >50 distinct ids escalates to one reload.
 const MAX_TARGETED_UPDATE = 50;
@@ -58,7 +58,13 @@ const SERVER_COMPUTED_SORT_FIELDS = new Set([
 // needs one thing `detections` does not, handled at the branch below: the
 // thumbnail URL lives on the batch-thumbnail endpoint, not on /metadata, so a
 // card refresh alone repaints the pre-rotate bitmap.
-const CARD_CONTENT_FIELDS = new Set(["detections", "pixels", "orientation"]);
+// `faces` (Detect faces again) is the same case for the face boxes.
+const CARD_CONTENT_FIELDS = new Set([
+  "detections",
+  "faces",
+  "pixels",
+  "orientation",
+]);
 
 // Stack membership. `stack_count` is the number of LIVE members a card's stack
 // badge renders, and it is the one facet neither of the branches above can
@@ -271,7 +277,7 @@ export function useGridRealtimeSync(deps) {
     }
     // The MAX_TARGETED_UPDATE escalation applies to the COALESCED batch: a
     // window that accreted >50 distinct per-id refreshes is a fetch storm, so
-    // collapse it into one reload (or defer under an open overlay) instead of
+    // collapse it into one reload (or defer under an open lightbox) instead of
     // the per-id loop.
     if (updated.length > MAX_TARGETED_UPDATE) {
       reloadOrDefer("coalesced-updated-too-large");
@@ -288,32 +294,32 @@ export function useGridRealtimeSync(deps) {
     }
   }
 
-  function isOverlayOpen() {
-    return grid.isOverlayOpen?.() === true;
+  function isLightboxOpen() {
+    return grid.isLightboxOpen?.() === true;
   }
 
-  // While the lightbox overlay is open the grid sequence is frozen for
-  // navigation (see ImageOverlay's frozen filmstrip). A pill would either flash
-  // a "sort order changed" / "new pictures" prompt for the user's own in-overlay
+  // While the lightbox is open the grid sequence is frozen for
+  // navigation (see Lightbox's frozen filmstrip). A pill would either flash
+  // a "sort order changed" / "new pictures" prompt for the user's own in-lightbox
   // edits or reshuffle the grid under them. Instead, flag a deferred in-place
-  // reconcile that ImageGrid.closeOverlay() runs on close (refetch → re-filter +
+  // reconcile that ImageGrid.closeLightbox() runs on close (refetch → re-filter +
   // re-sort), and raise no pill. Returns true when the change was deferred.
-  function deferWhileOverlayOpen() {
-    if (!isOverlayOpen()) return false;
-    grid.markOverlayDeferredRefresh?.();
+  function deferWhileLightboxOpen() {
+    if (!isLightboxOpen()) return false;
+    grid.markLightboxDeferredRefresh?.();
     return true;
   }
 
   // A change we can't (or shouldn't) apply with a targeted op: an untargetable
   // empty-id add/update, or a batch too large for the per-id loop. Reload the
-  // grid, or defer that reload to overlay close so we never reshuffle the grid
+  // grid, or defer that reload to lightbox close so we never reshuffle the grid
   // under the lightbox. Returns a `{ action, reason }` descriptor.
   function reloadOrDefer(reason) {
-    if (deferWhileOverlayOpen()) {
+    if (deferWhileLightboxOpen()) {
       logger.warn?.(
-        `useGridRealtimeSync: deferring grid reload under open overlay (${reason})`,
+        `useGridRealtimeSync: deferring grid reload under open lightbox (${reason})`,
       );
-      return { action: DEFERRED, reason: `${reason}-overlay-deferred` };
+      return { action: DEFERRED, reason: `${reason}-lightbox-deferred` };
     }
     logger.warn?.(`useGridRealtimeSync: full grid reload (${reason})`);
     reload();
@@ -343,11 +349,24 @@ export function useGridRealtimeSync(deps) {
   }
 
   // True when every changed field is a card-content-only field (and there is at
-  // least one). These fields are, by construction, not view-affecting, so this
-  // can be handled uniformly for all origins with a targeted in-place refresh.
+  // least one). The CARD_CONTENT_FIELDS are, by construction, not
+  // view-affecting, so this can be handled uniformly for all origins with a
+  // targeted in-place refresh.
+  //
+  // `file_path` joins them only beside `pixels`, and only where the view does
+  // not select on it (anywhere but a folder view): a layout move is the same
+  // card with a new thumbnail URL, which only the `pixels` branch re-reads. In
+  // a folder view the move can take the card out of the view, so it keeps the
+  // ordinary dispatch.
   function fieldsAreCardContentOnly(fields) {
     if (!Array.isArray(fields) || !fields.length) return false;
-    return fields.every((field) => CARD_CONTENT_FIELDS.has(field));
+    const movedFileRepaints =
+      fields.includes("pixels") && !pictureChangeAffectsView(["file_path"]);
+    return fields.every(
+      (field) =>
+        CARD_CONTENT_FIELDS.has(field) ||
+        (field === "file_path" && movedFileRepaints),
+    );
   }
 
   // True when every changed field is a stack facet (and there is at least one).
@@ -408,10 +427,10 @@ export function useGridRealtimeSync(deps) {
    * `handleOwnOrigin`.
    */
   function applyAdded(originLabel, pictureIds) {
-    if (deferWhileOverlayOpen()) {
+    if (deferWhileLightboxOpen()) {
       return {
         action: TARGETED,
-        reason: `${originLabel}-added-overlay-deferred`,
+        reason: `${originLabel}-added-lightbox-deferred`,
       };
     }
     if (grid.isImagesLoading?.()) {
@@ -430,12 +449,12 @@ export function useGridRealtimeSync(deps) {
       // and the comeback would never show.
       return reloadOrDefer(`${originLabel}-restored-untargetable-empty-ids`);
     }
-    if (deferWhileOverlayOpen()) {
+    if (deferWhileLightboxOpen()) {
       // Same contract as an add (§9.1): never restructure the grid under the
-      // frozen filmstrip. closeOverlay() reconciles.
+      // frozen filmstrip. closeLightbox() reconciles.
       return {
         action: TARGETED,
-        reason: `${originLabel}-restored-overlay-deferred`,
+        reason: `${originLabel}-restored-lightbox-deferred`,
       };
     }
     if (grid.isImagesLoading?.()) {
@@ -504,7 +523,7 @@ export function useGridRealtimeSync(deps) {
     // An empty-id add/update can't be targeted (e.g. restore-all broadcasts
     // change_kind:"added" with picture_ids:[]). The per-id ops below would be
     // silent no-ops, so other owner tabs would never reflect the change. Reload
-    // (or defer under an open overlay) rather than no-op.
+    // (or defer under an open lightbox) rather than no-op.
     if (!pictureIds.length) {
       return reloadOrDefer("foreign-ui-untargetable-empty-ids");
     }
@@ -544,10 +563,10 @@ export function useGridRealtimeSync(deps) {
       if (!pictureIds.length) {
         return reloadOrDefer("external-restored-untargetable-empty-ids");
       }
-      if (deferWhileOverlayOpen()) {
+      if (deferWhileLightboxOpen()) {
         return {
           action: TARGETED,
-          reason: "external-restored-overlay-deferred",
+          reason: "external-restored-lightbox-deferred",
         };
       }
       enqueueSortPill(pictureIds);
@@ -561,21 +580,21 @@ export function useGridRealtimeSync(deps) {
       return reloadOrDefer("external-untargetable-empty-ids");
     }
     if (changeKind === "added") {
-      if (deferWhileOverlayOpen()) {
-        return { action: TARGETED, reason: "external-added-overlay-deferred" };
+      if (deferWhileLightboxOpen()) {
+        return { action: TARGETED, reason: "external-added-lightbox-deferred" };
       }
       enqueueAddPill(pictureIds);
       return { action: PILL, reason: "external-added" };
     }
     // updated
     if (pictureChangeAffectsView(fields)) {
-      if (deferWhileOverlayOpen()) {
+      if (deferWhileLightboxOpen()) {
         // The classic case: the user's own tag edit kicks off a background
         // smart_score recompute that arrives origin-less (external) and would
-        // raise the "sort order changed" pill. Defer it to overlay close.
+        // raise the "sort order changed" pill. Defer it to lightbox close.
         return {
           action: TARGETED,
-          reason: "external-updated-sort-affecting-overlay-deferred",
+          reason: "external-updated-sort-affecting-lightbox-deferred",
         };
       }
       // Would reshuffle the grid - raise the pill instead of moving cards under
@@ -615,7 +634,7 @@ export function useGridRealtimeSync(deps) {
     // place for ALL origins (own-origin echo, foreign UI, external) uniformly -
     // detection completion looks the same regardless of who triggered it. Never
     // a pill, never a reshuffle. Cap the per-id fetch loop and defer under an
-    // open overlay, like the other targeted branches.
+    // open lightbox, like the other targeted branches.
     if (
       changeKind === "updated" &&
       fieldsAreCardContentOnly(fields) &&
@@ -635,12 +654,12 @@ export function useGridRealtimeSync(deps) {
       // where before this branch existed its own echo was simply suppressed.
       if (fields.includes("pixels")) {
         // A TURN specifically - `orientation` rides with `pixels` only for a
-        // rotate or its undo/redo. It runs under an open overlay rather than
+        // rotate or its undo/redo. It runs under an open lightbox rather than
         // deferring: the applier is FIELDS-ONLY (see
         // ImageGrid.applyRotatedCards), nothing is inserted, removed or
         // reordered because a turned photo does not move in the grid, so there
         // is no restructuring to keep off the frozen filmstrip - and deferring
-        // it queued a WHOLE-GRID refetch for `closeOverlay`, so every lightbox
+        // it queued a WHOLE-GRID refetch for `closeLightbox`, so every lightbox
         // session containing a rotate paid one.
         //
         // The other three producers of `pixels` (the thumbnail regeneration
@@ -651,11 +670,11 @@ export function useGridRealtimeSync(deps) {
         // re-read and blocking decode under the open lightbox, once per batch.
         if (fields.includes("orientation")) {
           // ...unless a grid snapshot is already waiting for close. That branch
-          // of `closeOverlay` assigns `pendingGridImages` wholesale and clears
+          // of `closeLightbox` assigns `pendingGridImages` wholesale and clears
           // the deferral flags, so it would discard this write and queue
           // nothing to repair it. Mark the deferral too and let close refetch.
-          if (isOverlayOpen() && grid.hasPendingGridImages?.() === true) {
-            grid.markOverlayDeferredRefresh?.();
+          if (isLightboxOpen() && grid.hasPendingGridImages?.() === true) {
+            grid.markLightboxDeferredRefresh?.();
             return {
               action: TARGETED,
               reason: "card-content-rotate-pending-snapshot-deferred",
@@ -664,10 +683,10 @@ export function useGridRealtimeSync(deps) {
           void grid.applyRotatedCards?.(pictureIds);
           return { action: TARGETED, reason: "card-content-rotate" };
         }
-        if (deferWhileOverlayOpen()) {
+        if (deferWhileLightboxOpen()) {
           return {
             action: TARGETED,
-            reason: "card-content-bytes-overlay-deferred",
+            reason: "card-content-bytes-lightbox-deferred",
           };
         }
         void grid.applyRotatedCards?.(pictureIds);
@@ -676,13 +695,13 @@ export function useGridRealtimeSync(deps) {
       if (pictureIds.length > MAX_TARGETED_UPDATE) {
         return reloadOrDefer("card-content-refresh-too-large");
       }
-      if (deferWhileOverlayOpen()) {
+      if (deferWhileLightboxOpen()) {
         // Only the GRID card refresh is deferred here. The open lightbox keeps
         // itself current off App.vue's `wsDetectionUpdate` signal, which it uses
         // to re-read /pictures/{id}/detections.
         return {
           action: TARGETED,
-          reason: "card-content-refresh-overlay-deferred",
+          reason: "card-content-refresh-lightbox-deferred",
         };
       }
       // `detections` leaves the file alone and takes the plain refresh.
@@ -707,12 +726,12 @@ export function useGridRealtimeSync(deps) {
       if (isStackUpdatedSortValue(getSelectedSort())) {
         return reloadOrDefer("stack-time-sort-changed");
       }
-      if (deferWhileOverlayOpen()) {
+      if (deferWhileLightboxOpen()) {
         // §9.1: nothing mutates the grid under the frozen filmstrip.
-        // closeOverlay() reconciles.
+        // closeLightbox() reconciles.
         return {
           action: TARGETED,
-          reason: "stack-facet-refresh-overlay-deferred",
+          reason: "stack-facet-refresh-lightbox-deferred",
         };
       }
       grid.refreshStackFacets?.(pictureIds);
@@ -769,8 +788,11 @@ export function useGridRealtimeSync(deps) {
     // reported bug, and it is why `restored` is a kind of its own rather than
     // the `added` the undo path used to send.
     const changeKind = resolveChangeKind(payload);
+    // A moved file changes the sidebar's Folders counts, which are read from
+    // the stored paths, even where it changes nothing in the grid.
     const touchesSidebar =
       affectsView ||
+      (Array.isArray(payload?.fields) && payload.fields.includes("file_path")) ||
       changeKind === "added" ||
       changeKind === "removed" ||
       changeKind === "restored";

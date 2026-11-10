@@ -260,7 +260,7 @@ export class NoticeHost {
 
   /**
    * Is the card the topmost paintable thing at its own centre? The direct test
-   * for spec check 11 ("above the overlay chrome") and for the z-order of the
+   * for spec check 11 ("above the lightbox chrome") and for the z-order of the
    * stack generally — far more honest than comparing z-index strings across
    * different stacking contexts.
    */

@@ -468,6 +468,55 @@ def manual_documents_holding(hub: HubDatabase, canonical: str) -> list[str]:
     return found
 
 
+def manual_workflow_running(
+    hub: HubDatabase, identity: str, library_uuid: Optional[str] = None
+) -> Optional[dict]:
+    """The oldest manual workflow whose saved graph is *identity*, or ``None``.
+
+    *identity* is ``workflow_bindings.runnable_identity`` of a
+    placeholder-migrated document. Each workflow is compared by its current
+    document (its saved head, so one edited since no longer matches) and by
+    the API graph stored as its conversion. Changes waiting to be saved are
+    not an edit. Answers ``{workflow_id, name, hidden}``, *hidden* as the
+    grid reads it in *library_uuid*.
+    """
+    # ponytail: parses every manual document per import, as
+    # manual_documents_holding does; a stored identity column if imports ever
+    # meet a large library.
+    for row in hub.fetchall(
+        "SELECT d.workflow_id, d.document, d.api_document, a.name, "
+        "COALESCE(h.hidden, a.hidden, 0) AS hidden "
+        "FROM workflow_document d "
+        "LEFT JOIN workflow_group_attr a ON a.workflow_id = d.workflow_id "
+        "LEFT JOIN workflow_group_hidden h ON h.workflow_id = d.workflow_id "
+        "AND h.library_uuid = ? "
+        "ORDER BY d.created_at, d.workflow_id",
+        (library_uuid,),
+    ):
+        for stored in (row["document"], row["api_document"]):
+            if not stored:
+                continue
+            try:
+                document = json.loads(stored)
+                same = workflow_bindings.runnable_identity(document) == identity
+            except (ValueError, TypeError, RecursionError, AttributeError) as exc:
+                # AttributeError: valid JSON that is not an object. One row
+                # that will not compare must not refuse every later import.
+                logger.warning(
+                    "Manual workflow %s will not read to compare with an import: %s",
+                    row["workflow_id"],
+                    exc,
+                )
+                continue
+            if same:
+                return {
+                    "workflow_id": row["workflow_id"],
+                    "name": row["name"],
+                    "hidden": bool(row["hidden"]),
+                }
+    return None
+
+
 def manual_document(hub: HubDatabase, workflow_id: str) -> Optional[dict]:
     """A manual workflow's runnable document, or ``None`` for no such row.
 

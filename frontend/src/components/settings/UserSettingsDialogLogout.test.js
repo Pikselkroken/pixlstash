@@ -27,10 +27,14 @@ vi.mock("./AppearanceSection.vue", () => ({ default: sectionStub }));
 vi.mock("./BehaviourSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ComputeSection.vue", () => ({ default: sectionStub }));
 vi.mock("./LibrariesSection.vue", () => ({ default: sectionStub }));
+vi.mock("./ImportFoldersSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ModelFoldersSection.vue", () => ({ default: sectionStub }));
 vi.mock("./PrivacySection.vue", () => ({ default: sectionStub }));
+vi.mock("./SharingSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ScrapheapSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SnapshotsSection.vue", () => ({ default: sectionStub }));
+vi.mock("./GhostsSection.vue", () => ({ default: sectionStub }));
+vi.mock("./AiToolkitSetup.vue", () => ({ default: sectionStub }));
 vi.mock("./SmartScoreSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ComfyuiHostSection.vue", () => ({ default: sectionStub }));
 

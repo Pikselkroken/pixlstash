@@ -6,10 +6,10 @@
       :award="store.activeAward"
     />
 
-    <!-- Session header: title + scan receipt + staleness + gamify pill + tally,
-         all in normal flow (nothing absolutely positioned over anything). -->
+    <!-- Session header: scan receipt + staleness + gamify pill + tally, all in
+         normal flow (nothing absolutely positioned over anything). The title
+         is the view's toolbar's. -->
     <div class="rs-session-head">
-      <span class="rs-session-title">Review: “{{ session.tag }}”</span>
       <span class="rs-session-receipt">{{ receiptLine }}</span>
       <span class="rs-session-spacer"></span>
       <span v-if="session.stale" class="rs-session-stale">
@@ -107,9 +107,13 @@
             ref="archiveBtnRef"
             class="rs-state-btn rs-state-btn--archive"
             type="button"
-            @click="store.archiveSession(session.id)"
+            @click="endFinished"
           >
-            <v-icon size="16">mdi-archive-check-outline</v-icon> Archive review
+            <Tooltip
+              text="End the review and go back to the board"
+              activator="parent"
+            />
+            <v-icon size="16">mdi-stop-circle-outline</v-icon> End review
           </button>
           <button
             class="rs-state-btn"
@@ -141,9 +145,13 @@
             ref="archiveBtnRef"
             class="rs-state-btn rs-state-btn--archive"
             type="button"
-            @click="store.archiveSession(session.id)"
+            @click="endFinished"
           >
-            <v-icon size="16">mdi-archive-check-outline</v-icon> Archive review
+            <Tooltip
+              text="End the review and go back to the board"
+              activator="parent"
+            />
+            <v-icon size="16">mdi-stop-circle-outline</v-icon> End review
           </button>
           <button
             v-if="reopenableSkips > 0"
@@ -206,7 +214,7 @@
               text="Apply this decision despite the earlier call (Enter)."
               activator="parent"
             />
-            <kbd>↵</kbd> Apply
+            <KeyCap k="Enter" /> Apply
           </button>
           <button class="rs-confirm-btn" type="button" @click="cancelPending">
             <Tooltip
@@ -266,6 +274,7 @@ import {
 import ReviewBinaryCard from "./ReviewBinaryCard.vue";
 import ReviewPairCard from "./ReviewPairCard.vue";
 import ReviewDecisionBar from "./ReviewDecisionBar.vue";
+import KeyCap from "../widgets/KeyCap.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import ReviewCelebration from "./ReviewCelebration.vue";
 
@@ -488,6 +497,14 @@ let prevKind = null;
 const cardRef = ref(null);
 const archiveBtnRef = ref(null);
 
+// The finish button is "End review…" with the question skipped: the queue is
+// empty, so it keeps. A review with no decisions (an empty scan, everything
+// skipped) has nothing to keep and ends with no receipt, as from the menus.
+function endFinished() {
+  if (store.decidedCountFor(props.session.id)) store.archiveSession(props.session.id);
+  else store.abortSession(props.session.id);
+}
+
 watch(
   () => current.value && `${current.value.id}`,
   () => {
@@ -509,7 +526,7 @@ watch(
   { immediate: true },
 );
 
-// On completion, focus moves to Archive.
+// On completion, focus moves to End review.
 watch(
   () => !current.value && !loadingEmpty.value,
   (done) => {
@@ -738,10 +755,6 @@ defineExpose({ handleKey });
   gap: var(--space-4);
   flex-wrap: wrap;
   padding: 20px var(--space-6) var(--space-4);
-}
-.rs-session-title {
-  font-size: var(--text-lg);
-  font-weight: var(--weight-bold);
 }
 .rs-session-receipt {
   font-size: var(--text-2xs);
@@ -1030,7 +1043,7 @@ defineExpose({ handleKey });
 .rs-confirm-btn kbd {
   font-family: var(--font-mono, monospace);
   font-size: 10px;
-  padding: 0 var(--space-2);
+  padding: var(--kbd-pad-tight);
   border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.3);
 }

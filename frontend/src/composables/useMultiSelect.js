@@ -1,4 +1,6 @@
 import { ref, watch } from "vue";
+import { storeToRefs } from "pinia";
+import { useSelectionStore } from "../stores/useSelectionStore";
 import {
   FACE_DRAG_MIME,
   PICTURE_DRAG_MIME,
@@ -15,7 +17,9 @@ import {
  */
 export function useMultiSelect() {
   // ── Selection state ──────────────────────────────────────────────────────
-  const selectedImageIds = ref([]);
+  // Held in the selection store rather than here, so the rail beside the grid
+  // (#2161) shows the same pictures the grid has selected.
+  const { selectedImageIds } = storeToRefs(useSelectionStore());
   /**
    * ID of the last image the user explicitly selected (used as range anchor for
    * Shift-click). Exposed as a ref so that callers outside the composable can

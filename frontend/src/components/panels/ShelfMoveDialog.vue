@@ -4,51 +4,73 @@
     title="Move files"
     :subtitle="subtitle"
     @close="emit('close')"
+    @accept="submit"
   >
-    <label class="smd-field">
-      <span class="smd-label">Move them to</span>
-      <!-- A native select, not a combobox: the destination list is the
-           registered folders, which is a handful and never grows to the
-           thousands the entity pickers deal with. Native gets type-ahead,
-           the platform's own keyboard model and a mobile picker for free. -->
-      <select
-        ref="firstFieldEl"
-        v-model="destinationId"
-        class="smd-select"
-        :disabled="working"
-      >
-        <option
-          v-for="folder in destinations"
-          :key="folder.id"
-          :value="folder.id"
-        >
-          {{ folderLabel(folder) }}
-        </option>
-      </select>
-    </label>
+    <!-- A drop or a paste already named the place, so the dialog only says
+         what goes where. It gets here only when the move is a copy across
+         drives (or one a drive could not be measured for): a rename on one
+         drive starts without it. -->
+    <template v-if="confirming">
+      <p class="smd-lead" data-testid="shelf-move-route">
+        Move <strong>{{ what }}</strong> from <strong>{{ fromName }}</strong>
+        to <strong>{{ toName }}</strong>.
+      </p>
+      <p class="smd-note">
+        {{ formatModelSize(totalBytes) }}. {{ mechanism }}.
+      </p>
+    </template>
 
-    <p v-if="!destinations.length" class="smd-note" role="status">
-      There is nowhere to move these. Register another model folder first.
-    </p>
+    <template v-else>
+      <div class="smd-field">
+        <span class="smd-label" aria-hidden="true">Move them to</span>
+        <!-- The Folders tree, picking (#2204): any subfolder is a destination,
+             and each drive shows its free space. Locked folders and the folder
+             every file is already in are refused. -->
+        <div ref="treeBoxEl" class="smd-tree">
+          <ModelFolderTree
+            ref="treeRef"
+            mode="pick"
+            label="Move them to"
+            :selected="destination"
+            :disabled="refused"
+            @select="pick"
+          />
+        </div>
+        <!-- A folder made here is the destination, so the move can go straight
+             into it (#2206). -->
+        <ModelFolderNewRow
+          v-if="destination"
+          :folder-id="destination.folderId"
+          :path="destination.path"
+          :label="destinationName(folders.folders, destination)"
+          :reason="gates.folderVerbReason({ id: destination.folderId })"
+          @created="onCreated"
+        />
+      </div>
 
-    <!-- What the move will actually cost, before it starts. The server plans
-         the whole batch inside the POST and refuses it whole, so this is not
-         the safety net; it is the difference between pressing Move on a rename
-         and pressing it on 40 minutes of copying across a USB drive. -->
-    <dl v-else class="smd-facts">
-      <div class="smd-fact">
-        <dt>Files</dt>
-        <dd>{{ itemCount.toLocaleString() }}</dd>
-      </div>
-      <div class="smd-fact">
-        <dt>Size</dt>
-        <dd>{{ formatModelSize(totalBytes) }}</dd>
-      </div>
-      <div class="smd-fact">
-        <dt>How</dt>
-        <dd>{{ mechanism }}</dd>
-      </div>
-    </dl>
+      <p v-if="!destinations.length" class="smd-note" role="status">
+        There is nowhere to move these. Register another model folder first.
+      </p>
+
+      <!-- What the move will actually cost, before it starts. The server plans
+           the whole batch inside the POST and refuses it whole, so this is not
+           the safety net; it is the difference between pressing Move on a rename
+           and pressing it on 40 minutes of copying across a USB drive. -->
+      <dl v-else class="smd-facts">
+        <div class="smd-fact">
+          <dt>Files</dt>
+          <dd>{{ itemCount.toLocaleString() }}</dd>
+        </div>
+        <div class="smd-fact">
+          <dt>Size</dt>
+          <dd>{{ formatModelSize(totalBytes) }}</dd>
+        </div>
+        <div class="smd-fact">
+          <dt>How</dt>
+          <dd>{{ mechanism }}</dd>
+        </div>
+      </dl>
+    </template>
 
     <p v-if="alreadyThere" class="smd-note" role="status">
       {{ alreadyThere }}
@@ -59,6 +81,7 @@
         Cancel
       </AppButton>
       <AppButton
+        ref="moveButton"
         variant="primary"
         key-hint="enter"
         :loading="working"
@@ -87,9 +110,19 @@ import { computed, nextTick, ref, watch } from "vue";
 
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
+import ModelFolderNewRow from "./ModelFolderNewRow.vue";
+import ModelFolderTree from "./ModelFolderTree.vue";
+import { DOWNLOADS_KIND, SOURCE_KIND } from "../../api/modelFolders";
+import { destinationName } from "../../composables/useModelCopyDrop";
+import { parentPath } from "../../composables/useModelFolderMove";
+import { useModelFolderGates } from "../../composables/useModelFolderGates";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
-import { formatModelSize } from "../../utils/modelShelf";
+import {
+  allAlreadyIn,
+  formatModelSize,
+  inFolderScopeOf,
+} from "../../utils/modelShelf";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -104,39 +137,88 @@ const props = defineProps({
   /** Bytes the move will shift, for the summary. */
   totalBytes: { type: Number, default: 0 },
   /**
-   * The destination a drop already chose, or null when a button opened this.
-   *
-   * Seeded into the select rather than skipping it: a drop still gets the
-   * numbers and the Move press, so a 438 GB copy is never one slip of the
-   * pointer away from starting, and the destination is still correctable
-   * without starting the gesture again.
+   * `{folderId, path}` chosen before the dialog opened: the folder a drop or
+   * a paste named. Null from *Move to…*, which starts with nothing chosen so
+   * the destination is always the reader's own pick.
    */
-  destinationFolderId: { type: Number, default: null },
+  initialDestination: { type: Object, default: null },
 });
-const emit = defineEmits(["close"]);
+/** `started` once the server has accepted the move. */
+const emit = defineEmits(["close", "started"]);
 
 const folders = useModelFoldersStore();
 const moves = useModelMovesStore();
+const gates = useModelFolderGates();
 
-const destinationId = ref(null);
+/** `{folderId, path}` picked in the tree, or null. */
+const destination = ref(null);
 const working = ref(false);
-const firstFieldEl = ref(null);
+/**
+ * Opened on a place already chosen (a drop or a paste): the dialog states the
+ * move instead of offering the tree. Latched on open, because the host clears
+ * `initialDestination` as it closes and the dialog must not swap to the tree
+ * while it fades out.
+ */
+const confirming = ref(false);
+const treeBoxEl = ref(null);
+const treeRef = ref(null);
+const moveButton = ref(null);
 
 const itemCount = computed(() => props.items.length);
 
 /**
- * The folders a move may be sent to.
- *
- * Two exclusions, and the server only enforces the first. A `source` folder is
- * an ai-toolkit output root: it is taken from, never written into, and
- * `ModelMover.plan` refuses it. An `external` folder is one PixlStash shares
- * with other software (the HuggingFace cache, insightface's store) - the server
- * would accept the write, and it is still not ours to put files in.
+ * The folders a move may be sent to: the ones the tree lists (not an
+ * ai-toolkit output root nor Downloads) that are not locked. The server
+ * refuses the rest too.
  */
 const destinations = computed(() =>
   folders.folders.filter(
-    (folder) => folder.kind !== "source" && folder.movable !== "external",
+    (folder) =>
+      folder.kind !== SOURCE_KIND &&
+      folder.kind !== DOWNLOADS_KIND &&
+      folder.movable === "per_item",
   ),
+);
+
+/** A tree row refused as a destination: every file is already in it. */
+function refused(entry) {
+  return allAlreadyIn(props.items, entry);
+}
+
+function pick(node) {
+  destination.value = { folderId: node.folderId, path: node.path };
+}
+
+/** A folder made in the destination: reveal it, and pick it. */
+function onCreated({ folderId, path }) {
+  treeRef.value?.reveal(folderId, destination.value?.path ?? "", path);
+  destination.value = { folderId, path };
+}
+
+/** The file's name for one file, else how many. */
+const what = computed(() => {
+  if (itemCount.value !== 1) return subtitle.value;
+  return String(props.items[0].relpath ?? "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop();
+});
+
+/** The folder the files are in, or how many folders when they differ. */
+const fromName = computed(() => {
+  const names = new Set(
+    props.items.map((item) =>
+      destinationName(folders.folders, {
+        folderId: item.folder_id,
+        path: parentPath(String(item.relpath ?? "").replace(/\\/g, "/")),
+      }),
+    ),
+  );
+  return names.size === 1 ? [...names][0] : `${names.size} folders`;
+});
+
+const toName = computed(() =>
+  destination.value ? destinationName(folders.folders, destination.value) : "",
 );
 
 const subtitle = computed(
@@ -147,12 +229,6 @@ const subtitle = computed(
 const confirmLabel = computed(() =>
   moves.busy ? "A move is already running" : "Move",
 );
-
-function folderLabel(folder) {
-  return folder.kind === "managed"
-    ? `${folder.path} (PixlStash's own store)`
-    : folder.path;
-}
 
 /**
  * Whether this will be a rename or a real copy, which is the whole difference
@@ -166,7 +242,7 @@ function folderLabel(folder) {
  */
 const mechanism = computed(() => {
   const byId = folders.deviceByFolderId;
-  const target = byId?.get(Number(destinationId.value));
+  const target = byId?.get(Number(destination.value?.folderId));
   // `device_id` is null when the drive could not be measured, and an unmeasured
   // drive must not be guessed as "same": that would promise instant on a move
   // that copies. Both directions fall through to the honest answer.
@@ -182,10 +258,11 @@ const mechanism = computed(() => {
   return "Copied to another drive, verified, then removed";
 });
 
-/** How many of the chosen copies are already in the destination. */
+/** How many of the chosen copies are already directly in the destination. */
 const alreadyThere = computed(() => {
-  const already = props.items.filter(
-    (item) => item.folder_id === destinationId.value,
+  if (!destination.value) return "";
+  const already = props.items.filter((item) =>
+    inFolderScopeOf(item, destination.value),
   ).length;
   if (!already) return "";
   if (already === itemCount.value) {
@@ -200,26 +277,28 @@ const canSubmit = computed(
   () =>
     !working.value &&
     !moves.busy &&
-    destinationId.value != null &&
+    destination.value != null &&
     itemCount.value > 0,
 );
 
-// Seed the destination on open. The managed store is the default because it is
-// the one folder ruled to always exist, so it is the only choice that is never
-// wrong on a fresh install.
+// Seed the destination on open: the folder a drop or a paste named, else
+// nothing, so *Move to…* never sends files somewhere the reader did not pick.
+// (It used to pre-select the managed store, which takes no moves now.) With a
+// destination already chosen, focus waits on Move and Enter confirms; without
+// one it goes to the tree.
 watch(
   () => props.open,
   async (open) => {
     if (!open) return;
     working.value = false;
-    const dropped = destinations.value.find(
-      (f) => f.id === props.destinationFolderId,
-    );
-    const managed = destinations.value.find((f) => f.kind === "managed");
-    destinationId.value =
-      dropped?.id ?? managed?.id ?? destinations.value[0]?.id ?? null;
+    const initial = props.initialDestination;
+    confirming.value = initial != null;
+    destination.value = initial
+      ? { folderId: Number(initial.folderId), path: initial.path ?? "" }
+      : null;
     await nextTick();
-    firstFieldEl.value?.focus();
+    if (destination.value) moveButton.value?.$el?.focus?.();
+    else treeBoxEl.value?.querySelector('[tabindex="0"]')?.focus();
   },
   { immediate: true },
 );
@@ -227,13 +306,17 @@ watch(
 async function submit() {
   if (!canSubmit.value) return;
   working.value = true;
-  const started = await moves.start(destinationId.value, props.items);
+  const { folderId, path } = destination.value;
+  const started = await moves.start(folderId, props.items, path);
   working.value = false;
   // The selection is deliberately KEPT. A move changes where the files are and
   // not what the models are, so under `Group by: folder` the selected rows
   // reappear under the destination - which is the answer to "where did they
   // go", and it leaves the reader able to follow with another verb.
-  if (started) emit("close");
+  if (started) {
+    emit("started");
+    emit("close");
+  }
 }
 </script>
 
@@ -247,17 +330,16 @@ async function submit() {
   margin-bottom: var(--space-2);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.smd-select {
-  width: 100%;
-  padding: var(--space-2) var(--space-3);
+/* The tree scrolls inside the dialog rather than growing it past the
+   viewport: a machine with several drives lists many folders. */
+.smd-tree {
+  max-height: 320px;
+  overflow-y: auto;
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.25);
-  background: rgb(var(--v-theme-surface));
-  color: rgb(var(--v-theme-on-surface));
-  font-size: var(--text-sm);
+  border: 1px solid rgb(var(--v-theme-divider));
 }
 
 .smd-facts {
@@ -268,7 +350,7 @@ async function submit() {
 
 .smd-fact dt {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .smd-fact dd {
@@ -277,9 +359,16 @@ async function submit() {
   color: rgb(var(--v-theme-on-surface));
 }
 
+.smd-lead {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-surface));
+  overflow-wrap: anywhere;
+}
+
 .smd-note {
   margin: 0;
   font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 </style>

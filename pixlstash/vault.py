@@ -9,7 +9,7 @@ import threading
 import numpy as np
 
 from pathlib import Path
-from typing import Optional
+from typing import Collection, Optional
 from concurrent.futures import Future
 
 from sqlmodel import Session, select
@@ -24,6 +24,7 @@ from .db_models import (
     Picture,
     PicturePendingPerson,
     PictureSet,
+    ReferenceFolder,
     Snapshot,
     Tag,
     TAG_SENTINEL_LIKE_PATTERN,
@@ -45,8 +46,12 @@ from .tasks.quality_task import QualityTask
 from .tasks.smart_score_task import SmartScoreTask
 from .utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from .tasks.base_task import TaskStatus
+from .tasks.device_release_task import DeviceReleaseTask
 from .task_runner import TaskRunner
-from .resources.arbiter import arbiter
+from .resources.aitoolkit_tenant import AiToolkitProbe
+from .resources.arbiter import Lease, LeaseKind, Tenant, arbiter
+from .resources.comfyui_tenant import probe as comfyui_probe
+from .resources.ledger import ledger
 from .work_planner import WorkPlanner
 from .tasks import TaskType
 from .utils.reference_folder_watcher import ReferenceFolderWatcher
@@ -67,6 +72,20 @@ from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.workflow_ghost_service import DEFAULT_GHOST_RETENTION
 from pixlstash.services.snapshot_service import SnapshotService
+from pixlstash.utils.service.export_utils import ExportUtils
+from pixlstash.services.training_service import ADOPT_QUIET_S, TrainingService
+from pixlstash.services.comfyui_service import RUN_CLIENT_ID
+from pixlstash.services.stack_detector import set_cover
+from pixlstash.hub import training_runs
+from pixlstash.services.run_importer import STATUS_IMPORTED, RunImporter
+from pixlstash.services.model_mover import SHELF_IO_LOCK, publish_no_clobber
+from pixlstash.utils.aitoolkit_run import read_run
+from pixlstash.services.managed_model_store import find_download_folder
+from pixlstash.services.model_shelf_service import (
+    fetch_attachments,
+    replace_attachments,
+)
+from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
 from pixlstash.services.restore import RestoreService
 from pixlstash.hub.registry import VAULT_FILENAME
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
@@ -75,13 +94,42 @@ from pixlstash.tasks.missing_saved_recipe_workflow_finder import (
     MissingSavedRecipeWorkflowFinder,
 )
 from pixlstash.tasks.downloads_intake_finder import DownloadsIntakeFinder
+from pixlstash.tasks.model_folder_scan_finder import ModelFolderScanFinder
+from pixlstash.services.model_folder_scanner import SHELF_MODEL_SUFFIXES
 
 
 logger = get_logger(__name__)
 
 #: How long making room waits, on the arbiter's thread, for the GPU batch in
-#: flight to end; past it the models are unloaded off that thread.
+#: flight to end and the models to unload; past it they unload when the batch
+#: ends, without the arbiter waiting.
 YIELD_WAIT_S = 2.0
+
+
+def _move_trained_attachment(
+    vault, run: dict, old_sha: Optional[str], new_sha: str
+) -> None:
+    """Attach *new_sha* to the run's set or character, and *old_sha* no more.
+
+    Every other attachment either model carries is kept: each write is a full
+    replacement, so it is built from what the model holds now. A run of neither
+    a set nor a character attaches nothing.
+    """
+    if run.get("character_id") is not None:
+        entity = (ENTITY_CHARACTER, run["character_id"])
+    elif run.get("set_id") is not None:
+        entity = (ENTITY_SET, run["set_id"])
+    else:
+        return
+    if old_sha:
+        held = fetch_attachments(vault, sha256=old_sha).get(old_sha, [])
+        kept = [(a["entity_type"], a["entity_id"]) for a in held]
+        if entity in kept:
+            replace_attachments(vault, old_sha, [e for e in kept if e != entity])
+    held = fetch_attachments(vault, sha256=new_sha).get(new_sha, [])
+    kept = [(a["entity_type"], a["entity_id"]) for a in held]
+    if entity not in kept:
+        replace_attachments(vault, new_sha, kept + [entity])
 
 
 class Vault:
@@ -107,6 +155,7 @@ class Vault:
         server_config_path: Optional[str] = None,
         path_mapper=None,
         disable_background_workers: bool = False,
+        planner_finders: Optional[Collection[TaskType]] = None,
         force_cpu: bool = False,
         fast_captions: bool = False,
         daily_snapshots_enabled: bool = True,
@@ -127,6 +176,13 @@ class Vault:
                 WorkPlanner and ReferenceFolderWatcher are not started and
                 no models are ever loaded.  Intended for read-only deployments
                 where all processing is already complete.
+            planner_finders (Optional[Collection[TaskType]]): Register only
+                these finders with the work planner; ``None`` registers all of
+                them. A restricted vault also builds no inference engine, so a
+                model finder kept in the set registers but never queues work:
+                the import routes refuse unless FACE_EXTRACTION is registered,
+                and an e2e run must not load models. Only the e2e backend sets
+                it (``e2e_planner_finders``, under ``enable_test_hooks``).
             db_filename (Optional[str]): Name of the database file inside
                 *image_root*. ``None`` takes it from the hub registration when
                 the vault is opened through one, which is what puts a library
@@ -206,6 +262,8 @@ class Vault:
         self._fast_captions = fast_captions
         self._insightface_model_pack = insightface_model_pack
         self._last_aggressive_unload_at = 0.0
+        # Two progress polls can reach the sweep at once; one queues it.
+        self._aggressive_unload_lock = threading.Lock()
         self._keep_models_in_memory = True
         self._max_vram_gb = None
         self._wd14_tagger_enabled = False
@@ -220,6 +278,9 @@ class Vault:
         self._anomaly_apply_thresholds_memo: tuple | None = None
         self._server_config_path = server_config_path
         self._disable_background_workers = disable_background_workers
+        self._planner_finders = (
+            frozenset(planner_finders) if planner_finders is not None else None
+        )
         self._daily_snapshots_enabled: bool = daily_snapshots_enabled
         # Scrapheap auto-purge retention window (days) or None = "Never", plus
         # the instant it was last LOWERED (puts a +1 day floor under EVERY
@@ -236,6 +297,9 @@ class Vault:
         # (§B4).
         self._hub = registered_hub
         self._library_uuid: Optional[str] = getattr(registered_library, "uuid", None)
+        # Built after the hub and library are known: training runs live in the
+        # hub, scoped to this library.
+        self.training_service = self._build_training_service(disable_background_workers)
         self._ghost_retention: str = ghost_retention
 
         self._planner_watchers = {}
@@ -264,6 +328,7 @@ class Vault:
             self._planner_work_finders = {}
             self._work_planner = None
             self._ref_folder_watcher = None
+            self._model_folder_watcher = None
             self._closed = False
             self._started = False
             return
@@ -337,6 +402,7 @@ class Vault:
         self._planner_work_finders[TaskType.PENDING_SCORE_INVALIDATION] = (
             PendingScoreInvalidationFinder(vault=self)
         )
+        self._model_folder_watcher = None
         # The one finder here that works on the HUB rather than on this vault:
         # a model folder is a fact about the machine, so the checkpoints it
         # registers are shared by every library. Registered only when the vault
@@ -364,6 +430,21 @@ class Vault:
             # The watched Downloads folder, a hub fact for the same reason.
             self._planner_work_finders[TaskType.DOWNLOADS_INTAKE] = (
                 DownloadsIntakeFinder(hub=registered_hub, notifier=self.notify)
+            )
+            # And the model folders themselves: rescanned when a model file in
+            # one changes, and every ten minutes besides. There is no Rescan.
+            self._model_folder_watcher = ReferenceFolderWatcher(
+                on_folder_changed=self._on_model_folder_fs_changed,
+                extensions=frozenset(SHELF_MODEL_SUFFIXES),
+                # A download writes for minutes; one scan after it goes quiet.
+                debounce_s=5.0,
+            )
+            self._planner_work_finders[TaskType.MODEL_FOLDER_SCAN] = (
+                ModelFolderScanFinder(
+                    hub=registered_hub,
+                    watcher=self._model_folder_watcher,
+                    notifier=self.notify,
+                )
             )
             # The workflow-card backfill (§B2). Hub-only in the strongest sense:
             # it reads stored documents and never a picture, so it keys the
@@ -401,6 +482,28 @@ class Vault:
                     vault=self,
                 )
             )
+            # A training run's previews are files in its folder, so nothing
+            # else finds their faces; the live view scores them against the
+            # run's character (#2522).
+            if self._library_uuid:
+                from pixlstash.tasks.training_preview_faces_finder import (
+                    TrainingPreviewFacesFinder,
+                )
+
+                self._planner_work_finders[TaskType.TRAINING_PREVIEW_FACES] = (
+                    TrainingPreviewFacesFinder(
+                        hub=registered_hub,
+                        library_uuid=self._library_uuid,
+                        image_root=self.image_root,
+                        engine_getter=lambda: self._engine,
+                    )
+                )
+        if self._planner_finders is not None:
+            self._planner_work_finders = {
+                task_type: finder
+                for task_type, finder in self._planner_work_finders.items()
+                if task_type in self._planner_finders
+            }
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
             task_finders=self._planner_work_finders,
@@ -425,7 +528,7 @@ class Vault:
         On Metal this blocks for a few seconds while the CPU query encoders
         load; see :meth:`_create_engine`.
         """
-        if self._disable_background_workers:
+        if self._disable_background_workers or self._planner_finders is not None:
             return
         if not self._engine:
             self._engine = self._create_engine()
@@ -440,12 +543,24 @@ class Vault:
         """
         if self._disable_background_workers or self._started:
             return
+        # A trainer that outlived the restart gets its card before PixlStash's
+        # own GPU workers start, so none of them loads a model under it.
+        self.training_service.adopt_live_runs()
         self._task_runner.start()
         self._work_planner.start()
         self._arbiter.add_yielder(self._yield_gpu)
         self._arbiter.add_listener(self._on_resource_lease)
         self._ref_folder_watcher.start()
         self._start_existing_folder_watches()
+        if self._model_folder_watcher is not None:
+            self._model_folder_watcher.start()
+        # Reconcile before the training worker starts: a trainer that survived a
+        # restart is re-attached (or finalized, if it died) before the worker can
+        # claim a queued job and ask the arbiter for the card. The yielder is
+        # registered above, so the arbiter can move PixlStash's GPU work off the
+        # card for either.
+        self.training_service.reconcile_on_startup()
+        self.training_service.start()
         self._started = True
 
     def _create_engine(self) -> InferenceEngine:
@@ -715,6 +830,36 @@ class Vault:
         once caption sync is turned on."""
         self._on_reference_folder_fs_changed(None)
 
+    def mark_reference_folder_changed(self, folder_id: int) -> bool:
+        """Do what the filesystem watcher does when a file in a reference
+        folder changes: mark the folder due, so the next scan is now.
+
+        Only the e2e test hook calls this. The e2e specs call it after every
+        change they make on disk rather than wait on the watcher, which needs
+        an inotify instance a busy machine may not have.
+
+        Args:
+            folder_id: Primary key of the reference folder.
+
+        Returns:
+            bool: False when there is no such folder, and nothing was marked.
+        """
+        exists = self.db.run_immediate_read_task(
+            lambda session: session.get(ReferenceFolder, folder_id) is not None
+        )
+        if exists:
+            self._on_reference_folder_fs_changed(folder_id)
+        return exists
+
+    def _on_model_folder_fs_changed(self, folder_id: int) -> None:
+        """A model file in a registered model folder changed: scan it now."""
+        finder = self._planner_work_finders.get(TaskType.MODEL_FOLDER_SCAN)
+        if finder is None:
+            return
+        finder.mark_due(folder_id)
+        if self._work_planner is not None:
+            self._work_planner.wake()
+
     def _on_reference_folder_fs_changed(self, folder_id: int | None) -> None:
         """Callback invoked by the filesystem watcher when a relevant file changes.
 
@@ -784,8 +929,15 @@ class Vault:
         if timer is not None:
             timer.cancel()
         if self._started:
+            # Stop the training poll thread first.  This does NOT kill a running
+            # external trainer (by policy): it survives the restart and is
+            # re-attached by reconcile_on_startup on the next start().
+            if self.training_service is not None:
+                self.training_service.stop()
             if self._ref_folder_watcher is not None:
                 self._ref_folder_watcher.stop()
+            if self._model_folder_watcher is not None:
+                self._model_folder_watcher.stop()
             if self._task_runner is not None:
                 self._arbiter.remove_yielder(self._yield_gpu)
                 self._arbiter.remove_listener(self._on_resource_lease)
@@ -793,11 +945,24 @@ class Vault:
                 self._work_planner.stop()
             if self._task_runner is not None:
                 self._task_runner.stop()
-        if not self._disable_background_workers:
+        # stop() gives up on a worker after 60 s. Releasing ends in a device-
+        # cache flush, and on Metal a flush beside a worker still running a
+        # model kills the process, so the models are left for the process exit.
+        worker_alive = (
+            self._task_runner is not None and self._task_runner.gpu_worker_alive()
+        )
+        if worker_alive:
+            logger.warning(
+                "The GPU worker is still running after the task runner stopped; "
+                "leaving the models loaded rather than flushing the device under "
+                "it. They stay resident until the process exits."
+            )
+        if not self._disable_background_workers and not worker_alive:
             FaceExtractionTask.release_detection_models()
             ImageEmbeddingTask.release_models()
         if self._engine:
-            self._engine.close()
+            if not worker_alive:
+                self._engine.close()
             del self._engine
             self._engine = None
         if self.db:
@@ -845,6 +1010,11 @@ class Vault:
             None if retention_days is None else int(retention_days)
         )
         self._scrapheap_retention_reduced_at = reduced_at
+
+    @property
+    def disable_background_workers(self) -> bool:
+        """Whether this vault was opened with its background workers off."""
+        return self._disable_background_workers
 
     @property
     def hub(self):
@@ -905,6 +1075,494 @@ class Vault:
             self._last_aggressive_unload_at = 0.0
             progress = self._build_worker_progress_snapshot()
             self._maybe_aggressive_unload(progress)
+
+    # -------------------------------------------------------------------------
+    # Training service
+    # -------------------------------------------------------------------------
+
+    def _build_training_service(
+        self, disable_background_workers: bool
+    ) -> TrainingService:
+        """Construct the TrainingService with vault-bound dependencies injected.
+
+        The service is decoupled from the Vault: it takes callables, not the
+        Vault itself.  Here we bind those callables to this vault: the VRAM
+        lease request, the event emitter, the owner-config reader, and the dataset
+        builder (``ExportUtils.build_training_dataset``, which needs an object
+        exposing ``.vault``; a tiny shim provides that).
+
+        Args:
+            disable_background_workers: Forwarded so the service's worker is a
+                no-op for read-only deployments.
+
+        Returns:
+            A configured :class:`TrainingService` (not yet started).
+        """
+        vault = self
+
+        class _DatasetServerShim:
+            """Minimal ``server`` stand-in exposing only ``.vault``.
+
+            ``ExportUtils.build_training_dataset`` reads only ``server.vault.*``
+            (db + image_root); the training dataset path never touches the
+            request/query branches, so this is sufficient and keeps the service
+            free of any HTTP-server coupling.
+            """
+
+            vault = None
+
+        shim = _DatasetServerShim()
+        shim.vault = vault
+
+        def dataset_builder(**kwargs):
+            return ExportUtils.build_training_dataset(shim, **kwargs)
+
+        # What the trainer holds is AI Toolkit's to the arbiter, not other
+        # apps', so a lease shrunk to a run's peak is not counted twice.
+        tenant = None
+        if not disable_background_workers:
+            tenant = AiToolkitProbe()
+            # The process's arbiter: self._arbiter is bound after this runs.
+            arbiter().register_probe(Tenant.AITOOLKIT, tenant)
+
+        return TrainingService(
+            self._hub,
+            self._library_uuid,
+            self.image_root,
+            request_gpu=self._request_training_gpu,
+            import_run=self._import_training_run,
+            notify=self.notify,
+            config_provider=self._training_config_provider,
+            dataset_builder=dataset_builder,
+            disable_background_workers=disable_background_workers,
+            adopt_gpu=self._adopt_training_gpu,
+            tenant=tenant,
+        )
+
+    def _training_config_provider(self) -> dict:
+        """Read the owner's ai-toolkit config from the hub-backed owner row.
+
+        The ai-toolkit paths and pinned commit are owner-level machine settings,
+        so they live on the hub's ``user`` row (the AuthService reads it), not
+        on this vault's legacy ``user`` table.
+
+        Returns:
+            ``{"repo_path", "python"}`` (empty values if unset, or
+            ``{}`` when no owner row or AuthService is attached yet).
+        """
+        auth = self.auth_service
+        if auth is None:
+            return {}
+        try:
+            user = auth.get_user()
+        except Exception as exc:
+            logger.warning("Could not read ai-toolkit owner config: %s", exc)
+            return {}
+        if user is None:
+            return {}
+        return {
+            "repo_path": user.ai_toolkit_repo_path,
+            "python": user.ai_toolkit_python,
+        }
+
+    def _import_training_run(self, run_dir: str, info: dict) -> dict:
+        """Bring a finished ai-toolkit run onto the model shelf as the job's LoRA.
+
+        The one path a trained LoRA takes onto the shelf: the run importer, into
+        the download folder's ``loras/`` subfolder when it has one (the rule a
+        LoRA download follows), with provenance ``trained``. The cover (stack
+        position 0) is then attached to the job's character or set.
+
+        Args:
+            run_dir: The ai-toolkit run folder holding the checkpoints.
+            info: The run's fields (``id``, ``name``, ``set_id``,
+                ``character_id``). ``id`` is the hub ``training_run`` row every
+                imported model is stamped with.
+
+        Returns:
+            ``{"stack_id", "imported", "cover_sha256"}``. ``cover_sha256`` is
+            ``None`` when the cover itself did not import.
+
+        Raises:
+            RuntimeError: No shelf or download folder to receive the run, or no
+                checkpoint of it imported.
+            MoveRefused: The importer refused the batch before writing anything.
+        """
+        hub = self._hub
+        if hub is None:
+            raise RuntimeError("No model shelf is open to receive the trained LoRA.")
+        folder = find_download_folder(hub)
+        if folder is None:
+            raise RuntimeError("No model folder is set up to receive the trained LoRA.")
+        subfolder = (
+            "loras" if os.path.isdir(os.path.join(folder["path"], "loras")) else None
+        )
+        # The run sits in the shelf's ai-toolkit folder, so that folder's
+        # `delete_after_import` decides whether its files stay, exactly as for
+        # an import the owner starts from the shelf.
+        run_real = os.path.realpath(run_dir)
+        delete_source = False
+        for row in hub.fetchall(
+            "SELECT path, delete_after_import FROM model_folder WHERE kind = 'source'"
+        ):
+            root = os.path.realpath(row["path"])
+            try:
+                under_root = os.path.commonpath([root, run_real]) == root
+            except ValueError as exc:
+                # Windows: a source folder on another drive has no common path
+                # with the run, so it cannot be the run's folder. Logged, since
+                # it is the reason this source is skipped.
+                logger.warning(
+                    "Source folder %s and run folder %s share no common path (%s); "
+                    "the source is not the run's folder.",
+                    root,
+                    run_real,
+                    exc,
+                )
+                under_root = False
+            if under_root:
+                delete_source = bool(row["delete_after_import"])
+                break
+        if info.get("continued_from_step") is not None and hub.fetchone(
+            "SELECT 1 FROM model WHERE training_run_id = ?", (info["id"],)
+        ):
+            return self._import_trained_longer(
+                run_dir, info, folder, subfolder, delete_source
+            )
+        with SHELF_IO_LOCK:
+            report = RunImporter(hub).import_run(
+                run_dir,
+                folder["id"],
+                subfolder=subfolder,
+                delete_source=delete_source,
+                training_run_id=info["id"],
+            )
+        landed = [o for o in report.outcomes if o.status == STATUS_IMPORTED]
+        if not landed:
+            raise RuntimeError(f"No checkpoint of {report.run_name} could be imported.")
+
+        # Nothing is cancelled here, so outcomes[0] is the cover (position 0),
+        # unless the owner chose a step in the live view while it trained. The
+        # row is read again: the one the worker claimed predates that choice.
+        cover = report.outcomes[0]
+        run = (
+            training_runs.get_run_by_uuid(hub, info["uuid"])
+            if info.get("uuid")
+            else None
+        )
+        chosen = run.get("cover_step") if run else None
+        if chosen is not None:
+            final_step = run.get("total_steps")
+            picked = next(
+                (
+                    o
+                    for o in report.outcomes
+                    if o.status == STATUS_IMPORTED
+                    and o.model_id is not None
+                    and (o.step == chosen or (o.step is None and chosen == final_step))
+                ),
+                None,
+            )
+            if picked is None:
+                logger.warning(
+                    "Step %s chosen as the cover of %s has no imported checkpoint "
+                    "(pruned by the trainer?); the final stays the cover.",
+                    chosen,
+                    report.run_name,
+                )
+            elif picked is not cover:
+                set_cover(hub, report.stack_id, picked.model_id)
+                cover = picked
+        cover_sha = None
+        if cover.status == STATUS_IMPORTED and cover.model_id is not None:
+            cover_row = hub.fetchone(
+                "SELECT sha256 FROM model WHERE id = ?", (cover.model_id,)
+            )
+            if cover_row is None:
+                # The files have landed, so do not fail the run for a row that
+                # vanished after the import: the cover just has no hash to attach.
+                logger.warning(
+                    "Cover model %s of %s landed but its row is gone; its hash is "
+                    "not attached to the job's character or set.",
+                    cover.model_id,
+                    report.run_name,
+                )
+            else:
+                cover_sha = cover_row["sha256"]
+        else:
+            logger.warning(
+                "The cover of %s (%s) did not import; no LoRA is attached to %s.",
+                report.run_name,
+                cover.filename,
+                info.get("name"),
+            )
+
+        if cover_sha is not None:
+            _move_trained_attachment(self, info, None, cover_sha)
+
+        return {
+            "stack_id": report.stack_id,
+            "imported": len(landed),
+            "cover_sha256": cover_sha,
+        }
+
+    def _import_trained_longer(
+        self,
+        run_dir: str,
+        info: dict,
+        folder,
+        subfolder: Optional[str],
+        delete_source: bool,
+    ) -> dict:
+        """Add a run trained longer to the stack its first import made.
+
+        The shelf's own copies give their names up first, as the run folder's
+        did: the bare final becomes its stamped step, so the longer-trained
+        final takes ``<stem>.safetensors`` and everything that loads that name
+        gets it. After a rewind, the copies past the step it trained on from
+        are renamed into the take that set them aside (``<stem>_take-1_<step>``),
+        because the new take writes the same steps again. Only the steps past
+        that one and the new final are imported, after the stack's members, so
+        the cover stays where the owner put it.
+
+        Returns:
+            ``{"stack_id", "imported", "cover_sha256"}`` as
+            :meth:`_import_training_run`; ``cover_sha256`` is None, since the
+            cover and its attachment are left as they are.
+
+        Raises:
+            RuntimeError: No checkpoint imported, or a shelf copy could not be
+                renamed out of the way.
+            MoveRefused: The importer refused the batch.
+        """
+        hub = self._hub
+        from_step = int(info["continued_from_step"])
+        take = info.get("set_aside_take")
+        stem = os.path.basename(os.path.normpath(run_dir))
+        with SHELF_IO_LOCK:
+            locations = hub.fetchall(
+                "SELECT mf.relpath, m.id AS model_id, m.training_step "
+                "FROM model_file mf JOIN model m ON m.id = mf.model_id "
+                "WHERE mf.model_folder_id = ? AND m.training_run_id = ?",
+                (folder["id"], info["id"]),
+            )
+            for location in locations:
+                name = os.path.basename(location["relpath"])
+                step = location["training_step"]
+                if step is None:
+                    continue
+                if take and step > from_step:
+                    renamed = f"{stem}_{take}_{step:09d}.safetensors"
+                elif name == f"{stem}.safetensors":
+                    renamed = f"{stem}_{step:09d}.safetensors"
+                else:
+                    continue
+                if renamed == name:
+                    continue
+                source = os.path.join(folder["path"], location["relpath"])
+                relpath = os.path.join(os.path.dirname(location["relpath"]), renamed)
+                relpath = relpath.replace(os.sep, "/")
+                try:
+                    publish_no_clobber(source, os.path.join(folder["path"], relpath))
+                except OSError as exc:
+                    logger.error(
+                        "Could not rename %s to %s on the shelf for run %s: %s",
+                        source,
+                        renamed,
+                        info["uuid"],
+                        exc,
+                    )
+                    raise RuntimeError(
+                        f"The shelf's copy of {name} could not make room for the "
+                        "longer-trained file."
+                    ) from exc
+                try:
+                    with hub.transaction() as conn:
+                        conn.execute(
+                            "UPDATE model_file SET relpath = ? "
+                            "WHERE model_folder_id = ? AND relpath = ?",
+                            (relpath, folder["id"], location["relpath"]),
+                        )
+                        conn.execute(
+                            "UPDATE model SET filename = ? WHERE id = ?",
+                            (renamed, location["model_id"]),
+                        )
+                except Exception:
+                    # The rows still name the old file: give it its name back.
+                    try:
+                        os.rename(os.path.join(folder["path"], relpath), source)
+                    except OSError as undo_exc:
+                        logger.error(
+                            "Could not rename %s back to %s after the shelf rows "
+                            "for run %s refused the new name (%s); the model's "
+                            "file is missing under its recorded name.",
+                            relpath,
+                            source,
+                            info["uuid"],
+                            undo_exc,
+                        )
+                    raise
+            stack = hub.fetchone(
+                "SELECT stack_id, MAX(stack_position) AS last FROM model "
+                "WHERE training_run_id = ? AND stack_id IS NOT NULL "
+                "GROUP BY stack_id ORDER BY COUNT(*) DESC LIMIT 1",
+                (info["id"],),
+            )
+            steps = [
+                c.step
+                for c in read_run(run_dir).checkpoints
+                if c.step is None or c.step > from_step
+            ]
+            report = RunImporter(hub).import_run(
+                run_dir,
+                folder["id"],
+                steps=steps,
+                subfolder=subfolder,
+                delete_source=delete_source,
+                training_run_id=info["id"],
+                stack_id=stack["stack_id"] if stack else None,
+                first_position=(stack["last"] or 0) + 1 if stack else 0,
+            )
+        landed = [o for o in report.outcomes if o.status == STATUS_IMPORTED]
+        if not landed:
+            raise RuntimeError(f"No checkpoint of {report.run_name} could be imported.")
+        return {
+            "stack_id": report.stack_id,
+            "imported": len(landed),
+            "cover_sha256": None,
+        }
+
+    def choose_training_cover(self, run: dict, step: int) -> bool:
+        """Make the checkpoint at *step* the cover of a trained run on the shelf.
+
+        The stack's cover moves (``stack_detector.set_cover``) and the LoRA
+        attached to the run's set or character moves with it, so the set uses
+        the step the owner chose rather than the last one. A run not on the
+        shelf yet is left to its import, which reads ``cover_step``.
+
+        Args:
+            run: The ``training_run`` row (``id``, ``total_steps``, ``set_id``,
+                ``character_id``).
+            step: The step chosen; the run's last step names its bare final.
+
+        Returns:
+            True when the shelf was changed, False when the run has no models
+            on it yet.
+
+        Raises:
+            LookupError: The run is on the shelf but kept no checkpoint at
+                *step*.
+        """
+        hub = self._hub
+        if hub is None:
+            return False
+        rows = hub.fetchall(
+            "SELECT id, sha256, stack_id, stack_position, training_step FROM model "
+            "WHERE training_run_id = ? ORDER BY stack_position IS NULL, "
+            "stack_position, id",
+            (run["id"],),
+        )
+        if not rows:
+            return False
+        target = next(
+            (
+                row
+                for row in rows
+                if row["training_step"] == step
+                or (row["training_step"] is None and step == run.get("total_steps"))
+            ),
+            None,
+        )
+        if target is None or target["stack_id"] is None:
+            raise LookupError(f"No checkpoint of this run was kept at step {step}.")
+        current = next(
+            (
+                row
+                for row in rows
+                if row["stack_id"] == target["stack_id"] and row["stack_position"] == 0
+            ),
+            None,
+        )
+        set_cover(hub, target["stack_id"], target["id"])
+        old_sha = current["sha256"] if current is not None else None
+        if target["sha256"] and target["sha256"] != old_sha:
+            _move_trained_attachment(self, run, old_sha, target["sha256"])
+        return True
+
+    def _request_training_gpu(
+        self, label: str, job_uuid: str, vram_mb: int, ram_mb: int
+    ) -> Lease:
+        """Ask the arbiter for a training run's card: the one PixlStash uses.
+
+        Exclusive, so PixlStash yields its own GPU work first and an idle
+        ComfyUI frees its cache; the run's own process then has the card. The
+        needs are those of the run's resolved memory profile.
+        """
+        self._watch_comfyui()
+        return self._arbiter.request(
+            Tenant.AITOOLKIT,
+            label,
+            need_mb=vram_mb,
+            ram_mb=ram_mb,
+            kind=LeaseKind.EXCLUSIVE,
+            device=ledger().pixlstash_device(),
+            job_id=job_uuid,
+        )
+
+    def _watch_comfyui(self) -> None:
+        """Point the arbiter's ComfyUI probe at the owner's ComfyUI.
+
+        Unpointed, the arbiter sees no ComfyUI: a run queued by Train longer
+        or resumed at start-up, before any ComfyUI run or the training dialog
+        pointed it, then never has ComfyUI cleared or offers to quit it, and
+        an adopted run counts ComfyUI's memory as other apps'.
+        """
+        auth = self.auth_service
+        if auth is None:
+            logger.warning(
+                "No owner attached yet; the training run waits without "
+                "ComfyUI's memory in view"
+            )
+            return
+        try:
+            user = auth.get_user()
+        except Exception as exc:
+            logger.warning(
+                "Could not read the owner's ComfyUI address; the training run "
+                "waits without ComfyUI's memory in view: %s",
+                exc,
+            )
+            return
+        url = (getattr(user, "comfyui_url", None) or "").rstrip("/")
+        if url:
+            comfyui_probe(RUN_CLIENT_ID, url)
+
+    def _adopt_training_gpu(
+        self, label: str, job_uuid: str, vram_mb: int, ram_mb: int
+    ) -> Lease:
+        """Grant a trainer that outlived the restart its card at once.
+
+        See :meth:`ResourceArbiter.adopt`: exclusive and unshrinkable for
+        ``ADOPT_QUIET_S``, so PixlStash's own work keeps off the card.
+        """
+        self._watch_comfyui()
+        return self._arbiter.adopt(
+            Tenant.AITOOLKIT,
+            label,
+            vram_mb,
+            ledger().pixlstash_device(),
+            quiet_s=ADOPT_QUIET_S,
+            ram_mb=ram_mb,
+            job_id=job_uuid,
+        )
+
+    def training_room(self) -> dict:
+        """What a training run could be given now: ``{vram_mb, ram_mb}``.
+
+        On the card training leases (PixlStash's own); see
+        :meth:`ResourceArbiter.training_room`.
+        """
+        return self._arbiter.training_room(ledger().pixlstash_device())
 
     def set_max_vram_usage_gb(self, max_vram_gb: Optional[float]):
         """The most PixlStash's own GPU work may hold, and its batch sizing.
@@ -1346,6 +2004,23 @@ class Vault:
                 )
             return
 
+        if task.type == "FaceModelRefreshTask" and task.params.get("redetect"):
+            picture_ids = result.get("picture_ids") or []
+            if picture_ids:
+                # "faces" is card content: the grid re-reads the boxes in place.
+                self.notify(
+                    EventType.CHANGED_PICTURES,
+                    {
+                        "picture_ids": picture_ids,
+                        "change_kind": "updated",
+                        "fields": ["faces"],
+                        "origin_client_id": task.params.get("origin_client_id"),
+                        "new_faces": result.get("new_faces", 0),
+                    },
+                )
+                self.notify(EventType.CHANGED_FACES)
+            return
+
         changed = result.get("changed") if isinstance(result, dict) else None
         if not changed:
             return
@@ -1558,7 +2233,7 @@ class Vault:
         Returns:
             concurrent.futures.Future: Future set to True when completed.
         """
-        if not self._engine:
+        if not self._engine and self._planner_finders is None:
             self._engine = self._create_engine()
             self._bind_engine_services()
 
@@ -1747,8 +2422,9 @@ class Vault:
                     missing = 0
                     worker_active_override = False
             elif worker_type == TaskType.MODEL_FOLDER_SCAN:
-                # User-triggered (no finder): live counters straight off the
-                # running task(s), the PICTURE_IMPORT / DETECTION shape. Counted
+                # Live counters straight off the running task(s), whether the
+                # finder or a registration queued them, the PICTURE_IMPORT /
+                # DETECTION shape. Counted
                 # in model files, not pictures - the shelf lives in the hub and
                 # the generic library total would be meaningless here.
                 label = "model_folder_scan"
@@ -1879,6 +2555,11 @@ class Vault:
                 finder = self._planner_work_finders.get(TaskType.WORKFLOW_CARD_BACKFILL)
                 total, missing = finder.progress() if finder is not None else (0, 0)
                 label = "workflows_carded"
+            elif worker_type == TaskType.TRAINING_PREVIEW_FACES:
+                # Counted over the training previews, not the library's pictures.
+                finder = self._planner_work_finders.get(TaskType.TRAINING_PREVIEW_FACES)
+                total, missing = finder.progress() if finder is not None else (0, 0)
+                label = "training_previews_scored"
             elif worker_type == TaskType.ORIENTATION:
                 # Without its own count this row fell into `planner_managed`
                 # below - `missing = 0`, so it read "12,094 / 12,094, 0.00/s"
@@ -2127,56 +2808,102 @@ class Vault:
         return progress
 
     def _maybe_aggressive_unload(self, progress: dict):
+        """Queue an unload of every model when all the workers are idle.
+
+        Reached from the worker-progress poll (a request thread) and from
+        switching "keep models in memory" off (the event loop), so it only
+        queues the unload on the GPU worker (:meth:`_unload_models_on_worker`)
+        and never waits for it.
+        """
         if self._keep_models_in_memory:
             return
         if not self._engine:
             return
-        now = time.time()
-        if now - self._last_aggressive_unload_at < self.AGGRESSIVE_UNLOAD_INTERVAL:
-            return
+        with self._aggressive_unload_lock:
+            now = time.time()
+            if now - self._last_aggressive_unload_at < self.AGGRESSIVE_UNLOAD_INTERVAL:
+                return
+            for snapshot in progress.values():
+                status = snapshot.get("status")
+                running = bool(snapshot.get("running"))
+                if not running:
+                    continue
+                if status in ("idle", "stopped", "uninitialized"):
+                    continue
 
-        any_busy = False
-        for snapshot in progress.values():
-            status = snapshot.get("status")
-            running = bool(snapshot.get("running"))
-            if not running:
-                continue
-            if status in ("idle", "stopped", "uninitialized"):
-                continue
+                current = int(snapshot.get("current") or 0)
+                total = int(snapshot.get("total") or 0)
+                remaining = snapshot.get("remaining")
+                if remaining is None:
+                    remaining = max(0, total - current)
+                else:
+                    remaining = max(0, int(remaining))
 
-            current = int(snapshot.get("current") or 0)
-            total = int(snapshot.get("total") or 0)
-            remaining = snapshot.get("remaining")
-            if remaining is None:
-                remaining = max(0, total - current)
-            else:
-                remaining = max(0, int(remaining))
-
-            has_pending_work = remaining > 0 or (total > 0 and current < total)
-            if has_pending_work:
-                any_busy = True
-                break
-        if any_busy:
-            return
-        # The snapshot only sees planner in-flight counts. A task submitted
-        # straight to the runner (an interactive retag or redescribe) is
-        # invisible to it, and unloading the model under a running caption
-        # batch makes the captioner return nothing for every picture in it.
-        # GPU-queue tasks only: a dedup scan or an import holds no model.
-        if self._task_runner is not None and self._task_runner.has_active_gpu_tasks():
-            return
+                if remaining > 0 or (total > 0 and current < total):
+                    return
+            # The snapshot only sees planner in-flight counts. A task submitted
+            # straight to the runner (an interactive retag or redescribe) is
+            # invisible to it. The unload could not land under it - it waits
+            # for the running task on the worker - but it would cost the next
+            # batch a reload. GPU-queue tasks only: a dedup scan or an import
+            # holds no model.
+            if (
+                self._task_runner is not None
+                and self._task_runner.has_active_gpu_tasks()
+            ):
+                return
+            self._last_aggressive_unload_at = now
 
         logger.warning("All workers idle; aggressively unloading models.")
-        self.unload_models()
-        self._last_aggressive_unload_at = now
+        # The setting can be switched back on while the unload waits.
+        self._unload_models_on_worker(when=lambda: not self._keep_models_in_memory)
+
+    def _unload_models_on_worker(self, when=None) -> Optional[DeviceReleaseTask]:
+        """Queue :meth:`unload_models` on the GPU worker; inline if there is none.
+
+        It ends in a device-cache flush, and on Metal a flush on any other
+        thread while the worker runs a model kills the process
+        (``docs/apple-metal-thread-safety.md``, cause 3). Without a running
+        GPU worker nothing else is on the device, so it runs here.
+
+        Args:
+            when: Checked just before unloading; ``False`` skips it.
+
+        Returns:
+            The queued task, or ``None`` when it ran inline or could not be
+            queued.
+        """
+        runner = self._task_runner
+        if runner is None or not runner.gpu_worker_alive():
+            if when is None or when():
+                self.unload_models()
+            return None
+        task = DeviceReleaseTask("UnloadModels", self.unload_models, when=when)
+        try:
+            runner.submit(task)
+        except RuntimeError as exc:
+            # The runner is closed. Vault.stop() releases the models once the
+            # GPU worker has exited; if the worker outlives the stop it skips
+            # the release rather than flush under it, and nothing unloads them.
+            logger.warning(
+                "Model unload not queued, the task runner is stopped. Vault.stop() "
+                "releases the models if the GPU worker exits; if it outlived the "
+                "stop they stay resident until the process exits: %s",
+                exc,
+            )
+            return None
+        return task
 
     def unload_models(self) -> None:
         """Unload every model PixlStash holds, whatever ``keep_models_in_memory`` says.
 
         The engine's services, tagger plugins, face detection and the embedding
-        models, then a malloc_trim. Callers make sure no GPU task is running:
-        unloading under a running caption batch makes it return nothing for
-        every picture in it.
+        models, then a malloc_trim. The one exception is the CPU query encoders
+        on Metal, kept while a search is encoding or used them in the last
+        ``IDLE_UNLOAD_S`` (``InferenceEngine.close``). Runs on the GPU worker, queued by
+        :meth:`_unload_models_on_worker`: unloading under a running caption
+        batch makes it return nothing for every picture in it, and on Metal
+        the flush at the end kills the process beside a running model.
         """
         if not self._engine:
             return
@@ -2237,38 +2964,23 @@ class Vault:
                 self._work_planner.release(lease.id)
                 return []
         stopped = self._task_runner.preempt_gpu(f"preempted by {lease.label}")
+        # The unload runs on the GPU worker once the batch in flight ends; the
+        # planner hold keeps new work off, so that batch is the last before
+        # the room is made. A lease granted meanwhile has its room, and
+        # unloading then would only cost the next batch a reload.
+        task = self._unload_models_on_worker(
+            when=lambda: lease.state.value == "waiting" and not self._closed
+        )
         # Briefly: this runs on the arbiter's one thread, which every other
-        # lease waits on. A batch that takes longer is waited for off it.
-        if not self._task_runner.wait_for_gpu_idle(timeout_s=YIELD_WAIT_S):
+        # lease waits on.
+        if task is not None and not task.wait(YIELD_WAIT_S):
             logger.info(
                 "The GPU worker is still finishing its batch; the models are "
                 "unloaded once it does, for %s (%s)",
                 lease.id,
                 lease.label,
             )
-            # Off the arbiter's thread: the planner hold keeps new work off,
-            # so the batch in flight is the last before the room is made.
-            threading.Thread(
-                target=self._unload_once_idle,
-                args=(lease, self._task_runner),
-                name=f"yield-{lease.id}",
-                daemon=True,
-            ).start()
-            return stopped
-        self.unload_models()
         return stopped
-
-    def _unload_once_idle(self, lease, runner) -> None:
-        """Unload the models when *runner*'s GPU work ends, if *lease* still waits."""
-        while lease.state.value == "waiting" and not self._closed:
-            if runner.wait_for_gpu_idle(timeout_s=5.0):
-                # Granted during the wait: the room is there, and unloading now
-                # would only cost the next batch a reload.
-                if lease.state.value == "waiting" and not self._closed:
-                    self.unload_models()
-                return
-            # A stopped runner answers at once; do not spin on it.
-            time.sleep(0.5)
 
     def _release_yield_hold(self, lease_id: str) -> None:
         if lease_id in self._yield_holds:

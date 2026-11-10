@@ -39,6 +39,8 @@ variant to an alias list means the normaliser was bypassed somewhere.
 normalised match from any source beats a fuzzy one from any source; within a
 tier the file's declared metadata beats its filename (:data:`SOURCE_RANK`). A
 person's value (``user``) outranks every scan, so nothing here clobbers it.
+Civitai's by-hash answer (``civitai``, written only when the owner asks for an
+online lookup) sits between a declaration and a filename match.
 
 **Containment for filenames, edit distance for declared values, never the
 reverse.** A filename is a soup of tokens (``ilxl_example_v3_fp16-000012``) where
@@ -698,16 +700,21 @@ def family_named(value: Optional[str]) -> Optional[str]:
 # Where a stored canonical label came from, highest first. The scanner writes a
 # new answer only when its source outranks the stored one, within one scan and
 # across scans alike, so a rescan can upgrade a filename guess to a declared
-# match and nothing it finds can replace what a person typed.
+# match and nothing it finds can replace what a person typed. `civitai` is
+# Civitai's answer for these exact bytes, looked up by hash when the owner asks:
+# better than any filename, but a third party's word, so the file's own header
+# still outranks it. Only the order matters; ranks are compared, never stored.
 SOURCE_USER = "user"
 SOURCE_DECLARED = "declared"
+SOURCE_CIVITAI = "civitai"
 SOURCE_FILENAME = "filename"
 SOURCE_DECLARED_FUZZY = "declared_fuzzy"
 SOURCE_FILENAME_FUZZY = "filename_fuzzy"
 
 SOURCE_RANK = {
-    SOURCE_USER: 5,
-    SOURCE_DECLARED: 4,
+    SOURCE_USER: 6,
+    SOURCE_DECLARED: 5,
+    SOURCE_CIVITAI: 4,
     SOURCE_FILENAME: 3,
     SOURCE_DECLARED_FUZZY: 2,
     SOURCE_FILENAME_FUZZY: 1,
@@ -1361,3 +1368,29 @@ def model_tile(
         "mark_letters": None if glyph else glyph_letters(entry),
         "mark_band": True,
     }
+
+
+def training_base_tile(raw: Optional[str]) -> Optional[dict]:
+    """The tile a training run's base model wears, or ``None`` for a base we do not know.
+
+    *raw* is what the trainer was pointed at: a Hugging Face repo id
+    (``Tongyi-MAI/Z-Image-Turbo``), a checkpoint path or a label. It is read
+    as a checkpoint of that base, so the tile is the release's own (its
+    maker's glyph on its maker's colour), the one a workflow card draws that
+    checkpoint with.
+
+    Returns :func:`model_tile`'s fields plus ``label``, the canonical name
+    (``None`` for a re-branded fine-tune, which wears its own mark and is not
+    its base: ``juggernaut_sdxl`` is Juggernaut, not SDXL 1.0), with no
+    tab: *raw* is free text, so a role or a few-step bolt read from it would
+    claim more than it says (a Klein *base* id reads as few-step).
+    """
+    if not raw or not raw.strip():
+        return None
+    tail = re.split(r"[\\/]", raw.strip().rstrip("\\/"))[-1]
+    canonical, _ = identify((raw, tail), (tail,))
+    tile = model_tile(canonical, tail, checkpoint=True)
+    if not tile:
+        return None
+    label = canonical if tile["mark_band"] else None
+    return {**tile, "label": label, "mark_tab": None}

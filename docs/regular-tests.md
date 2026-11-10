@@ -91,12 +91,50 @@ shrinks as automated coverage grows.
 The spec asserts the thumbnail URL shape before extracting its picture ID, so
 missing or placeholder sources fail with the actual `src` in the diagnostic.
 
-## Picture Detail (ImageOverlay) — `overlay.spec.js` (plan §4)
+## Undo and redo — `undo-redo.spec.js`
+
+Changes are made through the API with the page's own `X-Client-Id`, so the tab
+treats them as its own; every verdict is read back from the server. The toolbar
+control is mounted on Duplicates only (#2160 removed it from the grid toolbar),
+so its checks run there. Cleanup takes back each test's own operation by id.
+
+| Test | Covers | Status |
+|------|--------|--------|
+| Ctrl+Z reverts … on the server, Ctrl+Y redoes it | One test per change kind: Scrapheap move, tag add, tag remove, rating, set add, character assignment, rotation; exactly one undo and one redo request | ✅ |
+| names the last operation, and its buttons undo and redo it | `UndoControl` accessible names; its Undo and Redo buttons | ✅ |
+| the History picker undoes back to a step, newest first, and no further | Preview range, per-step `POST /operations/{id}/undo` order, the step before survives | ✅ |
+| Ctrl+Z belongs to the field being typed in | Grid search, lightbox tag entry and description: the text is undone, the library is not, the description is not saved | ✅ |
+| Ctrl+Z in the lightbox undoes and keeps the lightbox open | Lightbox's own binding and receipt | ✅ |
+| a read-only session: undo is inert, and the control says why | Chord and control make no `/operations` call; the control and History explain why (the chord itself is silent) | ✅ |
+| nothing to undo: the control is disabled and Ctrl+Z does nothing | Served an empty stack (undo/redo POSTs stubbed off the real log): disabled control, "Nothing to undo." notice, no POST | ✅ |
+
+## Deleting pictures and the Scrapheap — `scrapheap.spec.js`
+
+| Test | Covers | Status |
+|------|--------|--------|
+| the Delete key sends the selected picture to the Scrapheap | Grid keyboard delete; the live card goes and `/scrapheap` lists it | ✅ |
+| the Selection menu's Delete sends the selection to the Scrapheap | Selection ▾ Delete on a two-picture selection | ✅ |
+| the context menu's Delete sends the picture to the Scrapheap | Right-click Delete | ✅ |
+| a picture in a locked set is refused, with a notice saying why | Delete key keeps it and says it is in a locked set; the context menu's Delete is disabled | ✅ |
+| the lightbox deletes its picture, and Restore in the Scrapheap brings it back | Lightbox context menu Delete (what the lightbox does next is #2346's); Restore from the Scrapheap's lightbox | ✅ |
+| Restore all returns every picture with its sets, character and tags | Restore all on a heap holding only the test's pictures; membership and tags checked through the API | ✅ |
+| Empty scrapheap states the count, and Cancel deletes nothing | The confirm's count; Cancel sends no purge | ✅ |
+| Delete forever on a selection counts only the selection, and Cancel deletes nothing | Selection-scoped preview count; Cancel sends no purge | ✅ |
+| a cold load of /scrapheap renders the Scrapheap, not the library | Direct navigation to `/scrapheap` | ✅ |
+
+Every test puts back what it sent to the Scrapheap. The purge request is
+blocked at the network in the two Cancel tests, so a broken Cancel fails the
+test rather than destroying fixture pictures. Confirming Empty scrapheap or
+Delete forever needs pictures the spec imported itself, and the
+protected-original choice needs a reference-folder picture. The e2e backend
+provides both since #2320; until #2353 runs them for real, they stay manual.
+
+## Picture Detail (Lightbox) — `lightbox.spec.js` (plan §4)
 | Test | Covers | Status |
 |------|--------|--------|
 | opens from a thumbnail and closes with the button | Overlay open/close lifecycle | ✅ |
-| navigates next/previous with arrow keys | →/← move between grid images in the overlay | ✅ |
-| closes with Escape | Escape dismisses the overlay | ✅ |
+| navigates next/previous with arrow keys | →/← move between grid images in the lightbox | ✅ |
+| closes with Escape | Escape dismisses the lightbox | ✅ |
 
 ## Faces — `faces.spec.js` (plan §10)
 | Test | Covers | Status |
@@ -107,11 +145,12 @@ missing or placeholder sources fail with the actual `src` in the diagnostic.
 | Test | Covers | Status |
 |------|--------|--------|
 | expands and collapses stacks from the View menu | Expand-all / collapse-all stack controls in the View menu | ✅ |
+| make a cover, take a member out and reorder in the filmstrip; each survives a reload | On a stack of four loose pictures the spec creates: Edit stack ▸ Open stack, Make cover, Take out of stack, and the lightbox filmstrip's Move later; each checked against the server's order and the grid's position chips after a fresh load (`afterAll` takes the stack apart) | ✅ |
 
 ## Tags — `tags.spec.js` (plan §5)
 | Test | Covers | Status |
 |------|--------|--------|
-| adds and removes a tag in the overlay | Add a tag via the inline input; remove it via its ✕ button (chip appears/disappears with no reload) | ✅ |
+| adds and removes a tag in the lightbox | Add a tag via the inline input; remove it via its ✕ button (chip appears/disappears with no reload) | ✅ |
 
 ## Star rating — `rating.spec.js` (plan §6)
 | Test | Covers | Status |
@@ -119,22 +158,38 @@ missing or placeholder sources fail with the actual `src` in the diagnostic.
 | sets a rating that persists across a reload | Click the Nth star in the overlay; the score round-trips to the backend and survives a reload | ✅ |
 | a grid star click saves, survives a reload, and matches the overlay | The compact hover star badge on a thumbnail card: click the Nth star, reload — the grid badge still shows N and the overlay for the same picture agrees (grid↔overlay sync). Uses the 2nd card so the two tests never share a picture | ✅ |
 
-## Picture import — `import.spec.js` (plan §2, partial)
+## Picture import — `import.spec.js` (plan §2)
 | Test | Covers | Status |
 |------|--------|--------|
 | dragging files over the grid raises the import overlay; leaving clears it | A synthetic DataTransfer with a real JPEG File dispatched on the grid scroll wrapper raises the "Drop files here to import" overlay; dragleave clears it | ✅ |
+| the Import panel imports one file, then several, and All media counts them | `setInputFiles` on the panel's input: the upload is held so the staging dialog is seen, then the import completes, the new cards render and All media rises by one, then by three more | ✅ |
+| a real drop on the grid uploads the dropped file and imports it | The drop handler's upload carries the dropped file by name, and the picture lands | ✅ |
+| a drop on /set/:id joins that set | The session opens with the set's id; `GET /picture_sets/{id}/members` lists exactly the new picture | ✅ |
+| a drop on /character/:id is filed for that character | The session opens with the character's id; the picture's `pending_character_id` names it (face extraction, which turns that into a face, does not run in e2e) | ✅ |
+| the Import panel inside a project imports into that project | The session opens with the project's id; `GET /pictures?project_id=` lists exactly the new picture | ✅ |
+| a locked set refuses the import and says why | The session open answers 409, nothing is uploaded or imported, and the dialog shows the server's reason | ✅ |
+| unsupported files are left out, and a drop of nothing else is reported | Beside a picture an unsupported file is never uploaded; alone, it opens no session and raises the "None of those files…" notice | ✅ |
+| importing the same picture twice keeps one copy | The second import reports one duplicate and no new picture; the counts stay put | ✅ |
+| a .txt beside an image tags it | A same-stem caption sidecar's comma-separated tags land on the picture | ✅ |
+| a video imports and plays in the lightbox | A canvas-recorded VP8 clip imports as a video and its playback advances in the lightbox | ✅ |
 
-> ⚠️ **Drop → import completes is NOT automatable in this harness:**
-> `POST /pictures/import` returns 400 "Cannot import: …" (no face worker) and the e2e
-> backend boots with `disable_background_workers: true`. The import-completion
-> half of legacy §2 stays in the manual plan (Import & background processing)
-> until the harness grows a worker-enabled mode or a test hook.
+Every test purges the pictures it imported and deletes the sets, characters and
+projects it made, so the Scrapheap is left as the fixture had it.
+
+## Media fixture — `media-fixture.spec.js`
+| Test | Covers | Status |
+|------|--------|--------|
+| every registered reference and import folder lives under the throwaway work dir | Guard: Delete forever with *include protected* removes reference-folder originals, so no spec may register a folder outside the temp dir | ✅ |
+| the seeded reference folder is registered and holds its pictures | The launcher's seeded folder is active, laid out, and lists its three images | ✅ |
+| /moves lists the seeded move as an unambiguous review | The seed's move into a project-named folder reaches `GET /moves/pending` | ✅ |
+| an import completes and the picture appears in the grid | Import dialog → staging commit → `PictureImportTask` on the e2e task runner; the card appears; the picture is purged afterwards | ✅ |
 
 ## Export — `export.spec.js` (plan §15)
 | Test | Covers | Status |
 |------|--------|--------|
-| exports 3 selected pictures to a ZIP containing exactly 3 image files | Ctrl-click 3 cards → toolbar Export panel (captions "none") → Export → the downloaded ZIP's central directory holds exactly 3 image entries | ✅ |
-| exports a picture set to a ZIP matching the sidebar count | Open a non-empty set, export the current view — ZIP image-entry count equals the set's sidebar count badge | ✅ |
+| exports 3 selected pictures to a ZIP containing exactly 3 image files | Ctrl-click 3 cards → the selection pill's Export panel (captions "none") → Export → the downloaded ZIP's central directory holds exactly 3 image entries | ✅ |
+| exports a picture set to a ZIP matching the sidebar count | Open a non-empty set, Ctrl+A, Export — the request carries the view's query rather than ids, and the ZIP image-entry count equals the set's sidebar count badge | ✅ |
+| writes 3 half-size pictures and their tag captions into the folder picked | Export to Folder… into a mkdtemp folder walked to in the folder browser, captions "Tags", resolution "Half Size": 3 images and 3 non-empty captions on disk, each image half its recorded size; the backend's openers refuse, so the notice says it could not open the folder | ✅ |
 
 ## Tag predictions — `tag-predictions.spec.js` (plan §14)
 | Test | Covers | Status |
@@ -157,17 +212,20 @@ missing or placeholder sources fail with the actual `src` in the diagnostic.
 ## Context menu — `context-menu.spec.js` (plan §3.5)
 | Test | Covers | Status |
 |------|--------|--------|
-| opens on right-click and lists picture actions | Right-click a card opens `.image-ctx-menu` exposing Tag / Reverse image search / Share image; Escape dismisses it | ✅ |
+| opens on right-click and lists picture actions | Right-click a card opens `.image-ctx-menu` exposing Tag / Share image, and Reverse image search once Find & compare is hovered; Escape dismisses it | ✅ |
+| Set ▸ adds the picture to the set picked, and picking it again removes it | On a set the spec creates: the API membership gains the picture, then loses it | ✅ |
+| Tag… opens and focuses the tag field | The stats sidebar opens with its tag field focused | ✅ |
+| Find & compare ▸ Compare lays the two selected pictures over each other | Two selected pictures open in the lightbox's compare view, one on the stage and the other clipped over it | ✅ |
 
 ## Statistics sidebar — `stats.spec.js`
 | Test | Covers | Status |
 |------|--------|--------|
-| toggles the stats sidebar open and closed | Toolbar right-rail toggle ("Stats and tasks") shows/hides the stats inspector's content (`.stats-sidebar .inspector-content`) with its Tags/Pictures/Tasks tabs | ✅ |
+| toggles the stats sidebar open and closed | Toolbar right-rail toggle ("Inspector") shows/hides the stats inspector's content (`.stats-sidebar .inspector-content`) with its Tags/Pictures tabs | ✅ |
 
 ## Boolean set operations — `set-operations.spec.js`
 | Test | Covers | Status |
 |------|--------|--------|
-| combines multiple sets via the multi-select toolbar | Ctrl-click a second set reveals the combine toolbar with Union / Overlap / Difference / Unique (XOR); clearing dismisses it | ✅ |
+| the combined grid matches the set arithmetic for every mode | On two overlapping sets the spec creates, the grid under Union / Overlap / Difference / Unique (XOR) holds exactly the ids computed from the API's memberships; clearing dismisses the toolbar | ✅ |
 
 ## Picture-set locking — `set-locking.spec.js` (plan §4)
 | Test | Covers | Status |
@@ -182,9 +240,9 @@ missing or placeholder sources fail with the actual `src` in the diagnostic.
 ## Snapshots — `snapshots.spec.js`
 | Test | Covers | Status |
 |------|--------|--------|
-| lists restore points with a restore action (list-only) | Settings → Snapshots lists ≥1 restore point, each offering a Restore action (rollback itself is **not** clicked — it would rewrite the shared DB) | ✅ |
+| a snapshot taken now restores sets, people and pictures to this state | Create now (file lands under the work dir) → add a set → full restore of that snapshot → sets, set memberships, people and pictures (score, stack) match the state before. The restore signs out every session and revokes every token, so the spec signs in again and rewrites `.auth/state.json` and `token.json` | ✅ |
 
-## Grid live-update — `grid-own-change-no-pill.spec.js`, `grid-external-change-pill.spec.js`, `grid-injection.spec.js`, `grid-overlay-deferral.spec.js` (plan §19)
+## Grid live-update — `grid-own-change-no-pill.spec.js`, `grid-external-change-pill.spec.js`, `grid-injection.spec.js`, `grid-lightbox-deferral.spec.js` (plan §19)
 WebSocket-driven grid refresh and the two pills. The e2e harness simulates an
 *external* change by sending requests with **no `X-Client-Id`**, and *own*
 changes by driving the UI / sending the tab's own client id; floods are fired
@@ -198,7 +256,7 @@ fixes for [#499](https://github.com/Pikselkroken/pixlstash/issues/499) and
 | external change raises the right pill | No-client-id mutation → external; add → "New pictures", update → "View changed externally"; click loads it (§19.2) | ✅ |
 | injection: own-origin suppressed, external add raises pill | `ws-event` injection with matching origin is suppressed; external `added` raises "New pictures" (§19.1/§19.2) | ✅ |
 | flood is coalesced | 100 external events → bounded number of grid refetches, not one per id (§19.3, #500) | ✅ |
-| overlay defers external changes | External change while overlay open → no pill; deferred reconcile on close (§19.4) | ✅ |
+| lightbox defers external changes | External change while lightbox open → no pill; deferred reconcile on close (§19.4) | ✅ |
 
 ## Review Sessions — `review-board.spec.js`, `review-session.spec.js` (plan §20)
 
@@ -206,7 +264,7 @@ The tag-review redesign: a tag-health board (landing), first-class review
 sessions in a rail, and binary/pair decision cards. Drives the real backend.
 The board is served from the `tag_health` cache, so the board spec's
 `beforeEach` builds it through the API (`POST /api/v1/tag_health/rebuild`, poll
-`GET /api/v1/tag_health` until `building=false`) before opening the overlay —
+`GET /api/v1/tag_health` until `building=false`) before opening the lightbox —
 the new-review dialog's tag chips ARE the health rows, so the cache must exist.
 Page object: `e2e/pages/ReviewSessions.js` (`reviews` fixture). The fixture
 vault's real CLIP embeddings produce live suspects (probed: shirt/smile/hand 3,
@@ -218,7 +276,7 @@ mutations) is unit-covered in `src/stores/useReviewSessionsStore.test.js`.
 
 | Test | Covers | Status |
 |------|--------|--------|
-| opens from the toolbar and renders the ranked board | Toolbar `Review and fix tags` → `.rs-overlay`; board title + the redesigned columns (Tag / Est. fixes / Est. wrong / Est. missing / Mismatch / Why it ranks here); ≥1 tag row | ✅ |
+| opens from its URL and renders the ranked board | `?review=board` (the toolbar button left with #2160) → `.rs-overlay`; board title + the redesigned columns (Tag / Est. fixes / Est. wrong / Est. missing / Mismatch / Why it ranks here); ≥1 tag row | ✅ |
 | the persistent rebuild control is visible in the header (Spec B) | The board header always exposes its rebuild control | ✅ |
 | the Why column is never blank for a row with a ranking signal | A row with a ranking signal always shows a "Why it ranks here" explanation | ✅ |
 | the filter input narrows the visible rows | `/`-focusable filter narrows rows to matches and restores on clear | ✅ |
@@ -230,10 +288,10 @@ mutations) is unit-covered in `src/stores/useReviewSessionsStore.test.js`.
 | creating a review opens a session with a scan receipt and progress | Dialog → "Scan & create" → session view, receipt ("Scanned N · N suspects"), rail done/found, Undo disabled at start | ✅ |
 | binary Yes/No map to keep/remove; tally + backend receipt track it | remove-dir No=remove / Yes=keep; tally + `GET /reviews/{id}` receipt agree; focus advances to the re-keyed card; Undo enabled after a decision | ✅ |
 | Escape closes the review first (back to tag health); a second Escape closes the overlay | In a session, Escape returns to the tag-health board; a second Escape dismisses the overlay | ✅ |
-| Undo reverses the last decision and decrements the tally | Undo (net counter) decrements the tally and re-disables when the stack empties; backend receipt returns to 0 | 📝 fixme |
-| Skip removes the card with no decision and is reported separately | Skip → `.rs-tally-skipped` + rail "N skipped"; receipt removed/added/kept unchanged, skipped++ | 📝 fixme |
-| keyboard Y / N / S / U drive decisions and focus stays on the card | Keyboard parity with the buttons; focus stays on `.rs-card` | 📝 fixme |
-| working through the queue reaches completion and archives to a receipt | Decide all → completion state → Archive → `.rs-archived` receipt; backend status ARCHIVED | 📝 fixme |
+| Undo reverses the last decision and decrements the tally | Undo (net counter) decrements the tally and re-disables when the stack empties; backend receipt returns to 0. Uses a multi-suspect tag so the decision bar is still there after one decision | ✅ |
+| Skip removes the card with no decision and is reported separately | Skip → `.rs-tally-skipped` + rail "done/found · N skipped"; receipt removed/added/kept unchanged, skipped++ | ✅ |
+| keyboard Y / N / S / U drive decisions and focus stays on the card | Keyboard parity with the buttons; focus stays on `.rs-card`; `U` straight after `N` undoes it. The in-flight-write case itself is pinned by the store unit test, since a local backend usually answers before the next key | ✅ |
+| working through the queue reaches completion and ends with a receipt | Decide all → completion state → End review → back on the board, session gone from the sidebar → Reviews inspector's Archived tab entry → `.rs-archived` receipt; backend status ARCHIVED | ✅ |
 
 **✅ BUG-RS-1 — RESOLVED.** The session card used to never render in a real
 browser: the moment the suggestions queue loaded, `ReviewSessionView` crashed
@@ -242,13 +300,11 @@ with `TypeError: Cannot read properties of undefined (reading 'el')` in Vue's
 collision between the card's `v-else` branch and the compiler's numeric auto-key
 for the sibling "Loading" `v-if` (only surfacing in production block patching);
 fixed by namespacing the key (`card-${current.id}`) in `ReviewSessionView.vue`.
-The three active specs above (create, binary decide, Escape-close) are the
-authoritative regression guard and run green against the production build. The
-four rows marked **📝 fixme** stay `test.fixme`'d for reasons **unrelated to
-BUG-RS-1** — each encodes a behaviour that does not yet match the implementation
-(single-suspect queue emptying, Skip tally, keyboard focus, queue completion/
-archive) and needs QA+dev reconciliation; see the per-test `FIXME (not BUG-RS-1)`
-notes in the spec. Un-`fixme` each as its behaviour is settled.
+The first three specs above (create, binary decide, Escape-close) are the
+authoritative regression guard and run green against the production build.
+Archiving returns to the board rather than to the receipt: the completion state
+has just shown the tally, and the next step is picking another tag. The receipt
+stays one click away in the rail's Archived list.
 
 ---
 
@@ -262,26 +318,62 @@ notes in the spec. Un-`fixme` each as its behaviour is settled.
 | --- | --- | --- |
 | opens on F1 and lists the grid shortcuts | F1 reaches the global handler and `ShortcutsDialog` renders its table. The dialog is static markup with no unit coverage, so this is its only pin | ✅ |
 
+## Grid filters — `filters.spec.js`
+Every facet is checked the same way: the strip's "N of M" is the API's `/pictures/count` for the same filter over the same view, a chip names it, and its × restores the grid (no strip, menu header back to "M of M"). When the API's answer fits on screen the cards are compared by id too. The fixture records no LoRA and no workflow, so those two stub only the menu's list of choices; the listing and the count are the real server's (0).
+| Test | Covers | Status |
+| --- | --- | --- |
+| media type | Video (none in the fixture: empty grid) and Images, each with its chip | ✅ |
+| faces: No face / Has face | `face_filter` reaches the grid stream | ✅ |
+| stacks: Stacked / Unstacked | `stack_state` | ✅ |
+| sharing | Shares one picture through a READ token and revokes it after; the grid is exactly that picture | ✅ |
+| score | At least 3 stars; then At most 2 from 0, which takes the unrated with it | ✅ |
+| tags | Has tag, then flipped to Lacks tag from its menu chip; never both | ✅ |
+| tag confidence | Missing at the default 80% | ✅ |
+| checkpoint / LoRA / workflow | A ticked value reaches the listing and gets its chip | ✅ |
+| two facets combine, and Clear all clears both | AND across facets (a pair chosen to be narrower than either alone), and the strip's Clear all | ✅ |
+| filters survive a route change and reset on a reload | The filter store is the tab's, not the route's: a sidebar navigation keeps it, a reload starts clean | ✅ |
+
+## Deep links — `deep-links.spec.js`
+| Test | Covers | Status |
+| --- | --- | --- |
+| `?overlay=` on `/set/:id`, `/character/:id`, `/project/:pid/set/:id` | The lightbox opens on that picture (not the grid's first), and closing it lands on the entity's grid with `?overlay=` dropped | ✅ |
+| `/project/:pid/character/:id` cold load | The scope slot names the project, the person's row is active, the grid is the person's within the project | ✅ |
+| multi-set `?ids=…&mode=union\|intersection`, multi-character `?ids=…&mode=union` | The grid's own count is the API's count for the combined query | ✅ |
+| `?review=board`, `?review=<id>` | Cold loads open the board, and a review the spec created (aborted after) | ✅ |
+
+## Grid keys — `grid-keys.spec.js`
+| Test | Covers | Status |
+| --- | --- | --- |
+| G, the arrows, Space and Enter | The cursor tile holds the keyboard focus with `:focus-visible` after each key; Ctrl+Arrow moves it alone, Space toggles, Enter opens that picture | ✅ |
+| Home, End, PageDown and PageUp | End shows the whole last row; a page is one window | ✅ |
+| Ctrl+A | Selects every picture in the view, not just the tiles on screen | ✅ |
+| 0–5 | Rates the cursor picture, read back from the API | ✅ |
+| typing safety | With the pointer resting on a tile, every grid key typed into the search field types and does nothing else | ✅ |
+
+## Lightbox keys — `lightbox-keys.spec.js`
+| Test | Covers | Status |
+| --- | --- | --- |
+| Z | 100% and back to fit, on the fixture's tallest picture, which is larger than the stage (fit is the zoom floor) | ✅ |
+| Space, S, T | Chrome hidden and back; sidebar closed and back; caret in the tag field | ✅ |
+| 1–5 | Stars and the API's score | ✅ |
+| A | Adds the next picture to the set last added to, in a set the spec makes and deletes | ✅ |
+| typing safety | Every lightbox key typed into the tag field types and changes nothing | ✅ |
+
 ---
 
 ## Coverage gaps / testing debt (risk-based)
 
 Tracked so they aren't forgotten — weighted by blast radius:
 
-- **Snapshots rollback & selective restore (v1.5) — HIGH RISK, partially
-  automated.** `snapshots.spec.js` now asserts the restore-point list renders
-  with a Restore action, but the destructive round-trip (snapshot → mutate →
-  rollback) and *selective metadata restore* are still uncovered — clicking
-  Restore would rewrite the shared fixture DB, so it needs an isolated backend.
-  Data-loss territory; should be the next spec.
+- **Selective snapshot restore (v1.5) — HIGH RISK, uncovered.**
+  `snapshots.spec.js` runs the full round-trip (snapshot → mutate → full
+  restore), but restoring chosen pictures from a snapshot (the context menu's
+  Restore from snapshot) has no spec. Data-loss territory.
 - **Bulk operations at scale** — select-all/range and apply-to-many beyond a
   handful of pictures are only smoke-covered.
-- **Import completion blocked by the worker requirement.** The import endpoint
-  hard-requires the face worker, and the harness disables workers — so
-  drop→import, malformed/huge/unsupported file handling, and everything
-  downstream of an import (progress UI, caption/tag/face generation) is
-  manual-only. A worker-enabled harness mode (or an import test hook) would
-  unlock a large block of legacy §2/§16 automation at once.
+- **Everything downstream of an import is manual.** The harness runs the import
+  task but loads no models, so caption, tag, face and score generation on new
+  pictures never happen in e2e; neither do malformed or huge files.
 - **Infinite scroll needs a bigger fixture.** The ~110-picture fixture renders
   in a single page (108 thumbnails mount eagerly), so "scroll loads more" has
   nothing to assert; it lives in the manual Performance section. A multi-page
@@ -299,12 +391,10 @@ Tracked so they aren't forgotten — weighted by blast radius:
   actions, so an item present in both menus but wired to the wrong handler in
   one of them would still pass. Asserting that representative actions actually
   fire is the remaining gap.
-- **Review Sessions — partial loop automation + manual-only signals (plan §20).**
+- **Review Sessions — manual-only signals (plan §20).**
   The board is automated (`review-board.spec.js`, 9 cases). The session loop is
-  **partly automated**: create, binary decide, and Escape-close run green
-  (BUG-RS-1 is resolved); four further cases (Undo, Skip, keyboard, queue
-  completion/archive) stay `test.fixme`'d for reasons unrelated to BUG-RS-1 and
-  are tracked separately. Separately, several board/creation
+  **automated**: create, binary decide, Escape-close, Undo, Skip, keyboard,
+  and queue completion/archive run green. Separately, several board/creation
   paths are **not exercisable against the committed fixture** and stay manual
   (see release-test-plan §20): `est_wrong`/`est_missing` columns and
   auto-resolvable/bulk-accept (the fixture's predictions never disagree with
@@ -318,10 +408,10 @@ Tracked so they aren't forgotten — weighted by blast radius:
   most of these become e2e specs.
 - **Grid live-update — manual-only paths (plan §19).** The four `grid-*` specs
   cover the deterministic core (own vs external, pill choice, flood coalescing,
-  overlay deferral). These are **not yet automated** and stay manual:
+  lightbox deferral). These are **not yet automated** and stay manual:
   - *Real bulk work with background workers ON (§19.3, #500)* — the e2e backend
-    runs `disable_background_workers: true`, so worker tag/quality/smart-score
-    events never fire. The injection spec proves frontend coalescing under a
+    runs only the folder sweeps and loads no models, so worker
+    tag/quality/smart-score events never fire. The injection spec proves frontend coalescing under a
     synthetic flood, but the real worker-driven path needs a live server run.
   - *Real two-tab / two-device observation (§19.2)* — automated coverage uses
     the no-client-id lever to fake "external"; genuine concurrent same-owner

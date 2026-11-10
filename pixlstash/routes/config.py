@@ -30,12 +30,14 @@ from pixlstash.routes.model_folders import register_comfyui_model_folders
 from pixlstash.utils.path_utils import LibraryRootsUnavailable
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services import (
+    comfyui_connections,
+    comfyui_link_service,
     config_service,
     library_settings_service,
     scrapheap_service,
     workflow_ghost_service,
 )
-from pixlstash.services import run_log, vram_history
+from pixlstash.services import run_log, tag_preferences, vram_history
 from pixlstash.services.comfyui_service import live_runs
 from pixlstash.services.model_downloads import live_downloads
 from pixlstash.resources.arbiter import arbiter
@@ -49,6 +51,7 @@ from pixlstash.utils.service.smart_score_invalidation import (
     record_pending_invalidation,
 )
 from pixlstash.utils.service.user_settings_utils import (
+    AI_TOOLKIT_CONFIG_KEYS,
     apply_user_config_patch,
     serialize_user_config,
 )
@@ -74,7 +77,7 @@ def create_router(server) -> APIRouter:
     router = APIRouter()
     hw_monitor = config_service.HardwareMonitor()
 
-    def _config_payload(user) -> dict:
+    def _config_payload(user, request: Request) -> dict:
         """Serialise the user's config, with the library-owned settings merged in.
 
         The client sees one flat config object exactly as before. Behind it,
@@ -82,8 +85,18 @@ def create_router(server) -> APIRouter:
         the user row: it is a character id in that vault, so the same number in
         another library is a different person (see
         pixlstash/db_models/library_settings.py).
+
+        The ai-toolkit checkout and its Python are host paths, which only the
+        §16.3 tier that ``GET /training/ai-toolkit/status`` carries may read;
+        everyone else gets ``ai_toolkit_configured`` and nulls (#2295).
         """
         payload = serialize_user_config(user)
+        payload["ai_toolkit_configured"] = bool(
+            payload.get("ai_toolkit_repo_path") and payload.get("ai_toolkit_python")
+        )
+        if not _host_local(request):
+            payload["ai_toolkit_repo_path"] = None
+            payload["ai_toolkit_python"] = None
         payload["similarity_character"] = (
             library_settings_service.get_similarity_character(server.vault.db)
         )
@@ -91,7 +104,18 @@ def create_router(server) -> APIRouter:
         payload["auto_exclusive_after_oom"] = vram_history.auto_exclusive_after_oom(
             server.hub, getattr(user, "id", None)
         )
+        # A table of its own in the hub too.
+        payload["tag_chip_size"] = tag_preferences.read(
+            server.hub, getattr(user, "id", None)
+        )
         return payload
+
+    def _host_local(request: Request) -> bool:
+        """Whether *request* passes the ``LOCAL_OWNER_ONLY`` locality rule (§16.3)."""
+        return (
+            is_local_or_tailscale_ip(server.auth.real_client_ip(request))
+            or server.auth.allow_remote_host_ops
+        )
 
     def _ensure_secure_when_required(request: Request):
         server.auth.ensure_secure_when_required(request)
@@ -185,6 +209,16 @@ def create_router(server) -> APIRouter:
         date_format: Optional[str] = None
         theme_mode: Optional[str] = None
         comfyui_url: Optional[str] = None
+        ai_toolkit_repo_path: Optional[str] = None
+        ai_toolkit_python: Optional[str] = None
+        ai_toolkit_commit: Optional[str] = None
+        ai_toolkit_configured: Optional[bool] = Field(
+            default=None,
+            description=(
+                "Whether an ai-toolkit checkout and its Python are saved. The two "
+                "paths themselves are null unless the request is local (§16.3)."
+            ),
+        )
         public_url: Optional[str] = None
         similarity_character: Optional[int] = None
         stack_strictness: Optional[float] = None
@@ -205,6 +239,13 @@ def create_router(server) -> APIRouter:
             ),
         )
         check_for_updates: Optional[bool] = None
+        training_presets_auto_check: Optional[bool] = Field(
+            default=None,
+            description=(
+                "Check pixlstash.dev for newer training recipes once a day, "
+                "when the Train dialog opens. Off until turned on."
+            ),
+        )
         telemetry_send_install_id: Optional[bool] = Field(
             default=None,
             description=(
@@ -247,10 +288,37 @@ def create_router(server) -> APIRouter:
             ),
         )
         show_keyboard_hint: Optional[bool] = None
+        grid_open_gesture: Optional[str] = None
+        viewer_wheel_action: Optional[str] = None
+        last_seen_version: Optional[str] = Field(
+            default=None,
+            description=(
+                "The app version whose What's changed panel the owner has seen. "
+                "Blank or null resets it."
+            ),
+        )
+        whats_changed: Optional[dict] = Field(
+            default=None,
+            description=(
+                'What\'s changed progress: {"done": [step ids], "checklist": bool, '
+                '"card": bool}. Null resets it.'
+            ),
+        )
         embed_watermark: Optional[bool] = None
+        keep_workflow_on_export: Optional[bool] = Field(
+            default=None,
+            description=(
+                "Exports keep generation data (ComfyUI workflow, prompt, "
+                "A1111 parameters). Off by default; the Export panel's switch "
+                "reads and writes it."
+            ),
+        )
         smart_score_penalised_tags: Optional[dict] = None
         hidden_tags: Optional[list] = None
         tagger_settings: Optional[dict] = None
+        tag_chip_size: Optional[str] = Field(
+            default=None, description="`compact`, `comfortable` or `large`."
+        )
 
     class PenalisedTagsResponse(BaseModel):
         model_config = ConfigDict(extra="allow")
@@ -509,7 +577,7 @@ def create_router(server) -> APIRouter:
     def get_me_config(request: Request):
         _ensure_secure_when_required(request)
         user = server.auth.get_user_for_request(request)
-        return _config_payload(user)
+        return _config_payload(user, request)
 
     @router.get(
         "/users/me/penalised-tags",
@@ -520,7 +588,7 @@ def create_router(server) -> APIRouter:
     def get_me_penalised_tags(request: Request):
         _ensure_secure_when_required(request)
         user = server.auth.get_user_for_request(request)
-        config = _config_payload(user)
+        config = _config_payload(user, request)
         return {"smart_score_penalised_tags": config["smart_score_penalised_tags"]}
 
     def _host_ops_allowed(request: Request) -> bool:
@@ -530,9 +598,9 @@ def create_router(server) -> APIRouter:
         (``LOCAL_OWNER_ONLY``, §16.3): saving a ComfyUI address must not be a
         way round it. A refused request still saves the address; it is logged.
         """
-        client_ip = server.auth.real_client_ip(request)
-        if is_local_or_tailscale_ip(client_ip) or server.auth.allow_remote_host_ops:
+        if _host_local(request):
             return True
+        client_ip = server.auth.real_client_ip(request)
         logger.info(
             "ComfyUI address saved from %s; its model folders are not registered "
             "because host operations are local-only (allow_remote_host_ops is off).",
@@ -565,6 +633,19 @@ def create_router(server) -> APIRouter:
         start_time = time.time()
         logger.debug(f"[TIMING] PATCH /users/me/config called at {start_time:.3f}")
         patch_data = await request.json()
+        refused = [
+            key
+            for key in AI_TOOLKIT_CONFIG_KEYS
+            if isinstance(patch_data, dict) and key in patch_data
+        ]
+        if refused:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{', '.join(refused)} cannot be set here. Save the ai-toolkit "
+                    "checkout and its Python with PUT /api/v1/training/ai-toolkit/config."
+                ),
+            )
         auto_exclusive = (
             patch_data.pop("auto_exclusive_after_oom", None)
             if isinstance(patch_data, dict)
@@ -573,6 +654,41 @@ def create_router(server) -> APIRouter:
         if auto_exclusive is not None and not isinstance(auto_exclusive, bool):
             raise HTTPException(
                 status_code=400, detail="auto_exclusive_after_oom must be true or false"
+            )
+        chip_size = None
+        if isinstance(patch_data, dict) and tag_preferences.CONFIG_KEY in patch_data:
+            # Its own hub table, not the user row. Checked here, before any
+            # write, and stored only once the user row has been saved, so a
+            # PATCH refused for any value saves none of them.
+            require_hub(server, "No hub is attached to keep the chip size in.")
+            try:
+                chip_size = tag_preferences.validate(
+                    patch_data.pop(tag_preferences.CONFIG_KEY)
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        def _refuse_orphaning_a_link(user, value) -> None:
+            """A linked current connection keeps its address (#2194).
+
+            Clearing it would drop the connection with its key still live, and
+            a new address would leave the key bound to the old one. Switching
+            to another listed address leaves the key alone.
+            """
+            current = comfyui_connections.current_id(user)
+            if not comfyui_link_service.link_record(server, current):
+                return
+            if value not in ("", None, "null") and comfyui_connections.is_listed(
+                user, str(value).strip()
+            ):
+                return
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The current ComfyUI is linked with its own key. Remove the "
+                    "connection or edit its address in Settings › ComfyUI, which "
+                    "revokes the key first."
+                ),
             )
 
         def preview_patch(session: Session, user_id: int):
@@ -587,6 +703,8 @@ def create_router(server) -> APIRouter:
             if user is None:
                 raise HTTPException(status_code=404, detail="User not found")
 
+            if isinstance(patch_data, dict) and "comfyui_url" in patch_data:
+                _refuse_orphaning_a_link(user, patch_data["comfyui_url"])
             old_penalised_tags = _resolved_penalised_tags(
                 user.smart_score_penalised_tags
             )
@@ -696,6 +814,8 @@ def create_router(server) -> APIRouter:
         user, updated = server.hub_engine.run_task(
             update_user, user_id, priority=DBPriority.IMMEDIATE
         )
+        if chip_size is not None:
+            tag_preferences.write(server.hub, user_id, chip_size)
         # Keep the process-local owner cache coherent with its new hub home.
         # Background work (notably smart scoring) has no request from which to
         # reload these settings.
@@ -788,6 +908,7 @@ def create_router(server) -> APIRouter:
                     server.hub, user_id, auto_exclusive
                 )
                 updated = True
+        updated = updated or chip_size is not None
         elapsed = time.time() - start_time
         logger.debug(
             f"[TIMING] PATCH /users/me/config completed in {elapsed:.3f} seconds"
@@ -795,7 +916,7 @@ def create_router(server) -> APIRouter:
         return {
             "status": "success",
             "updated": updated,
-            "config": _config_payload(user),
+            "config": _config_payload(user, request),
         }
 
     @router.post(

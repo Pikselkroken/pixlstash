@@ -16,7 +16,8 @@ from types import SimpleNamespace
 import pytest
 
 from pixlstash.hub.db import HubDatabase
-from pixlstash.services import model_downloads
+from pixlstash.routes.workflows import RunGroup, _mark_live_downloads
+from pixlstash.services import comfyui_templates, model_downloads
 from pixlstash.services.model_downloads import (
     STATUS_CANCELLED,
     STATUS_DONE,
@@ -25,8 +26,10 @@ from pixlstash.services.model_downloads import (
     cancel_download,
     digest_source,
     download_source,
+    live_download_source,
     live_downloads,
     start_download,
+    trusted_live_link,
 )
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.services.model_mover import PARTIAL_SUFFIX, SHELF_IO_LOCK
@@ -49,20 +52,25 @@ def serve_bytes(
     length=None,
     encoding=None,
     asked=None,
+    status=200,
+    headers=None,
 ):
     """Serve *body* at a loopback URL; *gate*, when set, holds the second half.
 
     *length* is the Content-Length claimed, the body's own unless given;
     ``-1`` sends none. *encoding* is a Content-Encoding to claim, and *asked*,
-    a list, collects each request's headers.
+    a list, collects each request's headers. *status* and *headers* are the
+    answer's status and any further headers.
     """
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             if asked is not None:
                 asked.append(dict(self.headers))
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", content_type)
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             if encoding:
                 self.send_header("Content-Encoding", encoding)
             if length != -1:
@@ -232,6 +240,32 @@ def test_without_the_comfyui_subfolder_the_file_goes_at_the_top(
     assert (chosen / "flat.safetensors").is_file()
 
 
+@pytest.mark.parametrize(
+    "directory, subfolder",
+    [("vae", "VAE"), ("text_encoders", "TextEncoders"), ("unet", "DiffusionModels")],
+)
+def test_a_launcher_spelled_subfolder_for_the_role_takes_the_file(
+    hub, target, adapter_bytes, linked, directory, subfolder
+):
+    """Stability Matrix spells ComfyUI's folders its own way. The folder is
+    what tells the shelf a VAE of a layout its tensors do not show, so the
+    file goes into it rather than to the top of the download folder."""
+    chosen, _ = target
+    (chosen / "ApproxVAE").mkdir()
+    (chosen / subfolder).mkdir()
+    with serve_bytes(adapter_bytes) as url:
+        linked(url, directory)
+        done = _wait(start_download(hub, "component.safetensors")["id"])
+        # A loader naming the folder itself goes there too, not into a new
+        # folder of the list's spelling beside it.
+        named = _wait(start_download(hub, f"{directory}/named.safetensors")["id"])
+    assert done["status"] == STATUS_DONE, done
+    assert named["status"] == STATUS_DONE, named
+    assert (chosen / subfolder / "component.safetensors").is_file()
+    assert (chosen / subfolder / "named.safetensors").is_file()
+    assert not (chosen / directory).exists()
+
+
 def test_with_no_marked_folder_the_default_folder_takes_it(
     hub, tmp_path, adapter_bytes, linked
 ):
@@ -323,6 +357,92 @@ def test_a_web_page_is_not_saved_as_a_model(hub, target, linked):
     assert done["status"] == STATUS_FAILED
     assert "web page" in done["error"]
     assert os.listdir(chosen) == ["loras"]
+
+
+def test_a_gated_header_from_another_host_is_its_plain_error(hub, target, linked):
+    """Only a Hugging Face link is said to be gated on Hugging Face. Wrong if
+    this loopback host's ``X-Error-Code: GatedRepo`` reads as one, or offers
+    a page."""
+    chosen, _ = target
+    with serve_bytes(
+        b"Access to model a/b is restricted.",
+        content_type="text/plain",
+        status=401,
+        headers={"X-Error-Code": "GatedRepo"},
+    ) as url:
+        linked(url, "loras")
+        done = _wait(start_download(hub, "gated.safetensors")["id"])
+    assert done["status"] == STATUS_FAILED
+    assert done["error"].startswith("401 Client Error"), done["error"]
+    assert done["page_url"] is None
+    assert os.listdir(chosen) == ["loras"]
+
+
+class _Answer:
+    """A response with *status* and *headers*, for `_fetch` to read."""
+
+    def __init__(self, status, headers):
+        self.status_code = status
+        self.headers = headers
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise model_downloads.requests.HTTPError(f"{self.status_code} Error")
+
+
+@pytest.mark.parametrize(
+    "headers, page",
+    [
+        ({"X-Error-Code": "GatedRepo"}, "https://huggingface.co/org/repo"),
+        # Any other 401 (a repository that is not there) is not a licence.
+        ({}, None),
+    ],
+)
+def test_a_gated_hugging_face_file_links_its_model_page(
+    tmp_path, monkeypatch, headers, page
+):
+    """Wrong if a gated file's error is the bare 401, or does not name where
+    the download would have put it, its ComfyUI subfolder included."""
+    url = "https://huggingface.co/org/repo/resolve/main/x.safetensors"
+    monkeypatch.setattr(model_downloads, "_open", lambda u, live: _Answer(401, headers))
+    entry = {"_target": str(tmp_path / "loras" / "x"), "page_url": None}
+    with pytest.raises(
+        model_downloads.requests.HTTPError if page is None else ValueError
+    ) as caught:
+        model_downloads._fetch(url, str(tmp_path / "x.part"), entry, threading.Event())
+    assert entry["page_url"] == page
+    if page:
+        assert str(caught.value).startswith("It is gated on Hugging Face.")
+        assert f"into {tmp_path / 'loras'};" in str(caught.value)
+    assert not (tmp_path / "x.part").exists()
+
+
+@pytest.mark.parametrize(
+    "url, page",
+    [
+        (
+            "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/f.safetensors",
+            "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8",
+        ),
+        (
+            "https://huggingface.co/org/repo/resolve/main/sub/f.safetensors",
+            "https://huggingface.co/org/repo",
+        ),
+        ("https://huggingface.co/resolve/main/f.safetensors", None),
+        ("https://huggingface.co/org/repo/blob/main/f.safetensors", None),
+        ("http://huggingface.co/org/repo/resolve/main/f.safetensors", None),
+        ("https://cdn.hf.co/org/repo/resolve/main/f.safetensors", None),
+        ("https://example.com/org/repo/resolve/main/f.safetensors", None),
+    ],
+)
+def test_the_model_page_is_only_ever_a_hugging_face_repository(url, page):
+    assert model_downloads.model_page(url) == page
 
 
 def test_a_compressed_body_is_asked_against_and_refused(
@@ -872,3 +992,229 @@ def test_a_thread_that_will_not_start_leaves_no_entry_behind(
     with pytest.raises(DownloadRefused) as caught:
         start_download(hub, "unstarted.safetensors")
     assert "already in" in str(caught.value)
+
+
+# A ComfyUI address for the live-template tests; nothing is ever asked there.
+COMFYUI = "http://127.0.0.1:1"
+HF_LINK = "https://huggingface.co/someone/repo/resolve/main/loras/{}"
+
+
+@pytest.fixture
+def live_listing(monkeypatch):
+    """The owner's ComfyUI serves one template linking *files* ``{name: url}``."""
+
+    def serve(files):
+        listing = comfyui_templates.Listing(
+            [
+                comfyui_templates.Template(
+                    module="default",
+                    name="example_edit",
+                    source="builtin",
+                    title="Example edit",
+                    files=[
+                        comfyui_templates.TemplateFile(name, "loras", url)
+                        for name, url in files.items()
+                    ],
+                )
+            ],
+            read_at=0.0,
+        )
+        monkeypatch.setattr(
+            comfyui_templates, "read_listing", lambda url, object_info=None: listing
+        )
+
+    return serve
+
+
+@pytest.mark.parametrize(
+    "name, url, trusted",
+    [
+        ("a.safetensors", HF_LINK.format("a.safetensors"), True),
+        ("a.gguf", HF_LINK.format("a.gguf"), True),
+        ("a.safetensors", "http://huggingface.co/x/a.safetensors", False),
+        ("a.safetensors", "https://example.com/x/a.safetensors", False),
+        ("a.safetensors", "https://huggingface.co.example.com/a.safetensors", False),
+        ("a.safetensors", "https://user@huggingface.co/a.safetensors", False),
+        ("a.safetensors", "https://huggingface.co:8443/a.safetensors", False),
+        # A pickle: loading it runs code, so a live link never fetches one.
+        ("a.pth", HF_LINK.format("a.pth"), False),
+        ("a.ckpt", HF_LINK.format("a.ckpt"), False),
+        ("a.safetensors", None, False),
+    ],
+)
+def test_a_live_template_link_is_taken_only_from_hugging_face(name, url, trusted):
+    assert trusted_live_link(name, url) is trusted
+
+
+def test_a_file_only_the_live_templates_link_is_found_there(live_listing):
+    live_listing(
+        {
+            "Fresh_Edit_LoRA.safetensors": HF_LINK.format(
+                "Fresh_Edit_LoRA.safetensors"
+            ),
+            "elsewhere.safetensors": "https://example.com/elsewhere.safetensors",
+        }
+    )
+    assert download_source("fresh_edit_lora.safetensors") is None
+    found = live_download_source("loras/fresh_edit_lora.safetensors", COMFYUI, {})
+    assert found == {
+        "url": HF_LINK.format("Fresh_Edit_LoRA.safetensors"),
+        "directory": "loras",
+        "sha256": None,
+        "live": True,
+    }
+    assert live_download_source("elsewhere.safetensors", COMFYUI, {}) is None
+    assert live_download_source("fresh_edit_lora.safetensors", None, {}) is None
+
+
+def test_no_live_templates_is_no_live_link(monkeypatch):
+    def unavailable(url, object_info=None):
+        raise comfyui_templates.TemplatesUnavailable("nothing answers")
+
+    monkeypatch.setattr(comfyui_templates, "read_listing", unavailable)
+    assert live_download_source("fresh.safetensors", COMFYUI, {}) is None
+
+
+def test_no_templates_are_asked_while_comfyui_is_down(monkeypatch):
+    def never(url, object_info=None):
+        raise AssertionError("asked a ComfyUI that is not answering")
+
+    monkeypatch.setattr(comfyui_templates, "read_listing", never)
+    assert live_download_source("fresh.safetensors", COMFYUI, None) is None
+
+
+def test_a_download_falls_back_to_the_live_templates(hub, target, live_listing):
+    chosen, _ = target
+    live_listing({"fresh.safetensors": HF_LINK.format("fresh.safetensors")})
+    # Already there: refused only after a link was found, so nothing is fetched.
+    (chosen / "loras" / "fresh.safetensors").write_bytes(b"x")
+    with pytest.raises(DownloadRefused) as caught:
+        start_download(hub, "fresh.safetensors", comfyui_url=COMFYUI, object_info={})
+    assert caught.value.status_code == 409
+    with pytest.raises(DownloadRefused) as caught:
+        start_download(hub, "fresh.safetensors")
+    assert caught.value.status_code == 404
+    assert live_downloads() == []
+
+
+def test_the_preflight_marks_what_only_the_live_templates_link(live_listing):
+    live_listing({"fresh.safetensors": HF_LINK.format("fresh.safetensors")})
+    group = RunGroup(
+        reasons=[
+            {
+                "code": MISSING_MODELS,
+                "models": [
+                    {"file": "fresh.safetensors", "folder": "loras"},
+                    {"file": "own_merge.safetensors", "folder": "checkpoints"},
+                    # Named by digest: a live template has none to match.
+                    {"file": "fresh.safetensors", "sha256": "ab" * 32},
+                ],
+            }
+        ],
+        bypassed_loras=[
+            {"file": "fresh.safetensors", "requested": False},
+            {"file": "fresh.safetensors", "requested": True},
+        ],
+    )
+    _mark_live_downloads([group], COMFYUI, object_info={})
+    models = group.reasons[0]["models"]
+    assert [model.get("downloadable") for model in models] == [True, None, None]
+    assert [lora.get("downloadable") for lora in group.bypassed_loras] == [True, None]
+
+
+def test_the_preflight_asks_no_templates_while_comfyui_is_down(monkeypatch):
+    def never(url, object_info=None):
+        raise AssertionError("asked a ComfyUI that is not answering")
+
+    monkeypatch.setattr(comfyui_templates, "read_listing", never)
+    group = RunGroup(bypassed_loras=[{"file": "fresh.safetensors"}])
+    _mark_live_downloads([group], COMFYUI, object_info=None)
+    assert "downloadable" not in group.bypassed_loras[0]
+
+
+@pytest.mark.parametrize(
+    "url, allowed",
+    [
+        ("https://huggingface.co/a/b/resolve/main/x.safetensors", True),
+        ("https://us.aws.cdn.hf.co/xet-bridge-us/abc", True),
+        ("https://cdn-lfs.huggingface.co/repos/abc", True),
+        ("http://us.aws.cdn.hf.co/abc", False),
+        ("https://example.com/abc", False),
+        ("https://hf.co.example.com/abc", False),
+        ("https://evilhf.co/abc", False),
+        ("https://user@cdn.hf.co/abc", False),
+        ("https://cdn.hf.co:8443/abc", False),
+    ],
+)
+def test_a_live_link_may_only_hop_within_hugging_face(url, allowed):
+    assert model_downloads._live_hop(url) is allowed
+
+
+class _Hop:
+    """A response that redirects to *location*, or ends with *location* None."""
+
+    def __init__(self, location=None):
+        self.is_redirect = location is not None
+        self.headers = {"Location": location} if location else {}
+
+    def close(self):
+        pass
+
+
+def test_a_live_link_redirected_off_hugging_face_is_never_asked(monkeypatch):
+    asked = []
+    hops = {
+        "https://huggingface.co/a/resolve/main/x.safetensors": "/b/resolve/main/x.safetensors",
+        "https://huggingface.co/b/resolve/main/x.safetensors": "https://example.com/x",
+    }
+
+    def get(url, **kwargs):
+        assert kwargs["allow_redirects"] is False
+        asked.append(url)
+        return _Hop(hops.get(url))
+
+    monkeypatch.setattr(model_downloads.requests, "get", get)
+    with pytest.raises(ValueError, match="example.com"):
+        model_downloads._open(
+            "https://huggingface.co/a/resolve/main/x.safetensors", live=True
+        )
+    assert asked == list(hops)
+
+
+def test_a_live_link_redirected_to_the_hugging_face_cdn_is_followed(monkeypatch):
+    asked = []
+    hops = {
+        "https://huggingface.co/a/resolve/main/x.safetensors": "https://us.aws.cdn.hf.co/x",
+    }
+
+    def get(url, **kwargs):
+        asked.append(url)
+        return _Hop(hops.get(url))
+
+    monkeypatch.setattr(model_downloads.requests, "get", get)
+    final = model_downloads._open(
+        "https://huggingface.co/a/resolve/main/x.safetensors", live=True
+    )
+    assert not final.is_redirect
+    assert asked == [*hops, "https://us.aws.cdn.hf.co/x"]
+
+
+def test_a_live_source_reaches_the_fetch_as_live(
+    hub, target, live_listing, monkeypatch
+):
+    live_listing({"fresh.safetensors": HF_LINK.format("fresh.safetensors")})
+    seen = threading.Event()
+    calls = []
+
+    def fetch(url, partial, entry, cancel, live=False):
+        calls.append((url, live))
+        seen.set()
+        raise ValueError("not fetched in a test")
+
+    monkeypatch.setattr(model_downloads, "_fetch", fetch)
+    entry = start_download(
+        hub, "fresh.safetensors", comfyui_url=COMFYUI, object_info={}
+    )
+    assert seen.wait(5)
+    _wait(entry["id"])
+    assert calls == [(HF_LINK.format("fresh.safetensors"), True)]

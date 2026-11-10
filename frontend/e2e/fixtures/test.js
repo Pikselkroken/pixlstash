@@ -3,13 +3,14 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GridPage } from '../pages/GridPage.js'
-import { ImageOverlay } from '../pages/ImageOverlay.js'
+import { Lightbox } from '../pages/Lightbox.js'
 import { SettingsDialog } from '../pages/SettingsDialog.js'
 import { SideBar } from '../pages/SideBar.js'
 import { ShareDialog } from '../pages/ShareDialog.js'
 import { ReviewSessions } from '../pages/ReviewSessions.js'
 import { NoticeHost } from '../pages/NoticeHost.js'
 import { DuplicateQueuePage } from '../pages/DuplicateQueuePage.js'
+import { WorkflowsPage } from '../pages/WorkflowsPage.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const TOKEN_PATH = resolve(__dirname, '../.auth/token.json')
@@ -166,6 +167,14 @@ export const test = base.extend({
     await use(context)
   },
 
+  // A spec's route handler that passes a poll through (`route.fetch()`) can
+  // still be waiting on the server when the test ends: the context closes
+  // under it and the test fails after it passed. Drop the handlers first.
+  page: async ({ page }, use) => {
+    await use(page)
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  },
+
   // The minted credentials object: { token, username, password }.
   // Playwright resolves a fixture's dependencies by parsing this destructuring
   // pattern, so a fixture that needs none must still be written `({}, use)`.
@@ -193,8 +202,8 @@ export const test = base.extend({
   grid: async ({ page }, use) => {
     await use(new GridPage(page))
   },
-  overlay: async ({ page }, use) => {
-    await use(new ImageOverlay(page))
+  lightbox: async ({ page }, use) => {
+    await use(new Lightbox(page))
   },
   settings: async ({ page }, use) => {
     await use(new SettingsDialog(page))
@@ -213,6 +222,10 @@ export const test = base.extend({
   // over it, and shares none of its selectors.
   duplicates: async ({ page }, use) => {
     await use(new DuplicateQueuePage(page))
+  },
+  // The Workflows screen: its card grid, a card's verb menu and the rail.
+  workflows: async ({ page }, use) => {
+    await use(new WorkflowsPage(page))
   },
   // The notice surface (NoticeHost.vue). Call `notices.installHooks()` BEFORE
   // the first navigation — the store seam is an addInitScript.

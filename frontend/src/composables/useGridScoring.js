@@ -4,6 +4,7 @@ import {
   applyScores,
   getGuestScores,
   listPicturesByIds,
+  setPicturesFavourite,
   submitGuestScores,
 } from "../api/pictures";
 import { getPictureId } from "../utils/media.js";
@@ -27,7 +28,6 @@ import { errorDetail } from "../utils/apiError";
  * @param {Object} deps - Grid state and callbacks, same shape as useGridFetch's.
  */
 export function useGridScoring({
-  backendUrl,
   allGridImages,
   lastFetchedGridImages,
   loadedRanges,
@@ -35,8 +35,8 @@ export function useGridScoring({
   visibleEnd,
   renderBuffer,
   imagesLoading,
-  overlayOpen,
-  pendingOverlayGridRefresh,
+  lightboxOpen,
+  pendingLightboxGridRefresh,
   preserveScrollOnNextFetch,
   skipNextWsRefresh,
   gridContainer,
@@ -176,7 +176,7 @@ export function useGridScoring({
     // Kept only as a fallback / explicit refresh. The main listing
     // (GET /pictures) now overlays guest scores onto img.score server-side.
     try {
-      const resp = await getGuestScores({ baseUrl: backendUrl });
+      const resp = await getGuestScores();
       const scores = resp?.scores ?? {};
       const map = new Map();
       for (const [k, v] of Object.entries(scores)) {
@@ -452,11 +452,11 @@ export function useGridScoring({
     // (the backend has no character context to compute it there). gridImageSortKey
     // therefore falls through to `score` and would splice the card at the wrong
     // position. Fall back to a full refetch, which DOES recompute likeness - or,
-    // under an open overlay, defer it (the overlay-open deferral contract, §9.1)
+    // under an open lightbox, defer it (the lightbox-open deferral contract, §9.1)
     // so we never restructure the filmstrip mid-view.
     if (isCharacterLikenessSortActive()) {
-      if (overlayOpen.value) {
-        pendingOverlayGridRefresh.value = true;
+      if (lightboxOpen.value) {
+        pendingLightboxGridRefresh.value = true;
         return;
       }
       preserveScrollOnNextFetch.value = true;
@@ -670,17 +670,17 @@ export function useGridScoring({
       });
 
       if (isScoreSortActive()) {
-        if (overlayOpen.value) {
-          // Reordering the grid while the overlay is open would break the
-          // filmstrip. Defer the reposition until the overlay closes.
-          pendingOverlayGridRefresh.value = true;
+        if (lightboxOpen.value) {
+          // Reordering the grid while the lightbox is open would break the
+          // filmstrip. Defer the reposition until the lightbox closes.
+          pendingLightboxGridRefresh.value = true;
         } else {
           repositionImageByScore(imageId, newScore);
         }
       }
       if (isCharacterLikenessSortActive()) {
-        if (overlayOpen.value) {
-          pendingOverlayGridRefresh.value = true;
+        if (lightboxOpen.value) {
+          pendingLightboxGridRefresh.value = true;
           return;
         }
         preserveScrollOnNextFetch.value = true;
@@ -688,8 +688,8 @@ export function useGridScoring({
         return;
       }
       if (isSmartScoreSortActive()) {
-        if (overlayOpen.value) {
-          pendingOverlayGridRefresh.value = true;
+        if (lightboxOpen.value) {
+          pendingLightboxGridRefresh.value = true;
           return;
         }
         preserveScrollOnNextFetch.value = true;
@@ -733,10 +733,75 @@ export function useGridScoring({
     });
   }
 
+  // FAVOURITES
+  // ============================================================
+  // Drawn at once and put back with a notice if the server refuses. The WS
+  // echo is skipped like a score's: the change is already on the cards.
+  // Resolves false when nothing was stored, so a caller holding its own copy
+  // (the lightbox) can put its heart back too.
+  async function setFavourite(imageIds, on) {
+    const keys = new Set(
+      (imageIds ?? []).map((id) => getPictureId(id)).filter((id) => id !== null),
+    );
+    if (!keys.size || isReadOnly.value) return false;
+    const before = new Map();
+    for (const img of allGridImages.value) {
+      const key = getPictureId(img?.id);
+      if (keys.has(key)) before.set(key, Boolean(img.favourite));
+    }
+    const mark = (valueOf) => {
+      const apply = (images) =>
+        images.map((img) => {
+          const key = getPictureId(img?.id);
+          return keys.has(key) ? { ...img, favourite: valueOf(key) } : img;
+        });
+      if (Array.isArray(lastFetchedGridImages.value)) {
+        lastFetchedGridImages.value = apply(lastFetchedGridImages.value);
+      }
+      allGridImages.value = apply(allGridImages.value);
+    };
+    mark(() => on);
+    skipNextWsRefresh.value = true;
+    try {
+      const body = await setPicturesFavourite([...keys].map(Number), on);
+      // Nothing changed (already so, or in the Scrapheap): no WS echo comes
+      // back to consume the skip, and it would eat the next real refresh.
+      if (!body?.updated_ids?.length) skipNextWsRefresh.value = false;
+    } catch (e) {
+      console.error("Failed to set favourite", [...keys], on, e);
+      skipNextWsRefresh.value = false;
+      mark((key) => before.get(key) ?? !on);
+      noticeStore.error(
+        `Couldn't ${on ? "favourite" : "unfavourite"} that. ${errorDetail(e)}`,
+        { key: "favourite-set" },
+      );
+      return false;
+    }
+    // "Favourites only" is the one view an unfavourite throws a picture out of.
+    if (!on && filterStore.favouriteOnlyFilter && removeImagesById) {
+      removeImagesById([...keys]);
+    }
+    // The sidebar's Favourites row carries a count, as a score's rows do.
+    emit("refresh-sidebar");
+    return true;
+  }
+
+  /** Favourite a mixed selection, unfavourite one that is all favourites. */
+  function toggleFavourite(imageIds) {
+    const keys = new Set((imageIds ?? []).map((id) => getPictureId(id)));
+    const rows = allGridImages.value.filter((img) =>
+      keys.has(getPictureId(img?.id)),
+    );
+    const allFavourite = rows.length > 0 && rows.every((img) => img.favourite);
+    return setFavourite(imageIds, !allFavourite);
+  }
+
   // ============================================================
 
   return {
     setScore,
+    setFavourite,
+    toggleFavourite,
     setGuestScore,
     handleGuestConsentAccepted,
     handleGuestConsentRejected,

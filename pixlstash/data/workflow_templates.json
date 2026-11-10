@@ -1,6 +1,6 @@
 {
  "source": "comfyui-workflow-templates-json",
- "version": "0.1.117",
+ "version": "0.1.129",
  "templates": [
   {
    "name": "3d_hunyuan3d-v2.1",
@@ -19,7 +19,7 @@
    "min_comfyui_version": "0.3.28",
    "requires_custom_nodes": false,
    "size": 4939212390,
-   "usage": 158,
+   "usage": 163,
    "files": [
     {
      "name": "hunyuan_3d_v2.1.safetensors",
@@ -46,7 +46,7 @@
    "min_comfyui_version": "0.3.28",
    "requires_custom_nodes": false,
    "size": 4939212390,
-   "usage": 32,
+   "usage": 51,
    "files": [
     {
      "name": "hunyuan3d-dit-v2_fp16.safetensors",
@@ -73,7 +73,7 @@
    "min_comfyui_version": "0.3.28",
    "requires_custom_nodes": false,
    "size": 4928474972,
-   "usage": 104,
+   "usage": 59,
    "files": [
     {
      "name": "hunyuan3d-dit-v2-mv_fp16.safetensors",
@@ -100,13 +100,64 @@
    "min_comfyui_version": "0.3.28",
    "requires_custom_nodes": false,
    "size": 4928474972,
-   "usage": 14,
+   "usage": 29,
    "files": [
     {
      "name": "hunyuan3d-dit-v2-mv-turbo_fp16.safetensors",
      "url": "https://huggingface.co/Comfy-Org/hunyuan3D_2.0_repackaged/resolve/main/split_files/hunyuan3d-dit-v2-mv-turbo_fp16.safetensors",
      "directory": "checkpoints",
      "sha256": "172d7a989b99f66af760da0080d8c6f6350c72609536cf0c55b87a4afa574e45"
+    }
+   ]
+  },
+  {
+   "name": "3d_idol_image_to_gaussian_splat",
+   "title": "Idol: Image to Gaussian Splat",
+   "description": "Turn a single image into a 3D Gaussian splat with Idol, Comfy-Org's fine-tune of TripoSplat: BiRefNet removes the backdrop, DINOv3 and the Flux2 VAE encode the view, and one pass decodes a 262k-point splat. Exports a .spz splat, an orbit preview and an experimental .glb mesh. Best on stylized characters and props.",
+   "kind": "3d",
+   "tags": [
+    "3D",
+    "Image to 3D"
+   ],
+   "models": [
+    "Idol",
+    "TripoSplat"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.23.0",
+   "requires_custom_nodes": false,
+   "size": 3758096384,
+   "usage": 20,
+   "files": [
+    {
+     "name": "birefnet.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors",
+     "directory": "background_removal",
+     "sha256": "9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154"
+    },
+    {
+     "name": "dino_v3_vit_h_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Idol/resolve/main/clip_vision/dino_v3_vit_h_bf16.safetensors",
+     "directory": "clip_vision",
+     "sha256": "a29ef35101a16966972a0d50732a6f3a608ff7cfffb2afa9bbe9007cb842cc53"
+    },
+    {
+     "name": "idol_decoder_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Idol/resolve/main/vae/idol_decoder_fp16.safetensors",
+     "directory": "vae",
+     "sha256": "6a146a1e6b2653f74422f7ea835eb8715c547c7de8fc4545051f15c247ae54a9"
+    },
+    {
+     "name": "flux2-vae.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Idol/resolve/main/vae/flux2-vae.safetensors",
+     "directory": "vae",
+     "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
+    },
+    {
+     "name": "idol_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Idol/resolve/main/diffusion_models/idol_fp16.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "9abf6a99fc6bdad701901b12de8fe1b256f02cae4948f7489d25d86b11b52a93"
     }
    ]
   },
@@ -126,7 +177,7 @@
    "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 644245094,
-   "usage": 20,
+   "usage": 31,
    "files": [
     {
      "name": "moge_2_vitl_normal_fp16.safetensors",
@@ -152,7 +203,7 @@
    "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 644245094,
-   "usage": 54,
+   "usage": 83,
    "files": [
     {
      "name": "moge_2_vitl_normal_fp16.safetensors",
@@ -179,7 +230,7 @@
    "min_comfyui_version": "0.35.0",
    "requires_custom_nodes": false,
    "size": 9341553869,
-   "usage": 294,
+   "usage": 235,
    "files": [
     {
      "name": "trellis_2_texture_vae_bf16.safetensors",
@@ -231,7 +282,7 @@
    "min_comfyui_version": "0.34.0",
    "requires_custom_nodes": false,
    "size": 15354508083,
-   "usage": 818,
+   "usage": 831,
    "files": [
     {
      "name": "trellis_2_texture_vae_bf16.safetensors",
@@ -293,7 +344,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 3972844749,
-   "usage": 291,
+   "usage": 198,
    "files": [
     {
      "name": "birefnet.safetensors",
@@ -342,7 +393,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 37044092928,
-   "usage": 24,
+   "usage": 11,
    "files": [
     {
      "name": "capybara_v0.1.safetensors",
@@ -478,7 +529,7 @@
    "min_comfyui_version": "0.12.0",
    "requires_custom_nodes": false,
    "size": 19864223744,
-   "usage": 75,
+   "usage": 72,
    "files": [
     {
      "name": "acestep_v1.5_xl_sft_bf16.safetensors",
@@ -522,7 +573,7 @@
    "min_comfyui_version": "0.12.0",
    "requires_custom_nodes": false,
    "size": 19864223744,
-   "usage": 202,
+   "usage": 244,
    "files": [
     {
      "name": "acestep_v1.5_xl_turbo_bf16.safetensors",
@@ -567,7 +618,7 @@
    "min_comfyui_version": "0.12.0",
    "requires_custom_nodes": false,
    "size": 10737418240,
-   "usage": 90,
+   "usage": 112,
    "files": [
     {
      "name": "ace_step_1.5_turbo_aio.safetensors",
@@ -594,7 +645,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 10737418240,
-   "usage": 33,
+   "usage": 34,
    "files": [
     {
      "name": "acestep_v1.5_turbo.safetensors",
@@ -639,7 +690,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 14710262989,
-   "usage": 37,
+   "usage": 79,
    "files": [
     {
      "name": "acestep_v1.5_turbo.safetensors",
@@ -684,7 +735,7 @@
    "min_comfyui_version": "0.35.2",
    "requires_custom_nodes": false,
    "size": 9985798963,
-   "usage": 13,
+   "usage": 65,
    "files": [
     {
      "name": "qwen_0.6b_ace15.safetensors",
@@ -728,7 +779,7 @@
    "min_comfyui_version": "0.3.35",
    "requires_custom_nodes": false,
    "size": 7698728878,
-   "usage": 19,
+   "usage": 35,
    "files": [
     {
      "name": "ace_step_v1_3.5b.safetensors",
@@ -754,7 +805,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 7698728878,
-   "usage": 11,
+   "usage": 13,
    "files": [
     {
      "name": "ace_step_v1_3.5b.safetensors",
@@ -806,7 +857,7 @@
    "min_comfyui_version": "0.33.1",
    "requires_custom_nodes": false,
    "size": 15354508083,
-   "usage": 523,
+   "usage": 645,
    "files": [
     {
      "name": "minimax_music3_dit_fp16.safetensors",
@@ -843,7 +894,7 @@
    "min_comfyui_version": "0.19.2",
    "requires_custom_nodes": false,
    "size": 15676630630,
-   "usage": 291,
+   "usage": 183,
    "files": [
     {
      "name": "qwen3.5_2b_bf16.safetensors",
@@ -880,7 +931,7 @@
    "min_comfyui_version": "0.19.2",
    "requires_custom_nodes": false,
    "size": 15891378995,
-   "usage": 260,
+   "usage": 41,
    "files": [
     {
      "name": "qwen3.5_2b_bf16.safetensors",
@@ -919,7 +970,7 @@
    "min_comfyui_version": "0.3.35",
    "requires_custom_nodes": false,
    "size": 5690831667,
-   "usage": 27,
+   "usage": 32,
    "files": [
     {
      "name": "stable-audio-open-1.0.safetensors",
@@ -1008,7 +1059,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 20723217203,
-   "usage": 2,
+   "usage": 14,
    "files": [
     {
      "name": "pixel_art_style_z_image_turbo.safetensors",
@@ -1053,7 +1104,7 @@
    "min_comfyui_version": "0.3.57",
    "requires_custom_nodes": false,
    "size": 18575733555,
-   "usage": 303,
+   "usage": 214,
    "files": [
     {
      "name": "flux1-dev-fp8.safetensors",
@@ -1098,7 +1149,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 22226455757,
-   "usage": 214,
+   "usage": 105,
    "files": [
     {
      "name": "clip_l.safetensors",
@@ -1143,7 +1194,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 34177202258,
-   "usage": 45,
+   "usage": 151,
    "files": [
     {
      "name": "clip_l.safetensors",
@@ -1188,7 +1239,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 35433480192,
-   "usage": 24,
+   "usage": 20,
    "files": [
     {
      "name": "vae-ft-mse-840000-ema-pruned.safetensors",
@@ -1251,7 +1302,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 34144990003,
-   "usage": 196,
+   "usage": 152,
    "files": [
     {
      "name": "ae.safetensors",
@@ -1296,7 +1347,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 34144990003,
-   "usage": 183,
+   "usage": 178,
    "files": [
     {
      "name": "ae.safetensors",
@@ -1341,7 +1392,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 34144990003,
-   "usage": 447,
+   "usage": 564,
    "files": [
     {
      "name": "clip_l.safetensors",
@@ -1386,7 +1437,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 10372346020,
-   "usage": 138,
+   "usage": 144,
    "files": [
     {
      "name": "clip_l.safetensors",
@@ -1430,7 +1481,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 17609365914,
-   "usage": 280,
+   "usage": 262,
    "files": [
     {
      "name": "ae.safetensors",
@@ -1475,7 +1526,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 35154307318,
-   "usage": 18,
+   "usage": 20,
    "files": [
     {
      "name": "flux1-dev.safetensors",
@@ -1532,7 +1583,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 17233556275,
-   "usage": 31,
+   "usage": 35,
    "files": [
     {
      "name": "flux1-schnell-fp8.safetensors",
@@ -1559,7 +1610,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 34144990003,
-   "usage": 62,
+   "usage": 48,
    "files": [
     {
      "name": "ae.safetensors",
@@ -1603,7 +1654,7 @@
    "min_comfyui_version": "0.3.45",
    "requires_custom_nodes": false,
    "size": 50465865728,
-   "usage": 65,
+   "usage": 36,
    "files": [
     {
      "name": "hidream_e1_1_bf16.safetensors",
@@ -1659,7 +1710,7 @@
    "min_comfyui_version": "0.3.29",
    "requires_custom_nodes": false,
    "size": 34252364186,
-   "usage": 18,
+   "usage": 19,
    "files": [
     {
      "name": "hidream_e1_full_bf16.safetensors",
@@ -1715,7 +1766,7 @@
    "min_comfyui_version": "0.3.29",
    "requires_custom_nodes": false,
    "size": 33285996544,
-   "usage": 22,
+   "usage": 17,
    "files": [
     {
      "name": "ae.safetensors",
@@ -1928,7 +1979,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 50787988275,
-   "usage": 36,
+   "usage": 52,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -1972,7 +2023,7 @@
    "min_comfyui_version": "0.16.0",
    "requires_custom_nodes": false,
    "size": 5798205850,
-   "usage": 574,
+   "usage": 734,
    "files": [
     {
      "name": "qwen_3_06b_base.safetensors",
@@ -2016,7 +2067,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 5798205850,
-   "usage": 10,
+   "usage": 38,
    "files": [
     {
      "name": "qwen_3_06b_base.safetensors",
@@ -2121,7 +2172,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 5798205850,
-   "usage": 14,
+   "usage": 64,
    "files": [
     {
      "name": "qwen_3_06b_base.safetensors",
@@ -2171,7 +2222,7 @@
    "min_comfyui_version": "0.11.0",
    "requires_custom_nodes": false,
    "size": 5583457485,
-   "usage": 201,
+   "usage": 270,
    "files": [
     {
      "name": "qwen_3_06b_base.safetensors",
@@ -2208,7 +2259,7 @@
    "min_comfyui_version": "0.26.0",
    "requires_custom_nodes": false,
    "size": 21260088115,
-   "usage": 33,
+   "usage": 27,
    "files": [
     {
      "name": "boogu_image_edit_fp8_scaled.safetensors",
@@ -2284,7 +2335,7 @@
    "min_comfyui_version": "0.26.0",
    "requires_custom_nodes": false,
    "size": 21260088115,
-   "usage": 32,
+   "usage": 13,
    "files": [
     {
      "name": "qwen3vl_8b_fp8_scaled.safetensors",
@@ -2322,7 +2373,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 24159191040,
-   "usage": 14,
+   "usage": 19,
    "files": [
     {
      "name": "t5xxl_fp8_e4m3fn_scaled.safetensors",
@@ -2355,7 +2406,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 23300197581,
-   "usage": 47,
+   "usage": 107,
    "files": [
     {
      "name": "ae.safetensors",
@@ -2394,7 +2445,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 41446434406,
-   "usage": 19,
+   "usage": 32,
    "files": [
     {
      "name": "wan_2.1_vae.safetensors",
@@ -2443,7 +2494,7 @@
    "min_comfyui_version": "0.15.0",
    "requires_custom_nodes": false,
    "size": 25984552141,
-   "usage": 55,
+   "usage": 54,
    "files": [
     {
      "name": "ernie-image.safetensors",
@@ -2487,7 +2538,7 @@
    "min_comfyui_version": "0.15.0",
    "requires_custom_nodes": false,
    "size": 25984552141,
-   "usage": 48,
+   "usage": 28,
    "files": [
     {
      "name": "ernie-image-turbo.safetensors",
@@ -2516,6 +2567,94 @@
    ]
   },
   {
+   "name": "image_fibo2_edit_dev_pe",
+   "title": "Fibo 2.0 Dev: Image Edit",
+   "description": "Same graph as the Turbo template loaded with the full non-distilled Fibo 2.0 Dev weights: 50 steps at CFG 5 with Bria's structured negative, for the cleanest edits when sampling time is not the constraint. The optional prompt enhancer rewrites the instruction into a structured caption; switch it off to sample the raw prompt.",
+   "kind": "edit",
+   "tags": [
+    "Image Edit",
+    "Int8"
+   ],
+   "models": [
+    "Fibo 2.0"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.43.0",
+   "requires_custom_nodes": false,
+   "size": 26971291510,
+   "usage": 0,
+   "files": [
+    {
+     "name": "fibo2_dev_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Fibo-2.0/resolve/main/diffusion_models/fibo2_dev_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "063dd397395809fd22234c6bd32932cfcb22619f4d2282bdbf1dc58c406fe325"
+    },
+    {
+     "name": "qwen3vl_4b_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Fibo-2.0/resolve/main/text_encoders/qwen3vl_4b_bf16.safetensors",
+     "directory": "text_encoders",
+     "sha256": "36f3ff447ef59201722e8f9ce6020c9819fdcfba6aa2608c4e09b1c0ce114e34"
+    },
+    {
+     "name": "flux2-vae.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Fibo-2.0/resolve/main/vae/flux2-vae.safetensors",
+     "directory": "vae",
+     "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
+    },
+    {
+     "name": "qwen3vl_8b_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Qwen3-VL/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+     "directory": "text_encoders",
+     "sha256": "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f"
+    }
+   ]
+  },
+  {
+   "name": "image_fibo2_edit_turbo_pe",
+   "title": "Fibo 2.0 Turbo: Image Edit",
+   "description": "Edit an image with local open-weights Fibo 2.0 Edit Turbo (int8) and an optional prompt enhancer: a local vision LLM reads the reference image and rewrites your instruction into the structured caption Fibo 2.0 was trained on before TextEncodeFibo2 samples 4 steps at CFG 1. Switch the enhancer off to feed your raw prompt, and compare the result against the source in the built-in image compare node. Ideal for fast instruction-based retouches that keep identity and composition.",
+   "kind": "edit",
+   "tags": [
+    "Image Edit",
+    "Int8"
+   ],
+   "models": [
+    "Fibo 2.0"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.43.0",
+   "requires_custom_nodes": false,
+   "size": 26950919782,
+   "usage": 0,
+   "files": [
+    {
+     "name": "fibo2_edit_turbo_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Fibo-2.0/resolve/main/diffusion_models/fibo2_edit_turbo_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "1f6fa7c499191f405467123f655f11762661eaa5bd479d1da8f161398ef72c3b"
+    },
+    {
+     "name": "qwen3vl_4b_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Fibo-2.0/resolve/main/text_encoders/qwen3vl_4b_bf16.safetensors",
+     "directory": "text_encoders",
+     "sha256": "36f3ff447ef59201722e8f9ce6020c9819fdcfba6aa2608c4e09b1c0ce114e34"
+    },
+    {
+     "name": "flux2-vae.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Fibo-2.0/resolve/main/vae/flux2-vae.safetensors",
+     "directory": "vae",
+     "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
+    },
+    {
+     "name": "qwen3vl_8b_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Qwen3-VL/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+     "directory": "text_encoders",
+     "sha256": "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f"
+    }
+   ]
+  },
+  {
    "name": "image_firered_image_edit1_1",
    "title": "FireRed Image Edit 1.1: Image Edit",
    "description": "Upload an image and a text prompt to edit it. Generate a modified image with enhanced identity consistency, multi-element fusion, or professional photo restoration.",
@@ -2530,7 +2669,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 51324859187,
-   "usage": 441,
+   "usage": 762,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -2575,7 +2714,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 22333829939,
-   "usage": 49,
+   "usage": 79,
    "files": [
     {
      "name": "ae.safetensors",
@@ -2627,7 +2766,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 74088185856,
-   "usage": 2075,
+   "usage": 904,
    "files": [
     {
      "name": "full_encoder_small_decoder.safetensors",
@@ -2673,7 +2812,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 56586194125,
-   "usage": 37,
+   "usage": 100,
    "files": [
     {
      "name": "flux2-vae.safetensors",
@@ -2756,7 +2895,7 @@
    "min_comfyui_version": "0.3.72",
    "requires_custom_nodes": false,
    "size": 17072495002,
-   "usage": 326,
+   "usage": 282,
    "files": [
     {
      "name": "flux-2-klein-base-4b-fp8.safetensors",
@@ -2795,7 +2934,7 @@
    "min_comfyui_version": "0.3.72",
    "requires_custom_nodes": false,
    "size": 12455405158,
-   "usage": 395,
+   "usage": 300,
    "files": [
     {
      "name": "flux-2-klein-4b-fp8.safetensors",
@@ -2834,7 +2973,7 @@
    "min_comfyui_version": "0.3.72",
    "requires_custom_nodes": false,
    "size": 19327352832,
-   "usage": 1152,
+   "usage": 727,
    "files": [
     {
      "name": "flux-2-klein-base-9b-fp8.safetensors",
@@ -2872,7 +3011,7 @@
    "min_comfyui_version": "0.3.72",
    "requires_custom_nodes": false,
    "size": 19112604467,
-   "usage": 69,
+   "usage": 56,
    "files": [
     {
      "name": "flux-2-klein-9b-fp8.safetensors",
@@ -2910,7 +3049,7 @@
    "min_comfyui_version": "0.3.72",
    "requires_custom_nodes": false,
    "size": 17072495002,
-   "usage": 198,
+   "usage": 108,
    "files": [
     {
      "name": "flux-2-klein-base-4b.safetensors",
@@ -2955,7 +3094,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 71403831296,
-   "usage": 412,
+   "usage": 403,
    "files": [
     {
      "name": "full_encoder_small_decoder.safetensors",
@@ -3000,7 +3139,7 @@
    "min_comfyui_version": "0.3.72",
    "requires_custom_nodes": false,
    "size": 19219978650,
-   "usage": 367,
+   "usage": 244,
    "files": [
     {
      "name": "flux-2-klein-base-9b-fp8.safetensors",
@@ -3036,7 +3175,7 @@
    "min_comfyui_version": "0.41.0",
    "requires_custom_nodes": false,
    "size": 21474836480,
-   "usage": 654,
+   "usage": 614,
    "files": [
     {
      "name": "flux3-image-klein-int8-convrot.safetensors",
@@ -3075,7 +3214,7 @@
    "min_comfyui_version": "0.41.0",
    "requires_custom_nodes": false,
    "size": 22226455757,
-   "usage": 302,
+   "usage": 211,
    "files": [
     {
      "name": "qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors",
@@ -3114,7 +3253,7 @@
    "min_comfyui_version": "0.41.0",
    "requires_custom_nodes": false,
    "size": 21474836480,
-   "usage": 916,
+   "usage": 1262,
    "files": [
     {
      "name": "qwen3vl_4b_int8_convrot.safetensors",
@@ -3153,7 +3292,7 @@
    "min_comfyui_version": "0.41.0",
    "requires_custom_nodes": false,
    "size": 21474836480,
-   "usage": 1211,
+   "usage": 1394,
    "files": [
     {
      "name": "qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors",
@@ -3193,7 +3332,7 @@
    "min_comfyui_version": "0.21.1",
    "requires_custom_nodes": false,
    "size": 25447681229,
-   "usage": 39,
+   "usage": 20,
    "files": [
     {
      "name": "hidream_o1_image_bf16.safetensors",
@@ -3225,7 +3364,7 @@
    "min_comfyui_version": "0.21.1",
    "requires_custom_nodes": false,
    "size": 17072495002,
-   "usage": 19,
+   "usage": 24,
    "files": [
     {
      "name": "hidream_o1_image_dev_fp8_scaled.safetensors",
@@ -3256,7 +3395,7 @@
    "min_comfyui_version": "0.24.0",
    "requires_custom_nodes": false,
    "size": 26521423053,
-   "usage": 88,
+   "usage": 26,
    "files": [
     {
      "name": "flux2-vae.safetensors",
@@ -3300,7 +3439,7 @@
    "min_comfyui_version": "0.24.0",
    "requires_custom_nodes": false,
    "size": 30064771072,
-   "usage": 23,
+   "usage": 24,
    "files": [
     {
      "name": "flux2-vae.safetensors",
@@ -3345,7 +3484,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 26736171418,
-   "usage": 10,
+   "usage": 12,
    "files": [
     {
      "name": "joyai_image_edit_int8_convrot.safetensors",
@@ -3428,7 +3567,7 @@
    "min_comfyui_version": "0.24.1",
    "requires_custom_nodes": false,
    "size": 19434727014,
-   "usage": 458,
+   "usage": 353,
    "files": [
     {
      "name": "krea2_turbo_int8_convrot.safetensors",
@@ -3471,7 +3610,7 @@
    "min_comfyui_version": "0.24.1",
    "requires_custom_nodes": false,
    "size": 19112604467,
-   "usage": 9677,
+   "usage": 9480,
    "files": [
     {
      "name": "krea2_turbo_fp8_scaled.safetensors",
@@ -3515,7 +3654,7 @@
    "min_comfyui_version": "0.24.1",
    "requires_custom_nodes": false,
    "size": 19112604467,
-   "usage": 718,
+   "usage": 667,
    "files": [
     {
      "name": "krea2_turbo_int8_convrot.safetensors",
@@ -3742,7 +3881,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 13421772800,
-   "usage": 40,
+   "usage": 22,
    "files": [
     {
      "name": "mage_flow_edit_int8_convrot.safetensors",
@@ -3780,7 +3919,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 13421772800,
-   "usage": 95,
+   "usage": 30,
    "files": [
     {
      "name": "mage_flow_edit_turbo_int8_convrot.safetensors",
@@ -3818,7 +3957,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 13421772800,
-   "usage": 91,
+   "usage": 14,
    "files": [
     {
      "name": "mage_flow_int8_convrot.safetensors",
@@ -3857,7 +3996,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 13421772800,
-   "usage": 11,
+   "usage": 13,
    "files": [
     {
      "name": "mage_flow_turbo_int8_convrot.safetensors",
@@ -3895,7 +4034,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 22441204122,
-   "usage": 32,
+   "usage": 23,
    "files": [
     {
      "name": "qwen_image_edit_2509_int8_convrot.safetensors",
@@ -3939,7 +4078,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 22441204122,
-   "usage": 239,
+   "usage": 118,
    "files": [
     {
      "name": "qwen_image_edit_2509_int8_convrot.safetensors",
@@ -4026,7 +4165,7 @@
    "min_comfyui_version": "0.38.0",
    "requires_custom_nodes": false,
    "size": 25984552141,
-   "usage": 43,
+   "usage": 31,
    "files": [
     {
      "name": "ming_image_0.1_design_int8_convrot.safetensors",
@@ -4064,7 +4203,7 @@
    "min_comfyui_version": "0.37.3",
    "requires_custom_nodes": false,
    "size": 43271795507,
-   "usage": 206,
+   "usage": 20,
    "files": [
     {
      "name": "qwen3.8_27b_w4a8.safetensors",
@@ -4093,6 +4232,50 @@
    ]
   },
   {
+   "name": "image_minimax_h3_t2i",
+   "title": "MiniMax H3: Text to Image",
+   "description": "Generate a single still image from a text prompt with MiniMax H3, an omni-modal video model used here for its first-frame decode. No file inputs required: the graph samples an empty latent and decodes it through the H3 video VAE. Best suited to a single subject with a defined light source and a simple or blurred background.",
+   "kind": "image",
+   "tags": [
+    "Text to Image",
+    "Int8"
+   ],
+   "models": [
+    "MiniMax H3"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.30.0",
+   "requires_custom_nodes": false,
+   "size": 41865330663,
+   "usage": 983,
+   "files": [
+    {
+     "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+    },
+    {
+     "name": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+     "directory": "loras",
+     "sha256": "2339acdf19bfe123f46b971ea35d367a84adb85de43627e1eceafa5a5b2b111e"
+    },
+    {
+     "name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+     "directory": "text_encoders",
+     "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+    },
+    {
+     "name": "minimax_h3_video_vae_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors",
+     "directory": "vae",
+     "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522"
+    }
+   ]
+  },
+  {
    "name": "image_moss_image_base_t2i",
    "title": "MOSS-Image Base: Text to Image",
    "description": "Generate an image from a text prompt with the MOSS-Image base checkpoint, which reads a full scene caption and returns one finished image. The prompt upsampler expands a short request into that caption first. Use it for fine-tuning experiments and comparisons with the instruction-tuned checkpoint.",
@@ -4107,7 +4290,7 @@
    "min_comfyui_version": "0.41.3",
    "requires_custom_nodes": false,
    "size": 22226455757,
-   "usage": 0,
+   "usage": 2254,
    "files": [
     {
      "name": "moss_image_base_int8_convrot.safetensors",
@@ -4145,13 +4328,106 @@
    "min_comfyui_version": "0.41.3",
    "requires_custom_nodes": false,
    "size": 22226455757,
-   "usage": 0,
+   "usage": 128,
    "files": [
     {
      "name": "moss_image_base_int8_convrot.safetensors",
      "url": "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/diffusion_models/moss_image_base_int8_convrot.safetensors",
      "directory": "diffusion_models",
      "sha256": "f601c1e1161915fb3fea003da0c1782e374dd960fbb3978bc0e4e3fa1f2d8e6f"
+    },
+    {
+     "name": "qwen3.5_9b_w4a8_gptq.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/text_encoders/qwen3.5_9b_w4a8_gptq.safetensors",
+     "directory": "text_encoders",
+     "sha256": "4cc6a1543ad2061806da46f35f90cadb4801dcba246c44782cf42ec0feb6407c"
+    },
+    {
+     "name": "flux2-vae_small.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/vae/flux2-vae_small.safetensors",
+     "directory": "vae",
+     "sha256": "d8d52ba036475f5fb07c8b435e176d3d97ebfa82f0d1a1c317f9cc1e25bd013b"
+    }
+   ]
+  },
+  {
+   "name": "image_moss_image_color_depth_control",
+   "title": "MOSS-Image: Color & Depth Control",
+   "description": "Re-pose and re-style a reference photo with MOSS-Image: the graph estimates the reference's geometry with MoGe 3, then generates a new image that keeps the pose, framing and silhouette while the prompt decides the character, wardrobe, setting and light. A color/depth control adapter LoRA makes the model follow the estimated map, and the color map socket is there for region-painted layouts.",
+   "kind": "image",
+   "tags": [
+    "Image",
+    "Depth"
+   ],
+   "models": [
+    "MOSS-Image"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.43.0",
+   "requires_custom_nodes": false,
+   "size": 18253611008,
+   "usage": 217,
+   "files": [
+    {
+     "name": "moss_image_sft_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/diffusion_models/moss_image_sft_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "b4d1475bc7eeffd7b809e82ea13a1fba1fb85c4e18365af3813722faa5c0fe4f"
+    },
+    {
+     "name": "qwen3.5_9b_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/text_encoders/qwen3.5_9b_int8_convrot.safetensors",
+     "directory": "text_encoders",
+     "sha256": "32e3787472f708fa5f83624acbf5ef23f7fc89c439e05065ea57cfe5a97f025a"
+    },
+    {
+     "name": "flux2-vae_small.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/vae/flux2-vae_small.safetensors",
+     "directory": "vae",
+     "sha256": "d8d52ba036475f5fb07c8b435e176d3d97ebfa82f0d1a1c317f9cc1e25bd013b"
+    },
+    {
+     "name": "moss_image_color_depth_control.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/loras/moss_image_color_depth_control.safetensors",
+     "directory": "loras",
+     "sha256": "e5c0c3efd05e4269207a39de6005798f14c90c6687c89c54eaffe4b76c43a763"
+    },
+    {
+     "name": "moge_3_vitg_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MoGe/resolve/main/geometry_estimation/moge_3_vitg_fp16.safetensors",
+     "directory": "geometry_estimation",
+     "sha256": "a587e42936ae7080b419df4c047b0f0b075d3492418f76ce81fb0779925a1fe6"
+    }
+   ]
+  },
+  {
+   "name": "image_moss_image_edit",
+   "title": "MOSS-Image: Image Edit LoRA",
+   "description": "Edit a photo with a short instruction using MOSS-Image and its edit LoRA: the instruction and the source image are encoded together, so the sampler redraws the same frame and only the described change is applied. Colour, material, outfit and background swaps keep the face, hair, pose and framing intact, and a Compare Images node shows the source next to the result.",
+   "kind": "edit",
+   "tags": [
+    "Image Edit"
+   ],
+   "models": [
+    "MOSS-Image"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.43.0",
+   "requires_custom_nodes": false,
+   "size": 13314398618,
+   "usage": 1703,
+   "files": [
+    {
+     "name": "moss_image_sft_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/diffusion_models/moss_image_sft_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "b4d1475bc7eeffd7b809e82ea13a1fba1fb85c4e18365af3813722faa5c0fe4f"
+    },
+    {
+     "name": "moss_image_edit_lora_rank_64_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/loras/moss_image_edit_lora_rank_64_bf16.safetensors",
+     "directory": "loras",
+     "sha256": "17a48b8c605dcffdedb92a2b887d18cf316505be90802717669fb6556098dcdf"
     },
     {
      "name": "qwen3.5_9b_w4a8_gptq.safetensors",
@@ -4182,7 +4458,7 @@
    "min_comfyui_version": "0.41.3",
    "requires_custom_nodes": false,
    "size": 22222122562,
-   "usage": 0,
+   "usage": 6885,
    "files": [
     {
      "name": "moss_image_sft_int8_convrot.safetensors",
@@ -4220,7 +4496,7 @@
    "min_comfyui_version": "0.41.3",
    "requires_custom_nodes": false,
    "size": 15461882266,
-   "usage": 0,
+   "usage": 352,
    "files": [
     {
      "name": "moss_image_sft_int8_convrot.safetensors",
@@ -4259,7 +4535,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 10630044058,
-   "usage": 146,
+   "usage": 80,
    "files": [
     {
      "name": "NetaYumev35_pretrained_all_in_one.safetensors",
@@ -4286,7 +4562,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 16213501542,
-   "usage": 59,
+   "usage": 38,
    "files": [
     {
      "name": "NewBie-Image-Exp0.1-bf16.safetensors",
@@ -4330,7 +4606,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 15784004813,
-   "usage": 14,
+   "usage": 10,
    "files": [
     {
      "name": "ae.safetensors",
@@ -4429,6 +4705,108 @@
    ]
   },
   {
+   "name": "image_p_h3_image_edit",
+   "title": "P-H3-Image: Image Edit",
+   "description": "Pruna AI's few-step image model built on MiniMax-H3: edit the source image with a short instruction, up to 9 reference images, 8-step sampling.",
+   "kind": "edit",
+   "tags": [
+    "Image Edit",
+    "Int8"
+   ],
+   "models": [
+    "P-H3-Image",
+    "MiniMax H3"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.44.0",
+   "requires_custom_nodes": false,
+   "size": 40355148082,
+   "usage": 269,
+   "files": [
+    {
+     "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+    },
+    {
+     "name": "p-h3-image_text_encoder_int8_convrot.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/text_encoders/p-h3-image_text_encoder_int8_convrot.safetensors",
+     "directory": "text_encoders",
+     "sha256": "fb42c9ff0597e61729475d0b48b69b591ffe06d0b442a79dde22b14fadbe1c0f"
+    },
+    {
+     "name": "p-h3-image_vae_int8_convrot.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/vae/p-h3-image_vae_int8_convrot.safetensors",
+     "directory": "vae",
+     "sha256": "583e0d43354b6b833aa9a0815a5fac831b1ef6d0c19a7eaa0616980a3dab5ffe"
+    },
+    {
+     "name": "p-h3-image_prompt_upsampler_w4a8.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/text_encoders/p-h3-image_prompt_upsampler_w4a8.safetensors",
+     "directory": "text_encoders",
+     "sha256": "74b206c0e3133aa0d1983fd8658c1526a53863cdcca5184538388e927f4e989b"
+    },
+    {
+     "name": "p-h3-image_lora_bf16.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/loras/p-h3-image_lora_bf16.safetensors",
+     "directory": "loras",
+     "sha256": "0e9013ae2873e3415dcb7bb59a9677293bdbdb6f663e138a79bb9bdced00ea61"
+    }
+   ]
+  },
+  {
+   "name": "image_p_h3_t2i",
+   "title": "P-H3-Image: Text to Image",
+   "description": "Pruna AI's few-step image model built on MiniMax-H3: write a plain-language request and a local prompt upsampler expands it into a detailed scene before an 8-step sample. Pick the aspect ratio and megapixel target on the Resolution Selector to move between square, 4:3, 16:9 and portrait canvases.",
+   "kind": "image",
+   "tags": [
+    "Text to Image",
+    "Int8"
+   ],
+   "models": [
+    "P-H3-Image",
+    "MiniMax H3"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.44.0",
+   "requires_custom_nodes": false,
+   "size": 37918538036,
+   "usage": 245,
+   "files": [
+    {
+     "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+    },
+    {
+     "name": "p-h3-image_text_encoder_int8_convrot.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/text_encoders/p-h3-image_text_encoder_int8_convrot.safetensors",
+     "directory": "text_encoders",
+     "sha256": "fb42c9ff0597e61729475d0b48b69b591ffe06d0b442a79dde22b14fadbe1c0f"
+    },
+    {
+     "name": "p-h3-image_lora_bf16.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/loras/p-h3-image_lora_bf16.safetensors",
+     "directory": "loras",
+     "sha256": "0e9013ae2873e3415dcb7bb59a9677293bdbdb6f663e138a79bb9bdced00ea61"
+    },
+    {
+     "name": "p-h3-image_vae_int8_convrot.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/vae/p-h3-image_vae_int8_convrot.safetensors",
+     "directory": "vae",
+     "sha256": "583e0d43354b6b833aa9a0815a5fac831b1ef6d0c19a7eaa0616980a3dab5ffe"
+    },
+    {
+     "name": "p-h3-image_prompt_upsampler_w4a8.safetensors",
+     "url": "https://huggingface.co/PrunaAI/p-h3-image-comfy/resolve/main/text_encoders/p-h3-image_prompt_upsampler_w4a8.safetensors",
+     "directory": "text_encoders",
+     "sha256": "74b206c0e3133aa0d1983fd8658c1526a53863cdcca5184538388e927f4e989b"
+    }
+   ]
+  },
+  {
    "name": "image_pixeldit_t2i",
    "title": "PixelDiT: Text to Image",
    "description": "Input a text prompt and optional negative prompt. Generate a 1024px image using PixelDiT's VAE-free pixel diffusion transformer.",
@@ -4443,7 +4821,7 @@
    "min_comfyui_version": "0.16.0",
    "requires_custom_nodes": false,
    "size": 7838315315,
-   "usage": 61,
+   "usage": 20,
    "files": [
     {
      "name": "gemma_2_2b_it_elm_bf16.safetensors",
@@ -4476,7 +4854,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31782757990,
-   "usage": 399,
+   "usage": 273,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -4520,7 +4898,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 35326106010,
-   "usage": 50,
+   "usage": 39,
    "files": [
     {
      "name": "Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors",
@@ -4570,7 +4948,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31782757990,
-   "usage": 17,
+   "usage": 14,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -4615,7 +4993,7 @@
    "min_comfyui_version": "0.3.49",
    "requires_custom_nodes": false,
    "size": 32427003085,
-   "usage": 41,
+   "usage": 40,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -4659,7 +5037,7 @@
    "min_comfyui_version": "0.37.0",
    "requires_custom_nodes": false,
    "size": 21367462298,
-   "usage": 114,
+   "usage": 239,
    "files": [
     {
      "name": "qwen_image_2.1_int8_convrot.safetensors",
@@ -4697,7 +5075,7 @@
    "min_comfyui_version": "0.37.0",
    "requires_custom_nodes": false,
    "size": 26736171418,
-   "usage": 18213,
+   "usage": 15631,
    "files": [
     {
      "name": "qwen_image_2.1_int8_convrot.safetensors",
@@ -4741,7 +5119,7 @@
    "min_comfyui_version": "0.37.2",
    "requires_custom_nodes": false,
    "size": 26736171418,
-   "usage": 4998,
+   "usage": 2457,
    "files": [
     {
      "name": "qwen_image_2.1_int8_convrot.safetensors",
@@ -4784,7 +5162,7 @@
    "min_comfyui_version": "0.39.0",
    "requires_custom_nodes": false,
    "size": 41016937677,
-   "usage": 1388,
+   "usage": 2986,
    "files": [
     {
      "name": "qwen_image_2.1_turbo_int8_convrot.safetensors",
@@ -4829,7 +5207,7 @@
    "min_comfyui_version": "0.39.0",
    "requires_custom_nodes": false,
    "size": 40984448745,
-   "usage": 572,
+   "usage": 1167,
    "files": [
     {
      "name": "qwen_image_2.1_turbo_int8_convrot.safetensors",
@@ -4923,7 +5301,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31782757990,
-   "usage": 64,
+   "usage": 68,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -4967,7 +5345,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 31782757990,
-   "usage": 3501,
+   "usage": 3470,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5011,7 +5389,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 31772020572,
-   "usage": 58,
+   "usage": 44,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5060,7 +5438,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 51324859187,
-   "usage": 496,
+   "usage": 432,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5104,7 +5482,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 31031138714,
-   "usage": 1455,
+   "usage": 1097,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5148,7 +5526,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 35304631173,
-   "usage": 60,
+   "usage": 45,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -5211,7 +5589,7 @@
    "min_comfyui_version": "0.3.57",
    "requires_custom_nodes": false,
    "size": 36013300777,
-   "usage": 172,
+   "usage": 185,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -5260,7 +5638,7 @@
    "min_comfyui_version": "0.6.0",
    "requires_custom_nodes": false,
    "size": 50465865728,
-   "usage": 97,
+   "usage": 70,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -5297,7 +5675,7 @@
    "min_comfyui_version": "0.6.0",
    "requires_custom_nodes": false,
    "size": 0,
-   "usage": 28,
+   "usage": 27,
    "files": [
     {
      "name": "qwen_image_layered_control_bf16.safetensors",
@@ -5336,7 +5714,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 32749125632,
-   "usage": 34,
+   "usage": 18,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5386,7 +5764,7 @@
    "min_comfyui_version": "0.0.1",
    "requires_custom_nodes": false,
    "size": 6979321856,
-   "usage": 610,
+   "usage": 456,
    "files": [
     {
      "name": "sd_xl_base_1.0.safetensors",
@@ -5413,7 +5791,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 41049149932,
-   "usage": 131,
+   "usage": 100,
    "files": [
     {
      "name": "wan2.1_i2v_480p_14B_fp16.safetensors",
@@ -5457,7 +5835,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 20830591386,
-   "usage": 137,
+   "usage": 318,
    "files": [
     {
      "name": "ae.safetensors",
@@ -5495,7 +5873,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 14602888806,
-   "usage": 32,
+   "usage": 29,
    "files": [
     {
      "name": "ae.safetensors",
@@ -5533,7 +5911,7 @@
    "min_comfyui_version": "0.11.0",
    "requires_custom_nodes": false,
    "size": 20830591386,
-   "usage": 14843,
+   "usage": 14712,
    "files": [
     {
      "name": "qwen_3_4b.safetensors",
@@ -5571,7 +5949,7 @@
    "min_comfyui_version": "0.3.57",
    "requires_custom_nodes": false,
    "size": 23837068493,
-   "usage": 309,
+   "usage": 356,
    "files": [
     {
      "name": "qwen_3_4b.safetensors",
@@ -5615,7 +5993,7 @@
    "min_comfyui_version": "0.11.0",
    "requires_custom_nodes": false,
    "size": 12133282611,
-   "usage": 216,
+   "usage": 90,
    "files": [
     {
      "name": "qwen_3_4b_fp8_mixed.safetensors",
@@ -5652,7 +6030,7 @@
    "min_comfyui_version": "0.15.0",
    "requires_custom_nodes": false,
    "size": 9019431322,
-   "usage": 65,
+   "usage": 73,
    "files": [
     {
      "name": "gemma4_e4b_it_fp8_scaled.safetensors",
@@ -5677,7 +6055,7 @@
    "min_comfyui_version": "0.15.0",
    "requires_custom_nodes": false,
    "size": 9341553869,
-   "usage": 146,
+   "usage": 118,
    "files": [
     {
      "name": "qwen3.5_4b_bf16.safetensors",
@@ -5702,7 +6080,7 @@
    "min_comfyui_version": "0.15.0",
    "requires_custom_nodes": false,
    "size": 8053063680,
-   "usage": 21,
+   "usage": 25,
    "files": [
     {
      "name": "qwen_3_4b.safetensors",
@@ -5727,7 +6105,7 @@
    "min_comfyui_version": "0.15.0",
    "requires_custom_nodes": false,
    "size": 5261334938,
-   "usage": 204,
+   "usage": 129,
    "files": [
     {
      "name": "qwen3vl_4b_fp8_scaled.safetensors",
@@ -5753,7 +6131,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 19155554140,
-   "usage": 27,
+   "usage": 15,
    "files": [
     {
      "name": "t5xxl_fp16.safetensors",
@@ -5851,7 +6229,7 @@
    "min_comfyui_version": "0.3.5",
    "requires_custom_nodes": false,
    "size": 23590107873,
-   "usage": 11,
+   "usage": 209,
    "files": [
     {
      "name": "sd3.5_large_fp8_scaled.safetensors",
@@ -5884,7 +6262,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 23590107873,
-   "usage": 27,
+   "usage": 38,
    "files": [
     {
      "name": "sd3.5_large_controlnet_depth.safetensors",
@@ -5929,7 +6307,7 @@
    "min_comfyui_version": "0.3.5",
    "requires_custom_nodes": false,
    "size": 14935748772,
-   "usage": 202,
+   "usage": 29,
    "files": [
     {
      "name": "sd3.5_large_fp8_scaled.safetensors",
@@ -5956,7 +6334,7 @@
    "min_comfyui_version": "0.0.1",
    "requires_custom_nodes": false,
    "size": 13013750907,
-   "usage": 48,
+   "usage": 49,
    "files": [
     {
      "name": "sd_xl_refiner_1.0.safetensors",
@@ -5989,7 +6367,7 @@
    "min_comfyui_version": "0.0.1",
    "requires_custom_nodes": false,
    "size": 10630044058,
-   "usage": 12,
+   "usage": 19,
    "files": [
     {
      "name": "clip_vision_g.safetensors",
@@ -6022,7 +6400,7 @@
    "min_comfyui_version": "0.0.1",
    "requires_custom_nodes": false,
    "size": 13013750907,
-   "usage": 95,
+   "usage": 77,
    "files": [
     {
      "name": "sd_xl_base_1.0.safetensors",
@@ -6055,7 +6433,7 @@
    "min_comfyui_version": "0.0.1",
    "requires_custom_nodes": false,
    "size": 6936372183,
-   "usage": 168,
+   "usage": 117,
    "files": [
     {
      "name": "sd_xl_turbo_1.0_fp16.safetensors",
@@ -6082,7 +6460,7 @@
    "min_comfyui_version": "0.35.2",
    "requires_custom_nodes": false,
    "size": 48962627174,
-   "usage": 10,
+   "usage": 31,
    "files": [
     {
      "name": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
@@ -6137,7 +6515,7 @@
    "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 39621073306,
-   "usage": 94,
+   "usage": 72,
    "files": [
     {
      "name": "ltx-2.3-22b-distilled-fp8.safetensors",
@@ -6220,7 +6598,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 32534377267,
-   "usage": 19,
+   "usage": 25,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -6320,7 +6698,7 @@
    "min_comfyui_version": "0.3.49",
    "requires_custom_nodes": false,
    "size": 30816390349,
-   "usage": 101,
+   "usage": 50,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6363,7 +6741,7 @@
    "min_comfyui_version": "0.40.0",
    "requires_custom_nodes": false,
    "size": 31245887078,
-   "usage": 708,
+   "usage": 928,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6415,7 +6793,7 @@
    "min_comfyui_version": "0.11.1",
    "requires_custom_nodes": false,
    "size": 20723217203,
-   "usage": 54,
+   "usage": 36,
    "files": [
     {
      "name": "z_image_turbo_bf16.safetensors",
@@ -6460,7 +6838,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 30709016166,
-   "usage": 14,
+   "usage": 12,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6503,7 +6881,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31245887078,
-   "usage": 363,
+   "usage": 249,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6552,7 +6930,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 31198642438,
-   "usage": 123,
+   "usage": 75,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6602,7 +6980,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 0,
-   "usage": 63,
+   "usage": 44,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -6664,7 +7042,7 @@
    "min_comfyui_version": "0.33.3",
    "requires_custom_nodes": false,
    "size": 134002979635,
-   "usage": 18,
+   "usage": 15,
    "files": [
     {
      "name": "flux-2-klein-base-4b-fp8.safetensors",
@@ -6731,7 +7109,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 0,
-   "usage": 110,
+   "usage": 52,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -6783,7 +7161,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31138512896,
-   "usage": 35,
+   "usage": 13,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6936,7 +7314,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31138512896,
-   "usage": 16,
+   "usage": 42,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6988,7 +7366,7 @@
    "min_comfyui_version": "0.11.1",
    "requires_custom_nodes": false,
    "size": 20723217203,
-   "usage": 34,
+   "usage": 28,
    "files": [
     {
      "name": "z_image_turbo_bf16.safetensors",
@@ -7033,7 +7411,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 9824737690,
-   "usage": 104,
+   "usage": 52,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -7104,7 +7482,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 0,
-   "usage": 88,
+   "usage": 40,
    "files": [
     {
      "name": "RealESRGAN_x4plus.safetensors",
@@ -7129,7 +7507,7 @@
    "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 429496730,
-   "usage": 60,
+   "usage": 107,
    "files": [
     {
      "name": "birefnet.safetensors",
@@ -7154,7 +7532,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 1288490189,
-   "usage": 55,
+   "usage": 20,
    "files": [
     {
      "name": "depth_anything_3_mono_large.safetensors",
@@ -7179,7 +7557,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 1288490189,
-   "usage": 132,
+   "usage": 207,
    "files": [
     {
      "name": "depth_anything_3_mono_large.safetensors",
@@ -7204,7 +7582,7 @@
    "min_comfyui_version": "0.20.0",
    "requires_custom_nodes": false,
    "size": 1717986918,
-   "usage": 122,
+   "usage": 127,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -7230,7 +7608,7 @@
    "min_comfyui_version": "0.37.0",
    "requires_custom_nodes": false,
    "size": 2469606195,
-   "usage": 94,
+   "usage": 76,
    "files": [
     {
      "name": "moge_3_vitg_fp16.safetensors",
@@ -7255,7 +7633,7 @@
    "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 644245094,
-   "usage": 14,
+   "usage": 13,
    "files": [
     {
      "name": "moge_2_vitl_normal_fp16.safetensors",
@@ -7329,7 +7707,7 @@
    "min_comfyui_version": "0.34.0",
    "requires_custom_nodes": false,
    "size": 5476083302,
-   "usage": 138,
+   "usage": 153,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -7372,7 +7750,7 @@
    "min_comfyui_version": "0.19.0",
    "requires_custom_nodes": false,
    "size": 2040109466,
-   "usage": 15,
+   "usage": 26,
    "files": [
     {
      "name": "sdpose_wholebody_fp16.safetensors",
@@ -7403,7 +7781,7 @@
    "min_comfyui_version": "0.19.0",
    "requires_custom_nodes": false,
    "size": 2040109466,
-   "usage": 9,
+   "usage": 11,
    "files": [
     {
      "name": "sdpose_wholebody_fp16.safetensors",
@@ -7434,7 +7812,7 @@
    "min_comfyui_version": "0.16.0",
    "requires_custom_nodes": false,
    "size": 1932735283,
-   "usage": 32,
+   "usage": 71,
    "files": [
     {
      "name": "sdpose_wholebody_fp16.safetensors",
@@ -7459,7 +7837,7 @@
    "min_comfyui_version": "0.16.0",
    "requires_custom_nodes": false,
    "size": 1932735283,
-   "usage": 9,
+   "usage": 13,
    "files": [
     {
      "name": "sdpose_wholebody_fp16.safetensors",
@@ -7485,7 +7863,7 @@
    "min_comfyui_version": "0.28.0",
    "requires_custom_nodes": false,
    "size": 3972844749,
-   "usage": 93,
+   "usage": 247,
    "files": [
     {
      "name": "seedvr2_ema_vae_fp16.safetensors",
@@ -7517,7 +7895,7 @@
    "min_comfyui_version": "0.28.0",
    "requires_custom_nodes": false,
    "size": 3972844749,
-   "usage": 581,
+   "usage": 624,
    "files": [
     {
      "name": "seedvr2_ema_vae_fp16.safetensors",
@@ -7549,7 +7927,7 @@
    "min_comfyui_version": "0.28.0",
    "requires_custom_nodes": false,
    "size": 8804682957,
-   "usage": 521,
+   "usage": 646,
    "files": [
     {
      "name": "seedvr2_ema_vae_fp16.safetensors",
@@ -7581,7 +7959,7 @@
    "min_comfyui_version": "0.20.0",
    "requires_custom_nodes": false,
    "size": 107374182,
-   "usage": 57,
+   "usage": 59,
    "files": [
     {
      "name": "film_net_fp16.safetensors",
@@ -7606,7 +7984,7 @@
    "min_comfyui_version": "0.20.0",
    "requires_custom_nodes": false,
    "size": 1717986918,
-   "usage": 157,
+   "usage": 141,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -7632,7 +8010,7 @@
    "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 34252364186,
-   "usage": 159,
+   "usage": 108,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -7687,7 +8065,7 @@
    "min_comfyui_version": "0.9.0",
    "requires_custom_nodes": false,
    "size": 20723217203,
-   "usage": 370,
+   "usage": 308,
    "files": [
     {
      "name": "z_image_turbo_bf16.safetensors",
@@ -7730,7 +8108,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 38762079846,
-   "usage": 91,
+   "usage": 48,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -7779,7 +8157,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 38762079846,
-   "usage": 354,
+   "usage": 287,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -7829,7 +8207,7 @@
    "min_comfyui_version": "0.3.71",
    "requires_custom_nodes": false,
    "size": 37044092928,
-   "usage": 29,
+   "usage": 32,
    "files": [
     {
      "name": "capybara_v0.1.safetensors",
@@ -7878,7 +8256,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 37044092928,
-   "usage": 40,
+   "usage": 19,
    "files": [
     {
      "name": "capybara_v0.1.safetensors",
@@ -7927,7 +8305,7 @@
    "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 12670153523,
-   "usage": 34,
+   "usage": 52,
    "files": [
     {
      "name": "causal_forcing-framewise.safetensors",
@@ -7950,6 +8328,50 @@
    ]
   },
   {
+   "name": "video_fasth3_ominiref_r2v",
+   "title": "FastH3 OmniRef: Reference to Video",
+   "description": "Generate synchronized video with matching audio from a text prompt plus a reference image using the FastH3 OmniRef eight-step distilled model, which renders both streams in just eight sampling steps. Takes 1 input image and produces 1 video output. Ideal for animating reference characters, creating talking avatars, and rapid social media video prototyping.",
+   "kind": "video",
+   "tags": [
+    "Reference to Video",
+    "Video"
+   ],
+   "models": [
+    "MiniMax H3"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.43.0",
+   "requires_custom_nodes": false,
+   "size": 42949672960,
+   "usage": 2141,
+   "files": [
+    {
+     "name": "minimax_h3_video_vae_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_int8_convrot.safetensors",
+     "directory": "vae",
+     "sha256": "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e"
+    },
+    {
+     "name": "minimax_h3_audio_vae_fp32.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors",
+     "directory": "vae",
+     "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+    },
+    {
+     "name": "fasth3_omniref_8step_pruned_int8_convrot.safetensors",
+     "url": "https://huggingface.co/FastVideo/FastH3-OmniRef-Comfy/resolve/main/diffusion_models/fasth3_omniref_8step_pruned_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "851b2dc9670ed864b7f1e951ac9da047d83b1c04ded9bfcc1a9e5bba0ee33f80"
+    },
+    {
+     "name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+     "directory": "text_encoders",
+     "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+    }
+   ]
+  },
+  {
    "name": "video_fastvideo_fasth3_i2v",
    "title": "FastVideo FastH3: Image to Video",
    "description": "Generate video with synchronized native audio from a single still image using MiniMax H3 and the FastH3 8-step checkpoint. One image produces one video output with matching voice, sound effects, and music in a single pass. Ideal for animating portraits, bringing product shots to life, and quick social media clips.",
@@ -7965,7 +8387,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 45097156608,
-   "usage": 2516,
+   "usage": 1657,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -8009,7 +8431,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 42949672960,
-   "usage": 816,
+   "usage": 464,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -8053,7 +8475,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 27895812588,
-   "usage": 18,
+   "usage": 17,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -8103,7 +8525,7 @@
    "min_comfyui_version": "0.3.71",
    "requires_custom_nodes": false,
    "size": 45384919416,
-   "usage": 96,
+   "usage": 114,
    "files": [
     {
      "name": "sigclip_vision_patch14_384.safetensors",
@@ -8165,7 +8587,7 @@
    "min_comfyui_version": "0.3.71",
    "requires_custom_nodes": false,
    "size": 45419279155,
-   "usage": 26,
+   "usage": 19,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -8221,7 +8643,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 14710262989,
-   "usage": 24,
+   "usage": 14,
    "files": [
     {
      "name": "kandinsky5lite_i2v_5s.safetensors",
@@ -8265,7 +8687,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 14710262989,
-   "usage": 44,
+   "usage": 14,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -8309,7 +8731,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 38976828211,
-   "usage": 120,
+   "usage": 150,
    "files": [
     {
      "name": "ltx-2.3-22b-distilled-fp8.safetensors",
@@ -8342,7 +8764,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 47244640256,
-   "usage": 18113,
+   "usage": 18605,
    "files": [
     {
      "name": "ltx-2.3-22b-dev-fp8.safetensors",
@@ -8393,7 +8815,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 42949672960,
-   "usage": 1146,
+   "usage": 1274,
    "files": [
     {
      "name": "ltx-2.3-22b-dev-fp8.safetensors",
@@ -8443,7 +8865,7 @@
    "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 40909563494,
-   "usage": 94,
+   "usage": 85,
    "files": [
     {
      "name": "ltx-2.3-22b-distilled-fp8.safetensors",
@@ -8494,7 +8916,7 @@
    "min_comfyui_version": "0.19.0",
    "requires_custom_nodes": false,
    "size": 43486543872,
-   "usage": 120,
+   "usage": 117,
    "files": [
     {
      "name": "ltx-2.3-22b-dev-fp8.safetensors",
@@ -8545,7 +8967,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 47244640256,
-   "usage": 566,
+   "usage": 697,
    "files": [
     {
      "name": "ltx-2.3-22b-dev-fp8.safetensors",
@@ -8596,7 +9018,7 @@
    "min_comfyui_version": "0.32.0",
    "requires_custom_nodes": false,
    "size": 56908316672,
-   "usage": 634,
+   "usage": 939,
    "files": [
     {
      "name": "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
@@ -8643,7 +9065,7 @@
    "min_comfyui_version": "0.32.0",
    "requires_custom_nodes": false,
    "size": 56908316672,
-   "usage": 4416,
+   "usage": 4490,
    "files": [
     {
      "name": "gemma4_e2b_it_int8_convrot.safetensors",
@@ -8695,7 +9117,7 @@
    "min_comfyui_version": "0.32.0",
    "requires_custom_nodes": false,
    "size": 53150220288,
-   "usage": 1414,
+   "usage": 1545,
    "files": [
     {
      "name": "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
@@ -8873,7 +9295,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 38010460570,
-   "usage": 90,
+   "usage": 106,
    "files": [
     {
      "name": "ltx-2-19b-dev-fp8.safetensors",
@@ -9018,7 +9440,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 45526653338,
-   "usage": 13,
+   "usage": 20,
    "files": [
     {
      "name": "ltx-2-19b-dev-fp8.safetensors",
@@ -9113,7 +9535,7 @@
    "min_comfyui_version": "0.35.0",
    "requires_custom_nodes": false,
    "size": 48747878810,
-   "usage": 159,
+   "usage": 154,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9182,7 +9604,7 @@
    "min_comfyui_version": "0.30.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 21177,
+   "usage": 19644,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9233,7 +9655,7 @@
    "min_comfyui_version": "0.30.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 813,
+   "usage": 398,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9283,7 +9705,7 @@
    "min_comfyui_version": "0.34.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 282,
+   "usage": 296,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9334,7 +9756,7 @@
    "min_comfyui_version": "0.30.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 8556,
+   "usage": 6777,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9385,7 +9807,7 @@
    "min_comfyui_version": "0.30.0",
    "requires_custom_nodes": false,
    "size": 56908316672,
-   "usage": 4200,
+   "usage": 4356,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9420,6 +9842,158 @@
    ]
   },
   {
+   "name": "video_pika_h3_flex_fl2va",
+   "title": "Pika H3 Flex: FL2VA",
+   "description": "Animate between two still frames with Pika H3 Flex: the first image opens the shot and the second closes it, while the prompt describes the path between them. The two frames are locked to the start and the end of the clip, the adapter runs at strength 1.0 on the int8 MiniMax H3 FL2VA base with the lcm sampler and Pika's six-step sigma list, and the output size is taken from the first frame and snapped to a multiple of 32 automatically, so portrait sources stay portrait.",
+   "kind": "video",
+   "tags": [
+    "FLF2V",
+    "Video",
+    "Image to Video"
+   ],
+   "models": [
+    "MiniMax H3"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.44.0",
+   "requires_custom_nodes": false,
+   "size": 44452911514,
+   "usage": 411,
+   "files": [
+    {
+     "name": "minimax_h3_video_vae_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_int8_convrot.safetensors",
+     "directory": "vae",
+     "sha256": "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e"
+    },
+    {
+     "name": "minimax_h3_audio_vae_fp32.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors",
+     "directory": "vae",
+     "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+    },
+    {
+     "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+    },
+    {
+     "name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+     "directory": "text_encoders",
+     "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+    },
+    {
+     "name": "pika_h3_flex_fl2va_v1_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/loras/pika_h3_flex_fl2va_v1_bf16.safetensors",
+     "directory": "loras",
+     "sha256": "cc5453aeecd6189468409003fe4cf1b57e52ff3a830a0a154b87decbe07358b7"
+    }
+   ]
+  },
+  {
+   "name": "video_pika_h3_flex_ref2va",
+   "title": "Pika H3 Flex: Reference to Video",
+   "description": "Generate a video with synchronized audio from reference images with Pika H3 Flex, keeping the identity, costume and look of the references while the prompt carries the story. Two image inputs are wired as Picture 1 and Picture 2, and the Pika adapter runs at strength 1.0 with the lcm sampler and a six-step sigma list on the MiniMax H3 Ref2VA base. Ideal for character-consistent short clips with native sound.",
+   "kind": "video",
+   "tags": [
+    "Reference to Video",
+    "LoRA",
+    "Video"
+   ],
+   "models": [
+    "MiniMax H3"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.44.0",
+   "requires_custom_nodes": false,
+   "size": 44452911514,
+   "usage": 1822,
+   "files": [
+    {
+     "name": "minimax_h3_video_vae_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_int8_convrot.safetensors",
+     "directory": "vae",
+     "sha256": "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e"
+    },
+    {
+     "name": "minimax_h3_audio_vae_fp32.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors",
+     "directory": "vae",
+     "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+    },
+    {
+     "name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779"
+    },
+    {
+     "name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+     "directory": "text_encoders",
+     "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+    },
+    {
+     "name": "pika_h3_flex_ref2va_v1_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/loras/pika_h3_flex_ref2va_v1_bf16.safetensors",
+     "directory": "loras",
+     "sha256": "de3745ceb7d8d5c20898dd8fa3a05f1c0b00089ccd55297b2a8bab95c766b0e0"
+    }
+   ]
+  },
+  {
+   "name": "video_pika_h3_flex_t2v",
+   "title": "Pika H3 Flex: Text to Video",
+   "description": "Generate a video with synchronized audio from a text prompt with Pika H3 Flex, a Pika post-trained adapter for MiniMax H3 that lands a finished 1344x768, 124-frame clip in six sampling steps. The adapter runs at strength 1.0 on the int8 MiniMax H3 base with the lcm sampler and Pika's own six-value sigma list, so a full render takes about a minute instead of a 20-step run. Ideal for fast prompt exploration and concept iteration on H3, with no image input to prepare.",
+   "kind": "video",
+   "tags": [
+    "Text to Video",
+    "Video"
+   ],
+   "models": [
+    "MiniMax H3"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.44.0",
+   "requires_custom_nodes": false,
+   "size": 44452911514,
+   "usage": 873,
+   "files": [
+    {
+     "name": "minimax_h3_video_vae_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_int8_convrot.safetensors",
+     "directory": "vae",
+     "sha256": "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e"
+    },
+    {
+     "name": "minimax_h3_audio_vae_fp32.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors",
+     "directory": "vae",
+     "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+    },
+    {
+     "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+    },
+    {
+     "name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+     "directory": "text_encoders",
+     "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+    },
+    {
+     "name": "pika_h3_flex_fl2va_v1_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/loras/pika_h3_flex_fl2va_v1_bf16.safetensors",
+     "directory": "loras",
+     "sha256": "cc5453aeecd6189468409003fe4cf1b57e52ff3a830a0a154b87decbe07358b7"
+    }
+   ]
+  },
+  {
    "name": "video_wan2.1_alpha_t2v_14B",
    "title": "Wan2.1 Alpha T2V",
    "description": "Generate text-to-video with alpha channel support for transparent backgrounds and semi-transparent objects.",
@@ -9436,7 +10010,7 @@
    "min_comfyui_version": "0.3.8",
    "requires_custom_nodes": false,
    "size": 22494891213,
-   "usage": 10,
+   "usage": 18,
    "files": [
     {
      "name": "wan2.1_t2v_14B_fp8_scaled.safetensors",
@@ -9538,7 +10112,7 @@
    "min_comfyui_version": "0.3.35",
    "requires_custom_nodes": false,
    "size": 42047729828,
-   "usage": 13,
+   "usage": 16,
    "files": [
     {
      "name": "wan2.1_fun_camera_v1.1_14B_bf16.safetensors",
@@ -9581,7 +10155,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 44775034061,
-   "usage": 957,
+   "usage": 882,
    "files": [
     {
      "name": "lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors",
@@ -9643,7 +10217,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 28668906701,
-   "usage": 653,
+   "usage": 615,
    "files": [
     {
      "name": "lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors",
@@ -9706,7 +10280,7 @@
    "min_comfyui_version": "0.17.0",
    "requires_custom_nodes": false,
    "size": 29635274342,
-   "usage": 71,
+   "usage": 73,
    "files": [
     {
      "name": "Wan2_1-I2V-14B-480p_fp8_e4m3fn_scaled_KJ.safetensors",
@@ -9763,7 +10337,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 38031935406,
-   "usage": 450,
+   "usage": 347,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -9820,7 +10394,7 @@
    "min_comfyui_version": "0.3.35",
    "requires_custom_nodes": false,
    "size": 40050570035,
-   "usage": 22,
+   "usage": 20,
    "files": [
     {
      "name": "wan2.2_fun_camera_high_noise_14B_fp8_scaled.safetensors",
@@ -9878,7 +10452,7 @@
    "min_comfyui_version": "0.3.50",
    "requires_custom_nodes": false,
    "size": 38031935406,
-   "usage": 90,
+   "usage": 41,
    "files": [
     {
      "name": "wan2.2_fun_control_high_noise_14B_fp8_scaled.safetensors",
@@ -9935,7 +10509,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 38031935406,
-   "usage": 10,
+   "usage": 14,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -9992,7 +10566,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 38010460570,
-   "usage": 10653,
+   "usage": 9549,
    "files": [
     {
      "name": "wan_2.1_vae.safetensors",
@@ -10049,7 +10623,7 @@
    "min_comfyui_version": "0.3.55",
    "requires_custom_nodes": false,
    "size": 25254407700,
-   "usage": 106,
+   "usage": 98,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -10100,7 +10674,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 38031935406,
-   "usage": 379,
+   "usage": 291,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -10158,7 +10732,7 @@
    "min_comfyui_version": "0.3.50",
    "requires_custom_nodes": false,
    "size": 18146236826,
-   "usage": 29,
+   "usage": 14,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -10236,7 +10810,7 @@
    "min_comfyui_version": "0.3.46",
    "requires_custom_nodes": false,
    "size": 18146236826,
-   "usage": 228,
+   "usage": 334,
    "files": [
     {
      "name": "wan2.2_ti2v_5B_fp16.safetensors",
@@ -10274,7 +10848,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 25662429594,
-   "usage": 1414,
+   "usage": 1757,
    "files": [
     {
      "name": "wan_animate_2_int8_convrot.safetensors",
@@ -10324,7 +10898,7 @@
    "min_comfyui_version": "0.31.0",
    "requires_custom_nodes": false,
    "size": 24910810317,
-   "usage": 246,
+   "usage": 191,
    "files": [
     {
      "name": "wan_animate_2_distill_int8_convrot.safetensors",
@@ -10469,7 +11043,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 57756572713,
-   "usage": 50,
+   "usage": 36,
    "files": [
     {
      "name": "wan2.1_vace_1.3B_fp16.safetensors",
@@ -10595,7 +11169,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 57756572713,
-   "usage": 188,
+   "usage": 156,
    "files": [
     {
      "name": "wan2.1_vace_14B_fp16.safetensors",
@@ -10658,7 +11232,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 57767310131,
-   "usage": 45,
+   "usage": 15,
    "files": [
     {
      "name": "wan_2.1_vae.safetensors",
@@ -10703,7 +11277,7 @@
    "min_comfyui_version": "0.20.0",
    "requires_custom_nodes": false,
    "size": 57767310131,
-   "usage": 216,
+   "usage": 206,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -10754,7 +11328,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 57756572713,
-   "usage": 60,
+   "usage": 40,
    "files": [
     {
      "name": "wan2.1_vace_1.3B_fp16.safetensors",
@@ -10914,7 +11488,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 11381663334,
-   "usage": 27,
+   "usage": 17,
    "files": [
     {
      "name": "wan2.1_fun_control_1.3B_bf16.safetensors",

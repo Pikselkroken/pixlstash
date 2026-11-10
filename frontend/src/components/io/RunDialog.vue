@@ -1250,7 +1250,7 @@ import { useRoute, useRouter } from "vue-router";
 import { VIcon } from "vuetify/components";
 
 import { characterThumbnailUrl } from "../../api/characters";
-import { getPictureRecipe, getPixlstashNode } from "../../api/comfyui";
+import { getPictureRecipe } from "../../api/comfyui";
 import { fetchWorkflowSets, listAdapters } from "../../api/modelShelf";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { stackMemberIds } from "../../utils/stackMembers";
@@ -1271,6 +1271,7 @@ import {
   setWorkflowPins,
   workflowCoverUrl,
 } from "../../api/workflows";
+import { useComfyuiOpen } from "../../composables/useComfyuiOpen";
 import { useModelPickUp } from "../../composables/useModelPickUp";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useFavouritesStore, favouritesFirst } from "../../stores/useFavouritesStore";
@@ -5174,40 +5175,18 @@ function onEscape(event) {
  */
 const desktop = typeof window !== "undefined" ? window.pixlstashDesktop : null;
 const filterStore = useFilterStore();
-/** Whether there is a ComfyUI to open, and a way to open it from here. */
-const canOpenComfyui = computed(
-  () => Boolean(filterStore.comfyuiUrl) && (!desktop || !!desktop.openComfyui),
-);
-/**
- * ComfyUI answered that its ComfyUI-PixlStash nodes are from before they
- * opened a run (`open_run.js`): the link would open whatever ComfyUI had last.
- * Only a definite no refuses; a ComfyUI that cannot be asked is left to try.
- */
-const comfyuiOpensNoRuns = ref(false);
-// Asked per address, as the Workflow tab asks: the address can arrive after
-// the popup does (the store still loading, or Settings opened from a notice
-// here), and the answer about one ComfyUI says nothing of the next.
-let nodeCheck = 0;
-watch(
-  () => canOpenComfyui.value && filterStore.comfyuiUrl,
-  async (url) => {
-    const check = ++nodeCheck;
-    comfyuiOpensNoRuns.value = false;
-    if (!url) return;
-    try {
-      const node = await getPixlstashNode();
-      if (check !== nodeCheck) return;
-      comfyuiOpensNoRuns.value = node?.opens_runs === false;
-    } catch (err) {
-      console.warn("[run] could not ask ComfyUI for the PixlStash nodes", err);
-    }
-  },
-  { immediate: true },
-);
+// Asked per address, as the Workflow tab asks (`useComfyuiOpen`): the address
+// can arrive after the popup does (the store still loading, or Settings opened
+// from a notice here), and the answer about one ComfyUI says nothing of the
+// next. `comfyuiOpensNoRuns`: its nodes are from before they opened a run
+// (`open_run.js`), so the link would open whatever ComfyUI had last.
+const { canOpenComfyui, comfyuiOpensNoRuns, comfyuiDown, comfyuiDownReason } =
+  useComfyuiOpen();
 const opening = ref(false);
 const openError = ref("");
 /** Why Open in ComfyUI does nothing, or "". */
 const openRefusal = computed(() => {
+  if (comfyuiDown.value) return `${comfyuiDownReason.value}.`;
   if (comfyuiOpensNoRuns.value) {
     return "Update the ComfyUI-PixlStash nodes in ComfyUI, then restart it, to open a run there.";
   }

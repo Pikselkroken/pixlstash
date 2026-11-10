@@ -279,7 +279,9 @@ onUnmounted(() => {
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-3);
-  flex-wrap: nowrap;
+  /* The review shares the centre column with the app's sidebar, so on a
+     narrow window the verbs wrap rather than run off the left edge. */
+  flex-wrap: wrap;
   min-height: 44px;
 }
 
@@ -354,7 +356,7 @@ onUnmounted(() => {
 .rs-decide-btn kbd {
   font-family: var(--font-mono, monospace);
   font-size: var(--text-2xs);
-  padding: 1px 5px;
+  padding: var(--kbd-pad-tight);
   border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.3);
   background: rgba(var(--v-theme-on-dark-surface), 0.08);

@@ -19,12 +19,16 @@ from sqlmodel import SQLModel, Session, create_engine, select
 from pixlstash.db_models.character import Character
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture
+from pixlstash.event_types import EventType
+from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.tasks.face_model_refresh_task import FaceModelRefreshTask, _bbox_iou
 from pixlstash.tasks.missing_face_model_refresh_finder import (
     MissingFaceModelRefreshFinder,
 )
+from pixlstash.utils.insightface_batched import BatchedFaceRunner
 import pixlstash.utils.insightface_model_utils as model_utils
+from pixlstash.vault import Vault
 
 
 @pytest.fixture(autouse=True)
@@ -117,10 +121,15 @@ def test_get_or_init_bounds_every_cuda_session_by_the_budget():
         mock.patch("pixlstash.tasks.face_extraction_task.ensure_model_pack_available"),
         mock.patch("insightface.app.FaceAnalysis") as fa,
         mock.patch("torch.cuda.is_available", return_value=True),
+        mock.patch(
+            "onnxruntime.get_available_providers",
+            return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+        ),
     ):
         FaceExtractionTask.get_or_init_insightface(engine)
     kwargs = fa.call_args.kwargs
     assert kwargs["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    assert fa.return_value.prepare.call_args.kwargs["ctx_id"] == 0
     cuda_options, cpu_options = kwargs["provider_options"]
     assert cuda_options == budget.ort_cuda_provider_options(
         ORT_ARENA_SHARE["insightface_session"]
@@ -132,6 +141,82 @@ def test_get_or_init_bounds_every_cuda_session_by_the_budget():
     assert "arena_extend_strategy" not in cuda_options
     assert cuda_options["cudnn_conv_algo_search"] == "HEURISTIC"
     assert cpu_options == {}
+    _reset_face_globals()
+
+
+@pytest.mark.parametrize(
+    "available, expected, ctx_id",
+    [
+        # A ROCm torch beside the bundled CPU ORT: no CUDA provider ORT cannot
+        # load, and ctx_id=-1 so InsightFace does not pretend it is on a GPU.
+        (["CPUExecutionProvider"], ["CPUExecutionProvider"], -1),
+        # The AMD ORT build (#458): the GPU, and ctx_id=0 so prepare() keeps it.
+        (
+            ["MIGraphXExecutionProvider", "CPUExecutionProvider"],
+            ["MIGraphXExecutionProvider", "CPUExecutionProvider"],
+            0,
+        ),
+        # OpenVINO stays out of face extraction: unmeasured on det_10g.
+        (
+            ["OpenVINOExecutionProvider", "CPUExecutionProvider"],
+            ["CPUExecutionProvider"],
+            -1,
+        ),
+    ],
+)
+def test_get_or_init_on_a_rocm_host_uses_what_ort_offers(available, expected, ctx_id):
+    from pixlstash.inference.vram_budget import VramBudget
+
+    _reset_face_globals()
+    budget = VramBudget.__new__(VramBudget)
+    budget._device = "cuda"
+    budget._max_vram_usage_mb = 8192
+    engine = _make_engine("buffalo_l", force_cpu=False)
+    engine.vram_budget = budget
+    with (
+        mock.patch("pixlstash.tasks.face_extraction_task.ensure_model_pack_available"),
+        mock.patch("insightface.app.FaceAnalysis") as fa,
+        # ROCm torch answers through the CUDA API.
+        mock.patch("torch.cuda.is_available", return_value=True),
+        mock.patch("onnxruntime.get_available_providers", return_value=available),
+    ):
+        FaceExtractionTask.get_or_init_insightface(engine)
+    kwargs = fa.call_args.kwargs
+    assert kwargs["providers"] == expected
+    # The CUDA arena options never reach an AMD or CPU provider.
+    assert kwargs["provider_options"] == [{}] * len(expected)
+    assert fa.return_value.prepare.call_args.kwargs["ctx_id"] == ctx_id
+    _reset_face_globals()
+
+
+def test_get_or_init_says_so_when_the_gpu_provider_did_not_load():
+    """An advertised provider whose libraries are missing loads as CPU silently."""
+    from pixlstash.inference.vram_budget import VramBudget
+    from pixlstash.tasks import face_extraction_task
+
+    budget = VramBudget.__new__(VramBudget)
+    budget._device = "cuda"
+    budget._max_vram_usage_mb = 8192
+    engine = _make_engine("buffalo_l", force_cpu=False)
+    engine.vram_budget = budget
+    for loaded, warned in (
+        (["CPUExecutionProvider"], True),
+        (["MIGraphXExecutionProvider", "CPUExecutionProvider"], False),
+    ):
+        _reset_face_globals()
+        with (
+            mock.patch.object(face_extraction_task, "ensure_model_pack_available"),
+            mock.patch("insightface.app.FaceAnalysis") as fa,
+            mock.patch("torch.cuda.is_available", return_value=True),
+            mock.patch(
+                "onnxruntime.get_available_providers",
+                return_value=["MIGraphXExecutionProvider", "CPUExecutionProvider"],
+            ),
+            mock.patch.object(face_extraction_task.logger, "warning") as warning,
+        ):
+            fa.return_value.det_model.session.get_providers.return_value = loaded
+            FaceExtractionTask.get_or_init_insightface(engine)
+        assert warning.called is warned, loaded
     _reset_face_globals()
 
 
@@ -174,6 +259,26 @@ def test_the_recogniser_is_called_in_chunks_that_fit_its_arena_cap():
     # Every face got its own row, in order, across the chunk boundaries.
     got = [f.embedding[0] for r in results for f in r]
     assert got == [i % RECOGNITION_CHUNK for i in range(total)]
+
+
+@pytest.mark.parametrize("override", [None, 0.1])
+def test_a_threshold_override_holds_for_its_own_run_only(override):
+    """A sensitive run detects at its threshold and puts the app's back."""
+    seen = []
+
+    class _Det:
+        det_thresh = 0.25
+
+        def detect(self, img):
+            seen.append(self.det_thresh)
+            return np.zeros((0, 5), "float32"), None
+
+    det = _Det()
+    app = types.SimpleNamespace(det_model=det, models={})
+    BatchedFaceRunner(app, det_thresh=override).run_batch([np.zeros((8, 8, 3))])
+
+    assert seen == [override or 0.25]
+    assert det.det_thresh == 0.25
 
 
 @pytest.mark.parametrize("cpu_spillover", [False, True])
@@ -905,6 +1010,216 @@ def test_refresh_no_detection_preserves_manual_face(tmp_path):
     assert faces[0].bbox == [200, 200, 240, 240]
 
 
+# --------------------------------------------------------------------------- #
+# §5c - "Detect faces again" (redetect=True) never takes a person off a picture
+# --------------------------------------------------------------------------- #
+
+
+def _unit(index, dim=512):
+    """A unit embedding pointing along one axis: orthogonal per index."""
+    vec = np.zeros(dim, dtype="float32")
+    vec[index] = 1.0
+    return vec.tobytes()
+
+
+def _picture_with_person_face(engine, bbox, features, face_index=0):
+    """One picture holding one detected face assigned to a person."""
+    with Session(engine) as session:
+        char = Character(name="Alice")
+        pic = Picture(file_path="p.jpg")
+        session.add(char)
+        session.add(pic)
+        session.commit()
+        face = Face(
+            picture_id=pic.id,
+            frame_index=0,
+            face_index=face_index,
+            bbox=bbox,
+            features=features,
+            model_pack="buffalo_l",
+            character_id=char.id,
+        )
+        session.add(face)
+        session.commit()
+        return pic.id, char.id, face.id
+
+
+def _detected(pic_id, bbox, features, face_index=0):
+    return Face(
+        picture_id=pic_id,
+        frame_index=0,
+        face_index=face_index,
+        bbox=bbox,
+        features=features,
+        model_pack="buffalo_l",
+    )
+
+
+def _faces(engine, pic_id):
+    with Session(engine) as session:
+        return session.exec(select(Face).where(Face.picture_id == pic_id)).all()
+
+
+def test_redetect_matches_a_turned_face_by_embedding(tmp_path):
+    """After a turn the box moves but the face embeds alike: the row and its
+    person carry over to the new box."""
+    engine = _make_sqlite(tmp_path)
+    pic_id, char_id, face_id = _picture_with_person_face(
+        engine, [10, 10, 30, 30], _unit(0)
+    )
+    turned = _detected(pic_id, [300, 300, 320, 320], _unit(0))
+
+    with Session(engine) as session:
+        added = FaceModelRefreshTask._refresh_picture_faces(
+            session, pic_id, [turned], "buffalo_l", True
+        )
+
+    # Nothing new: this is the run that offers "Try more sensitive".
+    assert added == 0
+
+    assert [(f.id, f.character_id, f.bbox) for f in _faces(engine, pic_id)] == [
+        (face_id, char_id, [300, 300, 320, 320])
+    ]
+
+
+def test_redetect_keeps_an_unmatched_face_that_names_a_person(tmp_path):
+    """A different face found elsewhere is added; the person's face is kept."""
+    engine = _make_sqlite(tmp_path)
+    pic_id, char_id, face_id = _picture_with_person_face(
+        engine, [10, 10, 30, 30], _unit(0)
+    )
+    other = _detected(pic_id, [300, 300, 320, 320], _unit(1))
+
+    with Session(engine) as session:
+        added = FaceModelRefreshTask._refresh_picture_faces(
+            session, pic_id, [other], "buffalo_l", True
+        )
+
+    assert added == 1
+
+    faces = {f.id: f for f in _faces(engine, pic_id)}
+    assert faces[face_id].character_id == char_id
+    assert faces[face_id].bbox == [10, 10, 30, 30]
+    assert len(faces) == 2
+    indices = sorted((f.frame_index, f.face_index) for f in faces.values())
+    assert len(set(indices)) == 2
+
+
+def test_redetect_finding_nothing_keeps_the_persons_face(tmp_path):
+    engine = _make_sqlite(tmp_path)
+    pic_id, char_id, face_id = _picture_with_person_face(
+        engine, [10, 10, 30, 30], _unit(0)
+    )
+
+    with Session(engine) as session:
+        FaceModelRefreshTask._refresh_picture_faces(
+            session, pic_id, [], "buffalo_l", True
+        )
+
+    faces = _faces(engine, pic_id)
+    assert [(f.id, f.character_id) for f in faces] == [(face_id, char_id)]
+
+
+def test_a_new_face_above_does_not_take_the_persons_row(tmp_path):
+    """Index 0 goes to a face found above the person's; the index match must not
+    pair the two, or the person moves onto a stranger."""
+    engine = _make_sqlite(tmp_path)
+    pic_id, char_id, face_id = _picture_with_person_face(
+        engine, [100, 100, 130, 130], _unit(0)
+    )
+    above = _detected(pic_id, [10, 10, 30, 30], _unit(1), face_index=0)
+    same = _detected(pic_id, [100, 100, 130, 130], _unit(0), face_index=1)
+
+    with Session(engine) as session:
+        FaceModelRefreshTask._refresh_picture_faces(
+            session, pic_id, [above, same], "buffalo_l", True
+        )
+
+    by_box = {tuple(f.bbox): f for f in _faces(engine, pic_id)}
+    assert by_box[(100, 100, 130, 130)].id == face_id
+    assert by_box[(100, 100, 130, 130)].character_id == char_id
+    assert by_box[(10, 10, 30, 30)].character_id is None
+
+
+def test_redetect_lets_two_named_faces_trade_places(tmp_path):
+    """Two people side by side, turned: each keeps their person although their
+    face_index values swap (the unique key must not trip mid-update)."""
+    engine = _make_sqlite(tmp_path)
+    pic_id, alice_id, alice_face = _picture_with_person_face(
+        engine, [10, 10, 30, 30], _unit(0), face_index=0
+    )
+    with Session(engine) as session:
+        bob = Character(name="Bob")
+        session.add(bob)
+        session.commit()
+        bob_face = Face(
+            picture_id=pic_id,
+            frame_index=0,
+            face_index=1,
+            bbox=[10, 100, 30, 120],
+            features=_unit(1),
+            model_pack="buffalo_l",
+            character_id=bob.id,
+        )
+        session.add(bob_face)
+        session.commit()
+        bob_id, bob_face_id = bob.id, bob_face.id
+    # After the turn Bob is on top (index 0) and Alice below (index 1).
+    new = [
+        _detected(pic_id, [300, 10, 320, 30], _unit(1), face_index=0),
+        _detected(pic_id, [300, 200, 320, 220], _unit(0), face_index=1),
+    ]
+
+    with Session(engine) as session:
+        FaceModelRefreshTask._refresh_picture_faces(
+            session, pic_id, new, "buffalo_l", True
+        )
+
+    by_id = {f.id: f for f in _faces(engine, pic_id)}
+    assert len(by_id) == 2
+    assert (by_id[bob_face_id].character_id, by_id[bob_face_id].face_index) == (
+        bob_id,
+        0,
+    )
+    assert (by_id[alice_face].character_id, by_id[alice_face].face_index) == (
+        alice_id,
+        1,
+    )
+
+
+@pytest.mark.parametrize("redetect", [False, True])
+def test_only_a_redetect_announces_its_faces(redetect):
+    """The owner's redetect tells the grid its face boxes changed; the
+    background pack sweep stays as quiet as it always was."""
+    events = []
+    vault = types.SimpleNamespace(notify=lambda *args: events.append(args))
+    task = types.SimpleNamespace(
+        type="FaceModelRefreshTask",
+        status=TaskStatus.COMPLETED,
+        result={"changed_count": 1, "picture_ids": [7], "new_faces": 0},
+        params={"redetect": redetect, "origin_client_id": "tab-1"},
+    )
+
+    Vault._on_task_completed(vault, task, None)
+
+    if redetect:
+        assert events == [
+            (
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": [7],
+                    "change_kind": "updated",
+                    "fields": ["faces"],
+                    "origin_client_id": "tab-1",
+                    "new_faces": 0,
+                },
+            ),
+            (EventType.CHANGED_FACES,),
+        ]
+    else:
+        assert events == []
+
+
 def test_bbox_iou_basics():
     assert _bbox_iou([0, 0, 10, 10], [0, 0, 10, 10]) == 1.0
     assert _bbox_iou([0, 0, 10, 10], [20, 20, 30, 30]) == 0.0
@@ -986,7 +1301,7 @@ def _patch_detection(monkeypatch, task):
         FaceExtractionTask,
         "detect_faces_in_images",
         staticmethod(
-            lambda app, images: [
+            lambda app, images, det_thresh=None: [
                 [_FakeDetection([10, 10, 30, 30], np.ones(512))] for _ in images
             ]
         ),

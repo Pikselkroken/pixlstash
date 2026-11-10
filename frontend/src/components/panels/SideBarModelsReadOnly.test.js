@@ -1,18 +1,12 @@
-// The sidebar's two Models entries against a READ/share credential (#1014).
+// The sidebar's Models and Workflows rows left for the title bar's workspace
+// switch (#2158). What the sidebar still owes them: it offers neither row in
+// either layout, for an owner or a READ session, and it still clears the
+// "new models arrived" mark when the shelf opens (the mark itself is drawn on
+// the title bar's Models segment now).
 //
-// Every route the shelf calls is owner-only, so the destination was live for a
-// session the backend refuses on all of it. The rule it now follows is the
-// demo site's, stated in `e2e/specs/read-only-features.spec.js`: show-but-
-// disable, never hide - the demo IS a read-only session, and a hidden feature
-// there advertises a smaller product than PixlStash is. So the row stays, goes
-// inert, and says why, exactly like Duplicates beside it.
-//
-// Both entries are covered because they are separate markup: the expanded rail
-// and the collapsed dock. The dock half was written twice before this file
-// existed and neither version was tested.
-//
-// `useAppNavigationModels.test.js` covers the other half - that a pasted
-// `/models` URL never mounts the shelf.
+// The READ-session rule the rows carried (shown, inert, explained) moved with
+// them: `components/TitleBar.test.js`. `useAppNavigationModels.test.js` covers
+// the other half - that a pasted `/models` URL never mounts the shelf.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
@@ -79,18 +73,6 @@ import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useRoute } from "vue-router";
 import SideBar from "./SideBar.vue";
 
-/**
- * The element's own tooltip text: its direct `Tooltip` child, stubbed by the
- * shallow mount. `undefined` when it has none or the text is empty, because an
- * empty text is a disabled tip.
- */
-function tipText(el) {
-  const tip = el
-    .findAll("tooltip-stub")
-    .find((t) => t.element.parentElement === el.element);
-  return tip?.attributes("text") || undefined;
-}
-
 function respond(url) {
   const u = String(url ?? "");
   if (u.includes("/characters")) return { data: [] };
@@ -121,44 +103,6 @@ async function mountSidebar({ docked = false } = {}) {
   return wrapper;
 }
 
-const SHELF_HINT = "The model shelf is only available in your own library";
-const DEDUP_HINT = "Duplicate review is only available in your own library";
-const WORKFLOWS_HINT =
-  "The workflow library is only available in your own library";
-
-/** The expanded rail's Models button, by its label. */
-function expandedModels(wrapper) {
-  return wrapper
-    .findAll("button.sidebar-list-item")
-    .find((b) => b.text().includes("Models"));
-}
-
-/**
- * The collapsed dock's destination buttons, in DOM order: Models, then
- * Workflows. Located by class and position, never by title: the title is the
- * thing under test and swaps to the refusal hint for a READ session.
- */
-function dockedDestinations(wrapper) {
-  return wrapper.findAll(
-    "button.sidebar-collapsed-item.sidebar-destination-btn",
-  );
-}
-
-function dockedModels(wrapper) {
-  return dockedDestinations(wrapper)[0];
-}
-
-function dockedWorkflows(wrapper) {
-  return dockedDestinations(wrapper)[1];
-}
-
-/** The expanded rail's Workflows button, by its label. */
-function expandedWorkflows(wrapper) {
-  return wrapper
-    .findAll("button.sidebar-list-item")
-    .find((b) => b.text().includes("Workflows"));
-}
-
 beforeEach(() => {
   setActivePinia(createPinia());
   isReadOnly.value = false;
@@ -172,158 +116,49 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("the expanded rail's Models entry", () => {
-  it("is visible, inert and explained for a READ session", async () => {
-    isReadOnly.value = true;
-    const wrapper = await mountSidebar();
-
-    // The anchor. A read-only render that produced no rail at all would leave
-    // every "the entry is not clickable" assertion below passing for the wrong
-    // reason - and Duplicates being inert-not-hidden is the very contract this
-    // change is following, so it is worth pinning in the same breath.
-    const duplicates = wrapper
-      .findAll(".sidebar-list-item")
-      .find((el) => el.text().includes("Duplicates"));
-    expect(duplicates).toBeTruthy();
-    expect(duplicates.attributes("aria-disabled")).toBe("true");
-    expect(tipText(duplicates)).toBe(DEDUP_HINT);
-
-    const models = expandedModels(wrapper);
-    expect(models).toBeTruthy();
-    expect(models.attributes("aria-disabled")).toBe("true");
-    expect(tipText(models)).toBe(SHELF_HINT);
-    // `aria-disabled`, not the native attribute: the control stays tabbable so
-    // a keyboard user reaches the explanation too.
-    expect(models.attributes("disabled")).toBeUndefined();
-
-    await models.trigger("click");
-    expect(wrapper.emitted("select-models")).toBeUndefined();
-
-    wrapper.unmount();
-  });
-
-  it("still navigates for the owner", async () => {
-    // The positive control: an inert-for-everybody row is its own regression.
-    const wrapper = await mountSidebar();
-
-    const models = expandedModels(wrapper);
-    expect(models).toBeTruthy();
-    expect(models.attributes("aria-disabled")).toBeUndefined();
-    expect(tipText(models)).toBeUndefined();
-
-    await models.trigger("click");
-    expect(wrapper.emitted("select-models")).toHaveLength(1);
-
-    wrapper.unmount();
+describe("the sidebar's workspace rows", () => {
+  it.each([
+    ["an owner", false],
+    ["a READ session", true],
+  ])("are gone for %s, in both layouts", async (_who, readOnly) => {
+    isReadOnly.value = readOnly;
+    for (const docked of [false, true]) {
+      const wrapper = await mountSidebar({ docked });
+      // The anchor: a render that produced no rail at all would pass the
+      // absence check below for the wrong reason.
+      expect(
+        wrapper
+          .findAll("button")
+          .some(
+            (b) =>
+              b.text().includes("Duplicates") ||
+              b.attributes("aria-label") === "Duplicates",
+          ),
+      ).toBe(true);
+      const names = wrapper
+        .findAll("button")
+        .map((b) => `${b.text()} ${b.attributes("aria-label") ?? ""}`);
+      expect(names.filter((n) => /\b(Models|Workflows)\b/.test(n))).toEqual([]);
+      wrapper.unmount();
+    }
   });
 });
 
-describe("the collapsed dock's Models entry", () => {
-  it("is visible, inert and explained for a READ session", async () => {
-    isReadOnly.value = true;
-    const wrapper = await mountSidebar({ docked: true });
-
-    const duplicates = wrapper
-      .findAll(".sidebar-collapsed-item")
-      .find((el) => String(tipText(el) ?? "") === DEDUP_HINT);
-    expect(duplicates).toBeTruthy();
-
-    const models = dockedModels(wrapper);
-    expect(models).toBeTruthy();
-    expect(models.attributes("aria-disabled")).toBe("true");
-    expect(tipText(models)).toBe(SHELF_HINT);
-
-    await models.trigger("click");
-    expect(wrapper.emitted("select-models")).toBeUndefined();
-
-    wrapper.unmount();
-  });
-
-  it("still navigates for the owner", async () => {
-    const wrapper = await mountSidebar({ docked: true });
-
-    const models = dockedModels(wrapper);
-    expect(models).toBeTruthy();
-    expect(tipText(models)).toBe("Models");
-    expect(models.attributes("aria-disabled")).toBeUndefined();
-
-    await models.trigger("click");
-    expect(wrapper.emitted("select-models")).toHaveLength(1);
-
-    wrapper.unmount();
-  });
-});
-
-describe("the Workflows entry", () => {
-  // Same rule, same reason: every /workflows route is owner-only, so the
-  // destination must not be live for a session the backend refuses on all of
-  // it — and must not be hidden either, because the demo site IS a read-only
-  // session.
-  it("is visible, inert and explained for a READ session, in both layouts", async () => {
-    isReadOnly.value = true;
-    const wrapper = await mountSidebar();
-
-    const workflows = expandedWorkflows(wrapper);
-    expect(workflows).toBeTruthy();
-    expect(workflows.attributes("aria-disabled")).toBe("true");
-    expect(tipText(workflows)).toBe(WORKFLOWS_HINT);
-    // `aria-disabled`, not the native attribute: the control stays tabbable so
-    // a keyboard user reaches the explanation too.
-    expect(workflows.attributes("disabled")).toBeUndefined();
-    await workflows.trigger("click");
-    expect(wrapper.emitted("select-workflows")).toBeUndefined();
-    wrapper.unmount();
-
-    const docked = await mountSidebar({ docked: true });
-    const dockedRow = dockedWorkflows(docked);
-    expect(dockedRow).toBeTruthy();
-    expect(dockedRow.attributes("aria-disabled")).toBe("true");
-    expect(tipText(dockedRow)).toBe(WORKFLOWS_HINT);
-    await dockedRow.trigger("click");
-    expect(docked.emitted("select-workflows")).toBeUndefined();
-    docked.unmount();
-  });
-
-  it("still navigates for the owner, in both layouts", async () => {
-    // The positive control: an inert-for-everybody row is its own regression.
-    const wrapper = await mountSidebar();
-
-    const workflows = expandedWorkflows(wrapper);
-    expect(workflows).toBeTruthy();
-    expect(workflows.attributes("aria-disabled")).toBeUndefined();
-    await workflows.trigger("click");
-    expect(wrapper.emitted("select-workflows")).toHaveLength(1);
-    wrapper.unmount();
-
-    const docked = await mountSidebar({ docked: true });
-    const dockedRow = dockedWorkflows(docked);
-    expect(dockedRow).toBeTruthy();
-    expect(tipText(dockedRow)).toBe("Workflows");
-    expect(dockedRow.attributes("aria-disabled")).toBeUndefined();
-    await dockedRow.trigger("click");
-    expect(docked.emitted("select-workflows")).toHaveLength(1);
-    docked.unmount();
-  });
-});
-
-describe("the expanded rail's Models entry, after a download arrived", () => {
+describe("new models that arrived while the shelf was closed", () => {
   afterEach(() => {
     useRoute().name = "all-pictures";
   });
 
-  it("wears `new` until the shelf is opened", async () => {
+  it("are marked seen once the shelf is opened", async () => {
     const wrapper = await mountSidebar();
     const shelf = useModelShelfStore();
-    expect(expandedModels(wrapper).find(".sidebar-new-tag").exists()).toBe(false);
-
     shelf.unseenArrivals = true;
     await flushPromises();
-    expect(expandedModels(wrapper).find(".sidebar-new-tag").exists()).toBe(true);
+    expect(shelf.unseenArrivals).toBe(true);
 
     useRoute().name = "models";
     await flushPromises();
     expect(shelf.unseenArrivals).toBe(false);
-    expect(expandedModels(wrapper).find(".sidebar-new-tag").exists()).toBe(false);
     wrapper.unmount();
   });
 

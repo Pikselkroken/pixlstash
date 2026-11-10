@@ -1,19 +1,19 @@
 <template>
-  <!-- The active tool's options, floating above the picture (the design's
-       Photoshop-style options strip). -->
-  <div class="paint-options" role="group" :aria-label="`${current.label} options`">
-    <span class="paint-options-name">
+  <!-- The options of the tool in hand, floating above the picture (the
+       design's Photoshop-style options strip): a selection tool's combine
+       mode and tolerance, or crop's framings. The lightbox draws it only for
+       those; the brush's size is in the Edit tab with the tools. -->
+  <div
+    class="paint-options"
+    role="group"
+    :aria-label="current ? `${current.label} options` : 'Paint tools'"
+  >
+    <span v-if="current" class="paint-options-name">
       <v-icon size="18">{{ current.icon }}</v-icon>
       {{ current.label }}
     </span>
 
-    <template v-if="paint.tool.value === 'hand'">
-      <span class="paint-options-hint">
-        Choose a tool to mark where the edit goes, or crop.
-      </span>
-    </template>
-
-    <template v-else-if="isModeTool">
+    <template v-if="isModeTool">
       <Segmented
         :model-value="paint.mode.value"
         variant="icon-label"
@@ -66,25 +66,7 @@
       </template>
     </template>
 
-    <template v-else>
-      <label class="paint-options-range">
-        Size
-        <input
-          :value="paint.brushSize.value"
-          type="range"
-          min="1"
-          max="200"
-          step="1"
-          @input="paint.setBrushSize($event.target.value)"
-        />
-        <output>{{ paint.brushSize.value }} px</output>
-      </label>
-      <span class="paint-options-hint">{{
-        paint.tool.value === "eraser"
-          ? "Paints the selection away"
-          : "Paints onto the selection"
-      }}</span>
-    </template>
+    <span v-if="current" class="paint-options-hint">Esc puts the tool down</span>
   </div>
 </template>
 
@@ -110,8 +92,9 @@ const props = defineProps({
 const emit = defineEmits(["apply-crop"]);
 
 const modes = PAINT_MODES;
+// `null` with no tool held.
 const current = computed(
-  () => PAINT_TOOLS.find((item) => item.id === props.paint.tool.value) || PAINT_TOOLS[0],
+  () => PAINT_TOOLS.find((item) => item.id === props.paint.tool.value) || null,
 );
 const isModeTool = computed(() => MODE_TOOLS.has(props.paint.tool.value));
 
@@ -130,10 +113,9 @@ function sameBox(box) {
   --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
   --track-trough: rgba(var(--v-theme-scrim), 0.34);
   --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
-  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
 
   position: absolute;
-  top: calc(var(--topbar-height) + var(--space-3));
+  top: var(--space-3);
   left: 50%;
   transform: translateX(-50%);
   z-index: var(--z-floating);

@@ -53,6 +53,7 @@ const listWorkflowCards = vi.fn();
 const getWorkflowCard = vi.fn();
 const patchWorkflowCard = vi.fn();
 const duplicateWorkflow = vi.fn();
+const inpaintCopyWorkflow = vi.fn();
 const deleteWorkflow = vi.fn();
 const exportWorkflow = vi.fn();
 const setWorkflowThumbnail = vi.fn();
@@ -70,6 +71,7 @@ vi.mock("../../api/workflows", () => ({
   // imports and this factory omits is `undefined` at the call - which fails
   // as "not a function" inside a handler rather than as a missing mock.
   duplicateWorkflow: (...args) => duplicateWorkflow(...args),
+  inpaintCopyWorkflow: (...args) => inpaintCopyWorkflow(...args),
   deleteWorkflow: (...args) => deleteWorkflow(...args),
   exportWorkflow: (...args) => exportWorkflow(...args),
   setWorkflowThumbnail: (...args) => setWorkflowThumbnail(...args),
@@ -116,8 +118,10 @@ const importWorkflow = vi.fn();
 const getPixlstashNode = vi.fn();
 const listTemplates = vi.fn();
 const addTemplates = vi.fn();
-vi.mock("../../api/comfyui", () => ({
+vi.mock("../../api/comfyui", async () => ({
   importWorkflow: (...args) => importWorkflow(...args),
+  // The real reader of a refusal: what the view does with a 409 is the test.
+  existingWorkflow: (await vi.importActual("../../api/comfyui")).existingWorkflow,
   getPixlstashNode: (...args) => getPixlstashNode(...args),
   // The Templates tab (#2000).
   listTemplates: (...args) => listTemplates(...args),
@@ -131,6 +135,9 @@ import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
+import { useSearchStore } from "../../stores/useSearchStore";
+import { useOperationStore } from "../../stores/useOperationStore";
 
 // `key` is the workflow's `id`; the grid row carries it as `data-key`.
 const card = (key, extra = {}) => ({
@@ -173,7 +180,7 @@ function setWidth(wrapper, width) {
     value: width,
     configurable: true,
   });
-  observers.forEach((callback) => callback());
+  observers.forEach((callback) => callback([]));
 }
 
 // `attachTo: document.body` leaves its DOM behind, so every wrapper is
@@ -186,6 +193,19 @@ function mountView() {
   const wrapper = mount(WorkflowsView, { attachTo: document.body });
   mounted.push(wrapper);
   return wrapper;
+}
+
+/**
+ * The source the sidebar chooses, which is `shown` in the templates store. The
+ * view has no tabs now (#2165): these stand in for the sidebar's two rows.
+ */
+async function showTemplates() {
+  useWorkflowTemplatesStore().shown = true;
+  await flush();
+}
+async function showMine() {
+  useWorkflowTemplatesStore().shown = false;
+  await flush();
 }
 
 /** Mounted, loaded, and measured at `width` px of grid. */
@@ -228,6 +248,9 @@ const cursorKey = (wrapper) =>
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  // The Templates place lists only with a ComfyUI set up (#2166).
+  useFilterStore().comfyuiConfigured = true;
+  useFilterStore().comfyuiConfigRead = true;
   // Both rails' open flags are persisted; a test that closes the inspector
   // must not hand the next one a closed inspector.
   window.localStorage.clear();
@@ -441,6 +464,7 @@ describe("the cursor survives the list being rebuilt", () => {
 describe("the empty state", () => {
   it("offers the two routes in that do not need a connection", async () => {
     listWorkflowCards.mockResolvedValue({ cards: [], one_offs: 0, hidden: 0 });
+    useFilterStore().comfyuiConfigured = false;
     const wrapper = mountView();
     await flush();
     expect(wrapper.find(".wfv-empty__title").text()).toBe("Nothing found yet");
@@ -466,7 +490,6 @@ describe("the empty state", () => {
       "left out of the grid: hidden workflows and 1 one-off. Nothing has been lost.",
     );
     expect(lead).not.toMatch(/37|38/);
-    expect(wrapper.find(".wfv-sub").text()).not.toContain("hidden");
   });
 
   it("names the watched folder by its host path and opens it", async () => {
@@ -493,10 +516,9 @@ describe("the empty state", () => {
       .findAll(".wfv-empty__actions button")
       .find((button) => button.text().includes("Open watched folder"));
     await open.trigger("click");
-    expect(push).toHaveBeenCalledWith({
-      name: "import-folder",
-      params: { id: "7" },
-    });
+    // Everything the folder brought in: the library, Imported from it.
+    expect(useFilterStore().importedFromFilter).toBe("/srv/incoming");
+    expect(push).toHaveBeenCalledWith({ name: "all-pictures" });
   });
 });
 
@@ -641,7 +663,6 @@ describe("arriving on ?topology=", () => {
     await flush();
 
     expect(wrapper.find(".wfv-note").text()).toContain("Left out: 1 one-off.");
-    expect(wrapper.find(".wfv-sub").text()).toBe("6 workflows · 1 one-off");
   });
 
   it("says nothing is left out when nothing is", async () => {
@@ -867,13 +888,14 @@ describe("the closed inspector", () => {
     expect(edgeTab(wrapper).exists()).toBe(true);
   });
 
-  it("names one workflow, counts several, and is a bare handle for none", async () => {
+  it("names one workflow, counts several, and hides for none", async () => {
     const wrapper = await closedGrid();
     expect(tabLabel(wrapper)).toBe("");
-    expect(edgeTab(wrapper).attributes("aria-label")).toBe("Show inspector");
+    expect(edgeTab(wrapper).isVisible()).toBe(false);
 
     await wrapper.findAll(".wfv-row")[0].trigger("click");
     await flush();
+    expect(edgeTab(wrapper).isVisible()).toBe(true);
     expect(tabLabel(wrapper)).toBe("a");
     expect(edgeTab(wrapper).attributes("aria-label")).toBe(
       "Show inspector: a",
@@ -951,14 +973,17 @@ describe("the closed inspector", () => {
     expect(nudgeClass(railButton(wrapper))).toBe("");
   });
 
-  // The amber busy pulse owns the glyph while anything runs.
-  it("leaves the glyph to the busy pulse while tasks run, and still bounces the tab", async () => {
+  // Running work lives in the title bar's Tasks pill, so the rail toggle has
+  // no busy pulse of its own and the flash is not held back while tasks run.
+  it("flashes the glyph and bounces the tab while tasks run, with no busy pulse", async () => {
     const wrapper = await closedGrid();
     useTasksStore().setImportRun("run-1", { status: "running" });
     await flush();
+    expect(railButton(wrapper).classes().join(" ")).not.toMatch(/busy/);
+    expect(railButton(wrapper).attributes("aria-label")).toBe("Inspector");
     await wrapper.findAll(".wfv-row")[0].trigger("click");
     await flush();
-    expect(nudgeClass(railButton(wrapper))).toBe("");
+    expect(nudgeClass(railButton(wrapper))).not.toBe("");
     expect(nudgeClass(edgeTab(wrapper))).not.toBe("");
   });
 });
@@ -976,14 +1001,12 @@ describe("the closed inspector", () => {
 // it reads the `<style>` block as text, so it stays green against a component
 // whose template no longer draws the tail at all.
 describe("the app-wide toolbar tail", () => {
-  it("asks App.vue for Settings and toggles the rail itself", async () => {
+  it("toggles the rail itself, and leaves Settings to the title bar", async () => {
     const wrapper = await grid();
     const sidebar = useSidebarStore();
-
-    await wrapper
-      .find(".wfv-toolbar button[aria-label='Settings']")
-      .trigger("click");
-    expect(wrapper.emitted("open-settings")).toHaveLength(1);
+    expect(
+      wrapper.find(".wfv-toolbar button[aria-label='Settings']").exists(),
+    ).toBe(false);
 
     // From the open state a fresh session starts in: the first press closes
     // the inspector, the second opens it again. Only the Workflows flag moves,
@@ -1006,40 +1029,62 @@ describe("the app-wide toolbar tail", () => {
     );
   });
 
-  it("orders the tail separator → TbGlobalActions, last in the bar", async () => {
+  it("orders the tail separator → UndoControl → rail toggle, last in the bar", async () => {
     // Placement, not presence: the app-wide chrome sits after this view's own
     // controls, ruled off from them, at the end - as ModelShelf's bar does.
     const wrapper = await grid();
     const bar = wrapper.find(".wfv-toolbar").element;
     const tail = wrapper.find(".wfv-bar-tail").element;
-    // TbGlobalActions is multi-root; its Settings button is a stable anchor.
-    const settings = wrapper.find(
-      ".wfv-toolbar button[aria-label='Settings']",
-    ).element;
+    // TbGlobalActions is multi-root; its rail toggle is a stable anchor.
+    const toggle = wrapper.find(".wfv-toolbar .tb-stats-btn").element;
     const separator = wrapper.find(".wfv-toolbar .bar-separator").element;
-    // "Add…" is the last of this view's own controls.
-    const add = wrapper
-      .findAll(".wfv-toolbar button")
-      .find((button) => button.text().includes("Add")).element;
+    // The Search field is the last of this view's own controls.
+    const add = wrapper.find(".wfv-search").element;
     const follows = (a, b) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
     expect(follows(add, separator)).toBe(true);
     // Adjacency, not merely order: the rule marks the boundary, so nothing may
     // slip between it and the chrome it rules off.
-    expect(separator.nextElementSibling).toBe(settings);
+    const undo = wrapper.find(".wfv-toolbar .uc").element;
+    expect(separator.nextElementSibling).toBe(undo);
+    expect(undo.nextElementSibling).toBe(toggle);
     // Nothing of this view's own follows the app-wide chrome. TbGlobalActions
     // is multi-root, so its stats button is the tail's last element.
     expect(bar.lastElementChild).toBe(tail);
     expect(tail.lastElementChild.classList.contains("tb-stats-btn")).toBe(true);
   });
 
-  // Nothing here writes to the operation log, so undo/redo and the History
-  // popover are not offered at all - the model shelf's exception, for its
-  // reason. `UNDO_BLIND_ROOTS` declines the chord to match.
-  it("mounts no undo control", async () => {
+  // Undo/redo and History are app-wide: they ride in TbGlobalActions, so this
+  // screen carries them in the same place every other screen does.
+  it("mounts the undo control in its tail", async () => {
     const wrapper = await grid();
-    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(false);
+    expect(
+      wrapper.find(".wfv-bar-tail").findComponent({ name: "UndoControl" }).exists(),
+    ).toBe(true);
+  });
+
+  // ...and an undo taken from that control is narrated here: the receipt is
+  // not local-only any more, so a library step's pill draws on this screen.
+  it("draws the receipt for a library undo", async () => {
+    const wrapper = await grid();
+    const operations = useOperationStore();
+    operations.showReceipt(
+      operations.buildReceipt(
+        {
+          id: 10,
+          created_at: "2026-07-29T12:00:00",
+          op_type: "pictures.tags.add",
+          target_count: 1,
+          undoable: true,
+          status: "applied",
+          summary: "Added tag 'portrait'",
+        },
+        "undone",
+      ),
+    );
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".receipt").exists()).toBe(true);
   });
 
   // The toggle's tooltip is its accessible name, and the rail on this screen
@@ -1127,7 +1172,7 @@ describe("the selection mark", () => {
 // so none of them can go on describing a filter another one has dropped.
 describe("WorkflowsView filters", () => {
   const filterButton = (wrapper) =>
-    wrapper.findAll("button").find((b) => b.text().includes("Filters"));
+    wrapper.findAll(".wfv-toolbar button").find((b) => b.text().includes("Filter"));
 
   it("has no chips, no badge and no withheld counts on a clean grid", async () => {
     const wrapper = await grid();
@@ -1135,7 +1180,6 @@ describe("WorkflowsView filters", () => {
     expect(filterButton(wrapper).find(".bar-filter-badge").exists()).toBe(
       false,
     );
-    expect(wrapper.find(".wfv-sub").text()).toBe("6 workflows");
   });
 
   it("draws one chip and one badge per filter that is on", async () => {
@@ -1145,26 +1189,6 @@ describe("WorkflowsView filters", () => {
 
     expect(filterButton(wrapper).find(".bar-filter-badge").text()).toBe("2");
     expect(wrapper.findAll(".filter-chip")).toHaveLength(2);
-  });
-
-  it("counts the one-offs left out and never the hidden workflows", async () => {
-    // On the payload, not on the store: ticking a checkbox re-reads the grid,
-    // and a count written straight onto the store is overwritten by the
-    // answer - which would make this pass for the wrong reason.
-    listWorkflowCards.mockImplementation(() =>
-      Promise.resolve({ cards: [...CARDS], one_offs: 7, hidden: 4 }),
-    );
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-    await store.fetchCards();
-    await flush();
-    expect(wrapper.find(".wfv-sub").text()).toBe("6 workflows · 7 one-offs");
-
-    // Shown is not withheld: the subtitle must stop counting what the reader
-    // is now looking at, or it captions the grid with its own contents.
-    store.setFilters({ hideOneOffs: false });
-    await flush();
-    expect(wrapper.find(".wfv-sub").text()).toBe("6 workflows");
   });
 
   it("filters by origin: each option keeps only its own cards", async () => {
@@ -1217,6 +1241,283 @@ describe("WorkflowsView filters", () => {
     await wrapper.find(".wfv-note-clear").trigger("click");
     await flush();
     expect(wrapper.findAll(".wfv-row")).toHaveLength(6);
+  });
+});
+
+// ── The toolbar (#2165): sort, filter, chips, search, the rail ───────────
+describe("the browse toolbar", () => {
+  const searchInput = (wrapper) => wrapper.find(".wfv-search input");
+
+  it("has no title, source switch, Add or name field: those are the sidebar's", async () => {
+    const wrapper = await grid();
+    const bar = wrapper.find(".wfv-toolbar");
+    expect(bar.find(".wfv-title").exists()).toBe(false);
+    expect(bar.text()).not.toContain("Workflows");
+    expect(wrapper.find('[data-testid="wfv-tab-mine"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="wfv-tab-templates"]').exists()).toBe(false);
+    expect(
+      bar.findAll("button").some((b) => b.text().includes("Add")),
+    ).toBe(false);
+    expect(bar.find(".wfv-name-bar").exists()).toBe(false);
+  });
+
+  it("keeps the active filters inside the bar, not on a row under it", async () => {
+    const wrapper = await grid();
+    useWorkflowsStore().setFilters({ type: "upscale" });
+    await flush();
+    expect(wrapper.find(".wfv-toolbar .filter-chip").exists()).toBe(true);
+    expect(wrapper.find(".wfv-toolbar .filter-strip").exists()).toBe(true);
+    // No strip sits outside the bar any more.
+    expect(
+      wrapper.findAll(".filter-strip").filter((el) => !el.element.closest(".wfv-toolbar")),
+    ).toHaveLength(0);
+  });
+
+  it("Search is bound to the workflow name filter, and types into it", async () => {
+    const wrapper = await grid();
+    const input = searchInput(wrapper);
+    expect(input.attributes("placeholder")).toBe("Search");
+    expect(input.attributes("aria-label")).toBe("Search workflows by name");
+    expect(wrapper.find(".wfv-search-key").text()).toBe("F");
+
+    await input.setValue("upscale");
+    expect(useWorkflowsStore().filters.name).toBe("upscale");
+    expect(useWorkflowTemplatesStore().filters.name).toBe("");
+    // The same text the Filters menu's field edits: one store value.
+    expect(input.element.value).toBe("upscale");
+  });
+
+  it("Search is bound to the templates name filter while Templates is shown", async () => {
+    listTemplates.mockResolvedValue({ reachable: true, templates: [] });
+    const wrapper = await grid();
+    await showTemplates();
+    const input = searchInput(wrapper);
+    expect(input.attributes("aria-label")).toBe(
+      "Search templates by title, tag or model",
+    );
+
+    await input.setValue("ready");
+    expect(useWorkflowTemplatesStore().filters.name).toBe("ready");
+    expect(useWorkflowsStore().filters.name).toBe("");
+  });
+
+  it("F focuses the Search field", async () => {
+    const wrapper = await grid();
+    expect(document.activeElement).not.toBe(searchInput(wrapper).element);
+    useSearchStore().requestSearchFocus();
+    await flush();
+    expect(document.activeElement).toBe(searchInput(wrapper).element);
+  });
+
+  it("the sidebar's Add workflow opens the workflow file picker", async () => {
+    const wrapper = await grid();
+    const picker = wrapper.find('input[accept=".json,application/json"]').element;
+    const click = vi.spyOn(picker, "click").mockImplementation(() => {});
+    const store = useWorkflowsStore();
+
+    store.requestAdd();
+    await flush();
+    expect(click).toHaveBeenCalledTimes(1);
+
+    store.requestAdd();
+    await flush();
+    expect(click).toHaveBeenCalledTimes(2);
+  });
+
+  it("the Search field shrinks, and the bar is the same height it was", async () => {
+    // jsdom has no layout: this pins the rule that lets the field give way,
+    // which is what keeps the bar from overflowing at a narrow width.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(
+      `${process.cwd()}/src/components/views/WorkflowsView.vue`,
+      "utf8",
+    );
+    expect(source).toMatch(/\.wfv-search \{[^}]*flex: 0 1 260px;[^}]*min-width: 96px;/);
+    expect(source).toMatch(/\.wfv-toolbar \{[^}]*height: 36px;/);
+  });
+});
+
+// ── A narrow bar (#2629): the chips leave, Sort folds into the ⋯ ─────────
+describe("the browse toolbar when narrow", () => {
+  const overflow = (wrapper) => wrapper.find('[data-testid="wfv-overflow"]');
+  async function openOverflow(wrapper) {
+    await overflow(wrapper).find("button").trigger("click");
+    await flush();
+  }
+  const sortRows = (wrapper) =>
+    wrapper.findAll('[data-testid="wfv-overflow-sort"]');
+  const directionRows = (wrapper) =>
+    wrapper.findAll('[data-testid="wfv-overflow-direction"]');
+  // A row's words, without its glyphs' ligature names.
+  const words = (rows) => rows.map((r) => r.find(".ctx-label-text").text());
+
+  // jsdom has no container queries, so the ladder is pinned in the source:
+  // each rung's rule inside the `wfvbar` query that is meant to carry it.
+  function rung(source, width) {
+    const at = source.indexOf(`@container wfvbar (max-width: ${width}px) {`);
+    expect(at).toBeGreaterThan(-1);
+    // A rung's block ends at the first line that closes it at column 0.
+    const rest = source.slice(at);
+    return rest.slice(0, rest.search(/\r?\n\}\r?\n/));
+  }
+
+  it("folds in steps, and the app-wide tail is in none of them", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(
+      `${process.cwd()}/src/components/views/WorkflowsView.vue`,
+      "utf8",
+    );
+    // The bar is the container the rungs query.
+    expect(source).toMatch(
+      /\.wfv-toolbar \{[^}]*container-name: wfvbar[^;]*;/,
+    );
+    // Above the fold the ⋯ is not drawn.
+    expect(source).toMatch(/\.wfv-toolbar \.wfv-overflow \{\s*display: none;/);
+
+    const chips = rung(source, 960);
+    expect(chips).toMatch(/\.wfv-strip \{\s*display: none;/);
+    expect(chips).not.toContain(".wfv-sort");
+
+    const sort = rung(source, 700);
+    expect(sort).toMatch(/\.wfv-sort \{\s*display: none;/);
+    expect(sort).toMatch(/\.wfv-overflow \{\s*display: flex;/);
+
+    const filter = rung(source, 480);
+    expect(filter).toMatch(/\.wfv-filter-label \{\s*display: none;/);
+
+    for (const block of [chips, sort, filter]) {
+      expect(block).not.toMatch(/wfv-bar-tail|tb-stats-btn|wfv-search/);
+    }
+  });
+
+  it("the Filter button keeps its name and count when its word drops", async () => {
+    const wrapper = await grid();
+    const filter = () =>
+      wrapper.findAll(".wfv-toolbar button").find((b) => b.text().includes("Filter"));
+    expect(filter().attributes("aria-label")).toBe("Filter");
+    useWorkflowsStore().setFilters({ type: "upscale" });
+    await flush();
+    expect(filter().attributes("aria-label")).toBe("1 Filter");
+    // The word is its own element, which is what the last rung hides.
+    expect(filter().find(".wfv-filter-label").text()).toBe("Filter");
+  });
+
+  it("the ⋯ rows set the workflow sort key and its direction", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    await openOverflow(wrapper);
+    expect(words(sortRows(wrapper))).toEqual([
+      "Your ratings",
+      "Recently used",
+      "Recently changed",
+      "Recently created",
+      "Picture count",
+      "Name",
+    ]);
+    const checked = () =>
+      sortRows(wrapper).filter((r) => r.attributes("aria-checked") === "true");
+    expect(words(checked())).toEqual(["Your ratings"]);
+
+    await sortRows(wrapper)
+      .find((r) => r.find(".ctx-label-text").text() === "Name")
+      .trigger("click");
+    await flush();
+    expect(store.sortKey).toBe("name");
+    // A row closes the menu, as a pick from any menu does.
+    expect(sortRows(wrapper)).toHaveLength(0);
+
+    await openOverflow(wrapper);
+    // The direction rows speak the key's own words, the current one checked.
+    expect(words(directionRows(wrapper))).toEqual([
+      "A to Z",
+      "Z to A",
+    ]);
+    expect(store.sortDirection).toBe("asc");
+    expect(directionRows(wrapper)[0].attributes("aria-checked")).toBe("true");
+    // Picking the direction already in force changes nothing.
+    await directionRows(wrapper)[0].trigger("click");
+    await flush();
+    expect(store.sortDirection).toBe("asc");
+
+    await openOverflow(wrapper);
+    await directionRows(wrapper)[1].trigger("click");
+    await flush();
+    expect(store.sortDirection).toBe("desc");
+  });
+
+  it("the ⋯ opens with focus on the current sort, and the arrows move between rows", async () => {
+    const wrapper = await grid();
+    await openOverflow(wrapper);
+    const current = () => document.activeElement;
+    // "Your ratings" is the store's default key.
+    expect(current().getAttribute("aria-checked")).toBe("true");
+    expect(current().textContent).toContain("Your ratings");
+
+    const panel = wrapper.find('[data-testid="wfv-overflow"] .tbo-panel');
+    await panel.trigger("keydown", { key: "ArrowDown" });
+    expect(current().textContent).toContain("Recently used");
+    await panel.trigger("keydown", { key: "ArrowUp" });
+    await panel.trigger("keydown", { key: "ArrowUp" });
+    // Up from the first row wraps to the last: Favourites first.
+    expect(current().dataset.testid).toBe("wfv-overflow-favourites");
+    await panel.trigger("keydown", { key: "Home" });
+    expect(current().textContent).toContain("Your ratings");
+    // The heading names its rows and is no row itself.
+    const group = panel.find('[role="group"]');
+    expect(
+      wrapper.find(`#${group.attributes("aria-labelledby")}`).text(),
+    ).toBe("Sort by");
+    expect(group.findAll('[role="menuitemradio"]')).toHaveLength(6);
+  });
+
+  it("the ⋯ carries Mine's Favourites first, and Templates has none", async () => {
+    listTemplates.mockResolvedValue({ reachable: true, templates: [] });
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    const favourites = () =>
+      wrapper.find('[data-testid="wfv-overflow-favourites"]');
+    const before = store.favouritesLead;
+    await openOverflow(wrapper);
+    expect(favourites().attributes("aria-checked")).toBe(String(before));
+    await favourites().trigger("click");
+    await flush();
+    expect(store.favouritesLead).toBe(!before);
+
+    await showTemplates();
+    await openOverflow(wrapper);
+    expect(sortRows(wrapper).length).toBeGreaterThan(0);
+    expect(favourites().exists()).toBe(false);
+  });
+
+  it("while Templates is shown the ⋯ sorts the templates", async () => {
+    listTemplates.mockResolvedValue({ reachable: true, templates: [] });
+    const wrapper = await grid();
+    await showTemplates();
+    const templates = useWorkflowTemplatesStore();
+    const mineKey = useWorkflowsStore().sortKey;
+    await openOverflow(wrapper);
+    expect(words(sortRows(wrapper))).toEqual([
+      "Readiness",
+      "Most used",
+      "Newest",
+      "Name",
+      "Model size",
+    ]);
+    await sortRows(wrapper)
+      .find((r) => r.find(".ctx-label-text").text() === "Model size")
+      .trigger("click");
+    await flush();
+    expect(templates.sortKey).toBe("size");
+    expect(useWorkflowsStore().sortKey).toBe(mineKey);
+
+    await openOverflow(wrapper);
+    expect(words(directionRows(wrapper))).toEqual([
+      "Smallest first",
+      "Largest first",
+    ]);
+    await directionRows(wrapper)[1].trigger("click");
+    await flush();
+    expect(templates.sortDirection).toBe("desc");
   });
 });
 
@@ -1460,6 +1761,37 @@ describe("the verbs the bar fires", () => {
     // Said as the verb is named (rule 9 of #1846).
     const { useNoticeStore } = await import("../../stores/useNoticeStore");
     expect(useNoticeStore().notices.at(-1).text).toBe("Duplicated as a (2).");
+  });
+
+  it("Convert to Inpainting selects the new workflow and says so", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.select("a");
+    inpaintCopyWorkflow.mockResolvedValue({ name: "a (inpaint)", workflow_id: "e" });
+
+    await bar(wrapper).vm.$emit("inpaint-copy");
+    await flush();
+    await flush();
+    expect(inpaintCopyWorkflow).toHaveBeenCalledWith("a");
+    expect(store.selectedKeys).toEqual(["e"]);
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    expect(useNoticeStore().notices.at(-1).text).toBe("Converted as a (inpaint).");
+  });
+
+  it("Convert to Inpainting shows the server's reason when it refuses", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.select("a");
+    const refusal = Object.assign(new Error("422"), {
+      response: { status: 422, data: { detail: "This workflow loads 2 pictures." } },
+    });
+    inpaintCopyWorkflow.mockRejectedValue(refusal);
+
+    await bar(wrapper).vm.$emit("inpaint-copy");
+    await flush();
+    await flush();
+    expect(store.selectedKeys).toEqual(["a"]);
+    expect(wrapper.find(".wfv-error").text()).toBe("This workflow loads 2 pictures.");
   });
 
   it("Choose thumbnail… uploads the picked image onto the one card", async () => {
@@ -1856,6 +2188,100 @@ describe("Add…, a dropped file, and Unfiled recipes", () => {
     expect(wrapper.find('[role="status"]').text()).toBe("Added flow");
   });
 
+  /** A rejection as axios hands over the server's "already here" 409. */
+  function alreadyHere(workflowId, name, hidden = false) {
+    return Object.assign(new Error("Request failed with status code 409"), {
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: "workflow_exists",
+            message: `This workflow is already here as ${name}.`,
+            workflow_id: workflowId,
+            name,
+            hidden,
+          },
+        },
+      },
+    });
+  }
+
+  async function chooseFiles(wrapper, names) {
+    const input = wrapper.find(".wfv-file-input");
+    Object.defineProperty(input.element, "files", {
+      value: names.map(
+        (name) =>
+          new File(['{"nodes": []}'], name, { type: "application/json" }),
+      ),
+      configurable: true,
+    });
+    await input.trigger("change");
+    await flush();
+    await flush();
+  }
+
+  it("lands on the workflow a refused file already is, and names it", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    importWorkflow.mockReset();
+    importWorkflow.mockRejectedValue(alreadyHere("c", "Card c"));
+    await chooseFiles(wrapper, ["flow.json"]);
+
+    expect(store.selectedKeys).toEqual(["c"]);
+    expect(cursorKey(wrapper)).toBe("c");
+    expect(store.error).toBe("");
+    const note = wrapper.find('[data-testid="wfv-already-here"]');
+    expect(note.text()).toContain(
+      "flow.json is already here as Card c, so it was not added again.",
+    );
+    expect(wrapper.find('[role="status"]').text()).toBe(
+      "flow.json is already here as Card c",
+    );
+    // The card it is pulses; no other does.
+    const pulsing = wrapper.findAll(".wfv-cell--pulse");
+    expect(pulsing).toHaveLength(1);
+    expect(pulsing[0].element.closest(".wfv-row").dataset.key).toBe("c");
+    await note.findAll("button").at(-1).trigger("click");
+    expect(wrapper.find('[data-testid="wfv-already-here"]').exists()).toBe(false);
+  });
+
+  it("adds the new files of a drop and names the ones already here", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    importWorkflow.mockReset();
+    importWorkflow
+      .mockResolvedValueOnce({ name: "a", workflow_id: "a" })
+      .mockRejectedValueOnce(alreadyHere("c", "Card c"))
+      .mockResolvedValueOnce({ name: "b", workflow_id: "b" });
+    await chooseFiles(wrapper, ["a.json", "dup.json", "b.json"]);
+
+    // On the last NEW card, with the duplicate still pointed at.
+    expect(store.selectedKeys).toEqual(["b"]);
+    expect(wrapper.find('[role="status"]').text()).toBe(
+      "Added 2 workflows; 1 is already here as Card c",
+    );
+    expect(
+      wrapper.find(".wfv-cell--pulse").element.closest(".wfv-row").dataset.key,
+    ).toBe("c");
+  });
+
+  it("turns Show hidden on to reach a hidden workflow a file already is", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    importWorkflow.mockReset();
+    importWorkflow.mockRejectedValue(alreadyHere("e", "Card e", true));
+    await chooseFiles(wrapper, ["flow.json"]);
+
+    expect(store.filters.showHidden).toBe(true);
+    expect(listWorkflowCards).toHaveBeenLastCalledWith(
+      expect.objectContaining({ includeHidden: true }),
+    );
+    expect(store.selectedKeys).toEqual(["e"]);
+    expect(wrapper.find('[data-testid="wfv-already-here"]').text()).toContain(
+      "It is hidden, so hidden workflows are shown now.",
+    );
+  });
+
   it("puts the wash out when the window importer claims the drop", async () => {
     const wrapper = await grid();
     const dataTransfer = { files: [], types: ["Files"] };
@@ -1974,14 +2400,11 @@ describe("Mine | Templates", () => {
     });
     const wrapper = await grid();
     expect(listTemplates).not.toHaveBeenCalled();
-    const tab = wrapper.find('[data-testid="wfv-tab-templates"]');
-    expect(tab.attributes("aria-selected")).toBe("false");
+    expect(useWorkflowTemplatesStore().shown).toBe(false);
 
-    await tab.trigger("click");
-    await flush();
+    await showTemplates();
 
     expect(listTemplates).toHaveBeenCalledTimes(1);
-    expect(tab.attributes("aria-selected")).toBe("true");
     expect(wrapper.find(".wfv-grid").exists()).toBe(false);
     // The partner template is hidden by default, and the strip says so.
     const titles = wrapper
@@ -1993,19 +2416,8 @@ describe("Mine | Templates", () => {
       "http://127.0.0.1:8188",
     );
 
-    await wrapper.find('[data-testid="wfv-tab-mine"]').trigger("click");
+    await showMine();
     expect(cardKeys(wrapper)).toEqual(["a", "b", "c", "d", "e", "f"]);
-  });
-
-  it("moves between the tabs with the arrow keys", async () => {
-    listTemplates.mockResolvedValue({ reachable: true, templates: [] });
-    const wrapper = await grid();
-    await wrapper.find('[data-testid="wfv-tab-mine"]').trigger("keydown", {
-      key: "ArrowRight",
-    });
-    expect(
-      wrapper.find('[data-testid="wfv-tab-templates"]').attributes("aria-selected"),
-    ).toBe("true");
   });
 
   it("shows Mine with the workflow a file dropped on Templates made", async () => {
@@ -2013,16 +2425,14 @@ describe("Mine | Templates", () => {
     importWorkflow.mockReset();
     importWorkflow.mockResolvedValue({ name: "flow", workflow_id: "d" });
     const wrapper = await grid();
-    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await showTemplates();
     await flush();
     const files = [new File(['{"nodes": []}'], "flow.json", { type: "application/json" })];
     await wrapper.find(".wfv").trigger("drop", { dataTransfer: { files, types: ["Files"] } });
     await flush();
     await flush();
 
-    expect(
-      wrapper.find('[data-testid="wfv-tab-mine"]').attributes("aria-selected"),
-    ).toBe("true");
+    expect(useWorkflowTemplatesStore().shown).toBe(false);
     expect(useWorkflowsStore().selectedKeys).toEqual(["d"]);
     expect(cursorKey(wrapper)).toBe("d");
   });
@@ -2035,7 +2445,7 @@ describe("Mine | Templates", () => {
       templates: [],
     });
     const wrapper = await grid();
-    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await showTemplates();
     await flush();
     const empty = wrapper.find('[data-testid="wtp-unreachable"]');
     expect(empty.text()).toContain("Templates come from your ComfyUI");
@@ -2056,7 +2466,7 @@ describe("Mine | Templates", () => {
       failed: [],
     });
     const wrapper = await grid();
-    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await showTemplates();
     await flush();
     expect(wrapper.find('[data-testid="wtp-unreachable"]').exists()).toBe(false);
     // Partner templates are hidden by default, shipped or not.
@@ -2093,7 +2503,7 @@ describe("Mine | Templates", () => {
       failed: [],
     });
     const wrapper = await grid();
-    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await showTemplates();
     await flush();
     await wrapper.find('[data-testid="template-card"]').trigger("click");
     await flush();
@@ -2117,7 +2527,7 @@ describe("Mine | Templates", () => {
       failed: [],
     });
     const wrapper = await grid();
-    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await showTemplates();
     await flush();
     await wrapper.find('[data-testid="template-card"]').trigger("click");
     await flush();
@@ -2128,9 +2538,7 @@ describe("Mine | Templates", () => {
     expect(addTemplates.mock.calls[0][0].map((t) => t.key)).toEqual([
       "default/ready",
     ]);
-    expect(
-      wrapper.find('[data-testid="wfv-tab-mine"]').attributes("aria-selected"),
-    ).toBe("true");
+    expect(useWorkflowTemplatesStore().shown).toBe(false);
     expect(useWorkflowsStore().selectedKeys).toEqual(["c"]);
     const { useNoticeStore } = await import("../../stores/useNoticeStore");
     expect(JSON.stringify(useNoticeStore().$state)).toContain(
@@ -2145,7 +2553,7 @@ describe("Mine | Templates", () => {
       failed: [{ module: "default", name: "api_x", detail: "gone" }],
     });
     const wrapper = await grid();
-    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await showTemplates();
     await flush();
     const { useWorkflowTemplatesStore } = await import(
       "../../stores/useWorkflowTemplatesStore"
@@ -2160,14 +2568,6 @@ describe("Mine | Templates", () => {
     expect(templates.selectedKeys).toEqual(["default/api_x"]);
   });
 
-  it("gives Mine no count until its list is read", async () => {
-    const wrapper = mountView();
-    const count = () =>
-      wrapper.find('[data-testid="wfv-tab-mine"] .wfv-viewseg-n').exists();
-    expect(count()).toBe(false);
-    await flush();
-    expect(count()).toBe(true);
-  });
 });
 
 describe("favourites (#1578)", () => {
@@ -2182,6 +2582,29 @@ describe("favourites (#1578)", () => {
     await flush();
     expect(setFavourites).toHaveBeenCalledWith("workflow", ["a"], true);
     expect(useWorkflowsStore().selectedKeys).toEqual(["a"]);
+  });
+
+  it("R runs the focused card, selecting it first, as the rail's Run… keycap says", async () => {
+    const wrapper = await grid();
+    const runDialog = useRunDialogStore();
+    const openRun = vi.spyOn(runDialog, "openRun").mockImplementation(() => {});
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "r" });
+    await flush();
+    expect(useWorkflowsStore().selectedKeys).toEqual(["a"]);
+    expect(openRun).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "card", workflowId: "a" }),
+    );
+  });
+
+  it("R and H typed into Search are text, not Run or Favourite", async () => {
+    const wrapper = await grid();
+    const openRun = vi.spyOn(useRunDialogStore(), "openRun").mockImplementation(() => {});
+    const input = wrapper.find(".wfv-search input");
+    for (const key of ["r", "h"]) await input.trigger("keydown", { key });
+    await flush();
+    expect(openRun).not.toHaveBeenCalled();
+    expect(setFavourites).not.toHaveBeenCalled();
+    expect(useWorkflowsStore().selectedKeys).toEqual([]);
   });
 
   it("H on a card inside the selection favourites the whole selection", async () => {
@@ -2215,7 +2638,7 @@ describe("favourites (#1578)", () => {
     wrapper.vm.sortMenuOpen = true;
     await flush();
     expect(box()).toHaveLength(1);
-    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await showTemplates();
     await flush();
     wrapper.vm.sortMenuOpen = true;
     await flush();

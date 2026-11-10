@@ -1,7 +1,7 @@
 """Utilities for extracting and interpreting ComfyUI workflow metadata
 embedded in image files.
 
-These functions mirror the extraction logic from the frontend's ImageOverlay
+These functions mirror the extraction logic from the frontend's Lightbox
 component and are used both in API endpoint responses and internally by the
 picture tagger when building text embeddings from ComfyUI generation data.
 """

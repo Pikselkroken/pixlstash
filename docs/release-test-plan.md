@@ -24,20 +24,24 @@ plan; legacy § numbers are still cited in spec titles):
 | Legacy section | Now automated by |
 |---|---|
 | §1 Authentication (login/logout, tokens, session persistence) | `auth.spec.js` |
-| §2 Import — drag overlay affordance | `import.spec.js` (drop→import stays manual, see Import section) |
+| §2 Import — Import panel, grid drop, set/character/project targets, locked set, unsupported files, de-duplication, `.txt` sidecar tags, video | `import.spec.js` |
 | §3.1–3.3 Grid display, sort, search | `grid.spec.js`, `grid-browse.spec.js` |
 | §3.5 Context menu opens/lists actions | `context-menu.spec.js` |
 | §4 Selection ▾ / context-menu parity (was #403) | `menu-parity.spec.js` |
-| §4 ImageOverlay open/navigate/close | `overlay.spec.js` |
+| §4 Lightbox open/navigate/close | `lightbox.spec.js` |
 | §5 Tags add/remove | `tags.spec.js` |
 | §6 Star rating — overlay persist + grid stars + grid↔overlay sync | `rating.spec.js` |
-| §7/§8/§9 Set/project/character navigation & filtering | `entities.spec.js`, `set-operations.spec.js`, `set-locking.spec.js` |
+| §7/§8/§9 Set/project/character navigation & filtering; create, edit, delete | `entities.spec.js`, `set-operations.spec.js`, `set-locking.spec.js`, `sidebar-entries.spec.js` |
 | §10 Faces crops + bounding boxes | `faces.spec.js` |
+| Delete to the Scrapheap (key, Selection ▾, context menu, lightbox), locked-set refusal, Restore / Restore all, Empty and Delete forever up to Cancel | `scrapheap.spec.js` (confirming a purge stays manual until #2353) |
 | §11 Stack expand/collapse | `stacks.spec.js` (badge click + visual stacking order stay manual) |
 | §14 Predictions — delete drops to prediction chip, Confirm restores | `tag-predictions.spec.js` (generation after import stays manual) |
 | §15 Export — selection ZIP contents + set ZIP count | `export.spec.js` |
-| §19.1/19.4 Live-update own-change silence, pill choice, flood coalescing, overlay deferral | `grid-own-change-no-pill.spec.js`, `grid-external-change-pill.spec.js`, `grid-injection.spec.js`, `grid-overlay-deferral.spec.js` |
+| §19.1/19.4 Live-update own-change silence, pill choice, flood coalescing, overlay deferral | `grid-own-change-no-pill.spec.js`, `grid-external-change-pill.spec.js`, `grid-injection.spec.js`, `grid-lightbox-deferral.spec.js` |
 | §20.1 Tag-health board; §20.3/20.4 review create + binary decide + Escape | `review-board.spec.js`, `review-session.spec.js` |
+| Filter menu facets, chips, Clear all | `filters.spec.js` |
+| Deep links (`?overlay=` on entity routes, multi-entity URLs, `?review=`) | `deep-links.spec.js` |
+| Grid and lightbox keyboard shortcuts, typing safety | `grid-keys.spec.js`, `lightbox-keys.spec.js` |
 | §0.5 From source (Linux) | CI `e2e` job (pip install, `npm run build`, boots server, logs in, renders grid) |
 
 ---
@@ -273,11 +277,12 @@ inside the overlay directory), then launch:
 
 ## 5. Import & background processing
 
-The e2e harness runs with `disable_background_workers: true` and the import
-endpoint requires the face worker — so everything here needs a real server
-run with workers ON.
+The e2e harness runs submitted tasks and the folder sweeps but loads no models
+and runs none of the tagging, embedding or scoring sweeps, so the import itself
+is automated (`import.spec.js`) and what follows it is not: everything here
+needs a real server run with workers ON.
 
-- [ ] Drag two or more image files from the OS file manager onto the grid and drop — import starts immediately, a progress indicator appears, and the pictures appear in the grid without a reload (the drag overlay itself is automated; the drop → import path is not)
+- [ ] Drag two or more image files from the OS file manager onto the grid and drop — import starts immediately, a progress indicator appears, and the pictures appear in the grid without a reload (`import.spec.js` drops a synthetic DataTransfer; a drag from a real file manager is not automated)
 - [ ] After importing a batch of 5+ pictures: the task indicator shows live progress; faces, a generated caption (Description section), and predicted tags appear on the new pictures once processing completes
 - [ ] Deleting all tags on a processed picture and requeueing (Reset and regenerate) produces fresh predictions
 
@@ -297,7 +302,7 @@ Requires a live ComfyUI server.
 
 ## 7. Image Plugins
 
-Visual-judgement checks (apply via the ImageOverlay):
+Visual-judgement checks (apply via the Lightbox):
 
 - [ ] **Blur/Sharpen**: blur level 5 — result is visibly blurrier
 - [ ] **Brightness/Contrast**: +2 brightness — result is visibly brighter
@@ -317,21 +322,13 @@ one page).
 
 ## 9. Folder Management (Reference + Import)
 
-Use two test folders: `reference_test/` (≥2 pre-existing images) and
-`import_test/` (empty, add 1 image mid-test).
+The sidebar no longer lists or adds folders: adding a folder is **Add a
+library**. Reference and import folders made by an earlier release keep working
+in the backend. Use a library that already has one of each.
 
-### 9.1 pip / native install
-
-- [ ] Sidebar **Folders** → Add folder → **Reference folder** → `reference_test/` — created with no error, no pending-restart badge, scanning starts automatically
-- [ ] Clicking the reference folder shows its pictures in the grid
-- [ ] Add an **Import folder** → `import_test/`; copy a new image into it while running — it appears in the grid automatically
-- [ ] Remove the reference folder — the entry disappears and its indexed pictures leave the grid
-
-### 9.2 Docker install
-
-- [ ] In Docker mode, folder browsing is unavailable and manual path entry is required
-- [ ] Saving a new reference/import folder prompts for a container restart with an updated mount; the folder shows pending-restart status until then
-- [ ] After restart the folder transitions to active (or mount-error if invalid); a new file in the mounted `import_test/` is picked up automatically
+- [ ] The sidebar shows no Folders section, expanded or docked, and the docked library menu offers only Global and Projects
+- [ ] The reference folder's pictures are still in All Pictures
+- [ ] Copy a new image into the import folder while running — it still appears in the grid automatically
 
 ---
 
@@ -376,10 +373,9 @@ regression when someone stumbles into it — not so that anyone goes looking.
 
 ## 11. Review Sessions — manual remainder
 
-Board + create + binary decide + Escape-close are automated
-(`review-board.spec.js`, `review-session.spec.js`; four further cases are
-`fixme`-guarded pending behaviour reconciliation). The rest needs a real vault
-or human judgement.
+Board + the session loop (create, binary decide, Escape-close, Undo, Skip,
+keyboard, completion/archive) are automated (`review-board.spec.js`,
+`review-session.spec.js`). The rest needs a real vault or human judgement.
 
 ### 11.1 Board signals not exercisable on the committed fixture
 

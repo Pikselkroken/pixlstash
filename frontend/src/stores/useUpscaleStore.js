@@ -33,7 +33,7 @@ export const useUpscaleStore = defineStore("upscale", () => {
    * picked by hand, null for no pick yet (the shelf's first, see `model`).
    */
   const chosen = ref(remembered.model ?? null);
-  /** The upscalers on the shelf, `[{sha256, name}]`; null until read. */
+  /** The shelf's upscalers, `[{sha256, name, filename}]`; null until read. */
   const models = ref(null);
   /** The Upscale… dialog's pictures, or null when it is closed. */
   const pictureIds = ref(null);
@@ -57,6 +57,7 @@ export const useUpscaleStore = defineStore("upscale", () => {
         .map((row) => ({
           sha256: row.sha256,
           name: modelName(row).text || row.filename,
+          filename: row.filename,
         }));
     } catch (err) {
       console.warn("Could not list the upscalers on the shelf:", err);

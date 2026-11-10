@@ -386,10 +386,7 @@ describe("ActionReceipt - local receipts (#1573)", () => {
     const store = useOperationStore();
     store.setLocalReceiptHost(true);
     const undoSpy = vi.spyOn(store, "undo");
-    const wrapper = mount(ActionReceipt, {
-      ...globalOpts,
-      props: { localOnly: true },
-    });
+    const wrapper = mount(ActionReceipt, globalOpts);
     const undo = raiseLocal(store);
     await wrapper.vm.$nextTick();
 
@@ -402,20 +399,6 @@ describe("ActionReceipt - local receipts (#1573)", () => {
     expect(undoSpy).not.toHaveBeenCalled();
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".r-btn").text()).toContain("Redo");
-  });
-
-  it("hides and does not announce a library receipt when local-only", async () => {
-    const store = useOperationStore();
-    const wrapper = mount(ActionReceipt, {
-      ...globalOpts,
-      props: { localOnly: true },
-    });
-    store.showReceipt(store.buildReceipt(op(), "did"));
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(wrapper.find(".receipt").exists()).toBe(false);
-    expect(
-      wrapper.find('[data-testid="action-receipt-announcement"]').text(),
-    ).toBe("");
   });
 
   it("raises nothing, and keeps nothing, without a host screen", () => {

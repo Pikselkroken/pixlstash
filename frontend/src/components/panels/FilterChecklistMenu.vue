@@ -80,7 +80,7 @@
     </div>
     <div v-else-if="footer" class="tbm-footer">{{ footer }}</div>
     <div v-else-if="hint" class="tbm-footer">
-      <span class="fm-kbd">Enter</span> {{ hint }}
+      <KeyCap k="Enter" class="fm-kbd" /> {{ hint }}
     </div>
   </div>
 </template>
@@ -92,6 +92,7 @@
  */
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { formatCount } from "../../utils/filterChips";
+import KeyCap from "../widgets/KeyCap.vue";
 
 const MAX_SHOWN = 50;
 

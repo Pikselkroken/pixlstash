@@ -368,12 +368,15 @@ class WsBroadcasterMixin:
             }
         elif event_type == EventType.MODELS_ARRIVED:
             # Another "look again": the shelf re-reads its rows. The ids only
-            # say how many arrived.
+            # say how many arrived; ``from_downloads`` says the Downloads
+            # intake moved them, which the owner's tab announces. No names:
+            # the event reaches every socket, and filenames are owner-only.
             info = data if isinstance(data, dict) else {}
             payload = {
                 "type": "models_arrived",
                 "event": event_type.name,
                 "model_ids": [int(i) for i in (info.get("model_ids") or [])],
+                "from_downloads": info.get("from_downloads") is True,
             }
         elif event_type in _WS_SNAPSHOT_EVENT_TYPES:
             info = data if isinstance(data, dict) else {}
@@ -403,6 +406,10 @@ class WsBroadcasterMixin:
             }
             if fields:
                 payload["fields"] = list(fields)
+            # A face redetect reports how many faces it added, so the tab that
+            # asked can offer a more sensitive run when it found none.
+            if isinstance(data, dict) and "new_faces" in data:
+                payload["new_faces"] = int(data["new_faces"])
         # Uniform origin-aware envelope on EVERY event. ``source`` and
         # ``origin_client_id`` let the frontend recognise the echo of its own
         # change (origin id match) and apply a targeted grid update instead of a

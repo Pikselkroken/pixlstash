@@ -1,14 +1,14 @@
 <template>
-  <!-- `@close` is CALLED, not bound bare. `closeOverlay`'s first argument
+  <!-- `@close` is CALLED, not bound bare. `closeLightbox`'s first argument
        decides whether the close returns to the view named by `?from=`, and a
        bare binding would hand that decision to whatever a future `close` emit
        happened to carry: a truthy payload would silently send the reader to
        the shelf, a falsy one silently stop it, with nothing red anywhere. -->
-  <ImageOverlay
-    ref="imageOverlayRef"
-    :open="overlayOpen"
-    :initialImageId="overlayImageId"
-    :initialExpandedStackIds="overlayInitialExpandedStackIds"
+  <Lightbox
+    ref="lightboxRef"
+    :open="lightboxOpen"
+    :initialImageId="lightboxImageId"
+    :initialExpandedStackIds="lightboxInitialExpandedStackIds"
     :allImages="allGridImages"
     :tagUpdate="wsStore.wsTagUpdate"
     :descriptionUpdate="wsStore.wsDescriptionUpdate"
@@ -16,34 +16,35 @@
     :detectionUpdate="wsStore.wsDetectionUpdate"
     :textUpdate="wsStore.wsTextUpdate"
     :orientationUpdate="wsStore.wsOrientationUpdate"
-    :hiddenTags="userPrefsStore.hiddenTags"
-    :applyTagFilter="userPrefsStore.applyTagFilter"
-    :dateFormat="userPrefsStore.dateFormat"
+    :facesUpdate="wsStore.wsFacesUpdate"
     :showStacks="gridStore.showStacks"
     :showProblemIcon="gridStore.showProblemIcon"
+    :favouritable="!isScrapheapView"
     :availablePlugins="availablePlugins"
     :comfyuiProgress="comfyuiProgress"
     :comfyuiProgressPercent="comfyuiProgressPercent"
     :pluginProgress="pluginProgress"
     :pluginProgressPercent="pluginProgressPercent"
     :comfyuiConfigured="filterStore.comfyuiConfigured"
-    :guestScore="overlayGuestScore"
-    :editRequest="overlayEditRequest"
-    :compareRequest="overlayCompareRequest"
-    @close="closeOverlay()"
+    :guestScore="lightboxGuestScore"
+    :editRequest="lightboxEditRequest"
+    :compareRequest="lightboxCompareRequest"
+    :view-label="activeCategoryLabel"
+    @close="closeLightbox()"
     @apply-score="applyScore"
+    @apply-favourite="applyLightboxFavourite"
     @set-guest-score="(img, n) => setGuestScore(img, n)"
-    @add-tag="addTagToImage"
     @update-description="updateDescriptionForImage"
-    @overlay-change="handleOverlayChange"
-    @added-to-set="handleOverlayAddedToSet"
+    @lightbox-change="handleLightboxChange"
+    @added-to-set="handleLightboxAddedToSet"
     @set-project="handleSetProjectForSelected"
     @run-plugin="handlePluginRunRequest"
-    @request-context-menu="handleOverlayContextMenuRequest"
+    @request-context-menu="handleLightboxContextMenuRequest"
     @character-created="emit('refresh-sidebar')"
     @run-recipe="openRunForPicture"
     @use-as-input="runWorkflowOnPicture"
-    @show-picture="moveOverlayTo"
+    @show-picture="moveLightboxTo"
+    @delete-picture="handleLightboxDelete"
     @edit-more-options="openRunFromEditTab"
   />
   <ImageImporter
@@ -55,7 +56,6 @@
   />
   <div :style="wrapperStyle" class="grid-content-area">
     <Toolbar
-      :selectedCount="selectedImageIds.length"
       :selectedCharacter="String(selectionStore.selectedCharacter)"
       :selectedSort="sortStore.selectedSort"
       :allPicturesId="String(ALL_PICTURES_ID)"
@@ -64,15 +64,11 @@
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
       @open-duplicates="emit('open-duplicates')"
-      @open-settings="emit('open-settings')"
-      @open-import="emit('open-import')"
-      @local-import="emit('local-import', $event)"
-      @confirm-export-zip="emit('confirm-export-zip')"
-      @confirm-export-folder="emit('confirm-export-folder', $event)"
     />
     <FilterStrip
       :count-base-query="filterCountBaseQuery"
       :all-pictures-view="isAllPicturesFilterView"
+      :owns-escape="escapeClearsFilters"
     />
     <!-- ── Visible range pill ── -->
     <transition name="grid-range-fade">
@@ -81,9 +77,9 @@
       }}</span>
     </transition>
     <!-- ── Breadcrumb: current-view path (bottom-left overlay) ──
-         Hidden on the desktop shell, where it lives in the title bar. -->
+         In both shells: the title bar holds the workspace switch (#2158). -->
     <nav
-      v-if="breadcrumb.length && !isDesktop"
+      v-if="breadcrumb.length"
       ref="breadcrumbEl"
       class="grid-breadcrumb"
       :class="{
@@ -137,10 +133,11 @@
         contextMenuImage ? sharedPictureIds.has(contextMenuImage.id) : false
       "
       @close="contextMenuVisible = false"
-      @added-to-set="handleOverlayAddedToSet"
+      @added-to-set="handleLightboxAddedToSet"
       @add-to-character="handleAddToCharacter"
       @remove-from-character="handleRemoveFromCharacter"
       @create-character="handleCreateCharacterFromMenu"
+      @create-set="handleCreateSetFromMenu"
       @set-project="handleSetProjectForSelected"
       @remove-from-stack="removeSelectedFromStack"
       @dissolve-stacks="dissolveSelectedStacks"
@@ -159,6 +156,7 @@
       @edit-pictures="editSelection"
       @compare-pictures="compareSelection"
       @segment="openSegmentDialog"
+      @detect-faces="detectFacesOnSelection"
       @auto-tag="handleAutoTag"
       @generate-description="handleGenerateDescription"
       @share-picture="sharePicture"
@@ -167,37 +165,39 @@
       @find-similar-faces="handleFindSimilarFaces"
       @rotate-left="rotateSelectedPictures(ROTATE_CCW)"
       @rotate-right="rotateSelectedPictures(ROTATE_CW)"
+      @open-with="openPictureInApp"
     />
 
-    <!-- ── Overlay (lightbox) context menu ─────────────────────
-         A second, dedicated instance so grid-menu and overlay-menu state stay
-         cleanly separated. It runs in overlay-mode (restricted action set +
-         dark skin) and every action is scoped to the single overlay picture via
-         overlay-specific handlers - never the grid selection. -->
+    <!-- ── Lightbox context menu ─────────────────────
+         A second, dedicated instance so grid-menu and lightbox-menu state stay
+         cleanly separated. It runs in lightbox-mode (restricted action set +
+         dark skin) and every action is scoped to the single lightbox picture via
+         lightbox-specific handlers - never the grid selection. -->
     <ImageGridContextMenu
-      overlay-mode
-      :visible="overlayCtxVisible"
-      :x="overlayCtxX"
-      :y="overlayCtxY"
-      :selected-image-ids="overlayCtxSelectedIds"
+      lightbox-mode
+      :visible="lightboxCtxVisible"
+      :x="lightboxCtxX"
+      :y="lightboxCtxY"
+      :selected-image-ids="lightboxCtxSelectedIds"
       :selected-character="String(selectionStore.selectedCharacter)"
       :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
-      :lock-reason="overlayCtxLockReason"
-      :context-image="overlayCtxImage"
-      :stack-edit="overlayCtxStackEdit"
+      :lock-reason="lightboxCtxLockReason"
+      :context-image="lightboxCtxImage"
+      :stack-edit="lightboxCtxStackEdit"
       :comfyui-configured="filterStore.comfyuiConfigured"
-      @close="overlayCtxVisible = false"
-      @stack-move="moveOverlayStackMember"
-      @save-picture="handleOverlaySave"
-      @save-picture-as="handleOverlaySaveAs"
-      @copy-picture="handleOverlayCopy"
-      @share-picture="handleOverlayShare"
-      @find-similar-faces="handleOverlayFindSimilarFaces"
-      @reverse-image-search="handleOverlayReverseImageSearch"
-      @segment="openOverlaySegmentDialog"
-      @delete-selected="handleOverlayDelete"
-      @remove-from-group="handleOverlayScrapheapRestore"
+      @close="lightboxCtxVisible = false"
+      @stack-move="moveLightboxStackMember"
+      @save-picture="handleLightboxSave"
+      @save-picture-as="handleLightboxSaveAs"
+      @copy-picture="handleLightboxCopy"
+      @share-picture="handleLightboxShare"
+      @find-similar-faces="handleLightboxFindSimilarFaces"
+      @reverse-image-search="handleLightboxReverseImageSearch"
+      @segment="openLightboxSegmentDialog"
+      @delete-selected="handleLightboxDelete()"
+      @remove-from-group="handleLightboxScrapheapRestore"
       @use-as-input="runWorkflowOnPicture"
+      @open-with="openPictureInApp"
     />
 
     <!-- ── New person from the context menu (#645) ─────────────
@@ -210,6 +210,15 @@
       :projects="createPersonProjects"
       @close="handleCreatePersonClose"
       @saved="handleCreatePersonSaved"
+    />
+    <!-- ── New set from the selection (#2124): the Set picker's "New set in
+         <Person>…" and "New set…". Grid-local for the same reason. -->
+    <PictureSetEditor
+      :open="createSetOpen"
+      :set="createSetDraft"
+      :projects="createPersonProjects"
+      @close="handleCreateSetClose"
+      @saved="handleCreateSetSaved"
     />
 
     <!-- ── Revoke picture shares confirm dialog ───────────────── -->
@@ -398,16 +407,26 @@
       :total="pluginProgress.total"
       anchor="bottom"
     />
+    <!-- The sort/search wait is drawn in the title bar, beside the tasks
+         pill, through tasksStore.transientProgress (wired below). -->
 
-    <ProgressOverlay
-      :visible="smartScoreLoadingVisible"
-      :status="smartScoreProgress.status"
-      :message="smartScoreProgressMessage"
-      :percent="smartScoreProgressPercent"
-      :indeterminate="false"
-      anchor="top"
-    />
-
+    <!-- An import's arriving tiles sit above the grid's scroller, pinned
+         whatever the sort or filter, and the scroller starts below them, so
+         the virtual grid's row maths never sees them (#2512). -->
+    <div
+      ref="arrivingWrapper"
+      class="grid-arriving"
+      :style="arrivingWrapperStyle"
+      @dragenter.prevent="handleGridDragEnter"
+      @dragover.prevent="handleGridDragOver"
+      @dragleave.prevent="handleGridDragLeave"
+      @drop.capture.prevent="handleArrivingGridDrop"
+    >
+      <ArrivingTiles
+        :columns="gridStore.columns"
+        @show-picture="(id) => openLightbox({ id })"
+      />
+    </div>
     <div
       class="grid-scroll-wrapper"
       ref="scrollWrapper"
@@ -415,7 +434,7 @@
       @dragenter.prevent="handleGridDragEnter"
       @dragover.prevent="handleGridDragOver"
       @dragleave.prevent="handleGridDragLeave"
-      @drop.capture.prevent="handleGridDrop"
+      @drop.capture.prevent="handleArrivingGridDrop"
       :style="scrollWrapperStyle"
     >
       <div
@@ -495,8 +514,19 @@
           <div class="empty-state-subtitle">
             {{ emptyStateSubtitle }}
           </div>
+          <!-- An empty Inbox offers the next period that holds anything, so a
+               narrow period never hides an older pile of unfiled work. -->
           <AppButton
-            v-if="canShowAllPicturesButton"
+            v-if="inboxWiderPeriod"
+            class="empty-state-action"
+            variant="primary"
+            data-testid="inbox-widen"
+            @click.stop="inboxStore.setPeriod(inboxWiderPeriod.id)"
+          >
+            Show {{ inboxWiderPeriod.label.toLowerCase() }}
+          </AppButton>
+          <AppButton
+            v-else-if="canShowAllPicturesButton && !inboxEmptyUnfiltered"
             class="empty-state-action"
             variant="primary"
             @click.stop="handleEmptyStateReset"
@@ -586,6 +616,7 @@
             ]"
             :role="img.id && !isImageGhosted(img) ? 'gridcell' : 'presentation'"
             @click.stop="handleThumbnailClick(img, img.idx, $event)"
+            @dblclick="handleThumbnailDblClick(img, $event)"
           >
             <div
               :class="[
@@ -605,12 +636,14 @@
               @drop="handleStackReorderDrop(img, $event)"
               @dragleave="handleStackReorderDragLeave(img, $event)"
             >
-              <!-- Top-left permanent badges (top→bottom): problem, reference folder, lock, share -->
+              <!-- Top-left permanent badges (top→bottom): stack count, new run,
+                   stack place, problem, reference folder, lock, share -->
               <div
                 v-if="
                   isThumbnailReady(img.id) &&
                   img.thumbnail &&
-                  (getOpenStackPlace(img) ||
+                  (shouldShowStackBadge(img) ||
+                    getOpenStackPlace(img) ||
                     newBatch.isNew(img.id) ||
                     (gridStore.showProblemIcon && hasPenalisedTags(img)) ||
                     img.reference_folder_id ||
@@ -619,6 +652,16 @@
                 "
                 class="thumbnail-top-left-badges"
               >
+                <!-- The stack count leads: it is permanent, so leading means it
+                     never moves, and the top-right corner belongs to the score
+                     strip alone. -->
+                <StackBadge
+                  v-if="shouldShowStackBadge(img)"
+                  :count="getStackBadgeCount(img)"
+                  :tint="getStackBadgeTint(img)"
+                  @activate="toggleStackExpand(img)"
+                  @mouseenter.stop="prefetchStackMembers(img)"
+                />
                 <!-- Made by the last run (#1868), until the next one ends: the
                      batch to pick the keepers from. -->
                 <span
@@ -1006,34 +1049,17 @@
                 </button>
                 </div>
               </div>
-              <!-- Top-right badge column - the shared home for corner
-                   indicators (stack count in the corner, hover-only stars
-                   below it, right-aligned, 2px gap). The stack count is
-                   PERMANENT - how many pictures a tile stands for is a fact
-                   about the tile, and hiding it until hover is what made
-                   stacks invisible while browsing. The hover behaviour
-                   therefore lives on the container's other children, not the
-                   container.
-
-                   The permanent badge leads the column deliberately: below the
-                   stars its rest position was set by a strip that is
-                   `opacity: 0` but still in flow, so it hung a row off the
-                   corner and moved whenever the star size or `showStars`
-                   changed. Leading, it never moves; only what appears beneath
-                   it does. -->
+              <!-- Top-right: the score strip alone, ending in the favourite
+                   heart. Hover-only, except that a favourite at rest keeps the
+                   strip collapsed to its heart and the stars slide out to the
+                   left under the pointer (ImageGrid.css). -->
               <div
                 v-if="isThumbnailReady(img.id) && img.thumbnail"
                 class="thumbnail-top-right-badges"
+                :style="{ '--star-size': `${badgeIconSizes.star}px` }"
               >
-                <StackBadge
-                  v-if="shouldShowStackBadge(img)"
-                  :count="getStackBadgeCount(img)"
-                  :tint="getStackBadgeTint(img)"
-                  @activate="toggleStackExpand(img)"
-                  @mouseenter.stop="prefetchStackMembers(img)"
-                />
                 <StarRatingOverlay
-                  v-if="gridStore.showStars"
+                  v-if="gridStore.showStars || (!isReadOnly && !isScrapheapView)"
                   :score="
                     isReadOnly
                       ? (guestScoreMap.get(img.id) ?? img.score ?? 0)
@@ -1041,7 +1067,12 @@
                   "
                   :icon-size="badgeIconSizes.star"
                   :compact="true"
+                  :stars="gridStore.showStars"
+                  shortens
+                  :favouritable="!isReadOnly && !isScrapheapView"
+                  :favourite="Boolean(img.favourite)"
                   @set-score="setScore(img, $event)"
+                  @toggle-favourite="toggleFavourite([img.id])"
                 />
               </div>
             </div>
@@ -1176,6 +1207,7 @@
           :selected-group-name="selectedGroupName"
           :selected-sort="sortStore.selectedSort"
           :owns-escape="true"
+          :compact="searchResultsActive"
           :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
           :selected-image-ids="selectedImageIds"
           :selected-media-support="selectedMediaSupport"
@@ -1195,7 +1227,9 @@
           :clearing-impossible="clearingImpossibleTags"
           @clear-impossible-tags="handleClearImpossibleTags"
           @clear-selection="clearSelection"
-          @added-to-set="handleOverlayAddedToSet"
+          @favourite="toggleFavourite(selectedImageIds)"
+          @added-to-set="handleLightboxAddedToSet"
+          @create-set="handleCreateSetFromMenu"
           @remove-from-group="removeFromGroup"
           @keep-cover-only="openKeepCoverOnly"
           @delete-selected="deleteSelected"
@@ -1210,11 +1244,11 @@
           @open-stack="openSelectedStack"
           @create-stacks-from-groups="createStacksFromSelectedGroups"
           @run-plugin="handlePluginRunRequest"
-          @tags-applied="handleTagsApplied"
           @auto-tag="handleAutoTag"
           @generate-description="handleGenerateDescription"
           @reverse-image-search="handleReverseImageSearch"
           @segment="openSegmentDialog"
+          @detect-faces="detectFacesOnSelection"
           @rotate-left="rotateSelectedPictures(ROTATE_CCW)"
           @rotate-right="rotateSelectedPictures(ROTATE_CW)"
           @selection-menu-open="toolbarSelectionMenuOpen = $event"
@@ -1222,6 +1256,8 @@
           @run-workflow="runWorkflowOnSelection"
           @edit-pictures="editSelection"
           @compare-pictures="compareSelection"
+          @confirm-export-zip="emit('confirm-export-zip')"
+          @confirm-export-folder="emit('confirm-export-folder', $event)"
         />
       </template>
     </GridActionPill>
@@ -1238,7 +1274,7 @@
     <ActionReceipt
       v-if="!isReadOnly"
       :lift-px="actionReceiptLift"
-      :pill-hidden="overlayOpen"
+      :pill-hidden="lightboxOpen"
     />
   </div>
 </template>
@@ -1258,9 +1294,16 @@ import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import LibraryEmptyState from "./LibraryEmptyState.vue";
-import { isSupportedImportFile } from "../../utils/media";
+import {
+  isFileDrag,
+  isInternalImageDrag,
+  isModelFile,
+  isSupportedImportFile,
+} from "../../utils/media";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { useWhatsChangedStore } from "../../stores/useWhatsChangedStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { usePublishTransientProgress } from "../../composables/usePublishTransientProgress";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
@@ -1278,7 +1321,7 @@ import {
   useBottomAnchor,
 } from "../../composables/useBottomAnchor";
 import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
-import { overlayCloseTarget } from "../../utils/overlayRoute";
+import { lightboxCloseTarget } from "../../utils/lightboxRoute";
 import { markEnd, markStart } from "../../utils/perfMarks";
 import { useScopedNotice } from "../../composables/useScopedNotice";
 import { buildPurgeBadge } from "../../utils/retention.js";
@@ -1312,8 +1355,11 @@ import {
   pictureGridTabIndex,
 } from "../../utils/gridAccessibility.js";
 import ImageImporter from "../io/ImageImporter.vue";
-import ImageOverlay from "./ImageOverlay.vue";
+import ArrivingTiles from "./ArrivingTiles.vue";
+import { useImportArrivalsStore } from "../../stores/useImportArrivalsStore";
+import Lightbox from "./Lightbox.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
+import { inboxEmptyState, useInboxStore } from "../../stores/useInboxStore";
 import FilterStrip from "../panels/FilterStrip.vue";
 import { filterChips } from "../../utils/filterChips";
 import Toolbar from "../panels/Toolbar.vue";
@@ -1352,6 +1398,7 @@ import {
   purgeScrapheap,
   restoreScrapheap,
   openPictureLocation,
+  openPictureWith,
   detectPictures,
   listPicturePlugins,
   runPicturePlugin,
@@ -1366,7 +1413,6 @@ import {
   listPicturesByIds,
   rotatePictures,
 } from "../../api/pictures";
-import { addPictureTag } from "../../api/tags";
 import {
   getStack,
   keepCoverOnly,
@@ -1402,10 +1448,13 @@ import {
   nextFreeCharacterName,
 } from "../../utils/characterCreateFlow.js";
 import CharacterEditor from "../editors/CharacterEditor.vue";
+import PictureSetEditor from "../editors/PictureSetEditor.vue";
+import { nextSetAppearance } from "../../utils/setAppearance.js";
+import { getEntityProjectIds } from "../../utils/projectMembership.js";
 import {
   getPictureSet,
-  addPictureToSet,
   bulkAddPicturesToSet,
+  listPictureSets,
   removePictureFromSet,
 } from "../../api/pictureSets";
 import { getSharedPictureIds, revokeTokensByResource } from "../../api/users";
@@ -1427,12 +1476,10 @@ import {
   lockedSetsSentence,
 } from "../../utils/dedup.js";
 import {
-  dedupeTagList,
   hasPenalisedTags,
   penalisedTagsTitle,
   penalisedTagIcon,
   penalisedTagColor,
-  getTagList,
 } from "../../utils/tags.js";
 import {
   getStackBadgeCount,
@@ -1458,6 +1505,7 @@ import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useWsStore } from "../../stores/useWsStore";
+import { useFaceRedetect } from "../../composables/useFaceRedetect";
 import { useSearchStore } from "../../stores/useSearchStore";
 import {
   ALL_PICTURES_ID,
@@ -1476,9 +1524,11 @@ const searchStore = useSearchStore();
 const gridStore = useGridStore();
 const sidebarStore = useSidebarStore();
 const userPrefsStore = useUserPrefsStore();
+// The 2.0 checklist ticks a gesture when it is done for real (#2145).
+const whatsChanged = useWhatsChangedStore();
 
 const emit = defineEmits([
-  "update:overlay-open",
+  "update:lightbox-open",
   "refresh-sidebar",
   "clear-search",
   "reset-to-all",
@@ -1619,22 +1669,22 @@ const contextMenuX = ref(0);
 const contextMenuY = ref(0);
 const contextMenuImage = ref(null);
 const contextMenuClickedFace = ref(null);
-// ── Overlay (lightbox) context menu - state kept separate from the grid menu.
-// The image object arrives in the request payload from ImageOverlay (it owns
+// ── Lightbox context menu - state kept separate from the grid menu.
+// The image object arrives in the request payload from Lightbox (it owns
 // the currently-displayed picture + its loaded faces), so this never depends on
 // the grid selection.
-const overlayCtxVisible = ref(false);
-const overlayCtxX = ref(0);
-const overlayCtxY = ref(0);
-const overlayCtxImage = ref(null);
-const imageOverlayRef = ref(null);
-// The overlay menu acts on exactly one picture: the one on screen.
-const overlayCtxSelectedIds = computed(() =>
-  overlayCtxImage.value?.id != null ? [overlayCtxImage.value.id] : [],
+const lightboxCtxVisible = ref(false);
+const lightboxCtxX = ref(0);
+const lightboxCtxY = ref(0);
+const lightboxCtxImage = ref(null);
+const lightboxRef = ref(null);
+// The lightbox menu acts on exactly one picture: the one on screen.
+const lightboxCtxSelectedIds = computed(() =>
+  lightboxCtxImage.value?.id != null ? [lightboxCtxImage.value.id] : [],
 );
-const overlayCtxLockReason = computed(() =>
-  overlayCtxImage.value?.id != null
-    ? lockedSetsStore.lockReason(overlayCtxImage.value.id)
+const lightboxCtxLockReason = computed(() =>
+  lightboxCtxImage.value?.id != null
+    ? lockedSetsStore.lockReason(lightboxCtxImage.value.id)
     : null,
 );
 const reverseImageSearchPictureIds = ref([]);
@@ -1901,7 +1951,7 @@ async function fetchAvailablePlugins() {
     return;
   }
   try {
-    const body = await listPicturePlugins({ baseUrl: props.backendUrl });
+    const body = await listPicturePlugins();
     const plugins = Array.isArray(body?.plugins) ? body.plugins : [];
     availablePlugins.value = plugins.filter((plugin) => plugin && plugin.name);
   } catch (err) {
@@ -1921,7 +1971,7 @@ const captionerPlugins = computed(() =>
 async function fetchTaggerPlugins() {
   if (!props.backendUrl) return;
   try {
-    const body = await listTaggers({ baseUrl: props.backendUrl });
+    const body = await listTaggers();
     allTaggerPlugins.value = body?.plugins ?? [];
   } catch (err) {
     console.warn("Failed to load tagger plugins:", err);
@@ -1935,6 +1985,11 @@ function handleTagsApplied(payload) {
   // reload that blanked the grid buys nothing here (#1162).
   if (payload?.action === "reset") return;
   debouncedFetchAllGridImages({ force: true });
+}
+
+/** Refresh the grid after Ctrl+V pasted copied tags onto the selection (#2139). */
+function handlePasteResult() {
+  handleTagsApplied({ action: "add" });
 }
 
 async function handleAutoTag({ model } = {}) {
@@ -1980,6 +2035,8 @@ function handlePluginRunRequest(payload) {
   // Stack the derived outputs with their originals unless the caller opted out.
   // Default true keeps the historical behaviour for any other run-plugin source.
   const stack = payload?.stack !== false;
+  // The lightbox's filter menu: its result opens as a before / after.
+  const compare = payload?.compare === true && pictureIds.length === 1;
   // Build per-image captions from stored descriptions in the grid.
   const idSet = new Set(pictureIds);
   const idToDesc = new Map();
@@ -1988,7 +2045,14 @@ function handlePluginRunRequest(payload) {
     if (idSet.has(id)) idToDesc.set(id, img.description || "");
   }
   const captions = pictureIds.map((id) => idToDesc.get(id) ?? "");
-  runPluginWithParameters(pluginName, pictureIds, parameters, captions, stack);
+  runPluginWithParameters(
+    pluginName,
+    pictureIds,
+    parameters,
+    captions,
+    stack,
+    compare,
+  );
 }
 
 async function runPluginWithParameters(
@@ -1997,6 +2061,7 @@ async function runPluginWithParameters(
   parameters,
   captions,
   stack = true,
+  compare = false,
 ) {
   if (!pluginName || !Array.isArray(pictureIds) || !pictureIds.length) return;
   try {
@@ -2045,14 +2110,20 @@ async function runPluginWithParameters(
         .filter((id) => id != null);
       if (newIds.length) {
         triggerNewImageHighlight(newIds);
-        if (overlayOpen.value) {
-          moveOverlayTo(newIds[newIds.length - 1]);
+        const newest = newIds[newIds.length - 1];
+        if (lightboxOpen.value && compare) {
+          // Taken only while the reader is still on the source picture.
+          lightboxRef.value?.showRunResult?.(newest, pictureIds[0], null);
+        } else if (lightboxOpen.value) {
+          // Through the lightbox, not the URL alone: the new picture is in
+          // neither of its lists yet, and a bare move would find nothing.
+          lightboxRef.value?.showPicture?.(newest);
         }
       }
     }
     preserveScrollOnNextFetch.value = true;
     debouncedFetchAllGridImages();
-    if (overlayOpen.value && pictureIds.length) {
+    if (lightboxOpen.value && pictureIds.length) {
       const refreshId =
         createdIds.length > 0
           ? createdIds[createdIds.length - 1]
@@ -2139,7 +2210,7 @@ function triggerFaceOverlayRedraw() {
 // The dialogs themselves are mounted in App.vue - the one parent the grid and
 // the Workflows view share - so the grid only says what to run.
 //
-// **Every close here is `closeOverlay(false)`** (#1446's rule): this component
+// **Every close here is `closeLightbox(false)`** (#1446's rule): this component
 // is closing the lightbox to reveal its own result, so it must not honour
 // `?from=`. Doing so would be worse here than on the other such paths - the
 // popup is App's, but the view context is the grid's, and `onUnmounted` closes
@@ -2150,7 +2221,7 @@ function triggerFaceOverlayRedraw() {
 function openRunForPicture(pictureId) {
   const id = Number(getPictureId(pictureId ?? contextMenuImage.value?.id));
   if (!Number.isFinite(id) || id <= 0) return;
-  if (overlayOpen.value) closeOverlay(false);
+  if (lightboxOpen.value) closeLightbox(false);
   runDialogStore.openRun({ kind: "picture", pictureIds: [id] });
 }
 
@@ -2209,7 +2280,7 @@ let decidingMakeMore = false;
 /** The Run popup with its workflow picker unset, over these pictures. */
 function openRunWithWorkflowPicker(ids) {
   if (isReadOnly.value || !ids.length) return;
-  if (overlayOpen.value) closeOverlay(false);
+  if (lightboxOpen.value) closeLightbox(false);
   runDialogStore.openRun({
     kind: "selection",
     pictureIds: ids,
@@ -2226,7 +2297,7 @@ function runWorkflowOnSelection() {
 const EDIT_WORKFLOW = "Flux2-Klein-Image-Edit.json";
 
 /** The grid's *Edit…*, as the lightbox reads it: `{pictureIds}` per gesture. */
-const overlayEditRequest = ref(null);
+const lightboxEditRequest = ref(null);
 
 /**
  * "Edit…", from either grid menu: the lightbox on the first selected picture,
@@ -2255,14 +2326,14 @@ async function editSelection() {
       { key: "edit-pictures" },
     );
   }
-  overlayEditRequest.value = { pictureIds: ids };
-  openOverlay({ id: ids[0] });
+  lightboxEditRequest.value = { pictureIds: ids };
+  openLightbox({ id: ids[0] });
 }
 
 /**
  * The lightbox's "Use as input for…" — the same popup, over ONE picture.
  *
- * Deliberately not routed through the selection. `openOverlay` never touches
+ * Deliberately not routed through the selection. `openLightbox` never touches
  * `selectedImageIds`, so in the lightbox that selection is invisible, and a
  * control whose tooltip says "this picture" must not hand the run fifty
  * others the reader cannot see. With no id there is nothing to act on, and it
@@ -2275,7 +2346,7 @@ function runWorkflowOnPicture(pictureId) {
 }
 
 /**
- * The lightbox Edit tab's *More options…* (#1381): the Run popup on this
+ * The lightbox Edit tab's *More settings…* (#1381): the Run popup on this
  * picture, with the tab's workflow and instruction already filled in. With no
  * instruction typed the popup starts from the picture's own prompt, as *Use as
  * input for…* does: `emptyPrompt` would send `""` over a recipe prompt, which
@@ -2566,10 +2637,10 @@ onMounted(() => {
   window.addEventListener("dragend", clearGridDragOverlay, true);
   window.addEventListener("keydown", handleKeyDown);
 
-  // Restore overlay from URL on initial page load (e.g. after a page refresh).
-  const overlayIdFromUrl = _overlayRoute.query.overlay;
-  if (overlayIdFromUrl && !overlayOpen.value) {
-    openOverlay({ id: overlayIdFromUrl });
+  // Restore lightbox from URL on initial page load (e.g. after a page refresh).
+  const lightboxIdFromUrl = _lightboxRoute.query.overlay;
+  if (lightboxIdFromUrl && !lightboxOpen.value) {
+    openLightbox({ id: lightboxIdFromUrl });
   }
 
   fetchAvailablePlugins();
@@ -2712,12 +2783,12 @@ watch(
       pendingGridRefreshAfterImport.value = true;
       return;
     }
-    if (overlayOpen.value) {
+    if (lightboxOpen.value) {
       // A tag edit under an active tag filter would re-query and drop the
       // now-non-matching picture from the grid mid-view (the streaming refetch
-      // replaces allGridImages). Defer the reconcile until the overlay closes so
-      // prev/next stay stable; closeOverlay() applies the filter removal in place.
-      pendingOverlayGridRefresh.value = true;
+      // replaces allGridImages). Defer the reconcile until the lightbox closes so
+      // prev/next stay stable; closeLightbox() applies the filter removal in place.
+      pendingLightboxGridRefresh.value = true;
       return;
     }
     if (payload.external) {
@@ -2913,10 +2984,10 @@ function getVideoThumbnailSrc(img) {
   if (!img || !isVideo(img)) return null;
   if (!img.id || !img.format) return null;
   // Build a stable URL without the pixel_sha cache-buster so the browser treats
-  // this as the same resource as the overlay's videoSrc (which also omits it).
+  // this as the same resource as the lightbox's videoSrc (which also omits it).
   // Using buildMediaUrl here would add ?v=pixel_sha, causing two concurrent
   // requests to different URLs for the same file - the browser aborts one,
-  // leaving the overlay's <video> element stuck loading.
+  // leaving the lightbox's <video> element stuck loading.
   return `${props.backendUrl}/pictures/${img.id}.${img.format.toLowerCase()}`;
 }
 
@@ -3356,10 +3427,8 @@ function errorDetail(err, fallback = "Please try again.") {
 const reviewOverlayOpen = computed(() => reviewSessionsStore.overlayOpen);
 
 // ── Breadcrumb (current-view path) ──────────────────────────────────────
-// The trail logic lives in useBreadcrumb, shared with the desktop title bar.
-// In the desktop shell the breadcrumb renders in the title bar instead, so the
-// in-grid overlay below is gated on !isDesktop.
-const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
+// The trail logic lives in useBreadcrumb. It renders here in both shells: the
+// title bar holds the workspace switch instead (#2158).
 const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
 
 // Below 600px the centred notice card widens over the bottom-left breadcrumb, so
@@ -3718,7 +3787,7 @@ async function removeFromGroup() {
   }
 }
 
-function handleOverlayAddedToSet(payload) {
+function handleLightboxAddedToSet(payload) {
   const pictureIds = Array.isArray(payload?.pictureIds)
     ? payload.pictureIds
     : [];
@@ -3734,10 +3803,10 @@ function handleOverlayAddedToSet(payload) {
     // In overlap view, removing membership from one selected set means the
     // picture no longer belongs to the intersection and should disappear.
     if (action === "removed") {
-      if (overlayOpen.value) {
-        // Defer grid removal until the overlay closes so the current picture
+      if (lightboxOpen.value) {
+        // Defer grid removal until the lightbox closes so the current picture
         // doesn't vanish from the filmstrip mid-viewing.
-        pendingOverlayGridRefresh.value = true;
+        pendingLightboxGridRefresh.value = true;
       } else {
         removeImagesById(pictureIds);
         selectedImageIds.value = selectedImageIds.value.filter(
@@ -3754,19 +3823,20 @@ function handleOverlayAddedToSet(payload) {
     Number.isFinite(changedSetId) &&
     changedSetId === primarySelectedSetId.value
   ) {
-    if (overlayOpen.value) {
-      pendingOverlayGridRefresh.value = true;
+    if (lightboxOpen.value) {
+      pendingLightboxGridRefresh.value = true;
     } else {
       removeImagesById(pictureIds);
     }
   }
 
   if (
-    selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID &&
+    (selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID ||
+      isInboxView.value) &&
     !hasSetSelection.value
   ) {
-    if (overlayOpen.value) {
-      pendingOverlayGridRefresh.value = true;
+    if (lightboxOpen.value) {
+      pendingLightboxGridRefresh.value = true;
     } else {
       removeImagesById(pictureIds);
     }
@@ -3780,7 +3850,8 @@ function handleAddToCharacter(payload) {
     : [];
   if (!pictureIds.length) return;
   if (
-    selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID &&
+    (selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID ||
+      isInboxView.value) &&
     !hasSetSelection.value
   ) {
     removeImagesById(pictureIds);
@@ -3809,17 +3880,16 @@ async function handleCreateCharacterFromMenu(query) {
     faceEntries: selectedFaceIds.value.slice(),
   });
   const typed = typeof query === "string" ? query.trim() : "";
-  const apiOpts = { baseUrl: props.backendUrl };
   // Projects feed the dialog's project select; the character list is only
   // needed to derive the next free default name when nothing was typed.
   const [projects, characters] = await Promise.all([
-    listProjects(apiOpts).catch((e) => {
+    listProjects().catch((e) => {
       console.warn("Couldn't list projects for the person editor", e);
       return [];
     }),
     typed
       ? Promise.resolve([])
-      : listCharacters(apiOpts).catch((e) => {
+      : listCharacters().catch((e) => {
           console.warn(
             "Couldn't list characters to derive a default person name",
             e,
@@ -3911,6 +3981,96 @@ async function handleCreatePersonSaved(savedCharacter) {
     );
     emit("refresh-sidebar");
   }
+}
+
+// ── New set from the selection (#2124) ───────────────────────────────────────
+const createSetOpen = ref(false);
+const createSetDraft = ref(null);
+let pendingCreateSetPictureIds = [];
+
+/**
+ * The Set picker's create row: name a new set (under the person it was asked
+ * for, if any) in the set editor, then file the captured selection into it.
+ */
+async function handleCreateSetFromMenu({ characterId = null, name = "" } = {}) {
+  pendingCreateSetPictureIds = selectedImageIds.value.slice();
+  const [projects, sets, person] = await Promise.all([
+    listProjects().catch((e) => {
+      console.warn("Couldn't list projects for the set editor", e);
+      return [];
+    }),
+    listPictureSets().catch((e) => {
+      console.warn("Couldn't list sets to pick a new set's icon and colour", e);
+      return [];
+    }),
+    characterId == null
+      ? Promise.resolve(null)
+      : getCharacter(characterId).catch((e) => {
+          console.warn(
+            `Couldn't read person ${characterId} for the new set's projects; it starts in the open project`,
+            e,
+          );
+          return null;
+        }),
+  ]);
+  createPersonProjects.value = Array.isArray(projects) ? projects : [];
+  const userSets = (Array.isArray(sets) ? sets : []).filter(
+    (s) => !s?.reference_character,
+  );
+  // A set under a person joins the person's projects, so it shows wherever
+  // they do (as SideBar.createChildSet does); otherwise the open project.
+  const personProjectIds = person ? getEntityProjectIds(person) : [];
+  createSetDraft.value = {
+    ...nextSetAppearance(userSets),
+    ...(personProjectIds.length
+      ? { project_ids: personProjectIds }
+      : projectStore.projectViewMode === "project" &&
+          projectStore.selectedProjectId != null
+        ? { project_ids: [projectStore.selectedProjectId] }
+        : {}),
+    parent_character_id: characterId,
+    parent_name: name,
+  };
+  createSetOpen.value = true;
+}
+
+// The ids stay as captured at the click: the row promised those N pictures.
+// `saved` reads them before the editor's `close`, so closing can drop them.
+function handleCreateSetClose() {
+  createSetOpen.value = false;
+  createSetDraft.value = null;
+  pendingCreateSetPictureIds = [];
+}
+
+async function handleCreateSetSaved(savedSet) {
+  const ids = pendingCreateSetPictureIds;
+  pendingCreateSetPictureIds = [];
+  const name = savedSet?.name || "the new set";
+  if (savedSet?.id == null || !ids.length) {
+    emit("refresh-sidebar");
+    return;
+  }
+  try {
+    // One bulk call: one operation-log entry and one Undo.
+    await bulkAddPicturesToSet(savedSet.id, ids);
+    noticeStore.success(
+      `Created ${name}, added ${ids.length} picture${ids.length === 1 ? "" : "s"}.`,
+      { key: "create-set-add" },
+    );
+    operationStore.refresh();
+    handleLightboxAddedToSet({
+      pictureIds: ids,
+      setId: savedSet.id,
+      action: "added",
+    });
+  } catch (e) {
+    console.error("Failed to add the selection to the new set", e);
+    noticeStore.error(
+      `Created ${name}, but couldn't add the selection. ${errorDetail(e)}`,
+      { key: "create-set-add" },
+    );
+  }
+  emit("refresh-sidebar");
 }
 
 function handleRemoveFromCharacter(payload) {
@@ -4018,17 +4178,25 @@ function showLibraryMoveNotice(library, counts) {
   noticeStore[message.level](message.body, { key: "pictures-move" });
 }
 
-// `idsOverride` scopes the delete to an explicit picture list (the overlay
-// context menu passes `[overlayImageId]`). When set, the grid selection is
-// neither read for the target NOR mutated as a side effect - the overlay owns
-// its own post-delete cleanup (it closes the lightbox). Default (null) is the
-// grid path: act on, and update, `selectedImageIds`.
+// `idsOverride` scopes the delete to an explicit picture list (the lightbox
+// passes the picture on screen). When set, the grid selection is neither read
+// for the target NOR mutated as a side effect - the lightbox owns its own
+// post-delete step (it moves on). Default (null) is the grid path: act on, and
+// update, `selectedImageIds`.
 // `moveTo` is a library: the request becomes the move, and the outcome is
 // worded by `buildLibraryMoveMessage` instead of the delete's own notice.
-async function deleteSelected(idsOverride = null, moveTo = null) {
+// `expandedStacks` adds stacks the lightbox opened, so deleting one of their
+// members takes that member, not the whole stack.
+// Resolves to the ids the server removed ([] when none did); the Scrapheap's
+// purge only opens its confirm here and resolves to [].
+async function deleteSelected(
+  idsOverride = null,
+  moveTo = null,
+  expandedStacks = null,
+) {
   const scoped = Array.isArray(idsOverride) && idsOverride.length > 0;
   const baseIds = scoped ? idsOverride : selectedImageIds.value;
-  if (!baseIds.length) return;
+  if (!baseIds.length) return [];
   const isScrapheapSelection = isScrapheapView.value;
 
   // For non-scrapheap deletions, expand collapsed stacks to all their members
@@ -4051,7 +4219,11 @@ async function deleteSelected(idsOverride = null, moveTo = null) {
     for (const id of baseIds) {
       const img = imageById.get(String(id));
       const stackId = getPictureStackId(img);
-      if (!stackId || expandedStackIds.value.has(stackId)) {
+      if (
+        !stackId ||
+        expandedStackIds.value.has(stackId) ||
+        expandedStacks?.has(stackId)
+      ) {
         // No stack, or stack is expanded: delete only this picture.
         resolved.add(id);
         if (stackId && getStackPositionValue(img) === 0) {
@@ -4096,7 +4268,7 @@ async function deleteSelected(idsOverride = null, moveTo = null) {
     // confirm, which names any reference-folder ORIGINALS being destroyed. The
     // scrapheap purge runs on @confirm (runScrapheapSelectionPurge).
     openDeleteForeverForSelection(idsToRemove, scoped);
-    return;
+    return [];
   }
 
   // Pictures frozen by a locked set are SKIPPED by the bulk delete - the server
@@ -4119,7 +4291,7 @@ async function deleteSelected(idsOverride = null, moveTo = null) {
         }),
       );
     }
-    return;
+    return [];
   }
 
   if (moveTo) {
@@ -4238,6 +4410,7 @@ async function deleteSelected(idsOverride = null, moveTo = null) {
         }),
       );
     }
+    return removedIds;
   } catch (err) {
     console.error(moveTo ? "Move to library failed" : "Bulk delete failed", err);
     if (moveTo) {
@@ -4258,6 +4431,7 @@ async function deleteSelected(idsOverride = null, moveTo = null) {
         : `Couldn't delete those pictures. ${errorDetail(err)}`,
       { key: moveTo ? "pictures-move" : "pictures-delete" },
     );
+    return [];
   }
 }
 
@@ -4557,7 +4731,7 @@ function preloadBitmap(url) {
  * nothing for a moment, which is what the in-flight overlay is for.
  *
  * FIELDS ONLY: nothing is inserted, removed or reordered. A turned photo does
- * not move in the grid, which is why this can be safe inside an open overlay
+ * not move in the grid, which is why this can be safe inside an open lightbox
  * where a refetch would not be.
  *
  * @param {Array<number|string>} pictureIds - pictures the server actually turned.
@@ -4757,14 +4931,14 @@ async function handleSetProjectForSelected(payload) {
     // renders no project data, so a refetch would only flicker the grid and
     // throw away scroll position and selection. Refetch only where membership
     // can actually move a picture into or out of the view. The sibling set path
-    // (handleOverlayAddedToSet) and the sidebar drag-drop path
+    // (handleLightboxAddedToSet) and the sidebar drag-drop path
     // (App.handleImagesMoved) already scope their grid work the same way.
     if (isProjectScopedView.value) {
-      if (overlayOpen.value) {
-        // A project change while the overlay is open would replace
+      if (lightboxOpen.value) {
+        // A project change while the lightbox is open would replace
         // allGridImages, breaking the filmstrip. Defer the refetch until the
-        // overlay closes.
-        pendingOverlayGridRefresh.value = true;
+        // lightbox closes.
+        pendingLightboxGridRefresh.value = true;
       } else {
         // Only arm the scroll-preserving flag when a fetch actually follows;
         // otherwise it leaks into the next unrelated fetch.
@@ -4850,6 +5024,15 @@ const isScrapheapView = computed(() => {
   const selected = String(selectionStore.selectedCharacter || "").toUpperCase();
   return selected === scrapheapId;
 });
+
+// ── Inbox ───────────────────────────────────────────────────────────────────
+// The grid narrowed to what was added within the chosen period and has no
+// person and no set (`/inbox`). Filing a picture takes it out, as in the
+// Unassigned view; an unfiled one ages out of the period on its own.
+const inboxStore = useInboxStore();
+const isInboxView = computed(() =>
+  Boolean(selectionStore.selectedFolderFilter?.inbox),
+);
 
 // ── Scrapheap auto-empty policy ─────────────────────────────────────────────
 // Two separate things, deliberately not conflated:
@@ -4983,7 +5166,7 @@ const selectionCompareBlockReason = computed(() =>
 );
 
 /** The grid's *Compare*, as the lightbox reads it: `{beforeId, afterId}`. */
-const overlayCompareRequest = ref(null);
+const lightboxCompareRequest = ref(null);
 
 /**
  * "Compare", from either grid menu: the lightbox on the second picture with
@@ -4993,8 +5176,8 @@ function compareSelection() {
   const pictures = selectedPictureRecords();
   if (compareBlockReason(pictures)) return;
   const [before, after] = pictures;
-  overlayCompareRequest.value = { beforeId: before.id, afterId: after.id };
-  openOverlay({ id: after.id });
+  lightboxCompareRequest.value = { beforeId: before.id, afterId: after.id };
+  openLightbox({ id: after.id });
 }
 
 const scrapheapEmptying = ref(false);
@@ -5236,16 +5419,16 @@ function openSelectedStack() {
 
 // The lightbox picture's own place in its stack, which the lightbox works out
 // from its filmstrip (it may differ from what the grid has open).
-const overlayCtxStackEdit = computed(() => {
-  const place = overlayCtxImage.value?.stackPlace;
+const lightboxCtxStackEdit = computed(() => {
+  const place = lightboxCtxImage.value?.stackPlace;
   if (!place || place.count < 2) return null;
   return { kind: "member", count: place.count, position: place.position };
 });
 
-function moveOverlayStackMember(where) {
+function moveLightboxStackMember(where) {
   if (isReadOnly.value) return;
-  void imageOverlayRef.value?.moveStackMember?.(
-    overlayCtxImage.value?.id,
+  void lightboxRef.value?.moveStackMember?.(
+    lightboxCtxImage.value?.id,
     where,
   );
 }
@@ -5283,6 +5466,7 @@ const selectedExpandedCount = computed(() => {
     filterStore.minScoreFilter == null &&
     filterStore.maxScoreFilter == null &&
     !filterStore.unscoredOnlyFilter &&
+    !filterStore.favouriteOnlyFilter &&
     filterStore.smartScoreBucketFilter == null &&
     filterStore.resolutionBucketFilter == null;
 
@@ -5322,27 +5506,40 @@ const SCRAPHEAP_BAR_HEIGHT_PX = 30;
 const isAllPicturesFilterView = computed(
   () => String(selectionStore.selectedCharacter) === String(ALL_PICTURES_ID),
 );
-const filterStripVisible = computed(
-  () =>
-    filterChips(filterStore, {
-      allPicturesView: isAllPicturesFilterView.value,
-    }).length > 0,
+const activeFilterChips = computed(() =>
+  filterChips(filterStore, { allPicturesView: isAllPicturesFilterView.value }),
 );
+const filterStripVisible = computed(() => activeFilterChips.value.length > 0);
+// Esc's last rung: what the strip's Clear all does, chip by chip.
+function clearFilters() {
+  for (const chip of activeFilterChips.value) chip.remove();
+}
 const wrapperStyle = computed(() => ({
   position: "relative",
   height: "100%",
   "--filter-strip-h": filterStripVisible.value
     ? "var(--toolbar-height)"
     : "0px",
+  // The grid body starts below an import's arriving tiles (#2512).
+  "--arriving-h": `${arrivingHeight.value}px`,
 }));
+const gridBodyTop = computed(() =>
+  showScrapheapBar.value
+    ? `var(--selbar-height, 48px) + var(--filter-strip-h, 0px) + ${SCRAPHEAP_BAR_HEIGHT_PX}px`
+    : "var(--selbar-height, 48px) + var(--filter-strip-h, 0px)",
+);
 const scrollWrapperStyle = computed(() => ({
   position: "absolute",
-  top: showScrapheapBar.value
-    ? `calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px) + ${SCRAPHEAP_BAR_HEIGHT_PX}px)`
-    : "calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px))",
+  top: `calc(${gridBodyTop.value} + ${arrivingHeight.value}px)`,
   left: "0",
   right: "0",
   bottom: "0",
+}));
+const arrivingWrapperStyle = computed(() => ({
+  position: "absolute",
+  top: `calc(${gridBodyTop.value})`,
+  left: "0",
+  right: "0",
 }));
 const scrapheapEmptyDisabled = computed(() => {
   return (
@@ -5389,7 +5586,7 @@ const deleteForeverProtectedPaths = ref([]);
 const deleteForeverLockedCount = ref(0);
 const deleteForeverMode = ref("selection"); // "selection" | "all"
 const deleteForeverIds = ref([]);
-// True when the pending purge was scoped to an explicit id list by the overlay
+// True when the pending purge was scoped to an explicit id list by the lightbox
 // context menu, so runScrapheapSelectionPurge must not mutate the grid selection.
 const deleteForeverScoped = ref(false);
 // Single-use confirmation minted by the delete preview for exactly this
@@ -5514,7 +5711,7 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
       debouncedFetchAllGridImages();
     }
     // Grid path only: keep the frozen pictures selected so the user can retry
-    // after unlocking. The overlay-scoped path leaves the grid selection alone.
+    // after unlocking. The lightbox-scoped path leaves the grid selection alone.
     if (!deleteForeverScoped.value) {
       selectedImageIds.value = selectedImageIds.value.filter((id) =>
         skippedLocked.has(String(id)),
@@ -5523,6 +5720,14 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
       if (!stillSelected.has(String(lastSelectedImageId.value))) {
         lastSelectedImageId.value = null;
       }
+    }
+    if (deleteForeverScoped.value) {
+      // The lightbox's one picture. Kept when it is a protected original the
+      // confirm chose to spare, or a locked one.
+      const kept = !includeProtected && deleteForeverProtectedCount.value > 0;
+      leaveDeletedLightboxPictures(
+        kept ? [] : idsToRemove.filter((id) => !skippedLocked.has(String(id))),
+      );
     }
     updateVisibleThumbnails();
     emit("refresh-sidebar");
@@ -5660,6 +5865,26 @@ async function openReferenceLocation(picId) {
   }
 }
 
+// Open with ▸ (both context menus). The edit comes back on its own: the
+// server imports a save and the realtime path stacks it on the original.
+async function openPictureInApp({ pictureId, appId, appName, other } = {}) {
+  try {
+    const body = await openPictureWith(pictureId, { appId, other });
+    const name = body?.app_name || appName;
+    noticeStore.success(
+      name
+        ? `Opened in ${name}. Save over the file and the edit comes back stacked on the original.`
+        : "Choose an app. Save over the file there and the edit comes back stacked on the original.",
+      { key: "open-with" },
+    );
+  } catch (err) {
+    console.warn(`Failed to open picture ${pictureId} in another app`, err);
+    noticeStore.warning(`Couldn't open it there. ${errorDetail(err)}`, {
+      key: "open-with",
+    });
+  }
+}
+
 // ============================================================
 // IMPORT
 // ============================================================
@@ -5688,11 +5913,7 @@ async function handleImagesUploaded(payload) {
         String(SCRAPHEAP_PICTURES_ID),
       ].includes(selectedCharacterKey);
       if (selectedSetId != null && selectedSetId !== "") {
-        await Promise.all(
-          pictureIds.map((id) =>
-            addPictureToSet(selectedSetId, id),
-          ),
-        );
+        await bulkAddPicturesToSet(selectedSetId, pictureIds);
       } else if (!skipCharacter && selectedCharacterId != null) {
         await addCharacterFaces(selectedCharacterId, pictureIds);
       }
@@ -5708,6 +5929,61 @@ async function handleImagesUploaded(payload) {
     updateVisibleThumbnails();
   });
   emit("refresh-sidebar");
+}
+
+// ── Arriving tiles (#2512) ──
+const importArrivals = useImportArrivalsStore();
+const arrivingWrapper = ref(null);
+const arrivingHeight = ref(0);
+let arrivingResizeObserver = null;
+onMounted(() => {
+  if (typeof ResizeObserver === "undefined" || !arrivingWrapper.value) return;
+  arrivingResizeObserver = new ResizeObserver(() => {
+    arrivingHeight.value = arrivingWrapper.value?.offsetHeight ?? 0;
+  });
+  arrivingResizeObserver.observe(arrivingWrapper.value);
+});
+onUnmounted(() => {
+  arrivingResizeObserver?.disconnect();
+  arrivingResizeObserver = null;
+});
+// A receipt leaves on Done, its countdown, the next import, or the next
+// navigation (ArrivingTiles, useImportArrivalsStore). The path, not the
+// whole URL: opening the lightbox from a duplicate tile is not navigating.
+const arrivalsRoute = useRoute();
+watch(
+  () => arrivalsRoute.path,
+  () => importArrivals.dismissFinished(),
+);
+
+/**
+ * Acknowledge an external file drop on the frame it lands, before the drop's
+ * folders are walked: the band says it is reading, and the dropped files
+ * already refused by name are held for the run as "not supported" tiles. Read
+ * synchronously, because the drop's payload is gone after the first await.
+ */
+async function handleArrivingGridDrop(event) {
+  const dataTransfer = event?.dataTransfer;
+  const external =
+    dataTransfer &&
+    isFileDrag(dataTransfer) &&
+    !isInternalImageDrag(dataTransfer);
+  if (external) {
+    whatsChanged.tick("drop");
+    importArrivals.beginReading(
+      Array.from(dataTransfer.files || []).filter(
+        (file) =>
+          /\.[^./\\]+$/.test(file.name) &&
+          !isSupportedImportFile(file) &&
+          !isModelFile(file),
+      ),
+    );
+  }
+  try {
+    await handleGridDrop(event);
+  } finally {
+    if (external) importArrivals.endReading();
+  }
 }
 
 function handleImportStarted() {
@@ -5794,9 +6070,9 @@ watch(
       skipNextWsRefresh.value = false;
       return;
     }
-    if (overlayOpen.value) {
-      // Overlay is open - quietly refresh in the background without clearing
-      // allGridImages, so the overlay doesn't lose focus or state mid-edit.
+    if (lightboxOpen.value) {
+      // Lightbox is open - quietly refresh in the background without clearing
+      // allGridImages, so the lightbox doesn't lose focus or state mid-edit.
       debouncedFetchAllGridImages();
       fetchAllPicturesCount();
       return;
@@ -5867,6 +6143,10 @@ watch(
   { immediate: true },
 );
 onUnmounted(() => {
+  // The selection is the store's now (the rail reads it), so it would outlive
+  // the grid: a view that comes back starts with nothing selected, as it did
+  // when the selection died with the grid.
+  clearSelection();
   // No grid, no selection to run on - and no view either, so the context goes
   // too. Left behind it is the LAST grid's: a run started afterwards from the
   // Workflows view would file its output into whichever set happened to be
@@ -5982,16 +6262,22 @@ function _justifiedItemGeometry(img, localIdx) {
   return {
     width: layout.itemScaledWidths[globalIdx],
     cardHeight: layout.rowHeights[row],
+    fullRow: !layout.lastRowPartial || row < layout.rowHeights.length - 1,
   };
 }
 
 function getJustifiedCardStyle(img, localIdx) {
   const geo = _justifiedItemGeometry(img, localIdx);
   if (!geo) return null;
+  // A full row's packed widths sum to the FLOORED container width, so a
+  // fractional column would leave its right edge short by up to 1px. Growing
+  // each card by its own width hands that remainder out in proportion to the
+  // aspect ratio; flex-grow never moves a line break, which is decided by the
+  // basis alone. The partial last row stays at its natural widths.
   return {
     width: `${geo.width}px`,
     height: `${geo.cardHeight}px`,
-    flex: "0 0 auto",
+    flex: geo.fullRow ? `${geo.width} 0 ${geo.width}px` : "0 0 auto",
   };
 }
 
@@ -6004,7 +6290,10 @@ function getJustifiedThumbStyle(img, localIdx) {
 
 // Container style for the two layout modes. Square keeps the original CSS
 // grid; justified switches to flex-wrap (via the class) with the packing gap
-// bound inline so JS arithmetic and CSS can never drift.
+// bound inline so JS arithmetic and CSS can never drift. The same gap runs
+// round the edges: it is the gutter a selected tile's outline is drawn in, so
+// the outermost tiles need it as much as their neighbours do.
+// useVirtualScroll subtracts it from the measured width.
 const gridContainerStyle = computed(() => {
   const base = { position: "relative", ...badgeCssVars.value };
   if (isJustifiedMode.value) {
@@ -6012,6 +6301,7 @@ const gridContainerStyle = computed(() => {
       ...base,
       columnGap: `${JUSTIFIED_ROW_GAP}px`,
       rowGap: `${JUSTIFIED_ROW_GAP}px`,
+      padding: `${JUSTIFIED_ROW_GAP}px !important`,
     };
   }
   return {
@@ -6023,37 +6313,43 @@ const gridContainerStyle = computed(() => {
 // ============================================================
 // OVERLAY STATE
 // ============================================================
-const overlayOpen = ref(false);
+const lightboxOpen = ref(false);
 // The lightbox is a deliberately-dark surface, so the notice host switches to
 // its `--on-dark` variant while it is up (notice-surface.md §2.5). The host
 // lives in App.vue (it must also render where there is no grid), so the state
-// has to travel up; `isOverlayOpen()` on the imperative API is a getter, not a
+// has to travel up; `isLightboxOpen()` on the imperative API is a getter, not a
 // reactive signal, and cannot drive a binding.
-watch(overlayOpen, (isOpen) => emit("update:overlay-open", isOpen));
-const overlayImageId = ref(null);
+watch(lightboxOpen, (isOpen) => emit("update:lightbox-open", isOpen));
+// The lightbox goes with the grid, and the watch above cannot say so: the
+// Recipe tab's links leave for Workflows or Models with it still up. Unsaid,
+// App keeps it "open" and the rail hides its picture panels for good.
+onUnmounted(() => {
+  if (lightboxOpen.value) emit("update:lightbox-open", false);
+});
+const lightboxImageId = ref(null);
 
-// ---- Overlay route tracking ----
-const _overlayRoute = useRoute();
-const _overlayRouter = useRouter();
+// ---- Lightbox route tracking ----
+const _lightboxRoute = useRoute();
+const _lightboxRouter = useRouter();
 // Prevents the route watcher from re-triggering when we push the route ourselves.
-let _overlayRoutePushPending = false;
+let _lightboxRoutePushPending = false;
 
-function _pushOverlayRoute(id) {
-  _overlayRoutePushPending = true;
-  const query = { ..._overlayRoute.query, overlay: String(id) };
-  _overlayRouter.replace({ query }).finally(() => {
-    _overlayRoutePushPending = false;
+function _pushLightboxRoute(id) {
+  _lightboxRoutePushPending = true;
+  const query = { ..._lightboxRoute.query, overlay: String(id) };
+  _lightboxRouter.replace({ query }).finally(() => {
+    _lightboxRoutePushPending = false;
   });
 }
 
-// Moving the open overlay is two writes, not one: the id the overlay renders
+// Moving the open lightbox is two writes, not one: the id the lightbox renders
 // from AND the `?overlay=` query the lightbox is addressable by (§7). Three
 // call sites move it - opening one, a plugin run creating a picture, a ComfyUI
 // run stacking one - and the two that only wrote the id left the URL pointing
 // at the previous picture, so a reload or a shared link went back to it.
-function moveOverlayTo(id) {
-  overlayImageId.value = id;
-  _pushOverlayRoute(id);
+function moveLightboxTo(id) {
+  lightboxImageId.value = id;
+  _pushLightboxRoute(id);
 }
 
 // A run belongs to the app (the backend follows it, the Tasks tab shows it on
@@ -6061,13 +6357,13 @@ function moveOverlayTo(id) {
 // started from here, and moving on to the new picture when one lands.
 const { progress: comfyuiProgress, follow: followComfyuiRun } =
   useGridComfyuiRuns({
-    overlayOpen,
+    lightboxOpen,
     allGridImages,
     lastFetchedGridImages,
     getPictureStackId,
     selectNewestStackMember,
     showRunResult: (id, sourceId, stackId) =>
-      imageOverlayRef.value?.showRunResult?.(id, sourceId, stackId),
+      lightboxRef.value?.showRunResult?.(id, sourceId, stackId),
     refreshSidebar: () => emit("refresh-sidebar"),
   });
 const comfyuiProgressPercent = computed(() => {
@@ -6085,20 +6381,20 @@ watch(
 // picture was opened from a destination that replaces this grid (the workflow
 // library's tiles), which sends the route to come back to as `?from=`. Without
 // it the close left the reader on All Pictures instead of the shelf they came
-// from. `overlayCloseTarget` owns that decision, so it can be read and tested as
-// one thing; `ImageGridOverlayCloseReturn.test.js` mounts this component and
+// from. `lightboxCloseTarget` owns that decision, so it can be read and tested as
+// one thing; `ImageGridLightboxCloseReturn.test.js` mounts this component and
 // pins that the close actually asks it.
 //
 // `returnToOrigin` is what separates the reader closing the lightbox from this
-// component closing it to reveal its own work - see `closeOverlay`.
+// component closing it to reveal its own work - see `closeLightbox`.
 // Does `?from=` name somewhere this app can actually go? The catch-all
 // redirects every unmatched path to the home view, so an unresolvable one would
 // close the lightbox onto All Pictures - the exact landing this change exists to
 // prevent - instead of falling back to the plain close. A named match is the
 // test: the only unnamed routes in the table are the two redirects.
-function _isOverlayReturnDestination(path) {
+function _isLightboxReturnDestination(path) {
   try {
-    return Boolean(_overlayRouter.resolve(path).name);
+    return Boolean(_lightboxRouter.resolve(path).name);
   } catch (err) {
     // A malformed path (a bad percent-escape) throws in the resolver rather
     // than returning nothing. Say so: it means a link somewhere is building
@@ -6108,42 +6404,42 @@ function _isOverlayReturnDestination(path) {
   }
 }
 
-function _removeOverlayRoute(returnToOrigin) {
-  _overlayRoutePushPending = true;
-  _overlayRouter
+function _removeLightboxRoute(returnToOrigin) {
+  _lightboxRoutePushPending = true;
+  _lightboxRouter
     .replace(
-      overlayCloseTarget(
-        _overlayRoute.query,
+      lightboxCloseTarget(
+        _lightboxRoute.query,
         returnToOrigin,
-        _isOverlayReturnDestination,
+        _isLightboxReturnDestination,
       ),
     )
     .finally(() => {
-      _overlayRoutePushPending = false;
+      _lightboxRoutePushPending = false;
     });
 }
 
 watch(
-  () => _overlayRoute.query.overlay,
+  () => _lightboxRoute.query.overlay,
   (id) => {
-    if (_overlayRoutePushPending) return;
+    if (_lightboxRoutePushPending) return;
     if (id) {
-      if (!overlayOpen.value || String(overlayImageId.value) !== String(id)) {
-        openOverlay({ id });
+      if (!lightboxOpen.value || String(lightboxImageId.value) !== String(id)) {
+        openLightbox({ id });
       }
     } else {
-      if (overlayOpen.value) {
+      if (lightboxOpen.value) {
         // The route has already moved - this is catching up with it, not the
         // reader closing the lightbox - so it must not act on a `?from=` of its
         // own accord.
-        closeOverlay(false);
+        closeLightbox(false);
       }
     }
   },
 );
-const overlayInitialExpandedStackIds = ref([]);
-const overlayGuestScore = computed(() => {
-  const id = overlayImageId.value;
+const lightboxInitialExpandedStackIds = ref([]);
+const lightboxGuestScore = computed(() => {
+  const id = lightboxImageId.value;
   if (id == null) return 0;
   // guestScoreMap holds optimistic updates; fall back to img.score which the
   // backend now returns pre-overridden with the guest score for READ sessions.
@@ -6152,22 +6448,21 @@ const overlayGuestScore = computed(() => {
   const img = allGridImages.value?.find((i) => i.id === Number(id));
   return img?.score ?? 0;
 });
-// Set to true when a tag mutation was deferred (applyTagFilter=true, overlay
-// open). Triggers a filtered grid refetch once the overlay closes.
+// Set to true when a tag edit in the lightbox was deferred (applyTagFilter on). Triggers a filtered grid refetch once the lightbox closes.
 const pendingTagFilterRefresh = ref(false);
 // Set to true when a grid-mutating operation (set removal, stack change,
 // smart-score re-rank) was deferred to avoid the filmstrip losing its current
-// picture while the overlay is open. Triggers a full refetch on close.
-const pendingOverlayGridRefresh = ref(false);
-// Pictures whose smart score changed while the overlay was open. Reconciled by
-// repositioning each card on close; see handleOverlayChange. Above this many the
+// picture while the lightbox is open. Triggers a full refetch on close.
+const pendingLightboxGridRefresh = ref(false);
+// Pictures whose smart score changed while the lightbox was open. Reconciled by
+// repositioning each card on close; see handleLightboxChange. Above this many the
 // per-id fetches cost more than one re-sort, so we fall back to a full reload -
 // mirroring MAX_TARGETED_UPDATE in useGridRealtimeSync.
-const pendingOverlaySmartScoreIds = new Set();
+const pendingLightboxSmartScoreIds = new Set();
 const MAX_DEFERRED_SMART_SCORE_REPOSITIONS = 25;
-// When fetchAllGridImages completes while the overlay is open, the resulting
+// When fetchAllGridImages completes while the lightbox is open, the resulting
 // image list is stored here instead of being written to allGridImages directly.
-// Applied to allGridImages when the overlay closes.
+// Applied to allGridImages when the lightbox closes.
 const pendingGridImages = ref(null);
 
 // ============================================================
@@ -6387,9 +6682,9 @@ const {
     scrollWrapper,
     preserveScrollOnNextFetch,
     pendingScrollTop,
-    overlayOpen,
+    lightboxOpen,
     pendingGridImages,
-    pendingOverlayGridRefresh,
+    pendingLightboxGridRefresh,
     visibleStart,
     visibleEnd,
     divisibleViewWindow,
@@ -6440,6 +6735,15 @@ const {
     onGridFetchDone,
   },
 );
+// The sort/search wait cannot be aborted and is over in seconds, so it sits in
+// the title bar beside the tasks pill rather than over the grid's corner.
+usePublishTransientProgress(() => ({
+  visible: smartScoreLoadingVisible.value,
+  status: smartScoreProgress.status,
+  message: smartScoreProgressMessage.value,
+  percent: smartScoreProgressPercent.value,
+}));
+
 // The view with no filters: the filter menu counts against it, and the strip
 // shows its size as the "of N".
 const filterCountBaseQuery = computed(() => buildFilterCountBaseQuery());
@@ -6513,8 +6817,8 @@ operationStore.$onAction(({ name, args, after }) => {
     // failed undo or redo must leave the current grid untouched.
     const succeeded = name === "undoTo" ? Number(result) > 0 : result != null;
     if (!succeeded || !isCharacterScopedView.value) return;
-    if (overlayOpen.value) {
-      pendingOverlayGridRefresh.value = true;
+    if (lightboxOpen.value) {
+      pendingLightboxGridRefresh.value = true;
       return;
     }
     preserveScrollOnNextFetch.value = true;
@@ -6648,6 +6952,8 @@ watch(
 
 const {
   setScore,
+  setFavourite,
+  toggleFavourite,
   setGuestScore,
   handleGuestConsentAccepted,
   handleGuestConsentRejected,
@@ -6670,8 +6976,8 @@ const {
   visibleEnd,
   renderBuffer,
   imagesLoading,
-  overlayOpen,
-  pendingOverlayGridRefresh,
+  lightboxOpen,
+  pendingLightboxGridRefresh,
   preserveScrollOnNextFetch,
   skipNextWsRefresh,
   gridContainer,
@@ -6689,20 +6995,27 @@ const {
   removeImagesById,
 });
 
+// The lightbox flips its own copy at once; a refused change puts it back there
+// as well as on the tiles.
+async function applyLightboxFavourite(img, on) {
+  if (!(await setFavourite([img.id], on))) img.favourite = !on;
+}
+
 // ============================================================
 // KEYBOARD NAVIGATION
 // (moved to useGridKeyboardNav composable)
 // ============================================================
-const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
+const gridKeyboard = useGridKeyboardNav(
   {
     scrollWrapper,
     allGridImages,
     rowHeight,
     visibleStart,
-    overlayOpen,
+    lightboxOpen,
     reviewOverlayOpen,
     showSelectionBar,
     searchResultsActive,
+    filtersActive: filterStripVisible,
     selectedImageIds,
     lastSelectedImageId,
     cursorIdx,
@@ -6713,23 +7026,28 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     isJustifiedMode,
     justifiedLayout,
     isGhosted: isGridIndexGhosted,
+    isScrapheap: () => isScrapheapView.value,
   },
   props,
   emit,
   {
     clearFaceSelection,
     clearSearchQuery,
+    clearFilters,
     scrollCursorIntoView,
     focusCursor: focusGridCursor,
-    openOverlay,
+    openLightbox,
     deleteSelected,
     selectionBarRef,
     applyScoresForSelection,
     setScore,
+    toggleFavourite,
     moveStackMember,
     getOpenStackPlace,
+    onPasteResult: handlePasteResult,
   },
 );
+const { onGlobalKeyPress, handleKeyDown, escapeClearsFilters } = gridKeyboard;
 
 // ============================================================
 // OVERLAY FUNCTIONS
@@ -6912,15 +7230,15 @@ function reorderStackByScore(stackIndex) {
   invalidateVisibleThumbnailRanges();
 }
 
-function handleOverlayChange(payload) {
+function handleLightboxChange(payload) {
   if (!payload) return;
   const imageId = payload.imageId ?? payload.id ?? payload;
   const fields = payload.fields || {};
   if (fields.stack) {
-    if (overlayOpen.value) {
+    if (lightboxOpen.value) {
       // A stack change while overlaying would replace allGridImages, breaking
-      // the filmstrip. Defer the full refetch until the overlay closes.
-      pendingOverlayGridRefresh.value = true;
+      // the filmstrip. Defer the full refetch until the lightbox closes.
+      pendingLightboxGridRefresh.value = true;
       return;
     }
     preserveScrollOnNextFetch.value = true;
@@ -6937,17 +7255,23 @@ function handleOverlayChange(payload) {
     void applyRotatedCards([imageId]);
     return;
   }
+  // A tag edit can take a picture into or out of a tag-filtered view. The
+  // lightbox shows its live tags, so the filtered refetch waits for it to close
+  // rather than emptying the grid behind it.
+  if (fields.tags && userPrefsStore.applyTagFilter && lightboxOpen.value) {
+    pendingTagFilterRefresh.value = true;
+  }
   if ((fields.tags || fields.smartScore) && isSmartScoreSortActive()) {
-    if (overlayOpen.value) {
+    if (lightboxOpen.value) {
       // Smart-score re-ranking would reorder allGridImages mid-viewing, so the
-      // re-rank is deferred to overlay close. Record WHICH picture changed rather
-      // than raising the blanket pendingOverlayGridRefresh: closeOverlay can then
+      // re-rank is deferred to lightbox close. Record WHICH picture changed rather
+      // than raising the blanket pendingLightboxGridRefresh: closeLightbox can then
       // reposition just these cards (refreshSmartScoreForImage fetches the true
       // score and moves the card to the server's slot) instead of re-sorting the
       // whole library. The full reload produced the same final order at the cost
       // of a complete re-score of every candidate, and it ran *in addition* to the
       // opportunistic move the realtime-sync path performs for the same edit.
-      pendingOverlaySmartScoreIds.add(imageId);
+      pendingLightboxSmartScoreIds.add(imageId);
       refreshGridImage(imageId);
       return;
     }
@@ -6958,14 +7282,14 @@ function handleOverlayChange(payload) {
   refreshGridImage(imageId);
 }
 
-async function openOverlay(img) {
+async function openLightbox(img) {
   if (!img || !img.id) return;
   markStart("pixlstash:interaction-open-picture");
-  overlayInitialExpandedStackIds.value = Array.from(
+  lightboxInitialExpandedStackIds.value = Array.from(
     expandedStackIds.value || [],
   );
-  overlayOpen.value = true;
-  moveOverlayTo(img.id);
+  lightboxOpen.value = true;
+  moveLightboxTo(img.id);
   markEnd("pixlstash:interaction-open-picture");
 }
 
@@ -6975,24 +7299,27 @@ async function openOverlay(img) {
 // it, and honouring `?from=` would send that result to a screen with no grid.
 // The default is the reader's own close (the X, Escape, the `close` emit, which
 // carries no payload), which is the one that goes back where it came from.
-function closeOverlay(returnToOrigin = true) {
-  overlayOpen.value = false;
-  overlayImageId.value = null;
-  overlayInitialExpandedStackIds.value = [];
-  _removeOverlayRoute(returnToOrigin);
+function closeLightbox(returnToOrigin = true) {
+  // Read before the lightbox goes: the picture it ended on, not the one it
+  // was opened on.
+  const lastShown = lightboxRef.value?.currentPicture?.() ?? null;
+  lightboxOpen.value = false;
+  lightboxImageId.value = null;
+  lightboxInitialExpandedStackIds.value = [];
+  _removeLightboxRoute(returnToOrigin);
   // A deferred smart-score re-rank is reconciled by moving just the affected
   // cards. Only when no broader refresh is already queued - a full reload
   // re-sorts everything anyway, so repositioning first would be wasted work (and
   // the reload's own resetThumbnailState would discard it).
-  const deferredSmartScoreIds = Array.from(pendingOverlaySmartScoreIds);
-  pendingOverlaySmartScoreIds.clear();
+  const deferredSmartScoreIds = Array.from(pendingLightboxSmartScoreIds);
+  pendingLightboxSmartScoreIds.clear();
   const hasBroaderRefresh =
     pendingGridImages.value !== null ||
     pendingTagFilterRefresh.value ||
-    pendingOverlayGridRefresh.value;
+    pendingLightboxGridRefresh.value;
   if (deferredSmartScoreIds.length && !hasBroaderRefresh) {
     if (deferredSmartScoreIds.length > MAX_DEFERRED_SMART_SCORE_REPOSITIONS) {
-      pendingOverlayGridRefresh.value = true;
+      pendingLightboxGridRefresh.value = true;
     } else {
       for (const id of deferredSmartScoreIds) {
         void refreshSmartScoreForImage(id);
@@ -7000,13 +7327,13 @@ function closeOverlay(returnToOrigin = true) {
     }
   }
   if (pendingGridImages.value !== null) {
-    // A background fetch completed while the overlay was open. Apply its
+    // A background fetch completed while the lightbox was open. Apply its
     // result now that we're safe to update the grid.
     allGridImages.value = pendingGridImages.value;
     pendingGridImages.value = null;
     pendingTagFilterRefresh.value = false;
-    pendingOverlayGridRefresh.value = false;
-    // loadedRanges was repopulated for the OLD images while the overlay was
+    pendingLightboxGridRefresh.value = false;
+    // loadedRanges was repopulated for the OLD images while the lightbox was
     // open (after resetThumbnailState() cleared it during the fetch). Now
     // that new images occupy the same indices we must invalidate those ranges
     // so updateVisibleThumbnails() fetches thumbnails for the new images.
@@ -7015,15 +7342,15 @@ function closeOverlay(returnToOrigin = true) {
     // stacks so any stacks that gained/changed members are correctly
     // re-inserted instead of staying on infinite placeholder.
     void refreshExpandedStacksAfterFetch();
-  } else if (pendingTagFilterRefresh.value || pendingOverlayGridRefresh.value) {
+  } else if (pendingTagFilterRefresh.value || pendingLightboxGridRefresh.value) {
     pendingTagFilterRefresh.value = false;
-    pendingOverlayGridRefresh.value = false;
+    pendingLightboxGridRefresh.value = false;
     lastFetchSuccess.value = { key: "", at: 0 };
     lastFetchError.value = { key: "", at: 0 };
     // Preserve scroll, exactly as the non-deferred siblings of this refresh do
     // (see the fields.stack / smart-score branches in handlePictureChanged).
-    // Those set the flag right before fetching, but when the overlay is open they
-    // only raise pendingOverlayGridRefresh and return - so the flag never got set
+    // Those set the flag right before fetching, but when the lightbox is open they
+    // only raise pendingLightboxGridRefresh and return - so the flag never got set
     // and the deferred fetch ran as a non-preserving one. That resets
     // visibleStart/visibleEnd to the top of the list (useGridFetch) while
     // scrollTop stays where the user left it, so the grid renders the first
@@ -7032,6 +7359,28 @@ function closeOverlay(returnToOrigin = true) {
     preserveScrollOnNextFetch.value = true;
     debouncedFetchAllGridImages();
   }
+  if (returnToOrigin) selectAndRevealPicture(lastShown);
+}
+
+/**
+ * Back on the grid with the picture the lightbox ended on selected and in
+ * view (#2163): the reader walked to it, so it is where they are. A member of
+ * a stack folded here is shown by its stack's card.
+ */
+function selectAndRevealPicture(picture) {
+  if (picture?.id == null) return;
+  const list = allGridImages.value || [];
+  let idx = list.findIndex((img) => String(img?.id) === String(picture.id));
+  const stackId = getPictureStackId(picture);
+  if (idx < 0 && stackId) {
+    idx = list.findIndex((img) => getPictureStackId(img) === stackId);
+  }
+  const card = list[idx];
+  if (!card?.id || isImageGhosted(card)) return;
+  selectedImageIds.value = [card.id];
+  lastSelectedImageId.value = card.id;
+  cursorIdx.value = idx;
+  void nextTick(() => scrollCursorIntoView(idx));
 }
 
 // ============================================================
@@ -7072,6 +7421,19 @@ watch(
     () => selectionStore.selectedCharacter,
     () => selectionStore.selectedSet,
     () => selectionStore.selectedSetIds,
+    // The folder facet, by value. A sidebar folder click also writes a fresh
+    // `selectedSetIds`, which is what used to set this off; a route that only
+    // changes the facet (the Inbox, or its period) writes nothing else.
+    () => {
+      const f = selectionStore.selectedFolderFilter;
+      return f
+        ? [
+            f.referenceFolderId ?? "",
+            f.pathPrefix ?? "",
+            f.inbox ? `inbox:${inboxStore.period}` : "",
+          ].join("|")
+        : "";
+    },
     () => selectionStore.characterMultiMode,
     () => selectionStore.setMultiMode,
     () => selectionStore.setDifferenceBaseId,
@@ -7112,6 +7474,7 @@ watch(
     () => filterStore.minScoreFilter,
     () => filterStore.maxScoreFilter,
     () => filterStore.unscoredOnlyFilter,
+    () => filterStore.favouriteOnlyFilter,
     () => filterStore.smartScoreBucketFilter,
     () => filterStore.resolutionBucketFilter,
     () => filterStore.tagFilter,
@@ -7122,6 +7485,7 @@ watch(
     () => filterStore.impossibleSources,
     () => filterStore.stackStateFilter,
     () => filterStore.sharedOnlyFilter,
+    () => filterStore.importedFromFilter,
     () => filterStore.noCharacterFilter,
     () => filterStore.noSetFilter,
     // *Show all N pictures* (F7). Without it the chip's × emptied the strip
@@ -7381,7 +7745,13 @@ watch(showLibraryEmptyState, (shown) => {
 // telemetry question until it knows, so a fresh install meets the library
 // before it meets the privacy dialog.
 watch(totalAllPicturesCountLoaded, (loaded) => {
-  if (loaded) emit("library-loaded", { empty: showLibraryEmptyState.value });
+  // `pictures` is the count itself: `empty` waits on the empty state's
+  // appearance delay, so it can still read false for an empty library here.
+  if (loaded)
+    emit("library-loaded", {
+      empty: showLibraryEmptyState.value,
+      pictures: totalAllPicturesCount.value,
+    });
 });
 
 /**
@@ -7417,6 +7787,29 @@ function importChosenFiles(chosen) {
   emit("local-import", { files });
 }
 
+// The Inbox is empty for its period with no filter or search on: the one
+// empty grid whose way out is a wider period rather than clearing a filter.
+// The per-period counts ignore both, so with either on they would offer a
+// period the narrowed grid cannot fill.
+const inboxEmptyUnfiltered = computed(
+  () =>
+    isInboxView.value &&
+    !filterChips(filterStore).length &&
+    !searchStore.isSearchActive,
+);
+const inboxEmpty = computed(() =>
+  inboxEmptyUnfiltered.value
+    ? inboxEmptyState(inboxStore.period, inboxStore.counts)
+    : null,
+);
+const inboxWiderPeriod = computed(() => inboxEmpty.value?.wider ?? null);
+watch(
+  () => showEmptyState.value && inboxEmptyUnfiltered.value,
+  (empty) => {
+    if (empty) void inboxStore.refreshAllCounts();
+  },
+);
+
 const emptyStateTitle = computed(() => {
   if (isSetOverlapView.value) {
     return "No overlap";
@@ -7424,6 +7817,7 @@ const emptyStateTitle = computed(() => {
   if (isScrapheapView.value) {
     return "No pictures in the scrap heap";
   }
+  if (inboxEmpty.value) return inboxEmpty.value.title;
   // The `totalAllPicturesCount === 0` arm is what `LibraryEmptyState` now
   // answers; this branch is only reached for a view that has its own empty
   // question (scrap heap, set overlap) or a filter that matched nothing.
@@ -7437,6 +7831,7 @@ const emptyStateSubtitle = computed(() => {
   if (isScrapheapView.value) {
     return "Are all your pictures that good?";
   }
+  if (inboxEmpty.value) return inboxEmpty.value.subtitle;
   return "Try clearing filters, adjusting your search, or switching sets.";
 });
 
@@ -7926,14 +8321,14 @@ function handleThumbnailClick(img, idx, event) {
     return handleImageCardClick(img, idx, event);
   }
   // Touch two-tap: first tap selects the image; second tap on the same
-  // already-selected image opens the overlay.
+  // already-selected image opens the lightbox.
   if (lastPointerWasTouch.value) {
     lastPointerWasTouch.value = false;
     const alreadySoleSelection =
       selectedImageIds.value.length === 1 &&
       selectedImageIds.value[0] === img.id;
     if (alreadySoleSelection) {
-      openOverlay(img);
+      openLightbox(img);
     } else {
       selectedImageIds.value = [img.id];
       lastSelectedImageId.value = img.id;
@@ -7942,9 +8337,27 @@ function handleThumbnailClick(img, idx, event) {
     event.stopPropagation();
     return;
   }
-  // Desktop: open overlay directly
-  openOverlay(img);
+  // Desktop, double-click mode (the default): a click selects, and
+  // handleThumbnailDblClick opens.
+  if (userPrefsStore.gridOpenGesture !== "single") {
+    handleImageCardClick(img, idx, event);
+    event.stopPropagation();
+    whatsChanged.tick("click");
+    return;
+  }
+  // Desktop, single-click mode: open lightbox directly
+  openLightbox(img);
   event.stopPropagation();
+  whatsChanged.tick("click");
+}
+
+function handleThumbnailDblClick(img, event) {
+  // In single-click mode the first click already opened the lightbox, and so
+  // has a touch two-tap where the browser synthesises a dblclick after it.
+  if (userPrefsStore.gridOpenGesture === "single" || lightboxOpen.value) return;
+  if (!img?.id || isImageGhosted(img) || touchSelectMode.value) return;
+  if (event.ctrlKey || event.metaKey || event.shiftKey) return;
+  openLightbox(img);
 }
 
 // Clear selection when clicking grid background
@@ -7979,6 +8392,7 @@ function handleImageContextMenu(img, event) {
   contextMenuX.value = event.clientX;
   contextMenuY.value = event.clientY;
   contextMenuVisible.value = true;
+  whatsChanged.tick("menu");
 }
 
 function handleFaceBboxContextMenu(img, overlay, event) {
@@ -7992,98 +8406,129 @@ function handleFaceBboxContextMenu(img, overlay, event) {
   contextMenuX.value = event.clientX;
   contextMenuY.value = event.clientY;
   contextMenuVisible.value = true;
+  whatsChanged.tick("menu");
 }
 
-// ── Overlay (lightbox) context menu ─────────────────────────────────────────
-// The overlay emits `request-context-menu` (media-area right-click or the
+// ── Lightbox context menu ─────────────────────────────────────────
+// The lightbox emits `request-context-menu` (media-area right-click or the
 // Shift+F10 / ContextMenu key) with the currently-displayed image object and a
 // screen position. Every action below is scoped to THIS one picture - the grid
 // selection is never read or persistently mutated.
 
-function handleOverlayContextMenuRequest(payload) {
+function handleLightboxContextMenuRequest(payload) {
   const img = payload?.image;
   if (!img?.id) return;
-  overlayCtxImage.value = img;
-  overlayCtxX.value = payload.clientX ?? 0;
-  overlayCtxY.value = payload.clientY ?? 0;
-  overlayCtxVisible.value = true;
+  lightboxCtxImage.value = img;
+  lightboxCtxX.value = payload.clientX ?? 0;
+  lightboxCtxY.value = payload.clientY ?? 0;
+  lightboxCtxVisible.value = true;
 }
 
-async function handleOverlaySave() {
-  await imageOverlayRef.value?.saveMedia?.(overlayCtxImage.value);
+async function handleLightboxSave() {
+  await lightboxRef.value?.saveMedia?.(lightboxCtxImage.value);
 }
 
-async function handleOverlaySaveAs() {
-  await imageOverlayRef.value?.saveMediaAs?.(overlayCtxImage.value);
+async function handleLightboxSaveAs() {
+  await lightboxRef.value?.saveMediaAs?.(lightboxCtxImage.value);
 }
 
-async function handleOverlayCopy() {
-  await imageOverlayRef.value?.copyMedia?.(overlayCtxImage.value);
+async function handleLightboxCopy() {
+  await lightboxRef.value?.copyMedia?.(lightboxCtxImage.value);
 }
 
-function handleOverlayShare() {
-  const img = overlayCtxImage.value;
+function handleLightboxShare() {
+  const img = lightboxCtxImage.value;
   if (!img?.id || !img?.format) return;
-  // ShareDialog reads `contextMenuImage`; point it at the overlay picture. The
+  // ShareDialog reads `contextMenuImage`; point it at the lightbox picture. The
   // grid menu is closed, so this does not affect any grid interaction.
   contextMenuImage.value = img;
   sharePicDialogOpen.value = true;
 }
 
-function handleOverlayReverseImageSearch() {
-  const id = overlayCtxImage.value?.id;
+function handleLightboxReverseImageSearch() {
+  const id = lightboxCtxImage.value?.id;
   if (id == null) return;
   faceLikenessSearchFaceId.value = null;
   reverseImageSearchPictureIds.value = [id];
   // Reveal the results behind the lightbox and clear any text search.
-  closeOverlay(false);
+  closeLightbox(false);
   emit("clear-search", "");
 }
 
-function handleOverlayFindSimilarFaces(faceId) {
+function handleLightboxFindSimilarFaces(faceId) {
   if (!faceId) return;
   reverseImageSearchPictureIds.value = [];
   faceLikenessSearchFaceId.value = faceId;
   // Same contract as the overlay's reverse-image-search sibling: the results
-  // land in the grid BEHIND the lightbox, and while the overlay is open every
+  // land in the grid BEHIND the lightbox, and while the lightbox is open every
   // grid mutation is deferred (§9.1), so without closing it the action looks
   // like it did nothing at all.
-  closeOverlay(false);
+  closeLightbox(false);
   emit("clear-search", "");
 }
 
-function openOverlaySegmentDialog() {
-  const id = overlayCtxImage.value?.id;
+function openLightboxSegmentDialog() {
+  const id = lightboxCtxImage.value?.id;
   if (id == null || isReadOnly.value) return;
   segmentTargetIds.value = [id];
   segmentPrompt.value = "";
   segmentDialogOpen.value = true;
 }
 
-async function handleOverlayDelete() {
-  const id = overlayCtxImage.value?.id;
-  if (id == null) return;
-  // Scope the shared delete flow to just this picture (idsOverride). For the
-  // scrapheap this opens the Delete-forever confirm; for a normal view it
-  // soft-deletes immediately. Either way, close the lightbox so it never shows
-  // a picture that has just left the current view.
-  await deleteSelected([id]);
-  closeOverlay(false);
+// One lightbox delete at a time: a held Delete steps through the pictures it
+// has been shown, never ahead of them on queued key repeats.
+let lightboxDeleteBusy = false;
+
+/**
+ * Delete the picture on screen and move on to the next one (#2346). The tile
+ * behind leaves the grid the same way a grid delete's does, and the lightbox's
+ * receipt carries the Undo.
+ * @param {Object} [img] - the picture; the context menu's by default.
+ * @param {{repeat?: boolean}} [options] - from a key held down.
+ */
+async function handleLightboxDelete(img = lightboxCtxImage.value, options) {
+  const id = img?.id;
+  if (id == null || lightboxDeleteBusy) return;
+  // Delete forever asks first: a held key must not open its confirm again the
+  // moment it is cancelled.
+  if (isScrapheapView.value && (options?.repeat || deleteForeverOpen.value)) {
+    return;
+  }
+  lightboxDeleteBusy = true;
+  try {
+    // Scoped to this picture (idsOverride). In the Scrapheap this only opens
+    // the Delete-forever confirm, and `runScrapheapSelectionPurge` moves on
+    // once it is confirmed.
+    const removed = await deleteSelected(
+      [id],
+      null,
+      lightboxRef.value?.expandedStackIds?.(),
+    );
+    if (removed.length) leaveDeletedLightboxPictures(removed);
+  } finally {
+    lightboxDeleteBusy = false;
+  }
 }
 
-async function handleOverlayScrapheapRestore() {
-  const id = overlayCtxImage.value?.id;
+/** Step past pictures that just left, or close when none is left to show. */
+function leaveDeletedLightboxPictures(ids) {
+  if (!lightboxOpen.value || !ids.length) return;
+  if (!lightboxRef.value?.removePictures?.(ids)) closeLightbox(false);
+}
+
+async function handleLightboxScrapheapRestore() {
+  const id = lightboxCtxImage.value?.id;
   if (id == null) return;
   try {
     await restoreScrapheap([id]);
   } catch (err) {
     console.error("Failed to restore picture from the scrapheap", err);
     noticeStore.error(`Couldn't restore that picture. ${errorDetail(err)}`, {
-      key: "scrapheap-restore-overlay",
+      key: "scrapheap-restore-lightbox",
     });
   }
   removeImagesById([id]);
-  closeOverlay(false);
+  closeLightbox(false);
   emit("refresh-sidebar");
   fetchAllGridImages().then(() => {
     loadedRanges.value = [];
@@ -8118,15 +8563,27 @@ async function confirmSegment() {
   if (!ids.length || !props.backendUrl) return;
   // Detection runs as a background GPU task. The grid card refreshes in place
   // on the resulting CHANGED_PICTURES event (detections is a card-content
-  // field), and the overlay reconciles too if open.
+  // field), and the lightbox reconciles too if open.
   try {
     await detectPictures(ids, segmentPrompt.value.trim());
+    lightboxRef.value?.showSegmentation();
     // Nudge the tasks poller so the activity light / Tasks-tab pulse appear
     // within one poll RTT instead of up to the 5 s idle interval later.
     tasksStore.nudge();
   } catch (err) {
     console.error("Object detection request failed:", err);
   }
+}
+
+const { detectFacesAgain } = useFaceRedetect();
+
+function detectFacesOnSelection() {
+  if (isReadOnly.value || !props.backendUrl) return;
+  const ids = selectedImageIds.value
+    .map((id) => Number(getPictureId(id)))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  // The cards re-read their face boxes on the run's `faces` event.
+  void detectFacesAgain(ids);
 }
 
 function sharePicture() {
@@ -8208,63 +8665,6 @@ async function confirmRevokePictureShares() {
 
 // updateColumns removed; columns is now controlled by prop
 
-async function _afterTagMutation(imageId) {
-  if (userPrefsStore.applyTagFilter) {
-    if (overlayOpen.value) {
-      // The overlay is showing live tag state already. Defer the full
-      // tag-filtered refetch until the overlay is closed to prevent the
-      // grid from unexpectedly going empty in the background.
-      pendingTagFilterRefresh.value = true;
-      refreshGridImage(imageId);
-      return;
-    }
-    lastFetchSuccess.value = { key: "", at: 0 };
-    lastFetchError.value = { key: "", at: 0 };
-    await fetchAllGridImages();
-    updateVisibleThumbnails();
-    return;
-  }
-  if (isSmartScoreSortActive()) {
-    if (overlayOpen.value) {
-      // Smart-score re-ranking would reorder the grid while the overlay is
-      // open. Defer the full refetch until the overlay closes.
-      pendingOverlayGridRefresh.value = true;
-      refreshGridImage(imageId);
-      return;
-    }
-    // Smart score values shown in the grid must match the list endpoint's
-    // global ranking context. Recompute by refetching the sorted list instead
-    // of patching a single card from metadata.
-    preserveScrollOnNextFetch.value = true;
-    lastFetchSuccess.value = { key: "", at: 0 };
-    lastFetchError.value = { key: "", at: 0 };
-    await fetchAllGridImages({ force: true });
-    updateVisibleThumbnails();
-  } else {
-    refreshGridImage(imageId);
-  }
-}
-
-async function addTagToImage(imageId, tag) {
-  try {
-    const response = await addPictureTag(imageId, tag);
-    const responseTags = getTagList(response?.tags);
-    const gridImg = allGridImages.value.find(
-      (img) => img && img.id === imageId,
-    );
-    if (gridImg) {
-      const current = getTagList(gridImg.tags);
-      const merged = responseTags.length
-        ? responseTags
-        : dedupeTagList([...current, { id: null, tag }]);
-      gridImg.tags = merged;
-    }
-    await _afterTagMutation(imageId);
-  } catch (error) {
-    console.error("Error adding tag:", error);
-  }
-}
-
 function updateDescriptionForImage(imageId, description) {
   const gridImg = allGridImages.value.find((img) => img && img.id === imageId);
   if (gridImg) {
@@ -8338,8 +8738,8 @@ defineExpose({
   repositionImageBySmartScore,
   refreshSmartScoreForImage,
   isImagesLoading: () => imagesLoading.value,
-  isOverlayOpen: () => overlayOpen.value,
-  markOverlayDeferredRefresh,
+  isLightboxOpen: () => lightboxOpen.value,
+  markLightboxDeferredRefresh,
   hasPendingGridImages,
   clearFaceSelection,
   hasCursorFocus: computed(() => cursorIdx.value !== null),
@@ -8355,24 +8755,54 @@ defineExpose({
   suggestPicturesForCharacter: faceSuggest.arm,
   // The set twin, from the sidebar's set context menu (#1489).
   suggestPicturesForSet: setSuggest.arm,
+  // The grid's rail (#2161), through App.vue: the selected pictures' own cards,
+  // and the very paths a tile and the lightbox use to rate, favourite and tag
+  // one, so the rail and the tile cannot disagree.
+  cardsByIds,
+  scoreOf: (img) =>
+    isReadOnly.value
+      ? (guestScoreMap.value.get(img.id) ?? img.score ?? 0)
+      : img.score || 0,
+  setScore,
+  toggleFavourite,
+  updateDescriptionForImage,
+  handleLightboxChange,
+  handleTagsApplied,
 });
 
-// Queue a deferred in-place grid reconcile to run when the overlay closes.
-// Used by the realtime-sync decision table: while the overlay is open we never
+// The cards by id, for `cardsByIds`. Rating and favouriting replace a card
+// object rather than mutate it, so the rail looks its pictures up afresh.
+const gridCardById = computed(() => {
+  const byId = new Map();
+  for (const img of allGridImages.value) {
+    if (img?.id != null) byId.set(String(img.id), img);
+  }
+  return byId;
+});
+
+/** The loaded cards for these ids, in the order given; unloaded ones skipped. */
+function cardsByIds(ids) {
+  return (ids ?? [])
+    .map((id) => gridCardById.value.get(String(id)))
+    .filter(Boolean);
+}
+
+// Queue a deferred in-place grid reconcile to run when the lightbox closes.
+// Used by the realtime-sync decision table: while the lightbox is open we never
 // raise a pill or reshuffle the grid under the frozen filmstrip; instead we
-// flag the refetch so closeOverlay() applies the filter-removal / re-sort
-// directly (see closeOverlay's pendingOverlayGridRefresh branch).
-function markOverlayDeferredRefresh() {
-  if (!overlayOpen.value) return;
-  pendingOverlayGridRefresh.value = true;
+// flag the refetch so closeLightbox() applies the filter-removal / re-sort
+// directly (see closeLightbox's pendingLightboxGridRefresh branch).
+function markLightboxDeferredRefresh() {
+  if (!lightboxOpen.value) return;
+  pendingLightboxGridRefresh.value = true;
 }
 
 /**
- * True when a background fetch has parked a whole grid list for overlay close.
+ * True when a background fetch has parked a whole grid list for lightbox close.
  *
- * `closeOverlay` takes that branch first and assigns the parked list WHOLESALE,
+ * `closeLightbox` takes that branch first and assigns the parked list WHOLESALE,
  * clearing the deferral flags with it - so any in-place write made to the live
- * `allGridImages` while the overlay was open is discarded, with nothing queued
+ * `allGridImages` while the lightbox was open is discarded, with nothing queued
  * to repair it. A caller that would otherwise write in place (the rotate
  * applier) asks this first and marks a deferred refresh instead.
  *
@@ -8584,6 +9014,47 @@ function getExportCount() {
 // ============================================================
 // EXPORT
 // ============================================================
+/**
+ * Whether the selection holds every picture the grid has drawn.
+ *
+ * Export lives on the selection pill (#2160), so a whole view is Ctrl+A, then
+ * Export. Ctrl+A selects the cells the grid holds, which are stack leaders and
+ * whatever has streamed in so far; the view itself is more than that. Cells
+ * still waiting for their picture, and ghosts, never block the answer - but a
+ * grid with no picture drawn yet (empty, or every cell still loading) is no
+ * evidence the selection is the view, so the selection goes by id then.
+ */
+function selectionCoversView() {
+  const selected = new Set(
+    selectedImageIds.value.map((id) => String(getPictureId(id))),
+  );
+  const ghosts = ghostedIdSet.value;
+  let sawPicture = false;
+  for (const img of allGridImages.value) {
+    const id = getPictureId(img?.id);
+    if (id == null) continue;
+    sawPicture = true;
+    if (!selected.has(String(id)) && !ghosts?.has(String(id))) return false;
+  }
+  return sawPicture;
+}
+
+/**
+ * The pictures an export sends: the selected ids, or the view's own query when
+ * nothing is selected or the selection is the whole view - which is what the
+ * toolbar's whole-grid export sent, collapsed stack members and the unloaded
+ * tail included.
+ */
+function exportPictureParams() {
+  const selectedIds = selectedImageIds.value;
+  if (!selectedIds?.length || selectionCoversView()) {
+    return buildPictureIdsQueryParams();
+  }
+  const params = new URLSearchParams();
+  for (const id of selectedIds) params.append("id", getPictureId(id));
+  return params.toString();
+}
+
 async function exportCurrentViewToZip(options = {}) {
   const exportType = options.exportType || "full";
   const captionMode = options.captionMode || "description";
@@ -8592,17 +9063,8 @@ async function exportCurrentViewToZip(options = {}) {
   const useOriginalFileNames = options.useOriginalFileNames === true;
   const resolution = options.resolution || "original";
   const bboxMode = options.bboxMode || "none";
-  let params;
-  const selectedIds = selectedImageIds.value;
-  if (selectedIds && selectedIds.length > 0) {
-    const selParams = new URLSearchParams();
-    for (const id of selectedIds) {
-      selParams.append("id", getPictureId(id));
-    }
-    params = selParams.toString();
-  } else {
-    params = buildPictureIdsQueryParams();
-  }
+  const keepGenerationData = options.keepGenerationData === true;
+  const params = exportPictureParams();
   const extraParams = new URLSearchParams();
   if (exportType) {
     extraParams.append("export_type", exportType);
@@ -8624,6 +9086,10 @@ async function exportCurrentViewToZip(options = {}) {
   }
   if (bboxMode && bboxMode !== "none") {
     extraParams.append("bbox_mode", bboxMode);
+  }
+  // Stripped unless the Share panel and Export row says keep (#2417).
+  if (keepGenerationData) {
+    extraParams.append("keep_generation_data", "true");
   }
   const extraParamString = extraParams.toString();
   const exportQuery = [params, extraParamString].filter(Boolean).join("&");
@@ -8727,17 +9193,8 @@ async function exportCurrentViewToFolder(options = {}) {
   const useOriginalFileNames = options.useOriginalFileNames === true;
   const resolution = options.resolution || "original";
   const bboxMode = options.bboxMode || "none";
-  let params;
-  const selectedIds = selectedImageIds.value;
-  if (selectedIds && selectedIds.length > 0) {
-    const selParams = new URLSearchParams();
-    for (const id of selectedIds) {
-      selParams.append("id", getPictureId(id));
-    }
-    params = selParams.toString();
-  } else {
-    params = buildPictureIdsQueryParams();
-  }
+  const keepGenerationData = options.keepGenerationData === true;
+  const params = exportPictureParams();
   const extraParams = new URLSearchParams();
   extraParams.append("destination", destination);
   if (exportType) {
@@ -8760,6 +9217,10 @@ async function exportCurrentViewToFolder(options = {}) {
   }
   if (bboxMode && bboxMode !== "none") {
     extraParams.append("bbox_mode", bboxMode);
+  }
+  // Stripped unless the Share panel and Export row says keep (#2417).
+  if (keepGenerationData) {
+    extraParams.append("keep_generation_data", "true");
   }
   const extraParamString = extraParams.toString();
   const exportQuery = [params, extraParamString].filter(Boolean).join("&");

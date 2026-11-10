@@ -30,6 +30,7 @@ with a pre-resolved set via the caller's own ``Picture.id.in_(...)`` clause.
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Sequence
 
 from fastapi import HTTPException
@@ -40,6 +41,7 @@ from sqlmodel import select
 
 from pixlstash.db_models.dedup import DedupGroup, DedupGroupMember
 from pixlstash.db_models.picture import Picture
+from pixlstash.db_models.tag import TAG_SENTINEL_LIKE_PATTERN, TAG_SENTINEL_ESCAPE_CHAR
 from pixlstash.utils.workflow_ids import AUTO_PREFIX, MANUAL_PREFIX
 from pixlstash.utils.service.person_tags import (
     FACE_REQUIRING_TAGS,
@@ -48,6 +50,42 @@ from pixlstash.utils.service.person_tags import (
 )
 
 _WORKFLOW_ID_PREFIXES = (AUTO_PREFIX, MANUAL_PREFIX)
+
+# The Inbox's periods (``?inbox=``): how far back "recently added" reaches.
+# ``all`` is the Inbox with no cutoff, every picture with no person and no set.
+INBOX_PERIODS: dict[str, Optional[timedelta]] = {
+    "24h": timedelta(hours=24),
+    "7d": timedelta(days=7),
+    "14d": timedelta(days=14),
+    "30d": timedelta(days=30),
+    "90d": timedelta(days=90),
+    "all": None,
+}
+
+
+def inbox_cutoff(period: Optional[str]) -> Optional[datetime]:
+    """The earliest ``imported_at`` an Inbox ``period`` admits.
+
+    Args:
+        period: A key of :data:`INBOX_PERIODS`, or ``None`` for no Inbox.
+
+    Returns:
+        The cutoff in UTC, or ``None`` for no Inbox and for ``all``.
+
+    Raises:
+        HTTPException: 422 for a period that is not one of the keys, rather
+            than an Inbox silently widened to every picture.
+    """
+    if period is None:
+        return None
+    if period not in INBOX_PERIODS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid inbox: must be one of {', '.join(INBOX_PERIODS)}",
+        )
+    span = INBOX_PERIODS[period]
+    return None if span is None else datetime.now(timezone.utc) - span
+
 
 # In a workflow filter's key list, a workflow whose runs file on it and whose
 # pictures are therefore NOT a plain variant's (``!manual:<uuid>``,
@@ -177,6 +215,69 @@ def is_truthy_flag(raw) -> bool:
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
+# Tag-group terms travel inside the ordinary ``tag`` / ``rejected_tag`` params:
+# ``__group:<id>`` is "any tag filed in that group", ``__group:none`` is "any tag
+# filed nowhere". Anything else stays a literal tag name, as it always was.
+GROUP_TERM_PREFIX = "__group:"
+GROUP_TERM_NONE = "__group:none"
+# SQLite's INTEGER is 64-bit; an id beyond it cannot name a group, so it binds to
+# a value no group can have (ids start at 1) rather than overflowing the driver.
+_SQLITE_MAX_INT = 2**63 - 1
+
+
+def _group_term_id(term: str) -> Optional[int]:
+    """The group id a ``__group:<digits>`` term names, else ``None``."""
+    if not term.startswith(GROUP_TERM_PREFIX):
+        return None
+    digits = term[len(GROUP_TERM_PREFIX) :]
+    if not digits or not digits.isascii() or not digits.isdigit():
+        return None
+    # Leading zeros name the same id; past 19 significant digits no 64-bit id
+    # fits, and int() of a few thousand digits raises on Python 3.11+.
+    significant = digits.lstrip("0") or "0"
+    if len(significant) > len(str(_SQLITE_MAX_INT)):
+        return -1
+    value = int(significant)
+    return value if value <= _SQLITE_MAX_INT else -1
+
+
+def _group_term_clause(
+    term: str, index: int, negate: bool
+) -> Optional[tuple[str, dict]]:
+    """SQL for one group term in a has (``negate=False``) or lacks list.
+
+    Returns ``None`` when *term* is a literal tag, so the caller keeps its own
+    exact-name clause. ``has`` means "some tag of the picture matches"; ``lacks``
+    is the negation of that same EXISTS, so a picture lacks a group only when it
+    carries none of the group's tags.
+    """
+    # The has and lacks lists are numbered from 0 each, and their clauses land
+    # in one statement, so the list is part of every bind name.
+    side = "lacks" if negate else "has"
+    group_id = _group_term_id(term)
+    if group_id is not None:
+        name = f"tg_group_{side}_{index}"
+        body = (
+            "EXISTS (SELECT 1 FROM tag JOIN tag_group_member m ON m.tag = tag.tag "
+            f"WHERE tag.picture_id = picture.id AND m.group_id = :{name})"
+        )
+        params: dict = {name: group_id}
+    elif term == GROUP_TERM_NONE:
+        prefix = f"tg_unfiled_{side}_{index}"
+        # A tag is unfiled when no tag_group_member row names it. Pending-retag
+        # sentinels are machine bookkeeping, not user tags, so they never count.
+        body = (
+            "EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND "
+            f"tag.tag NOT LIKE :{prefix}_pattern ESCAPE '{TAG_SENTINEL_ESCAPE_CHAR}' "
+            "AND NOT EXISTS (SELECT 1 FROM tag_group_member m WHERE m.tag = tag.tag)"
+            ")"
+        )
+        params = {f"{prefix}_pattern": TAG_SENTINEL_LIKE_PATTERN}
+    else:
+        return None
+    return (f"NOT {body}" if negate else body), params
+
+
 def _tag_in_exists(prefix: str, tags_lower: list[str]) -> tuple[str, dict]:
     """Return an ``EXISTS (a tag in tags_lower)`` SQL fragment + its bind params.
 
@@ -256,6 +357,8 @@ class PredicateFilter(BaseModel):
     # the same thing, so the predicate covers both. Given with a score range it
     # widens the range to take the unrated in too.
     unscored: bool = False
+    # "Favourites only": the owner's hearted pictures (``picture.favourite``).
+    favourite_only: bool = False
     smart_score_bucket: Optional[str] = None
     resolution_bucket: Optional[str] = None
     comfyui_models_filter: Optional[List[str]] = None
@@ -293,6 +396,8 @@ class PredicateFilter(BaseModel):
     # ``startswith`` behaviour.
     file_path_prefix_children_only: bool = True
     import_source_folder: Optional[str] = None
+    # Added at or after this time (the Inbox's period, see ``inbox_cutoff``).
+    imported_since: Optional[datetime] = None
 
     # --- scope / lifecycle flags ---
     include_deleted: bool = False
@@ -384,6 +489,14 @@ class PredicateFilter(BaseModel):
             return [text(f"NOT {_HAS_REAL_FACE_SQL}")]
         return []
 
+    def favourite_predicates(self) -> list[ColumnElement]:
+        """The "Favourites only" clause.
+
+        Public for the stack-leader collapse, like :meth:`face_predicates`: the
+        heart is often on a stack member that is not its global cover.
+        """
+        return [Picture.favourite.is_(True)] if self.favourite_only else []
+
     def predicates(self) -> list[ColumnElement]:
         """Compile this filter to a list of SQLAlchemy WHERE clauses.
 
@@ -408,6 +521,9 @@ class PredicateFilter(BaseModel):
         if self.import_source_folder:
             preds.append(Picture.import_source_folder == self.import_source_folder)
 
+        if self.imported_since is not None:
+            preds.append(Picture.imported_at >= self.imported_since)
+
         if self.format:
             preds.append(Picture.format.in_(self.format))
 
@@ -424,11 +540,17 @@ class PredicateFilter(BaseModel):
         else:
             preds.extend(score_range)
 
+        preds.extend(self.favourite_predicates())
+
         preds.extend(self._smart_score_bucket_predicates())
         preds.extend(self._resolution_bucket_predicates())
 
         if self.tags_filter:
             for i, tag in enumerate(self.tags_filter):
+                group = _group_term_clause(tag, i, negate=False)
+                if group is not None:
+                    preds.append(text(group[0]).bindparams(**group[1]))
+                    continue
                 preds.append(
                     text(
                         f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :tag_filter_{i})"
@@ -437,6 +559,10 @@ class PredicateFilter(BaseModel):
 
         if self.tags_rejected_filter:
             for i, tag in enumerate(self.tags_rejected_filter):
+                group = _group_term_clause(tag, i, negate=True)
+                if group is not None:
+                    preds.append(text(group[0]).bindparams(**group[1]))
+                    continue
                 preds.append(
                     text(
                         f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :rejected_tag_filter_{i})"
@@ -649,6 +775,7 @@ class PredicateFilter(BaseModel):
             min_score=_int_or_none("min_score"),
             max_score=_int_or_none("max_score"),
             unscored=is_truthy_flag(qp.get("unscored")),
+            favourite_only=is_truthy_flag(qp.get("favourite")),
             smart_score_bucket=qp.get("smart_score_bucket") or None,
             resolution_bucket=qp.get("resolution_bucket") or None,
             comfyui_models_filter=qp.getlist("comfyui_model") or None,
@@ -664,4 +791,5 @@ class PredicateFilter(BaseModel):
             file_path_prefix=qp.get("file_path_prefix") or None,
             file_path_prefix_children_only=children_only,
             import_source_folder=qp.get("import_source_folder") or None,
+            imported_since=inbox_cutoff(qp.get("inbox")),
         )

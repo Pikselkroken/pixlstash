@@ -29,6 +29,7 @@ from sqlmodel import Session, create_engine
 
 from pixlstash.hub.db import HUB_BUSY_TIMEOUT_S
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.sqlite_uri import sqlite_url
 
 logger = get_logger(__name__)
 
@@ -56,7 +57,7 @@ class HubEngine:
         self._path = hub_path
         self._closed = False
         self._engine = create_engine(
-            f"sqlite:///{hub_path}",
+            sqlite_url(hub_path),
             echo=False,
             connect_args={"timeout": HUB_BUSY_TIMEOUT_S},
         )

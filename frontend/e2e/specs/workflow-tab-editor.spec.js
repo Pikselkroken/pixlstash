@@ -2,6 +2,16 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { test, expect } from "../fixtures/test.js";
+import {
+  CKPT,
+  NOW,
+  OPEN,
+  SHA,
+  VAE,
+  WF,
+  gate,
+  stubWorkflows,
+} from "../fixtures/workflowTabStubs.js";
 
 // The Workflow tab as the editor, and the version menu in its head (#1850,
 // and the submenu of what can be done with an earlier version, #1792).
@@ -12,470 +22,16 @@ import { test, expect } from "../fixtures/test.js";
 // menu opened from the rail lands inside the window, which button is amber,
 // and where the keyboard is after a menu, a dialog or the bar goes away.
 //
-// The fixture library has no workflows and no ComfyUI, so every route the
-// screen reads is answered here from one small fake of the server
-// (`world`), which keeps what a write stored: a PUT of the changes answers
-// the next GET and moves the card's `unsaved_changes`, a go-back adds a
-// version. A workflow route nobody stubbed is recorded and fails the test,
+// Every route the screen reads is answered from one small fake of the server
+// (`world`, in `fixtures/workflowTabStubs.js`), which keeps what a write
+// stored: a PUT of the changes answers the next GET and moves the card's
+// `unsaved_changes`, a go-back adds a version. A workflow route nobody stubbed is recorded and fails the test,
 // so nothing here can pass on the real backend's 404.
-
-const WF = `auto:${"a".repeat(64)}`;
-const OTHER = `auto:${"b".repeat(64)}`;
-const NEW_WF = `manual:${"c".repeat(32)}`;
-
-const CKPT = "core:CheckpointLoaderSimple/ckpt_name";
-const VAE = "core:VAELoader/vae_name";
-/** A name long enough to push a row past 288px if anything lets it. */
-const CKPT_FILE =
-  "SDXL/realvisXL_v50_lightning_bakedvae_fp16_pruned_emaonly.safetensors";
-const CKPT_NAME = "realvisXL_v50_lightning_bakedvae_fp16_pruned_emaonly";
-const VAE_FILE = "sdxl_vae.safetensors";
-
-const SHA = { detail: "1".repeat(64), grain: "2".repeat(64), light: "3".repeat(64) };
-
-/** The clock every date in here is read against. */
-const NOW = "2026-10-05T12:00:00Z";
 
 /** Set to a directory to keep the screenshots; unset, none is written. */
 const SHOTS = process.env.WORKFLOW_TAB_SHOTS || "";
 
 test.use({ locale: "en-GB", timezoneId: "UTC" });
-
-const def = (label, inputName, value, slotLabel = "KSampler") => ({
-  label,
-  slot_label: slotLabel,
-  input_name: inputName,
-  value,
-  provenance: "best",
-});
-
-const loader = (node, filename, sha256, strength) => ({
-  node_id: node,
-  class_type: "LoraLoader",
-  field: "lora_name",
-  filename,
-  name: filename.split("/").pop().replace(/\.safetensors$/, ""),
-  strength,
-  strength_clip: strength,
-  sha256,
-  on_shelf: true,
-});
-const CHAIN = [
-  loader("7", "detail_slider_v2.safetensors", SHA.detail, 0.6),
-  loader("8", "loras/film-grain-35mm.safetensors", SHA.grain, 0.4),
-  loader("9", "soft_light.safetensors", SHA.light, 0.8),
-];
-
-/** A workflow as `GET /workflows` and `GET /workflows/{id}` serve it. */
-function workflowCard(id, name, overrides = {}) {
-  return {
-    id,
-    name,
-    type: "txt2img",
-    type_label: "Text to Image",
-    base_topology: `topology-${id.slice(-4)}`,
-    topologies: [`topology-${id.slice(-4)}`],
-    models: [
-      { kind: "checkpoint", name: CKPT_NAME, filename: CKPT_FILE, slot_label: "CheckpointLoaderSimple" },
-      { kind: "vae", name: "sdxl_vae", filename: VAE_FILE, slot_label: "VAELoader" },
-    ],
-    loras: [],
-    picture_count: 184,
-    rating: 4,
-    rank: 1,
-    covers: [],
-    specials: ["upscale", "face_detailer"],
-    defaults: [def("Steps", "steps", 28), def("CFG", "cfg", 5)],
-    default_recipe: {
-      sampled: 184,
-      models: [
-        { address: CKPT, kind: "checkpoint", filename: CKPT_FILE, provenance: "best" },
-        { address: VAE, kind: "vae", filename: VAE_FILE, provenance: "best" },
-      ],
-      loras: CHAIN.map((entry) => ({
-        asset: "",
-        filename: entry.filename,
-        sha256: entry.sha256,
-        strength: entry.strength,
-        provenance: "best",
-      })),
-      values: [def("Steps", "steps", 28), def("CFG", "cfg", 5)],
-      stages: { upscale: true, face_detailer: false },
-      stage_details: {},
-    },
-    ...overrides,
-  };
-}
-
-const REPLACEMENTS = {
-  checkpoint: [
-    { id: 11, filename: "SDXL/juggernautXL_v9.safetensors", display_name: "Juggernaut XL v9" },
-    { id: 12, filename: "SDXL/dreamshaperXL.safetensors", display_name: "DreamShaper XL" },
-  ],
-  vae: [{ id: 22, filename: "vae/sdxl-vae-fp16.safetensors", display_name: "SDXL VAE fp16" }],
-};
-
-/** `GET /models/workflow-sets`: two of the owner's own sets. */
-const SHELF = {
-  combinations: [],
-  no_set: [],
-  hand_made: [
-    {
-      id: 7,
-      name: "Portraits",
-      members: [
-        { id: 11, slot: "checkpoint", on_shelf: true, name: "Juggernaut XL v9" },
-        { id: 22, slot: "vae", on_shelf: true, name: "SDXL VAE fp16" },
-      ],
-    },
-    {
-      id: 8,
-      name: "Flux dev",
-      members: [{ id: 31, slot: "checkpoint", on_shelf: true, name: "flux dev" }],
-    },
-  ],
-  set_checks: [],
-};
-
-const OPEN = { open: true, reason: null };
-
-const countOf = (set) =>
-  (set?.models?.length ?? 0) +
-  (set?.loras?.length ?? 0) +
-  (set?.skip_loras?.length ?? 0) +
-  Object.keys(set?.stages ?? {}).length +
-  (set?.values?.length ?? 0);
-
-/** Three versions of the first workflow, newest first as the route sends them. */
-const VERSIONS = [
-  { version: 3, created_at: "2026-10-02T12:00:00+00:00", reason: "models changed" },
-  { version: 2, created_at: "2026-08-28T12:00:00+00:00", reason: "LoRAs edited" },
-  { version: 1, created_at: "2026-08-20T12:00:00+00:00", reason: "as PixlStash first read it" },
-];
-
-/**
- * Stub the routes this screen reads and answer from *world*, which keeps what
- * a write stored and which a test may change as it goes. Returns what was
- * sent, and every workflow request nothing here answers.
- */
-async function stubWorkflows(page, world = {}) {
-  const net = {
-    world: {
-      names: { [WF]: "Portrait, soft window light", [OTHER]: "Landscape, golden hour" },
-      /** Per workflow id: the set waiting, or absent. */
-      waiting: {},
-      /** Per workflow id: its versions, newest first. */
-      versions: { [WF]: VERSIONS.map((row) => ({ ...row })), [OTHER]: [] },
-      verbs: { save: OPEN, save_as_new: OPEN },
-      chain: CHAIN,
-      restoreRefusal: "",
-      /** Per workflow id: what waits was made on a version since left. */
-      stale: {},
-      /** ComfyUI configured, with the node that opens a workflow. */
-      comfyui: false,
-      ...world,
-    },
-    /** A held answer, by route: a gate to release (see `gate`). */
-    hold: {},
-    /** The writes in the order they reached the server. */
-    order: [],
-    changePuts: [],
-    discards: [],
-    saves: [],
-    savesAsNew: [],
-    restores: [],
-    duplicates: [],
-    openings: [],
-    chainWrites: [],
-    planAsks: [],
-    unstubbed: [],
-  };
-  const json = (route, body, status = 200) => route.fulfill({ status, json: body });
-  const versionOf = (id) => net.world.versions[id]?.[0]?.version ?? null;
-  const cardOf = (id) => {
-    const rows = net.world.versions[id] ?? [];
-    return workflowCard(id, net.world.names[id], {
-      versions: Math.max(rows.length, 1),
-      version: rows[0]?.version ?? 1,
-      version_at: rows[0]?.created_at ?? null,
-      unsaved_changes: countOf(net.world.waiting[id]),
-    });
-  };
-  const changesOf = (id) => {
-    const waiting = net.world.waiting[id] ?? null;
-    const stale = Boolean(net.world.stale[id]) && countOf(waiting) > 0;
-    return {
-      workflow_id: id,
-      version: versionOf(id),
-      waiting: countOf(waiting) ? waiting : null,
-      count: countOf(waiting),
-      ran: null,
-      ...net.world.verbs,
-      // As the real server answers for a set made on a version since left:
-      // marked, and Save closed for it. Absent otherwise, as for a mock that
-      // never heard of the field.
-      ...(stale
-        ? {
-            stale: true,
-            save: { open: false, reason: "This workflow has changed since." },
-          }
-        : {}),
-      ran_save: null,
-    };
-  };
-  const versionsOf = (id) => ({
-    workflow_id: id,
-    version: versionOf(id),
-    versions: (net.world.versions[id] ?? []).map((row, index) => ({
-      ...row,
-      current: index === 0,
-    })),
-  });
-  const addVersion = (id, reason) => {
-    const rows = net.world.versions[id] ?? [];
-    net.world.versions[id] = [
-      { version: (rows[0]?.version ?? 0) + 1, created_at: NOW, reason },
-      ...rows,
-    ];
-  };
-
-  await page.route(
-    (url) => url.pathname.startsWith("/api/v1/"),
-    async (route) => {
-      const request = route.request();
-      const url = new URL(request.url());
-      const path = decodeURIComponent(url.pathname).slice("/api/v1".length);
-      const method = request.method();
-      const { world: now } = net;
-
-      if (path === "/models/workflow-sets" && method === "GET") return json(route, SHELF);
-      // The dialog's Add reads the shelf's LoRAs; none is needed here.
-      if (path === "/adapters" && method === "GET") return json(route, { adapters: [] });
-      if (path === "/recipes" && method === "GET") return json(route, []);
-      if (now.comfyui && path === "/users/me/config" && method === "GET") {
-        const real = await route.fetch();
-        return route.fulfill({
-          response: real,
-          json: { ...(await real.json()), comfyui_url: "http://127.0.0.1:8188" },
-        });
-      }
-      if (now.comfyui && path === "/comfyui/pixlstash-node" && method === "GET") {
-        return json(route, { can_open_workflows: true, saves_back: true });
-      }
-      if (!path.startsWith("/workflows")) return route.fallback();
-
-      if (path === "/workflows" && method === "GET") {
-        return json(route, {
-          cards: Object.keys(now.names).map(cardOf),
-          one_offs: 0,
-          hidden: 0,
-        });
-      }
-      if (path === "/workflows/run/preflight" && method === "POST") {
-        const id = request.postDataJSON().workflow_id;
-        return json(route, {
-          ok: true,
-          runs: 1,
-          groups: [{ workflow_id: id, reasons: [], picture_inputs: [] }],
-        });
-      }
-
-      const own = Object.keys(now.names).find(
-        (id) => path === `/workflows/${id}` || path.startsWith(`/workflows/${id}/`),
-      );
-      const rest = own ? path.slice(`/workflows/${own}`.length) : null;
-      if (rest === "" && method === "GET") {
-        return json(route, {
-          card: cardOf(own),
-          notes: null,
-          hidden: false,
-          variants: [],
-          pins: null,
-          graph_base_models: [],
-          model_fixes: [],
-        });
-      }
-      if (rest === "/lora-chain" && method === "GET") {
-        return json(route, {
-          workflow_id: own,
-          editable: true,
-          refusal: null,
-          source: { node_id: "4", class_type: "CheckpointLoaderSimple", outputs: ["MODEL", "CLIP"] },
-          sink: { summary: "KSampler #12 reads model", consumers: [] },
-          loaders: now.chain,
-          added_loader_class: "LoraLoader",
-          lanes: [],
-          branch_note: null,
-        });
-      }
-      if (rest === "/lora-chain" && method === "PUT") {
-        const body = request.postDataJSON();
-        const sent = (body.entries ?? []).map((entry) => String(entry.node_id));
-        const changes = now.chain
-          .filter((entry) => !sent.includes(entry.node_id))
-          .map((entry) => ({
-            kind: "deleted",
-            node_id: entry.node_id,
-            text: `${entry.name} is taken out of the chain.`,
-          }));
-        const kept = now.chain
-          .map((entry) => entry.node_id)
-          .filter((id) => sent.includes(id));
-        if (JSON.stringify(kept) !== JSON.stringify(sent)) {
-          changes.push({
-            kind: "moved",
-            node_id: sent[0],
-            text: "The loaders are applied in another order.",
-          });
-        }
-        if (!body.dry_run) net.chainWrites.push(body);
-        return json(route, {
-          dry_run: Boolean(body.dry_run),
-          name: null,
-          workflow_id: body.dry_run ? null : own,
-          overwritten: !body.dry_run,
-          changes,
-        });
-      }
-      if (rest === "/lora-summary" && method === "GET") {
-        return json(route, {
-          workflow_id: own,
-          pictures: 184,
-          shared: [],
-          varying: [],
-          without: null,
-          cover_asset: null,
-        });
-      }
-      if (rest === "/form-inputs" && method === "GET") return json(route, { nodes: [] });
-      if (rest === "/model-swap" && method === "GET") {
-        return json(route, {
-          slots: [],
-          checkpoints: [],
-          vaes: [],
-          text_encoders: [],
-          replacements: REPLACEMENTS[url.searchParams.get("slot_kind")] || [],
-          replacements_reason: null,
-          replacements_narrowed: true,
-        });
-      }
-      if (rest === "/set-clone-plans" && method === "POST") {
-        const body = request.postDataJSON();
-        net.planAsks.push(body);
-        return json(route, {
-          base_filename: CKPT_FILE,
-          base_model: "SDXL",
-          plans: body.sets.map((ask, index) =>
-            index === 0
-              ? {
-                  key: ask.key,
-                  fit: "same_base_model",
-                  reason: null,
-                  keeps_loras: true,
-                  swaps: {
-                    [CKPT_FILE]: "SDXL/juggernautXL_v9.safetensors",
-                    [VAE_FILE]: "vae/sdxl-vae-fp16.safetensors",
-                  },
-                  unpaired_bases: [],
-                  takes: {},
-                  choices: {},
-                  loaders: [],
-                }
-              : {
-                  key: ask.key,
-                  fit: "wont_load",
-                  reason: "Its checkpoint needs a UNETLoader, which this workflow does not have.",
-                  keeps_loras: false,
-                  swaps: {},
-                  unpaired_bases: [],
-                  takes: {},
-                  choices: {},
-                  loaders: [],
-                },
-          ),
-        });
-      }
-      if (rest === "/changes" && method === "GET") return json(route, changesOf(own));
-      if (rest === "/changes" && method === "PUT") {
-        const body = request.postDataJSON();
-        net.changePuts.push(body);
-        net.order.push("put");
-        if (net.hold.put) await net.hold.put.promise;
-        now.waiting[own] = countOf(body) ? body : null;
-        return json(route, changesOf(own));
-      }
-      if (rest === "/changes" && method === "DELETE") {
-        net.discards.push(own);
-        now.waiting[own] = null;
-        return json(route, changesOf(own));
-      }
-      if (rest === "/versions" && method === "GET") return json(route, versionsOf(own));
-      const restore = rest?.match(/^\/versions\/(\d+)\/restore$/);
-      if (restore && method === "POST") {
-        net.restores.push(Number(restore[1]));
-        if (now.restoreRefusal) return json(route, { detail: now.restoreRefusal }, 409);
-        addVersion(own, `went back to version ${restore[1]}`);
-        // What waits was made on the version left: the server marks it so.
-        if (countOf(now.waiting[own])) now.stale[own] = true;
-        return json(route, versionsOf(own));
-      }
-      const opening = rest?.match(/^\/versions\/(\d+)\/opening$/);
-      if (opening && method === "POST") {
-        net.openings.push(Number(opening[1]));
-        return json(route, { opening: "ab".repeat(16), workflow_id: own });
-      }
-      if (rest === "/duplicate" && method === "POST") {
-        const version = url.searchParams.get("version");
-        net.duplicates.push(version === null ? null : Number(version));
-        // As the server names it: a plain duplicate is a copy.
-        const name = `${now.names[own]} ${version === null ? "(copy)" : `(version ${version})`}`;
-        now.names[NEW_WF] = name;
-        now.versions[NEW_WF] = [];
-        return json(route, { name, workflow_id: NEW_WF }, 201);
-      }
-      if (rest === "/save" && method === "POST") {
-        const body = request.postDataJSON();
-        net.saves.push(body);
-        net.order.push("save");
-        if (net.hold.save) await net.hold.save.promise;
-        now.waiting[own] = null;
-        now.stale[own] = false;
-        addVersion(own, "models changed");
-        return json(route, {
-          workflow_id: own,
-          version: versionOf(own),
-          new_workflow: false,
-          left_out: [],
-        });
-      }
-      if (rest === "/save-as-new" && method === "POST") {
-        const body = request.postDataJSON();
-        net.savesAsNew.push(body);
-        now.waiting[own] = null;
-        now.names[NEW_WF] = body.name;
-        now.versions[NEW_WF] = [];
-        return json(
-          route,
-          { workflow_id: NEW_WF, name: body.name, new_workflow: true, version: 1, left_out: [] },
-          201,
-        );
-      }
-
-      net.unstubbed.push(`${method} ${path}${url.search}`);
-      return json(route, { detail: "not stubbed by workflow-tab-editor.spec.js" }, 599);
-    },
-  );
-  return net;
-}
-
-/** A promise a test releases by hand: what a route holds its answer on. */
-function gate() {
-  let release;
-  const promise = new Promise((resolve) => {
-    release = resolve;
-  });
-  return { promise, release };
-}
 
 let net;
 test.afterEach(() => {
@@ -497,12 +53,14 @@ const versionActions = (page, number) =>
 const bar = (page) => rail(page).getByRole("group", { name: "Unsaved changes" });
 const runButton = (page) => rail(page).getByRole("button", { name: /^Run( with changes)?…$/ });
 const checkpointRow = (page) => rail(page).getByTestId("wftab-row-checkpoint");
-const checkpointPicker = (page) => rail(page).getByRole("combobox", { name: "Checkpoint" });
-const stage = (page, name) => rail(page).getByRole("checkbox", { name });
+const stage = (page, name) => rail(page).getByRole("button", { name });
 const strength = (page, name) =>
-  rail(page).getByRole("spinbutton", { name: `Strength of ${name}` });
-const editLoras = (page) => rail(page).getByRole("button", { name: "Edit LoRAs…" });
+  lorasDialog(page).getByRole("spinbutton", { name: `Strength of ${name}` });
+const editLoras = (page) => rail(page).getByRole("button", { name: "Edit LoRAs" });
+/** The rail's Edit LoRAs dialog (#2165): live edits, Done closes. */
 const lorasDialog = (page) => page.locator(".app-dialog").filter({ hasText: "Edit LoRAs" });
+/** The chain editor, which Add a LoRA or reorder… opens in its place. */
+const chainDialog = (page) => page.locator(".app-dialog").filter({ has: page.getByTestId("eld-primary") });
 const notices = (page) => page.locator(".notice-message");
 
 /** Open the Workflows screen on the stubbed library and select a card. */
@@ -516,13 +74,32 @@ async function selectWorkflow(page, index = 0) {
   await expect(checkpointRow(page)).toBeVisible();
 }
 
-/** The checkpoint picked, a stage switched and a loader removed. */
+/** Edit LoRAs open on the rail, with its rows read. */
+async function openLoras(page) {
+  await editLoras(page).click();
+  await expect(lorasDialog(page)).toBeVisible();
+  await settled(lorasDialog(page));
+}
+
+/** Done closes Edit LoRAs; every change in it was already unsaved. */
+async function doneLoras(page) {
+  await lorasDialog(page).getByTestId("wftab-loras-done").click();
+  await expect(lorasDialog(page)).toBeHidden();
+}
+
+/** A stage switched, a loader removed and a strength typed: three changes. */
 async function changeThree(page) {
-  await checkpointPicker(page).selectOption({ label: "Juggernaut XL v9" });
+  await stage(page, "Face detailer").click();
   await expect(bar(page)).toContainText("1 unsaved change");
-  await stage(page, "Face detailer").check();
+  await openLoras(page);
+  await lorasDialog(page).getByRole("button", { name: "Remove film-grain-35mm" }).click();
+  await expect(lorasDialog(page).getByRole("button", { name: "Put film-grain-35mm back" })).toBeFocused();
+  await doneLoras(page);
   await expect(bar(page)).toContainText("2 unsaved changes");
-  await rail(page).getByRole("button", { name: "Remove film-grain-35mm" }).click();
+  await openLoras(page);
+  await strength(page, "detail_slider_v2").fill("0.45");
+  await strength(page, "detail_slider_v2").press("Enter");
+  await doneLoras(page);
   await expect(bar(page)).toContainText("3 unsaved changes");
 }
 
@@ -641,11 +218,11 @@ test.describe("the head and the version menu", () => {
     await selectWorkflow(page);
 
     await expect(chip(page)).toHaveText("Version 3 · 2 Oct");
-    const count = rail(page).getByRole("button", { name: "Show all 184 pictures" });
-    const countBox = await count.boundingBox();
     const chipBox = await chip(page).boundingBox();
-    // A line of its own, under the count: the star chart shares the count's.
-    expect(chipBox.y).toBeGreaterThanOrEqual(countBox.y + countBox.height - 1);
+    // A line of its own in the head, above the Models panel (the star chart
+    // sits beside the tabs, not in the head).
+    const models = await rail(page).getByTestId("wftab-default-recipe").boundingBox();
+    expect(chipBox.y + chipBox.height).toBeLessThanOrEqual(models.y + 1);
     expect(await overflows(rail(page).locator(".inspector-body"))).toBe(false);
 
     await chip(page).click();
@@ -801,16 +378,15 @@ test.describe("rows as editors", () => {
   test("nothing in the rail runs past its edge, a long model name included", async ({ page }) => {
     net = await stubWorkflows(page);
     await selectWorkflow(page);
-    // Three loaders, each a row with a name, a strength and an ×.
+    // Three loaders, each a row with a name and its strength.
     await expect(rail(page).getByTestId("wftab-default-lora")).toHaveCount(3);
-    await expect(rail(page).getByRole("spinbutton")).toHaveCount(3);
-    await expect(stage(page, "Upscale")).toBeChecked();
-    await expect(stage(page, "Face detailer")).not.toBeChecked();
+    await expect(stage(page, "Upscale")).toHaveAttribute("aria-pressed", "true");
+    await expect(stage(page, "Face detailer")).toHaveAttribute("aria-pressed", "false");
 
     const railBox = await rail(page).boundingBox();
     expect(Math.round(railBox.width)).toBe(288);
     expect(await overflows(rail(page).locator(".inspector-body"))).toBe(false);
-    const rows = rail(page).locator(".wftab-field");
+    const rows = rail(page).locator(".wftab-row");
     const count = await rows.count();
     expect(count).toBeGreaterThanOrEqual(6);
     for (let index = 0; index < count; index += 1) {
@@ -820,49 +396,14 @@ test.describe("rows as editors", () => {
         railBox.x + railBox.width,
       );
     }
-    // The strength and the × are inside their field, not pushed out of it.
-    const field = rail(page).getByTestId("wftab-default-lora").first().locator(".wftab-value");
-    const remove = rail(page).getByRole("button", { name: "Remove detail_slider_v2" });
-    const fieldBox = await field.boundingBox();
-    const removeBox = await remove.boundingBox();
-    expect(removeBox.x + removeBox.width).toBeLessThanOrEqual(fieldBox.x + fieldBox.width + 1);
-  });
-
-  test("a model pick joins the changes, shows Edited and the saved name, and the reset takes it back", async ({ page }) => {
-    net = await stubWorkflows(page);
-    await selectWorkflow(page);
-
-    // The saved file first, then what the shelf offers: never a bare filename.
-    await expect(checkpointPicker(page).locator("option")).toHaveText([
-      CKPT_NAME,
-      "Juggernaut XL v9",
-      "DreamShaper XL",
-    ]);
-    await shot(checkpointRow(page), "model-row-saved");
-
-    await checkpointPicker(page).selectOption({ label: "Juggernaut XL v9" });
-    await expect(checkpointRow(page).getByText("Edited", { exact: true })).toBeVisible();
-    expect(net.changePuts).toHaveLength(1);
-    expect(net.changePuts[0].models).toEqual([
-      { address: CKPT, filename: "SDXL/juggernautXL_v9.safetensors" },
-    ]);
-    expect(net.changePuts[0].stages).toEqual({});
-
-    const saved = checkpointRow(page).getByTestId("wftab-saved");
-    await expect(saved).toContainText(`Saved: ${CKPT_NAME}`);
-    await expect(saved).not.toContainText(".safetensors");
-    // The long saved name clips inside the row instead of widening it.
-    expect(await overflows(checkpointRow(page))).toBe(false);
-    expect(await overflows(rail(page).locator(".inspector-body"))).toBe(false);
-    await shot(checkpointRow(page), "model-row-edited");
-
-    await saved.getByRole("button", { name: `Put Checkpoint back to ${CKPT_NAME}` }).click();
-    await expect(bar(page)).toBeHidden();
-    await expect(checkpointRow(page).getByText("Edited", { exact: true })).toBeHidden();
-    // Polled: a second write goes out when the first has answered, which
-    // the bar, drawn from the edit itself, does not wait for.
-    await expect.poll(() => net.changePuts.length).toBe(2);
-    expect(net.changePuts[1].models).toEqual([]);
+    // The strength field and the × are in the Edit LoRAs dialog: its rows fit too.
+    await openLoras(page);
+    const dialogRows = lorasDialog(page).getByTestId("wfl-row");
+    await expect(dialogRows).toHaveCount(3);
+    for (let index = 0; index < 3; index += 1) {
+      expect(await overflows(dialogRows.nth(index)), `dialog row ${index}`).toBe(false);
+    }
+    await doneLoras(page);
   });
 
   test("a stage toggles with Space, and a strength takes a typed value", async ({ page }) => {
@@ -871,10 +412,11 @@ test.describe("rows as editors", () => {
 
     await stage(page, "Face detailer").focus();
     await page.keyboard.press("Space");
-    await expect(stage(page, "Face detailer")).toBeChecked();
+    await expect(stage(page, "Face detailer")).toHaveAttribute("aria-pressed", "true");
     await expect(bar(page)).toContainText("1 unsaved change");
     expect(net.changePuts.at(-1).stages).toEqual({ face_detailer: true });
 
+    await openLoras(page);
     const field = strength(page, "detail_slider_v2");
     await expect(field).toHaveValue("0.60");
     await field.fill("0.45");
@@ -894,32 +436,37 @@ test.describe("rows as editors", () => {
         },
       ]);
     await expect(
-      rail(page).getByTestId("wftab-default-lora").first().getByTestId("wftab-lora-saved"),
+      lorasDialog(page).getByTestId("wfl-row").first().getByTestId("wftab-lora-saved"),
     ).toContainText("Saved: 0.60");
     // The field is wide enough for what was typed.
     expect(await overflows(field)).toBe(false);
+    await doneLoras(page);
   });
 
   test("× moves the keyboard to Put back, and Put back moves it to ×", async ({ page }) => {
     net = await stubWorkflows(page);
     await selectWorkflow(page);
 
-    const remove = rail(page).getByRole("button", { name: "Remove film-grain-35mm" });
-    const putBack = rail(page).getByRole("button", { name: "Put film-grain-35mm back" });
+    await openLoras(page);
+    const remove = lorasDialog(page).getByRole("button", { name: "Remove film-grain-35mm" });
+    const putBack = lorasDialog(page).getByRole("button", { name: "Put film-grain-35mm back" });
     await remove.click();
     await expect(putBack).toBeFocused();
     expect(net.changePuts.at(-1).skip_loras).toEqual([{ node_id: "8", field: "lora_name" }]);
-    // The row is still there, struck through and marked.
-    const row = rail(page).getByTestId("wftab-default-lora").nth(1);
+    // The row is still there, struck through and marked, in the dialog and
+    // in the rail's list.
+    const row = lorasDialog(page).getByTestId("wfl-row").nth(1);
     await expect(row.getByText("Removed", { exact: true })).toBeVisible();
     await expect(row.locator("s")).toHaveText("film-grain-35mm");
-    await expect(rail(page).getByTestId("wftab-default-lora")).toHaveCount(3);
+    await expect(lorasDialog(page).getByTestId("wfl-row")).toHaveCount(3);
     expect(await overflows(row)).toBe(false);
+    await expect(rail(page).getByTestId("wftab-lora-removed")).toBeVisible();
 
     await page.keyboard.press("Enter");
     await expect(remove).toBeFocused();
     await expect(bar(page)).toBeHidden();
     await expect.poll(() => net.changePuts.at(-1).skip_loras).toEqual([]);
+    await doneLoras(page);
   });
 });
 
@@ -930,11 +477,11 @@ test.describe("the bar", () => {
     net = await stubWorkflows(page);
     await selectWorkflow(page);
     await expect(bar(page)).toBeHidden();
-    await expect(runButton(page)).toHaveText("Run…");
+    await expect(runButton(page)).toContainText("Run…");
 
     await changeThree(page);
     await expect(bar(page).getByTestId("wftab-draft-count")).toHaveText("3 unsaved changes");
-    await expect(runButton(page)).toHaveText("Run with changes…");
+    await expect(runButton(page)).toContainText("Run with changes…");
 
     const barBox = await bar(page).boundingBox();
     const runBox = await runButton(page).boundingBox();
@@ -964,7 +511,7 @@ test.describe("the bar", () => {
     const ink = await styleOf(bar(page).locator(".wftab-draft__count .v-icon"), "color");
     expect(ink).not.toBe(await styleOf(bar(page), "color"));
     expect(await styleOf(saveAsNew, "borderTopColor")).toBe(ink);
-    const edited = checkpointRow(page).getByTestId("wftab-edited");
+    const edited = rail(page).getByTestId("wftab-stages-edited");
     expect(await styleOf(edited, "backgroundColor", "::before")).toBe(ink);
     expect(await styleOf(edited, "width", "::before")).toBe("8px");
     // It arrived with the first change: the pulse is the bar's own.
@@ -979,7 +526,7 @@ test.describe("the bar", () => {
     const said = rail(page).getByTestId("wftab-draft-arrival");
     await expect(said).toHaveText("");
 
-    await stage(page, "Face detailer").check();
+    await stage(page, "Face detailer").click();
     await expect(said).toHaveText("1 unsaved change");
     await expect(bar(page)).toHaveClass(/wftab-draft--arrived/);
     expect(await styleOf(bar(page), "animationName")).toBe("none");
@@ -989,7 +536,7 @@ test.describe("the bar", () => {
     net = await stubWorkflows(page);
     await page.setViewportSize({ width: 1280, height: 480 });
     await selectWorkflow(page);
-    await stage(page, "Face detailer").check();
+    await stage(page, "Face detailer").click();
     await expect(bar(page)).toContainText("1 unsaved change");
 
     // The body scrolls: there is more of it than the window shows.
@@ -1013,7 +560,7 @@ test.describe("the bar", () => {
       verbs: { save: { open: false, reason }, save_as_new: OPEN },
     });
     await selectWorkflow(page);
-    await checkpointPicker(page).selectOption({ label: "Juggernaut XL v9" });
+    await stage(page, "Face detailer").click();
 
     await expect(bar(page)).toContainText("1 unsaved change");
     await expect(bar(page).getByRole("button", { name: "Save", exact: true })).toHaveCount(0);
@@ -1031,7 +578,7 @@ test.describe("the bar", () => {
   test("Save as new… asks for the name with the keyboard in it, and Escape goes back", async ({ page }) => {
     net = await stubWorkflows(page);
     await selectWorkflow(page);
-    await stage(page, "Face detailer").check();
+    await stage(page, "Face detailer").click();
 
     const saveAsNew = bar(page).getByRole("button", { name: "Save as new…" });
     await saveAsNew.click();
@@ -1051,7 +598,7 @@ test.describe("the bar", () => {
     await saveAsNew.click();
     await name.fill("Portrait, softer");
     await page.keyboard.press("Enter");
-    await expect(rail(page).locator(".wftab-title")).toHaveText("Portrait, softer");
+    await expect(rail(page).getByTestId("wftab-title")).toHaveText("Portrait, softer");
     expect(net.savesAsNew).toEqual([{ name: "Portrait, softer" }]);
     expect(net.saves).toEqual([]);
     await expect(bar(page)).toBeHidden();
@@ -1066,7 +613,7 @@ test.describe("the bar", () => {
     await expect(bar(page)).toBeHidden();
     expect(net.saves).toEqual([{ version: 3 }]);
     await expect(runButton(page)).toBeFocused();
-    await expect(runButton(page)).toHaveText("Run…");
+    await expect(runButton(page)).toContainText("Run…");
     await expect(chip(page)).toHaveText("Version 4 · today");
     await expect(notices(page).last()).toHaveText(
       "Saved as version 4. The version menu takes it back.",
@@ -1084,9 +631,9 @@ test.describe("the bar", () => {
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(runButton(page)).toBeFocused();
     // The rows read as saved again.
-    await expect(checkpointRow(page).getByText("Edited", { exact: true })).toBeHidden();
-    await expect(stage(page, "Face detailer")).not.toBeChecked();
-    await expect(rail(page).getByRole("button", { name: "Remove film-grain-35mm" })).toBeVisible();
+    await expect(rail(page).getByTestId("wftab-stages-edited")).toBeHidden();
+    await expect(stage(page, "Face detailer")).toHaveAttribute("aria-pressed", "false");
+    await expect(rail(page).getByTestId("wftab-lora-removed")).toBeHidden();
   });
 });
 
@@ -1100,7 +647,7 @@ test.describe("the card", () => {
     await selectWorkflow(page);
     await expect(unsaved(page)).toHaveCount(0);
 
-    await stage(page, "Face detailer").check();
+    await stage(page, "Face detailer").click();
     await expect(unsaved(page)).toHaveText("Unsaved");
     // With the tab's teal dot before the word.
     expect(await styleOf(unsaved(page), "width", "::before")).toBe("8px");
@@ -1117,7 +664,7 @@ test.describe("the card", () => {
   test("keeps Unsaved clear of the picture count at the card's narrowest", async ({ page }) => {
     net = await stubWorkflows(page);
     await selectWorkflow(page);
-    await stage(page, "Face detailer").check();
+    await stage(page, "Face detailer").click();
     await expect(unsaved(page)).toBeVisible();
 
     const count = cardRow(page).locator(".wf-card__badge--end").first();
@@ -1165,10 +712,10 @@ test("changes stay with the workflow when another card is selected, and nothing 
   });
 
   await cardRow(page, 1).click();
-  await expect(rail(page).locator(".wftab-title")).toHaveText("Landscape, golden hour");
+  await expect(rail(page).getByTestId("wftab-title")).toHaveText("Landscape, golden hour");
   await expect(bar(page)).toBeHidden();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(checkpointRow(page).getByText("Edited", { exact: true })).toBeHidden();
+  await expect(rail(page).getByTestId("wftab-stages-edited")).toBeHidden();
 
   // While the other card is shown, one of the three is taken back somewhere
   // else: what the rail shows on the way back is then the server's set, not
@@ -1177,12 +724,10 @@ test("changes stay with the workflow when another card is selected, and nothing 
   net.world.waiting[WF] = { ...rest, stages: {} };
   const puts = net.changePuts.length;
   await cardRow(page, 0).click();
-  await expect(rail(page).locator(".wftab-title")).toHaveText("Portrait, soft window light");
+  await expect(rail(page).getByTestId("wftab-title")).toHaveText("Portrait, soft window light");
   await expect(bar(page).getByTestId("wftab-draft-count")).toHaveText("2 unsaved changes");
-  await expect(checkpointRow(page).getByText("Edited", { exact: true })).toBeVisible();
-  await expect(checkpointPicker(page)).toHaveValue("SDXL/juggernautXL_v9.safetensors");
-  await expect(stage(page, "Face detailer")).not.toBeChecked();
-  await expect(rail(page).getByRole("button", { name: "Put film-grain-35mm back" })).toBeVisible();
+  await expect(stage(page, "Face detailer")).toHaveAttribute("aria-pressed", "false");
+  await expect(rail(page).getByTestId("wftab-lora-removed")).toBeVisible();
   // Read, not written: coming back stored nothing and discarded nothing.
   expect(net.changePuts).toHaveLength(puts);
   expect(net.discards).toEqual([]);
@@ -1198,7 +743,7 @@ test.describe("Change model set…", () => {
 
     const button = rail(page).getByRole("button", { name: "Change model set…" });
     const models = rail(page).getByTestId("wftab-default-recipe");
-    const head = await models.locator(".wftab-sec-head").boundingBox();
+    const head = await models.locator(".section-head").boundingBox();
     const box = await button.boundingBox();
     expect(box.y).toBeGreaterThanOrEqual(head.y - 1);
     expect(box.y + box.height).toBeLessThanOrEqual(head.y + head.height + 1);
@@ -1235,60 +780,100 @@ test.describe("Change model set…", () => {
     await expect(rail(page).getByTestId("wftab-row-vae").getByText("Edited", { exact: true })).toBeVisible();
     expect(await overflows(rail(page).locator(".inspector-body"))).toBe(false);
   });
+
+  test("a long list stays inside a short window and scrolls under the wheel", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 600 });
+    net = await stubWorkflows(page);
+    // Thirty sets, registered after the fixture's routes so this answer wins:
+    // far more rows than 600px holds. The plan route answers each one.
+    await page.route("**/api/v1/models/workflow-sets", (route) =>
+      route.fulfill({
+        json: {
+          combinations: [],
+          no_set: [],
+          set_checks: [],
+          hand_made: Array.from({ length: 30 }, (_, index) => ({
+            id: 100 + index,
+            name: `Set ${index + 1}`,
+            members: [{ id: 200 + index, slot: "checkpoint", on_shelf: true, name: `ckpt ${index}` }],
+          })),
+        },
+      }),
+    );
+    await selectWorkflow(page);
+
+    await rail(page).getByRole("button", { name: "Change model set…" }).click();
+    const menu = page.getByTestId("wftab-use-set-menu");
+    await expect(menu.locator("[data-set]")).toHaveCount(30);
+    await settled(menu);
+    expect(await insideViewport(page, menu)).toBe(true);
+    const box = () =>
+      menu.evaluate((el) => ({
+        overflowY: getComputedStyle(el).overflowY,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+        scrollTop: el.scrollTop,
+        pageScroll: document.scrollingElement.scrollTop,
+      }));
+    const before = await box();
+    expect(before.overflowY).toBe("auto");
+    expect(before.scrollHeight).toBeGreaterThan(before.clientHeight);
+    expect(before.scrollTop).toBe(0);
+
+    const { x, y, width, height } = await menu.boundingBox();
+    await page.mouse.move(x + width / 2, y + height / 2);
+    await page.mouse.wheel(0, 400);
+    await expect.poll(async () => (await box()).scrollTop).toBeGreaterThan(0);
+    // The menu took the wheel, the page behind it did not move.
+    expect((await box()).pageScroll).toBe(before.pageScroll);
+    // The last row can be reached and is drawn inside the window.
+    const last = menu.locator("[data-set]").last();
+    await last.scrollIntoViewIfNeeded();
+    expect(await insideViewport(page, last)).toBe(true);
+  });
 });
 
 test.describe("Edit LoRAs…", () => {
-  const primary = (page) => lorasDialog(page).getByTestId("eld-primary");
-  const note = (page) => lorasDialog(page).getByTestId("eld-note");
+  const done = (page) => lorasDialog(page).getByTestId("wftab-loras-done");
 
-  test("a removal ends in Apply, which writes only the unsaved changes", async ({ page }) => {
+  test("a removal is an unsaved change at once, and Done only closes", async ({ page }) => {
     net = await stubWorkflows(page);
     await selectWorkflow(page);
 
-    await editLoras(page).click();
-    await expect(lorasDialog(page)).toBeVisible();
-    await settled(lorasDialog(page));
-    await expect(primary(page)).toHaveText("Apply");
-    await expect(primary(page)).toBeDisabled();
+    await openLoras(page);
+    await expect(done(page)).toHaveText("Done");
+    await expect(lorasDialog(page).getByTestId("wfl-row")).toHaveCount(3);
 
     await lorasDialog(page).getByRole("button", { name: "Remove film-grain-35mm" }).click();
     await expect(lorasDialog(page).getByRole("button", { name: "Put film-grain-35mm back" })).toBeFocused();
-    await expect(primary(page)).toBeEnabled();
-    await expect(primary(page)).toHaveText("Apply");
-    await expect(note(page)).toHaveText(
-      "Apply puts this in the Workflow tab as an unsaved change. Nothing is written until you save there.",
-    );
-    await expect(lorasDialog(page).getByTestId("eld-count")).toHaveText("1 loader removed");
-    // The note is pinned with the button it explains: whole, above it, and
-    // not under the fold of the list.
-    const noteBox = await note(page).boundingBox();
-    const primaryBox = await primary(page).boundingBox();
-    expect(noteBox.y + noteBox.height).toBeLessThanOrEqual(primaryBox.y);
-    expect(await insideViewport(page, note(page))).toBe(true);
-    expect(await drawnAtItsCorners(note(page))).toBe(true);
-    await shot(lorasDialog(page), "edit-loras-apply");
+    // Written at once: the bar has it while the dialog is still open.
+    await expect(bar(page).getByTestId("wftab-draft-count")).toHaveText("1 unsaved change");
+    expect(net.changePuts).toHaveLength(1);
+    expect(net.changePuts[0].skip_loras).toEqual([{ node_id: "8", field: "lora_name" }]);
+    expect(net.changePuts[0].loras).toEqual([]);
+    await expect(lorasDialog(page).getByTestId("wftab-lora-removed")).toHaveText("Removed");
+    await shot(lorasDialog(page), "edit-loras-removed");
 
-    await primary(page).click();
-    await expect(lorasDialog(page)).toBeHidden();
+    await doneLoras(page);
     // Only the set of changes: the chain itself was never written.
     expect(net.chainWrites).toEqual([]);
     expect(net.saves).toEqual([]);
     expect(net.changePuts).toHaveLength(1);
-    expect(net.changePuts[0].skip_loras).toEqual([{ node_id: "8", field: "lora_name" }]);
-    expect(net.changePuts[0].loras).toEqual([]);
+    await expect(rail(page).getByTestId("wftab-lora-removed")).toBeVisible();
     await expect(bar(page).getByTestId("wftab-draft-count")).toHaveText("1 unsaved change");
-    await expect(rail(page).getByRole("button", { name: "Put film-grain-35mm back" })).toBeVisible();
-    await expect(editLoras(page)).toBeFocused();
   });
 
-  test("a move turns the same button into Save with its note, and closing returns the keyboard", async ({ page }) => {
+  test("a move in the chain editor turns its button into Save with its note, and Cancel returns the keyboard", async ({ page }) => {
     net = await stubWorkflows(page);
     await selectWorkflow(page);
 
-    await editLoras(page).click();
-    await expect(lorasDialog(page)).toBeVisible();
-    await settled(lorasDialog(page));
-    const handle = lorasDialog(page).getByRole("button", { name: /^Reorder detail_slider_v2/ });
+    await openLoras(page);
+    await lorasDialog(page).getByTestId("wftab-lora-chain").click();
+    const primary = (page) => chainDialog(page).getByTestId("eld-primary");
+    const note = (page) => chainDialog(page).getByTestId("eld-note");
+    await expect(chainDialog(page)).toBeVisible();
+    await settled(chainDialog(page));
+    const handle = chainDialog(page).getByRole("button", { name: /^Reorder detail_slider_v2/ });
     await handle.focus();
     await page.keyboard.press("Alt+ArrowDown");
 
@@ -1297,21 +882,20 @@ test.describe("Edit LoRAs…", () => {
     await expect(note(page)).toContainText("Moving or adding a loader cannot wait as an unsaved change.");
     await expect(note(page)).toContainText("The version menu in the Workflow tab takes it back.");
     // Said as it happens, to a reader who is not looking at the button.
-    await expect(lorasDialog(page).getByTestId("eld-button-said")).toContainText(
+    await expect(chainDialog(page).getByTestId("eld-button-said")).toContainText(
       "The button now reads Save.",
     );
-    await expect(lorasDialog(page).getByTestId("eld-count")).toHaveText("1 loader moved");
+    await expect(chainDialog(page).getByTestId("eld-count")).toHaveText("1 loader moved");
     // The note is the button's description, and neither runs out of the dialog.
     const describedBy = await primary(page).getAttribute("aria-describedby");
     expect(describedBy).toBe(await note(page).getAttribute("id"));
     expect(await overflows(note(page))).toBe(false);
-    // The longer note, the one saying this writes at once, is whole too.
     expect(await insideViewport(page, note(page))).toBe(true);
     expect(await drawnAtItsCorners(note(page))).toBe(true);
-    await shot(lorasDialog(page), "edit-loras-save");
+    await shot(chainDialog(page), "edit-loras-save");
 
-    await lorasDialog(page).getByRole("button", { name: "Cancel" }).click();
-    await expect(lorasDialog(page)).toBeHidden();
+    await chainDialog(page).getByRole("button", { name: "Cancel" }).click();
+    await expect(chainDialog(page)).toBeHidden();
     await expect(editLoras(page)).toBeFocused();
     // Cancelled: nothing was written anywhere.
     expect(net.chainWrites).toEqual([]);
@@ -1326,7 +910,7 @@ test.describe("a save that is slow", () => {
   test("locks every row control until it answers, and an edit made meanwhile goes nowhere", async ({ page }) => {
     net = await stubWorkflows(page);
     await selectWorkflow(page);
-    await stage(page, "Face detailer").check();
+    await stage(page, "Face detailer").click();
     const save = bar(page).getByRole("button", { name: "Save", exact: true });
     await expect(save).toBeVisible();
     await expect(save).toBeEnabled();
@@ -1336,29 +920,33 @@ test.describe("a save that is slow", () => {
     await save.click();
     await expect.poll(() => net.saves.length).toBe(1);
     // Out: nothing that edits the set can be reached, and the verbs wait too.
-    await expect(checkpointPicker(page)).toBeDisabled();
+    await expect(rail(page).getByRole("button", { name: "Change model set…" })).toBeDisabled();
     await expect(stage(page, "Upscale")).toBeDisabled();
     await expect(stage(page, "Face detailer")).toBeDisabled();
-    await expect(strength(page, "detail_slider_v2")).toBeDisabled();
-    await expect(rail(page).getByRole("button", { name: "Remove film-grain-35mm" })).toBeDisabled();
     await expect(bar(page).getByRole("button", { name: "Discard" })).toBeDisabled();
     await expect(bar(page).getByRole("button", { name: "Save as new…" })).toBeDisabled();
-
+    // The LoRA rows' controls are in Edit LoRAs, which opens from the rail
+    // while the save is out.
+    await openLoras(page);
+    await expect(strength(page, "detail_slider_v2")).toBeDisabled();
+    await expect(lorasDialog(page).getByRole("button", { name: "Remove film-grain-35mm" })).toBeDisabled();
     // Pressed anyway, by a pointer: nothing was edited, and nothing was sent.
+    await lorasDialog(page).getByRole("button", { name: "Remove film-grain-35mm" }).click({ force: true });
+    await expect(lorasDialog(page).getByRole("button", { name: "Put film-grain-35mm back" })).toHaveCount(0);
+    await doneLoras(page);
     await stage(page, "Upscale").click({ force: true });
-    await rail(page).getByRole("button", { name: "Remove film-grain-35mm" }).click({ force: true });
-    await expect(stage(page, "Upscale")).toBeChecked();
-    await expect(rail(page).getByRole("button", { name: "Put film-grain-35mm back" })).toHaveCount(0);
+    await expect(stage(page, "Upscale")).toHaveAttribute("aria-pressed", "true");
     expect(net.changePuts).toHaveLength(1);
 
     net.hold.save.release();
     await expect(bar(page)).toBeHidden();
-    await expect(checkpointPicker(page)).toBeEnabled();
     await expect(stage(page, "Upscale")).toBeEnabled();
+    await openLoras(page);
     await expect(strength(page, "detail_slider_v2")).toBeEnabled();
+    await doneLoras(page);
     expect(net.saves).toEqual([{ version: 3 }]);
     // And an edit can be made again, which is one write more.
-    await stage(page, "Upscale").uncheck();
+    await stage(page, "Upscale").click();
     await expect(bar(page)).toContainText("1 unsaved change");
     expect(net.changePuts).toHaveLength(2);
     expect(net.changePuts[1].stages).toEqual({ upscale: false });
@@ -1368,16 +956,17 @@ test.describe("a save that is slow", () => {
     net = await stubWorkflows(page);
     await selectWorkflow(page);
     // The bar is up with its verbs before the strength is typed.
-    await stage(page, "Face detailer").check();
+    await stage(page, "Face detailer").click();
     const save = bar(page).getByRole("button", { name: "Save", exact: true });
     await expect(save).toBeVisible();
     await expect.poll(() => net.changePuts.length).toBe(1);
 
-    // The strength's write is held on the wire: the press lands while it is out.
+    // The strength's write is held on the wire. Done blurs the field (the
+    // edit), and Save is pressed while that write is out.
     net.hold.put = gate();
-    const field = strength(page, "detail_slider_v2");
-    await field.fill("0.45");
-    // The click blurs the field (the edit) and then presses Save.
+    await openLoras(page);
+    await strength(page, "detail_slider_v2").fill("0.45");
+    await doneLoras(page);
     await save.click();
     await expect.poll(() => net.order).toEqual(["put", "put"]);
     expect(net.saves).toEqual([]);
@@ -1404,7 +993,7 @@ test.describe("going back a version with changes waiting", () => {
     net = await stubWorkflows(page, { comfyui: true });
     await selectWorkflow(page);
     await expect(rail(page).getByTestId("wftab-open-comfyui")).toBeVisible();
-    await checkpointPicker(page).selectOption({ label: "Juggernaut XL v9" });
+    await stage(page, "Face detailer").click();
     await expect(bar(page)).toContainText("1 unsaved change");
     const note = rail(page).getByTestId("wftab-open-unsaved");
     await expect(note).toHaveText(

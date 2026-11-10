@@ -40,10 +40,12 @@ if (typeof window !== "undefined" && window.pixlstashDesktop) {
 // the whole warm neutral ramp to pure black/white and re-breaks the status
 // foregrounds. See docs/design/notice-surface.md §3.3.
 //
-// Warm light theme. Elevation inverts vs dark: the content canvas is the
-// brightest surface and chrome (sidebar / toolbar / panels) recedes to a warm
-// tinted grey, with raised controls (cards, inputs) going pure white. Text is a
-// warm near-black ramp, never pure #000.
+// Warm light-silver theme, a softened take on Windows 95's #c0c0c0 face.
+// Elevation inverts vs dark: chrome (sidebar / toolbar) is the darkest
+// neutral, the content canvas one step lighter, and floating things (menus,
+// dialogs, panels) and fields lighter again - but nothing paper-white: the
+// brightest fill is `input-background` at 0.91 luminance. Text is a warm
+// near-black ramp, never pure #000.
 //
 // SOURCE OF TRUTH: the Claude Design system's `tokens/colors.css`. Every value
 // here is one of its tokens, or an app-only key that carries its reason inline.
@@ -56,17 +58,17 @@ const pixlStashLight = {
     // canvas. In the desktop shell these are remapped to `background` (see
     // style.css) so the titlebar + toolbar + sidebar read as one strip; these
     // values drive the browser layout.
-    sidebar: "#f0ede9",
+    sidebar: "#d9d6d0",
     "sidebar-text": "#23211d",
-    toolbar: "#f0ede9",
+    toolbar: "#d9d6d0",
     "toolbar-text": "#23211d",
     // `sidebar-hover` is the accent duplicated, so it moves with it.
     "sidebar-hover": "#9e6727",
     "on-sidebar-hover": "#f7f1ea",
-    // Raised controls: inputs and buttons sit above the canvas, pure/near white.
-    "input-background": "#ffffff",
+    // Raised controls: fields are the lightest fill, but not paper-white.
+    "input-background": "#f5f4f2",
     "input-text": "#23211d",
-    "cancel-button": "#e6e1d8",
+    "cancel-button": "#ddd9d2",
     "cancel-button-text": "#23211d",
     // Deliberately-dark surfaces (e.g. the full-screen image viewer chrome) stay
     // dark even in light mode.
@@ -77,7 +79,7 @@ const pixlStashLight = {
     // inside it - and in the specific direction that matters: the fill hues are
     // tuned to CARRY a light label, not to BE one. This family is their light
     // counterpart, the same four hues lifted until they read as 11px semibold
-    // text (`ReviewRail`'s Abort/Clear). Identical in both themes. Measured
+    // text (the Tags view's tallies and receipts). Identical in both themes. Measured
     // 4.60:1 – 6.16:1 plain on `#242628`, 5.23:1 – 7.01:1 on `#181b20`.
     // Deep fill hues here would fail: `error` #b0392b reads 2.51:1, `info`
     // #30558c 2.03:1, `success` #2a7d3e 2.97:1.
@@ -100,20 +102,40 @@ const pixlStashLight = {
     // `surface-tertiary` is the light theme's wrong value there. 7.36:1 on
     // #242628, 8.37:1 on #181b20.
     "dark-surface-tertiary": "#8fbcc6",
+    // App-only, pending the design system and lead-designer sign-off: the red
+    // of an ON picture favourite (the heart ending the score strip). On a
+    // photo it sits on `--scrim-photo-strong`, where it measures 3.12:1 over a
+    // white photo and 6.39:1 over a black one; on the 55% scrim it falls to
+    // 1.36:1. Identical in both themes, like the family above. Only the state
+    // is red: the heart as a verb (the selection pill) stays ink.
+    "dark-surface-favourite": "#ff5a6e",
+    // The same red as a mark on this theme's own chrome (the filter menu's
+    // Favourites only row): deepened for a light ground, 4.77:1 on `surface`.
+    favourite: "#c8283f",
     // Olive as a FOREGROUND (a selected option's glyph or label) on this
     // theme's own surfaces - design system `--selected-ink`. A light ground
     // takes the deep olive; the dark theme lifts it.
     "selected-ink": "#567309",
+    // The keyboard focus ring and its glow (design system `--focus-stroke`,
+    // 2026-10-28): blue on every ground, never amber or olive. The shared
+    // #3880eb measures 2.65:1 on the silver `sidebar`, under the 3:1 floor for
+    // a focus indicator, so light takes a deeper blue of the same hue: 3.20:1
+    // on `sidebar`, 3.69:1 on `background`, 4.04:1 on `surface`/`panel`.
+    "focus-ring": "#3273d2",
     // Teal as a FOREGROUND, where it has one meaning: NOT SAVED YET (the dot
     // before a row's *Edited*, the glyph beside the count of unsaved changes,
     // the outline of *Save as new…*). The `tertiary` fill is a glyph at only
     // 2.73:1 on the dark rail, so the hue is deepened here and lifted in dark,
-    // the same shape as `surface-<status>`. 5.87:1 on `sidebar`, 4.21:1 on the
+    // the same shape as `surface-<status>`. 5.47:1 on `sidebar`, 4.07:1 on the
     // unsaved shelf's wash (`tertiary` at 26% over `sidebar`).
-    "surface-tertiary": "#3b606a",
-    surface: "#ffffff",
+    "surface-tertiary": "#35565f",
+    // Menus, dialogs, pills: the nearest thing, so the lightest ground after
+    // fields (0.86 luminance, down from 1.0).
+    surface: "#f0efec",
     "on-surface": "#23211d",
-    background: "#faf9f7",
+    // Behind the grid: one step lighter than chrome, so the canvas still comes
+    // forward of it.
+    background: "#e7e5e1",
     "on-background": "#23211d",
     // ── The action-fill tier (unified Camp B palette) ───────────────────────
     // ONE brand palette shared by both themes (design-system parity, 2026-07-24):
@@ -123,9 +145,9 @@ const pixlStashLight = {
     // theme (#1413): the shared #c47a1e measured 2.93:1 on this theme's
     // sidebar/toolbar, under the 3:1 floor for the attention dot and the busy
     // stats icon, so light takes the deep amber. It carries pure white at 4.75:1
-    // and clears 4.07:1 on the sidebar. These fills stay label-only (buttons,
+    // and clears 3.27:1 on the silver sidebar. These fills stay label-only (buttons,
     // chips, rails, icons - never small body text on a canvas).
-    accent: "#9e6727", // white label 4.75:1, 4.07:1 on sidebar/toolbar (#1413)
+    accent: "#9e6727", // white label 4.75:1, 3.27:1 on sidebar/toolbar (#1413)
     "on-accent": "#ffffff", // 4.75:1 on the deep light amber
     "accent-bright": "#e08a2a", // brighter, more-orange amber glow: selection / active / focus (not a text/fill token)
     primary: "#567309", // warm-white 4.86:1 (olive)
@@ -154,19 +176,20 @@ const pixlStashLight = {
     // inks and the dark values are their pale mirrors, the same shape as the
     // `dark-surface-*` family above. Colour is never the only cue - the level
     // number is on the label whatever the hue does.
-    // Measured on `surface`/`input-background` #ffffff (and `background`
-    // #faf9f7), plus the warm near-white label on the solid fill:
-    "level-1": "#12507f", //    8.47:1 / 8.05:1, label 7.55:1
+    // Measured on `surface` #f0efec / `input-background` #f5f4f2, plus the
+    // warm near-white label on the solid fill:
+    "level-1": "#12507f", //    7.37:1 / 7.70:1, label 7.55:1
     "on-level-1": "#f7f1ea",
-    "level-2": "#5138cf", //    7.46:1 / 7.09:1, label 6.65:1
+    "level-2": "#5138cf", //    6.48:1 / 6.78:1, label 6.65:1
     "on-level-2": "#f7f1ea",
-    "level-3": "#bb1bbb", //    5.27:1 / 5.01:1, label 4.70:1
+    "level-3": "#bb1bbb", //    4.58:1 / 4.79:1, label 4.70:1
     "on-level-3": "#f7f1ea",
-    "level-4": "#77154e", //   10.49:1 / 9.97:1, label 9.35:1
+    "level-4": "#77154e", //    9.12:1 / 9.54:1, label 9.35:1
     "on-level-4": "#f7f1ea",
     // Warm, low-contrast borders: a visible-but-soft divider and a subtler line.
-    border: "#d8d3c8",
-    divider: "#e8e4dc",
+    // Darker than the silver they sit on, at today's edge strength.
+    border: "#beb8ae",
+    divider: "#cec9c0",
     // App-only: Vuetify's own overlay key (dialog and menu backdrops).
     overlay: "#00000033",
     // Warm hover wash (rgba(45,32,15,.06)) instead of cold black.
@@ -187,16 +210,21 @@ const pixlStashLight = {
     // surfaces - design system `--surface-<status>`. None of the fills survives
     // being drawn as text on both canvases (light `warning` is 2.1:1 on white),
     // so whenever the hue is drawn rather than filled, use these. Deepened here
-    // because the canvas is light; the dark theme lifts them.
-    "surface-error": "#9a3327",
-    "surface-warning": "#755215",
-    "surface-success": "#226534",
+    // because the canvas is light; the dark theme lifts them. Error, warning
+    // and success are a step deeper again for the silver chrome: the drive
+    // meter draws them as fills beside its empty track, and 2.3:1 on both
+    // sides of that track needs the ink about 5.3:1 off `toolbar`. 5.50 -
+    // 5.57:1 on `sidebar`/`toolbar`, 6.9 - 7.0:1 on `surface`. `info` is not a
+    // meter fill and keeps the fill value.
+    "surface-error": "#8f2f24",
+    "surface-warning": "#6a4b13",
+    "surface-success": "#1f5c30",
     "surface-info": "#30558c",
-    // App-only: the pure-black ink the track-trough and drive-meter tints in
+    // App-only: the pure-black ink the track-trough and drive-band tints in
     // style.css are mixed from.
     scrim: "#000000",
     shadow: "#1c160c",
-    panel: "#efede9",
+    panel: "#f0efec",
     "on-panel": "#23211d",
   },
 };
@@ -234,9 +262,15 @@ const pixlStashDark = {
     // Identical in both themes too: teal as a mark on a dark chip (8.37:1 on
     // #181b20). See the light theme.
     "dark-surface-tertiary": "#8fbcc6",
+    // The favourite red, as in the light theme. On dark chrome the photo red
+    // already reads (4.90:1), so the two are one value here.
+    "dark-surface-favourite": "#ff5a6e",
+    favourite: "#ff5a6e",
     // The deep olive measures 2.72:1 on `surface`, so olive as a foreground
     // takes the lifted value here (5.37:1). See the light theme.
     "selected-ink": "#8EA604",
+    // The design system's blue. Light deepens it for its silver chrome.
+    "focus-ring": "#3880eb",
     // Teal as a foreground, lifted: 7.19:1 on `sidebar`, 5.63:1 on the
     // unsaved shelf's wash. See the light theme.
     "surface-tertiary": "#8fbcc6",

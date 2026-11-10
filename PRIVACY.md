@@ -1,6 +1,6 @@
 # PixlStash Privacy Policy
 
-_Last updated: 2026-08-02_
+_Last updated: 2026-10-28_
 
 PixlStash is a self-hosted application for managing your own picture and video
 library. It is private by design: your content stays on hardware you control.
@@ -31,7 +31,7 @@ time.
 
 PixlStash can check whether a newer version is available. This is the only feature
 that contacts a PixlStash-operated server, and it is **off unless you enable
-"Check for updates" in Settings → Privacy.** Until you opt in, no update check
+"Check for updates" in Settings → Privacy & sharing.** Until you opt in, no update check
 is ever made.
 
 When enabled, the app contacts `https://pixlstash.dev` at most once every 24 hours
@@ -62,7 +62,7 @@ you, and we do not use the IP address to identify you. If you later click the
 and installation type so it can show you the right upgrade instructions for your
 install.
 
-You can turn the update check off again at any time in Settings → Privacy; once
+You can turn the update check off again at any time in Settings → Privacy & sharing; once
 disabled, no further checks are made.
 
 ## The anonymous install ID (off until you turn it on)
@@ -71,7 +71,7 @@ PixlStash generates a random identifier for your installation the first time it
 starts, and stores it in a file called `install-id.json` next to your
 `server-config.json`. It is **off** on every installation and every install type,
 and upgrading from an earlier version leaves it off. Nothing is sent unless you
-turn on **"Send an anonymous install ID"** in Settings → Privacy.
+turn on **"Send an anonymous install ID"** in Settings → Privacy & sharing.
 
 It exists to answer one question that plain visit counts cannot: whether people
 keep using PixlStash, or install it once and stop. Without it we can count
@@ -121,6 +121,18 @@ request came from to the identifier it carried.
 We store your install ID, the dates we first and last heard from it, and a
 compact record of which days it was active. Nothing else. That record is deleted
 after 400 days of silence, and only aggregate counts are ever published.
+
+## Optional base-model lookup (only when you ask)
+
+On the model shelf, **Look up base model on Civitai…** asks Civitai which base model
+the selected files were made for. It runs only when you choose it for rows you
+selected and confirm the prompt. For each selected file that has no base model
+yet, PixlStash sends that file's SHA-256 fingerprint to `civitai.com`, and
+nothing else from your library: no filename, folder, picture or account.
+Civitai sees your IP address and learns that this address holds a file with
+that fingerprint, and its own privacy policy applies to the request. The base
+model it answers with is stored on your machine; a base model you set or
+cleared yourself is never changed.
 
 ## Software downloads from third parties
 

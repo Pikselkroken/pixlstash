@@ -27,6 +27,8 @@ import time
 import pytest
 
 from pixlstash.auth import COMFYUI_SCOPE
+from pixlstash.hub import dataset_snapshots, training_runs
+from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.schema import (
     CURRENT_DATA_VERSION,
     CURRENT_SCHEMA_VERSION,
@@ -1241,6 +1243,42 @@ class TestComponentRoleBackfill:
         ]
         assert hub.execute("PRAGMA user_version").fetchone()[0] == CURRENT_DATA_VERSION
 
+    def test_a_data_v24_hub_refiles_a_transformer_decoder_vae(self, hub, tmp_path):
+        # Data version 25: MiniMax H3's video VAE decodes with a transformer,
+        # which no layout knew, and its 2.6B parameters filed a flat-folder
+        # copy as a `checkpoint`. That layout only: a Wan VAE the owner set to
+        # `checkpoint` stays one, and so does one half of the new layout.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 24")
+        folder_id = add_folder(hub, str(tmp_path))
+
+        def shelved(name, tensors, file_kind="checkpoint"):
+            header = {t: {"dtype": "BF16", "shape": [1]} for t in tensors}
+            blob = json.dumps(header).encode()
+            (tmp_path / name).write_bytes(struct.pack("<Q", len(blob)) + blob)
+            model_id = add_model(hub, file_kind=file_kind, sha256=name, kind=None)
+            add_file(hub, model_id, folder_id, name)
+            return model_id
+
+        minimax = ["encoder.conv_in.weight", "decoder.x_embedder.weight"]
+        vae = shelved("minimax_h3_video_vae_int8_convrot.safetensors", minimax)
+        half = shelved("decoder_only.safetensors", ["decoder.x_embedder.weight"])
+        wan = shelved(
+            "owner_says_checkpoint.safetensors",
+            ["encoder.conv1.weight", "decoder.conv1.weight"],
+        )
+        hub.commit()
+
+        apply_migrations(hub)
+
+        kinds = dict(hub.execute("SELECT id, file_kind FROM model").fetchall())
+        assert [kinds[vae], kinds[half], kinds[wan]] == [
+            "vae",
+            "checkpoint",
+            "checkpoint",
+        ]
+        assert hub.execute("PRAGMA user_version").fetchone()[0] == CURRENT_DATA_VERSION
+
     def test_a_fresh_hub_records_the_backfill_as_done(self, hub):
         apply_migrations(hub)
 
@@ -1388,6 +1426,17 @@ class TestHandMadeWorkflowSets:
             "SELECT cloned FROM model_workflow_set WHERE id = ?", (set_id,)
         ).fetchone() == (0,)
 
+    def test_a_hub_from_before_the_replaced_card_gains_it(self, hub):
+        """A set made by an earlier build replaces no card: it reads NULL."""
+        apply_migrations(hub)
+        set_id = self._set(hub)
+        hub.execute("ALTER TABLE model_workflow_set DROP COLUMN replaces")
+        hub.commit()
+        apply_migrations(hub)
+        assert hub.execute(
+            "SELECT replaces FROM model_workflow_set WHERE id = ?", (set_id,)
+        ).fetchone() == (None,)
+
     def test_a_slot_outside_the_five_is_refused(self, hub):
         apply_migrations(hub)
         with pytest.raises(sqlite3.IntegrityError):
@@ -1440,3 +1489,266 @@ def test_data_v11_re_derives_only_the_cached_reference_counts(hub):
         hub.execute("SELECT topology_hash, traits FROM workflow_topology_core")
     ) == {"t1": None, "t2": "two-pass", "t3": ""}
     assert hub.execute("PRAGMA user_version").fetchone()[0] == CURRENT_DATA_VERSION
+
+
+class TestTrainingRunTable:
+    """The ``training_run`` table: the record ``model.training_run_id`` names.
+
+    Amended into v2 like the shelf, so a hub that already exists gains it on its
+    next open. Nothing references it by foreign key, so the checks are the
+    table's own: its identity, its required library, and that ids never recycle.
+    """
+
+    def test_a_fresh_hub_has_the_table(self, hub):
+        apply_migrations(hub)
+        assert "training_run" in table_names(hub)
+
+    def test_the_id_never_recycles(self, hub):
+        # A deleted run's id must not be handed to the next one: a model still
+        # carrying the old id would silently name a different run.
+        apply_migrations(hub)
+        assert "AUTOINCREMENT" in ddl_for(hub, "training_run")
+
+    def test_the_uuid_is_unique(self, hub):
+        apply_migrations(hub)
+        insert = (
+            "INSERT INTO training_run (uuid, library_uuid, name, created_at) "
+            "VALUES ('same', 'lib', 'a', '2026-10-25T00:00:00+00:00')"
+        )
+        hub.execute(insert)
+        with pytest.raises(sqlite3.IntegrityError):
+            hub.execute(insert)
+
+    def test_every_run_names_its_library(self, hub):
+        # The set and character ids a run holds are vault ids, meaningful only
+        # in the library that owns them.
+        apply_migrations(hub)
+        with pytest.raises(sqlite3.IntegrityError):
+            hub.execute(
+                "INSERT INTO training_run (uuid, name, created_at) "
+                "VALUES ('no-library', 'a', '2026-10-25T00:00:00+00:00')"
+            )
+
+    def test_an_existing_v2_hub_gains_the_table_on_next_open(self, hub):
+        apply_migrations(hub)
+        hub.execute("DROP TABLE training_run")
+        assert read_schema_version(hub) == 2
+        assert "training_run" not in table_names(hub)
+
+        apply_migrations(hub)
+        assert read_schema_version(hub) == 2, "the amend must not bump to v3"
+        assert "training_run" in table_names(hub)
+
+    def test_an_existing_v2_hub_gains_the_measurement_table(self, hub):
+        # What this machine measured a training setup to need (#2120), keyed
+        # by the setup's fingerprint, one row each.
+        apply_migrations(hub)
+        hub.execute("DROP TABLE training_profile_measurement")
+        apply_migrations(hub)
+        assert read_schema_version(hub) == 2
+        insert = (
+            "INSERT INTO training_profile_measurement (fingerprint, preset, "
+            "profile, phase_peaks, source, measured_at) VALUES ('fp', "
+            "'zimage-turbo@1', 'q8', '{}', 'probe', '2026-10-26T00:00:00+00:00')"
+        )
+        hub.execute(insert)
+        with pytest.raises(sqlite3.IntegrityError):
+            hub.execute(insert)
+
+
+@pytest.fixture
+def store(tmp_path):
+    """An open HubDatabase, for the training-run store's own reads and writes."""
+    with HubDatabase(str(tmp_path / "store.db")) as database:
+        yield database
+
+
+# A finished run's completed_at; a completed run without one is still busy.
+_COMPLETED_AT = "2026-10-26T09:00:00+00:00"
+
+
+def _new_run(store, library_uuid, uuid):
+    return training_runs.create_run(
+        store,
+        library_uuid=library_uuid,
+        uuid=uuid,
+        name=uuid,
+        set_id=None,
+        character_id=None,
+        base_model="m",
+        trigger_word="t",
+    )
+
+
+class TestTrainingRunStore:
+    """Every read and write of a run is scoped to the library that owns it."""
+
+    def test_a_run_is_read_back_only_in_its_own_library(self, store):
+        mine = _new_run(store, "lib-a", "run-a")
+        theirs = _new_run(store, "lib-b", "run-b")
+
+        assert training_runs.get_run(store, "lib-a", mine)["uuid"] == "run-a"
+        assert training_runs.get_run(store, "lib-a", theirs) is None
+
+    def test_a_listing_holds_only_the_libraries_runs(self, store):
+        mine = _new_run(store, "lib-a", "run-a")
+        _new_run(store, "lib-b", "run-b")
+
+        listed = training_runs.list_runs(store, "lib-a")
+        assert [row["id"] for row in listed] == [mine]
+
+    def test_the_worker_claims_its_libraries_oldest_queued_run(self, store):
+        _new_run(store, "lib-b", "other")  # older, but not this library's
+        first = _new_run(store, "lib-a", "first")
+        second = _new_run(store, "lib-a", "second")
+
+        assert training_runs.next_queued_run(store, "lib-a")["id"] == first
+        training_runs.update_run(store, "first", status="running")
+        assert training_runs.next_queued_run(store, "lib-a")["id"] == second
+
+    def test_startup_reconcile_sees_only_its_libraries_unfinished_runs(self, store):
+        _new_run(store, "lib-a", "a-running")
+        _new_run(store, "lib-b", "b-running")
+        training_runs.update_run(store, "a-running", status="running")
+        training_runs.update_run(store, "b-running", status="running")
+
+        found = training_runs.unfinished_runs(store, "lib-a")
+        assert [row["uuid"] for row in found] == ["a-running"]
+
+    def test_only_mutable_columns_can_be_updated(self, store):
+        _new_run(store, "lib-a", "run-a")
+        with pytest.raises(ValueError):
+            training_runs.update_run(store, "run-a", library_uuid="lib-b")
+        with pytest.raises(ValueError):
+            training_runs.update_run(store, "run-a", uuid="other")
+
+        assert training_runs.update_run(store, "run-a", step=7) is True
+        assert training_runs.get_run_by_uuid(store, "run-a")["step"] == 7
+
+    def test_delete_refuses_another_librarys_run(self, store):
+        theirs = _new_run(store, "lib-b", "run-b")
+
+        assert training_runs.delete_run(store, "lib-a", theirs) is None
+        assert training_runs.get_run(store, "lib-b", theirs) is not None
+        assert training_runs.delete_run(store, "lib-b", theirs) == "run-b"
+        assert training_runs.get_run(store, "lib-b", theirs) is None
+
+    def test_only_finished_delete_leaves_a_live_run_in_place(self, store):
+        """The status test is part of the DELETE: a live run is never removed."""
+        queued = _new_run(store, "lib-a", "run-queued")
+        done = _new_run(store, "lib-a", "run-done")
+        training_runs.update_run(
+            store, "run-done", status="completed", completed_at=_COMPLETED_AT
+        )
+
+        assert (
+            training_runs.delete_run(store, "lib-a", queued, only_finished=True) is None
+        )
+        assert training_runs.get_run(store, "lib-a", queued) is not None
+        assert (
+            training_runs.delete_run(store, "lib-a", done, only_finished=True)
+            == "run-done"
+        )
+        assert training_runs.get_run(store, "lib-a", done) is None
+
+    def test_only_finished_delete_leaves_a_run_still_being_imported(self, store):
+        """Completed with no completed_at: still drawing previews or importing."""
+        busy = _new_run(store, "lib-a", "run-busy")
+        training_runs.update_run(store, "run-busy", status="completed")
+
+        assert (
+            training_runs.delete_run(store, "lib-a", busy, only_finished=True) is None
+        )
+        assert training_runs.get_run(store, "lib-a", busy) is not None
+
+        training_runs.update_run(store, "run-busy", completed_at=_COMPLETED_AT)
+        assert (
+            training_runs.delete_run(store, "lib-a", busy, only_finished=True)
+            == "run-busy"
+        )
+
+
+def _snapshot(store, library_uuid, run_uuid, captions):
+    return dataset_snapshots.record_snapshot(
+        store,
+        library_uuid=library_uuid,
+        run_uuid=run_uuid,
+        set_id=3,
+        character_id=None,
+        trigger_word="ohwx",
+        caption_mode="tags",
+        items=[
+            {
+                "picture_id": index + 10,
+                "file_name": f"image_{index + 1:05d}.png",
+                "sha256": f"{index:064x}",
+                "caption": caption,
+            }
+            for index, caption in enumerate(captions)
+        ],
+    )
+
+
+def _snapshot_rows(store):
+    return (
+        store.fetchone("SELECT COUNT(*) FROM dataset_snapshot")[0],
+        store.fetchone("SELECT COUNT(*) FROM dataset_snapshot_item")[0],
+    )
+
+
+class TestDatasetSnapshotStore:
+    """A run names one frozen record of its dataset, scoped to its library."""
+
+    def test_a_snapshot_is_recorded_in_order_and_the_run_names_it(self, store):
+        run = _new_run(store, "lib-a", "run-a")
+        snapshot_id = _snapshot(store, "lib-a", "run-a", ["ohwx, a", None])
+
+        assert training_runs.get_run(store, "lib-a", run)["dataset_snapshot_id"] == (
+            snapshot_id
+        )
+        snapshot = dataset_snapshots.get_snapshot(store, "lib-a", snapshot_id)
+        assert snapshot["image_count"] == 2
+        assert snapshot["set_id"] == 3
+        assert [item["caption"] for item in snapshot["items"]] == ["ohwx, a", None]
+        assert [item["picture_id"] for item in snapshot["items"]] == [10, 11]
+        assert dataset_snapshots.get_snapshot(store, "lib-b", snapshot_id) is None
+
+    def test_a_rebuilt_dataset_replaces_the_runs_snapshot(self, store):
+        run = _new_run(store, "lib-a", "run-a")
+        first = _snapshot(store, "lib-a", "run-a", ["one", "two", "three"])
+        second = _snapshot(store, "lib-a", "run-a", ["only"])
+
+        assert second != first
+        assert training_runs.get_run(store, "lib-a", run)["dataset_snapshot_id"] == (
+            second
+        )
+        assert dataset_snapshots.get_snapshot(store, "lib-a", first) is None
+        assert _snapshot_rows(store) == (1, 1)
+
+    def test_another_librarys_run_cannot_be_given_a_snapshot(self, store):
+        _new_run(store, "lib-b", "run-b")
+        with pytest.raises(LookupError):
+            _snapshot(store, "lib-a", "run-b", ["x"])
+        assert _snapshot_rows(store) == (0, 0)
+
+    def test_deleting_the_run_deletes_its_snapshot_and_no_other(self, store):
+        gone = _new_run(store, "lib-a", "run-gone")
+        _new_run(store, "lib-a", "run-kept")
+        _snapshot(store, "lib-a", "run-gone", ["a", "b"])
+        kept = _snapshot(store, "lib-a", "run-kept", ["c"])
+        training_runs.update_run(
+            store, "run-gone", status="completed", completed_at=_COMPLETED_AT
+        )
+
+        assert training_runs.delete_run(store, "lib-a", gone, only_finished=True)
+        assert _snapshot_rows(store) == (1, 1)
+        assert dataset_snapshots.get_snapshot(store, "lib-a", kept) is not None
+
+    def test_a_refused_delete_keeps_the_snapshot(self, store):
+        live = _new_run(store, "lib-a", "run-live")
+        _snapshot(store, "lib-a", "run-live", ["a"])
+
+        assert (
+            training_runs.delete_run(store, "lib-a", live, only_finished=True) is None
+        )
+        assert _snapshot_rows(store) == (1, 1)

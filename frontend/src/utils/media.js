@@ -1,5 +1,7 @@
 // media.js - Shared media/file helpers for PixlStash frontend
 
+import { isOwnShareCopyDrop, outgoingDragIds } from "./shareDrag.js";
+
 export const PIL_IMAGE_EXTENSIONS = [
   "jpg",
   "jpeg",
@@ -252,6 +254,10 @@ export async function extractSupportedImportFilesFromDataTransfer(
   { accept = isSupportedImportFile } = {},
 ) {
   if (!dataTransfer) return [];
+  // A drag-out dropped back onto the window carries PixlStash's own share
+  // copies. Every import path reads its files here, so this is the one place
+  // that keeps them out of the library.
+  if (isOwnShareCopyDrop(dataTransfer)) return [];
 
   const unique = new Map();
   const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
@@ -474,8 +480,8 @@ export function buildMediaUrl({ backendUrl, image, format } = {}) {
   return `${backendUrl}/pictures/${image.id}.${ext}${cacheBuster}`;
 }
 
-export function getOverlayFormat(overlayImage) {
-  return MediaFormat(overlayImage) || "png";
+export function getLightboxFormat(lightboxImage) {
+  return MediaFormat(lightboxImage) || "png";
 }
 
 export function isFileDrag(dataTransfer) {
@@ -498,7 +504,33 @@ export function isFileDrag(dataTransfer) {
 export function isInternalImageDrag(dataTransfer) {
   if (!dataTransfer) return false;
   const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
-  return types.includes("application/json");
+  // A desktop drag-out is an OS file drag with no JSON (utils/shareDrag.js).
+  return (
+    types.includes("application/json") || outgoingDragIds(dataTransfer) != null
+  );
+}
+
+/**
+ * The internal payload a drag carries: its JSON body, or for a desktop
+ * drag-out (an OS file drag, utils/shareDrag.js) the pictures it is dragging.
+ * Null when there is none, or the JSON does not parse.
+ *
+ * Every drop target reads its payload here, so the two kinds of picture drag
+ * cannot be told apart by the targets that take them.
+ */
+export function readInternalDragPayload(dataTransfer) {
+  if (!dataTransfer) return null;
+  const raw = dataTransfer.getData?.("application/json");
+  if (raw) {
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      console.error("Could not parse the drag payload", { raw, err });
+      return null;
+    }
+  }
+  const ids = outgoingDragIds(dataTransfer);
+  return ids ? { type: "image-ids", imageIds: ids } : null;
 }
 
 /**
@@ -513,16 +545,6 @@ export function isInternalImageDrag(dataTransfer) {
 export const PICTURE_DRAG_MIME = "application/x-pixlstash-pictures";
 export const FACE_DRAG_MIME = "application/x-pixlstash-faces";
 /**
- * Registered copies of model files, dragged from the shelf onto a folder.
- *
- * A third marker rather than a field in the body, for the reason above and for
- * one more: the sidebar's set and character rows accept pictures, and a model
- * dropped on one has no meaning at all. `types` is what refuses it during
- * dragover, before the pointer ever suggests the drop would work.
- */
-export const MODEL_FILE_DRAG_MIME = "application/x-pixlstash-model-files";
-
-/**
  * Payload `type` to its marker. A kind absent from this map gets no marker, so
  * no drop target accepts it - an unmapped payload must fail closed rather than
  * inherit the picture marker and be filed as a picture drag (issue #757 again,
@@ -531,7 +553,6 @@ export const MODEL_FILE_DRAG_MIME = "application/x-pixlstash-model-files";
 const DRAG_MARKERS = {
   "image-ids": PICTURE_DRAG_MIME,
   "face-bbox": FACE_DRAG_MIME,
-  "model-files": MODEL_FILE_DRAG_MIME,
 };
 
 /**
@@ -556,14 +577,24 @@ export function setInternalDragPayload(dataTransfer, payload) {
 export function isPictureDrag(dataTransfer) {
   if (!dataTransfer) return false;
   const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
-  return types.includes(PICTURE_DRAG_MIME);
+  return (
+    types.includes(PICTURE_DRAG_MIME) || outgoingDragIds(dataTransfer) != null
+  );
 }
 
-/** True when the drag carries registered copies of model files. */
-export function isModelFileDrag(dataTransfer) {
-  if (!dataTransfer) return false;
-  const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
-  return types.includes(MODEL_FILE_DRAG_MIME);
+/**
+ * The drop effect a target should set: `preferred` where the drag allows it,
+ * else one it does allow. A dropEffect outside `effectAllowed` makes the
+ * browser refuse the drop without a drop event, and a desktop drag-out
+ * (utils/shareDrag.js) allows only copy and link, never move.
+ */
+export function dropEffectFor(dataTransfer, preferred = "move") {
+  const allowed = String(dataTransfer?.effectAllowed || "all").toLowerCase();
+  if (allowed === "all" || allowed === "uninitialized") return preferred;
+  return (
+    [preferred, "copy", "link", "move"].find((e) => allowed.includes(e)) ||
+    "none"
+  );
 }
 
 /** True when the drag carries face bounding boxes. */
@@ -580,4 +611,25 @@ export function isVideo(img) {
     return isSupportedVideoFile(`file.${format}`);
   }
   return isSupportedVideoFile(img.id || "");
+}
+
+/**
+ * Drop repeated face or object detections: the same id, or for a row without
+ * one the same box on the same frame. The lightbox and the grid's rail read
+ * both lists through this.
+ */
+export function dedupeDetections(items) {
+  if (!Array.isArray(items)) return [];
+  const seen = new Set();
+  const result = [];
+  for (const item of items) {
+    const id = item?.id;
+    const bbox = Array.isArray(item?.bbox) ? item.bbox.join(",") : "";
+    const frame = item?.frame_index ?? "";
+    const key = id != null ? `id:${id}` : `bbox:${frame}:${bbox}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
 }

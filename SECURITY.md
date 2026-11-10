@@ -13,3 +13,5 @@ PixlStash does not currently support older releases with security updates. Only 
 ## Reporting a Vulnerability
 
 Please submit vulnerability reports to lindkvis@gmail.com. You should expect a respons within a few days.
+
+You can also report one privately on GitHub, where only the maintainers can see it: <https://github.com/Pikselkroken/pixlstash/security/advisories/new>. The report page at <https://pixlstash.dev/report.html> offers both routes under *I found a security problem*.

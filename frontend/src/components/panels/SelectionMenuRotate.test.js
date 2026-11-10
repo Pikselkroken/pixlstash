@@ -78,7 +78,15 @@ function mountMenu(props = {}) {
 }
 
 /** The rotate items, found by their glyph so a label change cannot hide them. */
-function rotateItems(wrapper) {
+// The rows live in a group's submenu, rendered only while it is open, the way
+// a hover opens it.
+async function openGroup(wrapper, group) {
+  const wrap = wrapper.find(`[data-group="${group}"]`);
+  if (wrap.exists()) await wrap.trigger("mouseenter");
+}
+
+async function rotateItems(wrapper) {
+  await openGroup(wrapper, "adjust");
   const buttons = wrapper.findAll("button.ctx-item");
   const withIcon = (glyph) => buttons.find((b) => b.html().includes(glyph));
   return {
@@ -88,21 +96,21 @@ function rotateItems(wrapper) {
 }
 
 describe("SelectionMenu - rotate", () => {
-  it("offers the pair at all, which is the parity #403 asserts", () => {
-    const { left, right } = rotateItems(mountMenu());
+  it("offers the pair at all, which is the parity #403 asserts", async () => {
+    const { left, right } = await rotateItems(mountMenu());
     expect(left).toBeDefined();
     expect(right).toBeDefined();
   });
 
-  it("names the count over a multi-selection, word for word as the context menu does", () => {
-    const { left, right } = rotateItems(mountMenu());
+  it("names the count over a multi-selection, word for word as the context menu does", async () => {
+    const { left, right } = await rotateItems(mountMenu());
     expect(left.text()).toContain("Rotate 3 photos left");
     expect(right.text()).toContain("Rotate 3 photos right");
   });
 
-  it("drops the count for a single picture", () => {
+  it("drops the count for a single picture", async () => {
     const wrapper = mountMenu({ selectedCount: 1, selectedImageIds: ["10"] });
-    const { left, right } = rotateItems(wrapper);
+    const { left, right } = await rotateItems(wrapper);
     expect(left.text()).toContain("Rotate left");
     expect(right.text()).toContain("Rotate right");
     expect(left.text()).not.toContain("photos");
@@ -110,7 +118,7 @@ describe("SelectionMenu - rotate", () => {
 
   it("emits the direction it is labelled with, and closes", async () => {
     const wrapper = mountMenu();
-    const { left, right } = rotateItems(wrapper);
+    const { left, right } = await rotateItems(wrapper);
 
     await left.trigger("click");
     await right.trigger("click");
@@ -120,14 +128,14 @@ describe("SelectionMenu - rotate", () => {
     expect(wrapper.emitted("close")).toHaveLength(2);
   });
 
-  it("stays live when only some of the selection can rotate", () => {
-    const { left } = rotateItems(mountMenu({ rotateBlockReason: null }));
+  it("stays live when only some of the selection can rotate", async () => {
+    const { left } = await rotateItems(mountMenu({ rotateBlockReason: null }));
     expect(left.attributes("disabled")).toBeUndefined();
   });
 
-  it("greys with the reason when nothing selected can rotate", () => {
+  it("greys with the reason when nothing selected can rotate", async () => {
     const wrapper = mountMenu({ rotateBlockReason: ROTATE_FORMAT_REASON });
-    const { left, right } = rotateItems(wrapper);
+    const { left, right } = await rotateItems(wrapper);
 
     expect(left.attributes("disabled")).toBeDefined();
     expect(right.attributes("disabled")).toBeDefined();
@@ -135,20 +143,20 @@ describe("SelectionMenu - rotate", () => {
     expect(tip(left)).toContain("Filters > Rotate");
   });
 
-  it("is greyed in a read-only session, which cannot rotate at all", () => {
-    const { left, right } = rotateItems(mountMenu({ isReadOnly: true }));
+  it("is greyed in a read-only session, which cannot rotate at all", async () => {
+    const { left, right } = await rotateItems(mountMenu({ isReadOnly: true }));
     expect(left.attributes("disabled")).toBeDefined();
     expect(right.attributes("disabled")).toBeDefined();
   });
 
-  it("is greyed with nothing selected", () => {
+  it("is greyed with nothing selected", async () => {
     const wrapper = mountMenu({ selectedCount: 0, selectedImageIds: [] });
-    const { left } = rotateItems(wrapper);
+    const { left } = await rotateItems(wrapper);
     expect(left.attributes("disabled")).toBeDefined();
   });
 
-  it("is absent in the scrapheap, where the context menu omits it too", () => {
-    const { left, right } = rotateItems(mountMenu({ isScrapheapView: true }));
+  it("is absent in the scrapheap, where the context menu omits it too", async () => {
+    const { left, right } = await rotateItems(mountMenu({ isScrapheapView: true }));
     expect(left).toBeUndefined();
     expect(right).toBeUndefined();
   });
@@ -156,13 +164,15 @@ describe("SelectionMenu - rotate", () => {
 
 // Compare shares this file's menu environment: any two pictures, ComfyUI or not.
 describe("SelectionMenu - compare", () => {
-  const compareItem = (wrapper) =>
-    wrapper
+  const compareItem = async (wrapper) => {
+    await openGroup(wrapper, "find");
+    return wrapper
       .findAll("button.ctx-item")
       .find((b) => b.html().includes("mdi-compare-horizontal"));
+  };
 
-  it("is offered without ComfyUI, greyed with its reason short of two", () => {
-    const item = compareItem(
+  it("is offered without ComfyUI, greyed with its reason short of two", async () => {
+    const item = await compareItem(
       mountMenu({ comfyuiConfigured: false, compareBlockReason: COMPARE_PICK_REASON }),
     );
     expect(item.attributes("disabled")).toBeDefined();
@@ -172,7 +182,7 @@ describe("SelectionMenu - compare", () => {
 
   it("asks the grid to compare two pictures", async () => {
     const wrapper = mountMenu({ comfyuiConfigured: false, compareBlockReason: null });
-    const item = compareItem(wrapper);
+    const item = await compareItem(wrapper);
     expect(item.attributes("disabled")).toBeUndefined();
     await item.trigger("click");
     expect(wrapper.emitted("compare-pictures")).toHaveLength(1);

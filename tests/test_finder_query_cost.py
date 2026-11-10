@@ -46,6 +46,7 @@ from sqlalchemy.orm.exc import DetachedInstanceError
 from sqlmodel import Session
 
 from pixlstash.db_models import Face, Picture
+from pixlstash.tasks.base_task import QueueType
 from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
 from pixlstash.tasks.missing_smart_score_finder import MissingSmartScoreFinder
 from pixlstash.tasks.missing_thumbnail_finder import MissingThumbnailFinder
@@ -521,14 +522,27 @@ def test_keeping_models_in_memory_survives_the_finder_running_dry(tmp_path):
             lambda cls: released.append(True)
         )
         try:
-            finder.on_all_tasks_complete()
+            assert finder.on_all_tasks_complete() is None
             assert released == [], "the owner asked for the models to stay resident"
 
             dropping = MissingFaceExtractionFinder(
                 vault.db, lambda: _StubEngine(keep_models_in_memory=False)
             )
-            dropping.on_all_tasks_complete()
+            release = dropping.on_all_tasks_complete()
+            # Handed to the planner for the GPU worker, not run on its thread:
+            # on Metal the flush at the end of the release crashes beside it.
+            assert released == [], "the release ran on the planner's thread"
+            assert release.queue_type == QueueType.GPU
+            release.run()
             assert released == [True], "and to be dropped when they did not"
+
+            # Switched on while the release waited on the GPU queue.
+            engine = _StubEngine(keep_models_in_memory=False)
+            waiting = MissingFaceExtractionFinder(vault.db, lambda: engine)
+            release = waiting.on_all_tasks_complete()
+            engine.keep_models_in_memory = True
+            release.run()
+            assert released == [True], "the setting was switched on meanwhile"
         finally:
             FaceExtractionTask.release_detection_models = original
 
@@ -803,6 +817,30 @@ def test_text_embedding_waits_per_picture_for_tags_and_description(tmp_path):
         }
         # No tagger_settings at all: tagger off, Florence-2 captioning on.
         assert _text_candidates(vault, _TextEngine()) == {described, tags_pending}
+
+
+def test_a_failed_text_embedding_batch_is_not_handed_out_again(tmp_path):
+    """An encoder that cannot load must not get the same batch every cycle."""
+    from types import SimpleNamespace
+
+    from pixlstash.task_runner import TaskCancelledError
+    from pixlstash.tasks.missing_text_embedding_finder import (
+        MissingTextEmbeddingFinder,
+    )
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        described, tags_pending, _, _ = _seed_text_stage(vault, tmp_path)
+        finder = MissingTextEmbeddingFinder(vault.db, lambda: _TextEngine())
+
+        def candidates():
+            rows = vault.db.run_immediate_read_task(finder._fetch_candidates, 64)
+            return {p.id for p in rows}
+
+        task = SimpleNamespace(params={"picture_ids": [described]})
+        finder.on_task_complete(task, TaskCancelledError("stopped"))
+        assert candidates() == {described, tags_pending}
+        finder.on_task_complete(task, ImportError("huggingface-hub mismatch"))
+        assert candidates() == {tags_pending}
 
 
 _LIKENESS_PROBE = "picture.size_bin_index is null"

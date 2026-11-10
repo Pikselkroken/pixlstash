@@ -19,14 +19,19 @@ Owner decisions (2026-10-06), which this module implements and nothing more:
   settings, token included, to anyone who can reach it, so the token is bound
   to the source address PixlStash sees on the link's round-trip check, and
   refused from anywhere else (see ``auth.TOKEN_BIND_PENDING``).
-* Automatic linking is for a ComfyUI on this computer (plain HTTP over the
-  loopback listener) or on the local network (the external listener, which
+* Automatic linking is for a ComfyUI on this computer (over PixlStash's
+  configured port, or the desktop window's loopback listener only when nothing
+  serves that port) or on the local network (the external listener, which
   must be on **with HTTPS**; the pack is handed PixlStash's certificate and
   verifies against it). Anything else is a manual exercise.
 
-The record of the live link (which token, which URL) is kept in the server
-config under :data:`LINK_CONFIG_KEY`, so Disconnect can revoke exactly that
-token and a restart can re-send a loopback URL whose port moved.
+Each ComfyUI connection (``services/comfyui_connections.py``) is linked with
+its own key and stays linked when the owner switches between them (#2194).
+The record of each live link (which token, which URL) is kept in the server
+config under :data:`LINKS_CONFIG_KEY`, keyed by connection id, so removing a
+connection can revoke exactly its token, and each session re-sends the URL
+ComfyUI should call (:func:`reannounce`). :func:`adopt_single_record` moves the one record older
+builds kept (:data:`LINK_CONFIG_KEY`) onto its connection.
 """
 
 from __future__ import annotations
@@ -35,6 +40,7 @@ import ipaddress
 import os
 import socket
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlsplit
@@ -54,6 +60,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models import UserToken
 from pixlstash.pixl_logging import get_logger
 from pixlstash.server_config_io import persist_server_config
+from pixlstash.services import comfyui_connections
 from pixlstash.services.comfyui_service import (
     NO_PROXY,
     comfyui_can_open_workflows,
@@ -63,7 +70,10 @@ from pixlstash.services.comfyui_service import (
 
 logger = get_logger(__name__)
 
+# Before #2194: the one link record, moved into the map at start-up.
 LINK_CONFIG_KEY = "comfyui_link"
+# ``{connection_id: record}``, one record per linked connection.
+LINKS_CONFIG_KEY = "comfyui_links"
 TOKEN_DESCRIPTION = "ComfyUI (linked)"
 
 # The pack's ComfyUI settings ids (ComfyUI-PixlStash connection.py).
@@ -76,7 +86,13 @@ STEP_IDS = ("reach", "nodes", "link", "check")
 
 # One link or unlink at a time: two concurrent links would each mint a token and
 # the second record would orphan the first.
+# ponytail: one lock for every connection; per-connection locks if links are
+# ever automated.
 _LINK_LOCK = threading.Lock()
+
+# ``(connection_id, token_public_id, url)`` per ComfyUI told this session.
+_told_this_session: set[tuple] = set()
+REANNOUNCE_RETRY_SECONDS = 30.0
 
 
 class LinkRefused(Exception):
@@ -158,7 +174,13 @@ def _address_toward(host: str, port: int) -> Optional[str]:
 
 
 def _cert_covers(cert_pem: bytes, ip: str) -> bool:
-    cert = x509.load_pem_x509_certificate(cert_pem)
+    """Whether the PEM certificate names *ip*; False for one that will not
+    parse (DER, a key, a corrupt file), which the pack could not verify by."""
+    try:
+        cert = x509.load_pem_x509_certificate(cert_pem)
+    except ValueError as exc:
+        logger.warning("PixlStash's HTTPS certificate does not parse: %s", exc)
+        return False
     try:
         names = cert.extensions.get_extension_for_class(
             x509.SubjectAlternativeName
@@ -202,6 +224,45 @@ def _loopback_port(server) -> int:
     return int(port) if port else int(server._server_config.get("port", 9537))
 
 
+def _external_listener_up(server) -> bool:
+    """Whether the desktop serves its configured port: the rule
+    ``_build_electron_configs`` binds the external listener by.
+
+    ponytail: the rule, not the socket; a port another program holds reads as
+    up, and the link's round-trip check is what then fails.
+    """
+    return bool(server._server_config.get("external_server_enabled", False)) and bool(
+        server._external_listener_password_ready()
+    )
+
+
+def _cert_for_loopback(server) -> Optional[str]:
+    """PixlStash's certificate, if it names 127.0.0.1; else ``None``, logged.
+
+    One the owner supplied may name only the machine's network address, and
+    the pack verifying against it would then refuse every call to 127.0.0.1.
+    """
+    try:
+        cert = _read_cert(server)
+    except LinkRefused as refused:
+        logger.warning(
+            "A ComfyUI on this computer is linked through the window's "
+            "listener instead of port %s: %s",
+            server._server_config.get("port", 9537),
+            refused,
+        )
+        return None
+    if not _cert_covers(cert, "127.0.0.1"):
+        logger.warning(
+            "A ComfyUI on this computer is linked through the window's "
+            "listener instead of port %s: PixlStash's HTTPS certificate does "
+            "not name 127.0.0.1.",
+            server._server_config.get("port", 9537),
+        )
+        return None
+    return cert.decode()
+
+
 def link_target(server, where: str, pinned_url: str) -> tuple[str, Optional[str]]:
     """The PixlStash URL ComfyUI should call, and the certificate to trust.
 
@@ -211,12 +272,25 @@ def link_target(server, where: str, pinned_url: str) -> tuple[str, Optional[str]
     config = server._server_config
     https = bool(config.get("require_ssl", False))
     if where == "this_computer":
-        if _is_desktop():
-            # The desktop window's own listener: always on, always plain HTTP.
-            return f"http://127.0.0.1:{_loopback_port(server)}", None
-        scheme = "https" if https else "http"
-        url = f"{scheme}://127.0.0.1:{_loopback_port(server)}"
-        return url, (_read_cert(server).decode() if https else None)
+        if not _is_desktop():
+            scheme = "https" if https else "http"
+            url = f"{scheme}://127.0.0.1:{_loopback_port(server)}"
+            return url, (_read_cert(server).decode() if https else None)
+        if _external_listener_up(server):
+            # The configured port, never the window's: the loopback port is
+            # this install's own (`stableLoopbackPort`), so another install or
+            # a test run on this computer has another, and moves ComfyUI off
+            # ours. The external listener binds 0.0.0.0, so 127.0.0.1 reaches
+            # it, over HTTPS only with a certificate that names 127.0.0.1.
+            port = int(config.get("port", 9537))
+            if not https:
+                return f"http://127.0.0.1:{port}", None
+            cert = _cert_for_loopback(server)
+            if cert is not None:
+                return f"https://127.0.0.1:{port}", cert
+        # Nothing ComfyUI can use serves the configured port: the window's own
+        # listener, always plain HTTP, re-sent each session (`reannounce`).
+        return f"http://127.0.0.1:{_loopback_port(server)}", None
 
     if _is_desktop():
         # Password first: remote access will not bind without one, so turning
@@ -263,15 +337,25 @@ def link_target(server, where: str, pinned_url: str) -> tuple[str, Optional[str]
     return f"https://{host}:{port}", cert.decode()
 
 
-def link_status(server) -> dict:
-    """The live link. ``bound_address`` is where its token works from;
+def _records(server) -> dict:
+    """``{connection_id: record}`` for every linked connection."""
+    return server._server_config.get(LINKS_CONFIG_KEY) or {}
+
+
+def link_record(server, connection_id: Optional[str]) -> dict:
+    """The connection's link record, or ``{}`` when it is not linked."""
+    return _records(server).get(connection_id) or {} if connection_id else {}
+
+
+def link_status(server, connection_id: Optional[str]) -> dict:
+    """The connection's live link. ``bound_address`` is where its token works from;
     ``refused_from`` the last other address it was used from since start-up
     (ComfyUI's address changed, or somebody else has the key); ``exposure``
     whether other computers can reach the linked ComfyUI (see :func:`exposure`);
     ``token_id`` and ``all_libraries`` the key's row and whether it covers
     every library, which ``PUT /users/me/token/{token_id}/libraries`` changes.
     """
-    record = server._server_config.get(LINK_CONFIG_KEY) or {}
+    record = link_record(server, connection_id)
     public_id = record.get("token_public_id")
     token = _token(server, public_id) if public_id else None
     return {
@@ -314,11 +398,17 @@ def _token(server, public_id: str) -> Optional[UserToken]:
     return server.auth._db.run_task(find, priority=DBPriority.IMMEDIATE)
 
 
-def _save_record(server, record: Optional[dict]) -> None:
+def _save_record(server, connection_id: str, record: Optional[dict]) -> None:
+    records = dict(_records(server))
     if record is None:
-        server._server_config.pop(LINK_CONFIG_KEY, None)
+        records.pop(connection_id, None)
     else:
-        server._server_config[LINK_CONFIG_KEY] = record
+        records[connection_id] = record
+    server._server_config[LINKS_CONFIG_KEY] = records
+    _persist(server)
+
+
+def _persist(server) -> None:
     config_path = getattr(server, "_server_config_path", None)
     if config_path:
         persist_server_config(config_path, server._server_config)
@@ -392,13 +482,15 @@ def _check_round_trip(pinned_url: str, token: str) -> Optional[str]:
     return said or f"ComfyUI answered the check with HTTP {response.status_code}."
 
 
-def link(server, request: Request, saved_url: Optional[str]) -> dict:
-    """Run the four steps; the reply's ``steps`` say how far it got and why."""
+def link(server, request: Request, connection: Optional[dict]) -> dict:
+    """Link *connection* (an entry of ``comfyui_connections.read``) at its own
+    address, current or not. Run the four steps; the reply's ``steps`` say how
+    far it got and why. Only this connection's earlier key is replaced."""
     with _LINK_LOCK:
-        return _link(server, request, saved_url)
+        return _link(server, request, connection)
 
 
-def _link(server, request: Request, saved_url: Optional[str]) -> dict:
+def _link(server, request: Request, connection: Optional[dict]) -> dict:
     steps = {step: _step("not_run") for step in STEP_IDS}
 
     exposed = None
@@ -406,13 +498,24 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
     def reply(linked: bool = False) -> dict:
         return {
             "linked": linked,
-            "link": link_status(server),
+            "link": link_status(server, connection_id),
             "steps": [{"id": step, **steps[step]} for step in STEP_IDS],
             "exposure": exposed,
         }
 
+    connection_id = (connection or {}).get("id")
+    saved_url = (connection or {}).get("url")
     if not saved_url:
         steps["reach"] = _step("failed", "No ComfyUI address is saved.")
+        return reply()
+    # Read again under the lock: a remove or move that held it first would
+    # otherwise leave this link's key recorded for a connection that is gone.
+    if not _still_listed(server, connection):
+        steps["reach"] = _step(
+            "failed",
+            "This connection was removed or moved while the link waited. Try again.",
+            "connection_changed",
+        )
         return reply()
     try:
         probe = probe_comfyui(saved_url)
@@ -452,6 +555,24 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
             "not_local",
         )
         return reply()
+    # ComfyUI keeps one PixlStash key, so a second connection to the same
+    # ComfyUI (localhost and 127.0.0.1) would overwrite the first one's key.
+    twin = next(
+        (
+            other_id
+            for other_id, other in _records(server).items()
+            if other_id != connection_id and _pinned(other) == pinned
+        ),
+        None,
+    )
+    if twin is not None:
+        steps["link"] = _step(
+            "needs_you",
+            "Another connection is already linked to this same ComfyUI, which "
+            "holds one key. Remove one of the two connections.",
+            "already_linked",
+        )
+        return reply()
     try:
         pixlstash_url, cert = link_target(server, where, pinned)
     except LinkRefused as refused:
@@ -460,12 +581,14 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
 
     minted = server.auth.create_token(
         request,
-        TOKEN_DESCRIPTION,
+        # Several keys can be live at once; the address tells them apart under
+        # Account > API Tokens.
+        f"{TOKEN_DESCRIPTION} · {urlsplit(comfyui_url).netloc}",
         scope=COMFYUI_SCOPE,
         bound_address=TOKEN_BIND_PENDING,
     )
     public_id = minted["public_id"]
-    previous = server._server_config.get(LINK_CONFIG_KEY) or {}
+    previous = link_record(server, connection_id)
     replaced = previous.get("token_public_id")
     old_key = _token(server, replaced) if replaced else None
     if (
@@ -513,7 +636,7 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
             "failed", f"ComfyUI refused the settings: {exc}", "write_failed"
         )
         return reply()
-    old_record = server._server_config.get(LINK_CONFIG_KEY)
+    old_record = _records(server).get(connection_id)
     old_token = (old_record or {}).get("token_public_id")
     record = {
         "token_public_id": public_id,
@@ -524,15 +647,17 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         "exposure": exposed,
     }
     try:
-        _save_record(server, record)
+        _save_record(server, connection_id, record)
     except Exception:
         # ComfyUI holds the token but no record does, so nothing could ever
         # revoke it: revoke it now, and take it back from ComfyUI.
         logger.exception("Recording the ComfyUI link failed; revoking its token.")
+        records = dict(_records(server))
         if old_record is None:
-            server._server_config.pop(LINK_CONFIG_KEY, None)
+            records.pop(connection_id, None)
         else:
-            server._server_config[LINK_CONFIG_KEY] = old_record
+            records[connection_id] = old_record
+        server._server_config[LINKS_CONFIG_KEY] = records
         _revoke(server, request, public_id)
         _clear_comfyui_key(pinned, comfyui_url)
         raise
@@ -552,8 +677,8 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
                 old_token,
             )
             leftover = (
-                'The key "ComfyUI (linked)" it replaced could not be revoked '
-                "and still works: delete the older one under Account › API Tokens."
+                "The key it replaced could not be revoked and still works: "
+                "delete the older one under Account › API Tokens."
             )
     logger.info(
         "ComfyUI at %s linked to %s with a ComfyUI-only key (token %s; replaced %s).",
@@ -593,7 +718,7 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         # Undo the link entirely, so no live token is left that the link
         # record says nothing useful about, and the status agrees with the
         # reply.
-        _unlink(server, request)
+        _unlink(server, request, connection_id)
         steps["link"] = _step(
             "failed",
             " ".join(
@@ -602,7 +727,7 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         )
         steps["check"] = _step("failed", problem, "check_failed")
         return reply()
-    _save_record(server, {**record, "bound_address": bound})
+    _save_record(server, connection_id, {**record, "bound_address": bound})
     logger.info("ComfyUI link token %s is bound to %s.", public_id, bound)
     steps["check"] = _step(
         "done",
@@ -612,10 +737,25 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
     return reply(linked=True)
 
 
-def unlink(server, request: Request) -> dict:
-    """Revoke the link's token and clear ComfyUI's copy, best effort."""
+def unlink(server, request: Request, connection_id: Optional[str], then=None):
+    """Revoke the connection's key and clear ComfyUI's copy, best effort.
+
+    A revoke that fails raises and leaves the record, so a connection is never
+    removed while its key still works. *then*, when given, runs under the same
+    hold of the link lock and its result is returned: a remove or move that
+    changes the list there cannot interleave with a link of that connection.
+    """
     with _LINK_LOCK:
-        return _unlink(server, request)
+        result = _unlink(server, request, connection_id)
+        return then() if then is not None else result
+
+
+def _still_listed(server, connection: dict) -> bool:
+    """Whether *connection* is still listed, at the same address."""
+    return any(
+        entry["id"] == connection["id"] and entry["url"] == connection["url"]
+        for entry in comfyui_connections.read(server.auth.get_user())
+    )
 
 
 def _pinned(record: dict) -> Optional[str]:
@@ -628,15 +768,17 @@ def _pinned(record: dict) -> Optional[str]:
     return pinned if where else None
 
 
-def _unlink(server, request: Request) -> dict:
-    record = server._server_config.get(LINK_CONFIG_KEY) or {}
+def _unlink(server, request: Request, connection_id: Optional[str]) -> dict:
+    record = link_record(server, connection_id)
+    if not record:
+        return {"linked": False}
     if record.get("token_public_id"):
         _revoke(server, request, record["token_public_id"])
     # No record is no link: Disconnect asks whenever it cannot tell.
     pinned = _pinned(record) if record.get("comfyui_url") else None
     if pinned:
         _clear_comfyui_key(pinned, record["comfyui_url"])
-    _save_record(server, None)
+    _save_record(server, connection_id, None)
     return {"linked": False}
 
 
@@ -653,20 +795,136 @@ def _clear_comfyui_key(pinned: str, comfyui_url: str) -> None:
         )
 
 
+def adopt_single_record(server) -> None:
+    """Give every link record a connection, once at start-up (#2194).
+
+    Builds before #2194 kept one record under :data:`LINK_CONFIG_KEY`. It moves
+    onto the connection with its address, or onto one added for it, so a live
+    key never loses its owner. Then any record whose connection is gone has its
+    key revoked: nothing could ever reach it to revoke it otherwise.
+    """
+    try:
+        _adopt_single_record(server)
+    except Exception:
+        # Start-up goes on; the records stay as they were and are tried again
+        # at the next start.
+        logger.exception(
+            "Could not give every ComfyUI link record a connection; Settings may "
+            "show a linked ComfyUI as unlinked until the next start."
+        )
+
+
+def _adopt_single_record(server) -> None:
+    config = server._server_config
+    single = config.get(LINK_CONFIG_KEY)
+    records = dict(_records(server))
+    if not single and not records:
+        return
+    if getattr(server, "hub_engine", None) is None:
+        logger.warning("No hub is attached; ComfyUI link records are left as they are.")
+        return
+    owner = server.auth.get_user()
+    if owner is None:
+        logger.warning("No owner row; ComfyUI link records are left as they are.")
+        return
+    if single and single.get("token_public_id"):
+        url = single.get("comfyui_url")
+        if url:
+            adopted = {}
+
+            def adopt(user) -> bool:
+                before = user.comfyui_connections
+                adopted.update(comfyui_connections.add(user, None, url))
+                return user.comfyui_connections != before
+
+            comfyui_connections.save(server, owner.id, adopt)
+            displaced = records.get(adopted["id"])
+            if displaced and displaced.get("token_public_id"):
+                _delete_key(server, displaced["token_public_id"])
+            records[adopted["id"]] = single
+            logger.info(
+                "Moved the ComfyUI link record for %s (token %s) onto connection %s.",
+                url,
+                single["token_public_id"],
+                adopted["id"],
+            )
+        else:
+            logger.info(
+                "The ComfyUI link record names no address; revoking its token %s.",
+                single["token_public_id"],
+            )
+            _delete_key(server, single["token_public_id"])
+    user = server.auth.get_user()
+    if not comfyui_connections.is_readable(user):
+        # read() falls back to the saved address alone, which would make every
+        # other connection's live key look orphaned. Keep them all.
+        logger.error(
+            "The ComfyUI connection list cannot be read; no link key is revoked "
+            "at this start. %d link record(s) are kept as they are.",
+            len(records),
+        )
+        listed = set(records)
+    else:
+        listed = {e["id"] for e in comfyui_connections.read(user)}
+    for connection_id in [cid for cid in records if cid not in listed]:
+        public_id = records.pop(connection_id).get("token_public_id")
+        logger.info(
+            "ComfyUI connection %s is gone; revoking its link token %s.",
+            connection_id,
+            public_id,
+        )
+        if public_id:
+            _delete_key(server, public_id)
+    config[LINKS_CONFIG_KEY] = records
+    config.pop(LINK_CONFIG_KEY, None)
+    _persist(server)
+
+
+def _delete_key(server, public_id: str) -> None:
+    """Revoke a link key with no request to revoke it through (start-up).
+
+    By ``public_id``, never by row id: SQLite reuses row ids.
+    """
+
+    def delete(session) -> bool:
+        token = session.exec(
+            select(UserToken).where(UserToken.public_id == public_id)
+        ).first()
+        if token is None:
+            return False
+        session.delete(token)
+        session.commit()
+        return True
+
+    try:
+        deleted = server.auth._db.run_task(delete, priority=DBPriority.IMMEDIATE)
+    except Exception:
+        logger.exception(
+            "Could not revoke ComfyUI link token %s; it is STILL LIVE. Delete it "
+            "under Account > API Tokens.",
+            public_id,
+        )
+        return
+    server.auth._drop_sessions_for_tokens((public_id,))
+    server.auth._flush_token_cache()
+    if not deleted:
+        logger.info("ComfyUI link token %s was already gone.", public_id)
+
+
 def narrow_recorded_key(server) -> None:
-    """Hold the recorded link's key to the ComfyUI scope (#1811).
+    """Hold every recorded link's key to the ComfyUI scope (#1811).
 
     A link made before the scope has an ``ALL`` key. The hub narrows the ones
-    bound to an address when it opens; this narrows the recorded one whatever
-    its binding, which is the only way to tell a key from before #1810 (no
+    bound to an address when it opens; this narrows the recorded ones whatever
+    their binding, which is the only way to tell a key from before #1810 (no
     ``bound_address``) from the owner's own tokens. Run once at start-up.
     """
-    public_id = (server._server_config.get(LINK_CONFIG_KEY) or {}).get(
-        "token_public_id"
-    )
-    if not public_id:
-        return
+    for record in _records(server).values():
+        if record.get("token_public_id"):
+            _narrow(server, record["token_public_id"])
 
+
+def _narrow(server, public_id: str) -> None:
     def narrow(session) -> bool:
         token = session.exec(
             select(UserToken).where(UserToken.public_id == public_id)
@@ -697,38 +955,82 @@ def narrow_recorded_key(server) -> None:
         )
 
 
-def reannounce(server) -> None:
-    """After a restart, re-send a loopback URL whose port moved.
+def reannounce(server, quiet: bool = False) -> bool:
+    """Tell every linked ComfyUI on this computer where PixlStash is, once a
+    session.
 
-    The desktop listener's port is stable best-effort (``stableLoopbackPort``)
-    and falls back to a random one when the usual port is taken. The token is
-    unchanged, so only the URL is written.
+    Written on the first contact whatever the record says: another PixlStash on
+    this computer (a second install, a test run) linking or re-announcing to the
+    same ComfyUI leaves it calling that one's port, which no record here can
+    see. The token is unchanged, so only the URL and its certificate are
+    written. A ComfyUI that cannot be reached is tried again
+    (:func:`reannounce_until_told`).
+
+    Returns:
+        False while a ComfyUI that should be told has not been.
     """
-    record = server._server_config.get(LINK_CONFIG_KEY) or {}
-    if record.get("where") != "this_computer" or not _is_desktop():
-        return
-    current = f"http://127.0.0.1:{_loopback_port(server)}"
-    if record.get("pixlstash_url") == current:
-        return
-    pinned = _pinned(record)
-    if pinned is None:
-        logger.warning(
-            "The linked ComfyUI at %s is no longer on this computer; not "
-            "telling it PixlStash moved to %s.",
+    if not _is_desktop():
+        return True
+    told_all = True
+    for connection_id, record in list(_records(server).items()):
+        if record.get("where") != "this_computer":
+            continue
+        pinned = _pinned(record)
+        if pinned is None:
+            logger.warning(
+                "The linked ComfyUI at %s is no longer on this computer; not "
+                "telling it where PixlStash is.",
+                record.get("comfyui_url"),
+            )
+            continue
+        try:
+            current, cert = link_target(server, "this_computer", pinned)
+        except LinkRefused as refused:
+            logger.warning(
+                "Not telling the linked ComfyUI at %s where PixlStash is: %s",
+                record.get("comfyui_url"),
+                refused,
+            )
+            continue
+        told = (connection_id, record.get("token_public_id"), current)
+        if told in _told_this_session:
+            continue
+        try:
+            _write_settings(
+                pinned,
+                {SETTING_URL: current, SETTING_SSL: True, SETTING_CA: cert or ""},
+            )
+        except requests.RequestException as exc:
+            told_all = False
+            (logger.debug if quiet else logger.info)(
+                "Could not tell the linked ComfyUI at %s that PixlStash is at "
+                "%s yet (%s); trying again until it answers.",
+                record.get("comfyui_url"),
+                current,
+                exc,
+            )
+            continue
+        _told_this_session.add(told)
+        if record.get("pixlstash_url") != current:
+            with _LINK_LOCK:
+                # A link or unlink while ComfyUI was being told owns the record.
+                fresh = _records(server).get(connection_id)
+                if fresh and fresh["token_public_id"] == record["token_public_id"]:
+                    _save_record(
+                        server, connection_id, {**fresh, "pixlstash_url": current}
+                    )
+        logger.info(
+            "Told the linked ComfyUI at %s that PixlStash is at %s.",
             record.get("comfyui_url"),
             current,
         )
-        return
-    try:
-        _write_settings(pinned, {SETTING_URL: current})
-    except requests.RequestException as exc:
-        logger.warning(
-            "PixlStash moved to %s but could not tell the linked ComfyUI at %s: "
-            "%s. Link it again from Settings.",
-            current,
-            record.get("comfyui_url"),
-            exc,
-        )
-        return
-    _save_record(server, {**record, "pixlstash_url": current})
-    logger.info("Told the linked ComfyUI that PixlStash is now at %s.", current)
+    return told_all
+
+
+def reannounce_until_told(server, interval: float = REANNOUNCE_RETRY_SECONDS) -> None:
+    """:func:`reannounce`, again every *interval* seconds until every linked
+    ComfyUI here has been told: ComfyUI is often started after PixlStash."""
+    quiet = False
+    while not reannounce(server, quiet=quiet):
+        quiet = True
+        time.sleep(interval)

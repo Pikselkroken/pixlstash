@@ -105,6 +105,7 @@ function distributeRowWidths(rowAspects, availableWidth) {
  *   rowOffsets: number[],
  *   itemScaledWidths: number[],
  *   totalHeight: number,
+ *   lastRowPartial: boolean,
  * }} Where:
  *   - `rowStarts[r]` is the index of the first image in row `r`;
  *     `rowStarts.length === rowCount + 1` - the sentinel
@@ -118,6 +119,8 @@ function distributeRowWidths(rowAspects, availableWidth) {
  *   - `itemScaledWidths[i]` is image i's display width in whole px. Full rows
  *     sum (with gaps) to exactly `floor(containerWidth)`; the last row does not.
  *   - `totalHeight` is the full scroll height in px (no trailing gap).
+ *   - `lastRowPartial` is true when the final row was left at natural width
+ *     (the LAST-ROW RULE); every other row is full.
  */
 export function packJustifiedRows({
   aspectRatios,
@@ -137,6 +140,7 @@ export function packJustifiedRows({
     rowOffsets: [],
     itemScaledWidths: [],
     totalHeight: 0,
+    lastRowPartial: false,
   };
   if (n === 0 || width <= 0 || !(targetRowHeight > 0)) return empty;
 
@@ -225,7 +229,8 @@ export function packJustifiedRows({
       }
     }
   }
-  if (rowAspects.length > 0) closeRow(false);
+  const lastRowPartial = rowAspects.length > 0;
+  if (lastRowPartial) closeRow(false);
 
   // Sentinel: rowStarts[rowCount] === n.
   rowStarts.push(n);
@@ -237,6 +242,7 @@ export function packJustifiedRows({
     itemScaledWidths,
     // y carries a trailing inter-row gap after the final closeRow; drop it.
     totalHeight: rowHeights.length > 0 ? y - rowGap : 0,
+    lastRowPartial,
   };
 }
 

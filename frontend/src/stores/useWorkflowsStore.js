@@ -4,8 +4,10 @@ import { defineStore } from "pinia";
 import {
   deleteWorkflow,
   duplicateWorkflow,
+  inpaintCopyWorkflow,
   listWorkflowCards,
   patchWorkflowCard,
+  restoreWorkflow,
   setWorkflowThumbnail,
 } from "../api/workflows";
 import {
@@ -13,10 +15,17 @@ import {
   WORKFLOW_SOURCE_LABELS,
   workflowFilterChips,
 } from "../utils/filterChips";
-import { baseModels, modelDisplayName } from "../utils/workflowCard";
+import {
+  baseModels,
+  markRow,
+  modelDisplayName,
+} from "../utils/workflowCard";
 import { onSessionReset } from "../utils/apiClient";
 import { errorMessage } from "../utils/apiError";
 import { favouritesFirst, useFavouritesStore } from "./useFavouritesStore";
+import { useNoticeStore } from "./useNoticeStore";
+import { useOperationStore } from "./useOperationStore";
+import { useWorkflowTemplatesStore } from "./useWorkflowTemplatesStore";
 
 /**
  * The Workflows grid (v1.12 F1a) — the cards, the sort and the selection.
@@ -28,6 +37,13 @@ import { favouritesFirst, useFavouritesStore } from "./useFavouritesStore";
  * split.
  */
 
+/** The rail head's name for each place, when no facet is lit. */
+const PLACE_LABELS = {
+  all: "All workflows",
+  favourites: "Favourites",
+  recent: "Recently used",
+};
+
 export const SORT_KEYS = [
   "rating",
   "used",
@@ -37,13 +53,37 @@ export const SORT_KEYS = [
   "name",
 ];
 
+/**
+ * Each key's name, the end it starts at (`natural`) and its two directions in
+ * words, `[asc, desc]`: "Ascending" means nothing on a date or a rating.
+ */
 export const SORT_LABELS = {
-  rating: { label: "Your ratings" },
-  used: { label: "Recently used" },
-  changed: { label: "Recently changed" },
-  created: { label: "Recently created" },
-  pictures: { label: "Picture count" },
-  name: { label: "Name" },
+  rating: {
+    label: "Your ratings",
+    natural: "desc",
+    words: ["Lowest first", "Highest first"],
+  },
+  used: {
+    label: "Recently used",
+    natural: "desc",
+    words: ["Oldest first", "Newest first"],
+  },
+  changed: {
+    label: "Recently changed",
+    natural: "desc",
+    words: ["Oldest first", "Newest first"],
+  },
+  created: {
+    label: "Recently created",
+    natural: "desc",
+    words: ["Oldest first", "Newest first"],
+  },
+  pictures: {
+    label: "Picture count",
+    natural: "desc",
+    words: ["Fewest first", "Most first"],
+  },
+  name: { label: "Name", natural: "asc", words: ["A to Z", "Z to A"] },
 };
 
 /** The numeric sort keys, each as `(card) => number`, descending. */
@@ -62,10 +102,24 @@ const SORT_VALUES = {
   pictures: (card) => card.picture_count ?? 0,
 };
 
+/** The date keys' cards with no date: last in both directions. */
+const UNDATED = {
+  used: (card) => !card.last_used,
+  changed: (card) => !card.changed_at,
+  created: (card) => !card.created_at,
+};
+
 // Name is the one key that reads A to Z rather than highest first. Numeric so
 // "v2" sorts before "v10"; the collator already keeps "flux" beside "Flux".
 const nameCollator = new Intl.Collator(undefined, { numeric: true });
 const byName = (a, b) => nameCollator.compare(a.name ?? "", b.name ?? "");
+
+/**
+ * How far back "Recently used" reaches: a card last used this long ago or later.
+ * Client-side, read off `last_used`, so it never reads the server again.
+ */
+export const RECENT_DAYS = 30;
+const RECENT_MS = RECENT_DAYS * 24 * 60 * 60 * 1000;
 
 /**
  * What the Filters panel starts on (v1.12 F7).
@@ -78,8 +132,12 @@ export const DEFAULT_FILTERS = Object.freeze({
   hideOneOffs: true,
   showHidden: false,
   // Only the cards the owner has favourited (#1578). Client-side: it only
-  // removes a card, so it never reads the server again.
+  // removes a card, so it never reads the server again. The Favourites place
+  // sets it; it is not a chip.
   favouritesOnly: false,
+  // The Recently used place: cards used within RECENT_DAYS. Client-side, and
+  // not a chip either.
+  recent: false,
   // "Keeps something deleted": a picture ghost or the name of a model that is
   // not on the shelf. The card counts the two apart; this row asks for either.
   ghosts: false,
@@ -94,6 +152,11 @@ export const DEFAULT_FILTERS = Object.freeze({
   // Text the card's name must contain, ignoring case.
   name: "",
 });
+
+/** Was this card last used at or after `since` (epoch ms)? A card never used is not. */
+function usedSince(card, since) {
+  return card.last_used ? Date.parse(card.last_used) >= since : false;
+}
 
 /** Does this card keep something deleted? */
 function keepsGhost(card) {
@@ -125,11 +188,17 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   const error = ref("");
 
   const sortKey = ref("rating");
+  // "asc" | "desc". A new key starts at its own end (`setSortKey`), never the
+  // last key's: Name after "Highest first" would otherwise read Z to A.
+  const sortDirection = ref(SORT_LABELS.rating.natural);
   // Favourites lead inside the grid's group, after the sort (#1578). On by
   // default; remembered for the session the way the sort is.
   const favouritesLead = ref(true);
   const filters = ref({ ...DEFAULT_FILTERS });
   const favourites = useFavouritesStore();
+  // Read for `viewName` and the sidebar: the Templates place is the templates
+  // store's `shown`, not a filter of this one.
+  const templates = useWorkflowTemplatesStore();
 
   // A stamp, not a boolean: an in-flight fetch that resolves after a session
   // reset must not write its rows, or its cover thumbnail URLs, into the new
@@ -194,6 +263,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   const filteredCards = computed(() => {
     const view = filters.value;
     const needle = view.name.trim().toLowerCase();
+    const since = Date.now() - RECENT_MS;
     return cards.value.filter((card) => {
       if (needle && !(card.name ?? "").toLowerCase().includes(needle)) {
         return false;
@@ -201,6 +271,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       if (view.favouritesOnly && !favourites.isFavourite("workflow", card.id)) {
         return false;
       }
+      if (view.recent && !usedSince(card, since)) return false;
       if (view.ghosts && !keepsGhost(card)) return false;
       if (view.type != null && card.type !== view.type) return false;
       if (
@@ -226,11 +297,20 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   const sortedCards = computed(() => {
     // A copy: `cards` is the fetch order and a sort in place would make the
     // next resort depend on the last one.
-    const copy = [...filteredCards.value];
+    let copy = [...filteredCards.value];
     if (sortKey.value === "name") copy.sort(byName);
     else {
       const value = SORT_VALUES[sortKey.value] ?? SORT_VALUES.rating;
       copy.sort((a, b) => value(b) - value(a));
+    }
+    // The flip reverses the dated cards only: an undated one stays below
+    // every dated card in both directions, as it does unflipped.
+    if (sortDirection.value !== SORT_LABELS[sortKey.value].natural) {
+      const blank = UNDATED[sortKey.value] ?? (() => false);
+      copy = [
+        ...copy.filter((card) => !blank(card)).reverse(),
+        ...copy.filter(blank),
+      ];
     }
     // The grid is one group, so favourites lead the whole sorted list. The
     // sort still orders everything else (#1578).
@@ -238,6 +318,44 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     return favouritesFirst(copy, (card) =>
       favourites.isFavourite("workflow", card.id),
     );
+  });
+
+  /** How many of the cards read were used within RECENT_DAYS: the Recently used count. */
+  const recentCount = computed(() => {
+    const since = Date.now() - RECENT_MS;
+    return cards.value.filter((card) => usedSince(card, since)).length;
+  });
+
+  /**
+   * The place the rail lights: "all", "favourites" or "recent". Places are the
+   * sidebar's, not filters in the toolbar, so they have no chip; this only
+   * reads the two flags that carry them.
+   */
+  const place = computed(() => {
+    if (filters.value.favouritesOnly) return "favourites";
+    if (filters.value.recent) return "recent";
+    return "all";
+  });
+
+  /**
+   * The rail head's name for what the grid shows: the templates when that
+   * place is on, else the lit facet, else the place.
+   */
+  const viewName = computed(() => {
+    if (templates.shown) return "ComfyUI templates";
+    const { type, checkpoint } = filters.value;
+    if (type != null) {
+      return (
+        cards.value.find((card) => card.type === type)?.type_label ?? type
+      );
+    }
+    if (checkpoint != null) {
+      return (
+        filterOptions.value.checkpoints.find((model) => model.id === checkpoint)
+          ?.label ?? checkpoint
+      );
+    }
+    return PLACE_LABELS[place.value];
   });
 
   /** How many of the cards read are favourites: the Filters row's count. */
@@ -257,18 +375,9 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * the module that exists so one filter cannot be spelled two ways; this
    * store owns the state and the refetch decision, and nothing else.
    */
-  const filterChips = computed(() => {
-    const chips = workflowFilterChips(filters.value, cards.value, setFilters);
-    if (filters.value.favouritesOnly) {
-      chips.unshift({
-        key: "favourites",
-        kind: "Showing",
-        value: "favourites",
-        remove: () => setFilters({ favouritesOnly: false }),
-      });
-    }
-    return chips;
-  });
+  const filterChips = computed(() =>
+    workflowFilterChips(filters.value, cards.value, setFilters),
+  );
 
   /**
    * "12 of 40" — what the grid is drawing of what the server sent.
@@ -296,7 +405,9 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    */
   const filterOptions = computed(() => {
     const types = new Map();
-    // file name → { count, label }: filtered by file, shown by shelf name.
+    // file name → { count, label, mark }: filtered by file, shown by shelf
+    // name, drawn by the first card's payload of it (the mark is the file's,
+    // so any card's copy draws the same one).
     const checkpoints = new Map();
     let imported = 0;
     let ghosts = 0;
@@ -317,6 +428,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
         const seen = checkpoints.get(model.name) ?? {
           count: 0,
           label: modelDisplayName(model),
+          mark: markRow(model),
         };
         seen.count += 1;
         checkpoints.set(model.name, seen);
@@ -332,7 +444,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       ghosts,
       types: [...types.values()].sort((a, b) => b.count - a.count),
       checkpoints: [...checkpoints.entries()]
-        .map(([id, { count, label }]) => ({ id, label, count }))
+        .map(([id, { count, label, mark }]) => ({ id, label, count, mark }))
         .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id)),
       sources: [
         {
@@ -398,7 +510,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
 
   /**
    * Forget what was read and read the grid again, after something OUTSIDE this
-   * view changed what the cards say (a ghost purge in Settings › Privacy).
+   * view changed what the cards say (a ghost purge in Settings › Recovery).
    *
    * **Only re-read when the grid has been read**, so a purge made by somebody
    * who has never opened Workflows fires no request.
@@ -579,6 +691,21 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   }
 
   /**
+   * Store a Crop & Stitch inpaint workflow made from one workflow (#2446).
+   *
+   * Like `duplicateCard`: the grid is re-read and the answer's `workflow_id`
+   * is handed back to select it. A refusal's reason lands in `error`.
+   */
+  function inpaintCopyCard(key) {
+    return busyCall(
+      "inpaint-copy",
+      key,
+      "Could not convert that workflow to inpainting.",
+      () => inpaintCopyWorkflow(key),
+    );
+  }
+
+  /**
    * Delete every selected MANUAL workflow.
    *
    * Their pictures stay, back on their automatic workflows. An automatic
@@ -593,14 +720,62 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     // exactly what was looked at.
     const keys = selectedCards.value.map((card) => card.id);
     if (!keys.length || verbBusy.value) return { done: 0, refused: 0 };
-    const result = await writeEach("delete", keys, (key) =>
-      deleteWorkflow(key),
-    );
-    if (result.done) notedRecipesChanged();
+    const result = await deleteKeys(keys);
     // The deleted cards left the grid, and the selection goes with them.
     if (!result.refused) clearSelection();
     else deselect(result.written);
     return result;
+  }
+
+  /**
+   * Delete *keys* and raise the receipt whose Undo takes them back out of the
+   * trash. Redo is this again, on what the undo brought back: a restored
+   * workflow keeps its id.
+   */
+  async function deleteKeys(keys) {
+    const tokens = new Map();
+    const names = [];
+    const result = await writeEach("delete", keys, async (key) => {
+      const body = await deleteWorkflow(key);
+      names.push(body?.deleted);
+      if (body?.undo_token) tokens.set(key, body.undo_token);
+    });
+    if (result.done) notedRecipesChanged();
+    if (tokens.size) {
+      // What this receipt's own Undo brought back, which its Redo deletes.
+      let back = [];
+      useOperationStore().showLocalReceipt({
+        summary:
+          result.done === 1 && names[0]
+            ? `Deleted “${names[0]}”`
+            : `Deleted ${result.done} workflows`,
+        icon: "mdi-trash-can-outline",
+        destructive: true,
+        undo: async () => {
+          back = await undoDelete(tokens);
+          return back.length > 0;
+        },
+        redo: async () => (await deleteKeys(back)).done > 0,
+      });
+    }
+    return result;
+  }
+
+  /** Undo a delete: the keys that came back, and says why when some did not. */
+  async function undoDelete(tokens) {
+    const result = await writeEach("restore", [...tokens.keys()], (key) =>
+      restoreWorkflow(key, tokens.get(key)),
+    );
+    if (result.done) notedRecipesChanged();
+    if (result.refused) {
+      useNoticeStore().push({
+        level: "error",
+        text: result.done
+          ? `${result.done} of ${tokens.size} workflows came back; the rest are no longer in the trash.`
+          : "That could not be undone: the workflow is no longer in the trash.",
+      });
+    }
+    return result.written;
   }
 
   /** Replace the selection, or toggle one id into it (Ctrl/Cmd). */
@@ -624,7 +799,26 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   }
 
   function setSortKey(key) {
-    if (SORT_KEYS.includes(key)) sortKey.value = key;
+    if (!SORT_KEYS.includes(key) || key === sortKey.value) return;
+    sortKey.value = key;
+    sortDirection.value = SORT_LABELS[key].natural;
+  }
+
+  function toggleSortDirection() {
+    sortDirection.value = sortDirection.value === "asc" ? "desc" : "asc";
+  }
+
+  /**
+   * Light one of the three places. Picking one clears the Type and Base model
+   * facets, as the sidebar always has; the Templates place is the caller's.
+   */
+  function setPlace(next) {
+    setFilters({
+      favouritesOnly: next === "favourites",
+      recent: next === "recent",
+      type: null,
+      checkpoint: null,
+    });
   }
 
   function setFavouritesLead(on) {
@@ -759,6 +953,17 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    */
   const useSetKey = ref("");
 
+  /**
+   * Bumped by the sidebar's Add workflow button. WorkflowsView watches it and
+   * opens its file picker, the way `useSetKey` asks the Workflow tab.
+   */
+  const addRequest = ref(0);
+
+  /** Ask the Workflows view to open its add-a-workflow picker. */
+  function requestAdd() {
+    addRequest.value += 1;
+  }
+
   /** Ask the Workflow tab to open *Change model set…* on one workflow. "" takes it back. */
   function requestUseSet(key) {
     useSetKey.value = key || "";
@@ -779,6 +984,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     loaded,
     error,
     sortKey,
+    sortDirection,
     favouritesLead,
     setFavouritesLead,
     favouriteCount,
@@ -789,6 +995,12 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     sortedCards,
     filterChips,
     filterOfLabel,
+    place,
+    recentCount,
+    viewName,
+    setPlace,
+    addRequest,
+    requestAdd,
     filterOptions,
     selectedCards,
     runnableCard,
@@ -804,11 +1016,13 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     setThumbnail,
     pinThumbnail,
     duplicateCard,
+    inpaintCopyCard,
     deleteSelected,
     select,
     selectRange,
     clearSelection,
     setSortKey,
+    toggleSortDirection,
     setFilters,
     clearFilters,
     reset,

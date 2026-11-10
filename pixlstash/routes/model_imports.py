@@ -13,21 +13,28 @@ a move because it *is* a move with a row created rather than repointed: copy →
 verify by SHA-256 → register the row and commit → then unlink. The unlink only
 happens at all when the source folder carries ``delete_after_import``.
 
+``DELETE /model-folders/{id}/runs/{name}`` clears a run the owner no longer
+wants: the folder goes to the OS trash whole, which is the undo. It is refused
+while a training job may still write into it, and it takes the import's slot so
+nothing is copying out of it at the time.
+
 **A run is addressed by name, not by path.** The body names a registered
 ``source`` folder and a run *inside* it, and the server joins them, so no host
 path is ever taken from the caller. The join is contained: a run name that
 resolves outside its registered output root is refused rather than read.
 
-**A run's previews come with it**, into ``<stem>_samples/`` beside each imported
-checkpoint, and ``GET /models/{model_id}/samples`` reads them back off the shelf.
-That pair is addressed by ``model.id`` rather than by sha256, because a
+**A run's previews stay in the run.** Imports before 2026-10-30 copied them into
+``<stem>_samples/`` beside each checkpoint, and ``GET /models/{model_id}/samples``
+still reads those back off the shelf. That pair is addressed by ``model.id`` rather than by sha256, because a
 checkpoint nobody has hashed has no sha256 to be addressed by.
 
 Authorization: every route here is `LOCAL_OWNER_ONLY`, declared in
 ``pixlstash/authz/registry.py``. The listing walks a registered host path and
-reads every run under it, which is the same authority as
-``model-folders/{id}/rescan``; the import writes files into one registered folder
-and may unlink them from another, which is the ``model-moves`` authority; and
+reads every run under it, which is the same authority as the background
+folder scan (``ModelFolderScanFinder``); the import writes files into one registered folder
+and may unlink them from another, which is the ``model-moves`` authority; the
+trash removes one run folder from a registered root, which is
+``POST /model-files/delete``' authority over a run; and
 both sample routes read inside a registered folder, which is the authority
 ``GET /adapters/{sha256}/file`` sits on for the same reason - bytes out of a
 registered root are a capability of their own, and "no host path crosses the
@@ -42,17 +49,23 @@ from typing import Optional
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
+from send2trash import TrashPermissionError, send2trash
 
+from pixlstash.hub.training_runs import busy_runs
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_folder_scanner import STATE_PRESENT
 from pixlstash.services.model_mover import SHELF_IO_LOCK, MoveRefused, samples_relpath
 from pixlstash.services.run_importer import RunImporter
+from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 from pixlstash.utils.aitoolkit_run import (
     SAMPLES_DIRNAME,
     is_sample_filename,
     read_output_root,
+    read_run,
 )
+from pixlstash.utils.known_base_models import training_base_tile
 from pixlstash.utils.path_utils import resolve_path_within
+from pixlstash.utils.system_utils import TRASH_NAME
 
 logger = get_logger(__name__)
 
@@ -62,12 +75,13 @@ SOURCE_FOLDER_KIND = "source"
 # ``mimetypes.guess_type``: the directory is on the owner's disk and anything
 # could have been dropped into it, and guessing would let an ``.html`` be served
 # from our own origin. ai-toolkit writes JPEG and PNG; WebP is here because a
-# run configured for it writes that instead.
+# run configured for it writes that instead; a video model's previews are MP4.
 SAMPLE_MEDIA_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
     ".webp": "image/webp",
+    ".mp4": "video/mp4",
 }
 
 
@@ -113,9 +127,31 @@ class RunResponse(BaseModel):
         default=None,
         description="`name_or_path` from the run's `config.yaml`, verbatim.",
     )
+    base_tile: Optional[dict] = Field(
+        default=None,
+        description=(
+            "The tile the base model wears (`mark`, `mark_icon`, ... as on a "
+            "shelf row, no tab, plus `label`), or null for a base no known one "
+            "matches."
+        ),
+    )
     trigger_words: list[str] = Field(default_factory=list)
     rank: Optional[int] = Field(
         default=None, description="`linear` from the config, when it records one."
+    )
+    total_steps: Optional[int] = Field(
+        default=None, description="`train.steps` from the config: the steps asked for."
+    )
+    learning_rate: Optional[float] = Field(
+        default=None, description="`train.lr` from the config."
+    )
+    sample_prompts: list[str] = Field(
+        default_factory=list,
+        description="The preview prompts, in the order a sample's `index` counts.",
+    )
+    modified_at: Optional[float] = Field(
+        default=None,
+        description="Epoch seconds of the newest checkpoint's last write.",
     )
     config_error: Optional[str] = Field(
         default=None,
@@ -187,21 +223,7 @@ class ImportedFile(BaseModel):
     model_id: Optional[int] = Field(
         default=None, description="The hub `model.id` the file landed on."
     )
-    detail: Optional[str] = Field(
-        default=None,
-        description=(
-            "Why, when it failed - and, on a file that imported, why its "
-            "previews did not come with it."
-        ),
-    )
-    sample_count: int = Field(
-        default=0,
-        description=(
-            "Previews copied into this checkpoint's `<stem>_samples/` directory. "
-            "Zero for a run with no samples, and for a copy that failed - "
-            "`detail` says which."
-        ),
-    )
+    detail: Optional[str] = Field(default=None, description="Why, when it failed.")
 
 
 class ImportResponse(BaseModel):
@@ -225,6 +247,18 @@ class ImportResponse(BaseModel):
         )
     )
     files: list[ImportedFile] = Field(default_factory=list)
+
+
+class TrashRunResponse(BaseModel):
+    """Body of ``DELETE /model-folders/{folder_id}/runs/{run_name}``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    run_name: str
+    trash_name: str = Field(
+        default=TRASH_NAME,
+        description="What this machine calls its trash, for the receipt.",
+    )
 
 
 def sample_path_within(run_dir: str, filename: str) -> str:
@@ -321,10 +355,30 @@ def _to_run_response(run) -> RunResponse:
             for sample in run.samples
         ],
         base_model=run.base_model,
+        base_tile=training_base_tile(run.base_model),
         trigger_words=list(run.trigger_words),
         rank=run.rank,
+        total_steps=run.total_steps,
+        learning_rate=run.learning_rate,
+        sample_prompts=list(run.sample_prompts),
+        modified_at=_newest_mtime(run.checkpoints),
         config_error=run.config_error,
     )
+
+
+def _newest_mtime(checkpoints) -> Optional[float]:
+    times = []
+    for checkpoint in checkpoints:
+        try:
+            times.append(os.path.getmtime(checkpoint.path))
+        except OSError as exc:
+            logger.warning(
+                "Could not stat run checkpoint %s: %s. Leaving it out of the "
+                "run's date.",
+                checkpoint.path,
+                exc,
+            )
+    return max(times) if times else None
 
 
 def _size_of(path: str) -> Optional[int]:
@@ -398,9 +452,122 @@ def create_router(server) -> APIRouter:
             ) from exc
         return RunListResponse(runs=[_to_run_response(run) for run in runs])
 
+    @router.delete(
+        "/model-folders/{folder_id}/runs/{run_name}",
+        summary="Move a training run to the trash",
+        description=(
+            "Moves one run folder of a registered `source` folder to this "
+            f"machine's {TRASH_NAME.lower()} as one entry, which restores whole. "
+            "Checkpoints already imported are shelf copies of their own and stay. "
+            "Refused while a training job may still write into the folder "
+            "(409), for a name that is not a run in that folder (400 or 404), "
+            "for a symbolic link (409), and on a drive with no trash (409)."
+        ),
+        tags=["model_shelf"],
+        response_model=TrashRunResponse,
+    )
+    def trash_run(folder_id: int, run_name: str, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        folder = _source_folder(folder_id)
+        # One name, joined and contained, as the import takes it.
+        if run_name in ("", ".", "..") or "/" in run_name or "\\" in run_name:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{run_name!r} is not a run inside that folder.",
+            )
+        joined = os.path.join(folder["path"], run_name)
+        try:
+            run_dir = resolve_path_within(folder["path"], run_name)
+        except ValueError as exc:
+            logger.error(
+                "Refusing to trash %r from %s: it resolves outside the "
+                "registered output root (%s).",
+                run_name,
+                folder["path"],
+                exc,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"{run_name!r} is not a run inside that folder.",
+            ) from exc
+        if os.path.islink(joined):
+            # The trash would take the link and the listing reads its target:
+            # what the card showed is not what would go.
+            raise HTTPException(
+                status_code=409,
+                detail=f"{run_name!r} is a link, so PixlStash leaves it alone.",
+            )
+        # Only what the listing would show as a run: the output root may hold
+        # other folders, and those are not this route's to remove.
+        if not os.path.isdir(run_dir) or not read_run(run_dir).checkpoints:
+            raise HTTPException(status_code=404, detail=f"No run named {run_name!r}.")
+        for job in busy_runs(server.hub):
+            if not job.get("training_folder"):
+                continue
+            save_root = LocalAiToolkit.handle_for(
+                "",
+                job["uuid"],
+                job["name"],
+                training_folder=job["training_folder"],
+            ).save_root
+            # normcase: a case-insensitive drive spells one folder two ways.
+            if os.path.normcase(os.path.realpath(save_root)) == os.path.normcase(
+                run_dir
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{job['name']!r} is still {job['status']} in that folder. "
+                        "Stop it, or wait for it to finish, first."
+                    ),
+                )
+        # The slot an import takes: an import reading this folder would lose
+        # its files halfway through.
+        if not SHELF_IO_LOCK.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A move or an import is already running. Removing a run out "
+                    "from under it could take files it is still copying."
+                ),
+            )
+        try:
+            send2trash(run_dir)
+        except TrashPermissionError as exc:
+            logger.error("Could not move %s to the %s: %s", run_dir, TRASH_NAME, exc)
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"This drive has no {TRASH_NAME} PixlStash can use, so "
+                    f"{run_name!r} was left where it is."
+                ),
+            ) from exc
+        except OSError as exc:
+            logger.error(
+                "Moving run %s (folder id=%s) to the %s failed: %s",
+                run_dir,
+                folder_id,
+                TRASH_NAME,
+                exc,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not remove {run_name!r}: {exc.strerror or exc}",
+            ) from exc
+        finally:
+            SHELF_IO_LOCK.release()
+        logger.info(
+            "Moved training run %s (folder id=%s) to the %s.",
+            run_dir,
+            folder_id,
+            TRASH_NAME,
+        )
+        return TrashRunResponse(run_name=run_name)
+
     @router.get(
         "/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
-        summary="One preview image from a training run",
+        summary="One preview (image or clip) from a training run",
         description=(
             "Serves a sample ai-toolkit rendered during the run, so a step can "
             "be judged before it is imported. Reads and changes nothing else - "
@@ -415,7 +582,7 @@ def create_router(server) -> APIRouter:
         ),
         tags=["model_shelf"],
         response_class=FileResponse,
-        responses={200: {"content": {"image/*": {}}}},
+        responses={200: {"content": {"image/*": {}, "video/mp4": {}}}},
     )
     def get_run_sample(folder_id: int, run_name: str, filename: str, request: Request):
         server.auth.ensure_secure_when_required(request)
@@ -438,10 +605,10 @@ def create_router(server) -> APIRouter:
         if media_type is None:
             # An allowlist, not a guess. `mimetypes` would happily label an
             # `.html` dropped in `samples/` as text/html and serve it from our
-            # origin; the run only ever writes the three formats below.
+            # origin; the run only ever writes the formats listed above.
             logger.warning(
-                "Refusing to serve %s: %r is not one of the image formats a "
-                "run's samples directory holds.",
+                "Refusing to serve %s: %r is not one of the formats a run's "
+                "samples directory holds.",
                 sample_path,
                 os.path.splitext(sample_path)[1],
             )
@@ -550,7 +717,7 @@ def create_router(server) -> APIRouter:
         ),
         tags=["model_shelf"],
         response_class=FileResponse,
-        responses={200: {"content": {"image/*": {}}}},
+        responses={200: {"content": {"image/*": {}, "video/mp4": {}}}},
     )
     def get_model_sample(model_id: int, filename: str, request: Request):
         server.auth.ensure_secure_when_required(request)
@@ -662,7 +829,6 @@ def create_router(server) -> APIRouter:
                     status=outcome.status,
                     model_id=outcome.model_id,
                     detail=outcome.detail,
-                    sample_count=outcome.sample_count,
                 )
                 for outcome in report.outcomes
             ],

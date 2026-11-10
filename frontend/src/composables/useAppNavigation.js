@@ -10,6 +10,7 @@ import { useFilterStore } from "../stores/useFilterStore";
 import { useWsStore } from "../stores/useWsStore";
 import {
   ALL_PICTURES_ID,
+  NOT_IN_PROJECT_QUERY,
   SCRAPHEAP_PICTURES_ID,
   UNASSIGNED_PICTURES_ID,
 } from "../stores/useViewStore";
@@ -124,6 +125,11 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     if (charId !== ALL_PICTURES_ID) {
       filterStore.noCharacterFilter = false;
       filterStore.noSetFilter = false;
+    }
+    // Favourites and Scrapheap are both places: going from one to the other
+    // must not carry Favourites' filter into the heap.
+    if (charId === SCRAPHEAP_PICTURES_ID) {
+      filterStore.favouriteOnlyFilter = false;
     }
     wsStore.clearPendingExternalImportIds();
     wsStore.clearSortChangedExternalIds();
@@ -260,7 +266,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     if (sel.selectedFolderFilter) {
       const f = sel.selectedFolderFilter;
       // `?path=` rides along on the folder routes too. A sidebar subfolder
-      // click carries `rfId` (`FolderTreeNode.vue` requires it), so it takes
+      // selection carries `rfId` (it always does), so it takes
       // the ref-folder branch, and without the query the URL named the folder
       // ROOT: a reload or a shared link landed one level up from what was on
       // screen. The id still owns the payload - `useViewStore.applyView`
@@ -283,12 +289,8 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
         });
         return;
       }
-      if (f.importFolderId != null) {
-        pushAppRoute({
-          name: "import-folder",
-          params: { id: String(f.importFolderId) },
-          query: folderQuery,
-        });
+      if (f.inbox) {
+        pushAppRoute({ name: "inbox" });
         return;
       }
       // A folder payload with no id of any kind - what an "About your
@@ -348,8 +350,17 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
       return;
     }
 
+    // "Not in a project": the global routes, marked so a reload or Back keeps
+    // the scope (useViewStore.parseRouteView reads it back). A real project
+    // returned above on its own route; the id test keeps that true if the
+    // branches are ever reordered.
+    const scopeQuery =
+      proj.projectViewMode === "project" && proj.selectedProjectId == null
+        ? { project: NOT_IN_PROJECT_QUERY }
+        : {};
+
     if (sel.selectedSetIds.length > 0) {
-      const query = {};
+      const query = { ...scopeQuery };
       if (sel.selectedSetIds.length > 1) {
         query.ids = sel.selectedSetIds.join(",");
         query.mode = sel.setMultiMode || "intersection";
@@ -374,11 +385,11 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     }
 
     if (!sel.selectedCharacter || sel.selectedCharacter === ALL_PICTURES_ID) {
-      pushAppRoute({ name: "all-pictures" });
+      pushAppRoute({ name: "all-pictures", query: scopeQuery });
       return;
     }
 
-    const query = {};
+    const query = { ...scopeQuery };
     if (sel.selectedCharacterIds.length > 1) {
       query.ids = sel.selectedCharacterIds.join(",");
       query.mode = sel.characterMultiMode || "union";
@@ -397,8 +408,9 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   // Same reasoning for the model shelf: it lists files on this machine, not
   // pictures in the library, so it is a route rather than a selection.
   // Both of the shelf's views. `/models/runs` is the ai-toolkit runs waiting to
-  // be imported - the same destination, a second tab - so the sidebar's Models
-  // entry stays the current page across both and no second destination lights.
+  // be imported - the same destination, a second tab - so the title bar's
+  // Models workspace stays the current page across both and no second
+  // destination lights.
   // A READ session is never showing it: the shelf lists the owner's machine and
   // every route behind it is owner-only, so mounting it would only fire requests
   // the credential can never satisfy (issue #1014). Gating the predicate rather
@@ -417,13 +429,8 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     () => !isReadOnly.value && WORKFLOW_ROUTES.includes(route.name),
   );
 
-  /** Open the workflow library. */
-  function handleSelectWorkflows() {
-    pushAppRoute({ name: "workflows" });
-  }
-
   // …and a pasted /models URL is bounced to the library rather than left on a
-  // route that renders the grid under a Models heading. The sidebar row cannot
+  // route that renders the grid under a Models heading. The title bar's segment cannot
   // reach this: it is inert for a READ session, so the only way in is an
   // address bar.
   //
@@ -452,17 +459,13 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
         (MODEL_SHELF_ROUTES.includes(name) ||
           WORKFLOW_ROUTES.includes(name) ||
           name === "insights" ||
-          name === "moves")
+          name === "moves" ||
+          name === "inbox")
       )
         replaceAppRoute({ name: "all-pictures" });
     },
     { immediate: true },
   );
-
-  /** Open the model shelf. */
-  function handleSelectModels() {
-    pushAppRoute({ name: "models" });
-  }
 
   // "About your library" is a destination for the same reason Duplicates is: it
   // shows findings rather than pictures, so it has no selection to express.
@@ -492,6 +495,17 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   /** Open the reconciliation queue for moves made outside PixlStash. */
   function handleSelectMoves() {
     pushAppRoute({ name: "moves" });
+  }
+
+  // The Inbox is the grid narrowed to what was added lately and has no person
+  // and no set. The owner's review queue, so owner-only like Moves.
+  const isInboxView = computed(
+    () => !isReadOnly.value && route.name === "inbox",
+  );
+
+  /** Open the Inbox. */
+  function handleSelectInbox() {
+    pushAppRoute({ name: "inbox" });
   }
 
   /**
@@ -564,11 +578,11 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     isModelsView,
     isInsightsView,
     isMovesView,
+    isInboxView,
     isWorkflowsView,
-    handleSelectModels,
     handleSelectInsights,
     handleSelectMoves,
-    handleSelectWorkflows,
+    handleSelectInbox,
     handleInsightAction,
     handleSelectCharacter,
     handleSelectSet,

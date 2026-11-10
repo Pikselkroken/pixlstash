@@ -408,6 +408,12 @@
         align-items: center;
       }
 
+      .launch-head + .launch-head {
+        margin-top: 24px;
+        padding-top: 24px;
+        border-top: 1px solid var(--border);
+      }
+
       .launch-kicker {
         font-size: 0.78rem;
         letter-spacing: 0.08em;
@@ -441,6 +447,22 @@
         border: 1px solid var(--border);
         background: #000;
         cursor: zoom-in;
+      }
+
+      .launch-map {
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border);
+        overflow: hidden;
+      }
+
+      .launch-map img {
+        cursor: zoom-in;
+      }
+
+      .launch-map .app-pin {
+        width: 24px;
+        height: 24px;
+        font-size: 0.8rem;
       }
 
       .launch-grid {
@@ -630,6 +652,64 @@
       .lightbox-close:hover {
         background: rgba(255, 255, 255, 1);
       }
+      /* The hero's text on the left, the "PixlStash needs you!" card on the
+         right; stacked, card last, on a narrow screen. */
+      .hero-split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 220px;
+        gap: 32px;
+        align-items: center;
+      }
+
+      .needs-you-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        padding: 16px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        text-align: center;
+        transition:
+          border-color 0.15s ease,
+          transform 0.2s ease;
+      }
+
+      .needs-you-card:hover {
+        border-color: var(--accent);
+        transform: translateY(-2px);
+      }
+
+      .needs-you-card img {
+        width: 128px;
+        height: 128px;
+        border-radius: var(--radius-md);
+      }
+
+      .needs-you-text {
+        color: var(--muted);
+        font-size: 0.85rem;
+        line-height: 1.5;
+      }
+
+      .needs-you-link {
+        color: var(--accent);
+        font-weight: 600;
+        font-size: 0.9rem;
+      }
+
+      @media (max-width: 900px) {
+        .hero-split {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 20px;
+        }
+
+        .needs-you-card {
+          justify-self: center;
+          max-width: 320px;
+        }
+      }
     </style>
     <script type="application/ld+json">
       {
@@ -669,9 +749,10 @@
       <div id="nav-placeholder"></div>
       <script src="nav.js"></script>
 
-      <div class="page-hero">
+      <div class="page-hero hero-split">
+        <div class="hero-main">
         <a class="launch-pill" href="whatsnew.html"
-          ><span>New</span> PixlStash 1.13: Inpainting and model downloads →</a
+          ><span>New</span> PixlStash 2.0: LoRA training and streamlined UI →</a
         >
         <h1>A desktop image manager for creators</h1>
         <p>
@@ -700,17 +781,49 @@
             >Try the live demo</a
           >
         </div>
+        </div>
+
+        <a class="needs-you-card" href="report.html">
+          <img
+            src="assets/PixlStashNeedsYou.jpg"
+            width="256"
+            height="256"
+            alt="PixlStash needs you!"
+          />
+          <span class="needs-you-text"
+            >Found a bug, or missing something? Most reports get a reply within
+            a day.</span
+          >
+          <span class="needs-you-link">Report it &rarr;</span>
+        </a>
       </div>
 
       <section class="launch">
         <div class="launch-head">
           <div>
-            <span class="launch-kicker"
-              >PixlStash 1.13: inpainting and workflow/model downloads</span
-            >
-            <h2>Draw area to change,<br />set a prompt,<br />press Run</h2>
+            <span class="launch-kicker">PixlStash 2.0</span>
+            <h2>Three workspaces, and LoRAs trained from your library</h2>
             <p class="launch-lead">
-              The picture viewer has paint tools now. Mark a part of a picture,
+              Media, Workflows and Models each have their own sidebar, and the
+              toolbars are for browsing. Select a person or a set and press
+              Train LoRA, and the result is attached to them when it finishes.
+            </p>
+          </div>
+          <div class="app-map launch-map">
+            <img
+              src="assets/BarryTraining.jpg"
+              alt="PixlStash 2.0 showing a garden gnome hammering a 2.0 sign, with numbered pins on Train LoRA in the gnome's person menu and the Media, Workflows and Models switcher"
+            />
+            <span class="app-pin" style="left: 19.6%; top: 62.9%" aria-hidden="true">1</span>
+            <span class="app-pin" style="left: 59.4%; top: 1.9%" aria-hidden="true">2</span>
+          </div>
+        </div>
+        <div class="launch-head">
+          <div>
+            <span class="launch-kicker">Further refined</span>
+            <h2>Draw inpainting selection and run</h2>
+            <p class="launch-lead">
+              The picture viewer has paint tools. Mark a part of a picture,
               describe the change, and an inpaint workflow redraws only that
               part. Three inpaint workflows come with PixlStash, and your own
               inpaint workflows run there too.
@@ -718,7 +831,8 @@
           </div>
           <div class="launch-video">
             <video
-              src="assets/InpaintBoth.mp4"
+              src="assets/WorkflowInpainting2.0.mp4"
+              aria-label="Inpainting in the picture viewer: a rectangle drawn over the bearded garden gnome's hand and a prompt give him an orange cocktail with an umbrella, then a second edit turns the next gnome's hat purple"
               autoplay
               loop
               muted
@@ -726,55 +840,10 @@
             ></video>
           </div>
         </div>
-        <div class="launch-grid">
-          <div class="launch-tile">
-            <img
-              src="assets/TemplateDownloads.jpg"
-              alt="The Templates tab: ComfyUI template cards marked Ready to run or with how many files are missing"
-              loading="lazy"
-            />
-            <h3>Every ComfyUI template</h3>
-            <p>
-              A Templates tab lists what your ComfyUI offers, which files each
-              needs and which you have. Add one and it loads from your library
-              and shelf, and saves back to PixlStash.
-            </p>
-          </div>
-          <div class="launch-tile">
-            <img
-              src="assets/ModelDownload.jpg"
-              alt="The Tasks tab downloading a 19 GB checkpoint, with a progress bar and a cancel button"
-              loading="lazy"
-            />
-            <h3>Missing models, downloaded</h3>
-            <p>
-              One press downloads a model a workflow is missing, into the folder
-              you set in Settings › Models, and puts it on your shelf,
-              immediately accessible for use.
-            </p>
-          </div>
-          <div class="launch-tile">
-            <img
-              src="assets/WaitingForGPU.png"
-              alt="The Tasks tab with a ComfyUI run waiting for the GPU, showing what it needs and what is free"
-              loading="lazy"
-            />
-            <h3>Runs wait for the GPU</h3>
-            <p>
-              A run that does not fit waits for GPU memory instead of running
-              out of it, and PixlStash unloads its own models to make room.
-            </p>
-          </div>
-        </div>
         <div class="launch-foot">
-          <p>
-            New to workflows? 1.12 turned the ComfyUI workflows behind your
-            pictures into a library you can run. Next up is 2.0: training a LoRA
-            from your library, inside PixlStash. And it does this easier and
-            with more managable folder management than ComfyUI itself.
-          </p>
+          <p>Upgrading? Things have moved. The What's New page shows where.</p>
           <a class="btn btn-primary" href="whatsnew.html"
-            >See everything in 1.13</a
+            >See everything in 2.0</a
           >
         </div>
       </section>
@@ -950,7 +1019,8 @@
             href="https://github.com/Pikselkroken/pixlstash/blob/main/pixlstash/LICENSE"
             >GPLv3</a
           >) • Easy install • Cross-platform •
-          <a href="privacy.html">Privacy</a></span
+          <a href="privacy.html">Privacy</a> •
+          <a href="report.html">Report a problem</a></span
         >
       </footer>
     </div>

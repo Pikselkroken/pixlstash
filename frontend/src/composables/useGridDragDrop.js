@@ -2,6 +2,7 @@ import { ref } from "vue";
 import {
   extractSupportedImportFilesFromDataTransfer,
   isFileDrag,
+  isInternalImageDrag,
   isVideo,
   setInternalDragPayload,
 } from "../utils/media.js";
@@ -9,6 +10,14 @@ import { useNoticeStore } from "../stores/useNoticeStore";
 import { useSelectionStore } from "../stores/useSelectionStore";
 import { useProjectStore } from "../stores/useProjectStore";
 import { resolveImportTarget } from "../utils/importTarget.js";
+import { isReadOnly } from "../utils/apiClient";
+import { stageShareFiles } from "../utils/copyAsFiles.js";
+import { isApplePlatform } from "../utils/shortcutHints.js";
+import {
+  canStartShareDrag,
+  isOwnShareCopyDrop,
+  runShareDrag,
+} from "../utils/shareDrag.js";
 
 /**
  * Manages all drag-and-drop interactions in the image grid:
@@ -174,21 +183,29 @@ export function useGridDragDrop(
     clearGridDragOverlay();
 
     // Ignore drag-and-drop if the source is the grid itself
-    if (
-      dragSource.value === "grid" ||
-      e.dataTransfer.types.includes("application/json")
-    ) {
+    if (dragSource.value === "grid" || isInternalImageDrag(e.dataTransfer)) {
       dragSource.value = null;
       return;
     }
 
     if (!e.dataTransfer) return;
+    // Our own drag-out dropped back: the window-level handler says so.
+    if (isOwnShareCopyDrop(e.dataTransfer)) return;
+    // Read before the walk awaits: the drop's payload is gone after dispatch.
+    // A drop with no files in it at all is not a drop of unsupported files.
+    // On X11 a file manager hands a very large selection (thousands of paths)
+    // over incrementally, which Chromium cannot read, so the drop arrives as
+    // a scrap of text; saying "not supported" there sent the owner hunting a
+    // regression in the importer.
+    const carriedFiles = isFileDrag(e.dataTransfer);
     const files = await extractSupportedImportFilesFromDataTransfer(
       e.dataTransfer,
     );
     if (!files.length) {
       noticeStore.warning(
-        "None of those files are a supported image, video or archive.",
+        carriedFiles
+          ? "None of those files are a supported image, video or archive."
+          : "That drop carried no files. If you dragged a lot of files at once, drag fewer at a time, or use Import.",
         { key: "import-unsupported-files" },
       );
       return;
@@ -289,7 +306,113 @@ export function useGridDragDrop(
     });
   }
 
+  // ── Drag-out as files (#2420) ─────────────────────────────────────────────
+  // In the desktop app a Ctrl-drag (Option on a Mac) is an OS file drag of the
+  // original files, so it lands in a file manager, a mail or a chat like a file
+  // manager's own drag, and the in-app targets take it too (utils/shareDrag.js).
+  // A plain drag stays the instant in-app HTML5 drag: the OS drag can only
+  // start once the backend has linked the files, which made every drag onto a
+  // set or a stack wait for it and lose the tile ghost.
+
+  function wantsShareDrag(ids) {
+    return ids.length > 0 && canStartShareDrag() && !isReadOnly.value;
+  }
+
+  // Not Alt off a Mac: Linux window managers take Alt+drag to move the window,
+  // so the page never sees the drag. Not Ctrl on a Mac: Ctrl+click is a right
+  // click there. Selection changes on click, which a drag never fires, so
+  // either key leaves the selection alone.
+  function dragOutKey() {
+    return isApplePlatform() ? "Option" : "Ctrl";
+  }
+
+  function wantsDragOut(event) {
+    return isApplePlatform() ? !!event.altKey : !!event.ctrlKey;
+  }
+
+  /** A plain drag let go outside the window with nothing taking it. */
+  function endedOutsideWindowUntaken(event) {
+    if (!event || event.dataTransfer?.dropEffect !== "none") return false;
+    const { clientX: x, clientY: y } = event;
+    return x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight;
+  }
+
+  /** The thumbnail under the pointer as PNG bytes for the OS drag, or undefined. */
+  function dragIconPng(element) {
+    if (!(element instanceof HTMLImageElement) || !element.naturalWidth) {
+      return undefined;
+    }
+    try {
+      // ponytail: one fixed ghost size; size it from the tile if it looks off.
+      const scale = Math.min(
+        1,
+        96 / Math.max(element.naturalWidth, element.naturalHeight),
+      );
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(element.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(element.naturalHeight * scale));
+      canvas.getContext("2d").drawImage(element, 0, 0, canvas.width, canvas.height);
+      const base64 = canvas.toDataURL("image/png").split(",")[1];
+      return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)).buffer;
+    } catch (err) {
+      console.warn("No drag icon from the thumbnail; the app icon stands in", err);
+      return undefined;
+    }
+  }
+
+  function startShareDrag(img, event, ids) {
+    // The OS drag replaces this one, and it can only start once the files are
+    // linked under their names, which takes a request.
+    event.preventDefault();
+    dragSource.value = "grid";
+    setDragSourceImageIds(ids);
+    const icon = dragIconPng(thumbnailRefs[img.id]);
+    // Let go before the copies were ready: no drag. A cancelled dragstart
+    // leaves the button's own release to reach the page.
+    let released = false;
+    const release = () => {
+      released = true;
+    };
+    window.addEventListener("pointerup", release, true);
+    window.addEventListener("mouseup", release, true);
+    const body = typeof document !== "undefined" ? document.body : null;
+    if (body) body.style.cursor = "progress";
+    void (async () => {
+      let staged;
+      try {
+        // The originals, hard-linked under the copy-and-paste names, so even a
+        // whole view starts at once.
+        staged = await stageShareFiles(ids, { verb: "drag", key: "drag-out" });
+      } finally {
+        if (body) body.style.cursor = "";
+        window.removeEventListener("pointerup", release, true);
+        window.removeEventListener("mouseup", release, true);
+      }
+      if (!staged || released) {
+        handleDragEnd();
+        return;
+      }
+      if (staged.skipped) {
+        noticeStore.warning(
+          `${staged.skipped} could not be read and ${staged.skipped === 1 ? "was" : "were"} left out of the drag.`,
+          { key: "drag-out" },
+        );
+      }
+      try {
+        await runShareDrag(ids, staged.paths, { icon, onEnd: handleDragEnd });
+      } catch (err) {
+        console.error("Starting the drag-out failed", { ids, err });
+        noticeStore.error(
+          `Couldn't start the drag. ${err?.message || err}`,
+          { key: "drag-out" },
+        );
+      }
+    })();
+  }
+
   function handleThumbnailNativeDragStart(img, event) {
+    // The tile's own capture handler already took this drag out as files.
+    if (event.defaultPrevented) return;
     // No grid drag-and-drop while the Review Sessions overlay is up (it stays
     // mounted over the grid as a modal review surface).
     if (reviewOverlayOpen?.value) {
@@ -300,8 +423,12 @@ export function useGridDragDrop(
       event.preventDefault();
       return;
     }
-    dragSource.value = "grid";
     const selectionIds = getDragSelectionIds(img);
+    if (wantsDragOut(event) && wantsShareDrag(selectionIds)) {
+      startShareDrag(img, event, selectionIds);
+      return;
+    }
+    dragSource.value = "grid";
     if (selectionIds.length > 1) {
       setDragSourceImageIds(selectionIds);
       setupMultiExportDrag(event, selectionIds);
@@ -315,7 +442,20 @@ export function useGridDragDrop(
     setDragDataForImageIds(event, [img.id]);
   }
 
-  function handleDragEnd() {
+  function handleDragEnd(event) {
+    // Someone trying to drag pictures out without the key: say which it is.
+    // Once per drag: the tile's dragend follows its container's, after this
+    // has cleared the source.
+    if (
+      dragSource.value === "grid" &&
+      wantsShareDrag([...dragSourceImageIds.value]) &&
+      endedOutsideWindowUntaken(event)
+    ) {
+      noticeStore.info(
+        `To drag pictures out of PixlStash as files, hold ${dragOutKey()} as you start the drag.`,
+        { key: "drag-out-hint" },
+      );
+    }
     dragSource.value = null;
     stackReorderDrag.value = null;
     clearDragSourceImageIds();
@@ -346,8 +486,12 @@ export function useGridDragDrop(
     }
     const existing = event.dataTransfer.getData("application/json");
     if (existing) return;
-    dragSource.value = "grid";
     const selectionIds = getDragSelectionIds(img);
+    if (wantsDragOut(event) && wantsShareDrag(selectionIds)) {
+      startShareDrag(img, event, selectionIds);
+      return;
+    }
+    dragSource.value = "grid";
     if (selectionIds.length > 1) {
       setDragSourceImageIds(selectionIds);
       setupMultiExportDrag(event, selectionIds);

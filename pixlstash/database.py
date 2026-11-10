@@ -24,6 +24,7 @@ from sqlalchemy import (
     update as sa_update,
     select as sa_select,
 )
+from sqlalchemy.orm.util import identity_key
 from sqlmodel import create_engine, Session
 from fastapi import HTTPException
 from rapidfuzz.distance import Levenshtein
@@ -33,6 +34,7 @@ import numpy as np
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.tag_reset_registry import TagResetRegistry
+from pixlstash.utils.sqlite_uri import sqlite_url
 from pixlstash.utils.unprocessable_image_registry import UnprocessableImageRegistry
 
 # These imports are necessary to register the models with SQLModel
@@ -430,20 +432,64 @@ def _after_flush_layout_marker(session, flush_context) -> None:
                 session.expire(cached, ["layout_check_due_at"])
 
 
+def _before_flush_face_box_tracker(session, flush_context, instances) -> None:
+    """Record pictures whose face boxes changed, so their smart score is redone.
+
+    The smart score's resolution term reads the main face's box
+    (``scoring.smart_score.fetch_main_face_mpx``), and faces are written by face
+    extraction, the model refresh, the face routes and a restore. A sentinel
+    (no box) changes nothing the scorer reads, so it does not count.
+    """
+    dirty_pids: set = session.info.setdefault("_face_box_dirty_pids", set())
+    dirty = session.dirty  # rebuilt on every access; once per flush, not per row
+    for obj in itertools.chain(session.new, dirty, session.deleted):
+        if not isinstance(obj, Face) or obj.picture_id is None:
+            continue
+        if obj in dirty:
+            changed = _attribute_changed(obj, "bbox_")
+        else:
+            changed = obj.bbox_ is not None
+        if changed:
+            dirty_pids.add(obj.picture_id)
+
+
+def _after_flush_smart_score_reset(session, flush_context) -> None:
+    """NULL the tracked pictures' smart score in the same txn; the finder redoes it."""
+    dirty_pids: set = session.info.pop("_face_box_dirty_pids", set())
+    if not dirty_pids:
+        return
+    with session.no_autoflush:
+        # Core UPDATE, as in the hooks above, so the flush cycle is not re-entered.
+        table = Picture.__table__
+        session.execute(
+            sa_update(table)
+            .where(table.c.id.in_(sorted(dirty_pids)))
+            .where(table.c.smart_score.is_not(None))
+            .values(smart_score=None)
+        )
+        for pid in dirty_pids:
+            cached = session.identity_map.get(identity_key(Picture, pid))
+            if cached is not None:
+                session.expire(cached, ["smart_score"])
+
+
 def _attach_session_hooks(session: Session) -> None:
     """Attach per-session before_flush / after_flush event listeners.
 
-    Two pairs: the metadata-hash hooks, and the v1.11 layout tracker. The writer
-    thread runs every task inside a session with these listeners, so any picture
-    mutation (or tag/face mutation that affects a picture) refreshes the
-    ``metadata_hash`` column in the same transaction, and any change to a
-    picture's project / set / person membership stamps it as owing a layout
-    check.
+    Three pairs: the metadata-hash hooks, the v1.11 layout tracker, and the
+    face-box tracker. The writer thread runs every task inside a session with
+    these listeners, so any picture mutation (or tag/face mutation that affects
+    a picture) refreshes the ``metadata_hash`` column in the same transaction,
+    any change to a picture's project / set / person membership stamps it as
+    owing a layout check, and any change to its face boxes clears its smart
+    score.
     """
     event.listen(session, "before_flush", _before_flush_hash_tracker)
     event.listen(session, "after_flush", _after_flush_hash_updater)
     event.listen(session, "before_flush", _before_flush_layout_tracker)
     event.listen(session, "after_flush", _after_flush_layout_marker)
+    event.listen(session, "before_flush", _before_flush_face_box_tracker)
+    event.listen(session, "after_flush", _after_flush_smart_score_reset)
 
 
 class _EngineRWLock:
@@ -913,7 +959,7 @@ def create_configured_engine(
         A configured SQLAlchemy ``Engine``.
     """
     engine = create_engine(
-        f"sqlite:///{db_path}",
+        sqlite_url(db_path),
         echo=echo,
         connect_args={"timeout": SQLITE_BUSY_TIMEOUT_S},
     )
@@ -962,7 +1008,7 @@ def _run_migrations(connection, db_path: str, db_exists: bool) -> None:
 
     config = Config(str(alembic_ini))
     config.set_main_option("script_location", str(migrations_dir))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    config.attributes["sqlalchemy_url"] = sqlite_url(db_path)
     # The registered-library opener has already validated this exact
     # connection. Alembic must use it rather than reopening the path and giving
     # a replacement database migration authority.

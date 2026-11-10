@@ -473,6 +473,11 @@ def test_the_idle_sweep_releases_the_models_only_when_progress_is_polled(env):
             time.time() - vault.AGGRESSIVE_UNLOAD_INTERVAL - 1
         )
         vault.get_worker_progress()
+        # Queued on the GPU worker rather than run on the polling thread: on
+        # Metal the flush at its end crashes beside a running model (#1775).
+        deadline = time.monotonic() + 10
+        while tagger.is_loaded() and time.monotonic() < deadline:
+            time.sleep(0.05)
         assert not tagger.is_loaded(), f"{active} survived the idle sweep"
         assert not vault._engine.clip_service.is_loaded()
         assert FaceExtractionTask._global_insightface_app is None

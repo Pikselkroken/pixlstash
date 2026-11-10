@@ -25,7 +25,7 @@ async function mintLibraryReadToken(apiContext) {
 }
 
 test.describe('read-only session: owner-only features stay visible', () => {
-  test('shows Undo and Duplicates as inert rather than hiding them', async ({
+  test('shows Duplicates and Models as inert rather than hiding them', async ({
     browser,
     apiContext,
     baseURL,
@@ -59,25 +59,13 @@ test.describe('read-only session: owner-only features stay visible', () => {
     try {
       await page.goto(`/?token=${encodeURIComponent(token)}`)
 
-      // ── Undo: mounted, inert, and it says why ──────────────────────────
-      const undo = page.locator('.uc-btn--undo')
-      await expect(undo).toBeVisible({ timeout: 15_000 })
-      await expect(undo).toHaveAttribute('aria-disabled', 'true')
-      // Icon-only, so the reason is the control's name: one string for the
-      // tooltip and the accessible name (buttons.md, "Tooltips").
-      await expect(undo).toHaveAttribute(
-        'aria-label',
-        'Undo is only available in your own library',
-      )
-      // `aria-disabled`, not the native attribute: the control stays tabbable
-      // so a keyboard user reaches the explanation too.
-      await expect(undo).not.toHaveAttribute('disabled', /.*/)
-
+      // Every screen's toolbar carries the undo control; the inert-but-visible
+      // case is checked at Duplicates.
       // ── Duplicates: a visible destination that does not navigate ───────
       const duplicates = page
         .locator('.sidebar-list-item', { hasText: 'Duplicates' })
         .first()
-      await expect(duplicates).toBeVisible()
+      await expect(duplicates).toBeVisible({ timeout: 15_000 })
       await expect(duplicates).toHaveAttribute('aria-disabled', 'true')
       // A labelled row keeps its name; the reason is its tooltip, exposed to
       // assistive tech as the row's accessible description (aria-describedby,
@@ -100,9 +88,10 @@ test.describe('read-only session: owner-only features stay visible', () => {
       expect(new URL(page.url()).pathname).not.toContain('duplicates')
 
       // ── Models: the shelf is a third such destination (#1014) ──────────
+      // A workspace on the title bar's switch now (#2158), not a sidebar row.
       const models = page
-        .locator('.sidebar-list-item', { hasText: 'Models' })
-        .first()
+        .getByRole('navigation', { name: 'Workspace' })
+        .getByRole('button', { name: 'Models' })
       await expect(models).toBeVisible()
       await expect(models).toHaveAttribute('aria-disabled', 'true')
       await expect(models).toHaveAccessibleDescription(
@@ -135,6 +124,71 @@ test.describe('read-only session: owner-only features stay visible', () => {
 
       // ── None of the three woke the owner-only API ──────────────────────
       expect(forbidden).toEqual([])
+    } finally {
+      await context.close()
+    }
+  })
+
+  // The workflow library is the Models case again (#2319): every /workflows
+  // route is OWNER_ONLY, so the whole screen is the owner-only action. Its
+  // verbs (delete, rename, Save, Run, download missing) are never drawn for a
+  // READ session, because the screen that holds them is never mounted; what
+  // stays visible and explains itself is the workspace segment.
+  test('shows Workflows as inert, and the owner session still reaches it', async ({
+    browser,
+    apiContext,
+    baseURL,
+    page: ownerPage,
+  }) => {
+    // The positive control first: the owner's own session goes there, so the
+    // refusal below is the token's and not a broken route.
+    await ownerPage.goto('/')
+    const ownerWorkflows = ownerPage
+      .getByRole('navigation', { name: 'Workspace' })
+      .getByRole('link', { name: 'Workflows' })
+    await ownerWorkflows.click()
+    await ownerPage.waitForURL((u) => new URL(u).pathname === '/workflows')
+    await expect(ownerPage.getByRole('region', { name: 'Workflows' })).toBeVisible()
+
+    const token = await mintLibraryReadToken(apiContext)
+    const context = await browser.newContext({ baseURL, storageState: undefined })
+    const page = await context.newPage()
+
+    const workflowCalls = []
+    page.on('request', (req) => {
+      const path = new URL(req.url()).pathname
+      if (path.startsWith('/api/v1/workflows')) workflowCalls.push(path)
+    })
+    const visited = []
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) visited.push(new URL(frame.url()).pathname)
+    })
+
+    try {
+      await page.goto(`/?token=${encodeURIComponent(token)}`)
+      // What a READ session can do still works: the library's pictures.
+      await expect(page.locator('.thumbnail-card').first()).toBeVisible({
+        timeout: 15_000,
+      })
+
+      const workspaces = page.getByRole('navigation', { name: 'Workspace' })
+      const workflows = workspaces.getByRole('button', { name: 'Workflows' })
+      await expect(workflows).toBeVisible()
+      await expect(workflows).toHaveAttribute('aria-disabled', 'true')
+      await expect(workflows).toHaveAccessibleDescription(
+        'The workflow library is only available in your own library',
+      )
+      await expect(workflows).toBeDisabled()
+      await expect(workflows).not.toHaveAttribute('disabled', /.*/)
+
+      // `force` for the reason given for Models above: the press must reach
+      // the segment, and navigate nowhere.
+      await workflows.click({ force: true })
+      await page.waitForTimeout(500)
+      expect(visited).not.toContain('/workflows')
+      // The open segment beside it is a positive control in the same bar.
+      await expect(workspaces.getByRole('link', { name: 'Media' })).toBeVisible()
+      expect(workflowCalls).toEqual([])
     } finally {
       await context.close()
     }
@@ -205,6 +259,44 @@ test.describe('read-only session: owner-only features stay visible', () => {
       expect(url.searchParams.get('token')).toBe(token)
       // …and asked the shelf for nothing on the way through.
       expect(shelfCalls).toEqual([])
+    } finally {
+      await context.close()
+    }
+  })
+
+  // A pasted workflow link, deep link and all, bounces the same way: the
+  // selection, the rail and Edit LoRAs it asks for are all owner-only reads.
+  test('bounces a Workflows deep link when it is reached by URL', async ({
+    browser,
+    apiContext,
+    baseURL,
+  }) => {
+    const token = await mintLibraryReadToken(apiContext)
+    const context = await browser.newContext({ baseURL, storageState: undefined })
+    const page = await context.newPage()
+
+    const workflowCalls = []
+    page.on('request', (req) => {
+      const path = new URL(req.url()).pathname
+      if (path.startsWith('/api/v1/workflows')) workflowCalls.push(path)
+    })
+
+    try {
+      const link = new URLSearchParams({
+        workflow: `auto:${'a'.repeat(64)}`,
+        edit: 'loras',
+        token,
+      })
+      await page.goto(`/workflows?${link}`)
+
+      await page.waitForURL((u) => new URL(u).pathname === '/', {
+        timeout: 15_000,
+      })
+      await expect(page.locator('.thumbnail-card').first()).toBeVisible()
+      expect(new URL(page.url()).searchParams.get('token')).toBe(token)
+      await expect(page.getByRole('region', { name: 'Workflows' })).toHaveCount(0)
+      await expect(page.getByRole('dialog', { name: 'Edit LoRAs' })).toHaveCount(0)
+      expect(workflowCalls).toEqual([])
     } finally {
       await context.close()
     }

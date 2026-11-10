@@ -18,6 +18,10 @@ on:
         default: false
 
 env:
+  # Every PixlStash this workflow boots reports itself as ours, never as a real
+  # install (Server.DEV_MACHINE_ENV_VAR; guarded by tests/test_install_type_buckets.py).
+  PIXLSTASH_TELEMETRY_DEV: '1'
+
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   # The source to build: the release_tag input on a rebuild (see
@@ -40,6 +44,8 @@ jobs:
         with:
           ref: ${{ env.SOURCE_REF }}
           persist-credentials: false
+          # The image carries the ComfyUI-PixlStash nodes from the submodule.
+          submodules: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -167,7 +173,15 @@ jobs:
           tags: ${{ steps.push-tags-cpu.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=cpu
-          cache-to: type=gha,scope=cpu,mode=max
+          # No cache write from a tag push. A cache saved there is scoped to
+          # that tag's ref, which no later run can restore (a run reads its own
+          # ref, its PR's base branch and the default branch), so it is dead on
+          # arrival while still counting against the repo's 10 GB Actions
+          # cache. v2.0.0rc3's GPU write alone was 4.66 GB, and develop's Linux
+          # model cache was LRU-evicted behind it, sending every PR's backend
+          # shards in cold. Dispatches (rebuild-release.yml, from main) still
+          # write, to main, where every later run can read it.
+          cache-to: ${{ github.ref_type != 'tag' && 'type=gha,scope=cpu,mode=max' || '' }}
 
   build-gpu:
     name: Build GPU image (NVIDIA CUDA)
@@ -182,6 +196,8 @@ jobs:
         with:
           ref: ${{ env.SOURCE_REF }}
           persist-credentials: false
+          # The image carries the ComfyUI-PixlStash nodes from the submodule.
+          submodules: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -309,4 +325,5 @@ jobs:
           tags: ${{ steps.push-tags-gpu.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=gpu
-          cache-to: type=gha,scope=gpu,mode=max
+          # Never from a tag push; see the CPU build above.
+          cache-to: ${{ github.ref_type != 'tag' && 'type=gha,scope=gpu,mode=max' || '' }}

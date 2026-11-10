@@ -1,4 +1,4 @@
-// Settings › Libraries.
+// Settings › Libraries & imports.
 //
 // The behaviours worth pinning are the ones a user would only discover by
 // hitting them: that a remote session is told why it cannot manage libraries

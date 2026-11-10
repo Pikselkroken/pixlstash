@@ -205,7 +205,7 @@ export function deriveModelName(filename) {
  *
  * **The display copy lives here and not in the API**, the way slot kinds
  * already do: the backend serves the id, one map turns it into words, and the
- * shelf row, the workflow card, its ⓘ list and the recipe overlay all read the
+ * shelf row, the workflow card, its ⓘ list and the lightbox's recipe all read the
  * same one rather than each inventing a spelling.
  *
  * `fp8_e4m3` and `fp8_e5m2` deliberately share the label `FP8`: the variant is
@@ -363,6 +363,8 @@ export const SORT_LABELS = {
   name: { label: "Name", icon: "mdi-sort-alphabetical-variant" },
   size: { label: "Size", icon: "mdi-harddisk" },
   base_model: { label: "Base model", icon: "mdi-cube-outline" },
+  type: { label: "Type", icon: "mdi-shape-outline" },
+  sets: { label: "Sets", icon: "mdi-view-grid-outline" },
 };
 
 /**
@@ -451,7 +453,9 @@ const DIRECTION_WORDS = {
   file_mtime: ["Oldest first", "Newest first"],
   name: ["A to Z", "Z to A"],
   base_model: ["A to Z", "Z to A"],
+  type: ["A to Z", "Z to A"],
   size: ["Smallest first", "Largest first"],
+  sets: ["Fewest first", "Most first"],
 };
 
 /**
@@ -480,7 +484,9 @@ export function sortDirectionLabel(key, direction) {
  * @returns {"asc"|"desc"}
  */
 export function defaultSortDirection(key) {
-  return key === "name" || key === "base_model" ? "asc" : "desc";
+  return key === "name" || key === "base_model" || key === "type"
+    ? "asc"
+    : "desc";
 }
 
 /** What each grouping axis is called, and the glyph that stands for it. */
@@ -489,8 +495,9 @@ export const GROUP_BY_LABELS = {
   // The one axis whose groups OVERLAP, and so the one that is a grid rather
   // than a band: a VAE belongs to every set it has run in (#1438).
   workflow_set: { label: "Workflow set", icon: "mdi-view-grid-outline" },
+  // The sidebar's Type rows as bands (#2168): All models' default.
+  type: { label: "Type", icon: "mdi-shape-outline" },
   base_model: { label: "Base model", icon: "mdi-cube-outline" },
-  folder: { label: "Folder", icon: "mdi-folder-outline" },
   feature: { label: "Feature", icon: "mdi-star-four-points-outline" },
 };
 
@@ -570,6 +577,89 @@ export function fileKindLabel(fileKind) {
 }
 
 /**
+ * The Models sidebar's Type rows (#2168), in the order the design lists them.
+ *
+ * `mark` is the letter the row, the list and a set card's member chips draw a
+ * model under; `tint` names the colour role it is painted in (checkpoints in
+ * the teal `tertiary`, LoRAs in the raspberry `secondary`, the support files in
+ * one neutral), so the three surfaces cannot disagree about what a C means.
+ */
+export const SHELF_TYPES = [
+  { key: "checkpoint", label: "Checkpoints", one: "Checkpoint", mark: "C", tint: "tertiary" },
+  { key: "lora", label: "LoRAs", one: "LoRA", mark: "L", tint: "secondary" },
+  { key: "vae", label: "VAEs", one: "VAE", mark: "V", tint: "neutral" },
+  { key: "text_encoder", label: "Text encoders", one: "Text encoder", mark: "T", tint: "neutral" },
+  { key: "upscaler", label: "Upscalers", one: "Upscaler", mark: "U", tint: "neutral" },
+  { key: "controlnet", label: "ControlNets", one: "ControlNet", mark: "N", tint: "neutral" },
+];
+
+/**
+ * Which Type row a shelf row sits under, or `""` for none.
+ *
+ * Every adapter algorithm is a LoRA here (LoKr, LoHa and DoRA are LoRA
+ * variants a reader looks for under that word); an engine or an unclassified
+ * file sits under no Type row and is still listed in All models.
+ *
+ * @param {{file_kind?: string}} row
+ * @returns {string} a {@link SHELF_TYPES} key, or `""`.
+ */
+export function shelfTypeOf(row) {
+  const kind = String(row?.file_kind || "");
+  if (kind === "adapter") return "lora";
+  return SHELF_TYPES.some((type) => type.key === kind) ? kind : "";
+}
+
+/**
+ * The always-present anchor of the metadata line, whatever else is null.
+ *
+ * A model that serves several features lists them ALL, because a single label
+ * answers "what breaks if I delete this" wrongly for exactly the rows a reader
+ * is most likely to be deciding about: Florence-2 captions and detects, and the
+ * CLIP the embedder loads is both the search encoder and the aesthetic scorer's
+ * backbone. `capabilities` arrives primary-first, so the first word is the one
+ * `row.kind` holds and the column still reads as one thing at a glance.
+ */
+function kindLabel(row) {
+  // One table with the `feature` group axis, which names its headings from the
+  // same one - the cell reading `Checkpoint` under a header saying something
+  // else is the contradiction that table exists to prevent.
+  const named = fileKindLabel(row.file_kind);
+  if (named) return named;
+  const capabilities = Array.isArray(row.capabilities) ? row.capabilities : [];
+  if (capabilities.length) return capabilities.map(capabilityLabel).join(", ");
+  // The axis still files `unknown` under `Other` where the cell says
+  // "Unclassified": a shrug is not a heading of its own. The CELL always names
+  // what the row is.
+  return adapterKindLabel(row.kind) || "Adapter";
+}
+
+/**
+ * The Type cell's words: the Type row's singular, or the kind label where there
+ * is none. The Type sort orders on the same words.
+ *
+ * @param {Object} row - a shelf row.
+ * @returns {string}
+ */
+export function shelfTypeLabel(row) {
+  return (
+    SHELF_TYPES.find((type) => type.key === shelfTypeOf(row))?.one ??
+    kindLabel(row)
+  );
+}
+
+/**
+ * The Type letter and tint a row is drawn under (`TypeMark`'s props), or a
+ * neutral "?" for a file no Type row takes.
+ *
+ * @param {{file_kind?: string}} row
+ * @returns {{mark: string, tint: string}}
+ */
+export function shelfTypeMark(row) {
+  const type = SHELF_TYPES.find((one) => one.key === shelfTypeOf(row));
+  return type ? { mark: type.mark, tint: type.tint } : { mark: "?", tint: "neutral" };
+}
+
+/**
  * Look a free-text value up in a label table, falling through to itself.
  *
  * `Object.hasOwn` rather than a plain index, because both tables are keyed by
@@ -646,7 +736,7 @@ export function adapterKindLabel(kind) {
  *
  * Not a new icon family. Where the product already marks a feature, that mark
  * is the one used here and it is not re-drawn somewhere else: the face from
- * `ImageOverlay` and the toolbar, the SHAPE from the same two - it is what
+ * `Lightbox` and the toolbar, the SHAPE from the same two - it is what
  * "Object boxes" and "Detect objects" wear, so `detector` takes it and the
  * catch-all does not - the tag, the star and the caption box from the operation
  * log's icon rules. The two features nothing else in the app marks take glyphs
@@ -745,54 +835,6 @@ export function compareGroups(a, b) {
 }
 
 /**
- * Add a group for every registered folder that has none.
- *
- * Groups are built from `model_file` rows, so a folder holding nothing produces
- * no group at all - and the managed store holds nothing on every fresh install,
- * despite being the ruled default destination for a drop or an import. A
- * destination you cannot see is not a destination.
- *
- * The empty group carries `emptyReason`, because "registered and empty" and
- * "never scanned" are different facts and only one of them is the owner's to
- * act on. `last_checked` is the discriminator for that pair rather than a zero
- * count: a folder that has never been walked has no count to be zero.
- *
- * `file_count` decides something else - whether the folder is empty at all.
- * Absence from `groups` cannot answer that, because `groups` is built from the
- * visible rows and a filter can empty a folder that is full.
- *
- * @param {Array<Object>} groups - the folder groups the rows produced.
- * @param {Array<Object>} folders - rows from `GET /model-folders`.
- * @returns {Array<Object>} groups plus the empties, in one sorted run.
- */
-export function withEmptyFolders(groups, folders) {
-  const held = new Set(groups.map((group) => group.key));
-  const empties = [];
-  for (const folder of folders || []) {
-    const key = String(folder.path || folder.id || "");
-    if (!key || held.has(key)) continue;
-    // "Has no group" is NOT "is empty". `groups` is built from the VISIBLE
-    // rows, so a folder full of adapters has no group at all while Show is
-    // narrowed to checkpoints - and calling that folder empty would be a plain
-    // lie about the disk. The registry knows better: `file_count` counts the
-    // copies registered under the folder in any state, so a folder that holds
-    // something is skipped and simply stays absent from a filtered view, which
-    // is what every other filtered-out row does.
-    const unscanned = !folder.last_checked;
-    if (!unscanned && Number(folder.file_count) > 0) continue;
-    empties.push({
-      key,
-      label: key,
-      labelKind: "path",
-      folderId: Number(folder.id),
-      emptyReason: unscanned ? "unscanned" : "empty",
-      rows: [],
-    });
-  }
-  return empties.length ? [...groups, ...empties].sort(compareGroups) : groups;
-}
-
-/**
  * The base model a row should be GROUPED, FILTERED and FACETED by.
  *
  * `base_model_canonical` when the server identified one - from what the file
@@ -832,8 +874,9 @@ const GUESSED_BASE_SOURCES = new Set([
  * read from, for the tag's tooltip.
  *
  * @param {Object} row - a row from `/adapters` or `/checkpoints`.
- * @returns {{text: string, guess: string|null}} `text` is `""` when nothing
- *   is recorded; `guess` is the tooltip copy for a guessed value, else null.
+ * @returns {{text: string, guess: string|null, note?: string}} `text` is `""`
+ *   when nothing is recorded; `guess` is the tooltip copy for a guessed value,
+ *   else null; `note` says a value came from Civitai, which is not a guess.
  */
 export function baseModelCell(row) {
   const canonical = row?.base_model_canonical || "";
@@ -846,411 +889,48 @@ export function baseModelCell(row) {
         : "Guessed from the filename. Nothing in the file says this.";
     return {
       text: canonical,
-      guess: `${how} Double-click or press Shift+F2 to correct it.`,
+      guess: `${how} Click to confirm it; double-click the label or press Shift+F2 to correct it.`,
+    };
+  }
+  if (source === "civitai") {
+    return {
+      text: row?.base_model || canonical,
+      guess: null,
+      note: "From Civitai, matched by file hash. Double-click or press Shift+F2 to correct it.",
     };
   }
   return { text: row?.base_model || canonical, guess: null };
 }
 
-/** What each folder layout is called, and the glyph that stands for it. */
-export const FOLDER_LAYOUT_LABELS = {
-  drive: { label: "Drive, then folder", icon: "mdi-harddisk" },
-  alpha: { label: "Folder, A to Z", icon: "mdi-sort-alphabetical-variant" },
-};
+/** How many models one Civitai lookup may ask about; the route's own cap. */
+export const MAX_BASE_MODEL_LOOKUP = 100;
 
 /**
- * What each folder tier is marked with, in ONE icon family.
+ * Whether Look up base model on Civitai would ask about this model.
  *
- * These glyphs started in the old model-folders dialog, which shared this map
- * with the shelf header: two copies of the map would be two vocabularies for
- * one fact. Settings › Models now draws no glyph, so the header is its reader. Nothing here is
- * hand-drawn - the header used to have no tier mark at all, and the mock that
- * proposed one built a folder out of a div and a `::before` tab, which is a
- * second icon family by construction.
+ * Mirrors the server's eligibility, which stays the authority: an adapter or
+ * checkpoint, hashed, with no base model, that the owner has not cleared
+ * (a cleared base model is null with source `user`) and whose header does not
+ * already name one (source `declared`, which outranks Civitai).
  *
- * `chip` is the WORD the tier is stated in, and it is what makes the tier
- * survive greyscale together with the glyph's shape. `user` has none: a folder
- * the owner registered is the unmarked case, and chipping every header would
- * make the two that matter invisible among them.
+ * @param {Object} row - a model row from `/adapters` or `/checkpoints`.
+ * @returns {boolean}
  */
-export const FOLDER_TIERS = {
-  managed: {
-    icon: "mdi-folder-home-outline",
-    chip: "Managed",
-    note: "PixlStash keeps its own models here.",
-  },
-  // The only kind the owner can neither scan nor forget, so it is the only one
-  // that gets the lock - the same rule the folders dialog's glyph column uses.
-  foreign: {
-    icon: "mdi-folder-lock-outline",
-    chip: "Locked",
-    note: "Owned by another tool. PixlStash reads it and never writes to it.",
-  },
-  source: {
-    icon: "mdi-folder-cog-outline",
-    chip: "ai-toolkit",
-    note: "Training output. Models are imported from here, not catalogued in place.",
-  },
-  // A tray, not a folder: nothing is listed from it. Models saved here are
-  // moved to the default folder, so it never heads a group of rows itself.
-  downloads: {
-    icon: "mdi-tray-arrow-down",
-    chip: "Downloads",
-    note: "New models saved here move to the default folder.",
-  },
-  user: { icon: "mdi-folder-outline", chip: "", note: "" },
-};
-
-/** The glyph a folder whose drive is not plugged in wears, instead of its tier's. */
-const OFFLINE_ICON = "mdi-lan-disconnect";
+export function lookupEligible(row) {
+  return (
+    (row?.file_kind === "adapter" || row?.file_kind === "checkpoint") &&
+    Boolean(row.sha256) &&
+    row.base_model == null &&
+    row.base_model_source !== "user" &&
+    row.base_model_source !== "declared"
+  );
+}
 
 // The rail keeps its palette entry's HUE and pins saturation and lightness, the
 // same renormalisation `markBackground` does and for the same reason: a colour
 // picked for identity is not automatically a colour that reads as a 3px line.
 // Mid lightness rather than the mark's 30%, because this line sits on the
 // canvas in BOTH themes and nothing is ever written on it.
-const RAIL_SATURATION = 60;
-const RAIL_LIGHTNESS = 50;
-
-/**
- * The rail colour a drive gets, by its position in the drive order.
- *
- * A grouping hint and never the identity: the chip (or the band above) names
- * the volume, and the palette repeats after 48 drives. `SET_COLORS` is
- * deliberately interleaved so neighbouring indices are far apart in hue, which
- * is what makes "these two folders are on one disk" readable at a glance.
- *
- * @param {number} index - position in the drive order.
- * @returns {string} an `hsl()` colour.
- */
-export function driveRailColor(index) {
-  const entry = SET_COLORS[index % SET_COLORS.length].value;
-  return `hsl(${hueOf(entry)} ${RAIL_SATURATION}% ${RAIL_LIGHTNESS}%)`;
-}
-
-/**
- * True when `path` sits inside `parent`, one registered folder inside another.
- *
- * String comparison on a separator boundary, which is what keeps `/models` from
- * swallowing `/models-old`. Both separators, because a registry written on
- * Windows holds backslashes.
- */
-function isInside(path, parent) {
-  if (!path || !parent || path === parent) return false;
-  const head = parent.replace(/[/\\]+$/, "");
-  const rest = path.slice(head.length);
-  return path.startsWith(head) && /^[/\\]/.test(rest);
-}
-
-/**
- * Tell each folder header what drive it is on, what tier it is and whether it
- * can be reached (#899).
- *
- * A header used to carry a path and a count and nothing else, so the answer to
- * "which disk is this on", "is this one PixlStash writes to" and "is this drive
- * even plugged in" lived only in the folders dialog. All three are properties
- * of the folder registry, which the shelf already holds; none of them needed a
- * request.
- *
- * **Every distinction here survives greyscale.** The drive is a hue on the rail
- * AND a chip that names the volume; the tier is a glyph shape AND a word; the
- * offline state is a DASHED rail and muted ink - never the error colour, for
- * the reason the offline row treatment is not the error colour either. Nothing
- * is carried by hue alone.
- *
- * Drives are numbered in a stable order (by device id) rather than by the order
- * the groups happen to arrive in, or plugging a disk in would repaint every
- * other folder's rail. A folder whose drive could not be measured gets NO rail
- * colour: we do not know what disk it is on, and inventing a colour for it
- * would claim a grouping nothing measured.
- *
- * @param {Array<Object>} groups - folder groups, each carrying `folderId`.
- * @param {Object} context
- * @param {Array<Object>} context.folders - rows from `GET /model-folders`.
- * @param {Map<number, Object>} [context.deviceByFolderId] - from the folder store.
- * @param {Set<number>} [context.offlineFolderIds] - folders wholly out of reach.
- * @returns {Array<Object>} the same groups, each with `tier`, `icon`, `chip`,
- *   `drive` (`{label, rail}` or null), `offline` and `nested`.
- */
-export function withFolderSignals(
-  groups,
-  { folders = [], deviceByFolderId = null, offlineFolderIds = null } = {},
-) {
-  const byId = new Map(
-    (folders || []).map((folder) => [Number(folder.id), folder]),
-  );
-  const paths = (folders || []).map((folder) => String(folder.path || ""));
-  // Drive order, fixed before anything is drawn. Sorted by device id so it is
-  // the same on every render and the same for every reader.
-  const driveIndex = new Map(
-    [
-      ...new Set(
-        [...(deviceByFolderId?.values?.() || [])]
-          .map((device) => device?.device_id)
-          .filter(Boolean)
-          .map(String),
-      ),
-    ]
-      .sort()
-      .map((id, index) => [id, index]),
-  );
-  return (groups || []).map((group) => {
-    const folderId = Number(group.folderId);
-    const folder = Number.isInteger(folderId) ? byId.get(folderId) : null;
-    const device = Number.isInteger(folderId)
-      ? deviceByFolderId?.get?.(folderId) || null
-      : null;
-    const tier = FOLDER_TIERS[folder?.kind] ? folder.kind : "user";
-    const offline = Boolean(offlineFolderIds?.has?.(folderId));
-    const deviceId = device?.device_id ? String(device.device_id) : "";
-    return {
-      ...group,
-      tier: folder ? tier : null,
-      icon: offline ? OFFLINE_ICON : FOLDER_TIERS[tier].icon,
-      chip: folder ? FOLDER_TIERS[tier].chip : "",
-      note: folder ? FOLDER_TIERS[tier].note : "",
-      drive: deviceId
-        ? {
-            label: device.label || device.mount_point || "",
-            rail: driveRailColor(driveIndex.get(deviceId) ?? 0),
-          }
-        : null,
-      offline,
-      // One level, never two: nesting here says "this folder lives inside
-      // another registered one", which is a yes or a no. A registry three deep
-      // would otherwise walk the headers off the left edge of the panel.
-      nested: paths.some((other) =>
-        isInside(String(folder?.path || ""), other),
-      ),
-    };
-  });
-}
-
-/**
- * Arrange folder groups into drive bands.
- *
- * Two levels, which is what the plan allows and no more: the band is the drive
- * and the header under it is the folder. Groups are RE-ORDERED so a band's
- * folders are contiguous - a band drawn over a non-contiguous run would claim
- * a grouping the list does not have - and each group is tagged with the band it
- * opens, so the caller draws a band header exactly when `bandStart` is set
- * rather than nesting the markup.
- *
- * A folder whose drive could not be measured still gets a band of its own,
- * labelled with its own path: an unplugged drive has to keep somewhere to sit,
- * and merging two unmeasurable folders would assert a sameness nothing
- * measured. Those bands sort last, because a drive we cannot read is not the
- * one the reader is scanning for space on.
- *
- * @param {Array<Object>} groups - folder groups, each carrying `folderId`.
- * @param {Map<number, Object>} deviceByFolderId - from `useModelFoldersStore`.
- * @returns {Array<Object>} the same groups, reordered, each with `band` and
- *   `bandStart` (true on the first group of each band).
- */
-/**
- * The band a folder belongs to.
- *
- * The drive when one was measured, the folder itself when none was - the same
- * rule {@link bandGroups} keys on, exported so a caller asking "is this copy
- * already on that drive?" cannot answer it with a second, drifting copy of the
- * rule.
- *
- * @param {number} folderId - `model_folder.id`.
- * @param {Map<number, Object>} deviceByFolderId - from `useModelFoldersStore`.
- * @returns {string} the band key.
- */
-export function bandKeyFor(folderId, deviceByFolderId) {
-  const device = deviceByFolderId?.get?.(Number(folderId)) || null;
-  return device?.device_id ? `d:${device.device_id}` : `f:${Number(folderId)}`;
-}
-
-export function bandGroups(groups, deviceByFolderId) {
-  const byBand = new Map();
-  // Not every folder group names a folder. A model whose folders have all been
-  // forgotten falls into "No registered copy", which has no `folderId` and is
-  // not on a drive at all - banding it would put a disk glyph and a capacity
-  // line over the one group that exists precisely because there is no disk.
-  // It stays unbanded and sorts last, the same place `compareGroups` already
-  // puts the absence of a value.
-  const unbanded = groups.filter((group) => !Number.isInteger(group.folderId));
-  for (const group of groups) {
-    if (!Number.isInteger(group.folderId)) continue;
-    const folderId = Number(group.folderId);
-    const device = deviceByFolderId?.get?.(folderId) || null;
-    // Unmeasured folders band alone, keyed by folder rather than by device.
-    const key = bandKeyFor(folderId, deviceByFolderId);
-    let band = byBand.get(key);
-    if (!band) {
-      band = {
-        key,
-        // The volume's name if it has one, else where it is mounted. A Linux
-        // mount point runs to `/media/<user>/A1B2C3D4E5F60789` and crowds the
-        // header out; the precise string stays available as the tooltip.
-        label: device?.label || device?.mount_point || group.label,
-        mountPoint: device?.mount_point || group.label,
-        // `local`, `network`, `removable`, `ramdisk` - or null, which is the
-        // answer on macOS and for any filesystem the backend will not classify.
-        // Null is normal and draws the plain disk glyph; see `device_kind`.
-        kind: device?.kind || null,
-        measured: Boolean(device?.device_id),
-        totalBytes: device?.total_bytes ?? null,
-        freeBytes: device?.free_bytes ?? null,
-        shelfBytes: device?.shelf_bytes ?? null,
-        groups: [],
-      };
-      byBand.set(key, band);
-    }
-    band.groups.push(group);
-  }
-  const bands = [...byBand.values()].sort((a, b) => {
-    if (a.measured !== b.measured) return a.measured ? -1 : 1;
-    return a.label.localeCompare(b.label, undefined, {
-      numeric: true,
-      sensitivity: "base",
-    });
-  });
-  const arranged = [];
-  for (const band of bands) {
-    band.groups.forEach((group, index) => {
-      arranged.push({ ...group, band, bandStart: index === 0 });
-    });
-  }
-  // `band: null` rather than a band of their own: the caller draws a header
-  // only where `bandStart` is set, so these render as bare folder groups.
-  for (const group of unbanded) {
-    arranged.push({ ...group, band: null, bandStart: false });
-  }
-  return arranged;
-}
-
-/**
- * When a drive is close enough to full to say so.
- *
- * Bytes, not a proportion, because the question the band answers is "does the
- * next checkpoint fit" and that is answered in bytes. A full SDXL or Flux
- * checkpoint is 6–24 GB, so 50 GiB is two or three more files: close enough to
- * warn, far enough not to nag.
- *
- * A percentage is wrong in both directions on exactly the hardware this
- * feature targets. Ten per cent of a 4 TB model drive is 400 GB, which is not a
- * problem and would cry wolf on the drive people actually keep models on; ten
- * per cent of a 256 GB SSD is 25 GB, which IS a problem - but so is 60 GB free
- * on that same disk, and the fraction calls that fine.
- */
-const LOW_FREE_BYTES = 50 * 1024 ** 3;
-
-/**
- * How a drive's space divides into the three things a reader asks about.
- *
- * The meter answers two questions at once - "how full is this disk" and "how
- * much of that is us" - and it can only answer the second if the shelf's share
- * is drawn as its OWN segment rather than as a fill overlaid on the used one.
- * Overlaying was the original shape and it made the two questions the same
- * pixel: a reader could see one boundary and had no way to know which of the
- * two it marked.
- *
- * The three add to exactly 100 by construction (`shelf + (used - shelf) + free
- * === total`), which is what lets the caller lay them out in a row without a
- * rounding sliver opening at the right-hand end. That identity is the whole
- * reason the segments need no per-segment clamp, so BOTH inputs are clamped
- * into range before it is relied on:
- *
- *   * `free` to `total`, because the two are separate reads of the device and
- *     a filesystem can genuinely report more free than it holds - thin
- *     provisioning and transparent compression (ZFS, btrfs) do it by design,
- *     and a network mount's `statvfs` can simply be wrong. Unclamped that
- *     yields `freePct > 100` and a segment running off the end of the track.
- *   * `shelf` to `used`, because `shelf_bytes` is counted from the hub and the
- *     capacity from the disk, so a scan mid-flight can briefly make the first
- *     exceed the second.
- *
- * Returns `null` when the drive could not be measured, which the caller must
- * draw as "unknown" rather than as an empty bar: an empty bar reads as a drive
- * with nothing on it.
- *
- * @param {Object} band - a band from {@link bandGroups}.
- * @returns {{shelfPct: number, otherPct: number, freePct: number,
- *   usedPct: number, lowFree: boolean}|null}
- */
-export function bandUsage(band) {
-  const total = Number(band?.totalBytes);
-  const reportedFree = Number(band?.freeBytes);
-  if (!Number.isFinite(total) || total <= 0) return null;
-  if (!Number.isFinite(reportedFree) || reportedFree < 0) return null;
-  const free = Math.min(reportedFree, total);
-  const used = total - free;
-  const shelf = Math.max(0, Math.min(used, Number(band?.shelfBytes) || 0));
-  return {
-    shelfPct: (shelf / total) * 100,
-    otherPct: ((used - shelf) / total) * 100,
-    freePct: (free / total) * 100,
-    usedPct: (used / total) * 100,
-    lowFree: free < LOW_FREE_BYTES,
-  };
-}
-
-/**
- * What a drive would hold after a drop, and whether the drop fits.
- *
- * The meter is the drop target (#894), so the consequence has to be drawable
- * *before* the pointer is released - which means a fourth segment carved out of
- * the free one rather than a fifth number in the label. `freePct` is therefore
- * already reduced by the projection and the four still sum to exactly 100, so
- * the caller lays them out in the same flex row with no rounding sliver at the
- * right-hand end and needs no per-segment clamp. That is the whole reason this
- * returns a REPLACEMENT for `bandUsage`'s object rather than something to draw
- * alongside it.
- *
- * `added` is clamped into the free space for the SEGMENT, because a bar cannot
- * draw past its own track; `fits` is decided on the unclamped figure, so the
- * over-full case is a full-width hatch in the error treatment and not a bar
- * that quietly stops looking wrong at 100%. `freeAfter` goes negative in that
- * case, which is how far short the drive is.
- *
- * **Every** derived field is projected, not just the segments. `usedPct` and
- * `lowFree` are recomputed from the free space that would be LEFT, because a
- * replacement carrying two fields measured before the drop is a trap: they sit
- * on the same object as segments drawn from after it, and the first caller to
- * read `meter(band).lowFree` next to a projected bar gets an answer about a
- * different drive state than the one on screen. Nothing reads them off this
- * object today - the band's low treatment deliberately goes through `bandUsage`
- * - and that is exactly why the inconsistency would be found late.
- *
- * A drive that could not be measured returns `null`, exactly as `bandUsage`
- * does: a projection onto an unknown capacity is a guess, and the caller must
- * read that as "cannot say" rather than as "does not fit".
- *
- * @param {Object} band - a band from {@link bandGroups}.
- * @param {number} addedBytes - bytes the drop would ADD to this drive. Copies
- *   already on it are renames and add nothing, so the caller nets them out.
- * @returns {{shelfPct: number, otherPct: number, addedPct: number,
- *   freePct: number, usedPct: number, lowFree: boolean, addedBytes: number,
- *   freeAfter: number, fits: boolean}|null}
- */
-export function bandProjection(band, addedBytes) {
-  const use = bandUsage(band);
-  if (!use) return null;
-  const total = Number(band.totalBytes);
-  const free = Math.min(Number(band.freeBytes), total);
-  const added = Math.max(0, Number(addedBytes) || 0);
-  const drawn = Math.min(added, free);
-  const freeAfter = free - added;
-  return {
-    ...use,
-    addedPct: (drawn / total) * 100,
-    freePct: ((free - drawn) / total) * 100,
-    // The drawn figure, so this stays `shelfPct + otherPct + addedPct` and the
-    // bar cannot claim to be more than full.
-    usedPct: ((total - free + drawn) / total) * 100,
-    // The unclamped one, so a drop that overruns the drive reports low rather
-    // than reporting the zero free space it was clamped to.
-    lowFree: freeAfter < LOW_FREE_BYTES,
-    addedBytes: added,
-    freeAfter,
-    fits: added <= free,
-  };
-}
-
 /**
  * How many copies of this model are actually on the disk right now.
  *
@@ -1372,16 +1052,12 @@ export function copyPath(copy) {
 /**
  * Where a row's copies sit, one path per line, each saying what is there.
  *
- * The folder is only on screen under `groupBy: 'folder'`, where the header
- * names it. Group by base model or by feature - or not at all, which is the
- * default - and the shelf stops saying where anything is, which is the first
- * question of a reader with the same adapter on two disks. So the file line
- * carries the answer as its tooltip on every axis, including `folder`, where
- * the header names the folder but nothing names the SUBDIRECTORY under it.
+ * No list header names a folder (the folder grouping went in #2168), and
+ * where a file is is the first question of a reader with the same adapter on
+ * two disks, so the file line carries the answer as its tooltip.
  *
  * Every copy, not the first: a model registered in two folders is one row, and
- * naming one of its homes would read as naming its only one. Under `folder` the
- * store hands this ONE copy, because that draw stands for one copy.
+ * naming one of its homes would read as naming its only one.
  *
  * Each path is {@link copyPath}'s. A copy missing either half is skipped rather than half-named: both are
  * NOT NULL on the wire, so this is a broken row, and `a.st` on its own answers
@@ -1516,20 +1192,6 @@ export function importReceipt(report) {
       `${count(failed)} could not be copied and ${failed === 1 ? "was" : "were"} left in the run.`,
     );
   }
-  // A checkpoint whose previews did not copy is still `imported` - losing a
-  // preview must not cost the weights, so the server does not fail the file for
-  // it. Which means the status counts above cannot see it, and a receipt built
-  // from them alone would call a run whose samples were lost a clean import.
-  // Named separately rather than folded into `failed`, because the checkpoint
-  // is genuinely on the shelf and telling someone otherwise is worse.
-  const withoutSamples = files.filter(
-    (f) => f.status === "imported" && f.sample_count === 0 && f.detail,
-  ).length;
-  if (withoutSamples) {
-    notes.push(
-      `${count(withoutSamples)} landed without ${withoutSamples === 1 ? "its" : "their"} training previews.`,
-    );
-  }
   if (report?.deleted_source && landed) {
     notes.push("The run's own files have been removed.");
   }
@@ -1550,8 +1212,9 @@ export function importReceipt(report) {
  * - **PixlStash's own folder.** Those files are ours, declared rather than
  *   scanned, and every engine loader looks for them at a fixed path - moving
  *   one out breaks the tagger and re-downloads it on the next run.
- * - **An `external` folder.** The HuggingFace cache and insightface's store are
- *   shared with other software. Taking a file out of one is not ours to do.
+ * - **A locked folder** (`movable` other than `per_item`). The HuggingFace
+ *   cache and the InsightFace packs are shared with other software or move
+ *   only as a whole. Taking a file out of one is not ours to do.
  *
  * Per COPY and not per model: `model_file`'s primary key is
  * `(folder_id, relpath)`, so a model registered in three folders offers three
@@ -1569,34 +1232,377 @@ export function importReceipt(report) {
  * has to net out the copies already sitting on it (#894). It is deliberately
  * kept off `items`, which is posted to `/model-moves` verbatim.
  *
+ * In a folder view (#2204) only the copy in the open folder moves: a model
+ * with a second copy elsewhere is selected there as "this file", and taking
+ * the other copy along would move a file the reader cannot see.
+ *
  * @param {Array<Object>} rows - shelf rows, each with `locations`.
  * @param {Map<number, Object>|null} foldersById - `model_folder.id` to the
- *   folder row, for the two folder-level exclusions. Omitted, only the
- *   `present` rule applies.
+ *   folder row, for the folder-level exclusions. Omitted, only the `present`
+ *   rule applies.
+ * @param {{folderId: number, path: string, locked?: boolean}|null} [scope] -
+ *   the open folder, or null for every copy.
  * @returns {{items: Array<{folder_id: number, relpath: string}>,
- *   totalBytes: number, bytesByFolderId: Map<number, number>}}
+ *   totalBytes: number, bytesByFolderId: Map<number, number>,
+ *   kinds: Map<string, string>, stays: number}} `kinds` is each copy's Type
+ *   by {@link copyKey}, for the drop tip's ComfyUI name; the items stay bare
+ *   because the move route refuses any other field. `stays` counts the rows
+ *   that have a copy in scope but none that can move (missing, offline,
+ *   PixlStash's own or locked), so a drag can say what it leaves behind; a
+ *   row with no copy in the open folder is not here, and is not counted.
  */
-export function movableCopies(rows, foldersById = null) {
+export function movableCopies(rows, foldersById = null, scope = null) {
   const items = [];
+  const kinds = new Map();
   const bytesByFolderId = new Map();
   let totalBytes = 0;
+  let stays = 0;
   for (const row of Array.isArray(rows) ? rows : []) {
+    const before = items.length;
+    let here = false;
     for (const loc of row?.locations || []) {
+      if (scope && !inFolderScopeOf(loc, scope)) continue;
+      here = true;
       if (loc?.state !== "present") continue;
       const folder = foldersById?.get(Number(loc.folder_id));
       if (folder?.owner === "pixlstash") continue;
-      if (folder?.movable === "external") continue;
+      // A locked folder (the lock in the Folders tree): files do not leave it
+      // one at a time, and the server refuses them.
+      if (folder?.movable && folder.movable !== "per_item") continue;
       const bytes = Number(row.file_size) || 0;
       const folderId = Number(loc.folder_id);
       items.push({ folder_id: loc.folder_id, relpath: loc.relpath });
+      kinds.set(copyKey(loc), shelfTypeOf(row));
       bytesByFolderId.set(
         folderId,
         (bytesByFolderId.get(folderId) || 0) + bytes,
       );
       totalBytes += bytes;
     }
+    if (here && items.length === before) stays += 1;
   }
-  return { items, totalBytes, bytesByFolderId };
+  return { items, totalBytes, bytesByFolderId, kinds, stays };
+}
+
+/**
+ * One copy's key: its folder and its relpath.
+ *
+ * @param {{folder_id: number, relpath: string}} loc
+ * @returns {string}
+ */
+export function copyKey(loc) {
+  return `${Number(loc?.folder_id)}\u0000${loc?.relpath}`;
+}
+
+/**
+ * Whether a key press came from the Folders tree (#2206).
+ *
+ * The shelf's window listeners cannot tell the tree's keys from their own by
+ * the event alone: the tree is in the sidebar, outside `.shelf`. Its rows carry
+ * `.mft`, and a press from one belongs to the folder under the focus, never to
+ * a model selection. Delete is the one that matters: from a row it would open a
+ * FILE deletion.
+ *
+ * @param {KeyboardEvent} event
+ * @returns {boolean}
+ */
+export function isInFoldersTree(event) {
+  return Boolean(event?.target?.closest?.(".mft"));
+}
+
+/**
+ * The POSIX directory of a copy's `relpath`, `""` at its folder's root. The
+ * scanner stores relpaths with the host's separator.
+ *
+ * @param {string} relpath
+ * @returns {string}
+ */
+export function relpathDir(relpath) {
+  const posix = String(relpath ?? "").replace(/\\/g, "/");
+  const at = posix.lastIndexOf("/");
+  return at < 0 ? "" : posix.slice(0, at);
+}
+
+/**
+ * Whether a copy is in an open folder: directly in it, or anywhere under a
+ * locked one, which cannot be browsed into.
+ *
+ * @param {{folder_id: number, relpath: string}} loc
+ * @param {{folderId: number, path?: string, locked?: boolean}} scope
+ * @returns {boolean}
+ */
+export function inFolderScopeOf(loc, scope) {
+  if (Number(loc?.folder_id) !== Number(scope.folderId)) return false;
+  const dir = relpathDir(loc?.relpath);
+  const path = scope.path ?? "";
+  if (!scope.locked) return dir === path;
+  return !path || dir === path || dir.startsWith(`${path}/`);
+}
+
+/**
+ * The directory ComfyUI loads a copy's kind from that holds it (#2205), the
+ * deepest when two do, or null. ComfyUI loads a folder recursively.
+ *
+ * @param {{folder_id: number, relpath: string}} loc
+ * @param {string} kind - a {@link SHELF_TYPES} key, from `shelfTypeOf`.
+ * @param {{known: boolean, reads: Array<{folder_id: number, subpath: string,
+ *   kind: string}>}} reads - `GET /model-folders/comfyui-reads`.
+ * @returns {Object|null} the read.
+ */
+export function comfyuiReadFor(loc, kind, reads) {
+  if (!reads?.known || !kind) return null;
+  const dir = relpathDir(loc?.relpath);
+  let best = null;
+  for (const read of reads.reads ?? []) {
+    if (read.kind !== kind) continue;
+    if (Number(read.folder_id) !== Number(loc?.folder_id)) continue;
+    const sub = read.subpath ?? "";
+    if (sub && dir !== sub && !dir.startsWith(`${sub}/`)) continue;
+    if (!best || sub.length > best.subpath.length) best = { ...read, subpath: sub };
+  }
+  return best;
+}
+
+/**
+ * Whether ComfyUI's own loaders cannot see a copy: ComfyUI loads its kind
+ * from some folder on the shelf, and it sits outside every one. Always false
+ * when where ComfyUI looks is not known, so nothing is guessed.
+ *
+ * @param {{folder_id: number, relpath: string}} loc
+ * @param {string} kind - a {@link SHELF_TYPES} key; `""` is never misplaced.
+ * @param {Object} reads - see {@link comfyuiReadFor}.
+ * @returns {boolean}
+ */
+export function isMisplaced(loc, kind, reads) {
+  // Only a kind ComfyUI loads from somewhere on the shelf: otherwise there is
+  // no folder to drag it into, and "ComfyUI does not list it" would be noise.
+  if (!reads?.known || !reads.reads?.some((read) => read.kind === kind)) {
+    return false;
+  }
+  return comfyuiReadFor(loc, kind, reads) == null;
+}
+
+/**
+ * What ComfyUI calls a copy in its loader's list: its path under the folder
+ * it is loaded from, `flux/x.safetensors`, or null when it is not listed. A
+ * registered folder inside ComfyUI's carries its own path as the read's
+ * `prefix`.
+ *
+ * @param {{folder_id: number, relpath: string}} loc
+ * @param {string} kind
+ * @param {Object} reads - see {@link comfyuiReadFor}.
+ * @returns {string|null}
+ */
+export function comfyuiName(loc, kind, reads) {
+  const read = comfyuiReadFor(loc, kind, reads);
+  if (!read) return null;
+  const posix = String(loc.relpath ?? "").replace(/\\/g, "/");
+  const name = read.subpath ? posix.slice(read.subpath.length + 1) : posix;
+  return read.prefix ? `${read.prefix}/${name}` : name;
+}
+
+/**
+ * A folder mark's words: `ComfyUI loads LoRAs from here`. A Type's label is
+ * lowercased mid-sentence unless it is spelled with capitals inside it.
+ *
+ * @param {{label: string}} type - a {@link SHELF_TYPES} entry.
+ * @returns {string}
+ */
+export function comfyuiLoadsTitle(type) {
+  const label = /^[A-Z][a-z]*(\s|$)/.test(type.label)
+    ? type.label[0].toLowerCase() + type.label.slice(1)
+    : type.label;
+  return `ComfyUI loads ${label} from here`;
+}
+
+/**
+ * The Types ComfyUI loads from exactly this directory, for its folder marks.
+ *
+ * @param {number} folderId
+ * @param {string} path - POSIX, relative to the folder, `""` for its root.
+ * @param {Object} reads - see {@link comfyuiReadFor}.
+ * @returns {Array<Object>} {@link SHELF_TYPES} entries, in their order.
+ */
+export function comfyuiMarks(folderId, path, reads) {
+  if (!reads?.known) return [];
+  const kinds = new Set(
+    (reads.reads ?? [])
+      .filter(
+        (read) =>
+          Number(read.folder_id) === Number(folderId) &&
+          (read.subpath ?? "") === (path ?? ""),
+      )
+      .map((read) => read.kind),
+  );
+  return SHELF_TYPES.filter((type) => kinds.has(type.key));
+}
+
+/**
+ * The Type a known tool files under each directory of its models folder:
+ * StabilityMatrix's `Models/<name>` and ComfyUI's `models/<name>`, by the
+ * name squashed to lowercase letters and digits. Only for a folder ComfyUI's
+ * own reads do not cover; those are asked first.
+ */
+const LAYOUT_KINDS = {
+  stablediffusion: "checkpoint",
+  diffusionmodels: "checkpoint",
+  checkpoints: "checkpoint",
+  unet: "checkpoint",
+  lora: "lora",
+  loras: "lora",
+  lycoris: "lora",
+  vae: "vae",
+  textencoders: "text_encoder",
+  clip: "text_encoder",
+  esrgan: "upscaler",
+  realesrgan: "upscaler",
+  swinir: "upscaler",
+  upscalemodels: "upscaler",
+  controlnet: "controlnet",
+};
+
+/** What a directory name must contain to already say it holds a Type. */
+const TYPE_STEMS = {
+  checkpoint: "checkpoint",
+  lora: "lora",
+  vae: "vae",
+  text_encoder: "textencoder",
+  upscaler: "upscale",
+  controlnet: "controlnet",
+};
+
+const squash = (name) =>
+  String(name ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+/**
+ * The Type a known tool's layout files under a directory, or `""`: a
+ * directory straight under a `models` folder, or straight under the registered
+ * folder itself, that is StabilityMatrix's (by the folder's `tool`) or
+ * ComfyUI's (a `ComfyUI` segment in its path). The registered folder counts
+ * whatever its name, because it is stored at its resolved path and a `Models`
+ * moved behind a symlink resolves to the name of wherever it went; a library
+ * root holds `Models` and `Packages`, never a Type folder, so nothing there is
+ * mistaken. A registered Type folder's own subfolders are the owner's sorting.
+ * Anything else has no known layout and is never guessed.
+ *
+ * @param {{path: string, tool?: string}} folder - the registered folder.
+ * @param {string} path - POSIX, relative to it, `""` for its root.
+ * @returns {string} a {@link SHELF_TYPES} key, or `""`.
+ */
+export function layoutKind(folder, path) {
+  const root = String(folder?.path ?? "")
+    .split(/[\\/]+/)
+    .filter(Boolean);
+  const segments = [...root, ...String(path ?? "").split("/").filter(Boolean)];
+  if (segments.length < 2) return "";
+  const inRoot =
+    segments.length === root.length + 1 && !LAYOUT_KINDS[squash(root.at(-1))];
+  if (!inRoot && squash(segments.at(-2)) !== "models") return "";
+  const known =
+    folder.tool === "StabilityMatrix" ||
+    segments.some((segment) => /comfyui/i.test(segment));
+  return known ? (LAYOUT_KINDS[squash(segments.at(-1))] ?? "") : "";
+}
+
+/**
+ * Where models of each Type belong in the registered folders: the directories
+ * ComfyUI loads them from, or for a folder none of its reads lands in, the
+ * directories its tool's layout names. A layout directory is only found once
+ * its parent has been listed.
+ *
+ * @param {Array<{id: number, path: string, tool?: string}>} folders
+ * @param {Map<string, {listing?: Object}>} listings - the folders store's
+ *   `dirListings`, keyed `"<folder id>:<path>"`.
+ * @param {Object} reads - see {@link comfyuiReadFor}.
+ * @returns {Array<{folderId: number, path: string, kind: string,
+ *   count: number}>} `count` is the models directly in it, 0 when unlisted.
+ */
+export function modelDestinations(folders, listings, reads) {
+  const out = [];
+  for (const folder of folders) {
+    const id = Number(folder.id);
+    const counts = new Map();
+    for (const [key, entry] of listings ?? []) {
+      if (!key.startsWith(`${id}:`) || !entry?.listing) continue;
+      counts.set(key.slice(`${id}:`.length), entry.listing.direct_model_count);
+      for (const dir of entry.listing.dirs ?? []) {
+        if (!counts.has(dir.path)) counts.set(dir.path, dir.direct_model_count);
+      }
+    }
+    const read = reads?.known
+      ? (reads.reads ?? []).filter((one) => Number(one.folder_id) === id)
+      : [];
+    const found = read.length
+      ? read.map((one) => [one.subpath ?? "", one.kind])
+      : [...counts.keys()].map((path) => [path, layoutKind(folder, path)]);
+    const seen = new Set();
+    for (const [path, kind] of found) {
+      if (!kind || seen.has(`${path}\u0000${kind}`)) continue;
+      seen.add(`${path}\u0000${kind}`);
+      out.push({ folderId: id, path, kind, count: Number(counts.get(path)) || 0 });
+    }
+  }
+  return out;
+}
+
+/**
+ * The Types a directory holds that its name does not already say, for the
+ * second line under it: `DiffusionModels` reads Checkpoints, `Lora` nothing.
+ *
+ * @param {string} name - the directory's name.
+ * @param {Set<string>} kinds - {@link SHELF_TYPES} keys it holds.
+ * @returns {Array<Object>} {@link SHELF_TYPES} entries, in their order.
+ */
+export function unsaidTypes(name, kinds) {
+  const said = squash(name);
+  return SHELF_TYPES.filter(
+    (type) => kinds.has(type.key) && !said.includes(TYPE_STEMS[type.key]),
+  );
+}
+
+/**
+ * Whether every copy is already directly in a destination, so a move there
+ * would do nothing: the server skips such a copy rather than moving it.
+ *
+ * @param {Array<{folder_id: number, relpath: string}>} items
+ * @param {{folderId: number, path?: string}} destination
+ * @returns {boolean}
+ */
+export function allAlreadyIn(items, destination) {
+  const scope = { folderId: destination.folderId, path: destination.path };
+  return items.length > 0 && items.every((item) => inFolderScopeOf(item, scope));
+}
+
+/**
+ * What a move does on disk: a rename on one drive, or a copy that hands the
+ * other drives their bytes back. For the drop tip and the Move dialog.
+ *
+ * Measured on the drive (`device_id`), as `model_mover.same_device` measures
+ * it. A drive that could not be measured is never guessed as "same".
+ *
+ * @param {{bytesByFolderId: Map<number, number>}} copies - from
+ *   {@link movableCopies}.
+ * @param {number} destinationFolderId
+ * @param {Map<number, Object>} deviceByFolderId - from the folders store.
+ * @returns {{how: "rename"|"copy"|"unknown", freed: number,
+ *   drives: Array<string>}} `freed` is what leaves the other drives, and
+ *   `drives` names them.
+ */
+export function moveMechanism(copies, destinationFolderId, deviceByFolderId) {
+  const target = deviceByFolderId?.get(Number(destinationFolderId));
+  if (!target?.device_id) return { how: "unknown", freed: 0, drives: [] };
+  let freed = 0;
+  const drives = new Set();
+  for (const [folderId, bytes] of copies?.bytesByFolderId ?? []) {
+    const device = deviceByFolderId.get(Number(folderId));
+    if (device?.device_id === target.device_id) continue;
+    freed += bytes;
+    drives.add(device?.label || device?.mount_point || "the other drive");
+  }
+  if (!drives.size) return { how: "rename", freed: 0, drives: [] };
+  return { how: "copy", freed, drives: [...drives] };
 }
 
 /**

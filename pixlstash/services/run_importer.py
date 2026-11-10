@@ -33,22 +33,17 @@ The stack mirrors ``PictureStack`` exactly, so nothing new is invented for
 presentation: ``stack_position`` 0 is the cover and is the **final** checkpoint
 when the run has a bare no-step file, or the highest step when it does not.
 
-**The samples come with the weights.** One run measured 1.9 GB of which
-``samples/`` was 15 MB, so the provenance costs 0.8 % of the bytes and the whole
-run is taken: each checkpoint's previews land in ``<stem>_samples/`` beside it,
-under the trainer's own filenames. They are copied after the row commits and
-before the unlink, so ``delete_after_import`` can never destroy the only copy -
-which is what it used to do, this module having taken the ``.safetensors`` and
-nothing else. A failed sample copy is logged and reported in the outcome's
-``detail`` and the checkpoint stays ``imported``: losing a preview must not cost
-the weights.
+**The samples stay behind.** A run's ``samples/`` are the trainer's working
+output, read in place by the Training runs view; importing copies the weights
+only. Earlier imports copied each checkpoint's previews into ``<stem>_samples/``
+beside it, and a move or a delete still carries or removes such a directory
+where one exists.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -64,16 +59,14 @@ from pixlstash.services.model_mover import (
     MoveRefused,
     copy_and_digest,
     discard_partial,
-    discard_partial_tree,
     file_digest,
     publish_no_clobber,
     require_space,
-    samples_relpath,
     unlink_source,
 )
 from pixlstash.utils.adapter_header import FILE_ADAPTER, describe_adapter
 from pixlstash.utils.path_utils import resolve_path_within
-from pixlstash.utils.aitoolkit_run import Checkpoint, Sample, read_run
+from pixlstash.utils.aitoolkit_run import Checkpoint, read_run
 
 logger = get_logger(__name__)
 
@@ -93,10 +86,6 @@ class ImportOutcome:
     status: str
     model_id: Optional[int] = None
     detail: Optional[str] = None
-    sample_count: int = 0
-    """Previews that landed beside the checkpoint. Zero is the honest answer for
-    a run with no samples **and** for a copy that failed, which is why the
-    failure also goes into ``detail``."""
 
 
 @dataclass
@@ -111,72 +100,6 @@ class ImportReport:
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _sample_bytes(samples: list[Sample]) -> int:
-    """What a checkpoint's previews cost at the destination, best effort.
-
-    A preview that vanished between the listing and now is worth a warning and
-    an under-count, never a refused import: the space check exists to stop a
-    24 GB copy filling the disk, and 15 MB of JPEGs is not what decides that.
-    """
-    total = 0
-    for sample in samples:
-        try:
-            total += os.path.getsize(sample.path)
-        except OSError as exc:
-            logger.warning(
-                "Could not size the sample %s: %s. The space check is short by "
-                "that file.",
-                sample.path,
-                exc,
-            )
-    return total
-
-
-def _copy_samples(
-    samples: list[Sample], target: Optional[str]
-) -> tuple[int, Optional[str]]:
-    """Copy one checkpoint's previews beside it, or say why they did not go.
-
-    **Non-fatal, and that is the ruling**: the row naming the checkpoint is
-    already committed, and losing a preview must not cost the weights. Written
-    to a ``.pixlstash-partial`` directory and renamed into place, so a failure
-    half-way leaves no half-populated ``<stem>_samples/`` for somebody to read
-    as the whole set.
-
-    ``copy2`` rather than ``copy_and_digest``: a JPEG is not identity-bearing
-    and nothing on the shelf resolves on its hash, so verifying it would buy a
-    second read of every preview for nothing.
-
-    Returns:
-        ``(count copied, detail or None)``. The count is 0 on failure.
-    """
-    if not samples or target is None:
-        return 0, None
-    partial = target + PARTIAL_SUFFIX
-    try:
-        os.mkdir(partial)
-        for sample in samples:
-            # ``basename`` because the trainer's own filename is kept verbatim -
-            # no renumbering - and it is still a name being turned into a path.
-            shutil.copy2(
-                sample.path, os.path.join(partial, os.path.basename(sample.filename))
-            )
-        os.rename(partial, target)
-    except OSError as exc:
-        discard_partial_tree(partial)
-        logger.error(
-            "Could not copy the %d sample(s) of %s into %s: %s. The checkpoint "
-            "itself is imported and registered; only its previews are missing.",
-            len(samples),
-            os.path.dirname(samples[0].path),
-            target,
-            exc,
-            exc_info=True,
-        )
-        return 0, f"Samples were not copied into {os.path.basename(target)}: {exc}"
-    return len(samples), None
 
 
 def _cover_first(checkpoints: list[Checkpoint]) -> list[Checkpoint]:
@@ -214,8 +137,12 @@ class RunImporter:
         *,
         steps: Optional[list[Optional[int]]] = None,
         delete_source: bool = False,
+        subfolder: Optional[str] = None,
         should_cancel: Optional[Callable[[], bool]] = None,
         on_progress: Optional[Callable[[ImportOutcome], None]] = None,
+        training_run_id: Optional[int] = None,
+        stack_id: Optional[int] = None,
+        first_position: int = 0,
     ) -> ImportReport:
         """Import the selected checkpoints of one run.
 
@@ -228,8 +155,19 @@ class RunImporter:
             delete_source: Whether to unlink each file after its row is durably
                 committed. Comes from the source folder's
                 ``delete_after_import``; the unlink is always last.
+            subfolder: A folder inside the destination to write into, e.g.
+                ``loras``, or ``None`` for the destination's root. The caller
+                decides it; containment is still checked against the root.
             should_cancel: Consulted between files. Nothing is rolled back.
             on_progress: Called with each :class:`ImportOutcome`.
+            training_run_id: The hub ``training_run`` row that made the run, when
+                PixlStash trained it. Written into each new ``model`` row, so a
+                trained model names the run it came from. None for a run
+                trained elsewhere.
+            stack_id: An existing stack to add the checkpoints to (a run
+                trained longer), instead of a new one.
+            first_position: The ``stack_position`` the first file takes;
+                after an existing stack's members, so its cover stays.
 
         Returns:
             An :class:`ImportReport`, with the stack the run landed in.
@@ -249,24 +187,19 @@ class RunImporter:
                 status_code=404,
             )
 
-        # The run's previews travel with its weights: one folder per checkpoint,
-        # named from that checkpoint's own stem. Resolved once here so the
-        # collision check, the space check and the copy all read the same
-        # answer, and so the bare final's "highest step" rule is applied in one
-        # place.
-        samples = {c.path: run.samples_for(c) for c in wanted}
         targets = self._resolve_targets(
-            wanted, destination, destination_folder_id, samples
+            wanted, destination, destination_folder_id, subfolder
         )
-        require_space(
-            destination,
-            sum(os.path.getsize(c.path) for c in wanted)
-            + sum(_sample_bytes(s) for s in samples.values()),
-        )
+        require_space(destination, sum(os.path.getsize(c.path) for c in wanted))
+        if subfolder:
+            # Containment was checked against the destination above, so this
+            # cannot create a folder outside it. Made only after every check has
+            # passed, so a refused batch leaves nothing behind.
+            os.makedirs(os.path.join(destination, subfolder), exist_ok=True)
 
         report = ImportReport(run_name=run.name)
-        report.stack_id = self._create_stack(run.name)
-        for position, checkpoint in enumerate(_cover_first(wanted)):
+        report.stack_id = stack_id or self._create_stack(run.name)
+        for position, checkpoint in enumerate(_cover_first(wanted), first_position):
             if should_cancel is not None and should_cancel():
                 report.cancelled = True
                 report.outcomes.append(
@@ -275,17 +208,17 @@ class RunImporter:
                     )
                 )
                 continue
-            target, samples_target = targets[checkpoint.path]
+            target, relpath = targets[checkpoint.path]
             outcome = self._import_one(
                 checkpoint,
                 target,
-                samples=samples[checkpoint.path],
-                samples_target=samples_target,
+                relpath=relpath,
                 run=run,
                 stack_id=report.stack_id,
                 position=position,
                 destination_folder_id=destination_folder_id,
                 delete_source=delete_source,
+                training_run_id=training_run_id,
             )
             report.outcomes.append(outcome)
             if on_progress is not None:
@@ -337,25 +270,22 @@ class RunImporter:
         checkpoints: list[Checkpoint],
         destination: str,
         destination_folder_id: int,
-        samples: dict[str, list[Sample]],
-    ) -> dict[str, tuple[str, Optional[str]]]:
+        subfolder: Optional[str] = None,
+    ) -> dict[str, tuple[str, str]]:
         """Contain and collision-check every destination before the first byte.
 
         Same rule as the mover: refuse the batch rather than import half a run
-        and stop, because there is no undo for shelf operations. That covers the
-        samples directory too, and it is the sharper of the two: a checkpoint
-        collision refuses one file the owner can see, while merging into an
-        existing ``<stem>_samples/`` would write into a directory they may have
-        put there themselves.
+        and stop, because there is no undo for shelf operations.
 
         Returns:
-            ``{source checkpoint path: (file target, samples target or None)}``.
-            The samples target is ``None`` for a checkpoint with no previews -
-            nothing is written, so nothing is claimed.
+            ``{source checkpoint path: (file target, file relpath)}``. The
+            relpath is the one the shelf row records - the basename, under
+            ``subfolder`` when there is one.
         """
-        targets: dict[str, tuple[str, Optional[str]]] = {}
+        targets: dict[str, tuple[str, str]] = {}
         for checkpoint in checkpoints:
-            relpath = os.path.basename(checkpoint.filename)
+            name = os.path.basename(checkpoint.filename)
+            relpath = f"{subfolder}/{name}" if subfolder else name
             try:
                 # Containment (#776) on the write path, and **reachable**:
                 # ``basename`` flattens the name and ``aitoolkit_run`` only ever
@@ -387,46 +317,10 @@ class RunImporter:
             ):
                 raise MoveRefused(
                     f"{relpath} is already registered in the destination folder. "
-                    "Rescan it first."
+                    "Try again once its next scan has caught up."
                 )
-            targets[checkpoint.path] = (
-                target,
-                self._samples_target(destination, relpath, samples[checkpoint.path]),
-            )
+            targets[checkpoint.path] = (target, relpath)
         return targets
-
-    @staticmethod
-    def _samples_target(
-        destination: str, relpath: str, samples: list[Sample]
-    ) -> Optional[str]:
-        """Where this checkpoint's previews go, or ``None`` when it has none."""
-        if not samples:
-            return None
-        directory = samples_relpath(relpath)
-        try:
-            # The same containment call the checkpoint gets, and it is what
-            # refuses a symlink standing at ``<stem>_samples``: it resolves
-            # outside the registered folder, dangling or not, so the refusal
-            # happens here rather than in the existence check below.
-            #
-            # **That check is on the resolved path, not the joined one.** For a
-            # dangling link ``realpath`` has already collapsed to the missing
-            # target, so ``lexists`` and ``exists`` agree here and the choice
-            # between them buys nothing - the containment above is the whole
-            # guard. Written down because the opposite was claimed in this
-            # comment and the mutation stayed green.
-            target = resolve_path_within(destination, directory)
-        except ValueError as exc:
-            raise MoveRefused(
-                f"{directory!r} would be written outside the destination folder."
-            ) from exc
-        if os.path.lexists(target):
-            raise MoveRefused(
-                f"{directory} already exists in the destination folder, and a "
-                "run's previews are never merged into a directory that is "
-                "already there. Nothing was imported."
-            )
-        return target
 
     def _create_stack(self, name: str) -> int:
         now = _utcnow()
@@ -446,13 +340,13 @@ class RunImporter:
         checkpoint: Checkpoint,
         target: str,
         *,
-        samples: list[Sample],
-        samples_target: Optional[str],
+        relpath: str,
         run,
         stack_id: int,
         position: int,
         destination_folder_id: int,
         delete_source: bool,
+        training_run_id: Optional[int] = None,
     ) -> ImportOutcome:
         """copy → verify → register and commit → then unlink. No other order."""
         partial = target + PARTIAL_SUFFIX
@@ -489,11 +383,13 @@ class RunImporter:
             model_id = self._register(
                 target,
                 written,
+                relpath=relpath,
                 checkpoint=checkpoint,
                 run=run,
                 stack_id=stack_id,
                 position=position,
                 destination_folder_id=destination_folder_id,
+                training_run_id=training_run_id,
             )
         except sqlite3.IntegrityError as exc:
             # The destination key was registered between ``_resolve_targets``
@@ -517,19 +413,10 @@ class RunImporter:
             return ImportOutcome(
                 checkpoint.filename, checkpoint.step, STATUS_FAILED, detail=str(exc)
             )
-        # After the row is durably committed and **before** the unlink, so
-        # ``delete_after_import`` can never outrun the copy: the one place this
-        # gap lost data rather than merely deferring a feature.
-        sample_count, detail = _copy_samples(samples, samples_target)
         if delete_source:
             unlink_source(checkpoint.path)
         return ImportOutcome(
-            checkpoint.filename,
-            checkpoint.step,
-            STATUS_IMPORTED,
-            model_id=model_id,
-            detail=detail,
-            sample_count=sample_count,
+            checkpoint.filename, checkpoint.step, STATUS_IMPORTED, model_id=model_id
         )
 
     def _register(
@@ -537,11 +424,13 @@ class RunImporter:
         target: str,
         digest: str,
         *,
+        relpath: str,
         checkpoint: Checkpoint,
         run,
         stack_id: int,
         position: int,
         destination_folder_id: int,
+        training_run_id: Optional[int] = None,
     ) -> int:
         """Write the content row and the location row in one transaction.
 
@@ -549,7 +438,8 @@ class RunImporter:
         row will name. ``ON CONFLICT(sha256)`` because a run imported twice, or a
         file already on the shelf from somewhere else, is one model with two
         locations - the shelf's whole content/location split. On that path the
-        curation already on the row is kept and only the run facts are filled in.
+        curation already on the row is kept and only the run facts are filled in,
+        ``training_run_id`` included: the first run to make the file keeps it.
 
         The run's own config supplies what the header often does not: 37 % of
         real adapters record no base model at all, and ai-toolkit's
@@ -569,7 +459,8 @@ class RunImporter:
                 "INSERT INTO model (file_kind, kind, sha256, display_name, "
                 "filename, base_model, trigger_words, provenance, training_step, "
                 "param_count, file_size, stack_id, stack_position, run_key, "
-                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "training_run_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(sha256) DO UPDATE SET "
                 "display_name = COALESCE(model.display_name, excluded.display_name), "
                 "base_model = COALESCE(model.base_model, excluded.base_model), "
@@ -578,6 +469,7 @@ class RunImporter:
                 "stack_id = COALESCE(model.stack_id, excluded.stack_id), "
                 "stack_position = COALESCE(model.stack_position, excluded.stack_position), "
                 "run_key = COALESCE(model.run_key, excluded.run_key), "
+                "training_run_id = COALESCE(model.training_run_id, excluded.training_run_id), "
                 "file_size = excluded.file_size",
                 (
                     # An adapter, always: a training run's output is what it
@@ -596,6 +488,7 @@ class RunImporter:
                     stack_id,
                     position,
                     run.name,
+                    training_run_id,
                     now,
                 ),
             )
@@ -617,7 +510,7 @@ class RunImporter:
                 (
                     model_id,
                     destination_folder_id,
-                    os.path.basename(target),
+                    relpath,
                     STATE_PRESENT,
                     now,
                     mtime,

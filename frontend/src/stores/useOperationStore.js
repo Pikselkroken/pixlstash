@@ -35,6 +35,7 @@ import {
   undoOperation,
 } from "../api/operations";
 import { useNoticeStore } from "./useNoticeStore";
+import { TARGET_TAG_GROUP, useTagGroupsStore } from "./useTagGroupsStore";
 import { useWsStore } from "./useWsStore";
 
 /** How many history steps the popover shows (design rule: capped at 50). */
@@ -271,13 +272,17 @@ export const useOperationStore = defineStore("operation", () => {
 
   // Highest operation id seen by a completed refresh. Used to tell a genuinely
   // new operation from a re-read of the same history - an id we have already
-  // seen must never raise a second receipt.
+  // seen must never raise a second receipt. `null` means never loaded; `0`
+  // means loaded and the log was empty (ids start at 1), so the first
+  // operation a fresh library records still narrates.
   let highWaterMark = null;
 
   // Coalesce overlapping refreshes: WS bursts collapse into one in-flight
-  // request plus at most one trailing refetch.
+  // request plus at most one trailing refetch. A queued call that wanted a
+  // receipt keeps it: the refetch narrates if any caller behind it asked to.
   let inFlight = false;
   let refetchQueued = false;
+  let queuedNarrate = false;
 
   // Every request belongs to exactly one authentication epoch. Reset aborts
   // the transport where possible and the epoch check remains the backstop for
@@ -308,6 +313,8 @@ export const useOperationStore = defineStore("operation", () => {
   let queuedUndos = 0;
 
   // ── Ghost state ──────────────────────────────────────────────────────────
+  /** `{ids}` of the pictures the latest undo/redo brought back, or null. */
+  const lastRestore = ref(null);
   /** Picture ids whose tiles are ghosted in place, awaiting their undo window. */
   const ghostPictureIds = ref([]);
   /** `none` | `pending` | `committed` - see the constants above. */
@@ -763,7 +770,11 @@ export const useOperationStore = defineStore("operation", () => {
   /** Un-ghost whatever an undo/redo response says it put back. */
   function applyLifecycleToGhosts(result) {
     const restored = result?.restored_picture_ids;
-    if (Array.isArray(restored) && restored.length) unghostPictures(restored);
+    if (Array.isArray(restored) && restored.length) {
+      unghostPictures(restored);
+      // A new object per undo, so a watcher sees the same ids twice.
+      lastRestore.value = { ids: restored.slice() };
+    }
   }
 
   // ── Server reads ─────────────────────────────────────────────────────────
@@ -780,6 +791,7 @@ export const useOperationStore = defineStore("operation", () => {
     if (isReadOnly.value) return;
     if (inFlight) {
       refetchQueued = true;
+      queuedNarrate = queuedNarrate || narrate;
       return;
     }
     inFlight = true;
@@ -797,10 +809,7 @@ export const useOperationStore = defineStore("operation", () => {
       nextRedo.value = state?.next_redo ?? null;
       const previous = highWaterMark;
       const newest = operations.value[0];
-      if (newest?.id != null) {
-        highWaterMark =
-          previous == null ? newest.id : Math.max(previous, newest.id);
-      }
+      highWaterMark = Math.max(previous ?? 0, newest?.id ?? 0);
       loaded.value = true;
       if (narrate) narrateNewest(previous, newest);
     } catch (e) {
@@ -817,8 +826,10 @@ export const useOperationStore = defineStore("operation", () => {
       if (requestIsCurrent(request)) {
         inFlight = false;
         if (refetchQueued) {
+          const narrateNext = narrate || queuedNarrate;
           refetchQueued = false;
-          refresh({ narrate });
+          queuedNarrate = false;
+          refresh({ narrate: narrateNext });
         }
       }
     }
@@ -876,6 +887,19 @@ export const useOperationStore = defineStore("operation", () => {
   }
 
   // ── Mutations ────────────────────────────────────────────────────────────
+  /**
+   * An undo or redo of a change that is not a picture's (filing tags under a
+   * group, #2469) announces no picture: re-read what it restored.
+   * @param {Object} result - the undo/redo response.
+   */
+  function reloadRestoredDomains(result) {
+    const ops = result?.operations ?? [];
+    if (ops.some((op) => op?.target_type === TARGET_TAG_GROUP)) {
+      const tagGroups = useTagGroupsStore();
+      void tagGroups.fetch({ force: true }).then(() => tagGroups.refilterGroupTerms());
+    }
+  }
+
   /**
    * Surface a failed undo/redo. Three shapes, because they mean three things:
    *
@@ -960,6 +984,7 @@ export const useOperationStore = defineStore("operation", () => {
       // that is not this set's" and collapse the very tiles the undo just
       // brought back.
       applyLifecycleToGhosts(result);
+      reloadRestoredDomains(result);
       await refresh({ narrate: false });
       if (!requestIsCurrent(request)) return null;
       const reverted = target ?? result?.operations?.[0] ?? null;
@@ -1001,6 +1026,7 @@ export const useOperationStore = defineStore("operation", () => {
     try {
       const result = await redoOperation({ signal: request.controller.signal });
       if (!requestIsCurrent(request)) return null;
+      reloadRestoredDomains(result);
       await refresh({ narrate: false });
       if (!requestIsCurrent(request)) return null;
       // Redoing a move puts the pictures back in the Scrapheap. Their tiles are
@@ -1078,6 +1104,7 @@ export const useOperationStore = defineStore("operation", () => {
         });
         if (!requestIsCurrent(request)) return reverted;
         applyLifecycleToGhosts(result);
+        reloadRestoredDomains(result);
         const done = new Set((result?.operations ?? []).map((op) => op?.id));
         done.add(id);
         reverted += done.size;
@@ -1128,6 +1155,7 @@ export const useOperationStore = defineStore("operation", () => {
       });
       if (!requestIsCurrent(request)) return null;
       applyLifecycleToGhosts(result);
+      reloadRestoredDomains(result);
       await refresh({ narrate: false });
       if (!requestIsCurrent(request)) return null;
       const reverted = target ?? result?.operations?.[0] ?? null;
@@ -1151,6 +1179,7 @@ export const useOperationStore = defineStore("operation", () => {
     activeRequests.clear();
     inFlight = false;
     refetchQueued = false;
+    queuedNarrate = false;
     busy.value = false;
     dismissReceipt();
     resetGhostSet();
@@ -1190,6 +1219,7 @@ export const useOperationStore = defineStore("operation", () => {
     loaded,
     receipt,
     ghostPictureIds,
+    lastRestore,
     ghostState,
     collapsingPictureIds,
     // computed

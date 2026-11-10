@@ -5,13 +5,12 @@ The duplicate queue is the one e2e surface the harness cannot reach through the
 UI or the API, for two reasons that are both properties of the test backend
 rather than of the feature:
 
-1. **Neither import path can add a duplicate.** ``POST /pictures/import``
-   refuses outright without the face-extraction worker, and a reference folder's
-   initial scan is driven by the work planner. Both are off, because
-   ``serve_e2e_backend.py`` boots with ``disable_background_workers: true``.
+1. **Neither import path can add a duplicate.** Import dedup refuses a file
+   whose pixels are already in the library, so the grid never gets the pair.
 2. **A duplicate group only exists after a scan.** ``GET /dedup/groups`` reads
    persisted ``DedupGroup`` rows; the rows are written by ``DedupScanTask``,
-   which the same disabled work planner never runs. ``POST /dedup/scan`` writes
+   which the e2e work planner (restricted by ``serve_e2e_backend.py`` to the
+   folder sweeps and an idle face finder) never runs. ``POST /dedup/scan`` writes
    a ``pending`` row and nothing ever picks it up.
 
 Enabling the workers for the whole suite is not the answer: they would start

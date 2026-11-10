@@ -44,10 +44,15 @@ _DEBOUNCE_S = 1.0
 # reconcile never reads a file a delete then trashes and imports it again.
 INBOX_LOCK = threading.Lock()
 
+# The folder both workflow folders below sit in; ``None`` is the app's data
+# directory. Only the e2e backend moves it (``test_hooks.isolate_e2e_data``),
+# so a test run never touches the folders the owner's own server uses.
+DATA_ROOT: str | None = None
+
 
 def workflow_inbox_dir() -> str:
     """The watched folder, in the app's data directory."""
-    return os.path.join(user_data_dir("pixlstash"), "workflows")
+    return os.path.join(DATA_ROOT or user_data_dir("pixlstash"), "workflows")
 
 
 def workflow_user_dir() -> str:
@@ -56,7 +61,9 @@ def workflow_user_dir() -> str:
     Nothing is written here any more; hub data step 7 read what is, and the
     legacy file routes still list and delete it.
     """
-    return os.path.join(user_data_dir("pixlstash"), "comfyui-workflows", "user")
+    return os.path.join(
+        DATA_ROOT or user_data_dir("pixlstash"), "comfyui-workflows", "user"
+    )
 
 
 def content_hash(workflow: dict) -> str:
@@ -137,7 +144,7 @@ def reconcile(folder: str, store: Callable[[str, dict], dict]) -> int:
 
 def trash_workflow(
     folder: str, name: str, workflow: dict, *, sweep: bool = True
-) -> None:
+) -> list[str]:
     """Write *workflow* back to the inbox and move it to the system trash.
 
     With *sweep*, every inbox file holding the workflow goes, not just the one
@@ -148,6 +155,10 @@ def trash_workflow(
     it, and that edit must stay for the watcher to import. For the same reason
     the copy is written to a name no file has yet. Call it holding
     :data:`INBOX_LOCK`, and remove the stored workflow before releasing it.
+
+    Returns:
+        Every path sent to the trash, the copy written here first, so an undo
+        can take them back out.
 
     Raises:
         ValueError: *name* would put the copy outside *folder*.
@@ -173,11 +184,15 @@ def trash_workflow(
             counter += 1
     if not sweep:
         send2trash(path)
-        return
+        return [path]
+    written_path, trashed = path, []
     for entry in _entries(folder):
         path = os.path.join(folder, entry)
         if _file_hash(path) == digest:
             send2trash(path)
+            trashed.append(path)
+    # The copy written here first, whatever order the folder listed in.
+    return sorted(trashed, key=lambda trashed_path: trashed_path != written_path)
 
 
 def _file_hash(path: str) -> str | None:

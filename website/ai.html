@@ -264,6 +264,7 @@
           "Character likeness scoring against reference faces",
           "Automatic grouping of similar images",
           "Dataset export for training",
+          "LoRA training with ai-toolkit, started from a person or a picture set",
           "ai-toolkit run import with sample images and version history",
           "Two-way ComfyUI integration with tagged round-trip",
           "Tagger plugin API, with a published catalogue including a Moondream2 captioner and an OpenAI-compatible vision API captioner",
@@ -323,8 +324,8 @@
             <span class="ai-loop__num">STAGE 4</span>
             <h3>Train and generate</h3>
             <p>
-              Export the set, track the training run it produced, and bring back
-              a LoRA to present to workflows.
+              Train a LoRA on the set with ai-toolkit, watch the run, and bring
+              back the LoRA to present to workflows.
             </p>
           </li>
         </ol>
@@ -541,12 +542,22 @@
             </p>
           </div>
           <div class="ai-card">
+            <h3>LoRA training</h3>
+            <p>
+              Train a LoRA from a person or a picture set, using your own
+              ai-toolkit install and a GPU it can train on. The Train dialog
+              works out steps, rank and memory settings from the picture count
+              and your GPU, and the run's page shows the loss, previews per
+              checkpoint and the time left.
+            </p>
+          </div>
+          <div class="ai-card">
             <h3>Training runs and versions</h3>
             <p>
               Read an ai-toolkit run where it was written and import it with its
               sample images. Versions of one subject group behind a single row,
               so a character trained four times is one entry with its history
-              under it. PixlStash tracks the runs; it does not run the trainer.
+              under it, whether it was trained here or elsewhere.
             </p>
           </div>
           <div class="ai-card">
@@ -587,7 +598,8 @@
             <h3>CPU out of the box</h3>
             <p>
               The desktop app ships a ready-to-run CPU runtime, so every model
-              on this page works offline on first launch.
+              on this page works offline on first launch. LoRA training is the
+              exception: it runs in your own ai-toolkit install and needs a GPU.
             </p>
           </div>
           <div class="ai-card">
@@ -691,6 +703,11 @@
                 <th scope="row">Reverse face and likeness search</th>
                 <td>No</td>
                 <td class="yes">Yes</td>
+              </tr>
+              <tr>
+                <th scope="row">LoRA training (ai-toolkit)</th>
+                <td>No</td>
+                <td class="yes">Yes, from a person or a picture set</td>
               </tr>
               <tr>
                 <th scope="row">Dataset export and run tracking</th>

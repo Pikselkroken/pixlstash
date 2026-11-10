@@ -12,6 +12,9 @@ export const useFilterStore = defineStore("filter", () => {
   // (the filter menu's Score sets it for a range from 0 stars), which the
   // backend ORs.
   const unscoredOnlyFilter = ref(false);
+  // "Favourites only" (`favourite=1`): the owner's hearted pictures, in
+  // whatever the grid is showing.
+  const favouriteOnlyFilter = ref(false);
   const smartScoreBucketFilter = ref(null);
   const resolutionBucketFilter = ref(null);
   const tagFilter = ref([]);
@@ -20,6 +23,8 @@ export const useFilterStore = defineStore("filter", () => {
   const tagConfidenceBelowFilter = ref([]);
   const faceBboxFilter = ref(null);
   const sharedOnlyFilter = ref(false);
+  // "Imported from": an import folder's path, or null for any picture.
+  const importedFromFilter = ref(null);
   // "Problems" in All Pictures: no named person, and in no set. Independent;
   // both on is the old combined "unassigned" view.
   const noCharacterFilter = ref(false);
@@ -27,6 +32,9 @@ export const useFilterStore = defineStore("filter", () => {
   const comfyuiModelFilter = ref([]);
   const comfyuiLoraFilter = ref([]);
   const comfyuiConfigured = ref(false);
+  // Whether the config has been read, so `comfyuiConfigured` false means none
+  // is saved rather than not known yet (the Workflows sidebar's Set up row).
+  const comfyuiConfigRead = ref(false);
   // The address itself, for the one control that sends the browser there
   // (the Workflow tab's Open in ComfyUI). Empty when none is configured.
   const comfyuiUrl = ref("");
@@ -36,6 +44,7 @@ export const useFilterStore = defineStore("filter", () => {
     onSessionReset(() => {
       comfyuiUrl.value = "";
       comfyuiConfigured.value = false;
+      comfyuiConfigRead.value = false;
     }),
   );
   // Impossible-tag grid filter: array of source keys ("no_face" / "no_humans"),
@@ -64,6 +73,7 @@ export const useFilterStore = defineStore("filter", () => {
     minScoreFilter.value = null;
     maxScoreFilter.value = null;
     unscoredOnlyFilter.value = false;
+    favouriteOnlyFilter.value = false;
     smartScoreBucketFilter.value = null;
     resolutionBucketFilter.value = null;
     tagFilter.value = [];
@@ -72,6 +82,7 @@ export const useFilterStore = defineStore("filter", () => {
     tagConfidenceBelowFilter.value = [];
     faceBboxFilter.value = null;
     sharedOnlyFilter.value = false;
+    importedFromFilter.value = null;
     noCharacterFilter.value = false;
     noSetFilter.value = false;
     comfyuiModelFilter.value = [];
@@ -86,6 +97,7 @@ export const useFilterStore = defineStore("filter", () => {
     minScoreFilter,
     maxScoreFilter,
     unscoredOnlyFilter,
+    favouriteOnlyFilter,
     smartScoreBucketFilter,
     resolutionBucketFilter,
     tagFilter,
@@ -94,11 +106,13 @@ export const useFilterStore = defineStore("filter", () => {
     tagConfidenceBelowFilter,
     faceBboxFilter,
     sharedOnlyFilter,
+    importedFromFilter,
     noCharacterFilter,
     noSetFilter,
     comfyuiModelFilter,
     comfyuiLoraFilter,
     comfyuiConfigured,
+    comfyuiConfigRead,
     comfyuiUrl,
     impossibleSources,
     stackStateFilter,

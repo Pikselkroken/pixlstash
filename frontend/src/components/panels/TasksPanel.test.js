@@ -1,4 +1,4 @@
-// The task manager's body, now that two inspectors mount it.
+// The task manager's body, as the title bar's Tasks pill mounts it.
 //
 // The rows themselves moved out of StatsSidebar untouched, so what is worth
 // asserting is what the move made possible to get wrong:
@@ -11,7 +11,7 @@
 
 import { afterEach, describe, it, expect, beforeEach, vi } from "vitest";
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
-import { h } from "vue";
+import { h, nextTick } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 
 const getWorkflowChanges = vi.fn();
@@ -44,7 +44,7 @@ vi.mock("../../utils/apiClient", async (original) => {
   return { ...(await original()), isReadOnly: readOnly.ref };
 });
 
-import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
+import TasksPanel from "./TasksPanel.vue";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useTasksStore } from "../../stores/useTasksStore";
@@ -55,10 +55,18 @@ import RunAnywayDialog from "./RunAnywayDialog.vue";
 vi.mock("../../api/comfyui", () => ({ abortRun: vi.fn(async () => ({})) }));
 const runLeaseAnyway = vi.fn(async () => ({ status: "success" }));
 const cancelLease = vi.fn(async () => ({ status: "success" }));
+const freeComfyui = vi.fn(async () => ({ status: "success", freed_mb: 0 }));
 vi.mock("../../api/resources", () => ({
   runLeaseAnyway: (...args) => runLeaseAnyway(...args),
   cancelLease: (...args) => cancelLease(...args),
-  freeComfyui: vi.fn(async () => ({ status: "success", freed_mb: 0 })),
+  freeComfyui: (...args) => freeComfyui(...args),
+}));
+const quitComfyuiForTrainingJob = vi.fn(async () => ({ status: "allowed" }));
+const listTrainingJobs = vi.fn(async () => [{ id: 7, uuid: "job-uuid" }]);
+vi.mock("../../api/training", async (original) => ({
+  ...(await original()),
+  listTrainingJobs: (...args) => listTrainingJobs(...args),
+  quitComfyuiForTrainingJob: (...args) => quitComfyuiForTrainingJob(...args),
 }));
 
 const globalOpts = { global: { stubs: { "v-icon": true, Tooltip: true } } };
@@ -83,36 +91,10 @@ beforeEach(() => {
   nav.push = vi.fn();
 });
 
-describe("the tab the hosts declare", () => {
-  // Both inspectors take their descriptor from here, so this is the only place
-  // its wording is decided — and the only place it can be wrong. Asserting the
-  // tooltip as a hand-written prop on AppInspector tested the band, not this.
-  it("counts in words, and says one task in the singular", () => {
-    const tasksStore = useTasksStore();
-    expect(tasksTabFor(tasksStore)).toEqual({
-      value: "tasks",
-      label: "Tasks",
-      icon: "mdi-timeline-clock-outline",
-    });
-
-    tasksStore.comfyuiRuns = [{ prompt_id: "run-1", label: "One" }];
-    expect(tasksTabFor(tasksStore)).toMatchObject({
-      busy: true,
-      busyTooltip: "1 active task",
-    });
-
-    tasksStore.setImportRun("import-1", { label: "Two" });
-    expect(tasksTabFor(tasksStore)).toMatchObject({
-      busy: true,
-      busyTooltip: "2 active tasks",
-    });
-  });
-});
-
 describe("the task manager's poll cadence", () => {
-  // Mounted IS "the tab is on screen": an inspector unmounts its body when the
-  // rail collapses, so this follows what is visible rather than which tab was
-  // last picked. Nothing else in the app calls setTasksTabOpen.
+  // Mounted IS "the task list is on screen": the popover unmounts it when it
+  // closes, so this follows what is visible. Nothing else in the app calls
+  // setTasksTabOpen.
   it("asks for the fast cadence while it is mounted, and gives it back", () => {
     const tasksStore = useTasksStore();
     const spy = vi.spyOn(tasksStore, "setTasksTabOpen");
@@ -129,8 +111,8 @@ describe("the task manager's poll cadence", () => {
 
   // The store counts panels rather than holding a flag: one host's unmount
   // must not drop the cadence back to idle under another host that is still
-  // showing the panel. Not reachable while the two inspectors are `v-if` /
-  // `v-else` siblings; the panel is shared on purpose, so it is asserted.
+  // showing the panel. Not reachable with one host; the panel is shareable on
+  // purpose, so it is asserted.
   it("stays fast while any panel is still mounted", () => {
     const tasksStore = useTasksStore();
     const first = mount(TasksPanel, globalOpts);
@@ -184,6 +166,10 @@ describe("what the task manager shows", () => {
       true,
       false,
     ]);
+    // Each run's percent is a line under its name.
+    const lines = rows.map((row) => row.find('[data-testid="tm-comfy-progress"]'));
+    expect(lines.map((line) => line.attributes("aria-valuenow"))).toEqual(["0", "40", "0"]);
+    expect(lines[1].find(".tm-run-line-fill").attributes("style")).toContain("width: 40%");
 
     // The stop asks the backend, not a handler some view registered.
     const stop = wrapper.find('button[aria-label="Stop ComfyUI"]');
@@ -194,9 +180,9 @@ describe("what the task manager shows", () => {
   });
 
   // A row leaves with its run, and a focused Stop leaves with it: focus falls
-  // to <body>, out of the tab order. Every host is an inspector whose band
-  // holds the Tasks tab, so the panel hands the keyboard back to that tab.
-  function inInspector() {
+  // to <body>, out of the tab order. The host is the title bar's popover, a
+  // dialog, so the panel hands the keyboard back to it.
+  function inPopover() {
     const tasksStore = useTasksStore();
     tasksStore.comfyuiRuns = [
       { prompt_id: "p-1", label: "Night market", status: "running", percent: 40 },
@@ -204,20 +190,17 @@ describe("what the task manager shows", () => {
     const wrapper = mount(
       {
         render: () =>
-          h("div", { class: "inspector" }, [
-            h("button", { class: "inspector-tab inspector-tab--active" }, "Tasks"),
-            h(TasksPanel),
-          ]),
+          h("div", { role: "dialog", tabindex: "-1" }, [h(TasksPanel)]),
       },
       { ...globalOpts, attachTo: document.body },
     );
     const stop = wrapper.find('button[aria-label="Stop ComfyUI"]').element;
     stop.focus();
-    return { tasksStore, wrapper, stop, tab: wrapper.find(".inspector-tab").element };
+    return { tasksStore, wrapper, stop, tab: wrapper.find('[role="dialog"]').element };
   }
 
-  it("hands focus to its tab when the focused control leaves with its row", async () => {
-    const { tasksStore, stop, tab } = inInspector();
+  it("hands focus to its popover when the focused control leaves with its row", async () => {
+    const { tasksStore, stop, tab } = inPopover();
     tasksStore.comfyuiRuns = [];
     // Chromium fires this as the button is removed; jsdom does not, so the
     // test fires it, before the render that removes the row.
@@ -228,7 +211,7 @@ describe("what the task manager shows", () => {
   });
 
   it("leaves focus alone when the control is still there", async () => {
-    const { stop, tab } = inInspector();
+    const { stop, tab } = inPopover();
     stop.blur();
     await flushPromises();
     expect(document.activeElement).not.toBe(tab);
@@ -237,7 +220,7 @@ describe("what the task manager shows", () => {
   // The panel's own hand-off (a save's receipt line takes focus as its offer
   // leaves) is not focus lost.
   it("leaves focus alone when the row left but focus already went somewhere", async () => {
-    const { tasksStore, stop } = inInspector();
+    const { tasksStore, stop } = inPopover();
     const elsewhere = document.createElement("button");
     document.body.appendChild(elsewhere);
     tasksStore.comfyuiRuns = [];
@@ -361,10 +344,9 @@ describe("the offer to save what a run changed", () => {
     wrapper.findAll("button").find((b) => b.text().trim() === text);
   const refusal = (status, detail) => ({ response: { status, data: { detail } } });
 
-  async function mountPanel(props = {}) {
+  async function mountPanel() {
     const wrapper = mount(TasksPanel, {
       ...globalOpts,
-      props,
       attachTo: document.body,
     });
     await flushPromises();
@@ -448,30 +430,6 @@ describe("the offer to save what a run changed", () => {
     expect(button(wrapper, "Save as new…")).toBeTruthy();
     // The panel is not empty with an offer in it.
     expect(textOf(wrapper)).not.toContain("No active tasks");
-  });
-
-  // The lightbox's pane is dark in both themes (#2056). The rows take the dark
-  // inks from the root's class; the offer's buttons are AppButtons, which carry
-  // their own theme inks and have to be told.
-  it("takes the dark-surface inks in the lightbox, buttons included", async () => {
-    ranAndFinished();
-    const wrapper = await mountPanel({ lightbox: true });
-    expect(wrapper.classes()).toContain("tm--lightbox");
-    const verbs = offer(wrapper).findAll(".app-btn");
-    expect(verbs.length).toBe(2);
-    for (const verb of verbs) expect(verb.classes()).toContain("app-btn--on-dark");
-
-    await button(wrapper, "Save as new…").trigger("click");
-    const named = offer(wrapper).findAll(".app-btn");
-    expect(named.length).toBe(2);
-    for (const verb of named) expect(verb.classes()).toContain("app-btn--on-dark");
-  });
-
-  it("keeps the theme's inks in a rail", async () => {
-    ranAndFinished();
-    const wrapper = await mountPanel();
-    expect(wrapper.classes()).not.toContain("tm--lightbox");
-    expect(offer(wrapper).find(".app-btn--on-dark").exists()).toBe(false);
   });
 
   it("draws nothing the server does not hold, whatever this tab remembers", async () => {
@@ -1184,6 +1142,17 @@ describe("the Finished group", () => {
     expect(rows(wrapper)).toHaveLength(2);
   });
 
+  it("heads the group with Clear all, and a read-only session with Made", async () => {
+    let wrapper = await mountWith([run()]);
+    const head = () => wrapper.find('[data-testid="tm-finished"] .tm-group-col');
+    expect(head().text()).toBe("Clear all");
+    wrapper.unmount();
+    readOnly.ref.value = true;
+    wrapper = await mountWith([run()]);
+    expect(head().text()).toBe("Made");
+    expect(wrapper.find('[data-testid="tm-finished-clear"]').exists()).toBe(false);
+  });
+
   it("clears every run but those with unsaved changes", async () => {
     const wrapper = await mountWith([
       run({ id: "run-a", offer: true }),
@@ -1280,8 +1249,9 @@ describe("the GPU queue in the task manager", () => {
     expect(bar.findAll(".tm-legend li").map((item) => item.text())).toEqual([
       "PixlStash",
       "ComfyUI",
+      "AI Toolkit",
       "Other apps",
-      "Spare",
+      "Headroom",
     ]);
     // ComfyUI's 9.8 GB is its own segment, and a spare margin is drawn.
     expect(bar.find(".tm-vram-seg--comfyui").exists()).toBe(true);
@@ -1309,11 +1279,11 @@ describe("the GPU queue in the task manager", () => {
     expect(fold.find('[data-testid="tm-pixl-count"]').text()).toBe("2");
     expect(fold.find(".tm-fig-text").text()).toBe("1.8 GB");
     // Collapsed by default: no task lines.
-    expect(wrapper.findAll(".tm-row--child")).toHaveLength(0);
+    expect(wrapper.findAll('[data-testid="tm-pixl-child"]')).toHaveLength(0);
     expect(fold.find(".tm-caret").attributes("aria-expanded")).toBe("false");
 
     await fold.find(".tm-caret").trigger("click");
-    const children = wrapper.findAll(".tm-row--child");
+    const children = wrapper.findAll('[data-testid="tm-pixl-child"]');
     expect(children).toHaveLength(2);
     // A task on the CPU says so in its figure column, and is still running.
     expect(children[1].find(".tm-fig-text").text()).toBe("CPU");
@@ -1336,7 +1306,7 @@ describe("the GPU queue in the task manager", () => {
     // Both idle between batches: the fold does not pulse for them.
     expect(fold.find(".tm-mark").classes("tm-mark--running")).toBe(false);
     // Collapsed: no worker is listed anywhere, inside the fold or beside it.
-    expect(wrapper.findAll(".tm-worker-row")).toHaveLength(0);
+    expect(wrapper.findAll('[data-testid="tm-pixl-child"]')).toHaveLength(0);
     expect(wrapper.findAll("canvas.tm-sparkline")).toHaveLength(0);
 
     tasksStore.workerSnapshots = {
@@ -1347,16 +1317,54 @@ describe("the GPU queue in the task manager", () => {
     expect(fold.find(".tm-mark").classes("tm-mark--running")).toBe(true);
 
     await fold.find(".tm-caret").trigger("click");
-    const rows = fold.findAll(".tm-worker-row");
-    expect(rows.map((row) => row.find(".tm-worker-label").text())).toEqual([
-      "Image Embeddings",
-      "Tags",
+    // One line each, inside the fold's own card, with its progress by its name.
+    const rows = fold.findAll('[data-testid="tm-pixl-child"]');
+    expect(rows.map((row) => row.find(".tm-child-name").text())).toEqual([
+      "Image Embeddings 5 / 9",
+      "Tags 1 / 9",
     ]);
     expect(rows.every((row) => row.find("canvas.tm-sparkline").exists())).toBe(true);
     // The tagger's lease shows on the tagger's row, and is not a line of its own.
-    expect(rows[1].find('[data-testid="tm-worker-figure"]').text()).toBe("1.2 GB");
-    expect(rows[0].find('[data-testid="tm-worker-figure"]').exists()).toBe(false);
-    expect(wrapper.findAll(".tm-row--child")).toHaveLength(0);
+    expect(rows[1].find(".tm-fig-text").text()).toBe("1.2 GB");
+    expect(rows[0].find(".tm-fig-text").text()).toBe("");
+    expect(rows[1].find(".tm-mark").classes("tm-mark--running")).toBe(true);
+    // The rate and what is left are the tooltip's, and read out with the row.
+    tasksStore.series = {
+      TagTask: [
+        { t: 100, rate: 0, current: 1 },
+        { t: 110, rate: 2, current: 21 },
+      ],
+    };
+    await flushPromises();
+    const tagRow = fold.findAll('[data-testid="tm-pixl-child"]')[1];
+    expect(tagRow.find(".visually-hidden").text()).toBe(", 2.0/s · 8 to go");
+  });
+
+  it("checks off a worker that has finished, with no chart and no figure", () => {
+    const tasksStore = setGpu(gpuAnswer({ leases: [] }));
+    tasksStore.workerSnapshots = {
+      TextEmbeddingTask: { label: "Text embeddings", current: 9, total: 9, running: false, active: true },
+      ImageEmbeddingTask: { label: "Image embeddings", current: 5, total: 9, running: true, active: true },
+    };
+    // Its last batch still counts in the minute's rate; it is done all the same.
+    tasksStore.series = {
+      TextEmbeddingTask: [
+        { t: 100, rate: 0, current: 1 },
+        { t: 110, rate: 0.8, current: 9 },
+      ],
+    };
+    localStorage.setItem("pixlstash:tasks:pixlstash-fold", "1");
+    const wrapper = mount(TasksPanel, globalOpts);
+    const rows = wrapper.findAll('[data-testid="tm-pixl-child"]');
+    const done = rows.find((row) => row.text().includes("Text Embeddings"));
+    const working = rows.find((row) => row.text().includes("Image Embeddings"));
+    expect(done.find(".tm-mark").attributes("data-state")).toBe("done");
+    expect(done.find("canvas.tm-sparkline").exists()).toBe(false);
+    expect(done.find(".tm-fig-text").text()).toBe("");
+    // Nor does it read out the rate its last batch left behind.
+    expect(done.find(".visually-hidden").exists()).toBe(false);
+    expect(working.find(".tm-mark").attributes("data-state")).toBeUndefined();
+    expect(working.find("canvas.tm-sparkline").exists()).toBe(true);
   });
 
   it("marks a task the backend stopped as stopped, not as lost", async () => {
@@ -1368,7 +1376,7 @@ describe("the GPU queue in the task manager", () => {
     );
     localStorage.setItem("pixlstash:tasks:pixlstash-fold", "1");
     const wrapper = mount(TasksPanel, globalOpts);
-    const children = wrapper.findAll(".tm-row--child");
+    const children = wrapper.findAll('[data-testid="tm-pixl-child"]');
     expect(children.map((child) => child.find(".tm-fig-text").text())).toEqual(["1.2 GB", "stopped"]);
     expect(children[1].find(".tm-mark").attributes("data-state")).toBe("stopped");
   });
@@ -1395,7 +1403,7 @@ describe("the GPU queue in the task manager", () => {
               short_by_mb: 3100,
               position: 1,
               blocked_by: [],
-              actions: ["run_anyway", "cancel", "free_comfyui"],
+              actions: ["run_anyway", "cancel", "quit_comfyui"],
             },
           }),
         ],
@@ -1412,7 +1420,7 @@ describe("the GPU queue in the task manager", () => {
     expect(wrapper.findAll('[data-testid="tm-waiting-row"]')).toHaveLength(1);
     expect(wrapper.find('[data-testid="tm-run-anyway"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="tm-cancel-wait"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="tm-free-comfyui"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tm-quit-comfyui"]').exists()).toBe(false);
     expect(wrapper.find('button[aria-label="Stop ComfyUI"]').exists()).toBe(false);
   });
 
@@ -1453,9 +1461,52 @@ describe("the GPU queue in the task manager", () => {
     // The three actions the backend offered, and none it did not.
     expect(wrapper.find('[data-testid="tm-run-anyway"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="tm-cancel-wait"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="tm-free-comfyui"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tm-quit-comfyui"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tm-clear-phase"]').exists()).toBe(false);
     // The run is not also listed under Running.
     expect(wrapper.findAll('[data-testid="tm-comfy-row"]')).toHaveLength(0);
+  });
+
+  it("asks before cancelling a waiting AI Toolkit run, and cancels nothing on no", async () => {
+    cancelLease.mockClear();
+    setGpu(
+      gpuAnswer({
+        leases: [
+          gpuLease({
+            id: "lease-t",
+            tenant: "aitoolkit",
+            label: "Clementine",
+            kind: "heavy",
+            state: "waiting",
+            device: null,
+            need_mb: 14600,
+            waiting_reason: {
+              code: "fifo",
+              text: "Waiting behind ComfyUI.",
+              need_mb: 14600,
+              free_mb: 11500,
+              short_by_mb: 3100,
+              position: 1,
+              blocked_by: [],
+              actions: ["cancel"],
+            },
+          }),
+        ],
+      }),
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const wrapper = mount(TasksPanel, globalOpts);
+    await wrapper.find('[data-testid="tm-cancel-wait"]').trigger("click");
+    await flushPromises();
+    expect(confirm).toHaveBeenCalledWith(
+      'Stop training "Clementine"? The checkpoints it saved are kept.',
+    );
+    expect(cancelLease).not.toHaveBeenCalled();
+
+    confirm.mockReturnValue(true);
+    await wrapper.find('[data-testid="tm-cancel-wait"]').trigger("click");
+    await flushPromises();
+    expect(cancelLease).toHaveBeenCalledWith("lease-t");
   });
 
   it("asks before Run anyway, and starts the lease only when the dialog is confirmed", async () => {
@@ -1532,5 +1583,283 @@ describe("the GPU queue in the task manager", () => {
       inDialog.remove();
       wrapper.unmount();
     }
+  });
+});
+
+describe("the AI Toolkit run in the task manager", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  function trainingLease(over = {}) {
+    return {
+      id: "lease-train",
+      tenant: "aitoolkit",
+      label: "LoRA training 'MyChar'",
+      kind: "exclusive",
+      state: "granted",
+      device: "GPU-1",
+      need_mb: 14336,
+      ram_mb: 0,
+      reserved_mb: 14336,
+      held_mb: 14336,
+      peak_mb: null,
+      since: "2026-10-22T10:00:00Z",
+      worker_type: null,
+      run_id: null,
+      job_id: "job-1",
+      workflow_id: null,
+      on_cpu: false,
+      warnings: [],
+      waiting_reason: null,
+      progress: { step: 2750, total: 4000, loss: 0.123 },
+      ...over,
+    };
+  }
+
+  it("is one row: its name, the step, total and loss it reports, and the VRAM it holds", () => {
+    setGpu(gpuAnswer({ leases: [trainingLease()] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    const row = wrapper.find('[data-testid="tm-aitoolkit-row"]');
+    expect(wrapper.findAll('[data-testid="tm-aitoolkit-row"]')).toHaveLength(1);
+    expect(row.find(".tm-name").text()).toContain("LoRA training 'MyChar'");
+    expect(row.find('[data-testid="tm-aitoolkit-progress"]').text()).toBe(
+      "step 2750/4000 · loss 0.123",
+    );
+    expect(row.find(".tm-fig-text").text()).toBe("14.0 GB");
+    expect(row.find(".tm-mark").classes("tm-mark--running")).toBe(true);
+  });
+
+  it("names the memory probe instead of its own steps", () => {
+    setGpu(
+      gpuAnswer({
+        leases: [
+          trainingLease({ progress: { step: 6, total: 6, shown_as: "checking" } }),
+        ],
+      }),
+    );
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find('[data-testid="tm-aitoolkit-progress"]').text()).toBe(
+      "checking memory and speed",
+    );
+    setGpu(
+      gpuAnswer({
+        leases: [
+          trainingLease({ progress: { step: 40, total: 40, shown_as: "previews" } }),
+        ],
+      }),
+    );
+    const after = mount(TasksPanel, globalOpts);
+    expect(after.find('[data-testid="tm-aitoolkit-progress"]').text()).toBe(
+      "generating previews",
+    );
+  });
+
+  it("opens the run's page in the shelf's Training runs tab", async () => {
+    nav.push = vi.fn();
+    setGpu(gpuAnswer({ leases: [trainingLease()] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    await wrapper.find('[data-testid="tm-aitoolkit-watch"]').trigger("click");
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "models-runs",
+      query: { run: "job-1" },
+    });
+  });
+
+  it("shows no step until the run reports a total", () => {
+    setGpu(gpuAnswer({ leases: [trainingLease({ progress: null })] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find('[data-testid="tm-aitoolkit-row"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="tm-aitoolkit-progress"]').exists()).toBe(false);
+  });
+
+  it("draws the run once, with no PixlStash fold or worker row of its own", () => {
+    setGpu(gpuAnswer({ leases: [trainingLease()] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find('[data-testid="tm-pixlstash"]').exists()).toBe(false);
+    expect(wrapper.findAll(".tm-worker-row")).toHaveLength(0);
+    expect(wrapper.findAll('[data-testid="tm-aitoolkit-row"]')).toHaveLength(1);
+  });
+
+  it("is listed under Waiting for the GPU while its lease waits, not as a running row", () => {
+    setGpu(gpuAnswer({ leases: [trainingLease({ state: "waiting", progress: null, held_mb: 0 })] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find('[data-testid="tm-aitoolkit-row"]').exists()).toBe(false);
+    expect(wrapper.findAll('[data-testid="tm-waiting-row"]')).toHaveLength(1);
+  });
+});
+
+describe("clearing ComfyUI's memory from Tasks", () => {
+  const SHORT = {
+    code: "vram",
+    text: "Needs 26.6 GB; 11.6 GB is free.",
+    need_mb: 27238,
+    free_mb: 11878,
+    short_by_mb: 2458,
+    position: 1,
+    blocked_by: [],
+    comfyui_closing: { kept_mb: 6144, short_mb: 2458, can_quit: true, busy: false, allowed: false },
+    actions: ["run_anyway", "cancel", "quit_comfyui"],
+  };
+
+  function training(clear) {
+    return gpuLease({
+      id: "lease-t",
+      tenant: "aitoolkit",
+      label: "LoRA training 'Grandad'",
+      kind: "exclusive",
+      state: "waiting",
+      need_mb: 27238,
+      job_id: "job-uuid",
+      waiting_reason: SHORT,
+      comfyui_clear: clear,
+    });
+  }
+
+  function acts(wrapper) {
+    return wrapper
+      .find('[data-testid="tm-waiting-row"] .tm-acts')
+      .findAll("button")
+      .map((button) => button.attributes("data-testid"));
+  }
+
+  function steps(wrapper) {
+    return wrapper
+      .findAll(".tm-phase li")
+      .map((li) => `${li.text()}:${li.attributes("data-state")}`);
+  }
+
+  beforeEach(() => {
+    readOnly.ref.value = false;
+    freeComfyui.mockClear();
+    quitComfyuiForTrainingJob.mockClear();
+  });
+
+  it("waits on ComfyUI's jobs with Quit instead and Cancel, never Run anyway", () => {
+    setGpu(gpuAnswer({ leases: [training({ phase: "jobs", jobs: 2, freed_mb: null, failed: false })] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find(".tm-clear-text").text()).toBe(
+      "Waits for ComfyUI's 2 jobs, then clears its memory and starts.",
+    );
+    expect(steps(wrapper)).toEqual([
+      "ComfyUI's jobs, in progress:now",
+      "Clear memory, not started:next",
+      "Train, not started:next",
+    ]);
+    expect(acts(wrapper)).toEqual(["tm-quit-comfyui", "tm-cancel-wait"]);
+    expect(wrapper.find('[data-testid="tm-quit-comfyui"]').attributes("aria-label")).toBe(
+      "Quit ComfyUI after its jobs instead",
+    );
+  });
+
+  it("shows what the clear freed so far, with Cancel alone", () => {
+    setGpu(gpuAnswer({ leases: [training({ phase: "clearing", jobs: 0, freed_mb: 9420, failed: false })] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find(".tm-clear-text").text()).toBe("Clearing ComfyUI's memory: 9.2 GB freed.");
+    expect(steps(wrapper)).toEqual([
+      "ComfyUI's jobs, done:done",
+      "Clear memory, in progress:now",
+      "Train, not started:next",
+    ]);
+    expect(acts(wrapper)).toEqual(["tm-cancel-wait"]);
+  });
+
+  it("still short after clearing, asks: quit and train, run anyway, cancel", async () => {
+    setGpu(gpuAnswer({ leases: [training({ phase: "cleared", jobs: 0, freed_mb: 12902, failed: false })] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find(".tm-clear-text").text()).toBe(
+      "Cleared 12.6 GB; still 2.4 GB short. ComfyUI keeps 6.0 GB until it quits.",
+    );
+    expect(wrapper.find(".tm-clear-text--short").exists()).toBe(true);
+    expect(steps(wrapper)).toEqual([
+      "ComfyUI's jobs, done:done",
+      "Clear memory, done:done",
+      "Train, not started:next",
+    ]);
+    expect(acts(wrapper)).toEqual(["tm-quit-comfyui", "tm-run-anyway", "tm-cancel-wait"]);
+    await wrapper.find('[data-testid="tm-quit-comfyui"]').trigger("click");
+    await flushPromises();
+    // The route names the run by its job id, found from the lease's uuid.
+    expect(quitComfyuiForTrainingJob).toHaveBeenCalledWith(7);
+  });
+
+  it("does not mark a failed clear as done", () => {
+    setGpu(gpuAnswer({ leases: [training({ phase: "cleared", jobs: 0, freed_mb: 0, failed: true })] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find(".tm-clear-text").text()).toBe("ComfyUI did not clear its memory.");
+    expect(steps(wrapper)).toEqual([
+      "ComfyUI's jobs, done:done",
+      "Clear memory, not started:next",
+      "Train, not started:next",
+    ]);
+  });
+
+  it("never says it cleared 0.0 GB, nor 'until it quits' of one it cannot quit", () => {
+    const lease = training({ phase: "cleared", jobs: 0, freed_mb: 0, failed: false });
+    lease.waiting_reason = {
+      ...SHORT,
+      comfyui_closing: { ...SHORT.comfyui_closing, can_quit: false },
+      actions: ["run_anyway", "cancel"],
+    };
+    setGpu(gpuAnswer({ leases: [lease] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find(".tm-clear-text").text()).toBe(
+      "Still 2.4 GB short after clearing. ComfyUI keeps 6.0 GB until it is closed.",
+    );
+  });
+
+  it("gives ComfyUI a standing row whose broom clears it only when idle", async () => {
+    const tasks = setGpu(
+      gpuAnswer({ comfyui: { device: "GPU-1", held_mb: 19046, idle: false, jobs: 3 } }),
+    );
+    const wrapper = mount(TasksPanel, globalOpts);
+    const row = wrapper.find('[data-testid="tm-comfy-host"]');
+    expect(row.find(".tm-fig-text").text()).toBe("18.6 GB");
+    expect(row.find('[data-testid="tm-comfy-host-jobs"]').text()).toBe("3");
+    const broom = row.find('[data-testid="tm-clear-comfyui"]');
+    expect(broom.attributes("aria-disabled")).toBe("true");
+    await broom.trigger("click");
+    expect(freeComfyui).not.toHaveBeenCalled();
+
+    tasks.resources = gpuAnswer({ comfyui: { device: "GPU-1", held_mb: 19046, idle: true, jobs: 0 } });
+    await nextTick();
+    expect(broom.attributes("aria-disabled")).toBeUndefined();
+    freeComfyui.mockResolvedValueOnce({ status: "success", freed_mb: 12902 });
+    await broom.trigger("click");
+    await flushPromises();
+    expect(freeComfyui).toHaveBeenCalledTimes(1);
+    expect(useNoticeStore().notices.map((n) => n.text)).toContain("Cleared 12.6 GB from ComfyUI.");
+  });
+
+  it("leaves the standing row out while its jobs are run rows, the running one showing what ComfyUI holds", async () => {
+    const tasks = setGpu(
+      gpuAnswer({ comfyui: { device: "GPU-1", held_mb: 19046, idle: false, jobs: 1 } }),
+    );
+    tasks.comfyuiRuns = [
+      { prompt_id: "p-1", label: "Night market", status: "running", percent: 20 },
+    ];
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find('[data-testid="tm-comfy-host"]').exists()).toBe(false);
+    const run = wrapper.find('[data-testid="tm-comfy-row"]');
+    expect(run.find(".tm-fig-text").text()).toBe("18.6 GB");
+
+    // Queued only, no run shows what ComfyUI holds, so the standing row stays.
+    tasks.comfyuiRuns = [{ prompt_id: "p-1", label: "Night market", status: "queued", percent: 0 }];
+    await nextTick();
+    expect(wrapper.find('[data-testid="tm-comfy-host"]').exists()).toBe(true);
+    tasks.comfyuiRuns = [{ prompt_id: "p-1", label: "Night market", status: "running", percent: 20 }];
+    await nextTick();
+    expect(wrapper.find('[data-testid="tm-comfy-host"]').exists()).toBe(false);
+
+    // A job PixlStash did not submit has no run row, so the standing row returns.
+    tasks.resources = gpuAnswer({ comfyui: { device: "GPU-1", held_mb: 19046, idle: false, jobs: 2 } });
+    await nextTick();
+    expect(wrapper.find('[data-testid="tm-comfy-host"]').exists()).toBe(true);
+  });
+
+  it("draws no ComfyUI row before ComfyUI has been read", () => {
+    setGpu(gpuAnswer());
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find('[data-testid="tm-comfy-host"]').exists()).toBe(false);
   });
 });

@@ -2,7 +2,7 @@
 // route refuses a list that misses any member, so a stack whose members are not
 // all known to be on screen must offer no order at all.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ref } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 
@@ -17,6 +17,10 @@ vi.mock("../api/stacks", () => ({
 import { useStackOrdering } from "./useStackOrdering.js";
 import { listStackPictures } from "../api/stacks";
 import { useSortStore } from "../stores/useSortStore";
+import {
+  resetShareDragForTests,
+  runShareDrag,
+} from "../utils/shareDrag.js";
 
 function makeStack(images, fetched = images) {
   const deps = {
@@ -153,5 +157,60 @@ describe("useStackOrdering: an open stack's layout under a sort", () => {
     expect(ids(stack)).toEqual([100, 1, 2, 3, 101]);
     const tile = stack.grid.value.find((img) => img.id === 2);
     expect(tile.stack_position).toBe(1);
+  });
+});
+
+// A dropEffect the drag does not allow makes Chromium drop nothing, with no
+// drop event; a desktop drag-out (utils/shareDrag.js) allows copy and link only.
+describe("useStackOrdering: reorder dragover asks for an allowed effect", () => {
+  const COPY = "/home/me/share-copies/0123abcd/1.png";
+  const openStack = () =>
+    makeStack([member(1, 0, { stackCount: 3 }), member(2, 1), member(3, 2)]);
+  const dragover = (dataTransfer) => ({
+    dataTransfer,
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+  });
+
+  afterEach(() => {
+    resetShareDragForTests();
+    delete window.pixlstashDesktop;
+  });
+
+  it("takes a desktop drag-out with copy", () => {
+    window.pixlstashDesktop = { startShareDrag: () => new Promise(() => {}) };
+    void runShareDrag([1], [COPY]);
+    const stack = openStack();
+    const dataTransfer = {
+      types: ["Files"],
+      files: [],
+      effectAllowed: "copyLink",
+      dropEffect: "",
+      getData: () => "",
+    };
+    const event = dragover(dataTransfer);
+
+    stack.handleStackReorderDragOver(member(2, 1), event);
+
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(dataTransfer.dropEffect).toBe("copy");
+  });
+
+  it("keeps move for an in-page drag that allows only move", () => {
+    const stack = openStack();
+    const json = JSON.stringify({ type: "image-ids", imageIds: [1] });
+    const dataTransfer = {
+      types: ["application/json"],
+      files: [],
+      effectAllowed: "move",
+      dropEffect: "",
+      getData: (type) => (type === "application/json" ? json : ""),
+    };
+    const event = dragover(dataTransfer);
+
+    stack.handleStackReorderDragOver(member(2, 1), event);
+
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(dataTransfer.dropEffect).toBe("move");
   });
 });

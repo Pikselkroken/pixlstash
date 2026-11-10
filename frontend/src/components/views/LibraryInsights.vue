@@ -25,14 +25,10 @@
         >
           Look again
         </AppButton>
-        <!-- The app-wide tail, minus undo: this view replaces the grid and its
-             toolbar, so without it neither Settings nor the right rail has a
-             control on the screen (#1415). Settings travels on the same `act`
-             channel the findings' own buttons use. -->
-        <TbGlobalActions
-          separator
-          @open-settings="emit('act', { kind: 'settings' })"
-        />
+        <!-- The app-wide tail (undo/redo and the rail toggle): this view
+             replaces the grid and its toolbar, so without it neither has a
+             control on the screen (#1415). -->
+        <TbGlobalActions separator />
       </div>
     </div>
 
@@ -101,6 +97,8 @@
         </p>
       </template>
     </div>
+    <!-- Narrates an undo/redo taken from the toolbar's control. -->
+    <ActionReceipt />
   </div>
 </template>
 
@@ -108,6 +106,7 @@
 import { computed, onMounted, ref } from "vue";
 import { VIcon } from "vuetify/components";
 
+import ActionReceipt from "../widgets/ActionReceipt.vue";
 import AppButton from "../widgets/AppButton.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import { getInsights } from "../../api/insights";
@@ -207,6 +206,8 @@ onMounted(load);
 
 <style scoped>
 .ins {
+  /* The receipt slot is absolutely placed against this root. */
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;

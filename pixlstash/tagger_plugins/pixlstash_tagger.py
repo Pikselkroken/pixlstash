@@ -10,6 +10,7 @@ import base64
 import json
 import logging
 import os
+import shutil
 import threading
 from io import BytesIO
 from typing import TYPE_CHECKING, Callable
@@ -23,6 +24,7 @@ if TYPE_CHECKING:  # annotations only - see the function-local import note below
 
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
 from pixlstash.utils.accelerator import is_accelerated, supports_fp16
+from pixlstash.utils.model_utils import MODEL_CONSTRUCTION_LOCK
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
 from pixlstash.utils.vram_utils import empty_device_cache, is_vram_oom
 
@@ -37,10 +39,19 @@ PIXLSTASH_TAGGER_HF_REPO = "PersonalJeebus/pixlvault-anomaly-tagger"
 PIXLSTASH_TAGGER_FILENAME = "pixlstash-anomaly-tagger.safetensors"
 PIXLSTASH_TAGGER_META_FILENAME = "pixlstash-anomaly-tagger_meta.json"
 PIXLSTASH_TAGGER_REV_FILENAME = "pixlstash-anomaly-tagger.revision"
+# The DINOv3 ViT is built from a config shipped beside the weights, and the
+# weights are under the DINOv3 License, shipped beside them too. The repo names
+# both generically, so they are stored under the tagger's prefix: the model
+# folder is shared with every other model on the shelf.
+PIXLSTASH_TAGGER_HF_CONFIG_FILENAME = "dinov3_config.json"
+PIXLSTASH_TAGGER_CONFIG_FILENAME = "pixlstash-anomaly-tagger_dinov3_config.json"
+PIXLSTASH_TAGGER_HF_LICENSE_FILENAME = "LICENSE.md"
+PIXLSTASH_TAGGER_LICENSE_FILENAME = "pixlstash-anomaly-tagger_LICENSE.md"
+PIXLSTASH_TAGGER_DINOV3_ARCH = "dinov3_vitb16"
 # Pin a specific HuggingFace git commit SHA so the model is re-downloaded
 # whenever this value is updated, even if the local file already exists.
 # Set to "main" to always use the latest commit on the default branch.
-PIXLSTASH_TAGGER_REVISION = "9c980e90c73b1270ddc5c7b9cf55536ec40c7afc"
+PIXLSTASH_TAGGER_REVISION = "cba5e8ab3674714018b204f09700d4b25441d128"
 PIXLSTASH_TAGGER_DEFAULT_THRESHOLD = 0.50
 PIXLSTASH_TAGGER_LABEL_THRESHOLD_BIAS = 0.0
 
@@ -109,6 +120,65 @@ PIXLSTASH_ANOMALY_MAX_BOXES = 5
 PIXLSTASH_ANOMALY_HEATMAP_SIZE = 256
 
 
+def _build_dinov3_tagger(config_path: str, num_labels: int):
+    """Build the DINOv3 ViT-B/16 tagger with the trainer's module layout.
+
+    The state-dict keys (``features.embeddings.*``, ``features.model.layer.N.*``,
+    ``classifier.{0,2}.*``) are pixltagger's, so a checkpoint loads strictly.
+    The head reads ``[CLS, mean patch token]``; the ``Identity`` keeps the
+    linear layer at index 2 where the trainer's dropout slot was.
+
+    Args:
+        config_path: The ``dinov3_config.json`` shipped beside the weights.
+        num_labels: Width of the output layer.
+
+    Returns:
+        An untrained ``torch.nn.Module``; the caller loads the weights.
+    """
+    import torch
+    from transformers import DINOv3ViTConfig, DINOv3ViTModel
+
+    class DINOv3Tagger(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            config = DINOv3ViTConfig.from_json_file(config_path)
+            self.features = DINOv3ViTModel(config)
+            # CLS + register tokens precede the patch tokens.
+            self.skip_tokens = 1 + config.num_register_tokens
+            self.patch_size = config.patch_size
+            width = 2 * config.hidden_size
+            self.classifier = torch.nn.Sequential(
+                torch.nn.LayerNorm(width),
+                torch.nn.Identity(),
+                torch.nn.Linear(width, num_labels),
+            )
+
+        def forward(self, x):
+            out = self.features(pixel_values=x)
+            patches = out.last_hidden_state[:, self.skip_tokens :]
+            return self.classifier(torch.cat([out.pooler_output, patches.mean(1)], 1))
+
+    return DINOv3Tagger()
+
+
+def _vit_patch_tokens_to_nchw(tokens, skip_tokens: int, image_hw, patch_size: int):
+    """Turn ViT tokens ``(N, skip + h*w, C)`` into a ``(N, C, h, w)`` map.
+
+    Args:
+        tokens: The encoder's output tokens, CLS and registers first.
+        skip_tokens: How many leading non-patch tokens to drop.
+        image_hw: The input's ``(height, width)`` in pixels.
+        patch_size: The ViT's patch side in pixels.
+
+    Patch tokens are row-major over the grid (the patch embedding flattens
+    ``(h, w)``), so row ``r``, column ``c`` is token ``skip + r * w + c``.
+    """
+    grid_h, grid_w = image_hw[0] // patch_size, image_hw[1] // patch_size
+    patches = tokens[:, skip_tokens:]
+    n, _, channels = patches.shape
+    return patches.reshape(n, grid_h, grid_w, channels).permute(0, 3, 1, 2)
+
+
 class UnknownAnomalyLabel(ValueError):
     """Raised when a requested anomaly label is not known to the tagger model."""
 
@@ -139,11 +209,13 @@ class PixlStashTaggerService:
         self._model_path = os.path.join(model_dir, PIXLSTASH_TAGGER_FILENAME)
         self._meta_path = os.path.join(model_dir, PIXLSTASH_TAGGER_META_FILENAME)
         self._rev_path = os.path.join(model_dir, PIXLSTASH_TAGGER_REV_FILENAME)
+        self._config_path = os.path.join(model_dir, PIXLSTASH_TAGGER_CONFIG_FILENAME)
         self._image_size_full = PIXLSTASH_TAGGER_IMAGE_SIZE_FULL
         self._image_size_quality_crop = PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP
         self._batch_size_fn = batch_size_fn
         # Model state - populated by init()
         self._model = None
+        self._arch: str | None = None
         self._labels: list | None = None
         self._label_to_idx: dict | None = None
         self._label_thresholds: dict[str, float] = {}
@@ -206,12 +278,13 @@ class PixlStashTaggerService:
         """Return True if the model or meta file must be (re-)downloaded.
 
         Re-download is required when:
-        - The model or meta file is missing, OR
+        - The model, meta or DINOv3 config file is missing, OR
         - The revision sidecar is absent or records a different revision than
           ``PIXLSTASH_TAGGER_REVISION``, indicating the pinned version has changed.
         """
-        if not os.path.isfile(self._model_path) or not os.path.isfile(self._meta_path):
-            return True
+        for path in (self._model_path, self._meta_path, self._config_path):
+            if not os.path.isfile(path):
+                return True
         # Only enforce revision check for explicit commit SHAs.
         if PIXLSTASH_TAGGER_REVISION == "main":
             return False
@@ -259,6 +332,21 @@ class PixlStashTaggerService:
                 revision=PIXLSTASH_TAGGER_REVISION,
                 force_download=False,
             )
+            # Fetched into the HF cache and copied, so they land under the
+            # tagger's prefix rather than as a bare LICENSE.md in a shared folder.
+            for hf_name, local_name in (
+                (PIXLSTASH_TAGGER_HF_CONFIG_FILENAME, PIXLSTASH_TAGGER_CONFIG_FILENAME),
+                (
+                    PIXLSTASH_TAGGER_HF_LICENSE_FILENAME,
+                    PIXLSTASH_TAGGER_LICENSE_FILENAME,
+                ),
+            ):
+                cached = hf_hub_download(
+                    repo_id=PIXLSTASH_TAGGER_HF_REPO,
+                    filename=hf_name,
+                    revision=PIXLSTASH_TAGGER_REVISION,
+                )
+                shutil.copyfile(cached, os.path.join(dest_dir, local_name))
             try:
                 with open(self._rev_path, "w", encoding="utf-8") as f:
                     f.write(PIXLSTASH_TAGGER_REVISION)
@@ -304,16 +392,27 @@ class PixlStashTaggerService:
                 "Loaded per-label thresholds for %d labels from meta.json",
                 len(self._label_thresholds),
             )
-        self._model = self._build_model(arch, len(labels))
+        if arch == PIXLSTASH_TAGGER_DINOV3_ARCH and not os.path.exists(
+            self._config_path
+        ):
+            raise FileNotFoundError(
+                f"PixlStash tagger DINOv3 config not found: {self._config_path}"
+            )
+        # Built under the process-wide lock; see MODEL_CONSTRUCTION_LOCK.
+        with MODEL_CONSTRUCTION_LOCK:
+            self._model = self._build_model(arch, len(labels))
+        self._arch = arch
         # Normalise dtype first: safetensors weights may be FP16 while the
         # freshly-built classifier head is FP32.  Cast everything to FP32,
         # load the state dict (now a consistent dtype), then promote to FP16
         # on an accelerator.  CPU always stays FP32.
         #
-        # On CUDA fp16 buys speed. On MPS it buys *headroom* - measured
-        # tag-identical to fp32 and to the CPU, no measurable speed change, and
-        # ~45 % less device memory at the same batch - which on unified memory
-        # is the thing that keeps a batch from taking the machine with it.
+        # On CUDA fp16 buys speed. On MPS it buys *headroom* - on the ConvNeXt
+        # tagger it measured tag-identical to fp32 and to the CPU, no
+        # measurable speed change, and ~45 % less device memory at the same
+        # batch - which on unified memory is the thing that keeps a batch from
+        # taking the machine with it. The DINOv3 ViT is tag-identical in fp16
+        # on CUDA; its MPS parity is not yet measured.
         self._model.float()
         self._model.load_state_dict(state_dict)
         self._model.to(self._device)
@@ -413,6 +512,7 @@ class PixlStashTaggerService:
         """
         with self._load_lock:
             self._model = None
+            self._arch = None
             self._labels = None
             self._label_to_idx = None
             self._transform = None
@@ -805,8 +905,8 @@ class PixlStashTaggerService:
     def localize_anomaly(self, pil_image: Image.Image, label: str) -> dict:
         """Locate an anomaly label in an image via Grad-CAM (approximate).
 
-        Runs a single Grad-CAM pass on the last ConvNeXt stage for the given
-        label and derives an APPROXIMATE bounding box plus a colourised heatmap
+        Runs a single Grad-CAM pass on the backbone's last feature map for the
+        given label and derives an APPROXIMATE bounding box plus a colourised heatmap
         overlay. Intended as a "zoom to the anomaly" UI hint, not precise
         detection. When the activation is too spread out (a global or surface
         defect), the result is flagged diffuse with no box or heatmap.
@@ -872,6 +972,8 @@ class PixlStashTaggerService:
             in_features = model.classifier[2].in_features
             model.classifier[2] = torch.nn.Linear(in_features, num_labels)
             return model
+        if arch == PIXLSTASH_TAGGER_DINOV3_ARCH:
+            return _build_dinov3_tagger(self._config_path, num_labels)
         raise ValueError(f"Unsupported PixlStash tagger arch: {arch}")
 
     def _build_transform(self, image_size: int) -> transforms.Compose:
@@ -898,11 +1000,12 @@ class PixlStashTaggerService:
     def _compute_gradcam(self, rgb_image: Image.Image, label_idx: int) -> np.ndarray:
         """Return a normalised ``[0, 1]`` Grad-CAM heatmap for ``label_idx``.
 
-        Hooks the last ConvNeXt stage, runs one forward+backward pass at the
-        full image size, and resizes the class-activation map to the input
-        resolution. The shared model is temporarily upcast to fp32 (CUDA keeps
-        it in fp16 for the hot path, which produces NaN gradients) and restored
-        to its original dtype in ``finally`` so the hot tagging path is
+        Hooks the last ConvNeXt stage (or, for the DINOv3 ViT, its final
+        layernorm, whose patch tokens are reshaped to a grid), runs one
+        forward+backward pass at the full image size, and resizes the
+        class-activation map to the input resolution. The shared model is
+        temporarily upcast to fp32 (CUDA keeps it in fp16 for the hot path,
+        which produces NaN gradients) and restored to its original dtype in ``finally`` so the hot tagging path is
         unaffected.
         """
         import torch.nn.functional as F
@@ -920,7 +1023,20 @@ class PixlStashTaggerService:
         upcast = original_dtype != torch.float32
         activations: dict = {}
         gradients: dict = {}
-        target_layer = model.features[-1]  # last ConvNeXt stage, NCHW
+        if self._arch == PIXLSTASH_TAGGER_DINOV3_ARCH:
+            # Tokens out, (1, skip + h*w, C): drop CLS and registers, grid them.
+            target_layer = model.features.norm
+
+            def to_nchw(t):
+                return _vit_patch_tokens_to_nchw(
+                    t, model.skip_tokens, inp.shape[-2:], model.patch_size
+                )
+
+        else:
+            target_layer = model.features[-1]  # last ConvNeXt stage, NCHW
+
+            def to_nchw(t):
+                return t
 
         def fwd_hook(_m, _i, out):
             activations["v"] = out
@@ -935,8 +1051,8 @@ class PixlStashTaggerService:
             model.zero_grad(set_to_none=True)
             logits = model(inp)  # (1, num_labels)
             logits[0, label_idx].backward()
-            acts = activations["v"]  # (1, C, h, w)
-            grads = gradients["v"]  # (1, C, h, w)
+            acts = to_nchw(activations["v"])  # (1, C, h, w)
+            grads = to_nchw(gradients["v"])  # (1, C, h, w)
             weights = grads.mean(dim=(2, 3), keepdim=True)  # (1, C, 1, 1)
             cam = F.relu((weights * acts).sum(dim=1, keepdim=True))  # (1, 1, h, w)
             cam = F.interpolate(
@@ -1050,7 +1166,10 @@ class PixlStashTaggerPlugin(TaggerPlugin):
     author: str = "Gaute Lindkvist <lindkvis@gmail.com>"
     license: str = "GPL-3.0-only"
     models: list[dict[str, str]] = [
-        {"name": "PersonalJeebus/pixlvault-anomaly-tagger", "license": "MIT"},
+        {
+            "name": "PersonalJeebus/pixlvault-anomaly-tagger",
+            "license": "DINOv3 License (LICENSE.md in the model repo)",
+        },
     ]
     supports_tags: bool = True
     supports_descriptions: bool = False

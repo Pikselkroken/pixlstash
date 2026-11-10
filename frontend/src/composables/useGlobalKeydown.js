@@ -22,20 +22,11 @@ import { isTypingTarget } from "../utils/dom.js";
  *   dialog, which its own shortcut toggles.
  */
 /**
- * Coalescing key for the "no undo here" answer, so holding the chord updates
- * one card instead of stacking them (notice spec §9.1).
+ * Coalescing key for the "nothing that way" answer beside a local receipt, so
+ * holding the chord updates one card instead of stacking them (notice spec
+ * §9.1).
  */
 export const SHELF_NO_UNDO_KEY = "shelf-no-undo";
-
-/**
- * The roots of every destination that replaces the grid and narrates nothing:
- * no `ActionReceipt` for library actions, no `UndoControl`. The shelf mounts
- * one for its own set edits only, and the chord takes that pill's action. One list rather than a check per
- * screen, because the population is what the invariant is about - the model
- * shelf was guarded alone and the other three were not, so the chord reverted
- * a library action with nothing on screen to say it had happened (#1415).
- */
-const UNDO_BLIND_ROOTS = ".shelf, .wfv, .mv, .ins";
 
 export function useGlobalKeydown({
   gridContainer,
@@ -63,38 +54,23 @@ export function useGlobalKeydown({
     );
   }
 
-  /**
-   * Is a destination that cannot narrate an undo the mounted one?
-   *
-   * These four replace the grid and neither write the operation log nor mount
-   * an `ActionReceipt`; none mounts `UndoControl` either, which is also the
-   * app's only renderer of the "Changed elsewhere" warning. Read off the same
-   * kind of DOM signal the lightbox check above uses, for the same reason:
-   * there is no shared which-view-is-up flag, and each root is v-if'd on its
-   * route.
-   */
-  function isUndoBlindDestination() {
-    if (typeof document === "undefined") return false;
-    return document.querySelector(UNDO_BLIND_ROOTS) != null;
-  }
-
   function handleGlobalKeydown(e) {
     // The review overlay is modal and owns its own keyboard handler; don't
     // run the app/grid shortcuts (scroll, search, help) behind it.
     if (reviewSessionsStore.overlayOpen) return;
     // The LIGHTBOX owns the keyboard too, with its own undo binding and its own
     // receipt. This used to be enforced implicitly by listener order - the
-    // overlay mounted before App, ran first, and stopImmediatePropagation()
+    // lightbox mounted before App, ran first, and stopImmediatePropagation()
     // silenced this handler - but the Duplicates view unmounts and remounts the
-    // grid (and the overlay inside it), which re-registers their listeners
+    // grid (and the lightbox inside it), which re-registers their listeners
     // AFTER this one and silently flips that order. The result was one Ctrl+Z
-    // running TWO undos: this handler's, then the overlay's, which the
+    // running TWO undos: this handler's, then the lightbox's, which the
     // operation store's busy-queue happily executed as a queued second step.
     // Ownership is therefore stated here explicitly, on the same DOM signal the
-    // overlay renders (`.image-overlay` is v-if'd on open), not on ordering.
+    // lightbox renders (`.lightbox` is v-if'd on open), not on ordering.
     if (
       typeof document !== "undefined" &&
-      document.querySelector(".image-overlay") != null
+      document.querySelector(".lightbox") != null
     ) {
       return;
     }
@@ -119,6 +95,15 @@ export function useGlobalKeydown({
       sidebarStore.hideAutoSidebar();
     }
 
+    // Escape leaves the sidebar's Find in library from anywhere, not only from
+    // its field (#2448): the filter keeps the sidebar narrowed after focus has
+    // moved to the grid. Not while typing elsewhere or under a dialog, and not
+    // preventDefault-ed, so the other Escape owners (the grid's selection)
+    // keep theirs.
+    if (e.key === "Escape" && !isEditable && !isModalOverlayOpen()) {
+      sidebarRef.value?.clearFind?.();
+    }
+
     // Undo / redo. Global by design: the shortcut has to work with no receipt on
     // screen, and every undo raises one, so the result is always narrated. Ctrl
     // and Meta are both accepted (the HINT is platform-specific, the binding is
@@ -134,26 +119,19 @@ export function useGlobalKeydown({
     //     undo raises a receipt" invariant, so the shortcut declines rather than
     //     acting blind.
     //
-    // The GRID-REPLACING DESTINATIONS THAT NARRATE NOTHING decline rather than
-    // act, for the same invariant arrived at from the other side: they mount no
-    // receipt and (deliberately) no UndoControl, so the chord there would
-    // revert a library action taken on a screen the reader has left, with
-    // nothing on this one to say it happened - not even the "Changed
-    // elsewhere" warning, whose only renderer is the control they do not have.
-    // The model shelf was guarded on that reasoning and the workflow library,
-    // Moves and Insights were not, though the same is true of all four
-    // (`UNDO_BLIND_ROOTS`). They decline OUT LOUD: a chord that does nothing at
-    // all teaches nothing, and the next thing a reader does is press it again.
-    // The notice surface is app-wide and already renders over these screens, so
-    // this costs no new chrome; the coalescing key is what keeps a repeated
-    // press one card rather than a wall.
+    // Every destination that replaces the grid (Duplicates, the model shelf,
+    // Workflows, Moves, Insights) mounts `UndoControl` in its toolbar tail
+    // (it rides in `TbGlobalActions`) and an `ActionReceipt`, so the chord
+    // acts there too: the control names the step and carries the "Changed
+    // elsewhere" warning, and the receipt narrates the result. They used to
+    // decline (#1415) because they had neither.
     //
     // The lightbox is NOT covered by that last guard and never was:
-    // `isModalOverlayOpen()` looks for a Vuetify scrim, and `.image-overlay`
-    // renders its own. The lightbox is excluded by the explicit `.image-overlay`
+    // `isModalOverlayOpen()` looks for a Vuetify scrim, and `.lightbox`
+    // renders its own. The lightbox is excluded by the explicit `.lightbox`
     // check at the top of this handler (listener ORDER used to do it, until the
     // Duplicates view's grid remount flipped it - see that comment). Undo works
-    // in the lightbox through its own key handler plus `OverlayActionReceipt`,
+    // in the lightbox through its own key handler plus `LightboxActionReceipt`,
     // fitted to that surface's GUI per the owner's ruling.
     if (
       (e.ctrlKey || e.metaKey) &&
@@ -184,12 +162,6 @@ export function useGlobalKeydown({
             text: wantsUndo
               ? "Nothing more to undo here - Redo puts that change back."
               : "Nothing to redo - Undo takes that change back.",
-          });
-        } else if (isUndoBlindDestination()) {
-          noticeStore.push({
-            level: "info",
-            key: SHELF_NO_UNDO_KEY,
-            text: "Changes on this screen aren't undoable - undo and redo apply to library actions in the grid.",
           });
         } else if (wantsUndo) {
           operationStore.undo();

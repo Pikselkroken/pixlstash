@@ -1,7 +1,8 @@
 import { test, expect } from '../fixtures/test.js'
 
 // Statistics sidebar (StatsSidebar.vue) — the toolbar toggle opens a panel with
-// Tags / Pictures / Tasks tabs summarising the library. Read-only: toggling the
+// Tags / Pictures tabs summarising the library (no Tasks: that is the title
+// bar's pill). Read-only: toggling the
 // panel changes only per-user UI state.
 
 test.describe('statistics sidebar', () => {
@@ -13,8 +14,8 @@ test.describe('statistics sidebar', () => {
     // normalise to open before asserting on its contents.
     if ((await grid.statsContent.count()) === 0) await grid.statsToggle.click()
     await expect(grid.statsContent).toBeVisible()
-    // It renders its tabbed sections (Tags / Pictures / Tasks).
-    await expect.poll(() => grid.statsTabs.count()).toBeGreaterThanOrEqual(2)
+    // It renders its tabbed sections, Tags and Pictures, and no Tasks tab.
+    await expect(grid.statsTabs).toHaveText([/Tags/, /Pictures/])
 
     // Toggling hides it, and toggling again brings it back.
     await grid.statsToggle.click()

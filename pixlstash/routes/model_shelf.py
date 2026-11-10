@@ -128,6 +128,7 @@ from pixlstash.services.model_shelf_service import (
     fetch_models,
     fetch_picture_counts,
     fetch_workflow_sets,
+    fill_base_models_online,
     forget_models,
     base_model_family,
     hidden_model_ids,
@@ -176,6 +177,7 @@ from pixlstash.utils.adapter_header import (
 from pixlstash.utils.host_open import open_in_file_manager
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.known_base_models import (
+    SOURCE_CIVITAI,
     SOURCE_DECLARED,
     SOURCE_FILENAME,
     SOURCE_USER,
@@ -387,16 +389,20 @@ class ModelResponse(BaseModel):
         default=None,
         description=(
             "The known base model this row was identified as, from what the "
-            "file declares or from its filename, or the fold of what a person "
-            "typed. Stored, and what the shelf sorts and filters on. Null when "
-            "nothing matched, or when a person cleared the base model."
+            "file declares, from Civitai's by-hash answer or from its "
+            "filename, or the fold of what a person typed. Stored, and what "
+            "the shelf sorts and filters on. Null when nothing matched, when a "
+            "person cleared the base model, or when Civitai named a base model "
+            "PixlStash does not know."
         ),
     )
     base_model_source: Optional[str] = Field(
         default=None,
         description=(
             "Where `base_model_canonical` came from, strongest first: `user`, "
-            "`declared` (the file's metadata names it exactly), `filename` (a "
+            "`declared` (the file's metadata names it exactly), `civitai` "
+            "(Civitai's answer for this file's SHA-256, looked up when the "
+            "owner asked, written into `base_model` too), `filename` (a "
             "filename token names it exactly), `declared_fuzzy` (a near-typo "
             "in the metadata), `filename_fuzzy` (an alias inside the "
             "filename). The last three are guesses and the shelf says so."
@@ -887,6 +893,66 @@ class ModelForgetResponse(BaseModel):
     )
 
 
+# One call asks Civitai once per eligible row, sequentially, so the cap bounds
+# how long the owner waits on one confirmation.
+MAX_MODELS_PER_LOOKUP = 100
+
+
+class BaseModelLookupRequest(BaseModel):
+    """Body of ``POST /models/base-model-lookup``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ids: list[int] = Field(
+        min_length=1,
+        max_length=MAX_MODELS_PER_LOOKUP,
+        description=(
+            "The models to look up, by hub `model.id`. At most "
+            f"{MAX_MODELS_PER_LOOKUP} per call: each eligible one is one "
+            "request to Civitai, made while the caller waits."
+        ),
+    )
+
+
+class BaseModelLookupFill(BaseModel):
+    """One row the lookup filled."""
+
+    id: int
+    base_model: str = Field(description="Civitai's `baseModel`, as written.")
+
+
+class BaseModelLookupSkip(BaseModel):
+    """One id the lookup did not ask about, and why."""
+
+    id: int
+    reason: str = Field(
+        description=(
+            "`already_set` (the row has a base model, or its header names "
+            "one), `owner_set` (the owner "
+            "cleared it, which is a ruling, or set one while the lookup ran), "
+            "`not_a_model` (not an adapter or a checkpoint), `no_hash` (not "
+            "hashed yet, so there is nothing to ask with) or `unknown_id`."
+        )
+    )
+
+
+class BaseModelLookupResponse(BaseModel):
+    """Body of ``POST /models/base-model-lookup``: the receipt the shelf shows."""
+
+    filled: list[BaseModelLookupFill]
+    not_found: list[int] = Field(
+        description="Asked about, and Civitai named no base model for the file."
+    )
+    skipped: list[BaseModelLookupSkip]
+    not_asked: list[int] = Field(
+        description=(
+            "Eligible, but never asked: Civitai stopped answering (timeout, "
+            "refused connection, 429, 5xx) on the first of these, and the "
+            "batch stopped there rather than wait out the same failure again."
+        )
+    )
+
+
 class ModelCompanionsRequest(BaseModel):
     """Body of ``POST /models/companions``."""
 
@@ -1020,6 +1086,33 @@ class WorkflowSetMissingBase(BaseModel):
     )
 
 
+class WorkflowSetCombinationWorkflow(BaseModel):
+    """One workflow a combination's kept pictures were made with."""
+
+    id: str = Field(description="The workflow's id (`GET /workflows`).")
+    name: str = Field(
+        description=(
+            "What the workflow is called: the owner's name, else its base card's "
+            "name or file, else its id."
+        )
+    )
+    picture_count: int = Field(
+        description="Kept pictures of this combination made with this workflow."
+    )
+
+
+class WorkflowSetLatestPicture(BaseModel):
+    """One of a combination's newest kept pictures."""
+
+    picture_id: int = Field(description="The picture's id.")
+    at: str = Field(
+        description=(
+            "ISO-8601 time the grid's date sort reads for the picture: its "
+            "creation time, else its import time."
+        )
+    )
+
+
 class WorkflowSetCombination(BaseModel):
     """One set of files a picture proves ran together."""
 
@@ -1079,6 +1172,28 @@ class WorkflowSetCombination(BaseModel):
             "Ids of the hand-made sets holding every model of this combination "
             "on the shelf. The combination is still listed: the grid hides a "
             "covered one, Works with reads them all."
+        ),
+    )
+    workflows: list[WorkflowSetCombinationWorkflow] = Field(
+        default_factory=list,
+        description=(
+            "The workflows this combination's kept pictures were made with, most "
+            "pictures first, then name. A picture with no workflow counts toward "
+            "none, so the sum is at most `picture_count`."
+        ),
+    )
+    last_used_at: Optional[str] = Field(
+        default=None,
+        description=(
+            "ISO-8601 time of the newest kept picture behind the combination, "
+            "null when it has none."
+        ),
+    )
+    latest: list[WorkflowSetLatestPicture] = Field(
+        default_factory=list,
+        description=(
+            "Up to ten of the combination's kept pictures, newest first, by the "
+            "same date `last_used_at` reads."
         ),
     )
 
@@ -1231,6 +1346,10 @@ class HandMadeSet(BaseModel):
         default=None,
         description="The ComfyUI template it was made from, by name (see the create).",
     )
+    replaces: Optional[str] = Field(
+        default=None,
+        description="The set from pictures it was made from by Edit set (see the create).",
+    )
     incomplete: bool = Field(description="The set has no checkpoint member.")
     checkpoint_ids: list[int] = Field(
         default_factory=list,
@@ -1355,6 +1474,16 @@ class WorkflowSetCreateRequest(BaseModel):
             "The ComfyUI template (`GET /models/workflow-templates`) the set is "
             "made from, by name. Stored as given and served back; the set then "
             "covers that template in the picker whatever it holds."
+        ),
+    )
+    replaces: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=1000,
+        description=(
+            "The key of the set from pictures (`model:<id>` or "
+            "`missing:<file>`) the set is made from by Edit set. Stored as "
+            "given and served back; the grid draws the set in that card's place."
         ),
     )
     declined: list[Digest] = Field(
@@ -1907,7 +2036,7 @@ def _present_copy(locations: list[dict]) -> Optional[str]:
             return path
         logger.warning(
             "The shelf records a present copy at %s but there is no file "
-            "there; a rescan of that folder would correct the row.",
+            "there; the folder's next scan corrects the row.",
             path,
         )
     return None
@@ -2003,7 +2132,7 @@ def _matched_name(row: dict) -> Optional[str]:
         row["file_kind"] != FILE_CHECKPOINT
         or not canonical
         or row["base_model_source"]
-        not in (SOURCE_USER, SOURCE_DECLARED, SOURCE_FILENAME)
+        not in (SOURCE_USER, SOURCE_DECLARED, SOURCE_CIVITAI, SOURCE_FILENAME)
         or not row["filename"]
     ):
         return None
@@ -2511,7 +2640,8 @@ def create_router(server) -> APIRouter:
         description=(
             "Four of the shelf's verbs on one route, because all of them "
             "write a curated column and differ only in which one: **Rename** "
-            "(`display_name`, one id), **Set base model** (`base_model`), "
+            "(`display_name`, one model or one stack), **Set base model** "
+            "(`base_model`), "
             "**Set kind** (`kind`, `file_kind`, `capabilities`, "
             "`suggest_kind`) and **Set trigger words** (`trigger_words`). Only the "
             "fields present in the body are written, so setting a base model "
@@ -2560,13 +2690,21 @@ def create_router(server) -> APIRouter:
                     ),
                 )
 
-        if "display_name" in changes and len(payload.ids) > 1:
-            # A name is a fact about one file. Applying one across a selection
-            # would give every row the same name, which is not a rename anyone
-            # asked for and cannot be undone.
+        ids = payload.ids
+        if "display_name" in changes:
+            ids = _rename_targets(ids)
+        if ids is None:
+            # A name is a fact about one file, or about one stack: a run's
+            # members share its name, and renaming its collapsed row names
+            # the run. Applying one across any other selection would give
+            # every row the same name, which is not a rename anyone asked for
+            # and cannot be undone.
             raise HTTPException(
                 status_code=400,
-                detail="display_name can only be set on one model at a time.",
+                detail=(
+                    "display_name can only be set on one model, or on the "
+                    "members of one stack, at a time."
+                ),
             )
         if (
             changes.get("file_kind") is not None
@@ -2587,14 +2725,41 @@ def create_router(server) -> APIRouter:
                 detail="file_kind cannot be cleared; use 'unknown'.",
             )
 
-        _refuse_builtin_engines(payload.ids)
-        _refuse_impossible_adapters(payload.ids, changes)
+        _refuse_builtin_engines(ids)
+        _refuse_impossible_adapters(ids, changes)
 
-        updated = update_models(server.hub, payload.ids, changes)
+        updated = update_models(server.hub, ids, changes)
         logger.info(
             "Shelf edit wrote %s on %d model(s).", ", ".join(sent), len(updated)
         )
         return ModelEditResponse(updated=updated, fields=sent)
+
+    def _rename_targets(ids: list[int]) -> list[int] | None:
+        """The models a rename of ``ids`` writes, or None to refuse it.
+
+        One id is that model. Several are accepted only when every one that
+        exists is a member of the same stack, and then the name goes to the
+        WHOLE stack: the shelf draws a run as one row and sends the members it
+        shows, and a filter can hide some. Naming only those would leave the
+        hidden ones under the old name, and the row would show it again once
+        the filter is cleared. Ids that name no row add no stack of their own.
+        """
+        unique = list(dict.fromkeys(ids))
+        if len(unique) <= 1:
+            return unique
+        placeholders = ", ".join("?" for _ in unique)
+        stacks = server.hub.fetchall(
+            f"SELECT DISTINCT stack_id FROM model WHERE id IN ({placeholders})",
+            tuple(unique),
+        )
+        if len(stacks) != 1 or stacks[0]["stack_id"] is None:
+            return None
+        return [
+            int(row["id"])
+            for row in server.hub.fetchall(
+                "SELECT id FROM model WHERE stack_id = ?", (stacks[0]["stack_id"],)
+            )
+        ]
 
     def _refuse_builtin_engines(ids: list[int]) -> None:
         """Refuse any verb aimed at a model PixlStash downloaded for itself.
@@ -2684,6 +2849,38 @@ def create_router(server) -> APIRouter:
                 f"{len(blocked)} file(s) cannot be an adapter: {filename!r} {reason}."
             ),
         )
+
+    @router.post(
+        "/models/base-model-lookup",
+        summary="Fill empty base models from Civitai, by file hash",
+        description=(
+            "The shelf's one outbound verb, run only when the owner asks. For "
+            "each selected adapter or checkpoint with no base model and no "
+            "ruling from the owner, sends the file's SHA-256 - and nothing "
+            "else - to Civitai's by-hash lookup and writes the `baseModel` it "
+            "answers into `base_model`, with `base_model_source` `civitai`. A "
+            "base model the owner set or cleared is never touched, including "
+            "one set while the lookup runs.\n\n"
+            "Synchronous and sequential. The first network failure stops the "
+            "batch and the rest come back under `not_asked`. Refused with 409 "
+            "on the public demo (`PIXLSTASH_DEMO_MODE`), which must not make "
+            "outbound calls on a visitor's click, and for a built-in engine."
+        ),
+        tags=["model_shelf"],
+        response_model=BaseModelLookupResponse,
+    )
+    def lookup_base_models(
+        request: Request,
+        payload: BaseModelLookupRequest = Body(...),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        if os.environ.get("PIXLSTASH_DEMO_MODE", "").strip():
+            raise HTTPException(
+                status_code=409,
+                detail="The demo does not look models up online.",
+            )
+        _refuse_builtin_engines(payload.ids)
+        return fill_base_models_online(server.hub, payload.ids)
 
     @router.post(
         "/models/forget",
@@ -2823,6 +3020,15 @@ def create_router(server) -> APIRouter:
                     picture_count=combination["picture_count"],
                     covers=_cover_strip(combination["covers"]),
                     covered_by=combination["covered_by"],
+                    workflows=[
+                        WorkflowSetCombinationWorkflow(**entry)
+                        for entry in combination.get("workflows", [])
+                    ],
+                    last_used_at=combination.get("last_used_at"),
+                    latest=[
+                        WorkflowSetLatestPicture(**entry)
+                        for entry in combination.get("latest", [])
+                    ],
                 )
                 for combination in found["combinations"]
             ],
@@ -2949,6 +3155,7 @@ def create_router(server) -> APIRouter:
                 cloned=payload.cloned,
                 template=payload.template,
                 declined=payload.declined,
+                replaces=payload.replaces,
             )
         return _one_set(set_id, seen=payload.seen)
 

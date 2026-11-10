@@ -1,5 +1,8 @@
 <template>
-  <div class="selection-bar-overlay">
+  <div
+    class="selection-bar-overlay"
+    :class="{ 'selection-bar-overlay--searching': gbSearchOpen }"
+  >
     <div class="selection-bar-content">
       <div class="selection-bar-left">
         <AppBarButton
@@ -38,8 +41,6 @@
               <AppBarButton
                 v-bind="menuProps"
                 class="bar-split-menu"
-                prefix="Sort:"
-                :icon="gbSortTypeIcon"
                 chevron
                 :tooltip="gbSortButtonLabel"
               >
@@ -204,14 +205,9 @@
             </div>
           </div>
         </v-menu>
-        <!-- Undo/redo moved to the right-side app-wide tail (see below): the
-             canonical [separator][UndoControl][TbGlobalActions] cluster is
-             identical in every view that writes the operation log, so the
-             position learned here holds in Duplicates too. (The model shelf
-             writes none and carries no undo - amendment #4.) -->
         <!-- ── Filter button ──────────────────────────────────────── -->
-        <!-- No count badge: the filter strip under the toolbar shows every
-             active filter as a chip. The menu stays open through every choice
+        <!-- The count is the filters the strip and the search field's tokens
+             show (one state, three views). The menu stays open through every choice
              (close-on-content-click off); Esc, a click outside or the funnel
              close it. -->
         <v-menu
@@ -225,12 +221,14 @@
           <template #activator="{ props: menuProps }">
             <AppBarButton
               v-bind="menuProps"
-              icon="filter"
-              chevron
+              icon="filter-outline"
               :active="filterChipCount > 0 && !gbFilterMenuOpen"
               :open="gbFilterMenuOpen"
+              :badge="filterChipCount || null"
               tooltip="Filters"
-            />
+              aria-label="Filters"
+              ><span class="tb-label">Filter</span></AppBarButton
+            >
           </template>
           <FilterMenu
             :count-base-query="props.filterCountBaseQuery"
@@ -250,12 +248,13 @@
           <template #activator="{ props: menuProps }">
             <AppBarButton
               v-bind="menuProps"
-              class="tb-fold-600"
+              class="tb-view"
               icon="view-grid"
-              chevron
               :open="gbViewMenuOpen"
               tooltip="View options"
-            />
+              aria-label="View options"
+              ><span class="tb-label">View</span></AppBarButton
+            >
           </template>
           <div class="tbm gb-view-panel">
             <span class="tbm-caret tbm-caret--end"></span>
@@ -336,248 +335,90 @@
             </div>
           </div>
         </v-menu>
-        <!-- ── Separator G-S1: the lens run | the action run ────────────
-             A separator marks a SEMANTIC boundary, not a group edge (the
-             amendments in docs/design/toolbar-responsive-decisions.md).
-             Renders at ALL widths: with the ⋯ standing at the end of the
-             action run it collapses (amendment #2), the run keeps two
-             members ([Search][⋯]) down to the floor, so both flanks stay
-             populated and the rule never sits boxed. -->
-        <div class="bar-separator"></div>
-        <!-- ── Toolbar: Search (icon trigger → search menu popover) ───── -->
-        <v-menu
-          v-model="gbSearchMenuOpen"
-          :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
-          :offset="8"
-          transition="scale-transition"
-        >
-          <template #activator="{ props: menuProps }">
-            <AppBarButton
-              v-bind="menuProps"
-              icon="magnify"
-              :active="searchStore.isSearchActive && !gbSearchMenuOpen"
-              :open="gbSearchMenuOpen"
-              tooltip="Search (F)"
-              aria-label="Search"
-            />
-          </template>
-          <div class="tbm gb-search-panel">
-            <span class="tbm-caret tbm-caret--icon-center-end"></span>
-            <div class="tbm-header">
-              <v-icon size="18" class="tbm-header-icon">mdi-magnify</v-icon>
-              <span class="tbm-title">Search</span>
-            </div>
-            <div class="gb-search-field">
-              <div class="tbm-input-wrap">
-                <v-icon size="16" class="tbm-input-icon">mdi-magnify</v-icon>
-                <input
-                  ref="searchInputRef"
-                  v-model="searchStore.searchInput"
-                  class="tbm-input tbm-input--with-icon"
-                  type="text"
-                  placeholder="Search your library…"
-                  autocomplete="off"
-                  @keydown.enter.prevent="onSearchEnter"
-                  @keydown.escape.prevent="onSearchEscape"
-                />
-              </div>
-            </div>
+        <!-- ── Inbox period (the Inbox only) ─────────────────────────────
+             A view setting like Sort, so the same dim-prefix bar button; the
+             menu is the shared one (`.ctx-menu`), a radio row per period with
+             how many pictures it would hold. Leaving the Inbox drops the
+             button; the store keeps the period for next time. -->
+        <template v-if="isInboxView">
+          <div class="bar-separator"></div>
+          <v-menu
+            v-model="inboxMenuOpen"
+            location="bottom start"
+            origin="top start"
+            :offset="8"
+          >
+            <template #activator="{ props: menuProps }">
+              <AppBarButton
+                v-bind="menuProps"
+                chevron
+                :open="inboxMenuOpen"
+                :aria-label="`Added: ${inboxStore.periodInfo.label}`"
+                data-testid="inbox-period"
+                ><span class="bar-btn-prefix tb-label">Added:</span
+                >{{ inboxStore.periodInfo.label }}</AppBarButton
+              >
+            </template>
             <div
-              v-if="gbSearchHistoryItems.length"
-              class="tbm-section gb-search-recent"
+              ref="inboxMenuEl"
+              class="ctx-menu"
+              role="menu"
+              tabindex="-1"
+              aria-label="Added in"
+              @keydown="onMenuKeydown"
             >
-              <span class="tbm-label">Recent</span>
-              <div class="gb-recent-list">
+              <div class="ctx-label section-label">Added in</div>
+              <template v-for="option in INBOX_PERIODS" :key="option.id">
+                <div v-if="option.id === 'all'" class="ctx-sep"></div>
                 <button
-                  v-for="item in gbSearchHistoryItems"
-                  :key="item"
-                  class="gb-recent-row"
+                  class="ctx-item"
                   type="button"
-                  @click="gbApplySearchHistory(item)"
+                  role="menuitemradio"
+                  :aria-checked="option.id === inboxStore.period"
+                  :data-autofocus="
+                    option.id === inboxStore.period ? '' : undefined
+                  "
+                  :data-testid="`inbox-period-${option.id}`"
+                  @click="pickInboxPeriod(option.id)"
                 >
-                  <v-icon size="16" class="gb-recent-icon">mdi-history</v-icon>
-                  <span class="gb-recent-label">{{ item }}</span>
-                  <v-icon size="14" class="gb-recent-apply"
-                    >mdi-arrow-top-left</v-icon
+                  <span class="ctx-icon" aria-hidden="true"></span>
+                  <span class="ctx-label-text">{{ option.label }}</span>
+                  <span class="ctx-meta">{{ inboxCountText(option.id) }}</span>
+                  <v-icon
+                    v-if="option.id === inboxStore.period"
+                    class="ctx-check"
+                    >mdi-check</v-icon
                   >
+                  <span v-else class="ctx-check" aria-hidden="true"></span>
                 </button>
-              </div>
+              </template>
             </div>
-          </div>
-        </v-menu>
-        <!-- ── Toolbar: Export ───────────────────────────────────────── -->
-        <v-menu
-          v-model="exportStore.exportMenuOpen"
-          :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
-          :offset="8"
-          transition="scale-transition"
-        >
-          <template #activator="{ props: menuProps }">
-            <AppBarButton
-              v-bind="menuProps"
-              class="tb-export-btn tb-fold-700"
-              icon="tray-arrow-down"
-              :open="exportStore.exportMenuOpen"
-              :tooltip="exportActionLabel('Export current grid to zip')"
-            />
-          </template>
-          <TbExportPanel
-            @confirm-export="emit('confirm-export-zip')"
-            @confirm-export-folder="emit('confirm-export-folder', $event)"
-          />
-        </v-menu>
-        <!-- ── Toolbar: Import (icon trigger → import menu popover) ────── -->
-        <v-menu
-          v-if="!isReadOnly"
-          v-model="tbImportMenuOpen"
-          :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
-          :offset="8"
-          transition="scale-transition"
-        >
-          <template #activator="{ props: menuProps }">
-            <AppBarButton
-              v-bind="menuProps"
-              class="tb-fold-700"
-              icon="cloud-upload-outline"
-              :open="tbImportMenuOpen"
-              tooltip="Import photos"
-            />
-          </template>
-          <TbImportPanel
-            :open="tbImportMenuOpen"
-            :default-project-id="projectStore.selectedProjectId"
-            @local-import="
-              emit('local-import', $event);
-              tbImportMenuOpen = false;
-            "
-            @open-full-import="
-              emit('open-import');
-              tbImportMenuOpen = false;
-            "
-          />
-        </v-menu>
-        <!-- ── Generate with no selection (v1.12 F5). The old button here
-             opened the rail run panel, which is gone; this opens the Run
-             popup with its workflow picker unset, which is the same popup
-             every other entry point opens and the one case it was already
-             built for (`kind: "card"`, its own "Results go to" set picker).
-             Without a door on the grid, starting a run from nothing meant
-             navigating to Workflows first. -->
-        <AppBarButton
-          v-if="filterStore.comfyuiConfigured"
-          class="tb-fold-700"
-          icon="image-plus-outline"
-          :disabled="isReadOnly"
-          tooltip="Generate new pictures with a ComfyUI workflow"
-          aria-label="Generate new pictures with a ComfyUI workflow"
-          @click="generateFromNothing"
-        />
-        <!-- ── The ⋯ overflow (amendment #2 in docs/design/
-             toolbar-responsive-decisions.md): a burger may only collapse
-             controls from its OWN visual group, and it stands where those
-             controls stood - so it lives HERE, at the end of the action run
-             it collapses (Export/Import/ComfyUI at ≤700, View at ≤600), and
-             never a control from across a group boundary. Fold = CSS both
-             ways: each row shares its bar button's v-if, and the container
-             queries flip which of the pair is visible. The panel keeps its
-             right-aligned anchoring, so it opens leftward and stays
-             on-screen. -->
-        <TbOverflowMenu class="tb-overflow">
-          <template #default="{ close }">
-            <button
-              v-if="filterStore.comfyuiConfigured"
-              type="button"
-              role="menuitem"
-              class="ctx-item tb-row-700"
-              :disabled="isReadOnly"
-              @click="
-                close();
-                generateFromNothing();
-              "
-            >
-              <v-icon class="ctx-icon">mdi-image-plus-outline</v-icon>
-              <span>Generate with ComfyUI…</span>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              class="ctx-item tb-row-700"
-              @click="
-                emit('confirm-export-zip');
-                close();
-              "
-            >
-              <v-icon class="ctx-icon">mdi-tray-arrow-down</v-icon>
-              <span>{{ exportActionLabel("Export grid to zip") }}</span>
-            </button>
-            <button
-              v-if="!isReadOnly"
-              type="button"
-              role="menuitem"
-              class="ctx-item tb-row-700"
-              @click="
-                emit('open-import');
-                close();
-              "
-            >
-              <v-icon class="ctx-icon">mdi-cloud-upload-outline</v-icon>
-              <span>Import photos…</span>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              class="ctx-item tb-row-600"
-              @click="
-                close();
-                gbViewMenuOpen = true;
-              "
-            >
-              <v-icon class="ctx-icon">mdi-view-grid</v-icon>
-              <span>View options…</span>
-            </button>
-          </template>
-        </TbOverflowMenu>
+          </v-menu>
+        </template>
+        <!-- No ⋯ overflow here: View was its only member, and a burger
+             holding one control is that control's glyph behind an extra
+             click. View keeps its glyph at every width instead. The toolbar
+             is browse-only (#2160); Generate left it too, so a run starts
+             from a selection, a picture, a person or set, or the Workflows
+             screen. -->
       </div>
       <!-- No separator between the groups: the elastic gap IS the left|right
            boundary (two-boundary rule, docs/design/toolbar-responsive-
-           decisions.md amendment). The old leading rule here boxed the Review
-           button, and its narrow-width gap-guard twin drew a double rule. -->
+           decisions.md amendment). A leading rule here once boxed the button
+           after it, and its narrow-width gap-guard twin drew a double rule. -->
       <div class="selection-bar-right">
-        <!-- ── Toolbar: Review and fix tags (an action, not a menu) ─────
-             Visible at ALL widths (amendment #2): it is the review overlay's
-             only visible entry point, and folding it into the left group's
-             burger would cross the group boundary. -->
-        <AppBarButton
-          icon="tag-check-outline"
-          :disabled="isReadOnly"
-          tooltip="Review and fix tags"
-          @click="reviewSessionsStore.overlayOpen = true"
+        <!-- ── Toolbar: Search. The field itself: focused, it widens in place
+             and drops its list; View (and, in a bar of 700px or less, Sort's
+             value) steps aside meanwhile. -->
+        <SearchTokenField
+          ref="searchInputRef"
+          :all-pictures-view="isAllPicturesView"
+          @update:open="gbSearchOpen = $event"
         />
-        <!-- ── Separator G-S4: view-local actions | app-wide chrome ─────
-             The canonical toolbar tail, identical in every view that writes
-             the operation log (not the model shelf, amendment #4):
-             [separator] [UndoControl] [TbGlobalActions]. The rule is
-             required AND stays at every width (it mirrors the Duplicates
-             bar's D-S2): proximity alone cannot separate identical 32px
-             icon buttons into "this view's tools" and "the app's chrome". -->
-        <div class="bar-separator"></div>
-        <!-- Mounted in a read-only session too, inert: the demo has to
-             show that undo exists. UndoControl owns that state. -->
-        <UndoControl />
-        <!-- ── Toolbar: Settings + stats toggle (shared with the duplicates
-             queue, which is why they live in their own component). Never
-             folds (amendment #2); the activity light stays first-class on the
-             Stats button at every width. -->
-        <TbGlobalActions
-          rail-name="Stats and tasks"
-          @open-settings="emit('open-settings')"
-        />
+        <!-- ── The app-wide tail: undo/redo + History and the rail toggle
+             (shared with every destination, which is why it lives in its own
+             component). Never folds (amendment #2). -->
+        <TbGlobalActions />
       </div>
     </div>
   </div>
@@ -585,35 +426,29 @@
 
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useGridStore } from "../../stores/useGridStore";
-import { useExportStore } from "../../stores/useExportStore";
 import { useSearchStore } from "../../stores/useSearchStore";
-import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
-import { useProjectStore } from "../../stores/useProjectStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useSelectionStore } from "../../stores/useSelectionStore";
+import { INBOX_PERIODS, useInboxStore } from "../../stores/useInboxStore";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import {
   MAX_THUMBNAIL_SIZE_LEVEL,
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
   sizeLabelForLevel,
 } from "../../utils/thumbnailSizes";
 import FilterMenu from "./FilterMenu.vue";
+import SearchTokenField from "./SearchTokenField.vue";
 import { filterChips } from "../../utils/filterChips";
 import TbGlobalActions from "./TbGlobalActions.vue";
-import TbExportPanel from "./TbExportPanel.vue";
-import TbImportPanel from "./TbImportPanel.vue";
-import TbOverflowMenu from "./TbOverflowMenu.vue";
-import { useRunDialogStore } from "../../stores/useRunDialogStore";
-import UndoControl from "./UndoControl.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import { useOneTimeNotice } from "../../composables/useOneTimeNotice";
 const props = defineProps({
-  selectedCount: Number,
   selectedCharacter: String,
   selectedSort: { type: String, default: "" },
   allPicturesId: { type: String, required: true },
@@ -625,28 +460,40 @@ const props = defineProps({
 const emit = defineEmits([
   "expand-all-stacks",
   "collapse-all-stacks",
-  "confirm-export-zip",
-  "confirm-export-folder",
-  "open-import",
-  "local-import",
-  "open-settings",
   "open-duplicates",
 ]);
 
-const runDialog = useRunDialogStore();
+// ── Inbox period ──────────────────────────────────────────────────────────
+const selectionStore = useSelectionStore();
+const inboxStore = useInboxStore();
+const isInboxView = computed(() =>
+  Boolean(selectionStore.selectedFolderFilter?.inbox),
+);
+const inboxMenuOpen = ref(false);
+const inboxMenuEl = ref(null);
 
-/**
- * Generate with nothing selected: the Run popup, picker unset.
- *
- * No pictures, so the card IS the run's source and the popup shows its own
- * "Results go to" set picker rather than filing beside a source picture.
- */
-function generateFromNothing() {
-  if (isReadOnly.value) return;
-  runDialog.openRun({ kind: "card", pickWorkflow: true, emptyPrompt: true });
+// Every row's count is read as the menu opens, so each period says what it
+// would hold before it is picked. The current period is focused, as a menu of
+// choices opens on its value; `v-menu` mounts its content on open.
+watch(inboxMenuOpen, async (isOpen) => {
+  if (!isOpen) return;
+  void inboxStore.refreshAllCounts();
+  await nextTick();
+  requestAnimationFrame(() =>
+    inboxMenuEl.value?.querySelector("[data-autofocus]")?.focus(),
+  );
+});
+
+function pickInboxPeriod(id) {
+  inboxMenuOpen.value = false;
+  inboxStore.setPeriod(id);
 }
 
-const tbImportMenuOpen = ref(false);
+/** A row's count, or nothing until it has been read. */
+function inboxCountText(id) {
+  const n = inboxStore.counts[id];
+  return n == null ? "" : n.toLocaleString();
+}
 
 // Shown once per browser and then never again. A migration nudge that came back
 // after a reload would be an ad, so the flag is persisted rather than held in
@@ -679,10 +526,7 @@ const STACK_UPDATED_AT_SORT_KEY = "STACK_UPDATED_AT";
 const filterStore = useFilterStore();
 const sortStore = useSortStore();
 const gridStore = useGridStore();
-const exportStore = useExportStore();
 const searchStore = useSearchStore();
-const reviewSessionsStore = useReviewSessionsStore();
-const projectStore = useProjectStore();
 const sidebarStore = useSidebarStore();
 
 // Stack time belongs to the stack-deck lens, not to loose pictures. Keep it
@@ -712,19 +556,6 @@ watch(
   { immediate: true },
 );
 
-// ── Toolbar: Export ────────────────────────────────────────────────────────────
-// The export follows the grid's own selection: with a subset selected,
-// ImageGrid.exportCurrentViewToZip sends those ids and nothing else. Name that
-// subset on the control, so the user knows what lands in the zip before opening
-// the panel (whose count is only refreshed once the menu is already open).
-// `idle` is the caller's whole-grid wording, which differs between the button's
-// tooltip and the overflow row.
-function exportActionLabel(idle) {
-  const count = Number(props.selectedCount) || 0;
-  if (count <= 0) return idle;
-  return `Export ${count} picture${count === 1 ? "" : "s"} to zip`;
-}
-
 // ── Grid Bar: Sort ─────────────────────────────────────────────────────────────
 const SIMILARITY_SORT_KEY_GB = "CHARACTER_LIKENESS";
 const LIKENESS_GROUPS_SORT_KEY_GB = "LIKENESS_GROUPS";
@@ -736,37 +567,15 @@ const gbSearchActive = computed(() =>
   Boolean(searchStore.searchQuery && searchStore.searchQuery.trim()),
 );
 
-// ── Grid Bar: Search (icon trigger → search menu popover) ──────────────────────
+// ── Grid Bar: Search (the field widens in place while it has focus) ────────────
 const searchInputRef = ref(null);
-const gbSearchMenuOpen = ref(false);
-// Full history when the field is empty; prefix-filtered while typing.
-const gbSearchHistoryItems = computed(() => searchStore.filteredSearchHistory);
+const gbSearchOpen = ref(false);
 
-function onSearchEnter() {
-  searchStore.commitSearch();
-  gbSearchMenuOpen.value = false;
-}
-function onSearchEscape() {
-  gbSearchMenuOpen.value = false;
-}
-function gbApplySearchHistory(item) {
-  searchStore.searchInput = item;
-  searchStore.commitSearch();
-  gbSearchMenuOpen.value = false;
-}
-
-// Focus the field whenever the menu opens (click or the "F" shortcut).
-watch(gbSearchMenuOpen, (open) => {
-  if (open) nextTick(() => searchInputRef.value?.focus());
-});
-
-// The global "F" shortcut opens the search menu (App bumps this token rather
+// The global "F" shortcut focuses the search field (App bumps this token rather
 // than holding a ref down through ImageGrid → Toolbar).
 watch(
   () => searchStore.searchFocusToken,
-  () => {
-    gbSearchMenuOpen.value = true;
-  },
+  () => searchInputRef.value?.focus(),
 );
 
 const gbSortModel = computed({
@@ -1140,12 +949,16 @@ const gbCollapseAllStacksDisabled = computed(
   gap: var(--space-3);
   flex-shrink: 0;
 }
+/* The right group takes the bar's spare room so the search field can grow
+   into it (to its 560 px cap; past that the room sits before the field). The
+   margin keeps the elastic left|right gap from closing to nothing. */
 .selection-bar-right {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--space-3);
-  margin-left: auto;
-  flex-shrink: 0;
+  margin-left: var(--space-5);
+  flex: 1 0 auto;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1158,64 +971,27 @@ const gbCollapseAllStacksDisabled = computed(
    component boundary, so every `.bar-btn` outside this file rendered unstyled.
    Only the toolbar's own overrides stay here. */
 
-/* ── Search menu (icon trigger → popover with input + recent searches) ─────── */
-.gb-search-panel {
-  width: 420px;
-  max-width: 92vw;
+/* ── Search: while the field has focus it widens over View, which steps
+   aside, and the right group may give so it never overflows. Sort keeps its
+   value, since the order the results come in is worth seeing while searching;
+   only in a bar of 700px or less (the overflow ladder's first step) does it
+   step aside too, so the open field is never squeezed below its rest width. The
+   bar rises to the dropdown layer meanwhile, so the list it drops paints over
+   the grid's floating chrome (the date pill, the selection pill). ──────── */
+.selection-bar-overlay--searching {
+  z-index: var(--z-dropdown);
 }
-.gb-search-field {
-  /* Match the section side padding (12px) so the input lines up with the recent
-     rows and with every other toolbar menu; top matches the menu headers (8px).
-     The tight 4px bottom only works when a Recent section sits below and supplies
-     its own top padding. */
-  padding: var(--space-3) var(--space-4) var(--space-2);
+.selection-bar-overlay--searching .tb-view {
+  display: none;
 }
-.gb-search-field:last-child {
-  /* No Recent section below: the field owns the panel's bottom edge, so match the
-     section last-child rhythm (16px) instead of hugging the edge with 4px. */
-  padding-bottom: var(--space-5);
-}
-.gb-search-recent {
-  padding-top: var(--space-4);
-}
-.gb-recent-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-.gb-recent-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  width: 100%;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  color: rgb(var(--v-theme-on-panel));
-  font-family: var(--font-ui);
-  font-size: var(--text-sm);
-  text-align: left;
-  transition: background var(--dur-1) var(--ease-standard);
-}
-.gb-recent-row:hover {
-  background: var(--hover-wash);
-}
-.gb-recent-icon {
-  color: rgba(var(--v-theme-on-panel), 0.5);
-  flex-shrink: 0;
-}
-.gb-recent-label {
-  flex: 1;
+.selection-bar-overlay--searching .selection-bar-right {
+  flex-shrink: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.gb-recent-apply {
-  color: rgba(var(--v-theme-on-panel), 0.35);
-  flex-shrink: 0;
-}
-.gb-recent-row:hover .gb-recent-apply {
-  color: rgba(var(--v-theme-on-panel), 0.7);
+@container selbar (max-width: 700px) {
+  .selection-bar-overlay--searching .bar-split-menu {
+    display: none;
+  }
 }
 
 /* ── Sort panel ───────────────────────────────────────────────────────────── */
@@ -1378,7 +1154,6 @@ const gbCollapseAllStacksDisabled = computed(
 
   .bar-split-toggle,
   .bar-separator,
-  .tb-export-btn,
   :deep(.bar-btn-chevron) {
     display: none;
   }
@@ -1402,47 +1177,12 @@ const gbCollapseAllStacksDisabled = computed(
 }
 
 /* ── Responsive: progressive label dropping via container queries ─────────── */
+/* The sort button carries no icon (#2160), so its value is what it says and it
+   keeps it; Filter and View fall back to their glyphs, named by aria-label. */
 @container selbar (max-width: 960px) {
-  :deep(.bar-btn-prefix),
-  .bar-btn-sort-type {
+  .tb-label,
+  .bar-btn-sort-secondary {
     display: none;
-  }
-}
-
-/* ── The ⋯ overflow ladder (see docs/design/toolbar-responsive-decisions.md,
-   amendment #2). The burger stands at the end of its OWN group (the action
-   run) and collapses only that group's members. Fold = CSS both ways: a
-   control's bar button and its overflow row share one v-if, and these
-   queries flip which of the pair is visible. No JS measures anything. The
-   trigger appears with the FIRST fold step; Undo, Review, Settings and
-   Stats never fold at any width. ─────────────────────────────────────── */
-.tb-overflow {
-  display: none;
-}
-
-.tb-row-700,
-.tb-row-600 {
-  display: none;
-}
-
-@container selbar (max-width: 700px) {
-  .tb-fold-700 {
-    display: none;
-  }
-  .tb-overflow {
-    display: flex;
-  }
-  .tb-row-700 {
-    display: flex;
-  }
-}
-
-@container toolbar (max-width: 600px) {
-  .tb-fold-600 {
-    display: none;
-  }
-  .tb-row-600 {
-    display: flex;
   }
 }
 

@@ -1,7 +1,7 @@
 // A folder click and what the URL says afterwards.
 //
 // The sidebar's folder tree emits `{referenceFolderId, pathPrefix, label}` for
-// EVERY node - `FolderTreeNode.vue` requires the `rfId` - so a subfolder click
+// EVERY node, `rfId` included, so a subfolder click
 // and its folder's root click differ only in `pathPrefix`. The route builder
 // keyed off the id alone, so both pushed `/ref-folder/5` and the subfolder
 // vanished from the URL: a reload or a shared link landed one level up, on the
@@ -114,22 +114,13 @@ describe("a reference-folder click", () => {
     wrapper.unmount();
   });
 
-  it("pushes no query when the payload carries no path at all", () => {
-    // The project menu's folder rows build the payload from the listing, and
-    // an import folder's has no `pathPrefix`. An empty query, not `path=`.
+  it("keeps the Inbox on its own route", () => {
+    // The Inbox facet is a grid view of its own: a selection change made while
+    // it shows (or Back onto it) keeps `/inbox`.
     const { wrapper, api } = mountNav();
 
-    api.handleSelectFolder({
-      importSourceFolder: "/home/me/inbox",
-      importFolderId: 7,
-      label: "inbox",
-    });
-
-    expect(nav.push).toHaveBeenCalledWith({
-      name: "import-folder",
-      params: { id: "7" },
-      query: {},
-    });
+    api.handleSelectFolder({ inbox: true });
+    expect(nav.push).toHaveBeenLastCalledWith({ name: "inbox" });
 
     wrapper.unmount();
   });

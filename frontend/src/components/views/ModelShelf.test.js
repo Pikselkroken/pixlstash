@@ -37,6 +37,12 @@ let hiddenOnServer = new Set();
 
 // The favourites are read on mount, and written by the heart and H. Doubled so
 // each test says what the hub holds and reads back what was asked to change.
+// The loss of a trained run, read by its id when a stack of its files opens.
+const getTrainingJob = vi.fn();
+vi.mock("../../api/training", () => ({
+  getTrainingJob: (...args) => getTrainingJob(...args),
+}));
+
 const listFavourites = vi.fn();
 const setFavourites = vi.fn();
 vi.mock("../../api/favourites", () => ({
@@ -78,6 +84,8 @@ vi.mock("../../api/modelShelf", () => ({
 // assertion read the default view back.
 const listModelFolderDevices = vi.fn();
 const listModelFolders = vi.fn();
+const listModelFolderDirs = vi.fn();
+const getComfyuiReads = vi.fn();
 // `onMounted` calls `moves.adopt()`, which reads the move job so a move
 // started before a reload is picked up. Left unmocked it reaches the network,
 // fails, and `console.warn`s from a promise nothing in the test awaits - which
@@ -86,9 +94,10 @@ const listModelFolders = vi.fn();
 // Every file passed and the runner still exited 1 (#880's first CI run). It is
 // timing-dependent, so a local run can be green with the same bug present.
 const getModelMoveStatus = vi.fn();
+const startModelMove = vi.fn();
 vi.mock("../../api/modelMoves", () => ({
   getModelMoveStatus: (...args) => getModelMoveStatus(...args),
-  startModelMove: vi.fn(),
+  startModelMove: (...args) => startModelMove(...args),
   cancelModelMove: vi.fn(),
 }));
 
@@ -146,7 +155,9 @@ const createModelFolder = vi.fn();
 vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
   createModelFolder: (...args) => createModelFolder(...args),
+  getComfyuiReads: (...args) => getComfyuiReads(...args),
   listModelFolderDevices: (...args) => listModelFolderDevices(...args),
+  listModelFolderDirs: (...args) => listModelFolderDirs(...args),
   listModelFolders: (...args) => listModelFolders(...args),
 }));
 
@@ -188,8 +199,6 @@ const folderGates = vi.hoisted(() => ({
 }));
 vi.mock("../../composables/useModelFolderGates", () => ({
   useModelFolderGates: () => ({
-    canScan: (folder) => folder.kind === "user",
-    scanReason: () => "",
     relocateReason: () => folderGates.moveReason,
     scan: (...args) => folderGates.scan(...args),
   }),
@@ -202,11 +211,14 @@ vi.mock("../../api/modelIcons", async (importOriginal) => ({
 }));
 
 import ModelShelf from "./ModelShelf.vue";
+import { characterThumbnailUrl } from "../../api/characters";
+import { modelIconUrl } from "../../api/modelIcons";
 import KindMenu from "../widgets/KindMenu.vue";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
+import { useFavouritesStore } from "../../stores/useFavouritesStore";
+import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
-import { useOperationStore } from "../../stores/useOperationStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
@@ -244,6 +256,8 @@ const globalOpts = {
       // this suite's business.
       ShelfEditDialog: true,
       ShelfMoveDialog: true,
+      FolderMoveDialog: true,
+      ShelfRemoveFolderDialog: true,
       WorkflowSetRenameDialog: true,
       MergeCopiesDialog: true,
       ReplaceMissingDialog: true,
@@ -375,6 +389,17 @@ beforeEach(() => {
   setModelIcon.mockReset();
   listModelFolders.mockReset();
   listModelFolders.mockResolvedValue([]);
+  getComfyuiReads.mockReset();
+  getComfyuiReads.mockResolvedValue({ known: false, reads: [] });
+  listModelFolderDirs.mockReset();
+  listModelFolderDirs.mockImplementation(async (id, path) => ({
+    folder_id: id,
+    path,
+    locked: false,
+    model_count: 0,
+    bytes: 0,
+    dirs: [],
+  }));
   nav.route.name = "models";
   nav.push.mockClear();
   createModelFolder.mockReset();
@@ -388,6 +413,7 @@ beforeEach(() => {
   // from an unawaited promise.
   getModelMoveStatus.mockReset();
   getModelMoveStatus.mockResolvedValue({ status: "idle", results: [] });
+  startModelMove.mockReset().mockResolvedValue({ status: "running", results: [] });
   addModelFile.mockReset();
   createStack.mockReset();
   unstackStack.mockReset();
@@ -400,6 +426,12 @@ beforeEach(() => {
   listFavourites.mockReset().mockResolvedValue({ model: [], workflow: [], set: [] });
   setFavourites.mockReset().mockResolvedValue({ model: [], workflow: [], set: [] });
 });
+
+// A paste starts a move, and the move store polls it a second later. A fresh
+// pinia does not stop that timer: it fires in whichever test is running by
+// then, reads the idle status, and pushes "Nothing moved." into THAT test's
+// notices - which a starved runner turned into a random failure.
+afterEach(() => useModelMovesStore().resetForSession());
 
 describe("a row with nothing in its header", () => {
   it("shows a name derived from the filename, never a blank", async () => {
@@ -417,9 +449,10 @@ describe("a row with nothing in its header", () => {
     // says so in words rather than leaving a cell that reads as a gap. The date
     // is the exception and deliberately so: it is a FIGURE, like the size
     // beside it, and a figure nobody recorded is left blank rather than
-    // dashed - this fixture carries no `added_at`.
+    // dashed - this fixture carries no `added_at`. Sets is blank too until the
+    // sets are read, which this mount never asks for.
     const cells = row.findAll(".shelf-col").map((s) => textOf(s));
-    expect(cells).toEqual(["LoRA", "not set", "342.1 MB", ""]);
+    expect(cells).toEqual(["LoRA", "not set", "342.1 MB", "", ""]);
   });
 
   it("takes the quant postfix out of the name and puts it on a chip", async () => {
@@ -700,7 +733,7 @@ describe("editing a base model in place", () => {
     expect(edit).toHaveBeenCalledWith([7], { base_model: "SDXL 1.0" });
   });
 
-  it("starts a guess from the guess, and clearing it says 'none of these'", async () => {
+  it("starts a guess from the guess, Enter accepts it, and clearing it says 'none of these'", async () => {
     // A guessed row stores no base model of its own, so comparing against the
     // stored value made an emptied field look unchanged and wrote nothing.
     const wrapper = await mountShelf([
@@ -717,14 +750,58 @@ describe("editing a base model in place", () => {
     await wrapper.find(".shelf-base-text").trigger("dblclick");
     let field = wrapper.find(".shelf-row-base-edit");
     expect(field.element.value).toBe("Sana");
-    await field.trigger("keydown", { key: "Enter" });
+    // Clicking away from the untouched guess leaves it a guess...
+    await field.trigger("blur");
     expect(edit).not.toHaveBeenCalled();
+
+    // ...while Enter on it is a confirmation, the same write as the tag's.
+    await wrapper.find(".shelf-base-text").trigger("dblclick");
+    field = wrapper.find(".shelf-row-base-edit");
+    await field.trigger("keydown", { key: "Enter" });
+    await wrapper.vm.$nextTick();
+    expect(edit).toHaveBeenCalledWith([7], { base_model: "Sana" });
+    edit.mockClear();
 
     await wrapper.find(".shelf-base-text").trigger("dblclick");
     field = wrapper.find(".shelf-row-base-edit");
     await field.setValue("");
     await field.trigger("keydown", { key: "Enter" });
     expect(edit).toHaveBeenCalledWith([7], { base_model: null });
+  });
+
+  it("writes nothing on Enter when a stated base model is left as it is", async () => {
+    // Only a guess has anything to accept; a stated value is already decided.
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    await wrapper.find(".shelf-row-base-edit").trigger("keydown", {
+      key: "Enter",
+    });
+    await wrapper.vm.$nextTick();
+    expect(edit).not.toHaveBeenCalled();
+  });
+
+  it("confirms a guess with one click, writing the label it shows", async () => {
+    const wrapper = await mountShelf([
+      adapter({
+        id: 7,
+        base_model: "sdxl",
+        base_model_canonical: "SDXL 1.0",
+        base_model_source: "declared_fuzzy",
+      }),
+      adapter({ id: 8 }),
+    ]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    const tags = wrapper.findAll(".shelf-base-guess");
+    // Only the guessed row offers it; a stated base model is already decided.
+    expect(tags).toHaveLength(1);
+    await tags[0].trigger("click");
+    expect(edit).toHaveBeenCalledWith([7], { base_model: "SDXL 1.0" });
+    expect(store.isSelected(7)).toBe(false);
   });
 
   it("clears the column with an explicit null rather than an empty string", async () => {
@@ -984,11 +1061,11 @@ describe("file kinds", () => {
 
   it("still names an adapter whose algorithm folds to nothing", async () => {
     // The hub CHECK is `kind IS NOT NULL`, not non-empty, so a whitespace-only
-    // kind is reachable over the raw API. The cell falls back to `Adapter`
-    // rather than going blank: an empty Kind column reads as a broken row, and
-    // "it is an adapter, we cannot name the algorithm" is the actual fact.
+    // kind is reachable over the raw API. Every adapter sits under the LoRA
+    // Type row whatever its algorithm says, so the Type cell names it LoRA
+    // rather than going blank: an empty Type column reads as a broken row.
     const wrapper = await mountShelf([adapter({ kind: "  " })]);
-    expect(textOf(wrapper.find(".shelf-row .shelf-col"))).toContain("Adapter");
+    expect(textOf(wrapper.find(".shelf-row .shelf-col"))).toContain("LoRA");
   });
 });
 
@@ -1008,6 +1085,12 @@ describe("location state", () => {
     expect(slots[1].classes()).toContain("shelf-row-loc--unreachable");
     const rows = wrapper.findAll(".shelf-row");
     expect(rows[2].find(".shelf-row-loc").exists()).toBe(false);
+    // A file that is gone has nothing to picture: its glyph takes the mark's
+    // place. One that is only out of reach keeps its mark.
+    expect(rows[0].find(".shelf-row-mark .shelf-row-loc").exists()).toBe(true);
+    expect(rows[0].find(".shelf-row-mark .mmark").exists()).toBe(false);
+    expect(rows[1].find(".shelf-row-label .shelf-row-loc").exists()).toBe(true);
+    expect(rows[1].find(".shelf-row-mark .mmark").exists()).toBe(true);
   });
 
   it("says where the file is on an axis that draws no folder header", async () => {
@@ -1025,27 +1108,6 @@ describe("location state", () => {
     expect(tip(wrapper.find(".shelf-row-file"))).toBe(
       `/home/me/models/a.st\n/media/me/spare/a.st\nSHA-256: ${"a".repeat(64)}`,
     );
-  });
-
-  it("names THIS copy on a folder-grouped row, not the other folder's", async () => {
-    // The draw stands for one copy - that is why it already reports that
-    // copy's state rather than the merged one. A tooltip reading the merged
-    // array put a path where the file IS on the row that says it is gone.
-    const wrapper = await mountShelf([
-      adapter({
-        locations: [
-          { state: "present", folder_path: "/home/me/models", relpath: "a.st" },
-          { state: "missing", folder_path: "/media/me/spare", relpath: "a.st" },
-        ],
-      }),
-    ]);
-    useModelShelfStore().setView({ groupBy: "folder" });
-    await wrapper.vm.$nextTick();
-    const titles = wrapper.findAll(".shelf-row-file").map((el) => tip(el));
-    expect(titles).toEqual([
-      `/home/me/models/a.st\nSHA-256: ${"a".repeat(64)}`,
-      `/media/me/spare/a.st · not where it was\nSHA-256: ${"a".repeat(64)}`,
-    ]);
   });
 
   it("says where each step of an expanded run is", async () => {
@@ -1067,6 +1129,51 @@ describe("location state", () => {
     expect(tip(wrapper.find(".shelf-row--member .shelf-row-file"))).toBe(
       `/media/me/spare/b.st\nSHA-256: ${"b".repeat(64)}`,
     );
+  });
+
+  it("draws the loss of a trained run in its expansion", async () => {
+    getTrainingJob.mockResolvedValue({
+      id: 42,
+      loss_curve: [
+        { step: 1, loss: 0.5 },
+        { step: 2, loss: 0.4 },
+      ],
+    });
+    const wrapper = await mountShelf([
+      adapter({ id: 1, stack_id: 7, stack_position: 0, training_run_id: 42 }),
+      adapter({
+        id: 2,
+        stack_id: 7,
+        stack_position: 1,
+        sha256: "b".repeat(64),
+        training_run_id: 42,
+      }),
+    ]);
+    expect(wrapper.find("[data-testid='shelf-run-loss']").exists()).toBe(false);
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
+    await flushPromises();
+    expect(getTrainingJob).toHaveBeenCalledWith(42);
+    expect(
+      wrapper.find("[data-testid='shelf-run-loss'] .lora-loss-figure").exists(),
+    ).toBe(true);
+  });
+
+  it("draws no loss band for an expanded stack with no training run", async () => {
+    getTrainingJob.mockClear();
+    const wrapper = await mountShelf([
+      adapter({ id: 1, stack_id: 7, stack_position: 0, training_run_id: null }),
+      adapter({
+        id: 2,
+        stack_id: 7,
+        stack_position: 1,
+        sha256: "b".repeat(64),
+        training_run_id: null,
+      }),
+    ]);
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
+    await flushPromises();
+    expect(wrapper.find("[data-testid='shelf-run-loss']").exists()).toBe(false);
+    expect(getTrainingJob).not.toHaveBeenCalled();
   });
 
   it("still names the hash when every copy has been forgotten", async () => {
@@ -1198,39 +1305,6 @@ describe("refetching after an edit", () => {
     expect(wrapper.find(".set-grid-stub").element).toBe(grid);
   });
 
-  it("offers to select every set missing its checkpoint, once, dismissibly", async () => {
-    const wrapper = await mountShelf([adapter()]);
-    const store = useModelShelfStore();
-    store.setView({ groupBy: "workflow_set" });
-    const gone = (name) => ({
-      key: `+${name}`,
-      models: [],
-      missing: [{ name, workflow_ids: ["auto:a"] }],
-      recipes: 1,
-      history_runs: 0,
-      picture_count: 1,
-      covers: [],
-    });
-    store.workflowSets = {
-      combinations: [gone("a.sft"), gone("b.sft")],
-      handMade: [],
-    };
-    await wrapper.vm.$nextTick();
-    const banner = () => wrapper.find('[data-testid="shelf-missing-banner"]');
-    expect(textOf(banner())).toContain("2 sets are missing their checkpoint");
-    await banner()
-      .findAll("button")
-      .find((b) => b.text().includes("Select them"))
-      .trigger("click");
-    expect([...store.selectedMissingKeys]).toEqual(["missing:a.sft", "missing:b.sft"]);
-    await banner().find('[aria-label="Dismiss the missing checkpoint notice"]').trigger("click");
-    expect(banner().exists()).toBe(false);
-    // One fixed, another gone missing: the count is unchanged, the banner back.
-    store.workflowSets = { ...store.workflowSets, combinations: [gone("a.sft"), gone("c.sft")] };
-    await wrapper.vm.$nextTick();
-    expect(banner().exists()).toBe(true);
-  });
-
   it("says it is reading, not 'no models', while Reset refetches an empty view", async () => {
     const wrapper = await mountShelf([]);
     await useModelShelfStore().setFilters(
@@ -1328,7 +1402,8 @@ describe("the shelf's own accessible name", () => {
     // sentence in it is about the row list, and the region now also contains
     // the training-runs panel, which has none of those controls.
     const panel = wrapper.find("#shelf-panel-shelf");
-    expect(panel.attributes("role")).toBe("tabpanel");
+    expect(panel.attributes("role")).toBe("region");
+    expect(panel.attributes("aria-label")).toBe("Model list");
     expect(panel.attributes("aria-describedby")).toBe("shelf-help");
     expect(wrapper.find("#shelf-help").exists()).toBe(true);
   });
@@ -1340,96 +1415,13 @@ describe("the shelf's own accessible name", () => {
     // them.
     const wrapper = await mountShelf([adapter()]);
     const help = wrapper.find("#shelf-help").text();
-    expect(help).toContain("Settings and the Models and tasks toggle");
+    expect(help).toContain("Settings and the Models toggle");
     expect(help).toMatch(/nothing on this screen can be undone/i);
     expect(help).not.toMatch(/undo and redo/i);
   });
 });
 
 // ── F2: group headers and the Sort split-button ────────────────────────────
-
-describe("group headers", () => {
-  it("draws no header at all while the list is ungrouped", async () => {
-    // The flat F1 list and the grouped list are ONE piece of markup with the
-    // header switched off, not two copies of the row template.
-    const wrapper = await mountShelf([adapter()]);
-    expect(wrapper.find(".shelf-group-btn").exists()).toBe(false);
-    expect(wrapper.findAll(".shelf-row").length).toBe(1);
-  });
-
-  it("states the group and its size, and collapses to the header alone", async () => {
-    const wrapper = await mountShelf([
-      adapter({ id: 1, base_model: "sdxl" }),
-      adapter({ id: 2, base_model: "sdxl" }),
-    ]);
-    useModelShelfStore().setView({ groupBy: "base_model" });
-    await wrapper.vm.$nextTick();
-
-    const header = wrapper.find(".shelf-group-btn");
-    expect(textOf(header)).toContain("sdxl");
-    expect(textOf(header)).toContain("2 models");
-    expect(header.attributes("aria-expanded")).toBe("true");
-    // The accessible name carries the count, so the reader hears how big the
-    // group is BEFORE deciding to open it.
-    expect(header.attributes("aria-label")).toBe("sdxl, 2 models");
-
-    await header.trigger("click");
-    expect(wrapper.find(".shelf-group-btn").attributes("aria-expanded")).toBe(
-      "false",
-    );
-    expect(wrapper.findAll(".shelf-row").length).toBe(0);
-    // The header survives with its count: a group that vanished would be
-    // indistinguishable from one the filters removed.
-    expect(textOf(wrapper.find(".shelf-group-btn"))).toContain("2 models");
-  });
-
-  it("is a real button, so Tab still moves group to group", async () => {
-    // The header stays a stop of its own. It shared that job with nothing while
-    // rows carried no verb; now it shares it with the list's single roving
-    // stop, which is one Tab press away rather than 1,800.
-    const wrapper = await mountShelf([adapter({ base_model: "sdxl" })]);
-    useModelShelfStore().setView({ groupBy: "base_model" });
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find(".shelf-group-btn").element.tagName).toBe("BUTTON");
-    expect(wrapper.find(".shelf-group-heading").element.tagName).toBe("H3");
-  });
-
-  it("sets a folder path in the path variant, never uppercased", async () => {
-    // §3 gives the mono face to file paths, and uppercasing one misstates the
-    // string. A base-model name is a label and takes the other treatment.
-    const wrapper = await mountShelf([
-      adapter({
-        locations: [{ state: "present", folder_path: "/mnt/Models" }],
-      }),
-    ]);
-    const store = useModelShelfStore();
-    store.setView({ groupBy: "folder" });
-    await wrapper.vm.$nextTick();
-    const label = wrapper.find(".shelf-group-label");
-    expect(label.classes()).toContain("shelf-group-label--path");
-    expect(label.text()).toBe("/mnt/Models");
-
-    store.setView({ groupBy: "base_model" });
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find(".shelf-group-label").classes()).toContain(
-      "shelf-group-label--name",
-    );
-  });
-
-  it("counts models and copies apart when a model sits in two folders", async () => {
-    const wrapper = await mountShelf([
-      adapter({
-        locations: [
-          { state: "present", folder_path: "/a" },
-          { state: "present", folder_path: "/b" },
-        ],
-      }),
-    ]);
-    useModelShelfStore().setView({ groupBy: "folder" });
-    await wrapper.vm.$nextTick();
-    expect(textOf(wrapper.find(".shelf-sub"))).toBe("1 model · 2 copies");
-  });
-});
 
 describe("the Sort split-button", () => {
   it("names its direction so a keyboard user hears it on focus return", async () => {
@@ -1551,11 +1543,16 @@ describe("the column headings", () => {
     expect(wrapper.find(".shelf-head").exists()).toBe(false);
   });
 
-  it("leaves Kind a heading rather than a button, having no sort key", async () => {
+  it("sorts on Type and Sets too, every column being a button", async () => {
     const wrapper = await mountShelf([adapter()]);
-    expect(headOf(wrapper, "kind").element.tagName).toBe("SPAN");
-    // And it is still resizable: the grip belongs to the column, not to the
-    // sort.
+    const store = useModelShelfStore();
+    await headOf(wrapper, "kind").trigger("click");
+    expect(store.view.sortKey).toBe("type");
+    expect(store.view.sortDirection).toBe("asc");
+    await headOf(wrapper, "sets").trigger("click");
+    expect(store.view.sortKey).toBe("sets");
+    expect(store.view.sortDirection).toBe("desc");
+    expect(wrapper.find(".shelf-head").findAll("button").length).toBe(6);
     expect(gripOf(wrapper, "kind").exists()).toBe(true);
   });
 
@@ -1566,16 +1563,14 @@ describe("the column headings", () => {
     await headOf(wrapper, "base").trigger("click");
     const headers = wrapper.findAll('[role="columnheader"]');
     expect(headers.map((h) => h.attributes("aria-sort"))).toEqual([
-      // The favourite column's heading carries no sort.
-      undefined,
-      undefined,
+      "none", // Name
+      "none", // Type
+      "ascending", // Base
+      "none", // Size
+      // Added names whichever date axis the shelf is on and is therefore
+      // `none` here for `added_at` rather than absent.
       "none",
-      undefined,
-      "ascending",
-      "none",
-      // The date heading, which names whichever date axis the shelf is on and
-      // is therefore `none` here for `added_at` rather than absent.
-      "none",
+      "none", // Sets
     ]);
   });
 });
@@ -1611,19 +1606,30 @@ describe("resizing the columns", () => {
   it("widens the column the grip belongs to, and remembers it", async () => {
     const wrapper = await mountShelf([adapter()]);
     const store = useModelShelfStore();
-    expect(store.view.columnWidths.base).toBe(84);
+    expect(store.view.columnWidths.base).toBe(140);
 
     await drag(wrapper, gripOf(wrapper, "base"), 240, 200);
-    expect(store.view.columnWidths.base).toBe(124);
+    expect(store.view.columnWidths.base).toBe(180);
     // The variable the rows read, not a per-cell style: one declaration, so a
     // heading and the cells under it cannot drift apart.
     expect(
       wrapper.find(".shelf").element.style.getPropertyValue("--shelf-col-base"),
-    ).toBe("124px");
+    ).toBe("180px");
     expect(
       JSON.parse(window.localStorage.getItem("pixlstash:modelShelfView"))
         .columnWidths.base,
-    ).toBe(124);
+    ).toBe(180);
+  });
+
+  it("hands the stylesheet the same floors the grips stop at", async () => {
+    // A narrow panel shrinks the columns to these and holds Name at its own.
+    // Without them `min-width` falls back to each cell's content, and the
+    // rows stop agreeing with each other and with the headings.
+    const wrapper = await mountShelf([adapter()]);
+    const style = wrapper.find(".shelf").element.style;
+    expect(style.getPropertyValue("--shelf-col-base-min")).toBe("72px");
+    expect(style.getPropertyValue("--shelf-col-sets-min")).toBe("44px");
+    expect(style.getPropertyValue("--shelf-name-min")).toBe("200px");
   });
 
   it("stops widening where the Name track would go under its floor", async () => {
@@ -1641,19 +1647,19 @@ describe("resizing the columns", () => {
     );
 
     await drag(wrapper, gripOf(wrapper, "base"), 400, 0);
-    expect(store.view.columnWidths.base).toBe(144);
+    expect(store.view.columnWidths.base).toBe(200);
 
     // The separator ANNOUNCES that limit rather than the store's absolute
-    // ceiling: a reader told the maximum is 400 and stopped at 144 has been
-    // told the wrong thing about the control in their hand. 204 because the
+    // ceiling: a reader told the maximum is 400 and stopped at 200 has been
+    // told the wrong thing about the control in their hand. 260 because the
     // stubbed track never shrinks - it is the live measurement that is being
     // asserted here, not the arithmetic.
-    expect(gripOf(wrapper, "base").attributes("aria-valuemax")).toBe("204");
+    expect(gripOf(wrapper, "base").attributes("aria-valuemax")).toBe("260");
 
     // And a panel with nothing left to give still lets the column back down:
     // the measurement is a ceiling, so a request to narrow passes untouched.
     await drag(wrapper, gripOf(wrapper, "base"), 0, 40);
-    expect(store.view.columnWidths.base).toBe(104);
+    expect(store.view.columnWidths.base).toBe(160);
   });
 
   it("holds a column at its floor rather than letting it vanish", async () => {
@@ -1684,14 +1690,14 @@ describe("resizing the columns", () => {
 
     await fire(wrapper, grip, "pointerdown", 220);
     await fire(wrapper, grip, "pointermove", 200);
-    expect(store.view.columnWidths.base).toBe(104);
+    expect(store.view.columnWidths.base).toBe(160);
 
     // The release happened somewhere else. The next move arrives with nothing
     // held down, and that is the drag over.
     await fire(wrapper, grip, "pointermove", 160, 0);
-    expect(store.view.columnWidths.base).toBe(104);
+    expect(store.view.columnWidths.base).toBe(160);
     await fire(wrapper, grip, "pointermove", 20, 0);
-    expect(store.view.columnWidths.base).toBe(104);
+    expect(store.view.columnWidths.base).toBe(160);
   });
 
   it("refuses a secondary button on any device, a pen's barrel included", async () => {
@@ -1775,7 +1781,7 @@ describe("resizing the columns", () => {
     await fire(wrapper, grip, "pointermove", 220);
     await fire(wrapper, grip, "pointermove", 210);
     await fire(wrapper, grip, "pointermove", 200);
-    expect(useModelShelfStore().view.columnWidths.base).toBe(114);
+    expect(useModelShelfStore().view.columnWidths.base).toBe(170);
     expect(write).not.toHaveBeenCalled();
 
     await fire(wrapper, grip, "pointerup", 200, 0);
@@ -1783,37 +1789,13 @@ describe("resizing the columns", () => {
     expect(
       JSON.parse(window.localStorage.getItem("pixlstash:modelShelfView"))
         .columnWidths.base,
-    ).toBe(114);
+    ).toBe(170);
     write.mockRestore();
   });
 });
 
 describe("selecting rows", () => {
   const rowAt = (wrapper, i) => wrapper.findAll(".shelf-row")[i];
-
-  it("selects by model, so one file drawn in two folders is one selection", async () => {
-    // Under folder grouping a model with copies in two folders is DRAWN twice.
-    // The verbs write the model, so a per-row selection would let the same file
-    // be half selected and ask the reader to hold a distinction the data has
-    // not got.
-    const wrapper = await mountShelf([
-      adapter({
-        locations: [
-          { state: "present", folder_id: 1, folder_path: "/a", relpath: "x" },
-          { state: "present", folder_id: 2, folder_path: "/b", relpath: "x" },
-        ],
-      }),
-    ]);
-    useModelShelfStore().setView({ groupBy: "folder" });
-    await wrapper.vm.$nextTick();
-
-    expect(wrapper.findAll(".shelf-row")).toHaveLength(2);
-    await rowAt(wrapper, 0).trigger("click");
-    await wrapper.vm.$nextTick();
-
-    expect(useModelShelfStore().selectedRows).toHaveLength(1);
-    expect(wrapper.findAll(".shelf-row--selected")).toHaveLength(2);
-  });
 
   it("replaces the selection on a plain click", async () => {
     // The file-manager rule, and the one a checkbox got wrong: a bare click is
@@ -2109,718 +2091,6 @@ describe("selecting rows", () => {
   });
 });
 
-describe("drive bands", () => {
-  const inFolder = (id, folderId, path) =>
-    adapter({
-      id,
-      sha256: String(id).repeat(64).slice(0, 64),
-      locations: [
-        {
-          state: "present",
-          folder_id: folderId,
-          folder_path: path,
-          relpath: "a.st",
-        },
-      ],
-    });
-
-  it("draws one band per drive, with a meter that reads free space first", async () => {
-    listModelFolderDevices.mockResolvedValue([
-      {
-        device_id: "9",
-        mount_point: "/mnt/fast",
-        label: "FastModels",
-        total_bytes: 1024 ** 4,
-        free_bytes: 512 * 1024 ** 3,
-        shelf_bytes: 256 * 1024 ** 3,
-        folder_ids: [1, 2],
-      },
-    ]);
-    const wrapper = await mountShelf([
-      inFolder(1, 1, "/mnt/fast/loras"),
-      inFolder(2, 2, "/mnt/fast/checkpoints"),
-    ]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
-    await wrapper.vm.$nextTick();
-
-    const bands = wrapper.findAll(".shelf-band");
-    expect(bands).toHaveLength(1);
-    // The volume's name, not its mount point: a Linux mount point runs to
-    // `/media/<user>/A1B2C3D4E5F60789` and crowds the header out.
-    expect(textOf(bands[0])).toContain("FastModels");
-    // And the mount point beside it, in the mono face: the volume label answers
-    // "which disk" and the path answers "which one is that", which on a machine
-    // with two identically-named drives is the only half that does.
-    expect(textOf(bands[0].find(".shelf-band-path"))).toBe("/mnt/fast");
-    // Free leads: it is the number that decides whether the next checkpoint
-    // fits, and the meter is read at a glance rather than computed from.
-    expect(textOf(bands[0])).toContain("512.0 GB free of 1.0 TB");
-
-    // Three segments carving up the track, in the legend's order, and their
-    // widths add to the whole drive. Two overlaid fills could not say which of
-    // "how full is the disk" and "how much is ours" a boundary marked (#893).
-    const segs = wrapper.findAll(".shelf-band-seg");
-    expect(segs).toHaveLength(3);
-    expect(segs.map((s) => s.attributes("style"))).toEqual([
-      "width: 25%;", // 256 GB on the shelf
-      "width: 25%;", // 256 GB belonging to anything else
-      "width: 50%;", // 512 GB free
-    ]);
-    // The meter is decorative: the same figures are already visible text in
-    // this heading, so labelling it made every band announce them twice.
-    expect(wrapper.find(".shelf-band-meter").attributes("aria-hidden")).toBe(
-      "true",
-    );
-    expect(
-      wrapper.find(".shelf-band-meter").attributes("role"),
-    ).toBeUndefined();
-  });
-
-  it("says what kind of drive it is on the glyph, and nothing when unsure", async () => {
-    // The kind rides the mark the band already carries, because the row has no
-    // horizontal room for a chip - which is the whole reason this exists. A
-    // null kind is the normal answer on macOS and for any filesystem the
-    // backend will not vouch for, and it must draw the plain disk rather than
-    // the word "Unknown".
-    listModelFolderDevices.mockResolvedValue([
-      {
-        device_id: "9",
-        mount_point: "/mnt/nas",
-        label: "Archive",
-        kind: "network",
-        total_bytes: 1024 ** 4,
-        free_bytes: 512 * 1024 ** 3,
-        shelf_bytes: 0,
-        folder_ids: [1],
-      },
-      {
-        device_id: "10",
-        mount_point: "/mnt/plain",
-        label: "Plain",
-        total_bytes: 1024 ** 4,
-        free_bytes: 512 * 1024 ** 3,
-        shelf_bytes: 0,
-        folder_ids: [2],
-      },
-    ]);
-    // The auto-stub swallows `v-icon`'s slot, and the glyph IS the slot here.
-    const wrapper = await mountShelf(
-      [inFolder(1, 1, "/mnt/nas/loras"), inFolder(2, 2, "/mnt/plain/loras")],
-      [],
-      [],
-      {
-        global: {
-          ...globalOpts.global,
-          stubs: {
-            ...globalOpts.global.stubs,
-            "v-icon": { template: "<i><slot /></i>" },
-          },
-        },
-      },
-    );
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
-    await wrapper.vm.$nextTick();
-
-    const icons = wrapper.findAll(".shelf-band-icon");
-    expect(icons[0].text()).toBe("mdi-nas");
-    expect(tip(icons[0])).toBe("Network share");
-    expect(icons[1].text()).toBe("mdi-harddisk");
-    expect(tip(icons[1])).toBe("");
-    expect(textOf(wrapper.findAll(".shelf-band")[1])).not.toContain("Unknown");
-  });
-
-  it("drops the mount point when it is already the band's name", async () => {
-    // With no volume label the name IS the mount point, and drawing both
-    // rendered `/` twice - which reads as a rendering fault, not as detail.
-    listModelFolderDevices.mockResolvedValue([
-      {
-        device_id: "9",
-        mount_point: "/",
-        label: null,
-        total_bytes: 1024 ** 4,
-        free_bytes: 512 * 1024 ** 3,
-        shelf_bytes: 0,
-        folder_ids: [1],
-      },
-    ]);
-    const wrapper = await mountShelf([inFolder(1, 1, "/models")]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
-    await wrapper.vm.$nextTick();
-
-    const band = wrapper.find(".shelf-band");
-    expect(textOf(band.find(".shelf-band-name"))).toBe("/");
-    expect(band.find(".shelf-band-path").exists()).toBe(false);
-  });
-
-  it("keys the meter once for the view, not once per band", async () => {
-    listModelFolderDevices.mockResolvedValue([
-      {
-        device_id: "9",
-        mount_point: "/mnt/fast",
-        label: "FastModels",
-        total_bytes: 1024 ** 4,
-        free_bytes: 512 * 1024 ** 3,
-        shelf_bytes: 256 * 1024 ** 3,
-        folder_ids: [1],
-      },
-      {
-        device_id: "10",
-        mount_point: "/mnt/slow",
-        label: "SlowModels",
-        total_bytes: 1024 ** 4,
-        free_bytes: 512 * 1024 ** 3,
-        shelf_bytes: 128 * 1024 ** 3,
-        folder_ids: [2],
-      },
-    ]);
-    const wrapper = await mountShelf([
-      inFolder(1, 1, "/mnt/fast/loras"),
-      inFolder(2, 2, "/mnt/slow/checkpoints"),
-    ]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
-    await wrapper.vm.$nextTick();
-
-    expect(wrapper.findAll(".shelf-band")).toHaveLength(2);
-    expect(wrapper.findAll(".shelf-keys")).toHaveLength(1);
-    expect(textOf(wrapper.find(".shelf-keys"))).toContain("On the shelf");
-    expect(textOf(wrapper.find(".shelf-keys"))).toContain("Other files");
-    expect(textOf(wrapper.find(".shelf-keys"))).toContain("Free");
-  });
-
-  it("draws no key when no meter is on screen to key", async () => {
-    // An unmeasured drive renders no meter, so a shelf of only offline drives
-    // would otherwise print a key to a picture nobody can see.
-    listModelFolderDevices.mockResolvedValue([
-      {
-        device_id: null,
-        mount_point: "/net/models",
-        total_bytes: null,
-        free_bytes: null,
-        shelf_bytes: 0,
-        folder_ids: [7],
-      },
-    ]);
-    const wrapper = await mountShelf([inFolder(1, 7, "/net/models/loras")]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
-    await wrapper.vm.$nextTick();
-
-    expect(wrapper.find(".shelf-band").exists()).toBe(true);
-    expect(wrapper.find(".shelf-keys").exists()).toBe(false);
-  });
-
-  it("warns when a drive has no room for the next checkpoint", async () => {
-    listModelFolderDevices.mockResolvedValue([
-      {
-        device_id: "9",
-        mount_point: "/mnt/fast",
-        label: "FastModels",
-        total_bytes: 1024 ** 4,
-        free_bytes: 8 * 1024 ** 3,
-        shelf_bytes: 512 * 1024 ** 3,
-        folder_ids: [1],
-      },
-    ]);
-    const wrapper = await mountShelf([inFolder(1, 1, "/mnt/fast/loras")]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
-    await wrapper.vm.$nextTick();
-
-    // The word carries the state in greyscale, and in a screen reader, without
-    // a live region: this is a standing fact about a disk, not an event.
-    expect(textOf(wrapper.find(".shelf-band"))).toContain(
-      "Only 8.0 GB free of 1.0 TB",
-    );
-    expect(wrapper.find(".shelf-band-meter--low").exists()).toBe(true);
-    expect(wrapper.find(".shelf-band-figures--low").exists()).toBe(true);
-    expect(wrapper.find(".shelf-band").attributes("role")).not.toBe("alert");
-  });
-
-  it("leaves a roomy drive unwarned however full it looks", async () => {
-    // 400 GB left is a tenth of this drive. A percentage rule would cry wolf
-    // here, on exactly the hardware people keep models on.
-    listModelFolderDevices.mockResolvedValue([
-      {
-        device_id: "9",
-        mount_point: "/mnt/fast",
-        label: "FastModels",
-        total_bytes: 4000 * 1024 ** 3,
-        free_bytes: 400 * 1024 ** 3,
-        shelf_bytes: 1024 ** 3,
-        folder_ids: [1],
-      },
-    ]);
-    const wrapper = await mountShelf([inFolder(1, 1, "/mnt/fast/loras")]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
-    await wrapper.vm.$nextTick();
-
-    expect(textOf(wrapper.find(".shelf-band"))).not.toContain("Only");
-    expect(wrapper.find(".shelf-band-meter--low").exists()).toBe(false);
-  });
-
-  it("says a drive is unknown rather than drawing it empty", async () => {
-    // An empty meter reads as a drive with nothing on it, which is the one
-    // thing "we could not measure it" does not mean.
-    listModelFolderDevices.mockResolvedValue([
-      {
-        device_id: null,
-        mount_point: "/net/models",
-        total_bytes: null,
-        free_bytes: null,
-        shelf_bytes: 0,
-        folder_ids: [7],
-      },
-    ]);
-    const wrapper = await mountShelf([inFolder(1, 7, "/net/models/loras")]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
-    await wrapper.vm.$nextTick();
-
-    expect(textOf(wrapper.find(".shelf-band"))).toContain("Capacity unknown");
-    expect(wrapper.find(".shelf-band-meter").exists()).toBe(false);
-  });
-
-  it("draws no band at all under the A to Z layout", async () => {
-    // The band is the drive layout's own tier. Folder-alphabetical is one flat
-    // run of folder headers, which is what it was before F2.
-    listModelFolderDevices.mockResolvedValue([
-      {
-        device_id: "9",
-        mount_point: "/mnt/fast",
-        total_bytes: 1000,
-        free_bytes: 400,
-        shelf_bytes: 100,
-        folder_ids: [1],
-      },
-    ]);
-    const wrapper = await mountShelf([inFolder(1, 1, "/mnt/fast/loras")]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
-    await wrapper.vm.$nextTick();
-
-    expect(wrapper.find(".shelf-band").exists()).toBe(false);
-    expect(wrapper.findAll(".shelf-group-btn").length).toBeGreaterThan(0);
-  });
-});
-
-describe("what a folder header says about its folder (#899)", () => {
-  const inFolder = (id, folderId, path, state = "present") =>
-    adapter({
-      id,
-      sha256: String(id).repeat(64).slice(0, 64),
-      locations: [
-        { state, folder_id: folderId, folder_path: path, relpath: "a.st" },
-      ],
-    });
-
-  async function mountFolders(rows, { folders = [], devices = [] } = {}) {
-    listModelFolders.mockResolvedValue(folders);
-    listModelFolderDevices.mockResolvedValue(devices);
-    const wrapper = await mountShelf(rows);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
-    await wrapper.vm.$nextTick();
-    return wrapper;
-  }
-
-  it("rails the folders on one drive in one colour, and names the volume", async () => {
-    const wrapper = await mountFolders(
-      [
-        inFolder(1, 1, "/mnt/fast/loras"),
-        inFolder(2, 2, "/mnt/fast/ckpt"),
-        inFolder(3, 3, "/ext/loras"),
-      ],
-      {
-        folders: [
-          { id: 1, path: "/mnt/fast/loras", kind: "user", file_count: 1 },
-          { id: 2, path: "/mnt/fast/ckpt", kind: "user", file_count: 1 },
-          { id: 3, path: "/ext/loras", kind: "user", file_count: 1 },
-        ],
-        devices: [
-          { device_id: "9", label: "FastModels", folder_ids: [1, 2] },
-          { device_id: "12", label: "Archive", folder_ids: [3] },
-        ],
-      },
-    );
-    // Alphabetical by path under this layout: /ext/loras, then the two on
-    // /mnt/fast.
-    const headers = wrapper.findAll(".shelf-group-btn");
-    const rails = headers.map((btn) => btn.attributes("style") || "");
-    expect(rails[1]).toContain("border-left-color");
-    // Same disk, same rail; a different disk, a different one.
-    expect(rails[2]).toBe(rails[1]);
-    expect(rails[0]).not.toBe(rails[1]);
-    // ...and the identity is a WORD, because the hue is only a grouping hint.
-    expect(textOf(headers[1])).toContain("FastModels");
-    expect(textOf(headers[0])).toContain("Archive");
-  });
-
-  it("leaves the drive chip to the band when there is a band", async () => {
-    // Under `Drive, then folder` the band above IS the chip. Repeating it on
-    // every folder under it would be noise rather than a second signal.
-    listModelFolders.mockResolvedValue([
-      { id: 1, path: "/mnt/fast/loras", kind: "user", file_count: 1 },
-    ]);
-    listModelFolderDevices.mockResolvedValue([
-      { device_id: "9", label: "FastModels", folder_ids: [1] },
-    ]);
-    const wrapper = await mountShelf([inFolder(1, 1, "/mnt/fast/loras")]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
-    await wrapper.vm.$nextTick();
-
-    expect(textOf(wrapper.find(".shelf-band"))).toContain("FastModels");
-    expect(textOf(wrapper.find(".shelf-group-btn"))).not.toContain(
-      "FastModels",
-    );
-    // The rail still runs down the header: it is what says the two folders
-    // under one band belong together once the band has scrolled away.
-    expect(wrapper.find(".shelf-group-btn").attributes("style")).toContain(
-      "border-left-color",
-    );
-  });
-
-  it("states the tier in a word and a glyph, on the header itself", async () => {
-    const wrapper = await mountFolders(
-      [
-        inFolder(1, 1, "/store"),
-        inFolder(2, 2, "/hf"),
-        inFolder(3, 3, "/mine"),
-      ],
-      {
-        folders: [
-          { id: 1, path: "/store", kind: "managed", file_count: 1 },
-          { id: 2, path: "/hf", kind: "foreign", file_count: 1 },
-          { id: 3, path: "/mine", kind: "user", file_count: 1 },
-        ],
-      },
-    );
-    const headers = wrapper.findAll(".shelf-group-btn");
-    const chips = headers.map((h) =>
-      h.findAll(".shelf-chip").map((c) => textOf(c)),
-    );
-    // Alphabetical by path: /hf, /mine, /store.
-    expect(chips[0]).toEqual(["Locked"]);
-    expect(chips[1]).toEqual([]);
-    expect(chips[2]).toEqual(["Managed"]);
-    // The reader who never opens the header still hears all three.
-    expect(headers[2].attributes("aria-label")).toBe(
-      "/store, Managed, 1 model",
-    );
-  });
-
-  it("marks an offline folder without ever using the error treatment", async () => {
-    const wrapper = await mountFolders(
-      [inFolder(1, 1, "/ext/loras", "unreachable")],
-      {
-        folders: [{ id: 1, path: "/ext/loras", kind: "user", file_count: 1 }],
-      },
-    );
-    const header = wrapper.find(".shelf-group-btn");
-    expect(header.classes()).toContain("shelf-group-btn--offline");
-    // A word as well as the dashed rail, so nothing here is carried by colour.
-    expect(textOf(header)).toContain("Offline");
-    expect(header.attributes("aria-label")).toContain("offline");
-    // The dashed rail replaces the drive hue rather than joining it: we cannot
-    // see the disk, so nothing on this header may claim which one it is.
-    expect(header.attributes("style") || "").not.toContain("border-left-color");
-  });
-
-  it("indents a folder registered inside another registered folder", async () => {
-    const wrapper = await mountFolders(
-      [inFolder(1, 1, "/models"), inFolder(2, 2, "/models/loras")],
-      {
-        folders: [
-          { id: 1, path: "/models", kind: "user", file_count: 1 },
-          { id: 2, path: "/models/loras", kind: "user", file_count: 1 },
-        ],
-      },
-    );
-    const [parent, child] = wrapper.findAll(".shelf-group-btn");
-    // `--depth` is the shared row system's own indent, not a private padding.
-    expect(parent.attributes("style") || "").not.toContain("--depth");
-    expect(child.attributes("style")).toContain("--depth: 1");
-  });
-});
-
-describe("a folder header's context menu (#1270)", () => {
-  const scan = vi.fn();
-  const relocate = vi.fn();
-  beforeEach(() => {
-    folderGates.scan = scan;
-    folderGates.moveReason = "";
-  });
-
-  async function mountWithFolders(folders) {
-    scan.mockReset();
-    relocate.mockReset();
-    listModelFolders.mockResolvedValue(folders);
-    const rows = folders.map((folder, i) =>
-      adapter({
-        id: i + 1,
-        sha256: String(i + 1).repeat(64),
-        locations: [
-          {
-            state: "present",
-            folder_id: folder.id,
-            folder_path: folder.path,
-            relpath: "a.st",
-          },
-        ],
-      }),
-    );
-    // Attached, so the focus the menu hands back is a real one.
-    const wrapper = await mountShelf(rows, [], [], { attachTo: document.body });
-    vi.spyOn(useModelMovesStore(), "relocate").mockImplementation(relocate);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
-    await wrapper.vm.$nextTick();
-    return wrapper;
-  }
-
-  const menuItems = (wrapper) =>
-    wrapper.findAll('[role="menuitem"]').filter((el) => {
-      const text = textOf(el);
-      return /^(Re)?[Ss]can folder$|^Move folder/.test(text);
-    });
-
-  it("offers Rescan and Move on a folder that can take both", async () => {
-    folderGates.moveReason = "";
-    const folder = {
-      id: 1,
-      path: "/m",
-      kind: "user",
-      relocatable: true,
-      last_checked: "2026-01-01T00:00:00Z",
-      file_count: 1,
-    };
-    const wrapper = await mountWithFolders([folder]);
-    await wrapper.find(".shelf-group-btn").trigger("contextmenu");
-    const [rescan, move] = menuItems(wrapper);
-    expect(textOf(rescan)).toBe("Rescan folder");
-    expect(textOf(move)).toBe("Move folder…");
-
-    await rescan.trigger("click");
-    expect(scan).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }));
-    // Move opens the shelf's own picker and empties the folder into the pick.
-    await move.trigger("click");
-    const picker = wrapper
-      .findAllComponents({ name: "FolderBrowser" })
-      .find((b) => b.props("open"));
-    await picker.vm.$emit("select", "/mnt/x");
-    expect(relocate).toHaveBeenCalledWith(1, "/mnt/x");
-    wrapper.unmount();
-  });
-
-  it("disables a refused verb and says why", async () => {
-    folderGates.moveReason = "A move is already running.";
-    const wrapper = await mountWithFolders([
-      { id: 1, path: "/m", kind: "user", relocatable: true, file_count: 1 },
-    ]);
-    await wrapper.find(".shelf-group-btn").trigger("contextmenu");
-    const move = menuItems(wrapper).find((el) =>
-      textOf(el).includes("Move folder"),
-    );
-    expect(move.attributes("disabled")).toBeDefined();
-    expect(tip(move)).toBe("A move is already running.");
-    // A never-scanned folder is offered a Scan, not a Rescan.
-    expect(menuItems(wrapper).map(textOf)).toContain("Scan folder");
-    wrapper.unmount();
-  });
-
-  it("keeps the browser's menu on a folder with nothing to offer", async () => {
-    const wrapper = await mountWithFolders([
-      {
-        id: 1,
-        path: "/src",
-        kind: "source",
-        relocatable: false,
-        file_count: 1,
-      },
-    ]);
-    const event = new MouseEvent("contextmenu", { cancelable: true });
-    wrapper.find(".shelf-group-btn").element.dispatchEvent(event);
-    await wrapper.vm.$nextTick();
-    expect(event.defaultPrevented).toBe(false);
-    expect(menuItems(wrapper)).toHaveLength(0);
-    wrapper.unmount();
-  });
-
-  it("opens from the keyboard and gives focus back to the header", async () => {
-    folderGates.moveReason = "";
-    const wrapper = await mountWithFolders([
-      { id: 1, path: "/m", kind: "user", relocatable: false, file_count: 1 },
-    ]);
-    const header = wrapper.find(".shelf-group-btn");
-    expect(menuItems(wrapper)).toHaveLength(0);
-    await header.trigger("keydown", { key: "F10", shiftKey: true });
-    const [rescan] = menuItems(wrapper);
-    expect(textOf(rescan)).toBe("Scan folder");
-
-    header.element.blur();
-    await rescan.trigger("click");
-    expect(scan).toHaveBeenCalled();
-    expect(document.activeElement).toBe(header.element);
-    wrapper.unmount();
-  });
-});
-
-describe("the group header's reserved column", () => {
-  it("carries the axis glyph rather than an empty gap", async () => {
-    // The width is reserved either way so the header's label lines up with the
-    // row names. Left empty it reads as a thumbnail that failed to load.
-    const wrapper = await mountShelf([adapter()]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
-    await wrapper.vm.$nextTick();
-
-    const mark = wrapper.find(".shelf-group-mark");
-    expect(mark.exists()).toBe(true);
-    expect(mark.element.tagName.toLowerCase()).toBe("v-icon-stub");
-  });
-
-  it("draws each FEATURE's own glyph there, not one axis glyph on every header", async () => {
-    // The bug: the header fell back to the axis's glyph for want of its own, so
-    // every feature wore one star. Asserted on the rendered mark rather than on
-    // the store's field, because the fallback lives in the template and the
-    // store test passes either way.
-    listAdapters.mockResolvedValue([
-      adapter({ id: 1, capabilities: ["tagger"] }),
-      adapter({ id: 2, capabilities: ["face"] }),
-    ]);
-    listCheckpoints.mockResolvedValue([]);
-    // The auto-stub swallows its slot, which is why the test above can only
-    // reach the tag name. This one has to read the glyph, so `v-icon` renders.
-    const wrapper = mount(ModelShelf, {
-      global: {
-        ...globalOpts.global,
-        stubs: {
-          ...globalOpts.global.stubs,
-          "v-icon": { template: "<i><slot /></i>" },
-        },
-      },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await wrapper.vm.$nextTick();
-    useModelShelfStore().setView({ groupBy: "feature" });
-    await wrapper.vm.$nextTick();
-
-    const marks = wrapper
-      .findAll(".shelf-group-mark")
-      .map((mark) => mark.text());
-    expect(marks.sort()).toEqual(["mdi-face-recognition", "mdi-tag-outline"]);
-  });
-});
-
-describe("selection and drive bands together", () => {
-  it("selects a row that sits under a band, and bands do not become rows", async () => {
-    // The seam this merge created: F2 renders `shownGroups` (banded) where F1
-    // rendered `store.groups`, and F3 puts a checkbox inside the row loop. If
-    // `bandGroups` ever dropped `rows` on its way through, the list would draw
-    // headers over nothing and the bar would never open.
-    listModelFolderDevices.mockResolvedValue([
-      {
-        device_id: "9",
-        mount_point: "/mnt/fast",
-        label: "FastModels",
-        total_bytes: 1000,
-        free_bytes: 400,
-        shelf_bytes: 100,
-        folder_ids: [1],
-      },
-    ]);
-    const wrapper = await mountShelf([
-      adapter({
-        locations: [
-          {
-            state: "present",
-            folder_id: 1,
-            folder_path: "/mnt/fast/loras",
-            relpath: "a",
-          },
-        ],
-      }),
-    ]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
-    await wrapper.vm.$nextTick();
-
-    expect(wrapper.find(".shelf-band").exists()).toBe(true);
-    const rows = wrapper.findAll(".shelf-row");
-    expect(rows).toHaveLength(1);
-
-    await rows[0].trigger("click");
-    await wrapper.vm.$nextTick();
-    expect(tip(wrapper.find(".selbar-count"))).toContain("1 model selected");
-    // The band is a header, not a row: it must not have become selectable.
-    expect(wrapper.find(".shelf-band").attributes("role")).not.toBe("option");
-  });
-});
-
-describe("focus under folder grouping, where a model is drawn twice", () => {
-  const twiceDrawn = () =>
-    adapter({
-      id: 1,
-      locations: [
-        { state: "present", folder_id: 1, folder_path: "/a", relpath: "x" },
-        { state: "present", folder_id: 2, folder_path: "/b", relpath: "x" },
-      ],
-    });
-
-  async function mountGrouped(rows) {
-    const wrapper = await mountShelf(rows);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
-    await wrapper.vm.$nextTick();
-    return wrapper;
-  }
-
-  it("still keeps exactly one tab stop across both draws", async () => {
-    // Keyed by model id, BOTH draws satisfied `row.id === rovingRowId` and both
-    // carried tabindex="0" - two focusable options for one listbox position.
-    const wrapper = await mountGrouped([twiceDrawn()]);
-    const stops = wrapper
-      .findAll(".shelf-row")
-      .map((r) => r.attributes("tabindex"));
-    expect(stops).toHaveLength(2);
-    expect(stops.filter((t) => t === "0")).toHaveLength(1);
-  });
-
-  it("moves the stop to the second draw, not back to the first", async () => {
-    // The bug the id-keying hid: `indexOf(row.id)` returned the FIRST draw's
-    // index whichever draw the cursor was on, so ArrowDown from the second draw
-    // moved to the second draw again.
-    const wrapper = await mountGrouped([twiceDrawn()]);
-    await wrapper.findAll(".shelf-row")[0].trigger("keydown", {
-      key: "ArrowDown",
-    });
-    await wrapper.vm.$nextTick();
-
-    const stops = wrapper
-      .findAll(".shelf-row")
-      .map((r) => r.attributes("tabindex"));
-    expect(stops).toEqual(["-1", "0"]);
-  });
-
-  it("gives every drawn row a key, including in the ungrouped default", async () => {
-    // `rowKey` was set only where a model can be drawn twice, so in the default
-    // view the list's v-for key - and everything else keyed per drawn row - was
-    // undefined for every row.
-    const flat = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
-    const keys = flat
-      .findAll(".shelf-row")
-      .map((r) => r.attributes("data-row-key"));
-    expect(keys).toEqual(["1", "2"]);
-
-    const grouped = await mountGrouped([twiceDrawn()]);
-    const groupedKeys = grouped
-      .findAll(".shelf-row")
-      .map((r) => r.attributes("data-row-key"));
-    expect(new Set(groupedKeys).size).toBe(2);
-  });
-
-  it("selects the model, so both of its draws light up", async () => {
-    // Focus is per drawn row; selection stays per model. Clicking one draw
-    // selects the model, and the other draw of it must show as selected too.
-    const wrapper = await mountGrouped([twiceDrawn()]);
-    await wrapper.findAll(".shelf-row")[0].trigger("click");
-    await wrapper.vm.$nextTick();
-
-    expect(useModelShelfStore().selectedRows).toHaveLength(1);
-    expect(wrapper.findAll(".shelf-row--selected")).toHaveLength(2);
-  });
-});
-
 describe("a click on the list's background", () => {
   it("clears the selection, and a click on a row does not", async () => {
     const wrapper = await mountShelf([adapter({ id: 7 }), adapter({ id: 8 })]);
@@ -2881,502 +2151,6 @@ describe("a click on the row being renamed", () => {
 
     await rows[1].trigger("click");
     expect([...store.selectedIds]).toEqual([8]);
-  });
-});
-
-describe("a registered folder holding no models", () => {
-  it("gets a group of its own, so the managed store is visible", async () => {
-    // It is ruled to always exist and to be the default destination for a drop
-    // or an import. A destination you cannot see is not a destination.
-    listModelFolders.mockResolvedValue([
-      {
-        id: 1,
-        path: "/models/loras",
-        last_checked: "2026-08-10T00:00:00Z",
-        file_count: 1,
-      },
-      { id: 2, path: "/models/store", last_checked: "2026-08-10T00:00:00Z" },
-    ]);
-    const wrapper = await mountShelf([
-      adapter({
-        locations: [
-          {
-            state: "present",
-            folder_id: 1,
-            folder_path: "/models/loras",
-            relpath: "a",
-          },
-        ],
-      }),
-    ]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
-    await wrapper.vm.$nextTick();
-
-    const labels = wrapper.findAll(".shelf-group-label").map((l) => l.text());
-    expect(labels).toContain("/models/store");
-    expect(textOf(wrapper.find(".shelf-empty-folder"))).toBe(
-      "No models in this folder.",
-    );
-  });
-
-  it("says it has not been looked in yet when it has not", async () => {
-    // "We have not looked" is the owner's to act on; "we looked and it is
-    // empty" is not, and a bare "0 models" says neither.
-    //
-    // A shelf with NO models at all renders its own empty state instead of the
-    // group list, which is the better answer there ("add a folder"), so the
-    // case asserted is the one the owner actually hits: models elsewhere, and
-    // one folder nothing has looked in.
-    listModelFolders.mockResolvedValue([
-      {
-        id: 1,
-        path: "/models/loras",
-        last_checked: "2026-08-10T00:00:00Z",
-        file_count: 1,
-      },
-      { id: 2, path: "/models/store", last_checked: null },
-    ]);
-    const wrapper = await mountShelf([
-      adapter({
-        locations: [
-          {
-            state: "present",
-            folder_id: 1,
-            folder_path: "/models/loras",
-            relpath: "a",
-          },
-        ],
-      }),
-    ]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
-    await wrapper.vm.$nextTick();
-
-    expect(textOf(wrapper.find(".shelf-empty-folder"))).toBe(
-      "Not scanned yet.",
-    );
-  });
-
-  it("stays out of the way on every other axis", async () => {
-    // The folder registry is a fact about folders. Grouping by base model and
-    // seeing a folder appear would be a category error.
-    listModelFolders.mockResolvedValue([
-      { id: 2, path: "/models/store", last_checked: null },
-    ]);
-    const wrapper = await mountShelf([adapter({ base_model: "sdxl" })]);
-    useModelShelfStore().setView({ groupBy: "base_model" });
-    await wrapper.vm.$nextTick();
-
-    expect(wrapper.find(".shelf-empty-folder").exists()).toBe(false);
-  });
-
-  it("is not selectable, having no model to act on", async () => {
-    // A verb armed against a folder would be a verb with nothing to write.
-    listModelFolders.mockResolvedValue([
-      {
-        id: 1,
-        path: "/models/loras",
-        last_checked: "2026-08-10T00:00:00Z",
-        file_count: 1,
-      },
-      { id: 2, path: "/models/store", last_checked: null },
-    ]);
-    const wrapper = await mountShelf([
-      adapter({
-        locations: [
-          {
-            state: "present",
-            folder_id: 1,
-            folder_path: "/models/loras",
-            relpath: "a",
-          },
-        ],
-      }),
-    ]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
-    await wrapper.vm.$nextTick();
-
-    // A row, because a grid takes nothing else - but never a SELECTABLE one:
-    // no `aria-selected` and no tab stop, since there is no model here to act
-    // on. Its one cell spans the width rather than pretending to have columns.
-    const note = wrapper.find(".shelf-empty-folder");
-    expect(note.attributes("role")).toBe("row");
-    expect(note.attributes("aria-selected")).toBeUndefined();
-    expect(note.attributes("tabindex")).toBeUndefined();
-  });
-});
-
-/** A DataTransfer stand-in: jsdom's drag events carry none. */
-function transfer(types = []) {
-  return {
-    types,
-    setData: vi.fn(function (type) {
-      this.types = [...this.types, type];
-    }),
-    effectAllowed: "",
-    dropEffect: "",
-  };
-}
-
-describe("dragging models onto a folder", () => {
-  const FOLDERS = [
-    { id: 1, path: "/models/loras", kind: "user", movable: "per_item" },
-    { id: 2, path: "/models/store", kind: "managed", movable: "root_only" },
-    { id: 3, path: "/runs", kind: "source", movable: "per_item" },
-  ];
-
-  async function shelfWithFolders(rows) {
-    listModelFolders.mockResolvedValue(FOLDERS);
-    const wrapper = await mountShelf(rows);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
-    await wrapper.vm.$nextTick();
-    return wrapper;
-  }
-
-  function present(folderId, path) {
-    return [
-      {
-        state: "present",
-        folder_id: folderId,
-        folder_path: path,
-        relpath: "a",
-      },
-    ];
-  }
-
-  function headerFor(wrapper, label) {
-    return wrapper
-      .findAll(".shelf-group-btn")
-      .find((b) => b.text().includes(label));
-  }
-
-  it("marks its payload so no other drop target can claim it", async () => {
-    // A model dropped on a set or character row has no meaning at all, and
-    // `types` is the only thing readable during dragover - so the marker key is
-    // what refuses it, before the pointer suggests the drop would work (#757).
-    const wrapper = await shelfWithFolders([
-      adapter({ locations: present(1, "/models/loras") }),
-    ]);
-    const dt = transfer();
-    await wrapper.find(".shelf-row").trigger("dragstart", { dataTransfer: dt });
-    expect(dt.types).toContain("application/x-pixlstash-model-files");
-    expect(dt.types).not.toContain("application/x-pixlstash-pictures");
-  });
-
-  it("refuses to drag a row whose file is not on this machine", async () => {
-    // The gesture could only ever end in a refusal, and the pointer would say
-    // it works the whole way there.
-    const wrapper = await shelfWithFolders([
-      adapter({
-        locations: [
-          {
-            state: "missing",
-            folder_id: 1,
-            folder_path: "/models/loras",
-            relpath: "a",
-          },
-        ],
-      }),
-    ]);
-    expect(wrapper.find(".shelf-row").attributes("draggable")).toBe("false");
-  });
-
-  it("never offers the drag on an engine, whatever its location says", async () => {
-    // The HuggingFace cache is `blobs/` under content hashes with `snapshots/`
-    // symlinking names onto them, shared with every other HF tool, and an
-    // engine row's relpath there is a whole repo directory. A drag that looks
-    // like it works on 116 GB of someone else's bookkeeping must not be
-    // offered; the server refuses it too, and this is the half that stops the
-    // gesture starting.
-    const wrapper = await mountShelf([
-      adapter({
-        id: 700,
-        file_kind: "engine",
-        kind: "captioner",
-        display_name: "fancyfeast/llama-joycaption",
-        locations: [
-          {
-            state: "present",
-            folder_id: 9,
-            folder_path: "/home/g/.cache/huggingface/hub",
-            relpath: "models--fancyfeast--llama-joycaption",
-          },
-        ],
-      }),
-    ]);
-    expect(wrapper.find(".shelf-row").attributes("draggable")).toBe("false");
-  });
-
-  it("accepts the drag on a folder it may write to, and only there", async () => {
-    // preventDefault() is what ACCEPTS a drop, so it is called inside the
-    // handler for the payloads this target takes - never as a `.prevent`
-    // modifier, which would accept a picture drag from the grid too.
-    const wrapper = await shelfWithFolders([
-      adapter({ locations: present(1, "/models/loras") }),
-    ]);
-    const dt = transfer(["application/x-pixlstash-model-files"]);
-
-    const accepted = { preventDefault: vi.fn(), dataTransfer: dt };
-    headerFor(wrapper, "/models/store").element.dispatchEvent(
-      Object.assign(new Event("dragover", { cancelable: true }), accepted),
-    );
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find(".shelf-group-btn--drop").exists()).toBe(true);
-  });
-
-  it("names the folder a model file dragged in from outside lands in", async () => {
-    // The window's drop handler reads the attribute (useModelDropTarget); a
-    // source folder carries none, so a drop there goes to the default folder.
-    const wrapper = await shelfWithFolders([
-      adapter({ locations: present(1, "/models/loras") }),
-    ]);
-    const header = headerFor(wrapper, "/models/loras");
-    expect(header.attributes("data-model-drop-folder")).toBe("1");
-    expect(
-      headerFor(wrapper, "/runs").attributes("data-model-drop-folder"),
-    ).toBeUndefined();
-
-    header.element.dispatchEvent(
-      Object.assign(new Event("dragover", { cancelable: true }), {
-        dataTransfer: { types: ["Files"], items: [{ kind: "file", type: "" }] },
-      }),
-    );
-    await wrapper.vm.$nextTick();
-    expect(header.classes()).toContain("shelf-group-btn--drop");
-  });
-
-  it("refuses a source folder, which is taken from and never written into", async () => {
-    // `ModelMover.plan` refuses it too. Checking here as well is what stops the
-    // pointer promising a drop the dialog would then have to take back.
-    const wrapper = await shelfWithFolders([
-      adapter({ locations: present(1, "/models/loras") }),
-    ]);
-    const event = Object.assign(new Event("dragover", { cancelable: true }), {
-      dataTransfer: transfer(["application/x-pixlstash-model-files"]),
-    });
-    headerFor(wrapper, "/runs").element.dispatchEvent(event);
-    await wrapper.vm.$nextTick();
-    expect(event.defaultPrevented).toBe(false);
-    expect(wrapper.find(".shelf-group-btn--drop").exists()).toBe(false);
-  });
-
-  it("refuses a payload it does not recognise", async () => {
-    const wrapper = await shelfWithFolders([
-      adapter({ locations: present(1, "/models/loras") }),
-    ]);
-    const event = Object.assign(new Event("dragover", { cancelable: true }), {
-      dataTransfer: transfer(["application/x-pixlstash-pictures"]),
-    });
-    headerFor(wrapper, "/models/store").element.dispatchEvent(event);
-    await wrapper.vm.$nextTick();
-    // Not prevented, so the browser's own "no drop here" cursor stands.
-    expect(event.defaultPrevented).toBe(false);
-    expect(wrapper.find(".shelf-group-btn--drop").exists()).toBe(false);
-  });
-
-  it("opens the dialog on drop rather than moving on release", async () => {
-    // There is no undo behind a move, so a 438 GB copy across a USB drive must
-    // never be one slip of the pointer away from starting.
-    const wrapper = await shelfWithFolders([
-      adapter({ locations: present(1, "/models/loras") }),
-    ]);
-    const store = useModelShelfStore();
-    store.toggleSelected(1);
-    await wrapper.vm.$nextTick();
-
-    const dt = transfer(["application/x-pixlstash-model-files"]);
-    await headerFor(wrapper, "/models/store").trigger("drop", {
-      dataTransfer: dt,
-    });
-
-    const dialog = wrapper.findComponent({ name: "ShelfMoveDialog" });
-    expect(dialog.props("open")).toBe(true);
-    expect(dialog.props("destinationFolderId")).toBe(2);
-    expect(dialog.props("items")).toEqual([{ folder_id: 1, relpath: "a" }]);
-  });
-});
-
-describe("dropping onto the capacity meter", () => {
-  const GB = 1024 ** 3;
-  const FOLDERS = [
-    { id: 1, path: "/mnt/fast/loras", kind: "user", movable: "per_item" },
-    { id: 2, path: "/mnt/slow/store", kind: "managed", movable: "root_only" },
-  ];
-
-  /**
-   * One 100 GB adapter on the Fast drive, and an empty folder on Slow.
-   *
-   * `slowFree` is the whole point of the fixture: it is what decides whether
-   * the drop fits, and every test here differs only in that number.
-   */
-  async function twoDrives({ slowFree, devices } = {}) {
-    listModelFolders.mockResolvedValue(FOLDERS);
-    listModelFolderDevices.mockResolvedValue(
-      devices ?? [
-        {
-          device_id: "fast",
-          mount_point: "/mnt/fast",
-          label: "Fast",
-          total_bytes: 4000 * GB,
-          free_bytes: 2000 * GB,
-          shelf_bytes: 500 * GB,
-          folder_ids: [1],
-        },
-        {
-          device_id: "slow",
-          mount_point: "/mnt/slow",
-          label: "Slow",
-          total_bytes: 1000 * GB,
-          free_bytes: slowFree,
-          shelf_bytes: 100 * GB,
-          folder_ids: [2],
-        },
-      ],
-    );
-    const wrapper = await mountShelf([
-      adapter({
-        id: 1,
-        file_size: 100 * GB,
-        locations: [
-          {
-            state: "present",
-            folder_id: 1,
-            folder_path: "/mnt/fast/loras",
-            relpath: "a.st",
-          },
-        ],
-      }),
-    ]);
-    const store = useModelShelfStore();
-    store.setView({ groupBy: "folder", folderLayout: "drive" });
-    store.toggleSelected(1);
-    await wrapper.vm.$nextTick();
-    return wrapper;
-  }
-
-  function bandFor(wrapper, label) {
-    return wrapper
-      .findAll(".shelf-band")
-      .find((band) => band.text().includes(label));
-  }
-
-  /** Pick the row up, then hold the pointer over a band. */
-  async function dragOnto(wrapper, label, type = "dragover") {
-    const dt = transfer();
-    await wrapper.find(".shelf-row").trigger("dragstart", { dataTransfer: dt });
-    const event = Object.assign(new Event(type, { cancelable: true }), {
-      dataTransfer: dt,
-    });
-    bandFor(wrapper, label).element.dispatchEvent(event);
-    await wrapper.vm.$nextTick();
-    return event;
-  }
-
-  it("projects the drop as a hatched segment cut out of the free space", async () => {
-    // The consequence, drawn before the drop commits. Four segments now, still
-    // summing to the drive: 100 GB on the shelf, 500 GB of other files, the
-    // 100 GB ghost, and the 300 GB that would be left.
-    const wrapper = await twoDrives({ slowFree: 400 * GB });
-    const event = await dragOnto(wrapper, "Slow");
-    expect(event.defaultPrevented).toBe(true);
-
-    const band = bandFor(wrapper, "Slow");
-    expect(band.classes()).toContain("shelf-band--drop");
-    expect(
-      band.findAll(".shelf-band-seg").map((s) => s.attributes("style")),
-    ).toEqual(["width: 10%;", "width: 50%;", "width: 10%;", "width: 30%;"]);
-    // Hatched rather than a fourth flat colour: a projection is provisional
-    // and a measurement is not, and the two must not be one reading apart.
-    expect(band.find(".shelf-band-seg--ghost").exists()).toBe(true);
-    expect(band.find(".shelf-band-seg--ghost-reject").exists()).toBe(false);
-    // The half that survives greyscale and is readable out loud.
-    expect(textOf(band)).toContain("100.0 GB fits · 300.0 GB free after");
-
-    // And only the band under the pointer: the other drive still reads as
-    // measured, because nothing is being dropped on it.
-    expect(bandFor(wrapper, "Fast").findAll(".shelf-band-seg")).toHaveLength(3);
-  });
-
-  it("refuses the drop while the pointer is still down, not after it", async () => {
-    // The honest place to refuse a move. `preventDefault()` is what ACCEPTS a
-    // drop, so not calling it leaves the browser's own "no drop here" cursor
-    // over a band already drawn in the error treatment.
-    const wrapper = await twoDrives({ slowFree: 40 * GB });
-    const event = await dragOnto(wrapper, "Slow");
-    expect(event.defaultPrevented).toBe(false);
-
-    const band = bandFor(wrapper, "Slow");
-    expect(band.classes()).toContain("shelf-band--reject");
-    expect(band.classes()).not.toContain("shelf-band--drop");
-    expect(band.find(".shelf-band-seg--ghost-reject").exists()).toBe(true);
-    expect(textOf(band)).toContain("100.0 GB will not fit · 60.0 GB short");
-  });
-
-  it("does not open the dialog for a drop the band refused", async () => {
-    const wrapper = await twoDrives({ slowFree: 40 * GB });
-    await dragOnto(wrapper, "Slow", "drop");
-    expect(
-      wrapper.findComponent({ name: "ShelfMoveDialog" }).props("open"),
-    ).toBe(false);
-  });
-
-  it("resolves a band drop to the first folder on that drive a move may go to", async () => {
-    // A band is a disk and a move needs a folder, so one is chosen - safely,
-    // because the drop does not move on release: the dialog states the
-    // destination and its select corrects it.
-    const wrapper = await twoDrives({ slowFree: 400 * GB });
-    await dragOnto(wrapper, "Slow", "drop");
-
-    const dialog = wrapper.findComponent({ name: "ShelfMoveDialog" });
-    expect(dialog.props("open")).toBe(true);
-    expect(dialog.props("destinationFolderId")).toBe(2);
-    expect(dialog.props("items")).toEqual([{ folder_id: 1, relpath: "a.st" }]);
-  });
-
-  it("counts a move within one drive as nothing to copy", async () => {
-    // Those are renames - the server reports `bytes_to_copy` of zero for them
-    // - so projecting 100 GB onto the disk the bytes are already on would
-    // refuse a move that costs nothing.
-    const wrapper = await twoDrives({ slowFree: 400 * GB });
-    await dragOnto(wrapper, "Fast");
-
-    const band = bandFor(wrapper, "Fast");
-    expect(band.classes()).toContain("shelf-band--drop");
-    expect(textOf(band)).toContain("Already on this drive · nothing to copy");
-  });
-
-  it("refuses a folder header on a full drive too, not only its band", async () => {
-    // The refusal belongs to the DISK. A folder whose drive has no room cannot
-    // take the files either, so the header stops highlighting and the band
-    // above it is where the reader is told why.
-    const wrapper = await twoDrives({ slowFree: 40 * GB });
-    const dt = transfer();
-    await wrapper.find(".shelf-row").trigger("dragstart", { dataTransfer: dt });
-    const event = Object.assign(new Event("dragover", { cancelable: true }), {
-      dataTransfer: dt,
-    });
-    wrapper
-      .findAll(".shelf-group-btn")
-      .find((b) => b.text().includes("/mnt/slow/store"))
-      .element.dispatchEvent(event);
-    await wrapper.vm.$nextTick();
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(wrapper.find(".shelf-group-btn--drop").exists()).toBe(false);
-    expect(bandFor(wrapper, "Slow").classes()).toContain("shelf-band--reject");
-  });
-
-  it("does not refuse a drive it could not measure", async () => {
-    // "We cannot say" must not be drawn as "does not fit". The band takes the
-    // drop and highlights for it; it simply has no ghost and no outcome to
-    // state, and the server still checks before it copies.
-    const wrapper = await twoDrives({ devices: [] });
-    const event = await dragOnto(wrapper, "/mnt/slow/store");
-    expect(event.defaultPrevented).toBe(true);
-
-    const band = bandFor(wrapper, "/mnt/slow/store");
-    expect(band.classes()).toContain("shelf-band--drop");
-    expect(band.find(".shelf-band-seg--ghost").exists()).toBe(false);
-    expect(textOf(band)).toContain("Capacity unknown");
   });
 });
 
@@ -3541,48 +2315,6 @@ describe("a run's disclosure", () => {
     );
   });
 
-  it("heads the columns on every grid a reader may land in, and draws the strip once", async () => {
-    // The point of #891: a `columnheader` heads the grid it is in and nothing
-    // else, and grouping makes one grid per group - so every group carries the
-    // row, and every one of them is visually-hidden. What the eye sees is the
-    // single `.shelf-head` strip above the whole list, which is a control group
-    // and not the grid's header row precisely so it does not have to repeat.
-    const wrapper = await mountShelf([
-      adapter({
-        id: 1,
-        locations: [
-          { state: "present", folder_id: 1, folder_path: "/a", relpath: "x" },
-        ],
-      }),
-      adapter({
-        id: 2,
-        sha256: "c".repeat(64),
-        locations: [
-          { state: "present", folder_id: 2, folder_path: "/b", relpath: "y" },
-        ],
-      }),
-    ]);
-    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
-    await wrapper.vm.$nextTick();
-
-    // One hidden header row per grid, because that is what the grid semantics
-    // want, and exactly ONE visible strip however many groups there are: eight
-    // identical bands of chrome down a grouped list is the thing the strip's
-    // whole design avoids.
-    const heads = wrapper.findAll('[role="row"].visually-hidden');
-    expect(heads).toHaveLength(2);
-    expect(
-      heads[0].findAll('[role="columnheader"]').map((cell) => cell.text()),
-    ).toEqual(["Favourite", "Model", "Name", "Kind", "Base", "Size", "Date added"]);
-    expect(wrapper.findAll(".shelf-head")).toHaveLength(1);
-    // And the widths reach a group's rows through the one root declaration, so
-    // the columns cannot step sideways from one folder to the next.
-    useModelShelfStore().setColumnWidth("kind", 120);
-    await wrapper.vm.$nextTick();
-    expect(
-      wrapper.find(".shelf").element.style.getPropertyValue("--shelf-col-kind"),
-    ).toBe("120px");
-  });
 });
 
 describe("the date column", () => {
@@ -3670,7 +2402,8 @@ describe("the date column", () => {
     expect(wrapper.find(".shelf-col--date").text()).toBe("2024-01-09");
     // And the header says which of the two dates a reader is hearing.
     const heads = wrapper.findAll('[role="row"].visually-hidden');
-    expect(heads[0].findAll('[role="columnheader"]').at(-1).text()).toBe(
+    // Sets is the last heading now, so the date heading is the one before it.
+    expect(heads[0].findAll('[role="columnheader"]').at(-2).text()).toBe(
       "File date",
     );
   });
@@ -3741,116 +2474,6 @@ describe("the date column", () => {
     expect(
       wrapper.find(".shelf-row--member").find(".shelf-col--date").text(),
     ).toBe("2025-07-08");
-  });
-});
-
-describe("the assignment ring (#892, redrawn for #904)", () => {
-  it("names every attached entity, and never by colour alone", async () => {
-    listCharacters.mockResolvedValue([
-      { id: 7, name: "Ada", character_color: "#e91e63" },
-    ]);
-    listPictureSets.mockResolvedValue([
-      { id: 3, name: "Beach", set_color: "#3f51b5" },
-    ]);
-    const wrapper = await mountShelf([
-      adapter({
-        attachments: [
-          { entity_type: "character", entity_id: 7 },
-          { entity_type: "set", entity_id: 3 },
-        ],
-      }),
-    ]);
-    const mark = wrapper.find(".mmark");
-    // The greyscale test, as arithmetic: strip the hue and the ring still
-    // carries a STYLE, and the mark still says who out loud. Both attachments
-    // are named even though one ring is drawn - the mark has one edge.
-    expect(tip(mark)).toBe("Ada (person), Beach (set)");
-    expect(textOf(mark)).toContain("Ada (person), Beach (set)");
-    expect(mark.classes()).toContain("mmark--ring");
-    expect(
-      mark
-        .classes()
-        .some((c) => /^mmark--(solid|dashed|thick|double)$/.test(c)),
-    ).toBe(true);
-    // The hue is the entity's own, so a character wears one colour app-wide.
-    expect(mark.attributes("style")).toContain("#e91e63");
-  });
-
-  it("holds one treatment per entity, across every row that wears it", async () => {
-    // The style is the identity carrier, so it is a fact about the character
-    // rather than about the row: two adapters assigned to one person must draw
-    // the same ring or the treatment says nothing at all.
-    listCharacters.mockResolvedValue([{ id: 7, name: "Ada" }]);
-    const attachments = [{ entity_type: "character", entity_id: 7 }];
-    const wrapper = await mountShelf([
-      adapter({ id: 1, attachments }),
-      adapter({ id: 2, sha256: "b".repeat(64), attachments }),
-    ]);
-    const styles = wrapper
-      .findAll(".mmark")
-      .map((m) =>
-        m.classes().find((c) => c.startsWith("mmark--") && c !== "mmark--ring"),
-      );
-    expect(styles[0]).toBe(styles[1]);
-  });
-
-  it("sets no hue property at all on an unassigned mark", async () => {
-    // Not an EMPTY one. `var(--mmark-ring, transparent)` takes its fallback
-    // only when the property is unset; set-but-empty resolves to nothing, which
-    // is invalid at computed-value time and drops the whole `border` shorthand
-    // - the 2px width with it, leaving the dashed ring a different size from
-    // every other ring on the shelf.
-    const wrapper = await mountShelf([adapter({ attachments: [] })]);
-    expect(wrapper.find(".mmark").attributes("style")).toBeUndefined();
-  });
-
-  it("draws the dashed grey ring for a model assigned to nothing", async () => {
-    const wrapper = await mountShelf([adapter({ attachments: [] })]);
-    const mark = wrapper.find(".mmark");
-    // A state, not a gap: an unringed mark under a design where every other
-    // mark has one reads as a rendering fault rather than as "assigned to
-    // nothing", and the word is what a reader hears.
-    expect(mark.classes()).toContain("mmark--none");
-    expect(tip(mark)).toBe("Unassigned");
-  });
-
-  it("still rings an attachment whose entity the lists do not answer", async () => {
-    // The vault is the authority on what is attached. Dropping the ring would
-    // say "not assigned", which is a different and wrong fact.
-    const wrapper = await mountShelf([
-      adapter({ attachments: [{ entity_type: "character", entity_id: 42 }] }),
-    ]);
-    const mark = wrapper.find(".mmark");
-    expect(mark.classes()).not.toContain("mmark--none");
-    expect(tip(mark)).toBe("#42 (person)");
-  });
-
-  it("borrows the assigned face when the model has no picture of its own", async () => {
-    // A LoRA of Sarah with no icon is far better identified by Sarah's
-    // reference face than by the letters the generator would draw, and the ring
-    // around it is already her colour - so the two halves say one thing.
-    listCharacters.mockResolvedValue([{ id: 7, name: "Ada" }]);
-    const wrapper = await mountShelf([
-      adapter({ attachments: [{ entity_type: "character", entity_id: 7 }] }),
-    ]);
-    const img = wrapper.find(".mmark-img");
-    expect(img.exists()).toBe(true);
-    expect(img.attributes("src")).toContain("/characters/7");
-  });
-
-  it("keeps the model's own icon ahead of the face it is assigned to", async () => {
-    // Somebody chose that picture for this file. The assignment is still drawn
-    // - it is the ring - so nothing is lost by the icon winning the middle.
-    listCharacters.mockResolvedValue([{ id: 7, name: "Ada" }]);
-    const wrapper = await mountShelf([
-      adapter({
-        icon_sha256: "f".repeat(64),
-        attachments: [{ entity_type: "character", entity_id: 7 }],
-      }),
-    ]);
-    expect(wrapper.find(".mmark-img").attributes("src")).not.toContain(
-      "/characters/7",
-    );
   });
 });
 
@@ -4257,52 +2880,6 @@ describe("the manual stack verb", () => {
   });
 });
 
-describe("the model-folders door", () => {
-  // Deleted once already, in the toolbar consolidation for #904, and nothing in
-  // this suite noticed. Asserted on a POPULATED shelf, because the empty
-  // state's own button unmounts exactly when the registry starts needing edits.
-  // The registry lives in Settings › Models, so every door asks for that entry.
-  it("opens Settings on Models from the toolbar", async () => {
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
-    const folders = wrapper.find(
-      '.shelf-toolbar button[aria-label="Model folders"]',
-    );
-    expect(folders.exists()).toBe(true);
-    await folders.trigger("click");
-    expect(wrapper.emitted("open-settings")).toEqual([["models"]]);
-  });
-
-  it("opens it from the Add menu and the empty state too", async () => {
-    const wrapper = await mountShelf([]);
-    await wrapper
-      .findAll(".ctx-item")
-      .find((b) => b.text().includes("Add folder"))
-      .trigger("click");
-    await wrapper
-      .findAll(".shelf-state button")
-      .find((b) => b.text().includes("Add a model folder"))
-      .trigger("click");
-    expect(wrapper.emitted("open-settings")).toEqual([["models"], ["models"]]);
-  });
-
-  it("puts focus on the Add button before Settings records its opener", async () => {
-    // Settings hands focus back to whatever held it when it opened, and the
-    // `Add folder…` item is gone by then, so the Add button it hangs off has
-    // to be the one holding it.
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
-    document.body.appendChild(wrapper.element);
-    const add = wrapper
-      .find('.shelf-toolbar .tip[data-text="Add models to the shelf"]')
-      .element.closest("button");
-    await wrapper
-      .findAll(".ctx-item")
-      .find((b) => b.text().includes("Add folder"))
-      .trigger("click");
-    expect(document.activeElement).toBe(add);
-    wrapper.unmount();
-  });
-});
-
 
 describe("Escape", () => {
   // The key is handled on the WINDOW, so every assertion here needs a real
@@ -4396,7 +2973,7 @@ describe("Escape", () => {
     // Every dialog the shelf owns, not only the edit one: a press with nothing
     // focused targets `<body>`, so the ref is the only thing that can see them.
     wrapper.vm.editVerb = "";
-    wrapper.vm.relocatingFolder = { id: 1, path: "/m" };
+    wrapper.vm.addFileOpen = true;
     await wrapper.vm.$nextTick();
     document.body.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
@@ -4469,6 +3046,20 @@ describe("Escape", () => {
   });
 });
 
+describe("the trained label", () => {
+  it("marks a row from an ai-toolkit run, and nothing found on disk", async () => {
+    // The tag keys on `training_run_id`, the run the row came from.
+    const wrapper = await mountShelf([
+      adapter({ id: 611, display_name: "Ours", training_run_id: 4 }),
+      adapter({ id: 612, display_name: "Theirs", training_run_id: null }),
+    ]);
+    const marked = wrapper
+      .findAll(".shelf-chip--trained")
+      .map((chip) => chip.text());
+    expect(marked).toEqual(["Trained"]);
+  });
+});
+
 describe("the training step", () => {
   it("shows the step on a row whose name had it stripped", async () => {
     // `deriveModelName` drops the trailing step on the stated grounds that it
@@ -4530,107 +3121,6 @@ describe("the training step", () => {
       }),
     ]);
     expect(wrapper.find(".shelf-chip--step").exists()).toBe(false);
-  });
-});
-
-describe("Add file", () => {
-  // F6's remainder: the way one adapter that belongs to no training run gets
-  // onto the shelf without a folder being registered for it.
-
-  async function pick(wrapper, path) {
-    wrapper.findComponent({ name: "FolderBrowser" }).vm.$emit("select", path);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await wrapper.vm.$nextTick();
-  }
-
-  it("offers the verb under Add, with a name a reader can hear", async () => {
-    // Not a button of its own in the bar any more: adding a folder, adding a
-    // loose file and importing a run are three ways into one thing, so they
-    // share the one accented control (#904).
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
-    const item = wrapper
-      .findAll(".ctx-item")
-      .find((entry) => entry.text().includes("Add file"));
-    expect(item).toBeDefined();
-  });
-
-  it("sends the picked path and refreshes the shelf, so no rescan is needed", async () => {
-    // The done-when of #901: the row is there when the call returns. The shelf
-    // is refetched rather than the response being spliced in, because the
-    // server decides what the row says (name, kind, base model, size).
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
-    addModelFile.mockResolvedValue({
-      model_id: 7,
-      filename: "loose.safetensors",
-      folder_id: 2,
-      folder_path: "/store",
-    });
-    const before = listAdapters.mock.calls.length;
-
-    await pick(wrapper, "/home/u/Downloads/loose.safetensors");
-
-    expect(addModelFile).toHaveBeenCalledWith(
-      "/home/u/Downloads/loose.safetensors",
-    );
-    expect(listAdapters.mock.calls.length).toBeGreaterThan(before);
-    const notices = useNoticeStore();
-    expect(notices.notices[0].level).toBe("success");
-    // The one thing a reader might fear about a verb that copies: it says the
-    // original is untouched, because nothing else in the UI would say so.
-    expect(notices.notices[0].text).toContain("still where it was");
-  });
-
-  it("reports a refusal rather than leaving it looking like it landed", async () => {
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
-    addModelFile.mockRejectedValue({
-      response: { data: { detail: "That file is already inside /m." } },
-    });
-
-    await pick(wrapper, "/m/known.safetensors");
-
-    const notices = useNoticeStore();
-    expect(notices.notices[0].level).toBe("error");
-    expect(notices.notices[0].text).toContain("already inside");
-  });
-
-  it("returns focus to the Add button when opened from its own menu", async () => {
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
-    document.body.appendChild(wrapper.element);
-
-    const item = wrapper
-      .findAll(".ctx-item")
-      .find((entry) => entry.text().includes("Add file"));
-    await item.trigger("click");
-    wrapper.findComponent({ name: "FolderBrowser" }).vm.$emit("close");
-    await wrapper.vm.$nextTick();
-    await wrapper.vm.$nextTick();
-
-    expect(document.activeElement).toBe(
-      wrapper
-        .find('.shelf-toolbar .tip[data-text="Add models to the shelf"]')
-        .element.closest("button"),
-    );
-    wrapper.unmount();
-  });
-
-  it("returns focus to the ⋯ trigger when opened from the overflow menu, not the folded Add button", async () => {
-    // The bug this guards: the ⋯ row used to call `openAddFile()` with no
-    // invoker, so `closeAddFile` always named `addBtnRef` - which is exactly
-    // the button `shelf-fold-680` hides at the width the ⋯ exists to serve.
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
-    document.body.appendChild(wrapper.element);
-
-    await wrapper.find(".tbo-trigger").trigger("click");
-    const item = wrapper
-      .findAll(".tbo-panel .ctx-item")
-      .find((entry) => entry.text().includes("Add file"));
-    await item.trigger("click");
-    wrapper.findComponent({ name: "FolderBrowser" }).vm.$emit("close");
-    await wrapper.vm.$nextTick();
-    await wrapper.vm.$nextTick();
-
-    expect(document.activeElement).toBe(wrapper.find(".tbo-trigger").element);
-    wrapper.unmount();
   });
 });
 
@@ -4762,19 +3252,16 @@ describe("a long move, in the panel that is running it", () => {
 });
 
 // #938-follow-up: the shelf is a destination like Duplicates, so it carries the
-// app-wide tail - Settings and the stats toggle - rather than dropping both the
-// moment the grid unmounts. Undo is the exception: nothing on this screen writes
-// to the operation log, so there is nothing here for it to take back.
+// app-wide tail - the stats toggle - rather than dropping it the moment the
+// grid unmounts. Settings is the title bar's (#2158). Undo/redo rides in the
+// same tail, as it does on every screen.
 describe("the app-wide toolbar tail", () => {
-  it("asks App.vue for Settings and toggles the Models rail itself", async () => {
+  it("toggles the Models rail itself, and leaves Settings to the title bar", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const sidebar = useSidebarStore();
-    const settings = wrapper.find(
-      ".shelf-toolbar button[aria-label='Settings']",
-    );
-
-    await settings.trigger("click");
-    expect(wrapper.emitted("open-settings")).toHaveLength(1);
+    expect(
+      wrapper.find(".shelf-toolbar button[aria-label='Settings']").exists(),
+    ).toBe(false);
 
     // Directional, not a flip: the rail opens on the first press and closes on
     // the second, from the shut state a fresh session starts in.
@@ -4783,7 +3270,7 @@ describe("the app-wide toolbar tail", () => {
     sidebar.modelsRailOpen = false;
     sidebar.statsOpen = false;
     const toggle = wrapper.find(".shelf-toolbar .tb-stats-btn");
-    expect(toggle.attributes("aria-label")).toBe("Models and tasks");
+    expect(toggle.attributes("aria-label")).toBe("Models");
     await toggle.trigger("click");
     expect(sidebar.modelsRailOpen).toBe(true);
     expect(toggle.attributes("aria-pressed")).toBe("true");
@@ -4792,27 +3279,32 @@ describe("the app-wide toolbar tail", () => {
     expect(sidebar.statsOpen).toBe(false);
   });
 
-  it("orders the tail separator → TbGlobalActions, last in the bar", async () => {
-    // The documented tail minus undo
+  it("orders the tail separator → UndoControl → rail toggle, last in the bar", async () => {
+    // The documented tail
     // (docs/design/toolbar-responsive-decisions.md). Asserted as PLACEMENT and
     // not merely as presence: the whole point of the rule is that the app-wide
     // chrome sits after the view controls, ruled off from them, at the end.
     const wrapper = await mountShelf([adapter({ id: 1 })]);
+    // The Show control is the list's; the Sets place draws the grid without it.
+    useModelShelfStore().setPlace("all");
+    await wrapper.vm.$nextTick();
     const cluster = wrapper.find(".shelf-bar-cluster").element;
-    // TbGlobalActions is multi-root; its Settings button is a stable anchor.
-    const settings = wrapper.find("button[aria-label='Settings']").element;
+    // TbGlobalActions is multi-root; its rail toggle is a stable anchor.
+    const toggle = wrapper.find(".shelf-bar-cluster .tb-stats-btn").element;
     const separator = wrapper.find(".shelf-bar-cluster .bar-separator").element;
     // The Show menu - the LAST of this view's own controls, and the one the
     // tail has to come after. (Every bar button is `--boxed` now, the tail's
     // own included, so the Show button is found by name.)
-    const showBtn = wrapper.find(".shelf-bar-cluster .shelf-show-btn").element;
+    const showBtn = wrapper.find(".shelf-show-btn").element;
     const follows = (a, b) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
     expect(follows(showBtn, separator)).toBe(true);
     // Adjacency, not merely order: the rule marks the boundary, so nothing may
     // slip between it and the chrome it rules off.
-    expect(separator.nextElementSibling).toBe(settings);
+    const undo = wrapper.find(".shelf-bar-cluster .uc").element;
+    expect(separator.nextElementSibling).toBe(undo);
+    expect(undo.nextElementSibling).toBe(toggle);
     // Nothing of this view's own follows the app-wide chrome. TbGlobalActions
     // is multi-root, so its stats button IS the bar's last element.
     expect(cluster.lastElementChild.classList.contains("tb-stats-btn")).toBe(
@@ -4820,11 +3312,15 @@ describe("the app-wide toolbar tail", () => {
     );
   });
 
-  // The shelf writes nothing to the operation log, so undo/redo and the
-  // History popover are not offered here at all.
-  it("mounts no undo control", async () => {
+  // Undo/redo and History are app-wide, so the shelf carries them too.
+  it("mounts the undo control in its tail", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
-    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(false);
+    expect(
+      wrapper
+        .find(".shelf-bar-cluster")
+        .findComponent({ name: "UndoControl" })
+        .exists(),
+    ).toBe(true);
   });
 });
 
@@ -4846,7 +3342,7 @@ describe("the closed Models rail's handle", () => {
       "All models",
     );
     expect(handle(wrapper).attributes("aria-label")).toBe(
-      `Show all models (${useModelShelfStore().railRows.length})`,
+      `Show all models (${useModelShelfStore().visibleRows.length})`,
     );
 
     await rowAt(wrapper, 1).trigger("click");
@@ -4994,6 +3490,26 @@ describe("Delete", () => {
     wrapper.unmount();
   });
 
+  // The Folders tree (#2206) is in the sidebar, outside `.shelf`, and its
+  // Delete is Remove folder… (#2207). Here it must never open a file
+  // deletion, selection or no selection.
+  it("is not the shelf's when pressed in the Folders tree", async () => {
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const tree = document.createElement("div");
+    tree.className = "mft";
+    document.body.appendChild(tree);
+    tree.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Delete", bubbles: true }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchModelCompanions).not.toHaveBeenCalled();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(useModelShelfStore().selectedIds.size).toBe(1);
+    tree.remove();
+    wrapper.unmount();
+  });
+
   it("says in the prompt what the delete leaves behind", async () => {
     // #1314: the question is asked for exactly the ids the call will send,
     // and its answer is in front of the reader before they agree.
@@ -5058,60 +3574,21 @@ describe("Delete", () => {
     wrapper.unmount();
   });
 
-  it("leaves the Models rail's selection to the rail's own keys", async () => {
-    // Delete pressed over here was aimed at the shelf, and the shelf has
-    // nothing selected: the rail's rows are not this key's to take.
-    listModelFolders.mockResolvedValue([FOLDER]);
-    const wrapper = await mountShelf([inFolder(1)]);
-    document.body.appendChild(wrapper.element);
-    const store = useModelShelfStore();
-    store.setRailSelection([1]);
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-
-    await pressDelete();
-    document.body.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-    );
-
-    expect(confirmSpy).not.toHaveBeenCalled();
-    expect(deleteModels).not.toHaveBeenCalled();
-    expect(store.selectedRows.map((r) => r.id)).toEqual([1]);
-    wrapper.unmount();
-  });
-
-  it("deletes the Models rail's selection when the rail asks, not the shelf's", async () => {
-    // The rail is not this view's child, so its Delete arrives through the
-    // store - and lands on the same prompt, counting the rail's own rows.
-    listModelFolders.mockResolvedValue([FOLDER]);
+  it("opens the edit dialog for a verb the store asks for, and a listed row renames inline", async () => {
     const wrapper = await mountShelf([inFolder(1), inFolder(2)]);
     const store = useModelShelfStore();
-    store.toggleSelected(1);
-    store.setRailSelection([2]);
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-
-    store.requestVerb("delete", true);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    expect(deleteModels).toHaveBeenCalledWith([2], { permanent: true });
-    wrapper.unmount();
-  });
-
-  it("opens the edit dialog for a verb the rail asks for, rename included", async () => {
-    const wrapper = await mountShelf([inFolder(1), inFolder(2)]);
-    const store = useModelShelfStore();
-    store.setRailSelection([2]);
+    store.toggleSelected(2);
 
     store.requestVerb("set-kind");
     await wrapper.vm.$nextTick();
     expect(wrapper.vm.editVerb).toBe("kind");
 
-    // The rail's row may not be drawn on the list at all, so there is no
-    // inline field to open: the name takes the dialog.
+    // A row drawn on the list takes its name in place, not in the dialog.
+    wrapper.vm.editVerb = "";
     store.requestVerb("rename");
     await wrapper.vm.$nextTick();
-    expect(wrapper.vm.editVerb).toBe("rename");
-    expect(wrapper.find(".shelf-row-rename").exists()).toBe(false);
+    expect(wrapper.vm.editVerb).toBe("");
+    expect(wrapper.find(".shelf-row-rename").exists()).toBe(true);
     wrapper.unmount();
   });
 
@@ -5299,269 +3776,6 @@ describe("Delete", () => {
   });
 });
 
-describe("setting the ai-toolkit output folder", () => {
-  const SOURCE = {
-    id: 7,
-    path: "/home/g/ai-toolkit/output",
-    kind: "source",
-    movable: "external",
-    file_count: 0,
-    present_bytes: 0,
-  };
-
-  const addItems = (wrapper) =>
-    wrapper.findAll(".ctx-item").map((b) => b.text());
-
-  it("offers to set it while none is registered", async () => {
-    const wrapper = await mountShelf([]);
-    expect(addItems(wrapper).some((t) => t.includes("Set ai-toolkit"))).toBe(
-      true,
-    );
-    wrapper.unmount();
-  });
-
-  it("stops offering once it is set, because the runs get their own destination", async () => {
-    // Not replaced by an Import item: what is INSIDE the folder is a view now,
-    // reached from the sidebar. This menu adds things, and once the one output
-    // root exists there is nothing here left to add.
-    listModelFolders.mockResolvedValue([SOURCE]);
-    const wrapper = await mountShelf([]);
-    const items = addItems(wrapper);
-    expect(items.some((t) => t.includes("Set ai-toolkit"))).toBe(false);
-    expect(items.some((t) => t.includes("Import from ai-toolkit"))).toBe(false);
-    wrapper.unmount();
-  });
-
-  it("registers the picked folder as the output root and goes to its runs", async () => {
-    // Navigating is the point of setting it: the owner set it because they have
-    // runs to import, so landing them on the list beats announcing a new
-    // sidebar entry.
-    const wrapper = await mountShelf([]);
-    const setItem = wrapper
-      .findAll(".ctx-item")
-      .find((b) => b.text().includes("Set ai-toolkit"));
-    await setItem.trigger("click");
-    await wrapper.vm.$nextTick();
-
-    const browsers = wrapper.findAllComponents({ name: "FolderBrowser" });
-    await browsers.at(-1).vm.$emit("select", "/home/g/ai-toolkit/output");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await wrapper.vm.$nextTick();
-
-    expect(createModelFolder).toHaveBeenCalledWith({
-      path: "/home/g/ai-toolkit/output",
-      kind: "source",
-    });
-    // Navigating is the point of setting it: the owner set it because they have
-    // runs to import, so landing them on the list beats announcing a new tab.
-    expect(nav.push).toHaveBeenCalledWith({ name: "models-runs" });
-    wrapper.unmount();
-  });
-});
-
-describe("the two views of the shelf", () => {
-  const rowAt = (wrapper, i) => wrapper.findAll(".shelf-row")[i];
-  const SOURCE = {
-    id: 7,
-    path: "/home/g/ai-toolkit/output",
-    kind: "source",
-    movable: "external",
-    file_count: 0,
-    present_bytes: 0,
-  };
-
-  it("shows the runs panel on /models/runs and the rows on /models", async () => {
-    listModelFolders.mockResolvedValue([SOURCE]);
-    const wrapper = await mountShelf([adapter()]);
-    expect(wrapper.find("#shelf-panel-shelf").exists()).toBe(true);
-    expect(wrapper.find("#shelf-panel-runs").exists()).toBe(false);
-
-    nav.route.name = "models-runs";
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find("#shelf-panel-shelf").exists()).toBe(false);
-    expect(wrapper.find("#shelf-panel-runs").exists()).toBe(true);
-    wrapper.unmount();
-  });
-
-  it("keeps a shelf selection across a switch, but takes its keys away", async () => {
-    // The shelf component stays mounted behind the runs panel and its key
-    // handler is on the WINDOW, so without the tab guard `Delete` would open a
-    // confirmation for rows nobody can see and `Escape` would silently clear a
-    // selection the reader does not know they still have. Keeping the selection
-    // is deliberate: losing forty deliberately-clicked rows because someone
-    // glanced at a run would be the worse error.
-    const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
-    document.body.appendChild(wrapper.element);
-    const store = useModelShelfStore();
-    await rowAt(wrapper, 0).trigger("click");
-    expect(store.selectedRows).toHaveLength(1);
-
-    nav.route.name = "models-runs";
-    await wrapper.vm.$nextTick();
-
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
-    await wrapper.vm.$nextTick();
-    expect(store.selectedRows).toHaveLength(1);
-
-    nav.route.name = "models";
-    await wrapper.vm.$nextTick();
-    expect(store.selectedRows).toHaveLength(1);
-    // …and the keys come back with the rows.
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    await wrapper.vm.$nextTick();
-    expect(store.selectedRows).toHaveLength(0);
-    wrapper.unmount();
-  });
-
-  it("draws a set receipt on the grid's pill, never a library one, and drops it on leaving", async () => {
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
-    const operations = useOperationStore();
-    operations.showReceipt(
-      operations.buildReceipt({ id: 1, op_type: "pictures.score" }, "did"),
-    );
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find(".receipt").exists()).toBe(false);
-
-    operations.showLocalReceipt({
-      summary: 'Added 1 model to "Portrait kit".',
-      icon: "mdi-playlist-plus",
-      undo: vi.fn(),
-      redo: vi.fn(),
-    });
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find(".receipt .r-text").text()).toBe(
-      'Added 1 model to "Portrait kit"',
-    );
-
-    // The runs tab keeps the shelf mounted, and must not keep its receipt.
-    nav.route.name = "models-runs";
-    await wrapper.vm.$nextTick();
-    expect(operations.receipt).toBe(null);
-    operations.showLocalReceipt({
-      summary: "Late",
-      icon: "mdi-plus",
-      undo: vi.fn(),
-      redo: vi.fn(),
-    });
-    expect(operations.receipt).toBe(null);
-
-    nav.route.name = "models";
-    await wrapper.vm.$nextTick();
-    operations.showLocalReceipt({
-      summary: "Back",
-      icon: "mdi-plus",
-      undo: vi.fn(),
-      redo: vi.fn(),
-    });
-    wrapper.unmount();
-    expect(operations.receipt).toBe(null);
-  });
-
-  it("does not dock the shelf's pill over the runs grid", async () => {
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
-    await rowAt(wrapper, 0).trigger("click");
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find(".selbar").exists()).toBe(true);
-
-    nav.route.name = "models-runs";
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find(".selbar").exists()).toBe(false);
-    wrapper.unmount();
-  });
-
-  it("hides the row-list controls on the runs tab", async () => {
-    // Group, Sort and Show all act on the shelf's rows. On the
-    // runs tab that list is not on screen, so they are gone rather than
-    // disabled - a disabled control owes an explanation, and these are not
-    // about a selection the reader just made.
-    const wrapper = await mountShelf([adapter()]);
-    const labels = () =>
-      wrapper
-        .findAll(".shelf-toolbar button")
-        .map((b) =>
-          [b.attributes("aria-label"), tip(b), b.text()]
-            .filter(Boolean)
-            .join(" "),
-        );
-    expect(labels().some((l) => l.includes("Group"))).toBe(true);
-
-    nav.route.name = "models-runs";
-    await wrapper.vm.$nextTick();
-
-    expect(labels().some((l) => l.includes("Group"))).toBe(false);
-    wrapper.unmount();
-  });
-
-  it("keeps Add and Model folders on both tabs", async () => {
-    // These open something, write nothing on the press, and have no selection
-    // to hang on, so they are view-independent - and keeping them fixed is what
-    // stops the left group reflowing on every switch.
-    const wrapper = await mountShelf([adapter()]);
-    const has = (needle) =>
-      wrapper
-        .findAll(".shelf-toolbar button")
-        .some((b) =>
-          [b.attributes("aria-label"), tip(b), b.text()]
-            .filter(Boolean)
-            .join(" ")
-            .includes(needle),
-        );
-    expect(has("Add models to the shelf")).toBe(true);
-    expect(has("Model folders")).toBe(true);
-
-    nav.route.name = "models-runs";
-    await wrapper.vm.$nextTick();
-
-    expect(has("Add models to the shelf")).toBe(true);
-    expect(has("Model folders")).toBe(true);
-    wrapper.unmount();
-  });
-
-  it("hands the two verbs to the ⋯ when the bar folds", async () => {
-    // The ladder itself is CSS (@container shelfbar, which jsdom does not
-    // evaluate), so what is asserted here is the pair the ladder depends on:
-    // the fold hooks are on the elements the rungs name, and the folded form
-    // offers the SAME doors as the buttons it replaces. Lose either and the
-    // bar silently stops collapsing.
-    const wrapper = await mountShelf([adapter()]);
-    expect(wrapper.find(".shelf-title").classes()).toContain("shelf-fold-1262");
-    expect(wrapper.find(".shelf-sub--ingap").classes()).toContain(
-      "shelf-fold-1262",
-    );
-    const folded = wrapper
-      .findAll(".shelf-toolbar button")
-      .filter((b) => b.classes().includes("shelf-fold-680"))
-      .map((b) => tip(b));
-    expect(folded).toEqual([
-      "Add models to the shelf",
-      "Model folders - add, rescan, move or forget a folder",
-    ]);
-
-    await wrapper.find(".tbo-trigger").trigger("click");
-    const rows = wrapper.findAll(".tbo-panel .ctx-item").map((b) => b.text());
-    expect(rows).toEqual([
-      "Add folder…",
-      "Add file…",
-      "Set ai-toolkit output folder…",
-      "Model folders…",
-    ]);
-
-    await wrapper.findAll(".tbo-panel .ctx-item").at(-1).trigger("click");
-    expect(wrapper.emitted("open-settings")).toEqual([["models"]]);
-    wrapper.unmount();
-  });
-
-  it("moves between the tabs on Left and Right", async () => {
-    const wrapper = await mountShelf([adapter()]);
-    await wrapper.find("#shelf-tab-shelf").trigger("keydown", {
-      key: "ArrowRight",
-    });
-    expect(nav.push).toHaveBeenCalledWith({ name: "models-runs" });
-    wrapper.unmount();
-  });
-});
-
 describe("the view switcher does not resize when you switch", () => {
   // Twice now the tabs have shoved the whole left group of the toolbar sideways
   // on every switch, because the selected state changed something that costs
@@ -5646,6 +3860,18 @@ describe("acting inside a run", () => {
     await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
     return wrapper;
   }
+
+  it("draws the deck behind the mark, not across the whole slot", async () => {
+    // The ticks fill their nearest positioned box. Left in the slot they drew
+    // a grey pill over the mark, which read as a broken thumbnail.
+    const wrapper = await openRun();
+    const ticks = wrapper.find(
+      ".shelf-row:not(.shelf-row--member) [data-testid='stack-edge-ticks']",
+    );
+    expect(ticks.element.parentElement.classList).toContain("shelf-row-mark");
+    expect(ticks.element.parentElement.querySelector(".mmark")).not.toBeNull();
+    wrapper.unmount();
+  });
 
   it("says which file the run is being drawn from, once it is open", async () => {
     const wrapper = await openRun();
@@ -5849,21 +4075,23 @@ describe("the set grid is what the shelf opens on", () => {
     expect(wrapper.find(".shelf-row").exists()).toBe(false);
   });
 
-  it("hides Sort, because it steers a list that is not on screen", async () => {
+  it("sorts the grid on its own keys, and the list on the list's", async () => {
     const wrapper = await mountDefaultShelf();
     const store = useModelShelfStore();
 
     // The shipped split-button, which is what `Sort` actually is.
-    const hasSort = () => wrapper.find(".bar-split-button").exists();
+    const sortLabel = () => textOf(wrapper.find(".bar-split-menu"));
 
-    // A live control with no effect reads "Sort: Added" over a grid it cannot
-    // reorder, so it is absent here and back the moment the row list is. The grid
-    // orders itself by the weight of the evidence behind each set.
-    expect(hasSort()).toBe(false);
+    // The grid's own sort, never the list's "Date added" over a grid it
+    // cannot reorder.
+    expect(sortLabel()).toContain("Most used");
+    await wrapper.find(".bar-split-toggle").trigger("click");
+    expect(store.view.setSortDirection).toBe("asc");
+    expect(store.view.sortDirection).toBe("desc");
 
     store.setView({ groupBy: "none" });
     await wrapper.vm.$nextTick();
-    expect(hasSort()).toBe(true);
+    expect(sortLabel()).toContain("Date added");
   });
 
   it("counts sets rather than models while the grid is on screen", async () => {
@@ -5930,29 +4158,6 @@ describe("the set grid is what the shelf opens on", () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(deleteWorkflowSet).toHaveBeenCalledWith(10);
-  });
-
-  it("still deletes the selected set while the Models rail holds a selection", async () => {
-    // The rail's rows are not the shelf's "a model is selected too": with
-    // them counted, Delete on a set card would ask about a file instead.
-    deleteWorkflowSet.mockReset().mockResolvedValue({
-      deleted: { id: 10, name: "Kit", members: [] },
-    });
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const { store } = await shelfOnTheGrid();
-    store.workflowSets = {
-      ...store.workflowSets,
-      handMade: [{ id: 10, name: "Kit", members: [] }],
-    };
-    store.setRailSelection([2]);
-    store.selectSet(10);
-    expect(store.selectedRows.map((r) => r.id)).toEqual([2]);
-
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(deleteWorkflowSet).toHaveBeenCalledWith(10);
-    expect(deleteModels).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
   });
 
   it("renames a selected hand-made set on F2, as its pill says (#1520)", async () => {
@@ -6336,23 +4541,6 @@ describe("the set grid is what the shelf opens on", () => {
   });
 });
 
-describe("the Group by menu", () => {
-  it("closes once a grouping is picked, and hands focus back to its button", async () => {
-    const wrapper = await mountShelf([adapter()], [], [], {
-      attachTo: document.body,
-    });
-    wrapper.vm.groupMenuOpen = true;
-
-    const group = wrapper.findComponent({ name: "ShelfSortPanel" });
-    expect(group.props("section")).toBe("group");
-    group.vm.$emit("group-picked");
-
-    expect(wrapper.vm.groupMenuOpen).toBe(false);
-    expect(document.activeElement).toBe(wrapper.vm.groupButtonRef.el);
-    wrapper.unmount();
-  });
-});
-
 describe("a row the owner has marked in a set", () => {
   const mark = (verdict, names) => ({ combo_key: "1,2", names, verdict });
 
@@ -6389,80 +4577,827 @@ describe("a row the owner has marked in a set", () => {
   });
 });
 
-describe("favourites (#1578)", () => {
-  const SHA_A = "a".repeat(64);
-  const SHA_B = "b".repeat(64);
-  const SHA_C = "c".repeat(64);
 
-  it("draws the heart on each row, pressed on a favourite and disabled on an unhashed one", async () => {
-    listFavourites.mockResolvedValue({ model: [SHA_A], workflow: [], set: [] });
-    const wrapper = await mountShelf([
-      adapter({ id: 1, sha256: SHA_A, display_name: "Alpha" }),
-      adapter({ id: 2, sha256: null, display_name: "Beta", filename: "b.safetensors" }),
+describe("the open folder (#2203)", () => {
+  const FOLDER = {
+    id: 1,
+    path: "/home/me/StabilityMatrix/Models",
+    kind: "user",
+    movable: "per_item",
+    deletable: true,
+  };
+  const at = (relpath) => [
+    { state: "present", folder_id: 1, folder_path: FOLDER.path, relpath },
+  ];
+
+  async function openFolder(path = "") {
+    listModelFolders.mockResolvedValue([FOLDER]);
+    listModelFolderDevices.mockResolvedValue([
+      {
+        device_id: "d1",
+        mount_point: "/",
+        label: "System drive",
+        total_bytes: 1000 * 1024 ** 3,
+        free_bytes: 50 * 1024 ** 3,
+        folder_ids: [1],
+      },
     ]);
-    const alpha = wrapper.find('[data-row-key="1"] [data-testid="favourite-heart"]');
-    expect(alpha.attributes("aria-pressed")).toBe("true");
-    const beta = wrapper.find('[data-row-key="2"] [data-testid="favourite-heart"]');
-    expect(beta.attributes("aria-disabled")).toBe("true");
-    expect(beta.attributes("aria-pressed")).toBe("false");
-  });
-
-  it("H favourites the focused row by its hash", async () => {
-    const wrapper = await mountShelf([adapter({ id: 1, sha256: SHA_A })]);
-    await wrapper.find('[data-row-key="1"]').trigger("focus");
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "h" }));
+    listModelFolderDirs.mockImplementation(async (id, at) => ({
+      folder_id: id,
+      path: at,
+      locked: false,
+      model_count: 2,
+      bytes: 0,
+      dirs:
+        at === ""
+          ? [
+              { name: "Lora", path: "Lora", model_count: 1, bytes: 2e8, has_dirs: false },
+              { name: "VAE", path: "VAE", model_count: 0, bytes: 0, has_dirs: false },
+            ]
+          : [],
+    }));
+    const wrapper = await mountShelf([
+      adapter({ id: 1, locations: at("loose.safetensors") }),
+      adapter({ id: 2, sha256: "b".repeat(64), locations: at("Lora/x.safetensors") }),
+    ]);
+    const store = useModelShelfStore();
+    await useModelFoldersStore().refreshDevices();
+    store.setFolderScope({ folderId: 1, path });
     await flushPromises();
-    expect(setFavourites).toHaveBeenCalledWith("model", [SHA_A], true);
+    return { wrapper, store };
+  }
+
+  describe("moving into a folder (#2204)", () => {
+    const LOOSE = { folder_id: 1, relpath: "loose.safetensors" };
+    const dialog = (wrapper) => wrapper.findComponent({ name: "ShelfMoveDialog" });
+    const press = (key) => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key, ctrlKey: key !== "Escape", bubbles: true }),
+      );
+      return flushPromises();
+    };
+
+    async function selectLoose() {
+      const opened = await openFolder();
+      document.body.appendChild(opened.wrapper.element);
+      opened.store.toggleSelected(1);
+      await flushPromises();
+      return opened;
+    }
+
+    it("cuts with Ctrl X and pastes on the same drive without asking", async () => {
+      const { wrapper, store } = await selectLoose();
+      await press("x");
+      expect(store.cutCopies.items).toEqual([LOOSE]);
+      expect(wrapper.find(".shelf-row--cut").exists()).toBe(true);
+
+      store.setFolderScope({ folderId: 1, path: "Lora" });
+      await flushPromises();
+      await press("v");
+      // A rename on one drive: the move starts, as a file manager's does, and
+      // no dialog asks first.
+      expect(dialog(wrapper).props("open")).toBe(false);
+      expect(startModelMove).toHaveBeenCalledWith(1, [LOOSE], "Lora");
+      // The cut is spent once the move it pasted starts.
+      expect(store.cutCopies).toBe(null);
+      wrapper.unmount();
+    });
+
+    it("asks before a drop it cannot promise is a rename", async () => {
+      const { wrapper, store } = await selectLoose();
+      // The drive was not measured, so the move may copy: it is stated first.
+      useModelFoldersStore().devices = [];
+      store.requestMove(store.movableSelection(), { folderId: 1, path: "Lora" });
+      await flushPromises();
+      expect(startModelMove).not.toHaveBeenCalled();
+      expect(dialog(wrapper).props("open")).toBe(true);
+      expect(dialog(wrapper).props("items")).toEqual([LOOSE]);
+      expect(dialog(wrapper).props("initialDestination")).toEqual({
+        folderId: 1,
+        path: "Lora",
+      });
+      wrapper.unmount();
+    });
+
+    it("puts a cut back with Escape, and pastes nothing outside a folder", async () => {
+      const { wrapper, store } = await selectLoose();
+      await press("x");
+      await press("Escape");
+      expect(store.cutCopies).toBe(null);
+      expect(store.selectedRows.map((row) => row.id)).toEqual([1]);
+
+      await press("x");
+      store.setPlace("all");
+      await flushPromises();
+      await press("v");
+      expect(dialog(wrapper).props("open")).toBe(false);
+      wrapper.unmount();
+    });
+
+    /** A main-button press on `el`, and the pointer moved to `x`, `y`. */
+    const pointer = (el, type, x = 0, y = 0) =>
+      el.dispatchEvent(
+        new MouseEvent(type, {
+          button: 0,
+          buttons: type === "pointerup" ? 0 : 1,
+          clientX: x,
+          clientY: y,
+          bubbles: true,
+        }),
+      );
+
+    it("drags an unselected row alone, selecting it first", async () => {
+      const { wrapper, store } = await openFolder();
+      expect(store.selectedRows).toEqual([]);
+      const row = wrapper.find(".shelf-row");
+      // Not the browser's drag: its image lifted late on the desktop shell.
+      expect(row.attributes("draggable")).toBeUndefined();
+      pointer(row.element, "pointerdown");
+      // Under 4 px a press is still a click.
+      pointer(window, "pointermove", 3, 0);
+      expect(store.dragCopies).toBe(null);
+      pointer(window, "pointermove", 10, 0);
+      expect(store.selectedRows.map((one) => one.id)).toEqual([1]);
+      expect(store.dragCopies.items).toEqual([LOOSE]);
+      // Away from a folder the tip is the preview: what is carried.
+      expect(store.dropTip).toEqual({ x: 10, y: 0, text: "loose.safetensors" });
+      pointer(window, "pointerup", 10, 0);
+      expect(store.dragCopies).toBe(null);
+      expect(store.dropTip).toBe(null);
+      wrapper.unmount();
+    });
+
+    it("says how many selected models a drag leaves behind", async () => {
+      // The report: several models selected, the others in a locked folder,
+      // and the tip named one file as if the selection had been dropped.
+      const LOCKED = { ...FOLDER, id: 2, path: "/home/me/.cache/hub", movable: "external" };
+      listModelFolders.mockResolvedValue([FOLDER, LOCKED]);
+      const wrapper = await mountShelf([
+        adapter({ id: 1, locations: at("loose.safetensors") }),
+        adapter({
+          id: 2,
+          sha256: "b".repeat(64),
+          locations: [
+            { state: "present", folder_id: 2, folder_path: LOCKED.path, relpath: "x.safetensors" },
+          ],
+        }),
+      ]);
+      await useModelFoldersStore().refresh();
+      const store = useModelShelfStore();
+      store.toggleSelected(1);
+      store.toggleSelected(2);
+      await flushPromises();
+      pointer(wrapper.find(".shelf-row").element, "pointerdown");
+      pointer(window, "pointermove", 10, 0);
+      expect(store.dragCopies.items).toEqual([LOOSE]);
+      expect(store.dropTip.text).toBe("loose.safetensors · 1 model can't move");
+      pointer(window, "pointerup", 10, 0);
+      wrapper.unmount();
+    });
+
+    it("hands the drop to the folder under the pointer, and eats the release's click", async () => {
+      const { wrapper, store } = await openFolder();
+      const folder = document.createElement("div");
+      folder.dataset.modelCopiesDrop = "";
+      const heard = [];
+      folder.addEventListener("model-copies-over", (event) => {
+        heard.push(["over", event.detail]);
+        event.preventDefault();
+      });
+      folder.addEventListener("model-copies-drop", () =>
+        heard.push(["drop", store.dragCopies?.items]),
+      );
+      document.body.appendChild(folder);
+      const was = document.elementFromPoint;
+      document.elementFromPoint = (x) => (x > 100 ? folder : document.body);
+      const clicked = vi.fn();
+      document.body.addEventListener("click", clicked);
+      try {
+        pointer(wrapper.find(".shelf-row").element, "pointerdown");
+        pointer(window, "pointermove", 20, 0);
+        expect(store.dropTip.text).toBe("loose.safetensors");
+        pointer(window, "pointermove", 120, 5);
+        pointer(window, "pointerup", 120, 5);
+        expect(heard).toEqual([
+          ["over", { x: 120, y: 5 }],
+          ["drop", [LOOSE]],
+        ]);
+        document.body.click();
+        expect(clicked).not.toHaveBeenCalled();
+      } finally {
+        document.elementFromPoint = was;
+        document.body.removeEventListener("click", clicked);
+        folder.remove();
+      }
+      wrapper.unmount();
+    });
+
+    it("drops on what a scroll put under the pointer, not what was there", async () => {
+      const { wrapper, store } = await openFolder();
+      const folder = document.createElement("div");
+      folder.dataset.modelCopiesDrop = "";
+      const drops = vi.fn();
+      folder.addEventListener("model-copies-over", (event) => event.preventDefault());
+      folder.addEventListener("model-copies-drop", drops);
+      document.body.appendChild(folder);
+      const was = document.elementFromPoint;
+      let under = folder;
+      document.elementFromPoint = () => under;
+      try {
+        pointer(wrapper.find(".shelf-row").element, "pointerdown");
+        pointer(window, "pointermove", 20, 0);
+        expect(store.dropTip).toBe(null);
+        // The wheel scrolls the folder away from a pointer that stays put.
+        under = document.body;
+        document.dispatchEvent(new Event("scroll"));
+        expect(store.dropTip.text).toBe("loose.safetensors");
+        pointer(window, "pointerup", 20, 0);
+        expect(drops).not.toHaveBeenCalled();
+      } finally {
+        document.elementFromPoint = was;
+        folder.remove();
+      }
+      wrapper.unmount();
+    });
+
+    it("puts a drag back with Escape, keeping the selection", async () => {
+      const { wrapper, store } = await selectLoose();
+      pointer(wrapper.find(".shelf-row").element, "pointerdown");
+      pointer(window, "pointermove", 10, 0);
+      expect(store.dragCopies).not.toBe(null);
+      await press("Escape");
+      expect(store.dragCopies).toBe(null);
+      expect(store.selectedRows.map((one) => one.id)).toEqual([1]);
+      // Its release is still a click, which must not narrow the selection.
+      const clicked = vi.fn();
+      document.body.addEventListener("click", clicked);
+      pointer(window, "pointerup", 10, 0);
+      document.body.click();
+      document.body.removeEventListener("click", clicked);
+      expect(clicked).not.toHaveBeenCalled();
+      wrapper.unmount();
+    });
+
+    it("drops nothing when the release was never heard", async () => {
+      const { wrapper, store } = await openFolder();
+      pointer(wrapper.find(".shelf-row").element, "pointerdown");
+      pointer(window, "pointermove", 10, 0);
+      expect(store.dragCopies).not.toBe(null);
+      // A move with no button held: the release happened elsewhere.
+      window.dispatchEvent(new MouseEvent("pointermove", { clientX: 30 }));
+      expect(store.dragCopies).toBe(null);
+      expect(store.dropTip).toBe(null);
+      wrapper.unmount();
+    });
+
+    it("cuts and pastes from the row menu", async () => {
+      const { wrapper, store } = await selectLoose();
+      // Unmeasured, so the paste opens the dialog rather than starting.
+      useModelFoldersStore().devices = [];
+      const bar = wrapper.findComponent({ name: "ShelfSelectionBar" });
+      const verb = (name) => bar.findAll(`.ctx-item[data-verb='${name}']`);
+      // Paste is listed only while something is cut.
+      expect(verb("paste").length).toBe(0);
+      await verb("cut")[0].trigger("click");
+      expect(store.cutCopies.items).toEqual([LOOSE]);
+
+      store.setFolderScope({ folderId: 1, path: "Lora" });
+      await flushPromises();
+      expect(verb("paste")[0].attributes("disabled")).toBeUndefined();
+      await verb("paste")[0].trigger("click");
+      await flushPromises();
+      expect(dialog(wrapper).props("open")).toBe(true);
+      expect(dialog(wrapper).props("initialDestination")).toEqual({
+        folderId: 1,
+        path: "Lora",
+      });
+      dialog(wrapper).vm.$emit("started");
+      expect(store.cutCopies).toBe(null);
+      wrapper.unmount();
+    });
+
+    it("disables the menu's Paste outside a folder, and says why", async () => {
+      const { wrapper, store } = await selectLoose();
+      await press("x");
+      store.setPlace("all");
+      await flushPromises();
+      const paste = wrapper
+        .findComponent({ name: "ShelfSelectionBar" })
+        .find(".ctx-item[data-verb='paste']");
+      expect(paste.attributes("disabled")).toBeDefined();
+      expect(tip(paste)).toContain("Open a folder to paste into it");
+      wrapper.unmount();
+    });
+
+    it("refuses a paste into a locked folder, and a cut that has gone since", async () => {
+      const { wrapper, store } = await selectLoose();
+      await press("x");
+      expect(store.pasteCut({ folderId: 1, path: "VAE", locked: true })).toBe(false);
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "That folder is locked, so nothing can be moved into it.",
+      );
+      expect(store.cutCopies).not.toBe(null);
+
+      store.cutCopies = { ...store.cutCopies, ids: new Set([999]) };
+      expect(store.pasteCut({ folderId: 1, path: "VAE" })).toBe(false);
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "What you cut has moved or gone since, so there is nothing to paste.",
+      );
+      expect(store.cutCopies).toBe(null);
+      await flushPromises();
+      expect(dialog(wrapper).props("open")).toBe(false);
+      wrapper.unmount();
+    });
+
+    it("refuses to drag an unmovable row without touching the selection", async () => {
+      listModelFolders.mockResolvedValue([FOLDER]);
+      const wrapper = await mountShelf([
+        adapter({ id: 1, locations: at("loose.safetensors") }),
+        adapter({
+          id: 2,
+          sha256: "b".repeat(64),
+          locations: [{ ...at("gone.safetensors")[0], state: "missing" }],
+        }),
+      ]);
+      const store = useModelShelfStore();
+      await flushPromises();
+      store.toggleSelected(1);
+      await flushPromises();
+      const gone = wrapper
+        .findAll(".shelf-row[data-row-key]")
+        .find((one) => !one.classes("shelf-row--selected"));
+      gone.element.dispatchEvent(
+        new MouseEvent("pointerdown", { button: 0, bubbles: true }),
+      );
+      window.dispatchEvent(
+        new MouseEvent("pointermove", { buttons: 1, clientX: 10 }),
+      );
+      expect(store.dragCopies).toBe(null);
+      expect(store.selectedRows.map((one) => one.id)).toEqual([1]);
+      // Says why, rather than the row simply refusing to lift.
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "None of these files can be moved: they are missing, offline or in a locked folder.",
+      );
+      wrapper.unmount();
+    });
+
+    it("says on the row that its file is in a locked folder", async () => {
+      // All models mixes rows that drag with rows that cannot; the file line
+      // is where the reader can tell them apart before trying.
+      listModelFolders.mockResolvedValue([
+        FOLDER,
+        { id: 2, path: "/hf", kind: "foreign", movable: "fixed" },
+      ]);
+      const wrapper = await mountShelf([
+        adapter({ id: 1, locations: at("Loose_One.safetensors") }),
+        adapter({
+          id: 2,
+          sha256: "b".repeat(64),
+          locations: [
+            { state: "present", folder_id: 2, folder_path: "/hf", relpath: "Held.safetensors" },
+          ],
+        }),
+      ]);
+      await flushPromises();
+      const fileLine = (id) =>
+        wrapper.find(`.shelf-row[data-row-key='${id}'] .shelf-row-file`).text();
+      expect(fileLine(2)).toContain("in a locked folder");
+      expect(fileLine(1)).not.toContain("locked");
+      // And it is seen before it is read: the hatch on the row, the padlock
+      // on its mark, on the locked row alone.
+      const rowEl = (id) => wrapper.find(`.shelf-row[data-row-key='${id}']`);
+      expect(rowEl(2).classes()).toContain("shelf-row--locked");
+      expect(rowEl(2).find(".shelf-row-mark .shelf-row-lock").exists()).toBe(true);
+      expect(rowEl(1).classes()).not.toContain("shelf-row--locked");
+      expect(rowEl(1).find(".shelf-row-lock").exists()).toBe(false);
+      wrapper.unmount();
+    });
+
+    it("refuses a paste into the folder the cut files are already in", async () => {
+      const { wrapper } = await selectLoose();
+      await press("x");
+      await press("v");
+      expect(dialog(wrapper).props("open")).toBe(false);
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "What you cut is already in that folder.",
+      );
+      wrapper.unmount();
+    });
   });
 
-  it("a run is favourited by its cover, and its open members show no heart", async () => {
-    listFavourites.mockResolvedValue({ model: [SHA_A], workflow: [], set: [] });
-    const wrapper = await mountShelf([
-      adapter({ id: 1, sha256: SHA_A, stack_id: 7, stack_position: 0 }),
-      adapter({ id: 2, sha256: SHA_B, stack_id: 7, stack_position: 1 }),
-    ]);
-    await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
-    expect(wrapper.find(".shelf-row--member").exists()).toBe(true);
+  describe("where ComfyUI loads from (#2205)", () => {
+    const READS = {
+      known: true,
+      reads: [{ folder_id: 1, subpath: "Lora", category: "loras", kind: "lora" }],
+    };
+
+    it("marks the folder ComfyUI loads from, and says a model outside it is not listed", async () => {
+      getComfyuiReads.mockResolvedValue(READS);
+      const { wrapper, store } = await openFolder();
+      expect(getComfyuiReads).toHaveBeenCalledTimes(1);
+      const row = wrapper.find(".shelf-row");
+      expect(textOf(row.find("[data-testid='shelf-row-nolist']"))).toBe(
+        "ComfyUI does not list it here",
+      );
+      const note = wrapper.find("[data-testid='shelf-misplaced-note']");
+      expect(textOf(note)).toContain("1 model in this folder is outside the folders ComfyUI loads from");
+      await note.find("[data-testid='shelf-select-misplaced']").trigger("click");
+      expect(store.selectedRows.map((one) => one.id)).toEqual([1]);
+
+      // Inside the folder ComfyUI loads LoRAs from, nothing to say.
+      store.setFolderScope({ folderId: 1, path: "Lora" });
+      await flushPromises();
+      expect(wrapper.find("[data-testid='shelf-row-nolist']").exists()).toBe(false);
+      expect(wrapper.find("[data-testid='shelf-misplaced-note']").exists()).toBe(false);
+      wrapper.unmount();
+    });
+
+    it("draws no marks, lines or note while where ComfyUI loads from is unknown", async () => {
+      getComfyuiReads.mockResolvedValue({ ...READS, known: false });
+      const { wrapper } = await openFolder();
+      expect(wrapper.find("[data-testid='comfyui-mark']").exists()).toBe(false);
+      expect(wrapper.find("[data-testid='shelf-row-nolist']").exists()).toBe(false);
+      expect(wrapper.find("[data-testid='shelf-misplaced-note']").exists()).toBe(false);
+      wrapper.unmount();
+    });
+
+    it("says nothing about a locked folder, whose files cannot be dragged out", async () => {
+      getComfyuiReads.mockResolvedValue(READS);
+      const { wrapper, store } = await openFolder();
+      expect(wrapper.find("[data-testid='shelf-row-nolist']").exists()).toBe(true);
+      // Reopening the same folder is a no-op, so leave it first.
+      store.setPlace("all");
+      store.setFolderScope({ folderId: 1, path: "", locked: true });
+      await flushPromises();
+      expect(wrapper.find("[data-testid='shelf-row-nolist']").exists()).toBe(false);
+      expect(wrapper.find("[data-testid='shelf-misplaced-note']").exists()).toBe(false);
+      wrapper.unmount();
+    });
+
+    it("treats a refused read as unknown", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      getComfyuiReads.mockRejectedValue({ response: { status: 403 } });
+      const { wrapper } = await openFolder();
+      expect(wrapper.find("[data-testid='shelf-row-nolist']").exists()).toBe(false);
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+      wrapper.unmount();
+    });
+  });
+
+  it("lists only the folder's own models: no subfolders, path or bands", async () => {
+    // The Folders tree is where subfolders and the way back up live. The
+    // root's listing names Lora and VAE, and no model is called VAE.
+    const { wrapper, store } = await openFolder();
+    expect(wrapper.findAll(".shelf-row").length).toBe(1);
+    expect(textOf(wrapper)).not.toContain("VAE");
+    expect(textOf(wrapper)).not.toContain("All folders");
+    expect(textOf(wrapper.find(".shelf-sub"))).toBe("1 model");
+    store.setView({ groupBy: "type", listGroupBy: "type" });
+    await flushPromises();
+    expect(wrapper.find(".shelf-group-heading").exists()).toBe(false);
+    store.setPlace("all");
+    await flushPromises();
+    expect(wrapper.find(".shelf-group-heading").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("does not call a folder empty of subfolders while its listing is unread", async () => {
+    const { wrapper } = await openFolder();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    listModelFolderDirs.mockRejectedValue({
+      response: { status: 409, data: { detail: "Could not read the directory." } },
+    });
+    const store = useModelShelfStore();
+    store.setFolderScope({ folderId: 1, path: "VAE" });
+    await flushPromises();
+    // An unread listing does not let the empty line claim there are none.
+    expect(textOf(wrapper)).toContain("No models directly in this folder.");
+    warn.mockRestore();
+    wrapper.unmount();
+  });
+
+  it("states the drive's free space under the list", async () => {
+    const { wrapper } = await openFolder();
+    const status = textOf(wrapper.find("[data-testid='shelf-status']"));
+    expect(status).toContain("System drive: 50.0 GB free of 1000.0 GB");
+    expect(status).toContain("95% full");
     expect(
-      wrapper.find(".shelf-row--member [data-testid='favourite-heart']").exists(),
-    ).toBe(false);
-    const cover = wrapper.find('[data-row-key="1"] [data-testid="favourite-heart"]');
-    expect(cover.attributes("aria-pressed")).toBe("true");
+      wrapper.find(".shelf-status-bar--full").exists(),
+    ).toBe(true);
+    wrapper.unmount();
   });
 
-  it("leads a favourite inside its group, and stops when the view says so", async () => {
-    listFavourites.mockResolvedValue({ model: [SHA_C], workflow: [], set: [] });
-    await mountShelf([
-      adapter({ id: 1, sha256: SHA_A, display_name: "Alpha" }),
-      adapter({ id: 2, sha256: SHA_B, display_name: "Beta" }),
-      adapter({ id: 3, sha256: SHA_C, display_name: "Gamma" }),
-    ]);
+});
+
+describe("the sidebar's requests reach their dialog (#2168)", () => {
+  it.each([
+    ["add-file", "addFileOpen"],
+    ["set-source", "addSourceOpen"],
+  ])("opens its picker for %s", async (what, flag) => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    useModelShelfStore().requestShell(what, null);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm[flag]).toBe(true);
+    wrapper.unmount();
+  });
+
+  it.each(["add-folder", "manage-folders"])(
+    "sends %s to Settings on Models",
+    async (what) => {
+      const wrapper = await mountShelf([adapter({ id: 1 })]);
+      useModelShelfStore().requestShell(what, null);
+      await wrapper.vm.$nextTick();
+      expect(wrapper.emitted("open-settings")).toEqual([["models"]]);
+      wrapper.unmount();
+    },
+  );
+});
+
+describe("going to a model by link (?model=)", () => {
+  afterEach(() => {
+    nav.route.query = {};
+  });
+
+  it("leaves Sets for All models and picks the row", async () => {
+    // Sets draws the grid, which has no row to land on: Go to model from a
+    // training run used to open there and do nothing.
+    const wrapper = await mountShelf(
+      [adapter({ id: 1 }), adapter({ id: 2 })],
+      [],
+      [],
+      { attachTo: document.body },
+    );
     const store = useModelShelfStore();
-    store.setView({ sortKey: "name", sortDirection: "asc" });
-    expect(store.groups[0].rows.map((r) => r.id)).toEqual([3, 1, 2]);
-    store.setView({ favouritesFirst: false });
-    expect(store.groups[0].rows.map((r) => r.id)).toEqual([1, 2, 3]);
-  });
-
-  it("Favourites only narrows to the favourites, counts them, and is a filter", async () => {
-    listFavourites.mockResolvedValue({ model: [SHA_C], workflow: [], set: [] });
-    await mountShelf([
-      adapter({ id: 1, sha256: SHA_A, display_name: "Alpha" }),
-      adapter({ id: 3, sha256: SHA_C, display_name: "Gamma" }),
-    ]);
-    const store = useModelShelfStore();
-    expect(store.favouriteModelCount).toBe(1);
-    store.setFilters({ favouritesOnly: true });
-    expect(store.visibleRows.map((r) => r.id)).toEqual([3]);
-    expect(store.activeCount).toBe(1);
-  });
-
-  it("names how many a group leads with, when it has any", async () => {
-    listFavourites.mockResolvedValue({ model: [SHA_A], workflow: [], set: [] });
-    const wrapper = await mountShelf([adapter({ id: 1, sha256: SHA_A })]);
-    useModelShelfStore().setView({ groupBy: "base_model" });
+    store.setPlace("sets");
+    await wrapper.vm.$nextTick();
+    nav.route.query = { model: "2" };
     await flushPromises();
-    expect(textOf(wrapper)).toContain("1 favourite first");
+    expect(store.place).toBe("all");
+    expect([...store.selectedIds]).toEqual([2]);
+    const rows = wrapper.findAll(".shelf-row");
+    expect(document.activeElement).toBe(rows[1].element);
+    wrapper.unmount();
+  });
+
+  it("switches to All models once for a model it never finds, then lets the reader leave", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    nav.route.query = { model: "999" };
+    await flushPromises();
+    expect(store.place).toBe("all");
+    store.setPlace("sets");
+    // A refresh recomputes the drawn rows, which re-runs the link's watcher.
+    store.rows = [...store.rows, adapter({ id: 3 })];
+    await flushPromises();
+    expect(store.place).toBe("sets");
+    wrapper.unmount();
   });
 });
 
+describe("the list's Type, favourite and Sets columns (#2168)", () => {
+  it("says an empty shelf is empty on In no set yet, not that all is in a set", async () => {
+    const wrapper = await mountShelf([]);
+    const store = useModelShelfStore();
+    store.setsLoaded = true;
+    store.setPlace("loose");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("No models found.");
+    expect(wrapper.text()).not.toContain("Every model is in a set.");
+    wrapper.unmount();
+  });
+
+  it("says every model is in a set when the shelf has models and none is loose", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    store.workflowSets = {
+      ...store.workflowSets,
+      handMade: [{ id: 10, name: "Kit", members: [{ id: 1, on_shelf: true }] }],
+    };
+    store.setsLoaded = true;
+    store.setPlace("loose");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("Every model is in a set.");
+    wrapper.unmount();
+  });
+
+  it("draws a row's picture: its own icon, else its person's face, else a mark", async () => {
+    listCharacters.mockResolvedValue([{ id: 5, name: "Sarah" }]);
+    const wrapper = await mountShelf([
+      adapter({ id: 1, icon_sha256: "f".repeat(64) }),
+      adapter({
+        id: 2,
+        sha256: "b".repeat(64),
+        attachments: [{ entity_type: "character", entity_id: 5 }],
+      }),
+      adapter({ id: 3, sha256: "c".repeat(64) }),
+    ]);
+    await flushPromises();
+    const marks = wrapper.findAll(".shelf-row .shelf-row-mark .mmark");
+    expect(marks).toHaveLength(3);
+    expect(marks[0].find("img").attributes("src")).toBe(
+      modelIconUrl("f".repeat(64)),
+    );
+    expect(marks[1].find("img").attributes("src")).toBe(
+      characterThumbnailUrl(5),
+    );
+    expect(marks[2].find(".mmark-initials").exists()).toBe(true);
+    // #2168 took the assignment ring off the list; the face comes back alone.
+    for (const mark of marks) {
+      expect(mark.classes()).not.toContain("mmark--ring");
+    }
+    wrapper.unmount();
+  });
+
+  it("puts a set's icon on a row drawn before the sets arrived", async () => {
+    // The rows are memoised, so a list landing after them must still repaint.
+    let land;
+    listPictureSets.mockReturnValue(new Promise((resolve) => (land = resolve)));
+    const wrapper = await mountShelf([
+      adapter({ attachments: [{ entity_type: "set", entity_id: 7 }] }),
+    ]);
+    land([{ id: 7, name: "Kit", set_icon: "mdi-star" }]);
+    await flushPromises();
+    const mark = wrapper.find(".shelf-row-mark .mmark");
+    // The set's icon, not the thumbnail the icon replaced.
+    expect(mark.find(".mmark-icon").exists()).toBe(true);
+    expect(mark.find("img").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("draws a heart after the name of a favourite, and none on the rest", async () => {
+    listFavourites.mockResolvedValue({
+      model: ["a".repeat(64)],
+      workflow: [],
+      set: [],
+    });
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 2, sha256: "c".repeat(64) }),
+    ]);
+    const rows = wrapper.findAll(".shelf-row");
+    expect(rows[0].find(".shelf-row-heart").exists()).toBe(true);
+    expect(rows[1].find(".shelf-row-heart").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("opens the Sets place, not just the grid, for a new set from a checkpoint", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1, file_kind: "checkpoint" })]);
+    const store = useModelShelfStore();
+    const create = vi.spyOn(store, "createHandMadeSet").mockResolvedValue(null);
+    store.setPlace("all");
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    wrapper.findComponent({ name: "ShelfSelectionBar" }).vm.$emit("new-set");
+    await flushPromises();
+    expect(create).toHaveBeenCalled();
+    expect(store.place).toBe("sets");
+    expect(store.view.groupBy).toBe("workflow_set");
+    wrapper.unmount();
+  });
+
+  it("redraws only the row a selection touched, in a list banded by Type", async () => {
+    // Two bands, because a memo nested in the groups' loop is what broke:
+    // `v-memo` keeps one cache slot per list, so each band compared its rows
+    // with the band before it and every row redrew on every click. A row
+    // that was not redrawn keeps the very same rendered tree.
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 3, sha256: "c".repeat(64) }),
+      adapter({ id: 2, sha256: "b".repeat(64), file_kind: "checkpoint" }),
+    ]);
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "type" });
+    await flushPromises();
+    expect(wrapper.findAll(".shelf-group").length).toBe(2);
+    const trees = () =>
+      new Map(
+        wrapper
+          .findAllComponents({ name: "MemoBlock" })
+          .map((block) => [block.find(".shelf-row").attributes("data-row-key"), block.vm.$.subTree]),
+      );
+    const before = trees();
+    expect([...before.keys()].sort()).toEqual(["1:lora", "2:checkpoint", "3:lora"]);
+
+    store.toggleSelected(1);
+    await flushPromises();
+    const after = trees();
+    // Booleans, because a failing vnode comparison cannot be printed.
+    const kept = (key) => after.get(key) === before.get(key);
+    expect(kept("1:lora")).toBe(false);
+    expect(kept("2:checkpoint")).toBe(true);
+    expect(kept("3:lora")).toBe(true);
+    expect(wrapper.find(".shelf-row[data-row-key='1:lora']").classes()).toContain(
+      "shelf-row--selected",
+    );
+    wrapper.unmount();
+  });
+
+  it("redraws a row when something outside it changes", async () => {
+    // The list memoises each row (`rowMemo`), so a value read from outside
+    // the row object only reaches the screen if the memo lists it. Each of
+    // these changes after mount with the row object itself untouched.
+    useUserPrefsStore().dateFormat = "eu";
+    const wrapper = await mountShelf([
+      adapter({
+        id: 1,
+        // Local noon, as the date column's own block builds its stamps.
+        added_at: new Date(2026, 6, 30, 12, 0).toISOString().slice(0, 19),
+        locations: [
+          { state: "present", folder_id: 2, folder_path: "/hf", relpath: "Held.safetensors" },
+        ],
+      }),
+    ]);
+    // Favourites leading re-sorts, which rebuilds every row object and would
+    // redraw the heart whether or not the memo lists it.
+    useModelShelfStore().setView({ favouritesFirst: false });
+    await flushPromises();
+    const row = () => wrapper.find(".shelf-row");
+    expect(row().find(".shelf-row-heart").exists()).toBe(false);
+    expect(row().find(".shelf-row-file").text()).not.toContain("locked");
+
+    // One at a time: changed together, any one listed value would redraw
+    // the row for all of them.
+    useFavouritesStore().keys = { model: ["a".repeat(64)], workflow: [], set: [] };
+    await flushPromises();
+    expect(row().find(".shelf-row-heart").exists()).toBe(true);
+    useUserPrefsStore().dateFormat = "iso";
+    await flushPromises();
+    expect(row().find(".shelf-col--date").text()).toBe("2026-07-30");
+    useModelFoldersStore().folders = [
+      { id: 2, path: "/hf", kind: "foreign", movable: "fixed" },
+    ];
+    await flushPromises();
+    expect(row().find(".shelf-row-file").text()).toContain("in a locked folder");
+    wrapper.unmount();
+  });
+
+  it("counts the sets a row is in, and dashes a row that is in none", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 2, sha256: "c".repeat(64) }),
+    ]);
+    const store = useModelShelfStore();
+    store.workflowSets = {
+      ...store.workflowSets,
+      handMade: [{ id: 10, name: "Kit", members: [{ id: 1, on_shelf: true }] }],
+    };
+    await wrapper.vm.$nextTick();
+    // Until the sets are read the column says nothing, not "in none".
+    expect(wrapper.findAll(".shelf-row")[1].find(".shelf-col--sets").text()).toBe("");
+    store.setsLoaded = true;
+    await wrapper.vm.$nextTick();
+    const rows = wrapper.findAll(".shelf-row");
+    expect(rows[0].find(".shelf-col--sets").text()).toBe("1");
+    expect(rows[1].find(".shelf-col--sets").text()).toBe("–");
+    wrapper.unmount();
+  });
+});
+
+describe("the folder removal dialog the tree asks for", () => {
+  const SOURCE = { folderId: 1, path: "Lora", name: "Lora" };
+  const PLAN = { file_count: 2, files: [], fingerprint: "fp", name: "Lora" };
+  const dialog = (wrapper) =>
+    wrapper.findComponent({ name: "ShelfRemoveFolderDialog" });
+
+  it("answers the request on close: removed only after the dialog said so", async () => {
+    const wrapper = await mountShelf([]);
+    const store = useModelShelfStore();
+
+    const cancelled = store.requestFolderRemove(SOURCE, PLAN, { remaining: 2 });
+    await flushPromises();
+    expect(dialog(wrapper).props("open")).toBe(true);
+    expect(dialog(wrapper).props("remaining")).toBe(2);
+    dialog(wrapper).vm.$emit("close");
+    await expect(cancelled).resolves.toBe(false);
+    expect(dialog(wrapper).props("open")).toBe(false);
+
+    const removed = store.requestFolderRemove(SOURCE, PLAN);
+    await flushPromises();
+    dialog(wrapper).vm.$emit("removed");
+    dialog(wrapper).vm.$emit("close");
+    await expect(removed).resolves.toBe(true);
+    wrapper.unmount();
+  });
+
+  it("leaves a request that arrives while the last dialog closes to its own dialog", async () => {
+    const wrapper = await mountShelf([]);
+    const store = useModelShelfStore();
+    const first = store.requestFolderRemove(SOURCE, PLAN);
+    await flushPromises();
+    // The close waits a tick for the focus; the next request lands in it.
+    dialog(wrapper).vm.$emit("close");
+    const second = store.requestFolderRemove({ ...SOURCE, path: "VAE" }, PLAN);
+    await expect(first).resolves.toBe(false);
+    let answered = null;
+    second.then((value) => (answered = value));
+    await flushPromises();
+    expect(answered).toBe(null);
+    expect(dialog(wrapper).props("open")).toBe(true);
+    expect(dialog(wrapper).props("source").path).toBe("VAE");
+    dialog(wrapper).vm.$emit("removed");
+    dialog(wrapper).vm.$emit("close");
+    await expect(second).resolves.toBe(true);
+    wrapper.unmount();
+  });
+});

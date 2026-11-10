@@ -15,6 +15,7 @@ from pixlstash.scoring.smart_score import (
     _BUILTIN_MIN_GOOD,
     _BUILTIN_MIN_BAD,
     attach_anomaly_inputs,
+    fetch_main_face_mpx,
     prepare_smart_score_inputs,
     resolve_penalised_tag_weights,
 )
@@ -226,6 +227,10 @@ class SmartScoreTask(BaseTask):
                 }
             )
 
+        face_mpx = fetch_main_face_mpx(session, candidate_ids)
+        for candidate in candidates:
+            candidate["face_mpx"] = face_mpx.get(candidate["id"])
+
         scorer_config = attach_anomaly_inputs(
             session,
             candidates,
@@ -239,9 +244,20 @@ class SmartScoreTask(BaseTask):
         if len(bad) < _BUILTIN_MIN_BAD:
             bad = list(bad) + builtin_bad
 
-        before_signature = anomaly_state_signature(session, candidate_ids)
+        before_signature = SmartScoreTask._input_signature(session, candidate_ids)
 
         return good, bad, candidates, scorer_config, before_signature
+
+    @staticmethod
+    def _input_signature(session: Session, picture_ids: list) -> dict:
+        """``{picture_id: (anomaly signature, main face megapixels)}`` for the CAS.
+
+        The two scorer inputs another writer can move mid-batch: a tag edit, and face
+        extraction or a face edit (the face sets the resolution term).
+        """
+        anomaly = anomaly_state_signature(session, picture_ids)
+        faces = fetch_main_face_mpx(session, picture_ids)
+        return {pid: (anomaly.get(pid), faces.get(pid)) for pid in picture_ids}
 
     @staticmethod
     def _persist_scores(session: Session, id_to_score: dict, before: dict) -> list[int]:
@@ -272,7 +288,7 @@ class SmartScoreTask(BaseTask):
             excluded - the interactive-refresh path keys off this list, so a skipped,
             still-NULL id is never announced as a finished rescore.
         """
-        after = anomaly_state_signature(session, list(id_to_score.keys()))
+        after = SmartScoreTask._input_signature(session, list(id_to_score.keys()))
 
         # Compare-and-swap (B1): keep only pictures whose anomaly inputs did not move
         # between the read transaction that computed the score and this write. A drifted

@@ -74,7 +74,7 @@ import { wordLayerStyle } from "../../composables/usePictureText";
 const props = defineProps({
   /** The `usePaintSelection` state. */
   paint: { type: Object, required: true },
-  /** The lightbox's `overlayDims`: display and natural size, offset. */
+  /** The lightbox's `lightboxDims`: display and natural size, offset. */
   dims: { type: Object, required: true },
 });
 

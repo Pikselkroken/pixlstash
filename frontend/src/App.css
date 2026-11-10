@@ -65,6 +65,30 @@ body {
   padding: 0;
   position: relative;
 }
+/* The centre column plus the right rail, the box a picture opened in the
+   lightbox fills (#2163). `isolation` keeps the lightbox's own layers inside
+   it, so the auto-hide sidebar, its trigger and its scrim (`--z-floating` on
+   `.file-manager`) still slide over an open picture. */
+.workspace-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  position: relative;
+  isolation: isolate;
+}
+/* Holds no box of its own: the teleported lightbox is placed against
+   `.workspace-body`. */
+.lightbox-host {
+  display: contents;
+}
+/* The lightbox's full screen (Lightbox, F): the picture takes the whole
+   screen, so the title bar and everything in the file manager beside the
+   workspace (the sidebar, its hover trigger and its scrim) are taken out. */
+:root.lightbox-fullscreen .titlebar,
+:root.lightbox-fullscreen .file-manager > :not(.workspace-body) {
+  display: none !important;
+}
 .main-area {
   flex: 1;
   display: flex;
@@ -461,13 +485,13 @@ button:focus:not(:focus-visible) {
 }
 kbd {
   display: inline-block;
-  padding: var(--space-1) var(--space-2);
+  padding: var(--kbd-pad);
   font-size: var(--text-2xs);
   font-family: var(--font-mono);
   background: rgba(var(--v-theme-on-background), 0.08);
   border: 1px solid rgba(var(--v-theme-on-background), 0.2);
   border-radius: var(--radius-sm);
-  line-height: 1.5;
+  line-height: var(--kbd-leading);
 }
 
 /* The cover of an expanded stack, named. Bottom-left, on the photo scrim: the
@@ -1047,11 +1071,29 @@ kbd {
   line-height: var(--leading-body);
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
+/* A chord is keycaps side by side: Shift, then Tab. They sit a hairline
+   apart so they read as one press. */
+kbd + kbd {
+  margin-left: var(--kbd-chord-gap);
+}
+/* An alternative (← or →, 1 to 5) starts a new press, not a chord: the text
+   between keys does not break `+` adjacency, so the key opts out and keeps
+   only the word space before it. */
+kbd + kbd.kbd-or {
+  margin-left: 0;
+}
+/* The enter icon's ink weighs about 1px right of its box (the upright is on
+   the right), so centred it reads off-centre in its cap. An optical nudge, in
+   one place for every keycap that wears it. A transform, not a margin: inside
+   a centring flex box a margin moves it half as far and rounds away at 1x. */
+kbd .mdi-subdirectory-arrow-left {
+  transform: translateX(-1px);
+}
 .fm-kbd {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  line-height: 1;
-  padding: var(--space-1) var(--space-2);
+  line-height: var(--kbd-leading);
+  padding: var(--kbd-pad);
   border-radius: var(--radius-sm);
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
@@ -1121,15 +1163,13 @@ kbd {
 }
 
 /* On a ground that stays dark in both themes (buttons.md, "The on-dark
-   context"). `toolbar-text`, the wash and the focus ink are theme values, the
-   light theme's near-black on a dark card. Restated here, not inherited: a
+   context"). `toolbar-text` and the wash are theme values, the light theme's
+   near-black on a dark card. Restated here, not inherited: a
    custom property holding var() resolves where it is declared. */
 .bar-btn--on-dark {
   --v-theme-toolbar-text: var(--v-theme-on-dark-surface);
   --v-theme-surface-error: var(--v-theme-dark-surface-error);
   --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
-  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
-  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
 }
 /* The open state's border is a theme token; the ink at 28% is its dark-ground
    value, as on `AppButton`'s outline. `!important` to match `.bar-btn--open`. */
@@ -1190,6 +1230,19 @@ kbd {
   opacity: var(--opacity-text-secondary);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+/* The Esc keycap on a bar button that is the way out of a view
+   (ViewBackButton, the lightbox's Exit full screen). */
+.bar-btn-kbd {
+  margin-left: var(--space-2);
+  padding: var(--kbd-pad-tight);
+  line-height: var(--kbd-leading);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .bar-split-toggle {

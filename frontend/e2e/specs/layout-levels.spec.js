@@ -14,7 +14,7 @@ async function openLayoutDialog(page, grid) {
   const settings = new SettingsDialog(page)
   await grid.goto()
   await settings.open()
-  await settings.openTab('Libraries')
+  await settings.openTab('Libraries & imports')
   const activeRow = page.locator('.library-row', { has: page.locator('.library-row__active, [class*="active"]') }).first()
   const anyRow = (await activeRow.count()) ? activeRow : page.locator('.library-row').first()
   await anyRow.locator('button[aria-haspopup], .library-row__menu, button:has-text("···")').first().click()

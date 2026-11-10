@@ -33,7 +33,7 @@ import { useTasksStore } from "../../stores/useTasksStore";
 // Vuetify is not installed in the test app, so `v-menu` is stubbed with the
 // two behaviours the component relies on: the activator's click toggles it,
 // and the rows are in the page only while it is open. `afterEnter` is the
-// overlay's own event, emitted by hand where a test needs the menu "drawn".
+// lightbox's own event, emitted by hand where a test needs the menu "drawn".
 const VMenuStub = {
   name: "VMenu",
   props: { modelValue: { type: Boolean, default: false } },
@@ -301,9 +301,6 @@ describe("the rows", () => {
   it("name each set as the shelf does and count the rows it fills", async () => {
     const wrapper = mountMenu();
     await openMenu(wrapper);
-    expect(
-      wrapper.findAll("[data-set]").map((entry) => entry.attributes("data-set")),
-    ).toEqual(["hand:7", "hand:8", "hand:9", "model:31"]);
     expect(row(wrapper, "hand:7").find(".ctx-label-text").text()).toBe(
       "Portraits",
     );
@@ -342,6 +339,40 @@ describe("the rows", () => {
     await row(wrapper, "hand:8").trigger("click");
     expect(wrapper.emitted("use")).toBeUndefined();
     expect(menu(wrapper).exists()).toBe(true);
+  });
+
+  it("keep a set used in another kind of workflow takeable, with the warning", async () => {
+    planSetClones.mockResolvedValue({
+      ...PLANS,
+      plans: PLANS.plans.map((entry) =>
+        entry.key === "model:31"
+          ? { ...entry, fit: "other", warning: "Used for Image to Video, not Image to Image" }
+          : entry,
+      ),
+    });
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    const warned = row(wrapper, "model:31");
+    expect(warned.find(".wfset-warn").text()).toBe(
+      "Used for Image to Video, not Image to Image",
+    );
+    expect(warned.attributes("aria-disabled")).toBeUndefined();
+    expect(warned.attributes("aria-label")).toMatch(
+      /, fills 1 row · its LoRAs are not added, Used for Image to Video, not Image to Image$/,
+    );
+    // Only the set it is about.
+    expect(row(wrapper, "hand:7").find(".wfset-warn").exists()).toBe(false);
+    await warned.trigger("click");
+    expect(wrapper.emitted("use")).toEqual([
+      [
+        {
+          name: warned.find(".ctx-label-text").text(),
+          models: [
+            { address: "4.ckpt_name", filename: "juggernautXL_v9.safetensors" },
+          ],
+        },
+      ],
+    ]);
   });
 
   it("disable a set that changes none of the rows", async () => {
@@ -737,30 +768,101 @@ describe("from outside the tab", () => {
   });
 });
 
+describe("the order (sections, then favourites, then by name)", () => {
+  const order = (wrapper) =>
+    wrapper.findAll("[data-set]").map((entry) => entry.attributes("data-set"));
+  const headings = (wrapper) =>
+    wrapper
+      .findAll("[data-section]")
+      .map((section) => [
+        section.attributes("data-section"),
+        section.find(".section-label").text(),
+        section.findAll("[data-set]").map((entry) => entry.attributes("data-set")),
+      ]);
+
+  it("puts the sets that fit first, then the warned ones, then the unusable", async () => {
+    planSetClones.mockResolvedValue({
+      ...PLANS,
+      plans: PLANS.plans.map((entry) =>
+        entry.key === "hand:7"
+          ? { ...entry, warning: "Used for Image to Video, not Image to Image" }
+          : entry,
+      ),
+    });
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    expect(headings(wrapper)).toEqual([
+      ["fits", "Fits this workflow", ["model:31"]],
+      ["other", "Used in other kinds of workflow", ["hand:7"]],
+      // Will not load (Flux dev) and changes nothing (What it has), by name.
+      ["off", "Not usable here", ["hand:8", "hand:9"]],
+    ]);
+  });
+
+  it("leaves out a heading with no sets under it", async () => {
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    expect(headings(wrapper).map(([id]) => id)).toEqual(["fits", "off"]);
+  });
+
+  it("sorts by name inside a section, whichever kind of set it is", async () => {
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    // Juggernaut (read from pictures) before Portraits (hand-made).
+    expect(order(wrapper)).toEqual(["model:31", "hand:7", "hand:8", "hand:9"]);
+  });
+
+  it("sorts names as a person reads them: case aside, numbers by value", async () => {
+    fetchWorkflowSets.mockResolvedValue({
+      ...SHELF,
+      combinations: [],
+      hand_made: ["set 10", "Set 9", "alpha"].map((name, index) => ({
+        id: 40 + index,
+        name,
+        members: [{ id: 50 + index, slot: "checkpoint", on_shelf: true, name }],
+      })),
+    });
+    planSetClones.mockResolvedValue({
+      ...PLANS,
+      plans: [40, 41, 42].map((id) =>
+        plan(`hand:${id}`, {
+          swaps: { "sdxl/realvisxl_v50.safetensors": `m${id}.safetensors` },
+        }),
+      ),
+    });
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    expect(order(wrapper)).toEqual(["hand:42", "hand:41", "hand:40"]);
+  });
+
+  it("keeps hand-made first between two sets of one name", async () => {
+    fetchWorkflowSets.mockResolvedValue({
+      ...SHELF,
+      hand_made: [{ ...SHELF.hand_made[0], name: "juggernautXL v9" }],
+    });
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    expect(order(wrapper).slice(0, 2)).toEqual(["hand:7", "model:31"]);
+  });
+});
+
 describe("favourite sets (#1578)", () => {
   const order = (wrapper) =>
     wrapper.findAll("[data-set]").map((entry) => entry.attributes("data-set"));
 
-  it("a favourite hand-made set leads inside the hand-made group", async () => {
+  it("a favourite leads inside its section, whichever kind of set it is", async () => {
+    listFavourites.mockResolvedValue({ model: [], workflow: [], set: ["hand:7", "hand:9"] });
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    await flushPromises();
+    expect(order(wrapper)).toEqual(["hand:7", "model:31", "hand:9", "hand:8"]);
+  });
+
+  it("a favourite never climbs out of its section", async () => {
     listFavourites.mockResolvedValue({ model: [], workflow: [], set: ["hand:8"] });
     const wrapper = mountMenu();
     await openMenu(wrapper);
     await flushPromises();
-    expect(order(wrapper)).toEqual(["hand:8", "hand:7", "hand:9", "model:31"]);
-  });
-
-  it("a favourite pictures set never climbs over the hand-made group", async () => {
-    listFavourites.mockResolvedValue({ model: [], workflow: [], set: ["model:31"] });
-    const wrapper = mountMenu();
-    await openMenu(wrapper);
-    await flushPromises();
-    expect(order(wrapper)).toEqual(["hand:7", "hand:8", "hand:9", "model:31"]);
-  });
-
-  it("with no favourites the order is the shelf's own", async () => {
-    const wrapper = mountMenu();
-    await openMenu(wrapper);
-    await flushPromises();
-    expect(order(wrapper)).toEqual(["hand:7", "hand:8", "hand:9", "model:31"]);
+    expect(order(wrapper)).toEqual(["model:31", "hand:7", "hand:8", "hand:9"]);
   });
 });

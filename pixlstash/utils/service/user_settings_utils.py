@@ -1,11 +1,89 @@
 """User settings serialisation and patching utilities."""
 
 import json
+import os
+import re
+
+from pixlstash.pixl_logging import get_logger
+from pixlstash.services import comfyui_connections
+from pixlstash.training import ai_toolkit_install
 
 from pixlstash.utils.system_utils import (  # noqa: F401
     MAX_VRAM_BUDGET_GB,
     default_max_vram_gb,
     max_vram_budget_gb,
+)
+
+logger = get_logger(__name__)
+
+LAST_SEEN_VERSION_MAX_LENGTH = 64
+WHATS_CHANGED_KEYS = frozenset({"done", "checklist", "card"})
+WHATS_CHANGED_MAX_DONE = 16
+WHATS_CHANGED_STEP_RE = re.compile(r"[a-z0-9_-]{1,32}")
+
+
+def validate_ai_toolkit_settings(repo_path: str | None, python: str | None) -> None:
+    """Check the ai-toolkit paths a PUT or a check is about to use.
+
+    ``python`` becomes argv[0] of the trainer process and ``repo_path`` is its
+    working directory, so both must name real things on this host, and the
+    Python must belong to the checkout: inside its ``.venv`` or ``venv``, or the
+    one :func:`ai_toolkit_install.find_python` picks for it. A ``None`` value is
+    not checked (it clears that setting). Both callers, ``PUT
+    /training/ai-toolkit/config`` and ``/check``, pass the pair together, so a
+    Python is checked against the checkout beside it and never accepted alone.
+
+    Args:
+        repo_path: The ai-toolkit checkout directory, or ``None``.
+        python: The interpreter that runs the trainer, or ``None``.
+
+    Raises:
+        ValueError: With a message naming the problem, if either path is not an
+            absolute path to the expected kind of file or directory, or the
+            Python is not the checkout's.
+    """
+    if repo_path:
+        if not os.path.isabs(repo_path):
+            raise ValueError("ai_toolkit_repo_path must be an absolute path.")
+        if not os.path.isdir(repo_path):
+            raise ValueError("ai_toolkit_repo_path must be an existing directory.")
+        if not ai_toolkit_install.is_checkout(repo_path):
+            raise ValueError(
+                "ai_toolkit_repo_path has no run.py and toolkit folder; point it at "
+                "the ai-toolkit checkout."
+            )
+    if python:
+        if not os.path.isabs(python):
+            raise ValueError("ai_toolkit_python must be an absolute path.")
+        if not (os.path.isfile(python) and os.access(python, os.X_OK)):
+            raise ValueError("ai_toolkit_python must be an existing executable file.")
+        if not repo_path:
+            raise ValueError("ai_toolkit_python needs the checkout it runs in.")
+        # normpath, not realpath: a venv's python is a link out of the checkout.
+        chosen = os.path.normcase(os.path.normpath(python))
+        found = ai_toolkit_install.find_python(repo_path)
+        in_venv = any(
+            chosen.startswith(
+                os.path.normcase(os.path.normpath(os.path.join(repo_path, env)))
+                + os.sep
+            )
+            for env in (".venv", "venv")
+        )
+        if not in_venv and chosen != os.path.normcase(os.path.normpath(found or "")):
+            raise ValueError(
+                "ai_toolkit_python must be the checkout's own Python: one in its "
+                ".venv or venv, or the python3 on the PATH when it has neither."
+            )
+
+
+# The ai-toolkit keys a PATCH to /users/me/config may not write. The checkout and
+# its Python are stored only by PUT /training/ai-toolkit/config, where the host
+# locality rule is declared on the route; the commit is read from the checkout
+# when a job starts.
+AI_TOOLKIT_CONFIG_KEYS = (
+    "ai_toolkit_repo_path",
+    "ai_toolkit_python",
+    "ai_toolkit_commit",
 )
 
 
@@ -64,6 +142,10 @@ def serialize_user_config(user) -> dict:
         "date_format",
         "theme_mode",
         "comfyui_url",
+        "ai_toolkit_repo_path",
+        "ai_toolkit_python",
+        "ai_toolkit_commit",
+        "training_presets_auto_check",
         "public_url",
         "similarity_character",
         "stack_strictness",
@@ -77,13 +159,20 @@ def serialize_user_config(user) -> dict:
         "telemetry_send_hardware_profile",
         "telemetry_consent_prompted",
         "show_keyboard_hint",
+        "grid_open_gesture",
+        "viewer_wheel_action",
         "embed_watermark",
+        "keep_workflow_on_export",
+        "last_seen_version",
     }
 
     # ``getattr(..., None)`` (not bare ``getattr``) so a source object that
     # predates a newly-added setting simply falls back to the default rather
     # than raising - keeps serialisation resilient to schema growth.
     config = {
+        # Fall back to the default when the source lacks the attribute or it is
+        # None. A source missing a newly-added field (e.g. a fake user in tests
+        # or an ORM row read before its column migration ran) must not raise.
         key: (
             getattr(source, key, None)
             if getattr(source, key, None) is not None
@@ -91,8 +180,9 @@ def serialize_user_config(user) -> dict:
         )
         for key in allowed_fields
     }
-    # check_for_updates is tri-state: serialise as-is, including None (undecided)
-    config["check_for_updates"] = getattr(source, "check_for_updates", None)
+    # Tri-state: serialise as-is, including None (undecided)
+    for key in ("check_for_updates", "training_presets_auto_check"):
+        config[key] = getattr(source, key, None)
 
     config["expand_all_stacks"] = (
         getattr(source, "show_stacks")
@@ -126,6 +216,7 @@ def serialize_user_config(user) -> dict:
 
     # Include tagger_settings, filling in defaults for any missing entries.
     config["tagger_settings"] = _load_tagger_settings(source)
+    config["whats_changed"] = _load_whats_changed(source)
 
     return config
 
@@ -144,6 +235,76 @@ def _load_tagger_settings(user) -> dict:
     else:
         parsed = {}
     return manager.fill_defaults(parsed)
+
+
+def _load_whats_changed(user) -> dict | None:
+    """Return the stored What's changed progress as a dict, or None when unset."""
+    raw = getattr(user, "whats_changed", None)
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        logger.warning(
+            "Stored whats_changed is not JSON (%s); reading it as unset. value=%r",
+            exc,
+            raw,
+        )
+        return None
+    if not isinstance(parsed, dict):
+        logger.warning(
+            "Stored whats_changed is not a JSON object; reading it as unset. value=%r",
+            raw,
+        )
+        return None
+    return parsed
+
+
+def _normalize_last_seen_version(value) -> str | None:
+    """Validate a last_seen_version patch; blank, null or whitespace clears it."""
+    if value in ("", None, "null"):
+        return None
+    if not isinstance(value, str):
+        raise ValueError("last_seen_version must be a string")
+    text = value.strip()
+    if len(text) > LAST_SEEN_VERSION_MAX_LENGTH:
+        raise ValueError(
+            f"last_seen_version must be at most {LAST_SEEN_VERSION_MAX_LENGTH} characters"
+        )
+    return text or None
+
+
+def _normalize_whats_changed(value) -> str | None:
+    """Validate a whats_changed patch and return the JSON to store, or None to clear."""
+    if value in (None, "null"):
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("whats_changed must be a JSON object")
+    unknown = set(value) - WHATS_CHANGED_KEYS
+    if unknown:
+        raise ValueError(f"whats_changed has unknown keys: {sorted(unknown)}")
+    normalized = {}
+    if "done" in value:
+        done = value["done"]
+        if not isinstance(done, list) or len(done) > WHATS_CHANGED_MAX_DONE:
+            raise ValueError(
+                f"whats_changed.done must be a list of at most {WHATS_CHANGED_MAX_DONE} step ids"
+            )
+        steps = []
+        for step in done:
+            if not isinstance(step, str) or not WHATS_CHANGED_STEP_RE.fullmatch(step):
+                raise ValueError(
+                    "whats_changed.done entries must be 1-32 characters of a-z, 0-9, _ or -"
+                )
+            if step not in steps:
+                steps.append(step)
+        normalized["done"] = steps
+    for flag in ("checklist", "card"):
+        if flag in value:
+            if not isinstance(value[flag], bool):
+                raise ValueError(f"whats_changed.{flag} must be true or false")
+            normalized[flag] = value[flag]
+    return json.dumps(normalized)
 
 
 def apply_user_config_patch(user, patch_data) -> bool:
@@ -183,6 +344,10 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "date_format",
         "theme_mode",
         "comfyui_url",
+        "ai_toolkit_repo_path",
+        "ai_toolkit_python",
+        "ai_toolkit_commit",
+        "training_presets_auto_check",
         "public_url",
         "similarity_character",
         "stack_strictness",
@@ -198,7 +363,12 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "telemetry_send_hardware_profile",
         "telemetry_consent_prompted",
         "show_keyboard_hint",
+        "grid_open_gesture",
+        "viewer_wheel_action",
         "embed_watermark",
+        "keep_workflow_on_export",
+        "last_seen_version",
+        "whats_changed",
         "tagger_settings",
     }
 
@@ -225,6 +395,10 @@ def apply_user_config_patch(user, patch_data) -> bool:
     }
     allowed_theme_modes = {"light", "dark"}
     allowed_thumbnail_modes = {"square", "justified"}
+    allowed_choices = {
+        "grid_open_gesture": {"double", "single"},
+        "viewer_wheel_action": {"zoom", "browse"},
+    }
 
     updated = False
     for key, value in patch_data.items():
@@ -253,7 +427,24 @@ def apply_user_config_patch(user, patch_data) -> bool:
             else:
                 new_value = str(value).strip()
             if user.comfyui_url != new_value:
-                user.comfyui_url = new_value
+                # The connection list follows (#2167); clearing it makes the
+                # next connection current when one remains.
+                comfyui_connections.set_url(user, new_value)
+                updated = True
+            continue
+        if key in {
+            "ai_toolkit_repo_path",
+            "ai_toolkit_python",
+            "ai_toolkit_commit",
+        }:
+            # Plain string path/commit settings: coerce empty/null to None and
+            # trim whitespace, exactly like comfyui_url.
+            if value in ("", None, "null"):
+                new_value = None
+            else:
+                new_value = str(value).strip()
+            if getattr(user, key) != new_value:
+                setattr(user, key, new_value)
                 updated = True
             continue
         if key == "public_url":
@@ -328,9 +519,10 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 user.max_vram_gb = new_value
                 updated = True
             continue
-        if key in telemetry_fields:
+        if key in telemetry_fields or key == "keep_workflow_on_export":
             # Coerce like the other boolean toggles, so a client PATCHing the
-            # string "false" cannot silently enable a telemetry category.
+            # string "false" cannot silently enable a telemetry category or
+            # start exporting workflows.
             if value in ("", None, "null", "false", "False", "0", 0):
                 new_value = False
             else:
@@ -339,15 +531,15 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 setattr(user, key, new_value)
                 updated = True
             continue
-        if key == "check_for_updates":
+        if key in ("check_for_updates", "training_presets_auto_check"):
             if value in ("", "null"):
                 new_value = None
             elif value is None:
                 new_value = None
             else:
                 new_value = bool(value)
-            if user.check_for_updates != new_value:
-                user.check_for_updates = new_value
+            if getattr(user, key) != new_value:
+                setattr(user, key, new_value)
                 updated = True
             continue
         if key == "date_format":
@@ -405,6 +597,15 @@ def apply_user_config_patch(user, patch_data) -> bool:
             new_value = max(SIDEBAR_WIDTH_MIN, min(SIDEBAR_WIDTH_MAX, new_value))
             if user.sidebar_width != new_value:
                 user.sidebar_width = new_value
+                updated = True
+            continue
+        if key in allowed_choices:
+            # A blank patch resets to NULL, which reads back as the default.
+            new_value = None if value in ("", None, "null") else str(value)
+            if new_value is not None and new_value not in allowed_choices[key]:
+                raise ValueError(f"{key} must be one of {sorted(allowed_choices[key])}")
+            if getattr(user, key, None) != new_value:
+                setattr(user, key, new_value)
                 updated = True
             continue
         if key == "thumbnail_mode":
@@ -467,6 +668,18 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = bool(value)
             if user.hide_purge_snapshot_warning != new_value:
                 user.hide_purge_snapshot_warning = new_value
+                updated = True
+            continue
+        if key == "last_seen_version":
+            new_value = _normalize_last_seen_version(value)
+            if user.last_seen_version != new_value:
+                user.last_seen_version = new_value
+                updated = True
+            continue
+        if key == "whats_changed":
+            new_value = _normalize_whats_changed(value)
+            if user.whats_changed != new_value:
+                user.whats_changed = new_value
                 updated = True
             continue
         if key == "tagger_settings":

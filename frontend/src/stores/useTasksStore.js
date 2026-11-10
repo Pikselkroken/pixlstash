@@ -6,8 +6,11 @@ import { abortRun } from "../api/comfyui";
 import { cancelModelDownload } from "../api/modelDownloads";
 import { formatModelSize } from "../utils/modelShelf";
 import { cancelLease, freeComfyui, runLeaseAnyway } from "../api/resources";
+import { listTrainingJobs, quitComfyuiForTrainingJob } from "../api/training";
 import { deviceVramBar, runKey, runMatches } from "../utils/gpuMemory";
+import { gbTenths } from "../utils/trainingPlan";
 import { useNoticeStore } from "./useNoticeStore";
+import { useSidebarStore } from "./useSidebarStore";
 
 // Adaptive poll cadence (ms). Fast while the Tasks tab is open or something is
 // actively running; slow when the app is merely idle-watching for new work.
@@ -34,12 +37,17 @@ export function downloadMessage(download) {
     : `Downloading… ${received}`;
 }
 
+/** Nothing waiting: `transientProgress` when no grid is sorting or searching. */
+function idleTransientProgress() {
+  return { visible: false, status: "idle", message: "", percent: 0 };
+}
+
 /**
  * Cross-component "what is the app working on right now" store.
  *
  * This is the single source of truth for active background work, and the single
  * poller of GET /workers/progress. It exists so the Tasks tab, the animated
- * Tasks-tab indicator, and the app-wide stats-sidebar activity light all read
+ * Tasks-tab indicator, and the title bar's Tasks pill all read
  * the same state, and so we never poll the endpoint from two places at once.
  *
  * Three kinds of work are merged into one `activeEntries` list:
@@ -62,6 +70,17 @@ export const useTasksStore = defineStore("tasks", () => {
   const lastSnapshot = new Map(); // key → { current, t }
   const lastActiveAtByWorker = new Map();
   const lastProgressAtByWorker = new Map();
+
+  // ── Transient progress ────────────────────────────────────────────────────
+  // A short wait the user cannot abort and the task list does not list: the
+  // grid's sort or search loading. The grid writes it, the title bar draws it
+  // beside the tasks pill, so it no longer covers the grid's corner.
+  // ProgressOverlay's props: { visible, status, message, percent }.
+  const transientProgress = ref(idleTransientProgress());
+
+  function clearTransientProgress() {
+    transientProgress.value = idleTransientProgress();
+  }
 
   // ── ComfyUI runs (backend-reported) ───────────────────────────────────────
   // The runs in flight as the last poll listed them, oldest first:
@@ -203,9 +222,21 @@ export const useTasksStore = defineStore("tasks", () => {
           key: `model-download-${download.id}`,
         });
       } else if (download.status === "failed") {
+        // A gated model's page, where its licence is accepted. The action
+        // makes the card sticky, so it waits for the owner to read it.
+        const page = download.page_url;
         notices.error(
           `Could not download ${download.file}: ${download.error || "it failed."}`,
-          { key: `model-download-${download.id}` },
+          {
+            key: `model-download-${download.id}`,
+            action: page
+              ? {
+                  label: "Open page",
+                  handler: () =>
+                    window.open(page, "_blank", "noopener,noreferrer"),
+                }
+              : null,
+          },
         );
       }
     }
@@ -269,12 +300,88 @@ export const useTasksStore = defineStore("tasks", () => {
     return waitingAction(() => cancelLease(leaseId), "Could not cancel that run.");
   }
 
-  /** Ask ComfyUI to free its cache for a non-ComfyUI job that is short of memory. */
+  /** Have an idle ComfyUI unload its models: the broom on its Tasks row. */
   async function freeComfyuiCache() {
-    return waitingAction(
+    const answer = await waitingAction(
       () => freeComfyui(),
-      "ComfyUI could not free its cache.",
+      "ComfyUI could not clear its memory.",
     );
+    if (answer) {
+      useNoticeStore().push({
+        level: "success",
+        text: answer.freed_mb
+          ? `Cleared ${gbTenths(answer.freed_mb)} GB from ComfyUI.`
+          : "ComfyUI had nothing to clear.",
+        key: "comfyui-cleared",
+      });
+    }
+    return answer;
+  }
+
+  /**
+   * The owner's yes to quitting ComfyUI for a waiting training run, from its
+   * Tasks row. The route names the run by its job id; the lease carries its
+   * uuid, so the jobs are read to find it.
+   */
+  async function quitComfyuiFor(lease) {
+    return waitingAction(async () => {
+      const jobs = await listTrainingJobs();
+      const job = (Array.isArray(jobs) ? jobs : []).find(
+        (entry) => entry.uuid === lease.job_id,
+      );
+      if (!job) throw new Error(`No training job ${lease.job_id} to quit ComfyUI for`);
+      return quitComfyuiForTrainingJob(job.id);
+    }, "Could not ask PixlStash to quit ComfyUI.");
+  }
+
+  // ── ComfyUI clearing for a waiting lease, told as it happens ──────────────
+  // A lease's `comfyui_clear.phase` moves jobs → clearing → cleared (still
+  // short) or done (granted). Each move this tab saw is a notice, so the
+  // owner hears the outcome without watching Tasks. The first poll's phases
+  // are old news.
+  const seenClearPhase = new Map();
+
+  function noteClearPhases(list) {
+    const notices = useNoticeStore();
+    const live = new Set();
+    for (const lease of list) {
+      const clear = lease.comfyui_clear;
+      if (!clear) continue;
+      live.add(lease.id);
+      const before = seenClearPhase.get(lease.id);
+      seenClearPhase.set(lease.id, clear.phase);
+      if (before !== "jobs" && before !== "clearing") continue;
+      if (before === clear.phase) continue;
+      const label = lease.label || "The run";
+      const key = `comfyui-clear-${lease.id}`;
+      const freed = gbTenths(clear.freed_mb);
+      if (clear.phase === "clearing") {
+        notices.push({ level: "info", text: "ComfyUI's jobs finished. Clearing its memory.", key });
+      } else if (clear.phase === "done") {
+        notices.push({
+          level: "success",
+          text: clear.freed_mb
+            ? `Cleared ${freed} GB from ComfyUI. ${label} started.`
+            : `${label} started.`,
+          key,
+        });
+      } else if (clear.phase === "cleared") {
+        const short = gbTenths(lease.waiting_reason?.short_by_mb || 0);
+        notices.push({
+          level: "warning",
+          text: clear.failed
+            ? `ComfyUI did not clear its memory; ${label} waits.`
+            : clear.freed_mb
+              ? `Cleared ${freed} GB; ${label} is still ${short} GB short and waits.`
+              : `ComfyUI's memory is cleared; ${label} is still ${short} GB short and waits.`,
+          action: { label: "Open Tasks", handler: () => useSidebarStore().showTasksTab() },
+          key,
+        });
+      }
+    }
+    for (const id of Array.from(seenClearPhase.keys())) {
+      if (!live.has(id)) seenClearPhase.delete(id);
+    }
   }
 
   async function waitingAction(call, failure) {
@@ -393,6 +500,25 @@ export const useTasksStore = defineStore("tasks", () => {
     );
   }
 
+  // The AI Toolkit run that holds the card: one row, with the step, total and
+  // latest loss the run reports on its lease. A waiting one is listed by
+  // waitingEntries, through the same lease.
+  const aitoolkitEntries = computed(() =>
+    leases.value
+      .filter(
+        (lease) => lease.tenant === "aitoolkit" && lease.state === "granted",
+      )
+      .map((lease) => ({
+        kind: "aitoolkit",
+        key: `lease:${lease.id}`,
+        label: lease.label || "AI Toolkit",
+        figureMb: lease.held_mb ?? null,
+        progress: lease.progress ?? null,
+        // The training run's uuid: its page is `/models/runs?run=<uuid>`.
+        jobId: lease.job_id ?? null,
+      })),
+  );
+
   // One row per ComfyUI run that is not held: the run's own label, its percent
   // and the VRAM its lease holds. ComfyUI works through them one at a time, and
   // the abort on a row stops every run in flight.
@@ -410,7 +536,11 @@ export const useTasksStore = defineStore("tasks", () => {
           message:
             run.status === "running" ? "ComfyUI running…" : "Queued in ComfyUI",
         },
-        figureMb: leaseOfRun(run)?.held_mb ?? null,
+        // A run PixlStash holds no lease for shows what ComfyUI holds while it
+        // is the one on the GPU, since the standing ComfyUI row steps aside.
+        figureMb:
+          leaseOfRun(run)?.held_mb ??
+          (run.status === "running" ? (comfyuiHost.value?.held_mb ?? null) : null),
       })),
   );
 
@@ -442,6 +572,9 @@ export const useTasksStore = defineStore("tasks", () => {
         text: reason?.text || "",
         position: reason?.position ?? Number.POSITIVE_INFINITY,
         actions: reason?.actions ?? [],
+        // ComfyUI's jobs, its clear, then train: the row's phase track.
+        clear: lease.comfyui_clear ?? null,
+        shortMb: reason?.short_by_mb ?? null,
       });
     }
     for (const run of comfyuiRuns.value) {
@@ -457,6 +590,8 @@ export const useTasksStore = defineStore("tasks", () => {
         text: "",
         position: Number.POSITIVE_INFINITY,
         actions: [],
+        clear: null,
+        shortMb: null,
       });
     }
     // Stable, so rows with no position keep the order they came in.
@@ -550,6 +685,10 @@ export const useTasksStore = defineStore("tasks", () => {
     };
   });
 
+  // The ComfyUI PixlStash submits to: what it holds, whether it is idle and
+  // how many jobs it has, for its own row in Tasks. Null until it is read.
+  const comfyuiHost = computed(() => resources.value?.comfyui ?? null);
+
   // Per-GPU bars: each card's split of what is on it, from `devices` and
   // `holders`. Empty when the backend sends no resources.
   const vramBars = computed(() => {
@@ -574,6 +713,7 @@ export const useTasksStore = defineStore("tasks", () => {
   const runningEntries = computed(() => [
     ...comfyuiEntries.value,
     ...downloadEntries.value,
+    ...aitoolkitEntries.value,
     ...(pixlstashEntry.value ? [pixlstashEntry.value] : []),
     ...importEntries.value,
   ]);
@@ -697,6 +837,7 @@ export const useTasksStore = defineStore("tasks", () => {
         Array.isArray(progress?.downloads) ? progress.downloads : [],
       );
       resources.value = progress?.resources ?? null;
+      noteClearPhases(resources.value?.leases ?? []);
       const now = Date.now() / 1000;
       nowSeconds.value = now;
       const nextSeries = { ...series.value };
@@ -802,8 +943,10 @@ export const useTasksStore = defineStore("tasks", () => {
     offersSeen.clear();
     finishedPolled = false;
     resources.value = null;
+    seenClearPhase.clear();
     modelDownloads.value = [];
     seenDownloadStatus.clear();
+    clearTransientProgress();
   }
 
   onScopeDispose(onSessionReset(reset));
@@ -850,6 +993,11 @@ export const useTasksStore = defineStore("tasks", () => {
     runWaitingAnyway,
     cancelWaiting,
     freeComfyuiCache,
+    quitComfyuiFor,
+    comfyuiHost,
+    // transient progress (the grid's sort/search wait)
+    transientProgress,
+    clearTransientProgress,
     // import runs (#459)
     importRuns,
     setImportRun,

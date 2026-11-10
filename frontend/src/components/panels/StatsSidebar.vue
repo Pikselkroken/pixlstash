@@ -1,17 +1,52 @@
 <script setup>
-import { ref, watch, computed, nextTick, onMounted, onUnmounted } from "vue";
+import {
+  ref,
+  watch,
+  computed,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  provide,
+} from "vue";
 import AppInspector from "../widgets/AppInspector.vue";
-import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
+import AppButton from "../widgets/AppButton.vue";
+import SectionHeader from "../widgets/SectionHeader.vue";
+import RailPicture from "./RailPicture.vue";
+import RailPictures from "./RailPictures.vue";
 import StatsHistogram from "../widgets/StatsHistogram.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import LightboxRecipePanel from "../views/LightboxRecipePanel.vue";
+import { getPictureRecipe } from "../../api/comfyui";
 import { getPictureStats } from "../../api/pictures";
-import { useTasksStore } from "../../stores/useTasksStore";
+import { isReadOnly } from "../../utils/apiClient";
+import { formatUserDate } from "../../utils/utils.js";
+import { recipeForPanel } from "../../utils/pictureRecipe.js";
+import {
+  SECTION_SCOPE,
+  useSectionCollapse,
+} from "../../composables/useSectionCollapse";
+import {
+  fitWords,
+  pictureTitle,
+  useRailPicture,
+} from "../../composables/useRailPicture";
+import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useProjectStore } from "../../stores/useProjectStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWsStore } from "../../stores/useWsStore";
+import { useInboxStore } from "../../stores/useInboxStore";
+import {
+  INSPECTOR_BAND,
+  useWhatsChangedStore,
+} from "../../stores/useWhatsChangedStore";
+import {
+  isGroupToken,
+  useTagGroupsStore,
+} from "../../stores/useTagGroupsStore";
 import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
@@ -21,15 +56,16 @@ import {
 // grid queries from straight from the stores, and writes filter changes back
 // itself. App.vue no longer mirrors any of it through props.
 const filterStore = useFilterStore();
+const tagGroups = useTagGroupsStore();
 const selectionStore = useSelectionStore();
 const projectStore = useProjectStore();
 const userPrefsStore = useUserPrefsStore();
 const sidebarStore = useSidebarStore();
 const wsStore = useWsStore();
-// The Tasks tab's body is `TasksPanel`, shared with the Workflows view's
-// inspector, and `tasksTabFor` is the tab itself. Nothing else about the task
-// manager is left in this file.
-const tasksStore = useTasksStore();
+const inboxStore = useInboxStore();
+// While the 2.0 checklist is up, Details sits beside it in a band (#2145).
+const whatsChanged = useWhatsChangedStore();
+
 
 // The two folder facets are derived from the sidebar's folder selection, same
 // as App.vue used to compute them for the old props.
@@ -37,7 +73,11 @@ const filePathPrefixFilter = computed(
   () => selectionStore.selectedFolderFilter?.pathPrefix ?? null,
 );
 const importSourceFolderFilter = computed(
-  () => selectionStore.selectedFolderFilter?.importSourceFolder ?? null,
+  () => filterStore.importedFromFilter ?? null,
+);
+// The Inbox's period, as the grid sends it (`useGridFetch.inboxPeriod`).
+const inboxPeriod = computed(() =>
+  selectionStore.selectedFolderFilter?.inbox ? inboxStore.period : null,
 );
 
 // ─── PIL / Video extension lists ─────────────────────────────────────────────
@@ -53,10 +93,154 @@ const PIL_IMAGE_EXTENSIONS = [
 ];
 const VIDEO_EXTENSIONS = ["mp4", "webm", "mov", "avi", "mkv", "m4v"];
 
-// Section collapse state
-const topTagsOpen = ref(true);
-const coocOpen = ref(false);
-const confHistOpen = ref(false);
+const props = defineProps({
+  /** The view the grid shows: the head's title while nothing is selected. */
+  viewName: { type: String, default: "" },
+  /** The grid's cards for the selection, where loaded (App.vue). */
+  pictures: { type: Array, default: () => [] },
+  /** The rating a tile shows for a card (a guest's own, when read-only). */
+  scoreOf: { type: Function, default: (card) => card?.score || 0 },
+  /**
+   * The lightbox lies over the rail. Its panels are the ones the rail would
+   * show, so the rail's copies go rather than sit live (and focusable) under it.
+   */
+  covered: { type: Boolean, default: false },
+});
+
+// What the rail does to a picture goes through the grid's own paths (App.vue
+// hands each to the grid), so the rail and the tile cannot disagree.
+const emit = defineEmits([
+  "set-score",
+  "toggle-favourite",
+  "update-description",
+  "lightbox-change",
+  "tags-applied",
+]);
+
+// ─── The selection (#2161) ────────────────────────────────────────────────────
+// Nothing selected, the rail describes the view; one picture, that picture;
+// several, what they share.
+const selectedIds = computed(() => selectionStore.selectedImageIds);
+watch(selectedIds, () => {
+  // A T that no tag field took (the rail was under the lightbox) is spent:
+  // it must not take the caret when some later selection mounts one.
+  sidebarStore.tagFieldPending = false;
+});
+const railMode = computed(() => {
+  const n = selectedIds.value.length;
+  if (n === 0) return "none";
+  return n === 1 ? "one" : "many";
+});
+const oneId = computed(() =>
+  railMode.value === "one" ? selectedIds.value[0] : null,
+);
+const oneCard = computed(
+  () =>
+    props.pictures.find((card) => String(card.id) === String(oneId.value)) ??
+    null,
+);
+const {
+  image: oneImage,
+  faces: oneFaces,
+  refresh: refreshOne,
+} = useRailPicture(() => oneId.value);
+const isScrapheapView = computed(
+  () => selectionStore.selectedCharacter === String(SCRAPHEAP_PICTURES_ID),
+);
+
+const namesStore = useEntityNamesStore();
+
+// The head's text. A picture is named by what it shows, never by its file
+// name while there is anything better: files mostly have random names.
+const head = computed(() => {
+  if (railMode.value === "none") {
+    return { title: props.viewName, full: props.viewName };
+  }
+  if (railMode.value === "many") {
+    const text = `${selectedIds.value.length.toLocaleString()} pictures`;
+    return { title: text, full: text };
+  }
+  const people = [
+    ...new Set(
+      oneFaces.value
+        .map((face) => namesStore.characterNames[face.character_id])
+        .filter(Boolean),
+    ),
+  ];
+  return pictureTitle(oneImage.value, people, (date) =>
+    formatUserDate(date, userPrefsStore.dateFormat),
+  );
+});
+
+// The grid's closed-rail edge tab names the selection the way this head does.
+defineExpose({ head });
+
+// The same act as the toolbar toggle, so it persists. The button goes with
+// the rail, so focus moves to the grid toolbar's toggle rather than dropping
+// to `body`; the lightbox mounts a toggle of its own, which is not that one.
+function closeRail() {
+  sidebarStore.toggleStats();
+  nextTick(() =>
+    [...document.querySelectorAll(".tb-stats-btn")]
+      .find((el) => !el.closest(".lightbox-topbar-sidebar-toggle"))
+      ?.focus(),
+  );
+}
+
+// The head cuts its title after the last whole word that fits, which CSS
+// cannot do: it measures the title in the head's own font.
+const titleRef = ref(null);
+const titleHovered = ref(false);
+const railPictureRef = ref(null);
+const titleWidth = ref(0);
+let titleCanvas = null;
+function measureTitle(text) {
+  titleCanvas ??= document.createElement("canvas").getContext("2d");
+  if (!titleCanvas || !titleRef.value) return 0;
+  // Longhands, not `font`: not every engine serialises the shorthand.
+  const style = getComputedStyle(titleRef.value);
+  titleCanvas.font = [
+    style.fontStyle,
+    style.fontWeight,
+    style.fontSize,
+    style.fontFamily,
+  ].join(" ");
+  return titleCanvas.measureText(text).width;
+}
+const shownTitle = computed(() =>
+  fitWords(head.value.title, titleWidth.value, measureTitle),
+);
+let titleObserver = null;
+watch(titleRef, (el) => {
+  titleObserver?.disconnect();
+  if (!el || typeof ResizeObserver === "undefined") return;
+  titleObserver = new ResizeObserver(() => {
+    titleWidth.value = el.clientWidth;
+  });
+  titleObserver.observe(el);
+});
+onUnmounted(() => titleObserver?.disconnect());
+
+// The sections in this rail keep their own collapsed state, apart from the
+// same sections in the lightbox.
+provide(SECTION_SCOPE, "rail");
+const RAIL = { scope: "rail" };
+const topTagsCollapsed = useSectionCollapse("topTags", RAIL);
+const coocCollapsed = useSectionCollapse("cooccurrences", {
+  ...RAIL,
+  defaultCollapsed: true,
+});
+const confHistCollapsed = useSectionCollapse("tagConfidence", {
+  ...RAIL,
+  defaultCollapsed: true,
+});
+const taggedCollapsed = useSectionCollapse("taggedPictures", RAIL);
+const scoreCollapsed = useSectionCollapse("score", RAIL);
+const smartCollapsed = useSectionCollapse("smartScore", RAIL);
+const agreementCollapsed = useSectionCollapse("agreement", RAIL);
+const resolutionCollapsed = useSectionCollapse("resolution", RAIL);
+const coocOpen = computed(() => !coocCollapsed.value);
+const confHistOpen = computed(() => !confHistCollapsed.value);
 
 // Tab state
 const activeTab = ref("tags");
@@ -64,8 +248,116 @@ const activeTab = ref("tags");
 const tabs = computed(() => [
   { value: "tags", label: "Tags", icon: "mdi-tag-multiple-outline" },
   { value: "pictures", label: "Pictures", icon: "mdi-image-multiple-outline" },
-  tasksTabFor(tasksStore),
 ]);
+
+// ─── One picture: Info | Recipe ───────────────────────────────────────────────
+// The lightbox's band (#1313) on the grid's inspector: Info is the picture as
+// the rail has always shown it, Recipe is how it was made, in the lightbox's
+// own Recipe panel. By the lightbox's rules: absent rather than disabled on a
+// picture with no recipe, the tab held across the next picture's read so it
+// does not blink under the cursor, and the reader's choice outlives the
+// selection. Unlike the lightbox, the panel waits for that read rather than
+// saying "nothing here was made in ComfyUI" about a picture that may have been.
+const PICTURE_TABS = [
+  { value: "info", label: "Info", icon: "mdi-information-outline" },
+  { value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" },
+];
+const pictureTab = ref("info");
+const recipe = ref(null);
+const recipeTabShown = ref(false);
+let recipeRead = 0;
+const runDialogStore = useRunDialogStore();
+
+// Read only while the rail shows the picture: a shut rail or the lightbox
+// over it (which reads its own) costs no read per selection change.
+const recipePictureId = computed(() =>
+  sidebarStore.statsOpen && !props.covered ? oneId.value : null,
+);
+watch(
+  recipePictureId,
+  async (id) => {
+    // Cleared before the read: the panel must never show the last picture's
+    // prompt under this one.
+    recipe.value = null;
+    const read = (recipeRead += 1);
+    if (id == null) {
+      recipeTabShown.value = false;
+      return;
+    }
+    let next = null;
+    try {
+      next = recipeForPanel(await getPictureRecipe(id, { preflight: false }));
+    } catch (err) {
+      // A picture with no recipe answers 200, so this is a failed read (the
+      // picture or its file gone, the server down). The rail falls back to
+      // Info alone, as the lightbox does.
+      console.error(`Failed to read the recipe of picture ${id}:`, err);
+    }
+    if (read !== recipeRead) return;
+    recipe.value = next;
+    recipeTabShown.value = next !== null;
+  },
+  { immediate: true },
+);
+
+const shownPictureTab = computed(() =>
+  recipeTabShown.value ? pictureTab.value : "info",
+);
+// One band, two subjects: the view's Tags | Pictures with nothing selected,
+// the picture's Info | Recipe with one.
+const bandTabs = computed(() => {
+  if (railMode.value === "none") return tabs.value;
+  return railMode.value === "one" && recipeTabShown.value ? PICTURE_TABS : [];
+});
+const bandValue = computed({
+  get: () =>
+    railMode.value === "none" ? activeTab.value : shownPictureTab.value,
+  set: (value) => {
+    if (railMode.value === "none") activeTab.value = value;
+    else pictureTab.value = value;
+  },
+});
+// The band or the panel going under a focused control (the next picture has no
+// recipe) would drop focus to `body`, where the ring is gone and nothing says
+// so: the lightbox's focus rescue, onto the rail's own head instead of a canvas.
+watch(
+  () => [bandTabs.value.length, shownPictureTab.value, !!recipe.value],
+  () => {
+    const active = document.activeElement;
+    if (!active?.closest?.(".stats-sidebar .inspector-tabs, .rail-recipe")) {
+      return;
+    }
+    nextTick(() => {
+      if (active.isConnected) return;
+      document
+        .querySelector(".stats-sidebar .rail-clear, .stats-sidebar .rail-close")
+        ?.focus();
+    });
+  },
+);
+
+// T on Recipe: back to Info, where the tag field is, rather than a caret in
+// a hidden field. The field focuses after the render that shows it.
+watch(
+  () => sidebarStore.tagFieldPending,
+  (pending) => {
+    if (pending) pictureTab.value = "info";
+  },
+);
+
+function runRecipe() {
+  if (oneId.value == null) return;
+  runDialogStore.openRun({ kind: "picture", pictureIds: [Number(oneId.value)] });
+}
+
+function runOnPicture() {
+  if (isReadOnly.value || oneId.value == null) return;
+  runDialogStore.openRun({
+    kind: "selection",
+    pictureIds: [Number(oneId.value)],
+    pickWorkflow: true,
+  });
+}
 
 // Picture stats
 const picStats = ref(null);
@@ -229,6 +521,7 @@ function buildQueryParams() {
   if (filterStore.maxScoreFilter != null)
     params.append("max_score", filterStore.maxScoreFilter);
   if (filterStore.unscoredOnlyFilter) params.append("unscored", "1");
+  if (filterStore.favouriteOnlyFilter) params.append("favourite", "1");
   if (filterStore.smartScoreBucketFilter != null)
     params.append("smart_score_bucket", filterStore.smartScoreBucketFilter);
   if (filterStore.resolutionBucketFilter != null)
@@ -237,6 +530,7 @@ function buildQueryParams() {
     params.append("file_path_prefix", filePathPrefixFilter.value);
   if (importSourceFolderFilter.value != null)
     params.append("import_source_folder", importSourceFolderFilter.value);
+  if (inboxPeriod.value) params.append("inbox", inboxPeriod.value);
   (filterStore.tagFilter || []).forEach((t) => params.append("tag", t));
   (filterStore.tagRejectedFilter || []).forEach((t) =>
     params.append("rejected_tag", t),
@@ -322,7 +616,17 @@ async function fetchConf() {
 // over it tracks exactly the right dependencies. Unlike the old per-prop
 // watch list, it also doesn't refire when a store write leaves the resulting
 // query string identical.
-const statsQueryParams = computed(() => buildQueryParams());
+//
+// A group term (`__group:3`) reads the same while a move or its undo changes
+// which pictures it matches, so such a query also carries the map's revision.
+const statsQueryParams = computed(() => {
+  const qs = buildQueryParams();
+  const filters = [
+    ...(filterStore.tagFilter || []),
+    ...(filterStore.tagRejectedFilter || []),
+  ];
+  return filters.some(isGroupToken) ? `${qs}#groups=${tagGroups.revision}` : qs;
+});
 watch(
   statsQueryParams,
   () => {
@@ -390,6 +694,20 @@ watch(
 onUnmounted(() => {
   clearTimeout(_wsTagUpdateTimer);
 });
+
+// The one picture's tags or description changed elsewhere (a tagger run, the
+// lightbox, another window): read its details again, keeping them on screen.
+watch(
+  () => [wsStore.wsTagUpdate, wsStore.wsDescriptionUpdate],
+  (updates) => {
+    if (oneId.value == null) return;
+    const id = String(oneId.value);
+    const touched = updates.some((u) =>
+      (u?.pictureIds || []).some((p) => String(p) === id),
+    );
+    if (touched) refreshOne();
+  },
+);
 
 // ─── Donut chart ──────────────────────────────────────────────────────────────
 const DONUT_R = 40;
@@ -921,25 +1239,139 @@ function handleResolutionBarClick(label) {
     filterStore.resolutionBucketFilter = key;
   }
 }
-
-// A deep link to the Tasks tab (the "View progress" notice action). Opening the rail is the store's half of `showTasksTab`;
-// this is the half only the mounted inspector can do.
-watch(
-  () => sidebarStore.tasksTabRequest,
-  () => {
-    activeTab.value = "tasks";
-  },
-);
 </script>
 
 <template>
   <AppInspector
-    v-model="activeTab"
+    v-model="bandValue"
     class="stats-sidebar"
-    label="Stats"
+    label="Inspector"
     :open="sidebarStore.statsOpen"
-    :tabs="tabs"
+    :tabs="bandTabs"
+    :band="whatsChanged.checklistShown ? INSPECTOR_BAND : []"
+    band-value="details"
+    @update:band-value="whatsChanged.showTab($event)"
+    @close-band="whatsChanged.leave()"
   >
+    <!-- One head row on the toolbar's line (#2161): what the rail is about -
+         the view, the one picture, or how many - and, while anything is
+         selected, Esc's keycap and the selection-off icon that clears it.
+         The close button always ends the row. -->
+    <template #head>
+      <h2 ref="titleRef" class="rail-title" data-testid="rail-title">
+        <Tooltip
+          v-if="head.full && head.full !== shownTitle"
+          :text="head.full"
+          activator="parent"
+        />
+        <!-- A description's sentence: pointing at it marks it there, and a
+             click selects it. -->
+        <button
+          v-if="head.fromDescription"
+          class="rail-title__quote"
+          type="button"
+          @mouseenter="titleHovered = true"
+          @mouseleave="titleHovered = false"
+          @focus="titleHovered = true"
+          @blur="titleHovered = false"
+          @vue:unmounted="titleHovered = false"
+          @click="railPictureRef?.selectInDescription(head.title)"
+        >
+          {{ shownTitle }}
+        </button>
+        <template v-else>{{ shownTitle }}</template>
+      </h2>
+      <template v-if="selectedIds.length">
+        <kbd class="fm-kbd rail-esc" aria-hidden="true">Esc</kbd>
+        <AppButton
+          class="rail-clear"
+          variant="ghost"
+          size="sm"
+          icon-left="selection-off"
+          icon-only
+          tooltip="Clear the selection · Esc"
+          aria-keyshortcuts="Escape"
+          @click="selectionStore.selectedImageIds = []"
+        />
+      </template>
+      <AppButton
+        class="rail-close"
+        variant="ghost"
+        size="sm"
+        icon-left="close"
+        icon-only
+        tooltip="Close this panel"
+        @click="closeRail"
+      />
+    </template>
+    <template v-if="railMode === 'none' && stats" #lead>
+      <div class="stats-tiles">
+        <div class="stats-tile">
+          <span class="stats-tile-value">{{
+            stats.total.toLocaleString()
+          }}</span>
+          <span class="stats-tile-label">Pictures</span>
+        </div>
+        <div class="stats-tile">
+          <span class="stats-tile-value">{{
+            (stats.total_tags ?? 0).toLocaleString()
+          }}</span>
+          <span class="stats-tile-label">Tags</span>
+        </div>
+        <div class="stats-tile">
+          <span class="stats-tile-value">{{
+            stats.avg_tags_per_image.toFixed(1)
+          }}</span>
+          <span class="stats-tile-label">Tags / picture</span>
+        </div>
+      </div>
+    </template>
+
+    <!-- `v-if` beside the Info `v-show`, as in the lightbox: Recipe is
+         read-only and costs nothing to rebuild, while Info holds the tag
+         field and an edit in progress. -->
+    <div
+      v-if="
+        railMode === 'one' && !covered && shownPictureTab === 'recipe' && recipe
+      "
+      class="rail-recipe dark-inks-on-theme"
+    >
+      <LightboxRecipePanel
+        :recipe="recipe"
+        :picture-id="oneId"
+        :can-generate-variants="
+          filterStore.comfyuiConfigured && !isReadOnly && oneId != null
+        "
+        :comfyui-configured="filterStore.comfyuiConfigured"
+        @run="runRecipe"
+        @use-as-input="runOnPicture"
+      />
+    </div>
+    <RailPicture
+      v-if="railMode === 'one' && !covered"
+      v-show="shownPictureTab === 'info'"
+      ref="railPictureRef"
+      v-model:image="oneImage"
+      v-model:faces="oneFaces"
+      :picture-id="oneId"
+      :card="oneCard"
+      :score="oneCard ? scoreOf(oneCard) : 0"
+      :favouritable="!isReadOnly && !isScrapheapView"
+      :description-highlight="titleHovered && head.fromDescription ? head.title : ''"
+      @set-score="(n) => oneCard && emit('set-score', oneCard, n)"
+      @toggle-favourite="emit('toggle-favourite', [oneId])"
+      @update-description="(id, text) => emit('update-description', id, text)"
+      @lightbox-change="emit('lightbox-change', $event)"
+      @tags-applied="emit('tags-applied', $event)"
+      @refresh="refreshOne"
+    />
+    <RailPictures
+      v-else-if="railMode === 'many' && !covered"
+      :ids="selectedIds"
+      :cards="pictures"
+      @tags-applied="emit('tags-applied', $event)"
+    />
+    <template v-else-if="railMode === 'none'">
     <div v-if="loading && !stats" class="stats-loading">
       <v-progress-circular indeterminate size="24" width="2" color="primary" />
     </div>
@@ -949,29 +1381,12 @@ watch(
     <template v-else-if="stats && activeTab === 'tags'">
       <!-- Overview section -->
       <div class="inspector-section">
-        <!-- Stat tiles -->
-        <div class="stats-tiles">
-          <div class="stats-tile">
-            <span class="stats-tile-value">{{
-              stats.total_tags != null
-                ? stats.total_tags.toLocaleString()
-                : stats.total.toLocaleString()
-            }}</span>
-            <span class="stats-tile-label">Total tags</span>
-          </div>
-          <div class="stats-tile">
-            <span class="stats-tile-value">{{
-              stats.avg_tags_per_image.toFixed(1)
-            }}</span>
-            <span class="stats-tile-label">Avg tags / pic</span>
-          </div>
-        </div>
-
         <!-- Donut chart -->
-        <div class="stats-section-header">
-          <span class="section-label">Tagged pictures</span>
-        </div>
-        <div class="stats-donut-wrap">
+        <SectionHeader
+          v-model:collapsed="taggedCollapsed"
+          label="Tagged pictures"
+        />
+        <div v-if="!taggedCollapsed" class="stats-donut-wrap">
           <svg
             :width="DONUT_CX * 2"
             :height="DONUT_CY * 2"
@@ -1043,19 +1458,10 @@ watch(
         v-if="stats.top_tags.length || penalisedOnlyTags"
         class="inspector-section"
       >
-        <div class="stats-section-header">
+        <SectionHeader v-model:collapsed="topTagsCollapsed" label="Top tags">
+          <template #actions>
           <button
-            class="stats-section-toggle"
-            type="button"
-            @click="topTagsOpen = !topTagsOpen"
-          >
-            <v-icon size="13">{{
-              topTagsOpen ? "mdi-chevron-down" : "mdi-chevron-right"
-            }}</v-icon>
-            <span class="section-label" style="margin-left: var(--space-1)">Top Tags</span>
-          </button>
-          <button
-            v-if="hasPenalisedTags && topTagsOpen"
+            v-if="hasPenalisedTags && !topTagsCollapsed"
             class="penalised-toggle"
             :class="{ active: penalisedOnlyTags }"
             type="button"
@@ -1066,7 +1472,7 @@ watch(
             penalised
           </button>
           <button
-            v-if="topTagsOpen && activeTagsInTopTags().length > 0"
+            v-if="!topTagsCollapsed && activeTagsInTopTags().length > 0"
             class="stats-clear-btn"
             type="button"
             aria-label="Clear top-tag filters"
@@ -1079,8 +1485,9 @@ watch(
             />
             <v-icon size="11">mdi-close</v-icon>
           </button>
-        </div>
-        <div v-if="topTagsOpen" class="stats-bars">
+          </template>
+        </SectionHeader>
+        <div v-if="!topTagsCollapsed" class="stats-bars">
           <svg
             :width="260"
             :height="displayedTags.length * 18 + 4"
@@ -1138,19 +1545,11 @@ watch(
 
       <!-- Co-occurrence section -->
       <div v-if="stats.total > 0" class="inspector-section">
-        <div class="stats-section-header">
-          <button
-            class="stats-section-toggle"
-            type="button"
-            @click="coocOpen = !coocOpen"
-          >
-            <v-icon size="13">{{
-              coocOpen ? "mdi-chevron-down" : "mdi-chevron-right"
-            }}</v-icon>
-            <span class="section-label" style="margin-left: var(--space-1)"
-              >Co-occurrences</span
-            >
-          </button>
+        <SectionHeader
+          v-model:collapsed="coocCollapsed"
+          label="Co-occurrences"
+        >
+          <template #actions>
           <button
             v-if="hasPenalisedTags && coocOpen"
             class="penalised-toggle"
@@ -1185,7 +1584,8 @@ watch(
             />
             <v-icon size="11">mdi-close</v-icon>
           </button>
-        </div>
+          </template>
+        </SectionHeader>
         <div v-if="coocOpen" class="stats-cooc-list">
           <div
             v-for="(item, i) in displayedCooc"
@@ -1220,19 +1620,11 @@ watch(
 
       <!-- Confidence distribution section -->
       <div v-if="stats.total > 0" class="inspector-section">
-        <div class="stats-section-header">
-          <button
-            class="stats-section-toggle"
-            type="button"
-            @click="confHistOpen = !confHistOpen"
-          >
-            <v-icon size="13">{{
-              confHistOpen ? "mdi-chevron-down" : "mdi-chevron-right"
-            }}</v-icon>
-            <span class="section-label" style="margin-left: var(--space-1)"
-              >Tag Confidence</span
-            >
-          </button>
+        <SectionHeader
+          v-model:collapsed="confHistCollapsed"
+          label="Tag confidence"
+        >
+          <template #actions>
           <div class="conf-tag-selector">
             <v-progress-circular
               v-if="confTagLoading"
@@ -1290,7 +1682,8 @@ watch(
               <v-icon size="11">mdi-close</v-icon>
             </button>
           </div>
-        </div>
+          </template>
+        </SectionHeader>
         <div v-if="confHistOpen" class="stats-hist">
           <StatsHistogram
             :buckets="confHistBuckets"
@@ -1318,22 +1711,10 @@ watch(
         />
       </div>
       <template v-else-if="picStats">
-        <!-- Total tile -->
-        <div class="inspector-section">
-          <div class="stats-tiles">
-            <div class="stats-tile">
-              <span class="stats-tile-value">{{
-                picStats.total.toLocaleString()
-              }}</span>
-              <span class="stats-tile-label">Total</span>
-            </div>
-          </div>
-        </div>
-
         <!-- Manual score distribution -->
         <div class="inspector-section">
-          <div class="stats-section-header">
-            <span class="section-label">Score</span>
+          <SectionHeader v-model:collapsed="scoreCollapsed" label="Score">
+            <template #actions>
             <button
               v-if="
                 filterStore.minScoreFilter != null ||
@@ -1356,8 +1737,9 @@ watch(
               />
               <v-icon size="11">mdi-close</v-icon>
             </button>
-          </div>
-          <div class="stats-hist">
+            </template>
+          </SectionHeader>
+          <div v-if="!scoreCollapsed" class="stats-hist">
             <StatsHistogram
               :buckets="picStats.score_distribution"
               aria-label="Manual score distribution"
@@ -1370,8 +1752,8 @@ watch(
 
         <!-- Smart score distribution -->
         <div class="inspector-section">
-          <div class="stats-section-header">
-            <span class="section-label">Smart Score</span>
+          <SectionHeader v-model:collapsed="smartCollapsed" label="Smart score">
+            <template #actions>
             <button
               v-if="filterStore.smartScoreBucketFilter != null"
               class="stats-clear-btn"
@@ -1386,8 +1768,9 @@ watch(
               />
               <v-icon size="11">mdi-close</v-icon>
             </button>
-          </div>
-          <div class="stats-hist">
+            </template>
+          </SectionHeader>
+          <div v-if="!smartCollapsed" class="stats-hist">
             <StatsHistogram
               :buckets="picStats.smart_score_distribution"
               aria-label="Smart score distribution"
@@ -1400,8 +1783,11 @@ watch(
 
         <!-- Smart score vs your rating (agreement matrix) -->
         <div v-if="agreement" class="inspector-section">
-          <div class="stats-section-header">
-            <span class="section-label">Agreement</span>
+          <SectionHeader
+            v-model:collapsed="agreementCollapsed"
+            label="Agreement"
+          >
+            <template #actions>
             <span
               class="stats-info-dot"
               tabindex="0"
@@ -1429,7 +1815,9 @@ watch(
               />
               <v-icon size="11">mdi-close</v-icon>
             </button>
-          </div>
+            </template>
+          </SectionHeader>
+          <template v-if="!agreementCollapsed">
           <div v-if="agreement.pairs > 0" class="stats-hist">
             <svg
               :width="260"
@@ -1558,12 +1946,13 @@ watch(
             </span>
             <span class="agreement-coverage">{{ agreementCoverage }}</span>
           </div>
+          </template>
         </div>
 
         <!-- Resolution distribution -->
         <div class="inspector-section">
-          <div class="stats-section-header">
-            <span class="section-label">Resolution</span>
+          <SectionHeader v-model:collapsed="resolutionCollapsed" label="Resolution">
+            <template #actions>
             <button
               v-if="filterStore.resolutionBucketFilter != null"
               class="stats-clear-btn"
@@ -1578,8 +1967,9 @@ watch(
               />
               <v-icon size="11">mdi-close</v-icon>
             </button>
-          </div>
-          <div class="stats-hist">
+            </template>
+          </SectionHeader>
+          <div v-if="!resolutionCollapsed" class="stats-hist">
             <StatsHistogram
               :buckets="picStats.resolution_distribution"
               aria-label="Resolution distribution"
@@ -1591,13 +1981,20 @@ watch(
         </div>
       </template>
     </template>
-
-    <!-- ── Tasks tab ─────────────────────────────────────────────────── -->
-    <TasksPanel v-if="activeTab === 'tasks'" />
+    </template>
   </AppInspector>
 </template>
 
 <style scoped>
+/* The Recipe panel scrolls itself and pins its Run… footer, as in the
+   lightbox, so it takes the body's height rather than growing the body. */
+.rail-recipe {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 .stats-loading {
   display: flex;
   align-items: center;
@@ -1611,21 +2008,15 @@ watch(
   padding: var(--space-3) 0;
 }
 
-.stats-section-toggle {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: 0;
-  color: inherit;
-}
-
+/* Three tiles across the rail (#2161): pictures, tags, tags per picture. */
 .stats-tiles {
-  display: flex;
-  gap: var(--space-3);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
 }
 
 .stats-tile {
-  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1644,9 +2035,40 @@ watch(
 .stats-tile-label {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
   margin-top: var(--space-1);
+  text-align: center;
+}
+
+/* The head's title: one line, ellipsised; the whole of it is in the tip. */
+.rail-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+
+.rail-title__quote {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: inherit;
+  text-align: left;
+}
+
+.rail-esc {
+  flex: none;
+  margin-left: var(--space-2);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.rail-clear,
+.rail-close {
+  flex: none;
 }
 
 .stats-donut-wrap {
@@ -1708,13 +2130,6 @@ watch(
 .legend-text {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.65);
-}
-
-.stats-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
 }
 
 .penalised-toggle {

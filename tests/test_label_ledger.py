@@ -293,7 +293,7 @@ def _status(server, pic_id, tag):
 def test_retag_status_flip_preserves_accepted_human_label():
     """Re-tagging must not push a human-accepted tag into the rejected pile.
 
-    Regression for the ImageOverlay re-tag bug: both status-resolution passes
+    Regression for the Lightbox re-tag bug: both status-resolution passes
     (_resolve_pending_predictions and _write_predictions_from_tags) auto-flipped
     a prediction's status from the freshly-applied tag set, ignoring the durable
     human POS label. When the new pass didn't re-apply the tag, the accepted row

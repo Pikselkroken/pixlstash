@@ -36,10 +36,12 @@ import itertools
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from urllib.parse import quote
 
@@ -48,6 +50,7 @@ from fastapi.testclient import TestClient
 from send2trash import TrashPermissionError
 from sqlmodel import Session, delete
 
+from pixlstash import auth
 from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
@@ -55,11 +58,19 @@ from pixlstash.db_models.adapter_attachment import AdapterAttachment
 from pixlstash.db_models.picture import Picture
 from pixlstash.routes import model_files as model_files_routes
 from pixlstash.routes import model_folders as model_folders_routes
+from pixlstash.tasks import model_folder_scan_task
+from pixlstash.tasks.base_task import TaskStatus
+from pixlstash.tasks.model_folder_scan_finder import (
+    ModelFolderScanFinder,
+    scanned_folders,
+)
 from pixlstash.routes import model_shelf as model_shelf_routes
+from pixlstash.routes import model_imports as model_imports_routes
 from pixlstash.routes.model_imports import (
     model_sample_path_within,
     sample_path_within,
 )
+from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
 from pixlstash.services.model_kind_suggestions import (
     loader_offers,
@@ -67,6 +78,7 @@ from pixlstash.services.model_kind_suggestions import (
 )
 from pixlstash.server import Server
 from pixlstash.services import builtin_caches, builtin_models, comfyui_service
+from pixlstash.services import civitai_lookup
 from pixlstash.services import model_downloads
 from pixlstash.services import model_shelf_service, model_workflow_sets
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
@@ -93,6 +105,7 @@ _SHELF_ROUTES = (
     ("GET", "/api/v1/models/base-models"),
     ("POST", "/api/v1/models/companions"),
     ("PUT", "/api/v1/models/hidden"),
+    ("POST", "/api/v1/models/base-model-lookup"),
     ("GET", "/api/v1/favourites"),
     ("PUT", "/api/v1/favourites"),
     ("GET", "/api/v1/models/workflow-sets"),
@@ -380,8 +393,8 @@ def fresh_shelf(shelf_env):
     # The seed deletes model_folder rows behind the API's back, so the rowids it
     # frees can come back attached to a different folder. Drop the remembered
     # scans with them, as DELETE /model-folders does on the real path.
-    with model_folders_routes._scans_lock:
-        model_folders_routes._scans.clear()
+    with model_folder_scan_task._scans_lock:
+        model_folder_scan_task._scans.clear()
     # The owner session is what every positive control runs on; prove it is live
     # before any refusal is measured against it.
     r = shelf_env.owner.get(f"{API}/adapters")
@@ -1045,6 +1058,116 @@ def test_workflow_sets_orders_the_strongest_evidence_first(shelf_env):
 
         assert [c["picture_count"] for c in body["combinations"]] == [4, 1]
     finally:
+        _wipe_recipes(shelf_env.server)
+
+
+def _seed_workflow_of(server, workflow_id: str, structural_hash: str) -> None:
+    """Place the variant *structural_hash* in the manual workflow *workflow_id*,
+    the way the hub files a variant under a workflow it is in."""
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_group (workflow_id, kind) "
+            "VALUES (?, 'manual')",
+            (workflow_id,),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_group_member (topology_hash, workflow_id) "
+            "VALUES (?, ?)",
+            (f"topo-{structural_hash}", workflow_id),
+        )
+        conn.execute(
+            "INSERT INTO workflow_variant "
+            "(structural_hash, topology_hash, workflow_key, key_version) "
+            "VALUES (?, ?, ?, 'v1')",
+            (structural_hash, f"topo-{structural_hash}", f"key-{structural_hash}"),
+        )
+
+
+def _unseed_workflows(server) -> None:
+    with server.hub.transaction() as conn:
+        conn.execute("DELETE FROM workflow_group_member")
+        conn.execute("DELETE FROM workflow_variant")
+        conn.execute("DELETE FROM workflow_group")
+
+
+def test_workflow_sets_name_each_combinations_workflows_and_newest_pictures(
+    shelf_env,
+):
+    """The three facts a combination carries beyond its counts, off the same
+    kept pictures as `picture_count`.
+
+    One combination, three recipes naming the same files:
+    * `sh-wf-a`: 11 pictures in workflow A, dated May 1 to May 11;
+    * `sh-wf-c`: 2 pictures in workflow B, dated June 1 and June 2;
+    * `sh-wf-b`: 1 picture in no workflow, dated July 1.
+
+    So picture_count is 14, workflows sum to 13 (the workflow-less picture
+    counts toward none), and `latest` is the ten newest of the 14 - including
+    the workflow-less one - so the four oldest of workflow A's are not in it.
+    A workflow with no card on this hub is named by its id.
+    """
+    try:
+        assets = [
+            ("ckpt_name", "base_xl.safetensors"),
+            ("lora_name", "alice.safetensors"),
+        ]
+        for name in ("sh-wf-a", "sh-wf-b", "sh-wf-c"):
+            _seed_recipe(shelf_env.server, name, assets)
+        _seed_workflow_of(shelf_env.server, "manual:wf-a", "sh-wf-a")
+        _seed_workflow_of(shelf_env.server, "manual:wf-b", "sh-wf-c")
+
+        a_ids = [
+            _seed_picture(
+                shelf_env.server,
+                "sh-wf-a",
+                created_at=datetime(2026, 5, 1 + day, tzinfo=timezone.utc),
+            )
+            for day in range(11)
+        ]
+        c_ids = [
+            _seed_picture(
+                shelf_env.server,
+                "sh-wf-c",
+                created_at=datetime(2026, 6, 1 + day, tzinfo=timezone.utc),
+            )
+            for day in range(2)
+        ]
+        b_id = _seed_picture(
+            shelf_env.server,
+            "sh-wf-b",
+            created_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+        assert len(body["combinations"]) == 1
+        card = body["combinations"][0]
+
+        assert card["picture_count"] == 14
+        assert card["workflows"] == [
+            {"id": "manual:wf-a", "name": "manual:wf-a", "picture_count": 11},
+            {"id": "manual:wf-b", "name": "manual:wf-b", "picture_count": 2},
+        ]
+        assert (
+            sum(w["picture_count"] for w in card["workflows"]) <= card["picture_count"]
+        )
+
+        assert (
+            card["last_used_at"]
+            == datetime(2026, 7, 1, tzinfo=timezone.utc).isoformat()
+        )
+        expected = [b_id, *reversed(c_ids), *reversed(a_ids[4:])]
+        assert [p["picture_id"] for p in card["latest"]] == expected
+        assert len(card["latest"]) == 10
+        assert (
+            card["latest"][0]["at"]
+            == datetime(2026, 7, 1, tzinfo=timezone.utc).isoformat()
+        )
+        assert (
+            card["latest"][-1]["at"]
+            == datetime(2026, 5, 5, tzinfo=timezone.utc).isoformat()
+        )
+    finally:
+        _unseed_workflows(shelf_env.server)
         _wipe_recipes(shelf_env.server)
 
 
@@ -2071,6 +2194,31 @@ def test_a_cloned_set_says_so_and_its_snapshot_keeps_the_mark(shelf_env):
         r = shelf_env.owner.delete(f"{API}/models/workflow-sets/{made['id']}")
         assert r.status_code == 200, r.text
         assert r.json()["deleted"]["cloned"] is True
+    finally:
+        _wipe_sets(shelf_env.server)
+
+
+def test_a_set_made_by_edit_set_names_the_card_it_replaces(shelf_env):
+    """`replaces` is how the grid draws an edited set in its card's place, so it
+    is served on the set, in the list, and on a delete's snapshot for an Undo."""
+    try:
+        key = "missing:gone.safetensors"
+        made = _new_set(shelf_env, name="Edited", replaces=key)
+        assert made["replaces"] == key
+        plain = _new_set(shelf_env, name="By hand")
+        assert plain["replaces"] is None
+        listed = _hand_made(shelf_env)
+        assert (listed[made["id"]]["replaces"], listed[plain["id"]]["replaces"]) == (
+            key,
+            None,
+        )
+        r = shelf_env.owner.delete(f"{API}/models/workflow-sets/{made['id']}")
+        assert r.status_code == 200, r.text
+        assert r.json()["deleted"]["replaces"] == key
+        r = shelf_env.owner.post(
+            f"{API}/models/workflow-sets", json={"name": "x", "replaces": ""}
+        )
+        assert r.status_code == 422, r.text
     finally:
         _wipe_sets(shelf_env.server)
 
@@ -3264,8 +3412,7 @@ def test_a_symlink_to_an_allowed_folder_registers_at_its_resolved_path(
     assert r.status_code == 200, r.text
     assert r.json()["path"] == os.path.realpath(str(real))
 
-    r = shelf_env.owner.post(f"{API}/model-folders/{r.json()['id']}/rescan")
-    assert r.status_code == 202, r.text
+    assert _await_scan(shelf_env, r.json()["id"])["scan_status"] == "completed"
 
 
 def test_pick_up_registers_a_late_file_only_when_asked(shelf_env, tmp_path):
@@ -3372,18 +3519,22 @@ class _FolderPaths:
 def test_comfyui_model_roots_collapse_categories_to_their_root(monkeypatch):
     """Two categories under one parent make that parent the root; a category
     alone keeps itself, so a ``loras:`` entry pointing at a home folder does not
-    put the whole home folder on the shelf. ``custom_nodes`` names the install."""
+    put the whole home folder on the shelf. ``custom_nodes`` names the install,
+    and a node pack's own bundled folders never make the pack a models root."""
     fake = _FolderPaths(
         {
             "checkpoints": ["/comfy/models/checkpoints"],
-            "loras": ["/comfy/models/loras", "/data/my-loras"],
+            "loras": ["/comfy/models/loras", "/data/my-loras", "/comfy/custom_nodes2"],
             "vae": ["/comfy/models/vae", "/comfy/models/vae/extra"],
             "custom_nodes": ["/comfy/custom_nodes"],
+            "kjnodes_fonts": ["/comfy/custom_nodes/comfyui-kjnodes/fonts"],
+            "intrinsic_loras": ["/comfy/custom_nodes/comfyui-kjnodes/intrinsic_loras"],
             "configs": "not a list",
         }
     )
     monkeypatch.setattr(comfyui_service.requests, "get", fake)
     assert comfyui_service.comfyui_model_roots("http://comfy:8188") == [
+        "/comfy/custom_nodes2",
         "/comfy/models",
         "/data/my-loras",
     ]
@@ -3393,12 +3544,16 @@ def test_comfyui_model_roots_collapse_categories_to_their_root(monkeypatch):
 def test_comfyui_model_roots_group_by_category_not_by_folder_count(monkeypatch):
     """Two folders of one category under a parent are not a models root: the
     parent is somebody's home or data drive. A Windows ComfyUI's paths group
-    the same way on any backend."""
+    the same way on any backend, and its node-pack folders are matched without
+    regard to case."""
     fake = _FolderPaths(
         {
             "loras": ["/home/me/loras-a", "/home/me/loras-b"],
             "checkpoints": ["C:\\ComfyUI\\models\\checkpoints"],
             "vae": ["C:\\ComfyUI\\models\\vae"],
+            "custom_nodes": ["C:\\ComfyUI\\custom_nodes"],
+            "kjnodes_fonts": ["c:\\COMFYUI\\Custom_Nodes\\kj\\fonts"],
+            "intrinsic_loras": ["c:\\COMFYUI\\Custom_Nodes\\kj\\loras"],
         }
     )
     monkeypatch.setattr(comfyui_service.requests, "get", fake)
@@ -3735,33 +3890,130 @@ def test_forgetting_a_folder_tombstones_and_keeps_every_model(shelf_env):
     assert shelf_env.owner.get(f"{API}/model-folders").json()["folders"] == []
 
 
-def test_rescan_of_a_missing_folder_reports_started_and_does_not_raise(shelf_env):
+def test_a_scan_of_a_missing_folder_completes_and_does_not_raise(shelf_env):
     """The seeded folder does not exist on disk, so the scan marks it
-    unreachable. The route still answers 202 immediately: it must never block on
-    reading a folder of 1,800 adapters. It answers with the id of the task now
-    queued, which is what a client watches instead of guessing from
-    ``last_checked``."""
-    r = shelf_env.owner.post(f"{API}/model-folders/1/rescan")
-    assert r.status_code == 202, r.text
-    body = r.json()
-    assert (body["status"], body["id"]) == ("started", 1)
-    assert body["task_id"], body
+    unreachable."""
+    row = shelf_env.server.hub.fetchone(
+        "SELECT path, kind FROM model_folder WHERE id = 1"
+    )
+    assert model_folders_routes.queue_model_folder_scan(
+        shelf_env.server, 1, row["path"], row["kind"]
+    )
     assert _await_scan(shelf_env, 1)["scan_status"] == "completed", (
         "an unreadable folder is a scan that succeeded and recorded "
         "'unreachable', not a scan that failed"
     )
 
 
-def test_rescan_skips_a_source_folder(shelf_env, tmp_path):
-    """`source` folders are taken FROM, never catalogued in place."""
+def test_a_source_folder_is_never_scanned(shelf_env, tmp_path):
+    """`source` folders are taken FROM, never catalogued in place: registering
+    one queues no scan, and the background scan never picks it."""
     r = shelf_env.owner.post(
         f"{API}/model-folders",
         json={"path": _new_folder_path(str(tmp_path), "src"), "kind": "source"},
     )
-    folder_id = r.json()["id"]
-    r = shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan")
-    assert r.status_code == 202, r.text
-    assert r.json()["status"] == "skipped"
+    assert r.status_code == 200, r.text
+    assert r.json()["scan_status"] is None, r.text
+    assert r.json()["id"] not in {
+        row["id"] for row in scanned_folders(shelf_env.server.hub)
+    }
+    # The positive control: a plain folder is both.
+    r = shelf_env.owner.post(
+        f"{API}/model-folders", json={"path": _new_folder_path(str(tmp_path), "own")}
+    )
+    assert r.json()["scan_status"] in {"pending", "running", "completed"}, r.text
+    assert r.json()["id"] in {
+        row["id"] for row in scanned_folders(shelf_env.server.hub)
+    }
+
+
+def test_the_background_scan_of_the_huggingface_cache_drops_a_deleted_repo(
+    shelf_env, tmp_path, monkeypatch
+):
+    """The cache is declared, never walked, so its background scan is the
+    declaration again. Before it was, a repo deleted from the cache stayed
+    `present` until the server restarted."""
+    import huggingface_hub
+
+    cache = tmp_path / "hf-rescan"
+    cache.mkdir()
+    monkeypatch.setenv(builtin_caches.HUGGINGFACE_CACHE_DIR_ENV, str(cache))
+
+    def _repo(name, size):
+        return SimpleNamespace(
+            repo_id=f"org/{name}",
+            repo_type="model",
+            repo_path=str(cache / f"models--org--{name}"),
+            size_on_disk=size,
+            revisions=(),
+        )
+
+    repos = [_repo("keep", 100), _repo("drop", 32_000)]
+    monkeypatch.setattr(
+        huggingface_hub,
+        "scan_cache_dir",
+        lambda _path: SimpleNamespace(repos=list(repos)),
+    )
+    folder_id = builtin_caches.declare_huggingface_cache(
+        shelf_env.server.hub, str(cache)
+    )
+
+    def _states():
+        return {
+            row["relpath"]: row["state"]
+            for row in shelf_env.server.hub.fetchall(
+                "SELECT relpath, state FROM model_file WHERE model_folder_id = ?",
+                (folder_id,),
+            )
+        }
+
+    try:
+        assert _states() == {
+            "models--org--keep": "present",
+            "models--org--drop": "present",
+        }
+        repos.pop()
+
+        # The finder hands it out like any folder, on the timer.
+        finder = ModelFolderScanFinder(shelf_env.server.hub)
+        finder._due = lambda _interval: True
+        with shelf_env.server.hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_folder SET last_checked = NULL WHERE id = ?",
+                (folder_id,),
+            )
+        task = None
+        while (candidate := finder.find_task()) is not None:
+            if candidate.folder_id == folder_id:
+                task = candidate
+            candidate.status = TaskStatus.COMPLETED
+        assert task is not None, "the cache was never handed out"
+
+        # A move holds the slot: that pass is skipped, not declared under it.
+        monkeypatch.setattr(model_folder_scan_task, "_REDECLARE_WAIT_S", 0.01)
+        with SHELF_IO_LOCK:
+            assert task._run_task()["declared"] is False
+        assert _states()["models--org--drop"] == "present"
+
+        assert task._run_task()["declared"] is True
+        assert _states() == {
+            "models--org--keep": "present",
+            "models--org--drop": "missing",
+        }
+    finally:
+        rows = shelf_env.server.hub.fetchall(
+            "SELECT model_id FROM model_file WHERE model_folder_id = ?", (folder_id,)
+        )
+        with shelf_env.server.hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_file SET state = 'missing' WHERE model_folder_id = ?",
+                (folder_id,),
+            )
+        model_shelf_service.forget_models(
+            shelf_env.server.hub, [int(row["model_id"]) for row in rows]
+        )
+        with shelf_env.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model_folder WHERE id = ?", (folder_id,))
 
 
 def test_one_downloads_folder_is_taken_from_and_never_scanned(shelf_env, tmp_path):
@@ -3794,8 +4046,8 @@ def test_one_downloads_folder_is_taken_from_and_never_scanned(shelf_env, tmp_pat
     )
     assert r.status_code == 200, r.text
 
-    r = shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan")
-    assert r.json()["status"] == "skipped", r.text
+    assert body["scan_status"] is None, body
+    assert folder_id not in {row["id"] for row in scanned_folders(shelf_env.server.hub)}
     r = shelf_env.owner.patch(
         f"{API}/model-folders/{folder_id}", json={"is_default": True}
     )
@@ -4015,7 +4267,6 @@ def test_unknown_folder_id_is_404_on_every_mutator(shelf_env):
         shelf_env.owner.patch(f"{API}/model-folders/999999", json={}).status_code == 404
     )
     assert shelf_env.owner.delete(f"{API}/model-folders/999999").status_code == 404
-    assert shelf_env.owner.post(f"{API}/model-folders/999999/rescan").status_code == 404
 
 
 # ---- authorization: the read tier vs the §16.3 locality tier ---------------
@@ -4024,11 +4275,23 @@ _FOLDER_MUTATORS = (
     ("POST", f"{API}/model-folders", {"json": {"path": "/tmp/pixlstash-authz-probe"}}),
     ("PATCH", f"{API}/model-folders/1", {"json": {}}),
     ("DELETE", f"{API}/model-folders/1", {}),
-    ("POST", f"{API}/model-folders/1/rescan", {}),
     (
         "POST",
         f"{API}/model-folders/pick-up",
         {"json": {"files": ["probe.safetensors"]}},
+    ),
+    # The seeded folder's path is not on disk, so the local positive control
+    # answers 404 here and creates nothing.
+    (
+        "POST",
+        f"{API}/model-folders/1/dirs",
+        {"json": {"path": "", "name": "authz-probe"}},
+    ),
+    # A dry run of a directory that does not exist: 404, and it reads nothing.
+    (
+        "POST",
+        f"{API}/model-folders/1/dirs/remove",
+        {"json": {"path": "authz-probe", "dry_run": True}},
     ),
 )
 
@@ -4152,14 +4415,15 @@ def test_share_tokens_never_reach_a_folder_mutator(shelf_env):
 
 
 # ===========================================================================
-# A rescan is a task, not a thread
+# A scan is a task, not a thread
 # ===========================================================================
 
 _TERMINAL_SCAN_STATES = ("completed", "failed", "cancelled")
 
 
 def _register_folder_with_adapters(shelf_env, tmp_path, name, count) -> tuple[int, str]:
-    """Register a folder holding *count* real adapters. Returns ``(id, path)``."""
+    """Register a folder holding *count* real adapters, which queues its first
+    scan. Returns ``(id, path)``."""
     folder = tmp_path / name
     folder.mkdir()
     for index in range(count):
@@ -4184,7 +4448,7 @@ def _await_scan(shelf_env, folder_id, timeout=30.0) -> dict:
     raise AssertionError(f"the scan never settled; last seen: {last}")
 
 
-def test_a_rescan_is_a_task_with_progress_a_denominator_and_one_scan_per_folder(
+def test_a_scan_is_a_task_with_progress_a_denominator_and_one_scan_per_folder(
     shelf_env, tmp_path, monkeypatch
 ):
     """The three things the bare daemon thread could not give.
@@ -4197,10 +4461,9 @@ def test_a_rescan_is_a_task_with_progress_a_denominator_and_one_scan_per_folder(
     lifecycle.
 
     The scan is held inside ``_describe`` so the in-flight assertions are made
-    against a genuinely running task rather than a race.
+    against a genuinely running task rather than a race. Registering the folder
+    is what queues it.
     """
-    folder_id, _ = _register_folder_with_adapters(shelf_env, tmp_path, "held", 3)
-
     started = threading.Event()
     release = threading.Event()
     ran_on = []
@@ -4214,10 +4477,7 @@ def test_a_rescan_is_a_task_with_progress_a_denominator_and_one_scan_per_folder(
 
     monkeypatch.setattr(ModelFolderScanner, "_describe", blocking)
 
-    r = shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan")
-    assert r.status_code == 202, r.text
-    task_id = r.json()["task_id"]
-    assert task_id, r.text
+    folder_id, path = _register_folder_with_adapters(shelf_env, tmp_path, "held", 3)
     try:
         assert started.wait(30), "the submitted task never reached the scanner"
 
@@ -4232,15 +4492,17 @@ def test_a_rescan_is_a_task_with_progress_a_denominator_and_one_scan_per_folder(
         # which is the whole point of materialising the walk.
         assert (lane["total"], lane["current"]) == (3, 0), lane
 
-        # One scan per folder: the second press is refused and told which task is
-        # already doing the work, rather than reading the same bytes again.
-        again = shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan")
-        assert again.status_code == 202, again.text
-        assert again.json() == {
-            "status": "already_running",
-            "id": folder_id,
-            "task_id": task_id,
-        }
+        # One scan per folder: the background scan cannot claim a second one
+        # while this is running, rather than reading the same bytes again.
+        assert (
+            model_folder_scan_task.claim_scan(
+                shelf_env.server.hub, folder_id, path, "user"
+            )
+            is None
+        )
+        assert not model_folders_routes.queue_model_folder_scan(
+            shelf_env.server, folder_id, path, "user"
+        )
     finally:
         # Inside the try, so an assertion that fires still releases the held
         # scan instead of parking a TaskRunner slot on release.wait(30). The
@@ -4263,22 +4525,20 @@ def test_a_rescan_is_a_task_with_progress_a_denominator_and_one_scan_per_folder(
     assert lane["running"] is False, lane
 
 
-def test_a_crashed_rescan_reports_failed_rather_than_looking_slow(
+def test_a_crashed_scan_reports_failed_rather_than_looking_slow(
     shelf_env, tmp_path, monkeypatch
 ):
     """The scanner logs its exception and returns without stamping
     ``last_checked``, so a timestamp cannot tell a crash from a slow read - which
     is why the UI had to guess with a ten-minute ceiling. The task's status can.
     """
-    folder_id, _ = _register_folder_with_adapters(shelf_env, tmp_path, "doomed", 2)
 
     def die(self, *args, **kwargs):
         raise RuntimeError("the drive went away mid-scan")
 
     monkeypatch.setattr(ModelFolderScanner, "scan_folder", die)
 
-    r = shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan")
-    assert r.status_code == 202, r.text
+    folder_id, _ = _register_folder_with_adapters(shelf_env, tmp_path, "doomed", 2)
 
     row = _await_scan(shelf_env, folder_id)
     assert row["scan_status"] == "failed", row
@@ -4291,15 +4551,11 @@ def test_forgetting_a_folder_forgets_the_scan_recorded_against_it(shelf_env, tmp
     """SQLite reuses rowids, so a remembered scan outliving its folder would let
     a folder registered later inherit a previous one's outcome."""
     folder_id, _ = _register_folder_with_adapters(shelf_env, tmp_path, "shortlived", 1)
-    assert (
-        shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan").status_code
-        == 202
-    )
     assert _await_scan(shelf_env, folder_id)["scan_status"] == "completed"
 
     r = shelf_env.owner.delete(f"{API}/model-folders/{folder_id}")
     assert r.status_code == 200, r.text
-    assert folder_id not in model_folders_routes._scans
+    assert model_folder_scan_task.scan_state(folder_id) == (None, None)
 
 
 # ===========================================================================
@@ -4724,6 +4980,11 @@ _MOVE_ROUTES = (
     ("POST", f"{API}/model-moves", {"json": {"destination_folder_id": 1, "items": []}}),
     ("GET", f"{API}/model-moves", {}),
     ("DELETE", f"{API}/model-moves", {}),
+    (
+        "POST",
+        f"{API}/model-folders/1/dirs/move",
+        {"json": {"path": "probe", "destination_folder_id": 1}},
+    ),
 )
 
 
@@ -4847,7 +5108,12 @@ def test_every_move_route_is_declared_local_owner_only():
     """§16.3: the shelf's first block that writes and unlinks host files. The
     GET is on the tier too, deliberately - see the coverage-matrix rationale."""
     for method, path, _ in _MOVE_ROUTES:
-        key = (method, path.replace(API, "/api/v1"))
+        key = (
+            method,
+            path.replace(API, "/api/v1").replace(
+                "/model-folders/1/", "/model-folders/{folder_id}/"
+            ),
+        )
         assert key in ROUTE_POLICIES, f"{key} has no ROUTE_POLICIES entry"
         declared = ROUTE_POLICIES[key]
         assert declared.policy is AccessPolicy.LOCAL_OWNER_ONLY, (
@@ -4878,6 +5144,59 @@ def test_a_move_relocates_the_file_and_the_row(shelf_env, move_folders):
     assert [location["folder_id"] for location in row["locations"]] == [
         move_folders.destination_id
     ]
+
+
+def test_a_cross_drive_move_reports_bytes_done(shelf_env, move_folders, monkeypatch):
+    """The status carries byte progress, so one big file does not read as stuck."""
+    from pixlstash.services import model_mover
+
+    monkeypatch.setattr(model_mover, "same_device", lambda *_: False)
+    source = move_folders.source_dir / "moving.safetensors"
+    size = source.stat().st_size
+    # The fixture's hash is a stand-in; a copy is verified against it, so give
+    # the row the file's real one.
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET sha256 = ? WHERE sha256 = ?",
+            (model_mover.file_digest(str(source)), _h("movingfile")),
+        )
+    r = shelf_env.owner.post(
+        f"{API}/model-moves",
+        json={
+            "destination_folder_id": move_folders.destination_id,
+            "items": [
+                {"folder_id": move_folders.source_id, "relpath": "moving.safetensors"}
+            ],
+        },
+    )
+    assert r.status_code == 202, r.text
+
+    body = _await_move(shelf_env)
+    assert [item["status"] for item in body["results"]] == ["moved"]
+    assert body["bytes_to_copy"] == size
+    assert body["bytes_done"] == 2 * size
+
+
+def test_a_move_into_a_subfolder_lands_there_and_says_so(shelf_env, move_folders):
+    """``destination_subpath`` reaches the mover and comes back in the status."""
+    (move_folders.destination_dir / "Lora").mkdir()
+    r = shelf_env.owner.post(
+        f"{API}/model-moves",
+        json={
+            "destination_folder_id": move_folders.destination_id,
+            "destination_subpath": "Lora",
+            "items": [
+                {"folder_id": move_folders.source_id, "relpath": "moving.safetensors"}
+            ],
+        },
+    )
+    assert r.status_code == 202, r.text
+    assert r.json()["destination_subpath"] == "Lora"
+
+    body = _await_move(shelf_env)
+    assert body["destination_subpath"] == "Lora"
+    assert [item["status"] for item in body["results"]] == ["moved"]
+    assert (move_folders.destination_dir / "Lora" / "moving.safetensors").exists()
 
 
 def test_a_move_is_refused_before_the_first_byte_when_it_cannot_work(
@@ -5020,6 +5339,7 @@ _IMPORT_ROUTES = (
     # and the listing walks one directory inside that folder.
     ("GET", f"{API}/models/1/samples", {}),
     ("GET", f"{API}/models/1/samples/a.png", {}),
+    ("DELETE", f"{API}/model-folders/1/runs/Clementine", {}),
 )
 
 
@@ -5083,6 +5403,7 @@ def test_every_import_route_is_declared_local_owner_only():
             "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
         ),
         ("POST", "/api/v1/model-imports"),
+        ("DELETE", "/api/v1/model-folders/{folder_id}/runs/{run_name}"),
         # NOT owner_only, which is what the plan for the samples change asked
         # for on the grounds that a model.id crosses the wire and a host path
         # does not. That is the argument the matrix records as *not* the
@@ -5281,6 +5602,23 @@ def test_a_symlinked_sample_file_is_refused_too(tmp_path):
         sample_path_within(str(run_dir), "innocent.png")
 
 
+def test_a_video_models_clip_preview_is_served_as_mp4(shelf_env, import_folders):
+    """A video model's previews are MP4 clips; refusing them left a motion
+    run's board with nothing on it."""
+    samples = import_folders.run_dir / "samples"
+    samples.mkdir(exist_ok=True)
+    (samples / "1712345678901__000000500_0.mp4").write_bytes(
+        b"\x00\x00\x00\x18ftypmp42"
+    )
+
+    r = _sample(
+        shelf_env, import_folders, "Clementine", "1712345678901__000000500_0.mp4"
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "video/mp4"
+    assert r.content[4:8] == b"ftyp"
+
+
 def test_a_file_that_is_not_an_image_is_never_served_from_our_origin(
     shelf_env, import_folders
 ):
@@ -5341,10 +5679,10 @@ def test_importing_a_run_registers_it_as_one_stack(shelf_env, import_folders):
 
 # ── The imported samples, read back off the shelf ───────────────────────────
 #
-# The run's previews travel with its weights, so the same images are reachable
-# twice: from the output root before the import (the routes above) and from the
-# destination folder afterwards (these). The containment story is the same one,
-# with the run replaced by a `model_file` row.
+# Imports before 2026-10-30 copied a run's previews into `<stem>_samples/`
+# beside each checkpoint, and these routes still read them there. The
+# containment story is the run routes' one, with the run replaced by a
+# `model_file` row.
 
 
 def _import_clementine(env, folders, *, steps=None):
@@ -5371,32 +5709,32 @@ def _run_samples(folders, *pairs):
         )
 
 
-def test_an_imported_runs_samples_are_listed_and_served_off_the_shelf(
+def test_an_import_leaves_the_samples_and_an_earlier_copy_is_still_served(
     shelf_env, import_folders
 ):
-    """The positive control for both routes, and the bare final's cover rule at
-    the same time: it carries no step of its own, so it takes the highest step's
-    previews rather than showing nothing."""
+    """An import takes the weights only: the previews stay in the run. A
+    `<stem>_samples/` an earlier import copied is still listed and served, which
+    is the positive control for both routes."""
     _run_samples(import_folders, (500, 0), (500, 1))
     ids, files = _import_clementine(shelf_env, import_folders)
+    assert all("sample_count" not in f for f in files)
+    assert not list(import_folders.destination_dir.glob("*_samples")), (
+        "the import copied the run's previews onto the shelf"
+    )
+    assert len(list((import_folders.run_dir / "samples").iterdir())) == 2
 
     final = ids["Clementine.safetensors"]
-    stepped = ids["Clementine_000000500.safetensors"]
-    assert {f["filename"]: f["sample_count"] for f in files} == {
-        "Clementine.safetensors": 2,
-        "Clementine_000000500.safetensors": 2,
-    }
+    earlier = import_folders.destination_dir / "Clementine_samples"
+    earlier.mkdir()
+    for sample in (import_folders.run_dir / "samples").iterdir():
+        (earlier / sample.name).write_bytes(sample.read_bytes())
 
     listed = shelf_env.owner.get(f"{API}/models/{final}/samples")
     assert listed.status_code == 200, listed.text
     assert listed.json()["samples"] == [
         "1712345678901__000000500_0.jpg",
         "1712345678901__000000500_1.jpg",
-    ], "the stack cover listed no previews - the blank-cover failure"
-    assert (
-        shelf_env.owner.get(f"{API}/models/{stepped}/samples").json()["samples"]
-        == listed.json()["samples"]
-    )
+    ]
 
     served = shelf_env.owner.get(
         f"{API}/models/{final}/samples/1712345678901__000000500_1.jpg"
@@ -5463,12 +5801,12 @@ def test_a_non_image_in_a_models_samples_is_never_served_or_listed(
     """Same allowlist as the run route, for the same reason: the directory is on
     the owner's disk and anything can be dropped into it, and `mimetypes` would
     label this text/html and serve it from our own origin."""
-    _run_samples(import_folders, (500, 0))
     ids, _ = _import_clementine(shelf_env, import_folders, steps=[None])
     model_id = ids["Clementine.safetensors"]
-    (import_folders.destination_dir / "Clementine_samples" / "note.html").write_text(
-        "<script>alert(1)</script>"
-    )
+    samples = import_folders.destination_dir / "Clementine_samples"
+    samples.mkdir()
+    (samples / "1712345678901__000000500_0.jpg").write_bytes(b"\xff\xd8\xff")
+    (samples / "note.html").write_text("<script>alert(1)</script>")
 
     listed = shelf_env.owner.get(f"{API}/models/{model_id}/samples")
     assert "note.html" not in listed.json()["samples"], (
@@ -5543,6 +5881,121 @@ def test_a_run_name_that_escapes_the_output_root_is_refused(shelf_env, import_fo
     )
     assert r.status_code == 400, r.text
     assert list(import_folders.destination_dir.iterdir()) == []
+
+
+# ── Clearing a run: DELETE /model-folders/{id}/runs/{name} ─────────────────
+
+
+@pytest.fixture
+def run_trash(monkeypatch, tmp_path):
+    """A trash we can look inside, standing in for the OS one."""
+    bin_dir = tmp_path / "run-trash"
+    bin_dir.mkdir()
+
+    def send(path):
+        os.replace(path, bin_dir / os.path.basename(path))
+
+    monkeypatch.setattr(model_imports_routes, "send2trash", send)
+    return bin_dir
+
+
+def _trash_run(env, folders, name):
+    return env.owner.delete(f"{API}/model-folders/{folders.source_id}/runs/{name}")
+
+
+def test_clearing_a_run_moves_its_folder_to_the_trash(
+    shelf_env, import_folders, run_trash
+):
+    r = _trash_run(shelf_env, import_folders, "Clementine")
+    assert r.status_code == 200, r.text
+    assert r.json()["run_name"] == "Clementine"
+    assert not import_folders.run_dir.exists()
+    assert (run_trash / "Clementine" / "Clementine.safetensors").exists()
+    listed = shelf_env.owner.get(
+        f"{API}/model-folders/{import_folders.source_id}/runs"
+    ).json()["runs"]
+    assert listed == []
+
+
+def test_clearing_refuses_what_is_not_a_run(shelf_env, import_folders, run_trash):
+    """A folder with no checkpoint is not a run the grid shows, a link is not
+    followed, and a name outside the root is not read: each is left alone."""
+    not_a_run = import_folders.output_root / "notes"
+    not_a_run.mkdir()
+    (not_a_run / "todo.txt").write_text("keep")
+    outside = import_folders.output_root.parent / "elsewhere"
+    outside.mkdir()
+    _write_run_adapter(outside / "elsewhere.safetensors", b"x")
+    (import_folders.output_root / "escapes").symlink_to(
+        outside, target_is_directory=True
+    )
+    # Inside the root, so containment passes: trashing it would take the run
+    # it points at, not the link the card was drawn from.
+    (import_folders.output_root / "alias").symlink_to(
+        import_folders.run_dir, target_is_directory=True
+    )
+
+    assert _trash_run(shelf_env, import_folders, "notes").status_code == 404
+    assert _trash_run(shelf_env, import_folders, "missing").status_code == 404
+    assert _trash_run(shelf_env, import_folders, "escapes").status_code == 400
+    assert _trash_run(shelf_env, import_folders, "alias").status_code == 409
+    assert import_folders.run_dir.exists()
+    assert _trash_run(shelf_env, import_folders, "a%5Cb").status_code == 400
+    assert (not_a_run / "todo.txt").exists()
+    assert (outside / "elsewhere.safetensors").exists()
+    assert list(run_trash.iterdir()) == []
+    # Over-blocking is its own regression: a real run beside them still goes.
+    assert _trash_run(shelf_env, import_folders, "Clementine").status_code == 200
+
+
+def test_clearing_refuses_a_run_a_job_still_writes_into(
+    shelf_env, import_folders, run_trash
+):
+    uuid = "0123456789abcdef0123456789abcdef"
+    save_root = LocalAiToolkit.handle_for(
+        "", uuid, "Busy run", training_folder=str(import_folders.output_root)
+    ).save_root
+    run_dir = import_folders.output_root / os.path.basename(save_root)
+    run_dir.mkdir()
+    _write_run_adapter(run_dir / f"{run_dir.name}_000000100.safetensors", b"busy")
+    hub = shelf_env.server.hub
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO training_run (uuid, library_uuid, name, status, "
+            "training_folder, created_at) VALUES (?, 'lib', 'Busy run', "
+            "'running', ?, '2026-11-03T00:00:00+00:00')",
+            (uuid, str(import_folders.output_root)),
+        )
+    try:
+        r = _trash_run(shelf_env, import_folders, run_dir.name)
+        assert r.status_code == 409, r.text
+        assert "Busy run" in r.text
+        assert run_dir.exists()
+        # The run it does not touch still goes, and so does this one once the
+        # job has ended.
+        assert _trash_run(shelf_env, import_folders, "Clementine").status_code == 200
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE training_run SET status = 'error' WHERE uuid = ?", (uuid,)
+            )
+        r = _trash_run(shelf_env, import_folders, run_dir.name)
+        assert r.status_code == 200, r.text
+        assert (run_trash / run_dir.name).exists()
+    finally:
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM training_run WHERE uuid = ?", (uuid,))
+
+
+def test_clearing_takes_the_same_slot_as_an_import(
+    shelf_env, import_folders, run_trash
+):
+    assert SHELF_IO_LOCK.acquire(blocking=False)
+    try:
+        r = _trash_run(shelf_env, import_folders, "Clementine")
+        assert r.status_code == 409, r.text
+        assert import_folders.run_dir.exists()
+    finally:
+        SHELF_IO_LOCK.release()
 
 
 def test_import_routes_refuse_every_share_token(shelf_env):
@@ -6041,7 +6494,7 @@ def test_a_relocation_with_a_failed_file_does_not_promote_the_new_folder(
     from pixlstash.services import model_mover
 
     monkeypatch.setattr(model_mover, "same_device", lambda *_: False)
-    monkeypatch.setattr(model_mover, "file_digest", lambda path: "0" * 64)
+    monkeypatch.setattr(model_mover, "file_digest", lambda path, **_: "0" * 64)
 
     r = shelf_env.owner.post(
         f"{API}/model-folders/{relocatable_store.managed_id}/relocate",
@@ -6495,7 +6948,7 @@ def test_a_rename_is_refused_across_a_selection(shelf_env):
         f"{API}/models", json={"ids": [alice, bob], "display_name": "Both"}
     )
     assert r.status_code == 400
-    assert "one model at a time" in r.text
+    assert "one model, or on the members of one stack" in r.text
     assert _model_row(shelf_env, alice)["display_name"] == "Alice", (
         "the refusal still wrote"
     )
@@ -6506,6 +6959,52 @@ def test_a_rename_is_refused_across_a_selection(shelf_env):
     )
     assert ok.status_code == 200, ok.text
     assert _model_row(shelf_env, alice)["display_name"] == "Alice Prime"
+
+
+def test_a_rename_names_every_member_of_one_stack(shelf_env):
+    """A collapsed stack is one row on the shelf, and renaming it sends every
+    member it shows. That is one name for one run, not a bulk rename, so it is
+    written to all of them - and only when they really are one stack."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    dana = shelf_env.model_ids["dana.safetensors"]
+    bob = shelf_env.model_ids["bob.safetensors"]
+    assert _model_row(shelf_env, alice)["stack_id"] == STACK_ID
+    assert _model_row(shelf_env, dana)["stack_id"] == STACK_ID
+    assert _model_row(shelf_env, bob)["stack_id"] is None
+
+    # A stack member plus an outsider is still a selection, and still refused.
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice, dana, bob], "display_name": "Run"}
+    )
+    assert r.status_code == 400, r.text
+    assert _model_row(shelf_env, dana)["display_name"] == "Dana"
+    # Two unstacked models share no stack either: "no stack" is not one stack.
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [bob, noname], "display_name": "Run"}
+    )
+    assert r.status_code == 400, r.text
+    assert _model_row(shelf_env, bob)["display_name"] == "Bob"
+
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice, dana], "display_name": "Run"}
+    )
+    assert r.status_code == 200, r.text
+    assert sorted(r.json()["updated"]) == sorted([alice, dana])
+    assert _model_row(shelf_env, alice)["display_name"] == "Run"
+    assert _model_row(shelf_env, dana)["display_name"] == "Run"
+    assert _model_row(shelf_env, bob)["display_name"] == "Bob"
+
+    # A filter can hide members, so the shelf sends only the ones it shows.
+    # The name still goes to the whole run: here Dana is not sent at all (the
+    # other id names nothing) and is renamed with Alice.
+    ghost = max(shelf_env.model_ids.values()) + 1000
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice, ghost], "display_name": "Whole"}
+    )
+    assert r.status_code == 200, r.text
+    assert sorted(r.json()["updated"]) == sorted([alice, dana])
+    assert _model_row(shelf_env, dana)["display_name"] == "Whole"
 
 
 def test_an_unhashed_checkpoint_cannot_be_called_an_adapter(shelf_env):
@@ -6954,6 +7453,8 @@ def test_the_verb_routes_are_owner_only_in_both_directions(shelf_env):
     calls = (
         ("PATCH", f"{API}/models", {"json": {"ids": [alice], "base_model": "SDXL"}}),
         ("POST", f"{API}/models/forget", {"json": {"ids": [alice]}}),
+        # Alice has a base model, so the owner's call asks Civitai nothing.
+        ("POST", f"{API}/models/base-model-lookup", {"json": {"ids": [alice]}}),
     )
 
     token = mint_read_token(shelf_env.owner, "verb probe")
@@ -7013,10 +7514,6 @@ def test_the_meter_counts_present_bytes_and_ignores_missing_ones(shelf_env, tmp_
     report space the drive itself does not agree is in use."""
     folder_id, folder_path = _register_folder_with_adapters(
         shelf_env, tmp_path, "metered", 3
-    )
-    assert (
-        shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan").status_code
-        == 202
     )
     assert _await_scan(shelf_env, folder_id)["scan_status"] == "completed"
 
@@ -7495,8 +7992,8 @@ def test_forget_clears_an_engine_row_nothing_declares_any_more(shelf_env):
     )
 
 
-def test_the_folder_pixlstash_owns_cannot_be_forgotten_or_rescanned(shelf_env):
-    """Rescan especially: the scanner yields only `.safetensors` and sweeps what
+def test_the_folder_pixlstash_owns_cannot_be_forgotten_or_scanned(shelf_env):
+    """Scanning especially: the scanner yields only `.safetensors` and sweeps what
     it did not see to `missing`, so pointing it at a folder of ONNX and `.pth`
     engines would mark them all missing on every pass."""
     _declare_engine(shelf_env)
@@ -7505,9 +8002,7 @@ def test_the_folder_pixlstash_owns_cannot_be_forgotten_or_rescanned(shelf_env):
     assert forgotten.status_code == 409, forgotten.text
     assert "downloaded for itself" in forgotten.text
 
-    rescan = shelf_env.owner.post(f"{API}/model-folders/9/rescan")
-    assert rescan.status_code == 202, rescan.text
-    assert rescan.json()["status"] == "skipped"
+    assert 9 not in {row["id"] for row in scanned_folders(shelf_env.server.hub)}
 
 
 # ===========================================================================
@@ -7655,6 +8150,12 @@ def test_a_checkpoint_named_after_its_base_model_is_matched_by_name(shelf_env):
         rows = shelf_env.owner.get(f"{API}/checkpoints").json()["checkpoints"]
         return next(r for r in rows if r["id"] == huge)["matched_name"]
 
+    assert matched() == "FLUX.1 dev"
+    # Civitai's answer for these bytes is not a guess either (#1517).
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model_source = 'civitai' WHERE id = ?", (huge,)
+        )
     assert matched() == "FLUX.1 dev"
     with shelf_env.server.hub.transaction() as conn:
         conn.execute(
@@ -8287,7 +8788,7 @@ def test_a_file_already_inside_a_registered_folder_is_refused_not_duplicated(
 
     r = shelf_env.owner.post(f"{API}/model-files", json={"path": str(inside)})
     assert r.status_code == 409, r.text
-    assert "Rescan" in r.text
+    assert "scans by itself" in r.text
     assert sorted(p.name for p in loose_file.store.iterdir()) == [
         "already-there.safetensors"
     ]
@@ -8688,10 +9189,6 @@ def test_the_download_serves_the_bytes_the_named_hash_stands_for(shelf_env, tmp_
     """
     folder_id, folder_path = _register_folder_with_adapters(
         shelf_env, tmp_path, "downloadable", 1
-    )
-    assert (
-        shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan").status_code
-        == 202
     )
     _await_scan(shelf_env, folder_id)
 
@@ -9579,6 +10076,137 @@ def test_a_copy_registered_while_the_files_went_keeps_its_model_alive(
     assert (spare / "alice.safetensors").exists()
 
 
+@pytest.fixture
+def os_trash(monkeypatch, tmp_path):
+    """send2trash's real freedesktop trash, kept under tmp_path, so the undo
+    has a real `.trashinfo` record to find the file by."""
+    if sys.platform in ("win32", "darwin"):
+        pytest.skip("freedesktop trash only")
+    from send2trash import plat_other  # imports os.getuid: not on Windows
+
+    data_home = tmp_path / "share"
+    monkeypatch.setattr(plat_other, "XDG_DATA_HOME", os.fsencode(data_home))
+    monkeypatch.setattr(plat_other, "HOMETRASH_B", os.fsencode(data_home / "Trash"))
+    monkeypatch.setattr(plat_other, "get_dev", lambda path: 0)
+    monkeypatch.setattr(model_files_routes, "send2trash", plat_other.send2trash)
+    return data_home / "Trash"
+
+
+def test_undo_puts_a_trashed_model_back_under_the_same_id(
+    shelf_env, real_files, os_trash
+):
+    """Undo brings the file out of the trash and the row back as it was, so a
+    Redo is the same delete again; the token is spent by its undo."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET display_name = 'Alice v2' WHERE id = ?", (alice,)
+        )
+
+    body = _delete(shelf_env, [alice]).json()
+    assert body["deleted"] == [alice]
+    token = body["undo_token"]
+    assert token
+
+    r = shelf_env.owner.post(f"{API}/model-files/delete/undo", json={"token": token})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"restored": [alice], "partly_restored": [], "refused": []}
+    assert (real_files / "alice.safetensors").exists(), "the file stayed trashed"
+    assert list((os_trash / "info").iterdir()) == []
+    row = shelf_env.server.hub.fetchone(
+        "SELECT display_name FROM model WHERE id = ?", (alice,)
+    )
+    assert row is not None and row["display_name"] == "Alice v2"
+    assert shelf_env.server.hub.fetchone(
+        "SELECT 1 FROM model_file WHERE model_id = ?", (alice,)
+    ), "the model came back without its copy"
+
+    again = shelf_env.owner.post(
+        f"{API}/model-files/delete/undo", json={"token": token}
+    )
+    assert again.status_code == 404
+
+    # Redo: the same delete, the same id.
+    assert _delete(shelf_env, [alice]).json()["deleted"] == [alice]
+
+
+def test_undo_of_an_emptied_trash_leaves_the_model_deleted(
+    shelf_env, real_files, os_trash
+):
+    alice = shelf_env.model_ids["alice.safetensors"]
+    token = _delete(shelf_env, [alice]).json()["undo_token"]
+    for sub in ("files", "info"):
+        for entry in (os_trash / sub).iterdir():
+            entry.unlink()
+
+    r = shelf_env.owner.post(f"{API}/model-files/delete/undo", json={"token": token})
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "restored": [],
+        "partly_restored": [],
+        "refused": [{"id": alice, "reason": "not_in_trash"}],
+    }
+    assert (
+        shelf_env.server.hub.fetchone("SELECT id FROM model WHERE id = ?", (alice,))
+        is None
+    ), "a row came back naming a file that is not there"
+
+
+def test_undo_is_declared_local_owner_only_and_refuses_every_share_token(
+    shelf_env, real_files, os_trash
+):
+    """The undo writes the same folders the delete emptied, so the same tier;
+    a share token is refused, and the owner's token still undoes."""
+    declared = ROUTE_POLICIES.get(("POST", "/api/v1/model-files/delete/undo"))
+    assert declared is not None and declared.justification
+    assert declared.policy is AccessPolicy.LOCAL_OWNER_ONLY
+    alice = shelf_env.model_ids["alice.safetensors"]
+    token = _delete(shelf_env, [alice]).json()["undo_token"]
+    path = f"{API}/model-files/delete/undo"
+    for description, restriction in (
+        ("undo scoped probe", {"resource_type": "character", "resource_id": 1}),
+        ("undo unscoped probe", {}),
+    ):
+        client = bearer_client(
+            shelf_env.server,
+            mint_read_token(shelf_env.owner, description, **restriction),
+        )
+        assert client.get(f"{API}/pictures").status_code == 200, description
+        assert_real_route(shelf_env.server.api, "POST", path)
+        r = client.post(path, json={"token": token})
+        assert r.status_code == 403, f"{description}: {r.status_code} {r.text}"
+    assert not (real_files / "alice.safetensors").exists(), "a refused undo restored"
+    # Positive control: the token was not spent by the refusals.
+    r = shelf_env.owner.post(path, json={"token": token})
+    assert r.status_code == 200 and r.json()["restored"] == [alice], r.text
+
+
+def test_a_refused_undo_leaves_the_previews_in_the_trash(
+    shelf_env, real_files, os_trash
+):
+    """Previews come back only beside a copy that did: a refused model must
+    not leave them orphaned in the folder."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    samples = real_files / "alice_samples"
+    samples.mkdir()
+    (samples / "1712345678901__000000500_0.jpg").write_bytes(b"\xff\xd8\xff")
+    token = _delete(shelf_env, [alice]).json()["undo_token"]
+    assert not samples.exists()
+    (os_trash / "files" / "alice.safetensors").unlink()
+
+    r = shelf_env.owner.post(f"{API}/model-files/delete/undo", json={"token": token})
+    assert r.json()["refused"] == [{"id": alice, "reason": "not_in_trash"}]
+    assert not samples.exists(), "a refused model's previews came back alone"
+    assert (os_trash / "files" / "alice_samples").exists()
+
+
+def test_a_permanent_delete_offers_no_undo(shelf_env, real_files, fake_trash):
+    alice = shelf_env.model_ids["alice.safetensors"]
+    body = _delete(shelf_env, [alice], permanent=True).json()
+    assert body["deleted"] == [alice]
+    assert body["undo_token"] is None
+
+
 # ===========================================================================
 # Open in file manager (#933) - the shelf's one host-shell verb
 # ===========================================================================
@@ -9737,6 +10365,97 @@ def test_the_spawn_helper_reads_the_openers_exit_status(tmp_path):
 
         run.side_effect = FileNotFoundError(opener)
         assert host_open.open_in_file_manager(str(tmp_path)) is False
+
+
+# ---------------------------------------------------------------------------
+# The folder tree's `Open in file manager`: the same spawn, for a directory
+# ---------------------------------------------------------------------------
+
+_FOLDER_OPEN_ROUTE = ("POST", "/api/v1/model-folders/{folder_id}/open")
+
+
+@pytest.fixture
+def folder_opener(monkeypatch):
+    """The host spawn behind the folder route, replaced by a list of paths."""
+    opened: list[str] = []
+
+    def fake(path):
+        opened.append(path)
+        return True
+
+    monkeypatch.setattr(model_folders_routes, "open_in_file_manager", fake)
+    return opened
+
+
+def _open_folder(client, folder_id=1, path=None, **kwargs):
+    params = {} if path is None else {"path": path}
+    return client.post(f"{API}/model-folders/{folder_id}/open", params=params, **kwargs)
+
+
+def test_open_folder_hands_the_root_or_the_named_directory_to_the_file_manager(
+    shelf_env, tmp_path, folder_opener
+):
+    root = tmp_path / "loras"
+    (root / "sub" / "deep").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+
+    r = _open_folder(shelf_env.owner)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "ok"
+    r = _open_folder(shelf_env.owner, path="sub/deep")
+    assert r.status_code == 200, r.text
+    assert folder_opener == [
+        os.path.realpath(root),
+        os.path.realpath(root / "sub" / "deep"),
+    ], folder_opener
+
+
+def test_open_folder_spawns_nothing_for_a_path_it_will_not_open(
+    shelf_env, tmp_path, folder_opener
+):
+    """Outside the folder is 400, not there is 404, and neither reaches the
+    desktop. The escape through a link is the one the string check cannot see."""
+    root = tmp_path / "loras"
+    root.mkdir()
+    (root / "notes.txt").write_text("not a folder")
+    os.symlink(tmp_path, root / "escape")
+    _seeded_folder_at(shelf_env.server, str(root))
+
+    for bad in ("..", "../loras", "/etc", "a//b", "escape"):
+        r = _open_folder(shelf_env.owner, path=bad)
+        assert r.status_code == 400, f"{bad!r} answered {r.status_code}: {r.text}"
+    assert _open_folder(shelf_env.owner, path="missing").status_code == 404
+    assert _open_folder(shelf_env.owner, path="notes.txt").status_code == 404
+    assert _open_folder(shelf_env.owner, folder_id=999).status_code == 404
+    assert folder_opener == [], folder_opener
+
+
+def test_open_folder_on_a_host_with_no_file_manager_is_500(
+    shelf_env, tmp_path, monkeypatch
+):
+    _seeded_folder_at(shelf_env.server, str(tmp_path))
+    monkeypatch.setattr(
+        model_folders_routes, "open_in_file_manager", lambda path: False
+    )
+    assert _open_folder(shelf_env.owner).status_code == 500
+
+
+def test_open_folder_is_loopback_owner_only(shelf_env, tmp_path, folder_opener):
+    """Declared on the red line, and refused from the LAN, where a
+    ``LOCAL_OWNER_ONLY`` route would answer. The owner's loopback 200 is the
+    positive control, so the refusal cannot pass on a dead route. A READ token
+    is not probed: the middleware refuses its POST by method before the gate."""
+    declared = ROUTE_POLICIES.get(_FOLDER_OPEN_ROUTE)
+    assert declared is not None, f"{_FOLDER_OPEN_ROUTE} has no ROUTE_POLICIES entry"
+    assert declared.policy is AccessPolicy.LOOPBACK_OWNER_ONLY, declared.policy
+    _seeded_folder_at(shelf_env.server, str(tmp_path))
+
+    r = _open_folder(shelf_env.owner, headers={"X-Forwarded-For": LAN_IPV4})
+    assert r.status_code == 403, f"a LAN caller reached the host desktop: {r.text}"
+    assert folder_opener == [], "a refused caller spawned something on the host"
+    assert _open_folder(shelf_env.owner).status_code == 200, (
+        "the owner lost a verb they are meant to have"
+    )
 
 
 # ===========================================================================
@@ -10613,3 +11332,1436 @@ def test_a_set_with_a_template_head_is_offered_the_rest_and_can_answer_it(
         assert entry["declined"] == [download["sha256"]]
     finally:
         _wipe_sets(shelf_env.server)
+
+
+# ===========================================================================
+# Browsing a model folder by directory (#2203)
+# ===========================================================================
+#
+# The tree lists one directory level per call. The names come from the disk,
+# because the scanner records files and never an empty directory; the counts
+# come from the hub's `present` copies beneath each entry. Each test lays out
+# both: a real tree under tmp_path, and the copies the hub says sit in it.
+
+
+def _add_folder(server, folder_id: int, path: str, kind: str, movable: str, owner):
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (id, path, kind, owner, movable, created_at) "
+            "VALUES (?, ?, ?, ?, ?, '2026-08-09T00:00:00Z')",
+            (folder_id, path, kind, owner, movable),
+        )
+
+
+def _set_copies(shelf_env, folder_id: int, copies) -> None:
+    """Make one folder hold exactly these `present` copies.
+
+    Each copy is ``(relpath, size)`` or ``(relpath, size, model_key)``; copies
+    that share a ``model_key`` are two copies of one model. The seed's rows for
+    the folder are dropped first, so a count names only what this test wrote.
+    """
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute("DELETE FROM model_file WHERE model_folder_id = ?", (folder_id,))
+        model_ids: dict[str, int] = {}
+        for copy in copies:
+            relpath, size = copy[0], copy[1]
+            key = copy[2] if len(copy) > 2 else relpath
+            if key not in model_ids:
+                model_ids[key] = conn.execute(
+                    "INSERT INTO model (file_kind, kind, sha256, filename, provenance, "
+                    "file_size, created_at) VALUES ('adapter', 'lora', ?, ?, 'external', ?, "
+                    "'2026-08-08T00:00:00Z')",
+                    (_h(f"dirs-{folder_id}-{key}"), relpath.rsplit("/", 1)[-1], size),
+                ).lastrowid
+            conn.execute(
+                "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
+                "seen_at, file_mtime) VALUES (?, ?, ?, 'present', "
+                "'2026-08-09T00:00:00Z', 0)",
+                (model_ids[key], folder_id, relpath),
+            )
+
+
+def _listing(shelf_env, folder_id: int = 1, path: str | None = None):
+    params = {} if path is None else {"path": path}
+    return shelf_env.owner.get(f"{API}/model-folders/{folder_id}/dirs", params=params)
+
+
+def _by_name(body: dict) -> dict[str, dict]:
+    return {entry["name"]: entry for entry in body["dirs"]}
+
+
+def test_dirs_count_every_copy_beneath_each_entry(shelf_env, tmp_path):
+    """Counts are recursive, distinct by model and summed by copy.
+
+    The file two levels down counts at the root and in its parent, but directly
+    only in its own directory. Two copies of
+    one model count once by model and twice by bytes. An empty directory shows.
+    """
+    root = tmp_path / "loras"
+    (root / "people" / "alice").mkdir(parents=True)
+    (root / "people" / "empty").mkdir()
+    (root / "style").mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    _set_copies(
+        shelf_env,
+        1,
+        [
+            ("top.safetensors", 10),
+            ("people/b.safetensors", 5, "b"),
+            ("people/b-copy.safetensors", 5, "b"),
+            ("people/alice/a.safetensors", 20),
+        ],
+    )
+
+    body = _listing(shelf_env).json()
+    assert (body["path"], body["locked"]) == ("", False)
+    assert (body["model_count"], body["bytes"]) == (3, 40)
+    assert body["direct_model_count"] == 1
+    dirs = _by_name(body)
+    assert list(dirs) == ["people", "style"]
+    assert (dirs["people"]["model_count"], dirs["people"]["bytes"]) == (2, 30)
+    assert dirs["people"]["direct_model_count"] == 1
+    assert dirs["people"]["path"] == "people"
+    assert dirs["people"]["has_dirs"] is True
+    assert (dirs["style"]["model_count"], dirs["style"]["bytes"]) == (0, 0)
+    assert dirs["style"]["has_dirs"] is False
+
+    body = _listing(shelf_env, path="people").json()
+    assert (body["path"], body["model_count"], body["bytes"]) == ("people", 2, 30)
+    assert body["direct_model_count"] == 1
+    dirs = _by_name(body)
+    assert list(dirs) == ["alice", "empty"]
+    assert (dirs["alice"]["model_count"], dirs["alice"]["bytes"]) == (1, 20)
+    assert dirs["alice"]["direct_model_count"] == 1
+    assert dirs["alice"]["path"] == "people/alice"
+    assert dirs["alice"]["has_dirs"] is False
+    assert (dirs["empty"]["model_count"], dirs["empty"]["bytes"]) == (0, 0)
+
+
+def test_dot_dirs_symlinks_and_files_are_not_offered(shelf_env, tmp_path):
+    root = tmp_path / "loras"
+    (root / "real").mkdir(parents=True)
+    (root / ".cache").mkdir()
+    (root / "style").mkdir()
+    (tmp_path / "outside").mkdir()
+    (root / "linked").symlink_to(tmp_path / "outside", target_is_directory=True)
+    (root / "alias").symlink_to(root / "style", target_is_directory=True)
+    (root / "notes.txt").write_text("not a folder")
+    _seeded_folder_at(shelf_env.server, str(root))
+    _set_copies(shelf_env, 1, [("real/a.safetensors", 4)])
+
+    body = _listing(shelf_env).json()
+    assert [entry["name"] for entry in body["dirs"]] == ["real", "style"]
+
+
+def test_a_samples_directory_is_hidden_beside_its_model_and_shown_without_one(
+    shelf_env, tmp_path
+):
+    root = tmp_path / "loras"
+    (root / "alice_samples").mkdir(parents=True)
+    (root / "bob_samples").mkdir()
+    (root / "people" / "alice_samples").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+    _set_copies(shelf_env, 1, [("alice.safetensors", 3), ("people/x.safetensors", 1)])
+
+    root_names = [entry["name"] for entry in _listing(shelf_env).json()["dirs"]]
+    assert root_names == ["bob_samples", "people"]
+    # The rule is per directory: alice beside the root does not hide the
+    # previews of an alice inside people/, where no model of that name sits.
+    people_names = [
+        entry["name"] for entry in _listing(shelf_env, path="people").json()["dirs"]
+    ]
+    assert people_names == ["alice_samples"]
+
+
+def test_has_dirs_ignores_a_samples_directory_its_own_model_hides(shelf_env, tmp_path):
+    root = tmp_path / "loras"
+    (root / "parent" / "alice_samples").mkdir(parents=True)
+    (root / "other" / "deep").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+    _set_copies(shelf_env, 1, [("parent/alice.safetensors", 2)])
+
+    dirs = _by_name(_listing(shelf_env).json())
+    assert dirs["parent"]["has_dirs"] is False
+    assert dirs["other"]["has_dirs"] is True
+
+
+def test_a_locked_folder_answers_its_counts_and_no_directories(shelf_env, tmp_path):
+    source = tmp_path / "ai-toolkit"
+    (source / "run" / "sub").mkdir(parents=True)
+    _add_folder(shelf_env.server, 2, str(source), "source", "external", "ai-toolkit")
+    _set_copies(shelf_env, 2, [("run/x.safetensors", 9)])
+
+    body = _listing(shelf_env, folder_id=2).json()
+    assert (body["locked"], body["dirs"]) == (True, [])
+    assert (body["model_count"], body["bytes"]) == (1, 9)
+    body = _listing(shelf_env, folder_id=2, path="run").json()
+    assert (body["locked"], body["dirs"]) == (True, [])
+    assert (body["path"], body["model_count"], body["bytes"]) == ("run", 1, 9)
+    # Nothing on disk is read, so a path the disk does not hold is not a 404.
+    r = _listing(shelf_env, folder_id=2, path="not-on-disk")
+    assert r.status_code == 200 and r.json()["locked"] is True, r.text
+
+
+def test_a_path_that_escapes_or_is_not_plain_is_refused_with_400(shelf_env, tmp_path):
+    root = tmp_path / "loras"
+    (root / "inside").mkdir(parents=True)
+    (tmp_path / "outside").mkdir()
+    (root / "escape").symlink_to(tmp_path / "outside", target_is_directory=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+
+    assert _listing(shelf_env, path="inside").status_code == 200, (
+        "the positive control: a plain subpath must list"
+    )
+    for bad in (
+        "..",
+        "../x",
+        "a/../../x",
+        "inside/..",
+        "/etc",
+        "inside//x",
+        "./inside",
+        "inside/",
+        "escape",
+    ):
+        r = _listing(shelf_env, path=bad)
+        assert r.status_code == 400, f"{bad!r} answered {r.status_code}: {r.text}"
+
+
+def test_an_unknown_folder_or_a_path_that_is_not_a_directory_is_404(
+    shelf_env, tmp_path
+):
+    root = tmp_path / "loras"
+    (root / "sub").mkdir(parents=True)
+    (root / "notes.txt").write_text("not a folder")
+    _seeded_folder_at(shelf_env.server, str(root))
+
+    assert _listing(shelf_env, path="sub").status_code == 200, (
+        "the positive control: a directory must list"
+    )
+    assert _listing(shelf_env, folder_id=999).status_code == 404
+    assert _listing(shelf_env, path="missing").status_code == 404
+    assert _listing(shelf_env, path="notes.txt").status_code == 404
+
+
+def test_an_unreadable_directory_is_409_and_its_parent_still_lists(
+    shelf_env, tmp_path, monkeypatch
+):
+    root = tmp_path / "loras"
+    (root / "denied" / "inner").mkdir(parents=True)
+    (root / "peek_denied" / "deep").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+    real_root = os.path.realpath(root)
+    refused = {
+        os.path.join(real_root, "denied"),
+        os.path.join(real_root, "peek_denied"),
+    }
+    real_scandir = os.scandir
+
+    def scandir(path=".", *args, **kwargs):
+        if os.fspath(path) in refused:
+            raise PermissionError(13, "Permission denied", os.fspath(path))
+        return real_scandir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+
+    r = _listing(shelf_env, path="denied")
+    assert r.status_code == 409, r.text
+    r = _listing(shelf_env)
+    assert r.status_code == 200, r.text
+    dirs = _by_name(r.json())
+    assert set(dirs) == {"denied", "peek_denied"}
+    # A child that cannot be peeked reports has_dirs false; it is not a 409
+    # for the listing that found it.
+    assert dirs["peek_denied"]["has_dirs"] is False
+
+
+def test_the_folder_listing_is_local_owner_only_and_refuses_share_tokens(
+    shelf_env, tmp_path, monkeypatch
+):
+    root = tmp_path / "loras"
+    (root / "sub").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+    url = f"{API}/model-folders/1/dirs"
+    assert_real_route(
+        shelf_env.server.api,
+        "GET",
+        url,
+        template=f"{API}/model-folders/{{folder_id}}/dirs",
+    )
+    assert shelf_env.owner.get(url).status_code == 200, (
+        "the owner cannot list it either; the refusals below would prove nothing"
+    )
+
+    # Both READ belts are emptied, so every refusal below is the gate's own.
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+    scoped = mint_read_token(
+        shelf_env.owner,
+        "folder dirs probe",
+        resource_type="character",
+        resource_id=shelf_env.character_id,
+    )
+    unscoped = mint_read_token(shelf_env.owner, "folder dirs global read")
+    for name, token in (("resource-scoped", scoped), ("unscoped READ", unscoped)):
+        client = bearer_client(shelf_env.server, token)
+        assert client.get(f"{API}/pictures").status_code == 200, (
+            f"the {name} token is dead; the refusal below would prove nothing"
+        )
+        r = client.get(url)
+        assert r.status_code == 403, (
+            f"a {name} share token listed a model folder: {r.status_code} {r.text}"
+        )
+
+
+def test_a_remote_owner_is_refused_the_folder_listing_naming_the_flag(
+    shelf_env, tmp_path
+):
+    """The locality half of the tier: a public address is refused, naming the flag,
+    and the flag admits it. Without this an OWNER_ONLY declaration would pass every
+    other test in this block."""
+    root = tmp_path / "loras"
+    (root / "sub").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+    url = f"{API}/model-folders/1/dirs"
+    assert _listing(shelf_env).status_code == 200, "the positive control"
+    assert shelf_env.owner.get(url, headers=_xff(LAN_IPV4)).status_code == 200
+
+    r = shelf_env.owner.get(url, headers=_xff("8.8.8.8"))
+    assert r.status_code == 403, r.text
+    assert "allow_remote_host_ops" in r.text, r.text
+
+    config = shelf_env.server.auth._server_config
+    previous = config.get("allow_remote_host_ops")
+    config["allow_remote_host_ops"] = True
+    try:
+        r = shelf_env.owner.get(url, headers=_xff("8.8.8.8"))
+        assert r.status_code == 200, r.text
+    finally:
+        if previous is None:
+            config.pop("allow_remote_host_ops", None)
+        else:
+            config["allow_remote_host_ops"] = previous
+
+
+# ===========================================================================
+# Creating, renaming and moving a folder inside a model folder (#2206)
+# ===========================================================================
+#
+# The service half - same drive, another drive, cancel, collisions - is in
+# tests/test_model_move.py, which needs no server. These are the routes: the
+# create's refusals, the move's 202 on the shared job slot, and both tiers.
+
+
+def _create_dir(shelf_env, name: str, path: str = "", **kwargs):
+    return shelf_env.owner.post(
+        f"{API}/model-folders/1/dirs", json={"path": path, "name": name}, **kwargs
+    )
+
+
+@pytest.mark.parametrize(
+    "name, reason",
+    [
+        ("con", "Windows reserves"),
+        ("CON.txt", "Windows reserves"),
+        ("a/b", "cannot contain"),
+        ("a\\b", "cannot contain"),
+        ("..", "not a folder name"),
+        (".hidden", "hidden"),
+        ("trailing.", "cannot end with"),
+        ("trailing ", "cannot end with"),
+        ("   ", "needs a name"),
+        ("", "needs a name"),
+    ],
+)
+def test_a_folder_name_the_drive_cannot_hold_is_refused_with_the_reason(
+    shelf_env, tmp_path, name, reason
+):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    r = _create_dir(shelf_env, name)
+    assert r.status_code == 400, r.text
+    assert reason in r.json()["detail"], r.text
+    assert list(root.iterdir()) == [], "a refused name still made a folder"
+
+
+def test_creating_a_folder_makes_it_and_answers_its_path(shelf_env, tmp_path):
+    root = tmp_path / "loras"
+    (root / "people").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+
+    r = _create_dir(shelf_env, "flux", path="people")
+    assert r.status_code == 201, r.text
+    assert r.json() == {"folder_id": 1, "path": "people/flux"}
+    assert (root / "people" / "flux").is_dir()
+    listed = _by_name(_listing(shelf_env, path="people").json())
+    assert "flux" in listed, "the tree does not show the folder it just made"
+
+
+def test_creating_a_taken_name_is_a_conflict_and_touches_nothing(shelf_env, tmp_path):
+    root = tmp_path / "loras"
+    (root / "flux").mkdir(parents=True)
+    (root / "flux" / "keep.txt").write_text("mine")
+    os.symlink(str(tmp_path / "nowhere"), str(root / "dangling"))
+    _seeded_folder_at(shelf_env.server, str(root))
+
+    assert _create_dir(shelf_env, "flux").status_code == 409
+    assert (root / "flux" / "keep.txt").read_text() == "mine"
+    # A dangling link is a taken name, never a path to create through.
+    assert _create_dir(shelf_env, "dangling").status_code == 409
+    assert not (tmp_path / "nowhere").exists()
+
+
+def test_creating_in_a_locked_folder_is_refused(shelf_env, tmp_path):
+    root = tmp_path / "store"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute("UPDATE model_folder SET movable = 'root_only' WHERE id = 1")
+    assert _create_dir(shelf_env, "flux").status_code == 409
+    assert list(root.iterdir()) == []
+
+
+def test_creating_under_a_missing_or_escaping_parent_is_refused(shelf_env, tmp_path):
+    root = tmp_path / "loras"
+    root.mkdir()
+    (tmp_path / "outside").mkdir()
+    os.symlink(str(tmp_path / "outside"), str(root / "out"))
+    _seeded_folder_at(shelf_env.server, str(root))
+
+    assert _create_dir(shelf_env, "x", path="nope").status_code == 404
+    assert _create_dir(shelf_env, "x", path="../outside").status_code == 400
+    assert _create_dir(shelf_env, "x", path="out").status_code == 400
+    assert list((tmp_path / "outside").iterdir()) == []
+
+
+def test_creating_a_folder_is_refused_in_docker(shelf_env, tmp_path, monkeypatch):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    monkeypatch.setattr(shelf_env.server, "running_in_docker", lambda: True)
+    assert _create_dir(shelf_env, "flux").status_code == 403
+    assert list(root.iterdir()) == []
+
+
+def _wait_for_move(shelf_env) -> dict:
+    for _ in range(200):
+        body = shelf_env.owner.get(f"{API}/model-moves").json()
+        if body["status"] != "running":
+            return body
+        time.sleep(0.02)
+    raise AssertionError(f"the folder move never finished: {body}")
+
+
+def test_a_folder_move_runs_on_the_move_job_and_reports_its_kind(shelf_env, tmp_path):
+    """The route end to end: 202, the shared job, ``kind: folder``, rows moved."""
+    from pixlstash.routes import model_moves
+
+    model_moves._job = None
+    root = tmp_path / "loras"
+    (root / "sdxl").mkdir(parents=True)
+    (root / "people").mkdir()
+    (root / "sdxl" / "a.safetensors").write_bytes(b"a" * 64)
+    _seeded_folder_at(shelf_env.server, str(root))
+    _set_copies(shelf_env, 1, [(os.path.join("sdxl", "a.safetensors"), 64)])
+
+    plan = shelf_env.owner.post(
+        f"{API}/model-folders/1/dirs/move",
+        json={
+            "path": "sdxl",
+            "destination_folder_id": 1,
+            "destination_path": "people",
+            "dry_run": True,
+        },
+    )
+    assert plan.status_code == 200, plan.text
+    assert plan.json()["same_drive"] is True
+    assert (plan.json()["models"], plan.json()["files"]) == (1, 1)
+    assert (root / "sdxl").is_dir(), "a dry run moved the folder"
+
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/1/dirs/move",
+        json={"path": "sdxl", "destination_folder_id": 1, "destination_path": "people"},
+    )
+    assert r.status_code == 202, r.text
+    assert r.json()["kind"] == "folder"
+    # Undeclared on MoveStatusResponse, carried by its extra="allow".
+    assert (r.json()["name"], r.json()["files"]) == ("sdxl", 1)
+    body = _wait_for_move(shelf_env)
+    assert body["kind"] == "folder"
+    assert (body["name"], body["files"]) == ("sdxl", 1)
+    assert body["destination_subpath"] == "people/sdxl"
+    assert [item["status"] for item in body["results"]] == ["moved"], body
+    assert (root / "people" / "sdxl" / "a.safetensors").is_file()
+    relpaths = {
+        row["relpath"]
+        for row in shelf_env.server.hub.fetchall(
+            "SELECT relpath FROM model_file WHERE model_folder_id = 1"
+        )
+    }
+    assert relpaths == {os.path.join("people", "sdxl", "a.safetensors")}
+
+
+def test_a_folder_move_refusal_is_answered_before_the_job_starts(shelf_env, tmp_path):
+    from pixlstash.routes import model_moves
+
+    model_moves._job = None
+    root = tmp_path / "loras"
+    (root / "a" / "b").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+    url = f"{API}/model-folders/1/dirs/move"
+
+    root_move = shelf_env.owner.post(url, json={"path": "", "destination_folder_id": 1})
+    assert root_move.status_code == 400, root_move.text
+    into_itself = shelf_env.owner.post(
+        url, json={"path": "a", "destination_folder_id": 1, "destination_path": "a/b"}
+    )
+    assert into_itself.status_code == 400, into_itself.text
+    bad_name = shelf_env.owner.post(
+        url, json={"path": "a", "destination_folder_id": 1, "new_name": "con"}
+    )
+    assert bad_name.status_code == 400, bad_name.text
+    assert model_moves._job is None, "a refused folder move still took the job slot"
+    assert (root / "a" / "b").is_dir()
+
+
+# ---------------------------------------------------------------------------
+# POST /model-folders/{id}/rename - renaming the registered folder itself
+# ---------------------------------------------------------------------------
+
+_RENAME = f"{API}/model-folders/1/rename"
+
+
+def _rename_root(shelf_env, tmp_path, name: str = "Loras", **kwargs):
+    """Folder 1 at ``<tmp>/loras`` holding one catalogued copy, renamed."""
+    root = tmp_path / "loras"
+    (root / "sdxl").mkdir(parents=True)
+    (root / "sdxl" / "a.safetensors").write_bytes(b"a" * 64)
+    _seeded_folder_at(shelf_env.server, str(root))
+    _set_copies(shelf_env, 1, [(os.path.join("sdxl", "a.safetensors"), 64)])
+    return root, shelf_env.owner.post(_RENAME, json={"name": name}, **kwargs)
+
+
+def _folder_one(shelf_env) -> dict:
+    return dict(
+        shelf_env.server.hub.fetchone(
+            "SELECT path, is_default FROM model_folder WHERE id = 1"
+        )
+    )
+
+
+def test_renaming_a_folder_renames_it_on_disk_and_repoints_its_row(shelf_env, tmp_path):
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute("UPDATE model_folder SET is_default = 1 WHERE id = 1")
+    root, r = _rename_root(shelf_env, tmp_path)
+    assert r.status_code == 200, r.text
+    renamed = tmp_path / "Loras"
+    assert r.json()["path"] == str(renamed)
+    assert not root.exists() and (renamed / "sdxl" / "a.safetensors").is_file()
+    # The settings dialog and the tree read the row; the default mark is by id.
+    assert _folder_one(shelf_env) == {"path": str(renamed), "is_default": 1}
+    listed = {
+        f["id"]: f
+        for f in shelf_env.owner.get(f"{API}/model-folders").json()["folders"]
+    }
+    assert listed[1]["path"] == str(renamed)
+    # The copies name their folder by id and their file by relpath: untouched.
+    rows = shelf_env.server.hub.fetchall(
+        "SELECT relpath, state FROM model_file WHERE model_folder_id = 1"
+    )
+    assert [(row["relpath"], row["state"]) for row in rows] == [
+        (os.path.join("sdxl", "a.safetensors"), "present")
+    ]
+    assert _listing(shelf_env).status_code == 200, "the tree cannot list it now"
+    # The slot it held for the rename is free again.
+    claim = model_folder_scan_task.claim_scan(
+        shelf_env.server.hub, 1, str(renamed), "user"
+    )
+    assert claim is not None, "the rename left the folder's scan slot held"
+    model_folder_scan_task.release_scan(claim)
+
+
+@pytest.mark.parametrize("name", ["con", "a/b", "..", ".hidden", ""])
+def test_a_root_rename_to_a_name_the_drive_cannot_hold_is_refused(
+    shelf_env, tmp_path, name
+):
+    root, r = _rename_root(shelf_env, tmp_path, name)
+    assert r.status_code == 400, r.text
+    assert root.is_dir() and _folder_one(shelf_env)["path"] == str(root)
+
+
+def test_a_root_rename_onto_a_taken_name_merges_nothing(shelf_env, tmp_path):
+    (tmp_path / "Loras").mkdir()
+    root, r = _rename_root(shelf_env, tmp_path)
+    assert r.status_code == 409, r.text
+    assert (root / "sdxl" / "a.safetensors").is_file()
+    assert list((tmp_path / "Loras").iterdir()) == [], "an empty target was replaced"
+    assert _folder_one(shelf_env)["path"] == str(root)
+
+
+def test_a_root_rename_onto_a_dangling_link_is_a_conflict(shelf_env, tmp_path):
+    os.symlink(str(tmp_path / "nowhere"), str(tmp_path / "Loras"))
+    root, r = _rename_root(shelf_env, tmp_path)
+    assert r.status_code == 409, r.text
+    assert root.is_dir() and os.path.islink(tmp_path / "Loras")
+    assert _folder_one(shelf_env)["path"] == str(root)
+
+
+def test_a_root_rename_onto_a_registered_path_on_an_unplugged_drive_is_refused(
+    shelf_env, tmp_path
+):
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (path, kind, movable, created_at) "
+            "VALUES (?, 'user', 'per_item', '2026-08-09T00:00:00Z')",
+            (str(tmp_path / "Loras"),),
+        )
+    root, r = _rename_root(shelf_env, tmp_path)
+    assert r.status_code == 409, r.text
+    assert root.is_dir() and not (tmp_path / "Loras").exists()
+
+
+@pytest.mark.parametrize(
+    "column, value", [("movable", "root_only"), ("owner", "pixlstash")]
+)
+def test_a_locked_folder_is_not_renamed(shelf_env, tmp_path, column, value):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(f"UPDATE model_folder SET {column} = ? WHERE id = 1", (value,))
+    r = shelf_env.owner.post(_RENAME, json={"name": "Loras"})
+    assert r.status_code == 409, r.text
+    assert root.is_dir() and not (tmp_path / "Loras").exists()
+
+
+def test_a_root_rename_waits_for_a_scan_a_move_and_docker(
+    shelf_env, tmp_path, monkeypatch
+):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    scan = model_folder_scan_task.claim_scan(shelf_env.server.hub, 1, str(root), "user")
+    try:
+        r = shelf_env.owner.post(_RENAME, json={"name": "Loras"})
+        assert r.status_code == 409 and "scanned" in r.text, r.text
+    finally:
+        model_folder_scan_task.release_scan(scan)
+    with SHELF_IO_LOCK:
+        r = shelf_env.owner.post(_RENAME, json={"name": "Loras"})
+        assert r.status_code == 409 and "move or an import" in r.text, r.text
+    monkeypatch.setattr(shelf_env.server, "running_in_docker", lambda: True)
+    assert shelf_env.owner.post(_RENAME, json={"name": "Loras"}).status_code == 403
+    assert root.is_dir() and not (tmp_path / "Loras").exists()
+
+
+def test_a_root_rename_waits_for_a_download_into_the_folder(
+    shelf_env, tmp_path, monkeypatch
+):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    running = [{"status": "running", "folder_path": str(root)}]
+    monkeypatch.setattr(model_downloads, "live_downloads", lambda: running)
+    r = shelf_env.owner.post(_RENAME, json={"name": "Loras"})
+    assert r.status_code == 409 and "downloading" in r.text, r.text
+    assert root.is_dir() and not (tmp_path / "Loras").exists()
+    # One into another folder, or one that has ended, is no reason to wait.
+    running[0] = {"status": "running", "folder_path": str(tmp_path / "other")}
+    assert shelf_env.owner.post(_RENAME, json={"name": "Loras"}).status_code == 200
+
+
+def test_a_case_only_root_rename_is_not_refused_as_overlapping_itself(
+    shelf_env, tmp_path, monkeypatch
+):
+    """Windows compares paths case-folded, so the folder's own row reads as the
+    new path; that row must be left out of the overlap check."""
+
+    def within_folded(path, base):
+        path, base = path.casefold(), base.casefold()
+        return path == base or path.startswith(base.rstrip(os.sep) + os.sep)
+
+    monkeypatch.setattr(model_folders_routes, "path_is_within", within_folded)
+    root, r = _rename_root(shelf_env, tmp_path, "LORAS")
+    assert r.status_code == 200, r.text
+    assert _folder_one(shelf_env)["path"] == str(tmp_path / "LORAS")
+
+
+def test_a_root_rename_the_hub_refuses_is_renamed_back(
+    shelf_env, tmp_path, monkeypatch
+):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    hub = shelf_env.server.hub
+
+    def refuse():
+        raise model_folders_routes.sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(hub, "transaction", refuse)
+    r = shelf_env.owner.post(_RENAME, json={"name": "Loras"})
+    monkeypatch.undo()
+    assert r.status_code == 500, r.text
+    assert root.is_dir() and not (tmp_path / "Loras").exists()
+    assert _folder_one(shelf_env)["path"] == str(root)
+
+
+def test_a_remote_owner_is_refused_the_root_rename(shelf_env, tmp_path):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    assert_real_route(
+        shelf_env.server.api,
+        "POST",
+        _RENAME,
+        template=f"{API}/model-folders/{{folder_id}}/rename",
+    )
+    r = shelf_env.owner.post(_RENAME, json={"name": "Loras"}, headers=_xff("8.8.8.8"))
+    assert r.status_code == 403 and "allow_remote_host_ops" in r.text, r.text
+    assert root.is_dir()
+    r = shelf_env.owner.post(_RENAME, json={"name": "Loras"}, headers=_xff(LAN_IPV4))
+    assert r.status_code == 200, "the positive control: a LAN owner renames it"
+
+
+# ---------------------------------------------------------------------------
+# POST /model-folders/{id}/dirs/remove - removing a folder (#2207)
+# ---------------------------------------------------------------------------
+
+_REMOVE = f"{API}/model-folders/1/dirs/remove"
+
+
+@pytest.fixture
+def old_folder(shelf_env, tmp_path, request):
+    """The seeded folder at a real directory holding ``old/``: one model, a
+    note the shelf does not list, and a preview one level down. ``keep/`` is
+    beside it, empty unless the test's copies put something there."""
+    root = tmp_path / "loras"
+    (root / "old" / "previews").mkdir(parents=True)
+    (root / "keep").mkdir()
+    (root / "old" / "lost.safetensors").write_bytes(b"m" * 300)
+    (root / "old" / "notes.txt").write_bytes(b"n" * 20)
+    (root / "old" / "previews" / "p.png").write_bytes(b"p" * 100)
+    _seeded_folder_at(shelf_env.server, str(root))
+    # Indirect parametrisation names other catalogued copies; each is written.
+    copies = getattr(request, "param", None) or [
+        (os.path.join("old", "lost.safetensors"), 300, "lost")
+    ]
+    for relpath, size, _key in copies:
+        (root / relpath).write_bytes(b"m" * size)
+    _set_copies(shelf_env, 1, copies)
+    return root
+
+
+def _model_of(shelf_env, relpath: str) -> int:
+    return int(
+        shelf_env.server.hub.fetchone(
+            "SELECT model_id FROM model_file WHERE model_folder_id = 1 AND relpath = ?",
+            (relpath,),
+        )["model_id"]
+    )
+
+
+def _plan_removal(shelf_env, path: str = "old") -> dict:
+    r = shelf_env.owner.post(_REMOVE, json={"path": path, "dry_run": True})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_the_removal_dry_run_lists_every_file_largest_first_and_removes_nothing(
+    shelf_env, old_folder
+):
+    lost = _model_of(shelf_env, os.path.join("old", "lost.safetensors"))
+    plan = _plan_removal(shelf_env)
+    assert [(f["relpath"], f["size"], f["model_id"]) for f in plan["files"]] == [
+        ("lost.safetensors", 300, lost),
+        ("previews/p.png", 100, None),
+        ("notes.txt", 20, None),
+    ]
+    assert (plan["file_count"], plan["bytes"], plan["name"]) == (3, 420, "old")
+    assert plan["models"] == [
+        {"id": lost, "name": "lost.safetensors", "elsewhere": False}
+    ]
+    assert plan["breaks"] == {"people": [], "sets": [], "workflows": []}
+    assert plan["pictures"] == 0
+    assert plan["copies"] == [
+        {
+            "folder_id": 1,
+            "relpath": os.path.join("old", "lost.safetensors"),
+            "model_id": lost,
+            "size": 300,
+        }
+    ]
+    assert len(plan["fingerprint"]) == 64
+    assert (old_folder / "old" / "notes.txt").exists(), "a dry run removed something"
+    assert _plan_removal(shelf_env)["fingerprint"] == plan["fingerprint"], (
+        "the fingerprint is not a function of the folder"
+    )
+
+
+@pytest.mark.parametrize(
+    "old_folder",
+    [
+        [
+            (os.path.join("old", "lost.safetensors"), 300, "lost"),
+            (os.path.join("keep", "lost.safetensors"), 300, "lost"),
+        ]
+    ],
+    indirect=True,
+)
+def test_a_model_with_a_copy_elsewhere_breaks_nothing(shelf_env, old_folder):
+    _attach(shelf_env.server, _h("dirs-1-lost"), "character", shelf_env.character_id)
+    plan = _plan_removal(shelf_env)
+    assert plan["models"][0]["elsewhere"] is True
+    assert plan["breaks"] == {"people": [], "sets": [], "workflows": []}
+
+
+def test_a_model_only_inside_breaks_its_person_set_and_workflow(shelf_env, old_folder):
+    server = shelf_env.server
+    _attach(server, _h("dirs-1-lost"), "character", shelf_env.character_id)
+    _attach(server, _h("dirs-1-lost"), "set", shelf_env.set_id)
+    try:
+        _seed_recipe(server, "sh-remove", [("lora_name", "lost.safetensors")])
+        _seed_workflow_of(server, "manual:wf-remove", "sh-remove")
+        _seed_picture(server, "sh-remove")
+        _seed_picture(server, "sh-remove")
+        plan = _plan_removal(shelf_env)
+    finally:
+        _unseed_workflows(server)
+        _wipe_recipes(server)
+    assert plan["breaks"]["people"] == [
+        {
+            "id": shelf_env.character_id,
+            "name": "Shelf Character",
+            "models": ["lost.safetensors"],
+        }
+    ]
+    assert plan["breaks"]["sets"] == [
+        {"id": shelf_env.set_id, "name": "Shelf Set", "models": ["lost.safetensors"]}
+    ]
+    assert [w["id"] for w in plan["breaks"]["workflows"]] == ["manual:wf-remove"]
+    assert plan["pictures"] == 2
+
+
+def test_a_model_whose_only_row_inside_is_missing_still_breaks_its_person(
+    shelf_env, old_folder
+):
+    """The removal drops every row under the folder, whatever its state, and
+    purges the models left with none, so the dry run weighs those too."""
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_folder_id = 1"
+        )
+    _attach(shelf_env.server, _h("dirs-1-lost"), "character", shelf_env.character_id)
+    plan = _plan_removal(shelf_env)
+    assert [p["id"] for p in plan["breaks"]["people"]] == [shelf_env.character_id]
+    assert plan["copies"] == [], "a missing row was offered to the move"
+
+
+def test_a_stale_fingerprint_is_a_409_and_removes_nothing(
+    shelf_env, old_folder, fake_trash
+):
+    plan = _plan_removal(shelf_env)
+    (old_folder / "old" / "late.txt").write_bytes(b"written after the dialog opened")
+    r = shelf_env.owner.post(
+        _REMOVE, json={"path": "old", "expect": plan["fingerprint"]}
+    )
+    assert r.status_code == 409, r.text
+    assert (old_folder / "old" / "lost.safetensors").exists()
+    assert list(fake_trash.iterdir()) == []
+
+    # A row that changes with the bytes left alone (a scan marking a copy
+    # missing, or registering a file) is a change too: the purge acts on rows.
+    plan = _plan_removal(shelf_env)
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_folder_id = 1"
+        )
+    r = shelf_env.owner.post(
+        _REMOVE, json={"path": "old", "expect": plan["fingerprint"]}
+    )
+    assert r.status_code == 409, r.text
+    assert (old_folder / "old" / "lost.safetensors").exists()
+
+    missing = shelf_env.owner.post(_REMOVE, json={"path": "old"})
+    assert missing.status_code == 400, missing.text
+    assert (old_folder / "old").is_dir(), "a removal without a fingerprint went ahead"
+
+
+@pytest.mark.parametrize(
+    "old_folder",
+    [
+        [
+            (os.path.join("old", "lost.safetensors"), 300, "lost"),
+            (os.path.join("old", "twin.safetensors"), 50, "twin"),
+            (os.path.join("keep", "twin.safetensors"), 50, "twin"),
+        ]
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("permanent", [False, True], ids=["trash", "permanent"])
+def test_a_folder_goes_whole_and_takes_its_rows_and_its_last_copies(
+    shelf_env, old_folder, fake_trash, permanent
+):
+    lost = _model_of(shelf_env, os.path.join("old", "lost.safetensors"))
+    twin = _model_of(shelf_env, os.path.join("keep", "twin.safetensors"))
+    plan = _plan_removal(shelf_env)
+
+    r = shelf_env.owner.post(
+        _REMOVE,
+        json={"path": "old", "permanent": permanent, "expect": plan["fingerprint"]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["removed_models"] == [lost]
+    assert r.json()["files_removed"] == 4
+    assert not (old_folder / "old").exists()
+    if permanent:
+        assert list(fake_trash.iterdir()) == []
+    else:
+        # One entry, whole, so it restores whole.
+        assert sorted(p.name for p in fake_trash.iterdir()) == ["old"]
+        assert (fake_trash / "old" / "previews" / "p.png").exists()
+        assert (fake_trash / "old" / "notes.txt").exists()
+    assert (old_folder / "keep" / "twin.safetensors").exists()
+
+    hub = shelf_env.server.hub
+    assert hub.fetchone("SELECT id FROM model WHERE id = ?", (lost,)) is None
+    assert [
+        row["relpath"]
+        for row in hub.fetchall(
+            "SELECT relpath FROM model_file WHERE model_id = ?", (twin,)
+        )
+    ] == [os.path.join("keep", "twin.safetensors")], "the twin lost its other copy"
+
+
+@pytest.mark.parametrize("permanent", [False, True], ids=["trash", "permanent"])
+def test_a_symlinked_directory_inside_is_removed_as_a_link(
+    shelf_env, old_folder, fake_trash, tmp_path, permanent
+):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "theirs.safetensors").write_bytes(b"o" * 999)
+    try:
+        os.symlink(outside, old_folder / "old" / "elsewhere")
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot make a directory symlink here: {exc}")
+
+    plan = _plan_removal(shelf_env)
+    listed = {f["relpath"]: f for f in plan["files"]}
+    assert "elsewhere" in listed and listed["elsewhere"]["link"] is True
+    assert "elsewhere/theirs.safetensors" not in listed, (
+        "the walk followed a link out of the folder"
+    )
+
+    r = shelf_env.owner.post(
+        _REMOVE,
+        json={"path": "old", "permanent": permanent, "expect": plan["fingerprint"]},
+    )
+    assert r.status_code == 200, r.text
+    assert (outside / "theirs.safetensors").read_bytes() == b"o" * 999, (
+        "the removal reached through the link"
+    )
+
+
+def test_a_junction_is_listed_as_a_link_and_never_walked(tmp_path, monkeypatch):
+    """Without ``os.path.isjunction`` (Python 3.11), a junction is told by its
+    reparse tag. Simulated here: a directory whose ``lstat`` carries the tag."""
+    (tmp_path / "junction").mkdir()
+    (tmp_path / "junction" / "theirs.txt").write_bytes(b"not ours")
+    junction = str(tmp_path / "junction")
+    real_lstat = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        if os.fspath(path) == junction:
+            return SimpleNamespace(
+                st_mode=stat.S_IFDIR,
+                st_size=0,
+                st_mtime_ns=0,
+                st_reparse_tag=model_files_routes._JUNCTION_TAG,
+            )
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.delattr(os.path, "isjunction", raising=False)
+    monkeypatch.setattr(os, "lstat", lstat)
+    listing = model_files_routes._folder_listing(str(tmp_path))
+    assert [(relpath, link) for relpath, _size, _mtime, link in listing] == [
+        ("junction", True)
+    ]
+
+
+def test_a_folder_removal_through_a_link_is_refused(shelf_env, old_folder, tmp_path):
+    try:
+        os.symlink(tmp_path, old_folder / "link")
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot make a directory symlink here: {exc}")
+    via_link = shelf_env.owner.post(_REMOVE, json={"path": "link", "dry_run": True})
+    assert via_link.status_code == 400, via_link.text
+
+
+def test_a_folder_removal_is_refused_where_a_folder_move_is(shelf_env, old_folder):
+    root = shelf_env.owner.post(_REMOVE, json={"path": "", "dry_run": True})
+    assert root.status_code == 400, root.text
+
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (path, kind, movable, created_at) "
+            "VALUES (?, 'user', 'per_item', '2026-08-09T00:00:00Z')",
+            (str(old_folder / "old" / "previews"),),
+        )
+    holds_one = shelf_env.owner.post(_REMOVE, json={"path": "old", "dry_run": True})
+    assert holds_one.status_code == 409, holds_one.text
+
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute("UPDATE model_folder SET movable = 'root_only' WHERE id = 1")
+    locked = shelf_env.owner.post(_REMOVE, json={"path": "keep", "dry_run": True})
+    assert locked.status_code == 409, locked.text
+    assert (old_folder / "old" / "lost.safetensors").exists()
+
+
+def test_a_share_token_cannot_remove_a_folder(shelf_env, old_folder, fake_trash):
+    plan = _plan_removal(shelf_env)
+    body = {"path": "old", "expect": plan["fingerprint"]}
+    assert_real_route(shelf_env.server.api, "POST", _REMOVE)
+    for description, restriction in (
+        ("remove scoped probe", {"resource_type": "character", "resource_id": 1}),
+        ("remove unscoped probe", {}),
+    ):
+        token = mint_read_token(shelf_env.owner, description, **restriction)
+        client = bearer_client(shelf_env.server, token)
+        assert client.get(f"{API}/pictures").status_code == 200, (
+            f"{description} is dead; the refusal below would prove nothing"
+        )
+        r = client.post(_REMOVE, json=body)
+        assert r.status_code == 403, f"a share token removed a folder: {r.text}"
+    assert (old_folder / "old").is_dir(), "a refused call still removed the folder"
+    # Positive control: the owner is not blocked on the same call.
+    assert shelf_env.owner.post(_REMOVE, json=body).status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# GET /model-folders/comfyui-reads - where ComfyUI loads each kind from (#2205)
+# ---------------------------------------------------------------------------
+
+_READS = f"{API}/model-folders/comfyui-reads"
+
+
+@pytest.fixture
+def comfyui_at(shelf_env, monkeypatch):
+    """Point the owner's ComfyUI at a stand-in on this computer.
+
+    Returns a setter taking what ``/internal/folder_paths`` answers (a dict, or
+    an exception to raise) and where ``locate`` places ComfyUI; the URLs asked
+    are recorded on it. ``.test`` never resolves, so the save's own folder
+    registration finds nothing to add.
+    """
+    asked: list[str] = []
+    state = {"answer": {}, "where": "this_computer"}
+
+    def locate(url):
+        return state["where"], "http://127.0.0.1:18188/"
+
+    def folder_paths(url):
+        asked.append(url)
+        if isinstance(state["answer"], Exception):
+            raise state["answer"]
+        return state["answer"]
+
+    monkeypatch.setattr(
+        model_folders_routes, "comfyui_link_service", SimpleNamespace(locate=locate)
+    )
+    monkeypatch.setattr(model_folders_routes, "comfyui_folder_paths", folder_paths)
+    r = shelf_env.owner.patch(
+        f"{API}/users/me/config", json={"comfyui_url": "http://comfy.test:8188"}
+    )
+    assert r.status_code == 200, r.text
+
+    def setter(answer, where="this_computer"):
+        state["answer"], state["where"] = answer, where
+
+    setter.asked = asked
+    yield setter
+    shelf_env.owner.patch(f"{API}/users/me/config", json={"comfyui_url": ""})
+
+
+def test_comfyui_reads_match_each_category_to_a_registered_folder(
+    shelf_env, tmp_path, comfyui_at
+):
+    """A category path inside the folder reads from that subdirectory, mixed case
+    and nested kept as the disk spells them; one around the folder reads it whole.
+    A category outside every folder, and one the shelf has no Type for, are left
+    out."""
+    install = tmp_path / "ComfyUI"
+    models = install / "models"
+    for sub in ("Lora", "StableDiffusion/SDXL", "custom_nodes"):
+        (models / sub).mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(models))
+    comfyui_at(
+        {
+            "loras": [str(models / "Lora")],
+            "checkpoints": [str(models / "StableDiffusion" / "SDXL")],
+            "diffusion_models": [str(install)],
+            "vae": [str(tmp_path / "elsewhere" / "vae")],
+            "custom_nodes": [str(models / "custom_nodes")],
+            "clip": "not a list",
+        }
+    )
+
+    r = shelf_env.owner.get(_READS)
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "known": True,
+        "reads": [
+            # ComfyUI names a file here `models/<relpath>`: the prefix.
+            {
+                "folder_id": 1,
+                "subpath": "",
+                "prefix": "models",
+                "category": "diffusion_models",
+                "kind": "checkpoint",
+            },
+            {
+                "folder_id": 1,
+                "subpath": "Lora",
+                "prefix": "",
+                "category": "loras",
+                "kind": "lora",
+            },
+            {
+                "folder_id": 1,
+                "subpath": "StableDiffusion/SDXL",
+                "prefix": "",
+                "category": "checkpoints",
+                "kind": "checkpoint",
+            },
+        ],
+    }
+    assert comfyui_at.asked == ["http://127.0.0.1:18188"], (
+        "asked somewhere other than the address locate vetted"
+    )
+
+
+def test_comfyui_reads_are_unknown_when_nothing_lands_in_a_registered_folder(
+    shelf_env, tmp_path, comfyui_at
+):
+    """ComfyUI answered, but none of its folders is on the shelf. Saying `known`
+    here would call every model on the shelf misplaced."""
+    (tmp_path / "shelf").mkdir()
+    _seeded_folder_at(shelf_env.server, str(tmp_path / "shelf"))
+    comfyui_at({"loras": [str(tmp_path / "comfy" / "loras")]})
+
+    r = shelf_env.owner.get(_READS)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"known": False, "reads": []}
+    assert comfyui_at.asked, "the stand-in was never asked; nothing was measured"
+
+
+def test_comfyui_reads_are_unknown_when_comfyui_cannot_be_asked(
+    shelf_env, tmp_path, comfyui_at
+):
+    """Unreachable, or on another machine (whose paths name another disk, so it
+    is not even asked), or not set at all: no marks rather than guessed ones."""
+    _seeded_folder_at(shelf_env.server, str(tmp_path))
+    comfyui_at(comfyui_service.requests.ConnectionError("refused"))
+    r = shelf_env.owner.get(_READS)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"known": False, "reads": []}
+    assert len(comfyui_at.asked) == 1
+
+    comfyui_at({"loras": [str(tmp_path)]}, where="local_network")
+    assert shelf_env.owner.get(_READS).json() == {"known": False, "reads": []}
+    assert len(comfyui_at.asked) == 1, "a ComfyUI on another machine was asked"
+
+    shelf_env.owner.patch(f"{API}/users/me/config", json={"comfyui_url": ""})
+    comfyui_at({"loras": [str(tmp_path)]})
+    assert shelf_env.owner.get(_READS).json() == {"known": False, "reads": []}
+    assert len(comfyui_at.asked) == 1, "asked with no ComfyUI set"
+
+
+def test_comfyui_reads_are_local_owner_only_and_refuse_share_tokens(
+    shelf_env, tmp_path, monkeypatch, comfyui_at
+):
+    _seeded_folder_at(shelf_env.server, str(tmp_path))
+    comfyui_at({"loras": [str(tmp_path)]})
+    assert_real_route(shelf_env.server.api, "GET", _READS)
+    r = shelf_env.owner.get(_READS)
+    assert r.status_code == 200 and r.json()["known"], (
+        "the owner cannot read it either; the refusals below would prove nothing"
+    )
+
+    # Both READ belts are emptied, so every refusal below is the gate's own.
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+    scoped = mint_read_token(
+        shelf_env.owner,
+        "comfyui reads probe",
+        resource_type="character",
+        resource_id=shelf_env.character_id,
+    )
+    unscoped = mint_read_token(shelf_env.owner, "comfyui reads global read")
+    for name, token in (("resource-scoped", scoped), ("unscoped READ", unscoped)):
+        client = bearer_client(shelf_env.server, token)
+        assert client.get(f"{API}/pictures").status_code == 200, (
+            f"the {name} token is dead; the refusal below would prove nothing"
+        )
+        r = client.get(_READS)
+        assert r.status_code == 403, (
+            f"a {name} share token read ComfyUI's folders: {r.status_code} {r.text}"
+        )
+
+    assert shelf_env.owner.get(_READS, headers=_xff(LAN_IPV4)).status_code == 200
+    r = shelf_env.owner.get(_READS, headers=_xff("8.8.8.8"))
+    assert r.status_code == 403, r.text
+    assert "allow_remote_host_ops" in r.text, r.text
+
+
+# ===========================================================================
+# POST /models/base-model-lookup - empty base models from Civitai (#1517)
+# ===========================================================================
+
+
+@pytest.fixture
+def no_civitai_pause(monkeypatch):
+    monkeypatch.setattr(model_shelf_service, "CIVITAI_PAUSE_SECONDS", 0)
+
+
+def _base_model_columns(shelf_env, model_id) -> tuple:
+    row = shelf_env.server.hub.fetchone(
+        "SELECT base_model, base_model_canonical, base_model_source FROM model "
+        "WHERE id = ?",
+        (model_id,),
+    )
+    return tuple(row)
+
+
+def test_lookup_fills_only_an_empty_row_nobody_ruled_on(shelf_env, no_civitai_pause):
+    ids = shelf_env.model_ids
+    hub = shelf_env.server.hub
+    noname, dana = ids["sd_xl_noname.safetensors"], ids["dana.safetensors"]
+    # The owner's "none of these": base_model NULL, source `user`.
+    model_shelf_service.update_models(hub, [dana], {"base_model": None})
+    # A header that names the model only through `modelspec.architecture`.
+    declared = _add_model(shelf_env, "checkpoint", "spec.safetensors", _h("spec"))
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model_canonical = 'SDXL 1.0', "
+            "base_model_source = 'declared' WHERE id = ?",
+            (declared,),
+        )
+    engine = _add_model(shelf_env, "engine", "tagger.onnx", _h("engine"))
+    asked = []
+
+    def lookup(sha256):
+        asked.append(sha256)
+        return "SDXL 1.0"
+
+    selection = [
+        noname,
+        dana,
+        ids["alice.safetensors"],
+        ids["mystery.safetensors"],
+        ids["huge_unhashed.safetensors"],
+        declared,
+        engine,
+        999999,
+    ]
+    result = model_shelf_service.fill_base_models_online(hub, selection, lookup)
+
+    assert asked == [ADAPTER_NO_BASE], "a row that was not eligible was asked about"
+    assert result["filled"] == [{"id": noname, "base_model": "SDXL 1.0"}]
+    assert result["skipped"] == [
+        {"id": dana, "reason": "owner_set"},
+        {"id": ids["alice.safetensors"], "reason": "already_set"},
+        {"id": ids["mystery.safetensors"], "reason": "not_a_model"},
+        {"id": ids["huge_unhashed.safetensors"], "reason": "no_hash"},
+        {"id": declared, "reason": "already_set"},
+        {"id": engine, "reason": "not_a_model"},
+        {"id": 999999, "reason": "unknown_id"},
+    ]
+    assert result["not_found"] == [] and result["not_asked"] == []
+    assert _base_model_columns(shelf_env, noname) == ("SDXL 1.0", "SDXL 1.0", "civitai")
+    assert _base_model_columns(shelf_env, dana) == (None, None, "user")
+    assert _base_model_columns(shelf_env, declared) == (None, "SDXL 1.0", "declared")
+    assert _base_model_columns(shelf_env, ids["alice.safetensors"])[0] == "SDXL 1.0"
+
+
+@pytest.mark.parametrize("owner_value", [None, "Pony"])
+def test_an_owner_ruling_landing_during_the_lookup_wins(
+    shelf_env, no_civitai_pause, owner_value
+):
+    """The write repeats the eligibility: a clear (`None`) is the case only the
+    `<> 'user'` guard catches, since the base model is still NULL after it."""
+    hub = shelf_env.server.hub
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+
+    def lookup(sha256):
+        model_shelf_service.update_models(hub, [noname], {"base_model": owner_value})
+        return "Flux.1 dev"
+
+    result = model_shelf_service.fill_base_models_online(hub, [noname], lookup)
+
+    assert result["filled"] == []
+    assert result["skipped"] == [{"id": noname, "reason": "owner_set"}]
+    assert _base_model_columns(shelf_env, noname) == (
+        owner_value,
+        model_shelf_service.fold(owner_value),
+        "user",
+    )
+
+
+def test_a_header_identification_landing_during_the_lookup_wins(
+    shelf_env, no_civitai_pause
+):
+    hub = shelf_env.server.hub
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+
+    def lookup(sha256):
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET base_model_canonical = 'SDXL 1.0', "
+                "base_model_source = 'declared' WHERE id = ?",
+                (noname,),
+            )
+        return "Pony"
+
+    result = model_shelf_service.fill_base_models_online(hub, [noname], lookup)
+
+    assert result["skipped"] == [{"id": noname, "reason": "already_set"}], (
+        "a header that won the race was reported as the owner's ruling"
+    )
+    assert _base_model_columns(shelf_env, noname) == (None, "SDXL 1.0", "declared")
+
+
+def test_the_first_unreachable_answer_stops_the_batch(shelf_env, no_civitai_pause):
+    ids = shelf_env.model_ids
+    third = _add_model(shelf_env, "checkpoint", "third.safetensors", _h("third"))
+    selection = [ids["sd_xl_noname.safetensors"], ids["dana.safetensors"], third]
+    asked = []
+
+    def lookup(sha256):
+        asked.append(sha256)
+        if len(asked) == 2:
+            raise civitai_lookup.LookupUnavailable("HTTP 503")
+        return None
+
+    result = model_shelf_service.fill_base_models_online(
+        shelf_env.server.hub, selection, lookup
+    )
+
+    assert asked == [ADAPTER_NO_BASE, ADAPTER_NO_BASE_2], "it kept asking"
+    assert result["not_found"] == [selection[0]]
+    assert result["not_asked"] == selection[1:]
+    assert result["filled"] == [] and result["skipped"] == []
+
+
+def test_a_spent_time_budget_stops_the_batch(shelf_env, monkeypatch):
+    monkeypatch.setattr(model_shelf_service, "CIVITAI_BUDGET_SECONDS", -1)
+    selection = [
+        shelf_env.model_ids["sd_xl_noname.safetensors"],
+        shelf_env.model_ids["dana.safetensors"],
+    ]
+    asked = []
+
+    result = model_shelf_service.fill_base_models_online(
+        shelf_env.server.hub, selection, asked.append
+    )
+
+    assert asked == [] and result["not_asked"] == selection
+
+
+def test_a_civitai_answer_reaches_the_companion_ladder(shelf_env, no_civitai_pause):
+    hub = shelf_env.server.hub
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+    dana = shelf_env.model_ids["dana.safetensors"]
+    labels = {ADAPTER_NO_BASE: "sdxl", ADAPTER_NO_BASE_2: "Brand New Base"}
+    model_shelf_service.fill_base_models_online(hub, [noname, dana], labels.get)
+
+    rows = {
+        row["id"]: row
+        for row in hub.fetchall(
+            "SELECT id, base_model, base_model_canonical, base_model_source "
+            "FROM model WHERE id IN (?, ?)",
+            (noname, dana),
+        )
+    }
+    assert model_shelf_service.known_base_model(rows[noname]) == "SDXL 1.0"
+    # A label PixlStash does not know is stored verbatim and still answers.
+    assert rows[dana]["base_model_canonical"] is None
+    assert model_shelf_service.known_base_model(rows[dana]) == "Brand New Base"
+
+
+def test_a_header_declaration_replaces_civitai_and_a_filename_does_not(
+    shelf_env, no_civitai_pause
+):
+    hub = shelf_env.server.hub
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+    model_shelf_service.fill_base_models_online(hub, [noname], lambda _: "SDXL 1.0")
+
+    def scan_finds(canonical, source):
+        record = SimpleNamespace(
+            base_model_canonical=canonical, base_model_source=source
+        )
+        with hub.transaction() as conn:
+            ModelFolderScanner._write_identification(conn, noname, record)
+        return _base_model_columns(shelf_env, noname)[1:]
+
+    assert scan_finds("Pony Diffusion V6 XL", "filename") == ("SDXL 1.0", "civitai")
+    assert scan_finds("Illustrious", "declared") == ("Illustrious", "declared")
+
+
+def _civitai_answers(monkeypatch, status=200, body=None):
+    """Stand in for civitai.com; nothing in this module reaches the network."""
+    sent = []
+
+    def get(url, **kwargs):
+        sent.append(url)
+        return SimpleNamespace(status_code=status, json=lambda: body)
+
+    monkeypatch.setattr(civitai_lookup.requests, "get", get)
+    return sent
+
+
+def test_the_lookup_route_fills_and_answers_with_the_receipt(
+    shelf_env, monkeypatch, no_civitai_pause
+):
+    sent = _civitai_answers(monkeypatch, body={"baseModel": " Illustrious "})
+    digest = hashlib.sha256(b"a lora nobody named").hexdigest()
+    lora = _add_model(shelf_env, "adapter", "plain.safetensors", digest, kind="lora")
+    alice = shelf_env.model_ids["alice.safetensors"]
+    # The seed's readable stand-in hashes are not hex, as no real row's is.
+    not_hex = shelf_env.model_ids["sd_xl_noname.safetensors"]
+
+    r = shelf_env.owner.post(
+        f"{API}/models/base-model-lookup", json={"ids": [lora, alice, not_hex]}
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "filled": [{"id": lora, "base_model": "Illustrious"}],
+        "not_found": [],
+        "skipped": [
+            {"id": alice, "reason": "already_set"},
+            {"id": not_hex, "reason": "no_hash"},
+        ],
+        "not_asked": [],
+    }
+    assert sent == [civitai_lookup.CIVITAI_BY_HASH.format(sha256=digest)]
+    assert _base_model_columns(shelf_env, lora)[0] == "Illustrious"
+
+
+def test_the_lookup_route_refuses_what_it_must_not_ask_about(
+    shelf_env, monkeypatch, no_civitai_pause
+):
+    sent = _civitai_answers(monkeypatch, body={"baseModel": "SDXL 1.0"})
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+    engine = _add_model(shelf_env, "engine", "tagger.onnx", _h("engine"))
+    path = f"{API}/models/base-model-lookup"
+
+    r = shelf_env.owner.post(path, json={"ids": list(range(1, 102))})
+    assert r.status_code == 422, r.text
+    r = shelf_env.owner.post(path, json={"ids": [noname, engine]})
+    assert r.status_code == 409, r.text
+    monkeypatch.setenv("PIXLSTASH_DEMO_MODE", "1")
+    r = shelf_env.owner.post(path, json={"ids": [noname]})
+    assert r.status_code == 409, r.text
+    assert sent == [], "a refused call still asked Civitai"
+    assert _base_model_columns(shelf_env, noname)[0] is None

@@ -27,23 +27,57 @@ vi.mock("vuetify/components", async (importOriginal) => ({
 
 const listRuns = vi.fn();
 const importRun = vi.fn();
+const trashRun = vi.fn();
 vi.mock("../../api/modelImports", () => ({
   listRuns: (...args) => listRuns(...args),
   importRun: (...args) => importRun(...args),
+  trashRun: (...args) => trashRun(...args),
   runSampleUrl: (folderId, runName, filename) =>
     `/api/v1/model-folders/${folderId}/runs/${runName}/samples/${filename}`,
 }));
+
+const listTrainingJobs = vi.fn();
+const cancelTrainingJob = vi.fn();
+const getTrainingJob = vi.fn();
+const createTrainingJob = vi.fn();
+const deleteTrainingJob = vi.fn();
+vi.mock("../../api/training", () => ({
+  listTrainingJobs: (...args) => listTrainingJobs(...args),
+  cancelTrainingJob: (...args) => cancelTrainingJob(...args),
+  getTrainingJob: (...args) => getTrainingJob(...args),
+  createTrainingJob: (...args) => createTrainingJob(...args),
+  deleteTrainingJob: (...args) => deleteTrainingJob(...args),
+}));
+
+// The route the tab is on: `?run=<uuid>` opens a run's page.
+const nav = vi.hoisted(() => ({ route: null, push: vi.fn() }));
+vi.mock("vue-router", async () => {
+  const { reactive } = await import("vue");
+  nav.route = reactive({ name: "models-runs", query: {} });
+  return {
+    useRoute: () => nav.route,
+    useRouter: () => ({ push: (...args) => nav.push(...args) }),
+  };
+});
 
 import TrainingRuns from "./TrainingRuns.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
+import { useTrainingStore } from "../../stores/useTrainingStore";
 
 const globalOpts = {
   global: {
     stubs: {
       "v-icon": true,
       AiToolkitIcon: true,
+      TrainingRunLive: {
+        props: ["jobId", "run", "folderId"],
+        template:
+          "<div class='live-stub'>{{ jobId ?? `${folderId}/${run?.name}` }}</div>",
+      },
       // Renders the activator AND the panel inline. The real one teleports, so
       // nothing inside a menu would be findable.
       "v-menu": {
@@ -51,7 +85,8 @@ const globalOpts = {
         template: "<div><slot name='activator' :props='{}' /><slot /></div>",
       },
       AppButton: {
-        template: "<button :disabled='disabled'><slot /></button>",
+        template:
+          "<button :disabled='disabled' :aria-busy='loading ? `true` : undefined'><slot /></button>",
         props: ["disabled", "loading", "variant", "iconLeft", "size"],
       },
     },
@@ -107,14 +142,16 @@ async function openWith(runs, folders = FOLDERS) {
   return wrapper;
 }
 
-/** Tick the card whose name matches, the way a pointer would. */
-async function tick(wrapper, name) {
+/** Ctrl+click the card whose name matches: adds it to the selection. */
+async function tick(wrapper, name, modifiers = { ctrlKey: true }) {
   const card = wrapper
     .findAll(".tr-card")
     .find((c) => c.find(".tr-card-name").text() === name);
-  await card.trigger("click");
+  await card.trigger("click", modifiers);
   return card;
 }
+
+const chosenNow = () => useTrainingRunsStore().chosen;
 
 const importBtn = (wrapper) =>
   wrapper.findAll("button").find((b) => b.text().startsWith("Import"));
@@ -123,11 +160,24 @@ beforeEach(() => {
   setActivePinia(createPinia());
   listRuns.mockReset();
   importRun.mockReset();
+  listTrainingJobs.mockReset();
+  listTrainingJobs.mockResolvedValue([]);
+  cancelTrainingJob.mockReset();
+  nav.push.mockReset();
+  nav.route.query = {};
   useModelShelfStore().fetchRows = vi.fn();
+  // An import re-reads the registry. Left real it goes to the network and
+  // lands after the test, and the store action it then runs makes THAT
+  // test's pinia the active one again under the next test.
+  useModelFoldersStore().refresh = vi.fn(async () => {});
 });
 
-afterEach(() => {
+afterEach(async () => {
   while (mounted.length) mounted.pop().unmount();
+  // Let a test's trailing reads land before the next test's pinia is made: a
+  // store action resolving late makes ITS pinia the active one again, and the
+  // next test would then read the old test's notices.
+  await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
 describe("drawing the grid", () => {
@@ -138,6 +188,25 @@ describe("drawing the grid", () => {
     const wrapper = await openWith([run(), run("Foxglove")]);
     expect(wrapper.findAll(".tr-card")).toHaveLength(2);
     expect(importRun).not.toHaveBeenCalled();
+  });
+
+  it("marks each run with its base model's tile, or none with no base model", async () => {
+    const tile = { label: "FLUX.1 Dev", mark: ["Dev", "1"], mark_tab: null, mark_colors: ["#484c53"], mark_icon: "flux", mark_letters: null, mark_band: true };
+    const wrapper = await openWith([
+      run("Known", { base_tile: tile }),
+      run("Unknown", { base_model: "someone/my-base", base_tile: null }),
+      run("Unrecorded", { base_model: null }),
+    ]);
+    const mark = (name) =>
+      wrapper
+        .findAll(".tr-card")
+        .find((c) => c.find(".tr-card-name").text() === name)
+        .find("[data-testid='tr-card-mark']");
+    // The release's glyph, the tile a workflow card draws FLUX.1 Dev with.
+    expect(mark("Known").find(".mmark-named--release img").exists()).toBe(true);
+    // A base nobody knows still wears a mark: the generated one.
+    expect(mark("Unknown").find(".mmark-initials").exists()).toBe(true);
+    expect(mark("Unrecorded").exists()).toBe(false);
   });
 
   it("covers with the first prompt at the highest step", async () => {
@@ -168,6 +237,257 @@ describe("drawing the grid", () => {
     expect(wrapper.find(".tr-card-note").text()).toContain("No final file yet");
   });
 
+  it("says a failed run failed, and why, instead of calling it unfinished", async () => {
+    listTrainingJobs.mockResolvedValue([
+      {
+        uuid: "u1",
+        name: "Clementine",
+        status: "error",
+        error: "CUDA out of memory",
+        run_name: "Clementine",
+        started_at: "2026-10-01T00:01:00Z",
+        step: 500,
+        total_steps: 1000,
+      },
+    ]);
+    const wrapper = await openWith([
+      run("Clementine", {
+        checkpoints: [
+          { filename: "Clementine_000000500.safetensors", step: 500, size: 1 },
+        ],
+      }),
+    ]);
+    expect(wrapper.find(".tr-card-chip--err").text()).toBe("Failed");
+    expect(wrapper.find("[data-testid='tr-card-reason']").text()).toBe(
+      "CUDA out of memory",
+    );
+    expect(wrapper.text()).not.toContain("No final file yet");
+  });
+
+  it("keeps a card for a run that failed before it had a folder", async () => {
+    // Nothing on disk to draw, so the job is the whole card (#2293).
+    listTrainingJobs.mockResolvedValue([
+      {
+        uuid: "u1",
+        name: "Clementine",
+        status: "error",
+        error: "Dataset build failed",
+        run_name: null,
+        created_at: "2026-10-01T00:00:00Z",
+      },
+    ]);
+    const wrapper = await openWith([]);
+    const card = wrapper.find(".tr-card");
+    // The chip says it failed; where the state would be, it offers a retry.
+    expect(card.find(".tr-card-chip--err").text()).toBe("Failed");
+    expect(card.find(".tr-card-preview--none").text()).toBe("Retry");
+    expect(card.find("[data-testid='tr-card-reason']").text()).toBe(
+      "Dataset build failed",
+    );
+    // There is nothing to import from it.
+    await tick(wrapper, "Clementine");
+    expect(importBtn(wrapper)).toBeUndefined();
+  });
+
+  describe("retrying a failed run", () => {
+    const failedJob = {
+      id: 7,
+      uuid: "u1",
+      name: "Clementine",
+      status: "error",
+      error: "Dataset build failed",
+      run_name: null,
+      created_at: "2026-10-01T00:00:00Z",
+    };
+    const detail = {
+      ...failedJob,
+      set_id: 4,
+      character_id: null,
+      trigger_word: "clem",
+      preset: "flux-dev@3",
+      resolved_profile: {
+        preset: "flux-dev@3",
+        subject: "style",
+        effort: "strong",
+        fit: "save_memory",
+      },
+      advanced_pins: { "train.steps": 1200 },
+    };
+    const queued = {
+      id: 8,
+      uuid: "u2",
+      name: "Clementine",
+      status: "queued",
+      run_name: null,
+      created_at: "2026-10-02T00:00:00Z",
+    };
+
+    beforeEach(() => {
+      getTrainingJob.mockReset().mockResolvedValue(detail);
+      createTrainingJob.mockReset().mockResolvedValue(queued);
+      deleteTrainingJob.mockReset().mockResolvedValue({});
+    });
+
+    const cardNamed = (wrapper, name) =>
+      wrapper
+        .findAll(".tr-card")
+        .find((c) => c.find(".tr-card-name").text() === name);
+
+    async function retried(wrapper, click) {
+      listTrainingJobs.mockResolvedValue([queued]);
+      await click();
+      await settle(wrapper);
+    }
+
+    it("queues it again with its settings, in its card's place", async () => {
+      listTrainingJobs.mockResolvedValue([failedJob]);
+      const wrapper = await openWith([]);
+      await retried(wrapper, () =>
+        wrapper.find("[data-testid='tr-card-retry']").trigger("click"),
+      );
+      expect(createTrainingJob).toHaveBeenCalledWith({
+        name: "Clementine",
+        set_id: 4,
+        trigger_word: "clem",
+        preset: "flux-dev",
+        subject: "style",
+        effort: "strong",
+        fit: "save_memory",
+        pins: { "train.steps": 1200 },
+      });
+      // Created first, so a refused retry leaves the failed run alone.
+      expect(deleteTrainingJob).toHaveBeenCalledWith(7);
+      expect(
+        createTrainingJob.mock.invocationCallOrder[0],
+      ).toBeLessThan(deleteTrainingJob.mock.invocationCallOrder[0]);
+      const cards = wrapper.findAll(".tr-card");
+      expect(cards).toHaveLength(1);
+      expect(cards[0].attributes("data-run-key")).toBe("job:u2");
+      expect(cards[0].attributes("aria-selected")).toBe("true");
+    });
+
+    it("keeps the failed run when the retry is refused", async () => {
+      listTrainingJobs.mockResolvedValue([failedJob]);
+      createTrainingJob.mockRejectedValue({
+        response: { status: 422, data: { detail: "AI-toolkit is not set up." } },
+      });
+      const wrapper = await openWith([]);
+      await wrapper.find("[data-testid='tr-card-retry']").trigger("click");
+      await settle(wrapper);
+      expect(deleteTrainingJob).not.toHaveBeenCalled();
+      expect(useNoticeStore().notices.at(-1).text).toContain(
+        "AI-toolkit is not set up.",
+      );
+    });
+
+    it("leaves the keyboard place alone when the retry is refused", async () => {
+      // A folder card has no job; a refused retry must not read it as the
+      // replacement and move the cursor there.
+      listTrainingJobs.mockResolvedValue([failedJob]);
+      createTrainingJob.mockRejectedValue({
+        response: { status: 422, data: { detail: "AI-toolkit is not set up." } },
+      });
+      const wrapper = await openWith([run("Foxglove")]);
+      const tabbable = () =>
+        wrapper.find(".tr-card[tabindex='0'] .tr-card-name").text();
+      expect(tabbable()).toBe("Clementine");
+      await wrapper.find("[data-testid='tr-card-retry']").trigger("click");
+      await settle(wrapper);
+      expect(tabbable()).toBe("Clementine");
+    });
+
+    it("says why when the run no longer fits this GPU", async () => {
+      listTrainingJobs.mockResolvedValue([failedJob]);
+      createTrainingJob.mockRejectedValue({
+        response: {
+          status: 422,
+          data: {
+            detail: {
+              message: "Needs 24 GB of GPU memory; 12 GB is free.",
+              budget: "vram",
+              need_mb: 24576,
+              free_mb: 12288,
+            },
+          },
+        },
+      });
+      const wrapper = await openWith([]);
+      await wrapper.find("[data-testid='tr-card-retry']").trigger("click");
+      await settle(wrapper);
+      expect(deleteTrainingJob).not.toHaveBeenCalled();
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "Needs 24 GB of GPU memory; 12 GB is free.",
+      );
+    });
+
+    it("says so when the failed run could not be removed after the retry", async () => {
+      listTrainingJobs.mockResolvedValue([failedJob]);
+      deleteTrainingJob.mockRejectedValue({
+        response: { status: 409, data: { detail: "Job is still stopping" } },
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const wrapper = await openWith([]);
+        await wrapper.find("[data-testid='tr-card-retry']").trigger("click");
+        await settle(wrapper);
+        expect(createTrainingJob).toHaveBeenCalledTimes(1);
+        const notice = useNoticeStore().notices.at(-1);
+        expect(notice.level).toBe("warning");
+        expect(notice.text).toContain("could not remove the failed run");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("offers Retry training in a failed card's menu, and only there", async () => {
+      listTrainingJobs.mockResolvedValue([
+        failedJob,
+        { ...queued, id: 9, uuid: "u3", name: "Foxglove", status: "stopped" },
+      ]);
+      const wrapper = await openWith([]);
+      await cardNamed(wrapper, "Foxglove").trigger("contextmenu");
+      expect(wrapper.find("[data-testid='tr-menu-retry']").exists()).toBe(false);
+      await cardNamed(wrapper, "Clementine").trigger("contextmenu");
+      await retried(wrapper, () =>
+        wrapper.find("[data-testid='tr-menu-retry']").trigger("click"),
+      );
+      expect(createTrainingJob).toHaveBeenCalledTimes(1);
+      expect(deleteTrainingJob).toHaveBeenCalledWith(7);
+    });
+
+    it("offers Train longer on an ended run with a checkpoint, in the menu and on a one-run pill", async () => {
+      const ended = (name, id, status) => ({
+        id,
+        uuid: `u-${name}`,
+        name,
+        status,
+        run_name: name,
+        started_at: "2026-10-01T00:00:00Z",
+        completed_at: "2026-10-01T02:00:00Z",
+        created_at: "2026-10-01T00:00:00Z",
+      });
+      listTrainingJobs.mockResolvedValue([
+        ended("Clementine", 21, "completed"),
+        ended("Foxglove", 22, "stopped"),
+        { ...ended("Heron", 23, "running") },
+      ]);
+      const wrapper = await openWith([run("Clementine"), run("Foxglove"), run("Heron")]);
+      const item = "[data-testid='tr-menu-train-longer']";
+      const pill = "[data-testid='tr-pill-train-longer']";
+
+      await cardNamed(wrapper, "Heron").trigger("contextmenu");
+      expect(wrapper.find(item).exists()).toBe(false);
+
+      await cardNamed(wrapper, "Clementine").trigger("contextmenu");
+      expect(wrapper.find(item).text()).toContain("Train longer…");
+      expect(wrapper.find(pill).exists()).toBe(true);
+
+      // Two picked: one popover cannot set two runs' steps, so it is hidden.
+      await cardNamed(wrapper, "Foxglove").trigger("click", { ctrlKey: true });
+      expect(wrapper.find(pill).exists()).toBe(false);
+    });
+  });
+
   it("keeps a run importable when its config could not be read", async () => {
     // Steps and samples come from filenames, so the config is decoration.
     const wrapper = await openWith([
@@ -176,6 +496,21 @@ describe("drawing the grid", () => {
     expect(wrapper.text()).toContain("The steps still import");
     await tick(wrapper, "Clementine");
     expect(importBtn(wrapper).attributes("disabled")).toBeUndefined();
+  });
+
+  it("lets go of a folder's failure once the folder is forgotten", async () => {
+    listRuns.mockRejectedValue(new Error("gone"));
+    const folders = useModelFoldersStore();
+    folders.folders = FOLDERS;
+    folders.loaded = true;
+    const wrapper = mount(TrainingRuns, globalOpts);
+    mounted.push(wrapper);
+    await settle(wrapper);
+    expect(useTrainingRunsStore().error).not.toBe("");
+    useModelFoldersStore().folders = [FOLDERS[1]];
+    await settle(wrapper);
+    expect(useTrainingRunsStore().error).toBe("");
+    expect(wrapper.find("[role='alert']").exists()).toBe(false);
   });
 
   it("offers the way out when no output folder is set", async () => {
@@ -243,6 +578,29 @@ describe("drawing the grid", () => {
     expect(wrapper.findAll(".tr-card")).toHaveLength(2);
   });
 
+  it("spins the reload button only for a reload it started", async () => {
+    // Focus, and the poll while a run trains, reload unprompted; the button
+    // spinning for those made it blink every few seconds.
+    const wrapper = await openWith([run()]);
+    const button = () =>
+      wrapper.find("button[aria-label='Reload the training runs']");
+    let release;
+    listRuns.mockReturnValue(new Promise((r) => (release = r)));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await wrapper.vm.$nextTick();
+    expect(useTrainingRunsStore().loading).toBe(true);
+    expect(button().attributes("aria-busy")).toBeUndefined();
+    release([run()]);
+    await settle(wrapper);
+
+    listRuns.mockReturnValue(new Promise((r) => (release = r)));
+    await button().trigger("click");
+    expect(button().attributes("aria-busy")).toBe("true");
+    release([run()]);
+    await settle(wrapper);
+    expect(button().attributes("aria-busy")).toBeUndefined();
+  });
+
   it("still finds a destination when the registry lands after mount", async () => {
     // The cold-start / direct-navigation case: `folders.refresh()` is not
     // awaited, so `destinations` is EMPTY at mount. Choosing the default there
@@ -286,9 +644,76 @@ describe("drawing the grid", () => {
     expect(importRun.mock.calls[0][0].destinationFolderId).toBe(9);
   });
 
-  it("tells the shelf how many runs there are, for the count beside the tabs", async () => {
-    const wrapper = await openWith([run(), run("Foxglove")]);
-    expect(wrapper.emitted("count").at(-1)).toEqual([2]);
+  it("counts the runs for the sidebar and the toolbar", async () => {
+    await openWith([run(), run("Foxglove")]);
+    expect(useTrainingRunsStore().count).toBe(2);
+  });
+
+  it("leads with a New training run tile that opens the Train on picker", async () => {
+    const wrapper = await openWith([run()]);
+    const training = useTrainingStore();
+    training.openToPick = vi.fn();
+    const tile = wrapper.find("[data-testid='tr-new-run']");
+    expect(tile.element.nextElementSibling.getAttribute("role")).toBe("listbox");
+    await tile.trigger("click");
+    expect(training.openToPick).toHaveBeenCalled();
+    expect(wrapper.findAll(".tr-card")).toHaveLength(1);
+  });
+
+  it("draws the highest step's samples as the card's strip, prompt order", async () => {
+    const wrapper = await openWith([
+      run("Clementine", {
+        samples: [
+          { filename: "s_500_1.jpg", step: 500, index: 1 },
+          { filename: "s_250_0.jpg", step: 250, index: 0 },
+          { filename: "s_500_0.jpg", step: 500, index: 0 },
+        ],
+      }),
+    ]);
+    const srcs = wrapper
+      .findAll(".tr-card-strip img")
+      .map((img) => img.attributes("src"));
+    expect(srcs).toHaveLength(2);
+    expect(srcs[0]).toContain("s_500_0.jpg");
+    expect(srcs[1]).toContain("s_500_1.jpg");
+  });
+
+  it("reserves a slot per prompt while a step's samples are still landing", async () => {
+    // Three prompts, and step 500 has drawn only the second so far: the strip
+    // keeps three slots in prompt order rather than shrinking to one frame.
+    const wrapper = await openWith([
+      run("Clementine", {
+        sample_prompts: ["a", "b", "c"],
+        samples: [
+          { filename: "s_250_0.jpg", step: 250, index: 0 },
+          { filename: "s_250_1.jpg", step: 250, index: 1 },
+          { filename: "s_500_1.jpg", step: 500, index: 1 },
+        ],
+      }),
+    ]);
+    const slots = wrapper.findAll(".tr-card-strip > *");
+    expect(slots.map((el) => el.element.tagName)).toEqual(["SPAN", "IMG", "SPAN"]);
+    expect(slots[1].attributes("src")).toContain("s_500_1.jpg");
+    expect(wrapper.findAll(".tr-card-blank")).toHaveLength(2);
+    // No job is training it, so nothing is coming: the blanks hold still.
+    expect(wrapper.findAll(".tr-card-blank--live")).toHaveLength(0);
+  });
+
+  it("counts slots from the samples when the config names no prompts", async () => {
+    const wrapper = await openWith([
+      run("Clementine", {
+        samples: [
+          { filename: "s_250_0.jpg", step: 250, index: 0 },
+          { filename: "s_250_1.jpg", step: 250, index: 1 },
+          { filename: "s_500_0.jpg", step: 500, index: 0 },
+        ],
+      }),
+    ]);
+    expect(wrapper.findAll(".tr-card-strip > *")).toHaveLength(2);
+    expect(wrapper.find(".tr-card-strip img").attributes("src")).toContain(
+      "s_500_0.jpg",
+    );
+    expect(wrapper.findAll(".tr-card-blank")).toHaveLength(1);
   });
 });
 
@@ -326,6 +751,46 @@ describe("choosing runs", () => {
     expect(wrapper.findAll(".tr-card--checked")).toHaveLength(0);
   });
 
+  it("selects the clicked card alone on a plain click", async () => {
+    const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
+    await tick(wrapper, "Clementine", {});
+    await tick(wrapper, "Foxglove", {});
+    expect(chosenNow()).toEqual(["run:Foxglove"]);
+    // A second plain click keeps it, rather than unticking it.
+    await tick(wrapper, "Foxglove", {});
+    expect(chosenNow()).toEqual(["run:Foxglove"]);
+  });
+
+  it("adds and removes with Ctrl or Cmd", async () => {
+    const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
+    await tick(wrapper, "Clementine", {});
+    await tick(wrapper, "Hazel", { metaKey: true });
+    expect(chosenNow()).toEqual(["run:Clementine", "run:Hazel"]);
+    await tick(wrapper, "Clementine");
+    expect(chosenNow()).toEqual(["run:Hazel"]);
+  });
+
+  it("takes a range with Shift, from the last card clicked", async () => {
+    const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
+    const order = wrapper
+      .findAll(".tr-card")
+      .map((c) => c.find(".tr-card-name").text());
+    await tick(wrapper, order[0], {});
+    await tick(wrapper, order[2], { shiftKey: true });
+    expect(chosenNow()).toEqual(order.map((name) => `run:${name}`));
+    // The anchor stays put: a shorter range replaces the longer one.
+    await tick(wrapper, order[1], { shiftKey: true });
+    expect(chosenNow()).toEqual(order.slice(0, 2).map((name) => `run:${name}`));
+  });
+
+  it("selects all shown on Ctrl+A", async () => {
+    const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
+    await wrapper
+      .find(".tr-grid")
+      .trigger("keydown", { key: "a", ctrlKey: true });
+    expect(wrapper.findAll(".tr-card--checked")).toHaveLength(3);
+  });
+
   it("clears on Escape", async () => {
     const wrapper = await openWith([run(), run("Foxglove")]);
     await tick(wrapper, "Clementine");
@@ -342,7 +807,7 @@ describe("choosing runs", () => {
 
     await tick(wrapper, "Foxglove");
     expect(wrapper.findAll(".tr-step")).toHaveLength(0);
-    expect(importBtn(wrapper).text()).toContain("4 files");
+    expect(importBtn(wrapper).text()).toBe("Import 2 runs · 4 checkpoints");
   });
 
   it("never offers a source or an external folder as a destination", async () => {
@@ -411,6 +876,18 @@ describe("importing the batch", () => {
       destinationFolderId: 2,
       steps: [null],
     });
+  });
+
+  it("re-reads the jobs after an import, so Go to model can name what landed", async () => {
+    const wrapper = await openWith([run()]);
+    await tick(wrapper, "Clementine");
+    importRun.mockResolvedValue({ run_name: "Clementine", files: [] });
+    listTrainingJobs.mockClear();
+
+    await importBtn(wrapper).trigger("click");
+    await settle(wrapper);
+
+    expect(listTrainingJobs).toHaveBeenCalled();
   });
 
   it("sends every checkpoint of every run when several are chosen", async () => {
@@ -513,6 +990,23 @@ describe("staying current without moving the ground", () => {
     expect(boxes[1].element.checked).toBe(true);
   });
 
+  it("offers no import once a re-read of the folder fails", async () => {
+    // The error hides the grid; the pill and its delete warning must not stay
+    // behind it, importing runs the failed read could not confirm.
+    const wrapper = await openWith([run()]);
+    await tick(wrapper, "Clementine");
+    expect(importBtn(wrapper)).toBeDefined();
+
+    listRuns.mockRejectedValue(new Error("gone"));
+    window.dispatchEvent(new Event("focus"));
+    await settle(wrapper);
+
+    expect(wrapper.find("[role='alert']").exists()).toBe(true);
+    expect(wrapper.find(".selbar-float").exists()).toBe(false);
+    expect(importBtn(wrapper)).toBeUndefined();
+    expect(wrapper.find(".tr-warning").exists()).toBe(false);
+  });
+
   it("drops only the runs that are gone, keeping the rest ticked", async () => {
     const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
     await tick(wrapper, "Clementine");
@@ -586,7 +1080,7 @@ describe("staying current without moving the ground", () => {
 
       expect(wrapper.findAll(".tr-card")).toHaveLength(0);
       expect(importBtn(wrapper)).toBeUndefined();
-      expect(wrapper.emitted("count").at(-1)).toEqual([null]);
+      expect(useTrainingRunsStore().runs).toEqual([]);
       expect(wrapper.find(".tr-loading").exists()).toBe(true);
 
       release([run("Hazel")]);
@@ -607,7 +1101,7 @@ describe("staying current without moving the ground", () => {
       expect(wrapper.findAll(".tr-card-name").map((n) => n.text())).toEqual([
         "Foxglove",
       ]);
-      expect(wrapper.emitted("count").at(-1)).toEqual([1]);
+      expect(useTrainingRunsStore().count).toBe(1);
     });
 
     it("does not report the current read finished when an older one ends", async () => {
@@ -707,5 +1201,576 @@ describe("staying current without moving the ground", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(listRuns).not.toHaveBeenCalled();
+  });
+});
+
+describe("the runs PixlStash trains (#2118)", () => {
+  const job = (overrides = {}) => ({
+    id: 7,
+    uuid: "abcd1234ef",
+    name: "Clementine",
+    status: "running",
+    step: 1000,
+    total_steps: 1500,
+    base_model: "Z-Image",
+    run_name: "Clementine_abcd1234",
+    ...overrides,
+  });
+  const DONE_AT = "2026-10-26T09:00:00+00:00";
+
+  it("offers no import for a run still drawing its previews or being imported", async () => {
+    // Trained, no completed_at yet: the worker still reads its folder (#2291).
+    listTrainingJobs.mockResolvedValue([job({ status: "completed", completed_at: null })]);
+    const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
+    const card = wrapper
+      .findAll(".tr-card")
+      .find((c) => c.find(".tr-card-name").text() === "Clementine");
+    expect(card.find(".tr-card-chip").text()).toBe("Finishing");
+    await tick(wrapper, "Foxglove");
+    await card.trigger("click");
+    expect(card.attributes("aria-selected")).toBe("true");
+    expect(importBtn(wrapper)).toBeUndefined();
+  });
+
+  it("pulses a slot still to come only while its run trains", async () => {
+    const halfDrawn = () =>
+      run("Clementine_abcd1234", {
+        sample_prompts: ["a", "b"],
+        samples: [{ filename: "s_500_0.jpg", step: 500, index: 0 }],
+      });
+    listTrainingJobs.mockResolvedValue([job()]);
+    let wrapper = await openWith([halfDrawn()]);
+    expect(wrapper.findAll(".tr-card-blank--live")).toHaveLength(1);
+
+    listTrainingJobs.mockResolvedValue([
+      job({ status: "completed", completed_at: DONE_AT }),
+    ]);
+    wrapper = await openWith([halfDrawn()]);
+    expect(wrapper.findAll(".tr-card-blank")).toHaveLength(1);
+    expect(wrapper.findAll(".tr-card-blank--live")).toHaveLength(0);
+  });
+
+  it("picks a live run on its own, and offers no import for it", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
+    const card = wrapper
+      .findAll(".tr-card")
+      .find((c) => c.find(".tr-card-name").text() === "Clementine");
+    expect(card.find(".tr-card-chip").text()).toBe("Training");
+    expect(card.text()).toContain("1,000 / 1,500 steps");
+
+    // Live first: the grid leads with the run that is training.
+    expect(wrapper.findAll(".tr-card")[0].element).toBe(card.element);
+
+    await tick(wrapper, "Foxglove");
+    await card.trigger("click");
+    // Selecting the live run replaces the batch, and opens nothing.
+    expect(nav.push).not.toHaveBeenCalled();
+    expect(card.attributes("aria-selected")).toBe("true");
+    expect(wrapper.findAll(".tr-card--checked")).toHaveLength(1);
+    expect(importBtn(wrapper)).toBeUndefined();
+
+    // A finished run picked next takes the live one's place.
+    await tick(wrapper, "Foxglove");
+    expect(card.attributes("aria-selected")).toBe("false");
+    expect(importBtn(wrapper).text()).toBe("Import 2 checkpoints");
+  });
+
+  it("imports nothing while it cannot tell which runs are training", async () => {
+    // A run still training would read as finished, and a folder set to delete
+    // what it imports would then lose the run under the trainer.
+    listTrainingJobs.mockRejectedValue(new Error("offline"));
+    const wrapper = await openWith([run()]);
+    await tick(wrapper, "Clementine");
+    expect(importBtn(wrapper)).toBeUndefined();
+    expect(wrapper.text()).toContain("nothing can be imported until it can");
+
+    listTrainingJobs.mockResolvedValue([]);
+    await wrapper.findAll("button").find((b) => b.text() === "Retry").trigger("click");
+    await settle(wrapper);
+    expect(importBtn(wrapper)).toBeDefined();
+  });
+
+  it("keeps a tick on its run when the job list lands after the folder", async () => {
+    let release;
+    listTrainingJobs.mockReturnValue(new Promise((r) => (release = r)));
+    const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
+    await tick(wrapper, "Foxglove");
+    release([job({ status: "completed", completed_at: DONE_AT, run_name: "Clementine_abcd1234" })]);
+    await settle(wrapper);
+    expect(useTrainingRunsStore().chosen).toEqual(["run:Foxglove"]);
+    expect(importBtn(wrapper)).toBeDefined();
+  });
+
+  it("carries a queued run's tick to its card once its folder appears", async () => {
+    listTrainingJobs.mockResolvedValue([job({ run_name: null })]);
+    const wrapper = await openWith([]);
+    await wrapper.find(".tr-card").trigger("click");
+    const runsStore = useTrainingRunsStore();
+    expect(runsStore.chosen).toEqual(["job:abcd1234ef"]);
+
+    listRuns.mockResolvedValue([run("Clementine_abcd1234")]);
+    listTrainingJobs.mockResolvedValue([job()]);
+    await runsStore.reload();
+    await settle(wrapper);
+    expect(runsStore.chosen).toEqual(["run:Clementine_abcd1234"]);
+    expect(wrapper.findAll(".tr-card")).toHaveLength(1);
+  });
+
+  it("enters the cards at the near end from the New tile", async () => {
+    const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")], FOLDERS);
+    const cards = wrapper.findAll(".tr-card");
+    // The cursor sits on the middle card, as if it was focused last; a step
+    // from it would land on a neighbour, never on the near end.
+    const tile = wrapper.find("[data-testid='tr-new-run']");
+    await cards[1].trigger("focus");
+    await tile.trigger("keydown", { key: "ArrowDown" });
+    expect(cards[0].attributes("tabindex")).toBe("0");
+    await cards[1].trigger("focus");
+    await tile.trigger("keydown", { key: "ArrowUp" });
+    expect(cards[2].attributes("tabindex")).toBe("0");
+  });
+
+  it("gives a queued run a card before it has a folder", async () => {
+    listTrainingJobs.mockResolvedValue([
+      job({ status: "queued", step: 0, run_name: null }),
+      job({ uuid: "old", status: "completed", completed_at: DONE_AT, run_name: null }),
+    ]);
+    const wrapper = await openWith([]);
+    const cards = wrapper.findAll(".tr-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].text()).toContain("Waiting for the GPU");
+    await cards[0].trigger("click");
+    expect(cards[0].attributes("aria-selected")).toBe("true");
+    expect(useTrainingRunsStore().chosenCards[0].job.uuid).toBe("abcd1234ef");
+  });
+
+  it("says a queued run whose memory is being checked is checking, not waiting", async () => {
+    listTrainingJobs.mockResolvedValue([job({ status: "queued", step: 0, phase: "checking" })]);
+    const wrapper = await openWith([]);
+    const card = wrapper.find(".tr-card");
+    expect(card.text()).toContain("Checking memory and speed");
+    expect(card.text()).not.toContain("Waiting for the GPU");
+  });
+
+  it("draws the run's page for ?run=, and says so when it is not here", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    nav.route.query = { run: "abcd1234ef" };
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    expect(wrapper.find(".live-stub").text()).toBe("7");
+    expect(wrapper.find(".tr-grid").exists()).toBe(false);
+
+    nav.route.query = { run: "somebody-elses" };
+    await settle(wrapper);
+    expect(wrapper.find(".live-stub").exists()).toBe(false);
+    expect(wrapper.text()).toContain("That training run is not in this library.");
+  });
+
+  it("does not call a run missing when the job list could not be read", async () => {
+    listTrainingJobs.mockRejectedValue(new Error("offline"));
+    nav.route.query = { run: "abcd1234ef" };
+    const wrapper = await openWith([]);
+    expect(wrapper.text()).toContain("Could not read the training runs.");
+    expect(wrapper.text()).not.toContain("not in this library");
+  });
+
+  const cardNamed = (wrapper, name) =>
+    wrapper
+      .findAll(".tr-card")
+      .find((c) => c.find(".tr-card-name").text() === name);
+
+  it("opens a run it trained on a double-click, and only selects on the first click", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    const card = cardNamed(wrapper, "Clementine");
+    // A real double-click: two clicks, the second with `detail: 2`, then dblclick.
+    for (const detail of [1, 2]) {
+      card.element.dispatchEvent(new MouseEvent("click", { detail, bubbles: true }));
+    }
+    await card.trigger("dblclick");
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "models-runs",
+      query: { run: "abcd1234ef" },
+    });
+    expect(card.attributes("aria-selected")).toBe("true");
+  });
+
+  it("keeps an already-selected card selected when it is double-clicked open", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    const card = cardNamed(wrapper, "Clementine");
+    await card.trigger("click");
+    for (const detail of [1, 2]) {
+      card.element.dispatchEvent(new MouseEvent("click", { detail, bubbles: true }));
+    }
+    await card.trigger("dblclick");
+    expect(card.attributes("aria-selected")).toBe("true");
+    expect(nav.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("acts on the job as it is now, not as it was when the menu opened", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    await cardNamed(wrapper, "Clementine").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-stop']").exists()).toBe(true);
+    listTrainingJobs.mockResolvedValue([job({ status: "stopping" })]);
+    await useTrainingRunsStore().loadJobs();
+    await settle(wrapper);
+    expect(wrapper.find("[data-testid='tr-menu-stop']").exists()).toBe(false);
+  });
+
+  it("opens a run trained elsewhere from its folder", async () => {
+    const wrapper = await openWith([run("Foxglove")]);
+    await cardNamed(wrapper, "Foxglove").trigger("dblclick");
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "models-runs",
+      query: { "folder-run": "Foxglove" },
+    });
+    await cardNamed(wrapper, "Foxglove").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(true);
+  });
+
+  it("draws a folder run's page for ?folder-run=, and says so when it is not there", async () => {
+    nav.route.query = { "folder-run": "Foxglove" };
+    const wrapper = await openWith([run("Foxglove")]);
+    expect(wrapper.find(".live-stub").text()).toBe("1/Foxglove");
+    expect(wrapper.find(".tr-grid").exists()).toBe(false);
+
+    nav.route.query = { "folder-run": "Gone" };
+    await settle(wrapper);
+    expect(wrapper.find(".live-stub").exists()).toBe(false);
+    expect(wrapper.text()).toContain("That run is not in the training folder.");
+  });
+
+  it("does not call a folder run trained elsewhere when the job list could not be read", async () => {
+    listTrainingJobs.mockRejectedValue(new Error("offline"));
+    nav.route.query = { "folder-run": "Foxglove" };
+    const wrapper = await openWith([run("Foxglove")]);
+    expect(wrapper.find(".live-stub").exists()).toBe(false);
+    expect(wrapper.text()).toContain("Could not read the training runs.");
+  });
+
+  it("opens the job's own page when ?folder-run= names a run PixlStash trained", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    nav.route.query = { "folder-run": "Clementine_abcd1234" };
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    expect(wrapper.find(".live-stub").text()).toBe("7");
+  });
+
+  it("draws no check disc on a selected card", async () => {
+    const wrapper = await openWith([run("Foxglove")]);
+    const card = await tick(wrapper, "Foxglove");
+    expect(card.classes()).toContain("tr-card--checked");
+    expect(card.find(".tr-card-check").exists()).toBe(false);
+  });
+
+  it("selects a right-clicked card and offers to open it from the menu", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
+    await tick(wrapper, "Foxglove");
+    const card = cardNamed(wrapper, "Clementine");
+    await card.trigger("contextmenu");
+    expect(useTrainingRunsStore().chosen).toEqual(["run:Clementine_abcd1234"]);
+    await wrapper.find("[data-testid='tr-menu-open']").trigger("click");
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "models-runs",
+      query: { run: "abcd1234ef" },
+    });
+  });
+
+  it("goes to the model a run put on the shelf, its stack's cover", async () => {
+    listTrainingJobs.mockResolvedValue([
+      job({ status: "completed", completed_at: DONE_AT, model_ids: [12, 11] }),
+    ]);
+    const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
+    await cardNamed(wrapper, "Clementine").trigger("contextmenu");
+    await wrapper.find("[data-testid='tr-menu-model']").trigger("click");
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "models",
+      query: { model: "12" },
+    });
+  });
+
+  it("offers no Go to model for a run with nothing on the shelf", async () => {
+    listTrainingJobs.mockResolvedValue([
+      job({ status: "completed", completed_at: DONE_AT, model_ids: [] }),
+    ]);
+    const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
+    await cardNamed(wrapper, "Clementine").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(true);
+    expect(wrapper.find("[data-testid='tr-menu-model']").exists()).toBe(false);
+    // Nor for one trained elsewhere: only a job knows its models.
+    await cardNamed(wrapper, "Foxglove").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(true);
+    expect(wrapper.find("[data-testid='tr-menu-model']").exists()).toBe(false);
+  });
+
+  it("keeps the batch when the right-clicked card is already in it", async () => {
+    const wrapper = await openWith([run("Clementine"), run("Foxglove")]);
+    await tick(wrapper, "Clementine");
+    await tick(wrapper, "Foxglove");
+    await cardNamed(wrapper, "Foxglove").trigger("contextmenu");
+    expect(useTrainingRunsStore().chosen).toEqual([
+      "run:Clementine",
+      "run:Foxglove",
+    ]);
+    expect(wrapper.find("[data-testid='tr-menu-import']").text()).toBe(
+      "Import 2 runs · 4 checkpoints",
+    );
+  });
+
+  it("stops a training run from the menu, after asking", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    cancelTrainingJob.mockResolvedValue({});
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      const wrapper = await openWith([run("Clementine_abcd1234")]);
+      await cardNamed(wrapper, "Clementine").trigger("contextmenu");
+      await wrapper.find("[data-testid='tr-menu-stop']").trigger("click");
+      await settle(wrapper);
+      expect(confirm).toHaveBeenCalled();
+      expect(cancelTrainingJob).toHaveBeenCalledWith(7);
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it("offers no Stop for a trained run still finishing", async () => {
+    listTrainingJobs.mockResolvedValue([job({ status: "completed", completed_at: null })]);
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    await cardNamed(wrapper, "Clementine").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-stop']").exists()).toBe(false);
+    expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(true);
+  });
+});
+
+describe("the closed Models rail's handle", () => {
+  // The nudge every other inspector takes (visual-language "Closed
+  // inspector"): a NEW pick bounces the handle and flashes the toolbar glyph;
+  // re-picking what is picked, or clearing it, is not news.
+  it("names the pick and nudges only on a new one", async () => {
+    const sidebar = useSidebarStore();
+    sidebar.modelsRailOpen = false;
+    const wrapper = await openWith([run(), run("Foxglove")]);
+    const handle = () => wrapper.find("[data-testid='runs-rail-handle']");
+    const before = sidebar.inspectorNudge;
+
+    await tick(wrapper, "Clementine", {});
+    expect(sidebar.inspectorNudge).toBe(before + 1);
+    expect(handle().text()).toContain("Clementine");
+
+    await tick(wrapper, "Clementine", {});
+    expect(sidebar.inspectorNudge).toBe(before + 1);
+
+    await tick(wrapper, "Foxglove");
+    expect(sidebar.inspectorNudge).toBe(before + 2);
+    expect(handle().text()).toContain("2 runs");
+
+    // A reload that drops a picked run narrows the pick: not news either.
+    listRuns.mockResolvedValue([run()]);
+    await useTrainingRunsStore().reload();
+    await settle(wrapper);
+    expect(chosenNow()).toEqual(["run:Clementine"]);
+    expect(sidebar.inspectorNudge).toBe(before + 2);
+
+    useTrainingRunsStore().clearSelection();
+    await wrapper.vm.$nextTick();
+    expect(sidebar.inspectorNudge).toBe(before + 2);
+
+    sidebar.modelsRailOpen = true;
+    await wrapper.vm.$nextTick();
+    expect(handle().exists()).toBe(false);
+  });
+});
+
+describe("deleting runs", () => {
+  const confirmSpy = () => vi.spyOn(window, "confirm");
+  const cardNamed = (wrapper, name) =>
+    wrapper
+      .findAll(".tr-card")
+      .find((c) => c.find(".tr-card-name").text() === name);
+  const del = (wrapper, key = "Delete") =>
+    wrapper.find(".tr-card--checked").trigger("keydown", { key });
+
+  beforeEach(() => {
+    trashRun.mockReset();
+    trashRun.mockResolvedValue({ run_name: "x", trash_name: "Trash" });
+    deleteTrainingJob.mockReset();
+    deleteTrainingJob.mockResolvedValue({});
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("trashes each picked run in turn on Delete, after asking", async () => {
+    const ask = confirmSpy().mockReturnValue(true);
+    let inFlight = 0;
+    trashRun.mockImplementation(async () => {
+      inFlight += 1;
+      expect(inFlight).toBe(1);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      inFlight -= 1;
+      return {};
+    });
+    const wrapper = await openWith([run(), run("Foxglove")]);
+    await tick(wrapper, "Clementine");
+    await tick(wrapper, "Foxglove");
+    listRuns.mockResolvedValue([]);
+    await del(wrapper);
+    await settle(wrapper);
+    await settle(wrapper);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(ask.mock.calls[0][0]).toContain("2 training runs go");
+    expect(ask.mock.calls[0][0]).toContain("Checkpoints already imported stay");
+    expect(trashRun.mock.calls.map((c) => c[1]).sort()).toEqual([
+      "Clementine",
+      "Foxglove",
+    ]);
+    expect(trashRun.mock.calls[0][0]).toBe(1);
+    // No job trained either of them, so there is no record to remove.
+    expect(deleteTrainingJob).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices.at(-1).text).toBe("Cleared 2 runs.");
+    expect(wrapper.findAll(".tr-card")).toHaveLength(0);
+  });
+
+  it("names a single run in the question, and takes Backspace too", async () => {
+    const ask = confirmSpy().mockReturnValue(false);
+    const wrapper = await openWith([run()]);
+    await tick(wrapper, "Clementine");
+    await del(wrapper, "Backspace");
+    expect(ask.mock.calls[0][0]).toContain('"Clementine" goes to your');
+  });
+
+  it("does not delete on Backspace from a control inside a card", async () => {
+    const ask = confirmSpy().mockReturnValue(true);
+    listTrainingJobs.mockResolvedValue([
+      {
+        id: 9,
+        uuid: "u1",
+        name: "Clementine",
+        status: "error",
+        run_name: null,
+        created_at: "2026-10-01T00:00:00Z",
+      },
+    ]);
+    const wrapper = await openWith([]);
+    await tick(wrapper, "Clementine");
+    await wrapper
+      .find("[data-testid='tr-card-retry']")
+      .trigger("keydown", { key: "Backspace" });
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("deletes nothing when the question is declined", async () => {
+    confirmSpy().mockReturnValue(false);
+    const wrapper = await openWith([run()]);
+    await tick(wrapper, "Clementine");
+    await del(wrapper);
+    await settle(wrapper);
+    expect(trashRun).not.toHaveBeenCalled();
+  });
+
+  it("offers Delete in the card menu and on the pill", async () => {
+    confirmSpy().mockReturnValue(true);
+    const wrapper = await openWith([run()]);
+    await cardNamed(wrapper, "Clementine").trigger("contextmenu");
+    const item = wrapper.find("[data-testid='tr-menu-delete']");
+    expect(item.text()).toContain("Delete run");
+    expect(wrapper.find("[data-testid='tr-pill-delete']").exists()).toBe(true);
+    await item.trigger("click");
+    await settle(wrapper);
+    expect(trashRun).toHaveBeenCalledWith(1, "Clementine");
+  });
+
+  it("removes the job a run was trained with, after its folder", async () => {
+    confirmSpy().mockReturnValue(true);
+    listTrainingJobs.mockResolvedValue([
+      {
+        id: 7,
+        uuid: "abcd1234ef",
+        name: "Clementine",
+        status: "completed",
+        completed_at: "2026-10-26T09:00:00+00:00",
+        run_name: "Clementine_abcd1234",
+      },
+    ]);
+    const order = [];
+    trashRun.mockImplementation(async () => order.push("trash"));
+    deleteTrainingJob.mockImplementation(async () => order.push("job"));
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    await tick(wrapper, "Clementine");
+    await del(wrapper);
+    await settle(wrapper);
+    expect(trashRun).toHaveBeenCalledWith(1, "Clementine_abcd1234");
+    expect(deleteTrainingJob).toHaveBeenCalledWith(7);
+    expect(order).toEqual(["trash", "job"]);
+  });
+
+  it("keeps the job when its folder would not go", async () => {
+    confirmSpy().mockReturnValue(true);
+    listTrainingJobs.mockResolvedValue([
+      {
+        id: 7,
+        uuid: "abcd1234ef",
+        name: "Clementine",
+        status: "error",
+        run_name: "Clementine_abcd1234",
+        started_at: "2026-10-26T08:00:00+00:00",
+      },
+    ]);
+    trashRun.mockRejectedValue({
+      response: { status: 409, data: { detail: "No trash on that drive" } },
+    });
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    await tick(wrapper, "Clementine");
+    await del(wrapper);
+    await settle(wrapper);
+    expect(deleteTrainingJob).not.toHaveBeenCalled();
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.level).toBe("warning");
+    expect(notice.text).toContain("No trash on that drive");
+  });
+
+  it("deletes only the record of a run that never made a folder", async () => {
+    confirmSpy().mockReturnValue(true);
+    listTrainingJobs.mockResolvedValue([
+      {
+        id: 9,
+        uuid: "u1",
+        name: "Clementine",
+        status: "error",
+        run_name: null,
+        created_at: "2026-10-01T00:00:00Z",
+      },
+    ]);
+    const wrapper = await openWith([]);
+    await tick(wrapper, "Clementine");
+    // The pill is up for it although there is nothing to import.
+    expect(wrapper.find(".selbar").exists()).toBe(true);
+    expect(importBtn(wrapper)).toBeUndefined();
+    await del(wrapper);
+    await settle(wrapper);
+    expect(trashRun).not.toHaveBeenCalled();
+    expect(deleteTrainingJob).toHaveBeenCalledWith(9);
+  });
+
+  it("never offers to delete a run that is training", async () => {
+    const ask = confirmSpy().mockReturnValue(true);
+    listTrainingJobs.mockResolvedValue([
+      {
+        id: 7,
+        uuid: "abcd1234ef",
+        name: "Clementine",
+        status: "running",
+        run_name: "Clementine_abcd1234",
+      },
+    ]);
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    await cardNamed(wrapper, "Clementine").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-delete']").exists()).toBe(false);
+    expect(wrapper.find(".selbar").exists()).toBe(false);
+    await del(wrapper);
+    await settle(wrapper);
+    expect(ask).not.toHaveBeenCalled();
+    expect(trashRun).not.toHaveBeenCalled();
   });
 });

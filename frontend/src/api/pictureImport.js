@@ -27,17 +27,14 @@ import { apiClient } from "../utils/apiClient";
  *     the task row from `processed`/`total` and summarising with the five
  *     disjoint buckets `imported_count` / `duplicate_count` /
  *     `scrapheaped_count` / `failed_count` / `cancelled_count`, which sum to
- *     `total`. `scrapheaped_picture_ids` carries the restore offer (see below).
+ *     `total`. `scrapheaped_picture_ids` names the restored pictures (see below).
  *
  * THE SCRAPHEAP BUCKET: a file whose content matches a SOFT-DELETED picture is
  * neither imported nor an ordinary duplicate. Importing it again would put a
  * second copy of every scrapheaped picture back on disk, which a bulk "Keep
  * cover only" cleanup makes a predictable way to undo the cleanup and double the
- * bytes. Restoring it automatically would be the opposite surprise: the user
- * scrapheapped it deliberately. So the import reports it, and the UI offers
- * `POST /pictures/scrapheap/restore` with `scrapheaped_picture_ids`, the
- * shipped restore route, which already clears `deleted_at` and re-folds stack
- * positions. There is deliberately no second restore path here.
+ * bytes. Re-importing it means the user wants it back, so the server restores
+ * the picture (one undoable operation) and reports the file in this bucket.
  *
  * GRID REFRESH - there is deliberately NO per-file `results[]` payload. On
  * completion the backend broadcasts `CHANGED_PICTURES` + `PICTURE_IMPORTED` over
@@ -47,15 +44,22 @@ import { apiClient } from "../utils/apiClient";
  *
  * ENDPOINTS (final, all under /api/v1, mutating routes OWNER_ONLY):
  *   POST   {backendUrl}/pictures/import/staging                   → { staging_id, safe_threshold }
- *   POST   {backendUrl}/pictures/import/staging/{id}/files         multipart `file` (repeatable)
+ *   POST   {backendUrl}/pictures/import/staging/{id}/files         multipart `file` (repeatable), with an
+ *                                                                 optional `key` per file, in the same order
  *                                                                 → { staging_id, staged, received[], skipped[] }
  *   POST   {backendUrl}/pictures/import/staging/{id}/commit        → { staging_id, task_id, staged_count }
  *                                                                   400 empty/face-worker-down, 409 committed, 507 disk
  *   DELETE {backendUrl}/pictures/import/staging/{id}               (pre-commit only) → { stage:"cancelled", … }
  *   GET    {backendUrl}/pictures/import/staging/{id}/status        → { stage, staged, total, processed, task_id,
- *                                                                       imported_count, duplicate_count, scrapheaped_count,
+ *          ?outcomes_from=N                                             imported_count, duplicate_count, scrapheaped_count,
  *                                                                       scrapheaped_picture_ids[], failed_count,
- *                                                                       cancelled_count, error }
+ *                                                                       cancelled_count, error, outcomes[] }
+ *
+ * PER-FILE OUTCOMES (#2512): each file is streamed with the client's own `key`,
+ * and the status carries `outcomes[]` - `{ key, outcome, picture_id }` for every
+ * file the import has decided, from `outcomes_from` on - so the grid's arriving
+ * tiles can each show what became of their file while the import runs. The
+ * pictures themselves still reach the grid through the broadcast above.
  *
  * NOTE: the staging file endpoint accepts media, `.zip` archives (extracted
  * server-side) and `.txt` caption sidecars, and the client streams whatever the
@@ -142,6 +146,8 @@ export async function openStagingSession({
  * @param {string} args.backendUrl
  * @param {string} args.stagingId
  * @param {File[]} args.files
+ * @param {string[]} [args.keys]  One handle per file, same order; named back in
+ *   the status `outcomes[]`.
  * @param {AbortSignal} [args.signal]
  * @param {number} [args.timeoutMs]
  * @param {(e: ProgressEvent) => void} [args.onUploadProgress]
@@ -151,12 +157,14 @@ export async function stageFiles({
   backendUrl,
   stagingId,
   files,
+  keys = [],
   signal,
   timeoutMs,
   onUploadProgress,
 }) {
   const formData = new FormData();
   files.forEach((file) => formData.append("file", file));
+  keys.forEach((key) => formData.append("key", key));
   const res = await apiClient.post(
     IMPORT_ENDPOINTS.stageFiles(backendUrl, stagingId),
     formData,
@@ -229,15 +237,17 @@ export async function cancelStaging({ backendUrl, stagingId }) {
  * @property {string|null} taskId
  * @property {number|null} importedCount   New pictures imported (on completion).
  * @property {number|null} duplicateCount  Skipped: content already live in the vault.
- * @property {number|null} scrapheapedCount Skipped: content matches a picture in the
+ * @property {number|null} scrapheapedCount Content matched a picture in the
  *   Scrapheap. Counted per FILE. Not imported again (that would double the bytes on
- *   disk) and not restored either: restoring is offered, because the user
- *   scrapheapped those pictures on purpose.
+ *   disk); the server restored the picture instead.
  * @property {number[]} scrapheapedPictureIds Distinct scrapheaped pictures behind
- *   `scrapheapedCount`, per PICTURE. Feed straight to `restoreScrapheap()`.
+ *   `scrapheapedCount`, per PICTURE: the pictures the import restored.
  * @property {number|null} failedCount     Failed files (on completion).
  * @property {number|null} cancelledCount  Staged files never reached (cancelled run).
  * @property {string|null} error
+ * @property {{key: string|null, outcome: string, picture_id: number|null}[]} outcomes
+ *   Per-file outcomes decided since `outcomesFrom`: `new`, `duplicate`,
+ *   `scrapheaped` or `failed`.
  * @property {Object} raw
  *
  * The five counts are disjoint and sum to `total`; none is derived by subtracting
@@ -250,11 +260,17 @@ export async function cancelStaging({ backendUrl, stagingId }) {
  * @param {Object} args
  * @param {string} args.backendUrl
  * @param {string} args.stagingId
+ * @param {number} [args.outcomesFrom] How many outcomes the caller already has.
  * @returns {Promise<StagingStatus>}
  */
-export async function fetchStagingStatus({ backendUrl, stagingId }) {
+export async function fetchStagingStatus({
+  backendUrl,
+  stagingId,
+  outcomesFrom = 0,
+}) {
   const res = await apiClient.get(
     IMPORT_ENDPOINTS.status(backendUrl, stagingId),
+    { params: { outcomes_from: outcomesFrom } },
   );
   const d = res?.data ?? {};
   return {
@@ -272,6 +288,7 @@ export async function fetchStagingStatus({ backendUrl, stagingId }) {
     failedCount: d.failed_count ?? null,
     cancelledCount: d.cancelled_count ?? null,
     error: d.error ?? null,
+    outcomes: Array.isArray(d.outcomes) ? d.outcomes : [],
     raw: d,
   };
 }

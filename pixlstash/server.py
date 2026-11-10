@@ -54,6 +54,7 @@ from pixlstash.services import (
     comfyui_link_service,
     library_settings_service,
     scrapheap_service,
+    tag_group_service,
     workflow_ghost_service,
 )
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
@@ -68,6 +69,8 @@ from pixlstash.hub.bootstrap import (
     unusable_vault_from_open_failure,
 )
 from pixlstash.hub.registry import LibraryRegistry
+from pixlstash.services.e2e_seed_service import seed_reference_folder
+from pixlstash.services.e2e_workflow_seed import seed_workflows
 from pixlstash.services.library_switch_service import LibrarySwitchService
 from pixlstash.services.workflow_bindings import migrate_workflow_folder
 from pixlstash.services.workflow_events import announce_changed_workflows
@@ -122,6 +125,7 @@ from pixlstash.routes.reviews import create_router as create_reviews_router
 from pixlstash.routes.insights import create_router as create_insights_router
 from pixlstash.routes.moves import create_router as create_moves_router
 from pixlstash.routes.tag_health import create_router as create_tag_health_router
+from pixlstash.routes.tag_groups import create_router as create_tag_groups_router
 from pixlstash.routes.tagger_runs import (
     create_router as create_tagger_runs_router,
 )
@@ -147,6 +151,8 @@ from pixlstash.routes.model_downloads import (
 )
 from pixlstash.routes.model_files import create_router as create_model_files_router
 from pixlstash.routes.model_folders import create_router as create_model_folders_router
+from pixlstash.routes.model_folders import register_model_folder
+from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
 from pixlstash.routes.model_imports import create_router as create_model_imports_router
 from pixlstash.routes.model_moves import create_router as create_model_moves_router
 from pixlstash.routes.model_shelf import create_router as create_model_shelf_router
@@ -157,16 +163,32 @@ from pixlstash.routes.guest_scores import create_router as create_guest_scores_r
 from pixlstash.routes.share import create_router as create_share_router
 from pixlstash.routes.taggers import create_router as create_taggers_router
 from pixlstash.routes.snapshots import create_router as create_snapshots_router
+from pixlstash.routes.training import create_router as create_training_router
 from pixlstash.routes.telemetry import create_router as create_telemetry_router
 from pixlstash.routes.resources import create_router as create_resources_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
+from pixlstash.routes.test_hooks import (
+    fake_training_card,
+    isolate_e2e_data,
+    point_comfyui_default,
+    seed_model_folder,
+)
 from pixlstash.routes.workflows import create_router as create_workflows_router
 from pixlstash.server_config_io import DEVICE_ON_DISK_KEY, persist_server_config
+from pixlstash.tasks import TaskType
 from pixlstash.utils.accelerator import VALID_DEVICE_SETTINGS
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 from pixlstash.utils.request_origin import OriginClientMiddleware
+from pixlstash.utils.service.share_copies import share_copies_root, sweep_share_copies
+from pixlstash.services.edit_copies import (
+    EditCopyWatcher,
+    edit_copies_root,
+    process_session,
+    reconcile_all as reconcile_edit_copies,
+    sweep_edit_sessions,
+)
 
 
 # Logging will be set up after config is loaded
@@ -338,6 +360,10 @@ class Server(
         DEFAULT_WATCH_WORKFLOW_INBOX: Whether start-up imports the watched
             ``workflows/`` folder and keeps watching it. ``False`` in the test
             suite: that folder is machine-global too.
+        DEFAULT_WATCH_EDIT_COPIES: Whether start-up imports edits saved in an
+            Open-with edit copy and keeps watching them. ``False`` in the test
+            suite, which calls the import directly rather than waiting on a
+            filesystem watch per Server.
     """
 
     DEFAULT_MAX_VRAM_GB: float | None = None
@@ -349,6 +375,7 @@ class Server(
     DEFAULT_DECLARE_MODEL_ROOTS: bool = True
     DEFAULT_MIGRATE_WORKFLOW_TOKENS: bool = True
     DEFAULT_WATCH_WORKFLOW_INBOX: bool = True
+    DEFAULT_WATCH_EDIT_COPIES: bool = True
 
     @staticmethod
     def running_in_docker() -> bool:
@@ -431,7 +458,8 @@ class Server(
     #: when a developer's environment says ``dev``, and it sets this instead so
     #: the machine can still be labelled ours without changing how it runs.
     #:
-    #: Set to 1 by the shell for a dev backend (``PIXLSTASH_DESKTOP_DEV``); a
+    #: Set to 1 by the shell for a dev backend (``PIXLSTASH_DESKTOP_DEV``), and
+    #: at the top of every GitHub workflow so nothing CI boots is counted; a
     #: developer running a *bundled* desktop build can export it by hand.
     DEV_MACHINE_ENV_VAR = "PIXLSTASH_TELEMETRY_DEV"
 
@@ -590,8 +618,10 @@ class Server(
         # Before init_server_config, deliberately: ensure_install_identity reads
         # the presence of the server config to decide whether this is a fresh
         # install or an existing one upgrading in. Once init_server_config has
-        # run, that file always exists and the distinction is gone. The ID is
-        # written locally and transmitted by nothing in this release.
+        # run, that file always exists and the distinction is gone. Entry
+        # points that write the config before constructing a Server (app.main,
+        # the Docker entrypoint, the desktop's first-run setup) call it earlier
+        # still, which makes this a no-op for them.
         ensure_install_identity(server_config_path)
 
         self._server_config = self.init_server_config(server_config_path)
@@ -652,6 +682,11 @@ class Server(
         # issue #168), and it means a test or an alternate deployment gets its
         # own hub instead of reaching into the user's real one.
         hub_path = os.path.join(os.path.dirname(self._server_config_path), "hub.db")
+        # Before the hub opens: its data steps read the user workflow folder.
+        if self._server_config.get("enable_test_hooks", False) and (
+            self._server_config.get("e2e_data_dir")
+        ):
+            isolate_e2e_data(self._server_config["e2e_data_dir"])
         self._hub_bootstrap = bootstrap_hub(
             self._server_config["image_root"],
             hub_path,
@@ -666,6 +701,9 @@ class Server(
         # services/managed_model_store.py for why it is `managed` rather than a
         # seeded `user` folder nobody is allowed to remove.
         ensure_managed_folder(self.hub, os.path.dirname(self._server_config_path))
+        # Share copies from earlier runs that a receiving app has had hours to
+        # read (utils/service/share_copies.py).
+        sweep_share_copies(share_copies_root(os.path.dirname(self._server_config_path)))
         _log_stage("hub bootstrap (open/migrate hub.db)")
         # The three roots PixlStash's models live in, declared rather than
         # scanned. Off in the test suite: they are machine-global, so a Server
@@ -808,6 +846,7 @@ class Server(
         self.reconcile_library_settings(self.vault)
         self.vault.start()
         _log_stage("auth wired + background workers started")
+        self._start_edit_copies()
 
         # Owns replacing the vault when the active library changes, and the
         # state requests are refused in while that is happening.
@@ -1002,11 +1041,50 @@ class Server(
         if watcher is not None:
             self._workflow_inbox_watcher = None
             watcher.stop()
+        # Before the vault closes, so a late debounce cannot write into it.
+        watcher = getattr(self, "_edit_copy_watcher", None)
+        if watcher is not None:
+            self._edit_copy_watcher = None
+            watcher.stop()
         if getattr(self, "vault", None) is not None:
             logger.info("Closing the vault and cleaning up resources")
             self._close_active_vault()
         self._close_hub()
         gc.collect()
+
+    def _start_edit_copies(self) -> None:
+        """Sweep, reconcile and watch the Open-with edit copies.
+
+        An edit saved while the backend was down is imported by the reconcile;
+        sessions untouched for a day are swept after it (services/edit_copies.py).
+        """
+        self._edit_copy_watcher = None
+        if not Server.DEFAULT_WATCH_EDIT_COPIES:
+            return
+        root = edit_copies_root(os.path.dirname(self._server_config_path))
+        try:
+            reconcile_edit_copies(self, root)
+        except Exception as exc:
+            logger.error(
+                "Reconciling the edit copies in %s failed with %s: %s",
+                root,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+        # After the import, which touches every session it imports into.
+        sweep_edit_sessions(root)
+        try:
+            watcher = EditCopyWatcher(root, lambda path: process_session(self, path))
+            watcher.start()
+            self._edit_copy_watcher = watcher
+        except OSError as exc:
+            logger.error(
+                "Could not watch the edit copies in %s; an edit saved in another "
+                "app is imported at the next start only: %s",
+                root,
+                exc,
+            )
 
     def _store_inbox_workflow(self, name: str, workflow: dict) -> dict:
         """Store one inbox file as a manual workflow, once per content.
@@ -1079,7 +1157,19 @@ class Server(
         only a fingerprint, and the key lives in the hub. Penalised and hidden
         tags say what someone collects and what they hide, and a library folder
         is made to be copied and handed to other people.
+
+        It also seeds the default tag groups this library is behind on (issue
+        #2469). That runs first, and on every open, startup and switch alike, so
+        a library never opens without its defaults. A failure there is logged
+        and the library still opens.
         """
+        try:
+            tag_group_service.seed_default_groups(vault.db)
+        except Exception:
+            logger.exception(
+                "Could not seed the default tag groups for library %s",
+                getattr(library, "name", None) or "(active)",
+            )
         # The library is passed explicitly by the switch path, which reconciles
         # *before* it marks the target active: reading "the active library" there
         # would return the one being closed, and key the fingerprint with the
@@ -1163,13 +1253,21 @@ class Server(
             if Server.DEFAULT_FORCE_CPU is not None
             else startup_forced_cpu
         )
-        return Vault(
+        # E2E only: run submitted tasks and a few named sweeps, never the ones
+        # that would rewrite the fixture (tags, embeddings, scores).
+        planner_finders = None
+        if self._server_config.get("enable_test_hooks", False):
+            names = self._server_config.get("e2e_planner_finders")
+            if names is not None:
+                planner_finders = frozenset(TaskType(name) for name in names)
+        vault = Vault(
             image_root=image_root,
             description=User().description,
             server_config_path=self._server_config_path,
             path_mapper=self.path_mapper,
             disable_background_workers=not workers
             or self._server_config.get("disable_background_workers", False),
+            planner_finders=planner_finders,
             force_cpu=bool(force_cpu),
             fast_captions=Server.DEFAULT_FAST_CAPTIONS,
             daily_snapshots_enabled=self._server_config.get("daily_snapshots", True),
@@ -1186,6 +1284,15 @@ class Server(
                 self._server_config
             ),
         )
+        # A training job writes its run into the shelf's ai-toolkit (source)
+        # folder, registered through the same function the folder routes call.
+        # Bound here, not once at start-up, so a vault opened by a library
+        # switch can register it too: one without it fails its first job with
+        # "No model shelf folder is set up".
+        vault.training_service.set_source_folder_registrar(
+            lambda path: register_model_folder(self, path, SOURCE_FOLDER_KIND)
+        )
+        return vault
 
     def _active_library_uuid(self):
         """Return the active library's uuid, for stamping newly minted tokens."""
@@ -1304,11 +1411,15 @@ class Server(
         # get_worker_progress, which the in-app upgrade bar consumes.
         self.vault.start()
         self._maybe_send_telemetry_ping()
+        # The one link record of older builds moves onto its connection, and a
+        # removed connection's key is revoked (#2194).
+        comfyui_link_service.adopt_single_record(self)
         # A link from before the ComfyUI scope (#1811) is held to it.
         comfyui_link_service.narrow_recorded_key(self)
-        # A linked ComfyUI on this computer is told if the loopback port moved.
+        # Each linked ComfyUI on this computer is told where PixlStash is, once
+        # a session, as soon as it answers.
         threading.Thread(
-            target=comfyui_link_service.reannounce,
+            target=comfyui_link_service.reannounce_until_told,
             args=(self,),
             name="comfyui-link-reannounce",
             daemon=True,
@@ -1903,6 +2014,12 @@ class Server(
             dependencies=gate,
         )
         self.api.include_router(
+            create_tag_groups_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["tag_groups"],
+            dependencies=gate,
+        )
+        self.api.include_router(
             create_insights_router(self),
             prefix=API_V1_PREFIX,
             tags=["insights"],
@@ -2033,6 +2150,11 @@ class Server(
             tags=["snapshots"],
             dependencies=gate,
         )
+        self.api.include_router(
+            create_training_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
         # The workflow library's read side (implementation plan §F1/§F2). No
         # router-level ``tags=``: the module declares ``tags=["workflows"]``
         # itself, and FastAPI concatenates the two into a duplicated tag that
@@ -2073,6 +2195,16 @@ class Server(
                 include_in_schema=False,
                 dependencies=gate,
             )
+            if self._server_config.get("e2e_model_folder"):
+                seed_model_folder(self, self._server_config["e2e_model_folder"])
+            if self._server_config.get("e2e_reference_folder"):
+                seed_reference_folder(self, self._server_config["e2e_reference_folder"])
+            if self._server_config.get("e2e_comfyui_url"):
+                point_comfyui_default(self._server_config["e2e_comfyui_url"])
+            if self._server_config.get("e2e_workflow_seed"):
+                seed_workflows(self, self._server_config["e2e_workflow_seed"])
+            if self._server_config.get("e2e_training_card"):
+                fake_training_card(self, self._server_config["e2e_training_card"])
 
         @self.api.middleware("http")
         async def auth_middleware(request: Request, call_next):

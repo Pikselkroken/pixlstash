@@ -23,7 +23,7 @@ This is option **C** from the design discussion.
 
 | Runner / platform | Bundled in the installer | Fetched on demand (from PyPI/PyTorch) |
 | --- | --- | --- |
-| Linux x64 | CPython + all deps + **CPU** torch + onnxruntime | NVIDIA → `torch+cu128`, `onnxruntime-gpu`; AMD → `torch+rocm` (ORT stays CPU — ROCm ORT isn't on PyPI) |
+| Linux x64 | CPython + all deps + **CPU** torch + onnxruntime | NVIDIA → `torch+cu128`, `onnxruntime-gpu`; AMD → `torch+rocm` (ORT stays CPU — `onnxruntime-migraphx` needs MIGraphX from a system ROCm install) |
 | Windows x64 | CPython + all deps + **CPU** torch + onnxruntime | NVIDIA → `torch+cu128`, `onnxruntime-gpu` |
 | macOS arm64 | CPython + all deps + **Metal** torch (default PyPI macOS wheel) + onnxruntime | nothing — MPS is already in the bundled torch |
 
@@ -113,7 +113,7 @@ default (`computeDefaultBackendsRoot`):
   install folder to use.
 
 Users can override the default anywhere: the first-run wizard shows an install-location
-picker when GPU is selected, and Settings → Compute → *Install location* changes it later.
+picker when GPU is selected, and Settings → GPU & compute → *Install location* changes it later.
 Changing it after an overlay is installed **moves** the existing overlay (rename, falling
 back to copy+delete across drives) so the multi-GB torch isn't re-downloaded — this also
 replaces the "move it manually + symlink" workaround users were doing. The chosen path is
@@ -312,6 +312,29 @@ from setup it is **Choose Another Folder** and returns to the picker, from
 back to the CPU overlay first — the database has nothing to do with the
 accelerator, and retrying there would throw the typed error away.
 
+**The third is an active library that will not open at all** (#2637): its
+folder is gone, its `vault.db` is gone, it cannot be read, or it is a different
+library. The backend prints `PIXLSTASH_LIBRARY_UNAVAILABLE=` and the shell turns
+it into `LibraryUnavailableError` (`backend/LibraryRecovery.ts`). This one gets
+a full window (`renderer/library-recovery.html`) rather than a native box,
+because there are several answers, not one: **Try again** (relaunch, for a
+disconnected drive), **Find it…** (a folder picker, then `libraries relocate
+--same-library` through the CLI while the backend is stopped, so a wrong folder
+is answered on the screen rather than by another failed start), **Open another
+library** (`libraries activate`, only for a library the backend's own report
+offered), and **Create a new library…** (writes only `image_root` into the
+config and relaunches with `PIXLSTASH_REPLACE_LIBRARY=<uuid>`; the backend
+registers the folder the way first run does and then detaches the old
+registration; if that relaunch fails, the previous config is written back). A
+folder that is, contains or is inside the missing library's is refused on the
+screen and again by the backend. The action channels are gated on that page
+(`requireLibraryRecoveryRenderer`) and registered only while it waits. A
+relaunch that fails the same way, or on the chosen folder (a database that
+will not open, a declined permission repair), returns to the screen with a
+note; a permission repair is offered first, as `boot()` does. Only an unrelated
+failure goes to the splash. The overlay fallback is skipped, for the same
+reason as the database case.
+
 Subsequent launches see the config exists → no steps to run → straight into the
 library.
 
@@ -349,8 +372,8 @@ sub-option). Also deferred: wiring automatic update checks.
   pip still verifies index hashes over TLS.
 - **`--target` shadowing** for torch/onnxruntime must be validated (fallback: `venv
   --system-site-packages`, accepting base-path-coupling and recreate-on-update).
-- **AMD ROCm**: torch from the rocm index, but `onnxruntime` stays CPU (no PyPI ROCm ORT) —
-  same limitation as today.
+- **AMD ROCm**: torch from the rocm index, but `onnxruntime` stays CPU (`onnxruntime-migraphx`
+  needs MIGraphX from a system ROCm install) — same limitation as today.
 
 ## Verification
 - **Local CPU**: `build_desktop_runtime.py --accel cpu` → `npm start` → app opens into the

@@ -29,6 +29,7 @@ from pixlstash.resources.ledger import DeviceReading, Ledger
 
 CARD = "GPU-00000000-0000-0000-0000-000000000001"
 TOTAL = 24576  # 24 GB; margin is 5 % = 1228 MB
+MARGIN = safety_margin_mb(TOTAL)
 
 
 class FakeLedger:
@@ -59,12 +60,21 @@ class FakeLedger:
 
 
 class FakeComfy:
-    def __init__(self, usage=0, busy=False, idle=True, device=CARD):
+    def __init__(
+        self, usage=0, busy=False, idle=True, device=CARD, kept=None, can_quit=False
+    ):
         self.usage = usage
         self.is_busy = busy
         self.is_idle = idle
         self._device = device
         self.freed = 0
+        # What /free leaves (its CUDA context); None: unknown, all it holds.
+        self.kept = kept
+        self.quittable = can_quit
+        self.quits = 0
+        self.quit_works = True
+        self.queued = 0
+        self.reclaim_works = True
 
     def device(self):
         return self._device
@@ -78,8 +88,26 @@ class FakeComfy:
     def idle(self):
         return self.is_idle
 
+    def jobs(self):
+        return self.queued
+
     def reclaim(self):
         self.freed += 1
+        if not self.reclaim_works:
+            return False
+        self.usage = self.kept or 0
+        return True
+
+    def kept_mb(self):
+        return self.kept
+
+    def can_quit(self):
+        return self.quittable
+
+    def quit(self):
+        self.quits += 1
+        if not self.quit_works:
+            return False
         self.usage = 0
         return True
 
@@ -106,6 +134,22 @@ def budget(free_mb):
 def test_margin_is_the_larger_of_one_gb_and_five_percent():
     assert safety_margin_mb(8192) == 1024
     assert safety_margin_mb(TOTAL) == int(TOTAL * 0.05)
+
+
+def test_training_room_counts_what_tenants_give_back_but_not_other_apps():
+    """PixlStash's own memory and an idle ComfyUI's cache are freed for an
+    exclusive run, so they are room; what other apps hold is not."""
+    arb, _fake, _ = make(used_mb=12000, pixl_usage=3000, thread=False)
+    arb.register_probe(Tenant.COMFYUI, FakeComfy(usage=7000))
+    room = arb.training_room(CARD)
+    # 12000 used = 3000 PixlStash + 7000 ComfyUI + 2000 other apps.
+    assert room["vram_mb"] == budget(TOTAL - 2000)
+    assert room["ram_mb"] == 32768
+    # Its kept memory unknown, all it holds may stay until it quits.
+    assert room["comfyui"]["kept_mb"] == 7000
+    assert arb.training_room("GPU-elsewhere")["vram_mb"] is None
+    unmeasured, _f, _u = make(measurable=False, thread=False)
+    assert unmeasured.training_room(CARD)["vram_mb"] is None
 
 
 def test_heavy_that_fits_is_granted_at_once_and_snapshot_counts_it():
@@ -141,8 +185,12 @@ def test_outstanding_shrinks_as_the_tenant_grows_into_it():
     # The tenant now really holds 6000 of it, and the card says so.
     comfy.usage = 6000
     fake.used_mb = 6000
-    assert arb.snapshot()["devices"][0]["reserved_mb"] == 2000
+    device = arb.snapshot()["devices"][0]
+    assert device["reserved_mb"] == 2000
+    # The bar draws it as AI Toolkit's, not as spare.
+    assert device["reserved_by"] == {"aitoolkit": 2000}
     first.release()
+    assert arb.snapshot()["devices"][0]["reserved_by"] == {}
 
 
 def test_a_tenant_unreadable_at_grant_counts_growth_from_its_first_reading():
@@ -614,6 +662,186 @@ def test_reclaim_ladder_yields_pixlstash_then_frees_comfyui():
     lease.release()
 
 
+def _quit_scene(need_mb, **comfy):
+    """15000 MB of other apps and an idle ComfyUI holding 8000, which keeps
+    1500 (its CUDA context) after /free: 348 MB of budget as it stands."""
+    arb, fake, _ = make(used_mb=23000, thread=False)
+    probe = FakeComfy(usage=8000, kept=1500, **comfy)
+    arb.register_probe(Tenant.COMFYUI, probe)
+    lease = arb.request(Tenant.AITOOLKIT, "train", device=CARD, need_mb=need_mb)
+
+    def settle():
+        fake.used_mb = 15000 + probe.usage
+        arb._refresh()
+        with arb._lock:
+            arb._evaluate_locked()
+
+    return arb, probe, lease, settle
+
+
+def test_comfyui_is_quit_only_with_the_owners_yes_and_only_once_it_unloaded():
+    """#2558: /free cannot release ComfyUI's CUDA context. A run short by
+    less than ComfyUI holds, but more than an unload frees, waits for it to be
+    closed, and is offered the quit; the ladder quits it only once allowed."""
+    arb, probe, lease, settle = _quit_scene(8000, can_quit=True)
+    assert arb.training_room(CARD)["comfyui"] == {
+        "kept_mb": 1500,
+        "held_mb": 8000,
+        "can_quit": True,
+        "busy": False,
+        "jobs": 0,
+    }
+    reason = lease.waiting_reason
+    assert reason["code"] == "vram"
+    # 348 free + 6500 an unload frees: 1152 short of 8000.
+    assert reason["comfyui_closing"]["short_mb"] == 8000 - (budget(1576) + 6500)
+    assert "quit_comfyui" in reason["actions"]
+    assert reason["text"].startswith("Needs ComfyUI closed")
+    assert arb._reclaim_step() and probe.freed == 1, "it unloads first"
+    settle()
+    assert lease.state is LeaseState.WAITING
+    assert not arb._reclaim_step(), "no yes, no quit"
+    assert probe.quits == 0
+    lease.allow_comfyui_quit()
+    settle()
+    assert "quit_comfyui" not in lease.waiting_reason["actions"]
+    assert lease.waiting_reason["comfyui_closing"]["allowed"] is True
+    assert arb._reclaim_step() and probe.quits == 1
+    assert [w["code"] for w in lease.warnings] == ["comfyui_quit"]
+    settle()
+    assert lease.state is LeaseState.GRANTED
+    lease.release()
+
+
+def test_a_quit_that_fails_says_so_and_can_be_asked_again():
+    arb, probe, lease, settle = _quit_scene(8000, can_quit=True)
+    probe.quit_works = False
+    lease.allow_comfyui_quit()
+    while arb._reclaim_step():
+        settle()
+    assert probe.quits == 1
+    assert [w["code"] for w in lease.warnings] == ["comfyui_quit_failed"]
+    settle()
+    assert lease.state is LeaseState.WAITING
+    assert "quit_comfyui" in lease.waiting_reason["actions"], "offered again"
+    probe.quit_works = True
+    lease.allow_comfyui_quit()
+    settle()
+    assert arb._reclaim_step() and probe.quits == 2
+    settle()
+    assert lease.state is LeaseState.GRANTED
+    lease.release()
+
+
+def test_comfyui_is_never_quit_when_an_unload_is_enough_or_it_is_busy():
+    # An unload frees 6500, enough for 6000: no offer, no quit, though allowed.
+    arb, probe, lease, settle = _quit_scene(6000, can_quit=True)
+    assert lease.waiting_reason["comfyui_closing"] is None
+    lease.allow_comfyui_quit()
+    while lease.state is LeaseState.WAITING and arb._reclaim_step():
+        settle()
+    assert lease.state is LeaseState.GRANTED and probe.quits == 0
+    lease.release()
+
+    # Busy with work PixlStash did not submit: never quit mid-job.
+    arb, probe, lease, settle = _quit_scene(8000, can_quit=True, idle=False, busy=True)
+    lease.allow_comfyui_quit()
+    settle()
+    assert not arb._reclaim_step()
+    assert probe.quits == 0 and lease.state is LeaseState.WAITING
+    lease.release()
+
+    # One PixlStash cannot close (Docker, no pid): named, but never offered.
+    arb, probe, lease, settle = _quit_scene(8000)
+    assert lease.waiting_reason["comfyui_closing"]["can_quit"] is False
+    assert "quit_comfyui" not in lease.waiting_reason["actions"]
+    lease.release()
+
+    # Short even with ComfyUI gone: nothing to ask of it.
+    arb, probe, lease, settle = _quit_scene(9000, can_quit=True)
+    assert lease.waiting_reason["comfyui_closing"] is None
+    lease.release()
+
+
+def test_a_lease_shows_comfyuis_jobs_then_its_clear_then_the_outcome():
+    """The Tasks row's phase track: ComfyUI's jobs, the clear with what it
+    freed, then still short (and offered the quit) or granted."""
+    arb, probe, lease, settle = _quit_scene(8000, can_quit=True, idle=False)
+    probe.queued = 2
+    settle()
+
+    def clear():
+        return arb.snapshot()["leases"][0]["comfyui_clear"]
+
+    assert clear() == {"phase": "jobs", "jobs": 2, "freed_mb": None, "failed": False}
+    assert arb.snapshot()["comfyui"] == {
+        "device": CARD,
+        "held_mb": 8000,
+        "idle": False,
+        "jobs": 2,
+    }
+    assert not arb._reclaim_step(), "never cleared mid-job"
+    probe.is_idle, probe.queued = True, 0
+    settle()
+    assert clear()["phase"] == "clearing"
+    assert arb._reclaim_step() and probe.freed == 1
+    settle()
+    assert lease.state is LeaseState.WAITING
+    assert clear() == {"phase": "cleared", "jobs": 0, "freed_mb": 6500, "failed": False}
+    assert "quit_comfyui" in lease.waiting_reason["actions"]
+    lease.release()
+
+    arb, probe, lease, settle = _quit_scene(6000)
+    assert clear()["phase"] == "clearing"
+    assert arb._reclaim_step()
+    settle()
+    assert lease.state is LeaseState.GRANTED
+    assert clear() == {"phase": "done", "jobs": 0, "freed_mb": 6500, "failed": False}
+    lease.release()
+
+    # An unload ComfyUI refused (a job arrived meanwhile) is said, not shown
+    # as clearing for ever.
+    arb, probe, lease, settle = _quit_scene(6000)
+    probe.reclaim_works = False
+    assert arb._reclaim_step()
+    settle()
+    assert clear() == {"phase": "cleared", "jobs": 0, "freed_mb": 0, "failed": True}
+    lease.release()
+
+    # A read that raises after the unload still ends the record.
+    arb, probe, lease, settle = _quit_scene(6000)
+
+    def unreadable():
+        raise RuntimeError("stats unreadable")
+
+    probe.usage_mb = lambda: probe.usage
+    probe.reclaim = lambda: setattr(probe, "usage_mb", unreadable) or True
+    assert arb._reclaim_step()
+    assert lease.comfyui_clear["failed"] is True
+    probe.usage_mb = lambda: 1500
+    settle()
+    assert clear()["phase"] == "cleared"
+    lease.release()
+
+    # Only the lease the ladder clears for has a track: one behind it waits
+    # its turn (fifo), and is never told ComfyUI is clearing for it.
+    arb, probe, lease, settle = _quit_scene(8000, idle=False)
+    behind = arb.request(Tenant.AITOOLKIT, "train 2", device=CARD, need_mb=8000)
+    settle()
+    rows = {row["id"]: row for row in arb.snapshot()["leases"]}
+    assert rows[lease.id]["comfyui_clear"]["phase"] == "jobs"
+    assert rows[behind.id]["comfyui_clear"] is None
+    behind.release()
+    lease.release()
+
+    # Nothing to give: no ComfyUI memory on the card, no track.
+    arb, _fake, _ = make(used_mb=23000, thread=False)
+    lease = arb.request(Tenant.AITOOLKIT, "train", device=CARD, need_mb=8000)
+    assert arb.snapshot()["leases"][0]["comfyui_clear"] is None
+    assert arb.snapshot()["comfyui"] is None
+    lease.release()
+
+
 def test_comfyui_is_never_asked_to_free_for_its_own_run():
     arb, _fake, usage = make(used_mb=23000, pixl_usage=None, thread=False)
     comfy = FakeComfy(usage=8000)
@@ -624,6 +852,50 @@ def test_comfyui_is_never_asked_to_free_for_its_own_run():
         pass
     assert comfy.freed == 0
     lease.release()
+
+
+def test_a_comfyui_run_short_of_only_comfyuis_own_memory_goes_once_pixlstash_yields():
+    """ComfyUI holds the card: a run short by less than that is ComfyUI's to
+    fit, so other apps moving by a few hundred MB never hold it."""
+    # 23000 used: ComfyUI 19000, other apps 4000. ComfyUI's budget is 19348.
+    arb, _fake, _ = make(used_mb=23000, thread=False)
+    comfy = FakeComfy(usage=19000)
+    arb.register_probe(Tenant.COMFYUI, comfy)
+    yielded = []
+    arb.add_yielder(lambda lease: yielded.append(lease.id) or [])
+    lease = arb.request(Tenant.COMFYUI, "run", need_mb=19800)
+    assert lease.waiting_reason["code"] == "vram", "PixlStash moves off first"
+    assert arb._reclaim_step()
+    with arb._lock:
+        arb._evaluate_locked()
+    assert yielded == [lease.id]
+    assert lease.state is LeaseState.GRANTED
+    assert comfy.freed == 0
+    # Anyone else still waits, short by far less than ComfyUI holds: it is
+    # not their memory to manage.
+    train = arb.request(Tenant.AITOOLKIT, "train", device=CARD, need_mb=1000)
+    assert arb._reclaim_step()
+    with arb._lock:
+        arb._evaluate_locked()
+    assert train.state is LeaseState.WAITING
+    for held in (train, lease):
+        held.release()
+    # Short by more than the margin, however much ComfyUI holds: it waits.
+    comfy.usage = 19000
+    over = arb.request(Tenant.COMFYUI, "over", need_mb=19348 + MARGIN + 1)
+    while arb._reclaim_step():
+        with arb._lock:
+            arb._evaluate_locked()
+    assert over.waiting_reason["code"] == "vram"
+    over.release()
+    # Short by more than ComfyUI holds, other apps fill the card: it waits.
+    comfy.usage = 400
+    big = arb.request(Tenant.COMFYUI, "big", need_mb=1500)
+    while arb._reclaim_step():
+        with arb._lock:
+            arb._evaluate_locked()
+    assert big.waiting_reason["code"] == "vram"
+    big.release()
 
 
 def test_exclusive_makes_pixlstash_yield_before_it_is_granted():
@@ -980,6 +1252,66 @@ def test_comfyuis_figure_is_its_process_when_its_weights_live_outside_torch(
     assert probe.usage_mb() == 160
 
 
+def test_comfyui_keeps_the_least_it_held_and_quits_only_its_own_idle_process(
+    monkeypatch,
+):
+    """#2558: ``kept_mb`` is the floor /free cannot go under, and ``quit``
+    terminates the process listening on ComfyUI's port, only when idle."""
+    from pixlstash.resources import comfyui_tenant
+    from pixlstash.resources.comfyui_tenant import ComfyUIProbe
+
+    ended = []
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def net_connections(self, kind="inet"):
+            port = 8188 if self.pid == 4242 else 7801
+            return [
+                SimpleNamespace(
+                    status=psutil.CONN_LISTEN, laddr=SimpleNamespace(port=port)
+                )
+            ]
+
+        def terminate(self):
+            ended.append(self.pid)
+
+        def wait(self, timeout=None):
+            return 0
+
+    fake = _ProcessLedger({CARD: {4242: 13254, 5151: 900}})
+    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: fake)
+    monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
+    monkeypatch.setattr(comfyui_tenant.psutil, "Process", FakeProcess)
+    queue = {"queue_running": [], "queue_pending": []}
+    probe = ComfyUIProbe("test-client")
+    probe.watch("http://comfy.invalid:8188")
+    probe._get = lambda path: (
+        queue if path == "/queue" else _comfy_stats(TOTAL, TOTAL, torch_mb=160)
+    )
+    assert probe.device() == CARD
+    assert probe.kept_mb() is None and not probe.can_quit()
+    assert probe.usage_mb() == 13254
+    fake.by_card[CARD][4242] = 780
+    probe._stats = (0.0, None)
+    assert probe.usage_mb() == 780
+    fake.by_card[CARD][4242] = 9000
+    probe._stats = (0.0, None)
+    assert probe.usage_mb() == 9000
+    assert probe.kept_mb() == 780, "the least seen, not the latest"
+    assert probe.can_quit()
+
+    queue["queue_running"] = [[0, "p", {}, {"client_id": "someone-else"}]]
+    probe._queue = (0.0, None)
+    assert not probe.quit() and ended == [], "never mid-job"
+    queue["queue_running"] = []
+    probe._queue = (0.0, None)
+    assert probe.quit() and ended == [4242], "the listener, not the other pid"
+    assert not probe.can_quit()
+    assert probe.kept_mb() is None, "the next ComfyUI has its own floor"
+
+
 def test_the_ledger_lists_one_cards_processes_without_its_own():
     mb = 1024 * 1024
     on_card = {
@@ -1065,3 +1397,71 @@ def test_an_identical_card_elsewhere_is_told_apart_by_a_fresh_second_read(
     probe.watch("http://comfy.invalid")
     probe._get = lambda path: next(reads, _comfy_stats(TOTAL, TOTAL - 3000))
     assert probe.device() is None
+
+
+def test_a_granted_lease_carries_its_live_progress_in_the_snapshot():
+    arb, _fake, _ = make(used_mb=4000)
+    lease = arb.request(
+        Tenant.AITOOLKIT,
+        "LoRA training 'x'",
+        device=CARD,
+        need_mb=budget(TOTAL - 4000),
+        kind=LeaseKind.EXCLUSIVE,
+        job_id="job-1",
+    )
+    row = next(r for r in arb.snapshot()["leases"] if r["id"] == lease.id)
+    assert row["progress"] is None
+
+    lease.set_progress(step=2750, total=4000, loss=0.123)
+    row = next(r for r in arb.snapshot()["leases"] if r["id"] == lease.id)
+    assert row["progress"] == {"step": 2750, "total": 4000, "loss": 0.123}
+    assert row["job_id"] == "job-1"
+
+    lease.set_progress(step=2800, total=4000, loss=None)
+    row = next(r for r in arb.snapshot()["leases"] if r["id"] == lease.id)
+    assert row["progress"] == {"step": 2800, "total": 4000, "loss": None}
+
+    lease.release()
+    assert all(r["id"] != lease.id for r in arb.snapshot()["leases"])
+
+
+def test_adopt_grants_a_live_trainer_at_once_and_counts_its_memory_once():
+    """A trainer that outlived a restart already holds its memory: it is
+    granted without waiting, and what it holds is its reservation, not a
+    second helping on top of it."""
+    arb, fake, _ = make(used_mb=20000, thread=False)
+    trainer = FakeComfy(usage=18000)
+    arb.register_probe(Tenant.AITOOLKIT, trainer)
+    # Asked for the ordinary way, the same need waits: the card is full.
+    asked = arb.request(
+        Tenant.AITOOLKIT, "asked", device=CARD, need_mb=18000, kind=LeaseKind.EXCLUSIVE
+    )
+    assert asked.state is LeaseState.WAITING
+    asked.release()
+
+    adopted = arb.adopt(Tenant.AITOOLKIT, "train", 18000, CARD, quiet_s=60)
+    assert adopted.state is LeaseState.GRANTED
+    assert adopted.kind is LeaseKind.EXCLUSIVE
+    assert arb.snapshot()["devices"][0]["reserved_mb"] == 0
+    assert arb.try_light("Tagging", need_mb=0) is None
+
+    # Quiet: PixlStash has not watched it peak since the restart.
+    assert adopted.shrink(12000) is False
+    assert (adopted.kind, adopted.need_mb) == (LeaseKind.EXCLUSIVE, 18000)
+
+    adopted.quiet_until = time.monotonic() - 1
+    assert adopted.shrink(12000) is True
+    assert (adopted.kind, adopted.need_mb) == (LeaseKind.HEAVY, 12000)
+    light = arb.try_light("Tagging", need_mb=0)
+    assert light is not None and light.state is LeaseState.GRANTED
+    light.release()
+    adopted.release()
+
+
+def test_a_probe_can_name_the_memory_it_reports():
+    arb, _fake, _ = make(used_mb=3000, thread=False)
+    leftover = FakeComfy(usage=2000)
+    leftover.holder_label = lambda: "AI Toolkit · memory not released"
+    arb.register_probe(Tenant.AITOOLKIT, leftover)
+    labels = {row["label"] for row in arb.snapshot()["holders"]}
+    assert "AI Toolkit · memory not released" in labels

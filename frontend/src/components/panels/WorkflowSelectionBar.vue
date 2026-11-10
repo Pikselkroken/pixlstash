@@ -60,7 +60,7 @@
           role="menuitem"
           @click="store.clearSelection()"
         >
-          <v-icon class="ctx-icon">mdi-close</v-icon>
+          <v-icon class="ctx-icon">mdi-selection-off</v-icon>
           <span class="ctx-label-text">Clear selection</span>
           <span class="ctx-shortcut">Esc</span>
         </button>
@@ -73,86 +73,58 @@
          different things on purpose: the label is the verb and never changes,
          so a screen reader hears a stable name; the tooltip is the REFUSAL and
          changes with the selection. A tooltip alone is not an accessible name
-         a reader can rely on. -->
+         a reader can rely on.
+
+         The face is the three verbs a reader reaches for without a menu, then
+         `⋯`, which holds the whole inventory (VerbMenu). Favourite, Run, Rename
+         and Hide live there, and Run and Favourite keep their keys (R and H). -->
     <!-- The way out to the pictures (#1797): the picture grid's own
          "pictures" glyph, first because it reads the selection rather than
-         changing it. -->
-    <!-- Favourite leads (#1578): it is the one verb every card takes, and the
-         glyph says which way it will go. Filled when every selected card is one
-         already, so the next press unfavourites. -->
-    <AppBarButton
-      shape="round"
-      :icon="favouriteOn ? 'heart' : 'heart-outline'"
-      data-verb="favourite"
-      :aria-label="favouriteLabel"
-      :tooltip="favouriteTitle"
-      @click="emit('favourite')"
-    />
-
+         changing it. Its words drop below the pill's container width
+         (`wfpill`, WorkflowsView), never the verb itself. -->
     <AppBarButton
       shape="round"
       icon="image-multiple-outline"
       data-verb="show-pictures"
+      class="wfsel-verb"
       :aria-label="showPicturesLabel"
       :disabled="!hasPictures"
       :tooltip="showPicturesTitle"
-      @click="emit('show-pictures')"
-    />
+      @click="onVerb('show-pictures')"
+    >
+      <span class="wfsel-word">Show pictures</span>
+    </AppBarButton>
+
+    <!-- *Open in ComfyUI* is the adapted open by default, as the Workflow tab's
+         first button is; the menu's submenu keeps Original. The gates are the
+         menu row's own (`comfyuiOpenable`, `canOpenComfyui`), and its refusal
+         sentence is the tooltip when there is one. Absent with no ComfyUI. -->
+    <AppBarButton
+      v-if="canOpenComfyui"
+      shape="round"
+      data-verb="open-comfyui"
+      class="wfsel-verb"
+      aria-label="Open in ComfyUI"
+      :disabled="!comfyuiOpenable"
+      :tooltip="comfyuiTitle || adaptedTitle"
+      @click="onVerb('open-comfyui')"
+    >
+      <ComfyuiIcon :size="18" />
+      <span class="wfsel-word">Open in ComfyUI</span>
+    </AppBarButton>
 
     <AppBarButton
       shape="round"
-      icon="play"
-      data-verb="run"
-      aria-label="Run this workflow"
-      :disabled="!canRun || busy"
-      :loading="running('run')"
-      :tooltip="runTitle"
-      @click="emit('run')"
-    />
-
-    <!-- Rename rides along DISABLED rather than disappearing, which is the
-         shelf's rule and this screen's now: a row of buttons that reflows as
-         the selection grows is a row you have to re-read, and a disabled
-         button with its reason in the tooltip teaches where the verb lives. -->
-    <AppBarButton
-      shape="round"
-      icon="pencil-outline"
-      data-verb="rename"
-      aria-label="Rename"
-      :disabled="!single || busy"
-      :loading="running('rename')"
-      :tooltip="renameTitle"
-      @click="emit('rename')"
-    />
-
-    <AppBarButton
-      shape="round"
-      :icon="allHidden ? 'eye-outline' : 'eye-off-outline'"
-      data-verb="hide"
-      :aria-label="hideLabel"
-      :disabled="busy"
-      :loading="running('hide')"
-      :tooltip="hideTitle"
-      @click="emit('hide', allHidden)"
-    />
-
-    <span class="selbar-sep"></span>
-
-    <!-- The one destructive verb, so the one verb in the error colour, and
-         always in the same last place before `⋯`: a destructive
-         button that moves with the selection is how a reader presses the wrong
-         one. -->
-    <AppBarButton
-      shape="round"
-      danger
-      icon="delete-outline"
-      data-verb="delete"
-      aria-label="Delete workflow"
-      :disabled="!deletable || busy"
-      :loading="running('delete')"
-      :tooltip="deleteTitle"
-      @click="emit('delete')"
-    />
+      icon="tray-arrow-down"
+      data-verb="export"
+      class="wfsel-verb"
+      aria-label="Export"
+      :disabled="!single"
+      :tooltip="exportTitle"
+      @click="onVerb('export')"
+    >
+      <span class="wfsel-word">Export</span>
+    </AppBarButton>
 
     <v-menu
       v-model="moreMenuOpen"
@@ -174,6 +146,35 @@
       </template>
       <VerbMenu />
     </v-menu>
+
+    <span class="selbar-sep"></span>
+
+    <!-- The one destructive verb, so the one verb in the error colour, and
+         always in the same place before Clear: a destructive button that moves
+         with the selection is how a reader presses the wrong one. -->
+    <AppBarButton
+      shape="round"
+      danger
+      icon="delete-outline"
+      data-verb="delete"
+      aria-label="Delete workflow"
+      :disabled="!deletable || busy"
+      :loading="running('delete')"
+      :tooltip="deleteTitle"
+      @click="emit('delete')"
+    />
+
+    <!-- Clear is the deselect icon beside the count's own "Clear selection"
+         row: the pill is where a reader ends a selection, and Esc is the same
+         act. -->
+    <AppBarButton
+      shape="round"
+      icon="selection-off"
+      data-verb="clear"
+      aria-label="Clear selection"
+      tooltip="Clear selection (Esc)"
+      @click="store.clearSelection()"
+    />
   </div>
 
   <!-- The card context menu: the FULL inventory, and the thing every other
@@ -208,14 +209,19 @@
 // there, and is what lets this component be mounted in a test with nothing but
 // a store.
 
-import { computed, h, nextTick, ref, watch } from "vue";
+import { computed, h, nextTick, ref, watch, withDirectives } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
 import AppBarButton from "../widgets/AppBarButton.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { useComfyuiOpen } from "../../composables/useComfyuiOpen";
+import {
+  downloadableInWorkflows,
+  modelBaseName,
+} from "../../composables/useModelDownloads";
 import { isReadOnly } from "../../utils/apiClient";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import {
   favouriteVerb,
@@ -224,6 +230,7 @@ import {
 import { formatKeyHint, selectAllKeyHint } from "../../utils/shortcutHints";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { outputNoun } from "../../utils/workflowCard";
+import { vSubmenuFit } from "../../utils/submenuFit";
 
 const emit = defineEmits([
   "select-all",
@@ -239,6 +246,7 @@ const emit = defineEmits([
   "hide",
   "export",
   "duplicate",
+  "inpaint-copy",
   "use-set",
   "download-missing",
   "delete",
@@ -383,13 +391,19 @@ const runTitle = computed(() => {
 // *Open in ComfyUI*, the Workflow tab's two open verbs under one row. Absent
 // with no ComfyUI to open, as the tab's button is; refused for several cards,
 // or a ComfyUI without the node that loads the link.
-const { canOpenComfyui, comfyuiLacksNode, comfyuiOpensACopy } =
-  useComfyuiOpen();
+const {
+  canOpenComfyui,
+  comfyuiLacksNode,
+  comfyuiOpensACopy,
+  comfyuiDown,
+  comfyuiDownReason,
+} = useComfyuiOpen();
 const comfyuiOpenable = computed(
-  () => runnable.value && !comfyuiLacksNode.value,
+  () => runnable.value && !comfyuiLacksNode.value && !comfyuiDown.value,
 );
 const comfyuiTitle = computed(() => {
   if (!runnable.value) return "Select one workflow to open it in ComfyUI";
+  if (comfyuiDown.value) return comfyuiDownReason.value;
   if (comfyuiLacksNode.value) {
     return (
       "Opening a workflow needs the ComfyUI-PixlStash node in ComfyUI. " +
@@ -569,10 +583,6 @@ const allHidden = computed(
   () => cards.value.length > 0 && cards.value.every((card) => card.hidden),
 );
 
-const hideLabel = computed(() =>
-  allHidden.value ? "Unhide these workflows" : "Hide these workflows",
-);
-
 const hideTitle = computed(() => {
   const n = store.selectedKeys.length;
   if (allHidden.value) {
@@ -625,6 +635,30 @@ const duplicateTitle = computed(() =>
 );
 
 /**
+ * *Convert to Inpainting workflow* (#2446). Gated by the types that can never
+ * convert, not by the ones that can: an edit workflow that starts from an
+ * empty latent is typed `txt2img`, and it is exactly what this is for. The
+ * server's 422 says why anything else is refused.
+ */
+const NOT_CONVERTIBLE = {
+  inpaint: "This workflow already works on a selection",
+  outpaint: "This workflow already works on part of a picture",
+  video: "A video workflow cannot be converted to inpainting",
+  upscale: "An upscale workflow has no sampler to inpaint with",
+};
+const inpaintRefusal = computed(() =>
+  single.value && Object.hasOwn(NOT_CONVERTIBLE, cards.value[0]?.type ?? "")
+    ? NOT_CONVERTIBLE[cards.value[0].type]
+    : undefined,
+);
+const inpaintTitle = computed(() =>
+  !single.value
+    ? "Select one workflow to convert it to inpainting"
+    : (inpaintRefusal.value ??
+      "Make a new manual workflow from this one that redraws only a selection"),
+);
+
+/**
  * *Change model set…* is the Workflow tab's: it fills that tab's model rows, and
  * nothing is written until the tab's bar saves them (#1850).
  */
@@ -636,16 +670,66 @@ const useSetTitle = computed(() =>
 
 /**
  * *Download missing models*: what the run pre-flight says each selected
- * workflow lacks and PixlStash knows where to get. The view asks; the card
- * alone cannot name a missing file. A draft has no graph to ask about.
+ * workflow lacks and PixlStash knows where to get. The card alone cannot name
+ * a missing file, so a menu opening asks (cached, as the Workflow tab does)
+ * and the row is refused once every answer says there is nothing to fetch.
+ * Until then, or when one could not be asked, the row stays offered and the
+ * view's press asks again. A draft has no graph to ask about.
  */
 const downloadable = computed(
   () => !isReadOnly.value && cards.value.some((card) => !card.draft),
+);
+const tasksStore = useTasksStore();
+/**
+ * The selection's answer, or null while not known: `files` it can fetch and
+ * `downloading`, the missing ones already on their way.
+ */
+const missing = ref(null);
+// ponytail: one pre-flight per card, serially, on every open; past this many
+// the row stays offered unchecked. A batched pre-flight would lift the cap.
+const MISSING_CHECK_LIMIT = 12;
+let missingCheck = 0;
+watch(
+  () => [
+    contextOpen.value || moreMenuOpen.value,
+    store.selectedKeys.join("\n"),
+    // A download landing, failing or cancelled leaves the running list, and
+    // only a fresh answer says whether that file is now there or fetchable.
+    [...tasksStore.runningDownloadFiles].sort().join("\n"),
+  ],
+  async ([open]) => {
+    const check = ++missingCheck;
+    missing.value = null;
+    const asked = cards.value.filter((card) => !card.draft);
+    if (!open || !downloadable.value || asked.length > MISSING_CHECK_LIMIT) {
+      return;
+    }
+    const { files, downloading, unasked } =
+      await downloadableInWorkflows(asked);
+    if (check === missingCheck && !unasked) {
+      missing.value = { files, downloading };
+    }
+  },
+);
+/** Of those, the ones not already downloading; null while not known. */
+const toDownload = computed(
+  () =>
+    missing.value?.files.filter(
+      (file) => !tasksStore.runningDownloadFiles.has(modelBaseName(file)),
+    ) ?? null,
 );
 const downloadTitle = computed(() => {
   if (isReadOnly.value) return "This session cannot download models";
   if (!downloadable.value) {
     return "A draft has no graph to check yet: open it in ComfyUI and save it";
+  }
+  if (toDownload.value?.length === 0) {
+    if (missing.value.files.length || missing.value.downloading.length) {
+      return "Already downloading: the Tasks list in the title bar shows how far";
+    }
+    return single.value
+      ? "Nothing this workflow is missing can be downloaded"
+      : "Nothing these workflows are missing can be downloaded";
   }
   return single.value
     ? "Download every model this workflow lacks that PixlStash knows where to get"
@@ -817,32 +901,35 @@ const VerbMenu = () => {
           ],
         ),
         open
-          ? h(
-              "div",
-              {
-                class: "ctx-submenu",
-                role: "menu",
-                "aria-label": "Open in ComfyUI",
-                onKeydown: subKeydown,
-              },
-              [
-                item(
-                  h("img", {
-                    src: "/Logo.png",
-                    alt: "",
-                    class: "ctx-icon wf-menu-logo",
+          ? withDirectives(
+              h(
+                "div",
+                {
+                  class: "ctx-submenu",
+                  role: "menu",
+                  "aria-label": "Open in ComfyUI",
+                  onKeydown: subKeydown,
+                },
+                [
+                  item(
+                    h("img", {
+                      src: "/Logo.png",
+                      alt: "",
+                      class: "ctx-icon wf-menu-logo",
+                    }),
+                    "Adapted for PixlStash",
+                    {
+                      verb: "open-comfyui",
+                      title: adaptedTitle.value,
+                    },
+                  ),
+                  item(h(ComfyuiIcon, { class: "ctx-icon" }), "Original", {
+                    verb: "open-comfyui-original",
+                    title: "With its own savers and loaders instead of PixlStash's",
                   }),
-                  "Adapted for PixlStash",
-                  {
-                    verb: "open-comfyui",
-                    title: adaptedTitle.value,
-                  },
-                ),
-                item(h(ComfyuiIcon, { class: "ctx-icon" }), "Original", {
-                  verb: "open-comfyui-original",
-                  title: "With its own savers and loaders instead of PixlStash's",
-                }),
-              ],
+                ],
+              ),
+              [[vSubmenuFit]],
             )
           : null,
       ],
@@ -901,7 +988,8 @@ const VerbMenu = () => {
       }),
       item("mdi-download-outline", "Download missing models", {
         verb: "download-missing",
-        disabled: !downloadable.value || busy.value,
+        disabled:
+          !downloadable.value || busy.value || toDownload.value?.length === 0,
         title: downloadTitle.value,
       }),
       sep(),
@@ -955,6 +1043,11 @@ const VerbMenu = () => {
         disabled: !single.value,
         title: duplicateTitle.value,
       }),
+      item("mdi-brush-outline", "Convert to Inpainting workflow", {
+        verb: "inpaint-copy",
+        disabled: !single.value || Boolean(inpaintRefusal.value),
+        title: inpaintTitle.value,
+      }),
       sep(),
       item("mdi-delete-outline", "Delete…", {
         verb: "delete",
@@ -989,6 +1082,24 @@ defineExpose({
    function, which scoped CSS cannot reach. */
 .wf-menu {
   min-width: 210px;
+}
+
+/* The face's words, and what they cost. Show pictures, Open in ComfyUI and
+   Export carry theirs while the pill has the room: together they add about
+   300px to a pill that is about 400px without them, so the words go below
+   720px of container (`.wfv-pill-host`, WorkflowsView), and the verb keeps
+   its icon at the same 32px round it is at every width. The class is on the
+   labelled verbs only, so the icon-only ones never change. Estimated, not
+   measured: check at the grid's minimum width. */
+@container wfpill (max-width: 719px) {
+  .wfsel-word {
+    display: none;
+  }
+  .wfsel-verb {
+    width: var(--control-h-bar);
+    padding: 0;
+    justify-content: center;
+  }
 }
 
 /* The PixlStash mark is the brand in colour, so it takes none of the dimming

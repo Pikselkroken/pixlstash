@@ -283,6 +283,7 @@ import {
   checkpointUnread,
   loraGroups,
   lorasUnread,
+  markRow,
   modelDisplayName,
   outputNoun,
 } from "../../utils/workflowCard";
@@ -404,26 +405,6 @@ const modelsUnread = computed(
   () => checkpointIsUnread.value && lorasAreUnread.value,
 );
 const hasRecipe = computed(() => (props.card.variant_count ?? 1) !== 0);
-/**
- * A payload slot as the shelf row `ModelMark` reads. Both base-model spellings,
- * because `baseModelKey` prefers the folded one: passing only the raw would
- * colour the same model differently here and on the shelf.
- */
-function markRow(model) {
-  return {
-    display_name: model.title,
-    filename: model.name,
-    base_model: model.base_model,
-    base_model_folded: model.base_model_folded,
-    icon_sha256: model.icon,
-    mark: model.mark,
-    mark_tab: model.mark_tab,
-    mark_colors: model.mark_colors,
-    mark_icon: model.mark_icon,
-    mark_letters: model.mark_letters,
-    mark_band: model.mark_band,
-  };
-}
 /**
  * What a mark's tooltip says: the model's name, plus the precision the server
  * took out of it - without which two quant builds of one model read

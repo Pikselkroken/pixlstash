@@ -77,17 +77,19 @@ export function runMatches(entry, id) {
 
 /**
  * How one device's memory splits into the bar's segments, in MB and in order:
- * PixlStash, ComfyUI, AI Toolkit, other apps, then the spare margin (free memory
- * a new request could not get, which PixlStash keeps back). Whatever is free
- * beyond that is the empty track, so no segment is drawn for it.
+ * what is in use (PixlStash, ComfyUI, AI Toolkit, other apps), then what is free
+ * but kept back: each tenant's reservation not yet in use (`reserved: true`,
+ * drawn in that tenant's colour) and the spare margin PixlStash keeps. Whatever
+ * is free beyond that is the empty track, so no segment is drawn for it.
  *
  * The holders are the backend's `resources.holders`. Memory in use that no
  * holder accounts for is other apps' too, so the segments always add up to the
- * card's used memory.
+ * card's used memory. `device.reserved_by` says whose reservations the kept-back
+ * memory holds; a backend that does not send it draws all of it as spare.
  *
- * @param {{uuid: string, total_mb: number, free_mb?: number, used_mb?: number, budget_mb?: number}} device
+ * @param {{uuid: string, total_mb: number, free_mb?: number, used_mb?: number, budget_mb?: number, reserved_by?: Object<string, number>}} device
  * @param {Array<{device: string, tenant: string, used_mb: number, label?: string}>} [holders]
- * @returns {{total: number, free: number, segments: Array<{kind: string, mb: number, pct: number, holders: string[]}>}}
+ * @returns {{total: number, free: number, segments: Array<{key: string, kind: string, mb: number, pct: number, holders: string[], reserved: boolean}>}}
  */
 export function deviceVramBar(device, holders = []) {
   const total = nonNegative(device?.total_mb);
@@ -119,26 +121,27 @@ export function deviceVramBar(device, holders = []) {
     byKind.set("other", (byKind.get("other") ?? 0) + unclaimed);
   }
 
-  const order = [...SEGMENT_KINDS, "other"];
   const segments = [];
-  for (const kind of order) {
-    const mb = byKind.get(kind) ?? 0;
-    if (mb <= 0) continue;
+  const push = (kind, mb, reserved = false) => {
+    if (mb <= 0) return;
     segments.push({
+      key: reserved ? `${kind}-reserved` : kind,
       kind,
       mb,
       pct: total > 0 ? (mb / total) * 100 : 0,
-      holders: labels.get(kind) ?? [],
+      holders: reserved ? [] : (labels.get(kind) ?? []),
+      reserved,
     });
-  }
-  if (spare > 0) {
-    segments.push({
-      kind: "spare",
-      mb: spare,
-      pct: total > 0 ? (spare / total) * 100 : 0,
-      holders: [],
-    });
-  }
+  };
+  for (const kind of [...SEGMENT_KINDS, "other"]) push(kind, byKind.get(kind) ?? 0);
+  // The kept-back memory is the reservations first; what is left is spare.
+  // Over-committed (reservations beyond it), each is scaled down alike, so no
+  // tenant drops off the bar for coming later in the order.
+  const reserved = SEGMENT_KINDS.map((kind) => nonNegative(device?.reserved_by?.[kind]));
+  const reservedTotal = reserved.reduce((sum, mb) => sum + mb, 0);
+  const scale = reservedTotal > spare ? spare / reservedTotal : 1;
+  SEGMENT_KINDS.forEach((kind, i) => push(kind, reserved[i] * scale, true));
+  push("spare", scale < 1 ? 0 : spare - reservedTotal);
   return { total, free, segments };
 }
 

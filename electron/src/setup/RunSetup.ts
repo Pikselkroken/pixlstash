@@ -31,6 +31,11 @@ export type SetupDeps<Accel> = {
   setBackendsRoot: (location: string) => void;
   /** Prepare the one-time identity migration. Throws to refuse the setup. */
   prepareLegacyIdentity: (source: string) => Promise<unknown>;
+  /**
+   * Record the anonymous install ID while there is still no config, so it is
+   * classed as a new install (`python -m pixlstash.telemetry`). Never fatal.
+   */
+  recordInstallIdentity: () => Promise<unknown>;
   /** Write the desktop's own server config. */
   writeConfig: (imageRoot: string) => void;
   /**
@@ -117,6 +122,16 @@ export async function runFirstRunSetup<Accel>(
     // vault untouched and keeps the setup screen open, rather than booting a
     // server that looks migrated and is not.
     await deps.prepareLegacyIdentity(deps.legacyIdentitySource);
+  } else if (!deps.legacyIdentitySource) {
+    // Before the config: once it exists the backend classes the install ID as
+    // an upgrade. Not when a standalone library was detected, imported or not:
+    // that person already runs PixlStash, so this is not a new install.
+    try {
+      await deps.recordInstallIdentity();
+    } catch (error) {
+      // The backend still creates one at start-up, classed as an upgrade.
+      console.warn('[setup] could not record the install ID before the config:', error);
+    }
   }
 
   // The config is written only once any requested preparation has succeeded.

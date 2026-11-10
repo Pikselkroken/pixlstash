@@ -166,6 +166,59 @@ describe("resolveCurrent (via answerBinary)", () => {
     });
     expect(store.error).toBeTruthy();
   });
+
+  // The tally moves the moment the card leaves, so Undo must be live then too:
+  // a U pressed while the write is still in flight used to find an empty stack
+  // and answer "Nothing to undo", leaving the decision in place.
+  it("offers undo while the write is in flight, and reopens only once it lands", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item);
+    let land;
+    apiClient.post.mockReturnValueOnce(
+      new Promise((resolve) => {
+        land = () => resolve({ data: {} });
+      }),
+    );
+
+    const deciding = store.answerBinary("no");
+    expect(store.canUndo).toBe(true);
+    const undoing = store.undo();
+    await Promise.resolve();
+    // Reopening before the accept lands would race it server-side.
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+
+    land();
+    await deciding;
+    await undoing;
+
+    expect(apiClient.post).toHaveBeenLastCalledWith("/tag_suggestions/77/reopen");
+    expect(store.tallies[1]).toEqual({ removed: 0, added: 0, kept: 0 });
+    expect(store.queues[1].items[0]).toEqual(item);
+    expect(store.canUndo).toBe(false);
+  });
+
+  it("an undo waiting on a write that fails reopens nothing", async () => {
+    const store = useReviewSessionsStore();
+    seedSession(store, item);
+    let fail;
+    apiClient.post.mockReturnValueOnce(
+      new Promise((_, reject) => {
+        fail = () => reject(new Error("boom"));
+      }),
+    );
+
+    const deciding = store.answerBinary("no");
+    const undoing = store.undo();
+    fail();
+    await deciding;
+    await undoing;
+
+    // The failed write's own rollback put the card back; undo adds nothing.
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+    expect(store.queues[1].items).toEqual([item]);
+    expect(store.tallies[1]).toEqual({ removed: 0, added: 0, kept: 0 });
+    expect(store.canUndo).toBe(false);
+  });
 });
 
 // --- bumpProgress preserves the buckets no decision owns ----------------------

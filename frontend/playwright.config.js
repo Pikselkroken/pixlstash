@@ -22,6 +22,19 @@ const PORT =
         200),
   )
 const BASE_URL = `http://127.0.0.1:${PORT}`
+// The fake ComfyUI (e2e/fake_comfyui.py) sits 200 above, so it is never 8188
+// and two checkouts never share one. The backend's ComfyUI address points at
+// it (`e2e_comfyui_url`), and specs read it from the environment to ask it
+// what it was sent. Set PIXLSTASH_E2E_COMFYUI_PORT to pin it.
+const COMFYUI_PORT =
+  process.env.PIXLSTASH_E2E_COMFYUI_PORT || String(Number(PORT) + 200)
+if (Number(COMFYUI_PORT) === 8188) {
+  throw new Error(
+    'The fake ComfyUI would sit on 8188, ComfyUI\'s own port: set PIXLSTASH_E2E_COMFYUI_PORT.',
+  )
+}
+process.env.PIXLSTASH_E2E_COMFYUI_URL = `http://127.0.0.1:${COMFYUI_PORT}`
+const PYTHON = process.env.PIXLSTASH_PYTHON || 'python'
 
 export default defineConfig({
   testDir: './e2e/specs',
@@ -44,22 +57,33 @@ export default defineConfig({
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
   ],
-  webServer: {
-    // Build the SPA (served by the Python server), then launch the backend
-    // against a throwaway copy of test-data/. Override the interpreter with
-    // PIXLSTASH_PYTHON if `python` is not the pixlstash venv on your PATH.
-    command: `npm run build && PIXLSTASH_E2E_PORT=${PORT} ${process.env.PIXLSTASH_PYTHON || 'python'} e2e/serve_e2e_backend.py`,
-    url: `${BASE_URL}/version`,
-    timeout: 180_000,
-    // Always boot a fresh backend: the launcher strips users so each run
-    // registers a brand-new admin with a per-run random password (no reusable
-    // credential). Reusing a server would leave that admin's password stale.
-    reuseExistingServer: false,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    // Import pixlstash from THIS checkout. A shared venv with an editable
-    // install elsewhere otherwise wins (its finder resolves what cwd cannot),
-    // and the run silently serves another worktree's dist.
-    env: { PYTHONPATH: resolve(process.cwd(), '..') },
-  },
+  webServer: [
+    {
+      // Build the SPA (served by the Python server), then launch the backend
+      // against a throwaway copy of test-data/. Override the interpreter with
+      // PIXLSTASH_PYTHON if `python` is not the pixlstash venv on your PATH.
+      command: `npm run build && PIXLSTASH_E2E_PORT=${PORT} PIXLSTASH_E2E_COMFYUI_PORT=${COMFYUI_PORT} ${PYTHON} e2e/serve_e2e_backend.py`,
+      url: `${BASE_URL}/version`,
+      timeout: 180_000,
+      // Always boot a fresh backend: the launcher strips users so each run
+      // registers a brand-new admin with a per-run random password (no reusable
+      // credential). Reusing a server would leave that admin's password stale.
+      reuseExistingServer: false,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      // Import pixlstash from THIS checkout. A shared venv with an editable
+      // install elsewhere otherwise wins (its finder resolves what cwd cannot),
+      // and the run silently serves another worktree's dist.
+      env: { PYTHONPATH: resolve(process.cwd(), '..') },
+    },
+    {
+      // Fresh every run, like the backend: it keeps what it was sent in memory.
+      command: `PIXLSTASH_E2E_COMFYUI_PORT=${COMFYUI_PORT} ${PYTHON} e2e/fake_comfyui.py`,
+      url: `${process.env.PIXLSTASH_E2E_COMFYUI_URL}/system_stats`,
+      timeout: 30_000,
+      reuseExistingServer: false,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  ],
 })

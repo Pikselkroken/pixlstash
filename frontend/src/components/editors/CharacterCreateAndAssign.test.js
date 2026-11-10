@@ -191,9 +191,9 @@ async function gridHandleSaved(savedCharacter, pending, notices) {
     return;
   }
   if (pending.mode === "faces") {
-    await addCharacterFacesByFaceId(characterId, pending.ids, {});
+    await addCharacterFacesByFaceId(characterId, pending.ids);
   } else {
-    await addCharacterFaces(characterId, pending.ids, {});
+    await addCharacterFaces(characterId, pending.ids);
   }
   const n = pending.ids.length;
   const unit = pending.mode === "faces" ? "face" : "picture";
@@ -202,15 +202,15 @@ async function gridHandleSaved(savedCharacter, pending, notices) {
   );
 }
 
-/** Reproduces ImageOverlay.handleCreatePersonSaved's assignment branch. */
-async function overlayHandleSaved(savedCharacter, faceId, notices) {
+/** Reproduces Lightbox.handleCreatePersonSaved's assignment branch. */
+async function lightboxHandleSaved(savedCharacter, faceId, notices) {
   const characterId = savedCharacter?.id;
   const name = savedCharacter?.name || "person";
   if (characterId == null || faceId == null) {
     notices.error(`Created ${name}, but the face couldn't be assigned.`);
     return;
   }
-  await addCharacterFacesByFaceId(characterId, [faceId], {});
+  await addCharacterFacesByFaceId(characterId, [faceId]);
   notices.success(`Created ${name}, assigned to this face.`);
 }
 
@@ -229,7 +229,7 @@ describe("grid flow: the selection is actually assigned", () => {
 
     await gridHandleSaved(payload, pending, notices);
 
-    expect(addCharacterFaces).toHaveBeenCalledWith(99, ["10", "11"], {});
+    expect(addCharacterFaces).toHaveBeenCalledWith(99, ["10", "11"]);
     expect(addCharacterFacesByFaceId).not.toHaveBeenCalled();
     expect(notices.success).toHaveBeenCalledWith(
       "Created Alice, assigned 2 pictures.",
@@ -248,7 +248,7 @@ describe("grid flow: the selection is actually assigned", () => {
 
     await gridHandleSaved(payload, pending, notices);
 
-    expect(addCharacterFacesByFaceId).toHaveBeenCalledWith(99, [7], {});
+    expect(addCharacterFacesByFaceId).toHaveBeenCalledWith(99, [7]);
     expect(addCharacterFaces).not.toHaveBeenCalled();
     expect(notices.success).toHaveBeenCalledWith(
       "Created Alice, assigned 1 face.",
@@ -262,9 +262,9 @@ describe("overlay flow: the face is actually assigned", () => {
     const { payload } = await saveThroughEditor();
     const notices = noticeSpies();
 
-    await overlayHandleSaved(payload, 4, notices);
+    await lightboxHandleSaved(payload, 4, notices);
 
-    expect(addCharacterFacesByFaceId).toHaveBeenCalledWith(99, [4], {});
+    expect(addCharacterFacesByFaceId).toHaveBeenCalledWith(99, [4]);
     expect(notices.success).toHaveBeenCalledWith(
       "Created Alice, assigned to this face.",
     );
@@ -275,7 +275,7 @@ describe("overlay flow: the face is actually assigned", () => {
     // Characterises what the hosts used to receive. Kept so the regression is
     // described, not merely prevented.
     const notices = noticeSpies();
-    await overlayHandleSaved(CREATED_ENVELOPE, 4, notices);
+    await lightboxHandleSaved(CREATED_ENVELOPE, 4, notices);
     expect(addCharacterFacesByFaceId).not.toHaveBeenCalled();
     expect(notices.error).toHaveBeenCalled();
   });

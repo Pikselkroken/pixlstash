@@ -73,8 +73,8 @@
  *
  * Keys follow the tag field as far as the tag field goes - Arrow highlights,
  * Tab fills, and the highlighted row wears the same TAB hint - and then add the
- * two it has no answer for. `OverlayTagsPanel`'s list has no open state at all:
- * it is simply visible whenever the input holds a prefix that matches, inside a
+ * two it had no answer for. The old lightbox tag field's list had no open state:
+ * it was simply visible whenever the input held a prefix that matched, inside a
  * panel that is itself a mode. This field lives on a row and inside a dialog
  * that both own Escape, so it needs one: ArrowDown opens the menu, Escape
  * closes it, and only a second Escape reaches the host. Enter commits, taking
@@ -100,6 +100,12 @@
  * image's own tags, and prising it out is a refactor of a component this change
  * does not otherwise touch. The duplication is the treatment, not the logic,
  * and it is the thing to collapse if a third completion field ever appears.
+ *
+ * **A caller styles the field with `:deep()`.** The template has two roots (the
+ * input and the menu's layer), so Vue gives a scoped parent's attribute to
+ * neither, and a plain `.my-class` rule in the caller's scoped style never
+ * matches. The class still lands on the input through `$attrs`; write
+ * `.wrapper :deep(.my-class)`, or use a global class like `tbm-input`.
  */
 import {
   computed,
@@ -281,7 +287,7 @@ defineExpose({
 <style scoped>
 /* The tag field's treatment, repeated on purpose: two completion menus that
    looked different would be two things to learn. The values below are copied
-   from `OverlayTagsPanel.vue` along with the reasons they are off-token. */
+   from the old lightbox tag field along with the reasons they are off-token. */
 .bmi-menu {
   position: fixed;
   max-height: 240px;

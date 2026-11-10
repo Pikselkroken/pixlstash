@@ -1,6 +1,6 @@
 <script setup>
 /**
- * Settings › Libraries.
+ * Settings › Libraries & imports.
  *
  * The whole lifecycle: list, add, rename, switch, stop using. It used to be a
  * list and a lesson in the CLI, because adding a library points the server at a
@@ -177,23 +177,7 @@ async function switchTo(library, event) {
   const trigger = invoker?.classList?.contains("ctx-item")
     ? (moreButtons[library.uuid] ?? null)
     : invoker;
-  const shareCount = Number(activeLibrary.value?.active_share_links ?? 0);
-  const ok = await confirm({
-    title: `Switch to ${library.name}?`,
-    message:
-      "PixlStash will reload. Work in progress finishes or is cancelled first.",
-    warning:
-      shareCount > 0
-        ? `${shareCount} share ${shareCount === 1 ? "link points" : "links point"} at ${activeLibrary.value?.name}. ${shareCount === 1 ? "It stops" : "They stop"} working until you switch back.`
-        : "",
-    confirmLabel: "Switch and reload",
-  });
-  if (!ok) return;
-  await switchStore.begin(
-    library,
-    activeLibrary.value,
-    trigger,
-  );
+  await switchStore.confirmAndBegin(library, activeLibrary.value, trigger);
 }
 
 async function startRename(library) {
@@ -287,7 +271,7 @@ async function copyCommand(command) {
   // can be denied too. Claiming "Copied" then leaves the user pasting whatever
   // was on the clipboard before, and this command is the one thing on the
   // screen nobody can retype from memory. The shared notice surface owns the
-  // failure, as it does for the identical copy in OverlayDescriptionPanel.
+  // failure, as it does for the identical copy in LightboxDescriptionPanel.
   noticeStore.error(
     "Couldn't copy the command. Select the text and press Ctrl+C, or Command-C on a Mac.",
     { key: "libraries-cli-copy" },
@@ -306,6 +290,7 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
 <template>
   <div class="libraries-pane">
     <SettingsSection
+      class="libraries-main"
       first
       title="Libraries"
       desc="A library is a folder holding your pictures and their database. PixlStash keeps one open at a time."
@@ -511,16 +496,7 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
         hosting PixlStash.
       </p>
 
-      <AppButton
-        v-if="cliCommands.length"
-        size="sm"
-        variant="secondary"
-        icon-left="console"
-        @click="commandsOpen = true"
-      >
-        Show the commands
-      </AppButton>
-      <p v-else class="libraries-note">
+      <p v-if="!cliCommands.length" class="libraries-note">
         Open the documentation on the machine hosting PixlStash for the command
         appropriate to that installation. Host paths and command details are
         not shown to remote sessions.
@@ -528,14 +504,26 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
 
       <!-- Guidance and the documentation link stay in the section rather than
            moving into the dialog: they are exactly what a remote session needs,
-           and that session never gets a dialog to open. -->
-      <p class="libraries-note">
-        <a
-          :href="LIBRARIES_DOCUMENTATION_URL"
-          target="_blank"
-          rel="noopener noreferrer"
-        >Open the PixlStash command-line documentation</a>.
-      </p>
+           and that session never gets a dialog to open. The button shares the
+           link's line, so the pane keeps its height for the two lists. -->
+      <div class="libraries-cli-row">
+        <AppButton
+          v-if="cliCommands.length"
+          size="sm"
+          variant="secondary"
+          icon-left="console"
+          @click="commandsOpen = true"
+        >
+          Show the commands
+        </AppButton>
+        <p class="libraries-note">
+          <a
+            :href="LIBRARIES_DOCUMENTATION_URL"
+            target="_blank"
+            rel="noopener noreferrer"
+          >Open the PixlStash command-line documentation</a>.
+        </p>
+      </div>
 
       <p class="libraries-note">
         Run it on the machine hosting PixlStash, signed in as the user that owns
@@ -644,9 +632,19 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
 </template>
 
 <style scoped>
+/* The list is as tall as it needs to be, and gives way only when the pane
+   (shared with the import folders) runs out: every box between the pane and
+   the list may shrink, and the list scrolls inside itself. */
 .libraries-pane {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+}
+
+.libraries-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .libraries-loading {
@@ -658,10 +656,25 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
   padding: var(--space-3) 0;
 }
 
+.libraries-cli-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+}
+
+.libraries-cli-row .libraries-note {
+  margin: 0;
+}
+
 .libraries-list {
   list-style: none;
   margin: 0;
   padding: 0;
+  /* At least a row and a half, so a squeezed list still shows it scrolls. */
+  min-height: calc(2 * var(--space-8));
+  overflow-y: auto;
 }
 
 .library-row {

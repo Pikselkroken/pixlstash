@@ -60,10 +60,7 @@ export function runSampleUrl(folderId, runName, filename) {
  * @param {Array<number|null>} [options.steps] - which checkpoints, by step,
  *   with `null` for the bare final. Omit for the whole run.
  * @returns {Promise<Object>} the import report: `stack_id`, `deleted_source`
- *   and a per-file `files` array. Each file carries `sample_count` - the run's
- *   previews copied in beside that checkpoint - and a `detail` that says why
- *   they did not come when it is zero. A failed preview copy leaves the file
- *   `imported`: losing a preview must not cost the weights.
+ *   and a per-file `files` array. The run's previews stay in the run.
  */
 export async function importRun({
   sourceFolderId,
@@ -78,4 +75,22 @@ export async function importRun({
   };
   if (steps) body.steps = steps;
   return unwrap(apiClient.post("/model-imports", body));
+}
+
+/**
+ * Move one run's folder to the OS trash, which is the undo.
+ *
+ * Refused (409) while a training job may still write into it, or while a move
+ * or an import holds the shelf's job slot, so a batch is sequential.
+ *
+ * @param {number} folderId - the registered output root.
+ * @param {string} runName - a run inside it, by name.
+ * @returns {Promise<Object>} `{ run_name, trash_name }`.
+ */
+export async function trashRun(folderId, runName) {
+  return unwrap(
+    apiClient.delete(
+      `/model-folders/${folderId}/runs/${encodeURIComponent(runName)}`,
+    ),
+  );
 }

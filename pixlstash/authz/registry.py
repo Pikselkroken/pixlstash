@@ -333,6 +333,21 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "allow_remote_host_ops=true (§16.3.1)."
         ),
     ),
+    ("POST", "/api/v1/library/folders/open"): RoutePolicy(
+        _LOOPBACK,
+        justification=(
+            "§16.3.1 RED LINE (#2448): the Folders tree's Open in File Manager "
+            "shows a node's folder in the host file manager (open_in_file_manager "
+            "→ os.startfile/open/xdg-open - the same host-GUI spawn as "
+            "pictures/{id}/open-location). Takes a path only if GET "
+            "/library/folders lists it (a folder pictures are filed in), and "
+            "its realpath is contained in the library root. Loopback-only, "
+            "allow_remote_host_ops can NOT loosen it"
+        ),
+    ),
+    # #2458: the Folders tree, read from where pictures are filed. Names
+    # folders relative to the library root, never a host path.
+    ("GET", "/api/v1/library/folders"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/server-config/captions"): RoutePolicy(
         _LOCAL,
         justification=(
@@ -559,6 +574,9 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # constraints would reject) and that is a data check, not a scope one.
     ("PATCH", "/api/v1/models"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/models/forget"): RoutePolicy(_OWNER),
+    # Look up empty base models on Civitai (#1517): writes the same curated
+    # column as Set base model, and sends only each file's SHA-256 outbound.
+    ("POST", "/api/v1/models/base-model-lookup"): RoutePolicy(_OWNER),
     # Which models the active library hides: a hub row per library, the shelf's
     # tier, the owner's own view of their shelf (as the set hide below).
     ("PUT", "/api/v1/models/hidden"): RoutePolicy(_OWNER),
@@ -640,9 +658,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # rows - even though the shipped labels beside them are a constant.
     ("GET", "/api/v1/models/base-models"): RoutePolicy(_OWNER),
     # ── model_folders.py (shelf plan B5; §16.3 host-capability for the writes)
-    # The read is OWNER_ONLY like the rest of the shelf. Every mutator and the
-    # rescan take - or walk - a caller-supplied host path, which is the
-    # reference-folders class exactly, so they carry the §16.3 locality tier.
+    # The read is OWNER_ONLY like the rest of the shelf. Every mutator takes - or
+    # walks - a caller-supplied host path, which is the reference-folders class
+    # exactly, so they carry the §16.3 locality tier. There is no rescan route:
+    # folders are scanned in the background (ModelFolderScanFinder).
     ("GET", "/api/v1/model-folders"): RoutePolicy(_OWNER),
     # OWNER_ONLY, not the §16.3 tier the mutators carry, and the difference is
     # deliberate. It takes no caller-supplied path, reads no file content and
@@ -661,17 +680,60 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 model-folder update; sets the Docker bind host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # Renames the registered folder itself on the host (a folder the owner
+    # added, never a locked one) and repoints its row: the dirs/move rename,
+    # one level up.
+    ("POST", "/api/v1/model-folders/{folder_id}/rename"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 renames a registered model folder on the host within its own parent and repoints its model_folder row - the rename half of POST /model-folders/{folder_id}/dirs/move, applied to the registered root; one named segment, only per-item folders the owner added, refused in Docker; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("DELETE", "/api/v1/model-folders/{folder_id}"): RoutePolicy(
         _LOCAL,
         justification="§16.3 model-folder delete; drops a registered host path and tombstones its location rows; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
-    ("POST", "/api/v1/model-folders/{folder_id}/rescan"): RoutePolicy(
+    # §16.3, not OWNER_ONLY: it reads the names of directories inside a
+    # registered host folder, which PixlStash never registered, and the
+    # authority is the one GET /api/v1/models/{model_id}/samples exercises (a
+    # walk of a registered root, narrowed to one directory level). The folder
+    # list above reports what is registered; this reports what is on disk.
+    ("GET", "/api/v1/model-folders/{folder_id}/dirs"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 walks a registered host path and reads every model file under it - the same authority as reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 lists one directory level inside a registered model folder and reports the names of subdirectories PixlStash never registered, with recursive counts of what sits under them - the authority of models/{model_id}/samples (a walk of a registered root, narrowed); owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    # The tier of /dirs: the subpaths it returns name directories inside a
+    # registered folder that PixlStash never registered, read off the host
+    # ComfyUI's own folder list. It also has this server ask the saved ComfyUI.
+    ("GET", "/api/v1/model-folders/comfyui-reads"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 asks the saved ComfyUI on this computer where it loads each kind of model from and returns the subdirectories of registered model folders that match, names PixlStash never registered - the authority of model-folders/{folder_id}/dirs; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    # The folder verbs (#2206). Both write inside a registered host folder: the
+    # create makes one directory there, the move renames or copies a whole
+    # directory tree and repoints its rows, which is POST /model-moves' class.
+    ("POST", "/api/v1/model-folders/{folder_id}/dirs"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 creates a directory inside a registered model folder on the host - POST /filesystem/folders' mkdir authority, narrowed to one named segment contained against a folder the owner registered, and refused in Docker as that route is; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/model-folders/{folder_id}/dirs/move"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 moves or renames a directory tree inside or between registered model folders - a rename on one drive, a copy, verify and remove across drives - and repoints the model_file rows under it; POST /model-moves' write-and-unlink authority over a whole subtree, with both ends contained against registered folders; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    # Remove a directory inside a model folder (#2207): the delete's unlink
+    # authority over a whole subtree, so the same tier as the two above.
+    ("POST", "/api/v1/model-folders/{folder_id}/dirs/remove"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 moves a directory tree inside a registered model folder to the OS trash (or deletes it on request) and drops the model_file rows under it - POST /model-files/delete's unlink authority over a whole subtree, including files the shelf does not list. Takes no host path: the directory is contained against its registered folder by `resolve_subfolder` (no `..`, no link or dot-name on the way, realpath inside), links inside are removed as links and never walked, only per-item folders whose files the shelf may unlink are eligible, and the removal must match the fingerprint of the dry run that listed it; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    # The folder tree's `Open in file manager`: the host-GUI spawn of
+    # POST /models/{model_id}/open-location, for a directory rather than a
+    # model's, so the same red line.
+    ("POST", "/api/v1/model-folders/{folder_id}/open"): RoutePolicy(
+        _LOOPBACK,
+        justification="§16.3.1 RED LINE: opens a registered model folder, or a directory contained inside it, in the host file manager (open_in_file_manager → os.startfile/open/xdg-open - the same host-GUI spawn as models/{model_id}/open-location and reference-folders/open); loopback-only, allow_remote_host_ops can NOT loosen it",
     ),
     ("POST", "/api/v1/model-folders/pick-up"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 walks every registered host path and registers the model files it finds by name - model-folders/{folder_id}/rescan's authority, narrowed to the files named; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 walks every registered host path and registers the model files it finds by name - the background folder scan's authority, narrowed to the files named; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     # ── model_moves.py (shelf plan B7; §16.3 host-capability) ───────────────
     # The strongest filesystem authority the shelf has: this block writes new
@@ -754,14 +816,18 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # and contains it.
     ("GET", "/api/v1/model-folders/{folder_id}/runs"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 walks a registered ai-toolkit output root and reads every run folder and config under it - the same authority as model-folders/{folder_id}/rescan and reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 walks a registered ai-toolkit output root and reads every run folder and config under it - the same authority as POST model-folders and reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     (
         "GET",
         "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
     ): RoutePolicy(
         _LOCAL,
-        justification="§16.3 reads inside a registered ai-toolkit output root and writes nothing - the same authority class as model-folders/{folder_id}/rescan. NOT a subset of the listing beside it: that returns metadata for names matching the sample regex, this returns raw bytes for any allowlisted extension, which is a new capability rather than a narrower one. Both path segments are names joined and contained against the registered path, the samples directory is contained too (a symlinked one would otherwise become its own safe base), and the extension is allowlisted so nothing but an image can be served from our origin; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 reads inside a registered ai-toolkit output root and writes nothing - the same authority class as POST model-folders. NOT a subset of the listing beside it: that returns metadata for names matching the sample regex, this returns raw bytes for any allowlisted extension, which is a new capability rather than a narrower one. Both path segments are names joined and contained against the registered path, the samples directory is contained too (a symlinked one would otherwise become its own safe base), and the extension is allowlisted so nothing but an image can be served from our origin; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("DELETE", "/api/v1/model-folders/{folder_id}/runs/{run_name}"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 moves one run folder of a registered ai-toolkit output root to the host trash - POST /model-files/delete's authority over a run. Takes no host path: the run is a name joined and contained against the registered root, a link is refused, and so is a folder a training job may still write into; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     ("POST", "/api/v1/model-imports"): RoutePolicy(
         _LOCAL,
@@ -775,13 +841,13 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # because what decides the tier is the authority exercised - reading bytes
     # out of a folder the owner registered - not what the route accepts. The
     # listing walks one directory inside that folder and reports names of files
-    # PixlStash never registered, which is rescan's authority in miniature; the
+    # PixlStash never registered, which is the folder scan's authority in miniature; the
     # byte route is the sample route beside it with the run replaced by a shelf
     # row. Both are kept on one tier so a caller who cannot fetch a preview is
     # not handed a list of them.
     ("GET", "/api/v1/models/{model_id}/samples"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 lists one directory inside a registered model folder, reporting filenames of files PixlStash never registered - rescan's walk-a-registered-root authority, narrowed to one directory; kept on the byte route's tier so a caller who cannot fetch a preview is not handed a list of them; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 lists one directory inside a registered model folder, reporting filenames of files PixlStash never registered - the folder scan's walk-a-registered-root authority, narrowed to one directory; kept on the byte route's tier so a caller who cannot fetch a preview is not handed a list of them; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     ("GET", "/api/v1/models/{model_id}/samples/{filename}"): RoutePolicy(
         _LOCAL,
@@ -805,11 +871,16 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # ── model_downloads.py ────────────────────────────────────────────────
     ("POST", "/api/v1/model-downloads"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 fetches a model file and writes it into the registered download folder, registering it - POST /model-files' file-writing class with the read coming off the network instead of the disk; takes no host path and no URL (the link is looked up server-side in the committed template list by file name), the name is contained against the folder and must carry a shelf suffix; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 fetches a model file and writes it into the registered download folder, registering it - POST /model-files' file-writing class with the read coming off the network instead of the disk; takes no host path and no URL (the link is looked up server-side by file name: in the committed template list, else in the templates the owner's configured ComfyUI serves, taken from there only as https on huggingface.co for a .safetensors or .gguf file, every redirect hop held to Hugging Face before it is asked), the name is contained against the folder and must carry a shelf suffix; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     # Stops a download and discards its own partial file; returns nothing but
     # whether one was running.
     ("POST", "/api/v1/model-downloads/{download_id}/cancel"): RoutePolicy(_OWNER),
+    # The delete's undo: the same files back out of the trash, so the same tier.
+    ("POST", "/api/v1/model-files/delete/undo"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 undo of POST /model-files/delete: moves the files that delete sent to the OS trash back to the paths they were removed from and restores the hub rows it dropped. Takes no host path: the body is the in-memory token the delete answered with, and every path it restores is one that delete itself contained against a registered folder and trashed; nothing at a path is ever replaced; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("POST", "/api/v1/model-files/delete"): RoutePolicy(
         _LOCAL,
         justification="§16.3 unlinks the owner's model files (OS trash by default, permanent on request) out of registered host folders - the unlink half of POST /model-moves standing alone, and the shelf's only destructive verb. Takes no host path: the ids address rows the scanner wrote, every path is contained against its registered folder - lexically for the file so a symlinked model loses its link and not the bytes it points at, and by realpath for the directory holding it so no symlinked component can redirect the unlink (`_contained_path`) - and only `user` and `managed` folders are eligible, so PixlStash's own engine roots, the InsightFace packs and the shared HuggingFace cache are refused whole; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
@@ -957,6 +1028,8 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/pictures/likeness-groups"): _LIST_AWARE,
     ("GET", "/api/v1/pictures/comfyui_models"): _LIST_AWARE,
     ("GET", "/api/v1/pictures/comfyui_loras"): _LIST_AWARE,
+    # Workflows behind the in-scope pictures only (#1616); never /workflows*.
+    ("GET", "/api/v1/pictures/workflows"): _LIST_AWARE,
     (
         "GET",
         "/api/v1/pictures/export",
@@ -976,6 +1049,8 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/pictures/plugins/{name}"): _LIST_AWARE,
     ("PATCH", "/api/v1/pictures/project"): _LIST_AWARE,
     ("POST", "/api/v1/pictures/apply-scores"): _LIST_AWARE,
+    # The owner's own heart on a picture: a share token never marks one.
+    ("POST", "/api/v1/pictures/favourite"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/pictures/detect"): _LIST_AWARE,
     (
         "POST",
@@ -1037,6 +1112,22 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/pictures/export/folder"): RoutePolicy(
         _LOOPBACK,
         justification="§16.3 RED LINE (#291): writes exported pictures straight onto the host disk and, once done, opens the destination in the host file manager (same host-GUI spawn as pictures/open-location, via pixlstash/utils/host_open.py); loopback-only, allow_remote_host_ops can NOT loosen it",
+    ),
+    ("POST", "/api/v1/pictures/share-copies"): RoutePolicy(
+        _LOOPBACK,
+        justification="§16.3 host write (#2417): writes picture copies into a staging folder on the host disk and returns their absolute host paths, which only a process on that machine (the desktop app) can use; loopback-only like its sibling export/folder, allow_remote_host_ops can NOT loosen it. Remote and scoped sessions use the ZIP export",
+    ),
+    # Open with (edit copies): the GET reveals which applications the host has
+    # installed, the POST writes an edit copy to the host disk and spawns a host
+    # GUI program on it. Both are about the host, not about any row, so they
+    # sit on the share-copies / open-location tier.
+    ("GET", "/api/v1/open-with"): RoutePolicy(
+        _LOOPBACK,
+        justification="§16.3 host capability: lists the applications installed on the machine running PixlStash for a picture's file type, which is owner data about the host; loopback-only like its POST sibling, allow_remote_host_ops can NOT loosen it",
+    ),
+    ("POST", "/api/v1/open-with"): RoutePolicy(
+        _LOOPBACK,
+        justification="§16.3.1 RED LINE: writes an edit copy of a picture onto the host disk and spawns a host GUI program on it (gio launch / open -a / IAssocHandler.Invoke - the same host-GUI authority as pictures/{id}/open-location); the picture is named by picture_id in the body and the program is only ever one the OS listed for the file type, never one the request names; loopback-only, allow_remote_host_ops can NOT loosen it",
     ),
     ("POST", "/api/v1/pictures/import"): RoutePolicy(
         _OWNER,
@@ -1610,6 +1701,30 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Makes this server fetch an address the owner names; the same reach comfyui_url already has; owner only",
     ),
+    ("GET", "/api/v1/comfyui/connections"): RoutePolicy(
+        _OWNER,
+        justification="Names every ComfyUI address the owner saved and what its card is; owner config like GET /users/me/config; owner only",
+    ),
+    ("POST", "/api/v1/comfyui/connections"): RoutePolicy(
+        _OWNER,
+        justification="Saves an address the owner names for this server to fetch once chosen; the same reach comfyui_url already has; owner only",
+    ),
+    ("PATCH", "/api/v1/comfyui/connections/{connection_id}"): RoutePolicy(
+        _LOCAL,
+        justification="Renames a ComfyUI connection or moves it, and moving a linked one revokes its key and has this server write into that ComfyUI's settings on its own network; a local owner only, like DELETE /comfyui/link (§16.3, #2194)",
+    ),
+    ("DELETE", "/api/v1/comfyui/connections/{connection_id}"): RoutePolicy(
+        _LOCAL,
+        justification="Removes a ComfyUI connection, revoking its link key and having this server write into that ComfyUI's settings on its own network; a local owner only, like DELETE /comfyui/link (§16.3, #2194)",
+    ),
+    ("POST", "/api/v1/comfyui/connections/{connection_id}/link"): RoutePolicy(
+        _LOCAL,
+        justification="Mints a ComfyUI-scope token and has this server push it to whatever answers at that connection's address on its own network: the server's network position is the authority, so a local owner only, like POST /comfyui/link (§16.3, #2194)",
+    ),
+    ("DELETE", "/api/v1/comfyui/connections/{connection_id}/link"): RoutePolicy(
+        _LOCAL,
+        justification="Revokes a connection's ComfyUI link token and has this server write into that ComfyUI's settings on its own network; a local owner only, like DELETE /comfyui/link (§16.3, #2194)",
+    ),
     ("POST", "/api/v1/comfyui/abort"): RoutePolicy(
         _OWNER,
         justification="Abort generation; POST blocked for READ tokens; owner only",
@@ -1787,6 +1902,31 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Vault-wide rebuild; inline _reject_scoped_tokens; owner/full only",
     ),
+    # ── tag_groups.py (library-wide tag name -> group map; owner-only) ──────
+    ("GET", "/api/v1/tag_groups"): RoutePolicy(
+        _OWNER,
+        justification="Library-wide tag vocabulary (tag name -> group), not a picture fact; a share token's scope cannot narrow it meaningfully (same reasoning as tag_health); owner only",
+    ),
+    ("GET", "/api/v1/tag_groups/tags"): RoutePolicy(
+        _OWNER,
+        justification="Library-wide tag vocabulary, paged (filed tags and library tags with picture counts); not a picture fact, so a share token's scope cannot narrow it meaningfully (same reasoning as tag_health); owner only",
+    ),
+    ("POST", "/api/v1/tag_groups"): RoutePolicy(
+        _OWNER,
+        justification="Library-wide tag vocabulary (tag name -> group), not a picture fact; a share token's scope cannot narrow it meaningfully (same reasoning as tag_health); owner only",
+    ),
+    ("PUT", "/api/v1/tag_groups/order"): RoutePolicy(
+        _OWNER,
+        justification="Library-wide tag vocabulary (tag name -> group), not a picture fact; a share token's scope cannot narrow it meaningfully (same reasoning as tag_health); owner only",
+    ),
+    ("POST", "/api/v1/tag_groups/assign"): RoutePolicy(
+        _OWNER,
+        justification="Library-wide tag vocabulary (tag name -> group), not a picture fact; a share token's scope cannot narrow it meaningfully (same reasoning as tag_health); owner only",
+    ),
+    ("POST", "/api/v1/tag_groups/import"): RoutePolicy(
+        _OWNER,
+        justification="Library-wide tag vocabulary: files a whole tag table into the tag-name -> group map; not a picture fact, so a share token's scope cannot narrow it meaningfully (same reasoning as tag_health); owner only",
+    ),
     # ── tag_suggestions.py ──────────────────────────────────────────────────
     ("GET", "/api/v1/tag_suggestions"): _LIST_AWARE,
     (
@@ -1960,6 +2100,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Write a copy of a workflow's graph to disk; POST blocked for READ tokens; owner only",
     ),
+    ("POST", "/api/v1/workflows/{workflow_id}/inpaint-copy"): RoutePolicy(
+        _OWNER,
+        justification="Store a Crop & Stitch inpaint copy of a workflow's graph; POST blocked for READ tokens; owner only",
+    ),
     ("POST", "/api/v1/workflows/{workflow_id}/fixed-copy"): RoutePolicy(
         _OWNER,
         justification="Write a copy of a workflow's graph with this ComfyUI's repairs applied; POST blocked for READ tokens; owner only",
@@ -2040,6 +2184,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("DELETE", "/api/v1/workflows/{workflow_id}"): RoutePolicy(
         _OWNER,
         justification="Send a workflow's imported file to the trash; DELETE blocked for READ tokens; owner only",
+    ),
+    # Its undo: puts back what that delete took, spending the token it answered.
+    ("POST", "/api/v1/workflows/{workflow_id}/restore"): RoutePolicy(
+        _OWNER,
+        justification="Undo of DELETE /workflows/{workflow_id}: takes its file back out of the trash and restores the hub rows the delete dropped, named by the in-memory token that delete answered with; writes the machine-wide workflow store, so owner only",
     ),
     # The run route and its dry run (v1.12 B7). OWNER_ONLY, which is NARROWER
     # than the PICTURE_SCOPED run routes in comfyui.py it will eventually
@@ -2183,6 +2332,92 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "remains as defence in depth."
         ),
     ),
+    ("POST", "/api/v1/test-hooks/reference-folders/{folder_id}/rescan"): RoutePolicy(
+        _LOOPBACK,
+        justification=(
+            "E2E-only hook that marks a reference folder due for a rescan, "
+            "exactly as the filesystem watcher does when a file in it changes "
+            "(Vault._on_reference_folder_fs_changed). Returns no resource data: "
+            "only the folder id, or 404 when there is no such folder. Loopback for the same reasons as "
+            "/test-hooks/ws-event above: mounted only when enable_test_hooks is "
+            "true, which only frontend/e2e/serve_e2e_backend.py sets on a "
+            "127.0.0.1 backend, and allow_remote_host_ops must never expose a "
+            "test hook. The handler's inline require_unscoped_owner stays as "
+            "defence in depth."
+        ),
+    ),
+    ("POST", "/api/v1/test-hooks/file-pictures"): RoutePolicy(
+        _LOOPBACK,
+        justification=(
+            "E2E-only hook that files pictures on a workflow "
+            "(Picture.run_workflow_id), as a ComfyUI run's import does, or "
+            "unfiles them; the e2e Workflows specs need a deletable workflow "
+            "with pictures, and every product writer of the field is "
+            "background work the e2e backend leaves off. Returns no resource "
+            "data. Loopback for the same reasons as /test-hooks/ws-event "
+            "above: mounted only when enable_test_hooks is true, which only "
+            "frontend/e2e/serve_e2e_backend.py sets on a 127.0.0.1 backend, and "
+            "allow_remote_host_ops must never expose a test hook. The handler's "
+            "inline require_unscoped_owner stays as defence in depth."
+        ),
+    ),
+    # ── routes/training.py (ai-toolkit LoRA training; owner-only, see the router docstring)
+    ("GET", "/api/v1/training/jobs"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/jobs/{job_id}"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/jobs/{job_id}/status"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/jobs/{job_id}/live"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/jobs/{job_id}/snapshot"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/jobs/{job_id}/snapshot/export"): RoutePolicy(_OWNER),
+    ("PUT", "/api/v1/training/jobs/{job_id}/cover"): RoutePolicy(
+        _OWNER,
+        justification="Chooses which checkpoint covers one of the owner's own trained runs; renumbers stack_position in the hub and moves the set's or character's LoRA attachment in the vault, touching no file on disk; PUT blocked for READ tokens; owner only",
+    ),
+    ("GET", "/api/v1/training/jobs/{job_id}/train-longer"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/training/jobs/{job_id}/train-longer"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 renames and moves checkpoints in the run's host folder and queues the ai-toolkit trainer process to run again on the host; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/training/presets"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/training/presets/check"): RoutePolicy(
+        _OWNER,
+        justification="Fetches the recipe list from the fixed pixlstash.dev URL and writes verified recipes into the app's own cache beside the hub; takes no URL or path from the caller and returns no per-object data; POST blocked for READ tokens; owner only",
+    ),
+    ("GET", "/api/v1/training/sample-prompts"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/dataset"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/character_set_suggestion"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/training/resolve"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/training/jobs"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 starts an ai-toolkit trainer process on the host and writes the job's dataset and output under the image root; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/training/jobs/{job_id}/cancel"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 signals the host process group of a running trainer; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/training/jobs/{job_id}/quit-comfyui"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 lets PixlStash end the owner's local ComfyUI process (terminate) to make room for a queued run; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("DELETE", "/api/v1/training/jobs/{job_id}"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 removes a job's host work folder and dataset snapshot and its rows; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/training/ai-toolkit/discover"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 discloses host paths: it searches the owner's home directory and the shelf's folders for an ai-toolkit checkout and returns the paths it found and tried; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/training/ai-toolkit/check"): RoutePolicy(
+        _LOOPBACK,
+        justification="§16.3 RED LINE (#2295): chooses argv[0] of a host process and runs it at once (a torch/CUDA probe and run.py --help), at least as powerful as server/restart; loopback-only, allow_remote_host_ops can NOT loosen it",
+    ),
+    ("GET", "/api/v1/training/ai-toolkit/status"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 discloses host paths: the configured checkout, its interpreter, its datasets folder and the run folder, with their run counts; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("PUT", "/api/v1/training/ai-toolkit/config"): RoutePolicy(
+        _LOOPBACK,
+        justification="§16.3 RED LINE (#2295): stores the Python that is argv[0] of every later trainer process and the checkout it runs in, both checked on this host; loopback-only, allow_remote_host_ops can NOT loosen it",
+    ),
 }
 
 # Routes that exist only when a server-config flag is set. They are declared in
@@ -2201,6 +2436,8 @@ CONDITIONALLY_MOUNTED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         # routes/test_hooks.py - mounted only when ``enable_test_hooks`` is true,
         # which only frontend/e2e/serve_e2e_backend.py sets.
         ("POST", "/api/v1/test-hooks/ws-event"),
+        ("POST", "/api/v1/test-hooks/reference-folders/{folder_id}/rescan"),
+        ("POST", "/api/v1/test-hooks/file-pictures"),
     }
 )
 

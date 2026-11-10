@@ -1,0 +1,196 @@
+{
+  "id": "moss-image-base",
+  "version": 1,
+  "min_ai_toolkit": "0.13.28",
+  "label": "MOSS-Image Base",
+  "requires_arch": "moss_image",
+  "template": "zimage-turbo-lora",
+  "divisibility": 16,
+  "locked": {
+    "model.arch": "moss_image:base",
+    "model.name_or_path": "OpenMOSS-Team/MOSS-Image-Base",
+    "model.model_kwargs.uncond_skip_layers": [22],
+    "datasets[*].cache_latents_to_disk": true,
+    "network.network_kwargs.ignore_if_contains": ["layers.22."],
+    "train.noise_scheduler": "flowmatch",
+    "sample.sampler": "flowmatch"
+  },
+  "defaults": {
+    "datasets[*].resolution": [512, 768, 1024],
+    "train.timestep_type": "shift",
+    "train.optimizer": "adamw8bit",
+    "train.batch_size": 1,
+    "save.save_every": 250,
+    "sample.sample_every": 250
+  },
+  "inference_target": "base",
+  "preview": {
+    "base": {
+      "sample.sample_steps": 30,
+      "sample.guidance_scale": 3,
+      "sample.width": 1024,
+      "sample.height": 1024
+    }
+  },
+  "subject": {
+    "person": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "balanced"
+    },
+    "style": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "style"
+    },
+    "thing": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "balanced"
+    }
+  },
+  "effort": {
+    "gentle": {
+      "steps_per_picture": 60,
+      "min_steps": 800,
+      "max_steps": 1500,
+      "train.lr": 0.0001,
+      "network.linear": 16
+    },
+    "standard": {
+      "steps_per_picture": 100,
+      "min_steps": 1200,
+      "max_steps": 3000,
+      "train.lr": 0.0001,
+      "network.linear": 32
+    },
+    "strong": {
+      "steps_per_picture": 150,
+      "min_steps": 1800,
+      "max_steps": 4000,
+      "train.lr": 0.00015,
+      "network.linear": 32
+    }
+  },
+  "fit": {
+    "auto": ["q8", "q8_cached", "q8_low_vram", "q8_offload"],
+    "save_memory": ["q8_offload"],
+    "best_quality": ["bf16_cached"]
+  },
+  "hardware_profiles": {
+    "q8": {
+      "label": "8-bit model · text encoder on the GPU",
+      "vram_mb": 22700,
+      "ram_mb": 42200,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": false,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "q8_cached": {
+      "label": "8-bit model · captions encoded once",
+      "vram_mb": 20400,
+      "ram_mb": 42200,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "q8_low_vram": {
+      "label": "8-bit model · loaded one part at a time",
+      "vram_mb": 14100,
+      "ram_mb": 42200,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": true,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "q8_offload": {
+      "label": "8-bit model · 60% of layers in RAM",
+      "vram_mb": 8400,
+      "ram_mb": 42200,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": true,
+        "model.layer_offloading": true,
+        "model.layer_offloading_transformer_percent": 0.6,
+        "model.layer_offloading_text_encoder_percent": 0.6,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "bf16_cached": {
+      "label": "Full-precision model · captions encoded once",
+      "vram_mb": 24100,
+      "ram_mb": 42200,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": false,
+        "model.quantize_te": false,
+        "model.low_vram": true,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    }
+  },
+  "sources": {
+    "locked": "ai-toolkit extensions_built_in/diffusion_models/ui.tsx (moss_image:base; moss_image arrived in ai-toolkit 0.13.27, Base and the fresh-cache tokenizer fix in 0.13.28, which this recipe needs); moss_image/moss_image.py, which reads the Base transformer as Comfy-Org/MOSS-Image's moss_image_base_bf16.safetensors (byte-identical to the vendor shards), the Qwen3.5-9B text encoder from Comfy-Org/Qwen3.5 and the shared FLUX.2 VAE. The arch tag is stripped by ai-toolkit; the Base checkpoint comes from name_or_path. uncond_skip_layers [22] is the vendor's sampling default, and the LoRA is kept off block 22 so the skipped-block contrast stays the base model's, as ai-toolkit's UI does. Latents are cached, as for Krea 2, where encoding every step was measured at 5 GB above training",
+    "divisibility": "moss_image.py get_bucket_divisibility: 16 (the VAE's 8x and the 2x2 packing)",
+    "defaults": "ai-toolkit UI defaults for moss_image:base (timestep shift; the trainer's scheduler shift is 5, the vendor's)",
+    "preview.base": "OpenMOSS-Team/MOSS-Image-Base model card: 50 steps at CFG 3, shift 5, block 22 skipped on the negative branch, 1024 x 1024; the vendor's user guide says Base needs at least 50 steps. Previews use 30 steps, ai-toolkit's own default for the arch, to keep a preview round short",
+    "subject": "heuristic, as for Z-Image Turbo: ai-toolkit's own caption dropout default is 0.0; content_or_style per jobs/process/BaseSDTrainProcess.py",
+    "effort": "heuristic, as for Chroma1 Base: the vendor's user guide gives no LoRA steps or learning rate, so the step ranges are Z-Image Turbo's and the learning rates Krea 2's",
+    "fit": "the 8-bit profiles quantise with qfloat8, for which ai-toolkit picks the bf16 text encoder and transformer files and quantises them itself; its UI default, convrot8, is not a qtype PixlStash offers. ai-toolkit turns qfloat8 into float8 when layers are offloaded",
+    "hardware_profiles": "derived from moss_image.py's load order and the weights, never run here: a 5.1B transformer (10.2 GB bf16, about 5.3 GB qfloat8 with its full-precision exclusions), the Qwen3.5-9B text encoder without its vision tower (18.4 GB bf16, about 10 GB qfloat8, of which 2 GB is the token embedding the quantiser leaves in bf16), a 0.3 GB VAE, about 0.7 GB of LoRA, gradients and 8-bit Adam at rank 32, about 2.2 GB of activations at 1024 and about 1 GB to encode a picture's latents; each vram_mb calibrated like every untested seed here: the derived peak plus 0.6 GB of CUDA context, x1.08 (what Krea 2's derivation missed against its measurement) and x1.1 (the margin a measured peak is admitted with). The text encoder is larger than the transformer, so wherever it reaches the GPU it sets the peak",
+    "hardware_profiles.q8.vram_mb": "derived: the quantised transformer and text encoder resident, plus VAE, LoRA state and activations, 18.5 GB before calibration",
+    "hardware_profiles.q8_cached.vram_mb": "derived: both quantised models are on the GPU while captions and latents are encoded, 16.6 GB before calibration; ai-toolkit unloads the text encoder afterwards, so training's 8.5 GB is lower",
+    "hardware_profiles.q8_low_vram.vram_mb": "derived: low_vram keeps both models in RAM until each is needed; the peak is the 10 GB quantised text encoder encoding captions beside the VAE, 11.3 GB before calibration",
+    "hardware_profiles.q8_offload.vram_mb": "derived: 60% of both quantised models' layers in RAM, as measured worthwhile on Krea 2's transformer. The text encoder is offloaded too, unlike Klein's, because here it sets the peak: caption encoding with 40% of its layers and its embedding on the GPU, 6.5 GB before calibration, above training's 5.3 GB",
+    "hardware_profiles.bf16_cached.vram_mb": "derived: the 18.4 GB bf16 text encoder encoding captions sets the peak, 19.7 GB before calibration; low_vram keeps it off the GPU while the 10.2 GB bf16 transformer trains (13.4 GB)",
+    "hardware_profiles.*.max_rank, max_batch": "the rank and batch size the VRAM figures were derived at",
+    "hardware_profiles.*.ram_mb": "derived: the bf16 transformer state dict and the 19.3 GB bf16 text-encoder file, 29.5 GB, in RAM together while they are quantised or parked, x1.3 for what Krea 2's RAM derivation missed against its resident-memory measurement, and x1.1 margin"
+  }
+}

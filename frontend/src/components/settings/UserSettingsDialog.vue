@@ -1,25 +1,39 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { isReadOnly, logout } from "../../utils/apiClient";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AccountSection from "./AccountSection.vue";
 import LibrariesSection from "./LibrariesSection.vue";
+import ImportFoldersSection from "./ImportFoldersSection.vue";
 import AppearanceSection from "./AppearanceSection.vue";
 import BehaviourSection from "./BehaviourSection.vue";
 import ComfyuiHostSection from "./ComfyuiHostSection.vue";
 import ComputeSection from "./ComputeSection.vue";
 import ModelFoldersSection from "./ModelFoldersSection.vue";
+import AiToolkitSetup from "./AiToolkitSetup.vue";
 import PrivacySection from "./PrivacySection.vue";
+import SharingSection from "./SharingSection.vue";
 import ScrapheapSection from "./ScrapheapSection.vue";
 import SnapshotsSection from "./SnapshotsSection.vue";
+import GhostsSection from "./GhostsSection.vue";
 import SmartScoreSection from "./SmartScoreSection.vue";
+import NeedsYouBox from "./NeedsYouBox.vue";
 import { VIcon } from "vuetify/components";
+import { useWhatsChangedStore } from "../../stores/useWhatsChangedStore";
 
 const appVersion = __APP_VERSION__;
 
+// The version and the What's new pill beside it bring back the 2.0 checklist
+// and the training tour card, whichever were dismissed (#2145). The store is
+// read on the click, so the dialog still mounts where no Pinia is installed.
+function openWhatsNew() {
+  useWhatsChangedStore().reopen();
+  dialogOpen.value = false;
+}
+
 // The desktop app injects this bridge (Electron preload); a plain browser does
-// not, so the Backend and Compute tabs are desktop-only.
+// not, so the Server pane is desktop-only.
 const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 
 const props = defineProps({
@@ -27,7 +41,6 @@ const props = defineProps({
   sidebarThumbnailSize: { type: Number, default: 32 },
   dateFormat: { type: String, default: "locale" },
   themeMode: { type: String, default: "dark" },
-  checkForUpdates: { type: Boolean, default: null },
   showKeyboardHint: { type: Boolean, default: true },
   thumbnailMode: { type: String, default: "square" },
   /**
@@ -47,9 +60,7 @@ const emit = defineEmits([
   "update:hidden-tags",
   "update:apply-tag-filter",
   "update:comfyui-configured",
-  "update:check-for-updates",
   "update:show-keyboard-hint",
-  "update:public-url",
   "update:thumbnail-mode",
 ]);
 
@@ -60,106 +71,159 @@ const dialogOpen = computed({
 
 const settingsTab = ref("appearance");
 
-// The left nav rail. Each entry: id, MDI icon, label, and a visibility flag.
-const navItems = computed(() =>
+// The left nav rail: five headed groups, one level deep, every pane one click
+// away. Each entry: id, MDI icon, label, and a visibility flag. Ids outlive
+// labels on purpose: deep links name them (the server's library insights open
+// `behaviour`, every "connect ComfyUI" link opens `comfyui`).
+const navGroups = computed(() =>
   [
     {
-      id: "appearance",
-      icon: "palette-outline",
-      label: "Appearance",
-      show: true,
+      heading: "General",
+      items: [
+        {
+          id: "appearance",
+          icon: "palette-outline",
+          label: "Appearance",
+          show: true,
+        },
+        {
+          // The update check and install ID, and what leaves with a shared
+          // picture: the export switch, the public base URL and the watermark.
+          id: "privacy",
+          icon: "shield-lock-outline",
+          label: "Privacy & sharing",
+          show: !isReadOnly.value,
+        },
+      ],
     },
     {
-      // The model folders. The shelf's folder button lands here.
-      id: "models",
-      icon: "folder-multiple-outline",
-      label: "Models",
-      show: !isReadOnly.value,
+      heading: "Library",
+      items: [
+        {
+          // The libraries, and the import folders that flow into the open one.
+          id: "libraries",
+          icon: "bookshelf",
+          label: "Libraries & imports",
+          show: !isReadOnly.value,
+        },
+        {
+          // What happens to a picture after you delete it: the scrapheap
+          // timer, snapshots, and the ghosts kept of destroyed pictures.
+          id: "recovery",
+          icon: "delete-clock-outline",
+          label: "Recovery",
+          show: !isReadOnly.value,
+        },
+      ],
     },
     {
-      // Memory, VRAM and the taggers. The id predates the label and is kept:
-      // the server's library insights deep-link to it.
-      id: "behaviour",
-      icon: "tag-outline",
-      label: "Tagging",
-      show: !isReadOnly.value,
+      heading: "Tags",
+      items: [
+        {
+          // Memory, VRAM and the taggers.
+          id: "behaviour",
+          icon: "tag-outline",
+          label: "Tagging",
+          show: !isReadOnly.value,
+        },
+        {
+          id: "smart-score",
+          icon: "star-four-points-outline",
+          label: "Smart score & filters",
+          show: !isReadOnly.value,
+        },
+      ],
     },
     {
-      id: "smart-score",
-      icon: "star-four-points-outline",
-      label: "Smart Score & Filters",
-      show: !isReadOnly.value,
+      heading: "Models & AI",
+      items: [
+        {
+          // The model folders. The shelf's folder button lands here.
+          id: "models",
+          icon: "folder-multiple-outline",
+          label: "Model folders",
+          show: !isReadOnly.value,
+        },
+        {
+          // The ai-toolkit install LoRA training runs on. Runs themselves are
+          // in the Training runs view; the output folder is under Models.
+          id: "training",
+          icon: "school-outline",
+          label: "AI-toolkit",
+          show: !isReadOnly.value,
+        },
+        {
+          id: "comfyui",
+          icon: "sitemap-outline",
+          label: "ComfyUI",
+          show: !isReadOnly.value,
+        },
+        {
+          // Which GPU PixlStash uses and what it may take work on every
+          // install; the acceleration runtime inside it is desktop-only.
+          id: "compute",
+          icon: "expansion-card-variant",
+          label: "GPU & compute",
+          show: !isReadOnly.value,
+        },
+      ],
     },
     {
-      // Ordered next to Scrapheap and Snapshots - the open library's bin and
-      // its backups - so the container sits with the panes that describe it.
-      // Adjacency is the only cue: the rail is one flat list, deliberately, so
-      // nothing here may style an item by its position.
-      id: "libraries",
-      icon: "bookshelf",
-      label: "Libraries",
-      show: !isReadOnly.value,
+      heading: "Access",
+      items: [
+        {
+          // Remote access, hide to tray, the library folder and the logs.
+          id: "backend",
+          icon: "server-outline",
+          label: "Server",
+          show: isDesktop && !isReadOnly.value,
+        },
+        {
+          id: "account",
+          icon: "account-circle-outline",
+          label: "Account & tokens",
+          show: !isReadOnly.value,
+        },
+      ],
     },
-    {
-      id: "scrapheap",
-      icon: "delete-clock-outline",
-      label: "Scrapheap",
-      show: !isReadOnly.value,
-    },
-    {
-      id: "snapshots",
-      icon: "camera-outline",
-      label: "Snapshots",
-      show: !isReadOnly.value,
-    },
-    {
-      id: "privacy",
-      icon: "shield-lock-outline",
-      label: "Privacy",
-      show: !isReadOnly.value,
-    },
-    {
-      // Its own pane rather than a section under Compute: the acceleration
-      // runtime alone fills that pane, and a browser has no runtime at all.
-      id: "comfyui",
-      icon: "sitemap-outline",
-      label: "ComfyUI",
-      show: !isReadOnly.value,
-    },
-    {
-      // Which GPU PixlStash uses and what it may take work on every install;
-      // the acceleration runtime inside it is desktop-only.
-      id: "compute",
-      icon: "expansion-card-variant",
-      label: "Compute",
-      show: !isReadOnly.value,
-    },
-    {
-      id: "backend",
-      icon: "server-outline",
-      label: "Backend",
-      show: isDesktop && !isReadOnly.value,
-    },
-    {
-      id: "account",
-      icon: "account-circle-outline",
-      label: "Account Settings",
-      show: !isReadOnly.value,
-    },
-  ].filter((n) => n.show),
+  ]
+    .map((g) => ({ ...g, items: g.items.filter((n) => n.show) }))
+    .filter((g) => g.items.length),
 );
+
+const navItems = computed(() => navGroups.value.flatMap((g) => g.items));
+
+// A read-only session sees one group holding one pane; a heading over a
+// single item is noise, so the rail drops headings unless there is a choice.
+const showHeadings = computed(() => navGroups.value.length > 1);
+
+// Panes that were folded into a neighbour keep their old ids as deep links:
+// each lands on the merged pane, scrolled to its own section.
+const MERGED_TABS = {
+  "import-folders": "libraries",
+  scrapheap: "recovery",
+  snapshots: "recovery",
+  sharing: "privacy",
+};
 
 watch(
   () => dialogOpen.value,
-  (isOpen) => {
+  async (isOpen) => {
     if (!isOpen) return;
     // Only honour a requested tab that actually exists in this session - a
     // read-only or browser session hides several entries, and landing on a
     // hidden pane would show an empty dialog body.
     const requested = props.initialTab;
-    settingsTab.value = navItems.value.some((n) => n.id === requested)
-      ? requested
+    const tab = MERGED_TABS[requested] || requested;
+    settingsTab.value = navItems.value.some((n) => n.id === tab)
+      ? tab
       : "appearance";
+    if (tab !== requested && settingsTab.value === tab) {
+      await nextTick();
+      document
+        .getElementById(`settings-anchor-${requested}`)
+        ?.scrollIntoView({ block: "nearest" });
+    }
   },
   { immediate: true },
 );
@@ -174,6 +238,24 @@ watch(
     :pad-body="false"
     @close="dialogOpen = false"
   >
+    <template v-if="!isReadOnly" #subtitle>
+      <button
+        type="button"
+        class="settings-version"
+        data-testid="settings-version"
+        @click="openWhatsNew"
+      >
+        v{{ appVersion }}
+      </button>
+      <button
+        type="button"
+        class="settings-whats-new"
+        data-testid="settings-whats-new"
+        @click="openWhatsNew"
+      >
+        What's new
+      </button>
+    </template>
     <template #header-right>
       <!-- The desktop app runs on loopback and auto-logs the owner back in, so
            logging out there does nothing. A browser session against the same
@@ -190,23 +272,33 @@ watch(
     </template>
 
     <nav class="settings-nav" aria-label="Settings sections">
-      <button
-        v-for="item in navItems"
-        :key="item.id"
-        type="button"
-        class="settings-nav-item"
-        :class="{ 'settings-nav-item--active': settingsTab === item.id }"
-        :id="`settings-nav-${item.id}`"
-        :aria-current="settingsTab === item.id ? 'page' : undefined"
-        :aria-controls="`settings-pane-${item.id}`"
-        @click="settingsTab = item.id"
-      >
-        <span v-if="settingsTab === item.id" class="settings-nav-item__bar" />
-        <v-icon size="16" class="settings-nav-item__icon">
-          mdi-{{ item.icon }}
-        </v-icon>
-        {{ item.label }}
-      </button>
+      <template v-for="group in navGroups" :key="group.heading">
+        <div v-if="showHeadings" class="settings-nav-heading section-label">
+          {{ group.heading }}
+        </div>
+        <button
+          v-for="item in group.items"
+          :key="item.id"
+          type="button"
+          class="settings-nav-item"
+          :class="{ 'settings-nav-item--active': settingsTab === item.id }"
+          :id="`settings-nav-${item.id}`"
+          :aria-current="settingsTab === item.id ? 'page' : undefined"
+          :aria-controls="`settings-pane-${item.id}`"
+          @click="settingsTab = item.id"
+        >
+          <span v-if="settingsTab === item.id" class="settings-nav-item__bar" />
+          <v-icon size="16" class="settings-nav-item__icon">
+            mdi-{{ item.icon }}
+          </v-icon>
+          {{ item.label }}
+        </button>
+      </template>
+      <!-- "PixlStash needs you!": the way to the report page, held at the foot
+           of the rail so it shows whichever pane is open. -->
+      <div v-if="!isReadOnly" class="settings-nav-foot">
+        <NeedsYouBox :version="appVersion" />
+      </div>
     </nav>
 
     <div class="settings-content">
@@ -238,13 +330,54 @@ watch(
       </div>
       <div
         v-if="!isReadOnly"
-        v-show="settingsTab === 'models'"
-        id="settings-pane-models"
+        v-show="settingsTab === 'privacy'"
+        id="settings-pane-privacy"
         class="settings-pane"
         role="region"
-        aria-labelledby="settings-nav-models"
+        aria-labelledby="settings-nav-privacy"
       >
-        <ModelFoldersSection :open="dialogOpen && settingsTab === 'models'" />
+        <PrivacySection :open="dialogOpen && settingsTab === 'privacy'" />
+        <div id="settings-anchor-sharing">
+          <SharingSection :open="dialogOpen && settingsTab === 'privacy'" />
+        </div>
+      </div>
+      <div
+        v-if="!isReadOnly"
+        v-show="settingsTab === 'libraries'"
+        id="settings-pane-libraries"
+        class="settings-pane settings-pane--stack"
+        role="region"
+        aria-labelledby="settings-nav-libraries"
+      >
+        <LibrariesSection
+          class="settings-pane__shrink"
+          :open="dialogOpen && settingsTab === 'libraries'"
+        />
+        <div id="settings-anchor-import-folders">
+          <ImportFoldersSection
+            :open="dialogOpen && settingsTab === 'libraries'"
+          />
+        </div>
+      </div>
+      <div
+        v-if="!isReadOnly"
+        v-show="settingsTab === 'recovery'"
+        id="settings-pane-recovery"
+        class="settings-pane settings-pane--stack"
+        role="region"
+        aria-labelledby="settings-nav-recovery"
+      >
+        <div id="settings-anchor-scrapheap">
+          <ScrapheapSection :open="dialogOpen" />
+        </div>
+        <div id="settings-anchor-snapshots" class="settings-pane__grow">
+          <SnapshotsSection :open="dialogOpen" />
+        </div>
+        <!-- A plain block around the section: SettingsRow's `height: 100%`
+             would otherwise resolve against a flex item and stretch. -->
+        <div>
+          <GhostsSection :open="dialogOpen && settingsTab === 'recovery'" />
+        </div>
       </div>
       <div
         v-if="!isReadOnly"
@@ -260,11 +393,12 @@ watch(
         v-if="!isReadOnly"
         v-show="settingsTab === 'smart-score'"
         id="settings-pane-smart-score"
-        class="settings-pane"
+        class="settings-pane settings-pane--stack"
         role="region"
         aria-labelledby="settings-nav-smart-score"
       >
         <SmartScoreSection
+          class="settings-pane__shrink"
           :open="dialogOpen"
           @update:hidden-tags="emit('update:hidden-tags', $event)"
           @update:apply-tag-filter="emit('update:apply-tag-filter', $event)"
@@ -272,43 +406,23 @@ watch(
       </div>
       <div
         v-if="!isReadOnly"
-        v-show="settingsTab === 'libraries'"
-        id="settings-pane-libraries"
+        v-show="settingsTab === 'models'"
+        id="settings-pane-models"
         class="settings-pane"
         role="region"
-        aria-labelledby="settings-nav-libraries"
+        aria-labelledby="settings-nav-models"
       >
-        <LibrariesSection :open="dialogOpen && settingsTab === 'libraries'" />
+        <ModelFoldersSection :open="dialogOpen && settingsTab === 'models'" />
       </div>
       <div
         v-if="!isReadOnly"
-        v-show="settingsTab === 'scrapheap'"
-        id="settings-pane-scrapheap"
+        v-show="settingsTab === 'training'"
+        id="settings-pane-training"
         class="settings-pane"
         role="region"
-        aria-labelledby="settings-nav-scrapheap"
+        aria-labelledby="settings-nav-training"
       >
-        <ScrapheapSection :open="dialogOpen" />
-      </div>
-      <div
-        v-if="!isReadOnly"
-        v-show="settingsTab === 'snapshots'"
-        id="settings-pane-snapshots"
-        class="settings-pane"
-        role="region"
-        aria-labelledby="settings-nav-snapshots"
-      >
-        <SnapshotsSection :open="dialogOpen" />
-      </div>
-      <div
-        v-if="!isReadOnly"
-        v-show="settingsTab === 'privacy'"
-        id="settings-pane-privacy"
-        class="settings-pane"
-        role="region"
-        aria-labelledby="settings-nav-privacy"
-      >
-        <PrivacySection :open="dialogOpen && settingsTab === 'privacy'" />
+        <AiToolkitSetup :open="dialogOpen && settingsTab === 'training'" />
       </div>
       <div
         v-if="!isReadOnly"
@@ -322,6 +436,7 @@ watch(
           :open="dialogOpen"
           first
           @update:comfyui-configured="emit('update:comfyui-configured', $event)"
+          @open-tab="settingsTab = $event"
         />
       </div>
       <div
@@ -342,12 +457,7 @@ watch(
         role="region"
         aria-labelledby="settings-nav-backend"
       >
-        <ComputeSection
-          :open="dialogOpen"
-          view="backend"
-          :check-for-updates="props.checkForUpdates"
-          @update:check-for-updates="emit('update:check-for-updates', $event)"
-        />
+        <ComputeSection :open="dialogOpen" view="backend" />
       </div>
       <div
         v-if="!isReadOnly"
@@ -357,35 +467,97 @@ watch(
         role="region"
         aria-labelledby="settings-nav-account"
       >
-        <AccountSection
-          :open="dialogOpen"
-          @update:public-url="emit('update:public-url', $event)"
-        />
+        <AccountSection :open="dialogOpen" />
       </div>
     </div>
   </AppDialog>
 </template>
 
 <style scoped>
-/* Two-pane Settings: a left nav rail and a scrolling content area, both inside
-   the flush AppDialog body. */
+/* The version reads as the subtitle it was; both it and the pill reopen
+   What's new. */
+.settings-version {
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-version:hover {
+  color: rgb(var(--v-theme-on-surface));
+  text-decoration: underline;
+}
+
+.settings-whats-new {
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-pill);
+  background: none;
+  font-family: var(--font-ui);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-body);
+  color: rgb(var(--v-theme-on-surface));
+  cursor: pointer;
+}
+
+.settings-whats-new:hover {
+  background: var(--hover-wash);
+}
+
+/* Two-pane Settings: a left nav rail and a content area, both inside the
+   flush AppDialog body. */
 .settings-nav {
   width: 196px;
   flex-shrink: 0;
   border-right: 1px solid rgb(var(--v-theme-divider));
-  padding: var(--space-3) 0;
+  padding: var(--space-3) 0 0;
   background: rgb(var(--v-theme-background));
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  /* An item scrolled into view (keyboard focus, a test's click) lands above
+     the pinned report card rather than under it. */
+  scroll-padding-bottom: calc(var(--space-9) + var(--space-5));
 }
 
+/* The report box: pushed to the bottom when the rail has room, and sticky
+   when it does not, so the items scroll under it instead of hiding it. */
+.settings-nav-foot {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+  padding: var(--space-4) var(--space-3) var(--space-3);
+  background: rgb(var(--v-theme-background));
+}
+
+/* A group heading: the design system's SectionLabel. Plain text in the nav,
+   so a screen reader walking the rail hears the group before its items. */
+.settings-nav-heading {
+  padding: 0 var(--space-4) 0 var(--space-5);
+  margin: var(--space-4) 0 var(--space-2);
+}
+
+.settings-nav-heading:first-child {
+  margin-top: var(--space-2);
+}
+
+/* One bar-control height per item, so twelve items under five headings fit
+   the rail; with the report card pinned below them the last one or two
+   scroll under the card. */
 .settings-nav-item {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   width: 100%;
+  min-height: var(--control-h-bar);
   text-align: left;
   position: relative;
-  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-5);
+  padding: var(--space-2) var(--space-4) var(--space-2) var(--space-5);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
@@ -426,19 +598,45 @@ watch(
   flex-shrink: 0;
 }
 
+/* Fixed so the dialog does not resize as the rail is clicked, and tall enough
+   that no pane scrolls: a list that can grow scrolls in its own box instead.
+   On a short window the dialog (24px overlay margins each side, a 57px
+   header) takes what is left, and only then does a pane scroll. */
 .settings-content {
   flex: 1;
   min-width: 0;
   padding: var(--space-4) var(--space-6);
   overflow-y: auto;
-  height: 524px;
+  height: min(600px, calc(100vh - 112px));
 }
 
 /* Each pane fills the content height so panes that pin content to the bottom
-   (e.g. the Backend tab's library/log links, the Snapshots retention notes)
+   (e.g. the Server pane's library/log links)
    have a full-height box to push that content against. */
 .settings-pane {
   height: 100%;
+}
+
+/* A pane of stacked sections where one of them takes the height the others
+   leave (__grow: Recovery's snapshot list), or keeps its own height and gives
+   way only when the pane runs out (__shrink: the library and tag lists). */
+.settings-pane--stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-pane--stack > * {
+  flex: none;
+}
+
+.settings-pane--stack > .settings-pane__grow {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.settings-pane--stack > .settings-pane__shrink {
+  flex: 0 1 auto;
+  min-height: 0;
 }
 
 /* Vuetify's switch label defaults to 1rem / 0.6 opacity, which reads oversized
@@ -469,9 +667,14 @@ watch(
     border-bottom: 1px solid rgb(var(--v-theme-divider));
   }
 
+  /* A 180px rail cannot spare a pinned card: it ends the list instead. */
+  .settings-nav-foot {
+    position: static;
+  }
+
   .settings-content {
     width: 100%;
-    height: min(58vh, 524px);
+    height: min(58vh, 600px);
     padding: var(--space-4);
   }
 }

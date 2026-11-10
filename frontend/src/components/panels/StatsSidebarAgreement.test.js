@@ -2,7 +2,7 @@
 // rating against the smart score.
 //
 // StatsSidebar.vue is ~2k lines and its data comes from a live /pictures/stats
-// call, so - following the ImageGridLockBadge.test.js / ImageOverlayContextMenu
+// call, so - following the ImageGridLockBadge.test.js / LightboxContextMenu
 // precedent - these tests reproduce the widget's pure contracts verbatim from
 // the component rather than mounting it:
 //

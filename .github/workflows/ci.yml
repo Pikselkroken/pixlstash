@@ -29,12 +29,23 @@ on:
       - 'rc-prep-**'
     tags:
       - 'v*'
+  # A draft PR runs `checks` and `e2e` only; the backend shards and their
+  # warming jobs wait for `ready_for_review` (#2035). While a PR goes round the
+  # AI review, each push is superseded by the next fix long before the ~25 min
+  # gate reports, so a draft's gate run is ~200 runner-minutes cancelled.
+  # Nothing is a required check here (see the note above `e2e`), so the skipped
+  # jobs on a draft cannot stand in for a green gate.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   # Lets release-prep force the informational full-suite sweep on demand (the
   # single-process sweep job below keys off this event).
   workflow_dispatch:
 
 env:
+  # Every PixlStash this workflow boots reports itself as ours, never as a real
+  # install (Server.DEV_MACHINE_ENV_VAR; guarded by tests/test_install_type_buckets.py).
+  PIXLSTASH_TELEMETRY_DEV: '1'
+
   # Shared pytest flags for every backend job.
   #
   # Verbosity is deliberately lower than the local command documented in
@@ -119,12 +130,36 @@ jobs:
       # `npm run lint` is `tsc --noEmit`. `npm test` compiles with
       # tsconfig.test.json, which only covers src/ + test/; the lint pass is
       # what type-checks the main-process build as electron-builder will.
+      # Electron's install script fetches its binary from a GitHub release on
+      # every `npm ci`, and a 504 there has failed this job with nothing wrong
+      # in the tree (runs 42467486129 and 42469975695). @electron/get looks in
+      # ~/.cache/electron first and verifies the zip against the checksums
+      # shipped inside the npm package, so a restored zip installs with no
+      # network at all. Keyed on the lockfile, which pins the Electron version.
+      # Restore always; save only from a branch push, for the cache-budget
+      # reason given at `warm_models`.
+      - name: Restore the Electron binary cache
+        id: electron-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('electron/package-lock.json') }}
+
       - name: Test Electron shell
         working-directory: electron
         run: |
           npm ci
           npm run lint
           npm test
+
+      - name: Save the Electron binary cache
+        if: >-
+          success() && steps.electron-cache.outputs.cache-hit != 'true'
+          && github.event_name == 'push'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/electron
+          key: ${{ steps.electron-cache.outputs.cache-primary-key }}
 
       - name: Install telemetry Worker dependencies
         working-directory: website/telemetry-worker
@@ -165,6 +200,13 @@ jobs:
   warm_models:
     name: warm model cache
     runs-on: ubuntu-latest
+    # A ceiling on the cold path. InsightFace fetches buffalo_l from a GitHub
+    # release asset with `requests.get` and no timeout, so a stalled asset would
+    # otherwise hold this job - and every shard that `needs:` it - for the
+    # default 360 minutes. A warm hit finishes in well under a minute.
+    timeout-minutes: 60
+    # Draft PRs skip the gate; see `on: pull_request`.
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     # See the `backend` job for the rationale and the read-only token
     # requirement. Absent on fork PRs by design; the prefetch then runs
     # anonymously, which one sequential job is far more likely to survive than
@@ -361,6 +403,12 @@ jobs:
   warm_models_windows:
     name: warm model cache (Windows)
     runs-on: windows-latest
+    # A ceiling on the cold path. InsightFace fetches buffalo_l from a GitHub
+    # release asset with `requests.get` and no timeout, so a stalled asset would
+    # otherwise hold this job - and every shard that `needs:` it - for the
+    # default 360 minutes. A warm hit finishes in well under a minute.
+    timeout-minutes: 60
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     # Only a `push` can save this cache (see the save step), so only a `push`
     # runs the prefetch — and a run that never fetches has no use for the
     # token. Scoping it this way keeps the secret out of the environment on
@@ -420,8 +468,11 @@ jobs:
     # `!cancelled()` keeps the ordering and drops the veto: if warming breaks,
     # the shards still run, still report red or green on their own merits, and
     # `warm model cache` is the red check that says why they were slow.
+    #
+    # `!cancelled()` also overrides the skip a draft gives `warm_models`, so the
+    # draft clause has to be stated here too, not inherited.
     needs: warm_models
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     strategy:
       # Every shard must report: one shard failing tells you nothing about the
       # other seven, and a partial picture costs another full round trip.
@@ -451,8 +502,10 @@ jobs:
           CI_SHARD: ${{ matrix.shard }}
         run: >-
           python -m pytest $PYTEST_FLAGS --ci-shard "$CI_SHARD/8"
+          tests/db_models/test_training_models.py
           tests/multi_project_authz/test_generic_field_reader_allowlist.py
           tests/multi_project_authz/test_multi_project_membership_authz.py
+          tests/routes/test_training_api.py
           tests/test_adapter_attachment.py
           tests/test_adapter_header.py
           tests/test_aitoolkit_run.py
@@ -473,7 +526,9 @@ jobs:
           tests/test_character_face_assignment.py
           tests/test_characters_api.py
           tests/test_checkpoint_hash_finder.py
+          tests/test_child_sets.py
           tests/test_ci_shards.py
+          tests/test_civitai_lookup.py
           tests/test_cli_documentation.py
           tests/test_clip_text_embedding_similarity.py
           tests/test_comfyui_api_prompt_extraction.py
@@ -493,10 +548,13 @@ jobs:
           tests/test_dedup_tier_service.py
           tests/test_dedup_tiers_api.py
           tests/test_dedup_verdict_service.py
+          tests/test_default_tag_groups.py
           tests/test_description_cancel_blanking.py
+          tests/test_desktop_dev_scratch.py
           tests/test_detections_scope.py
           tests/test_docker_demo_hub_rewrite.py
           tests/test_downloads_intake.py
+          tests/test_e2e_workflow_run_fakes.py
           tests/test_edit_selection.py
           tests/test_except_hygiene_guardrail.py
           tests/test_export_api.py
@@ -519,6 +577,7 @@ jobs:
           tests/test_impossible_clear_authz.py
           tests/test_index_install_type.py
           tests/test_inline_rotate.py
+          tests/test_inpaint_conversion.py
           tests/test_insightface_relocation.py
           tests/test_install_type_buckets.py
           tests/test_invalid_image_endless_retry.py
@@ -564,9 +623,11 @@ jobs:
           tests/test_mps_memory_and_providers.py
           tests/test_node_pack_install.py
           tests/test_ocr_text.py
+          tests/test_open_with.py
           tests/test_openapi_response_schemas.py
           tests/test_operation_log.py
           tests/test_orientation.py
+          tests/test_package_data.py
           tests/test_path_containment.py
           tests/test_pending_score_invalidation.py
           tests/test_picture_is_video.py
@@ -580,6 +641,7 @@ jobs:
           tests/test_pictures_stream.py
           tests/test_pipeline_stage_contracts.py
           tests/test_pipeline_throughput_verification.py
+          tests/test_pixlstash_tagger_dinov3.py
           tests/test_plugin_create.py
           tests/test_plugin_install.py
           tests/test_plugin_lifecycle_gaps.py
@@ -604,9 +666,11 @@ jobs:
           tests/test_scrapheap_retention.py
           tests/test_security_supported_versions.py
           tests/test_server.py
+          tests/test_share_copies.py
           tests/test_share_link_library_pin.py
           tests/test_sidebar_counts_query_cost.py
           tests/test_smart_score_consistency.py
+          tests/test_smart_score_face_resolution.py
           tests/test_snapshots.py
           tests/test_snapshots_auth.py
           tests/test_ssl_generation.py
@@ -617,6 +681,7 @@ jobs:
           tests/test_stacks_membership.py
           tests/test_startup_permissions.py
           tests/test_system_utils.py
+          tests/test_tag_groups.py
           tests/test_tag_prediction_backfill.py
           tests/test_tag_prediction_scope.py
           tests/test_tag_task.py
@@ -632,6 +697,8 @@ jobs:
           tests/test_telemetry_install_id.py
           tests/test_telemetry_install_id_authz.py
           tests/test_telemetry_sender.py
+          tests/test_training_dataset.py
+          tests/test_trash_restore.py
           tests/test_vram_batch_budget.py
           tests/test_vram_oom_retry.py
           tests/test_watch_folder_worker.py
@@ -649,6 +716,18 @@ jobs:
           tests/test_workflow_versions.py
           tests/test_workflows_api.py
           tests/test_ws_broadcaster.py
+          tests/training/test_ai_toolkit_install.py
+          tests/training/test_config_render.py
+          tests/training/test_dataset_picker.py
+          tests/training/test_live_view.py
+          tests/training/test_local_ai_toolkit.py
+          tests/training/test_measurements.py
+          tests/training/test_preset_updates.py
+          tests/training/test_presets.py
+          tests/training/test_preview_likeness.py
+          tests/training/test_sample_prompts.py
+          tests/training/test_trainer_detach.py
+          tests/training/test_training_service.py
 
   # ---------------------------------------------------------------------------
   # RELEASE-PREP ONLY — informational ordering sweep, sharded by contiguous
@@ -721,7 +800,7 @@ jobs:
   # ---------------------------------------------------------------------------
   backend_release_sweep:
     name: backend-full block ${{ matrix.shard }} (informational, release-prep only)
-    if: ${{ !cancelled() && (startsWith(github.head_ref || github.ref_name, 'rc-prep') || startsWith(github.head_ref || github.ref_name, 'release') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (startsWith(github.head_ref || github.ref_name, 'rc-prep') || startsWith(github.head_ref || github.ref_name, 'release') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     # Same reason as the gate: read the model cache, never fill it, and never
     # let a failed warming job silently skip the sweep instead of running it.
@@ -776,12 +855,6 @@ jobs:
     # disabled, no ML models needed). The fixture is committed release input:
     # its absence is a coverage failure, never permission to skip the lane.
     runs-on: ubuntu-latest
-    env:
-      # Belt-and-braces with frontend/e2e/fixtures/test.js's production route
-      # block: declares this CI-booted backend as ours, so anything reaching
-      # the network by a path Playwright's route interception does not cover
-      # still arrives labelled dev rather than a real install. See #1213.
-      PIXLSTASH_TELEMETRY_DEV: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -958,6 +1031,7 @@ jobs:
     # exists to absorb. On the warm path this costs the shards a checkout and a
     # cache restore they were doing anyway.
     needs: warm_models_windows
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -1062,6 +1136,7 @@ jobs:
             tests/test_watch_folder_worker.py \
             tests/test_work_planner.py \
             tests/test_process_teardown.py \
+            tests/training/test_trainer_detach.py \
             2>&1 | tee pytest-windows.log
           status=${PIPESTATUS[0]}
           set -e

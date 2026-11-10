@@ -39,6 +39,7 @@ describe("api/pictureImport: staging status buckets", () => {
 
     expect(apiClient.get).toHaveBeenCalledWith(
       IMPORT_ENDPOINTS.status("/be", "s1"),
+      { params: { outcomes_from: 0 } },
     );
     expect(status.importedCount).toBe(1);
     expect(status.duplicateCount).toBe(1);
@@ -79,5 +80,22 @@ describe("api/pictureImport: staging status buckets", () => {
       stagingId: "s3",
     });
     expect(status.scrapheapedPictureIds).toEqual([]);
+  });
+
+  it("asks only for the outcomes it has not seen, and passes them on (#2512)", async () => {
+    const outcomes = [{ key: "k2", outcome: "duplicate", picture_id: 9 }];
+    apiClient.get.mockResolvedValue({
+      data: { stage: "importing", outcomes },
+    });
+    const status = await fetchStagingStatus({
+      backendUrl: "",
+      stagingId: "s4",
+      outcomesFrom: 1,
+    });
+    expect(apiClient.get).toHaveBeenCalledWith(
+      IMPORT_ENDPOINTS.status("", "s4"),
+      { params: { outcomes_from: 1 } },
+    );
+    expect(status.outcomes).toEqual(outcomes);
   });
 });

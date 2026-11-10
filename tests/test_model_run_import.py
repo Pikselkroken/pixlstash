@@ -28,14 +28,19 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
+import sqlite3
 import struct
+from types import SimpleNamespace
 
 import pytest
 
+import pixlstash.vault as vault_module
+from pixlstash.hub import training_runs
+from pixlstash.routes.model_imports import _to_run_response
 from pixlstash.services import model_mover as mover_module
 from pixlstash.services import run_importer as importer_module
-from pixlstash.services.model_mover import MoveRefused
-from pixlstash.services.stack_detector import set_cover
+from pixlstash.services.model_mover import MoveRefused, file_digest
 from pixlstash.services.run_importer import (
     PROVENANCE_TRAINED,
     STATUS_CANCELLED,
@@ -43,6 +48,9 @@ from pixlstash.services.run_importer import (
     STATUS_IMPORTED,
     RunImporter,
 )
+from pixlstash.services.stack_detector import set_cover
+from pixlstash.utils.aitoolkit_run import read_output_root
+from pixlstash.vault import Vault
 
 
 class Crash(BaseException):
@@ -152,9 +160,8 @@ def test_crash_after_the_copy_and_before_the_register_leaves_no_row(shelf, monke
     """Window 1. The bytes are at the destination and nothing claims them.
 
     The run still has its own copy, because the unlink is last and the register
-    never happened. Residue: an unregistered file that a **manual** rescan of the
-    destination folder picks up as a normal adapter - nothing scans a model
-    folder on start or on a schedule. Not a dangling row: there is no row.
+    never happened. Residue: an unregistered file that the next scan of the
+    destination folder picks up as a normal adapter. Not a dangling row: there is no row.
     """
     monkeypatch.setattr(
         RunImporter,
@@ -293,6 +300,61 @@ def test_an_import_records_trained_provenance_and_the_config_base_model(shelf):
     assert row["file_kind"] == "adapter"
 
 
+def test_a_subfolder_that_does_not_exist_yet_is_created_for_the_import(shelf):
+    """The subfolder need not exist: the import creates it and lands the run."""
+    subfolder = shelf["destination_dir"] / "loras"
+    assert not subfolder.exists()
+    report = RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], subfolder="loras"
+    )
+    assert {outcome.status for outcome in report.outcomes} == {STATUS_IMPORTED}
+    assert (subfolder / "Clementine.safetensors").is_file()
+    assert_no_dangling_rows(shelf["hub"])
+
+
+def test_a_refused_subfolder_import_creates_no_folder(shelf, monkeypatch):
+    """The subfolder is made only once every check has passed."""
+
+    def refuse(destination, bytes_to_copy):
+        raise MoveRefused("not enough space", status_code=507)
+
+    monkeypatch.setattr(importer_module, "require_space", refuse)
+    with pytest.raises(MoveRefused):
+        RunImporter(shelf["hub"]).import_run(
+            str(shelf["run_dir"]), shelf["destination_id"], subfolder="loras"
+        )
+    assert not (shelf["destination_dir"] / "loras").exists()
+
+
+def test_a_run_imported_into_a_subfolder_lands_under_it(shelf):
+    """With a ``subfolder`` the files and their ``model_file`` rows sit under
+    it - the shape a LoRA download gives a file that belongs in ``loras/``."""
+    subfolder = shelf["destination_dir"] / "loras"
+    subfolder.mkdir()
+    report = RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], subfolder="loras"
+    )
+    assert {outcome.status for outcome in report.outcomes} == {STATUS_IMPORTED}
+    assert (subfolder / "Clementine.safetensors").is_file()
+    assert not (shelf["destination_dir"] / "Clementine.safetensors").exists()
+    relpaths = sorted(
+        row["relpath"]
+        for row in shelf["hub"].fetchall(
+            "SELECT relpath FROM model_file WHERE model_folder_id = ?",
+            (shelf["destination_id"],),
+        )
+    )
+    assert relpaths == sorted(
+        f"loras/{name}"
+        for name in (
+            "Clementine_000000250.safetensors",
+            "Clementine_000000500.safetensors",
+            "Clementine.safetensors",
+        )
+    )
+    assert_no_dangling_rows(shelf["hub"])
+
+
 def test_the_configs_trigger_word_beats_the_headers_tag_table(shelf):
     """The config names the word the trainer was told to use. The header's
     frequency table is every tag in the captions, with the commonest first -
@@ -350,187 +412,37 @@ def test_a_run_with_no_bare_final_covers_with_its_highest_step(shelf):
 
 
 # ===========================================================================
-# The samples come with the weights
+# The samples stay in the run
 # ===========================================================================
-#
-# The one gap in this module that lost data rather than deferring a feature: the
-# importer took the ``.safetensors`` and nothing else, so a source folder
-# carrying ``delete_after_import`` destroyed the run's previews with it.
 
 
-def test_each_checkpoints_samples_land_beside_it_with_the_trainers_names(shelf):
+def test_an_import_takes_the_weights_and_leaves_the_samples_in_the_run(shelf):
+    """Even with ``delete_source``: the run's previews are the trainer's working
+    output, read in place, and never copied onto the shelf or unlinked."""
+    run_samples = sorted(os.listdir(shelf["run_dir"] / "samples"))
     report = RunImporter(shelf["hub"]).import_run(
-        str(shelf["run_dir"]), shelf["destination_id"]
+        str(shelf["run_dir"]), shelf["destination_id"], delete_source=True
     )
 
-    final = shelf["destination_dir"] / "Clementine_samples"
-    stepped = shelf["destination_dir"] / "Clementine_000000250_samples"
-    # ai-toolkit's own filenames, unchanged: no renumbering.
-    assert os.listdir(final) == ["1712345678901__000000500_0.jpg"]
-    assert os.listdir(stepped) == ["1712345678901__000000250_0.jpg"]
-    assert (final / "1712345678901__000000500_0.jpg").read_bytes() == b"jpeg"
-    assert {o.filename: o.sample_count for o in report.outcomes} == {
-        "Clementine.safetensors": 1,
-        "Clementine_000000500.safetensors": 1,
-        "Clementine_000000250.safetensors": 1,
-    }
+    assert {o.status for o in report.outcomes} == {STATUS_IMPORTED}
+    assert sorted(os.listdir(shelf["destination_dir"])) == [
+        "Clementine.safetensors",
+        "Clementine_000000250.safetensors",
+        "Clementine_000000500.safetensors",
+    ]
+    assert sorted(os.listdir(shelf["run_dir"] / "samples")) == run_samples
 
 
-def test_the_bare_final_takes_the_highest_steps_samples_even_when_it_is_imported_too(
-    shelf,
-):
-    """The cover rule, at the point it actually costs something: step 500's
-    previews are copied twice, into its own folder and into the final's. That
-    duplication is the accepted price of the most visible row of a fresh import
-    not being the only empty one."""
-    RunImporter(shelf["hub"]).import_run(str(shelf["run_dir"]), shelf["destination_id"])
-
-    final = shelf["destination_dir"] / "Clementine_samples"
-    highest = shelf["destination_dir"] / "Clementine_000000500_samples"
-    assert (
-        os.listdir(final) == os.listdir(highest) == ["1712345678901__000000500_0.jpg"]
-    )
-
-
-def test_a_checkpoint_whose_step_has_no_previews_gets_no_samples_folder(shelf):
-    """Not an empty directory, and not the highest step's either - that rule is
-    the bare final's alone."""
-    write_adapter(shelf["run_dir"] / "Clementine_000000900.safetensors", seed=b"s900")
-    report = RunImporter(shelf["hub"]).import_run(
-        str(shelf["run_dir"]), shelf["destination_id"], steps=[900]
-    )
-    assert [o.sample_count for o in report.outcomes] == [0]
-    assert not (shelf["destination_dir"] / "Clementine_000000900_samples").exists()
-
-
-def test_delete_after_import_unlinks_the_checkpoint_only_after_the_samples_are_copied(
-    shelf,
-):
-    """The ordering that makes this a data-loss fix rather than a feature.
-
-    Asserted at the seam rather than after the fact: an import that copied the
-    previews *after* the unlink would leave exactly the same directory on disk
-    at the end, and would still have had a window where the only copy was gone.
-    """
-    seen: dict = {}
-    real_unlink = importer_module.unlink_source
-
-    def record_then_unlink(path):
-        seen.setdefault(
-            path, sorted(os.listdir(shelf["destination_dir"] / "Clementine_samples"))
-        )
-        return real_unlink(path)
-
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(importer_module, "unlink_source", record_then_unlink)
-    try:
-        RunImporter(shelf["hub"]).import_run(
-            str(shelf["run_dir"]),
-            shelf["destination_id"],
-            steps=[None],
-            delete_source=True,
-        )
-    finally:
-        monkeypatch.undo()
-
-    assert seen == {
-        str(shelf["run_dir"] / "Clementine.safetensors"): [
-            "1712345678901__000000500_0.jpg"
-        ]
-    }, "the run's file was unlinked before its previews were copied"
-    assert not os.path.exists(shelf["run_dir"] / "Clementine.safetensors")
-
-
-def test_an_existing_samples_folder_refuses_the_whole_batch(shelf):
-    """The only path here that can write into a directory the owner put there,
-    and there is no undo. Refused in the same pass as the filename collision and
-    before the first byte, so nothing at all is imported."""
+def test_an_existing_samples_folder_is_left_alone(shelf):
+    """No previews are written, so a directory already at a checkpoint's
+    ``<stem>_samples`` name is neither a collision nor touched."""
     squatter = shelf["destination_dir"] / "Clementine_000000500_samples"
     squatter.mkdir()
     (squatter / "mine.jpg").write_bytes(b"somebody else's file")
 
-    with pytest.raises(MoveRefused, match="never merged"):
-        RunImporter(shelf["hub"]).import_run(
-            str(shelf["run_dir"]), shelf["destination_id"]
-        )
+    RunImporter(shelf["hub"]).import_run(str(shelf["run_dir"]), shelf["destination_id"])
 
-    assert os.listdir(shelf["destination_dir"]) == ["Clementine_000000500_samples"]
     assert os.listdir(squatter) == ["mine.jpg"]
-    assert models(shelf["hub"]) == {}
-
-
-def test_a_symlink_at_a_samples_destination_name_is_refused_not_written_through(shelf):
-    """The containment on the samples directory, and *which* check does it.
-
-    The comment in ``_resolve_targets`` used to credit `lexists`; it is the
-    containment call, which realpaths and so refuses the link whether or not it
-    dangles. Asserted here because the existence check runs on the *resolved*
-    path, where a dangling link is simply absent - so `lexists` and `exists`
-    cannot be told apart at that line, and only this proves the guard is real.
-    """
-    outside = shelf["destination_dir"].parent / "outside"
-    outside.mkdir()
-    os.symlink(
-        str(outside / "Clementine_samples"),
-        str(shelf["destination_dir"] / "Clementine_samples"),
-    )
-
-    with pytest.raises(MoveRefused, match="outside the destination folder"):
-        RunImporter(shelf["hub"]).import_run(
-            str(shelf["run_dir"]), shelf["destination_id"], steps=[None]
-        )
-
-    assert not (outside / "Clementine_samples").exists(), (
-        "the import wrote through the link, outside the registered folder"
-    )
-    assert models(shelf["hub"]) == {}
-
-
-def test_a_samples_copy_that_fails_leaves_the_checkpoint_imported(shelf, monkeypatch):
-    """Non-fatal, asserted rather than assumed: losing a preview must not cost
-    the weights. The half-written directory goes with it."""
-
-    def refuse(*args, **kwargs):
-        raise OSError("no room for previews")
-
-    monkeypatch.setattr(importer_module.shutil, "copy2", refuse)
-
-    report = RunImporter(shelf["hub"]).import_run(
-        str(shelf["run_dir"]), shelf["destination_id"], steps=[None], delete_source=True
-    )
-
-    outcome = report.outcomes[0]
-    assert outcome.status == STATUS_IMPORTED
-    assert outcome.sample_count == 0
-    assert "no room for previews" in (outcome.detail or "")
-    assert os.path.exists(shelf["destination_dir"] / "Clementine.safetensors")
-    assert not os.path.exists(shelf["run_dir"] / "Clementine.safetensors")
-    assert os.listdir(shelf["destination_dir"]) == ["Clementine.safetensors"], (
-        "a half-written samples directory was left behind"
-    )
-    assert_no_dangling_rows(shelf["hub"])
-
-
-def test_the_space_check_counts_the_samples(shelf, monkeypatch):
-    """A run measured 1.9 GB of which samples/ was 15 MB. Counting only the
-    weights makes the check wrong by that much, per run."""
-    seen: list[int] = []
-    real_require_space = mover_module.require_space
-
-    def record(destination, byte_count):
-        seen.append(byte_count)
-        return real_require_space(destination, byte_count)
-
-    monkeypatch.setattr(importer_module, "require_space", record)
-    RunImporter(shelf["hub"]).import_run(
-        str(shelf["run_dir"]), shelf["destination_id"], steps=[None]
-    )
-
-    weights = os.path.getsize(shelf["run_dir"] / "Clementine.safetensors")
-    previews = os.path.getsize(
-        shelf["run_dir"] / "samples" / "1712345678901__000000500_0.jpg"
-    )
-    assert seen == [weights + previews]
 
 
 # ===========================================================================
@@ -696,8 +608,6 @@ def test_a_symlink_at_a_destination_name_is_refused_not_written_through(shelf):
 
 
 def test_space_is_checked_before_the_first_byte(shelf, monkeypatch):
-    import shutil
-
     monkeypatch.setattr(
         mover_module.shutil,
         "disk_usage",
@@ -743,7 +653,6 @@ def test_cancel_stops_the_queue_and_rolls_nothing_back(shelf):
 def test_listing_runs_hashes_nothing_and_writes_nothing(shelf, monkeypatch):
     """The property the whole card grid rests on: an output root can be browsed
     without importing, hashing or moving anything."""
-    from pixlstash.utils.aitoolkit_run import read_output_root
 
     def refuse(*args, **kwargs):
         raise AssertionError("listing a run must not hash anything")
@@ -756,3 +665,433 @@ def test_listing_runs_hashes_nothing_and_writes_nothing(shelf, monkeypatch):
     assert runs[0].base_model == "black-forest-labs/FLUX.1-dev"
     assert models(shelf["hub"]) == {}
     assert os.listdir(shelf["destination_dir"]) == []
+
+
+def test_a_listed_run_is_dated_by_its_newest_checkpoint(shelf):
+    """The card's date: the last write of any checkpoint, read by a stat."""
+
+    run = read_output_root(str(shelf["output_root"]))[0]
+    newest = run.checkpoints[-1].path
+    os.utime(newest, (2_000_000_000, 2_000_000_000))
+
+    assert _to_run_response(run).modified_at == 2_000_000_000
+
+
+def test_a_listed_run_carries_its_base_models_tile(shelf):
+    """The card's mark: FLUX.1 dev's release tile, and none for a base unknown."""
+    run = read_output_root(str(shelf["output_root"]))[0]
+    tile = _to_run_response(run).base_tile
+    assert (tile["label"], tile["mark_icon"], tile["mark_band"]) == (
+        "FLUX.1 dev",
+        "flux",
+        True,
+    )
+    run.base_model = "someone/my-private-base"
+    assert _to_run_response(run).base_tile is None
+
+
+def _a_training_run(hub, run_uuid="run-clementine"):
+    """The hub row a PixlStash training run writes before it starts."""
+    return training_runs.create_run(
+        hub,
+        library_uuid="library-under-test",
+        uuid=run_uuid,
+        name="Clementine",
+        set_id=None,
+        character_id=None,
+        base_model="black-forest-labs/FLUX.1-dev",
+        trigger_word="clemntn",
+    )
+
+
+def test_every_model_an_import_creates_names_the_run_that_made_it(shelf):
+    run_id = _a_training_run(shelf["hub"])
+
+    RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], training_run_id=run_id
+    )
+
+    rows = models(shelf["hub"])
+    assert len(rows) == 3
+    assert {row["training_run_id"] for row in rows.values()} == {run_id}
+
+
+def test_a_run_trained_elsewhere_names_no_run(shelf):
+    RunImporter(shelf["hub"]).import_run(str(shelf["run_dir"]), shelf["destination_id"])
+
+    assert {row["training_run_id"] for row in models(shelf["hub"]).values()} == {None}
+
+
+def test_the_vault_hands_the_finished_runs_id_to_the_importer(shelf):
+    """The vault's hook is the one call site that knows the run's id.
+
+    ``_import_training_run`` reads only the hub, so it runs unbound on a
+    stand-in: the shelf's download folder receives the run, and every model it
+    lands names the run.
+    """
+    run_id = _a_training_run(shelf["hub"])
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+
+    stand_in = SimpleNamespace(_hub=shelf["hub"])
+    result = Vault._import_training_run(
+        stand_in,
+        str(shelf["run_dir"]),
+        {"id": run_id, "name": "Clementine", "set_id": None, "character_id": None},
+    )
+
+    assert result["imported"] == 3
+    assert {row["training_run_id"] for row in models(shelf["hub"]).values()} == {run_id}
+
+
+@pytest.mark.parametrize("delete_after_import", [0, 1])
+def test_a_trained_run_follows_its_source_folders_delete_after_import(
+    shelf, delete_after_import
+):
+    """The run lands in the shelf's ai-toolkit folder, so that folder decides.
+
+    Off, the trainer's files stay beside the shelf's copies; on, they go once
+    the copies are committed - the same rule an import from the shelf follows.
+    """
+    run_id = _a_training_run(shelf["hub"])
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+        conn.execute(
+            "UPDATE model_folder SET delete_after_import = ? WHERE id = ?",
+            (delete_after_import, shelf["source_id"]),
+        )
+
+    Vault._import_training_run(
+        SimpleNamespace(_hub=shelf["hub"]),
+        str(shelf["run_dir"]),
+        {"id": run_id, "name": "Clementine", "set_id": None, "character_id": None},
+    )
+
+    left = sorted(p.name for p in shelf["run_dir"].glob("*.safetensors"))
+    assert left == (
+        []
+        if delete_after_import
+        else [
+            "Clementine.safetensors",
+            "Clementine_000000250.safetensors",
+            "Clementine_000000500.safetensors",
+        ]
+    )
+
+
+def test_a_run_outside_the_source_folder_keeps_its_files(shelf, tmp_path):
+    """Only the folder holding the run decides: another one's switch is not it."""
+    run_id = _a_training_run(shelf["hub"])
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+        conn.execute(
+            "UPDATE model_folder SET delete_after_import = 1 WHERE id = ?",
+            (shelf["source_id"],),
+        )
+    elsewhere = tmp_path / "elsewhere" / "Clementine"
+    shutil.copytree(shelf["run_dir"], elsewhere)
+
+    Vault._import_training_run(
+        SimpleNamespace(_hub=shelf["hub"]),
+        str(elsewhere),
+        {"id": run_id, "name": "Clementine", "set_id": None, "character_id": None},
+    )
+
+    assert len(list(elsewhere.glob("*.safetensors"))) == 3
+
+
+def test_a_source_on_another_drive_is_skipped_not_fatal(shelf, monkeypatch):
+    """Windows: commonpath raises across drives. The run still imports.
+
+    The source that cannot share a path with the run is not the run's folder,
+    so its delete_after_import switch does not apply and the files stay.
+    """
+    run_id = _a_training_run(shelf["hub"])
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+        conn.execute(
+            "UPDATE model_folder SET delete_after_import = 1 WHERE id = ?",
+            (shelf["source_id"],),
+        )
+    source_root = os.path.realpath(str(shelf["output_root"]))
+    real_commonpath = os.path.commonpath
+
+    def other_drive(paths):
+        if list(paths)[0] == source_root:
+            raise ValueError("Paths don't have the same drive")
+        return real_commonpath(paths)
+
+    monkeypatch.setattr(os.path, "commonpath", other_drive)
+
+    result = Vault._import_training_run(
+        SimpleNamespace(_hub=shelf["hub"]),
+        str(shelf["run_dir"]),
+        {"id": run_id, "name": "Clementine", "set_id": None, "character_id": None},
+    )
+
+    assert result["imported"] == 3
+    assert len(list(shelf["run_dir"].glob("*.safetensors"))) == 3
+
+
+def test_a_cover_whose_row_vanished_does_not_fail_the_run(shelf, monkeypatch):
+    """The files have landed by the time the cover's hash is read.
+
+    A row that is gone then must not turn a finished import into a failed job:
+    the run still lands and the cover simply has no hash to attach.
+    """
+    run_id = _a_training_run(shelf["hub"])
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+    real_fetchone = shelf["hub"].fetchone
+
+    def vanished(sql, *args):
+        if sql.startswith("SELECT sha256 FROM model WHERE id"):
+            return None
+        return real_fetchone(sql, *args)
+
+    monkeypatch.setattr(shelf["hub"], "fetchone", vanished)
+
+    result = Vault._import_training_run(
+        SimpleNamespace(_hub=shelf["hub"]),
+        str(shelf["run_dir"]),
+        {"id": run_id, "name": "Clementine", "set_id": None, "character_id": None},
+    )
+
+    assert result["imported"] == 3
+    assert result["cover_sha256"] is None
+
+
+def _cover_of(hub, run_id):
+    """The step of the run's stack cover; None names the bare final."""
+    row = hub.fetchone(
+        "SELECT training_step FROM model WHERE training_run_id = ? "
+        "AND stack_position = 0",
+        (run_id,),
+    )
+    return row["training_step"] if row is not None else "no cover"
+
+
+def _download_target(shelf):
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+
+
+def test_a_step_chosen_while_training_is_the_cover_when_the_run_lands(shelf):
+    """The live view's "Use this step", made before the run was on the shelf."""
+    run_id = _a_training_run(shelf["hub"])
+    training_runs.update_run(shelf["hub"], "run-clementine", cover_step=250)
+    _download_target(shelf)
+
+    Vault._import_training_run(
+        SimpleNamespace(_hub=shelf["hub"]),
+        str(shelf["run_dir"]),
+        {"id": run_id, "uuid": "run-clementine", "name": "Clementine"},
+    )
+
+    assert _cover_of(shelf["hub"], run_id) == 250
+
+
+def test_a_chosen_step_the_trainer_pruned_leaves_the_final_the_cover(shelf):
+    run_id = _a_training_run(shelf["hub"])
+    training_runs.update_run(shelf["hub"], "run-clementine", cover_step=125)
+    _download_target(shelf)
+
+    Vault._import_training_run(
+        SimpleNamespace(_hub=shelf["hub"]),
+        str(shelf["run_dir"]),
+        {"id": run_id, "uuid": "run-clementine", "name": "Clementine"},
+    )
+
+    assert _cover_of(shelf["hub"], run_id) is None
+
+
+def test_choosing_a_step_after_the_import_moves_the_cover_and_the_sets_lora(
+    shelf, monkeypatch
+):
+    """The set's attached LoRA is the step chosen, not the last one."""
+
+    run_id = _a_training_run(shelf["hub"])
+    _download_target(shelf)
+    held: dict[str, list] = {}
+
+    def fetch(vault, *, sha256=None):
+        return {
+            sha256: [
+                {"entity_type": t, "entity_id": i} for t, i in held.get(sha256, [])
+            ]
+        }
+
+    def replace(vault, sha256, wanted):
+        held[sha256] = list(wanted)
+        return []
+
+    monkeypatch.setattr(vault_module, "fetch_attachments", fetch)
+    monkeypatch.setattr(vault_module, "replace_attachments", replace)
+    stand_in = SimpleNamespace(_hub=shelf["hub"])
+    run = {"id": run_id, "uuid": "run-clementine", "name": "Clementine", "set_id": 7}
+    Vault._import_training_run(stand_in, str(shelf["run_dir"]), run)
+    shas = {
+        row["training_step"]: row["sha256"]
+        for row in shelf["hub"].fetchall(
+            "SELECT training_step, sha256 FROM model WHERE training_run_id = ?",
+            (run_id,),
+        )
+    }
+    assert held == {shas[None]: [("set", 7)]}
+
+    assert Vault.choose_training_cover(stand_in, {**run, "total_steps": 750}, 500)
+
+    assert _cover_of(shelf["hub"], run_id) == 500
+    assert held[shas[None]] == []
+    assert held[shas[500]] == [("set", 7)]
+    with pytest.raises(LookupError):
+        Vault.choose_training_cover(stand_in, {**run, "total_steps": 750}, 125)
+
+
+def _train_longer_stand_in(hub):
+    stand_in = SimpleNamespace(_hub=hub)
+    stand_in._import_trained_longer = lambda *args: Vault._import_trained_longer(
+        stand_in, *args
+    )
+    return stand_in
+
+
+def _imported_then_trained_on(shelf):
+    """The run imported once, its final then given its step as Train longer does."""
+    hub = shelf["hub"]
+    run_id = _a_training_run(hub)
+    _download_target(shelf)
+    stand_in = _train_longer_stand_in(hub)
+    info = {"id": run_id, "uuid": "run-clementine", "name": "Clementine"}
+    Vault._import_training_run(stand_in, str(shelf["run_dir"]), info)
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET training_step = 750 "
+            "WHERE training_run_id = ? AND training_step IS NULL",
+            (run_id,),
+        )
+    return stand_in, info, run_id
+
+
+def _shelf_files(hub, run_id):
+    return {
+        row["relpath"]: (row["training_step"], row["stack_position"], row["stack_id"])
+        for row in hub.fetchall(
+            "SELECT mf.relpath, m.training_step, m.stack_position, m.stack_id "
+            "FROM model m JOIN model_file mf ON mf.model_id = m.id "
+            "WHERE m.training_run_id = ?",
+            (run_id,),
+        )
+    }
+
+
+def test_a_run_trained_longer_joins_its_stack_and_takes_the_finals_name(shelf):
+    """The final's shelf copy becomes its step; the longer one takes its name."""
+    stand_in, info, run_id = _imported_then_trained_on(shelf)
+    run_dir = shelf["run_dir"]
+    os.rename(
+        run_dir / "Clementine.safetensors", run_dir / "Clementine_000000750.safetensors"
+    )
+    write_adapter(run_dir / "Clementine_000001000.safetensors", seed=b"step1000")
+    write_adapter(run_dir / "Clementine.safetensors", seed=b"final-1250")
+    final_before = file_digest(str(shelf["destination_dir"] / "Clementine.safetensors"))
+
+    result = Vault._import_training_run(
+        stand_in, str(run_dir), {**info, "continued_from_step": 750}
+    )
+
+    assert result["imported"] == 2
+    files = _shelf_files(shelf["hub"], run_id)
+    assert sorted(files) == [
+        "Clementine.safetensors",
+        "Clementine_000000250.safetensors",
+        "Clementine_000000500.safetensors",
+        "Clementine_000000750.safetensors",
+        "Clementine_000001000.safetensors",
+    ]
+    assert len({stack for _, _, stack in files.values()}) == 1
+    # The old final keeps the cover, under its step's name.
+    assert files["Clementine_000000750.safetensors"][:2] == (750, 0)
+    assert (
+        file_digest(str(shelf["destination_dir"] / "Clementine_000000750.safetensors"))
+        == final_before
+    )
+    # The bare name is the longer-trained file now.
+    assert files["Clementine.safetensors"][0] is None
+    assert file_digest(
+        str(shelf["destination_dir"] / "Clementine.safetensors")
+    ) == file_digest(str(run_dir / "Clementine.safetensors"))
+
+
+def test_a_shelf_rename_its_rows_refuse_is_put_back(shelf):
+    """A failed row update gives the renamed shelf copy its old name back."""
+    stand_in, info, run_id = _imported_then_trained_on(shelf)
+    hub = shelf["hub"]
+    run_dir = shelf["run_dir"]
+    os.rename(
+        run_dir / "Clementine.safetensors", run_dir / "Clementine_000000750.safetensors"
+    )
+    write_adapter(run_dir / "Clementine.safetensors", seed=b"final-1250")
+    on_disk = sorted(os.listdir(shelf["destination_dir"]))
+    rows = _shelf_files(hub, run_id)
+
+    class _LockedHub:
+        def __getattr__(self, name):
+            return getattr(hub, name)
+
+        def transaction(self):
+            raise sqlite3.OperationalError("database is locked")
+
+    stand_in._hub = _LockedHub()
+    with pytest.raises(sqlite3.OperationalError):
+        Vault._import_training_run(
+            stand_in, str(run_dir), {**info, "continued_from_step": 750}
+        )
+
+    assert sorted(os.listdir(shelf["destination_dir"])) == on_disk
+    assert _shelf_files(hub, run_id) == rows
+
+
+def test_a_rewound_run_renames_its_first_takes_copies_into_the_take(shelf):
+    stand_in, info, run_id = _imported_then_trained_on(shelf)
+    run_dir = shelf["run_dir"]
+    take = run_dir / "take-1"
+    take.mkdir()
+    for name in ("Clementine_000000500.safetensors", "Clementine.safetensors"):
+        os.rename(run_dir / name, take / name)
+    write_adapter(run_dir / "Clementine_000000500.safetensors", seed=b"take2-500")
+    write_adapter(run_dir / "Clementine.safetensors", seed=b"take2-final")
+
+    Vault._import_training_run(
+        stand_in,
+        str(run_dir),
+        {**info, "continued_from_step": 250, "set_aside_take": "take-1"},
+    )
+
+    files = _shelf_files(shelf["hub"], run_id)
+    assert sorted(files) == [
+        "Clementine.safetensors",
+        "Clementine_000000250.safetensors",
+        "Clementine_000000500.safetensors",
+        "Clementine_take-1_000000500.safetensors",
+        "Clementine_take-1_000000750.safetensors",
+    ]
+    assert files["Clementine_take-1_000000750.safetensors"][:2] == (750, 0)

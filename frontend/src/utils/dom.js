@@ -4,7 +4,7 @@ import { nextTick, unref, watch } from "vue";
  * Whether an element is a text-entry target that owns its own keystrokes.
  *
  * The predicate every global key handler needs before claiming a bare letter:
- * typing "s" in a tag field must not also trigger the Selection menu.
+ * typing "s" in a tag field must not also open Add to set.
  *
  * `SELECT` counts because its type-ahead consumes letters the same way a text
  * field does, and `role="textbox"` catches the ARIA widgets that are not native
@@ -40,6 +40,24 @@ export function isEditableElement(el) {
 export function isTypingTarget(target) {
   const active = typeof document === "undefined" ? null : document.activeElement;
   return [target, active].some(isEditableElement);
+}
+
+/**
+ * Does a copy keystroke here belong to the browser rather than the app?
+ *
+ * Inside a text field, or with text selected on the page, Ctrl+C copies what
+ * the reader chose. Both the event target and `document.activeElement` count
+ * (`isTypingTarget`): a Vuetify combobox moves focus around, so the two do not
+ * always agree.
+ *
+ * @param {EventTarget|null} target - the keydown target.
+ * @returns {boolean}
+ */
+export function hasNativeCopyContext(target) {
+  if (isTypingTarget(target)) return true;
+  const selection =
+    typeof window === "undefined" ? null : window.getSelection?.();
+  return Boolean(selection && !selection.isCollapsed && selection.toString());
 }
 
 /**
@@ -97,3 +115,9 @@ export function useRefocusAfterLoading(loading, el) {
     nextTick(() => el.value?.focus());
   });
 }
+
+/**
+ * The element App.vue draws over the centre column and the right rail, which
+ * Lightbox teleports into so a picture opens inside the frame (#2163).
+ */
+export const LIGHTBOX_HOST_ID = "lightbox-host";

@@ -33,6 +33,10 @@ permissions:
   contents: read
 
 env:
+  # Every PixlStash this workflow boots reports itself as ours, never as a real
+  # install (Server.DEV_MACHINE_ENV_VAR; guarded by tests/test_install_type_buckets.py).
+  PIXLSTASH_TELEMETRY_DEV: '1'
+
   # The source to build: the release_tag input when given, else '' (checkout's
   # default, the triggering ref). Only checkouts of the source to build use it;
   # sign-windows-desktop checks out the dispatching ref for its signing action.
@@ -282,6 +286,16 @@ jobs:
               *) export CSC_LINK="data:application/x-pkcs12;base64,${CSC_LINK}" ;;
             esac
             export CSC_IDENTITY_AUTO_DISCOVERY=true
+            # Notarised build: a staple or DMG-detach fault after notarisation
+            # is recovered in this job (staple with backoff, then rebuild the
+            # zip/DMG from the notarised app) instead of re-notarising (#2634).
+            # A release_tag rebuild of a tag older than the script falls through
+            # to the plain build below.
+            if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ] \
+              && [ -f scripts/mac-signed-dist.sh ]; then
+              bash scripts/mac-signed-dist.sh
+              exit 0
+            fi
             if [ -z "${APPLE_ID:-}" ] && [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -z "${APPLE_TEAM_ID:-}" ]; then
               echo "::warning title=macOS signed but not notarised::Signing certificate is present but no notarisation credentials are set. The app will be signed but NOT notarised, so Gatekeeper still blocks it on download. Add APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID to finish the chain."
             fi

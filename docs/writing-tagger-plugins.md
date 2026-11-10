@@ -295,7 +295,7 @@ The built-ins declare theirs:
 | `florence2` | `GPL-3.0-only` | `florence-community/Florence-2-base`, `…-large-ft` — MIT |
 | `wd14` | `GPL-3.0-only AND Apache-2.0` (it adapts Kohya_ss) | `SmilingWolf/wd-convnext-tagger-v3` — Apache-2.0 |
 | `joycaption` | `GPL-3.0-only` | `fancyfeast/llama-joycaption-beta-one-hf-llava` — no declared license; ships the Llama 3.1 Community License |
-| `pixlstash_tagger` | `GPL-3.0-only` | `PersonalJeebus/pixlvault-anomaly-tagger` — MIT |
+| `pixlstash_tagger` | `GPL-3.0-only` | `PersonalJeebus/pixlvault-anomaly-tagger` — DINOv3 License (a DINOv3 ViT-B/16 fine-tune; `LICENSE.md` is downloaded beside the weights) |
 
 Keep all three as plain literals. They are meant to be read off the source with `ast`,
 without importing the module and running it, so a computed value reads as absent.

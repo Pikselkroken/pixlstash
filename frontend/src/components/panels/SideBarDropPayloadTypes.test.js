@@ -66,6 +66,10 @@ vi.mock("vue-router", () => ({
 
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
 import { FACE_DRAG_MIME, PICTURE_DRAG_MIME } from "../../utils/media.js";
+import {
+  resetShareDragForTests,
+  runShareDrag,
+} from "../../utils/shareDrag.js";
 import SideBar from "./SideBar.vue";
 
 /**
@@ -79,18 +83,13 @@ function tipText(el) {
     .find((t) => t.element.parentElement === el.element);
   return tip?.attributes("text") || undefined;
 }
-import FolderTreeNode from "../editors/FolderTreeNode.vue";
 
 const ADA = { id: 7, name: "Ada", image_count: 3, project_image_count: 3 };
 const SET = { id: 11, name: "Shoot", image_count: 2 };
 const PROJECT = { id: 3, name: "Book", image_count: 118 };
-const REF_FOLDER = { id: 21, folder: "/photos/ref", label: "Ref" };
 
 function respond(url) {
   const u = String(url ?? "");
-  if (u.includes("/reference-folders")) {
-    return { data: { folders: [REF_FOLDER], in_docker: false } };
-  }
   if (u.includes("/characters")) return { data: [ADA] };
   if (u.includes("/projects")) return { data: [PROJECT] };
   if (u.includes("/picture_sets")) return { data: [SET] };
@@ -119,16 +118,6 @@ function rowByTitle(wrapper, prefix, selector = ".sidebar-list-item") {
     .find((el) => String(tipText(el) ?? "").startsWith(prefix));
   if (!row) throw new Error(`no ${selector} titled ${prefix}`);
   return row;
-}
-
-/** Switch sidebar tabs, which is where the other drop targets live. */
-async function openTab(wrapper, label) {
-  const tab = wrapper
-    .findAll("button.sidebar-view-tab")
-    .find((el) => el.text().includes(label));
-  if (!tab) throw new Error(`no ${label} tab`);
-  await tab.trigger("click");
-  for (let i = 0; i < 5; i += 1) await flushPromises();
 }
 
 /** A dataTransfer whose `types` is all a dragover handler may read. */
@@ -171,7 +160,7 @@ beforeEach(() => {
   isReadOnly.value = false;
   sessionContext.value = null;
   apiGet.mockReset().mockImplementation((url) => Promise.resolve(respond(url)));
-  apiPost.mockReset().mockResolvedValue({ data: {} });
+  apiPost.mockReset().mockResolvedValue({ data: { added: 2 } });
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -185,9 +174,11 @@ describe("sidebar rows judge the drag payload during dragover", () => {
     const wrapper = await mountSidebar();
     const row = rowByTitle(wrapper, `${SET.name} (`);
 
-    const event = await fire(row, "dragover", transfer(PICTURES));
+    const dataTransfer = transfer(PICTURES);
+    const event = await fire(row, "dragover", dataTransfer);
 
     expect(event.defaultPrevented).toBe(true);
+    expect(dataTransfer.dropEffect).toBe("move");
     expect(row.classes()).toContain("droppable");
     expect(row.classes()).not.toContain("not-droppable");
 
@@ -220,81 +211,6 @@ describe("sidebar rows judge the drag payload during dragover", () => {
     }
 
     wrapper.unmount();
-  });
-
-  it("takes pictures but not faces on a project row", async () => {
-    const wrapper = await mountSidebar();
-    await openTab(wrapper, "Projects");
-    const row = rowByTitle(
-      wrapper,
-      `${PROJECT.name} (`,
-      ".sidebar-project-tree-row",
-    );
-
-    const accepted = await fire(row, "dragover", transfer(PICTURES));
-    expect(accepted.defaultPrevented).toBe(true);
-    expect(row.classes()).toContain("droppable");
-
-    await fire(row, "dragleave", transfer(PICTURES));
-    const refused = await fire(row, "dragover", transfer(FACES));
-    expect(refused.defaultPrevented).toBe(false);
-    expect(row.classes()).toContain("not-droppable");
-
-    wrapper.unmount();
-  });
-
-  it("takes pictures but not faces on a reference-folder row", async () => {
-    const wrapper = await mountSidebar();
-    await openTab(wrapper, "Folders");
-    const row = rowByTitle(
-      wrapper,
-      REF_FOLDER.folder,
-      ".sidebar-folder-root-row",
-    );
-
-    const accepted = await fire(row, "dragover", transfer(PICTURES));
-    expect(accepted.defaultPrevented).toBe(true);
-    expect(row.classes()).toContain("droppable");
-
-    await fire(row, "dragleave", transfer(PICTURES));
-    const refused = await fire(row, "dragover", transfer(FACES));
-    expect(refused.defaultPrevented).toBe(false);
-    expect(row.classes()).toContain("not-droppable");
-
-    wrapper.unmount();
-  });
-
-  it("refuses on a NESTED folder row too, not only the root", async () => {
-    // The root row got the refused branch; FolderTreeNode never declared
-    // `dropRejected`, so it landed as a DOM attribute and every nested row lit
-    // up with the full accept highlight for a payload it would not take.
-    const entry = { path: "/photos/ref/kids", name: "kids", image_count: 0 };
-    const node = mount(FolderTreeNode, {
-      props: {
-        entry,
-        rfId: REF_FOLDER.id,
-        folderBrowseCache: {},
-        expandedFolderIds: new Set(),
-        dropTargetKey: `path-${entry.path}`,
-        dropRejected: true,
-      },
-      global: {
-        config: {
-          compilerOptions: { isCustomElement: (tag) => tag.startsWith("v-") },
-        },
-      },
-    });
-    const row = node.find(".sidebar-folder-child-row");
-
-    expect(row.classes()).toContain("not-droppable");
-    expect(row.classes()).not.toContain("droppable");
-
-    // The accepted direction still paints, so this is not over-blocking.
-    await node.setProps({ dropRejected: false });
-    expect(row.classes()).toContain("droppable");
-    expect(row.classes()).not.toContain("not-droppable");
-
-    node.unmount();
   });
 
   it("keeps the highlight when the pointer crosses into a child element", async () => {
@@ -339,6 +255,41 @@ describe("sidebar drops read the payload kind, not just imageIds", () => {
     wrapper.unmount();
   });
 
+  it("still files the rest when one dragged picture is already in the set", async () => {
+    // The per-picture route answers 400 for a picture already in the set; the
+    // drop must not let that one refusal fail the pictures that are new.
+    apiPost.mockImplementation((url) =>
+      /\/members\/102$/.test(String(url))
+        ? Promise.reject({ response: { status: 400, data: { detail: "already in set" } } })
+        : Promise.resolve({ data: { status: "success", added: 1 } }),
+    );
+    const wrapper = await mountSidebar();
+    const row = rowByTitle(wrapper, `${SET.name} (`);
+
+    await fire(row, "drop", transfer(PICTURES));
+
+    expect(apiPost).toHaveBeenCalledWith(`/picture_sets/${SET.id}/members`, {
+      picture_ids: PICTURES.imageIds,
+    });
+    expect(wrapper.emitted("images-moved")?.[0]?.[0]).toEqual({
+      imageIds: PICTURES.imageIds,
+    });
+
+    wrapper.unmount();
+  });
+
+  it("moves nothing when every dragged picture is already in the set", async () => {
+    apiPost.mockResolvedValue({ data: { status: "success", added: 0 } });
+    const wrapper = await mountSidebar();
+    const row = rowByTitle(wrapper, `${SET.name} (`);
+
+    await fire(row, "drop", transfer(PICTURES));
+
+    expect(wrapper.emitted("images-moved")).toBeUndefined();
+
+    wrapper.unmount();
+  });
+
   it("files nothing into a set when the payload is a face drag", async () => {
     const wrapper = await mountSidebar();
     const row = rowByTitle(wrapper, `${SET.name} (`);
@@ -351,6 +302,90 @@ describe("sidebar drops read the payload kind, not just imageIds", () => {
     );
     expect(setPosts).toEqual([]);
 
+    wrapper.unmount();
+  });
+});
+
+// In the desktop app a picture drag is an OS file drag of share copies with no
+// JSON (#2420). The rows must still take it: dropping on sets must not break.
+describe("sidebar rows take a desktop drag-out", () => {
+  const COPY = "/home/me/share-copies/0123abcd/101.png";
+  function fileTransfer(path) {
+    const name = path ? path.split("/").pop() : "";
+    const files = path ? [Object.assign(new File(["x"], name), { path })] : [];
+    return {
+      types: ["Files"],
+      dropEffect: "",
+      effectAllowed: "copyLink",
+      files,
+      items: [],
+      getData: () => "",
+    };
+  }
+
+  beforeEach(() => {
+    resetShareDragForTests();
+    window.pixlstashDesktop = {
+      startShareDrag: () => new Promise(() => {}),
+      getDroppedFilePath: (file) => file.path,
+    };
+    void runShareDrag(PICTURES.imageIds, [COPY]);
+  });
+  afterEach(() => {
+    resetShareDragForTests();
+    delete window.pixlstashDesktop;
+  });
+
+  it("accepts it during dragover and files the pictures into a set on drop", async () => {
+    const wrapper = await mountSidebar();
+    const row = rowByTitle(wrapper, `${SET.name} (`);
+
+    const overTransfer = fileTransfer();
+    const over = await fire(row, "dragover", overTransfer);
+    expect(over.defaultPrevented).toBe(true);
+    // The OS drag allows copy and link only; "move" makes Chromium drop
+    // nothing, with no drop event at all.
+    expect(overTransfer.dropEffect).toBe("copy");
+    await fire(row, "drop", fileTransfer(COPY));
+
+    expect(wrapper.emitted("images-moved")?.[0]?.[0]).toEqual({
+      imageIds: PICTURES.imageIds,
+    });
+    wrapper.unmount();
+  });
+
+  it("asks only for an effect the drag allows", async () => {
+    const wrapper = await mountSidebar();
+    const row = rowByTitle(wrapper, `${ADA.name} (`);
+
+    const moveOnly = { ...fileTransfer(), effectAllowed: "move" };
+    await fire(row, "dragover", moveOnly);
+
+    expect(moveOnly.dropEffect).toBe("move");
+    wrapper.unmount();
+  });
+
+  it("assigns the pictures to a person on drop", async () => {
+    const wrapper = await mountSidebar();
+    const row = rowByTitle(wrapper, `${ADA.name} (`);
+
+    await fire(row, "drop", fileTransfer(COPY));
+
+    expect(wrapper.emitted("images-assigned-to-character")?.[0]?.[0]).toEqual({
+      characterId: ADA.id,
+      imageIds: PICTURES.imageIds,
+    });
+    wrapper.unmount();
+  });
+
+  it("never files the dragged pictures for another file dropped meanwhile", async () => {
+    const wrapper = await mountSidebar();
+    const row = rowByTitle(wrapper, `${SET.name} (`);
+
+    // Not a picture, so the import it rightly falls to has nothing to take.
+    await fire(row, "drop", fileTransfer("/home/me/Documents/other.bin"));
+
+    expect(wrapper.emitted("images-moved")).toBeUndefined();
     wrapper.unmount();
   });
 });

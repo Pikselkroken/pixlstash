@@ -167,6 +167,7 @@ def test_protocol_handshake_and_tool_list():
         "list_sets",
         "list_characters",
         "list_projects",
+        "list_picture_workflows",
         "get_recipe",
     }
     assert all(t["annotations"]["readOnlyHint"] is True for t in tools)
@@ -669,7 +670,13 @@ def test_every_tool_path_resolves_to_a_mounted_route(env, tmp_path):
     for tool in PICTURE_TOOLS:
         _call(fetch, tool, picture_id=env.pic_a)
     _call(fetch, "count_pictures")
-    for tool in ("list_tags", "list_sets", "list_characters", "list_projects"):
+    for tool in (
+        "list_tags",
+        "list_sets",
+        "list_characters",
+        "list_projects",
+        "list_picture_workflows",
+    ):
         _call(fetch, tool)
     _write(fetch, "list_workflows")
     _write(fetch, "get_workflow", workflow_id=WORKFLOW_ID)
@@ -774,6 +781,23 @@ def test_a_picture_scoped_token_sees_collections_only_where_its_scope_allows(env
     assert "answered 403" in refused["content"][0]["text"]
 
 
+@pytest.mark.parametrize("token", ["owner", "reader", "scoped"])
+def test_list_picture_workflows_answers_every_read_token(env, token):
+    """The read-only token's workflow listing (#1616) is open to it.
+
+    These pictures carry no workflow, so the list is empty; that the route
+    filters by scope is asserted on real recipes in
+    `tests/test_comfyui_recipe_route.py`. Here the point is the gate: the
+    owner-only `/workflows` sibling refuses the same tokens.
+    """
+    result = _call(getattr(env, token), "list_picture_workflows")
+    assert result["isError"] is False, result
+    assert json.loads(result["content"][0]["text"]) == []
+    if token != "owner":
+        status, _type, _body = getattr(env, token)("/workflows", {})
+        assert status == 403
+
+
 def test_list_tags_answers_a_scoped_token(env):
     result = _call(env.scoped, "list_tags")
     assert result["isError"] is False, result
@@ -811,7 +835,7 @@ def _instructions(allow_write):
 
 def test_the_workflow_tools_exist_only_with_allow_write():
     read_only = _list(False)
-    assert len(read_only) == 10
+    assert len(read_only) == 11
     assert not WRITE_TOOL_NAMES & set(read_only)
 
     full = _list(True)

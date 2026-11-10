@@ -1,9 +1,9 @@
 <template>
-  <div class="wtp" role="tabpanel" aria-labelledby="wfv-tab-templates">
+  <div class="wtp" role="region" aria-label="ComfyUI templates">
     <!-- Where the list comes from, first on the strip: none of it is the
          owner's own work until it is added. A ComfyUI mark with a connected
-         dot (a red cross for the shipped copy), so the strip keeps
-         its room for the chips; the address and the re-read are one hover and one
+         dot (a red cross for the shipped copy); the filter chips are
+         the toolbar's (#2165). The address and the re-read are one hover and one
          click away. -->
     <div v-if="listed && store.loaded" class="wtp-strip">
       <v-menu location="bottom start" :close-on-content-click="false">
@@ -57,23 +57,37 @@
           </div>
         </div>
       </v-menu>
-      <FilterStrip
-        inline
-        class="wtp-chips"
-        :chips="store.filterChips"
-        :of-label="store.filterOfLabel"
-        :on-clear-all="store.clearFilters"
-      />
     </div>
 
     <p v-if="store.error" class="wtp-note wtp-note--error" role="alert">
       {{ store.error }}
     </p>
 
+    <!-- No ComfyUI set up (#2166): whatever the default address answers, the
+         grid says where templates come from and how to get them. -->
+    <div
+      v-if="notSetUp"
+      class="wtp-empty"
+      data-testid="wtp-not-set-up"
+    >
+      <ComfyuiIcon :size="40" class="wtp-empty__icon" />
+      <h2 class="wtp-empty__title">Templates come from ComfyUI</h2>
+      <p class="wtp-empty__lead">
+        Connect a ComfyUI and its ready-made workflows show up here, with the
+        models each one needs and a download for any you are missing.
+      </p>
+      <AppButton
+        size="sm"
+        variant="primary"
+        @click="emit('open-settings', 'comfyui')"
+        >Set up ComfyUI</AppButton
+      >
+    </div>
+
     <!-- No ComfyUI answering: the tab is still a tab, and says where its list
          would come from. Mine is unaffected. -->
     <div
-      v-if="store.loaded && !listed"
+      v-else-if="store.loaded && !listed"
       class="wtp-empty"
       data-testid="wtp-unreachable"
     >
@@ -165,7 +179,7 @@
         >
         <AppBarButton
           shape="round"
-          icon="close"
+          icon="selection-off"
           aria-label="Clear selection"
           tooltip="Clear selection"
           @click="store.clearSelection()"
@@ -222,7 +236,7 @@
           data-verb="clear"
           @click="verb(() => store.clearSelection())"
         >
-          <v-icon class="ctx-icon">mdi-close</v-icon>
+          <v-icon class="ctx-icon">mdi-selection-off</v-icon>
           <span class="ctx-label-text">Clear selection</span>
           <span class="ctx-shortcut">Esc</span>
         </button>
@@ -247,6 +261,7 @@ import {
   downloadModels,
   modelBaseName,
 } from "../../composables/useModelDownloads";
+import { useFilterStore } from "../../stores/useFilterStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
 import { isReadOnly } from "../../utils/apiClient";
@@ -256,7 +271,6 @@ import AppButton from "../widgets/AppButton.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import WorkflowTemplateCard from "../widgets/WorkflowTemplateCard.vue";
 import Tooltip from "../widgets/Tooltip.vue";
-import FilterStrip from "./FilterStrip.vue";
 
 const props = defineProps({
   // The Mine grid's two numbers (`WorkflowsView.vue`), so both tabs lay out
@@ -269,9 +283,21 @@ const emit = defineEmits(["add", "open-settings"]);
 
 const store = useWorkflowTemplatesStore();
 const tasksStore = useTasksStore();
-// With no ComfyUI answering the list is the copy PixlStash ships, shown the
-// same way; only an empty one is the unreachable state.
-const listed = computed(() => store.reachable || store.templates.length > 0);
+const filterStore = useFilterStore();
+// No address saved, once the config says so. A shared view cannot read the
+// owner's config, so it never reads as unset.
+const notSetUp = computed(
+  () =>
+    filterStore.comfyuiConfigRead &&
+    !filterStore.comfyuiConfigured &&
+    !isReadOnly.value,
+);
+// With an address saved and nothing answering there, the list is the copy
+// PixlStash ships, shown the same way; only an empty one is the unreachable
+// state. With none saved, the not-set-up state stands in for any list.
+const listed = computed(
+  () => !notSetUp.value && (store.reachable || store.templates.length > 0),
+);
 const sourceLabel = computed(() =>
   store.reachable
     ? `Templates from your ComfyUI at ${store.comfyuiUrl}`
@@ -332,7 +358,7 @@ const downloadTitle = computed(() => {
     .flatMap((t) => t.files ?? [])
     .filter((file) => !file.present);
   if (files.some((file) => file.downloadable)) {
-    return "Already downloading: the Tasks tab shows how far";
+    return "Already downloading: the Tasks list in the title bar shows how far";
   }
   return files.length
     ? "PixlStash does not know where to get the files missing from your shelf"
@@ -469,7 +495,7 @@ function onKeyDown(event) {
   min-height: 0;
 }
 
-/* The source line leads, the filter chips follow on the same row. */
+/* The source line, over the grid. */
 .wtp-strip {
   display: flex;
   align-items: center;
@@ -541,13 +567,6 @@ function onKeyDown(event) {
 
 .wtp-url {
   font-family: var(--font-mono);
-}
-
-.wtp-chips {
-  flex: 1;
-  min-width: 0;
-  border-bottom: none;
-  background: transparent;
 }
 
 .wtp-note {

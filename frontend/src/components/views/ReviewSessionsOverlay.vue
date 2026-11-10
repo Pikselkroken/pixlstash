@@ -1,8 +1,46 @@
 <template>
-  <div class="rs-overlay">
-    <div class="rs-shell">
-      <ReviewRail @close="emit('close')" @new-review="openNewReview()" />
+  <!-- Tags is a view like Duplicates and Moves: App.vue draws it in
+       the centre column in place of the grid, so the title bar and the
+       sidebar never move. The sidebar's "Tags" row lights while it
+       is up, and its open reviews nest under that row. -->
+  <div
+    class="rs-overlay"
+    role="region"
+    aria-label="Tags"
+    data-testid="tags-to-review"
+  >
+    <!-- The grid's toolbar line, its contents swapped as the Lightbox swaps
+         them: the way back (named for where it goes, with Esc), the title,
+         then the board's own controls, which TagHealthBoard teleports into
+         `.rs-toolbar-tools`. -->
+    <header class="rs-toolbar" role="toolbar" aria-label="Tags">
+      <ViewBackButton
+        class="rs-toolbar-back"
+        :label="backTarget"
+        :tooltip="`Back to ${backTarget} (Esc)`"
+        on-dark
+        @click="goBack"
+      />
+      <span class="rs-toolbar-sep" aria-hidden="true"></span>
+      <h2 class="rs-toolbar-title">{{ toolbarTitle }}</h2>
+      <div :id="TOOLBAR_TOOLS_ID" class="rs-toolbar-tools"></div>
+      <!-- The right rail's toggle, as on every screen: here it is the Reviews
+           inspector. The app-wide undo is not here on purpose (the review has
+           its own, see handleUndoRequest). -->
+      <span class="rs-toolbar-rail">
+        <AppBarButton
+          icon="dock-right"
+          on-dark
+          :active="sidebarStore.reviewsRailOpen"
+          :aria-pressed="sidebarStore.reviewsRailOpen ? 'true' : 'false'"
+          tooltip="Reviews"
+          data-testid="rs-reviews-rail-toggle"
+          @click="sidebarStore.toggleReviewsRail()"
+        />
+      </span>
+    </header>
 
+    <div class="rs-shell">
       <ReviewSessionView
         v-if="store.activeSession"
         ref="sessionRef"
@@ -15,6 +53,7 @@
       <TagHealthBoard
         v-else
         ref="boardRef"
+        :toolbar-target="`#${TOOLBAR_TOOLS_ID}`"
         @start-review="openNewReview($event)"
       />
     </div>
@@ -34,16 +73,15 @@
          bottom-right "Apply tags" button, removed as a duplicate. Anchored
          bottom-right so the panel still opens in the same place. -->
     <div v-if="store.current" ref="tagApplyRef" class="rs-tag-apply">
-      <TbTagPanel
-        v-if="tagApplyOpen"
-        class="rs-tag-apply-panel"
-        :selected-count="cardImages.length"
-        :selected-image-ids="cardImages.map((i) => i.id)"
-        :all-grid-images="cardImages"
-        :open="tagApplyOpen"
-        @tags-applied="onTagsApplied"
-        @close="tagApplyOpen = false"
-      />
+      <!-- The grid rail's own tag field and chips: Esc in the field closes. -->
+      <div v-if="tagApplyOpen" class="rs-tag-apply-panel">
+        <RailTags
+          :ids="cardImages.map((i) => i.id)"
+          autofocus
+          @tags-applied="onTagsApplied"
+          @leave="tagApplyOpen = false"
+        />
+      </div>
     </div>
 
     <!-- Keyboard cheat-sheet (?) -->
@@ -55,8 +93,17 @@
       <div class="rs-keys" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
         <h3 class="rs-keys-title">Keyboard shortcuts</h3>
         <dl class="rs-keys-list">
-          <template v-for="[k, label] in SHORTCUTS" :key="k">
-            <dt><kbd>{{ k }}</kbd></dt>
+          <template v-for="[alternatives, label] in SHORTCUTS" :key="label">
+            <dt>
+              <template v-for="(keys, i) in alternatives" :key="i"
+                >{{ i ? " / " : ""
+                }}<KeyCap
+                  v-for="(key, j) in keys"
+                  :key="key"
+                  :k="key"
+                  :class="{ 'kbd-or': i && !j }"
+              /></template>
+            </dt>
             <dd>{{ label }}</dd>
           </template>
         </dl>
@@ -113,37 +160,56 @@
 </template>
 
 <script setup>
-// The "Review sessions" overlay shell: left rail (sessions + sticker shelf) +
-// main area (tag health board / one session / an archived receipt), plus the
-// overlay-level layers - new-review dialog, direct-tagging panel (T), keyboard
-// cheat-sheet (?), and the full-screen zoom.
+// The Tags view: a toolbar line (back, title, the board's controls)
+// over the main area (tag health board / one session / an archived receipt),
+// plus the view-level layers - new-review dialog, direct-tagging panel (T),
+// keyboard cheat-sheet (?), and the full-screen zoom. It replaces the grid in
+// App.vue's centre column; the open reviews are listed in the app sidebar.
 //
 // Keyboard: one capture-phase window handler (same discipline as the old
 // overlay). It bails for genuine text entry (input/textarea/contenteditable -
 // NOT <select>, which is a fixed-choice control whose type-ahead must not
 // swallow decision keys; selects are blurred after every change). Session keys
 // are delegated to the session view, which owns the consistency guard.
-import { computed, nextTick, onMounted, onUnmounted, provide, ref } from "vue";
-import ReviewRail from "../reviews/ReviewRail.vue";
+import {
+  computed,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  provide,
+  ref,
+  watch,
+} from "vue";
 import TagHealthBoard from "../reviews/TagHealthBoard.vue";
 import ReviewSessionView from "../reviews/ReviewSessionView.vue";
 import ReviewArchivedReceipt from "../reviews/ReviewArchivedReceipt.vue";
 import NewReviewDialog from "../reviews/NewReviewDialog.vue";
-import TbTagPanel from "../panels/TbTagPanel.vue";
+import RailTags from "../panels/RailTags.vue";
+import KeyCap from "../widgets/KeyCap.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import ViewBackButton from "../widgets/ViewBackButton.vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useProjectStore } from "../../stores/useProjectStore";
-import { formatKeyHint, undoKeyHint } from "../../utils/shortcutHints";
-import { API_BASE_URL } from "../../utils/apiClient";
+import { undoKeyHint } from "../../utils/shortcutHints";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
+import { useOperationStore } from "../../stores/useOperationStore";
+import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 // Sidebar selection sentinels (mirrors useSelectionStore.js / App.vue).
 const ALL_PICTURES_ID = "ALL";
 const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
 const SCRAPHEAP_PICTURES_ID = "SCRAPHEAP";
 
+const TOOLBAR_TOOLS_ID = "rs-toolbar-tools";
+
 const props = defineProps({
   backendUrl: { type: String, default: () => API_BASE_URL },
+  // The view underneath, named as it names itself: where back and Esc go
+  // from the board.
+  backLabel: { type: String, default: "All Pictures" },
 });
 const emit = defineEmits(["close", "tags-applied"]);
 
@@ -151,6 +217,20 @@ const store = useReviewSessionsStore();
 const selectionStore = useSelectionStore();
 const projectStore = useProjectStore();
 const noticeStore = useNoticeStore();
+const operationStore = useOperationStore();
+const tagGroups = useTagGroupsStore();
+const sidebarStore = useSidebarStore();
+
+// The board's Groups view files tags, and a tag move is the app-wide stack's
+// (one library-wide operation, no review decision in it): there, Ctrl+Z,
+// Ctrl+Y and `U` act on that stack rather than saying there is nothing here.
+const onGroupsBoard = computed(
+  () =>
+    store.view.type === "board" &&
+    !archivedReview.value &&
+    !isReadOnly.value &&
+    tagGroups.boardView === "groups",
+);
 
 const sessionRef = ref(null);
 const boardRef = ref(null);
@@ -159,7 +239,53 @@ const shortcutsOpen = ref(false);
 const tagApplyOpen = ref(false);
 const tagApplyRef = ref(null);
 
+// The tag panel opens from code (T, or a card's Tag manually), so nothing
+// hands focus back when it closes: it goes back to whatever had it, the
+// button that opened it, rather than dropping to <body>. Read before the
+// panel renders and its field takes focus.
+let tagApplyReturnFocus = null;
+watch(tagApplyOpen, (open) => {
+  if (open) {
+    tagApplyReturnFocus = document.activeElement;
+    return;
+  }
+  const el = tagApplyReturnFocus;
+  tagApplyReturnFocus = null;
+  if (el instanceof HTMLElement && el !== document.body && el.isConnected) {
+    nextTick(() => el.focus({ preventScroll: true }));
+  }
+});
+
 provide("rs-backend-url", props.backendUrl);
+
+// Inside a review or a receipt the way back is the board; on the board it is
+// the view the review was opened from.
+const onBoard = computed(
+  () => !store.activeSession && store.view.type !== "archived",
+);
+const backTarget = computed(() =>
+  onBoard.value ? props.backLabel : "Tags",
+);
+const toolbarTitle = computed(() => {
+  if (store.activeSession) return `Review: “${store.activeSession.tag}”`;
+  if (archivedReview.value) return `Archived: “${archivedReview.value.tag}”`;
+  return "Tags";
+});
+
+function goBack() {
+  if (onBoard.value) emit("close");
+  else store.showBoard();
+}
+
+// The sidebar's "New review…" row asks through the store, since the dialog
+// lives here. A dialog already up is left alone: reopening it would wipe the
+// tag and scope picked so far.
+watch(
+  () => store.newReviewTick,
+  () => {
+    if (!dialog.value) openNewReview();
+  },
+);
 
 const archivedReview = computed(() =>
   store.view.type === "archived"
@@ -174,19 +300,20 @@ const archivedReview = computed(() =>
 // and `U` is the reviewer muscle memory that keeps working. "in this review" is
 // the whole point of the row: it is the only place the scope boundary between
 // the review's undo and the app-wide one is taught before the user hits it.
+// Each row's keys are its alternatives, each one the keys of a chord.
 const SHORTCUTS = computed(() => [
-  ["Y / N", "Answer a binary card (yes / no)"],
-  ["B / N / L / R", "Answer a pair card (both / neither / left / right)"],
-  ["S", "Skip - leaves the queue undecided, no change made"],
+  [[["Y"], ["N"]], "Answer a binary card (yes / no)"],
   [
-    `U / ${formatKeyHint(undoKeyHint())}`,
-    "Undo the last decision in this review",
+    [["B"], ["N"], ["L"], ["R"]],
+    "Answer a pair card (both / neither / left / right)",
   ],
-  ["H", "Show / hide the evidence region"],
-  ["T", "Apply tags to the pictured image(s)"],
-  ["/", "Filter the tag health board"],
-  ["?", "This cheat-sheet"],
-  ["Esc", "Close the topmost layer"],
+  [[["S"]], "Skip - leaves the queue undecided, no change made"],
+  [[["U"], undoKeyHint()], "Undo the last decision in this review"],
+  [[["H"]], "Show / hide the evidence region"],
+  [[["T"]], "Apply tags to the pictured image(s)"],
+  [[["/"]], "Filter the tag health board"],
+  [[["?"]], "This cheat-sheet"],
+  [[["Esc"]], "Close the topmost layer"],
 ]);
 
 // Translate the app's current selection into the dialog's scope prefill, so a
@@ -215,15 +342,22 @@ function initialScopeFromSelection() {
 
 function openNewReview(preset = "") {
   store.createError = null;
-  // A scope chosen on the health board is the user's explicit working scope -
-  // it wins over the app-selection prefill.
-  const initialScope = store.healthScoped
-    ? { ...store.healthScope }
-    : initialScopeFromSelection();
+  // A review started from a board row (preset tag) covers what that row
+  // describes, never the grid selection (a review of 3 selected pictures finds
+  // nothing for a tag ranked on the whole library). Health rows describe the
+  // board scope, scoped or not; Groups always covers the whole library. A
+  // scope chosen on the board also wins for the bare "New review…" entry;
+  // only that one falls back to the app selection.
+  const initialScope =
+    preset && tagGroups.boardView === "groups"
+      ? { projectId: null, setId: null, characterId: null }
+      : preset || store.healthScoped
+        ? { ...store.healthScope }
+        : initialScopeFromSelection();
   dialog.value = { preset, initialScope };
 }
 
-// Minimal image objects for TbTagPanel: the current card's picture(s).
+// The current card's picture(s), for the tag panel.
 const cardImages = computed(() => {
   const item = store.current;
   if (!item) return [];
@@ -239,7 +373,7 @@ function onTagsApplied(payload) {
 }
 
 // Cards render a visible bottom-left "Tag manually" button that opens the
-// same TbTagPanel flow as the T shortcut.
+// same tag panel as the T shortcut.
 provide("rs-open-tag-apply", () => {
   tagApplyOpen.value = true;
 });
@@ -436,6 +570,10 @@ function handleUndoRequest() {
     closeZoom();
     return;
   }
+  if (onGroupsBoard.value) {
+    void operationStore.undo();
+    return;
+  }
   noticeStore.push({
     level: "info",
     text: "Nothing to undo here. Close the review sessions to undo earlier changes from the toolbar.",
@@ -450,6 +588,10 @@ function handleUndoRequest() {
  * app-wide redo behind the overlay.
  */
 function reportNoRedo() {
+  if (onGroupsBoard.value) {
+    void operationStore.redo();
+    return;
+  }
   noticeStore.push({
     level: "info",
     text: "Nothing to redo in this review. Answer the card again to reapply a decision you undid.",
@@ -459,6 +601,13 @@ function reportNoRedo() {
 
 function handleKeyDown(event) {
   if (isEditable(event.target) || isEditable(document.activeElement)) return;
+  // A dialog (End review…, a confirm) or a menu (the Reviews inspector's row
+  // menu) sits over this view but outside it: while one is up its own keys
+  // (Esc closes it) are the only ones that act.
+  if (
+    document.querySelector(".v-overlay--active.v-dialog, .v-overlay--active.v-menu")
+  )
+    return;
 
   // Undo/redo are checked BEFORE the modifier bail below - that bail is what
   // made Ctrl+Z dead in a review session, while App's global handler skips the
@@ -494,12 +643,13 @@ function handleKeyDown(event) {
     else if (tagApplyOpen.value) tagApplyOpen.value = false;
     else if (sessionRef.value?.handleKey("escape")) {
       // The session consumed it (a pending consistency confirm).
-    } else if (store.activeSession) {
-      // A review is open with nothing pending inside it: close just the
-      // review, back to the tag health board underneath - not the whole
-      // overlay. A second Esc (no active review) falls through to close.
-      store.showBoard();
-    } else emit("close");
+    } else if (boardRef.value?.handleEscape?.()) {
+      // The board's Groups view cleared its tag selection.
+    } else {
+      // Same exit as the toolbar's back button: a review (or a receipt) steps
+      // back to the board, the board back to the view underneath.
+      goBack();
+    }
   } else if (shortcutsOpen.value || dialog.value) {
     // A modal layer is up: swallow nothing else, let it be.
     handled = false;
@@ -541,35 +691,88 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* Fills the grid's place in the centre column. The review stays a dark
+   surface in both themes, as the Lightbox's stage does, and its toolbar band
+   with it: the board's controls live on that band. */
 .rs-overlay {
-  position: fixed;
-  /* Anchor below the desktop title bar (0px in a browser). */
-  inset: var(--titlebar-h) 0 0 0;
-  z-index: var(--z-modal);
-  background: rgba(var(--v-theme-scrim), 0.82);
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
-}
-
-.rs-shell {
   /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
   --v-theme-accent: var(--v-theme-dark-surface-accent);
+  position: absolute;
+  inset: 0;
   display: flex;
-  width: 100%;
+  flex-direction: column;
   background: rgb(var(--v-theme-dark-surface));
   color: rgb(var(--v-theme-on-dark-surface));
 }
 
-/* Every surface of the review overlay stays dark in both themes, so the global
-   focus ring keeps its width and gap but takes the on-dark ink: the theme's
-   ink is near-black in light and would vanish here. One rule for the rail, the
-   board, the session and its cards, so no child paints its own. The tag panel
-   (`.rs-tag-apply`) is a themed surface and keeps the global colour. */
-.rs-shell :deep(:focus-visible),
-.rs-keys :focus-visible,
-.rs-zoom :focus-visible {
-  outline-color: rgb(var(--v-theme-on-dark-surface));
+/* The grid toolbar's box (height, padding, rule), on the review's surface. */
+.rs-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--toolbar-height);
+  padding: 0 var(--space-3);
+  box-sizing: border-box;
+  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+.rs-toolbar::-webkit-scrollbar {
+  display: none;
+}
+.rs-toolbar :deep(:focus-visible) {
+  outline: none;
+  box-shadow: var(--focus-ring-inset);
+}
+/* The back button's Esc keycap takes the review's dark ink, as the bar
+   button does through `on-dark`. */
+.rs-toolbar :deep(.bar-btn-kbd) {
+  border-color: rgba(var(--v-theme-on-dark-surface), 0.28);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+.rs-toolbar-sep {
+  flex-shrink: 0;
+  width: 1px;
+  height: 20px;
+  margin: 0 var(--space-2);
+  background: rgba(var(--v-theme-on-dark-surface), 0.14);
+}
+.rs-toolbar-title {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.rs-toolbar-tools {
+  flex: 1;
+  /* Never narrower than its controls: on a narrow window the bar scrolls
+     under the rail toggle instead of drawing them over it. */
+  min-width: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The rail toggle stays on screen at the bar's right edge while the board's
+   controls scroll beneath it. */
+.rs-toolbar-rail {
+  position: sticky;
+  right: 0;
+  flex-shrink: 0;
+  display: flex;
+  padding-left: var(--space-2);
+  background: rgb(var(--v-theme-dark-surface));
+}
+
+.rs-shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
 }
 
 /* Positioning anchor only now - the visible bottom-right "Apply tags" button
@@ -585,6 +788,19 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: flex-end;
   gap: var(--space-3);
+}
+
+.rs-tag-apply-panel {
+  width: var(--stats-panel-w);
+  max-width: calc(100vw - 2 * var(--space-5));
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: var(--space-4);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  box-shadow: var(--elevation-4);
 }
 
 .rs-keys-backdrop {
@@ -623,7 +839,7 @@ onUnmounted(() => {
 .rs-keys-list kbd {
   font-family: var(--font-mono, monospace);
   font-size: var(--text-2xs);
-  padding: 1px 6px;
+  padding: var(--kbd-pad);
   border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.3);
   background: rgba(var(--v-theme-on-dark-surface), 0.08);

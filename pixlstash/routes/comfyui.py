@@ -1,3 +1,4 @@
+import errno
 import functools
 import hashlib
 import json
@@ -19,6 +20,7 @@ from typing import Literal, Optional
 
 from pixlstash.db_models import (
     Picture,
+    User,
 )
 from pixlstash.hub import (
     workflow_cards,
@@ -29,6 +31,7 @@ from pixlstash.hub import (
 from pixlstash.hub.workflow_card_reads import (
     find_workflow,
     manual_documents_holding,
+    manual_workflow_running,
     run_filed_workflow_ids,
     workflow_of_variant,
 )
@@ -94,6 +97,7 @@ from pixlstash.services import (
 )
 from pixlstash.services.workflow_events import announce_changed_workflows
 from pixlstash.services.workflow_inbox import workflow_user_dir
+from pixlstash.services.trash_undo import snapshot_rows
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     normalized_filename,
@@ -111,6 +115,8 @@ from pixlstash.services.workflow_io import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
+from pixlstash.utils.trash_restore import NotInTrash, restore_from_trash
+from pixlstash.services.model_mover import publish_no_clobber
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 
 # ComfyUI workflow-execution orchestration and the output-import pipeline live in
@@ -122,19 +128,23 @@ from pixlstash.services.comfyui_service import (
     PACK_OPENS_WORKFLOWS,
     PACK_SAVES_BACK,
     PIXLSTASH_CHECKPOINT_LOADER,
+    comfyui_can_open_workflows,
     comfyui_pixlstash_scripts,
+    comfyui_shelf_loader_current,
     library_ids_named,
+    normalize_comfyui_url,
     probe_comfyui,
     pixlstash_node_refusals,
     swap_pixlstash_savers,
 )
 from pixlstash.services import (
+    comfyui_connections,
     comfyui_link_service,
     comfyui_pack_service,
     comfyui_templates,
     node_pack_install_service,
 )
-from pixlstash.services.model_downloads import download_source
+from pixlstash.services.model_downloads import download_source, trusted_live_link
 from pixlstash.services.model_icons import IconRefused, store_icon
 from pixlstash.services.workflow_library_service import read_library_ids
 
@@ -330,7 +340,9 @@ def store_manual_workflow(
     What every way a workflow arrives goes through - an import, the watched
     inbox, a built-in, a duplicate, a fixed copy, a clone, a LoRA
     edit, an extract - so each stores the same kind of record. Always a new
-    record: identical copies are allowed. No file is written.
+    record, even for a copy of one already stored: refusing a copy is the
+    import route's decision (``manual_workflow_running``), since a duplicate
+    or a clone is a copy on purpose. No file is written.
 
     **The shape check and the placeholder migration are not skipped**: a
     workflow stored with placeholder tokens is one that will not run.
@@ -498,8 +510,11 @@ def store_inbox_workflow(hub, name: str, workflow: dict) -> dict:
     return {"name": _stem(name), "matched": False, "workflow_id": workflow_id}
 
 
-def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> None:
+def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> list[str]:
     """Move a stored workflow to the system trash by way of the inbox.
+
+    Returns what :func:`workflow_inbox.trash_workflow` trashed, or the file
+    itself when it is not a readable workflow.
 
     The trash copy comes first and the stored file goes only once it is there,
     so a failed trash never loses the workflow. The file is first renamed out
@@ -520,7 +535,7 @@ def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> None:
             exc,
         )
         send2trash(path)
-        return
+        return [path]
     # The file's own spelling, so a put-back never renames it; a unique name,
     # so it never lands over an earlier leftover.
     # ponytail: a crash before the put-back leaves the only copy as the
@@ -529,7 +544,7 @@ def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> None:
     aside = f"{disk}.{uuid.uuid4().hex[:8]}{DELETING_SUFFIX}"
     os.replace(disk, aside)
     try:
-        workflow_inbox.trash_workflow(
+        trashed = workflow_inbox.trash_workflow(
             workflow_inbox.workflow_inbox_dir(), name, workflow, sweep=sweep
         )
     except Exception as exc:
@@ -555,6 +570,7 @@ def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> None:
             aside,
             exc,
         )
+    return trashed
 
 
 def user_workflow_exists(workflow_name: str) -> bool:
@@ -569,7 +585,17 @@ def user_workflow_exists(workflow_name: str) -> bool:
     return os.path.isfile(path)
 
 
-def trash_user_workflow(hub, workflow_name: str, *, sweep: bool = True) -> str:
+# The rows keyed by a workflow FILE's name that deleting the file forgets.
+FILE_KEYED_TABLES = (
+    "workflow_picture_input",
+    "workflow_parameter_pins",
+    "workflow_file",
+)
+
+
+def trash_user_workflow(
+    hub, workflow_name: str, *, sweep: bool = True, undo: dict | None = None
+) -> str:
     """Send one stored workflow to the trash and forget its rows.
 
     Shared with ``DELETE /workflows/{key}``, so the card route and the file
@@ -584,6 +610,10 @@ def trash_user_workflow(hub, workflow_name: str, *, sweep: bool = True) -> str:
             them. Takes the hub rather than the whole server so it needs no
             server to test.
         workflow_name: The stored file to delete.
+        sweep: Also trash every inbox file holding the same workflow.
+        undo: Filled, when given, with what an undo puts back: ``file`` (the
+            path it was at), ``trashed`` (what went to the trash, the copy of
+            it first) and ``rows`` (its file-keyed rows, by table).
 
     Returns:
         The normalized name that was deleted.
@@ -599,9 +629,18 @@ def trash_user_workflow(hub, workflow_name: str, *, sweep: bool = True) -> str:
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="Workflow not found in user")
     stored_name = _on_disk_name(path)
+    if undo is not None and hub is not None:
+        with hub.transaction() as conn:
+            undo["rows"] = {
+                table: snapshot_rows(conn, table, "workflow_name", stored_name)
+                for table in FILE_KEYED_TABLES
+            }
+        undo["file"] = os.path.join(os.path.dirname(path), stored_name)
     try:
         with workflow_inbox.INBOX_LOCK:
-            _trash_stored_workflow(path, normalized, sweep)
+            trashed = _trash_stored_workflow(path, normalized, sweep)
+            if undo is not None:
+                undo["trashed"] = trashed
     except (TrashPermissionError, OSError, RecursionError, ValueError) as exc:
         logger.warning("Failed to delete workflow %s: %s", normalized, exc)
         raise HTTPException(status_code=500, detail="Failed to delete workflow")
@@ -648,6 +687,75 @@ def trash_user_workflow(hub, workflow_name: str, *, sweep: bool = True) -> str:
                     exc,
                 )
     return normalized
+
+
+def put_back_trashed_workflow(file: str | None, trashed: list[str]) -> list[str]:
+    """Take a deleted workflow's files back out of the trash, for its undo.
+
+    Call holding :data:`workflow_inbox.INBOX_LOCK`, and restore the rows before
+    releasing it, or the inbox could import a put-back file as a new workflow.
+
+    Args:
+        file: Where the workflow's file was in the user folder, or ``None`` for
+            a workflow that was only a stored document. Its copy is the first
+            of *trashed* and goes back there; nothing else can bring it back,
+            so this raises before anything moves when it cannot.
+        trashed: What the delete sent to the trash, its own copy first. For a
+            stored document that copy is only a copy - the rows are the
+            workflow - so it is taken out and removed when it can be found.
+            The rest were inbox files holding the same workflow and go back to
+            the inbox.
+
+    Returns:
+        The paths now back on disk, so a caller that cannot finish can send
+        them to the trash again.
+
+    Raises:
+        NotInTrash, FileExistsError, OSError: *file*'s copy could not be put
+            back; nothing was moved.
+    """
+    first, rest = trashed[0], trashed[1:]
+    back = []
+    if file is not None:
+        if os.path.lexists(file):
+            raise FileExistsError(errno.EEXIST, "Something is already there", file)
+        restore_from_trash(first)
+        if first != file:
+            try:
+                publish_no_clobber(first, file)
+            except OSError:
+                send2trash(first)
+                raise
+        back.append(file)
+    else:
+        try:
+            restore_from_trash(first)
+            os.remove(first)
+        except (NotInTrash, OSError) as exc:
+            logger.info("Left the trash copy %s of a restored workflow: %s", first, exc)
+    for path in rest:
+        try:
+            restore_from_trash(path)
+            back.append(path)
+        except (NotInTrash, OSError) as exc:
+            logger.warning(
+                "Restored a workflow but not its inbox file %s: %s", path, exc
+            )
+    return back
+
+
+def trash_again(paths: list[str]) -> None:
+    """Send what :func:`put_back_trashed_workflow` put back to the trash again."""
+    for path in paths:
+        try:
+            send2trash(path)
+        except (OSError, TrashPermissionError) as exc:
+            logger.error(
+                "Could not send %s back to the trash after a failed restore; it "
+                "may be imported as a new workflow: %s",
+                path,
+                exc,
+            )
 
 
 def _builtin_path(name: str) -> str | None:
@@ -1747,6 +1855,10 @@ class ComfyUIPixlstashNodeResponse(BaseModel):
     # Whether it can open a run from the Run popup, which it saves as a new
     # workflow: the pack's `open_run.js` is loaded. False for an older pack.
     opens_runs: Optional[bool] = None
+    # Whether its checkpoint loader loads every shelf checkpoint a run swaps
+    # it in for (`shelf` and `weight_dtype`): what an update of an outdated
+    # pack waits for (`pack_outdated`). False for an older pack.
+    shelf_loader_current: Optional[bool] = None
 
 
 class ComfyUIProbeRequest(BaseModel):
@@ -1764,10 +1876,17 @@ class ComfyUIProbeResponse(BaseModel):
     detail: Optional[str] = None
     # Whether ComfyUI's --listen lets other computers reach it; None unknown.
     listens_on_network: Optional[bool] = None
+    # The card ComfyUI runs on ("NVIDIA GeForce RTX 4090", "CPU") and its
+    # memory in MB; None unknown.
+    gpu: Optional[str] = None
+    vram_mb: Optional[int] = None
+    # Whether the ComfyUI-PixlStash nodes can open a workflow there; None when
+    # ComfyUI did not answer or did not list its extensions.
+    can_open_workflows: Optional[bool] = None
 
 
 class ComfyUILinkStatus(BaseModel):
-    """The live ComfyUI link, if any."""
+    """A connection's live ComfyUI link, if any."""
 
     linked: bool
     comfyui_url: Optional[str] = None
@@ -1785,6 +1904,54 @@ class ComfyUILinkStatus(BaseModel):
     # or only one: `PUT /users/me/token/{token_id}/libraries` changes that.
     token_id: Optional[int] = None
     all_libraries: bool = False
+
+
+class ComfyUIConnection(BaseModel):
+    """One ComfyUI the owner can run on, with what its newest probe said."""
+
+    id: str
+    name: str
+    url: str
+    status: Optional[Literal["connected", "offline"]] = Field(
+        None, description="The newest probe's answer; null when never asked."
+    )
+    gpu: Optional[str] = None
+    vram_mb: Optional[int] = None
+    nodes: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether the newest probe found the ComfyUI-PixlStash nodes able to "
+            "open a workflow; null when not known."
+        ),
+    )
+    link: ComfyUILinkStatus = Field(
+        default_factory=lambda: ComfyUILinkStatus(linked=False),
+        description="This connection's own link key, if it is linked.",
+    )
+
+
+class ComfyUIConnectionList(BaseModel):
+    """``GET /comfyui/connections``: every connection, and which runs go to."""
+
+    connections: list[ComfyUIConnection]
+    current: Optional[str] = Field(
+        None,
+        description="The id of the connection at `comfyui_url`; null with none saved.",
+    )
+
+
+class ComfyUIConnectionCreate(BaseModel):
+    """A ComfyUI to add; the name defaults to "This PC" or the host."""
+
+    url: str = Field(min_length=1, max_length=2048)
+    name: Optional[str] = Field(None, max_length=120)
+
+
+class ComfyUIConnectionUpdate(BaseModel):
+    """A new name or address for a connection; either may be left out."""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=120)
+    url: Optional[str] = Field(None, min_length=1, max_length=2048)
 
 
 class ComfyUILinkStep(BaseModel):
@@ -1850,7 +2017,8 @@ class ComfyUIWorkflowImportResponse(BaseModel):
     status: str
     # What the new manual workflow is called.
     name: str
-    # Always False: an import is a new workflow, identical copies allowed.
+    # Always False: an import is a new workflow, and a copy of one already
+    # stored is refused with 409 rather than matched.
     matched: bool = False
     # The manual workflow it is now.
     workflow_id: Optional[str] = None
@@ -2313,7 +2481,10 @@ def create_router(server) -> APIRouter:
             "ComfyUI-PixlStash node's open_workflow.js is loaded, the script "
             "that reads ?pixlstash_workflow=<key>. can_open_workflows is null "
             "when ComfyUI cannot be asked. opens_runs says the same of "
-            "open_run.js, which reads the Run popup's ?pixlstash_run=<opening>."
+            "open_run.js, which reads the Run popup's ?pixlstash_run=<opening>. "
+            "shelf_loader_current says whether its checkpoint loader has every "
+            "widget a run writes into it (shelf, weight_dtype), so an outdated "
+            "pack's update can wait for it."
         ),
         response_model=ComfyUIPixlstashNodeResponse,
     )
@@ -2321,25 +2492,60 @@ def create_router(server) -> APIRouter:
         comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
         scripts = comfyui_pixlstash_scripts(comfyui_url)
         if scripts is None:
-            return {"can_open_workflows": None, "saves_back": None, "opens_runs": None}
+            return {
+                "can_open_workflows": None,
+                "saves_back": None,
+                "opens_runs": None,
+                "shelf_loader_current": None,
+            }
         return {
             "can_open_workflows": PACK_OPENS_WORKFLOWS in scripts,
             "saves_back": PACK_SAVES_BACK in scripts,
             "opens_runs": PACK_OPENS_RUNS in scripts,
+            "shelf_loader_current": comfyui_shelf_loader_current(comfyui_url),
         }
+
+    def _connection_or_404(user, connection_id: str) -> dict:
+        entry = next(
+            (e for e in comfyui_connections.read(user) if e["id"] == connection_id),
+            None,
+        )
+        if entry is None:
+            raise HTTPException(
+                status_code=404, detail=f"No ComfyUI connection {connection_id!r}."
+            )
+        return entry
+
+    def _current_connection(user) -> Optional[dict]:
+        current = comfyui_connections.current_id(user)
+        return _connection_or_404(user, current) if current else None
+
+    def _address(request: Request, connection_id: Optional[str]) -> Optional[str]:
+        """The connection's address, or ``comfyui_url`` with none named."""
+        user = server.auth.get_user_for_request(request)
+        if connection_id:
+            return _connection_or_404(user, connection_id)["url"]
+        return getattr(user, "comfyui_url", None) if user else None
 
     @router.get(
         "/comfyui/link",
-        summary="Whether ComfyUI is linked to PixlStash",
+        summary="Whether the current ComfyUI is linked to PixlStash",
+        description=(
+            "The link of the connection runs go to. Every connection's own "
+            "link is in `GET /comfyui/connections`."
+        ),
         response_model=ComfyUILinkStatus,
     )
     def get_comfyui_link(request: Request):
         server.auth.ensure_secure_when_required(request)
-        return comfyui_link_service.link_status(server)
+        user = server.auth.get_user_for_request(request)
+        return comfyui_link_service.link_status(
+            server, comfyui_connections.current_id(user)
+        )
 
     @router.post(
         "/comfyui/link",
-        summary="Link the saved ComfyUI with a ComfyUI-only token",
+        summary="Link the current ComfyUI with a ComfyUI-only token",
         description=(
             "For a ComfyUI on this computer or the local network, from a local "
             "owner: mints a token that reaches only the routes the "
@@ -2352,16 +2558,17 @@ def create_router(server) -> APIRouter:
             "why a step needs the person. A ComfyUI on the local network needs "
             "remote access on with HTTPS. `exposure` says whether other "
             "computers can reach that ComfyUI. The token covers the open "
-            "library; `PUT /users/me/token/{token_id}/libraries` widens it."
+            "library; `PUT /users/me/token/{token_id}/libraries` widens it. "
+            "Acts on the current connection; "
+            "`POST /comfyui/connections/{connection_id}/link` links any."
         ),
         response_model=ComfyUILinkResponse,
     )
     def link_comfyui(request: Request):
         server.auth.ensure_secure_when_required(request)
-        user = server.auth.get_user_for_request(request)
-        saved = getattr(user, "comfyui_url", None) if user else None
-        reply = comfyui_link_service.link(server, request, saved)
-        reply["can_install_pack"] = _can_install_pack(saved)
+        connection = _current_connection(server.auth.get_user_for_request(request))
+        reply = comfyui_link_service.link(server, request, connection)
+        reply["can_install_pack"] = _can_install_pack((connection or {}).get("url"))
         return reply
 
     def _can_install_pack(saved: Optional[str]) -> bool:
@@ -2386,9 +2593,15 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ComfyUIPackInstallResponse,
     )
-    def install_comfyui_pack(request: Request):
-        user = server.auth.get_user_for_request(request)
-        saved = getattr(user, "comfyui_url", None) if user else None
+    def install_comfyui_pack(
+        request: Request,
+        connection_id: Optional[str] = Query(
+            None,
+            max_length=64,
+            description="The connection to act on; the current one when left out.",
+        ),
+    ):
+        saved = _address(request, connection_id)
         try:
             return comfyui_pack_service.install(saved)
         except comfyui_pack_service.PackInstallRefused as exc:
@@ -2408,9 +2621,16 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ComfyUINodePackInstallResponse,
     )
-    def install_node_pack(pack_id: str, request: Request):
-        user = server.auth.get_user_for_request(request)
-        saved = getattr(user, "comfyui_url", None) if user else None
+    def install_node_pack(
+        pack_id: str,
+        request: Request,
+        connection_id: Optional[str] = Query(
+            None,
+            max_length=64,
+            description="The connection to act on; the current one when left out.",
+        ),
+    ):
+        saved = _address(request, connection_id)
         try:
             return node_pack_install_service.install(saved, pack_id)
         except node_pack_install_service.UnknownPack as exc:
@@ -2428,9 +2648,16 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ComfyUINodePackResponse,
     )
-    def get_node_pack(pack_id: str, request: Request):
-        user = server.auth.get_user_for_request(request)
-        saved = getattr(user, "comfyui_url", None) if user else None
+    def get_node_pack(
+        pack_id: str,
+        request: Request,
+        connection_id: Optional[str] = Query(
+            None,
+            max_length=64,
+            description="The connection to act on; the current one when left out.",
+        ),
+    ):
+        saved = _address(request, connection_id)
         try:
             return {"loaded": node_pack_install_service.loaded(saved, pack_id)}
         except node_pack_install_service.UnknownPack as exc:
@@ -2438,12 +2665,15 @@ def create_router(server) -> APIRouter:
 
     @router.delete(
         "/comfyui/link",
-        summary="Unlink ComfyUI and revoke its token",
+        summary="Unlink the current ComfyUI and revoke its token",
         response_model=ComfyUILinkStatus,
     )
     def unlink_comfyui(request: Request):
         server.auth.ensure_secure_when_required(request)
-        return comfyui_link_service.unlink(server, request)
+        user = server.auth.get_user_for_request(request)
+        return comfyui_link_service.unlink(
+            server, request, comfyui_connections.current_id(user)
+        )
 
     @router.post(
         "/comfyui/probe",
@@ -2462,9 +2692,232 @@ def create_router(server) -> APIRouter:
     ):
         server.auth.ensure_secure_when_required(request)
         try:
-            return probe_comfyui(payload.url)
+            answer = probe_comfyui(payload.url)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        answer["can_open_workflows"] = (
+            comfyui_can_open_workflows(answer["url"].rstrip("/"))
+            if answer["reachable"]
+            else None
+        )
+        # A listed connection keeps its newest answer for the Run on menu.
+        if getattr(server, "hub_engine", None) is not None:
+            try:
+                comfyui_connections.save(
+                    server,
+                    server.auth.require_user_id(request),
+                    lambda user: comfyui_connections.record_probe(user, answer),
+                )
+            except Exception:
+                logger.exception(
+                    "ComfyUI at %s answered the probe (reachable=%s) but the "
+                    "answer could not be noted on its connection; the Run on "
+                    "menu shows the one before until the next probe.",
+                    answer["url"],
+                    answer["reachable"],
+                )
+        return answer
+
+    def _connection_list(user) -> dict:
+        return {
+            "connections": [
+                {**e, "link": comfyui_link_service.link_status(server, e["id"])}
+                for e in comfyui_connections.read(user)
+            ],
+            "current": comfyui_connections.current_id(user),
+        }
+
+    @router.get(
+        "/comfyui/connections",
+        summary="List the ComfyUI connections",
+        description=(
+            "Every ComfyUI the owner can run on, with what its newest probe "
+            "said and its own link key, and `current`, the one at "
+            "`comfyui_url` that runs go to. Switching is a `comfyui_url` PATCH "
+            "of `/users/me/config`."
+        ),
+        response_model=ComfyUIConnectionList,
+    )
+    def list_comfyui_connections(request: Request):
+        server.auth.ensure_secure_when_required(request)
+        return _connection_list(server.auth.get_user_for_request(request))
+
+    @router.post(
+        "/comfyui/connections",
+        summary="Add a ComfyUI connection",
+        description=(
+            "Adds an address, normalised as `POST /comfyui/probe` does, without "
+            "switching to it; an address already listed is left as it is. "
+            "Nothing is asked of it. 400 for an address that is not http(s) "
+            "with a host."
+        ),
+        response_model=ComfyUIConnectionList,
+    )
+    def add_comfyui_connection(
+        request: Request, payload: ComfyUIConnectionCreate = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        try:
+            url = normalize_comfyui_url(payload.url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        require_hub(server, "No hub is attached to keep ComfyUI connections in.")
+
+        def change(user) -> bool:
+            before = user.comfyui_connections
+            comfyui_connections.add(user, payload.name, url)
+            return user.comfyui_connections != before
+
+        user = comfyui_connections.save(
+            server, server.auth.require_user_id(request), change
+        )
+        return _connection_list(user)
+
+    def _unlink_then(request: Request, connection_id: str, then, *, kept, doing):
+        """Revoke the connection's key, then run *then*, under one hold of the
+        link lock. A revoke that fails is a 500 saying what was *kept*; a
+        failure of *then* after the key went is logged and raised as it is."""
+        try:
+            return comfyui_link_service.unlink(
+                server, request, connection_id, then=then
+            )
+        except Exception as exc:
+            if not comfyui_link_service.link_record(server, connection_id):
+                logger.exception(
+                    "Revoked the link key of ComfyUI connection %s, then could not %s.",
+                    connection_id,
+                    doing,
+                )
+                raise
+            logger.exception(
+                "Could not revoke the link key of ComfyUI connection %s; %s.",
+                connection_id,
+                kept,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"The connection's key could not be revoked, so {kept}: {exc}",
+            ) from exc
+
+    @router.patch(
+        "/comfyui/connections/{connection_id}",
+        summary="Rename a ComfyUI connection or change its address",
+        description=(
+            "A new address is normalised as `POST /comfyui/probe` does and is "
+            "not probed here. Moving a linked connection revokes its key first, "
+            "since the key is bound to the old address; link it again at the new "
+            "one. 400 for an address that is not http(s) with a host, 404 for "
+            "no such connection, 409 when another connection has the address."
+        ),
+        response_model=ComfyUIConnectionList,
+    )
+    def update_comfyui_connection(
+        connection_id: str,
+        request: Request,
+        payload: ComfyUIConnectionUpdate = Body(...),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        require_hub(server, "No hub is attached to keep ComfyUI connections in.")
+        if payload.name is not None and not payload.name.strip():
+            raise HTTPException(status_code=400, detail="A name cannot be blank.")
+        url = None
+        if payload.url is not None:
+            try:
+                url = normalize_comfyui_url(payload.url)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        user = server.auth.get_user_for_request(request)
+        before = _connection_or_404(user, connection_id)
+
+        def change(user) -> bool:
+            renamed = payload.name is not None and comfyui_connections.rename(
+                user, connection_id, payload.name
+            )
+            moved = url is not None and comfyui_connections.set_address(
+                user, connection_id, url
+            )
+            return renamed or moved
+
+        # Tried on a copy first, so a refused change revokes no key.
+        trial = User(**user.model_dump())
+        try:
+            change(trial)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        user_id = server.auth.require_user_id(request)
+        if _connection_or_404(trial, connection_id)["url"] != before["url"]:
+            # Revoked and moved under one hold of the link lock, so a link
+            # waiting on it finds the new address and not a key's old one.
+            user = _unlink_then(
+                request,
+                connection_id,
+                lambda: comfyui_connections.save(server, user_id, change),
+                kept="its address was not changed",
+                doing="move it",
+            )
+        else:
+            user = comfyui_connections.save(server, user_id, change)
+        return _connection_list(user)
+
+    @router.delete(
+        "/comfyui/connections/{connection_id}",
+        summary="Remove a ComfyUI connection, revoking its key",
+        description=(
+            "A linked connection's key is revoked first; if that fails the "
+            "connection stays (500). Clearing the key from ComfyUI's settings "
+            "is best effort. Removing the current connection hands runs to the "
+            "first one left. 404 for no such connection."
+        ),
+        response_model=ComfyUIConnectionList,
+    )
+    def remove_comfyui_connection(connection_id: str, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        require_hub(server, "No hub is attached to keep ComfyUI connections in.")
+        _connection_or_404(server.auth.get_user_for_request(request), connection_id)
+        user_id = server.auth.require_user_id(request)
+
+        def drop():
+            return comfyui_connections.save(
+                server,
+                user_id,
+                lambda user: comfyui_connections.remove(user, connection_id),
+            )
+
+        # Revoked and removed under one hold of the link lock, so a link
+        # waiting on it cannot record a key for the removed connection.
+        user = _unlink_then(
+            request, connection_id, drop, kept="it was kept", doing="remove it"
+        )
+        return _connection_list(user)
+
+    @router.post(
+        "/comfyui/connections/{connection_id}/link",
+        summary="Link one ComfyUI connection with its own ComfyUI-only key",
+        description=(
+            "`POST /comfyui/link` for this connection at its own address, "
+            "current or not. Only this connection's earlier key is replaced; "
+            "every other connection keeps its own. 404 for no such connection."
+        ),
+        response_model=ComfyUILinkResponse,
+    )
+    def link_comfyui_connection(connection_id: str, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        connection = _connection_or_404(
+            server.auth.get_user_for_request(request), connection_id
+        )
+        reply = comfyui_link_service.link(server, request, connection)
+        reply["can_install_pack"] = _can_install_pack(connection["url"])
+        return reply
+
+    @router.delete(
+        "/comfyui/connections/{connection_id}/link",
+        summary="Unlink one ComfyUI connection and revoke its key",
+        response_model=ComfyUILinkStatus,
+    )
+    def unlink_comfyui_connection(connection_id: str, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        _connection_or_404(server.auth.get_user_for_request(request), connection_id)
+        return comfyui_link_service.unlink(server, request, connection_id)
 
     @router.post(
         "/comfyui/workflows/{workflow_name}/card",
@@ -2640,7 +3093,13 @@ def create_router(server) -> APIRouter:
                             "directory": item.directory,
                             "url": item.url,
                             "present": normalized_filename(item.name) in present,
-                            "downloadable": download_source(item.name) is not None,
+                            # The live listing's own link too, where it is
+                            # one `start_download` would take from it.
+                            "downloadable": download_source(item.name) is not None
+                            or (
+                                not listing.bundled
+                                and trusted_live_link(item.name, item.url)
+                            ),
                         }
                         for item in template.files
                     ],
@@ -2837,11 +3296,19 @@ def create_router(server) -> APIRouter:
         description=(
             "Stores a workflow JSON, UI or API format, as a new manual "
             "workflow named `name` (a document still carrying placeholder "
-            "tokens is stored with them migrated to bindings). Always a new "
-            "workflow: identical copies are allowed, and no file is written. "
+            "tokens is stored with them migrated to bindings). No file is "
+            "written. A document whose runnable graph is already a manual "
+            "workflow's saved graph (the same nodes, values and links, "
+            "whatever the layout) is refused with 409 naming that workflow. "
             "A document not shaped like a ComfyUI workflow is refused with 400."
         ),
         response_model=ComfyUIWorkflowImportResponse,
+        responses={
+            409: {
+                "description": "Already in the library: `detail` is "
+                "`{code: workflow_exists, message, workflow_id, name, hidden}`."
+            },
+        },
     )
     def import_comfyui_workflow(request: Request, payload: dict = Body(...)):
         name = _normalize_workflow_name(payload.get("name"))
@@ -2854,6 +3321,32 @@ def create_router(server) -> APIRouter:
             )
         hub = require_hub(server, "The workflow library is not open.")
         try:
+            check_comfy_workflow(workflow)
+            existing = manual_workflow_running(
+                hub,
+                workflow_bindings.runnable_identity(
+                    workflow_bindings.migrate_placeholders(workflow)[0]
+                ),
+                getattr(server.vault, "library_uuid", None),
+            )
+            if existing is not None:
+                logger.info(
+                    "Refused importing %s: it is workflow %s (%s) already.",
+                    name,
+                    existing["workflow_id"],
+                    existing["name"],
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "workflow_exists",
+                        "message": f"This workflow is already here as "
+                        f"{existing['name'] or 'an unnamed workflow'}.",
+                        **existing,
+                    },
+                )
+            # ponytail: two imports of one file at the same instant can both
+            # pass the check; a lock or a stored identity column if that bites.
             workflow_id = store_manual_workflow(hub, _stem(name), workflow, "import")
         except WorkflowFileTooLarge as exc:
             logger.warning("Refused importing %s: %s", name, exc)

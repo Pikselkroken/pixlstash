@@ -7,7 +7,7 @@
 // countdown freezes - is the same on every surface that shows it. Only the
 // chrome differs: the grid gets a light pill in the selection bar's slot
 // (`ActionReceipt.vue`), the lightbox gets a dark HUD in its own vocabulary
-// (`OverlayActionReceipt.vue`).
+// (`LightboxActionReceipt.vue`).
 //
 // So the contract lives here and the components are left with markup and
 // styles. That is also what keeps the two honest: a change to the wording, the

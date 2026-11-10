@@ -191,6 +191,35 @@ def test_owner_only_tag_health_flip():
             )
 
 
+def test_owner_only_character_set_suggestion_both_directions(monkeypatch):
+    """GET /training/character_set_suggestion ranks one character's pictures:
+    owner only. Refused to both READ token shapes by the belt, and by the gate
+    itself once the belt is emptied (the gate's own 403 detail); the owner
+    still reads it."""
+    with _owner_env() as env:
+        owner, anon = env["owner"], env["anon"]
+        r = owner.post(f"{API}/characters", json={"name": "Suggested"})
+        assert r.status_code == 200, r.text
+        url = f"{API}/training/character_set_suggestion"
+        params = {"character_id": r.json()["character"]["id"]}
+
+        with _enforcing(env["server"]):
+            for label in ("scoped_read", "unscoped_read"):
+                r = anon.get(url, params=params, headers=_bearer(env[label]))
+                assert r.status_code == 403, f"{label}: {r.status_code} {r.text}"
+            monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+            for label in ("scoped_read", "unscoped_read"):
+                r = anon.get(url, params=params, headers=_bearer(env[label]))
+                assert r.status_code == 403 and _OWNER_REQUIRED_403 in r.text, (
+                    f"the gate must refuse {label} on its own; got "
+                    f"{r.status_code}: {r.text}"
+                )
+            # POSITIVE: the owner still reads it.
+            r = owner.get(url, params=params)
+            assert r.status_code == 200, r.text
+            assert r.json()["stills"]["picks"] == []
+
+
 # ---------------------------------------------------------------------------
 # F-c rider - GET /users/me/auth tightened any_token -> owner_only
 # ---------------------------------------------------------------------------

@@ -167,8 +167,9 @@ test.describe.serial('duplicates queue (§21)', () => {
 
   // Issue #1009. The bar could not shrink (two nowrap flex groups at the
   // default `min-width: auto`), so the surplus left through the right edge and
-  // took the last children in DOM order with it: Settings, then the stats
-  // toggle, then undo, gone with no signifier that anything was missing. The
+  // took the last children in DOM order with it: Settings (in the title bar
+  // since #2158), then the stats toggle, then undo, gone with no signifier
+  // that anything was missing. The
   // ladder that was supposed to prevent it (docs/design/toolbar-responsive-
   // decisions.md) had rungs at 860/720/600 for content measuring ~1570px.
   //
@@ -211,7 +212,6 @@ test.describe.serial('duplicates queue (§21)', () => {
           bar: Math.round(inline),
           overflow: Math.round(bar.scrollWidth - bar.clientWidth),
           spill: Math.round(spill),
-          settings: inside(bar.querySelector('button[aria-label="Settings"]')),
           stats: inside(bar.querySelector('.tb-stats-btn')),
           undo: inside(bar.querySelector('.uc-btn--undo')),
           size: Boolean(size) && size.getBoundingClientRect().width > 0,
@@ -220,7 +220,6 @@ test.describe.serial('duplicates queue (§21)', () => {
 
       expect(fit.overflow, `bar overflows at ${width}px`).toBeLessThanOrEqual(1)
       expect(fit.spill, `left group paints over the tail at ${width}px`).toBeLessThanOrEqual(1)
-      expect(fit.settings, `Settings is off the bar at ${width}px`).toBe(true)
       expect(fit.stats, `the stats toggle is off the bar at ${width}px`).toBe(true)
       expect(fit.undo, `undo is off the bar at ${width}px`).toBe(true)
       // The size slider is the one control on this bar that HIDES rather than

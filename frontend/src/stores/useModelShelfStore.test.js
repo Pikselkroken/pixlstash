@@ -29,6 +29,7 @@ const editModels = vi.fn();
 const listBaseModelCompletions = vi.fn();
 const forgetModels = vi.fn();
 const deleteModels = vi.fn();
+const undoDeleteModels = vi.fn();
 const setAdapterAttachments = vi.fn();
 const fetchWorkflowSets = vi.fn();
 const createWorkflowSet = vi.fn();
@@ -58,6 +59,7 @@ vi.mock("../api/modelShelf", () => ({
   listBaseModelCompletions: (...args) => listBaseModelCompletions(...args),
   forgetModels: (...args) => forgetModels(...args),
   deleteModels: (...args) => deleteModels(...args),
+  undoDeleteModels: (...args) => undoDeleteModels(...args),
   setAdapterAttachments: (...args) => setAdapterAttachments(...args),
   fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
   createWorkflowSet: (...args) => createWorkflowSet(...args),
@@ -96,6 +98,7 @@ import {
   mergeReceipt,
   editReceipt,
   forgetReceipt,
+  lookupReceipt,
   useModelShelfStore,
 } from "./useModelShelfStore";
 import { useNoticeStore } from "./useNoticeStore";
@@ -192,6 +195,39 @@ describe("models arriving from the Downloads folder", () => {
     store.onModelsArrived();
     expect(store.unseenArrivals).toBe(true);
     expect(listAdapters).not.toHaveBeenCalled();
+  });
+
+  it("keeps the badge on an intake arrival through the fetch the shelf makes on opening", async () => {
+    // The notice's Show opens the shelf, which re-reads: that ordinary fetch
+    // clears `newIds`, and the row must still say it is new.
+    const store = useModelShelfStore();
+    listAdapters.mockResolvedValue([adapter({ id: 1 })]);
+    await store.fetchRows();
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1 }),
+      adapter({ id: 2 }),
+      adapter({ id: 3 }),
+    ]);
+    store.onModelsArrived([2], { fromDownloads: true });
+    await vi.waitFor(() => expect(store.loading).toBe(false));
+    const isNew = (id) => store.visibleRows.find((r) => r.id === id)?.isNew;
+    // A scan's arrival (3) wears the markNew badge until the next fetch.
+    expect(isNew(3)).toBe(true);
+
+    await store.fetchRows();
+    expect(isNew(2)).toBe(true);
+    expect(isNew(3)).toBe(false);
+    expect(isNew(1)).toBe(false);
+
+    store.arrivedIds = new Set();
+    expect(isNew(2)).toBe(false);
+  });
+
+  it("forgets intake arrivals on a session reset", () => {
+    const store = useModelShelfStore();
+    store.onModelsArrived([2], { fromDownloads: true });
+    store.resetForSession();
+    expect(store.arrivedIds.size).toBe(0);
   });
 });
 
@@ -684,7 +720,7 @@ describe("sorting", () => {
     store.setView({ sortKey: "size", sortDirection: "asc" });
     expect(store.view.sortDirection).toBe("asc");
     // And a patch that is about something else entirely does not touch it.
-    store.setView({ groupBy: "folder" });
+    store.setView({ groupBy: "base_model" });
     expect(store.view.sortDirection).toBe("asc");
   });
 
@@ -775,7 +811,86 @@ describe("sorting", () => {
   });
 });
 
+describe("sorting on every column", () => {
+  it("sorts on Type by the words the cell shows", async () => {
+    listAdapters.mockResolvedValue([adapter({ id: 1, display_name: "lora" })]);
+    listCheckpoints.mockResolvedValue([
+      adapter({ id: 2, file_kind: "checkpoint", kind: null, display_name: "ckpt" }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "none", sortKey: "type" });
+    expect(store.view.sortDirection).toBe("asc");
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([2, 1]);
+    store.setView({ sortDirection: "desc" });
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([1, 2]);
+  });
+
+  it("sorts on Sets by how many sets hold the model, most first", async () => {
+    const member = (id) => ({
+      name: "x",
+      kind: "lora",
+      slot: "lora",
+      id,
+      sha256: String(id).repeat(64),
+      on_shelf: true,
+    });
+    const set = (id, members) => ({
+      id,
+      name: `set ${id}`,
+      declined: [],
+      removed: [],
+      members: members.map(member),
+    });
+    listAdapters.mockResolvedValue([1, 2, 3].map((id) =>
+      adapter({ id, sha256: String(id).repeat(64), display_name: `m${id}` }),
+    ));
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [],
+      no_set: [],
+      hand_made: [set(7, [3, 2]), set(8, [3])],
+    });
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    expect(store.setMembership.get(3)).toHaveLength(2);
+    store.setView({ groupBy: "none", sortKey: "sets" });
+    expect(store.view.sortDirection).toBe("desc");
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([3, 2, 1]);
+    store.setView({ sortDirection: "asc" });
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([1, 2, 3]);
+  });
+});
+
 describe("grouping", () => {
+  it("draws an open folder as one band, and keeps the grouping for leaving it", async () => {
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, locations: [{ state: "present", folder_id: 1, relpath: "a.st" }] }),
+    ]);
+    listCheckpoints.mockResolvedValue([
+      adapter({
+        id: 2,
+        file_kind: "checkpoint",
+        kind: null,
+        locations: [{ state: "present", folder_id: 1, relpath: "b.st" }],
+      }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "type", listGroupBy: "type" });
+    expect(store.groups).toHaveLength(2);
+
+    store.setFolderScope({ folderId: 1, path: "" });
+    expect(store.groupAxis).toBe("none");
+    expect(store.groups).toHaveLength(1);
+    expect(store.groups[0].rows.map((r) => r.id).sort()).toEqual([1, 2]);
+    expect(store.view.groupBy).toBe("type");
+
+    store.setPlace("all");
+    expect(store.groupAxis).toBe("type");
+    expect(store.groups).toHaveLength(2);
+  });
+
   it("puts the models that record no base model last, in both directions", async () => {
     // 37% of real adapters record nothing, so this group is one of the largest
     // on the shelf. It sorts last because it is the ABSENCE of a value rather
@@ -803,41 +918,6 @@ describe("grouping", () => {
       "sdxl",
       "Base model not set",
     ]);
-  });
-
-  it("lists a model under every folder holding a copy of it", async () => {
-    // Copied into two folders, or an interrupted move. A "primary location"
-    // would be a fiction the shelf then has to explain, and it makes the
-    // storage answer wrong: the file really does occupy both disks.
-    listAdapters.mockResolvedValue([
-      adapter({
-        id: 1,
-        locations: [
-          { state: "present", folder_path: "/a", relpath: "x.st" },
-          { state: "missing", folder_path: "/b", relpath: "x.st" },
-        ],
-      }),
-    ]);
-    const store = useModelShelfStore();
-    await store.fetchRows();
-    store.setView({ groupBy: "folder" });
-
-    expect(store.groups.map((g) => g.label)).toEqual(["/a", "/b"]);
-    // ...and each row reports THAT folder's state, not the merged one, or a
-    // file present here and gone there would claim to be fine where it is not.
-    expect(store.groups[0].rows[0].locState).toBe("present");
-    expect(store.groups[1].rows[0].locState).toBe("missing");
-    // One model, two rows drawn: the toolbar states both numbers.
-    expect(store.visibleRows.length).toBe(1);
-    expect(store.renderedCount).toBe(2);
-  });
-
-  it("names the group for a model no folder holds any more", async () => {
-    listAdapters.mockResolvedValue([adapter({ id: 1, locations: [] })]);
-    const store = useModelShelfStore();
-    await store.fetchRows();
-    store.setView({ groupBy: "folder" });
-    expect(store.groups.map((g) => g.label)).toEqual(["No registered copy"]);
   });
 
   it("still renders one group when nothing is grouped, so the list has one shape", async () => {
@@ -894,10 +974,9 @@ describe("grouping", () => {
     expect(store.groups[3].rows.length).toBe(666);
     expect(store.renderedCount).toBe(1800);
 
-    // Folders cluster hard: 2 of 1,800 files in one folder and the rest in the
-    // other is the normal shape, not a defect to smooth over.
-    store.setView({ groupBy: "folder" });
-    expect(store.groups.map((g) => g.rows.length)).toEqual([1200, 600]);
+    // Type is the band that replaced Folder (#2168): 1,800 rows, one band each.
+    store.setView({ groupBy: "type" });
+    expect(store.groups.reduce((n, g) => n + g.rows.length, 0)).toBe(1800);
   });
 });
 
@@ -918,7 +997,7 @@ describe("collapsing a group", () => {
     expect(store.isCollapsed("/a")).toBe(true);
 
     // The same key on the other axis is a different group entirely.
-    store.setView({ groupBy: "folder" });
+    store.setView({ groupBy: "feature" });
     expect(store.isCollapsed("/a")).toBe(false);
 
     store.setView({ groupBy: "base_model" });
@@ -979,12 +1058,49 @@ describe("the view is remembered", () => {
     // user's own preference and say nothing about the previous credential.
     listAdapters.mockResolvedValue([adapter()]);
     const store = useModelShelfStore();
-    store.setView({ groupBy: "folder", sortDirection: "asc" });
+    store.setView({ groupBy: "base_model", sortDirection: "asc" });
     await store.fetchRows();
     store.resetForSession();
     expect(store.rows).toEqual([]);
-    expect(store.view.groupBy).toBe("folder");
+    expect(store.view.groupBy).toBe("base_model");
     expect(store.view.sortDirection).toBe("asc");
+  });
+
+  it("reads a remembered Folder grouping back as Type", () => {
+    // Folder is no longer an axis (#2168): what a reader chose as Folder lands
+    // on the band that the sidebar's folder slot did not replace, not on a
+    // grouping that no longer exists.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({
+        v: 2,
+        groupBy: "folder",
+        listGroupBy: "folder",
+        sortKey: "name",
+        sortDirection: "asc",
+      }),
+    );
+    const store = useModelShelfStore();
+    expect(store.view.listGroupBy).toBe("type");
+    expect(store.view.groupBy).toBe("type");
+    expect(store.view.sortKey).toBe("name");
+  });
+
+  it("keeps a remembered list grouping, and migrates one from before it existed", () => {
+    // A blob that carries its own listGroupBy keeps it, whatever groupBy says.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({ v: 2, groupBy: "base_model", listGroupBy: "none" }),
+    );
+    expect(useModelShelfStore().view.listGroupBy).toBe("none");
+
+    // One from before #2168 carries none: its list grouping is its groupBy.
+    setActivePinia(createPinia());
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({ v: 2, groupBy: "base_model" }),
+    );
+    expect(useModelShelfStore().view.listGroupBy).toBe("base_model");
   });
 
   it("falls back to the defaults on a blob from another schema", () => {
@@ -1001,7 +1117,7 @@ describe("the view is remembered", () => {
     // The default of `groupBy` changed, and nothing else in the blob did. A
     // version 1 blob could only ever say `none`, so that field is not evidence
     // of a choice and is the one thing not carried forward; the widths, the
-    // collapsed groups, the sort and the folder layout are exactly what the
+    // collapsed groups and the sort are exactly what the
     // reader set and survive. The first version of #1438 bumped the version and
     // threw all of it away for a change to one field.
     window.localStorage.setItem(
@@ -1011,7 +1127,6 @@ describe("the view is remembered", () => {
         groupBy: "none",
         sortKey: "name",
         sortDirection: "asc",
-        folderLayout: "alpha",
         columnWidths: { kind: 120, base: 84, size: 74, date: 96 },
         collapsed: { base_model: ["sdxl"] },
       }),
@@ -1022,7 +1137,6 @@ describe("the view is remembered", () => {
     expect(store.view.groupBy).toBe("workflow_set");
     expect(store.view.sortKey).toBe("name");
     expect(store.view.sortDirection).toBe("asc");
-    expect(store.view.folderLayout).toBe("alpha");
     expect(store.view.columnWidths.kind).toBe(120);
     store.setView({ groupBy: "base_model" });
     expect(store.isCollapsed("sdxl")).toBe(true);
@@ -1084,6 +1198,7 @@ describe("the column widths", () => {
       base: 72,
       size: 56,
       date: 80,
+      sets: 44,
     });
   });
 
@@ -1100,9 +1215,10 @@ describe("the column widths", () => {
     }
     expect(store.view.columnWidths).toEqual({
       kind: 64,
-      base: 84,
+      base: 140,
       size: 74,
       date: 96,
+      sets: 56,
     });
   });
 
@@ -1117,9 +1233,10 @@ describe("the column widths", () => {
     const store = useModelShelfStore();
     expect(store.view.columnWidths).toEqual({
       kind: 64,
-      base: 84,
+      base: 140,
       size: 90,
       date: 96,
+      sets: 56,
     });
   });
 
@@ -1136,6 +1253,7 @@ describe("the column widths", () => {
       base: 150,
       size: 74,
       date: 96,
+      sets: 56,
     });
 
     window.localStorage.setItem(
@@ -1149,7 +1267,20 @@ describe("the column widths", () => {
       base: 150,
       size: 400,
       date: 96,
+      sets: 56,
     });
+  });
+
+  it("drops a Base width stored before its default widened, and only that", () => {
+    // Every view change below version 3 wrote the old 84px default into the
+    // blob, so the stored figure says nothing about a drag.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({ v: 2, columnWidths: { kind: 120, base: 84 } }),
+    );
+    const store = useModelShelfStore();
+    expect(store.view.columnWidths.base).toBe(140);
+    expect(store.view.columnWidths.kind).toBe(120);
   });
 
   it("takes the defaults from a blob written before columns could be dragged", () => {
@@ -1163,9 +1294,10 @@ describe("the column widths", () => {
     expect(store.view.sortKey).toBe("name");
     expect(store.view.columnWidths).toEqual({
       kind: 64,
-      base: 84,
+      base: 140,
       size: 74,
       date: 96,
+      sets: 56,
     });
   });
 });
@@ -1233,25 +1365,19 @@ describe("stacks are atomic", () => {
     expect([...store.selectedIds].sort()).toEqual([1, 2, 3, 4]);
   });
 
-  it("never hands a verb the same model twice, even drawn in two folders", () => {
+  it("never hands a verb the same model twice, even drawn under two features", () => {
     // The review of #881 read `selectedRows` as one entry per DRAWN row, which
-    // would duplicate under folder grouping - a model with copies in two
-    // folders is drawn twice. It is not: `selectedRows` filters `visibleRows`,
+    // would duplicate under the feature axis - a model serving two features is
+    // drawn twice. It is not: `selectedRows` filters `visibleRows`,
     // which is one entry per model, and the per-folder duplication happens in
     // `groups` for rendering only. Asserted rather than argued, and it stays
     // asserted so a future change to that derivation cannot quietly reintroduce
     // duplicate ids on the wire.
     const store = useModelShelfStore();
     store.rows = [
-      adapter({
-        id: 1,
-        locations: [
-          { state: "present", folder_id: 1, folder_path: "/a", relpath: "x" },
-          { state: "present", folder_id: 2, folder_path: "/b", relpath: "x" },
-        ],
-      }),
+      adapter({ id: 1, capabilities: ["captioner", "detector"] }),
     ];
-    store.setView({ groupBy: "folder" });
+    store.setView({ groupBy: "feature" });
     store.toggleSelected(1);
 
     // Drawn twice...
@@ -1298,36 +1424,6 @@ describe("stacks are atomic", () => {
     expect([...store.selectedIds].sort()).toEqual([1, 2, 3, 4]);
   });
 
-  it("narrows a member's copies to the folder it is drawn under", () => {
-    // The row is narrowed so the file line answers "where is this" with a path
-    // in the folder it is under; an expanded strip has to follow, or the steps
-    // answer with a path from the folder above.
-    const store = useModelShelfStore();
-    const twoFolders = (id, position) =>
-      adapter({
-        id,
-        sha256: String(id).repeat(64).slice(0, 64),
-        stack_id: 7,
-        stack_position: position,
-        locations: [
-          { state: "present", folder_id: 1, folder_path: "/a", relpath: "x" },
-          { state: "present", folder_id: 2, folder_path: "/b", relpath: "x" },
-        ],
-      });
-    store.rows = [twoFolders(1, 0), twoFolders(2, 1)];
-    store.setView({ groupBy: "folder" });
-
-    for (const group of store.groups) {
-      for (const row of group.rows) {
-        for (const member of row.members) {
-          expect(member.locations.map((l) => l.folder_id)).toEqual([
-            group.folderId,
-          ]);
-        }
-      }
-    }
-  });
-
   it("counts a part of a run as its parts, not as the run", () => {
     // Ctrl-clicking one file out of a selected run leaves two files, and the
     // bar has to say two. Reading the cover's presence as "the run" instead
@@ -1340,44 +1436,6 @@ describe("stacks are atomic", () => {
     expect(store.selectedModelIds).toEqual([1, 3]);
   });
 
-  it("hands the verbs the Models rail's selection while the rail has one", () => {
-    // The rail lists each file by itself, so a step of a run is that file and
-    // not the run: Delete there must not take the two steps nobody picked.
-    const store = shelfWithARun();
-    store.setRailSelection([2]);
-    expect(store.selectedRows.map((r) => r.id)).toEqual([2]);
-    expect(store.selectedModelIds).toEqual([2]);
-    // With the display fields the gates read, as every other screen's rows.
-    expect(store.selectedRows[0].locState).toBe("present");
-  });
-
-  it("holds one model selection at a time, the shelf's or the rail's", () => {
-    const store = shelfWithARun();
-    store.selectFromClick(4, {}, [1, 4]);
-    store.setRailSelection([2]);
-    expect(store.selectedIds.size).toBe(0);
-    expect(store.selectedRows.map((r) => r.id)).toEqual([2]);
-
-    // A shelf click takes it back, in the same breath: a row drag reads the
-    // selection straight after making it.
-    store.selectFromClick(4, {}, [1, 4]);
-    expect(store.railSelection).toBeNull();
-    expect(store.selectedRows.map((r) => r.id)).toEqual([4]);
-
-    // Clearing the shelf's selection is not a pick: clicking a set card does
-    // it, and the models selected in the rail to add to that set are still
-    // meant.
-    store.setRailSelection([2]);
-    store.clearSelection();
-    expect(store.selectedRows.map((r) => r.id)).toEqual([2]);
-  });
-
-  it("leaves the shelf's selection alone when the rail reports none", () => {
-    const store = shelfWithARun();
-    store.selectFromClick(4, {}, [1, 4]);
-    store.setRailSelection([]);
-    expect(store.selectedRows.map((r) => r.id)).toEqual([4]);
-  });
 });
 
 describe("the verbs", () => {
@@ -1775,6 +1833,14 @@ describe("the receipts", () => {
     expect(editReceipt(1, { display_name: null })).toContain(
       "derived from the filename",
     );
+    // A collapsed stack's rename writes every member, and is still one name.
+    expect(editReceipt(5, { display_name: "Clementine" })).toBe(
+      "Renamed to Clementine.",
+    );
+    // A rename beside another column names both, not just the rename.
+    expect(
+      editReceipt(1, { display_name: "Clementine", base_model: "SDXL" }),
+    ).toBe("Set the name and base model on 1 model.");
   });
 
   it("reports the refusals, which are the interesting half", () => {
@@ -1789,6 +1855,22 @@ describe("the receipts", () => {
       "Nothing was forgotten. 1 model still has a copy and was kept.",
     );
     expect(forgetReceipt(0, 0)).toBe("Nothing to forget.");
+  });
+
+  it("lookupReceipt adds up to the selection and says why some were not asked", () => {
+    expect(
+      lookupReceipt({
+        filled: [{ id: 1, base_model: "SDXL 1.0" }],
+        not_found: [2, 3],
+        skipped: [{ id: 4, reason: "owner_set" }],
+        not_asked: [5, 6, 7],
+      }),
+    ).toBe(
+      "Filled 1 model · 2 not on Civitai · 1 left alone · 3 not asked (Civitai stopped answering)",
+    );
+    expect(
+      lookupReceipt({ filled: [], not_found: [], skipped: [], not_asked: [] }),
+    ).toBe("Filled 0 models");
   });
 
   it("names the entity Assign wrote to, not its type", () => {
@@ -2361,6 +2443,54 @@ describe("deleting from disk", () => {
     );
   });
 
+  it("offers Undo for a trash delete, and Redo deletes what came back", async () => {
+    const store = useModelShelfStore();
+    const operations = useOperationStore();
+    operations.setLocalReceiptHost(true);
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    listAdapters.mockResolvedValue([]);
+    deleteModels.mockResolvedValue({
+      deleted: [1],
+      files_removed: 1,
+      permanent: false,
+      refused: [],
+      undo_token: "tok-1",
+    });
+    undoDeleteModels.mockResolvedValue({ restored: [1], refused: [] });
+
+    await store.deleteSelected();
+    expect(operations.receipt.summary).toContain("to the Trash");
+    await operations.takeLocalReceiptAction();
+    expect(undoDeleteModels).toHaveBeenCalledWith("tok-1");
+    expect(operations.receipt.mode).toBe("undone");
+
+    deleteModels.mockClear();
+    await operations.takeLocalReceiptAction();
+    expect(deleteModels).toHaveBeenCalledWith([1], { permanent: false });
+    operations.setLocalReceiptHost(false);
+  });
+
+  it("raises no Undo for a permanent delete", async () => {
+    const store = useModelShelfStore();
+    const operations = useOperationStore();
+    operations.setLocalReceiptHost(true);
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    listAdapters.mockResolvedValue([]);
+    deleteModels.mockResolvedValue({
+      deleted: [1],
+      files_removed: 1,
+      permanent: true,
+      refused: [],
+      undo_token: null,
+    });
+
+    await store.deleteSelected({ permanent: true });
+    expect(operations.receipt).toBe(null);
+    operations.setLocalReceiptHost(false);
+  });
+
   it("says what failed rather than swallowing it", async () => {
     const store = useModelShelfStore();
     store.rows = [adapter({ id: 1 })];
@@ -2550,117 +2680,6 @@ describe("duplicate copies", () => {
     await store.resetFilters();
     expect(store.filters.name).toBe("");
     expect(store.visibleRows.length).toBe(2);
-  });
-
-  it("keeps the count when the folder axis narrows a draw to one copy", async () => {
-    listAdapters.mockResolvedValue([
-      adapter({
-        id: 1,
-        locations: [
-          { state: "present", folder_path: "/m", relpath: "a.st" },
-          { state: "present", folder_path: "/n", relpath: "a.st" },
-        ],
-      }),
-    ]);
-    const store = useModelShelfStore();
-    await store.fetchRows();
-    store.setView({ groupBy: "folder" });
-    // The draw carries one location and still reports both copies: the count is
-    // a fact about the file, not about the group it is drawn under.
-    expect(store.groups[0].rows[0].locations.length).toBe(1);
-    expect(store.groups[0].rows.map((r) => r.copies)).toEqual([2]);
-  });
-
-  it("names each copy's draw for its own file, in name order", async () => {
-    // Byte-identical files under three names are ONE model whose `filename` is
-    // whichever the scanner met first (#1270).
-    listAdapters.mockResolvedValue([
-      adapter({
-        id: 1,
-        display_name: null,
-        filename: "ae.sft",
-        locations: [
-          { state: "present", folder_path: "/m", relpath: "ae.sft" },
-          {
-            state: "present",
-            folder_path: "/m",
-            relpath: "vae/ae.safetensors",
-          },
-          {
-            state: "present",
-            folder_path: "/m",
-            relpath: "zImageTurbo_vae.st",
-          },
-        ],
-      }),
-      adapter({ id: 2, display_name: null, filename: "b.st" }),
-    ]);
-    const store = useModelShelfStore();
-    await store.fetchRows();
-    store.setView({ groupBy: "folder", sortKey: "name", sortDirection: "asc" });
-    const drawn = store.groups[0].rows;
-    // `b.st`'s copy is `a.st`, so its draw sorts first although its model's
-    // own name sorts last.
-    expect(drawn.map((r) => r.filename)).toEqual([
-      "a.st",
-      "ae.sft",
-      "ae.safetensors",
-      "zImageTurbo_vae.st",
-    ]);
-    expect(drawn.map((r) => r.name.text)).toEqual([
-      "a",
-      "ae",
-      "ae",
-      "zImageTurbo vae",
-    ]);
-    // The model itself still carries one filename; only the draws differ.
-    expect(store.visibleRows.find((r) => r.id === 1).filename).toBe("ae.sft");
-  });
-
-  it("keeps a name somebody gave on every copy's draw", async () => {
-    listAdapters.mockResolvedValue([
-      adapter({
-        locations: [
-          { state: "present", folder_path: "/m", relpath: "a.st" },
-          { state: "present", folder_path: "/n", relpath: "other.st" },
-        ],
-      }),
-    ]);
-    const store = useModelShelfStore();
-    await store.fetchRows();
-    store.setView({ groupBy: "folder" });
-    const drawn = store.groups.flatMap((g) => g.rows);
-    expect(drawn.map((r) => r.filename)).toEqual(["a.st", "other.st"]);
-    expect(drawn.map((r) => r.name.text)).toEqual([
-      "Cyanwood Style",
-      "Cyanwood Style",
-    ]);
-  });
-
-  it("draws two copies in one folder under two keys, not one key twice", async () => {
-    listAdapters.mockResolvedValue([
-      adapter({
-        id: 1,
-        locations: [
-          { state: "present", folder_path: "/m", relpath: "qwen_3_4b.st" },
-          { state: "present", folder_path: "/m", relpath: "zimage_te.st" },
-        ],
-      }),
-    ]);
-    const store = useModelShelfStore();
-    await store.fetchRows();
-    store.setView({ groupBy: "folder" });
-    const drawn = store.groups[0].rows;
-    // One folder, one header, two draws - and the whole point is that they are
-    // distinguishable. Equal `rowKey`s put `tabindex="0"` on both at once and
-    // made `indexOf` answer with the first, which is the collision the push
-    // site was already warning about on the other axis.
-    expect(drawn.length).toBe(2);
-    expect(new Set(drawn.map((r) => r.rowKey)).size).toBe(2);
-    expect(drawn.map((r) => r.locations[0].relpath)).toEqual([
-      "qwen_3_4b.st",
-      "zimage_te.st",
-    ]);
   });
 });
 
@@ -3327,6 +3346,66 @@ describe("sets from pictures are hidden, never deleted", () => {
   function member(model, sha) {
     return { ...model, sha256: sha, slot: "checkpoint", on_shelf: true };
   }
+
+  it("draws a set made by Edit set in its card's place, not first", async () => {
+    const other = { id: 3, name: "other.st", kind: "checkpoint" };
+    const vae = { id: 2, name: "style.st", kind: "vae" };
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, sha256: "a".repeat(64), filename: "base.st" }),
+      adapter({ id: 2, sha256: "b".repeat(64), filename: "style.st" }),
+      adapter({ id: 3, sha256: "c".repeat(64), filename: "other.st" }),
+    ]);
+    // The copy of the missing-base set hides its card, as Edit set does.
+    hiddenOnServer.add("missing:gone.st");
+    const set = (id, extra) => ({
+      id,
+      name: `set ${id}`,
+      declined: [],
+      members: [],
+      picture_count: 0,
+      recipes: 0,
+      history_runs: 0,
+      ...extra,
+    });
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        { key: "a", models: [checkpoint], recipes: 1, picture_count: 20, covers: [] },
+        // Covered by set 21, made on its checkpoint by Edit set.
+        { key: "b", models: [other], recipes: 1, picture_count: 10, covers: [], covered_by: [21] },
+        {
+          key: "c",
+          models: [vae],
+          missing: [{ name: "gone.st", workflow_ids: [] }],
+          recipes: 1,
+          picture_count: 15,
+          covers: [],
+        },
+      ],
+      no_set: [],
+      hand_made: [
+        // Newest first, as the server serves them.
+        set(22, { replaces: "missing:gone.st" }),
+        set(21, { cloned: true, replaces: "model:3", picture_count: 10, recipes: 1 }),
+        set(20),
+      ],
+      hidden_sets: [...hiddenOnServer],
+    });
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+
+    const { lead, sets } = store.setGridCards;
+    // A set made by hand still leads.
+    expect(lead.map((group) => group.key)).toEqual(["hand:20"]);
+    // The edited ones sit where their cards did: the copy of the hidden
+    // missing card by that card's pictures (15), not its own (0).
+    expect(sets.map((group) => group.key)).toEqual([
+      "model:1",
+      "hand:22",
+      "hand:21",
+    ]);
+  });
 
   it("takes only the hand-made sets the grid draws on Select all", async () => {
     // A hidden hand-made set leaves the grid (#1869), so Select all must not
@@ -4080,10 +4159,12 @@ describe("sets from pictures are hidden, never deleted", () => {
 
     await store.cloneSetFromPictures(store.setGroups[0]);
 
-    // The checkpoint alone: the pictures on it bring in the rest (#1972).
+    // The checkpoint alone: the pictures on it bring in the rest (#1972),
+    // and the card it was made from is where it is drawn.
     expect(createWorkflowSet).toHaveBeenCalledWith({
       cloned: true,
       seen: true,
+      replaces: "model:1",
       members: [{ model_id: 1, slot: "checkpoint" }],
     });
     expect(store.openSetKey).toBe("hand:9");
@@ -4105,11 +4186,68 @@ describe("sets from pictures are hidden, never deleted", () => {
       seen: true,
       members: [{ model_id: 1, slot: "checkpoint" }],
     });
+  });
 
-    // A set named after a file the shelf does not hold has nothing to clone.
-    createWorkflowSet.mockClear();
-    await store.cloneSetFromPictures({ head: { missing: true }, models: [] });
+  it("edits a set whose base model is off the shelf as a copy that hides it", async () => {
+    useOperationStore().setLocalReceiptHost(true);
+    const store = shelfWithASet();
+    createWorkflowSet.mockReset().mockResolvedValue({ id: 9, members: [] });
+    deleteWorkflowSet.mockReset().mockResolvedValue({ deleted: { id: 9 } });
+    await store.cloneSetFromPictures({
+      key: "missing:gone.safetensors",
+      head: { missing: true, name: "gone.safetensors" },
+      card: { name: "gone" },
+      models: [
+        { id: 2, kind: "vae" },
+        { id: 5, kind: "text_encoder" },
+      ],
+    });
+
+    // The members on the shelf, the checkpoint slot left for a replacement,
+    // and no `cloned`: there is no checkpoint for it to follow.
+    expect(createWorkflowSet).toHaveBeenCalledWith({
+      name: "gone",
+      seen: true,
+      replaces: "missing:gone.safetensors",
+      members: [
+        { model_id: 2, slot: "vae" },
+        { model_id: 5, slot: "text_encoder" },
+      ],
+    });
+    expect(store.openSetKey).toBe("hand:9");
+    // The old card is kept, hidden, so the set reads as edited in place.
+    expect(hiddenOnServer.has("missing:gone.safetensors")).toBe(true);
+
+    // Undo takes the copy away and brings the card back.
+    await useOperationStore().takeLocalReceiptAction();
+    expect(deleteWorkflowSet).toHaveBeenCalledWith(9);
+    expect(hiddenOnServer.has("missing:gone.safetensors")).toBe(false);
+  });
+
+  it("copies a member this library hides, and makes nothing when the card will not hide", async () => {
+    const store = shelfWithASet();
+    createWorkflowSet.mockReset().mockResolvedValue({ id: 9, members: [] });
+    const group = {
+      key: "missing:gone.safetensors",
+      head: { missing: true, name: "gone.safetensors" },
+      card: { name: "gone" },
+      // The VAE is hidden here, so the drawn members leave it out.
+      models: [{ id: 5, kind: "text_encoder" }],
+      allModels: [
+        { id: 2, kind: "vae" },
+        { id: 5, kind: "text_encoder" },
+      ],
+    };
+
+    setWorkflowSetsHidden.mockRejectedValueOnce(new Error("test-hide-failed"));
+    await expect(store.cloneSetFromPictures(group)).resolves.toBeNull();
     expect(createWorkflowSet).not.toHaveBeenCalled();
+
+    await store.cloneSetFromPictures(group);
+    expect(createWorkflowSet.mock.calls[0][0].members).toEqual([
+      { model_id: 2, slot: "vae" },
+      { model_id: 5, slot: "text_encoder" },
+    ]);
   });
 
   it("makes one clone when the button is pressed twice", async () => {
@@ -4370,5 +4508,110 @@ describe("a model is hidden in this library", () => {
     await store.toggleHiddenModels([store.rows.find((r) => r.id === 2)]);
 
     expect(store.handMadeSets[0].removed).toEqual([]);
+  });
+});
+
+describe("the set grid's sort", () => {
+  /** Three sets: most pictures, newest use and first name are each another one. */
+  function shelfWithThreeSets() {
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, sha256: "a".repeat(64) }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+      adapter({ id: 3, sha256: "c".repeat(64) }),
+    ]);
+    const combo = (id, name, pictures, lastUsed) => ({
+      key: String(id),
+      models: [{ id, name, kind: "checkpoint" }],
+      recipes: 1,
+      picture_count: pictures,
+      last_used_at: lastUsed,
+      covers: [],
+    });
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        combo(1, "Bravo", 12, "2026-01-01T00:00:00Z"),
+        combo(2, "alpha", 3, "2026-06-01T00:00:00Z"),
+        combo(3, "Charlie", 5, null),
+      ],
+      no_set: [],
+    });
+    return useModelShelfStore();
+  }
+  const order = (store) => store.setGroups.map((group) => group.key);
+
+  it("orders by use, name and last use, each from its own end", async () => {
+    const store = shelfWithThreeSets();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+
+    // The default is the evidence order the grid always had.
+    expect(order(store)).toEqual(["model:1", "model:3", "model:2"]);
+    store.setView({ setSortDirection: "asc" });
+    expect(order(store)).toEqual(["model:2", "model:3", "model:1"]);
+
+    // A new key starts at its own end: Name after "Least used first" is A to Z.
+    store.setView({ setSortKey: "name" });
+    expect(store.view.setSortDirection).toBe("asc");
+    expect(order(store)).toEqual(["model:2", "model:1", "model:3"]);
+
+    // A set never used sorts last in both directions.
+    store.setView({ setSortKey: "last_used" });
+    expect(order(store)).toEqual(["model:2", "model:1", "model:3"]);
+    store.setView({ setSortDirection: "asc" });
+    expect(order(store)).toEqual(["model:1", "model:2", "model:3"]);
+  });
+
+  it("orders the hand-made cards by the same key, from what their combinations hold", async () => {
+    listAdapters.mockResolvedValue([adapter({ id: 1, sha256: "a".repeat(64) })]);
+    const hand = (id, name) => ({ id, name, members: [] });
+    // Served newest first, as the hub serves them: 9, 8, 7.
+    const combo = (id, pictures, lastUsed) => ({
+      key: `c${id}`,
+      models: [{ id: 1, name: "Base", kind: "checkpoint" }],
+      recipes: 1,
+      picture_count: pictures,
+      last_used_at: lastUsed,
+      covers: [],
+      covered_by: [id],
+    });
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        combo(7, 12, "2026-01-01T00:00:00Z"),
+        combo(8, 3, "2026-06-01T00:00:00Z"),
+      ],
+      no_set: [],
+      hand_made: [hand(9, "Charlie"), hand(8, "alpha"), hand(7, "Bravo")],
+    });
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    const handOrder = () => store.handMadeGroups.map((group) => group.set.id);
+
+    // Most used: 9 has no pictures and follows the two that have made some.
+    expect(handOrder()).toEqual([7, 8, 9]);
+    store.setView({ setSortDirection: "asc" });
+    expect(handOrder()).toEqual([9, 8, 7]);
+
+    // Last used: 9 was never used, so it is last in both directions.
+    store.setView({ setSortKey: "last_used" });
+    expect(handOrder()).toEqual([8, 7, 9]);
+    store.setView({ setSortDirection: "asc" });
+    expect(handOrder()).toEqual([7, 8, 9]);
+
+    store.setView({ setSortKey: "name" });
+    expect(handOrder()).toEqual([8, 7, 9]);
+    store.setView({ setSortDirection: "desc" });
+    expect(handOrder()).toEqual([9, 7, 8]);
+  });
+
+  it("is remembered apart from the row list's sort", async () => {
+    const store = shelfWithThreeSets();
+    store.setView({ setSortKey: "size", setSortDirection: "asc" });
+
+    setActivePinia(createPinia());
+    const next = useModelShelfStore();
+    expect(next.view.setSortKey).toBe("size");
+    expect(next.view.setSortDirection).toBe("asc");
+    expect(next.view.sortKey).toBe("added_at");
   });
 });

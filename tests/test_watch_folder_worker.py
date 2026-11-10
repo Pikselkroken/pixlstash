@@ -3,6 +3,7 @@ import shutil
 import tempfile
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
@@ -93,6 +94,80 @@ def test_watch_folder():
                 )
                 assert empty_filtered.status_code == 200
                 assert empty_filtered.json() == []
+
+                _assert_inbox_round_trip(client, server, pictures)
+
+
+def _assert_inbox_round_trip(client, server, pictures):
+    """The Inbox is what was added within its period and has no person or set."""
+    ids = sorted(pic.id for pic in pictures)
+
+    def inbox_ids(period="14d", **extra):
+        listed = client.get(
+            f"{API_PREFIX}/pictures",
+            params={"fields": "grid", "inbox": period, **extra},
+        )
+        assert listed.status_code == 200, listed.text
+        return sorted(row["id"] for row in listed.json())
+
+    def inbox_count(period="14d"):
+        counted = client.get(f"{API_PREFIX}/pictures/count", params={"inbox": period})
+        assert counted.status_code == 200, counted.text
+        return counted.json()["count"]
+
+    # Just imported and filed nowhere: every period holds all of them.
+    assert inbox_ids() == ids
+    assert inbox_ids("24h") == ids
+    assert inbox_ids("all") == ids
+    assert inbox_count() == len(ids)
+    (row,) = client.get(f"{API_PREFIX}/import-folders").json()["folders"]
+    assert "unseen_count" not in row
+    assert row["last_imported_at"] is not None
+    assert row["missing"] is False
+    # The Inbox is both halves of "unassigned", whatever a filter asks for.
+    assert inbox_ids(character_id="UNASSIGNED", unassigned_by="character") == ids
+    # An unknown period is refused rather than read as no Inbox at all.
+    refused = client.get(f"{API_PREFIX}/pictures", params={"inbox": "2w"})
+    assert refused.status_code == 422, refused.text
+
+    # Rating is not filing: the picture stays.
+    rated = client.post(
+        f"{API_PREFIX}/pictures/apply-scores",
+        json={"scores": {str(ids[0]): 4}, "only_unscored": False},
+    )
+    assert rated.status_code == 200, rated.text
+    assert ids[0] in inbox_ids()
+
+    # Filing in a set takes it out of the Inbox, not out of the library.
+    created = client.post(f"{API_PREFIX}/picture_sets", json={"name": "Inbox test"})
+    assert created.status_code == 200, created.text
+    set_id = created.json()["picture_set"]["id"]
+    filed = client.post(f"{API_PREFIX}/picture_sets/{set_id}/members/{ids[0]}")
+    assert filed.status_code == 200, filed.text
+    left = inbox_ids()
+    assert ids[0] not in left and left
+    assert inbox_count() == len(left)
+    everything = client.get(f"{API_PREFIX}/pictures", params={"fields": "grid"})
+    assert sorted(row["id"] for row in everything.json()) == ids
+
+    # Added three weeks ago: outside the default fortnight, inside 30 days.
+    aged = left[0]
+
+    def backdate(session):
+        picture = session.get(Picture, aged)
+        picture.imported_at = datetime.now(timezone.utc) - timedelta(days=21)
+        session.add(picture)
+        session.commit()
+
+    server.vault.db.run_task(backdate)
+    assert aged not in inbox_ids()
+    assert aged in inbox_ids("30d")
+    assert inbox_count("30d") == inbox_count() + 1
+
+    # The stats sidebar reads the same Inbox.
+    stats = client.get(f"{API_PREFIX}/pictures/stats", params={"inbox": "14d"})
+    assert stats.status_code == 200, stats.text
+    assert stats.json()["total"] == inbox_count()
 
 
 def test_watch_folder_delete_after_import():

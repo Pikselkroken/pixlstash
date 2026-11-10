@@ -37,6 +37,7 @@ import { useUserPrefsStore } from "../stores/useUserPrefsStore";
 import { useSortStore } from "../stores/useSortStore";
 import { useProjectStore } from "../stores/useProjectStore";
 import { useSearchStore } from "../stores/useSearchStore";
+import { useInboxStore } from "../stores/useInboxStore";
 import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
@@ -65,9 +66,9 @@ export function useGridFetch(
     scrollWrapper,
     preserveScrollOnNextFetch,
     pendingScrollTop,
-    overlayOpen,
+    lightboxOpen,
     pendingGridImages,
-    pendingOverlayGridRefresh,
+    pendingLightboxGridRefresh,
     visibleStart,
     visibleEnd,
     divisibleViewWindow,
@@ -123,6 +124,7 @@ export function useGridFetch(
   const gridStore = useGridStore();
   const selectionStore = useSelectionStore();
   const userPrefsStore = useUserPrefsStore();
+  const inboxStore = useInboxStore();
 
   // The three folder facets are one selection in the sidebar; the query wants
   // them as separate params.
@@ -132,8 +134,15 @@ export function useGridFetch(
   const filePathPrefixFilter = computed(
     () => selectionStore.selectedFolderFilter?.pathPrefix ?? null,
   );
+  // The Filter menu's "Imported from" narrows any view, the Inbox included.
   const importSourceFolderFilter = computed(
-    () => selectionStore.selectedFolderFilter?.importSourceFolder ?? null,
+    () => filterStore.importedFromFilter ?? null,
+  );
+  // The Inbox: the period it is narrowed to (`inbox=`), or null outside it.
+  // The backend reads it as the unassigned view (no person, no set) added
+  // within that period.
+  const inboxPeriod = computed(() =>
+    selectionStore.selectedFolderFilter?.inbox ? inboxStore.period : null,
   );
 
   // ============================================================
@@ -212,6 +221,7 @@ export function useGridFetch(
       // Changes which pictures the grid shows, so an unforced fetch must not
       // early-return as a no-op against the previous state's key.
       stackStateFilter: filterStore.stackStateFilter ?? "all",
+      favouriteOnlyFilter: Boolean(filterStore.favouriteOnlyFilter),
       similarityCharacter: sortStore.selectedSimilarityCharacter ?? null,
       comfyuiModelFilter: filterStore.comfyuiModelFilter ?? [],
       comfyuiLoraFilter: filterStore.comfyuiLoraFilter ?? [],
@@ -223,6 +233,7 @@ export function useGridFetch(
       referenceFolderIdFilter: referenceFolderIdFilter.value ?? null,
       filePathPrefixFilter: filePathPrefixFilter.value ?? null,
       importSourceFolderFilter: importSourceFolderFilter.value ?? null,
+      inboxPeriod: inboxPeriod.value,
       noCharacterFilter: filterStore.noCharacterFilter ?? false,
       noSetFilter: filterStore.noSetFilter ?? false,
       applyTagFilter: userPrefsStore.applyTagFilter ?? false,
@@ -442,6 +453,9 @@ export function useGridFetch(
     if (filterStore.unscoredOnlyFilter) {
       params.append("unscored", "1");
     }
+    if (filterStore.favouriteOnlyFilter) {
+      params.append("favourite", "1");
+    }
     if (filterStore.smartScoreBucketFilter != null) {
       params.append("smart_score_bucket", filterStore.smartScoreBucketFilter);
     }
@@ -473,6 +487,7 @@ export function useGridFetch(
     if (importSourceFolderFilter.value != null) {
       params.append("import_source_folder", importSourceFolderFilter.value);
     }
+    if (inboxPeriod.value) params.append("inbox", inboxPeriod.value);
     if (filterStore.faceBboxFilter != null) {
       params.append("face_filter", filterStore.faceBboxFilter);
     }
@@ -535,9 +550,7 @@ export function useGridFetch(
     if (filePathPrefixFilter.value != null) {
       params.append("file_path_prefix", filePathPrefixFilter.value);
     }
-    if (importSourceFolderFilter.value != null) {
-      params.append("import_source_folder", importSourceFolderFilter.value);
-    }
+    if (inboxPeriod.value) params.append("inbox", inboxPeriod.value);
     if (userPrefsStore.applyTagFilter) {
       params.append("apply_tag_filter", "true");
     }
@@ -565,6 +578,9 @@ export function useGridFetch(
     }
     if (filterStore.unscoredOnlyFilter) {
       params.append("unscored", "1");
+    }
+    if (filterStore.favouriteOnlyFilter) {
+      params.append("favourite", "1");
     }
     if (filterStore.smartScoreBucketFilter != null) {
       params.append("smart_score_bucket", filterStore.smartScoreBucketFilter);
@@ -912,16 +928,16 @@ export function useGridFetch(
             : rows;
       } else {
         fetchMode = "stream";
-        // Overlay open: the streaming path rebuilds a placeholder grid and
+        // Lightbox open: the streaming path rebuilds a placeholder grid and
         // re-fills allGridImages from the (now possibly narrower) filter query,
         // which would drop the picture being viewed out of the grid mid-session.
         // Unlike the id-list/search modes below, streaming writes allGridImages
-        // through its own return paths and never reaches the shared overlayOpen
-        // guard. Defer the whole reconcile to overlay close instead.
-        if (overlayOpen.value) {
-          pendingOverlayGridRefresh.value = true;
+        // through its own return paths and never reaches the shared lightboxOpen
+        // guard. Defer the whole reconcile to lightbox close instead.
+        if (lightboxOpen.value) {
+          pendingLightboxGridRefresh.value = true;
           // We started the sort progress bar above but are deferring this fetch
-          // to overlay-close, so it will never reach the completion below.
+          // to lightbox-close, so it will never reach the completion below.
           // Dismiss the bar now, otherwise "Sorting by …" is stranded forever.
           if (isSortedFetch && options?.showProgress === true)
             completeSmartScoreProgress(loadId, 0, false);
@@ -1096,6 +1112,7 @@ export function useGridFetch(
             String(importSourceFolderFilter.value),
           );
         }
+        if (inboxPeriod.value) _charP.set("inbox", inboxPeriod.value);
         // Filter params
         if (filePathPrefixFilter.value != null) {
           _charP.set("file_path_prefix", String(filePathPrefixFilter.value));
@@ -1115,6 +1132,7 @@ export function useGridFetch(
         if (filterStore.maxScoreFilter != null)
           _filterP.set("max_score", String(filterStore.maxScoreFilter));
         if (filterStore.unscoredOnlyFilter) _filterP.set("unscored", "1");
+        if (filterStore.favouriteOnlyFilter) _filterP.set("favourite", "1");
         // Filter params: smart score bucket
         if (filterStore.smartScoreBucketFilter != null)
           _filterP.set(
@@ -1495,12 +1513,12 @@ export function useGridFetch(
       hasLoadedOnce.value = true;
       const newImages = mapGridImages(images);
       resetThumbnailState();
-      if (overlayOpen.value) {
-        // Don't replace allGridImages while the overlay is open - the filmstrip
+      if (lightboxOpen.value) {
+        // Don't replace allGridImages while the lightbox is open - the filmstrip
         // and prev/next navigation read from it directly. Store the fetched
-        // result and apply it once the overlay closes.
+        // result and apply it once the lightbox closes.
         pendingGridImages.value = newImages;
-        pendingOverlayGridRefresh.value = true;
+        pendingLightboxGridRefresh.value = true;
       } else {
         allGridImages.value = newImages;
       }
@@ -1581,9 +1599,9 @@ export function useGridFetch(
       }
       fetchError = e;
       imagesError.value = e.message;
-      // Don't wipe the grid on a transient error while the overlay is open -
-      // the user would see the grid flash empty behind the overlay.
-      if (!overlayOpen.value) {
+      // Don't wipe the grid on a transient error while the lightbox is open -
+      // the user would see the grid flash empty behind the lightbox.
+      if (!lightboxOpen.value) {
         allGridImages.value = [];
       }
       lastFetchError.value = { key: fetchKey, at: Date.now() };

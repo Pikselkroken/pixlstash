@@ -53,6 +53,7 @@ from pixlstash.services.library_backup_service import (
     human_bytes,
 )
 from pixlstash.utils.system_utils import space_shortfall
+from pixlstash.utils.sqlite_uri import sqlite_file_uri
 
 logger = get_logger(__name__)
 
@@ -546,7 +547,9 @@ def _space_warning(archive: str, folder: str) -> Optional[str]:
 def _count_other_libraries(hub_copy: str, library_uuid: str) -> int:
     """How many *other* registrations the archived hub carries."""
     try:
-        conn = sqlite3.connect(f"file:{hub_copy}?mode=ro", uri=True, timeout=5)
+        conn = sqlite3.connect(
+            sqlite_file_uri(hub_copy, read_only=True), uri=True, timeout=5
+        )
     except sqlite3.Error as exc:
         raise RestoreError(f"The archived hub could not be opened: {exc}") from exc
     try:

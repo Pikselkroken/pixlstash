@@ -17,11 +17,33 @@
         </button>
       </div>
 
+      <!-- Favourites only leads (the Workflows menu's box, #1578): one
+           yes-or-no, so a box rather than a kind with its own menu. Hidden for
+           a share token, which cannot see the owner's hearts as its own. -->
+      <div v-if="!isReadOnly" class="tbm-section">
+        <span class="tbm-label">Show</span>
+        <label class="tbm-check fm-check">
+          <input
+            type="checkbox"
+            :checked="store.favouriteOnlyFilter"
+            @change="store.favouriteOnlyFilter = $event.target.checked"
+          />
+          <v-icon size="14" class="fm-fav-heart" aria-hidden="true"
+            >mdi-heart</v-icon
+          >
+          <span class="fm-check-label">Favourites only</span>
+          <span class="fm-n">{{ formatCount(count("favourite=1")) }}</span>
+        </label>
+        <span class="fm-hint"
+          >Narrows whatever you are looking at: a person, a set, a project, a
+          search.</span
+        >
+      </div>
       <div class="tbm-section">
         <span class="tbm-label">Picture</span>
         <template v-for="k in PICTURE_KINDS" :key="k.id">
           <button
-            v-if="k.id !== 'sharing' || !isReadOnly"
+            v-if="pictureKindShown(k.id)"
             :ref="(el) => (rowRefs[k.id] = el)"
             class="fm-row"
             type="button"
@@ -254,7 +276,8 @@
         title="Tags"
         :tags="tagRows"
         :rows="tagFieldRows"
-        footer="Click a chip to flip it between has and lacks."
+        grouped
+        :footer="tagFooter"
         @add="setTag"
         @flip="
           (chip, from) => setTag(chip.tag, from === 'has' ? 'lacks' : 'has')
@@ -342,6 +365,8 @@ import { listComfyuiLoras, listComfyuiModels } from "../../api/pictures";
 import { listWorkflowCards, workflowCoverUrl } from "../../api/workflows";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
+import { useImportFoldersStore } from "../../stores/useImportFoldersStore";
+import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 import { PIL_IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from "../../utils/media.js";
 import { useCascadeMenu } from "../../composables/useCascadeMenu";
 import {
@@ -361,6 +386,7 @@ import {
   modelLabel,
   parseConfidenceEntry,
   scoreChipValue,
+  tagTermLabel,
 } from "../../utils/filterChips";
 import { shortTypeLabel } from "../../utils/workflowCard";
 
@@ -373,12 +399,20 @@ const props = defineProps({
 
 const store = useFilterStore();
 const gridStore = useGridStore();
+const importFoldersStore = useImportFoldersStore();
+const tagGroups = useTagGroupsStore();
 
 const PICTURE_KINDS = [
   { id: "media", label: "Media", icon: "mdi-image-multiple-outline" },
   { id: "faces", label: "Faces", icon: "mdi-face-recognition" },
   { id: "stacks", label: "Stacks", icon: "mdi-layers-outline" },
   { id: "sharing", label: "Sharing", icon: "mdi-share-variant-outline" },
+  // Everything one import folder ever brought in, not only the Inbox's new.
+  {
+    id: "importedFrom",
+    label: "Imported from",
+    icon: "mdi-folder-download-outline",
+  },
 ];
 const CONTENT_KINDS = [
   { id: "score", label: "Score", icon: "mdi-star-outline" },
@@ -439,7 +473,29 @@ const PICK_ONE = {
     ],
     params: () => "shared_only=true",
   },
+  importedFrom: {
+    title: "Imported from",
+    anyLabel: "Any",
+    field: "importedFromFilter",
+    off: null,
+    get options() {
+      return importFoldersStore.folders.map((folder) => ({
+        id: folder.folder,
+        label: folder.label || folder.folder,
+        icon: "mdi-folder-download-outline",
+      }));
+    },
+    params: (id) => filterParams([["import_source_folder", id]]),
+  },
 };
+
+// Sharing and Imported from are the owner's: a share token has neither.
+function pictureKindShown(id) {
+  if (id === "sharing") return !isReadOnly.value;
+  if (id === "importedFrom")
+    return !isReadOnly.value && importFoldersStore.hasFolders;
+  return true;
+}
 
 const STAR_ROWS = [0, 1, 2, 3, 4, 5];
 
@@ -488,6 +544,7 @@ const KIND_OF_CHIP = {
   Faces: "faces",
   Stacks: "stacks",
   Sharing: "sharing",
+  "Imported from": "importedFrom",
   "Has tag": "tags",
   "Lacks tag": "tags",
   "Missing tag": "confidence",
@@ -520,6 +577,7 @@ watch(
     if (!isOpen) return;
     reset();
     loadLists();
+    if (!isReadOnly.value) importFoldersStore.refresh();
   },
   { immediate: true },
 );
@@ -734,6 +792,8 @@ function toggleIn(field, value, on) {
 // ── Tags and Tag confidence: a field that adds chips ─────────────────────────
 const TAG_FIELDS = { has: "tagFilter", lacks: "tagRejectedFilter" };
 
+// A group term (`__group:<id>`) is shown as its words, "any Character tag".
+const tagChip = (tag) => ({ tag, label: tagTermLabel(tag) });
 const tagFieldRows = computed(() => [
   {
     id: "has",
@@ -741,7 +801,7 @@ const tagFieldRows = computed(() => [
     short: "has",
     tone: "has",
     icon: "mdi-check",
-    chips: store.tagFilter.map((tag) => ({ tag })),
+    chips: store.tagFilter.map(tagChip),
   },
   {
     id: "lacks",
@@ -749,9 +809,21 @@ const tagFieldRows = computed(() => [
     short: "lacks",
     tone: "lacks",
     icon: "mdi-cancel",
-    chips: store.tagRejectedFilter.map((tag) => ({ tag })),
+    chips: store.tagRejectedFilter.map(tagChip),
   },
 ]);
+
+// The groups are named in the footer only where they are listed.
+const tagFooter = computed(() =>
+  tagGroups.hasGroups
+    ? "Click a group or tag to require it, Shift-click to exclude it. Click a chip to flip it."
+    : "Click a chip to flip it between has and lacks.",
+);
+
+// The Tags submenu lists the groups, so their map is read as it opens.
+watch(sub, (kind) => {
+  if (kind === "tags") tagGroups.fetch();
+});
 
 // A tag is either required or excluded, never both.
 function setTag(tag, rule) {
@@ -870,5 +942,13 @@ function clearConfidence() {
 }
 .fm-check--off {
   opacity: var(--opacity-disabled);
+}
+.fm-fav-heart {
+  color: rgb(var(--v-theme-favourite));
+}
+.fm-hint {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
+  line-height: var(--leading-snug);
 }
 </style>

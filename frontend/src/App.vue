@@ -21,6 +21,7 @@ import { useFilterStore } from "./stores/useFilterStore";
 import { useGridStore } from "./stores/useGridStore";
 import { useSidebarStore } from "./stores/useSidebarStore";
 import { useWorkflowTemplatesStore } from "./stores/useWorkflowTemplatesStore";
+import { useTrainingStore } from "./stores/useTrainingStore";
 import { useUserPrefsStore } from "./stores/useUserPrefsStore";
 import { useRunDialogStore } from "./stores/useRunDialogStore";
 import { useUpscaleStore } from "./stores/useUpscaleStore";
@@ -32,6 +33,7 @@ import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useOperationStore } from "./stores/useOperationStore";
 import { DEFAULT_TIMEOUTS, useNoticeStore } from "./stores/useNoticeStore";
+import { useWhatsChangedStore } from "./stores/useWhatsChangedStore";
 import {
   useLibrariesStore,
   useLibrarySwitchStore,
@@ -54,18 +56,25 @@ import { useAppEntityActions } from "./composables/useAppEntityActions";
 import { useSearchBarSync } from "./composables/useSearchBarSync";
 import { libraryDocumentTitle } from "./utils/libraryChrome";
 import { markEnd, markStart } from "./utils/perfMarks";
+import { LIGHTBOX_HOST_ID } from "./utils/dom";
 
 import SideBar from "./components/panels/SideBar.vue";
+import WorkflowsSidebar from "./components/panels/WorkflowsSidebar.vue";
 import TitleBar from "./components/TitleBar.vue";
 import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
 import TelemetryConsentDialog from "./components/dialogs/TelemetryConsentDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
+import WhatsChangedRail from "./components/panels/WhatsChangedRail.vue";
+import WhatsChangedTour from "./components/widgets/WhatsChangedTour.vue";
+import InspectorEdgeTab from "./components/widgets/InspectorEdgeTab.vue";
 import NoticeHost from "./components/widgets/NoticeHost.vue";
 import ShortcutsDialog from "./components/widgets/ShortcutsDialog.vue";
 import ConfirmDialog from "./components/widgets/ConfirmDialog.vue";
 import ModelDropFolderDialog from "./components/dialogs/ModelDropFolderDialog.vue";
+import TrainLoraDialog from "./components/io/TrainLoraDialog.vue";
+import CreateTrainingSetDialog from "./components/io/CreateTrainingSetDialog.vue";
 import LibrarySwitchOverlay from "./components/settings/LibrarySwitchOverlay.vue";
 import Tooltip from "./components/widgets/Tooltip.vue";
 import { useFloatingBottomInset } from "./composables/useBottomAnchor";
@@ -88,6 +97,9 @@ const MovesReview = defineAsyncComponent(
 const ReviewSessionsOverlay = defineAsyncComponent(
   () => import("./components/views/ReviewSessionsOverlay.vue"),
 );
+const ReviewsInspector = defineAsyncComponent(
+  () => import("./components/reviews/ReviewsInspector.vue"),
+);
 // The Workflows grid, on `/workflows` since F1b. Async like every other
 // destination, and for the same reason — nothing that is not on screen
 // belongs in the first chunk.
@@ -102,6 +114,10 @@ const TemplateInspector = defineAsyncComponent(
 );
 const WorkflowTab = defineAsyncComponent(
   () => import("./components/panels/WorkflowTab.vue"),
+);
+// The Models workspace's sidebar (#2168), loaded with the screen it serves.
+const ModelsSideBar = defineAsyncComponent(
+  () => import("./components/panels/ModelsSideBar.vue"),
 );
 // The Models screen's rail (Models | Tasks), for the same reason: the stats it
 // replaces there describe the library, and a hidden copy would keep fetching.
@@ -128,6 +144,7 @@ const filterStore = useFilterStore();
 const gridStore = useGridStore();
 const sidebarStore = useSidebarStore();
 const workflowTemplatesStore = useWorkflowTemplatesStore();
+const trainingStore = useTrainingStore();
 const userPrefsStore = useUserPrefsStore();
 const runDialogStore = useRunDialogStore();
 const upscaleStore = useUpscaleStore();
@@ -143,6 +160,7 @@ const { activeLibrary, importingName } = storeToRefs(librariesStore);
 const { overlayOpen: librarySwitchOverlayOpen } =
   storeToRefs(librarySwitchStore);
 const noticeStore = useNoticeStore();
+const whatsChanged = useWhatsChangedStore();
 // Owns route → view resolution (the app's single route watcher). Route pushing
 // stays here in App.vue; see stores/useViewStore.js.
 // Keycap labels for the shortcuts dialog. The binding accepts Ctrl and Meta
@@ -174,6 +192,7 @@ const gridContainer = ref(null);
 const sidebarRef = ref(null);
 const mainAreaRef = ref(null);
 const gridWrapperRef = ref(null);
+const statsSidebarRef = ref(null);
 
 // --- Local UI state ---
 const shortcutsDialogOpen = ref(false);
@@ -222,11 +241,11 @@ const {
   isModelsView,
   isInsightsView,
   isMovesView,
+  isInboxView,
   isWorkflowsView,
-  handleSelectModels,
   handleSelectInsights,
   handleSelectMoves,
-  handleSelectWorkflows,
+  handleSelectInbox,
   handleInsightAction,
   handleSelectCharacter,
   handleSelectSet,
@@ -262,6 +281,9 @@ const {
   refreshSidebar: (options) => refreshSidebar(options),
   refreshSidebarPicturesDebounced: (flash) =>
     refreshSidebarPicturesDebounced(flash),
+  // `?model=` scrolls the shelf to that row and selects it.
+  openModel: (modelId) =>
+    router.push({ name: "models", query: { model: String(modelId) } }),
 });
 
 const {
@@ -287,7 +309,6 @@ useWindowFileImport({ sidebarRef });
 const {
   handleViewProject,
   handleStackStatsUpdate,
-  handleUpdateCheckForUpdates,
   handleEmptyScrapheapFromSidebar,
   handleSuggestPicturesForCharacter,
   handleSuggestPicturesForSet,
@@ -327,7 +348,6 @@ const { fetchConfig } = useAppConfig({
 
 // --- Non-reactive internals ---
 let mainAreaResizeObserver = null;
-let columnsMenuCloseTimeout = null;
 // Unsubscribe handle for the desktop tray's "Settings" event (desktop only).
 let stopOpenSettings = null;
 
@@ -354,9 +374,17 @@ watch(mainAreaRef, (mainArea) => {
 });
 
 // --- Computed ---
-// Maps the current route to a sidebar folder key ('rf-{id}' or 'if-{id}') so
+// Maps the current route to a sidebar folder key ('rf-{id}') so
 // the sidebar can highlight the correct folder on deep-link or back-navigation.
 // Parsed once, by useViewStore.
+
+// The grid's cards for its selection, for the rail (#2161). The selection is
+// the store's; the cards are the grid's, read afresh because rating and
+// favouriting replace a card rather than change it.
+const railPictures = computed(
+  () =>
+    gridContainer.value?.cardsByIds?.(selectionStore.selectedImageIds) ?? [],
+);
 
 const activeCategoryLabel = computed(() => {
   if (selectionStore.selectedFolderFilter) {
@@ -397,6 +425,18 @@ const activeCategoryLabel = computed(() => {
     return selectionStore.lastSelectedCharacterLabel || "Category";
   }
   return "All Pictures";
+});
+
+// Where Tags to review's back button and Esc go from the board: the view it was
+// opened over, named as that view names itself.
+const tagReviewBackLabel = computed(() => {
+  if (isDuplicatesView.value) return "Duplicates";
+  if (isMovesView.value) return "Moves";
+  if (isInsightsView.value) return "About your library";
+  if (isInboxView.value) return "Inbox";
+  if (isWorkflowsView.value) return "Workflows";
+  if (isModelsView.value) return "Models";
+  return activeCategoryLabel.value;
 });
 
 // A library being imported for the first time is not in the registry listing
@@ -458,7 +498,7 @@ function onRunStarted({ prompts = [], pictureIds = [], error = "" } = {}) {
     action: { label: "Show", handler: () => sidebarStore.showTasksTab() },
     // A confirmation, not an Undo: it expires rather than piling up, and an
     // identical repeat collapses into one card with a ×N count. "Show" is a
-    // shortcut; the Tasks tab is reachable without it.
+    // shortcut; the title bar's Tasks pill is reachable without it.
     timeout: DEFAULT_TIMEOUTS.success,
     key: `comfyui-run-started-${prompts.length}`,
   });
@@ -512,6 +552,33 @@ function openSettingsDialog(tab = "") {
   sidebarRef.value?.openSettingsDialog?.(typeof tab === "string" ? tab : "");
 }
 
+// SideBar context-menu "Train LoRA": navigate to the set/character so the view
+// scope matches, then open the Train a LoRA dialog on it.
+async function handleTrainLora(scope) {
+  if (!scope || scope.id == null) return;
+  if (scope.type === "character") {
+    await handleSelectCharacter({ id: scope.id, label: scope.name });
+  } else if (scope.type === "set") {
+    await handleSelectSet({ id: scope.id, label: scope.name });
+  } else {
+    return;
+  }
+  trainingStore.openForScope({
+    type: scope.type,
+    id: scope.id,
+    name: scope.name,
+  });
+}
+
+// SideBar context-menu "Create a training set…": the character it was opened
+// on, or null while the dialog is closed.
+const trainingSetCharacter = ref(null);
+
+function handleCreateTrainingSet(character) {
+  if (!character || character.id == null) return;
+  trainingSetCharacter.value = character;
+}
+
 /** The empty library's "Choose a folder…" / "Import them…".
  *
  * The sidebar picks the route: the local_import wizard over the library's own
@@ -528,8 +595,54 @@ function offerLoosePictures() {
   return sidebarRef.value?.offerLoosePictures?.();
 }
 
+// ── What's changed in 2.0 (#2145) ──────────────────────────────────────────
+// Whether this launch is the upgrade needs the stored config, the running
+// version and whether the library holds pictures; decided once all three are
+// in. The upgrade launch puts both rails on screen, so the checklist and the
+// tour card are seen: the one time the app opens a rail by itself.
+const libraryEmpty = ref(null);
+watch(
+  [() => whatsChanged.loaded, appVersion, libraryEmpty],
+  ([loaded, version, empty]) => {
+    if (!loaded || !version || empty === null) return;
+    whatsChanged.evaluate({ version, libraryEmpty: empty });
+  },
+);
+
+// Settings' What's new: the checklist lives on the media rail, which the
+// Workflows and Models workspaces do not have.
+watch(
+  () => whatsChanged.reopened,
+  () => {
+    if (isModelsView.value || isWorkflowsView.value) router.push("/");
+  },
+);
+
+// The training tour's moves through the app (WhatsChangedTour.vue).
+const tourActions = {
+  select: (s) =>
+    s.type === "character"
+      ? handleSelectCharacter({ id: s.id, label: s.name })
+      : handleSelectSet({ id: s.id, label: s.name }),
+  openMenu: (s) => sidebarRef.value?.openEntityMenu?.(s),
+  closeMenu: () => sidebarRef.value?.closeEntityMenu?.(),
+  openTrain: (s) => {
+    sidebarRef.value?.closeEntityMenu?.();
+    return handleTrainLora({ type: s.type, id: s.id, name: s.name });
+  },
+  closeTrain: () => trainingStore.closeDialog(),
+  goModels: () => router.push("/models/runs"),
+  isSelected: (s) =>
+    s.type === "character"
+      ? selectionStore.selectedCharacter === s.id
+      : selectionStore.selectedSet === s.id,
+  trainOpen: () => trainingStore.trainDialogOpen,
+  onModels: () => isModelsView.value,
+};
+
 /** The first count is in; an empty library gets its import offer first. */
-async function onLibraryLoaded({ empty }) {
+async function onLibraryLoaded({ empty, pictures }) {
+  libraryEmpty.value = pictures === 0;
   // The sidebar's pending-mapping auto-open watches the libraries listing, so
   // `mappingStore.wizardOpen` only answers honestly once that listing is in
   // and the watcher it feeds has flushed. Settling before either is what let
@@ -567,6 +680,57 @@ watch(
 // modifier there so a white card does not read as foreign chrome (§2.5).
 const lightboxOpen = ref(false);
 const noticeOnDark = computed(() => lightboxOpen.value);
+
+// ── The grid's closed stats rail (visual-language "Closed inspector") ─────
+//
+// The stats rail inspects the grid's selection (#2161), so it takes the
+// Workflows and Models nudge: a NEW selection shows the edge tab and flashes
+// the rail toggle's glyph, both only while the rail is closed. Not while the
+// lightbox is up: stepping through it is not choosing, and it covers the tab.
+// "New" means it holds a picture the last one did not: a delete or a
+// deselect that only shrinks the selection is not news.
+const isGridView = computed(
+  () =>
+    !reviewSessionsStore.overlayOpen &&
+    !isDuplicatesView.value &&
+    !isModelsView.value &&
+    !isInsightsView.value &&
+    !isMovesView.value &&
+    !isWorkflowsView.value,
+);
+watch(
+  () => selectionStore.selectedImageIds,
+  (ids, previous) => {
+    if (!isGridView.value || lightboxOpen.value) return;
+    const before = new Set((previous ?? []).map(String));
+    if (ids.some((id) => !before.has(String(id)))) {
+      sidebarStore.inspectorNudge += 1;
+    }
+  },
+);
+
+/** What the closed rail would describe: the rail's own head, or `N pictures`. */
+const statsEdgeTabLabel = computed(() => {
+  if (whatsChanged.railShown) return "What's changed";
+  const count = selectionStore.selectedImageIds.length;
+  if (count > 1) return `${count.toLocaleString()} pictures`;
+  if (count === 0) return "";
+  return statsSidebarRef.value?.head?.title || "1 picture";
+});
+
+// The same act as the toolbar toggle, so it persists. The tab unmounts as the
+// rail opens, so focus goes into the rail (its active tab, or Clear when a
+// selection hides the tabs) rather than dropping to `body`.
+function openStatsFromTab() {
+  sidebarStore.toggleStats();
+  nextTick(() =>
+    document
+      .querySelector(
+        ".stats-sidebar .inspector-tab--active, .stats-sidebar .rail-clear",
+      )
+      ?.focus(),
+  );
+}
 
 function openImportDialog() {
   photosDialogOpen.value = true;
@@ -635,12 +799,20 @@ watch(
   { immediate: true },
 );
 
+// Deep-link from the train panel's "Set up ai-toolkit first" link: open the
+// settings dialog on its Training entry.
+watch(
+  () => trainingStore.settingsTabRequest,
+  (val) => {
+    if (val) openSettingsDialog("training");
+  },
+);
+
 // --- Lifecycle ---
 onMounted(async () => {
   markStart("pixlstash:app-mounted-to-interactive");
-  // Start the app-wide tasks poll so the activity indicators (Tasks-tab icon,
-  // stats-sidebar light) are live everywhere, not only while the Tasks tab is
-  // open. The store self-throttles when idle and pauses on a hidden tab.
+  // Start the app-wide tasks poll so the title bar's Tasks pill is live
+  // everywhere, not only while its list is open. The store self-throttles when idle and pauses on a hidden tab.
   tasksStore.startPolling();
   fetch("/version")
     .then((r) => r.json())
@@ -723,10 +895,6 @@ onBeforeUnmount(() => {
     mainAreaResizeObserver.disconnect();
     mainAreaResizeObserver = null;
   }
-  if (columnsMenuCloseTimeout) {
-    clearTimeout(columnsMenuCloseTimeout);
-    columnsMenuCloseTimeout = null;
-  }
 });
 
 defineExpose({
@@ -748,7 +916,7 @@ defineExpose({
         :install-type="installType"
         :check-for-updates="userPrefsStore.checkForUpdates"
         :active-library-name="activeLibraryName"
-        @open-libraries="openSettingsDialog('libraries')"
+        @open-settings="openSettingsDialog"
       />
       <div
         class="file-manager"
@@ -796,6 +964,21 @@ defineExpose({
             sidebarStore.sidebarOverlay && sidebarStore.hideAutoSidebar()
           "
         >
+          <!-- The Workflows (#2165) and Models (#2168) workspaces bring their
+               own sidebars. The library's SideBar stays mounted but not drawn:
+               its refs (settings, import, folder picks) and drop targets are
+               the app's, and a switch back to Media neither refetches nor
+               loses its scroll. A wrapper, since SideBar has several roots and
+               v-show on it would not reach them. -->
+          <WorkflowsSidebar
+            v-if="isWorkflowsView"
+            @open-settings="openSettingsDialog"
+          />
+          <ModelsSideBar v-else-if="isModelsView" />
+          <div
+            v-show="!isWorkflowsView && !isModelsView"
+            style="display: contents"
+          >
           <SideBar
             ref="sidebarRef"
             :installType="installType"
@@ -807,18 +990,21 @@ defineExpose({
             @select-character="handleSelectCharacter"
             @select-insights="handleSelectInsights"
             @select-moves="handleSelectMoves"
+            @select-inbox="handleSelectInbox()"
             @select-duplicates="handleSelectDuplicates"
-            @select-models="handleSelectModels"
-            @select-workflows="handleSelectWorkflows"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"
+            @open-import="openImportDialog"
+            @open-tag-review="reviewSessionsStore.overlayOpen = true"
+            @train-lora="handleTrainLora"
+            @create-training-set="handleCreateTrainingSet"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMoved"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
             @update:set-error="error = $event"
             @update:set-loading="loading = $event"
-            @update:check-for-updates="handleUpdateCheckForUpdates"
           />
+          </div>
         </div>
 
         <TelemetryConsentDialog
@@ -842,6 +1028,10 @@ defineExpose({
           :resources="snapshotsStore.restoreDialogResources"
           @confirmed="onRestoreConfirmed"
         />
+        <!-- The centre column and the right rail: everything a picture opened
+             in the lightbox may cover (#2163). The title bar and the left
+             sidebar stay outside it, so opening a picture moves neither. -->
+        <div class="workspace-body">
         <main :class="['main-area']" ref="mainAreaRef">
           <div
             :class="[
@@ -858,14 +1048,22 @@ defineExpose({
                 overflow: hidden;
               "
             >
+              <!-- Tags to review is a destination like Duplicates: it replaces
+                   the grid (or whichever view it was opened from, which it
+                   names on its back button) and the grid remounts when it
+                   closes. It rides on `?review=` over the current route
+                   (useReviewRoute.js), so it is checked first. -->
+              <ReviewSessionsOverlay
+                v-if="reviewSessionsStore.overlayOpen"
+                :back-label="tagReviewBackLabel"
+                :inert="librarySwitchOverlayOpen"
+                @close="reviewSessionsStore.overlayOpen = false"
+              />
               <!-- Duplicates is a destination, not a filter, so it replaces
                    the grid rather than floating over it. The grid stays
                    unmounted while the queue is open, which is also what keeps
                    its fetches and its WebSocket reconciliation quiet. -->
-              <DuplicateQueue
-                v-if="isDuplicatesView"
-                @open-settings="openSettingsDialog"
-              />
+              <DuplicateQueue v-else-if="isDuplicatesView" />
               <!-- The model shelf lists files on this machine rather than
                    pictures in the library, so like Duplicates it replaces the
                    grid instead of floating over it, and the grid stays
@@ -892,10 +1090,7 @@ defineExpose({
               <!-- Moves is a destination for the same reason Insights is: it
                    reports on the queue rather than showing the library, so it
                    replaces the grid instead of floating over it. -->
-              <MovesReview
-                v-else-if="isMovesView"
-                @open-settings="openSettingsDialog"
-              />
+              <MovesReview v-else-if="isMovesView" />
               <!-- The Workflows grid lists graphs the hub knows about rather
                    than pictures in this library, so like the shelf it replaces
                    the grid instead of floating over it, and the grid stays
@@ -931,7 +1126,7 @@ defineExpose({
                   gridStore.visibleRangeLabel = $event
                 "
                 @update:match-count="gridStore.matchCount = $event"
-                @update:overlay-open="lightboxOpen = $event"
+                @update:lightbox-open="lightboxOpen = $event"
                 @open-duplicates="handleSelectDuplicates({})"
                 @open-settings="openSettingsDialog"
                 @open-import="openImportDialog"
@@ -941,6 +1136,17 @@ defineExpose({
                 @library-loaded="onLibraryLoaded"
                 @confirm-export-zip="confirmExportZip"
                 @confirm-export-folder="confirmExportFolder"
+              />
+              <InspectorEdgeTab
+                v-if="isGridView && !sidebarStore.statsOpen && !lightboxOpen"
+                :label="statsEdgeTabLabel"
+                :nudge="sidebarStore.inspectorNudge"
+                :name="
+                  statsEdgeTabLabel
+                    ? `Show inspector: ${statsEdgeTabLabel}`
+                    : 'Show inspector'
+                "
+                @open="openStatsFromTab"
               />
             </div>
           </div>
@@ -956,14 +1162,44 @@ defineExpose({
              both became a popup in F5, so `/workflows` is the one branch left
              ahead of the stats panel. -->
         <!-- The Workflows view's Templates tab (#2000) has its own: a template
-             is not a workflow yet, so nothing of the Workflow tab applies.
-             It offers the Tasks tab all the same. -->
+             is not a workflow yet, so nothing of the Workflow tab applies. -->
+        <!-- Everywhere else the stats panel also inspects the grid's
+             selection (#2161). It rates, favourites and tags through the
+             grid's own paths, so the rail and the tile cannot disagree. -->
+        <!-- Tags to review owns the centre column and has no pictures for the
+             stats rail to inspect, so on any route it rides over the rail is
+             its Reviews inspector (open reviews, archived receipts, stickers)
+             instead. -->
+        <!-- The 2.0 What's changed checklist (#2145) is a second pane on the
+             media rail, beside Details in the band both panes draw, so it
+             sits just ahead of the stats panel. -->
+        <ReviewsInspector v-if="reviewSessionsStore.overlayOpen" />
+        <template v-else>
         <TemplateInspector
           v-if="isWorkflowsView && workflowTemplatesStore.shown"
         />
         <WorkflowTab v-else-if="isWorkflowsView" />
         <ModelsRail v-else-if="isModelsView" />
-        <StatsSidebar v-else />
+        <WhatsChangedRail v-else-if="whatsChanged.railShown" />
+        <StatsSidebar v-else
+          ref="statsSidebarRef"
+          :view-name="activeCategoryLabel"
+          :pictures="railPictures"
+          :covered="lightboxOpen"
+          :score-of="(card) => gridContainer?.scoreOf(card) ?? card.score ?? 0"
+          @set-score="(card, n) => gridContainer?.setScore(card, n)"
+          @toggle-favourite="(ids) => gridContainer?.toggleFavourite(ids)"
+          @update-description="
+            (id, text) => gridContainer?.updateDescriptionForImage(id, text)
+          "
+          @lightbox-change="(change) => gridContainer?.handleLightboxChange(change)"
+          @tags-applied="(change) => gridContainer?.handleTagsApplied(change)"
+        />
+        </template>
+        <!-- Lightbox teleports here: it lies over the centre column and
+             the rail, and draws its own inspector where the rail is. -->
+        <div :id="LIGHTBOX_HOST_ID" class="lightbox-host"></div>
+        </div>
       </div>
       <RunDialog
         v-if="runDialogStore.source"
@@ -984,11 +1220,6 @@ defineExpose({
         @open-settings="openSettingsDialog"
       />
       <UpscaleDialog v-if="upscaleStore.pictureIds" />
-      <ReviewSessionsOverlay
-        v-if="reviewSessionsStore.overlayOpen"
-        :inert="librarySwitchOverlayOpen"
-        @close="reviewSessionsStore.overlayOpen = false"
-      />
       <!-- The notice surface. LAST child of `.app-viewport` on purpose
            (notice-surface.md §8): its buttons then come last in DOM order, so a
            keyboard user reaches them after the page content, not before it. It
@@ -1003,11 +1234,13 @@ defineExpose({
       class="shortcuts-fab"
       :class="{
         'shortcuts-fab--above-bar': multiSelectBarShown,
-        'shortcuts-fab--stats-open': isWorkflowsView
-          ? sidebarStore.workflowInspectorOpen
-          : isModelsView
-            ? sidebarStore.modelsRailOpen
-            : sidebarStore.statsOpen,
+        'shortcuts-fab--stats-open': lightboxOpen
+          ? sidebarStore.lightboxRailOpen
+          : isWorkflowsView
+            ? sidebarStore.workflowInspectorOpen
+            : isModelsView
+              ? sidebarStore.modelsRailOpen
+              : sidebarStore.statsOpen,
       }"
       type="button"
       :disabled="librarySwitchOverlayOpen"
@@ -1019,7 +1252,17 @@ defineExpose({
     <ShortcutsDialog v-model="shortcutsDialogOpen" />
     <ConfirmDialog />
     <ModelDropFolderDialog />
+    <TrainLoraDialog />
+    <CreateTrainingSetDialog
+      :open="!!trainingSetCharacter"
+      :character="trainingSetCharacter"
+      :return-focus-to="trainingSetCharacter?.returnFocusTo ?? null"
+      @close="trainingSetCharacter = null"
+      @created="sidebarRef?.refreshSidebar?.()"
+      @train="handleTrainLora"
+    />
     <LibrarySwitchOverlay />
+    <WhatsChangedTour v-if="whatsChanged.tourStep" :actions="tourActions" />
   </v-app>
 </template>
 <style src="./App.css"></style>

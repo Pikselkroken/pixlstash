@@ -632,3 +632,57 @@ a {
   white-space: nowrap;
   border: 0;
 }
+
+/* App map: one screenshot with numbered pins on where each change lives
+   (What's New and the home page launch block). Pins are teal because a pin
+   identifies; amber stays on the key action. Positions are percentages of
+   the screenshot, so a re-shoot means placing them again. */
+.app-map {
+  position: relative;
+}
+
+.app-map > img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.app-pin {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--tertiary);
+  color: #fff;
+  font-family: var(--sans);
+  font-size: 0.92rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.app-map .app-pin {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  box-shadow:
+    0 0 0 3px rgba(27, 31, 36, 0.85),
+    0 4px 12px var(--shadow);
+  pointer-events: none;
+}
+
+.app-ring {
+  position: absolute;
+  border: 2px solid var(--tertiary);
+  border-radius: 8px;
+  box-shadow: 0 0 0 2px rgba(27, 31, 36, 0.6);
+  pointer-events: none;
+}
+
+@media (max-width: 700px) {
+  .app-map .app-pin {
+    width: 22px;
+    height: 22px;
+    font-size: 0.75rem;
+  }
+}

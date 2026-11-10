@@ -51,6 +51,17 @@ class User(SQLModel, table=True):
     # column default never rewrites a stored value.
     theme_mode: Optional[str] = Field(default="dark")
     comfyui_url: Optional[str] = Field(default=None)
+    # Every ComfyUI the owner can run on, as JSON (#2167); the current one is
+    # the entry at comfyui_url. NULL reads as the one saved address. See
+    # services/comfyui_connections.py.
+    comfyui_connections: Optional[str] = Field(default=None)
+    # ai-toolkit training config (non-secret paths; HF_TOKEN is operator-env-provided).
+    ai_toolkit_repo_path: Optional[str] = Field(default=None)
+    ai_toolkit_python: Optional[str] = Field(default=None)
+    ai_toolkit_commit: Optional[str] = Field(default=None)
+    # Check pixlstash.dev for newer training recipes once a day (#2122). None
+    # until the owner has been asked, which the Train dialog does once.
+    training_presets_auto_check: Optional[bool] = Field(default=None)
     public_url: Optional[str] = Field(default=None)
     similarity_character: Optional[int] = Field(default=None)
     stack_strictness: Optional[float] = Field(default=0.92)
@@ -75,7 +86,22 @@ class User(SQLModel, table=True):
     telemetry_send_hardware_profile: bool = Field(default=False)
     telemetry_consent_prompted: bool = Field(default=False)
     show_keyboard_hint: bool = Field(default=True)
+    # Mouse preferences (#2138). NULL on an existing row reads as the default:
+    # "double" opens a grid picture on double-click, "single" on one click;
+    # "zoom" makes the plain wheel zoom the viewer, "browse" step pictures.
+    grid_open_gesture: Optional[str] = Field(default="double")
+    viewer_wheel_action: Optional[str] = Field(default="zoom")
     embed_watermark: bool = Field(default=True)
+    # Whether an export (the Export panel, the Share panel) keeps the ComfyUI
+    # workflow, prompt and A1111 parameters. Off (strip) by default (#2417);
+    # NULL reads as off. Copy and drag-out always keep them.
+    keep_workflow_on_export: bool = Field(default=False)
+    # "What's changed" panel (#2145). last_seen_version is the app version whose
+    # panel the owner has already been shown; NULL means never. whats_changed is
+    # JSON: {"done": [step ids], "checklist": bool, "card": bool}; NULL means
+    # nothing to show. The frontend writes it when it finds the upgrade.
+    last_seen_version: Optional[str] = Field(default=None)
+    whats_changed: Optional[str] = Field(default=None)
     watermark_image: Optional[bytes] = Field(
         default=None,
         sa_column=Column(LargeBinary, nullable=True),

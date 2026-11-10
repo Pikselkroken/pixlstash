@@ -3,48 +3,229 @@
   <img src="website/assets/ScreenshotGrid.jpg" alt="PixlStash Screenshot" width="800"/>
 </p>
 
-PixlStash is a local picture library server for organizing, filtering, and reviewing large image collections.
+<p align="center">
+  <a href="https://pixlstash.dev/install.html">
+    <img src="website/assets/install-banner.svg" alt="Install PixlStash" width="320"/>
+  </a>
+  &nbsp;
+  <a href="https://demo.pixlstash.dev?token=o75qQ-w0fy_FraPb2sdxcGOVTBoKFmmZwStycljomSs">
+    <img src="website/assets/demo-banner.svg" alt="Try the Demo" width="320"/>
+  </a>
+</p>
 
-It provides:
+PixlStash is an image library for photographers and creators. It searches,
+tags, scores and organises large picture collections. Connect ComfyUI to
+generate and edit pictures, and AI-toolkit to train LoRAs. Every model runs on
+your own machine.
 
-- A desktop application or a headless server with a browser-based interface
-- Semantic search across the whole library with CLIP text queries, tagged or not (OpenCLIP ViT-B-32)
-- Face detection, face recognition and automatic grouping into named characters (InsightFace SCRFD-10G, buffalo_l or AuraFace), plus reverse face search
-- Automatic tagging and image descriptions with selectable AI engines (our own PixlStash Tagger, WD14, Florence-2, JoyCaption), chosen per request
-- Object segmentation, and reverse likeness search on CLIP embeddings
-- A tag review queue and a per-tag health board, so auto-tags become tags you can trust
-- Smart score sorting, character-likeness scoring, and calibrated anomaly detection for malformed anatomy
-- Every model runs on your own hardware (CPU, NVIDIA CUDA, or experimental AMD ROCm). No cloud API
-- Re-tag or regenerate descriptions for any selection directly from the context menu
-- Instant grid loading — thumbnails appear immediately, metadata fills in asynchronously
-- Fast metadata and tag filtering
-- Character and set organization
-- Local storage of your library data
-- API for integrating with other tools
-- Simple keyboard shortcuts for scoring, selection, tagging, deletion and navigation.
-- Integration with ComfyUI for running workflows on selected images within PixlStash.
-- Plugin system for defining new filter operations that can be performed on a set of images.
-- Sharing of pictures, picture sets, characters and projects.
-- Persistent view URLs — bookmark or refresh any view and land exactly where you left off.
-- Undo and Redo with keyboard shortcuts and history
-- Deduplication helper
-- Tag review helper
-- A model overview for keeping track of your generative AI models
-- Swappable image library
-- Scriptable backup 
+PixlStash is first of all a desktop app. The headless server, with the full
+interface in a browser, is maintained alongside it.
 
-PixlStash runs on your machine and serves the UI at a local (or Internet-facing) web address.
+## The 2.0 layout
+
+The title bar switches between three workspaces:
+
+- **Media**: the picture grid, with people, sets and projects in the sidebar
+  and the selected pictures in the Inspector on the right.
+- **Workflows**: your ComfyUI workflows as cards, their recipes, and the
+  templates your ComfyUI serves.
+- **Models**: the model shelf, your model folders and drives, and training
+  runs.
+
+The title bar also holds the library picker, which shows how full the
+library's drive is, and a Tasks button for running work. It is the
+same in the desktop app and in a browser.
+
+## Features
+
+### AI
+
+- Semantic search with CLIP (OpenCLIP ViT-B-32) across the whole library,
+  tagged or not. Text in documents, receipts and screenshots is read too, and
+  the same search matches it.
+- Face detection and recognition (InsightFace SCRFD-10G, buffalo_l or
+  AuraFace), grouped into people you name. Search by one face, sort the grid
+  by likeness to a person. *Reverse image search* in the right-click menu
+  finds visually similar pictures.
+- Tags and descriptions from the PixlStash Tagger, WD14, Florence-2 or
+  JoyCaption, chosen per request. Re-tag or redescribe any selection from the
+  right-click menu.
+- A tag review queue that asks about the tags the models most likely got wrong
+  or missed, and a health board per tag showing where to look next.
+- Smart score sorting, character-likeness scoring, and calibrated anomaly
+  detection for malformed anatomy and render defects (a DINOv3 ViT-B/16
+  model).
+- Object detection and segmentation with labelled boxes, exportable as COCO or
+  Ideogram JSON.
+- Every model runs on your own hardware: the CPU, an NVIDIA GPU (CUDA), the
+  GPU of an Apple Silicon Mac, or an AMD GPU with ROCm (experimental). No
+  cloud API.
+
+<p align="center">
+  <img src="website/assets/ScreenshotSemanticSearch.jpg" alt="Semantic search for an old man surrounded by photographs" width="800"/>
+</p>
+
+### Workflows and recipes
+
+These use a ComfyUI, on this machine or another one. Settings › ComfyUI finds
+a local one, installs the PixlStash nodes into it and links the two apps.
+
+- **Two-way ComfyUI integration.** Run ComfyUI workflows from PixlStash, or
+  use the PixlStash nodes inside your own workflows. Results come back tagged,
+  with their people, sets and projects attached.
+- **Workflow cards.** Every workflow your pictures were made with, plus the
+  files you add, as a card covered with the pictures it made. Drop a workflow
+  `.json` on the screen to add it. A Templates tab lists the templates your
+  ComfyUI serves.
+- **Editing in place.** Swap models, LoRAs and stages, expose or pin
+  parameters, and save over the workflow with earlier versions kept, or save
+  it as new. *Open in ComfyUI* loads models off your shelf, and Ctrl+S in
+  ComfyUI saves a new version back to PixlStash.
+- **A Recipe tab on every picture** made in ComfyUI, A1111 or Forge, videos
+  included: prompt, models, LoRA strengths, seed and settings. Save a recipe,
+  name it and run it again.
+- **One Run popup** for rerunning a recipe, *Make more like these…*, running a
+  workflow on a selection, and *Create with LoRA…* on a person or set. Video
+  workflows run too, and two people can share one picture.
+- **Runs that do not stop on a missing file.** A missing checkpoint, VAE or
+  text encoder can be swapped for one on your shelf, a missing LoRA or seed
+  node is worked around, and missing models can be downloaded from inside
+  PixlStash.
+- **Several ComfyUI connections**, such as this PC and a render box, picked
+  from the Workflows sidebar's Run on menu.
+- **GPU scheduling.** A run that does not fit in free GPU memory waits for
+  room instead of running out of it. Tasks shows a memory bar per GPU and a
+  ComfyUI row that can clear ComfyUI's memory, and Settings › GPU & compute picks
+  which GPU PixlStash uses.
+
+<p align="center">
+  <img src="website/assets/ScreenshotComfyUi.jpg" alt="The Workflows workspace with workflow cards and the selected workflow's models, LoRAs and parameters" width="800"/>
+</p>
+
+<p align="center">
+  <img src="website/assets/ComfyWorkflow.png" alt="PixlStash loader and saver nodes in a ComfyUI workflow" width="800"/>
+</p>
+
+### Inpaint, crop and compare
+
+- Paint a selection in the picture view's Edit tab (rectangle, ellipse, lasso,
+  brush, eraser, colour wand), describe what goes there, and an inpaint
+  workflow redraws only that part. Several inpaint workflows ship with
+  PixlStash, and *Convert to Inpainting workflow* makes one from your own
+  image-edit workflow.
+- Crop and rotate without ComfyUI.
+- Upscale with any workflow, including pictures you already have.
+- A before/after slider for an edit and its original, or for any two pictures
+  selected in the grid.
+- Edit several selected pictures at once. By default each edit is a new
+  picture in the original's stack.
+- *Open with* sends a picture to another app; save over it there and the edit
+  comes back stacked on the original.
+
+<p align="center">
+  <img src="website/assets/InpaintAxe.gif" alt="Inpainting an axe head into a gnome's hand in the Edit tab" width="800"/>
+</p>
+
+### Your folders
+
+- **Watched folders.** The library folder itself and any reference folders are
+  watched: rename or move a picture in your file manager and it keeps its tags,
+  score, people and sets. Import folders are watched for new files.
+- **Add a library from a folder you already have.** PixlStash reads it where
+  it sits and proposes which folder levels are projects, people, sets or tags.
+  Nothing is written until you confirm, and no file is copied, moved or
+  renamed.
+- **Import folders** (Settings › Libraries & imports) bring new files in as
+  they appear, such as ComfyUI's output folder. The **Inbox** under Review
+  holds whatever you added lately that has no person or set yet.
+- **Caption files** beside your pictures (`photo.txt`, `photo.caption`…) are
+  read on import and can be kept in sync both ways.
+- **Folder layouts** file new pictures into project, person or set folders.
+- **Exports** to a zip or straight into a folder, with captions and sidecars.
+  Generation data (the ComfyUI workflow, prompt and A1111 parameters) is
+  stripped from exported PNG, JPEG and WebP pictures unless you choose to keep
+  it.
+- In the desktop app, Ctrl+C or a Ctrl-drag copies the selected pictures out
+  as the original files.
+
+<p align="center">
+  <img src="website/assets/ScreenshotMapPreview.jpg" alt="Folder import preview listing the projects and sets the folders become" width="800"/>
+</p>
+
+### Libraries, models and training
+
+- **Multiple libraries** in one installation, one open at a time and switched
+  from the title bar. Pictures, tags, scores, snapshots, API tokens and share
+  links stay with their library; your account, preferences and model shelf
+  are shared. Pictures can be moved from one library to another.
+- **The model shelf** catalogues the folders holding your checkpoints, LoRAs,
+  VAEs, text encoders, GGUF models, upscalers and ControlNets: kind, base
+  model, precision, size and every folder a copy sits in. The folders keep
+  themselves up to date, and new models in your Downloads folder are picked
+  up.
+- **Workflow sets**: a card per checkpoint listing the VAEs, text encoders and
+  LoRAs that have run beside it, used to swap a workflow's models in one go.
+- Look up a missing base model on Civitai by file hash (nothing is uploaded),
+  and keep one copy of a duplicated model file.
+- A **Folders tree** of your drives and model folders with free space per
+  drive. Create, rename, move and remove folders, and drag or cut and paste
+  models between them, across drives too.
+- **LoRA training** from a person or a set with AI-toolkit, on your own GPU.
+  The Train dialog fits the run to your GPU, measures your machine on the first
+  run and gives a time estimate. *Create a training set…* on a person picks
+  the pictures for you.
+- **Training runs** have their own page: a loss curve with each checkpoint's
+  previews under it, and the time left. For a person, every
+  preview is rated for likeness. The finished LoRA goes on the shelf, attached
+  to the person or set, and a run can be trained longer or retried. Runs
+  trained in AI-toolkit outside PixlStash can be imported.
+- **Plugins** add tagger and captioning engines to the engine picker, and image
+  filters you apply to a selection from the grid.
+- **`pixlstash-cli`** manages libraries, writes and restores backups, and
+  installs plugins.
+
+<p align="center">
+  <img src="website/assets/TrainingReport.jpg" alt="A training run's page with loss and likeness curves and previews per checkpoint" width="800"/>
+</p>
+
+### Browse and organise
+
+- A fast grid, justified or square. Thumbnails appear at once and the details
+  fill in after.
+- People, picture sets and projects. Sets can sit inside a person or another
+  set, and one person or set can belong to several projects.
+- **Favourites**: press H to mark a picture. On a model, workflow set or
+  workflow, it puts that item first in every list you pick from.
+- **Tag groups.** Every library starts with default groups that file common
+  tagger tags, tags that name a colour show their chip in that colour, and a
+  Danbooru tag database (.xlsx or .csv) can be imported to file tags by its
+  categories.
+- Copy tags from one picture and paste them onto another or onto a selection.
+- A search field that finds tags, faces, checkpoints, LoRAs and workflows as
+  you type, metadata filters, and Union, Overlap, Difference and XOR on people
+  and sets.
+- Review queues for likely duplicates and for stacks whose pictures no longer
+  match.
+- Undo, redo and history, plus automatic snapshots with full or selective
+  restore. Deleted pictures wait in the Scrapheap.
+- Lock a finished set to freeze its tags, descriptions and scores. Sets can
+  have their own icon and colour.
+- Security notifications in the title bar when a fix is available.
+- Keyboard shortcuts for navigation, selection, scoring and tagging.
+- Read-only share links for pictures, sets, people and projects. Links can be
+  revoked and can carry your watermark.
+- View URLs you can bookmark or reload and land where you left off.
+- A REST API, and `pixlstash-mcp` for AI agents ([below](#connecting-an-ai-agent-mcp)).
 
 ## How is this different from Immich?
 
 Immich is a very good home photo server. If that's what you need, use it! PixlStash does a different job.
 
-**PixlStash does both of the AI features Immich is known for.** CLIP semantic
-search and InsightFace face recognition are in here too, along with duplicate
-detection. Immich documents two machine-learning tasks, smart search and facial
-recognition, and does them well for the job it is built for: finding a photo you
-already took. Immich also has OCR and mobile apps with background sync, which
-PixlStash does not.
+**PixlStash does the AI features Immich is known for.** CLIP semantic search,
+InsightFace face recognition and reading the text in pictures are in here too,
+along with duplicate detection. Immich does these well for the job it is built
+for: finding a photo you already took. Immich also has mobile apps with
+background sync, which PixlStash does not.
 
 What PixlStash adds is everything that happens *after* you have found the
 pictures. It is a tool for working with images rather than just storing them,
@@ -54,8 +235,9 @@ though it works as a home server too:
 - A tag review queue and a tag health board, so auto-tags are verified rather than trusted
 - Quality, anomaly and character-likeness scoring, so a large set sorts by what is worth looking at
 - Segmentation, reverse face search and reverse likeness search
-- Dataset export, and ai-toolkit run import with sample images and version history
 - Two-way ComfyUI integration: control ComfyUI from PixlStash, or call its nodes from your own workflows. Generated images return tagged, with People, Picture Set, and Project associations attached
+- A workflow library with recipes, inpainting and before/after comparison
+- LoRA training from a person or a set, import of AI-toolkit runs, and dataset export
 - A tagger plugin API, so a model we have never heard of shows up in the engine picker
 
 Full breakdown, including a capability-by-capability comparison table:
@@ -65,11 +247,11 @@ Full breakdown, including a capability-by-capability comparison table:
 
 <p align="center">
   <a href="https://pixlstash.dev/install.html">
-    <img src="website/assets/install-banner.svg" alt="Install PixlStash" width="320"/>
+    <img src="website/assets/install-banner.svg" alt="Install PixlStash" width="200"/>
   </a>
   &nbsp;
   <a href="https://demo.pixlstash.dev?token=o75qQ-w0fy_FraPb2sdxcGOVTBoKFmmZwStycljomSs">
-    <img src="website/assets/demo-banner.svg" alt="Try the Demo" width="320"/>
+    <img src="website/assets/demo-banner.svg" alt="Try the Demo" width="200"/>
   </a>
 </p>
 
@@ -129,7 +311,7 @@ whichever library is open. Only the owner, signed in from the local network,
 can change that (a token cannot change it, its own included). A share link and
 the ComfyUI link key always stay with their library.
 
-**Settings → Libraries** does all of it: add a library, rename one, switch
+**Settings → Libraries & imports** does all of it: add a library, rename one, switch
 between them, and stop using one. **Add a library…** takes a single folder and
 works out what it is — a library you already made is added as it is, with its
 tags, scores and people; a folder of pictures is brought in as it stands; an
@@ -152,7 +334,7 @@ library's share links offline. It also sees no folder paths. Set
 ### The library command line
 
 The same things can be done from a terminal, which is what a script or a cron
-job wants. **Settings → Libraries** shows the exact command for your
+job wants. **Settings → Libraries & imports** shows the exact command for your
 installation, with a copy button.
 
 Run these on the machine hosting PixlStash, as the OS user that owns `hub.db`,
@@ -167,6 +349,7 @@ pixlstash-cli libraries create /path/to/new-library --name "New library"
 pixlstash-cli libraries attach /path/to/existing-library --name "Existing library"
 pixlstash-cli libraries rename "Existing library" "Better name"
 pixlstash-cli libraries relocate "Existing library" /new/path
+pixlstash-cli libraries activate "Existing library"
 pixlstash-cli libraries detach "Existing library"
 pixlstash-cli libraries backup "Existing library" /path/to/backups/
 pixlstash-cli libraries backup "Existing library" /path/to/backups/monday.tar.zst
@@ -179,14 +362,20 @@ pixlstash-cli libraries restore /path/to/backups/monday.tar.zst /path/to/new-lib
 | `create` | Creates the folder, starts an empty library in it, and registers it. |
 | `attach` | Registers a library folder that already exists on disk. |
 | `rename` | Changes the display name. Nothing on disk moves. |
-| `relocate` | Points an existing registration at a new path, keeping its identity and share links. |
+| `relocate` | Points an existing registration at a new path, keeping its identity and share links. `--same-library` refuses a folder holding any other library. |
+| `activate` | Makes a library the one PixlStash opens next time it starts. For when the active library is missing and the server will not start; run it with PixlStash stopped. |
 | `detach` | Forgets a library. **No files are removed and nothing inside the folder changes.** |
 | `backup` | Writes the library and the hub to a single archive. |
 | `restore` | Unpacks an archive into a **new** folder and makes it the library that opens. |
 
 Notes worth knowing before you need them:
 
-- `detach` refuses the **active** library. Switch to another one first.
+- `detach` refuses the **active** library. Switch to another one first (in
+  Settings, or with `activate` while PixlStash is stopped).
+- If the active library's folder is deleted, moved or on a drive that is not
+  connected, PixlStash will not start, and says so with the exact commands to
+  `relocate` it, `activate` another one, or `create` a new one. Nothing is
+  created in the old folder. The desktop app shows the same choices as buttons.
 - Reattaching the same folder revives its original registration, including its
   share links, because a library carries a fingerprint of its own identity.
 - A backup is a **zstd-compressed tar**, named `.tar.zst` — not `.tar.gz`.
@@ -227,7 +416,7 @@ the environment PixlStash is installed into is active.
   (`~/.local/bin` on Linux and macOS, `%LOCALAPPDATA%\PixlStash\bin` — added to
   your user `PATH` — on Windows) and type `pixlstash libraries list` instead;
   open a new terminal afterwards. Either form targets the desktop app's own hub;
-  there is no need to pass `--hub`. Settings › Libraries always shows the exact
+  there is no need to pass `--hub`. Settings › Libraries & imports always shows the exact
   command for your install.
 - **A different hub** than the default: put global options *before* `libraries`,
   e.g. `pixlstash-cli --hub /path/to/hub.db libraries list`. Without `--hub` the
@@ -820,7 +1009,9 @@ shell where PixlStash runs.
 
 Tools: `search_pictures`, `list_pictures`, `count_pictures`, `get_picture`,
 `view_picture`, `list_tags`, `list_sets`, `list_characters`, `list_projects`,
-`get_recipe`.
+`list_picture_workflows`, `get_recipe`.
+`list_picture_workflows` lists the workflows the pictures the token can see were
+made with, how many pictures each, and the LoRAs each one loads.
 `list_pictures` and `search_pictures` also narrow by `set_id`, `character_id`,
 `project_id` and `tags`; `list_pictures` and `count_pictures` also by the
 `workflow_id` a recipe names. `get_recipe` says whether the model forks into
@@ -911,9 +1102,11 @@ PixlStash maintains separate Dockerfiles:
 - `Dockerfile`: CPU image
 - `Dockerfile.gpu`: GPU image (NVIDIA CUDA)
 
-Build locally:
+Build locally (the images carry the ComfyUI nodes from the submodule, so check it out first):
 
 ```bash
+git submodule update --init
+
 # CPU
 docker build -f Dockerfile -t pixlstash:cpu .
 
@@ -983,29 +1176,40 @@ Expected output should include `CUDAExecutionProvider`.
 
 If you prefer CPU mode, set `"default_device": "cpu"` in `server-config.json`.
 
+### Face extraction and WD14 on an AMD GPU (ROCm, experimental)
+
+The bundled ONNX Runtime is the CPU build, so on ROCm face extraction and the
+WD14 tagger run on the CPU while everything else uses the GPU. If MIGraphX is
+part of your ROCm install, the AMD build of ONNX Runtime moves them to the GPU:
+
+```bash
+pip uninstall -y onnxruntime
+pip install onnxruntime-migraphx
+```
+
+The startup log then names `MIGraphXExecutionProvider`.
+
 ### Import Folders and Reference Folders in Docker
 
 Because Docker containers have an isolated filesystem, folders on your host machine must be explicitly bind-mounted into the container before PixlStash can read them.
 
 **Key restrictions:**
 
-- **No folder browser.** The path browser is unavailable in Docker. You must type the host path manually in the folder editor.
-- **Volume mount required before the folder becomes active.** When you add a new Import or Reference folder, PixlStash saves it with a `pending_mount` status. The folder will not scan or import until you restart the container with the corresponding `-v` mount in your `docker run` command.
-- **Container restart needed for each new folder.** Adding a folder in the UI does not automatically mount it. You must stop and recreate the container with the new `-v` flag, then open PixlStash again.
+- **Type container paths.** Add a library has no folder browser in Docker, and every folder path you enter is the path inside the container.
+- **Mount the folder first.** Docker cannot add a mount to a running container, so stop and recreate the container with the new `-v` flag before adding the folder in PixlStash.
 
 **Workflow:**
 
-1. Open the sidebar **Folders** tab and add a new Import or Reference folder.
-2. Enter the **host path** (the path on your machine) and note the suggested **container path** (e.g. `/data/import/pictures-001` or `/data/ref/pictures-001`).
-3. The editor shows a ready-to-copy `docker run` restart command that includes all current mounts. Copy and run it to recreate the container with the new mount.
-4. After the container restarts, the folder status changes from `pending_mount` to active and scanning begins.
+1. Recreate the container with a `-v <host path>:<container path>` mount for the folder (example below).
+2. For an import folder, open **Settings › Libraries & imports** and choose **Add import folder…**. Enter the container path as **Folder** and the path on your machine as **Folder on the host**.
+3. To read a folder of pictures in place, choose **Add a library…** in the title bar's library picker and enter the container path. Reference folders added before 2.0 keep working as they are.
 
-**Example** — adding a reference folder to an existing GPU container:
+**Example**: mounting a folder into an existing GPU container:
 
 ```bash
 docker rm -f pixlstash-gpu 2>/dev/null || true
 docker run -d \
-  --runtime nvidia \
+  --gpus all \
   -e HOME=/home/pixlstash \
   -e PIXLSTASH_HOST=0.0.0.0 \
   -p 9537:9537 \

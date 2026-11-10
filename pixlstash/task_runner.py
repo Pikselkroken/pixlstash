@@ -76,6 +76,7 @@ class TaskRunner:
         self._queue_seq = itertools.count()
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
+        self._gpu_worker: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._active_task_lock = threading.Lock()
         self._active_tasks: dict[int, BaseTask] = {}  # thread ident -> running task
@@ -464,6 +465,7 @@ class TaskRunner:
         )
         gpu_worker.start()
         self._threads.append(gpu_worker)
+        self._gpu_worker = gpu_worker
 
     def stop(self):
         with self._lock:
@@ -579,6 +581,10 @@ class TaskRunner:
 
     def is_running(self) -> bool:
         return any(t.is_alive() for t in self._threads)
+
+    def gpu_worker_alive(self) -> bool:
+        """True while the GPU worker thread runs, even one that outlived ``stop()``."""
+        return self._gpu_worker is not None and self._gpu_worker.is_alive()
 
     def _run(self, work_queue: queue.PriorityQueue):
         logger.debug("TaskRunner %s worker started.", self._name)

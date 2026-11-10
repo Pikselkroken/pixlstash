@@ -124,7 +124,10 @@ in (workflow_id, and a workflow_link to open it in PixlStash), whether its \
 model forks into several sampler passes and which LoRAs feed each \
 (lora_chain), and how many nodes of each class it runs (node_class_counts).
 - "other pictures made with that workflow" -> list_pictures or count_pictures \
-with its workflow_id."""
+with its workflow_id.
+- "what workflows do I have" -> list_picture_workflows: every workflow the \
+visible pictures were made with, how many pictures each, and the LoRAs each \
+variant loads."""
 
 READ_ONLY_ENDING = """\
 Everything is read-only; there is no tool here that changes the library. A \
@@ -315,6 +318,18 @@ READ_TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "list_picture_workflows",
+        "description": "The workflows the pictures you can see were made "
+        "with, most pictures first: each workflow_id with its picture count, "
+        "and per variant a count, an example_picture_id and the LoRAs its "
+        "graph loads, in order along the model path. Read off the pictures' "
+        "own files without asking ComfyUI, so whether the model forks into "
+        "several sampler passes is not told apart here: get_recipe on the "
+        "example_picture_id says. Pass a workflow_id to list_pictures or "
+        "count_pictures for its pictures.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "get_recipe",
         "description": "How a picture was made, when it carries a ComfyUI "
         "recipe: prompt, seed, models, LoRAs and node classes with their "
@@ -440,9 +455,10 @@ WORKFLOW_TOOLS = [
         "over that workflow as its next version: the workflow keeps its "
         "name, pictures and recipes, the graph it replaces is kept as the "
         "version before, and the answer carries the version. Without it, "
-        "every call stores a new manual workflow named after `name` (API or "
-        "UI format, identical copies included) and the answer carries its "
-        "workflow_id.",
+        "it stores a new manual workflow named after `name` (API or UI "
+        "format) and the answer carries its workflow_id; a graph already in "
+        "the library (the same nodes, values and links, whatever the layout) "
+        "is refused with 409 naming the workflow_id and name it is there as.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -784,6 +800,10 @@ def _checked(status: int, content_type: str, body: bytes) -> tuple[str, bytes]:
     if status not in (200, 201):
         try:
             detail = json.loads(body).get("detail", "")
+            if isinstance(detail, dict):
+                # A structured refusal (an import already in the library) is
+                # handed on whole, so the agent reads the ids it names.
+                detail = json.dumps(detail)
         except (ValueError, AttributeError):
             detail = body[:200].decode("utf-8", "replace")
         if status == 401:
@@ -854,6 +874,8 @@ def call_tool(
         return _json_content(_get(fetch, "/characters")[1])
     if name == "list_projects":
         return _json_content(_get(fetch, "/projects")[1])
+    if name == "list_picture_workflows":
+        return _json_content(_get(fetch, "/pictures/workflows")[1])
     if name == "get_recipe":
         path = f"/comfyui/pictures/{_picture_id(arguments)}/recipe"
         recipe = _workflow_links(json.loads(_get(fetch, path)[1]))

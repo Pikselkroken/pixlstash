@@ -1324,7 +1324,7 @@ def _describe_ghosts(
     """Fill in what each workflow keeps of something deleted (F7's Ghosts filter).
 
     Two kinds, counted apart because forgetting them is two different purges in
-    Settings › Privacy: a **picture ghost** is the thumbnail and prompt of a
+    Settings › Recovery: a **picture ghost** is the thumbnail and prompt of a
     picture this library no longer has, and a **model ghost** is a VALUE naming
     a model the shelf does not hold - a filename, or a ``*_sha256`` digest,
     which is what :func:`~pixlstash.hub.workflows.model_ghost_names` judges.

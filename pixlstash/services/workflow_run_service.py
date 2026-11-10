@@ -803,11 +803,15 @@ def apply_choices(graph: dict, choices: list[tuple[str, str, str]]) -> None:
         inputs[field_name] = value
 
 
-def with_pack_outdated(reasons: list[Reason], files: set[str]) -> list[Reason]:
+def with_pack_outdated(
+    reasons: list[Reason], files: set[str], *, can_update: bool = False
+) -> list[Reason]:
     """*reasons* with every missing model in *files* moved to ``pack_outdated``.
 
     *files* are the checkpoints a current ComfyUI-PixlStash would load off the
     shelf, so they are not missing: the running ComfyUI's pack is old.
+    ``can_update`` says PixlStash carries a current pack it can install there
+    (``POST /comfyui/pack/install``).
     """
     moved: list[dict] = []
     kept: list[Reason] = []
@@ -828,7 +832,11 @@ def with_pack_outdated(reasons: list[Reason], files: set[str]) -> list[Reason]:
                     continue
                 reason = Reason(MISSING_MODELS, {**reason.detail, "models": models})
         kept.append(reason)
-    return [*kept, Reason(PACK_OUTDATED, {"models": moved})] if moved else kept
+    return (
+        [*kept, Reason(PACK_OUTDATED, {"models": moved, "can_update": can_update})]
+        if moved
+        else kept
+    )
 
 
 def with_pixlstash_refusals(reasons: list[Reason], nodes: list[dict]) -> list[Reason]:

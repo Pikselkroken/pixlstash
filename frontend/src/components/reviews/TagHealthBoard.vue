@@ -1,10 +1,12 @@
 <template>
   <div class="rs-board">
     <div class="rs-board-inner">
-      <div class="rs-board-heading">
-        <h2 class="rs-board-title">Which tags need review?</h2>
-        <span class="rs-board-subtitle">{{ subtitle }}</span>
-        <span class="rs-board-heading-spacer"></span>
+      <!-- The board's controls sit on the view's toolbar line, the app
+           toolbar's order: freshness and scope on the left, then the filter,
+           Anomalies and Sort on the right where search sits on the grid.
+           Drawn in place when there is no toolbar (a component test). -->
+      <Teleport :to="toolbarTarget" :disabled="!toolbarTarget" defer>
+      <div class="rs-board-controls">
         <button
           class="rs-board-rebuild-persistent"
           :class="{
@@ -27,10 +29,19 @@
               : "Never built"
           }}
         </button>
-      </div>
-
-      <div class="rs-board-controls">
-        <Tooltip text="Only count pictures in this project">
+        <span class="rs-board-controls-sep" aria-hidden="true"></span>
+        <!-- Groups (the default) or Health, the app's boxed switch. Read-only sessions have no
+             groups to show, so the board stays the health list for them. -->
+        <div v-if="showViewSwitch" class="rs-board-view">
+          <Segmented
+            :options="BOARD_VIEWS"
+            :model-value="boardView"
+            aria-label="Tag board view"
+            @update:model-value="tagGroups.setBoardView($event)"
+          />
+        </div>
+        <span class="rs-board-controls-sep" aria-hidden="true"></span>
+        <Tooltip v-if="!isGroups" text="Only count pictures in this project">
           <template #activator="{ props: tipProps }">
             <select
               class="rs-board-scope"
@@ -46,7 +57,7 @@
             </select>
           </template>
         </Tooltip>
-        <Tooltip text="Only count pictures in this set">
+        <Tooltip v-if="!isGroups" text="Only count pictures in this set">
           <template #activator="{ props: tipProps }">
             <select
               class="rs-board-scope"
@@ -66,7 +77,7 @@
             </select>
           </template>
         </Tooltip>
-        <Tooltip text="Only count pictures of this character">
+        <Tooltip v-if="!isGroups" text="Only count pictures of this character">
           <template #activator="{ props: tipProps }">
             <select
               class="rs-board-scope"
@@ -83,6 +94,28 @@
             </select>
           </template>
         </Tooltip>
+        <Tooltip
+          v-if="!isGroups && tagGroups.hasGroups"
+          text="Only show tags in this group"
+        >
+          <template #activator="{ props: tipProps }">
+            <select
+              class="rs-board-scope"
+              :class="{ 'rs-board-scope--set': groupScope != null }"
+              :value="groupScope ?? ''"
+              aria-label="Tag group"
+              v-bind="tipProps"
+              @change="pickGroup($event)"
+            >
+              <option value="">Group: Any</option>
+              <option value="none">Ungrouped</option>
+              <option v-for="g in tagGroups.groups" :key="g.id" :value="g.id">
+                {{ g.name }}
+              </option>
+            </select>
+          </template>
+        </Tooltip>
+        <span class="rs-board-controls-spacer"></span>
         <div class="rs-board-filter">
           <v-icon size="16" class="rs-board-filter-icon">mdi-magnify</v-icon>
           <input
@@ -95,6 +128,7 @@
           />
         </div>
         <button
+          v-if="!isGroups"
           class="rs-board-anomaly-toggle"
           :class="{ 'rs-board-anomaly-toggle--on': anomalyOnly }"
           type="button"
@@ -106,9 +140,9 @@
             activator="parent"
           />
           <v-icon size="16">mdi-alert-octagon-outline</v-icon>
-          Anomalies only
+          Anomalies
         </button>
-        <Tooltip text="Sort the board">
+        <Tooltip v-if="!isGroups" text="Sort the board">
           <template #activator="{ props: tipProps }">
             <select
               class="rs-board-sort"
@@ -123,6 +157,9 @@
           </template>
         </Tooltip>
       </div>
+      </Teleport>
+
+      <p v-if="!isGroups" class="rs-board-subtitle">{{ subtitle }}</p>
 
       <!-- Terminal state: the board is scoped to a LOCKED set. A locked set's
            pictures are read-only, so no tag on them can be reviewed - showing
@@ -130,9 +167,10 @@
            (the backend 423s it). Replace the whole body with the explanation
            instead; the controls above stay mounted so the user can scope back
            out. Follows ReviewSessionView.vue's `.rs-state` terminal-state
-           pattern (centred column, display icon, headline, sub-line). -->
+           pattern (centred column, display icon, headline, sub-line). Groups
+           ignores the scope, so the explanation does not replace it. -->
       <div
-        v-if="scopedSetLocked"
+        v-if="!isGroups && scopedSetLocked"
         ref="lockedRef"
         class="rs-board-locked"
         role="status"
@@ -145,6 +183,13 @@
           Pick another set - or “Set: Any” - to get the board back.
         </p>
       </div>
+
+      <TagGroupsBoard
+        v-else-if="isGroups"
+        ref="groupsRef"
+        :filter="filter"
+        @start-review="emit('start-review', $event)"
+      />
 
       <template v-else>
         <!-- Cache (re)build in progress, OR a board-scope refetch in flight: show
@@ -389,12 +434,16 @@
 // health bar, "Why it ranks here" shown, wide table. Tags outside the tagger
 // vocabulary keep an ENABLED "Start review" (kNN review still works) plus a
 // "no model signal" chip.
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
+import { isReadOnly } from "../../utils/apiClient";
 // Same words as NewReviewDialog's locked set option/trigger tooltip - one
 // source so the two surfaces can't drift apart.
 import { LOCKED_SET_HEADLINE, lockedSetTitle } from "./lockedSetCopy";
+import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import TagGroupsBoard from "./TagGroupsBoard.vue";
 // relativeDate already solves the "naive ISO string = UTC" quirk backend
 // timestamps carry (computed_at is the same shape as the snapshot timestamps
 // this helper was written for) - reuse it rather than re-deriving the same
@@ -412,13 +461,73 @@ import {
   zeroTailStart,
 } from "./tagHealthBoardLogic";
 
+defineProps({
+  // Where the controls draw: the view's toolbar line. Null draws them in place.
+  toolbarTarget: { type: String, default: null },
+});
 const emit = defineEmits(["start-review"]);
 const store = useReviewSessionsStore();
+const tagGroups = useTagGroupsStore();
 
 const anomalyOnly = ref(false);
 const filter = ref("");
 const filterRef = ref(null);
 const sort = ref({ key: "score", dir: "desc" });
+
+// --- Health | Groups -------------------------------------------------------
+// The switch is this machine's choice (tagGroups.boardView). A read-only
+// session cannot read the groups, so it has no switch and stays on Health.
+const BOARD_VIEWS = [
+  { id: "groups", label: "Groups" },
+  { id: "health", label: "Health" },
+];
+const showViewSwitch = computed(() => !isReadOnly.value);
+const boardView = computed(() =>
+  isReadOnly.value ? "health" : tagGroups.boardView,
+);
+const isGroups = computed(() => boardView.value === "groups");
+
+// Health's "Group: Any" scope: null (any), "none" (Ungrouped) or a group id.
+// It narrows the rows client-side, so it needs no server round trip.
+const groupScope = ref(null);
+
+function pickGroup(event) {
+  const raw = event.target.value;
+  groupScope.value = raw === "" ? null : raw === "none" ? "none" : Number(raw);
+  event.target.blur();
+}
+
+// A chosen group that leaves the map (another library, a reload without it)
+// would narrow the board to nothing with no word why: it falls back to Any.
+// Ungrouped stays meaningful while any group exists, and goes with the last.
+watch(
+  () => tagGroups.groups,
+  (groups) => {
+    const scope = groupScope.value;
+    if (scope == null) return;
+    const gone =
+      scope === "none" ? !groups.length : !groups.some((g) => g.id === scope);
+    if (gone) groupScope.value = null;
+  },
+);
+
+function inGroupScope(tag) {
+  if (groupScope.value == null) return true;
+  const group = tagGroups.groupFor(tag);
+  return groupScope.value === "none" ? !group : group?.id === groupScope.value;
+}
+
+onMounted(() => {
+  tagGroups.fetch();
+});
+
+const groupsRef = ref(null);
+
+// The overlay's Escape: the Groups view clears its selection first. Returns
+// whether it did, so the overlay knows the key was spent.
+function handleEscape() {
+  return groupsRef.value?.escape() ?? false;
+}
 
 // --- Persistent rebuild control (Spec B) ------------------------------------
 
@@ -434,7 +543,7 @@ const rebuildTitle = computed(() => {
 function focusFilter() {
   filterRef.value?.focus();
 }
-defineExpose({ focusFilter });
+defineExpose({ focusFilter, handleEscape });
 
 function clearFilter() {
   filter.value = "";
@@ -542,6 +651,7 @@ const filteredRows = computed(() => {
   const needle = filter.value.trim().toLowerCase();
   return store.healthRows
     .filter((r) => !anomalyOnly.value || isAnomaly(r))
+    .filter((r) => inGroupScope(r.tag))
     .filter((r) => !needle || r.tag.toLowerCase().includes(needle));
 });
 
@@ -670,28 +780,17 @@ function openSessionFor(tag) {
 
 // --- Provably-empty "Start review" gate --------------------------------------
 
-// The gate is only sound when the row's signals describe the review that the
-// button would actually create - i.e. when the board's scope IS the review's
-// scope. ReviewSessionsOverlay.vue's `openNewReview()` (~:205-213) inherits the
-// board scope into the dialog ONLY when `store.healthScoped` is true; on an
-// unscoped board it prefills from the app selection instead
-// (`initialScopeFromSelection()`), which can be an entirely different set of
-// pictures from the vault-wide numbers on this row. Disabling a button on
-// signals that don't describe the resulting review would be a false negative,
-// so outside the scope-matching case the button stays enabled and the click
-// falls through to the dialog exactly as before.
+// The gate is sound because the row's signals describe the review the button
+// creates: ReviewSessionsOverlay.vue's `openNewReview(tag)` always prefills a
+// row-started review with the board's scope (unscoped board → whole library),
+// never the app selection. Unscoped rows come from the cached board, so a stale
+// cache (tags confirmed since it was built) does not gate: its zeros may be old.
 //
-// (This condition is deliberately a strict SUBSET of "the scopes match": an
-// unscoped board with an empty app selection also matches, but the board can't
-// see the app selection from here, and erring toward "enabled" is the safe
-// direction.)
-const gateApplies = computed(() => store.healthScoped);
-
 // Keyed by tag so the template resolves each row's reason with one lookup
 // instead of recomputing it for :disabled, :title, and :class separately.
 const blockedStarts = computed(() => {
   const blocked = new Map();
-  if (!gateApplies.value) return blocked;
+  if (store.healthStale) return blocked;
   for (const r of store.healthRows) {
     const reason = zeroYieldReason(r);
     if (reason) blocked.set(r.tag, reason);
@@ -764,38 +863,25 @@ const TAIL_TOGGLE_TITLE =
      the surrounding margin coming from `.rs-board`'s own padding. */
   width: 100%;
 }
-.rs-board-heading {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  margin-bottom: var(--space-2);
-}
-.rs-board-title {
-  font-size: var(--text-lg);
-  font-weight: var(--weight-bold);
-}
 .rs-board-subtitle {
+  margin: 0 0 var(--space-4);
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-.rs-board-heading-spacer {
-  flex: 1;
-  min-width: var(--space-3);
 }
 /* Always rendered (row count 0, 1, or many) - the escape hatch stays visible
    even after the board has been built once, unlike the empty-state's
    one-time-only .rs-board-rebuild button below. Quieter, ambient copy since
    it's on screen at all times. */
 .rs-board-rebuild-persistent {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 var(--space-3);
+  gap: var(--space-2);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
-  background: rgba(var(--v-theme-on-dark-surface), 0.05);
+  border: 1px solid transparent;
+  background: transparent;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
   font-size: var(--text-2xs);
   white-space: nowrap;
@@ -821,16 +907,40 @@ const TAIL_TOGGLE_TITLE =
 }
 
 .rs-board-controls {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  margin: 6px 0 14px;
+  gap: var(--space-2);
+}
+.rs-board-controls-sep {
+  flex-shrink: 0;
+  width: 1px;
+  height: 20px;
+  margin: 0 var(--space-2);
+  background: rgba(var(--v-theme-on-dark-surface), 0.14);
+}
+.rs-board-controls-spacer {
+  flex: 1;
+}
+/* The Health | Groups switch sits on the dark toolbar: the theme's ink is
+   remapped onto the dark surface's, as PaintOptionsBar does, so the Segmented
+   track and its labels read here. */
+.rs-board-view {
+  --v-theme-on-surface: var(--v-theme-on-dark-surface);
+  --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
+  --track-trough: rgba(var(--v-theme-scrim), 0.34);
+  --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
+  display: inline-flex;
+  flex-shrink: 0;
 }
 .rs-board-filter {
   position: relative;
   display: inline-flex;
   align-items: center;
+  /* The one control on the toolbar line that gives way on a narrow window. */
+  flex: 0 1 130px;
+  min-width: 80px;
 }
 .rs-board-filter-icon {
   position: absolute;
@@ -839,8 +949,8 @@ const TAIL_TOGGLE_TITLE =
   pointer-events: none;
 }
 .rs-board-filter-input {
-  height: 30px;
-  width: 190px;
+  height: var(--control-h);
+  width: 100%;
   padding: 0 var(--space-2) 0 28px;
   border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
@@ -854,8 +964,8 @@ const TAIL_TOGGLE_TITLE =
 .rs-board-anomaly-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  height: 30px;
+  gap: var(--space-2);
+  height: var(--control-h);
   padding: 0 11px;
   border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
@@ -871,7 +981,7 @@ const TAIL_TOGGLE_TITLE =
 }
 .rs-board-sort,
 .rs-board-scope {
-  height: 30px;
+  height: var(--control-h);
   padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
@@ -892,9 +1002,14 @@ const TAIL_TOGGLE_TITLE =
 .rs-board-scope--set {
   border-color: rgb(var(--v-theme-dark-surface-primary));
 }
-.rs-board-scope {
-  max-width: 150px;
+.rs-board-sort {
+  max-width: 130px;
   text-overflow: ellipsis;
+}
+.rs-board-scope {
+  max-width: 110px;
+  text-overflow: ellipsis;
+  font-weight: var(--weight-regular);
 }
 
 .rs-board-building {
@@ -1007,14 +1122,18 @@ const TAIL_TOGGLE_TITLE =
 .rs-board-table {
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
   border-radius: var(--radius-md);
-  overflow: hidden;
+  /* Scrolls sideways rather than squeezing Why to nothing when the Reviews
+     inspector takes its 288px beside a narrow window. */
+  overflow-x: auto;
+  overflow-y: hidden;
   background: rgba(var(--v-theme-on-dark-surface), 0.03);
 }
 .rs-board-row {
+  min-width: min-content;
   display: grid;
   /* Compact density (locked): tag · needs-review · wrong · missing · mismatch ·
      last · why · action (Verified column cut - see Spec E) */
-  grid-template-columns: 172px 116px 98px 106px 84px 56px 1fr 116px;
+  grid-template-columns: 172px 116px 98px 106px 84px 56px minmax(160px, 1fr) 116px;
   gap: 10px;
   padding: 7px 14px;
   border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.08);

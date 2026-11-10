@@ -85,6 +85,32 @@ describe("deviceVramBar", () => {
     expect(Object.keys(byKind)).not.toContain("elsewhere");
   });
 
+  it("draws a tenant's reservation in its own colour, after what is in use, not as spare", () => {
+    // 2048 kept back: 1500 of it is AI Toolkit's reservation, the rest spare.
+    const bar = deviceVramBar({ ...CARD, reserved_by: { aitoolkit: 1500 } }, []);
+    expect(bar.segments.map((s) => [s.key, s.mb])).toEqual([
+      ["other", 24576 - 10240],
+      ["aitoolkit-reserved", 1500],
+      ["spare", 2048 - 1500],
+    ]);
+    expect(bar.segments[1].reserved).toBe(true);
+    expect(bar.segments[1].kind).toBe("aitoolkit");
+  });
+
+  it("never draws more reserved than the memory kept back, and drops no tenant", () => {
+    // Over-committed: 4096 reserved against 2048 kept back. Both halve.
+    const bar = deviceVramBar(
+      { ...CARD, reserved_by: { pixlstash: 2048, aitoolkit: 2048 } },
+      [],
+    );
+    const reserved = bar.segments.filter((s) => s.reserved);
+    expect(reserved.map((s) => [s.kind, s.mb])).toEqual([
+      ["pixlstash", 1024],
+      ["aitoolkit", 1024],
+    ]);
+    expect(bar.segments.map((s) => s.kind)).not.toContain("spare");
+  });
+
   it("draws no spare when a request could get all the free memory", () => {
     const bar = deviceVramBar({ ...CARD, budget_mb: 10240 }, []);
     expect(bar.segments.map((s) => s.kind)).toEqual(["other"]);

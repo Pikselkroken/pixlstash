@@ -6,7 +6,6 @@ import {
   IMPORT_FILE_ACCEPT,
 } from "../../utils/media.js";
 import { listProjects } from "../../api/projects.js";
-import { listImportFolders } from "../../api/folders.js";
 import ProjectEditor from "../editors/ProjectEditor.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -29,10 +28,6 @@ const activeTab = ref("local");
 const localInputRef = ref(null);
 const localFiles = ref([]);
 const dragActive = ref(false);
-const importFolders = ref([]);
-const importFoldersLoading = ref(false);
-const importFoldersError = ref("");
-const importFoldersLoaded = ref(false);
 
 const projects = ref([]);
 const selectedProjectId = ref(null);
@@ -165,39 +160,8 @@ async function handleLocalDrop(event) {
   triggerLocalImport(files);
 }
 
-async function fetchWatchFolders({ force = false } = {}) {
-  if (importFoldersLoading.value) return;
-  if (importFoldersLoaded.value && !force) return;
-  importFoldersLoading.value = true;
-  importFoldersError.value = "";
-  try {
-    const body = await listImportFolders();
-    importFolders.value = body?.folders || [];
-    importFoldersLoaded.value = true;
-  } catch {
-    importFoldersError.value =
-      "Unable to load monitored folders. Check server connection.";
-    importFolders.value = [];
-  } finally {
-    importFoldersLoading.value = false;
-  }
-}
-
-watch(
-  [dialogOpen, activeTab],
-  ([isOpen, tab]) => {
-    if (isOpen && tab === "monitoring") {
-      fetchWatchFolders({ force: !importFoldersLoaded.value });
-    }
-  },
-  { immediate: false },
-);
-
 watch(dialogOpen, (isOpen) => {
-  if (isOpen) {
-    importFoldersLoaded.value = false;
-    fetchProjects();
-  }
+  if (isOpen) fetchProjects();
 });
 </script>
 
@@ -232,7 +196,6 @@ watch(dialogOpen, (isOpen) => {
     />
     <v-tabs v-model="activeTab" class="photo-import-tabs">
       <v-tab value="local">Local import</v-tab>
-      <v-tab value="monitoring">Automatic Folder Monitoring</v-tab>
       <v-tab value="google">Google Photos</v-tab>
       <v-tab value="icloud">iCloud Photos</v-tab>
       <v-tab value="flickr">Flickr</v-tab>
@@ -269,27 +232,6 @@ watch(dialogOpen, (isOpen) => {
               Choose files
             </AppButton>
           </div>
-        </div>
-      </v-window-item>
-      <v-window-item value="monitoring">
-        <div class="google-photos-instructions">
-          <div class="google-photos-section-title">
-            Automatic Folder Monitoring
-          </div>
-          <p class="google-photos-note">
-            Import folders are managed directly in PixlStash.
-          </p>
-          <ol>
-            <li>Open the sidebar <strong>Folders</strong> tab.</li>
-            <li>
-              Click <strong>Add folder</strong> and choose
-              <strong>Import folder</strong>.
-            </li>
-            <li>
-              Set <strong>Delete source files after import</strong> if you
-              want one-way ingest behavior.
-            </li>
-          </ol>
         </div>
       </v-window-item>
       <v-window-item value="google">
@@ -497,49 +439,5 @@ watch(dialogOpen, (isOpen) => {
 .local-import-dropzone-text {
   font-weight: 500;
   color: rgba(var(--v-theme-on-surface), 0.8);
-}
-
-.watch-folder-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.watch-folder-list {
-  margin: 0;
-  padding-left: var(--space-5);
-  display: grid;
-  gap: var(--space-3);
-  color: rgba(var(--v-theme-on-surface), 0.8);
-  font-size: var(--text-base);
-}
-
-.watch-folder-list-item {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.watch-folder-list-label {
-  font-weight: 600;
-}
-
-.watch-folder-list-path {
-  font-family:
-    "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", monospace;
-  font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-surface), 0.66);
-}
-
-.watch-folder-list-badge {
-  display: inline-block;
-  width: fit-content;
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-pill);
-  font-size: var(--text-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  background: rgba(var(--v-theme-warning), 0.16);
-  color: rgb(var(--v-theme-surface-warning));
 }
 </style>

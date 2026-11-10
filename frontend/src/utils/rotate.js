@@ -61,7 +61,7 @@ export const ROTATE_REFERENCE_FOLDER_REASON =
 /**
  * Can this picture's own file be rotated in place?
  *
- * @param {Object|null} image - a grid or overlay picture record; needs `format`
+ * @param {Object|null} image - a grid or lightbox picture record; needs `format`
  *   and `reference_folder_id`, both of which ride the grid listing.
  * @returns {boolean}
  */

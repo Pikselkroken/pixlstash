@@ -1,0 +1,194 @@
+{
+  "id": "flux2-klein-9b-base",
+  "version": 1,
+  "label": "FLUX.2 Klein 9B Base",
+  "requires_arch": "flux2",
+  "template": "zimage-turbo-lora",
+  "divisibility": 16,
+  "locked": {
+    "model.arch": "flux2_klein_9b",
+    "model.name_or_path": "black-forest-labs/FLUX.2-klein-base-9B",
+    "model.model_kwargs.match_target_res": false,
+    "datasets[*].cache_latents_to_disk": true,
+    "network.network_kwargs.ignore_if_contains": [],
+    "train.noise_scheduler": "flowmatch",
+    "sample.sampler": "flowmatch"
+  },
+  "defaults": {
+    "datasets[*].resolution": [512, 768, 1024],
+    "train.timestep_type": "weighted",
+    "train.optimizer": "adamw8bit",
+    "train.batch_size": 1,
+    "save.save_every": 250,
+    "sample.sample_every": 250
+  },
+  "inference_target": "base",
+  "preview": {
+    "base": {
+      "sample.sample_steps": 30,
+      "sample.guidance_scale": 4,
+      "sample.width": 1024,
+      "sample.height": 1024
+    }
+  },
+  "subject": {
+    "person": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "balanced"
+    },
+    "style": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "style"
+    },
+    "thing": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "balanced"
+    }
+  },
+  "effort": {
+    "gentle": {
+      "steps_per_picture": 60,
+      "min_steps": 1000,
+      "max_steps": 1500,
+      "train.lr": 8e-05,
+      "network.linear": 16
+    },
+    "standard": {
+      "steps_per_picture": 100,
+      "min_steps": 1500,
+      "max_steps": 2500,
+      "train.lr": 0.0001,
+      "network.linear": 32
+    },
+    "strong": {
+      "steps_per_picture": 150,
+      "min_steps": 2000,
+      "max_steps": 3000,
+      "train.lr": 0.0001,
+      "network.linear": 32
+    }
+  },
+  "fit": {
+    "auto": ["q8", "q8_cached", "q8_low_vram", "q8_offload"],
+    "save_memory": ["q8_offload"],
+    "best_quality": ["bf16_cached"]
+  },
+  "hardware_profiles": {
+    "q8": {
+      "label": "8-bit model · text encoder on the GPU",
+      "vram_mb": 25300,
+      "ram_mb": 49200,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": false,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "q8_cached": {
+      "label": "8-bit model · captions encoded once",
+      "vram_mb": 21500,
+      "ram_mb": 49200,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "q8_low_vram": {
+      "label": "8-bit model · loaded one part at a time",
+      "vram_mb": 15600,
+      "ram_mb": 49200,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": true,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "q8_offload": {
+      "label": "8-bit model · 60% of layers in RAM",
+      "vram_mb": 10800,
+      "ram_mb": 49200,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": true,
+        "model.layer_offloading": true,
+        "model.layer_offloading_transformer_percent": 0.6,
+        "model.layer_offloading_text_encoder_percent": 0.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "bf16_cached": {
+      "label": "Full-precision model · captions encoded once",
+      "vram_mb": 26300,
+      "ram_mb": 49200,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": false,
+        "model.quantize_te": false,
+        "model.low_vram": true,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    }
+  },
+  "sources": {
+    "locked": "ai-toolkit ui/src/app/jobs/new/options.tsx (flux2_klein_9b, match_target_res off); extensions_built_in/diffusion_models/flux2/flux2_klein_model.py, which reads flux-2-klein-base-9b.safetensors, the Qwen3-8B text encoder and the ai-toolkit/flux2_vae VAE. Latents are cached, as for Krea 2, where encoding every step was measured at 5 GB above training. The repository is gated under the FLUX Non-Commercial License",
+    "divisibility": "flux2_model.py get_bucket_divisibility: 16",
+    "defaults": "ai-toolkit UI defaults for flux2_klein_9b (timestep weighted). Timestep sampling is contested: BFL's training guide names none and community guides differ, so this is ai-toolkit's choice, not a settled one. BFL's guide: train at 1024 or above, 512 for fast iterations",
+    "preview.base": "black-forest-labs/FLUX.2-klein-base-9B model card: 50 steps at guidance 4.0, 1024 x 1024; previews use 30 steps to keep a preview round short",
+    "subject": "heuristic, as for Z-Image Turbo: ai-toolkit's own caption dropout default is 0.0; content_or_style per jobs/process/BaseSDTrainProcess.py",
+    "effort": "BFL's FLUX.2 [klein] training guide (docs.bfl.ai/flux_2/flux2_klein_training): lr 8e-5 to 1e-4, lower for a style; 1500-2500 steps for a style, 1500-3000 for a character; no source gives a steps-per-picture rule",
+    "hardware_profiles": "derived from flux2_model.py's load order and the weights, never run here: a 9B transformer (18 GB bf16, 9 GB qfloat8, quantised on the CPU), an 8.2B Qwen3-8B text encoder (16.4 GB bf16, 8.2 GB qfloat8, quantised on the CPU), a 0.3 GB VAE, about 0.5 GB of LoRA, gradients and 8-bit Adam at rank 32 and about 2.7 GB of activations at 1024; each vram_mb calibrated like every untested seed here: the derived peak plus 0.6 GB of CUDA context, x1.08 (what Krea 2's derivation missed against its measurement) and x1.1 (the margin a measured peak is admitted with)",
+    "hardware_profiles.q8.vram_mb": "derived: the quantised transformer and text encoder resident, plus VAE, LoRA state and activations (21.3 GB before calibration); BFL's guide asks 22 GB for 9B Base training",
+    "hardware_profiles.q8_cached.vram_mb": "derived: the quantised text encoder still loads onto the GPU beside the transformer before captions are encoded, so loading peaks near 18.1 GB before calibration",
+    "hardware_profiles.q8_low_vram.vram_mb": "derived: low_vram keeps the text encoder and transformer in RAM until each is needed, so the peak is training's, 13.1 GB before calibration",
+    "hardware_profiles.q8_offload.vram_mb": "derived: 60% of the 9 GB quantised transformer in RAM, as measured worthwhile on Krea 2; the peak is encoding captions with the 8.2 GB text encoder, 9.1 GB before calibration",
+    "hardware_profiles.bf16_cached.vram_mb": "derived: the 18 GB bf16 transformer with VAE, LoRA state and activations (22.1 GB before calibration); low_vram keeps the 16.4 GB bf16 text encoder off the GPU while it is",
+    "hardware_profiles.*.max_rank, max_batch": "the rank and batch size the VRAM figures were derived at",
+    "hardware_profiles.*.ram_mb": "derived: the bf16 transformer state dict and the bf16 text encoder, 34.4 GB, are both in RAM while they are quantised, x1.3 for what Krea 2's RAM derivation missed against its resident-memory measurement, and x1.1 margin; BFL's guide asks 64 GB of system memory"
+  }
+}

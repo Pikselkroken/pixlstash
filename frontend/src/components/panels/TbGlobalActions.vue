@@ -1,52 +1,51 @@
 <template>
   <span v-if="separator" class="bar-separator" aria-hidden="true"></span>
-  <!-- ── Settings ──────────────────────────────────────────────────────── -->
-  <AppBarButton
-    icon="cog-outline"
-    tooltip="Settings"
-    @click="emit('open-settings')"
-  />
+  <!-- Undo, redo and History: app-wide, so they ride in this tail and every
+       screen that mounts it carries them in the same place. The operation log
+       is the library's, not a screen's, and undo is how a reader recovers from
+       anywhere. Mounted in a read-only session too, inert: UndoControl owns
+       that state. -->
+  <UndoControl />
+  <!-- Settings lives in the title bar (#2158): one control, the same place in
+       every workspace. -->
   <!-- ── Right-rail toggle ─────────────────────────────────────────────── -->
   <!-- One glyph on every screen, `dock-right`: it says where something will
        appear, not what is in it, because the rail holds stats on the Library,
        an inspector on Workflows and models on Models. Open is the pressed
        state (`active` + `aria-pressed`), never a second glyph. -->
-  <!-- App-wide activity light (`--busy`): the whole glyph pulses amber
-       whenever the task manager has any active work, so background tasks are
-       visible without opening the stats sidebar. A corner dot was too subtle
-       to notice (#1343). -->
+  <!-- No activity light here: running work is the title bar's Tasks pill,
+       so the rail toggle no longer pulses while tasks run. -->
   <!-- `--nudge-a`/`--nudge-b`: the closed-inspector flash (visual-language
        "Closed inspector"). Two classes with identical keyframes, alternated,
        so a second nudge restarts the animation instead of being ignored. -->
   <AppBarButton
     class="tb-stats-btn"
-    :class="{
-      'tb-stats-btn--busy': tasksStore.hasActiveTasks,
-      [`tb-stats-btn--nudge-${nudgeParity}`]: nudgeParity,
-    }"
+    :class="{ [`tb-stats-btn--nudge-${nudgeParity}`]: nudgeParity }"
     icon="dock-right"
     :active="railOpen"
     :aria-pressed="railOpen ? 'true' : 'false'"
-    :tooltip="statsTitle"
+    :tooltip="railName"
     @click="toggleRail"
   />
 </template>
 
 <script setup>
-// The app-wide chrome that must survive a change of destination: Settings and
-// the right-rail toggle. The grid's toolbar and the duplicates queue both
-// mount this SAME component, which is what keeps the pair pixel-identical in
-// every view - the styles live here, not in either host.
+// The app-wide chrome that must survive a change of destination: undo/redo
+// with its History, and the right-rail toggle (Settings moved to the title
+// bar, #2158). The grid's
+// toolbar and the duplicates queue both mount this SAME component, which is
+// what keeps it pixel-identical in every view - the styles live here, not in
+// either host.
 //
-// Both buttons act on global state (the settings dialog lives in App.vue, the
-// stats rail in the sidebar store), so the component takes no data props. The
-// two it does take are about the HOST: an optional separator for a bar that
-// does not already draw one, and what the rail is called on that screen.
+// It acts on global state (the stats rail in the sidebar store), so the
+// component takes no data props. The ones it does take are about the HOST: an
+// optional separator for a bar that does not already draw one, and what the
+// rail is called on that screen.
 
 import { computed, ref, watch } from "vue";
 import { useSidebarStore } from "../../stores/useSidebarStore";
-import { useTasksStore } from "../../stores/useTasksStore";
 import AppBarButton from "../widgets/AppBarButton.vue";
+import UndoControl from "./UndoControl.vue";
 
 const props = defineProps({
   // Draw the toolbar's vertical rule ahead of the pair. The grid toolbar
@@ -58,56 +57,48 @@ const props = defineProps({
   // grid it carries the workflow inspector, so a reader there was offered
   // "Show stats sidebar" for a control that opens the inspector (#1415).
   // A fixed name with no Show/Hide: `aria-pressed` says which way it is.
-  railName: { type: String, default: "Stats" },
+  railName: { type: String, default: "Inspector" },
   // WHICH rail the toggle drives. The Workflows inspector has its own open
   // flag (it defaults open; the stats sidebar defaults closed), so the host
   // says which one is on its screen.
   rail: {
     type: String,
     default: "stats",
-    validator: (value) => ["stats", "workflows", "models"].includes(value),
+    validator: (value) =>
+      ["stats", "workflows", "models", "lightbox"].includes(value),
   },
 });
 
-const emit = defineEmits(["open-settings"]);
-
 const sidebarStore = useSidebarStore();
-const tasksStore = useTasksStore();
 
 const railOpen = computed(() =>
   props.rail === "workflows"
     ? sidebarStore.workflowInspectorOpen
     : props.rail === "models"
       ? sidebarStore.modelsRailOpen
-      : sidebarStore.statsOpen,
+      : props.rail === "lightbox"
+        ? sidebarStore.lightboxRailOpen
+        : sidebarStore.statsOpen,
 );
 
 function toggleRail() {
   if (props.rail === "workflows") sidebarStore.toggleWorkflowInspector();
   else if (props.rail === "models") sidebarStore.toggleModelsRail();
+  else if (props.rail === "lightbox") sidebarStore.toggleLightboxRail();
   else sidebarStore.toggleStats();
 }
 
 // A new selection while the rail is closed: the glyph turns olive for
-// `--dur-attention` and fades back. Skipped while tasks run, because the amber
-// busy pulse owns the glyph then. Nothing is cleared on a timer: the class
+// `--dur-attention` and fades back. Nothing is cleared on a timer: the class
 // stays until the next nudge swaps it for its twin, and a one-shot animation
 // that has finished paints nothing.
 const nudgeParity = ref("");
 watch(
   () => sidebarStore.inspectorNudge,
   () => {
-    if (railOpen.value || tasksStore.hasActiveTasks) return;
+    if (railOpen.value) return;
     nudgeParity.value = nudgeParity.value === "a" ? "b" : "a";
   },
-);
-
-// Busy leads with the count and keeps the name, so the control is still
-// called what it opens while the pulse is on.
-const statsTitle = computed(() =>
-  tasksStore.hasActiveTasks
-    ? `${tasksStore.activeCount} task${tasksStore.activeCount === 1 ? "" : "s"} running · ${props.railName}`
-    : props.railName,
 );
 </script>
 
@@ -117,32 +108,13 @@ const statsTitle = computed(() =>
    whoever changed one to remember the other; the five rules were still
    byte-identical, and now there is one copy. */
 
-/* App-wide task-activity light on the stats toggle. Accent, not the olive
-   the active (open) state gives the glyph: live work is not selection. */
-.tb-stats-btn--busy :deep(.v-icon) {
-  color: rgb(var(--v-theme-accent));
-  animation: tb-stats-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes tb-stats-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.4;
-    transform: scale(0.7);
-  }
-}
-
 /* Glyph colour only: no background, ring or border, so it cannot be read as
    the button's pressed state. */
-.tb-stats-btn--nudge-a:not(.tb-stats-btn--busy) :deep(.v-icon) {
+.tb-stats-btn--nudge-a :deep(.v-icon) {
   animation: tb-stats-nudge-a var(--dur-attention) var(--ease-standard);
 }
 
-.tb-stats-btn--nudge-b:not(.tb-stats-btn--busy) :deep(.v-icon) {
+.tb-stats-btn--nudge-b :deep(.v-icon) {
   animation: tb-stats-nudge-b var(--dur-attention) var(--ease-standard);
 }
 
@@ -161,7 +133,6 @@ const statsTitle = computed(() =>
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tb-stats-btn--busy :deep(.v-icon),
   .tb-stats-btn--nudge-a :deep(.v-icon),
   .tb-stats-btn--nudge-b :deep(.v-icon) {
     animation: none;
@@ -169,8 +140,8 @@ const statsTitle = computed(() =>
 }
 
 /* No collapse rule here on purpose (amendment #2 in
-   docs/design/toolbar-responsive-decisions.md): Settings and Stats never
-   fold - a burger may only collapse controls from its own visual group, and
-   these are the app-wide tail's. The activity light stays first-class on the
-   Stats button at every width. */
+   docs/design/toolbar-responsive-decisions.md): the rail toggle never folds,
+   and undo itself never hides (UndoControl's own @container steps drop only
+   History and redo) - a burger may only collapse controls from its own visual
+   group, and these are the app-wide tail's. */
 </style>

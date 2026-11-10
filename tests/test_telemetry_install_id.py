@@ -8,12 +8,17 @@ and a corrupt or unwritable store degrades to "unavailable" rather than to a
 silently non-durable ID.
 """
 
+import io
 import json
 import os
+import stat
+import subprocess
+import sys
 import uuid
 
 import pytest
 
+from pixlstash import app
 from pixlstash.db_models import User
 from pixlstash.telemetry.install_id import (
     INSTALL_ID_FILENAME,
@@ -118,6 +123,17 @@ def test_existing_install_upgrading_is_not_marked_new(config_path):
     assert identity.is_new_install is False
 
 
+def test_an_existing_hub_without_a_config_is_not_marked_new(config_path):
+    # A deleted or lost config beside a library's hub is an upgrade, not a
+    # fresh install.
+    open(os.path.join(os.path.dirname(config_path), "hub.db"), "wb").close()
+
+    identity = ensure_install_identity(config_path)
+
+    assert identity is not None
+    assert identity.is_new_install is False
+
+
 def test_is_new_install_survives_a_reread(config_path):
     _write_server_config(config_path)
     ensure_install_identity(config_path)
@@ -126,6 +142,103 @@ def test_is_new_install_survives_a_reread(config_path):
 
     assert reread is not None
     assert reread.is_new_install is False
+
+
+class _ServerConstructed(Exception):
+    pass
+
+
+class _ServerAtConstruction(app.Server):
+    """Stops ``app.main`` where it constructs the server.
+
+    Keeps the real ``init_server_config`` and calls ``ensure_install_identity``
+    as ``Server.__init__`` does, then stops before anything heavier.
+    """
+
+    def __init__(self, server_config_path, **_kwargs):
+        ensure_install_identity(server_config_path)
+        raise _ServerConstructed
+
+
+class _Terminal(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+@pytest.fixture
+def start_app(monkeypatch):
+    """Run the real ``app.main`` start-up order up to server construction."""
+    monkeypatch.setattr(app, "Server", _ServerAtConstruction)
+    monkeypatch.setattr(app, "setup_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(app, "_prepare_startup_permissions", lambda *_args: None)
+
+    def start(config_path, *, terminal=False):
+        monkeypatch.setattr(sys, "argv", ["pixlstash", "--server-config", config_path])
+        monkeypatch.setattr(
+            app.sys, "stdin", _Terminal() if terminal else io.StringIO()
+        )
+        # The bootstrap wizard: Enter keeps every default.
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "")
+        with pytest.raises(_ServerConstructed):
+            app.main()
+        assert os.path.exists(config_path), "start-up wrote no server config"
+        return read_install_identity(config_path)
+
+    return start
+
+
+@pytest.mark.parametrize("terminal", [False, True], ids=["headless", "wizard"])
+def test_app_start_on_an_empty_config_folder_is_a_new_install(
+    tmp_path, start_app, terminal
+):
+    # Both writers in app.main (the wizard, init_server_config) run before the
+    # Server is constructed; the identity must be decided ahead of them.
+    identity = start_app(
+        str(tmp_path / "config" / "server-config.json"), terminal=terminal
+    )
+
+    assert identity is not None
+    assert identity.is_new_install is True
+
+
+def test_app_start_with_an_existing_config_is_not_a_new_install(tmp_path, start_app):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(mode=0o700)
+    config_path = str(config_dir / "server-config.json")
+    _write_server_config(config_path)
+
+    identity = start_app(config_path)
+
+    assert identity is not None
+    assert identity.is_new_install is False
+
+
+def test_module_entry_point_records_a_new_install(config_path):
+    # What the Docker entrypoint and the desktop's first-run setup run before
+    # they write their config.
+    subprocess.run(
+        [sys.executable, "-m", "pixlstash.telemetry", config_path], check=True
+    )
+
+    identity = read_install_identity(config_path)
+    assert identity is not None
+    assert identity.is_new_install is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+def test_a_config_directory_it_creates_is_private(tmp_path):
+    # On a fresh install this can be the first thing to create the config
+    # directory, which then holds the hub. init_server_config never loosens or
+    # tightens an existing directory, so a 0775 one here would be refused later.
+    config_path = tmp_path / "new" / "config" / "server-config.json"
+    previous = os.umask(0o002)
+    try:
+        ensure_install_identity(str(config_path))
+    finally:
+        os.umask(previous)
+
+    assert stat.S_IMODE(os.stat(config_path.parent).st_mode) == 0o700
+    assert stat.S_IMODE(os.stat(config_path.parent.parent).st_mode) == 0o700
 
 
 def test_declined_fresh_install_can_be_excluded_from_new_cohorts(config_path):

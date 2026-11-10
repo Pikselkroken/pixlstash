@@ -73,6 +73,8 @@ from pixlstash.utils.library_layout import (
     Layout,
     folder_name,
     parse_layout,
+    name_index,
+    read_components,
     relocate,
     render,
 )
@@ -1102,6 +1104,116 @@ def picture_exists(vault, picture_id: int) -> bool:
             lambda session: session.get(Picture, int(picture_id)) is not None
         )
     )
+
+
+def library_folder_tree(session: Session, image_root: Optional[str]) -> list:
+    """The folders of the library root that pictures are filed in (#2458).
+
+    Backs the Media sidebar's Folders tree, which draws where files are rather
+    than where assignments say they should be: a set whose pictures were all
+    filed under a person is inside that person's folder, and a set with nothing
+    filed under its own name is no folder at all. Read from each picture's
+    stored path, never by walking the disk, so a folder that holds no picture
+    is not drawn and every folder drawn exists (it holds the files counted).
+
+    Each level is read through the library's layout (``DEFAULT_LAYOUT`` when it
+    has none), so a level naming a project, person or set carries that entity's
+    id and its row keeps the entity's menu. A level the layout cannot read is a
+    plain folder, and so is everything below it: the owner's own tree.
+
+    Returns:
+        One dict per folder, sorted by path: ``path`` (``/``-joined, relative
+        to the library root, as given back to open it), ``name`` (the folder's
+        own name on disk), ``kind`` (``project``, ``character``, ``set``,
+        ``global``, ``unassigned`` or ``folder``), ``entity_id`` (the project,
+        person or set a level names, else None), ``project_id`` (the nearest
+        project level at or above it, else None) and ``count`` (the pictures
+        filed in it and below it).
+    """
+    if not image_root:
+        return []
+    root_path = os.path.abspath(image_root)
+    library_root = layout_roots(session, image_root).get(None)
+    layout = library_root.layout if library_root is not None else DEFAULT_LAYOUT
+    vocabulary = library_vocabulary(session, [layout])
+
+    counts: dict = {}
+    for stored in session.exec(
+        select(Picture.file_path).where(
+            Picture.reference_folder_id.is_(None), Picture.deleted.is_(False)
+        )
+    ).all():
+        if not stored:
+            continue
+        absolute = os.path.abspath(
+            stored if os.path.isabs(stored) else os.path.join(root_path, stored)
+        )
+        if not path_is_within(absolute, root_path):
+            continue
+        relative = os.path.relpath(os.path.dirname(absolute), root_path)
+        parts = relative.replace(os.sep, "/").split("/")
+        # The root itself, or a path that reached the root only through a
+        # symlink and so climbs out of it relatively: neither is a folder.
+        if relative in (".", os.curdir) or ".." in parts:
+            continue
+        for depth in range(1, len(parts) + 1):
+            path = "/".join(parts[:depth])
+            counts[path] = counts.get(path, 0) + 1
+
+    ids: dict = {}
+    for facet, model in (
+        (Facet.PROJECT, Project),
+        (Facet.PERSON, Character),
+        (Facet.SET, PictureSet),
+    ):
+        by_name: dict = {}
+        for entity_id, name in session.exec(select(model.id, model.name)).all():
+            by_name.setdefault(name, []).append(int(entity_id))
+        ids[facet] = by_name
+    kinds = {Facet.PROJECT: "project", Facet.PERSON: "character", Facet.SET: "set"}
+    unfiled_key = _match_key(layout.unfiled)
+    index = name_index(vocabulary)
+
+    folders = []
+    for path in sorted(counts):
+        parts = path.split("/")
+        readings = read_components(parts, layout, vocabulary, index)
+        kind, entity_id, project_id = "folder", None, None
+        for depth, reading in enumerate(readings[: len(parts)], start=1):
+            if reading is None:
+                # Only a top-level Global is "in no project"; one below a
+                # project (``Nordvik/Global/Beach``) is that project's.
+                kind, entity_id = ("global" if depth == 1 else "folder"), None
+                continue
+            facet, name = reading
+            matches = ids.get(facet, {}).get(name, [])
+            # Two people (or sets) of one name share a folder; the row cannot
+            # say which it is, so it is a plain folder rather than a guess.
+            entity_id = matches[0] if len(matches) == 1 else None
+            kind = kinds.get(facet, "folder") if entity_id is not None else "folder"
+            if kind == "project":
+                project_id = entity_id
+        if len(readings) < len(parts):
+            # Below the layout's reach: the owner's own folder.
+            kind, entity_id = "folder", None
+            if len(parts) == 1 and _match_key(parts[0]) == unfiled_key:
+                kind = "unassigned"
+        folders.append(
+            {
+                "path": path,
+                "name": parts[-1],
+                "kind": kind,
+                "entity_id": entity_id,
+                "project_id": project_id,
+                "count": counts[path],
+            }
+        )
+    return folders
+
+
+def library_folders(vault) -> list:
+    """:func:`library_folder_tree` for the open library."""
+    return vault.db.run_immediate_read_task(library_folder_tree, vault.image_root)
 
 
 def move_to_match(vault, picture_ids: Iterable[int], **operation_context) -> tuple:

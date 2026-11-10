@@ -12,17 +12,70 @@
          content. The box, the collapse, the tab band and the key/value grid
          live here; a pane owns only what it says. -->
     <!-- The lightbox keeps its pane mounted while closed: the panels hold
-         editing state and refs the overlay reaches into as it opens. -->
+         editing state and refs the lightbox reaches into as it opens. -->
     <div
       v-if="open || lightbox"
       v-show="open"
       class="inspector-content"
-      :class="{ 'inspector-content--footed': $slots.footer }"
+      :class="{
+        'inspector-content--footed': $slots.footer || $slots.head || band.length,
+      }"
     >
-      <!-- The tab band is pinned to the toolbar height, so the sidebar tabs,
-           the toolbar and this band share one bottom rule across the window.
-           Tabs name the SUBJECT of the pane, never the view. -->
-      <div v-if="tabs.length" class="inspector-tabs">
+      <!-- A pane that names its subject (the grid's rail, #2161) has a head
+           row instead: pinned to the toolbar height, so the toolbar and this
+           row share one bottom rule across the window. Its tabs then sit
+           under it, after the `lead` slot, one level down. -->
+      <!-- The band (#2145): a second subject beside the pane's own, the
+           What's changed checklist beside Details. Above everything else, on
+           the toolbar's line; a closable tab ends in its own × button. -->
+      <div v-if="band.length" class="inspector-tabs inspector-band">
+        <template v-for="tab in band" :key="tab.value">
+          <button
+            class="inspector-tab"
+            :class="{
+              'inspector-tab--active': tab.value === bandValue,
+              'inspector-tab--closable': tab.closeLabel,
+            }"
+            type="button"
+            :data-band="tab.value"
+            :aria-pressed="tab.value === bandValue ? 'true' : 'false'"
+            @click="emit('update:bandValue', tab.value)"
+          >
+            {{ tab.label }}
+          </button>
+          <button
+            v-if="tab.closeLabel"
+            class="inspector-band-close"
+            :class="{ 'inspector-band-close--active': tab.value === bandValue }"
+            type="button"
+            :aria-label="tab.closeLabel"
+            @click="emit('close-band', tab.value)"
+          >
+            <Tooltip :text="tab.closeLabel" activator="parent" :describe="false" />
+            <v-icon size="14">mdi-close</v-icon>
+          </button>
+        </template>
+      </div>
+      <div v-if="$slots.head" class="inspector-head">
+        <slot name="head" />
+      </div>
+      <div v-if="$slots.lead" class="inspector-lead">
+        <slot name="lead" />
+      </div>
+      <!-- Without a head the tab band is the pane's top row, at the toolbar
+           height for the same shared rule. Tabs name the SUBJECT of the pane,
+           never the view. -->
+      <!-- `tabs-end` rides the band's right edge (the lightbox's stars and
+           heart, #2163). With it the tabs size to their labels instead of
+           sharing the width, and the band is drawn even with no tabs. -->
+      <div
+        v-if="tabs.length || $slots['tabs-end']"
+        class="inspector-tabs"
+        :class="{
+          'inspector-tabs--under-head': $slots.head,
+          'inspector-tabs--with-end': $slots['tabs-end'],
+        }"
+      >
         <button
           v-for="tab in tabs"
           :key="tab.value"
@@ -33,33 +86,17 @@
           :disabled="tab.disabled"
           @click="emit('update:modelValue', tab.value)"
         >
-          <!-- While a tab is busy its count IS the thing to say, so it takes
-               the button's own description rather than hanging off the dot:
-               a bare span is not something a reader can reach. -->
-          <Tooltip
-            :text="(tab.busy ? tab.busyTooltip : tab.tooltip) || ''"
-            activator="parent"
-          />
-          <v-icon
-            v-if="tab.icon"
-            size="12"
-            :class="{ 'inspector-tab-icon--busy': tab.busy }"
-            >{{ tab.icon }}</v-icon
-          >
+          <Tooltip :text="tab.tooltip || ''" activator="parent" />
+          <v-icon v-if="tab.icon" size="12">{{ tab.icon }}</v-icon>
           {{ tab.label }}
           <!-- How many things the tab holds (the Models rail's shelf count). -->
           <span v-if="tab.count != null" class="inspector-tab-count num">{{
             tab.count.toLocaleString()
           }}</span>
-          <!-- `busy` is the tab's own live-work light: the Tasks tab wears it
-               while anything is running, in every inspector that offers the
-               tab, so the behaviour cannot drift between the two. -->
-          <span
-            v-if="tab.busy"
-            class="inspector-tab-pulse"
-            aria-hidden="true"
-          ></span>
         </button>
+        <div v-if="$slots['tabs-end']" class="inspector-tabs-end">
+          <slot name="tabs-end" />
+        </div>
       </div>
       <div class="inspector-body">
         <slot />
@@ -78,27 +115,32 @@ import Tooltip from "./Tooltip.vue";
 defineProps({
   /** Open or collapsed to zero width. The pane keeps its place in the row. */
   open: { type: Boolean, default: true },
-  /** The accessible name of the pane ("Stats", "Inspector"). */
+  /** The accessible name of the pane ("Inspector", "Models"). */
   label: { type: String, required: true },
   /**
-   * `[{ value, label, icon?, count?, disabled?, tooltip?, busy?, busyTooltip? }]`.
+   * `[{ value, label, icon?, count?, disabled?, tooltip? }]`.
    * `count` is drawn after the label, in the label's voice but untracked.
-   * `busy` pulses the tab's icon and adds an accent dot beside its label;
-   * `busyTooltip` then replaces `tooltip` as the button's description.
    */
   tabs: { type: Array, default: () => [] },
   /** The active tab's `value`. */
   modelValue: { type: String, default: "" },
   /**
-   * The image overlay's pane: dark in both themes, and a fixed-height column
+   * The image lightbox's pane: dark in both themes, and a fixed-height column
    * whose sections bound and scroll themselves instead of the pane scrolling.
    * Its tab band carries the on-dark inks below, added when the lightbox
    * became the first pane here to need `tabs` (#1313).
    */
   lightbox: { type: Boolean, default: false },
+  /**
+   * `[{ value, label, closeLabel? }]`: the band above the head (#2145). A tab
+   * with `closeLabel` gets a × button named by it, which emits `close-band`.
+   */
+  band: { type: Array, default: () => [] },
+  /** The band's active `value`. */
+  bandValue: { type: String, default: "" },
 });
 
-const emit = defineEmits(["update:modelValue"]);
+const emit = defineEmits(["update:modelValue", "update:bandValue", "close-band"]);
 </script>
 
 <style scoped>
@@ -142,8 +184,8 @@ const emit = defineEmits(["update:modelValue"]);
   flex-direction: column;
 }
 
-/* With a footer the body scrolls instead of the whole pane, so the footer
-   below it stays put. */
+/* With a footer or a head the body scrolls instead of the whole pane, so the
+   footer below it and the head, lead and tabs above it stay put. */
 .inspector-content--footed {
   overflow: hidden;
 }
@@ -154,12 +196,13 @@ const emit = defineEmits(["update:modelValue"]);
   overflow-y: auto;
 }
 
-/* The lightbox is dark in both themes, so its pane is a translucent
-   dark-surface over the picture rather than the theme's chrome. */
+/* The lightbox is dark in both themes, so its pane is dark too: the chrome in
+   the dark theme, the stage's dark-surface in light (`--lightbox-chrome`,
+   style.css). */
 .inspector--lightbox {
   /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
   --v-theme-accent: var(--v-theme-dark-surface-accent);
-  background: rgba(var(--v-theme-dark-surface), 0.6);
+  background: rgb(var(--lightbox-chrome));
   border-left-color: rgba(var(--v-theme-on-dark-surface), 0.12);
   color: rgb(var(--v-theme-on-dark-surface));
 }
@@ -189,6 +232,53 @@ const emit = defineEmits(["update:modelValue"]);
   border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 
+/* A closable tab and its × read as one tab: the × sits inside the tab's
+   underline, and the pair shares the band's width with the other tabs. */
+.inspector-tab--closable {
+  padding-right: 0;
+}
+
+.inspector-band-close {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  margin-right: var(--space-2);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  cursor: pointer;
+}
+
+.inspector-band-close:hover {
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.inspector-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: var(--toolbar-height);
+  flex-shrink: 0;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+
+.inspector-lead {
+  flex-shrink: 0;
+  padding: var(--space-4) var(--space-3) var(--space-3);
+}
+
+.inspector-tabs--under-head {
+  height: var(--control-h-bar);
+  margin: 0 var(--space-3);
+}
+
 /* An inspector tab speaks the section label's voice. Olive marks, words stay
    ink: the underline carries the selection. */
 .inspector-tab {
@@ -216,6 +306,17 @@ const emit = defineEmits(["update:modelValue"]);
     border-color var(--dur-1) var(--ease-standard);
 }
 
+.inspector-tabs--with-end .inspector-tab {
+  flex: 0 0 auto;
+}
+
+.inspector-tabs-end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  padding-right: var(--space-2);
+}
+
 .inspector-tab:hover:not(:disabled) {
   background: var(--hover-wash);
   color: rgb(var(--v-theme-on-surface));
@@ -235,42 +336,6 @@ const emit = defineEmits(["update:modelValue"]);
 .inspector-tab:disabled {
   opacity: var(--opacity-disabled);
   cursor: default;
-}
-
-/* Live work wears the accent, never the olive: olive is the selection mark the
-   active tab's underline carries, and an attention light is accent
-   (visual-language §12). */
-.inspector-tab-icon--busy {
-  color: rgb(var(--v-theme-accent));
-  animation: inspector-tab-pulse 1.4s ease-in-out infinite;
-}
-
-.inspector-tab-pulse {
-  width: var(--badge-size-dot);
-  height: var(--badge-size-dot);
-  border-radius: var(--radius-pill);
-  background: rgb(var(--v-theme-accent));
-  box-shadow: 0 0 5px rgba(var(--v-theme-accent), 0.6);
-  animation: inspector-tab-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes inspector-tab-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.45;
-    transform: scale(0.78);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .inspector-tab-icon--busy,
-  .inspector-tab-pulse {
-    animation: none;
-  }
 }
 
 /* The lightbox's tab band. Inked separately because the pane is dark in BOTH

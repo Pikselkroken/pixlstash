@@ -416,6 +416,22 @@ def test_rocm_keeps_its_branch():
     assert providers[0][0] == "ROCMExecutionProvider"
 
 
+def test_migraphx_is_the_amd_provider_from_ort_1_23_on():
+    """ORT 1.23 removed the ROCm provider; ``onnxruntime-migraphx`` is AMD's build."""
+    providers = onnx_execution_providers(
+        CUDA, ["MIGraphXExecutionProvider", "CPUExecutionProvider"]
+    )
+    assert providers == [("MIGraphXExecutionProvider", {}), "CPUExecutionProvider"]
+
+
+def test_rocm_is_preferred_over_migraphx():
+    """MIGraphX recompiles per input shape, so a build offering both uses ROCm."""
+    providers = onnx_execution_providers(
+        CUDA, ["MIGraphXExecutionProvider", "ROCMExecutionProvider"]
+    )
+    assert providers[0][0] == "ROCMExecutionProvider"
+
+
 def test_forcing_cpu_pins_the_cpu_provider():
     """How --force-cpu reaches ONNX Runtime, on a host that advertises CoreML."""
     providers = onnx_execution_providers(
@@ -520,12 +536,7 @@ def _workflow_on(device):
 
 
 def test_the_tagger_memory_model_follows_the_device():
-    """700 + 90n is a CUDA measurement and was being charged on Apple Silicon.
-
-    The MPS pair was measured as fresh-process peak device memory at batch 8
-    (2347 MiB fp32, 1319 MiB fp16); 450 + 240n and 450 + 120n reproduce those
-    slightly conservatively, which is the direction a memory gate should err.
-    """
+    """700 + 90n is a CUDA figure and was being charged on Apple Silicon."""
     assert _workflow_on(MPS)._pixlstash_tagger_memory_model() == (
         PIXLSTASH_TAGGER_MPS_BASE_MB,
         PIXLSTASH_TAGGER_MPS_PER_ITEM_FP16_MB,  # the tagger runs fp16 on MPS
@@ -536,7 +547,7 @@ def test_the_tagger_memory_model_follows_the_device():
     )
 
 
-def test_the_mps_model_halves_when_the_dtype_does(monkeypatch):
+def test_the_mps_model_follows_the_dtype(monkeypatch):
     """fp16 is most of why a unified-memory machine can afford the batch."""
     monkeypatch.setattr(
         "pixlstash.inference.workflows.tagging.supports_fp16", lambda device: False
@@ -545,15 +556,19 @@ def test_the_mps_model_halves_when_the_dtype_does(monkeypatch):
         PIXLSTASH_TAGGER_MPS_BASE_MB,
         PIXLSTASH_TAGGER_MPS_PER_ITEM_MB,
     )
-    assert PIXLSTASH_TAGGER_MPS_PER_ITEM_FP16_MB * 2 == PIXLSTASH_TAGGER_MPS_PER_ITEM_MB
+    assert PIXLSTASH_TAGGER_MPS_PER_ITEM_FP16_MB < PIXLSTASH_TAGGER_MPS_PER_ITEM_MB
 
 
-def test_the_measured_model_predicts_the_measured_peak():
-    """Anchored on the real numbers, so a future edit cannot drift silently."""
+def test_the_mps_model_covers_the_vit_estimate():
+    """Anchored on the numbers it was derived from, so an edit cannot drift.
+
+    ConvNeXt measured 1319 / 2347 MiB (fp16 / fp32) on MPS at batch 8; the
+    DINOv3 ViT's unfused attention adds 1216 / 794 MiB at batch 8 on CUDA.
+    """
     fp16 = PIXLSTASH_TAGGER_MPS_BASE_MB + 8 * PIXLSTASH_TAGGER_MPS_PER_ITEM_FP16_MB
     fp32 = PIXLSTASH_TAGGER_MPS_BASE_MB + 8 * PIXLSTASH_TAGGER_MPS_PER_ITEM_MB
-    assert 1319 <= fp16 <= 1319 * 1.15  # measured 1319 MiB, conservative
-    assert 2347 <= fp32 <= 2347 * 1.15  # measured 2347 MiB, conservative
+    assert 1319 + 1216 <= fp16 <= (1319 + 1216) * 1.15
+    assert 2347 + 794 <= fp32 <= (2347 + 794) * 1.15
 
 
 # ---------------------------------------------------------------------------

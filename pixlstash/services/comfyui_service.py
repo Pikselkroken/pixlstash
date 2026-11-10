@@ -13,6 +13,7 @@ function itself and in ``docs/backend_architecture.md`` §15. Preserve it exactl
 
 import ipaddress
 import json
+import math
 import mimetypes
 import ntpath
 import os
@@ -52,6 +53,7 @@ from pixlstash.services.layout_move_service import resolve_placement
 from pixlstash.services.move_reconciliation_service import add_person
 from pixlstash.scoring import match_faces_to_characters
 from pixlstash.services.comfyui_recipe_service import (
+    CHECKPOINT_LOADER_CAST,
     CHECKPOINT_LOADER_ID,
     CHECKPOINT_LOADER_SHELF,
     PACK_SAVERS,
@@ -2134,6 +2136,7 @@ def _process_comfyui_outputs(
         sampler = PeakSampler(
             comfyui_tenant.probe(RUN_CLIENT_ID, base_url),
             lambda: run_executing(prompt_id),
+            vram_lease.device,
         )
     released = False
     settled = False
@@ -2175,8 +2178,9 @@ def _process_comfyui_outputs(
         if sampler is None or not workflow_id:
             return
         card = ledger().device(vram_lease.device)
+        room = sampler.room_mb
         if outcome == "oom" and card is not None:
-            peak = card.total_mb
+            peak, room = card.total_mb, None
         if peak is None or card is None:
             logger.info(
                 "Run %s of workflow %s ended %s without a measured peak",
@@ -2195,6 +2199,7 @@ def _process_comfyui_outputs(
             "torch_reserved",
             outcome,
             vram_pixels,
+            room,
         )
 
     def mark_alone_after_oom() -> str:
@@ -2537,6 +2542,40 @@ def comfyui_pixlstash_scripts(base_url: str) -> set[str] | None:
     }
 
 
+def comfyui_shelf_loader_current(base_url: str) -> bool | None:
+    """Whether the running pack's checkpoint loader has every widget PixlStash
+    writes into it (``shelf`` and ``weight_dtype``), so it loads any shelf
+    checkpoint a run swaps it in for. ``None`` when ComfyUI cannot be asked.
+
+    One class's ``GET /object_info/<class>``, not the whole map: this is polled
+    while ComfyUI restarts after an update. A ComfyUI without the pack's
+    loader answers ``{}``, which is not current.
+    """
+    try:
+        response = requests.get(
+            f"{base_url}/object_info/{PIXLSTASH_CHECKPOINT_LOADER}", timeout=5
+        )
+        response.raise_for_status()
+        spec = response.json().get(PIXLSTASH_CHECKPOINT_LOADER)
+    except (requests.RequestException, ValueError, AttributeError) as exc:
+        logger.info(
+            "Could not read ComfyUI's %s at %s: %s",
+            PIXLSTASH_CHECKPOINT_LOADER,
+            base_url,
+            exc,
+        )
+        return None
+    if not isinstance(spec, dict):
+        return False
+    declared = spec.get("input") if isinstance(spec.get("input"), dict) else {}
+    names = {
+        name
+        for group in ("required", "optional")
+        for name in (declared.get(group) or {})
+    }
+    return {CHECKPOINT_LOADER_SHELF, CHECKPOINT_LOADER_CAST} <= names
+
+
 # The pack's scripts PixlStash asks ComfyUI for: the one that reads a
 # ``?pixlstash_workflow=<key>`` link, and the one that saves a workflow opened
 # that way back to PixlStash (#1852; a pack from before it opens a copy), and
@@ -2632,11 +2671,12 @@ def probe_comfyui(url: str, timeout: float = 2.0) -> dict:
     address the browser can reach and the server cannot is no use.
 
     Returns:
-        ``{"reachable", "url", "version", "detail", "listens_on_network"}``:
-        ``url`` normalised, ``version`` ComfyUI's own when it reports one,
-        ``detail`` the reason when not reachable, written for the person who
-        typed the address, ``listens_on_network`` from
-        :func:`comfyui_listens_on_network` (None when not known).
+        ``{"reachable", "url", "version", "detail", "listens_on_network",
+        "gpu", "vram_mb"}``: ``url`` normalised, ``version`` ComfyUI's own when
+        it reports one, ``detail`` the reason when not reachable, written for
+        the person who typed the address, ``listens_on_network`` from
+        :func:`comfyui_listens_on_network` (None when not known), ``gpu`` and
+        ``vram_mb`` from :func:`_comfyui_device` (None when not known).
 
     Raises:
         ValueError: *url* is not an http(s) URL with a host.
@@ -2649,6 +2689,8 @@ def probe_comfyui(url: str, timeout: float = 2.0) -> dict:
         "version": None,
         "detail": None,
         "listens_on_network": None,
+        "gpu": None,
+        "vram_mb": None,
     }
     try:
         # A redirect is not ComfyUI answering: it is another host's address.
@@ -2692,7 +2734,39 @@ def probe_comfyui(url: str, timeout: float = 2.0) -> dict:
     result["reachable"] = True
     result["version"] = str(version) if version else None
     result["listens_on_network"] = comfyui_listens_on_network(system.get("argv"))
+    result["gpu"], result["vram_mb"] = _comfyui_device(stats.get("devices"))
     return result
+
+
+# ComfyUI names a device "cuda:0 NVIDIA GeForce RTX 4090 : cudaMallocAsync":
+# the torch device first, the allocator last.
+_SHARED_MEMORY_DEVICES = {"cpu": "CPU", "mps": "Apple silicon"}
+_DEVICE_NAME_RE = re.compile(r"^(?:\w+:\d+\s+)?(.*?)(?:\s+:\s+\S+)?$")
+_DEVICE_NAME_MAX = 200
+
+
+def _comfyui_device(devices) -> tuple[str | None, int | None]:
+    """The card ComfyUI runs on, from ``/system_stats`` ``devices``.
+
+    ``(name, vram_mb)`` of the first device, the name without the torch device
+    and the allocator; no size for a ComfyUI on the CPU or Apple silicon, whose
+    ``vram_total`` is the machine's RAM; ``(None, None)`` when not listed.
+    """
+    first = devices[0] if isinstance(devices, list) and devices else None
+    if not isinstance(first, dict):
+        return None, None
+    # Both report the machine's RAM as vram_total.
+    if first.get("type") in _SHARED_MEMORY_DEVICES:
+        return _SHARED_MEMORY_DEVICES[first["type"]], None
+    # Capped first: the regex is quadratic on a long run of spaces (CodeQL #137).
+    raw_name = str(first.get("name") or "")[:_DEVICE_NAME_MAX].strip()
+    name = _DEVICE_NAME_RE.match(raw_name).group(1)
+    total = first.get("vram_total")
+    # JSON allows NaN and Infinity, which int() refuses; a size at or below
+    # zero is an error state, not a card.
+    known = isinstance(total, (int, float)) and math.isfinite(total) and total > 0
+    vram_mb = int(total) // (1024 * 1024) if known else None
+    return name or None, vram_mb or None
 
 
 def comfyui_folder_paths(base_url: str):
@@ -2732,7 +2806,9 @@ def comfyui_model_roots(base_url: str) -> list[str]:
     of one category alone under their parent are returned as themselves, so a
     ``loras:`` entry pointing straight at ``~/loras`` does not turn into the
     whole home folder. ``custom_nodes`` is skipped: its parent is the ComfyUI
-    install, not models.
+    install, not models. So is any folder inside it: a node pack that registers
+    its own bundled assets (KJNodes' ``fonts`` and ``intrinsic_loras``) would
+    otherwise put the pack itself on the shelf as a models root.
 
     Empty when ComfyUI cannot be asked. Whether a root is reachable from this
     machine is the caller's question.
@@ -2754,6 +2830,12 @@ def comfyui_model_roots(base_url: str) -> list[str]:
             type(folder_paths).__name__,
         )
         return []
+    node_paths = folder_paths.get("custom_nodes")
+    node_dirs = [
+        _path_module(path).normcase(_path_module(path).normpath(path)).rstrip("\\/")
+        for path in (node_paths if isinstance(node_paths, list) else [])
+        if isinstance(path, str) and path.strip()
+    ]
     # parent -> {child folder -> the categories that use it}
     by_parent: dict[str, dict[str, set[str]]] = {}
     seps: dict[str, str] = {}
@@ -2764,6 +2846,11 @@ def comfyui_model_roots(base_url: str) -> list[str]:
             if isinstance(path, str) and path.strip():
                 pathmod = _path_module(path)
                 path = pathmod.normpath(path)
+                folded = pathmod.normcase(path)
+                if any(
+                    folded == d or folded.startswith(d + pathmod.sep) for d in node_dirs
+                ):
+                    continue
                 seps[path] = pathmod.sep
                 children = by_parent.setdefault(pathmod.dirname(path), {})
                 children.setdefault(path, set()).add(category)

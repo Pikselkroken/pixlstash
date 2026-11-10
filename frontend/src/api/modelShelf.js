@@ -105,8 +105,9 @@ export async function listBaseModelCompletions() {
  *
  * @param {Array<number>} ids - hub `model.id` values. Ids rather than hashes:
  *   an unhashed 24 GB checkpoint has no hash to be addressed by.
- * @param {Object} changes - any of `display_name` (one id only), `base_model`,
- *   `kind`, `file_kind`, `capabilities`, `trigger_words`. `capabilities` is the
+ * @param {Object} changes - any of `display_name` (one id, or members of one
+ *   stack, which names the whole stack), `base_model`, `kind`, `file_kind`,
+ *   `capabilities`, `trigger_words`. `capabilities` is the
  *   COMPLETE feature set for every id sent, so `[]` clears it; the server
  *   replaces rather than merges, or there would be no way to take one off.
  *   `trigger_words` is the complete list too, and its `[]` is an answer ("needs
@@ -144,6 +145,22 @@ export async function setAdapterAttachments(sha256, attachments) {
       })),
     ),
   );
+}
+
+/**
+ * Fill empty base models from Civitai, by each file's SHA-256 (#1517).
+ *
+ * The shelf's one outbound verb, so its caller confirms first. The server asks
+ * only about adapters and checkpoints with no base model and no ruling from
+ * the owner, and answers with a receipt rather than failing on the rest.
+ *
+ * @param {Array<number>} ids - hub `model.id` values, at most 100.
+ * @returns {Promise<{filled: Array<{id: number, base_model: string}>,
+ *   not_found: Array<number>, skipped: Array<{id: number, reason: string}>,
+ *   not_asked: Array<number>}>}
+ */
+export async function lookupBaseModelsOnline(ids) {
+  return unwrap(apiClient.post("/models/base-model-lookup", { ids }));
 }
 
 /**
@@ -193,6 +210,13 @@ export async function fetchModelCompanions(ids) {
  * is flagged `ambiguous` and still listed. Folding combinations into stacks is
  * the CLIENT's (see `utils/workflowSets.js`): the server groups nothing, so the
  * toolbar can price every fold setting without another request.
+ *
+ * Each combination also carries, off the same kept pictures as its
+ * `picture_count`: `workflows` (`[{id, name, picture_count}]`, the workflows its
+ * pictures were made with, most pictures first; a picture in no workflow counts
+ * toward none, so the sum is at most `picture_count`), `last_used_at` (ISO-8601
+ * of its newest kept picture, or `null`) and `latest` (up to ten
+ * `{picture_id, at}`, newest first).
  *
  * `hand_made` is the owner's own sets (#1520), newest first. A set lives on its
  * checkpoint (#1972): its `members` are what the pictures on it ran with plus
@@ -406,10 +430,23 @@ export async function markWorkflowSetSeen(id, sha256) {
  *   machine's trash, which is the undo. True unlinks them, and nothing gets
  *   them back; the shelf sends it only for Shift+Delete.
  * @returns {Promise<{deleted: Array<number>, files_removed: number,
- *   permanent: boolean, refused: Array<{id: number, reason: string}>}>}
+ *   permanent: boolean, refused: Array<{id: number, reason: string}>,
+ *   undo_token: ?string}>} `undo_token` is null for a permanent delete.
  */
 export async function deleteModels(ids, { permanent = false } = {}) {
   return unwrap(apiClient.post("/model-files/delete", { ids, permanent }));
+}
+
+/**
+ * Undo a trash delete: the files come back out of the trash and the models
+ * back onto the shelf under the ids they had, so deleting them again redoes it.
+ *
+ * @param {string} token - the delete's `undo_token`; spent by this call.
+ * @returns {Promise<{restored: Array<number>,
+ *   refused: Array<{id: number, reason: string}>}>}
+ */
+export async function undoDeleteModels(token) {
+  return unwrap(apiClient.post("/model-files/delete/undo", { token }));
 }
 
 /**

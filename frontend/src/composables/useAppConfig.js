@@ -6,10 +6,15 @@ import {
   nearestSizeLevelForColumns,
 } from "../utils/thumbnailSizes";
 import { useUserPrefsStore } from "../stores/useUserPrefsStore";
+import { useTagClipboardStore } from "../stores/useTagClipboardStore";
+import { useWhatsChangedStore } from "../stores/useWhatsChangedStore";
 import { useGridStore } from "../stores/useGridStore";
 import { useSortStore } from "../stores/useSortStore";
 import { useFilterStore } from "../stores/useFilterStore";
 import { useSidebarStore } from "../stores/useSidebarStore";
+
+const GRID_OPEN_GESTURES = ["double", "single"];
+const VIEWER_WHEEL_ACTIONS = ["zoom", "browse"];
 
 /**
  * The user's server-side config: load it once on start, and write UI options
@@ -69,6 +74,8 @@ export function useAppConfig({
   onTelemetryConsentRequired,
 } = {}) {
   const userPrefsStore = useUserPrefsStore();
+  const tagClipboardStore = useTagClipboardStore();
+  const whatsChangedStore = useWhatsChangedStore();
   const gridStore = useGridStore();
   const sortStore = useSortStore();
   const filterStore = useFilterStore();
@@ -115,6 +122,10 @@ export function useAppConfig({
       }
       if (typeof cfg.show_keyboard_hint === "boolean")
         userPrefsStore.showKeyboardHint = cfg.show_keyboard_hint;
+      if (GRID_OPEN_GESTURES.includes(cfg.grid_open_gesture))
+        userPrefsStore.gridOpenGesture = cfg.grid_open_gesture;
+      if (VIEWER_WHEEL_ACTIONS.includes(cfg.viewer_wheel_action))
+        userPrefsStore.viewerWheelAction = cfg.viewer_wheel_action;
       if (typeof cfg.show_face_bboxes === "boolean") {
         gridStore.showFaceBboxes = cfg.show_face_bboxes;
       }
@@ -222,6 +233,8 @@ export function useAppConfig({
         userPrefsStore.hiddenTags = newHiddenTags;
       }
       userPrefsStore.applyTagFilter = Boolean(cfg.apply_tag_filter);
+      tagClipboardStore.hydrate(cfg);
+      whatsChangedStore.hydrate(cfg);
       const rawPt = cfg.smart_score_penalised_tags;
       if (rawPt && typeof rawPt === "object" && !Array.isArray(rawPt)) {
         userPrefsStore.penalisedTagWeights = Object.fromEntries(
@@ -254,6 +267,8 @@ export function useAppConfig({
             ? userPrefsStore.sidebarThumbnailSize
             : null,
         show_keyboard_hint: userPrefsStore.showKeyboardHint,
+        grid_open_gesture: userPrefsStore.gridOpenGesture,
+        viewer_wheel_action: userPrefsStore.viewerWheelAction,
         show_face_bboxes: gridStore.showFaceBboxes,
         show_problem_icon: gridStore.showProblemIcon,
         expand_all_stacks: gridStore.showStacks,
@@ -270,6 +285,7 @@ export function useAppConfig({
       };
       filterStore.comfyuiConfigured = Boolean(cfg?.comfyui_url);
       filterStore.comfyuiUrl = cfg?.comfyui_url || "";
+      filterStore.comfyuiConfigRead = true;
       if (typeof cfg?.public_url === "string" && cfg.public_url) {
         userPrefsStore.publicUrl = cfg.public_url;
       }
@@ -281,6 +297,7 @@ export function useAppConfig({
       userPrefsStore.checkForUpdates =
         cfu === true ? true : cfu === false ? false : null;
       userPrefsStore.hydrateTelemetry(cfg);
+      userPrefsStore.keepWorkflowOnExport = cfg?.keep_workflow_on_export === true;
       if (!userPrefsStore.telemetryConsentPrompted) {
         // On desktop the question is asked by the startup screen, before the
         // app loads, and the answer waits for us here. Applying it is what
@@ -320,6 +337,10 @@ export function useAppConfig({
     }
     if (typeof userPrefsStore.showKeyboardHint === "boolean")
       patch.show_keyboard_hint = userPrefsStore.showKeyboardHint;
+    if (GRID_OPEN_GESTURES.includes(userPrefsStore.gridOpenGesture))
+      patch.grid_open_gesture = userPrefsStore.gridOpenGesture;
+    if (VIEWER_WHEEL_ACTIONS.includes(userPrefsStore.viewerWheelAction))
+      patch.viewer_wheel_action = userPrefsStore.viewerWheelAction;
     if (typeof gridStore.showFaceBboxes === "boolean") {
       patch.show_face_bboxes = gridStore.showFaceBboxes;
     }
@@ -408,6 +429,8 @@ export function useAppConfig({
   );
   watch(() => userPrefsStore.themeMode, persist);
   watch(() => userPrefsStore.showKeyboardHint, persist);
+  watch(() => userPrefsStore.gridOpenGesture, persist);
+  watch(() => userPrefsStore.viewerWheelAction, persist);
   watch(
     [
       () => gridStore.showFaceBboxes,

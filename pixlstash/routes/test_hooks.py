@@ -1,11 +1,24 @@
-"""E2E-only test hooks for the WebSocket grid-event system.
+"""E2E-only test hooks.
 
-This router exists **solely** to let Playwright deterministically inject a
-WebSocket grid event by driving ``vault.notify`` with a controlled payload.
-The e2e backend boots with ``disable_background_workers: true``, so the
-tag/quality/smart-score/face events behind most "continuous refresh" and
-"pill-on-own-change" reports never fire on their own. This endpoint reproduces
-those flood / echo scenarios on demand, without real-timing nondeterminism.
+This router exists **solely** for Playwright, and holds three hooks.
+
+``ws-event`` deterministically injects a WebSocket grid event by driving
+``vault.notify`` with a controlled payload. The e2e backend runs only the
+folder sweeps (and a face finder that queues nothing) and loads no models, so the tag/quality/smart-score/face events
+behind most "continuous refresh" and "pill-on-own-change" reports never fire on
+their own. This endpoint reproduces those flood / echo scenarios on demand,
+without real-timing nondeterminism.
+
+``reference-folders/{folder_id}/rescan`` marks a reference folder changed on
+disk, which is the filesystem watcher's job. The watcher needs an inotify
+instance, and a machine running many processes may have none left to give it,
+so a spec that changes a folder's files says so here instead of waiting for
+the five-minute rescan.
+
+``file-pictures`` files pictures on a workflow, as a ComfyUI run's import does
+(``Picture.run_workflow_id``). A run, the watch-folder import and the ComfyUI
+extraction are the only writers, and none of them runs in e2e, so a spec that
+deletes a workflow it made has no other way to give it pictures.
 
 Security posture (do not weaken):
 
@@ -28,13 +41,24 @@ See ``docs/reviews/2026-06-grid-refresh-cleanup-plan.md`` §4 Phase 2 and
 
 from __future__ import annotations
 
+import os
+import shutil
+import sys
+import tempfile
 from typing import Optional
 
+import send2trash as send2trash_package
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
+from send2trash import send2trash
 
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.resources.arbiter import Lease, LeaseKind, LeaseState, Tenant
+from pixlstash.routes import comfyui as comfyui_routes
+from pixlstash.routes.model_folders import register_model_folder
+from pixlstash.services import e2e_workflow_seed, workflow_inbox
+from pixlstash.services.model_folder_scanner import ModelFolderScanner
 
 logger = get_logger(__name__)
 
@@ -145,6 +169,121 @@ class InjectWsEventResponse(BaseModel):
     )
 
 
+class FilePicturesRequest(BaseModel):
+    """Pictures to file on a workflow, or to take off whatever holds them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    picture_ids: list[int] = Field(..., min_length=1, max_length=_MAX_REPEAT)
+    workflow_id: Optional[str] = Field(
+        default=None, description="The workflow to file them on; null unfiles them."
+    )
+
+
+def seed_model_folder(server, path: str) -> None:
+    """Register the e2e launcher's model folder and scan it synchronously.
+
+    The e2e backend runs with background workers off, so the scan a new folder
+    normally gets never runs and the shelf would stay empty. Called at start-up,
+    only when ``enable_test_hooks`` is on. A failure is logged rather than
+    raised: the shelf specs then fail on their own assertions, and every other
+    spec still gets a server.
+    """
+    try:
+        folder_id = register_model_folder(server, path, "user")
+        result = ModelFolderScanner(server.hub).scan_folder(folder_id, path, "user")
+    except Exception as exc:
+        logger.error(
+            "[test-hooks] could not seed the e2e model folder %s: %s",
+            path,
+            exc,
+            exc_info=True,
+        )
+        return
+    logger.info(
+        "[test-hooks] seeded e2e model folder %s (id=%s): %d adapters, %d checkpoints",
+        path,
+        folder_id,
+        result.adapters,
+        result.checkpoints,
+    )
+
+
+def fake_training_card(server, card: dict) -> None:
+    """Train on a pretend card instead of leasing this machine's GPU.
+
+    *card* is ``{"vram_mb", "ram_mb"}``: what ``POST /training/jobs`` sizes a
+    run against. A CI runner has no GPU, so the arbiter reads no card and the
+    route refuses every run; a developer's machine has one, and an exclusive
+    lease on it would make PixlStash yield its GPU work for a trainer that is
+    ``tests/training/fake_run.py`` and uses none. The run's lease is granted at
+    once, holds nothing and has no arbiter, so the Tasks tab lists no lease for
+    it and its shrink and release do nothing. Called at start-up, only when
+    ``enable_test_hooks`` is on.
+    """
+    vault = server.vault
+    vault.training_room = lambda: dict(card)
+
+    def lease(label: str, job_uuid: str, vram_mb: int, ram_mb: int) -> Lease:
+        return Lease(
+            tenant=Tenant.AITOOLKIT,
+            label=label,
+            kind=LeaseKind.EXCLUSIVE,
+            device=None,
+            need_mb=vram_mb,
+            ram_mb=ram_mb,
+            job_id=job_uuid,
+            state=LeaseState.GRANTED,
+        )
+
+    vault.training_service._request_gpu = lease
+    vault.training_service._adopt_gpu = lease
+    logger.warning("[test-hooks] training runs on a pretend card: %s", card)
+
+
+def isolate_e2e_data(path: str) -> None:
+    """Keep the e2e backend's workflow folders and its trash under *path*.
+
+    The workflow inbox and the user workflow folder are machine-global, so an
+    e2e run would otherwise import whatever the owner's inbox holds, migrate
+    their workflows, and write a deleted workflow into the inbox their own
+    server watches. Every ``send2trash`` PixlStash calls moves the file into
+    ``<path>/trash`` instead of the OS trash, the way the pytest suites'
+    ``fake_trash`` does. Called by ``Server.__init__`` just before the
+    hub's data steps read the user folder, and only when ``enable_test_hooks``
+    is on.
+    """
+    workflow_inbox.DATA_ROOT = path
+    trash = os.path.join(path, "trash")
+    os.makedirs(trash, exist_ok=True)
+
+    def fake_trash(target) -> None:
+        # A folder per file, so two files of one name both keep theirs.
+        shutil.move(os.fspath(target), tempfile.mkdtemp(dir=trash))
+
+    # Every module that already bound the real one, not a list of them, and
+    # the package itself, so a module imported later binds the fake too.
+    send2trash_package.send2trash = fake_trash
+    for name, module in list(sys.modules.items()):
+        if name.startswith("pixlstash") and (
+            getattr(module, "send2trash", None) is send2trash
+        ):
+            module.send2trash = fake_trash
+    logger.warning("[test-hooks] workflow folders and trash moved under %s", path)
+
+
+def point_comfyui_default(url: str) -> None:
+    """Make *url* the ComfyUI an owner with no address of their own reaches.
+
+    Otherwise that is ``127.0.0.1:8188``, where a developer's own ComfyUI may
+    answer the e2e backend's reads, or take its runs. The e2e launcher points
+    it at the fake ComfyUI Playwright starts (``frontend/e2e/fake_comfyui.py``).
+    Called at start-up, only when ``enable_test_hooks`` is on.
+    """
+    comfyui_routes.DEFAULT_COMFYUI_URL = url
+    logger.warning("[test-hooks] ComfyUI default address is now %s", url)
+
+
 def create_router(server) -> APIRouter:
     """Build the e2e test-hooks router.
 
@@ -234,5 +373,49 @@ def create_router(server) -> APIRouter:
             event_type=payload.event_type,
             emitted=emitted,
         )
+
+    @router.post(
+        "/test-hooks/reference-folders/{folder_id}/rescan",
+        summary="[E2E ONLY] Mark a reference folder changed on disk",
+        description=(
+            "Owner-only, e2e-only hook. Does what the filesystem watcher does "
+            "when a file in the folder changes: marks the folder due, so the "
+            "planner's reference-folder scan picks it up at once. The watcher "
+            "itself needs an inotify instance, which a busy machine may not "
+            "have to give. Registered only when ``enable_test_hooks`` is "
+            "true; absent otherwise."
+        ),
+        include_in_schema=False,
+    )
+    def rescan_reference_folder(folder_id: int, request: Request) -> dict:
+        server.auth.require_unscoped_owner(request)
+        # The watcher's own callback, so the scan that follows is the real one.
+        if not server.vault.mark_reference_folder_changed(folder_id):
+            raise HTTPException(status_code=404, detail="Reference folder not found.")
+        logger.info("[test-hooks] marked reference folder %s changed", folder_id)
+        return {"status": "success", "folder_id": folder_id}
+
+    @router.post(
+        "/test-hooks/file-pictures",
+        summary="[E2E ONLY] File pictures on a workflow",
+        description=(
+            "Owner-only, e2e-only hook. Sets ``Picture.run_workflow_id``, as a "
+            "ComfyUI run's import does, or clears it. Written whatever the "
+            "picture held, unlike a run, so a spec can rerun against the same "
+            "backend. Registered only when ``enable_test_hooks`` is true; "
+            "absent otherwise."
+        ),
+        include_in_schema=False,
+    )
+    def file_pictures(payload: FilePicturesRequest, request: Request) -> dict:
+        server.auth.require_unscoped_owner(request)
+        ids = list(dict.fromkeys(payload.picture_ids))
+        missing = e2e_workflow_seed.file_pictures(server, ids, payload.workflow_id)
+        if missing:
+            raise HTTPException(status_code=404, detail=f"No picture {missing}.")
+        logger.info(
+            "[test-hooks] filed pictures %s on workflow %r", ids, payload.workflow_id
+        )
+        return {"status": "success", "filed": len(ids)}
 
     return router

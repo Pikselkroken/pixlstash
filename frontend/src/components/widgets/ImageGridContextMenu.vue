@@ -22,11 +22,11 @@
 
       <!-- ════════════════════════════════════════════════════════════
            OVERLAY (lightbox) MODE - a restricted, dark-surface action
-           set that strictly COMPLEMENTS the overlay chrome. Everything
+           set that strictly COMPLEMENTS the lightbox chrome. Everything
            else the grid menu offers is already reachable from the
            lightbox chrome or is multi-select-only, so it is hidden here.
            ════════════════════════════════════════════════════════════ -->
-      <template v-if="overlayMode">
+      <template v-if="lightboxMode">
         <button
           v-if="contextImage?.id"
           class="ctx-item"
@@ -35,11 +35,11 @@
           @click="onAction('save-picture')"
         >
           <Tooltip
-            :text="`Save this ${overlayMediaNoun} to your device (${saveShortcutHint})`"
+            :text="`Save this ${lightboxMediaNoun} to your device (${saveShortcutHint})`"
             activator="parent"
           />
           <v-icon class="ctx-icon">mdi-download</v-icon>
-          <span>Save {{ overlayMediaNoun }}</span>
+          <span>Save {{ lightboxMediaNoun }}</span>
           <span class="ctx-shortcut" aria-hidden="true">{{ saveShortcutHint }}</span>
         </button>
         <button
@@ -49,12 +49,19 @@
           @click="onAction('save-picture-as')"
         >
           <Tooltip
-            :text="`Choose where to save this ${overlayMediaNoun}`"
+            :text="`Choose where to save this ${lightboxMediaNoun}`"
             activator="parent"
           />
           <v-icon class="ctx-icon">mdi-content-save-edit-outline</v-icon>
-          Save {{ overlayMediaNoun }} as…
+          Save {{ lightboxMediaNoun }} as…
         </button>
+        <OpenWithMenu
+          v-if="showOpenWith"
+          :image="contextImage"
+          :open="openGroup === 'open-with'"
+          @update:open="openGroup = $event ? 'open-with' : null"
+          @pick="onAction('open-with', $event)"
+        />
         <!-- The slot form, so the reason span below keeps `aria-describedby`:
              a parent-activated tip would overwrite it. -->
         <Tooltip
@@ -72,7 +79,7 @@
               :aria-describedby="
                 contextImage?.copyAvailable === true
                   ? undefined
-                  : overlayCopyReasonId
+                  : lightboxCopyReasonId
               "
               @click="onAction('copy-picture')"
             >
@@ -86,7 +93,7 @@
         </Tooltip>
         <span
           v-if="contextImage?.id && contextImage?.copyAvailable !== true"
-          :id="overlayCopyReasonId"
+          :id="lightboxCopyReasonId"
           class="visually-hidden"
         >
           {{ copyPictureTitle }}
@@ -147,6 +154,7 @@
               </button>
               <div
                 v-if="findFacesSubmenuOpen"
+                v-submenu-fit
                 class="ctx-submenu ctx-face-submenu"
                 role="menu"
               >
@@ -178,7 +186,7 @@
             Reverse image search
           </button>
           <!-- 4. Use this picture as the input of another workflow (#1406).
-               Acts on the overlay picture and closes the lightbox, which the
+               Acts on the lightbox picture and closes the lightbox, which the
                popup would otherwise open behind.
 
                The name is true again since #1457: `POST /workflows/run` fills
@@ -232,7 +240,7 @@
               Restore from snapshot
               <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
             </button>
-            <div v-if="restoreSubmenuOpen" class="ctx-submenu" role="menu">
+            <div v-if="restoreSubmenuOpen" v-submenu-fit class="ctx-submenu" role="menu">
               <button
                 v-for="cp in recentSnapshots"
                 :key="cp.id"
@@ -310,10 +318,15 @@
       </template>
 
       <!-- ════════════════════════════════════════════════════════════
-           GRID MODE - the full context menu for grid cells (unchanged).
+           GRID MODE - the full context menu for grid cells. What changes a
+           picture's membership stays at the top; every tool folds into one of
+           four fixed groups (Analyse, Generate, Adjust, Find & compare), so
+           nothing sits deeper than today's two levels. Lists inside a group
+           are a heading over their rows, never a third level. Mirrored row for
+           row in SelectionMenu.vue (frontend/e2e/specs/menu-parity.spec.js).
            ════════════════════════════════════════════════════════════ -->
       <template v-else>
-      <!-- ── Set / Character / Project ─────────────────────────────── -->
+      <!-- ── Set / Character / Project + Stack ─────────────────────── -->
       <template v-if="!isScrapheapView">
         <Tooltip
           v-if="entityLists.canSeeProjects"
@@ -353,21 +366,19 @@
               v-bind="tipProps"
               type="set"
               placement="right"
+              allow-create
               :subject-ids="selectedImageIds"
               :disabled="!selectedImageIds.length || !!groupingLockReason"
               :readonly="isReadOnly"
               :locked-set-ids="lockedSetIds"
               @added="emit('added-to-set', $event)"
+              @create="delegateWith('create-set', $event)"
             />
           </template>
         </Tooltip>
-        <div class="ctx-sep" />
-      </template>
 
-      <!-- ── Stack ─────────────────────────────────────────────────────
-           Making stacks stays at the top level; everything that acts on a
-           stack that already exists is behind the one Edit stack ▸ row. -->
-      <template v-if="!isScrapheapView">
+        <!-- Making stacks stays at the top level; everything that acts on a
+             stack that already exists is behind the one Edit stack ▸ row. -->
         <button
           v-if="showCreateStackButton"
           class="ctx-item"
@@ -406,14 +417,15 @@
           @dissolve-stacks="onAction('dissolve-stacks')"
           @keep-cover-only="onAction('keep-cover-only')"
         />
-        <div v-if="showAnyStackAction" class="ctx-sep" />
+        <div class="ctx-sep" />
       </template>
 
-      <!-- ── Tag / Filters / ComfyUI (delegate to SelectionBar panels) ── -->
+      <!-- ── Tag + the four tool groups ────────────────────────────── -->
       <template v-if="!isScrapheapView">
         <button
           class="ctx-item"
           :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
+          aria-keyshortcuts="T"
           @click="delegate('open-tag-panel')"
         >
           <Tooltip
@@ -421,191 +433,224 @@
             activator="parent"
           />
           <v-icon class="ctx-icon">mdi-tag-plus</v-icon>
-          Tag
+          Tag…
+          <span class="ctx-shortcut" aria-hidden="true">T</span>
         </button>
-        <div
-          v-if="taggerPlugins.length"
-          class="ctx-submenu-wrap"
-          @mouseenter="autoTagSubmenuOpen = true"
-          @mouseleave="autoTagSubmenuOpen = false"
-        >
-          <button
-            class="ctx-item"
-            :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
-          >
-            <Tooltip :text="lockReason || ''" activator="parent" />
-            <v-icon class="ctx-icon">mdi-tag-outline</v-icon>
-            Tag automatically
-            <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
-          </button>
-          <div v-if="autoTagSubmenuOpen" class="ctx-submenu">
-            <button
-              v-for="plugin in taggerPlugins"
-              :key="plugin.name"
-              class="ctx-item"
-              :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
-              @click="onAction('auto-tag', { model: plugin.name })"
-            >
-              <Tooltip :text="lockReason || ''" activator="parent" />
-              <v-icon class="ctx-icon">mdi-tag-outline</v-icon>
-              {{ plugin.display_name || plugin.name }}
-              <span v-if="plugin.default_enabled" class="ctx-default-pill"
-                >default</span
-              >
-            </button>
-          </div>
-        </div>
-        <div
-          v-if="captionerPlugins.length"
-          class="ctx-submenu-wrap"
-          @mouseenter="descriptionSubmenuOpen = true"
-          @mouseleave="descriptionSubmenuOpen = false"
-        >
-          <button
-            class="ctx-item"
-            :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
-          >
-            <Tooltip :text="lockReason || ''" activator="parent" />
-            <v-icon class="ctx-icon">mdi-text-box-outline</v-icon>
-            Generate description
-            <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
-          </button>
-          <div v-if="descriptionSubmenuOpen" class="ctx-submenu">
-            <button
-              v-for="plugin in captionerPlugins"
-              :key="plugin.name"
-              class="ctx-item"
-              :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
-              @click="onAction('generate-description', { model: plugin.name })"
-            >
-              <Tooltip :text="lockReason || ''" activator="parent" />
-              <v-icon class="ctx-icon">mdi-text-box-outline</v-icon>
-              {{ plugin.display_name || plugin.name }}
-              <span v-if="plugin.default_enabled" class="ctx-default-pill"
-                >default</span
-              >
-            </button>
-          </div>
-        </div>
-        <button
-          v-if="pluginOptions.length"
-          class="ctx-item"
-          :disabled="!selectedImageIds.length || isReadOnly"
-          @click="delegate('open-plugin-panel')"
-        >
-          <v-icon class="ctx-icon">mdi-tune-variant</v-icon>
-          Filters
-        </button>
-        <!-- The three run entries, mirrored word for word in SelectionMenu.vue
-             and asserted by frontend/e2e/specs/menu-parity.spec.js: all three
-             act on the SELECTION, so none is context-only. -->
-        <button
-          v-if="comfyuiConfigured"
-          class="ctx-item"
-          :disabled="!selectedImageIds.length || isReadOnly"
-          @click="delegate('make-more')"
-        >
-          <Tooltip
-            text="Run each picture's own recipe again, with a new seed"
-            activator="parent"
-          />
-          <v-icon class="ctx-icon">mdi-content-copy</v-icon>
-          Make more like these…
-        </button>
-        <button
-          v-if="comfyuiConfigured"
-          class="ctx-item"
-          :disabled="!selectedImageIds.length || isReadOnly"
-          @click="delegate('run-workflow')"
-        >
-          <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
-          Run a workflow on these…
-        </button>
-        <button
-          v-if="comfyuiConfigured"
-          class="ctx-item"
-          :disabled="!selectedImageIds.length || isReadOnly"
-          @click="delegate('edit-pictures')"
-        >
-          <Tooltip
-            text="Open the lightbox on the Edit tab: mark where, say what should change, or crop"
-            activator="parent"
-          />
-          <v-icon class="ctx-icon">mdi-auto-fix</v-icon>
-          Edit…
-        </button>
-        <!-- Any two pictures, ComfyUI or not; mirrors SelectionMenu.vue. -->
-        <button
-          class="ctx-item"
-          :disabled="!!compareBlockReason"
-          @click="delegate('compare-pictures')"
-        >
-          <Tooltip
-            :text="compareBlockReason || 'Lay one picture over the other, cut at a slider'"
-            activator="parent"
-          />
-          <v-icon class="ctx-icon">mdi-compare-horizontal</v-icon>
-          Compare
-          <span v-if="compareBlockReason" class="ctx-meta">{{
-            COMPARE_NOTES[compareBlockReason]
-          }}</span>
-        </button>
-        <button
-          class="ctx-item"
-          :disabled="!selectedImageIds.length || isReadOnly"
-          @click="onAction('segment')"
-        >
-          <Tooltip
-            text="Detect objects and store bounding boxes"
-            activator="parent"
-          />
-          <v-icon class="ctx-icon">mdi-shape-outline</v-icon>
-          Segment
-        </button>
-        <!-- Rotate in place: applied on click, no dialog and no confirmation.
-             The label counts the selection because a bare "Rotate left" over
-             twelve tiles reads as an action on the one under the cursor.
-             Greyed rather than hidden when nothing in the selection can carry a
-             rotation, since the tooltip is what points at the copy route. -->
-        <button
-          class="ctx-item"
-          :disabled="!selectedImageIds.length || isReadOnly || !!rotateBlockReason"
-          @click="onAction('rotate-left')"
-        >
-          <Tooltip :text="rotateLeftTitle" activator="parent" />
-          <v-icon class="ctx-icon">mdi-rotate-left</v-icon>
-          {{ rotateLeftLabel }}
-        </button>
-        <button
-          class="ctx-item"
-          :disabled="!selectedImageIds.length || isReadOnly || !!rotateBlockReason"
-          @click="onAction('rotate-right')"
-        >
-          <Tooltip :text="rotateRightTitle" activator="parent" />
-          <v-icon class="ctx-icon">mdi-rotate-right</v-icon>
-          {{ rotateRightLabel }}
-        </button>
-        <div class="ctx-sep" />
-      </template>
 
-      <!-- ── Restore from snapshot ─────────────────────────── -->
-      <template
-        v-if="!isReadOnly && selectedImageIds.length >= 1 && !isScrapheapView"
-      >
+        <!-- Analyse ▸: what reads the picture. Segment and Detect faces
+             again are always there, so the group always has rows. -->
         <div
           class="ctx-submenu-wrap"
-          @mouseenter="restoreSubmenuOpen = true"
-          @mouseleave="restoreSubmenuOpen = false"
+          data-group="analyse"
+          @mouseenter="openGroup = 'analyse'"
+          @mouseleave="openGroup = null"
         >
           <button
             class="ctx-item"
-            :disabled="!selectedImageIds.length || isReadOnly"
+            aria-haspopup="menu"
+            :aria-expanded="openGroup === 'analyse'"
+            @click="openGroup = 'analyse'"
+          >
+            <v-icon class="ctx-icon">mdi-magnify-scan</v-icon>
+            Analyse
+            <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
+          </button>
+          <div v-if="openGroup === 'analyse'" v-submenu-fit class="ctx-submenu" role="menu">
+            <template v-if="taggerPlugins.length">
+              <div class="ctx-label section-label">Tag automatically</div>
+              <button
+                v-for="plugin in taggerPlugins"
+                :key="plugin.name"
+                class="ctx-item"
+                :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
+                @click="onAction('auto-tag', { model: plugin.name })"
+              >
+                <Tooltip :text="lockReason || ''" activator="parent" />
+                <v-icon class="ctx-icon">mdi-tag-outline</v-icon>
+                {{ plugin.display_name || plugin.name }}
+                <span v-if="plugin.default_enabled" class="ctx-default-pill"
+                  >default</span
+                >
+              </button>
+            </template>
+            <template v-if="captionerPlugins.length">
+              <div class="ctx-label section-label">Generate description</div>
+              <button
+                v-for="plugin in captionerPlugins"
+                :key="plugin.name"
+                class="ctx-item"
+                :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
+                @click="onAction('generate-description', { model: plugin.name })"
+              >
+                <Tooltip :text="lockReason || ''" activator="parent" />
+                <v-icon class="ctx-icon">mdi-text-box-outline</v-icon>
+                {{ plugin.display_name || plugin.name }}
+                <span v-if="plugin.default_enabled" class="ctx-default-pill"
+                  >default</span
+                >
+              </button>
+            </template>
+            <div class="ctx-sep" />
+            <button
+              class="ctx-item"
+              :disabled="!selectedImageIds.length || isReadOnly"
+              @click="onAction('segment')"
+            >
+              <Tooltip
+                text="Detect objects and store bounding boxes"
+                activator="parent"
+              />
+              <v-icon class="ctx-icon">mdi-shape-outline</v-icon>
+              Segment
+            </button>
+            <button
+              class="ctx-item"
+              :disabled="!selectedImageIds.length || isReadOnly"
+              @click="onAction('detect-faces')"
+            >
+              <Tooltip
+                text="Find the faces again; a face named as a person keeps its person"
+                activator="parent"
+              />
+              <v-icon class="ctx-icon">mdi-face-recognition</v-icon>
+              Detect faces again
+            </button>
+          </div>
+        </div>
+
+        <!-- Generate ▸: the three ComfyUI runs, mirrored word for word in
+             SelectionMenu.vue and asserted by menuRunEntryParity.test.js. All
+             three act on the SELECTION, so none is context-only. Absent
+             without ComfyUI, as the rows always were. -->
+        <div
+          v-if="comfyuiConfigured"
+          class="ctx-submenu-wrap"
+          data-group="generate"
+          @mouseenter="openGroup = 'generate'"
+          @mouseleave="openGroup = null"
+        >
+          <button
+            class="ctx-item"
+            aria-haspopup="menu"
+            :aria-expanded="openGroup === 'generate'"
+            @click="openGroup = 'generate'"
+          >
+            <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
+            Generate
+            <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
+          </button>
+          <div v-if="openGroup === 'generate'" v-submenu-fit class="ctx-submenu" role="menu">
+            <button
+              v-if="comfyuiConfigured"
+              class="ctx-item"
+              :disabled="!selectedImageIds.length || isReadOnly"
+              @click="delegate('make-more')"
+            >
+              <Tooltip
+                text="Run each picture's own recipe again, with a new seed"
+                activator="parent"
+              />
+              <v-icon class="ctx-icon">mdi-content-copy</v-icon>
+              Make more like these…
+            </button>
+            <button
+              v-if="comfyuiConfigured"
+              class="ctx-item"
+              :disabled="!selectedImageIds.length || isReadOnly"
+              @click="delegate('run-workflow')"
+            >
+              <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
+              Run a workflow on these…
+            </button>
+            <button
+              v-if="comfyuiConfigured"
+              class="ctx-item"
+              :disabled="!selectedImageIds.length || isReadOnly"
+              @click="delegate('edit-pictures')"
+            >
+              <Tooltip
+                text="Open the lightbox on the Edit tab: mark where, say what should change, or crop"
+                activator="parent"
+              />
+              <v-icon class="ctx-icon">mdi-auto-fix</v-icon>
+              Edit…
+            </button>
+          </div>
+        </div>
+
+        <!-- Adjust ▸: what changes the file. -->
+        <div
+          class="ctx-submenu-wrap"
+          data-group="adjust"
+          @mouseenter="openGroup = 'adjust'"
+          @mouseleave="openGroup = null"
+        >
+          <button
+            class="ctx-item"
+            aria-haspopup="menu"
+            :aria-expanded="openGroup === 'adjust'"
+            @click="openGroup = 'adjust'"
+          >
+            <v-icon class="ctx-icon">mdi-tune-variant</v-icon>
+            Adjust
+            <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
+          </button>
+          <div v-if="openGroup === 'adjust'" v-submenu-fit class="ctx-submenu" role="menu">
+            <!-- Rotate in place: applied on click, no dialog and no
+                 confirmation. The label counts the selection because a bare
+                 "Rotate left" over twelve tiles reads as an action on the one
+                 under the cursor. Greyed rather than hidden when nothing in
+                 the selection can carry a rotation, since the tooltip is what
+                 points at the copy route. -->
+            <button
+              class="ctx-item"
+              :disabled="!selectedImageIds.length || isReadOnly || !!rotateBlockReason"
+              @click="onAction('rotate-left')"
+            >
+              <Tooltip :text="rotateLeftTitle" activator="parent" />
+              <v-icon class="ctx-icon">mdi-rotate-left</v-icon>
+              {{ rotateLeftLabel }}
+            </button>
+            <button
+              class="ctx-item"
+              :disabled="!selectedImageIds.length || isReadOnly || !!rotateBlockReason"
+              @click="onAction('rotate-right')"
+            >
+              <Tooltip :text="rotateRightTitle" activator="parent" />
+              <v-icon class="ctx-icon">mdi-rotate-right</v-icon>
+              {{ rotateRightLabel }}
+            </button>
+            <button
+              v-if="pluginOptions.length"
+              class="ctx-item"
+              :disabled="!selectedImageIds.length || isReadOnly"
+              @click="delegate('open-plugin-panel')"
+            >
+              <v-icon class="ctx-icon">mdi-tune-variant</v-icon>
+              Filters…
+            </button>
+          </div>
+        </div>
+
+        <!-- Restore from snapshot ▸: its own submenu, not part of Adjust. -->
+        <div
+          v-if="!isReadOnly && selectedImageIds.length >= 1"
+          class="ctx-submenu-wrap"
+          data-group="restore"
+          @mouseenter="openGroup = 'restore'"
+          @mouseleave="openGroup = null"
+        >
+          <button
+            class="ctx-item"
+            aria-haspopup="menu"
+            :aria-expanded="openGroup === 'restore'"
+            @click="openGroup = 'restore'"
           >
             <v-icon class="ctx-icon">mdi-restore</v-icon>
             Restore from snapshot
             <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
           </button>
-          <div v-if="restoreSubmenuOpen" class="ctx-submenu">
+          <div v-if="openGroup === 'restore'" v-submenu-fit class="ctx-submenu" role="menu">
             <button
               v-for="cp in recentSnapshots"
               :key="cp.id"
@@ -633,76 +678,99 @@
             </button>
           </div>
         </div>
-      </template>
 
-      <!-- ── Find similar faces ─────────────────────────────── -->
-      <template
-        v-if="
-          contextImage?.id &&
-          !isScrapheapView &&
-          selectedImageIds.length === 1 &&
-          contextImageFaces.length
-        "
-      >
-        <!-- Direct action when a specific face was right-clicked, or only one face exists -->
-        <button
-          v-if="contextClickedFace || contextImageFaces.length === 1"
-          class="ctx-item"
-          @click="
-            onAction(
-              'find-similar-faces',
-              (contextClickedFace ?? contextImageFaces[0]).id,
-            )
-          "
-        >
-          <Tooltip text="Find pictures with similar faces" activator="parent" />
-          <v-icon class="ctx-icon">mdi-face-recognition</v-icon>
-          Find similar faces
-        </button>
-        <!-- Submenu to pick a face when not right-clicking on one -->
+        <!-- Find & compare ▸: what looks for other pictures. The grid always
+             opens on a picture, so Reverse image search keeps this at two
+             rows or more. -->
         <div
-          v-else
           class="ctx-submenu-wrap"
-          @mouseenter="openFaceSubmenu"
-          @mouseleave="findFacesSubmenuOpen = false"
+          data-group="find"
+          @mouseenter="openFindGroup"
+          @mouseleave="openGroup = null"
         >
-          <button class="ctx-item">
-            <v-icon class="ctx-icon">mdi-face-recognition</v-icon>
-            Find similar faces
+          <button
+            class="ctx-item"
+            aria-haspopup="menu"
+            :aria-expanded="openGroup === 'find'"
+            @click="openFindGroup"
+          >
+            <v-icon class="ctx-icon">mdi-image-search-outline</v-icon>
+            Find &amp; compare
             <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
           </button>
-          <div v-if="findFacesSubmenuOpen" class="ctx-submenu ctx-face-submenu">
+          <div v-if="openGroup === 'find'" v-submenu-fit class="ctx-submenu" role="menu">
+            <!-- Faces act on the one right-clicked picture. A clicked face, or
+                 the only one, is a single row; several are listed inline. -->
+            <template v-if="contextImage?.id && selectedImageIds.length === 1">
+              <button
+                v-if="
+                  contextImageFaces.length &&
+                  (contextClickedFace || contextImageFaces.length === 1)
+                "
+                class="ctx-item"
+                @click="
+                  onAction(
+                    'find-similar-faces',
+                    (contextClickedFace ?? contextImageFaces[0]).id,
+                  )
+                "
+              >
+                <Tooltip
+                  text="Find pictures with similar faces"
+                  activator="parent"
+                />
+                <v-icon class="ctx-icon">mdi-face-recognition</v-icon>
+                Find similar faces
+              </button>
+              <template v-else-if="contextImageFaces.length">
+                <div class="ctx-label section-label">Similar faces</div>
+                <button
+                  v-for="(face, idx) in contextImageFaces"
+                  :key="face.id ?? idx"
+                  class="ctx-item ctx-face-item"
+                  @click="onAction('find-similar-faces', face.id)"
+                >
+                  <div
+                    class="ctx-face-thumb"
+                    :style="getFaceThumbStyle(face, idx)"
+                  />
+                  <span>{{ faceLabel(face, idx) }}</span>
+                </button>
+              </template>
+              <div v-if="contextImageFaces.length" class="ctx-sep" />
+            </template>
             <button
-              v-for="(face, idx) in contextImageFaces"
-              :key="face.id ?? idx"
-              class="ctx-item ctx-face-item"
-              @click="onAction('find-similar-faces', face.id)"
+              v-if="contextImage?.id"
+              class="ctx-item"
+              :disabled="!selectedImageIds.length"
+              @click="onAction('reverse-image-search')"
             >
-              <div
-                class="ctx-face-thumb"
-                :style="getFaceThumbStyle(face, idx)"
+              <Tooltip text="Find visually similar images" activator="parent" />
+              <v-icon class="ctx-icon">mdi-image-search-outline</v-icon>
+              Reverse image search
+            </button>
+            <!-- Any two pictures, ComfyUI or not; mirrors SelectionMenu.vue. -->
+            <button
+              class="ctx-item"
+              :disabled="!!compareBlockReason"
+              @click="delegate('compare-pictures')"
+            >
+              <Tooltip
+                :text="compareBlockReason || 'Lay one picture over the other, cut at a slider'"
+                activator="parent"
               />
-              <span>{{ faceLabel(face, idx) }}</span>
+              <v-icon class="ctx-icon">mdi-compare-horizontal</v-icon>
+              Compare
+              <span v-if="compareBlockReason" class="ctx-meta">{{
+                COMPARE_NOTES[compareBlockReason]
+              }}</span>
             </button>
           </div>
         </div>
-      </template>
-
-      <!-- ── Reverse image search ────────────────────────────── -->
-      <template v-if="contextImage?.id && !isScrapheapView">
-        <button
-          class="ctx-item"
-          :disabled="!selectedImageIds.length"
-          @click="onAction('reverse-image-search')"
-        >
-          <Tooltip text="Find visually similar images" activator="parent" />
-          <v-icon class="ctx-icon">mdi-image-search-outline</v-icon>
-          Reverse image search
-        </button>
         <div class="ctx-sep" />
       </template>
 
-      <!-- ── Share image ──────────────────────────────────────────── -->
+      <!-- ── Share image + Move to library ─────────────────────────── -->
       <template v-if="contextImage?.id && selectedImageIds.length === 1">
         <button
           class="ctx-item"
@@ -721,50 +789,54 @@
           <v-icon class="ctx-icon">mdi-link-variant-off</v-icon>
           Remove all shares
         </button>
-        <div class="ctx-sep" />
       </template>
-
-      <!-- ── Move to library ───────────────────────────────────────────
-           Mirrored in SelectionMenu.vue. Absent rather than disabled with one
+      <!-- Sends the picture out of the library, so it sits with Share rather
+           than among the tools that act inside it. One picture only. -->
+      <OpenWithMenu
+        v-if="showOpenWith && selectedImageIds.length === 1"
+        :image="contextImage"
+        :open="openGroup === 'open-with'"
+        @update:open="openGroup = $event ? 'open-with' : null"
+        @pick="onAction('open-with', $event)"
+      />
+      <!-- Mirrored in SelectionMenu.vue. Absent rather than disabled with one
            library: there is nowhere to move to and nothing to explain. -->
-      <template
+      <div
         v-if="!isReadOnly && !isScrapheapView && otherLibraries.length"
+        class="ctx-submenu-wrap"
+        data-group="move"
+        @mouseenter="selectedImageIds.length && (openGroup = 'move')"
+        @mouseleave="openGroup = null"
       >
-        <div
-          class="ctx-submenu-wrap"
-          @mouseenter="selectedImageIds.length && (moveSubmenuOpen = true)"
-          @mouseleave="moveSubmenuOpen = false"
+        <button
+          class="ctx-item"
+          :disabled="!selectedImageIds.length"
+          aria-haspopup="true"
+          :aria-expanded="openGroup === 'move'"
+          @click="openGroup = openGroup === 'move' ? null : 'move'"
         >
+          <Tooltip
+            text="Copies the selection into another library and moves it to this library's Scrapheap. Tags, score and description go with it; people, sets, projects and stacks do not."
+            activator="parent"
+          />
+          <v-icon class="ctx-icon">mdi-folder-move-outline</v-icon>
+          Move to library
+          <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
+        </button>
+        <div v-if="openGroup === 'move'" v-submenu-fit class="ctx-submenu">
           <button
+            v-for="library in otherLibraries"
+            :key="library.uuid"
             class="ctx-item"
             :disabled="!selectedImageIds.length"
-            aria-haspopup="true"
-            :aria-expanded="moveSubmenuOpen"
-            @click="moveSubmenuOpen = !moveSubmenuOpen"
+            @click="onAction('move-to-library', library)"
           >
-            <Tooltip
-              text="Copies the selection into another library and moves it to this library's Scrapheap. Tags, score and description go with it; people, sets, projects and stacks do not."
-              activator="parent"
-            />
-            <v-icon class="ctx-icon">mdi-folder-move-outline</v-icon>
-            Move to library
-            <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
+            <v-icon class="ctx-icon">mdi-image-multiple-outline</v-icon>
+            {{ library.name }}
           </button>
-          <div v-if="moveSubmenuOpen" class="ctx-submenu">
-            <button
-              v-for="library in otherLibraries"
-              :key="library.uuid"
-              class="ctx-item"
-              :disabled="!selectedImageIds.length"
-              @click="onAction('move-to-library', library)"
-            >
-              <v-icon class="ctx-icon">mdi-image-multiple-outline</v-icon>
-              {{ library.name }}
-            </button>
-          </div>
         </div>
-        <div class="ctx-sep" />
-      </template>
+      </div>
+      <div v-if="showShareOrMoveGroup" class="ctx-sep" />
 
       <!-- ── Remove / Delete ───────────────────────────────────────────
            The trailing danger group. Keep cover only lives under Edit stack ▸,
@@ -780,6 +852,7 @@
       <button
         class="ctx-item ctx-item--danger"
         :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
+        aria-keyshortcuts="Delete"
         @click="onAction('delete-selected')"
       >
         <Tooltip
@@ -788,6 +861,7 @@
         />
         <v-icon class="ctx-icon">mdi-delete</v-icon>
         {{ deleteButtonLabel }}
+        <span class="ctx-shortcut" aria-hidden="true">Del</span>
       </button>
       </template>
     </div>
@@ -810,11 +884,15 @@ import { faceBoxColor } from "../../utils/utils.js";
 import { isApplePlatform } from "../../utils/shortcutHints.js";
 import { COMPARE_NOTES } from "../../utils/compare";
 import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
+import { isVideo } from "../../utils/media";
+import { serverIsOnThisMachine } from "../../utils/serverLocation";
+import { vSubmenuFit } from "../../utils/submenuFit";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import AddToEntityControl from "./AddToEntityControl.vue";
 import EditStackMenu from "./EditStackMenu.vue";
+import OpenWithMenu from "./OpenWithMenu.vue";
 import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
@@ -865,21 +943,21 @@ const props = defineProps({
   contextImage: { type: Object, default: null },
   contextClickedFace: { type: Object, default: null },
   isShared: { type: Boolean, default: false },
-  // Overlay (lightbox) mode: renders the restricted overlay action set,
+  // Lightbox mode: renders the restricted lightbox action set,
   // applies the dark-surface skin, and enables keyboard focus management
   // (auto-focus first item, arrow roving, focus-return to the invoker on close).
-  overlayMode: { type: Boolean, default: false },
+  lightboxMode: { type: Boolean, default: false },
 });
 
 // The dark-surface skin is tied to overlay invocation - the menu renders over
 // the dark lightbox there and nowhere else.
-const onDark = computed(() => props.overlayMode);
-const isOverlayVideo = computed(() => props.contextImage?.mediaKind === "video");
-const overlayMediaNoun = computed(() =>
-  isOverlayVideo.value ? "video" : "picture",
+const onDark = computed(() => props.lightboxMode);
+const isLightboxVideo = computed(() => props.contextImage?.mediaKind === "video");
+const lightboxMediaNoun = computed(() =>
+  isLightboxVideo.value ? "video" : "picture",
 );
 const copyPictureLabel = computed(() =>
-  isOverlayVideo.value ? "Copy current frame" : "Copy picture",
+  isLightboxVideo.value ? "Copy current frame" : "Copy picture",
 );
 const saveShortcutHint = computed(() =>
   isApplePlatform() ? "⌘S" : "Ctrl+S",
@@ -899,8 +977,8 @@ const copyPictureTitle = computed(() =>
     : props.contextImage?.copyUnavailableReason ||
       "This picture is not ready to copy.",
 );
-const overlayCopyReasonId = computed(
-  () => `overlay-copy-reason-${props.contextImage?.id ?? "media"}`,
+const lightboxCopyReasonId = computed(
+  () => `lightbox-copy-reason-${props.contextImage?.id ?? "media"}`,
 );
 
 const emit = defineEmits([
@@ -909,6 +987,7 @@ const emit = defineEmits([
   "add-to-character",
   "remove-from-character",
   "create-character",
+  "create-set",
   "set-project",
   "remove-from-stack",
   "dissolve-stacks",
@@ -928,6 +1007,7 @@ const emit = defineEmits([
   "compare-pictures",
   "use-as-input",
   "segment",
+  "detect-faces",
   "auto-tag",
   "generate-description",
   "save-picture",
@@ -939,6 +1019,7 @@ const emit = defineEmits([
   "find-similar-faces",
   "rotate-left",
   "rotate-right",
+  "open-with",
 ]);
 
 const menuRef = ref(null);
@@ -946,11 +1027,13 @@ const adjustedX = ref(props.x);
 const adjustedY = ref(props.y);
 const submenusFlip = ref(false);
 const tooltipSide = ref("top");
-const autoTagSubmenuOpen = ref(false);
-const descriptionSubmenuOpen = ref(false);
+// The grid's open submenu, by its wrap's `data-group` (analyse, generate,
+// adjust, find, move, open-with), or null. One at a time, so one ref. The
+// lightbox menu uses it for Open with too.
+const openGroup = ref(null);
+// The lightbox's own two submenus.
 const findFacesSubmenuOpen = ref(false);
 const restoreSubmenuOpen = ref(false);
-const moveSubmenuOpen = ref(false);
 const identicalSnapshotIds = ref(new Set());
 
 // Run token guards against rapid submenu toggles: when the watcher fires
@@ -959,35 +1042,39 @@ const identicalSnapshotIds = ref(new Set());
 // the new batch's state. Same pattern as SnapshotsSection.vue:88.
 let _hashCompareRunToken = 0;
 
-watch(restoreSubmenuOpen, async (isOpen) => {
-  if (!isOpen || !props.selectedImageIds.length) {
-    return;
-  }
-  const token = ++_hashCompareRunToken;
-  identicalSnapshotIds.value = new Set();
-  const pictureIds = props.selectedImageIds;
-  const matchedIds = new Set();
-  await Promise.all(
-    recentSnapshots.value.map(async (cp) => {
-      try {
-        const body = await hashCompareSnapshot(cp.id, pictureIds);
-        // Bail on stale apply - a newer run has superseded this one.
-        if (token !== _hashCompareRunToken) return;
-        const identicalSet = new Set(body.identical_ids);
-        const allIdentical = pictureIds.every((id) => identicalSet.has(id));
-        if (allIdentical) {
-          matchedIds.add(cp.id);
+// The snapshot rows are in the lightbox's submenu or the grid's own one.
+watch(
+  () => restoreSubmenuOpen.value || openGroup.value === "restore",
+  async (isOpen) => {
+    if (!isOpen || !props.selectedImageIds.length) {
+      return;
+    }
+    const token = ++_hashCompareRunToken;
+    identicalSnapshotIds.value = new Set();
+    const pictureIds = props.selectedImageIds;
+    const matchedIds = new Set();
+    await Promise.all(
+      recentSnapshots.value.map(async (cp) => {
+        try {
+          const body = await hashCompareSnapshot(cp.id, pictureIds);
+          // Bail on stale apply - a newer run has superseded this one.
+          if (token !== _hashCompareRunToken) return;
+          const identicalSet = new Set(body.identical_ids);
+          const allIdentical = pictureIds.every((id) => identicalSet.has(id));
+          if (allIdentical) {
+            matchedIds.add(cp.id);
+          }
+        } catch (err) {
+          // On error, leave the snapshot enabled (conservative).
+          console.warn(`Hash-compare failed for snapshot ${cp.id}:`, err);
         }
-      } catch (err) {
-        // On error, leave the snapshot enabled (conservative).
-        console.warn(`Hash-compare failed for snapshot ${cp.id}:`, err);
-      }
-    }),
-  );
-  if (token === _hashCompareRunToken) {
-    identicalSnapshotIds.value = matchedIds;
-  }
-});
+      }),
+    );
+    if (token === _hashCompareRunToken) {
+      identicalSnapshotIds.value = matchedIds;
+    }
+  },
+);
 
 const snapshotsStore = useSnapshotsStore();
 // A token scoped to a character / picture / set was granted no project scope,
@@ -1084,6 +1171,13 @@ function openFaceSubmenu() {
   loadFaceCharacterNames();
 }
 
+// The grid's Find & compare group lists the faces inline for one picture, so
+// their names load when it opens over one.
+function openFindGroup() {
+  openGroup.value = "find";
+  if (props.selectedImageIds.length === 1) loadFaceCharacterNames();
+}
+
 function faceLabel(face, idx) {
   if (face.character_id) {
     const name = faceCharacterNames.value[face.id];
@@ -1156,7 +1250,7 @@ async function clampPosition() {
 
 // Element focused before the menu opened, so Escape / an action can return
 // focus to the invoker (e.g. the lightbox media) instead of dropping it to
-// document.body. Only tracked in overlay mode (grid right-click keeps its
+// document.body. Only tracked in lightbox mode (grid right-click keeps its
 // mouse-driven, focus-neutral behaviour).
 let previouslyFocused = null;
 
@@ -1168,11 +1262,16 @@ const MENU_ITEM_SELECTOR =
 
 // A trigger's own flyout rows are `.ctx-item` as well (one row design), and the
 // flyout stays in the DOM while closed, so its rows are dropped here or they
-// would leak into this outer roving order.
+// would leak into this outer roving order. A grid group's rows rove on their
+// own while focus is inside the group, and stay out of the outer order.
 function menuItems() {
-  return Array.from(
-    menuRef.value?.querySelectorAll(MENU_ITEM_SELECTOR) || [],
-  ).filter((el) => !el.closest(".ate-menu"));
+  const group = document.activeElement?.closest?.("[data-group] .ctx-submenu");
+  const root = group && menuRef.value?.contains(group) ? group : menuRef.value;
+  return Array.from(root?.querySelectorAll(MENU_ITEM_SELECTOR) || []).filter(
+    (el) =>
+      !el.closest(".ate-menu") &&
+      (group || !el.closest("[data-group] .ctx-submenu")),
+  );
 }
 
 function focusFirstItem() {
@@ -1184,7 +1283,7 @@ watch(
   (val) => {
     if (val) {
       clampPosition();
-      if (props.overlayMode) {
+      if (props.lightboxMode) {
         previouslyFocused =
           document.activeElement instanceof HTMLElement
             ? document.activeElement
@@ -1193,12 +1292,10 @@ watch(
       }
     } else {
       // Reset transient submenu state so a reopen starts clean.
-      autoTagSubmenuOpen.value = false;
-      descriptionSubmenuOpen.value = false;
+      openGroup.value = null;
       findFacesSubmenuOpen.value = false;
       restoreSubmenuOpen.value = false;
-      moveSubmenuOpen.value = false;
-      if (props.overlayMode && previouslyFocused) {
+      if (props.lightboxMode && previouslyFocused) {
         try {
           previouslyFocused.focus();
         } catch {
@@ -1214,14 +1311,14 @@ watch(
 // Roving focus for keyboard users: Up/Down move between enabled items, Home/End
 // jump to the ends. Only fires while focus is inside the menu, so the grid menu
 // (never auto-focused) is unaffected. Every keystroke handled here also stops
-// bubbling so it never reaches the overlay's window-level key handler - which
+// bubbling so it never reaches the lightbox's window-level key handler - which
 // would otherwise navigate prev/next on arrows or toggle chrome on Space while
 // the user is driving the menu. (Escape is intercepted earlier, in the
 // capture-phase document handler.)
 async function onMenuKeydown(event) {
   // Inside an open Add-to flyout the control owns the keyboard (it has to: with
   // `floatMenu` its menu is teleported and never bubbles here at all). Only stop
-  // the keystroke from leaking to the overlay's global handlers.
+  // the keystroke from leaking to the lightbox's global handlers.
   if (event.target?.closest?.(".ate-menu")) {
     event.stopPropagation();
     return;
@@ -1241,8 +1338,31 @@ async function onMenuKeydown(event) {
     ateRoot?.querySelector(".ate-menu.open input")?.focus();
     return;
   }
+  // ArrowRight opens a grid group and focuses its first row; ArrowLeft inside
+  // one closes it and returns to its trigger. Mirrors SelectionMenu.vue.
+  const groupWrap = event.target?.closest?.("[data-group]");
+  if (groupWrap && event.key === "ArrowRight") {
+    if (event.target.parentElement === groupWrap) {
+      event.preventDefault();
+      event.stopPropagation();
+      openGroup.value = groupWrap.dataset.group;
+      await nextTick();
+      groupWrap.querySelector(".ctx-submenu .ctx-item:not([disabled])")?.focus();
+      return;
+    }
+  }
+  if (groupWrap && event.key === "ArrowLeft") {
+    if (event.target.closest(".ctx-submenu")) {
+      event.preventDefault();
+      event.stopPropagation();
+      openGroup.value = null;
+      await nextTick();
+      groupWrap.querySelector(":scope > .ctx-item")?.focus();
+      return;
+    }
+  }
   if (
-    props.overlayMode &&
+    props.lightboxMode &&
     (event.ctrlKey || event.metaKey) &&
     !event.altKey &&
     !event.shiftKey &&
@@ -1276,7 +1396,7 @@ async function onMenuKeydown(event) {
       items[next]?.focus();
     }
   }
-  // Keep menu keystrokes from leaking to global (overlay) handlers. Native
+  // Keep menu keystrokes from leaking to global (lightbox) handlers. Native
   // button activation (Enter / Space → click) is a default action, unaffected
   // by stopping propagation.
   event.stopPropagation();
@@ -1360,12 +1480,24 @@ const rotateRightTitle = computed(
   () => props.rotateBlockReason || rotateRightLabel.value,
 );
 
-const showAnyStackAction = computed(
+// Open with ▸ launches an app on the machine the server runs on, so it is
+// offered only where that machine is this one; the server refuses everyone
+// else anyway. Videos are not opened with (nothing saves back over one).
+const showOpenWith = computed(
   () =>
+    !!props.contextImage?.id &&
+    !isReadOnly.value &&
     !isScrapheapView.value &&
-    (showCreateStackButton.value ||
-      showGroupStackButton.value ||
-      !!props.stackEdit),
+    !isVideo(props.contextImage) &&
+    serverIsOnThisMachine(),
+);
+
+// Share image, Open with and Move to library are one group with one rule
+// under it.
+const showShareOrMoveGroup = computed(
+  () =>
+    (!!props.contextImage?.id && selectedCount.value === 1) ||
+    (!isReadOnly.value && !isScrapheapView.value && otherLibraries.value.length > 0),
 );
 
 const pluginOptions = computed(() => {

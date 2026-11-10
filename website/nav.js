@@ -17,7 +17,7 @@
     { href: "comfyui.html", label: "ComfyUI" },
     {
       href: "whatsnew.html",
-      label: "New in v1.13",
+      label: "New in v2.0",
       className: "nav-link--whatsnew",
     },
     { href: "api.html", label: "API" },

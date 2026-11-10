@@ -22,7 +22,7 @@
       Edit stack
       <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
     </button>
-    <div v-if="open" class="ctx-submenu edit-stack-submenu" role="menu">
+    <div v-if="open" v-submenu-fit class="ctx-submenu edit-stack-submenu" role="menu">
       <div class="ctx-label section-label edit-stack-head">
         <span>{{ heading }}</span>
         <span v-if="subheading">{{ subheading }}</span>
@@ -139,6 +139,7 @@ import {
   keepCoverOnlyMenuLabel,
 } from "../../utils/keepCoverOnly";
 import { plural } from "../../utils/lockedDelete";
+import { vSubmenuFit } from "../../utils/submenuFit";
 import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({

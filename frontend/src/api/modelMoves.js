@@ -23,12 +23,20 @@ import { unwrap } from "../utils/unwrap";
  *   named by its `model_file` primary key so it is one COPY and never a model
  *   that happens to have several. Both fields come straight off a shelf row's
  *   `locations[]`.
+ * @param {string} [destinationSubpath] - the directory inside that folder,
+ *   POSIX and relative, `""` for its root. It must already exist; locked
+ *   folders take no move at all.
  * @returns {Promise<Object>} the first status snapshot.
  */
-export async function startModelMove(destinationFolderId, items) {
+export async function startModelMove(
+  destinationFolderId,
+  items,
+  destinationSubpath = "",
+) {
   return unwrap(
     apiClient.post("/model-moves", {
       destination_folder_id: destinationFolderId,
+      destination_subpath: destinationSubpath,
       items,
     }),
   );

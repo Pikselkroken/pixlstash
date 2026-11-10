@@ -791,8 +791,9 @@
         <div class="tab-panel" id="panel-windows" role="tabpanel">
           <p class="section-title">Server Installer for Windows</p>
           <p class="section-subtitle">
-            The easiest way to get started with the server on Windows. No Python
-            or Node.js required. Linux and macOS users should just use pip.
+            The easiest way to get started with the server on Windows. Needs
+            Python 3.11 or newer; the installer checks for it. Linux and macOS
+            users should just use pip.
           </p>
 
           <div class="method-steps">
@@ -1176,7 +1177,7 @@ sudo systemctl restart docker"
               </p>
               <div class="cmd-block">
                 <code
-                  >docker run -d \ --runtime nvidia \ --user $(id -u):$(id -g) \
+                  >docker run -d \ --gpus all \ --user $(id -u):$(id -g) \
                   -e HOME=/home/pixlstash \ -e NVIDIA_VISIBLE_DEVICES=all \ -e
                   NVIDIA_DRIVER_CAPABILITIES=compute,utility \ -e
                   PIXLSTASH_HOST=0.0.0.0 \ -p 9537:9537 \ -v
@@ -1186,7 +1187,7 @@ sudo systemctl restart docker"
                 <button
                   class="copy-btn"
                   data-copy="docker run -d \
-  --runtime nvidia \
+  --gpus all \
   --user $(id -u):$(id -g) \
   -e HOME=/home/pixlstash \
   -e NVIDIA_VISIBLE_DEVICES=all \
@@ -1212,7 +1213,7 @@ sudo systemctl restart docker"
         <div class="tab-panel" id="panel-pip" role="tabpanel">
           <p class="section-title">pip + Virtual Environment</p>
           <p class="section-subtitle">
-            Install from PyPI. Requires Python 3.10 or newer. Using a virtual
+            Install from PyPI. Requires Python 3.11 or newer. Using a virtual
             environment is strongly recommended.
           </p>
 
@@ -1357,7 +1358,7 @@ WantedBy=multi-user.target"
         <div class="tab-panel" id="panel-source" role="tabpanel">
           <p class="section-title">Clone &amp; Run from Source</p>
           <p class="section-subtitle">
-            Run directly from the Git repository. Requires Python 3.10+, Node.js
+            Run directly from the Git repository. Requires Python 3.11+, Node.js
             20+, and npm.
           </p>
 

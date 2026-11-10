@@ -193,18 +193,12 @@ def normalise_tag_weights(weights: dict | None) -> dict[str, float]:
     return normalised
 
 
-_PENALISED_WEIGHTS = normalise_tag_weights(None)
-
-
 def _family_max_weights(weights: dict[str, float]) -> dict[str, float]:
     """Per-family ceiling: the largest weight any of its members carries in *weights*."""
     return {
         fam["name"]: max([weights[t] for t in fam["tags"] if t in weights] or [0.0])
         for fam in ANOMALY_FAMILIES
     }
-
-
-_FAMILY_MAX_WEIGHT = _family_max_weights(_PENALISED_WEIGHTS)
 
 
 def _tag_weight(

@@ -1,0 +1,91 @@
+{
+  "job": "extension",
+  "config": {
+    "name": "{{JOB_NAME}}",
+    "process": [
+      {
+        "type": "diffusion_trainer",
+        "training_folder": "{{TRAINING_FOLDER}}",
+        "sqlite_db_path": "{{SQLITE_DB_PATH}}",
+        "device": "cuda",
+        "trigger_word": "{{TRIGGER_WORD}}",
+        "performance_log_every": 10,
+        "network": {
+          "type": "lora",
+          "conv": 16,
+          "conv_alpha": 16,
+          "lokr_full_rank": true,
+          "lokr_factor": -1
+        },
+        "save": {
+          "dtype": "bf16",
+          "max_step_saves_to_keep": 4,
+          "save_format": "diffusers",
+          "push_to_hub": false
+        },
+        "datasets": [
+          {
+            "folder_path": "{{DATASET_FOLDER}}",
+            "mask_path": null,
+            "mask_min_value": 0.1,
+            "default_caption": "",
+            "caption_ext": "txt",
+            "cache_latents_to_disk": false,
+            "is_reg": false,
+            "network_weight": 1,
+            "controls": [],
+            "shrink_video_to_frames": true,
+            "num_frames": 1,
+            "flip_x": false,
+            "flip_y": false,
+            "num_repeats": 1
+          }
+        ],
+        "train": {
+          "bypass_guidance_embedding": true,
+          "gradient_accumulation": 1,
+          "train_unet": true,
+          "train_text_encoder": false,
+          "gradient_checkpointing": true,
+          "optimizer_params": {
+            "weight_decay": 0.0001
+          },
+          "unload_text_encoder": false,
+          "ema_config": {
+            "use_ema": false,
+            "ema_decay": 0.99
+          },
+          "skip_first_sample": false,
+          "force_first_sample": false,
+          "disable_sampling": false,
+          "dtype": "bf16",
+          "diff_output_preservation": false,
+          "diff_output_preservation_multiplier": 1.0,
+          "diff_output_preservation_class": "person",
+          "switch_boundary_every": 1,
+          "loss_type": "mse"
+        },
+        "logging": {
+          "log_every": 1,
+          "use_ui_logger": true
+        },
+        "model": {
+          "model_kwargs": {},
+          "compile": false
+        },
+        "sample": {
+          "samples": [],
+          "neg": "",
+          "seed": 42,
+          "walk_seed": false,
+          "num_frames": 1,
+          "fps": 1
+        }
+      }
+    ]
+  },
+  "meta": {
+    "name": "{{JOB_NAME}}",
+    "version": "1.0"
+  }
+}

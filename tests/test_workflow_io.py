@@ -2,17 +2,20 @@
 and the watched workflows folder (#1304)."""
 
 import copy
+import importlib.util
 import json
 import logging
 import sqlite3
 import os
 import pathlib
 import shutil
+import sys
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import send2trash as send2trash_package
 from fastapi import HTTPException
 
 import pixlstash.routes.comfyui as comfyui_module
@@ -21,7 +24,11 @@ import pixlstash.server as server_module
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub import workflow_origin
 from pixlstash.hub.workflow_card_reads import Workflow, manual_document
-from pixlstash.hub.workflow_group_writes import create_manual_workflow
+from pixlstash.hub.workflow_group_writes import (
+    create_manual_workflow,
+    set_group_hidden,
+    set_manual_api_document,
+)
 from pixlstash.services import workflow_bindings, workflow_inbox
 from pixlstash.services.workflow_inputs import (
     FIXED,
@@ -513,9 +520,10 @@ def test_a_fresh_install_takes_the_marker_so_an_as_is_import_keeps_detection(
     )
     hub = HubDatabase(str(tmp_path / "hub.db"))
     try:
+        server = MagicMock(hub=hub)
+        server.vault.library_uuid = None
         endpoint = _route(
-            comfyui_module.create_router(MagicMock(hub=hub)),
-            "/comfyui/workflows/import",
+            comfyui_module.create_router(server), "/comfyui/workflows/import"
         )
         graph = _t2i_graph()
         graph["7"] = _node("LoadImage", image="a.png")
@@ -592,6 +600,76 @@ def test_server_start_up_runs_the_migration_on_the_user_folder(tmp_path, monkeyp
         (stored,) = server.hub.fetchall("SELECT document FROM workflow_document")
         assert json.loads(stored["document"]) == _t2i_graph()
         assert server._workflow_inbox_watcher is not None
+    finally:
+        server.__exit__(None, None, None)
+
+
+def test_the_e2e_launcher_moves_the_workflow_folders_under_its_work_dir():
+    # The other half of the next test: the launcher must ask for the move.
+    path = pathlib.Path(__file__).parents[1] / "frontend/e2e/serve_e2e_backend.py"
+    spec = importlib.util.spec_from_file_location("serve_e2e_backend", path)
+    launcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launcher)
+    overrides = launcher.server_overrides(launcher.WORK_DIR / "images")
+    assert overrides["enable_test_hooks"] is True
+    data = pathlib.Path(overrides["e2e_data_dir"])
+    assert data.is_relative_to(launcher.WORK_DIR) and data != launcher.WORK_DIR
+
+
+def test_e2e_data_dir_moves_the_workflow_folders_and_the_trash(tmp_path, monkeypatch):
+    # The server moves both for the whole process; undone at teardown. The
+    # data directory and the trash it moves away from are stand-ins, so a
+    # regression lands here rather than in the developer's own.
+    monkeypatch.setattr(workflow_inbox, "DATA_ROOT", None)
+    shared = tmp_path / "shared-data"
+    monkeypatch.setattr(workflow_inbox, "user_data_dir", lambda _app: str(shared))
+
+    def real_trash(path):
+        raise AssertionError(f"{path} reached the real trash")
+
+    for name, module in list(sys.modules.items()):
+        if name.startswith("pixlstash") and hasattr(module, "send2trash"):
+            monkeypatch.setattr(module, "send2trash", real_trash)
+    monkeypatch.setattr(send2trash_package, "send2trash", real_trash)
+    data = tmp_path / "user-data"
+    user_dir = data / "comfyui-workflows" / "user"
+    user_dir.mkdir(parents=True)
+    inbox = data / "workflows"
+    inbox.mkdir()
+    dropped = _t2i_graph()
+    dropped["2"]["inputs"]["text"] = "dropped in the inbox"
+    (inbox / "dropped.json").write_text(json.dumps(dropped), encoding="utf-8")
+    monkeypatch.setattr(server_module.Server, "DEFAULT_MIGRATE_WORKFLOW_TOKENS", True)
+    monkeypatch.setattr(server_module.Server, "DEFAULT_WATCH_WORKFLOW_INBOX", True)
+    config_path = tmp_path / "config" / "server-config.json"
+    config_path.parent.mkdir()
+    config = {"port": 8000, "enable_test_hooks": True, "e2e_data_dir": str(data)}
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    server = server_module.Server(str(config_path))
+    try:
+        assert workflow_inbox.workflow_inbox_dir() == str(inbox)
+        assert workflow_inbox.workflow_user_dir() == str(user_dir)
+        # The grid holds what the moved inbox held, and nothing else.
+        (stored,) = server.hub.fetchall("SELECT document FROM workflow_document")
+        assert json.loads(stored["document"]) == dropped
+        assert (user_dir / workflow_bindings.MIGRATION_MARKER).exists()
+        digest = workflow_inbox.content_hash(dropped)
+        assert [p.name for p in inbox.iterdir()] == [f"dropped.{digest}.json"]
+
+        with workflow_inbox.INBOX_LOCK:
+            workflow_inbox.trash_workflow(str(inbox), "dropped.json", dropped)
+        assert list(inbox.iterdir()) == []
+        trashed = sorted(p.name for p in (data / "trash").rglob("*.json"))
+        assert trashed == [f"dropped (2).{digest}.json", f"dropped.{digest}.json"]
+        # Every caller of the real trash is moved, not only the inbox's.
+        assert comfyui_module.send2trash is workflow_inbox.send2trash
+        assert comfyui_module.send2trash is not real_trash
+        # And a module imported after start-up binds the fake as well.
+        from send2trash import send2trash as imported_later
+
+        assert imported_later is workflow_inbox.send2trash
+        assert not shared.exists()
     finally:
         server.__exit__(None, None, None)
 
@@ -804,13 +882,178 @@ def test_an_import_is_a_manual_workflow_holding_the_document_unchanged(import_ro
         assert hub.fetchone(f"SELECT COUNT(*) FROM {table}")[0] == 0, table
 
 
-def test_an_identical_import_under_a_taken_name_is_a_second_workflow(import_route):
-    """Identical copies are allowed, and a name is no key."""
+def _moved(ui: dict) -> dict:
+    """*ui* as ComfyUI exports it after the canvas was rearranged and tidied."""
+    moved = copy.deepcopy(ui)
+    moved["id"] = "another-file-id"
+    moved["revision"] = 7
+    moved["groups"] = [{"title": "Sampling", "bounding": [0, 0, 10, 10]}]
+    moved["extra"] = {"ds": {"scale": 2.5, "offset": [40, -12]}}
+    moved["last_link_id"] = 999
+    for node in moved["nodes"]:
+        node["pos"] = [node["pos"][0] + 300, node["pos"][1] - 80]
+        node["size"] = [123, 456]
+        node["color"] = "#223"
+        node["title"] = f"Renamed {node['id']}"
+        node["order"] = 99
+        node.setdefault("properties", {})["Node name for S&R"] = "Other"
+        node["properties"]["ver"] = "9.9.9"
+        if node["type"] == "MarkdownNote":
+            node["widgets_values"] = ["A note says something else now"]
+        for slot in node.get("inputs") or []:
+            slot["label"] = "relabelled"
+            slot["localized_name"] = "umbenannt"
+    moved["nodes"].reverse()
+    return moved
+
+
+def _ui_node(ui: dict, node_type: str) -> dict:
+    return next(node for node in ui["nodes"] if node["type"] == node_type)
+
+
+def test_runnable_identity_ignores_layout_and_nothing_a_run_reads():
+    """A layout-only change is the same workflow; a run-visible change is not."""
+    identity = workflow_bindings.runnable_identity
+    ui = _load(UI_FIXTURES / "image_z_image.json")
+    assert identity(_moved(ui)) == identity(ui)
+    # The tag every stored document carries is no difference either.
+    assert identity(stamp_workflow_id(ui, "manual:" + "a" * 32)) == identity(ui)
+
+    save = copy.deepcopy(ui)
+    _ui_node(save, "SaveImage")["widgets_values"] = ["another-prefix"]
+    bypassed = copy.deepcopy(ui)
+    _ui_node(bypassed, "SaveImage")["mode"] = 4
+    rewired = copy.deepcopy(ui)
+    rewired["links"][0][2] = 1
+    subgraph = copy.deepcopy(ui)
+    inner = subgraph["definitions"]["subgraphs"][0]["nodes"][0]
+    inner["widgets_values"] = ["something else", *inner["widgets_values"][1:]]
+    for changed in (save, bypassed, rewired, subgraph):
+        assert identity(changed) != identity(ui)
+        # Moving it as well does not hide the change.
+        assert identity(_moved(changed)) != identity(ui)
+
+    # A legacy group node's definition, keyed by its name, is a graph too:
+    # moving a node inside it is layout, changing a value inside it is not.
+    def grouped(seed, x):
+        doc = copy.deepcopy(ui)
+        doc["extra"] = {
+            "groupNodes": {
+                "Sampler pair": {
+                    "nodes": [
+                        {
+                            "type": "KSampler",
+                            "pos": [x, 0],
+                            "size": [300, 200],
+                            "title": f"Sampler at {x}",
+                            "index": 0,
+                            "widgets_values": [seed, "fixed", 20],
+                        }
+                    ],
+                    "links": [],
+                    "external": [],
+                }
+            }
+        }
+        return doc
+
+    assert identity(grouped(1, 640)) == identity(grouped(1, 0))
+    assert identity(grouped(2, 0)) != identity(grouped(1, 0))
+    assert identity(grouped(1, 0)) != identity(ui)
+
+    # A subgraph's nodes are not shape-checked: an odd `type` there is keyed,
+    # never raised on.
+    odd = copy.deepcopy(ui)
+    odd["definitions"]["subgraphs"][0]["nodes"][0]["type"] = ["odd"]
+    assert identity(odd) != identity(ui)
+
+    graph = _t2i_graph()
+    retitled = copy.deepcopy(graph)
+    retitled["2"]["_meta"] = {"title": "Positive"}
+    reordered = dict(reversed(list(retitled.items())))
+    assert identity(reordered) == identity(graph)
+    for path, value in (
+        (("2", "text"), "a dog"),
+        (("1", "ckpt_name"), "other.safetensors"),
+        (("2", "clip"), ["1", 0]),
+    ):
+        changed = copy.deepcopy(graph)
+        changed[path[0]]["inputs"][path[1]] = value
+        assert identity(changed) != identity(graph), path
+    seeded = copy.deepcopy(graph)
+    seeded["9"] = _node("KSampler", seed=1, model=["1", 0])
+    reseeded = copy.deepcopy(seeded)
+    reseeded["9"]["inputs"]["seed"] = 2
+    assert identity(reseeded) != identity(seeded)
+
+
+def _refused(call, **payload) -> dict:
+    with pytest.raises(HTTPException) as refused:
+        call(**payload)
+    assert refused.value.status_code == 409, refused.value.detail
+    return refused.value.detail
+
+
+def test_an_import_of_a_workflow_already_here_is_refused_naming_it(import_route):
+    """A 409 naming the workflow it already is, and nothing stored; a name is
+    still no key, so a different graph under a taken name is stored."""
     call, _user_dir, _built_in, hub = import_route
     first = call(name="flow", workflow=_t2i_graph())["workflow_id"]
-    second = call(name="flow", workflow=_t2i_graph())["workflow_id"]
-    assert first != second
-    assert [name for name, _o, _d in _manual(hub).values()] == ["flow", "flow"]
+    detail = _refused(call, name="flow again", workflow=_t2i_graph())
+    assert detail == {
+        "code": "workflow_exists",
+        "message": "This workflow is already here as flow.",
+        "workflow_id": first,
+        "name": "flow",
+        "hidden": False,
+    }
+    other = _t2i_graph()
+    other["2"]["inputs"]["text"] = "a dog"
+    second = call(name="flow", workflow=other)["workflow_id"]
+    assert set(_manual(hub)) == {first, second}
+
+    ui = _load(UI_FIXTURES / "image_z_image.json")
+    ui_id = call(name="ui", workflow=ui)["workflow_id"]
+    assert _refused(call, name="moved", workflow=_moved(ui))["workflow_id"] == ui_id
+    assert set(_manual(hub)) == {first, second, ui_id}
+
+
+def test_an_edited_workflow_takes_its_original_again(import_route):
+    """Compared with the saved head: once the workflow is saved over, the
+    original is a different workflow and is stored. Waiting changes are not a
+    save."""
+    call, _user_dir, _built_in, hub = import_route
+    first = call(name="flow", workflow=_t2i_graph())["workflow_id"]
+    edited = _t2i_graph()
+    edited["2"]["inputs"]["text"] = "an edited cat"
+    comfyui_module.store_over_workflow(hub, first, edited, "run", expected_version=1)
+    again = call(name="flow", workflow=_t2i_graph())["workflow_id"]
+    assert again != first
+    assert _refused(call, name="x", workflow=edited)["workflow_id"] == first
+
+
+def test_a_hidden_workflow_still_refuses_and_says_it_is_hidden(import_route):
+    call, _user_dir, _built_in, hub = import_route
+    first = call(name="flow", workflow=_t2i_graph())["workflow_id"]
+    set_group_hidden(hub, first, True)
+    detail = _refused(call, name="flow", workflow=_t2i_graph())
+    assert (detail["workflow_id"], detail["hidden"]) == (first, True)
+
+
+def test_an_api_graph_matches_the_conversion_stored_beside_an_editor_one(
+    import_route,
+):
+    call, _user_dir, _built_in, hub = import_route
+    ui_id = call(name="ui", workflow=_load(UI_FIXTURES / "image_z_image.json"))[
+        "workflow_id"
+    ]
+    graph = _t2i_graph()
+    # Before the conversion is stored, the API graph is a workflow of its own.
+    assert call(name="api", workflow=graph)["workflow_id"] != ui_id
+    other = _t2i_graph()
+    other["2"]["inputs"]["text"] = "a converted cat"
+    set_manual_api_document(hub, [ui_id], other)
+    assert _refused(call, name="api", workflow=other)["workflow_id"] == ui_id
 
 
 def test_an_unfileable_or_too_deep_import_is_handled(import_route):

@@ -1,11 +1,9 @@
-// The Sort panel's two controls and the folder layout that hangs off one of
-// them.
+// The Sort panel: Sort by, and the list's Group by section (#2168).
 //
-// The assertion worth having is that the layout choice is a SUB-choice: it was
-// once shipped as `Sort: Drive | Folder`, which reordered nothing and grouped
-// everything, and having a grouping control sit in the sort menu is why the
-// absence of real sorting went unnoticed. It must appear under Folder and
-// nowhere else.
+// The Group section is the only grouping control left on the toolbar's Sort
+// button. It writes the list's own grouping, and is not offered on the Sets
+// place, whose grid groups itself. Folder is not an option at all: it is the
+// sidebar's folder slot.
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
@@ -21,114 +19,56 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
-function layoutSection(wrapper) {
-  return wrapper.find('[aria-label="Folders laid out"]');
-}
+const groupSection = (wrapper) => wrapper.find(".shelf-group-section");
+const groupRows = (wrapper) =>
+  wrapper.find('[aria-label="Group by"]').findAll('[role="radio"]');
 
-describe("the folder layout sub-choice", () => {
-  it("is absent on every axis but Folder", async () => {
+describe("the Group by section", () => {
+  it("is offered on the list places and hidden on the Sets place", async () => {
     const wrapper = mount(ShelfSortPanel, globalOpts);
     const store = useModelShelfStore();
 
-    // The default axis is the set grid since #1438; what this pins is that the
-    // layout sub-choice belongs to Folder and to nothing else. Every other axis
-    // is walked, and the one that DOES show it is asserted at the end, so a
-    // panel that had stopped rendering the section at all cannot pass.
-    expect(store.view.groupBy).toBe("workflow_set");
-    for (const axis of ["workflow_set", "none", "base_model", "feature"]) {
-      store.setView({ groupBy: axis });
-      expect(layoutSection(wrapper).exists()).toBe(false);
-    }
-    store.setView({ groupBy: "folder" });
+    store.setPlace("all");
     await wrapper.vm.$nextTick();
-    expect(layoutSection(wrapper).exists()).toBe(true);
+    expect(groupSection(wrapper).exists()).toBe(true);
+
+    store.setPlace("sets");
+    await wrapper.vm.$nextTick();
+    expect(groupSection(wrapper).exists()).toBe(false);
   });
 
-  it("appears under Folder and sets the layout when pressed", async () => {
+  it("offers Type, Base model, Feature and None, and not Folder", async () => {
+    const wrapper = mount(ShelfSortPanel, globalOpts);
+    useModelShelfStore().setPlace("all");
+    await wrapper.vm.$nextTick();
+    expect(groupRows(wrapper).map((row) => row.text())).toEqual([
+      "Type",
+      "Base model",
+      "Feature",
+      "None",
+    ]);
+  });
+
+  it("writes the list's grouping, and remembers it as the list's", async () => {
     const wrapper = mount(ShelfSortPanel, globalOpts);
     const store = useModelShelfStore();
-    store.setView({ groupBy: "folder" });
+    store.setPlace("all");
     await wrapper.vm.$nextTick();
 
-    const section = layoutSection(wrapper);
-    expect(section.exists()).toBe(true);
-    const buttons = section.findAll('[role="radio"]');
-    expect(buttons).toHaveLength(2);
-
-    // Seeded to drive: the first question a shelf of 438 GB is asked is which
-    // disk is filling up.
-    expect(store.view.folderLayout).toBe("drive");
-    expect(buttons[0].attributes("aria-checked")).toBe("true");
-
-    await buttons[1].trigger("click");
-    expect(store.view.folderLayout).toBe("alpha");
-    expect(buttons[1].attributes("aria-checked")).toBe("true");
+    await groupRows(wrapper)
+      .find((row) => row.text() === "Base model")
+      .trigger("click");
+    expect(store.view.groupBy).toBe("base_model");
+    expect(store.view.listGroupBy).toBe("base_model");
   });
 
-  it("remembers the layout across a trip through another axis", async () => {
-    // The choice is carried at all times and only READ under Folder, so
-    // flipping to Base model and back must not silently reset it.
+  it("has no Folder layout sub-choice any more", async () => {
     const wrapper = mount(ShelfSortPanel, globalOpts);
-    const store = useModelShelfStore();
-    store.setView({ groupBy: "folder", folderLayout: "alpha" });
-    store.setView({ groupBy: "base_model" });
-    store.setView({ groupBy: "folder" });
+    useModelShelfStore().setPlace("all");
     await wrapper.vm.$nextTick();
-
-    expect(store.view.folderLayout).toBe("alpha");
-    expect(
-      layoutSection(wrapper)
-        .findAll('[role="radio"]')[1]
-        .attributes("aria-checked"),
-    ).toBe("true");
-  });
-});
-
-describe("picking a grouping", () => {
-  const groupRows = (wrapper) =>
-    wrapper.find('[aria-label="Group by"]').findAll('[role="radio"]');
-
-  it("tells the host on a click, on the current row too, and never on an arrow", async () => {
-    const wrapper = mount(ShelfSortPanel, {
-      ...globalOpts,
-      props: { section: "group" },
-    });
-    const store = useModelShelfStore();
-    const rows = groupRows(wrapper);
-    const current = rows.findIndex(
-      (row) => row.attributes("aria-checked") === "true",
+    expect(wrapper.find('[aria-label="Folders laid out"]').exists()).toBe(
+      false,
     );
-    // Any row but the current one and Folder, which has its own test below.
-    const other = rows.find(
-      (row, index) => index !== current && row.text() !== "Folder",
-    );
-
-    // Walking the rows changes the grouping without closing the menu under
-    // the reader.
-    const before = store.view.groupBy;
-    await rows[current].trigger("keydown", { key: "ArrowDown" });
-    expect(store.view.groupBy).not.toBe(before);
-    expect(wrapper.emitted("group-picked")).toBeUndefined();
-
-    await other.trigger("click");
-    expect(wrapper.emitted("group-picked")).toHaveLength(1);
-
-    // Pressing the grouping already in force is still an answer.
-    await other.trigger("click");
-    expect(wrapper.emitted("group-picked")).toHaveLength(2);
-  });
-
-  it("keeps the menu for Folder, which opens a further choice", async () => {
-    const wrapper = mount(ShelfSortPanel, {
-      ...globalOpts,
-      props: { section: "group" },
-    });
-    const store = useModelShelfStore();
-    const folder = groupRows(wrapper).find((row) => row.text() === "Folder");
-    await folder.trigger("click");
-    expect(store.view.groupBy).toBe("folder");
-    expect(layoutSection(wrapper).exists()).toBe(true);
-    expect(wrapper.emitted("group-picked")).toBeUndefined();
   });
 });
 
@@ -152,4 +92,3 @@ describe("favourites first (#1578)", () => {
     expect(useModelShelfStore().view.favouritesFirst).toBe(false);
   });
 });
-

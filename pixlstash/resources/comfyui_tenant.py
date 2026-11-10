@@ -19,7 +19,11 @@ every platform and inside Docker:
 * **whether it is ours to fill**: ``/queue`` holding nothing PixlStash did not
   submit (``busy``), or nothing at all (``idle``);
 * **freeing**: ``POST /free``, only on hand-off to a tenant that is not
-  ComfyUI (the arbiter's reclaim ladder) or when the owner asks.
+  ComfyUI (the arbiter's reclaim ladder) or when the owner asks;
+* **quitting** (#2558): what ``/free`` cannot release, its CUDA context, goes
+  only when the process exits. ``kept_mb`` is that floor, the least ComfyUI has
+  been seen to hold, and ``quit`` ends the process on its card that listens on
+  its port, only when idle and only once the owner has said yes.
 """
 
 from __future__ import annotations
@@ -57,6 +61,8 @@ FREE_SETTLE_TIMEOUT_S = 30.0
 FREE_SETTLE_MB = 256
 #: How often a run's peak is sampled.
 PEAK_SAMPLE_S = 0.5
+#: How long ``quit`` waits for ComfyUI to exit after asking it to.
+QUIT_WAIT_S = 30.0
 
 _MB = 1024 * 1024
 # What ``_map_device`` answers when a read failed partway: unknown, not remote.
@@ -84,6 +90,8 @@ class ComfyUIProbe:
         # The card's pids last searched for ComfyUI's, so a search that found
         # nothing is not repeated on every poll until they change.
         self._searched: frozenset[int] = frozenset()
+        # The least this ComfyUI has been seen to hold: what /free leaves.
+        self._floor_mb: int | None = None
 
     @property
     def base_url(self) -> str | None:
@@ -99,6 +107,7 @@ class ComfyUIProbe:
                 self._mapping = (0.0, None)
                 self._pid = None
                 self._searched = frozenset()
+                self._floor_mb = None
 
     # ── reads ────────────────────────────────────────────────────────────
 
@@ -257,9 +266,83 @@ class ComfyUIProbe:
             return None
         held = self._process_mb()
         if row.get("torch_vram_total") is None:
-            return held
-        allocator = int(row.get("torch_vram_total") or 0) // _MB
-        return max(allocator, held or 0)
+            usage = held
+        else:
+            usage = max(int(row.get("torch_vram_total") or 0) // _MB, held or 0)
+        if usage is not None:
+            self._floor_mb = (
+                usage if self._floor_mb is None else min(usage, self._floor_mb)
+            )
+        return usage
+
+    def kept_mb(self) -> int | None:
+        """What ComfyUI keeps after ``/free``, MB: the least it has held.
+
+        Its CUDA context (about 780 MB on an RTX 5090, more with dynamic VRAM)
+        is released only when the process exits. Before any ``/free`` the
+        least seen may still include models, which overstates it; the lease
+        re-reads the card after the ladder, so that only ever errs towards
+        asking. None until ComfyUI has been read.
+        """
+        return self._floor_mb
+
+    def can_quit(self) -> bool:
+        """Whether PixlStash knows ComfyUI's process here and could end it.
+
+        False for a remote ComfyUI, one in Docker or one NVML cannot attribute
+        (no pid listening on its port on its card).
+        """
+        return self._pid is not None
+
+    def quit(self, wait_s: float = QUIT_WAIT_S) -> bool:
+        """End an idle ComfyUI's process: terminate, then wait for it.
+
+        PixlStash did not start ComfyUI and cannot start it again; the caller
+        has the owner's yes. Returns True once the process has exited.
+        """
+        pid = self._pid
+        # Asked again now: a pid read a while ago may name another process,
+        # and a queue read a second ago may have missed a job just submitted.
+        if pid is not None and self._listening_pid([pid]) is None:
+            pid = None
+        self._queue = (0.0, None)
+        if pid is None or not self.idle():
+            logger.info(
+                "Not quitting ComfyUI at %s: %s",
+                self._base_url,
+                "no process of its is known" if pid is None else "it is not idle",
+            )
+            return False
+        try:
+            process = psutil.Process(pid)
+            process.terminate()
+            process.wait(timeout=wait_s)
+        except psutil.NoSuchProcess:
+            logger.info("ComfyUI's process %s had already exited", pid)
+        except (psutil.Error, OSError) as exc:
+            # TimeoutExpired is a psutil.Error too: not escalated to a kill.
+            # (On Windows psutil's terminate is already TerminateProcess.)
+            logger.warning(
+                "Could not quit ComfyUI at %s (process %s): %s",
+                self._base_url,
+                pid,
+                exc,
+            )
+            return False
+        logger.warning(
+            "Quit ComfyUI at %s (process %s) to make room for training, as "
+            "the owner asked; it has to be started again by hand",
+            self._base_url,
+            pid,
+        )
+        with self._lock:
+            self._pid = None
+            self._searched = frozenset()
+            self._stats = (0.0, None)
+            self._queue = (0.0, None)
+            # The next ComfyUI started here is a new process with its own floor.
+            self._floor_mb = None
+        return True
 
     def _process_mb(self) -> int | None:
         """ComfyUI's process memory on its card per NVML, or None unknown.
@@ -274,7 +357,11 @@ class ComfyUIProbe:
         processes = ledger().processes(card)
         if self._pid not in processes and frozenset(processes) != self._searched:
             self._searched = frozenset(processes)
-            self._pid = self._listening_pid(processes)
+            found = self._listening_pid(processes)
+            if found is not None and self._pid is not None and found != self._pid:
+                # ComfyUI was restarted: its floor was another process's.
+                self._floor_mb = None
+            self._pid = found
             if self._pid is None and processes:
                 logger.warning(
                     "No process on ComfyUI's card listens on %s, so its memory "
@@ -333,6 +420,10 @@ class ComfyUIProbe:
         """Nothing at all is queued or running on ComfyUI."""
         entries = self._entries()
         return entries is not None and not entries
+
+    def jobs(self) -> int:
+        """How many prompts are queued or running on ComfyUI, anyone's."""
+        return len(self._entries() or [])
 
     def reclaim(self) -> bool:
         return self.free() is not None
@@ -395,14 +486,20 @@ class PeakSampler:
 
     Runs from the moment ComfyUI starts the run until ``stop``. A run's peak
     is ComfyUI's whole allocation, cache included, which is what its next run
-    will grow to again.
+    will grow to again. ``room_mb`` is the room the run had at that peak: what
+    ComfyUI held plus what was still free on *device*, None when unread. A
+    peak that left less free than the arbiter's safety margin filled it.
     """
 
-    def __init__(self, probe: ComfyUIProbe, started: callable) -> None:
+    def __init__(
+        self, probe: ComfyUIProbe, started: callable, device: str | None = None
+    ) -> None:
         self._probe = probe
         self._started = started
+        self._device = device
         self._stop = threading.Event()
         self.peak_mb: int | None = None
+        self.room_mb: int | None = None
         self._thread = threading.Thread(
             target=self._run, name="comfyui-peak", daemon=True
         )
@@ -410,12 +507,21 @@ class PeakSampler:
 
     def _run(self) -> None:
         while not self._stop.wait(PEAK_SAMPLE_S):
-            if not self._started():
-                continue
-            self._probe.stats(max_age_s=PEAK_SAMPLE_S / 2)
-            usage = self._probe.usage_mb()
-            if usage is not None:
-                self.peak_mb = max(self.peak_mb or 0, usage)
+            if self._started():
+                self._sample()
+
+    def _sample(self) -> None:
+        self._probe.stats(max_age_s=PEAK_SAMPLE_S / 2)
+        usage = self._probe.usage_mb()
+        if usage is None or usage <= (self.peak_mb or 0):
+            return
+        self.peak_mb = usage
+        # Fresh, read right after the usage: a cached card reading from
+        # before it would misjudge the room while a model loads.
+        card = ledger().device(self._device, max_age_s=0.0)
+        self.room_mb = (
+            usage + card.free_mb if card is not None and card.measurable else None
+        )
 
     def stop(self) -> int | None:
         self._stop.set()

@@ -634,4 +634,33 @@ describe("ReviewSessionView", () => {
     expect(w.find(".rs-card").exists()).toBe(false);
     expect(w.find(".rs-state--done").exists()).toBe(true);
   });
+
+  // The finish button is "End review…" with the question skipped: decisions
+  // were made, so it keeps them and files the receipt; with none (all
+  // skipped, an empty scan) it ends with no receipt, as the menus do.
+  async function finishWith(done) {
+    const store = useReviewSessionsStore();
+    seed(store, { items: [], loading: false, error: null });
+    store.sessions = [{ ...session, progress: { done } }];
+    const archive = vi.spyOn(store, "archiveSession").mockResolvedValue();
+    const abort = vi.spyOn(store, "abortSession").mockResolvedValue();
+    const w = mount(ReviewSessionView, { props: { session }, global: globalOpts });
+    await flushPromises();
+    const btn = w.find(".rs-state-btn--archive");
+    expect(btn.text()).toContain("End review");
+    await btn.trigger("click");
+    return { archive, abort };
+  }
+
+  it("End review on the finished queue keeps the decisions and files the receipt", async () => {
+    const { archive, abort } = await finishWith(2);
+    expect(archive).toHaveBeenCalledWith("sess1");
+    expect(abort).not.toHaveBeenCalled();
+  });
+
+  it("End review with nothing decided ends the review with no receipt", async () => {
+    const { archive, abort } = await finishWith(0);
+    expect(abort).toHaveBeenCalledWith("sess1");
+    expect(archive).not.toHaveBeenCalled();
+  });
 });

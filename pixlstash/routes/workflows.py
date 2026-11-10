@@ -109,6 +109,8 @@ from pixlstash.hub.workflow_group_writes import (
     WAITING,
     clear_changes,
     delete_manual_workflow,
+    restore_manual_workflow,
+    snapshot_manual_workflow,
     is_parameter_address,
     read_changes,
     waiting_counts,
@@ -161,6 +163,7 @@ from pixlstash.services.comfyui_recipe_service import (
     read_lora_chain_untyped,
     retype_text_encoders,
     PICTURE_LOADER_LIBRARY,
+    CHECKPOINT_LOADER_CAST,
     CHECKPOINT_LOADER_SHELF,
     PIXLSTASH_CHECKPOINT_LOADER,
     PIXLSTASH_CONTROLNET_LOADER,
@@ -194,6 +197,7 @@ from pixlstash.services.comfyui_service import (
     unfed_picture_loaders,
 )
 from pixlstash.services import (
+    comfyui_pack_service,
     run_log,
     vram_history,
     workflow_bindings,
@@ -202,6 +206,11 @@ from pixlstash.services import (
 from pixlstash.resources import comfyui_tenant
 from pixlstash.resources.arbiter import LeaseKind, LeaseState, Tenant, arbiter
 from pixlstash.services.model_icons import MAX_ICON_BYTES, IconRefused, store_icon
+from pixlstash.services.inpaint_conversion import (
+    InpaintConversionRefused,
+    convert_to_inpaint,
+)
+from pixlstash.services.model_downloads import live_sources
 from pixlstash.services.edit_selection import (
     UNREADABLE_PICTURE,
     Selection,
@@ -227,6 +236,8 @@ from pixlstash.services.workflow_card_service import (
     workflow_lora_summary,
 )
 from pixlstash.services import saved_recipe_service
+from pixlstash.services.trash_undo import KIND_WORKFLOW, remember, take
+from pixlstash.utils.trash_restore import NotInTrash
 from pixlstash.services.model_kind_suggestions import (
     OFFERED_KINDS,
     REFILEABLE_KINDS,
@@ -275,6 +286,8 @@ from pixlstash.routes.comfyui import (
     store_manual_workflow,
     store_over_workflow,
     trash_user_workflow,
+    put_back_trashed_workflow,
+    trash_again,
     user_workflow_exists,
 )
 from pixlstash.services.workflow_export import (
@@ -2504,6 +2517,43 @@ class RunPreflight(BaseModel):
     groups: list[RunGroup] = Field(default_factory=list)
 
 
+def _mark_live_downloads(
+    groups: list[RunGroup], comfyui_url: str, object_info: dict | None
+) -> None:
+    """Mark ``downloadable`` what only the owner's ComfyUI's templates link.
+
+    The run service marks a missing model or a left-out LoRA downloadable
+    from the committed template list alone; one ComfyUI shipped since is
+    found in the templates it serves (``live_sources``), read once and only
+    when something is still unmarked and ComfyUI answered. A model a loader
+    names by digest is left alone: a live template records no digest to
+    match.
+    """
+    if object_info is None:
+        return
+    entries = [
+        model
+        for group in groups
+        for reason in group.reasons
+        if reason.get("code") == run_service.MISSING_MODELS
+        for model in reason.get("models") or []
+    ] + [lora for group in groups for lora in group.bypassed_loras]
+    unmarked = [
+        entry
+        for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("file")
+        and not entry.get("downloadable")
+        and "sha256" not in entry
+        and not entry.get("requested")
+    ]
+    sources = live_sources(comfyui_url, object_info) if unmarked else {}
+    for entry in unmarked:
+        name = os.path.basename(str(entry["file"]).replace("\\", "/")).casefold()
+        if name in sources:
+            entry["downloadable"] = True
+
+
 class RunResult(BaseModel):
     """What was submitted. ``prompts`` is one entry per submission."""
 
@@ -2723,7 +2773,8 @@ class WorkflowRunnableGraph(BaseModel):
         description=(
             "Where the loader for picking people goes on the canvas. Null "
             "when no person has a LoRA the Run popup would count for this "
-            "workflow, so no loader is put on."
+            "workflow, or for an open without `pixlstash_nodes` (the "
+            "workflow's own nodes), so no loader is put on."
         ),
     )
 
@@ -3329,12 +3380,13 @@ class SetClonePlan(BaseModel):
 
     key: str
     fit: Literal["same_base_model", "same_family", "other", "wont_load"]
-    reason: str | None = Field(
+    reason: str | None = Field(None, description="Why it will not load.")
+    warning: str | None = Field(
         None,
         description=(
-            "Why it will not load. That includes a set whose checkpoints "
-            "have only run in another kind of workflow (Text to Image, Image "
-            "to Video, ...) than this one."
+            "Why it may not suit this workflow though it loads: its "
+            "checkpoints have only run in another kind of workflow (Text to "
+            "Image, Image to Video, ...) than this one."
         ),
     )
     base_model: str | None = Field(None, description="The set checkpoint's.")
@@ -3423,6 +3475,21 @@ class WorkflowDeleted(BaseModel):
 
     deleted: str = Field(description="The deleted workflow's name.")
     workflow_id: str
+    undo_token: str | None = Field(
+        default=None,
+        description=(
+            "Hand to `POST /workflows/{workflow_id}/restore` to undo the delete. "
+            "Kept in memory only: a restart forgets it."
+        ),
+    )
+
+
+class RestoreWorkflowRequest(BaseModel):
+    """Body of ``POST /workflows/{workflow_id}/restore``."""
+
+    token: str = Field(
+        max_length=64, description="The `undo_token` the delete answered with."
+    )
 
 
 @dataclass
@@ -4674,7 +4741,8 @@ def create_router(server) -> APIRouter:
             }
             if kind == FILE_CHECKPOINT and unlisted:
                 # Per loader: a twin naming the same file that the pack's
-                # loader cannot stand in for (an fp8 cast) keeps it.
+                # loader cannot stand in for (an fp8 cast on a pack whose
+                # loader has none) keeps it.
                 held = [
                     (node_id, widget, value)
                     for node_id, _cls, widget, value in iter_model_fields_api(graph)
@@ -6211,6 +6279,8 @@ def create_router(server) -> APIRouter:
         loras: list[RunLora],
         object_info: dict | None,
         swaps: list[dict] | None = None,
+        *,
+        by_name: bool = False,
     ) -> list[run_service.Reason]:
         """Fill each named slot with its shelf adapter, then its strengths.
 
@@ -6223,6 +6293,10 @@ def create_router(server) -> APIRouter:
         that split is the module's rule: a request that cannot be interpreted
         against this card is a request error, while a card that will not run is
         a reason code.
+
+        *by_name* is an extract's: the graph is stored, not run, so with no
+        ``object_info`` a filename slot takes the shelf's name for the file
+        (``apply_adapter``) rather than being refused.
         """
         hub = getattr(server, "hub", None)
         targets = {
@@ -6240,7 +6314,20 @@ def create_router(server) -> APIRouter:
                     ),
                 )
             adapter = _shelf_adapter(hub, item.sha256)
-            if object_info is None and target.get("by") != "digest":
+            unlisted = object_info is None and target.get("by") != "digest"
+            if unlisted and by_name and not adapter["filenames"]:
+                # An extract asks no ComfyUI, so starting one would not help:
+                # the shelf has no name to write for the file.
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "The model shelf has no file name for this LoRA, so "
+                        f"PixlStash cannot write it into LoRA slot {item.field} "
+                        f"on node {item.node_id}. Choose another LoRA in the "
+                        "recipe, or remove it."
+                    ),
+                )
+            if unlisted and not by_name:
                 # A filename slot is resolved against what THIS ComfyUI lists,
                 # and with no `object_info` there is no list. Refused rather
                 # than skipped: the caller asked for LoRA X and consented to
@@ -6257,7 +6344,7 @@ def create_router(server) -> APIRouter:
                     ),
                 )
             try:
-                apply_adapter(graph, [target], adapter, object_info or {})
+                apply_adapter(graph, [target], adapter, object_info)
             except LookupError as exc:
                 # The adapter is on the shelf and not on this ComfyUI. Where
                 # ComfyUI-PixlStash is installed, the loader is swapped to its
@@ -7685,13 +7772,16 @@ def create_router(server) -> APIRouter:
                         ],
                         object_info,
                         recipe_swaps,
+                        by_name=extract,
                     )
             if body.loras and slots_in_graph:
                 # NOT gated on `object_info`: skipping the application when
                 # ComfyUI could not be asked is how a consented run silently
                 # kept the stored graph's LoRA instead of the one that was
                 # asked for. `_apply_loras` answers for that state itself.
-                found += _apply_loras(graph, body.loras, object_info, lora_swaps)
+                found += _apply_loras(
+                    graph, body.loras, object_info, lora_swaps, by_name=extract
+                )
             # Not gated on `found`: an added LoRA is applied, or its own reason
             # reported, whatever else refused. Skipped behind an earlier
             # refusal, a consented run would go ahead without it unsaid.
@@ -7876,7 +7966,13 @@ def create_router(server) -> APIRouter:
                         **node_policy,
                     )
             if stale_pack:
-                judged = run_service.with_pack_outdated(judged, stale_pack)
+                # Only ever a ComfyUI on this computer: the one the bundled
+                # pack can be installed into.
+                judged = run_service.with_pack_outdated(
+                    judged,
+                    stale_pack,
+                    can_update=comfyui_pack_service.bundled_pack() is not None,
+                )
             found += judged
             if object_info is None and not configured:
                 # The URL is the guessed default and nothing answered on it:
@@ -8048,6 +8144,7 @@ def create_router(server) -> APIRouter:
                     f"{MAX_RUNS_PER_REQUEST}."
                 ),
             )
+        _mark_live_downloads(planned, comfyui_url, object_info)
         return Plan(
             body=body,
             groups=planned,
@@ -9436,21 +9533,45 @@ def create_router(server) -> APIRouter:
         flattened one. The file is the layout until a save from ComfyUI
         replaces it, by the rules a saved one is kept by
         (:func:`_layout_to_keep`, with the people's LoRAs the graph loads), and
-        only over the wiring of the conversion stored beside it. ``None`` for a
-        document that is a graph rather than an editor file, or not converted.
+        only over the wiring of the conversion stored beside it.
+
+        **A save from PixlStash does not end it.** Save, or the MCP server's
+        import, stores the API graph over the file, so the file is read from
+        the newest version that holds one, as long as no save from ComfyUI
+        came after it: a model or value changed in PixlStash leaves the
+        wiring, and with it the file's subgraphs, as they were. ``None`` where
+        no version holds a converted editor file, or a save from ComfyUI came
+        after the newest that does: that save's layout is the one, kept or not.
         """
-        row = hub.fetchone(
+        # Only the version numbers walked: a document is read once it is one.
+        current = hub.fetchone(
             "SELECT document, api_document FROM workflow_document "
             "WHERE workflow_id = ?",
             (workflow_id,),
         )
-        if row is None or not row["api_document"]:
-            return None
-        editor = json.loads(row["document"])
-        if not is_ui_graph(editor):
-            return None
-        graph = api_graph(json.loads(row["api_document"]))
-        if graph is None:
+        candidates = [current] if current is not None else []
+        candidates += hub.fetchall(
+            "SELECT version, source FROM workflow_version "
+            "WHERE workflow_id = ? AND (api_document IS NOT NULL OR source = ?) "
+            "ORDER BY version DESC",
+            (workflow_id, workflow_versions.FROM_COMFYUI),
+        )
+        for row in candidates:
+            if "source" in row.keys():
+                if row["source"] == workflow_versions.FROM_COMFYUI:
+                    return None
+                row = hub.fetchone(
+                    "SELECT document, api_document FROM workflow_version "
+                    "WHERE workflow_id = ? AND version = ?",
+                    (workflow_id, row["version"]),
+                )
+            if row is None or not row["api_document"]:
+                continue
+            editor = json.loads(row["document"])
+            graph = api_graph(json.loads(row["api_document"]))
+            if is_ui_graph(editor) and graph is not None:
+                break
+        else:
             return None
         # What a save of this graph would leave out, as `PUT …/graph` reads it.
         people = people_loras_in(hub, server.vault, graph)
@@ -9891,29 +10012,33 @@ def create_router(server) -> APIRouter:
     ) -> set[str]:
         """The checkpoints and diffusion models :func:`_swap_in_shelf_loaders`
         left missing only because the running ComfyUI has a pack from before
-        the loader's ``shelf`` widget (#1923): one restart would load them off
-        the shelf.
+        a widget the loader needs: ``shelf`` for any of them (#1923), or
+        ``weight_dtype`` for a diffusion model's loader that casts. One restart
+        on a current pack would load them off the shelf.
 
-        Empty where the pack has no loader at all, or has the widget: the
+        Empty where the pack has no loader at all, or has every widget: the
         missing file is then reported as it always was.
         """
         spec = object_info.get(PIXLSTASH_CHECKPOINT_LOADER)
-        if (
-            not isinstance(spec, dict)
-            or find_input_spec(spec, CHECKPOINT_LOADER_SHELF) is not None
-        ):
+        if not isinstance(spec, dict):
             return set()
+        has_shelf = find_input_spec(spec, CHECKPOINT_LOADER_SHELF) is not None
+        has_cast = find_input_spec(spec, CHECKPOINT_LOADER_CAST) is not None
+        if has_shelf and has_cast:
+            return set()
+
+        def cast_of(item: dict) -> object:
+            node = graph.get(str(item.get("node_id"))) or {}
+            return (node.get("inputs") or {}).get(CHECKPOINT_LOADER_CAST, "default")
+
+        # A cast wired in from another node is one no pack's loader takes.
         names = {
             str(item.get("value"))
             for item in detect_model_targets(graph, object_info)
             if item
             and item.get("class_type") in ("CheckpointLoaderSimple", "UNETLoader")
-            # The pack's loader has no cast, so even a current one leaves an
-            # fp8 diffusion model's loader as it is (`swap_in_pack_nodes`).
-            and (graph.get(str(item.get("node_id"))) or {})
-            .get("inputs", {})
-            .get("weight_dtype", "default")
-            == "default"
+            and isinstance(cast_of(item), str)
+            and (not has_shelf or (not has_cast and cast_of(item) != "default"))
         }
         if not names or not _comfyui_is_here(request):
             return set()
@@ -10236,8 +10361,11 @@ def create_router(server) -> APIRouter:
             version=source.workflow_version,
             waiting_applied=waiting_applied,
             editor=_layout_for(hub, workflow.workflow_id, graph, own_nodes),
-            people_loader=_people_loader_place(
-                workflow.workflow_id, graph, object_info
+            # The loader is a ComfyUI-PixlStash node: the original has none.
+            people_loader=(
+                _people_loader_place(workflow.workflow_id, graph, object_info)
+                if pixlstash_nodes
+                else None
             ),
         )
 
@@ -10327,6 +10455,62 @@ def create_router(server) -> APIRouter:
             f"{_file_stem(card, workflow.name)} "
             + (f"(version {version})" if version is not None else "(copy)"),
             source.graph,
+            source.bindings,
+            "duplicate",
+            workflow,
+            card,
+        )
+        _announce(request, [landed], "imported")
+        return WorkflowFile(name=name, workflow_id=landed)
+
+    @router.post(
+        "/workflows/{workflow_id}/inpaint-copy",
+        summary="Convert a workflow to inpainting",
+        description=(
+            "Store a new manual workflow made from this img2img or image-edit "
+            "workflow that inpaints with Crop & Stitch: it redraws only the "
+            "selection at the workflow's working resolution and stitches the "
+            "result back into the original picture. The original is not changed."
+        ),
+        response_model=WorkflowFile,
+        status_code=201,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "There is no graph to convert."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
+            422: {
+                "description": "This graph cannot be converted; the detail says why."
+            },
+            500: {"description": "The copy could not be written."},
+        },
+    )
+    def inpaint_copy_workflow(request: Request, workflow_id: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        workflow, card = _require_base(hub, workflow_id)
+        source = _card_source(
+            card,
+            workflow_id=workflow.workflow_id,
+            comfyui_url=_comfyui_url(_user(request)),
+        )
+        try:
+            graph = convert_to_inpaint(source.graph)
+        except InpaintConversionRefused as exc:
+            logger.info(
+                "[workflows] Workflow %s was not converted to inpainting: %s",
+                workflow.workflow_id,
+                exc.reason,
+            )
+            raise HTTPException(status_code=422, detail=exc.reason) from exc
+        # Stored as a duplicate: `workflow_document.origin` is a CHECK list a
+        # new value would have to rebuild the table for, and nothing reads it
+        # but `pull`. Where the copy came from is `from_workflow_id`.
+        name, landed = _store_copy(
+            hub,
+            f"{_file_stem(card, workflow.name)} (inpaint)",
+            graph,
             source.bindings,
             "duplicate",
             workflow,
@@ -11612,7 +11796,7 @@ def create_router(server) -> APIRouter:
         return swaps, chosen
 
     def _other_type(kinds: set[str], wants: str) -> str:
-        """Why a set that has only run in other kinds of workflow is refused."""
+        """The warning on a set that has only run in other kinds of workflow."""
         ran = " and ".join(sorted(_MATCH_TYPE_LABELS.get(k, k) for k in kinds))
         return f"Used for {ran}, not {_MATCH_TYPE_LABELS.get(wants, wants)}"
 
@@ -11648,11 +11832,12 @@ def create_router(server) -> APIRouter:
             "class too, when a file of another type needs another loader, and "
             "the node pack that loader comes from), whether the set's "
             "checkpoint has the workflow's base model so its LoRAs are kept, "
-            "and, when the clone would be refused, why. A set is refused "
-            "when the recipes naming its checkpoints are all of another kind "
-            "of workflow than this one (its type, a video workflow told apart "
-            "by whether it starts from a picture); a checkpoint no recipe "
-            "names is refused nothing. Read off the graph a "
+            "and, when the clone would be refused, why. A set is warned about "
+            "(`warning`), never refused, when the recipes naming its "
+            "checkpoints are all of another kind of workflow than this one "
+            "(its type, a video workflow told apart by whether it starts from "
+            "a picture); a checkpoint no recipe names is warned about "
+            "nothing. Read off the graph a "
             "run submits: where the owner replaced a model this machine lacks "
             "(`model-fix`), every file named for the graph (`swaps` and "
             "`takes` keys, `loaders[].was`, `base_filename`, "
@@ -11719,8 +11904,8 @@ def create_router(server) -> APIRouter:
         )
         # A set is for the kind of workflow its checkpoints have run in: a
         # text-to-video model needs other nodes than a text-to-image graph
-        # has. Like for like only, and a checkpoint no recipe names is not
-        # known to be for anything else, so it is still offered.
+        # has. Another kind is warned about, not refused, and a checkpoint
+        # no recipe names is not known to be for anything else.
         wants = match_type(
             card.workflow_type,
             [
@@ -11804,9 +11989,14 @@ def create_router(server) -> APIRouter:
                 if gone
                 else "Has no checkpoint"
                 if checkpoint is None
-                else _other_type(kinds, wants)
-                if kinds and wants not in kinds
                 else _wont_load(base, unswapped, object_info)
+            )
+            # Another kind of workflow is a warning, never a refusal: the
+            # owner may know the model does this kind too.
+            warning = (
+                _other_type(kinds, wants)
+                if not reason and kinds and wants not in kinds
+                else None
             )
             if reason:
                 fit = "wont_load"
@@ -11911,6 +12101,7 @@ def create_router(server) -> APIRouter:
                         ],
                     },
                     reason=reason,
+                    warning=warning,
                     base_model=checkpoint.base_model if checkpoint else None,
                     keeps_loras=keeps,
                     swaps=swaps,
@@ -12096,7 +12287,8 @@ def create_router(server) -> APIRouter:
         if not unlisted:
             return loaders, swapped, unswapped
         # Per loader: a twin naming the same file that the pack's loader
-        # cannot stand in for (an fp8 cast) keeps it, and refuses the clone.
+        # cannot stand in for (an fp8 cast on a pack whose loader has none)
+        # keeps it, and refuses the clone.
         held = [
             (node_id, widget, value)
             for node_id, _cls, widget, value in iter_model_fields_api(graph)
@@ -14314,12 +14506,14 @@ def create_router(server) -> APIRouter:
         # of identical content can be another live workflow's.
         sweep = INBOX_ORIGIN in owned
         adopted = owned.get(FILE_ORIGIN)
+        rows = snapshot_manual_workflow(hub, workflow_id)
+        undo: dict = {}
         try:
             if adopted is not None and user_workflow_exists(adopted):
                 # A user-folder file data step 7 made this workflow of: the
                 # file itself goes to the trash (through the inbox, as a
                 # delete always did), or it would still list and re-adopt.
-                trash_user_workflow(hub, adopted, sweep=sweep)
+                trash_user_workflow(hub, adopted, sweep=sweep, undo=undo)
                 with workflow_inbox.INBOX_LOCK:
                     delete_manual_workflow(hub, workflow_id)
             else:
@@ -14327,7 +14521,7 @@ def create_router(server) -> APIRouter:
                     # The trash copy first, the rows once it is there: a
                     # failed trash never loses the workflow. Under the lock
                     # the inbox stores under, so it cannot land between.
-                    workflow_inbox.trash_workflow(
+                    undo["trashed"] = workflow_inbox.trash_workflow(
                         workflow_inbox.workflow_inbox_dir(),
                         f"{download_stem(name) or 'workflow'}.json",
                         json.loads(row["document"]),
@@ -14347,6 +14541,82 @@ def create_router(server) -> APIRouter:
                 status_code=500, detail="Failed to delete the workflow."
             ) from exc
         _announce(request, [workflow_id], "changed")
-        return WorkflowDeleted(deleted=name, workflow_id=workflow_id)
+        token = remember(
+            KIND_WORKFLOW,
+            {
+                "workflow_id": workflow_id,
+                "name": name,
+                "rows": rows,
+                "file": undo.get("file"),
+                "file_rows": undo.get("rows", {}),
+                "trashed": undo["trashed"],
+            },
+        )
+        return WorkflowDeleted(deleted=name, workflow_id=workflow_id, undo_token=token)
+
+    @router.post(
+        "/workflows/{workflow_id}/restore",
+        summary="Undo deleting a manual workflow",
+        description=(
+            "Puts back a workflow `DELETE /workflows/{workflow_id}` deleted, "
+            "under the same id, with its versions, defaults, pins and layout, "
+            "so deleting it again is the redo. A workflow that was a file in "
+            "the user folder needs that file back out of the system trash, and "
+            "is refused when the trash no longer holds it."
+        ),
+        response_model=WorkflowDeleted,
+        responses={
+            404: {
+                "description": "The token is unknown, spent or for another workflow."
+            },
+            409: {
+                "description": "Its file is no longer in the trash, or its place is taken."
+            },
+        },
+    )
+    def restore_workflow(
+        request: Request, workflow_id: str, payload: RestoreWorkflowRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        with workflow_inbox.INBOX_LOCK:
+            undo = take(
+                KIND_WORKFLOW,
+                payload.token,
+                lambda entry: entry["workflow_id"] == workflow_id,
+            )
+            if undo is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="There is nothing to undo: it was already undone, or PixlStash has restarted since.",
+                )
+            try:
+                back = put_back_trashed_workflow(undo["file"], undo["trashed"])
+            except (NotInTrash, OSError) as exc:
+                logger.warning("Could not restore workflow %s: %s", workflow_id, exc)
+                raise HTTPException(
+                    status_code=409,
+                    detail="Its file is no longer in the trash, so it cannot be put back.",
+                ) from exc
+            try:
+                restore_manual_workflow(
+                    hub, workflow_id, undo["rows"], undo["file_rows"]
+                )
+            except sqlite3.Error as exc:
+                logger.error(
+                    "Could not write workflow %s back (%s); sending the files "
+                    "it put back to the trash again.",
+                    workflow_id,
+                    exc,
+                    exc_info=True,
+                )
+                # Under the inbox lock still, so nothing imported them meanwhile.
+                trash_again(back)
+                raise HTTPException(
+                    status_code=409,
+                    detail="This workflow could not be put back: something has taken its place since it was deleted.",
+                ) from exc
+        _announce(request, [workflow_id], "changed")
+        return WorkflowDeleted(deleted=undo["name"], workflow_id=workflow_id)
 
     return router

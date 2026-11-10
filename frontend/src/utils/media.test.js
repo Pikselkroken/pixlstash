@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   buildMediaUrl,
   displayedAspectRatio,
+  dropEffectFor,
   isFaceDrag,
   isFileDrag,
   isInternalImageDrag,
@@ -127,6 +128,27 @@ describe('internal drag payload markers', () => {
        expect(complained).toHaveBeenCalled()
        complained.mockRestore()
      })
+})
+
+// A dropEffect the drag does not allow makes the browser drop nothing, silently.
+describe('dropEffectFor', () => {
+  it('keeps move where the drag allows it', () => {
+    expect(dropEffectFor({ effectAllowed: 'move' })).toBe('move')
+    expect(dropEffectFor({ effectAllowed: 'all' })).toBe('move')
+    expect(dropEffectFor({ effectAllowed: 'uninitialized' })).toBe('move')
+  })
+
+  it('falls to copy for a desktop drag-out, which allows only copy and link', () => {
+    expect(dropEffectFor({ effectAllowed: 'copyLink' })).toBe('copy')
+  })
+
+  it('never offers copy to a drag that only allows move', () => {
+    expect(dropEffectFor({ effectAllowed: 'move' }, 'copy')).toBe('move')
+  })
+
+  it('is none when the drag allows nothing', () => {
+    expect(dropEffectFor({ effectAllowed: 'none' })).toBe('none')
+  })
 })
 
 describe('buildMediaUrl', () => {

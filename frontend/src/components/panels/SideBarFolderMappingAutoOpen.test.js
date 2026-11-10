@@ -281,12 +281,6 @@ describe("an ordinary reference-folder pending entry", () => {
       if (String(url).includes("commit/status")) {
         return Promise.resolve({ data: { status } });
       }
-      // The row only renders beside at least one configured folder.
-      if (url === "/reference-folders") {
-        return Promise.resolve({
-          data: { folders: [{ id: 1, folder: "/home/me/ref" }], in_docker: true },
-        });
-      }
       return Promise.resolve(respond());
     });
   }
@@ -297,7 +291,6 @@ describe("an ordinary reference-folder pending entry", () => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(reference));
     commitStatus("completed");
     const wrapper = await mountSidebar();
-    wrapper.vm.selectFoldersTab();
     await flushPromises();
 
     expect(useFolderMappingStore().pending).toBe(null);
@@ -310,7 +303,6 @@ describe("an ordinary reference-folder pending entry", () => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(reference));
     commitStatus("running");
     const wrapper = await mountSidebar();
-    wrapper.vm.selectFoldersTab();
     await flushPromises();
     expect(useFolderMappingStore().pending).toEqual(reference);
 
@@ -330,7 +322,6 @@ describe("an ordinary reference-folder pending entry", () => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(reference));
     commitStatus("running");
     const wrapper = await mountSidebar();
-    wrapper.vm.selectFoldersTab();
     await flushPromises();
 
     expect(useFolderMappingStore().pending).toEqual(reference);

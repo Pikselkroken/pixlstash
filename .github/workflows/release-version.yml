@@ -11,11 +11,20 @@ on:
 
 permissions: {}
 
+env:
+  # Every PixlStash this workflow boots reports itself as ours, never as a real
+  # install (Server.DEV_MACHINE_ENV_VAR; guarded by tests/test_install_type_buckets.py).
+  PIXLSTASH_TELEMETRY_DEV: '1'
+
 jobs:
-  update:
+  # Release candidates and dev releases publish nothing to the website: no API
+  # docs, no latest-version.json, no SECURITY.md, and so no bot PR to close by
+  # hand. Only a plain vX.Y.Z tag goes on to the update job.
+  resolve:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      final: ${{ steps.tag.outputs.final }}
     steps:
       - name: Resolve release tag
         id: tag
@@ -32,11 +41,23 @@ jobs:
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "final=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$TAG is a pre-release; the website is not updated."
+          fi
 
+  update:
+    needs: resolve
+    if: needs.resolve.outputs.final == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ steps.tag.outputs.tag }}
+          ref: ${{ needs.resolve.outputs.tag }}
           path: release
           persist-credentials: false
 
@@ -71,7 +92,7 @@ jobs:
       - name: Compute and maybe update latest-version.json
         id: update
         env:
-          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
         run: |
           python - <<'EOF'
           import json, os, re, sys
@@ -161,7 +182,7 @@ jobs:
       # manual re-run on a tag cut before this landed still works.
       - name: Update SECURITY.md supported versions
         env:
-          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
         run: |
           python main/scripts/update_security_supported_versions.py \
             main/SECURITY.md "$RELEASE_TAG"
@@ -172,11 +193,11 @@ jobs:
           path: main
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
           base: main
-          branch: bot/update-latest-version-${{ steps.tag.outputs.tag }}
-          commit-message: "chore: release ${{ steps.tag.outputs.tag }} website update"
-          title: "chore: release ${{ steps.tag.outputs.tag }} website update"
+          branch: bot/update-latest-version-${{ needs.resolve.outputs.tag }}
+          commit-message: "chore: release ${{ needs.resolve.outputs.tag }} website update"
+          title: "chore: release ${{ needs.resolve.outputs.tag }} website update"
           body: |
-            Automated website update triggered by release **${{ steps.tag.outputs.tag }}**.
+            Automated website update triggered by release **${{ needs.resolve.outputs.tag }}**.
 
             Changes included:
             - `website/api/v{major}.{minor}/` — versioned OpenAPI docs (Scalar UI)

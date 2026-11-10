@@ -1,20 +1,7 @@
 <template>
-  <div
-    ref="root"
-    class="tm"
-    :class="{ 'tm--lightbox': lightbox }"
-    @focusout="onFocusOut"
-  >
-    <!-- One root, but no box of its own in a rail (`display: contents`): the
-         rows stay the inspector body's own flex children, exactly as they were
-         when they lived in `StatsSidebar`, so the body's gap spaces them. It also
-         means `.tm-system-bar`'s `margin-top: auto` still resolves against the
-         body: inert in the stats rail, which never gives `.inspector-body` a
-         height, and a real pin to the bottom on `/workflows`, where the
-         inspector's footer slot makes the body `flex: 1`
-         (`.inspector-content--footed`). That difference is pre-existing and
-         left alone. The lightbox variant is a box: its own scrolling column, on
-         the lightbox's dark ground (`.tm--lightbox` below). -->
+  <div ref="root" class="tm" @focusout="onFocusOut">
+    <!-- One root, but no box of its own (`display: contents`): the rows are
+         the popover body's own flex children, so its gap spaces them. -->
     <!-- A finished run is not an active task, and the panel is not empty with
          one in it either: the idle line gives way. -->
     <div
@@ -45,9 +32,12 @@
         >
           <span
             v-for="segment in bar.segments"
-            :key="segment.kind"
+            :key="segment.key"
             class="tm-vram-seg"
-            :class="`tm-vram-seg--${segment.kind}`"
+            :class="[
+              `tm-vram-seg--${segment.kind}`,
+              { 'tm-vram-seg--reserved': segment.reserved },
+            ]"
             :style="{ width: pctText(segment.pct) }"
           >
             <Tooltip
@@ -61,9 +51,53 @@
       <ul class="tm-legend" aria-label="What the bars show">
         <li><span class="tm-swatch tm-vram-seg--pixlstash"></span>PixlStash</li>
         <li><span class="tm-swatch tm-vram-seg--comfyui"></span>ComfyUI</li>
+        <li><span class="tm-swatch tm-vram-seg--aitoolkit"></span>AI Toolkit</li>
         <li><span class="tm-swatch tm-vram-seg--other"></span>Other apps</li>
-        <li><span class="tm-swatch tm-vram-seg--spare"></span>Spare</li>
+        <li><span class="tm-swatch tm-vram-seg--spare"></span>Headroom</li>
       </ul>
+      <!-- ComfyUI, standing: what it holds, and the broom that has it unload
+           its models whenever it is idle, with no run involved. Unavailable,
+           not hidden, while it has jobs: it is never cleared mid-job. Left out
+           while every job it has is already a run row under Running. -->
+      <div
+        v-if="showComfyuiHost"
+        class="tm-row"
+        data-testid="tm-comfy-host"
+      >
+        <span
+          class="tm-mark"
+          :class="{ 'tm-mark--running': !tasksStore.comfyuiHost.idle }"
+          aria-hidden="true"
+        ></span>
+        <ComfyuiIcon :size="18" class="tm-app" aria-hidden="true" />
+        <span class="tm-name">
+          ComfyUI
+          <span
+            v-if="tasksStore.comfyuiHost.jobs"
+            class="tm-count"
+            data-testid="tm-comfy-host-jobs"
+            >{{ tasksStore.comfyuiHost.jobs }}</span
+          >
+        </span>
+        <span class="visually-hidden">, {{ hostDetail }}</span>
+        <span class="tm-figure">
+          <span class="tm-fig-text">{{ formatGb(tasksStore.comfyuiHost.held_mb) }}</span>
+          <span v-if="!isReadOnly" class="tm-acts">
+            <button
+              class="tm-act"
+              type="button"
+              data-testid="tm-clear-comfyui"
+              :aria-label="hostClearTip"
+              :aria-disabled="hostClearable ? undefined : 'true'"
+              @click="clearComfyuiNow"
+            >
+              <Tooltip :text="hostClearTip" activator="parent" :describe="false" />
+              <v-icon size="16">mdi-broom</v-icon>
+            </button>
+          </span>
+        </span>
+        <Tooltip :text="`ComfyUI · ${hostDetail}`" activator="parent" :describe="false" />
+      </div>
     </div>
 
     <!-- Running: ComfyUI runs as rows of their own, PixlStash's own background
@@ -94,6 +128,19 @@
             ></span>
             <ComfyuiIcon :size="18" class="tm-app" aria-hidden="true" />
             <span class="tm-name">{{ entry.run.label }}</span>
+            <!-- The run's percent as a hairline under its name, sharing the
+                 name's grid cell so the row keeps its height. -->
+            <span
+              class="tm-run-line"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-valuenow="Math.round(entry.run.percent)"
+              :aria-label="`${entry.run.label} progress`"
+              data-testid="tm-comfy-progress"
+            >
+              <span class="tm-run-line-fill" :style="{ width: barWidth(entry.run) }"></span>
+            </span>
             <span class="tm-figure">
               <span class="tm-fig-text">{{ formatGb(entry.figureMb) }}</span>
               <span v-if="!isReadOnly" class="tm-acts">
@@ -114,13 +161,50 @@
               :describe="false"
             />
           </div>
-          <!-- PixlStash's own background work: one folded row with its count
-               and the VRAM its leases hold. The caret lists one line per task:
-               a worker with its sparkline, a lease or stopped task no worker
-               reports as a plain line. -->
+          <!-- AI Toolkit's run holding the card: one row, named for the run, with
+               its step, total and latest loss beside the name and the VRAM it
+               holds as the figure. Its lease is the only source, so no worker
+               row repeats it. -->
+          <div
+            v-else-if="entry.kind === 'aitoolkit'"
+            class="tm-row tm-row--run"
+            data-testid="tm-aitoolkit-row"
+          >
+            <span class="tm-mark tm-mark--running" aria-hidden="true"></span>
+            <AiToolkitIcon :size="18" class="tm-app" aria-hidden="true" />
+            <span class="tm-name">
+              {{ entry.label }}
+              <span
+                v-if="aitoolkitProgress(entry)"
+                class="tm-count"
+                data-testid="tm-aitoolkit-progress"
+                >{{ aitoolkitProgress(entry) }}</span
+              >
+            </span>
+            <span class="tm-figure">
+              <span class="tm-fig-text">{{ formatGb(entry.figureMb) }}</span>
+              <!-- The run's own page, in the shelf's Training runs tab. -->
+              <span v-if="entry.jobId" class="tm-acts">
+                <button
+                  class="tm-act"
+                  type="button"
+                  data-testid="tm-aitoolkit-watch"
+                  :aria-label="`Watch ${entry.label} in Training runs`"
+                  @click="watchTraining(entry)"
+                >
+                  <Tooltip text="Watch in Training runs" activator="parent" :describe="false" />
+                  <v-icon size="16">mdi-chart-line</v-icon>
+                </button>
+              </span>
+            </span>
+          </div>
+          <!-- PixlStash's own background work: one card, its row on top and,
+               open, one line per task below a hairline, on the same columns:
+               the task's mark under the padlock, its name where the parent's
+               starts, a row-sized sparkline, and its figure under VRAM. -->
           <div
             v-else-if="entry.kind === 'pixlstash'"
-            class="tm-fold"
+            class="tm-fold tm-fold--card"
             data-testid="tm-pixlstash"
           >
             <div class="tm-row tm-row--fold">
@@ -129,7 +213,7 @@
                 :class="pixlstashRunning(entry) ? 'tm-mark--running' : ''"
                 aria-hidden="true"
               ></span>
-              <span class="tm-app-gap" aria-hidden="true"></span>
+              <span class="tm-system-mark tm-app-logo" aria-hidden="true"></span>
               <span class="tm-name">
                 PixlStash processing
                 <span class="tm-count" data-testid="tm-pixl-count">{{ entry.count }}</span>
@@ -151,62 +235,52 @@
               <Tooltip :text="foldTip(entry)" activator="parent" :describe="false" />
             </div>
             <div v-if="pixlOpen" id="tm-pixl-children" class="tm-children">
-              <template v-for="child in entry.children" :key="child.key">
-                <!-- A backend worker: throughput sparkline + rate, and what its
-                     lease holds while it holds one. -->
-                <div v-if="child.snapshot" class="tm-worker-row">
-                  <div class="tm-worker-row-top">
-                    <span
-                      class="tm-status-dot"
-                      :class="{ 'tm-status-dot--running': childRunning(child) }"
-                      :data-state="child.stopped ? 'stopped' : undefined"
-                    ></span>
-                    <span class="tm-worker-label">{{
-                      tmFormatLabel(child.workerKey, child.snapshot.label)
-                    }}</span>
-                    <span class="tm-worker-progress">{{
-                      tmFormatProgress(child.snapshot)
-                    }}</span>
-                    <span
-                      v-if="child.stopped || child.onCpu || child.mb"
-                      class="tm-worker-progress"
-                      data-testid="tm-worker-figure"
-                    >{{ childFigure(child) }}</span>
-                  </div>
-                  <div class="tm-worker-row-bottom">
-                    <canvas
-                      :ref="(el) => tmRegisterCanvas(child.workerKey, el)"
-                      class="tm-sparkline"
-                    ></canvas>
-                    <span class="tm-worker-rate">
-                      {{ tmFormatRate(tmGetLatestRate(child.workerKey)) }}/s
-                    </span>
-                  </div>
-                  <Tooltip
-                    v-if="child.stopped || child.onCpu"
-                    :text="childTip(child)"
-                    activator="parent"
-                    :describe="false"
-                  />
-                </div>
-                <div
-                  v-else
-                  class="tm-row tm-row--child"
+              <div
+                v-for="child in entry.children"
+                :key="child.key"
+                class="tm-row--child"
+                :class="{ 'tm-row--child-done': childDone(child) }"
+                data-testid="tm-pixl-child"
+              >
+                <span
+                  v-if="childDone(child)"
+                  class="tm-mark tm-mark--done"
+                  data-state="done"
+                  aria-hidden="true"
                 >
-                  <span
-                    class="tm-mark"
-                    :class="child.stopped ? '' : 'tm-mark--running'"
-                    :data-state="child.stopped ? 'stopped' : undefined"
+                  <v-icon size="14">mdi-check</v-icon>
+                </span>
+                <span
+                  v-else
+                  class="tm-mark"
+                  :class="{ 'tm-mark--running': childRunning(child) }"
+                  :data-state="child.stopped ? 'stopped' : undefined"
+                  aria-hidden="true"
+                ></span>
+                <span class="tm-name tm-child-name">
+                  {{ childName(child) }}
+                  <span v-if="childProgress(child)" class="tm-child-n">{{
+                    childProgress(child)
+                  }}</span>
+                </span>
+                <!-- The tooltip is hover-only on a row with no focus stop, so
+                     what it says is read out here too. -->
+                <span v-if="childDetail(child)" class="visually-hidden"
+                  >, {{ childDetail(child) }}</span
+                >
+                <span class="tm-child-spark">
+                  <canvas
+                    v-if="child.snapshot && !childDone(child)"
+                    :ref="(el) => tmRegisterCanvas(child.workerKey, el)"
+                    class="tm-sparkline"
                     aria-hidden="true"
-                  ></span>
-                  <span class="tm-app-gap" aria-hidden="true"></span>
-                  <span class="tm-name">{{ childLabel(child) }}</span>
-                  <span class="tm-figure">
-                    <span class="tm-fig-text">{{ childFigure(child) }}</span>
-                  </span>
-                  <Tooltip :text="childTip(child)" activator="parent" :describe="false" />
-                </div>
-              </template>
+                  ></canvas>
+                </span>
+                <span class="tm-figure">
+                  <span class="tm-fig-text">{{ childFigure(child) }}</span>
+                </span>
+                <Tooltip :text="childTip(child)" activator="parent" :describe="false" />
+              </div>
             </div>
           </div>
           <!-- A model downloading for a workflow: its bytes as a bar, and a
@@ -240,10 +314,9 @@
             </div>
             <div class="tm-comfy-message">{{ entry.run.message }}</div>
           </div>
-          <!-- Async import (#459): the two-phase dialog auto-hides at the safe
-               transition and the import lands here as a determinate task row.
-               data-import-task-row is the FLIP flight target the import dialog
-               flies its count chip into. -->
+          <!-- Async import (#459): a determinate task row from the drop on
+               (#2512), the record for anyone not looking at the grid's
+               arriving tiles. -->
           <div
             v-else-if="entry.kind === 'import'"
             class="tm-worker-row tm-import-row"
@@ -328,6 +401,18 @@
             <span class="tm-fig-text">{{ needText(entry) }}</span>
             <span v-if="actionsOf(entry).length" class="tm-acts">
               <button
+                v-if="actionsOf(entry).includes('quit_comfyui')"
+                class="tm-act"
+                type="button"
+                data-testid="tm-quit-comfyui"
+                :aria-label="quitTip(entry)"
+                :disabled="busyLease === entry.lease?.id"
+                @click="quitComfyui(entry)"
+              >
+                <Tooltip :text="quitTip(entry)" activator="parent" :describe="false" />
+                <v-icon size="16">mdi-power</v-icon>
+              </button>
+              <button
                 v-if="actionsOf(entry).includes('run_anyway')"
                 class="tm-act"
                 type="button"
@@ -338,17 +423,6 @@
               >
                 <Tooltip text="Run anyway" activator="parent" :describe="false" />
                 <v-icon size="16">mdi-play</v-icon>
-              </button>
-              <button
-                v-if="actionsOf(entry).includes('free_comfyui')"
-                class="tm-act"
-                type="button"
-                data-testid="tm-free-comfyui"
-                aria-label="Free ComfyUI's cache"
-                @click="freeComfyuiCache()"
-              >
-                <Tooltip text="Free ComfyUI's cache" activator="parent" :describe="false" />
-                <v-icon size="16">mdi-broom</v-icon>
               </button>
               <button
                 v-if="actionsOf(entry).includes('cancel')"
@@ -364,6 +438,26 @@
               </button>
             </span>
           </span>
+          <!-- Waiting on ComfyUI: its jobs, its clear, then the run. -->
+          <div v-if="entry.clear" class="tm-clear" data-testid="tm-clear-phase">
+            <span
+              class="tm-clear-text"
+              :class="{ 'tm-clear-text--short': entry.clear.phase === 'cleared' }"
+              >{{ clearText(entry) }}</span
+            >
+            <ol class="tm-phase" aria-label="Progress">
+              <li
+                v-for="step in phaseSteps(entry.clear)"
+                :key="step.label"
+                :data-state="step.state"
+                :aria-current="step.state === 'now' ? 'step' : undefined"
+              >
+                {{ step.label }}<span class="visually-hidden"
+                  >, {{ PHASE_STATE_NAMES[step.state] }}</span
+                >
+              </li>
+            </ol>
+          </div>
           <Tooltip
             :text="entry.text || `${entry.label} is waiting for the GPU`"
             activator="parent"
@@ -402,20 +496,21 @@
     >
       <div class="tm-group-head tm-group-head--finished">
         <span id="tm-finished-head" class="section-label">Finished</span>
-        <!-- Clear takes the column label's place on hover or focus, as a row's
-             actions take its figure's. It never throws away unsaved changes. -->
-        <span class="tm-group-col tm-head-swap">
-          <span class="tm-head-col" aria-hidden="true">Made</span>
+        <!-- Clear all stands in the column label's place, always shown: on
+             hover alone nobody found it. It never throws away unsaved
+             changes. -->
+        <span class="tm-group-col">
+          <span v-if="isReadOnly" aria-hidden="true">Made</span>
           <button
-            v-if="!isReadOnly"
+            v-else
             class="tm-head-act"
             type="button"
             data-testid="tm-finished-clear"
-            aria-label="Clear the finished runs. Runs with unsaved changes stay."
+            aria-label="Clear all finished runs. Runs with unsaved changes stay."
             :disabled="Boolean(dismissing) || Boolean(busy)"
             @click="clearFinished"
           >
-            Clear
+            Clear all
           </button>
         </span>
       </div>
@@ -541,7 +636,6 @@
                 />
                 <div class="tm-offer-acts">
                   <AppButton
-                    :on-dark="lightbox"
                     variant="ghost"
                     size="sm"
                     :disabled="Boolean(busy)"
@@ -550,7 +644,6 @@
                     Back
                   </AppButton>
                   <AppButton
-                    :on-dark="lightbox"
                     size="sm"
                     :loading="busy === `new:${run.offer.workflowId}`"
                     :disabled="Boolean(busy)"
@@ -564,7 +657,6 @@
               </template>
               <div v-else class="tm-offer-acts">
                 <AppButton
-                  :on-dark="lightbox"
                   data-as-new
                   size="sm"
                   :disabled="Boolean(busy)"
@@ -575,7 +667,6 @@
                 <!-- `aria-disabled`, not `disabled`: a closed Save stays
                      reachable, with the server's reason as its description. -->
                 <AppButton
-                  :on-dark="lightbox"
                   size="sm"
                   icon-left="content-save-outline"
                   :loading="busy === `save:${run.offer.workflowId}`"
@@ -638,43 +729,10 @@
   </div>
 </template>
 
-<script>
-/**
- * The tab that shows this panel, so its word and its glyph are declared once
- * for every inspector that offers it. `tasksTabFor` lights it up while work is
- * running, and is what a host imports.
- */
-const TASKS_TAB = {
-  value: "tasks",
-  label: "Tasks",
-  icon: "mdi-timeline-clock-outline",
-};
-
-/**
- * The descriptor an inspector declares for its Tasks tab, lit while the store
- * has work. One function so the two hosts cannot drift apart on the wording or
- * on when the light comes on.
- */
-export function tasksTabFor(tasksStore) {
-  if (!tasksStore.hasActiveTasks) return TASKS_TAB;
-  const n = tasksStore.activeCount;
-  return {
-    ...TASKS_TAB,
-    busy: true,
-    busyTooltip: `${n} active task${n === 1 ? "" : "s"}`,
-  };
-}
-</script>
-
 <script setup>
-// The task manager: the body of the Tasks tab, wherever an inspector offers it.
-//
-// It started inside StatsSidebar and is a component of its own because the
-// Workflows view's inspector offers the same tab: somebody browsing
-// workflows or recipes has to be able to watch the work their last run started
-// without leaving the screen to do it. The image overlay offers it too (#2056),
-// as the `lightbox` variant: a run started from its Edit tab can be queued,
-// stopped or read back there without leaving the picture.
+// The task manager: the body of the title bar's Tasks pill (`TitleBarTasks`),
+// which is on every screen. It started as a Tasks tab in the right rails; those
+// tabs are gone, so a run can be watched from anywhere without a rail open.
 //
 // The data (worker snapshots, rate series, active-state, ComfyUI runs) lives in
 // the shared tasks store, which is the single poller of /workers/progress. This
@@ -722,29 +780,20 @@ import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import RunAnywayDialog from "./RunAnywayDialog.vue";
 
-defineProps({
-  // The lightbox's inspector: dark in both themes, so the panel takes the
-  // dark-surface inks rather than the theme's (`.tm--lightbox`).
-  lightbox: { type: Boolean, default: false },
-});
 const root = ref(null);
 
 // A row goes when its run does, and takes a focused Stop or Cancel with it;
 // focus then falls to <body>: the ring is gone and a keyboard user is out of
-// the tab order with nothing saying so. Every host is an inspector whose band
-// holds this tab, so the keyboard goes back to that tab. Checked a tick
-// later, after any hand-off of the panel's own (a save's receipt line) has
-// had its turn.
+// the tab order with nothing saying so. The keyboard goes back to the title
+// bar's popover (#2158) that holds the panel. Checked a tick later, after any
+// hand-off of the panel's own (a save's receipt line) has had its turn.
 function onFocusOut(event) {
   const left = event.target;
   nextTick(() => {
     if (left.isConnected) return;
     const now = document.activeElement;
     if (now && now !== document.body) return;
-    root.value
-      ?.closest(".inspector")
-      ?.querySelector(".inspector-tab--active")
-      ?.focus();
+    root.value?.closest('[role="dialog"]')?.focus();
   });
 }
 
@@ -792,6 +841,34 @@ function togglePixl() {
   }
 }
 
+/** Open an AI Toolkit run's page in the shelf's Training runs tab (#2118). */
+function watchTraining(entry) {
+  router.push({ name: "models-runs", query: { run: entry.jobId } });
+}
+
+/** What a side pass (the lease's shown_as) is doing, in place of its steps. */
+const AITOOLKIT_SIDE_PASS = {
+  checking: "checking memory and speed",
+  previews: "generating previews",
+};
+
+/**
+ * The AI Toolkit row's "step 2750/4000 · loss 0.123", or "" until the run has
+ * reported a total. The loss is left out until the run has one. A side pass
+ * (the memory probe before training, previews after) counts its own few steps,
+ * not the run's, so it is named instead.
+ */
+function aitoolkitProgress(entry) {
+  const progress = entry.progress;
+  const pass = progress?.shown_as;
+  if (pass) return AITOOLKIT_SIDE_PASS[pass] ?? pass;
+  if (!progress || !(Number(progress.total) > 0)) return "";
+  const step = `step ${Number(progress.step) || 0}/${Number(progress.total)}`;
+  if (progress.loss == null || !Number.isFinite(Number(progress.loss))) return step;
+  const loss = Number(progress.loss);
+  return `${step} · loss ${loss < 0.01 ? loss.toExponential(2) : loss.toFixed(3)}`;
+}
+
 /**
  * Whether a fold child is working now: not stopped, and a worker only while it
  * runs or moves, as its own dot says; between batches it is in the fold idle.
@@ -812,14 +889,17 @@ const SEGMENT_NAMES = {
   comfyui: "ComfyUI",
   aitoolkit: "AI Toolkit",
   other: "Other apps",
-  spare: "Spare",
+  spare: "Headroom",
 };
 
 /** A bar segment's tooltip: whose it is, how big, and what holds it. */
 function segmentTip(segment) {
   const name = SEGMENT_NAMES[segment.kind] ?? segment.kind;
   if (segment.kind === "spare") {
-    return `Spare · ${formatGb(segment.mb)} kept back from new requests`;
+    return `Headroom · ${formatGb(segment.mb)} kept free so a job that overshoots its estimate doesn't run the card out`;
+  }
+  if (segment.reserved) {
+    return `${name} · ${formatGb(segment.mb)} reserved, not in use yet`;
   }
   if (segment.kind === "pixlstash") {
     const count = tasksStore.pixlstashEntry?.count ?? 0;
@@ -834,9 +914,134 @@ function pctText(value) {
   return `${Math.min(100, Math.max(0, Number(value) || 0)).toFixed(2)}%`;
 }
 
+// What a row waiting on ComfyUI offers, by phase: while its jobs run, quit
+// instead or cancel; while it clears, cancel; still short after, the quit,
+// Run anyway and cancel.
+const PHASE_ACTIONS = {
+  jobs: ["quit_comfyui", "cancel"],
+  clearing: ["cancel"],
+};
+
 function actionsOf(entry) {
   // Every action writes; a read-only session is offered none.
-  return isReadOnly.value ? [] : (entry.actions ?? []);
+  if (isReadOnly.value) return [];
+  let actions = entry.actions ?? [];
+  const only = PHASE_ACTIONS[entry.clear?.phase];
+  if (only) actions = actions.filter((action) => only.includes(action));
+  // The quit is a training run's: its route names the run.
+  if (!entry.lease?.job_id || entry.lease.tenant !== "aitoolkit") {
+    actions = actions.filter((action) => action !== "quit_comfyui");
+  }
+  return actions;
+}
+
+function jobsText(count) {
+  return count ? `${count} ${count === 1 ? "job" : "jobs"}` : "jobs";
+}
+
+/** The line under a row waiting on ComfyUI, for the phase it is in. */
+function clearText(entry) {
+  const clear = entry.clear;
+  if (clear.phase === "jobs") {
+    return `Waits for ComfyUI's ${jobsText(clear.jobs)}, then clears its memory and starts.`;
+  }
+  if (clear.phase === "clearing") {
+    return clear.freed_mb
+      ? `Clearing ComfyUI's memory: ${formatGb(clear.freed_mb)} freed.`
+      : "Clearing ComfyUI's memory.";
+  }
+  if (clear.failed) return "ComfyUI did not clear its memory.";
+  const closing = entry.lease?.waiting_reason?.comfyui_closing;
+  const short = formatGb(entry.shortMb || 0);
+  return [
+    clear.freed_mb
+      ? `Cleared ${formatGb(clear.freed_mb)}; still ${short} short.`
+      : `Still ${short} short after clearing.`,
+    closing?.kept_mb
+      ? `ComfyUI keeps ${formatGb(closing.kept_mb)} until it ${closing.can_quit ? "quits" : "is closed"}.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+const PHASE_STATE_NAMES = { done: "done", now: "in progress", next: "not started" };
+
+// Cleared and still waiting: the first two done, training not begun.
+const PHASE_ORDER = ["jobs", "clearing", "cleared"];
+
+function phaseSteps(clear) {
+  const at = PHASE_ORDER.indexOf(clear.phase);
+  return ["ComfyUI's jobs", "Clear memory", "Train"].map((label, index) => ({
+    label,
+    // A failed clear is not a done one.
+    state:
+      clear.failed && index === 1
+        ? "next"
+        : index < at
+          ? "done"
+          : index === at && clear.phase !== "cleared"
+            ? "now"
+            : "next",
+  }));
+}
+
+function quitTip(entry) {
+  return entry.clear?.phase === "jobs"
+    ? "Quit ComfyUI after its jobs instead"
+    : "Quit ComfyUI and train";
+}
+
+async function quitComfyui(entry) {
+  if (!entry.lease || busyLease.value) return;
+  busyLease.value = entry.lease.id;
+  // Never rejects; see `confirmRunAnyway`.
+  try {
+    await tasksStore.quitComfyuiFor(entry.lease);
+  } finally {
+    busyLease.value = "";
+  }
+}
+
+const clearingHost = ref(false);
+// The standing row says nothing the run rows do not while there are as many of
+// them as ComfyUI has jobs and one is running, which then shows what ComfyUI
+// holds. It stays while ComfyUI has more jobs than rows, and for the broom
+// once ComfyUI is idle. ComfyUI reports a count, not which jobs, so this
+// compares counts.
+const showComfyuiHost = computed(() => {
+  const host = tasksStore.comfyuiHost;
+  if (!host) return false;
+  const runs = tasksStore.runningEntries.filter((e) => e.kind === "comfyui");
+  const oneRunning = runs.some((e) => e.run.status === "running");
+  return !(host.jobs > 0 && oneRunning && runs.length >= host.jobs);
+});
+const hostClearable = computed(
+  () => Boolean(tasksStore.comfyuiHost?.idle) && !clearingHost.value,
+);
+const hostClearTip = computed(() => {
+  if (clearingHost.value) return "Clearing ComfyUI's memory…";
+  return tasksStore.comfyuiHost?.idle
+    ? "Clear ComfyUI's memory"
+    : "ComfyUI's memory can be cleared once its jobs are done";
+});
+const hostDetail = computed(() => {
+  const host = tasksStore.comfyuiHost;
+  if (!host) return "";
+  const held = `holds ${formatGb(host.held_mb)}`;
+  return host.idle
+    ? `idle, ${held}`
+    : `${jobsText(host.jobs)} queued or running, ${held}`;
+});
+
+async function clearComfyuiNow() {
+  if (!hostClearable.value) return;
+  clearingHost.value = true;
+  try {
+    await tasksStore.freeComfyuiCache();
+  } finally {
+    clearingHost.value = false;
+  }
 }
 
 function needText(entry) {
@@ -881,6 +1086,16 @@ async function confirmRunAnyway() {
 
 async function cancelWait(entry) {
   if (!entry.lease || busyLease.value) return;
+  // A waiting AI Toolkit lease is a queued training run: cancelling it is
+  // Stop training, so it asks the same question.
+  if (
+    entry.lease.tenant === "aitoolkit" &&
+    !window.confirm(
+      `Stop training "${entry.label}"? The checkpoints it saved are kept.`,
+    )
+  ) {
+    return;
+  }
   busyLease.value = entry.lease.id;
   // Never rejects either; see `confirmRunAnyway`.
   try {
@@ -890,31 +1105,58 @@ async function cancelWait(entry) {
   }
 }
 
-function freeComfyuiCache() {
-  return tasksStore.freeComfyuiCache();
-}
-
 function childLabel(child) {
   return child.stopped && child.workerKey
     ? tmFallbackWorkerLabel(child.workerKey)
     : child.label;
 }
 
+/** A fold child's name: a worker's own label, else the lease's or the task's. */
+function childName(child) {
+  return child.snapshot
+    ? tmFormatLabel(child.workerKey, child.snapshot.label)
+    : childLabel(child);
+}
+
+/** How far a fold child is, "812 / 1190", or "" when it reports nothing. */
+function childProgress(child) {
+  if (child.snapshot) return tmFormatProgress(child.snapshot);
+  return child.progress?.total ? `${child.progress.current} / ${child.progress.total}` : "";
+}
+
+/**
+ * A worker that has worked through all it was given and is not running: a
+ * check in place of its dot, and no chart or figure. Its own `running`, not
+ * the rate: the rate averages a minute and outlives the row's grace.
+ */
+function childDone(child) {
+  if (!child.snapshot || child.stopped || child.mb || child.snapshot.running) return false;
+  const total = Number(child.snapshot.total || 0);
+  return total > 0 && Number(child.snapshot.current || 0) >= total;
+}
+
 /** What a PixlStash task holds, in the figure column: stopped, CPU, or VRAM. */
 function childFigure(child) {
   if (child.stopped) return "stopped";
   if (child.onCpu) return "CPU";
-  return formatGb(child.mb);
+  return child.mb ? formatGb(child.mb) : "";
+}
+
+/** Why a fold child is unusual, its rate and what is left: its tooltip after its name. */
+function childDetail(child) {
+  const parts = [];
+  if (child.stopped) parts.push(child.text || "Stopped to make room; nothing was lost");
+  else if (child.onCpu) parts.push("Running on the CPU");
+  const rate = child.snapshot && !childDone(child) ? tmGetLatestRate(child.workerKey) : 0;
+  if (rate > 0) parts.push(`${tmFormatRate(rate)}/s`);
+  const progress = child.snapshot ?? child.progress;
+  const left = Number(progress?.total || 0) - Number(progress?.current || 0);
+  if (Number(progress?.total) > 0 && left > 0) parts.push(`${left} to go`);
+  return parts.join(" · ");
 }
 
 function childTip(child) {
-  const parts = [childLabel(child)];
-  if (child.stopped) parts.push(child.text || "Stopped to make room; nothing was lost");
-  else if (child.onCpu) parts.push("Running on the CPU");
-  if (child.progress?.total) {
-    parts.push(`${child.progress.current} / ${child.progress.total}`);
-  }
-  return parts.join(" · ");
+  return [childName(child), childDetail(child)].filter(Boolean).join(" · ");
 }
 
 /** The fold's tooltip: its size, and anything unusual about its tasks. */
@@ -1261,9 +1503,9 @@ async function saveAsNew(offer) {
 const TM_WINDOW_SECONDS = 120; // sparkline x-axis span, seconds
 const tmCanvasRefs = new Map(); // key → { el, observer }
 
-// Mounted is exactly "the Tasks tab is on screen": the inspector unmounts its
-// body when the rail is collapsed, so the fast cadence follows what is actually
-// visible rather than which tab was last picked. The store keeps polling either
+// Mounted is exactly "the task list is on screen": the popover unmounts it when
+// it closes, so the fast cadence follows what is actually visible. The store
+// keeps polling either
 // way (that's what drives the app-wide activity light); this only changes how
 // often.
 onMounted(() => tasksStore.setTasksTabOpen(true));
@@ -1291,8 +1533,8 @@ function tmRegisterCanvas(key, el) {
   );
 }
 
-// Read off the canvas, not the document: the lightbox variant restates the
-// theme's colours on the panel, and a canvas only sees what it is told.
+// Read off the canvas, not the document: a host may restate the theme's
+// colours on the panel, and a canvas only sees what it is told.
 function tmGetThemeRgb(el, name) {
   if (typeof window === "undefined") return null;
   return (
@@ -1335,9 +1577,9 @@ function tmDrawSparkline(canvas, samples) {
   const dpr = window.devicePixelRatio || 1;
   const width = Math.max(
     4,
-    Math.floor(rect.width || canvas.parentElement?.clientWidth || 200),
+    Math.floor(rect.width || 48),
   );
-  const height = Math.max(4, Math.floor(rect.height || 28));
+  const height = Math.max(4, Math.floor(rect.height || 14));
   const tw = Math.floor(width * dpr);
   const th = Math.floor(height * dpr);
   if (canvas.width !== tw || canvas.height !== th) {
@@ -1368,7 +1610,7 @@ function tmDrawSparkline(canvas, samples) {
     else ctx.lineTo(x, y);
   });
   ctx.strokeStyle = tmThemeRgba(canvas, "tertiary", 0.85, "142,166,4");
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 1.25;
   ctx.stroke();
 
   const last = plotSamples[plotSamples.length - 1];
@@ -1396,6 +1638,7 @@ const tmLabelMap = {
   planner_managed: "Planner task",
   checkpoints_hashed: "Checkpoint Hash",
   workflows_carded: "Workflow cards",
+  training_previews_scored: "Training preview faces",
   text_score: "Text score",
   text_read: "Text in pictures",
   object_detection: "Object detection",
@@ -1504,55 +1747,9 @@ const tmSystemItems = computed(() => {
 </script>
 
 <style scoped>
-/* No box in a rail: the rows are the inspector body's own flex children. */
+/* No box of its own: the rows are the popover body's own flex children. */
 .tm {
   display: contents;
-}
-
-/* The lightbox variant (#2056). Its pane is dark in both themes, so every ink
-   the rows read is restated as the dark-surface one (visual-language.md,
-   "Status hue anywhere inside a dark-surface"): with the theme's, light mode
-   would paint near-black words and deepened status hues on a dark ground.
-   A custom property holding var() resolves where it is declared, so the
-   aliases built on :root (`--state-*`, `--tenant-pixlstash`, the hover wash,
-   the hatch) are restated here rather than inherited. The deep olive and teal
-   are one value in both themes but under 3:1 on this ground, so the progress
-   bars, the ComfyUI segment and the sparkline take their dark-surface values
-   too. AI Toolkit's violet has no dark-surface token and stays as it is, as
-   does the error tint (a wash, not a mark). */
-.tm--lightbox {
-  --v-theme-on-surface: var(--v-theme-on-dark-surface);
-  --v-theme-surface-error: var(--v-theme-dark-surface-error);
-  --v-theme-surface-warning: var(--v-theme-dark-surface-warning);
-  --v-theme-accent: var(--v-theme-dark-surface-accent);
-  --v-theme-primary: var(--v-theme-dark-surface-primary);
-  --v-theme-tertiary: var(--v-theme-dark-surface-tertiary);
-  --state-running: var(--v-theme-dark-surface-primary);
-  --state-waiting: var(--v-theme-dark-surface-accent);
-  --tenant-pixlstash: var(--v-theme-dark-surface-accent);
-  --tenant-comfyui: var(--v-theme-dark-surface-tertiary);
-  --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
-  --hatch-not-ours: repeating-linear-gradient(
-    -45deg,
-    rgba(var(--v-theme-on-dark-surface), 0.35) 0 2px,
-    transparent 2px 5px
-  );
-  /* The lightbox's body clips (it is a fixed-height pane), so the panel is
-     its own scroll region, with the bar its other regions use. */
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
-}
-
-/* The name field of Save as new…, as the Edit tab's instruction box. */
-.tm--lightbox :deep(.app-input__wrap) {
-  background: rgba(var(--v-theme-shadow), 0.35);
-  border-color: rgba(var(--v-theme-on-dark-surface), 0.2);
 }
 
 .tm-idle-msg {
@@ -1587,29 +1784,11 @@ const tmSystemItems = computed(() => {
   min-width: 0;
 }
 
-.tm-worker-row-bottom {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
+/* A fold child's throughput: a trend at row size, not a readable history. */
 .tm-sparkline {
-  flex: 1;
-  height: 28px;
-  min-width: 0;
   display: block;
-  border-radius: var(--radius-sm);
-}
-
-.tm-worker-rate {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), 0.45);
-  white-space: nowrap;
-  flex-shrink: 0;
-  font-variant-numeric: tabular-nums;
-  min-width: 38px;
-  text-align: right;
+  width: 48px;
+  height: 14px;
 }
 
 .tm-status-dot {
@@ -1640,6 +1819,29 @@ const tmSystemItems = computed(() => {
   border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-primary));
   transition: width 0.25s ease;
+}
+
+/* A run row's progress: a hairline in the name's own grid cell, at its foot and
+   nudged into the row padding, so it sits under the name without adding height. */
+.tm-row--run > .tm-name,
+.tm-run-line {
+  grid-area: 1 / 3;
+}
+
+.tm-run-line {
+  align-self: end;
+  height: 2px;
+  margin-bottom: calc(-1 * var(--space-1));
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-surface), 0.12);
+  overflow: hidden;
+}
+
+.tm-run-line-fill {
+  display: block;
+  height: 100%;
+  background: rgb(var(--v-theme-primary));
+  transition: width var(--dur-3) var(--ease-standard);
 }
 
 .tm-comfy-message {
@@ -1898,13 +2100,27 @@ const tmSystemItems = computed(() => {
 .tm-swatch.tm-vram-seg--aitoolkit {
   background: rgb(var(--tenant-aitoolkit));
 }
-/* One hatch for every memory that is not PixlStash's or ComfyUI's: other
-   apps, and the spare margin. */
+/* A tenant's reservation it has not grown into yet: its colour, paler, since
+   the memory is free on the card but promised to it. */
+.tm-vram-seg--pixlstash.tm-vram-seg--reserved {
+  background: rgba(var(--tenant-pixlstash), 0.4);
+}
+.tm-vram-seg--comfyui.tm-vram-seg--reserved {
+  background: rgba(var(--tenant-comfyui), 0.4);
+}
+.tm-vram-seg--aitoolkit.tm-vram-seg--reserved {
+  background: rgba(var(--tenant-aitoolkit), 0.4);
+}
+/* Memory in use that is no tenant's: the hatch. */
 .tm-vram-seg--other,
-.tm-vram-seg--spare,
-.tm-swatch.tm-vram-seg--other,
-.tm-swatch.tm-vram-seg--spare {
+.tm-swatch.tm-vram-seg--other {
   background: var(--hatch-not-ours);
+}
+/* Free memory PixlStash keeps back: thin upright lines, sparser than other
+   apps' diagonal hatch, so the two read apart without colour. */
+.tm-vram-seg--spare,
+.tm-swatch.tm-vram-seg--spare {
+  background: var(--spare-margin);
 }
 
 .tm-legend {
@@ -1968,18 +2184,75 @@ const tmSystemItems = computed(() => {
   font-size: var(--text-xs);
 }
 
-.tm-row--child {
+/* PixlStash processing and its tasks are one card: the parent's row on top,
+   its tasks below one hairline. The rows inside draw no box of their own, so
+   their columns line up with the bordered rows beside the card. */
+.tm-fold--card {
+  gap: 0;
+  border-radius: var(--radius-md);
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.07);
+}
+
+.tm-fold--card > .tm-row {
   background: none;
-  border-color: transparent;
-  padding-top: var(--space-1);
-  padding-bottom: var(--space-1);
+  border: 0;
 }
 
 .tm-children {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding-left: var(--indent-step);
+  padding: var(--space-1) 0 var(--space-2);
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.07);
+}
+
+/* A task: the parent's columns, its mark moved under the padlock so its name
+   starts where "PixlStash processing" does, then a sparkline and the figure. */
+.tm-row--child {
+  display: grid;
+  grid-template-columns: var(--gutter-glyph) 18px minmax(0, 1fr) 48px 56px;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 28px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+}
+
+.tm-row--child:hover {
+  background: var(--hover-wash);
+}
+
+.tm-row--child > .tm-mark {
+  grid-column: 2;
+}
+
+.tm-row--child .tm-figure {
+  min-width: 0;
+}
+
+.tm-child-name {
+  font-weight: var(--weight-regular);
+}
+
+.tm-row--child-done .tm-child-name {
+  color: rgba(var(--v-theme-on-surface), 0.55);
+}
+
+.tm-child-n {
+  margin-left: var(--space-3);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+/* The parent's app mark: the padlock, as the resource-usage footer draws it. */
+.tm-app-logo {
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+  margin: calc(var(--space-1) / 2);
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .tm-mark {
@@ -2106,8 +2379,77 @@ const tmSystemItems = computed(() => {
   color: rgb(var(--v-theme-on-surface));
 }
 
-.tm-act:disabled {
+.tm-act:disabled,
+.tm-act[aria-disabled="true"] {
   opacity: var(--opacity-disabled);
+}
+
+/* A row waiting on ComfyUI: a line of what is happening, then three short
+   tracks (its jobs, the clear, the run), under the name and figure. Teal,
+   the meter's hue, not olive: progress is not selection. */
+.tm-clear {
+  grid-column: 3 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.tm-clear-text {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.tm-clear-text--short {
+  color: rgb(var(--v-theme-surface-warning));
+}
+
+.tm-phase {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.tm-phase li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tm-phase li::before {
+  content: "";
+  height: var(--space-1);
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-surface), 0.12);
+}
+
+.tm-phase li[data-state="now"] {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tm-phase li[data-state="now"]::before {
+  background: linear-gradient(
+    90deg,
+    rgb(var(--v-theme-tertiary)) 0 40%,
+    rgba(var(--v-theme-on-surface), 0.12) 40%
+  );
+}
+
+.tm-phase li[data-state="done"] {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.tm-phase li[data-state="done"]::before {
+  background: rgb(var(--v-theme-tertiary));
 }
 
 .tm-fold {
@@ -2231,23 +2573,7 @@ const tmSystemItems = computed(() => {
   display: none;
 }
 
-.tm-tile:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-on-surface));
-  outline-offset: 1px;
-}
-
-/* The column label and Clear share one cell; Clear shows on hover or focus. */
-.tm-head-swap {
-  display: inline-grid;
-  justify-items: end;
-}
-
-.tm-head-swap > * {
-  grid-area: 1 / 1;
-}
-
 .tm-head-act {
-  opacity: 0;
   padding: 0;
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.85);
@@ -2258,14 +2584,9 @@ const tmSystemItems = computed(() => {
   text-decoration: underline;
 }
 
-.tm-group-head--finished:hover .tm-head-act,
-.tm-group-head--finished:focus-within .tm-head-act {
-  opacity: 1;
-}
-
-.tm-group-head--finished:hover .tm-head-col,
-.tm-group-head--finished:focus-within .tm-head-col {
-  visibility: hidden;
+.tm-head-act:disabled {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  text-decoration: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,6 +1,7 @@
 """Import folder CRUD API for automatic watch-folder imports."""
 
 import os
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
@@ -11,6 +12,7 @@ from sqlmodel import Session, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models.import_folder import ImportFolder
 from pixlstash.db_models.picture import Picture
+from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
 from pixlstash.utils.library_roots import (
@@ -48,6 +50,10 @@ class ImportFolderResponse(BaseModel):
     delete_after_import: bool
     last_checked: Optional[float]
     picture_count: int = 0
+    # When the newest picture it brought in arrived, or None before the first.
+    last_imported_at: Optional[datetime] = None
+    # The folder is not on disk (unplugged drive, renamed, deleted).
+    missing: bool = False
 
 
 class ImportFoldersListResponse(BaseModel):
@@ -88,7 +94,9 @@ def create_router(server) -> APIRouter:
         return normalized
 
     def _to_response(
-        folder: ImportFolder, picture_count: int = 0
+        folder: ImportFolder,
+        picture_count: int = 0,
+        last_imported_at: Optional[datetime] = None,
     ) -> ImportFolderResponse:
         return ImportFolderResponse(
             id=folder.id,
@@ -98,6 +106,18 @@ def create_router(server) -> APIRouter:
             delete_after_import=folder.delete_after_import,
             last_checked=folder.last_checked,
             picture_count=picture_count,
+            last_imported_at=last_imported_at,
+            missing=not os.path.isdir(folder.folder),
+        )
+
+    def _notify_changed(request: Request) -> None:
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "source": "ui",
+                "origin_client_id": getattr(request.state, "origin_client_id", None),
+                "change_kind": "updated",
+            },
         )
 
     @router.get(
@@ -118,6 +138,7 @@ def create_router(server) -> APIRouter:
                 select(
                     Picture.import_source_folder,
                     func.count(Picture.id),
+                    func.max(Picture.imported_at),
                 )
                 .where(
                     Picture.import_source_folder.is_not(None),
@@ -125,22 +146,26 @@ def create_router(server) -> APIRouter:
                 )
                 .group_by(Picture.import_source_folder)
             ).all()
-            counts_by_folder = {str(path): int(count) for path, count in count_rows}
-            return folders, counts_by_folder
+            stats_by_folder = {
+                str(path): (int(count), latest) for path, count, latest in count_rows
+            }
+            return folders, stats_by_folder
 
-        folders, counts_by_folder = server.vault.db.run_task(
+        folders, stats_by_folder = server.vault.db.run_task(
             fetch,
             priority=DBPriority.IMMEDIATE,
         )
-        return ImportFoldersListResponse(
-            folders=[
+        responses = []
+        for folder in folders:
+            count, latest = stats_by_folder.get(folder.folder, (0, None))
+            responses.append(
                 _to_response(
                     folder,
-                    picture_count=counts_by_folder.get(folder.folder, 0),
+                    picture_count=count,
+                    last_imported_at=latest,
                 )
-                for folder in folders
-            ]
-        )
+            )
+        return ImportFoldersListResponse(folders=responses)
 
     @router.post(
         "/import-folders",
@@ -212,16 +237,7 @@ def create_router(server) -> APIRouter:
 
         import_folder = server.vault.db.run_task(insert, priority=DBPriority.IMMEDIATE)
 
-        from pixlstash.event_types import EventType
-
-        server.vault.notify(
-            EventType.CHANGED_PICTURES,
-            {
-                "source": "ui",
-                "origin_client_id": getattr(request.state, "origin_client_id", None),
-                "change_kind": "updated",
-            },
-        )
+        _notify_changed(request)
         return _to_response(import_folder)
 
     @router.patch(
@@ -254,16 +270,7 @@ def create_router(server) -> APIRouter:
 
         folder = server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
 
-        from pixlstash.event_types import EventType
-
-        server.vault.notify(
-            EventType.CHANGED_PICTURES,
-            {
-                "source": "ui",
-                "origin_client_id": getattr(request.state, "origin_client_id", None),
-                "change_kind": "updated",
-            },
-        )
+        _notify_changed(request)
         return _to_response(folder)
 
     @router.delete(
@@ -286,16 +293,7 @@ def create_router(server) -> APIRouter:
         deleted_path = server.vault.db.run_task(remove, priority=DBPriority.IMMEDIATE)
         logger.info("Import folder removed: %s", deleted_path)
 
-        from pixlstash.event_types import EventType
-
-        server.vault.notify(
-            EventType.CHANGED_PICTURES,
-            {
-                "source": "ui",
-                "origin_client_id": getattr(request.state, "origin_client_id", None),
-                "change_kind": "updated",
-            },
-        )
+        _notify_changed(request)
         return {"status": "success", "id": folder_id}
 
     return router

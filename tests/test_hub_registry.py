@@ -15,8 +15,10 @@ import uuid
 import pytest
 
 from pixlstash.hub.db import HUB_FILE_MODE, HubDatabase
+from pixlstash.hub.engine import HubEngine
 from pixlstash.hub.registry import (
     ActiveLibraryError,
+    ForeignLibraryError,
     LibraryError,
     LibraryExistsError,
     LibraryNotFoundError,
@@ -27,6 +29,7 @@ from pixlstash.hub.registry import (
 from pixlstash.hub.schema import CURRENT_SCHEMA_VERSION, read_schema_version
 from pixlstash.cli import main as cli_main
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
+from tests.utils import URI_HOSTILE_FOLDER
 
 
 def make_vault_folder(root, name="library", *, with_credentials=False):
@@ -128,6 +131,21 @@ def registry(hub):
 class TestHubDatabase:
     def test_created_at_current_schema_version(self, hub):
         assert read_schema_version(hub.connection) == CURRENT_SCHEMA_VERSION
+
+    def test_engine_opens_a_hub_in_a_folder_with_uri_characters(self, tmp_path):
+        folder = tmp_path / URI_HOSTILE_FOLDER
+        folder.mkdir()
+        path = str(folder / "hub.db")
+        HubDatabase(path).close()
+
+        engine = HubEngine(path)
+        try:
+            with engine.engine.connect() as conn:
+                version = conn.exec_driver_sql("SELECT version FROM schema_version")
+                assert version.scalar() == CURRENT_SCHEMA_VERSION
+        finally:
+            engine.close()
+        assert os.listdir(tmp_path) == [URI_HOSTILE_FOLDER]
 
     def test_created_owner_only(self, tmp_path):
         path = str(tmp_path / "hub.db")
@@ -707,6 +725,20 @@ class TestRelocate:
         assert relocated.path == os.path.realpath(moved_to)
         assert _token_rows(hub, library.uuid) == 1
 
+    def test_relocate_into_a_folder_with_uri_characters(self, registry, tmp_path):
+        """``?`` and ``#`` cut a raw ``file:`` URI short, so the vault check
+        opened a stray file beside the folder and refused a real vault (#2210)."""
+        library = registry.attach(make_vault_folder(tmp_path, "plain"))
+        moved_to = os.path.join(str(tmp_path), URI_HOSTILE_FOLDER)
+        shutil.move(library.path, moved_to)
+
+        relocated = registry.relocate(library.id, moved_to)
+
+        assert relocated.uuid == library.uuid
+        assert relocated.path == os.path.realpath(moved_to)
+        strays = [n for n in os.listdir(tmp_path) if not n.startswith("hub.db")]
+        assert strays == [URI_HOSTILE_FOLDER]
+
     def test_relocate_to_an_occupied_path_is_refused(self, registry, tmp_path):
         first = registry.attach(make_vault_folder(tmp_path, "first"))
         second_folder = make_vault_folder(tmp_path, "second")
@@ -722,6 +754,35 @@ class TestRelocate:
 
         with pytest.raises(NotAVaultError):
             registry.relocate(library.id, str(empty))
+
+    def test_same_library_relocate_refuses_a_different_library(
+        self, registry, tmp_path
+    ):
+        """ "I found it" must not let another library take over this one's links."""
+        folder = make_vault_folder(tmp_path, "mine")
+        set_vault_uuid(folder, "00000000-0000-4000-8000-0000000000aa")
+        library = registry.attach(folder)
+        other = make_vault_folder(tmp_path, "someone-elses")
+        set_vault_uuid(other, "00000000-0000-4000-8000-0000000000bb")
+
+        with pytest.raises(ForeignLibraryError):
+            registry.relocate(library.id, other, require_same_library=True)
+
+        assert registry.get(library.id).path == library.path
+        # Without the flag the explicit move still goes ahead, as it always has.
+        assert registry.relocate(library.id, other).path == os.path.realpath(other)
+
+    def test_same_library_relocate_accepts_the_library_it_was(self, registry, tmp_path):
+        folder = make_vault_folder(tmp_path, "before")
+        set_vault_uuid(folder, "00000000-0000-4000-8000-0000000000aa")
+        library = registry.attach(folder)
+        moved_to = os.path.join(str(tmp_path), "after")
+        shutil.move(folder, moved_to)
+
+        relocated = registry.relocate(library.id, moved_to, require_same_library=True)
+
+        assert relocated.uuid == library.uuid
+        assert relocated.path == os.path.realpath(moved_to)
 
 
 class TestOverlapDetection:
@@ -822,3 +883,86 @@ class TestCli:
         captured = capsys.readouterr()
         assert code == 0
         assert "overlaps" in captured.err
+
+    def test_activate_makes_another_library_the_one_that_opens(self, tmp_path, capsys):
+        """The way out when the active library is gone and Settings is unreachable."""
+        hub_path = str(tmp_path / "hub.db")
+        first = make_vault_folder(tmp_path, "first")
+        second = make_vault_folder(tmp_path, "second")
+        set_vault_uuid(second, "00000000-0000-4000-8000-0000000000bb")
+        cli_main(["--hub", hub_path, "libraries", "attach", first])
+        cli_main(["--hub", hub_path, "libraries", "attach", second])
+        shutil.rmtree(first)
+        capsys.readouterr()
+
+        code = cli_main(["--hub", hub_path, "libraries", "activate", "second"])
+
+        assert code == 0, capsys.readouterr().err
+        hub = HubDatabase(hub_path)
+        try:
+            registry = LibraryRegistry(hub)
+            assert registry.active_library().path == os.path.realpath(second)
+            # And with the gone one no longer active, it can now be detached.
+            assert not registry.detach("first").attached
+        finally:
+            hub.close()
+
+    def test_activate_refuses_a_library_that_would_not_open(self, tmp_path, capsys):
+        hub_path = str(tmp_path / "hub.db")
+        first = make_vault_folder(tmp_path, "first")
+        second = make_vault_folder(tmp_path, "second")
+        cli_main(["--hub", hub_path, "libraries", "attach", first])
+        cli_main(["--hub", hub_path, "libraries", "attach", second])
+        os.remove(os.path.join(second, "vault.db"))
+        capsys.readouterr()
+
+        code = cli_main(["--hub", hub_path, "libraries", "activate", "second"])
+
+        assert code == 1
+        assert "Nothing was changed." in capsys.readouterr().err
+        hub = HubDatabase(hub_path)
+        try:
+            assert LibraryRegistry(hub).active_library().path == os.path.realpath(first)
+        finally:
+            hub.close()
+        # Refusing must not have created anything where the vault was.
+        assert not os.path.exists(os.path.join(second, "vault.db"))
+
+    def test_activate_refuses_a_foreign_vault(self, tmp_path, capsys):
+        hub_path = str(tmp_path / "hub.db")
+        first = make_vault_folder(tmp_path, "first")
+        second = make_vault_folder(tmp_path, "second")
+        set_vault_uuid(second, "00000000-0000-4000-8000-0000000000bb")
+        cli_main(["--hub", hub_path, "libraries", "attach", first])
+        cli_main(["--hub", hub_path, "libraries", "attach", second])
+        set_vault_uuid(second, "00000000-0000-4000-8000-0000000000cc")
+        capsys.readouterr()
+
+        code = cli_main(["--hub", hub_path, "libraries", "activate", "second"])
+
+        assert code == 1
+        assert "fingerprint conflict" in capsys.readouterr().err
+
+    def test_relocate_same_library_refusal_reaches_the_terminal(self, tmp_path, capsys):
+        hub_path = str(tmp_path / "hub.db")
+        folder = make_vault_folder(tmp_path, "mine")
+        set_vault_uuid(folder, "00000000-0000-4000-8000-0000000000aa")
+        other = make_vault_folder(tmp_path, "other")
+        set_vault_uuid(other, "00000000-0000-4000-8000-0000000000bb")
+        cli_main(["--hub", hub_path, "libraries", "attach", folder])
+        capsys.readouterr()
+
+        code = cli_main(
+            [
+                "--hub",
+                hub_path,
+                "libraries",
+                "relocate",
+                "mine",
+                other,
+                "--same-library",
+            ]
+        )
+
+        assert code == 1
+        assert "different library" in capsys.readouterr().err

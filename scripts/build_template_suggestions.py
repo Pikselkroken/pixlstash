@@ -9,7 +9,7 @@ runtime: it reads the committed file this script writes.
 ComfyUI itself installs to serve ``/templates``. It holds ``index.json`` (the
 catalogue) and one UI-format graph per template. A release is one download,
 so ``--version`` rebuilds the same file and the version is recorded in the
-output; a weekly diff is one release to the next. The sha256 it is checked
+output; a daily diff is one release to the next. The sha256 it is checked
 against comes from the same PyPI answer as its URL, so it catches a broken
 download, not a compromised release: the review of the bot PR is that gate.
 
@@ -33,7 +33,7 @@ previous list had. A gated file has none.
 
 **The graphs are kept too**, one minified file per template in
 ``pixlstash/data/workflow_templates/``, so a workflow can be made from one with
-no ComfyUI reachable (#2000). One file each, so the weekly PR's file list says
+no ComfyUI reachable (#2000). One file each, so the daily PR's file list says
 which graphs changed. A name that is not a plain file name is skipped.
 
 **And the catalogue itself**, ComfyUI's ``index.json`` as the wheel holds it
@@ -41,7 +41,7 @@ which graphs changed. A name that is not a plain file name is skipped.
 Templates tab lists while no ComfyUI is answering, read by the same code that
 reads a live ComfyUI's (#2000).
 
-**The weekly refresh** (``.github/workflows/template-suggestions.yml``) runs
+**The daily refresh** (``.github/workflows/template-suggestions.yml``) runs
 this with ``--summary``, which writes the PR body: the templates added,
 removed, whose files changed and whose graph changed.
 
@@ -261,7 +261,7 @@ def _title(template: dict) -> str:
 
 
 def summary(old: dict, new: dict, old_graphs: dict, new_graphs: dict) -> str:
-    """The weekly PR's body: what changed, by template, rather than a JSON diff."""
+    """The daily PR's body: what changed, by template, rather than a JSON diff."""
     before = {t["name"]: t for t in old.get("templates") or []}
     after = {t["name"]: t for t in new["templates"]}
 

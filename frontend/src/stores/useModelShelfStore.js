@@ -14,6 +14,7 @@ import {
   BASE_MODEL_UNASSIGNED,
   createWorkflowSet,
   deleteModels,
+  undoDeleteModels,
   deleteWorkflowSet,
   editModels,
   fetchWorkflowSets,
@@ -24,6 +25,7 @@ import {
   listAdapters,
   listBaseModelCompletions,
   listCheckpoints,
+  lookupBaseModelsOnline,
   markWorkflowSetSeen,
   mergeWorkflowSets,
   removeWorkflowSetMembers,
@@ -42,6 +44,7 @@ import { errorDetail } from "../utils/apiError";
 import {
   adapterKindKey,
   adapterKindLabel,
+  allAlreadyIn,
   baseModelKey,
   collapseStacks,
   capabilityIcon,
@@ -52,19 +55,26 @@ import {
   quantFromFilename,
   fileKindLabel,
   hideModelsVerb,
+  inFolderScopeOf,
   locationState,
+  movableCopies,
   presentCopies,
+  SHELF_TYPES,
+  shelfTypeLabel,
+  shelfTypeOf,
   trashName,
   modelName,
   offlineFolders,
   UNSET_GROUP_KEY,
 } from "../utils/modelShelf";
 import {
+  byEvidence,
   defaultSlot,
   handMadeBase,
   handMadeCard,
   handMadeName,
   headModel,
+  headName,
   hideSetsVerb,
   identicalSets,
   PICK_ORDERS,
@@ -78,6 +88,35 @@ import {
   worksWith,
 } from "../utils/workflowSets";
 import { checksByKey, comboKey } from "../utils/setVerdicts";
+import { activityOf, combinationsOfSet } from "../utils/setActivity";
+
+/**
+ * The Models sidebar's places (#2168). `sets` is the set grid; every other one
+ * is the row list, narrowed. Not persisted, past the grid-or-list choice
+ * `groupBy` already remembers: a place other than Sets and All models is a
+ * question, as the `Show` filters below are. `folder` is one folder of the
+ * Folders tree (#2203), opened by {@link setFolderScope} rather than by name.
+ */
+export const SHELF_PLACES = [
+  "sets",
+  "all",
+  "favourites",
+  "recent",
+  "loose",
+  "folder",
+];
+
+/** How far back *Recently added* reaches, by when a scan first saw the file. */
+export const RECENT_DAYS = 30;
+
+/** The list's grouping on All models and In no set yet: banded by Type. */
+export const LIST_GROUP_BY = "type";
+
+/**
+ * The axes a list can be banded by, in the Sort panel's order. Workflow set is
+ * the Sets place rather than an option, and folder is the sidebar's tree.
+ */
+export const LIST_GROUP_BY_KEYS = ["type", "base_model", "feature", "none"];
 
 /** Where the `Show` selection is remembered between visits. */
 const FILTERS_KEY = "pixlstash:modelShelfFilters";
@@ -128,7 +167,7 @@ const VIEW_KEY = "pixlstash:modelShelfView";
  * discards: leave its version out of that table and it falls through to the
  * defaults whole.
  */
-const VIEW_SCHEMA_VERSION = 2;
+const VIEW_SCHEMA_VERSION = 3;
 
 /**
  * Per stored version, the `view` fields a read must NOT take from it.
@@ -136,8 +175,12 @@ const VIEW_SCHEMA_VERSION = 2;
  * A blob at version 1 predates the set grid, so its `groupBy` is not evidence of
  * a choice - `none` was the only thing it could say. Everything else it holds is
  * still exactly what the reader set.
+ *
+ * Below version 3 the Base column defaulted to 84px, too narrow for most labels,
+ * and every view change wrote that default into the blob - so a stored `base`
+ * width is not evidence of a drag either.
  */
-const VIEW_MIGRATIONS = { 1: ["groupBy"] };
+const VIEW_MIGRATIONS = { 1: ["groupBy", "baseWidth"], 2: ["baseWidth"] };
 
 /**
  * Ceiling on remembered collapsed groups, per axis, oldest dropped.
@@ -155,14 +198,18 @@ const COMPLETION_RETRY_MS = 30_000;
  * The axes the shelf can group by. `none` is the flat F1 list.
  *
  * `feature` is the axis the multi-capability rule needs: a model that serves
- * several features is listed under EACH of them, which `groupsOf` already
- * supports because `folder` needed the same fan-out for a file copied twice.
+ * several features is listed under EACH of them, which `groupsOf` supports for
+ * the same reason a file copied into two folders would have needed it.
+ *
+ * `folder` is not an axis any more (#2168): the model folder is the sidebar's
+ * slot, which limits the list rather than banding it. A stored `folder` reads
+ * back as `type`, see `storedView`.
  */
 export const GROUP_BY_KEYS = [
   "none",
   "workflow_set",
+  "type",
   "base_model",
-  "folder",
   "feature",
 ];
 
@@ -184,19 +231,12 @@ export const GRID_GROUP_BY = "workflow_set";
 export const TRAY_VIEWS = ["grid", "list"];
 
 /**
- * How folder groups are laid out, which is a sub-choice of `Folder` rather than
- * a fourth axis: `drive` bands them by the disk they sit on, `alpha` runs them
- * A to Z. It was once offered as `Sort: Drive | Folder`, which was never a sort
- * and is why the absence of real sorting went unnoticed for so long.
- */
-export const FOLDER_LAYOUTS = ["drive", "alpha"];
-
-/**
  * The four data columns the reader can resize, and what each starts at.
  *
- * The first three figures are the resolved design's own
+ * `kind` and `size` are the resolved design's own
  * (ui_kits/app/model-shelf.html, row anatomy) and were fixed widths in the
- * stylesheet until the header strip gave them a grip. The Name column is
+ * stylesheet until the header strip gave them a grip. `base` was the kit's 84px
+ * too, which ellipsised nearly every label; 140px holds the common ones whole. The Name column is
  * deliberately absent: it is the flexible track that takes whatever the others
  * leave, so it has no width of its own to remember.
  *
@@ -207,10 +247,10 @@ export const FOLDER_LAYOUTS = ["drive", "alpha"];
  * keeps the common formats clear of the ellipsis rather than a proof against
  * every one, and the grip is there for the reader it does not suit.
  */
-export const COLUMN_KEYS = ["kind", "base", "size", "date"];
+export const COLUMN_KEYS = ["kind", "base", "size", "date", "sets"];
 
 /** @type {Record<string, number>} */
-export const DEFAULT_COLUMN_WIDTHS = { kind: 64, base: 84, size: 74, date: 96 };
+export const DEFAULT_COLUMN_WIDTHS = { kind: 64, base: 140, size: 74, date: 96, sets: 56 };
 
 /**
  * The floor each column is held above, per column rather than one figure.
@@ -229,7 +269,7 @@ export const DEFAULT_COLUMN_WIDTHS = { kind: 64, base: 84, size: 74, date: 96 };
  *
  * @type {Record<string, number>}
  */
-export const MIN_COLUMN_WIDTHS = { kind: 64, base: 72, size: 56, date: 80 };
+export const MIN_COLUMN_WIDTHS = { kind: 64, base: 72, size: 56, date: 80, sets: 44 };
 
 /**
  * The ceiling, which is a sanity bound on a stored blob and NOT the limit a
@@ -266,7 +306,8 @@ export function clampColumnWidth(key, px) {
 }
 
 /**
- * The five ruled sort keys, mirroring `SortKey` in `routes/model_shelf.py`.
+ * The sort keys: one per column, so every heading sorts. The first five mirror
+ * `SortKey` in `routes/model_shelf.py`; `type` and `sets` are the client's own.
  *
  * Applied CLIENT-SIDE, and that is not a shortcut. `fetchRows` issues one
  * request per selected block and concatenates the results, so three
@@ -280,9 +321,63 @@ export const SORT_KEYS = [
   "name",
   "size",
   "base_model",
+  "type",
+  "sets",
 ];
 
-/** What each sort key reads off a row. `null` means the row cannot answer. */
+/**
+ * The set grid's own sort keys: a set card has no file date, type or base
+ * column, so it does not take the row list's. Each carries its name, glyph,
+ * the end it starts at (`natural`) and its directions in words, `[asc, desc]`.
+ */
+export const SET_SORT_LABELS = {
+  used: {
+    label: "Most used",
+    icon: "mdi-image-multiple-outline",
+    natural: "desc",
+    words: ["Least used first", "Most used first"],
+  },
+  last_used: {
+    label: "Last used",
+    icon: "mdi-clock-outline",
+    natural: "desc",
+    words: ["Oldest first", "Newest first"],
+  },
+  name: {
+    label: "Name",
+    icon: "mdi-sort-alphabetical-variant",
+    natural: "asc",
+    words: ["A to Z", "Z to A"],
+  },
+  size: {
+    label: "Size",
+    icon: "mdi-harddisk",
+    natural: "desc",
+    words: ["Smallest first", "Largest first"],
+  },
+};
+export const SET_SORT_KEYS = Object.keys(SET_SORT_LABELS);
+
+const setNameCollator = new Intl.Collator(undefined, { numeric: true });
+
+/**
+ * What each set sort key reads off a card, given its combinations. `null` sorts
+ * last in both directions, as an unanswered row does in `compareOn`.
+ */
+const SET_SORT_VALUE = {
+  used: (group, combos) =>
+    combos.reduce((sum, c) => sum + (Number(c.picture_count) || 0), 0),
+  last_used: (group, combos) =>
+    Date.parse(activityOf(combos).lastUsedAt) || null,
+  name: (group) => group.card?.name || null,
+  size: (group) => group.card?.sizeBytes ?? null,
+};
+
+/**
+ * What each sort key reads off a row. `null` means the row cannot answer.
+ * `sets` reads the model's set count from `membership` (`setMembership`), or
+ * null while the sets are unread.
+ */
 const SORT_VALUE = {
   // A stack's date is its newest member's, never its cover's.
   added_at: (row) => row.newest_member_at || row.added_at || null,
@@ -293,6 +388,9 @@ const SORT_VALUE = {
   size: (row) => row.total_size ?? row.file_size ?? null,
   // Sorted by the folded value so the run is by base rather than by spelling.
   base_model: (row) => baseModelKey(row) || null,
+  type: (row) => shelfTypeLabel(row),
+  sets: (row, membership) =>
+    membership ? (membership.get(row.id)?.length ?? 0) : null,
 };
 
 /**
@@ -303,9 +401,9 @@ const SORT_VALUE = {
  * no base model" is an unanswered question, and letting 37% of the shelf pile
  * up at whichever end the direction points is how a sort stops being one.
  */
-function compareOn(a, b, key, direction) {
-  const left = SORT_VALUE[key](a);
-  const right = SORT_VALUE[key](b);
+function compareOn(a, b, key, direction, membership = null) {
+  const left = SORT_VALUE[key](a, membership);
+  const right = SORT_VALUE[key](b, membership);
   if (left === null || left === "")
     return right === null || right === "" ? 0 : 1;
   if (right === null || right === "") return -1;
@@ -319,30 +417,6 @@ function compareOn(a, b, key, direction) {
       sensitivity: "base",
     }) * sign
   );
-}
-
-/**
- * What one copy of a model is called on disk, for a draw that stands for it.
- *
- * `model.filename` is whichever copy the scanner met first, so byte-identical
- * files under different names (`ae.sft`, `ae.safetensors`) are one model with
- * one filename, and every draw under the folder axis read as the first. The
- * name follows too, unless somebody gave the model one.
- *
- * @param {Object} row - a shown row, carrying `name` from `modelName`.
- * @param {Object} location - the one copy this draw stands for.
- * @returns {{filename: string, name: Object}|{}} fields to spread over the row.
- */
-export function copyName(row, location) {
-  const filename = String(location?.relpath || "")
-    .split(/[\\/]/)
-    .pop();
-  if (!filename || filename === row.filename) return {};
-  return {
-    filename,
-    name:
-      row.name?.state === "named" ? row.name : modelName({ ...row, filename }),
-  };
 }
 
 /** "1 model" / "12 models", so no receipt ever reads "1 models". */
@@ -403,7 +477,12 @@ export function editReceipt(count, changes) {
   const fields = Object.keys(changes)
     .map((key) => FIELD_WORDS[key] || key)
     .join(" and ");
-  if (changes.display_name !== undefined && count === 1) {
+  // A rename is one model or one stack (the server refuses anything wider), so
+  // a stack's member count is not news: it is still one name on one row. Only
+  // when the name is all that was written: beside another column, the general
+  // receipt below names both.
+  const renameOnly = Object.keys(changes).length === 1;
+  if (changes.display_name !== undefined && renameOnly) {
     return changes.display_name
       ? `Renamed to ${changes.display_name}.`
       : "Cleared the name. The shelf shows one derived from the filename.";
@@ -456,6 +535,24 @@ export function forgetReceipt(gone, kept, vanished = 0, engines = 0) {
 }
 
 /**
+ * Say what a Civitai lookup filled, what it could not, and why.
+ *
+ * @param {Object} body - the route's receipt.
+ * @returns {string}
+ */
+export function lookupReceipt(body) {
+  const filled = body?.filled?.length ?? 0;
+  const missing = body?.not_found?.length ?? 0;
+  const skipped = body?.skipped?.length ?? 0;
+  const notAsked = body?.not_asked?.length ?? 0;
+  const parts = [`Filled ${modelCount(filled)}`];
+  if (missing) parts.push(`${missing} not on Civitai`);
+  if (skipped) parts.push(`${skipped} left alone`);
+  if (notAsked) parts.push(`${notAsked} not asked (Civitai stopped answering)`);
+  return parts.join(" · ");
+}
+
+/**
  * Say what a merge removed, where it put it, and what it left alone.
  *
  * The one sentence that has to be there is what SURVIVED: a reader who has just
@@ -499,7 +596,7 @@ export function mergeReceipt(
   note(
     "no_such_copy",
     (n) =>
-      `${modelCount(n)} no longer has the copy you chose. Rescan that folder.`,
+      `${modelCount(n)} no longer has the copy you chose. The shelf is catching up with that folder; try again in a moment.`,
   );
   note(
     "keeper_is_that_copy",
@@ -533,7 +630,7 @@ export function mergeReceipt(
   note(
     "escapes_its_folder",
     (n) =>
-      `${modelCount(n)} is recorded outside its own folder. Rescan that folder.`,
+      `${modelCount(n)} is recorded outside its own folder. The next scan of that folder corrects it.`,
   );
   note(
     "no_such_model",
@@ -626,7 +723,7 @@ export function deleteReceipt(
   note(
     "escapes_its_folder",
     (n) =>
-      `${modelCount(n)} ${n === 1 ? "is" : "are"} recorded at a path outside the folder ${n === 1 ? "it belongs" : "they belong"} to; rescan that folder.`,
+      `${modelCount(n)} ${n === 1 ? "is" : "are"} recorded at a path outside the folder ${n === 1 ? "it belongs" : "they belong"} to; the next scan of that folder corrects it.`,
   );
   note(
     "no_such_model",
@@ -685,13 +782,7 @@ export function assignReceipt(done, failed, entityName, attaching) {
 }
 
 /**
- * The default view: newest added first, ungrouped, exactly what F1 showed.
- *
- * `folderLayout` is carried at all times but only read under `groupBy:
- * 'folder'`. Remembering it while another axis is chosen is the point: flipping
- * to Base model and back must not silently reset how the folders were laid out.
- * It seeds to `drive`, because the question a shelf of 438 GB is asked first is
- * which disk is filling up.
+ * The default view: the set grid, with the row list's grouping remembered apart.
  */
 function defaultView() {
   return {
@@ -699,12 +790,18 @@ function defaultView() {
     // question the shelf is actually asked, and a grouping that answers it only
     // once somebody finds the menu is not the default it deserves.
     groupBy: GRID_GROUP_BY,
+    // The row list's own grouping, which `groupBy` takes whenever a place
+    // other than Sets is open (#2168): remembered apart, so a visit to Sets
+    // and back does not lose it.
+    listGroupBy: LIST_GROUP_BY,
     sortKey: "added_at",
     sortDirection: "desc",
-    folderLayout: "drive",
+    // The set grid's sort, apart from the list's: its keys are its own.
+    setSortKey: "used",
+    setSortDirection: "desc",
     // How an open set's tray draws its models: as cards or as a comparison
-    // list. Carried at all times and only read under `workflow_set`, exactly as
-    // `folderLayout` is only read under `folder`. Remembered for every tray
+    // list. Carried at all times and only read under `workflow_set`.
+    // Remembered for every tray
     // rather than per tray, because the switch answers "how do I read a tray"
     // rather than anything about the one in front of you.
     trayView: "grid",
@@ -756,7 +853,7 @@ function defaultFilters() {
     // again. Not restored on startup either, for the same reason: it is how a
     // hide is taken back, not a way to keep the shelf.
     showHidden: false,
-    // The name filter's text, matched as the Models rail's picker matches: the
+    // The name filter's text, matched as a set's ＋ picker matches: the
     // name the row shows or its filename. Not restored on startup either: a
     // search is a question, and a shelf that opened still narrowed by
     // yesterday's would read as missing models.
@@ -841,14 +938,28 @@ function storedView() {
   const stale =
     parsed.v === VIEW_SCHEMA_VERSION ? [] : VIEW_MIGRATIONS[parsed.v];
   if (!stale) return view;
-  if (!stale.includes("groupBy") && GROUP_BY_KEYS.includes(parsed.groupBy)) {
-    view.groupBy = parsed.groupBy;
+  // The Folder axis is gone (#2168): a grouping remembered as `folder` reads
+  // back as Type, the band the sidebar's folder slot replaced it with.
+  const axisOf = (key) => (key === "folder" ? "type" : key);
+  if (
+    !stale.includes("groupBy") &&
+    GROUP_BY_KEYS.includes(axisOf(parsed.groupBy))
+  ) {
+    view.groupBy = axisOf(parsed.groupBy);
   }
-  // Read per field rather than gated behind a schema bump: a blob written
-  // before the layout choice existed is still a valid remembered sort, and
-  // bumping the version to add one field would throw that away for everyone.
-  if (FOLDER_LAYOUTS.includes(parsed.folderLayout)) {
-    view.folderLayout = parsed.folderLayout;
+  if (
+    GROUP_BY_KEYS.includes(axisOf(parsed.listGroupBy)) &&
+    axisOf(parsed.listGroupBy) !== GRID_GROUP_BY
+  ) {
+    view.listGroupBy = axisOf(parsed.listGroupBy);
+  }
+  // A list grouping remembered from before #2168 is the list's grouping now:
+  // a migration, so only for a blob that carries no `listGroupBy` of its own.
+  if (
+    !GROUP_BY_KEYS.includes(axisOf(parsed.listGroupBy)) &&
+    view.groupBy !== GRID_GROUP_BY
+  ) {
+    view.listGroupBy = view.groupBy;
   }
   if (TRAY_VIEWS.includes(parsed.trayView)) view.trayView = parsed.trayView;
   if (typeof parsed.favouritesFirst === "boolean") {
@@ -858,11 +969,19 @@ function storedView() {
   if (parsed.sortDirection === "asc" || parsed.sortDirection === "desc") {
     view.sortDirection = parsed.sortDirection;
   }
+  if (SET_SORT_KEYS.includes(parsed.setSortKey)) {
+    view.setSortKey = parsed.setSortKey;
+    view.setSortDirection = SET_SORT_LABELS[parsed.setSortKey].natural;
+  }
+  if (parsed.setSortDirection === "asc" || parsed.setSortDirection === "desc") {
+    view.setSortDirection = parsed.setSortDirection;
+  }
   // Per column and clamped on the way in, for the reason the fields above are
   // read one at a time: a blob written before the columns could be dragged is
   // still a valid remembered sort, and a width edited by hand in devtools is
   // not a reason to hand back a shelf whose Size column is 4,000px wide.
   for (const key of COLUMN_KEYS) {
+    if (key === "base" && stale.includes("baseWidth")) continue;
     const width = clampColumnWidth(key, parsed.columnWidths?.[key]);
     if (width !== null) view.columnWidths[key] = width;
   }
@@ -902,16 +1021,13 @@ function storedCollapsed() {
 }
 
 /**
- * Every group a row belongs to on one axis, as `{key, label, labelKind}`.
+ * Every group a row belongs to on one band axis, as `{key, label, labelKind}`.
  *
- * A row belongs to exactly one base model but to EVERY folder holding a copy of
- * it, so this returns a list rather than a key. The alternative was a "primary
- * location", which is a fiction the shelf would then have to explain, and which
- * makes the storage answer wrong: a file copied into two folders occupies both.
- * `labelKind` is `path` for a literal filesystem path, which is set in the mono
- * face and never uppercased, because uppercasing a path misstates the string.
+ * A row belongs to exactly one Type and one base model, so those return one
+ * group; `feature` returns one per capability. The list shape is what lets a
+ * fan-out axis draw a row under each of its groups.
  *
- * `feature` is the second axis to fan out, and for the same kind of reason:
+ * `feature` is the axis that fans out, and for the same kind of reason:
  * Florence-2 captions AND detects, and the embedder's CLIP is both the search
  * encoder and the aesthetic scorer's backbone. Filing either under one heading
  * answers "what breaks if I delete this" wrongly, which is the question this
@@ -919,6 +1035,17 @@ function storedCollapsed() {
  * capability and is filed under its algorithm instead - see below.
  */
 function groupsOf(row, axis) {
+  if (axis === "type") {
+    // The sidebar's Type rows, so a band and the row that filters to it are
+    // one word (#2168). What no Type row takes (an engine, an unclassified
+    // file) closes the list under one band rather than vanishing from it.
+    const type = SHELF_TYPES.find((one) => one.key === shelfTypeOf(row));
+    return [
+      type
+        ? { key: type.key, label: type.label, labelKind: "name" }
+        : { key: UNSET_GROUP_KEY, label: "Other", labelKind: "name" },
+    ];
+  }
   if (axis === "feature") {
     const capabilities = Array.isArray(row.capabilities)
       ? row.capabilities
@@ -1030,22 +1157,7 @@ function groupsOf(row, axis) {
           },
         ];
   }
-  const locations = Array.isArray(row.locations) ? row.locations : [];
-  if (!locations.length) {
-    return [
-      {
-        key: UNSET_GROUP_KEY,
-        label: "No registered copy",
-        labelKind: "name",
-      },
-    ];
-  }
-  return locations.map((loc) => ({
-    key: String(loc.folder_path || loc.folder_id || ""),
-    label: String(loc.folder_path || `Folder ${loc.folder_id}`),
-    labelKind: "path",
-    location: loc,
-  }));
+  return [];
 }
 
 /** The top-level type checkboxes, each one row bucket. */
@@ -1101,6 +1213,28 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     view.favouritesFirst ? favouritesFirst(list, isFav) : list;
   /** Collapsed group keys, per axis. Replaced wholesale so templates react. */
   const collapsed = ref(storedCollapsed());
+  /**
+   * The sidebar's open place (#2168), one of {@link SHELF_PLACES}. Seeded from
+   * `groupBy`, the one part of it that is remembered: the grid, or All models.
+   */
+  const place = ref(view.groupBy === GRID_GROUP_BY ? "sets" : "all");
+  /**
+   * The open folder of the Folders tree, `{folderId, path, locked}`, or null.
+   * `path` is POSIX under the registered folder, `""` its root. The view is
+   * one level, as a file manager's is; a `locked` folder (one PixlStash or
+   * another tool lays out) cannot be browsed into, so it lists everything
+   * under it. Only the `folder` place has one: the set grid never narrows by
+   * folder, and opening a folder leaves Sets.
+   */
+  const folderScope = ref(null);
+  /**
+   * The axis the list is banded on. A folder is not banded: it holds a handful
+   * of models, and its column headings sort them. `view.groupBy` keeps the
+   * owner's grouping for when the folder is left.
+   */
+  const groupAxis = computed(() =>
+    place.value === "folder" ? "none" : view.groupBy,
+  );
   /** Every row fetched so far, across blocks. Not the shown set. */
   const rows = ref([]);
   /** Model ids the last scan added, for the `New` badge. Never persisted. */
@@ -1111,6 +1245,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * it while the shelf is open. Never persisted.
    */
   const unseenArrivals = ref(false);
+  /**
+   * Model ids the Downloads intake moved in since the shelf was last left.
+   * They wear the `New` badge too, and outlive the fetch that clears
+   * `newIds`: the shelf re-reads on mount, so the notice's `Show` would
+   * otherwise land on a row that has just lost its badge. Never persisted.
+   */
+  const arrivedIds = ref(new Set());
   const loading = ref(false);
   const error = ref("");
   /** True once a fetch has completed, so "empty" and "not asked yet" differ. */
@@ -1450,11 +1591,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       name: modelName(row),
       locState: locationState(row.locations),
       // Counted HERE, off the row's whole `locations`, and carried on the row
-      // from then on. The folder axis narrows a draw to the one copy that
-      // folder holds, so a template calling `presentCopies` at render time
-      // would report `1` for exactly the rows this is meant to mark.
+      // from then on, so every draw of the row reports the same count.
       copies: presentCopies(row.locations),
-      isNew: newIds.value.has(row.id),
+      isNew: newIds.value.has(row.id) || arrivedIds.value.has(row.id),
       // The store's list, not the row's own field: a hide lands here first.
       hidden: hiddenModelIds.value.has(row.id),
     };
@@ -1473,11 +1612,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   );
 
   /**
-   * What the Models rail lists and its closed handle counts: every offered row
-   * some set slot takes, a stack folded into its leader as the row list folds
-   * it. The leader is the one file the rail offers. Folded after the hidden
-   * rows are left out, so a stack whose leader alone is hidden is stood for by
-   * its next member.
+   * What the Models rail's *Models* tab lists: every offered row some set slot
+   * takes, a stack folded into its leader as the row list folds it. Folded
+   * after the hidden rows are left out, so a stack whose leader alone is hidden
+   * is stood for by its next member.
    */
   const railRows = computed(() =>
     collapseStacks(offeredRows.value.filter(railListed)),
@@ -1535,6 +1673,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         // Per file, before the fold below, so a run whose cover's name does
         // not match is still found by the step that does.
         if (!rowMatches(row, needle)) return false;
+        // The sidebar's place, row and folder (#2168): only off the set grid,
+        // which they do not narrow.
+        if (place.value !== "sets" && !inSidebarView(row)) return false;
         return true;
       })
       .map(displayRow);
@@ -1550,8 +1691,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       row.members ? { ...row, isNew: row.members.some((m) => m.isNew) } : row,
     );
     // Last, on the folded rows: a run is a favourite by its cover, the row the
-    // run is drawn as.
-    return filters.favouritesOnly ? folded.filter(isFavouriteRow) : folded;
+    // run is drawn as. The Favourites place is the same question asked from
+    // the sidebar.
+    return filters.favouritesOnly || place.value === "favourites"
+      ? folded.filter(isFavouriteRow)
+      : folded;
   });
 
   /** Favourite models on the shelf, once per hash: the Show box's count. */
@@ -1565,23 +1709,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   );
 
   /**
-   * A stack's members as this folder's draw sees them, one copy each.
-   *
-   * The per-member half of the narrowing the drawn row gets; see the comment at
-   * the push below.
-   */
-  function narrow(members, group) {
-    return members.map((member) => {
-      const here = (member.locations ?? []).filter(
-        (loc) => loc.folder_id === group.location.folder_id,
-      );
-      return here.length
-        ? { ...member, locations: here, locState: locationState(here) }
-        : member;
-    });
-  }
-
-  /**
    * The shown rows, sorted and cut into groups.
    *
    * Always at least one group, so the list has ONE shape to render: with
@@ -1589,22 +1716,22 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * drawn. That is what keeps the flat F1 list and the grouped list from
    * becoming two copies of the row markup.
    *
-   * ONE level of headers, deliberately, though the plan allows two. Folder is
-   * a grouping VALUE rather than a permanent outer band: a band per folder
-   * crossed with a group per base model fragments "what do I have for SDXL"
-   * into one answer per disk, which is the question the shelf exists to answer.
-   * The second level stays unspent for F5, where a stack genuinely nests inside
-   * a group.
+   * ONE level of headers. The model folder is the sidebar's slot, which limits
+   * the list rather than banding it, so no axis here spends a second level.
    */
   const groups = computed(() => {
-    const axis = view.groupBy;
+    const axis = groupAxis.value;
+    const membership = setsKnown.value ? setMembership.value : null;
     // A tiebreak on id, because a refetch can reorder equal-valued rows and a
     // list that reshuffles under an unchanged sort reads as a rendering fault.
     const sorted = [...visibleRows.value].sort(
       (a, b) =>
-        compareOn(a, b, view.sortKey, view.sortDirection) || a.id - b.id,
+        compareOn(a, b, view.sortKey, view.sortDirection, membership) ||
+        a.id - b.id,
     );
-    if (axis === "none") {
+    // The set grid draws its own cards, so its axis has no bands here: it is
+    // the one flat group, as `none` is, for anything that reads `groups`.
+    if (axis === "none" || axis === GRID_GROUP_BY) {
       // `rowKey` on this branch too. It was only set where a model can be drawn
       // more than once, which left every row in the DEFAULT view without one:
       // the list's `v-for` key was `undefined` for all of them, and so was
@@ -1631,76 +1758,29 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
             key: group.key,
             label: group.label,
             labelKind: group.labelKind,
-            // Which registered folder this group IS, when it is one. The drive
-            // bands need it to look the group's disk up, and the group is the
-            // only place that survives the flattening: `location` belongs to a
-            // copy, and a bucket outlives the copy that opened it.
-            folderId: group.location ? Number(group.location.folder_id) : null,
             // The header's glyph, where the axis has one per group rather than
-            // one for the whole axis. Empty elsewhere, and `withFolderSignals`
-            // fills it in for `folder` after the fact.
+            // one for the whole axis. Empty elsewhere.
             icon: group.icon || "",
             rows: [],
           };
           byKey.set(group.key, bucket);
         }
-        // `rowKey` carries the GROUP on every grouped axis, not only on the
-        // ones that can draw a row twice. Two axes fan out now - a file copied
-        // into two folders, a model serving two features - and both drew the
-        // same model under two headers with one key, which is the collision
-        // that put `tabindex="0"` on several draws at once and made `indexOf`
-        // return the first. Under `base_model` a row is in exactly one group,
-        // so the suffix is redundant there and costs nothing; the key is opaque
-        // to every reader of it.
-        //
-        // Under `folder` a row also reports THAT copy's state rather than the
-        // merged one, or a file present here and missing there would claim to
-        // be fine in the folder it is absent from. `locations` is narrowed to
-        // the same one copy for the same reason: the draw stands for one copy,
-        // and the file line's path tooltip reading the merged array would
-        // answer "where is this file" with a path in the folder above.
-        //
-        // Narrowing here is safe because nothing else reads a DRAWN row's
-        // locations - `selectedRows` and the verbs all read `visibleRows`,
-        // which still carries every copy.
-        //
-        // A stack's `members` are narrowed with it, for the reason the row
-        // itself is: an expanded strip under `/models` would otherwise answer
-        // "where is this step" with a path in the folder above. Members with no
-        // copy in this folder keep their own - the run is drawn here because
-        // the run is here, and inventing an absence for one step would be worse
-        // than a merged tooltip.
-        bucket.rows.push(
-          group.location
-            ? {
-                ...row,
-                // The COPY, not the folder. `group.key` is the folder path, so
-                // a file written twice into one folder produced two draws under
-                // one key - the very collision the note above describes, hit by
-                // the axis it was written for. `relpath` is unique within a
-                // folder by definition (it is half the `model_file` key), so
-                // appending it separates them and changes nothing for the
-                // single-copy rows that are the rest of the shelf.
-                rowKey: `${row.id}:${group.key}:${group.location.relpath}`,
-                ...copyName(row, group.location),
-                locState: locationState([group.location]),
-                locations: [group.location],
-                ...(row.members ? { members: narrow(row.members, group) } : {}),
-              }
-            : { ...row, rowKey: `${row.id}:${group.key}` },
-        );
+        // `rowKey` carries the GROUP on every grouped axis: a model serving
+        // two features is drawn under both, and one key across the two draws
+        // is the collision that put `tabindex="0"` on several at once.
+        bucket.rows.push({ ...row, rowKey: `${row.id}:${group.key}` });
       }
     }
-    // A draw named for its own copy can land out of name order, because the
-    // rows were sorted on the model's name before the fan-out.
-    if (axis === "folder" && view.sortKey === "name") {
-      for (const bucket of byKey.values()) {
-        bucket.rows.sort(
-          (a, b) => compareOn(a, b, "name", view.sortDirection) || a.id - b.id,
-        );
-      }
-    }
-    return [...byKey.values()].sort(compareGroups).map((bucket) => ({
+    // Type bands keep the sidebar's order; every other axis sorts by label.
+    const order = (key) => {
+      const at = SHELF_TYPES.findIndex((type) => type.key === key);
+      return at < 0 ? SHELF_TYPES.length : at;
+    };
+    const byAxis =
+      axis === "type"
+        ? (a, b) => order(a.key) - order(b.key)
+        : compareGroups;
+    return [...byKey.values()].sort(byAxis).map((bucket) => ({
       ...bucket,
       rows: leadFavourites(bucket.rows, isFavouriteRow),
       // The header's note: how many this group leads with. Counted off the rows
@@ -1771,10 +1851,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const openSetKey = ref("");
 
   /**
-   * The Models rail (design B, a sibling of the shelf in App.vue), as far as
-   * the set grid has to see it: the shelf rows a drag from it carries, while
-   * it is in the air, and the set its *Fits* filter is on, which the set
-   * panel's *Models · N fit* button sets.
+   * The Models rail's *Models* tab, as far as the set grid has to see it: the
+   * shelf rows a drag from it carries while it is in the air, and the set its
+   * *Fits* filter is on, which the set panel's *Models · N fit* sets.
    *
    * The drag is the rail's own pointer drag, not the browser's, so the rows
    * live here for its length, and `railOver` is the `data-rail-drop` key of
@@ -1790,6 +1869,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       : `${dragged.length} models`;
   });
   const railFitsSetId = ref(null);
+  /** Bumped by *Models · N fit*: the rail turns to its Models tab. */
+  const railShelfRequest = ref(0);
 
   /**
    * The order the Models rail and every slot's ＋ picker list models in: one
@@ -1994,12 +2075,49 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     fetchRows();
   }
 
+  /**
+   * Set cards in the grid's sort order. Stable, so a tie keeps the order the
+   * cards arrived in: strongest evidence first, or the newest hand-made set.
+   * Hand-made sets sort on the same key, so under Most used a new one with
+   * no pictures yet follows the ones that have made some.
+   */
+  function sortSets(groups) {
+    const key = SET_SORT_KEYS.includes(view.setSortKey)
+      ? view.setSortKey
+      : "used";
+    const sign = view.setSortDirection === "asc" ? 1 : -1;
+    const combinations = workflowSets.value.combinations;
+    const valued = groups.map((group) => ({
+      group,
+      // Its combinations are a filter over the whole payload for a hand-made
+      // set: read only for the two keys that need them.
+      value: SET_SORT_VALUE[key](
+        group,
+        key === "used" || key === "last_used"
+          ? combinationsOfSet(group, combinations)
+          : null,
+      ),
+    }));
+    valued.sort((a, b) => {
+      if (a.value === null) return b.value === null ? 0 : 1;
+      if (b.value === null) return -1;
+      const diff =
+        typeof a.value === "string"
+          ? setNameCollator.compare(a.value, b.value)
+          : a.value - b.value;
+      return diff * sign;
+    });
+    return valued.map((entry) => entry.group);
+  }
+
   /** The evidence cards drawn: the hidden ones only while Show hidden is on. */
   const setGroupList = computed(() =>
     arrangeSets(
-      showHiddenSets.value
-        ? evidenceGroups.value
-        : evidenceGroups.value.filter((group) => !group.hidden),
+      sortSets(
+        showHiddenSets.value
+          ? evidenceGroups.value
+          : evidenceGroups.value.filter((group) => !group.hidden),
+      ),
       isFavouriteSet,
     ),
   );
@@ -2388,8 +2506,44 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   /** The hand-made cards the set grid draws, arranged for favourites. */
   const handMadeGroups = computed(() =>
-    arrangeSets(namedHandMadeGroups.value, isFavouriteSet),
+    arrangeSets(sortSets(namedHandMadeGroups.value), isFavouriteSet),
   );
+
+  /**
+   * The set grid's cards in drawn order: `lead`, the owner's own sets that
+   * come first (newest first), then `sets`, the sets from pictures by their
+   * evidence.
+   *
+   * **A set made by Edit set keeps its card's place** rather than jumping to
+   * the front as a new set: `cloned`, or `replaces` naming the card. It sorts
+   * among the sets from pictures by that card's evidence while the card is
+   * still read (a missing-base card, hidden behind its copy), else by its own,
+   * which for a set on the card's checkpoint is the same pictures.
+   */
+  const setGridCards = computed(() => {
+    const inPlace = (group) => group.set.cloned || Boolean(group.set.replaces);
+    const cards = new Map(evidenceGroups.value.map((g) => [g.key, g]));
+    const weighed = (group) => {
+      if (!group.set) return { ...group, group };
+      const card = cards.get(group.set.replaces);
+      return {
+        key: group.key,
+        pictures: card ? card.pictures : group.set.picture_count,
+        recipes: card ? card.recipes : group.set.recipes,
+        historyRuns: card ? card.historyRuns : group.set.history_runs,
+        group,
+      };
+    };
+    const placed = byEvidence(
+      [...setGroupList.value, ...handMadeGroups.value.filter(inPlace)].map(
+        weighed,
+      ),
+    ).map((entry) => entry.group);
+    return {
+      lead: handMadeGroups.value.filter((group) => !inPlace(group)),
+      sets: arrangeSets(placed, isFavouriteSet),
+    };
+  });
 
   /**
    * The hand-made sets a surface other than the grid offers or names (the
@@ -2847,6 +3001,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       members: (snapshot.members ?? []).map(memberBack),
       ...clonedBack(snapshot),
       ...(snapshot.template ? { template: snapshot.template } : {}),
+      ...(snapshot.replaces ? { replaces: snapshot.replaces } : {}),
       ...(snapshot.declined?.length ? { declined: snapshot.declined } : {}),
     });
     if (snapshot.hidden) {
@@ -2863,10 +3018,25 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Make a set, optionally with members, and open its tray.
    *
    * @param {{name?: string|null, members?: Array<Object>}} [body]
+   * @param {{hides?: string}} [options] - `hides` is the key of a set from
+   *   pictures the new set stands in for: it is hidden once the set is made,
+   *   and shown again by the receipt's Undo.
    * @returns {Promise<Object|null>} the new set.
    */
-  async function createHandMadeSet(body = {}) {
-    const created = await setWrite(() => createWorkflowSet(body), {
+  async function createHandMadeSet(body = {}, { hides = "" } = {}) {
+    const created = await setWrite(async () => {
+      // The old card goes first: a set made beside a card that will not hide
+      // reads as a duplicate, not an edit. `changeHidden` has said why.
+      if (hides && !(await changeHidden([hides], true))) {
+        throw new Error("The set could not be edited.");
+      }
+      try {
+        return await createWorkflowSet(body);
+      } catch (err) {
+        if (hides) await changeHidden([hides], false);
+        throw err;
+      }
+    }, {
       receipt: (set) =>
         `Made "${setLabel(set)}" with ${(set.members ?? []).length} ${
           (set.members ?? []).length === 1 ? "model" : "models"
@@ -2874,12 +3044,18 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // Through the delete verb, not a bare call: this receipt can still be up
       // while the set is filled, and undoing it then would take every model added
       // since with no way back. The delete's own receipt offers that way back.
-      undo: async (set) => (await deleteHandMadeSets([set])) ?? false,
+      undo: async (set) => {
+        const deleted = await deleteHandMadeSets([set]);
+        if (deleted && hides) await changeHidden([hides], false);
+        return deleted ?? false;
+      },
       verb: "create",
       failure: "The set could not be made.",
     });
     if (created) {
       clearSelection();
+      // The card it replaces is out of the grid; it must not stay picked.
+      if (hides) clearMissingSelection();
       openSetKey.value = `hand:${created.id}`;
       noteCheckpoint(created.id, created.members ?? []);
     }
@@ -2892,21 +3068,44 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Automatic until the owner changes it. The card it was made from leaves the
    * grid, since the set is on its checkpoint; deleting the set brings it back.
    *
-   * @param {Object} group - an entry of `setGroups`, never a missing-base one.
+   * **A set whose base model is off the shelf** has no checkpoint for its copy
+   * to follow, so the copy holds the members that are on the shelf, under the
+   * card's name, with its checkpoint slot empty for a replacement. The card
+   * itself is hidden rather than left beside it: it is kept, since the
+   * pictures still say what they ran with, but to the owner the set was edited.
+   *
+   * @param {Object} group - an entry of `setGroups`.
    * @returns {Promise<Object|null>} the new set.
    */
   async function cloneSetFromPictures(group) {
-    if (!group?.head || group.head.missing || cloning.has(group.key)) {
-      return null;
-    }
+    if (!group?.head || cloning.has(group.key)) return null;
     // One per card: a second press while the first is on the wire would make
     // two identical sets.
     cloning.add(group.key);
     try {
+      if (group.head.missing) {
+        return await createHandMadeSet(
+          {
+            name: group.card?.name || group.head.name,
+            seen: true,
+            replaces: group.key,
+            // Hidden members too: the copy stands in for the whole set.
+            members: (group.allModels ?? group.models ?? [])
+              .filter((model) => model.id != null)
+              .map((model) => ({
+                model_id: model.id,
+                slot: defaultSlot(model.kind),
+              })),
+          },
+          { hides: group.key },
+        );
+      }
       return await createHandMadeSet({
         cloned: true,
         // Made from the card the owner is looking at: nothing in it is new.
         seen: true,
+        // Drawn in the card's place, not first (`setGridCards`).
+        replaces: group.key,
         members: [{ model_id: group.head.id, slot: "checkpoint" }],
       });
     } finally {
@@ -3094,16 +3293,37 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }
 
   /**
-   * Shelf rows into a set, from a drop: each to `slotId`, or to the slot its
-   * kind goes to. One write and one receipt with Undo, the ＋ chooser's own.
+   * Why a hand-made set will not take these shelf rows, or "" when it will:
+   * it holds them all already, or any one it would add is on another base
+   * model. The rail's *Add to set…* fades a set by it. A model with no known
+   * base model is not a conflict.
+   *
+   * @param {Object} set
+   * @param {Array<Object>} models - shelf rows.
+   */
+  function setAddRefusal(set, models) {
+    const held = new Set((set.members ?? []).map((member) => member.sha256));
+    const fresh = models.filter((row) => !held.has(row.sha256));
+    if (models.length && !fresh.length) return "Already in it";
+    const base = handMadeBase(set);
+    const other = fresh.map(rowBaseModel).find((b) => b && b !== base);
+    return base && other ? `${base}, not ${other}` : "";
+  }
+
+  /**
+   * Shelf rows into a set, from a rail drop: each to `slotId`, or to the slot
+   * its kind goes to. One write and one receipt with Undo, the ＋ chooser's own.
    *
    * @param {Object} set
    * @param {Array<Object>} models - shelf rows.
    * @param {string} [slotId]
    */
   async function addRowsToHandMadeSet(set, models, slotId = "") {
+    // What the set already holds is not written again, so a held checkpoint in
+    // the selection cannot ask about a second one.
+    const held = new Set((set.members ?? []).map((member) => member.sha256));
     const members = models
-      .filter((row) => row.sha256)
+      .filter((row) => row.sha256 && !held.has(row.sha256))
       .map((row) => ({
         model_id: row.id,
         slot: slotId || defaultSlot(row.file_kind),
@@ -3111,28 +3331,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (!members.length) return null;
     // The card already refused this during the drag; this is the same rule
     // stated where the write happens.
-    if (railDropRefusal(set, models)) return null;
+    if (setAddRefusal(set, models)) return null;
     if (!(await confirmSecondCheckpoint(set, members))) return null;
     return addToHandMadeSet(set, members);
-  }
-
-  /**
-   * Why a hand-made set will not take these shelf rows, or "" when it will:
-   * it holds them all already, or any one it would add is on another base
-   * model. One rule for the rail's *Add to set…* menu and for a drag over a
-   * card, so a card refuses while the pointer is over it rather than after
-   * the drop. A model with no known base model is not a conflict.
-   *
-   * @param {Object} set
-   * @param {Array<Object>} models - shelf rows.
-   */
-  function railDropRefusal(set, models) {
-    const held = new Set((set.members ?? []).map((member) => member.sha256));
-    const fresh = models.filter((row) => !held.has(row.sha256));
-    if (models.length && !fresh.length) return "Already in it";
-    const base = handMadeBase(set);
-    const other = fresh.map(rowBaseModel).find((b) => b && b !== base);
-    return base && other ? `${base}, not ${other}` : "";
   }
 
   /** A new set holding these shelf rows, each in its kind's slot. */
@@ -3443,10 +3644,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /**
    * How many rows the list actually draws.
    *
-   * Higher than `visibleRows.length` under folder grouping, because a model
-   * with copies in two folders is drawn under both. The toolbar states both
-   * numbers when they differ rather than picking one and being wrong about the
-   * other.
+   * Higher than `visibleRows.length` under the feature axis, because a model
+   * serving two features is drawn under both.
    */
   const renderedCount = computed(() =>
     groups.value.reduce((total, group) => total + group.rows.length, 0),
@@ -3454,7 +3653,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   /** True when this group is collapsed on the axis currently in use. */
   function isCollapsed(key) {
-    return collapsed.value[view.groupBy]?.has(key) ?? false;
+    return collapsed.value[groupAxis.value]?.has(key) ?? false;
   }
 
   /**
@@ -3465,7 +3664,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * what was there.
    */
   function toggleGroup(key) {
-    const axis = view.groupBy;
+    const axis = groupAxis.value;
     const next = new Set(collapsed.value[axis] || []);
     if (next.has(key)) next.delete(key);
     else next.add(key);
@@ -3476,11 +3675,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /**
    * Change the grouping or the sort.
    *
-   * Never refetches: every field the five sort keys read is already on the list
+   * Never refetches: every field the sort keys read is already on the list
    * payload, so a direction flip is a resort of what is in hand.
    *
-   * @param {Object} patch - any of `groupBy`, `folderLayout`, `fold`,
-   *   `sortKey`, `sortDirection`.
+   * @param {Object} patch - any of `groupBy`, `listGroupBy`, `sortKey`,
+   *   `sortDirection`, `favouritesFirst`, `trayView`.
    */
   function setView(patch) {
     // A NEW sort key arrives at its own end unless the caller named one. Here
@@ -3496,7 +3695,25 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     ) {
       patch = { ...patch, sortDirection: defaultSortDirection(patch.sortKey) };
     }
+    if (
+      SET_SORT_KEYS.includes(patch.setSortKey) &&
+      patch.setSortKey !== view.setSortKey &&
+      patch.setSortDirection === undefined
+    ) {
+      patch = {
+        ...patch,
+        setSortDirection: SET_SORT_LABELS[patch.setSortKey].natural,
+      };
+    }
     Object.assign(view, patch);
+    // The grid IS the Sets place (#2168): a `groupBy` written without going
+    // through `setPlace` must not leave the sidebar describing another view.
+    if (view.groupBy === GRID_GROUP_BY && place.value !== "sets") {
+      place.value = "sets";
+      folderScope.value = null;
+    } else if (view.groupBy !== GRID_GROUP_BY && place.value === "sets") {
+      place.value = "all";
+    }
     rememberView();
   }
 
@@ -3581,15 +3798,434 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * selection survives: it is the user's own preference, holds no ids, and is
    * the same reasoning that exempts `useUserPrefsStore`.
    */
+  // ── The Models workspace sidebar (#2168) ────────────────────────────────
+
+  /**
+   * The set grid's picked evidence cards, by key, mirrored here by
+   * `ModelShelf` from the grid (which alone can tell a card picked from its
+   * head picked in an open tray), so the rail can describe one set.
+   */
+  const pickedCardKeys = ref([]);
+
+  /**
+   * A dialog the Models sidebar asks the shelf to open: `{what, el, at}`, with
+   * `what` one of `add-folder`, `add-file`, `manage-folders` or `set-source`,
+   * and `el` the control focus returns to. The sidebar is not the shelf's
+   * child, and the dialogs and their confirmations live in `ModelShelf`, so it
+   * asks here the way the rail asks for a verb (`requestVerb`). `at` makes a
+   * second ask for the same dialog a change the shelf's watcher sees.
+   */
+  const shellRequest = ref(null);
+  let shellAsks = 0;
+
+  /**
+   * @param {string} what - see {@link shellRequest}.
+   * @param {HTMLElement|null} [el]
+   */
+  function requestShell(what, el = null) {
+    shellRequest.value = { what, el, at: (shellAsks += 1) };
+  }
+
+  // ── Moving: cut, paste and drag (#2204) ──────────────────────────────────
+
+  /**
+   * The copies `Ctrl X` holds, as {@link movableCopies} gives them, plus
+   * `ids`, the model ids whose rows draw dimmed. Null when nothing is cut.
+   */
+  const cutCopies = shallowRef(null);
+  /** The copies being dragged off the rows, or null: what a drop target asks. */
+  const dragCopies = shallowRef(null);
+  /** The tip under the pointer while a drag is over a folder: `{x, y, text}`. */
+  const dropTip = shallowRef(null);
+  /**
+   * A move a drop or a paste asked for, `{copies, destination, at}`. The
+   * Folders tree is in the sidebar and the move (or its dialog) in
+   * `ModelShelf`, so a drop asks here the way the sidebar asks for a dialog
+   * (`requestShell`).
+   */
+  const moveRequest = shallowRef(null);
+  let moveAsks = 0;
+  /**
+   * The folder being dragged in the Folders tree, `{folderId, path, name}`, or
+   * null. Held here because a drop target cannot read `dataTransfer` data
+   * before the drop, the same reason `dragCopies` is held.
+   */
+  const dragFolder = shallowRef(null);
+  /**
+   * A folder move the tree or its menu asked for: `{source, destination, plan,
+   * at}`. `destination` and `plan` are null for *Move folder to…*, which opens
+   * the dialog on the pick step; a drop that needs confirming carries both.
+   * `ModelShelf` owns the dialog, as it owns the file move's.
+   */
+  const folderMoveRequest = shallowRef(null);
+  let folderMoveAsks = 0;
+  /**
+   * A folder removal that needs the dialog (#2207): `{source, plan, remaining,
+   * at}`, the plan being the dry run already read and `remaining` how many
+   * picked folders wait behind this one. An empty folder never gets here; it
+   * goes at once. `ModelShelf` owns the dialog.
+   */
+  const folderRemoveRequest = shallowRef(null);
+  let folderRemoveAsks = 0;
+  /** Answers the open request's promise: true once its folder is removed. */
+  let folderRemoveSettle = null;
+
+  /**
+   * The selection's copies that can move. In a folder view, only the copy in
+   * the open folder: that is the file the reader is looking at.
+   *
+   * @param {Map<number, Object>|null} foldersById - for the locked folders.
+   */
+  function movableSelection(foldersById = null) {
+    return movableCopies(
+      selectedRows.value,
+      foldersById,
+      place.value === "folder" ? folderScope.value : null,
+    );
+  }
+
+  /**
+   * `Ctrl X`: hold the selection's movable copies for a paste.
+   *
+   * @param {Map<number, Object>|null} foldersById
+   * @returns {boolean} whether anything was cut.
+   */
+  function cutSelection(foldersById = null) {
+    const copies = movableSelection(foldersById);
+    if (!copies.items.length) {
+      cutCopies.value = null;
+      return false;
+    }
+    const ids = new Set();
+    for (const row of selectedRows.value) {
+      ids.add(row.id);
+      for (const id of row.memberIds ?? []) ids.add(id);
+    }
+    cutCopies.value = { ...copies, ids };
+    return true;
+  }
+
+  function clearCut() {
+    cutCopies.value = null;
+  }
+
+  /**
+   * The cut as it stands now: only the copies still `present` at the key they
+   * were cut at, on a model that was cut. A copy moved or deleted since drops
+   * out, and so does a different file that has since taken its path.
+   *
+   * @returns {{items: Array, totalBytes: number,
+   *   bytesByFolderId: Map<number, number>}|null}
+   */
+  function liveCut() {
+    const cut = cutCopies.value;
+    if (!cut) return null;
+    const key = (loc) => `${Number(loc.folder_id)}\u0000${loc.relpath}`;
+    const wanted = new Set(cut.items.map(key));
+    const items = [];
+    const bytesByFolderId = new Map();
+    let totalBytes = 0;
+    for (const row of rows.value) {
+      if (!cut.ids.has(row.id)) continue;
+      for (const loc of row.locations ?? []) {
+        if (loc?.state !== "present" || !wanted.delete(key(loc))) continue;
+        const bytes = Number(row.file_size) || 0;
+        const folderId = Number(loc.folder_id);
+        items.push({ folder_id: loc.folder_id, relpath: loc.relpath });
+        bytesByFolderId.set(folderId, (bytesByFolderId.get(folderId) || 0) + bytes);
+        totalBytes += bytes;
+      }
+    }
+    return { items, totalBytes, bytesByFolderId };
+  }
+
+  /** Whether a model's row draws as cut. */
+  function isCut(id) {
+    return cutCopies.value?.ids.has(id) ?? false;
+  }
+
+  /**
+   * @param {Object} copies - from {@link movableCopies}.
+   * @param {{folderId: number, path: string}} destination
+   * @param {boolean} [fromCut] - a paste: the cut is spent once it starts.
+   */
+  function requestMove(copies, destination, fromCut = false) {
+    moveRequest.value = { copies, destination, fromCut, at: (moveAsks += 1) };
+  }
+
+  /**
+   * Paste the cut into a folder: a move to it, as a drop asks for. One rule
+   * for every way in - `Ctrl V` and *Paste* in the row menu (the open folder),
+   * and *Paste here* or `Ctrl V` on a folder row - so each refuses the same
+   * way: a locked folder, a cut that has since moved or gone, and a folder
+   * every cut file is already in.
+   *
+   * @param {{folderId: number, path?: string, locked?: boolean}} destination
+   * @returns {boolean} whether the dialog was asked for.
+   */
+  function pasteCut(destination) {
+    const notices = useNoticeStore();
+    if (destination.locked) {
+      notices.push({
+        level: "info",
+        text: "That folder is locked, so nothing can be moved into it.",
+      });
+      return false;
+    }
+    const copies = liveCut();
+    if (!copies?.items.length) {
+      clearCut();
+      notices.push({
+        level: "info",
+        text: "What you cut has moved or gone since, so there is nothing to paste.",
+      });
+      return false;
+    }
+    const target = {
+      folderId: Number(destination.folderId),
+      path: destination.path ?? "",
+    };
+    if (allAlreadyIn(copies.items, target)) {
+      notices.push({
+        level: "info",
+        text: "What you cut is already in that folder.",
+      });
+      return false;
+    }
+    requestMove(copies, target, true);
+    return true;
+  }
+
+  /**
+   * @param {{folderId: number, path: string, name: string}} source
+   * @param {{folderId: number, path: string}|null} [destination]
+   * @param {Object|null} [plan] - the dry run's facts, when already read.
+   */
+  function requestFolderMove(source, destination = null, plan = null) {
+    folderMoveRequest.value = {
+      source,
+      destination,
+      plan,
+      at: (folderMoveAsks += 1),
+    };
+  }
+
+  /**
+   * @param {{folderId: number, path: string, name: string}} source
+   * @param {Object} plan - the removal's dry run.
+   * @param {{remaining?: number}} [options]
+   * @returns {Promise<boolean>} true once the dialog removed the folder, false
+   *   when it closed without (or was replaced or reset before it did).
+   */
+  function requestFolderRemove(source, plan, { remaining = 0 } = {}) {
+    settleFolderRemove(false);
+    return new Promise((resolve) => {
+      folderRemoveSettle = resolve;
+      folderRemoveRequest.value = {
+        source,
+        plan,
+        remaining,
+        at: (folderRemoveAsks += 1),
+      };
+    });
+  }
+
+  /** The removal dialog closed: `removed` is whether its folder went. */
+  function settleFolderRemove(removed) {
+    const settle = folderRemoveSettle;
+    folderRemoveSettle = null;
+    settle?.(Boolean(removed));
+  }
+
+  /** True once the sets are read, so "in no set" is an answer, not a guess. */
+  const setsKnown = computed(() => setsLoaded.value && !setsError.value);
+
+  /**
+   * Every set each model is in: model id → `[{key, name, hidden}]`.
+   *
+   * Built from the whole payload, not from what `Show` leaves on the grid,
+   * because the list's Sets column, *In no set yet* and the rail's *In sets*
+   * are facts about the model rather than about a checkbox. One of the
+   * owner's own sets counts even while hidden in this library: hiding is a
+   * view choice, and a model in a hidden set of theirs is not "in no set
+   * yet". An evidence card the owner hid is not a set here, nor is a
+   * combination one of their own sets already covers (that set stands for it).
+   */
+  const setMembership = computed(() => {
+    const byId = new Map();
+    const add = (id, entry) => {
+      if (id == null) return;
+      const list = byId.get(id);
+      if (!list) byId.set(id, [entry]);
+      else if (!list.some((one) => one.key === entry.key)) list.push(entry);
+    };
+    const evidence = workflowSets.value.combinations.filter(
+      (combination) =>
+        !combination.covered_by?.length &&
+        !isHiddenHere(headModel(combination)?.id),
+    );
+    for (const group of setGroups(evidence)) {
+      if (hiddenSetKeys.value.has(group.key)) continue;
+      const entry = { key: group.key, name: headName(group.head) };
+      for (const model of group.models ?? []) add(model.id, entry);
+    }
+    for (const set of handMadeSets.value) {
+      const key = `hand:${set.id}`;
+      const entry = {
+        key,
+        name: handMadeName(set),
+        hidden: hiddenSetKeys.value.has(key),
+      };
+      for (const member of set.members ?? []) {
+        if (member.on_shelf) add(member.id, entry);
+      }
+    }
+    return byId;
+  });
+
+  /** The cards the grid draws, by the membership above: the Sets place's count. */
+  const setCardCount = computed(
+    () =>
+      new Set(
+        [...setMembership.value.values()]
+          .flat()
+          .filter((entry) => !entry.hidden)
+          .map((entry) => entry.key),
+      ).size,
+  );
+
+  /** Added within {@link RECENT_DAYS}, by when a scan first saw the file. */
+  function isRecentRow(row) {
+    const at = Date.parse(row?.added_at ?? "");
+    return Number.isFinite(at) && Date.now() - at <= RECENT_DAYS * 86400000;
+  }
+
+  /**
+   * In the open folder: a copy directly in it, or anywhere under a locked one.
+   * A relpath is stored with the host's separator, so it is read as POSIX.
+   *
+   * A model whose file is present somewhere counts only where it is present.
+   * The copy a moved file left behind stays on record as `missing` (detection
+   * proposes, it never deletes), and listing the model by that record put it
+   * in a folder it had left. A model with no present copy still lists where
+   * its copies were, so a missing or offline one is not lost from view.
+   */
+  function inFolderScope(row) {
+    const scope = folderScope.value;
+    if (scope == null) return true;
+    const locations = row.locations ?? [];
+    const present = locations.some((loc) => loc?.state === "present");
+    return locations.some(
+      (loc) =>
+        (!present || loc?.state === "present") && inFolderScopeOf(loc, scope),
+    );
+  }
+
+  /**
+   * The open place's own narrowing, per file. Favourites is not here: a run is
+   * a favourite by its cover, so `visibleRows` asks it of the folded row.
+   * *In no set yet* lists nothing until the sets are read, rather than
+   * calling every model loose.
+   */
+  function inPlace(row) {
+    if (place.value === "recent") return isRecentRow(row);
+    if (place.value === "loose") {
+      return setsKnown.value && !setMembership.value.has(row.id);
+    }
+    return true;
+  }
+
+  /** Is this row in the sidebar's view: place and folder. */
+  function inSidebarView(row) {
+    return inFolderScope(row) && inPlace(row);
+  }
+
+  /** Rows matching `keep`, folded as the list folds them. */
+  function scopedCount(keep = () => true) {
+    return collapseStacks(offeredRows.value.filter((row) => keep(row)));
+  }
+
+  /**
+   * The sidebar's place counts, over the whole shelf: a folder is a place of
+   * its own now, not a scope over the others. Sets counts the cards. `loose`
+   * is null until the sets are read.
+   */
+  const placeCounts = computed(() => {
+    const all = scopedCount();
+    return {
+      sets: setCardCount.value,
+      all: all.length,
+      favourites: all.filter(isFavouriteRow).length,
+      recent: scopedCount(isRecentRow).length,
+      loose: setsKnown.value
+        ? scopedCount((row) => !setMembership.value.has(row.id)).length
+        : null,
+    };
+  });
+
+  /** Moving through the sidebar starts a new look: nothing stays selected. */
+  function clearEverySelection() {
+    clearSelection();
+    clearSetSelection();
+    clearMissingSelection();
+  }
+
+  /**
+   * Open a place. Sets takes the grid; every other place takes the list under
+   * its own remembered grouping. A place clears the open folder, as the
+   * sidebar lights one row at a time: picking All models is how a folder is
+   * left.
+   *
+   * @param {string} next - one of {@link SHELF_PLACES}, bar `folder`, which
+   *   {@link setFolderScope} opens.
+   */
+  function setPlace(next) {
+    if (!SHELF_PLACES.includes(next) || next === "folder") return;
+    place.value = next;
+    folderScope.value = null;
+    clearEverySelection();
+    const axis = next === "sets" ? GRID_GROUP_BY : view.listGroupBy;
+    if (view.groupBy !== axis) setView({ groupBy: axis });
+  }
+
+  /**
+   * Open one folder of the Folders tree, or leave it for All models with null.
+   *
+   * @param {{folderId: number, path?: string, locked?: boolean}|null} scope
+   */
+  function setFolderScope(scope) {
+    if (scope == null) {
+      if (place.value === "folder") setPlace("all");
+      return;
+    }
+    const next = {
+      folderId: Number(scope.folderId),
+      path: scope.path ?? "",
+      locked: Boolean(scope.locked),
+    };
+    const open = folderScope.value;
+    if (
+      place.value === "folder" &&
+      open?.folderId === next.folderId &&
+      open?.path === next.path
+    ) {
+      return;
+    }
+    place.value = "folder";
+    folderScope.value = next;
+    clearEverySelection();
+    if (view.groupBy !== view.listGroupBy) setView({ groupBy: view.listGroupBy });
+  }
+
   // ── Selection and the verbs (F3) ────────────────────────────────────────
 
   /**
    * The models the verbs will act on, by hub `model.id`.
    *
-   * By MODEL, not by rendered row. Under folder grouping one model is drawn
-   * once per folder holding a copy of it, and the verbs write the model: a
-   * per-row selection would let the same file be "half selected" and would ask
-   * the reader to understand a distinction the data does not have.
+   * By MODEL, not by rendered row. Under the feature axis one model can be
+   * drawn under two headers, and the verbs write the model: a per-row selection
+   * would let the same model be "half selected" and would ask the reader to
+   * understand a distinction the data does not have.
    *
    * Not persisted, and dropped by a session reset with the rows: a selection is
    * a gesture made against a list that is on screen, not a preference.
@@ -3597,34 +4233,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const selectedIds = ref(new Set());
 
   /**
-   * The Models rail's selection, by hub `model.id`, while it has one; else
-   * null.
-   *
-   * The rail is a third screen: its rows are in front of the reader too, so
-   * the verbs may act on them. There is one model selection at a time, as in a
-   * two-pane file manager: the rail taking it drops the shelf's, and a model
-   * picked on the shelf drops this one, which the rail watches for.
-   * `clearSelection` leaves it alone: clicking a set card clears the shelf's
-   * models, and the reader who selected here to add to that set still means
-   * them. The shelf's own keys never act on it (`ownSelection` in
-   * `ModelShelf.vue`); the rail answers its own.
-   */
-  const railSelection = ref(null);
-
-  /** The rail's selection changed: `ids` is all of it, empty for none. */
-  function setRailSelection(ids) {
-    // None is not a claim on the selection: the shelf keeps its own.
-    if (!ids?.length) {
-      railSelection.value = null;
-      return;
-    }
-    clearSelection();
-    railSelection.value = new Set(ids);
-  }
-
-  /**
    * A shelf verb asked for from outside the shelf's own bar, as `{verb,
-   * args}`. The rail's menu and keys ask; `ModelShelf.vue` owns every
+   * args}`. The Models rail asks (its Rename pencil); `ModelShelf.vue` owns every
    * confirmation and runs it against the selection, as it does for its bar.
    */
   const verbRequest = shallowRef(null);
@@ -3661,12 +4271,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * empty selection and every verb a phantom to gate on.
    */
   const selectedRows = computed(() => {
-    // The rail lists every file by itself, so a step of a run stands alone
-    // there: the "one file picked out of a run" gesture, not the run.
-    const inRail = railSelection.value;
-    if (inRail) {
-      return rows.value.filter((row) => inRail.has(row.id)).map(displayRow);
-    }
     const chosen = selectedIds.value;
     const out = [];
     for (const row of screenRows.value) {
@@ -3942,11 +4546,21 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     // no undo, and (the bar being gated on `selectedRows`) nothing on screen to
     // do it deliberately. The other caller, the pill's *Select all shown*, never
     // had the guard at all. One refusal here answers for both.
+    selectRows(drawn);
+  }
+
+  /**
+   * Select exactly these rows, a stack's members with it, in place of the
+   * selection. Nothing to select leaves the selection alone.
+   *
+   * @param {Array<Object>} drawn - rows as the list draws them.
+   */
+  function selectRows(drawn) {
     if (!drawn.length) return;
     selectedIds.value = new Set(
       drawn.flatMap((row) => row.memberIds ?? [row.id]),
     );
-    anchorId.value = drawn[0]?.id ?? null;
+    anchorId.value = drawn[0].id;
     anchorOccurrence.value = anchorId.value;
   }
 
@@ -3955,16 +4569,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     anchorId.value = null;
     anchorOccurrence.value = null;
   }
-
-  // Every path that selects on the shelf, in one place. Sync, because a shelf
-  // gesture reads `selectedRows` in the same breath as it selects (a row drag).
-  watch(
-    selectedIds,
-    (ids) => {
-      if (ids.size) railSelection.value = null;
-    },
-    { flush: "sync" },
-  );
 
   // Sets are selected on the set grid only; leaving it must not leave a
   // selection behind that Delete could act on unseen.
@@ -4089,6 +4693,51 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     }
   }
 
+  /** True while a Civitai lookup is in flight; the verb waits for it. */
+  const lookupBusy = ref(false);
+
+  /**
+   * Ask Civitai for the base models of *ids*, then say what it filled.
+   *
+   * The caller owns the confirmation: this is the one shelf call that leaves
+   * the machine, and the prompt is what says so.
+   *
+   * @param {number[]} ids - the eligible models (`lookupEligible`).
+   * @returns {Promise<boolean>} true when the call was made at all.
+   */
+  async function lookupBaseModels(ids) {
+    const notices = useNoticeStore();
+    // One at a time: a second press would queue up to 100 more requests.
+    if (!ids.length || lookupBusy.value) return false;
+    lookupBusy.value = true;
+    notices.push({
+      level: "info",
+      text: `Looking up ${ids.length === 1 ? "1 base model" : `${ids.length} base models`} on Civitai…`,
+    });
+    try {
+      const body = await lookupBaseModelsOnline(ids);
+      if (body?.filled?.length) invalidateBaseModelCompletions();
+      await fetchRows();
+      notices.push({
+        level: body?.not_asked?.length
+          ? "warning"
+          : body?.filled?.length
+            ? "success"
+            : "info",
+        text: lookupReceipt(body),
+      });
+      return true;
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || "Could not look those base models up.",
+      });
+      return false;
+    } finally {
+      lookupBusy.value = false;
+    }
+  }
+
   /**
    * Delete the selection from disk, then say what went and what did not.
    *
@@ -4115,18 +4764,33 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       clearSelection();
       await fetchRows();
       const gone = body?.deleted?.length ?? 0;
-      notices.push({
-        level: gone ? "success" : "info",
-        text: deleteReceipt(
-          gone,
-          body?.refused ?? [],
-          Boolean(body?.permanent),
-          // The server's word for its own trash, because the server is the
-          // machine the files were on. `trashName()` is the browser's guess and
-          // stands in only for an older backend.
-          body?.trash_name || trashName(),
-          body?.files_removed ?? 0,
-        ),
+      const text = deleteReceipt(
+        gone,
+        body?.refused ?? [],
+        Boolean(body?.permanent),
+        // The server's word for its own trash, because the server is the
+        // machine the files were on. `trashName()` is the browser's guess and
+        // stands in only for an older backend.
+        body?.trash_name || trashName(),
+        body?.files_removed ?? 0,
+      );
+      const token = body?.undo_token;
+      if (!token) {
+        notices.push({ level: gone ? "success" : "info", text });
+        return true;
+      }
+      // A trash delete: Undo takes the files back out of the trash, and Redo
+      // deletes what came back, which kept its ids.
+      let restored = [];
+      useOperationStore().showLocalReceipt({
+        summary: text,
+        icon: "mdi-trash-can-outline",
+        destructive: true,
+        undo: async () => {
+          restored = await undoDelete(token);
+          return restored.length > 0;
+        },
+        redo: () => deleteSelected({ ids: restored }),
       });
       return true;
     } catch (err) {
@@ -4135,6 +4799,41 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         text: errorDetail(err) || "Could not delete those models.",
       });
       return false;
+    }
+  }
+
+  /**
+   * Undo a trash delete, re-read the shelf, and say what stayed deleted.
+   *
+   * @param {string} token - the delete's `undo_token`.
+   * @returns {Promise<number[]>} the ids that came back.
+   */
+  async function undoDelete(token) {
+    const notices = useNoticeStore();
+    try {
+      const body = await undoDeleteModels(token);
+      await fetchRows();
+      const kept = body?.refused?.length ?? 0;
+      const partly = body?.partly_restored?.length ?? 0;
+      if (partly) {
+        notices.push({
+          level: "info",
+          text: `${modelCount(partly)} came back without some of ${partly === 1 ? "its" : "their"} copies; the shelf shows those as missing after its next scan.`,
+        });
+      }
+      if (kept) {
+        notices.push({
+          level: body?.restored?.length ? "info" : "error",
+          text: `${modelCount(kept)} could not be put back: ${kept === 1 ? "its files are" : "their files are"} no longer in the ${trashName()}, or something is in their place.`,
+        });
+      }
+      return body?.restored ?? [];
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || "That delete could not be undone.",
+      });
+      return [];
     }
   }
 
@@ -4384,9 +5083,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * diff against the last fetch, and against no fetch every row would be new.
    *
    * @param {number[]} [modelIds] - the `model.id`s that arrived.
+   * @param {{fromDownloads?: boolean}} [options] - true when the Downloads
+   *   intake moved them, so they keep their badge until the shelf is left.
    */
-  function onModelsArrived(modelIds = []) {
+  function onModelsArrived(modelIds = [], { fromDownloads = false } = {}) {
     unseenArrivals.value = true;
+    if (fromDownloads && modelIds.length) {
+      arrivedIds.value = new Set([...arrivedIds.value, ...modelIds]);
+    }
     if (loaded.value) fetchRows({ markNew: true });
     if (modelIds.length) announceReadyTemplates(modelIds);
   }
@@ -4536,10 +5240,18 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     epoch += 1;
     rows.value = [];
     newIds.value = new Set();
+    arrivedIds.value = new Set();
     unseenArrivals.value = false;
     selectedIds.value = new Set();
-    railSelection.value = null;
     verbRequest.value = null;
+    cutCopies.value = null;
+    dragCopies.value = null;
+    dropTip.value = null;
+    moveRequest.value = null;
+    dragFolder.value = null;
+    folderMoveRequest.value = null;
+    settleFolderRemove(false);
+    folderRemoveRequest.value = null;
     anchorId.value = null;
     anchorOccurrence.value = null;
     loaded.value = false;
@@ -4613,8 +5325,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     collapsed,
     selectedIds,
     selectedRows,
-    railSelection,
-    setRailSelection,
     verbRequest,
     requestVerb,
     anchorId,
@@ -4623,10 +5333,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     toggleSelected,
     selectFromClick,
     selectVisible,
+    selectRows,
     clearSelection,
     editSelected,
     editModelIds,
     forgetSelected,
+    lookupBaseModels,
+    lookupBusy,
     deleteSelected,
     mergeCopies,
     setIconOnSelected,
@@ -4640,6 +5353,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     error,
     fetchRows,
     unseenArrivals,
+    arrivedIds,
     onModelsArrived,
     workflowTemplates,
     templatesLoading,
@@ -4667,6 +5381,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsLoaded,
     loadWorkflowSets,
     setRailMounted,
+    railRows,
+    railDrag,
+    railOver,
+    railDragWhat,
+    railFitsSetId,
+    railShelfRequest,
+    addRowsToHandMadeSet,
+    createSetFromRows,
     shownModelIds,
     visibleCombinations,
     setGroups: setGroupList,
@@ -4674,7 +5396,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     showHiddenSets,
     hiddenModelIds,
     offeredRows,
-    railRows,
     toggleHiddenModels,
     hideSets,
     unhideSets,
@@ -4686,6 +5407,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     toggleSet,
     handMadeSets,
     handMadeGroups,
+    setGridCards,
     shownHandMadeSets,
     selectedSetIds,
     selectedMissingKeys,
@@ -4704,15 +5426,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     renameHandMadeSet,
     deleteHandMadeSets,
     addToHandMadeSet,
-    addRowsToHandMadeSet,
-    railDropRefusal,
-    createSetFromRows,
+    setAddRefusal,
     cloneSetFromPictures,
     confirmSecondCheckpoint,
-    railDrag,
-    railOver,
-    railDragWhat,
-    railFitsSetId,
     pickOrder,
     setPickOrder,
     announceAdded,
@@ -4729,11 +5445,40 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     activeCount,
     nothingSelected,
     isCollapsed,
+    groupAxis,
     toggleGroup,
     resetFilters,
     resetForSession,
     setFilters,
     setView,
     setColumnWidth,
+    place,
+    folderScope,
+    setPlace,
+    setFolderScope,
+    placeCounts,
+    setMembership,
+    setsKnown,
+    isRecentRow,
+    pickedCardKeys,
+    shellRequest,
+    requestShell,
+    cutCopies,
+    dragCopies,
+    dropTip,
+    moveRequest,
+    dragFolder,
+    folderMoveRequest,
+    requestFolderMove,
+    folderRemoveRequest,
+    requestFolderRemove,
+    settleFolderRemove,
+    movableSelection,
+    cutSelection,
+    clearCut,
+    liveCut,
+    isCut,
+    requestMove,
+    pasteCut,
   };
 });

@@ -30,6 +30,7 @@
 import { computed, ref } from "vue";
 
 import { useActionReceipt } from "../../composables/useActionReceipt";
+import KeyCap from "./KeyCap.vue";
 import { useBottomAnchor } from "../../composables/useBottomAnchor";
 import AppBarButton from "./AppBarButton.vue";
 
@@ -47,17 +48,11 @@ const props = defineProps({
    * none, so unmounting this would silence every undo announcement made there.
    */
   pillHidden: { type: Boolean, default: false },
-  /**
-   * Show only receipts raised by `showLocalReceipt`. A screen that is not in
-   * the operation log (the model shelf) narrates its own writes here, and a
-   * library action's Undo would revert something it cannot show.
-   */
-  localOnly: { type: Boolean, default: false },
 });
 
 // The receipt contract - wording, glyphs, keycaps, the drain window, the
 // hover/focus/hidden-tab pause and the focus-preserving action - is shared with
-// the lightbox's own narration (`OverlayActionReceipt.vue`). This surface owns
+// the lightbox's own narration (`LightboxActionReceipt.vue`). This surface owns
 // the single app-wide live region; the lightbox's does not announce.
 const {
   store,
@@ -77,11 +72,6 @@ const {
   resume,
   takeAction,
 } = useActionReceipt();
-
-// A receipt this surface does not draw is not announced from it either.
-const spoken = computed(() =>
-  props.localOnly && !receipt.value?.local ? "" : announcement.value,
-);
 
 /** The button's accessible name: the verb alone does not say what it undoes. */
 const actionAccessibleName = computed(
@@ -133,11 +123,11 @@ function onUndo(event) {
       aria-live="polite"
       aria-atomic="true"
       data-testid="action-receipt-announcement"
-      >{{ spoken }}</span
+      >{{ announcement }}</span
     >
     <transition name="receipt">
       <div
-        v-if="receipt && !pillHidden && (!localOnly || receipt.local)"
+        v-if="receipt && !pillHidden"
         :key="pillKey"
         class="receipt"
         :class="{ 'receipt--undone': undone, 'receipt--blocked': blocked }"
@@ -165,7 +155,7 @@ function onUndo(event) {
             >{{ actionLabel }}</AppBarButton
           >
           <span class="kbdhint" aria-hidden="true">
-            <kbd v-for="key in keyHint" :key="key">{{ key }}</kbd>
+            <KeyCap v-for="key in keyHint" :key="key" :k="key" />
           </span>
         </template>
         <span class="r-progress run" aria-hidden="true"></span>
@@ -269,10 +259,10 @@ function onUndo(event) {
   background: transparent;
 }
 
+/* The chord's gap is the global `kbd + kbd` rule's. */
 .kbdhint {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
   flex-shrink: 0;
 }
 

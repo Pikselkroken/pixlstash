@@ -160,12 +160,13 @@ below.
 
 ### The system, not a swatch list
 - **Neutrals are warm.** Text is a warm near-black (`#23211d`), never `#000`.
-  Backgrounds are a warm near-white (`#faf9f7`), never cold grey. Borders and dividers
-  are warm low-contrast lines (`--v-theme-border`, `--v-theme-divider`).
-- **Elevation inverts between themes.** In **light**, the content canvas is the
-  *brightest* surface and chrome (sidebar, toolbar, panels) recedes to a warm tinted
-  grey; raised controls (cards, inputs) go pure white. In **dark**, chrome is a raised
-  dark surface and elevation reads by *lightness*, not heavy shadow.
+  Light backgrounds are a warm light-silver ramp (chrome `#d9d6d0`, canvas `#e7e5e1`,
+  surface `#f0efec`, fields `#f5f4f2`), never cold grey and never paper-white. Borders
+  and dividers are warm lines (`--v-theme-border`, `--v-theme-divider`).
+- **Elevation inverts between themes.** In **light**, chrome (sidebar, toolbar) is the
+  darkest neutral, the canvas one step lighter, and floating things (menus, dialogs,
+  panels) and fields lighter again. In **dark**, chrome is a raised dark surface and
+  elevation reads by *lightness*, not heavy shadow.
 - **One accent.** Amber: `#9e6727` (light) / `#c47a1e` (dark). It marks the primary
   action and key state. Spend it sparingly.
 
@@ -186,6 +187,7 @@ below.
 | The same four, **inside a `dark-surface`** | `dark-surface-success` / `-error` / `-warning` / `-info` |
 | `primary` as a foreground **inside a `dark-surface`** | `dark-surface-primary` |
 | Hover / selection wash | `--hover-wash` / `--active-wash` (in `style.css`) |
+| A row that is locked in place (cannot be moved) | `--lock-hatch` (in `style.css`): a diagonal hatch, never a hue |
 | Shadow color (for elevation) | `shadow` |
 
 Status meaning never rides on color alone — pair it with an icon or text. The many
@@ -478,6 +480,15 @@ Findings to honour:
   drive a ghost, so it carries a 1px `outline` at 4.24 / 5.67 rather than relying on a
   colour step. A meter's own frame is a legitimate substitute for a fill boundary; a
   line *between two fills* is not.
+- **The drive meter's empty part is `--drive-meter-track`, an ink tint, not
+  `--track-trough`.** The trough is a black tint made as the well of the segmented
+  track, which draws its edge with a ring; under the 3px drive meter it measured 1.17:1 (dark) / 1.25:1 (light) off the
+  chrome and the free space vanished. The ink at 40% lightens in dark and darkens in
+  light, and clears 2.3:1 against both the chrome and the `surface-<status>` fill;
+  3:1 on both sides does not fit. Gated by `frontend/src/utils/contrastAudit.js`.
+  It is measured for the status fills only. In dark the track is about as light as the
+  olive and teal fills (roughly 1.2:1 apart), so a meter filled with those needs its
+  own measurement, not this token.
 - **The `on-<status>` values, on their solid fill, identical in both themes:**
   `on-error` #f7f1ea 5.40 · `on-warning` #1b1b1b 6.99 · `on-success` #f7f1ea 4.57 ·
   `on-info` #f7f1ea 6.68.
@@ -525,11 +536,11 @@ grid* can be tight (it is the user's work), the *controls around it* stay calm.
 **Alignment is most of what reads as polished.** Things that belong to the same row
 share a baseline; columns of controls share a left edge. The shell lines the sidebar
 header, toolbar, and stats header to one horizontal band and you respect that band
-everywhere. The band height is `--bar-height` (48px) in the browser; the desktop
-Electron shell compresses the top strip (title bar `--titlebar-h` 34px, sidebar
-header 36px) so the custom title bar and controls fit — see the overrides in
-`style.css`. (Heads-up: the per-component action-bar heights still drift — 34 / 36 /
-40 / 48 / 56px across `ImageGrid`, `ImageOverlay`, and the selection bar. The **three
+everywhere. At desktop width the band is `--toolbar-height` (36px) in both shells,
+and the sidebar's header slot takes it through `--sidebar-slot-h`, so the
+sidebar's top rule continues the toolbar's. The title bar above the band is `--titlebar-h` (40px) in both
+shells: the switch's 32px track with 4px above and below (#2158). (Heads-up: the per-component action-bar heights still drift — 34 / 36 /
+40 / 48 / 56px across `ImageGrid`, `Lightbox`, and the selection bar. The **three
 view toolbars are the one settled group**: the grid, Duplicates and model-shelf bars
 all sit at 36px, pinned to each other by a guardrail rather than to this token
 (`toolbar-responsive-decisions.md` Amendment #5) — so no view toolbar honours
@@ -584,11 +595,18 @@ the only way to make rank legible was a bigger step. Three levels of that pushed
 entity names to 91px in a 240px rail. Two ramp steps of size between project and
 caption is what makes a 16px indent enough.
 
-**Rank is size, weight and tracking. It is never opacity.** A structural label
-must not be dimmer than the content it heads. Dimming the section captions to 0.7
-made them the quietest thing in the column, sitting between a full-strength
-project above and full-strength entity names below, which reads as a hole rather
-than a hierarchy. Chrome recedes by being *smaller*, not by fading.
+**Rows rank by size, weight and tracking, never by opacity. A sidebar section
+head is the exception: it is the section label, at the section label's 0.7.**
+Dimming a caption alone once made it the quietest thing in the column, sitting
+between a full-strength project above and full-strength entity names below, which
+read as a hole rather than a hierarchy. At full ink, though, an 11px caps head
+sits at the same brightness as the 14px rows beside it, and the eye reads it as
+one more row. So the head takes `.section-label`'s ink (`--opacity-text-secondary`,
+4.95:1 light / 6.64:1 dark on the sidebar) *and* space: `--space-5` above the
+label, `--space-2` below, so it attaches to the group it names rather than
+floating between two (design "Quiet label", 2026-11). Space is what keeps the
+dimmed head from reading as a hole. Do not dim it further, and do not take the
+space away.
 
 **A row's caret takes its row's colour and never its own opacity.** When only the
 caption was dimmed, its caret was not, so the caret outshone the label it
@@ -623,6 +641,8 @@ label at `--opacity-disabled`. The dimmed label is what explains the blank slot.
 Keep the slot reserved so the caption does not shift when the first child
 arrives, and **keep the group's own add action at full strength and operable**,
 because it is the only way out of the empty state.
+
+**Child rows (#2124).** The sidebar's child sets are the one tree whose levels differ in size, so three values carry "belongs to" together, each too weak alone in a column of faces: the indent (a child's caret slot and then its mark hang just past the centre of its parent's mark, so a child's caret sits where its parent's line meets it: under the parent's name, as the general rule above has it, cost a whole parent mark per level and was ruled too deep here), the smaller mark (0.6 of the parent's), and a guide line (`--tree-guide`, on-surface at 30%) that drops from the parent's mark, ticks into each child and ends in an elbow (`--radius-sm`) at the last. An open parent and its children sit on one group (`--group-surface`, on-surface at 4.5%, with a `--group-border` of 10% and `--radius-md`), with no rule between the parent and its children: one crossed the parent's line where it leaves the mark. Closed rows get no separators: the open group's box is the grouping. Rows inside a group take its inset off through `--row-pad`, never a per-type `padding-left`, so every column outside it continues through it. The guide is decorative, not a meaningful graphical object: the indent and the size still say it with the line gone, so it need not reach 3:1. Every size follows the thumbnail-size setting in one proportion; nothing in the tree has a fixed pixel size of its own.
 
 **Scoped CSS does not cross a component boundary.** A row rendered by a child
 component gets none of the parent's scoped rules, so a recursive tree component must
@@ -712,8 +732,10 @@ one weight, one grid. Mixing icon sets is an instant tell of an unloved UI.
   3. **An icon-only control 32px (`--control-h-bar`) or taller takes a 24px glyph**:
      MDI is drawn on a 24-unit grid, so 24 is the only size that renders as drawn.
      Below 32px the control keeps its own smaller glyph. The discriminator is the
-     control's height, not the icon's. The one exception: the dialog close button
-     stays 20px beside its 18px title.
+     control's height, not the icon's. Two exceptions: the dialog close button
+     stays 20px beside its 18px title, and the docked sidebar rail's 40x36
+     buttons take 18px glyphs, as the design draws them (24px read as bold in
+     a 56px rail).
 
   13px and under is an inline mark (a lock inside a label) and follows the text it
   sits in; above 28px is display art and is exempt. Align the icon's optical centre
@@ -732,7 +754,7 @@ The photos are the hero. The chrome frames them; it does not compete.
 - **Consistent aspect handling.** Tiles share a radius (`--radius-md`) and a restrained
   border. No per-tile bespoke framing.
 - **States are designed, not defaulted.** Every tile has a real hover, a real selected
-  state (`--active-wash` / `--active-bar`), and a focus state (the ink ring, §11). The
+  state (`--active-wash` / `--active-bar`), and a focus state (the blue glowing border, §11). The
   selected state is how bulk work feels confident; make it unambiguous.
 - **Empty, loading, error.** Use the existing `Empty.png` / `EmptyTrash.png` art for
   empty states with a `--text-2xl` Tiny5 headline and a `--text-sm` line of guidance.
@@ -771,7 +793,7 @@ These already exist hand-rolled; the tokens above consolidate them. Reuse the
 pattern, don't re-roll the numbers.
 
 - **Attention pulse** — a soft, looping "look here" on a live indicator. Reference:
-  `tb-stats-pulse` (Toolbar stats icon), `tm-dot-pulse` (stats). ~1.4s
+  `tm-dot-pulse` (task rows). ~1.4s
   `ease-in-out infinite`, scale + opacity. Looping cadence is contextual, so it
   lives with the pattern, not as a raw duration token.
 - **Landing pulse (one-shot)** — a single glow-and-settle when something new
@@ -791,20 +813,27 @@ pattern, don't re-roll the numbers.
 
 These get skipped and that is exactly why a UI looks cheap.
 
-- **Focus is ink** (2026-09-13). Every focusable element shows one ring, drawn by
-  the single `:focus-visible` rule in `style.css`: a `--focus-width` (2px) outline in
-  `--focus-stroke` with a `--focus-offset` (2px) gap. `--focus-stroke` is its own
-  per-theme token and resolves to the text colour in both themes. The gap is the
-  point: the ring only ever meets the ground, never the fill it surrounds, so it never
-  has to contrast with amber or olive. Worst case 10.24:1 dark and 13.74:1 light, on
-  `panel`. The amber ring it replaces measured 1.27:1 against the Save button and read
-  as a second mark on an olive selection. **A component does not paint its own
-  focus colour.** A control that cannot take a gap (a 32px menu row flush in its menu)
-  uses `--focus-ring-inset`. A Vuetify field, whose label rides on its top border,
-  keeps `--focus-glow`, now in the same ink. Never remove an outline without replacing
-  it; a focus ring is the one place in this system where "subtle" is a defect.
-  **There is exactly one focus language.** The theme's legacy `focus` key and any
-  `rgb(var(--v-theme-accent))` ring are drift.
+- **Focus is one glowing border** (2026-10-28, replacing the 2026-09-13 ink ring that
+  sat 2px outside the box, where overflow containers clipped it). Every focusable
+  element shows one ring, drawn by the single `:focus-visible` rule in `style.css`: a
+  `--focus-width` (2px) outline in `--focus-stroke` drawn **inward** from the control's
+  edge (`--focus-offset` is minus the width), so it covers the 1px border where there is
+  one, follows the corners and moves nothing. Around it `--focus-glow`, the same blue
+  blurred 8px outward (45% in dark, 35% in light), is the only part that leaves the
+  box, so a clipping container cuts nothing but the glow. It fades in over `--dur-1`.
+  `--focus-stroke` is the theme's `focus-ring`, **one blue on every ground**, the
+  lightbox and the on-dark contexts included: `#3880eb` in dark (3.85 on `surface`, 4.3
+  on `background`), and the same hue deeper, `#3273d2`, on the light theme's silver
+  chrome (3.20:1 at worst on `sidebar`, 4.04 on `surface`). On an amber, olive or brick
+  fill the ring meets the fill at 1.1-1.6:1, and the ground outside the edge and the
+  glow carry it. **A component does not paint its own focus colour.** A control whose
+  ring has to be a box-shadow (a 32px menu row flush in its menu, a field wrapper's
+  inset) uses `--focus-ring-inset`, the same 2px inset ring plus the glow; a wrapper
+  that rings for its field with `:focus-within` adds `box-shadow: var(--focus-glow)`. An
+  outlined Vuetify field, whose label rides on its top border, keeps the glow alone.
+  Never remove an outline without replacing it; a focus ring is the one place in this
+  system where "subtle" is a defect. **There is exactly one focus language.** Amber or
+  olive on a ring, an accent border on focus, or a per-surface ink are drift.
 - **Hover is an ink wash** (2026-09-13). A transparent control (row, tab, bar button,
   segment, menu row) takes `--hover-wash`, the text colour at 16% per theme, and a
   muted label or icon goes to full ink. It carries no hue, because amber is the action
@@ -819,7 +848,10 @@ These get skipped and that is exactly why a UI looks cheap.
   below), and nothing else. Everything merely chosen is olive: a selected tile,
   the active sidebar row, a focused group, a selected tab or table row take `--active-bar` (edge
   or ring) and `--active-wash`, the lifted olive at 0.20 in dark and the deep olive at
-  0.16 in light. **No olive text or icon on an olive wash:** the selected item's label,
+  0.16 in light. The justified picture grid is the exception (#2162): a selected
+  tile takes a 2px `--active-bar` outline in the 2px gutter round it and a glow
+  fading inwards from that edge, no flat wash, so a run of selected photos stays
+  countable. **No olive text or icon on an olive wash:** the selected item's label,
   icon and count take `--active-text`, the surface's own ink (7.5 - 11.2:1 at rest).
   **Olive marks, words stay text:** a current value, a selected tab and an active bar
   button keep olive on their check, underline or glyph (`--selected-ink`, lifted in
@@ -868,10 +900,9 @@ These get skipped and that is exactly why a UI looks cheap.
   `aria-keyshortcuts` target, so mutating it mid-flight renames the control under
   a screen reader, and a longer word resizes the button and reflows the action
   row. The spinner already says "working", so `AppButton` has no loading-text
-  prop. (`TbTagPanel`'s hand-rolled "Applying..." predates the primitive: drift
-  to converge, not precedent.) No live region on the button either, because the
+  prop. No live region on the button either, because the
   outcome is announced by the notice surface and a second announcer would
-  double-speak, the same reason `OverlayActionReceipt` has none.
+  double-speak, the same reason `LightboxActionReceipt` has none.
   **The spinner keeps spinning under `prefers-reduced-motion`.** The global reset
   in `design-tokens.css` would freeze it into a static broken ring that reads as a
   rendering fault, and a spinner is a status readout rather than decoration, which
@@ -895,8 +926,8 @@ These get skipped and that is exactly why a UI looks cheap.
   the only signal that a bounded list continues, so it stays visible rather than
   fading until hover, and the track stays transparent so it does not draw a second
   line next to an existing border. Reference: the four scroll regions of the image
-  overlay sidebar (`.tag-list`, `.tag-drop-zone--predictions`, `.face-assign-grid`,
-  and the description `textarea`).
+  overlay sidebar (`.tag-list`, `.tag-drop-zone--predictions`, the Faces panel's
+  `.faces-panel__body`, and the description `textarea`).
 
 ---
 
@@ -952,18 +983,67 @@ count.
 
 ### The key-hint badge (`kbd`)
 
-Dialog action buttons wear their keys (owner decision, 2026-07-29; the behavioural
+Every keyboard hint in the app is one keycap (owner decision, 2026-10-28, after
+the toolbar search's F proved unreadable at a distance). The box is shared and
+lives in the `KEYCAP` block of `design-tokens.css`; each site keeps its own font
+and colour, so the only thing a site chooses is which inset:
+
+- **`--kbd-pad`** (2px 8px): the default, everywhere a keycap sits in text, a
+  menu, a tooltip or a footer.
+- **`--kbd-pad-tight`** (2px 6px): inside a control, such as a selection pill or
+  a bar button. 6px is deliberately between spacing steps: 8px reads loose inside
+  a pill, 4px puts the border back on the glyph.
+- **`--kbd-pad-field`** (0 4px): the F inside a search field at rest. It is set
+  in the UI face at `--text-sm`, not mono at `--text-2xs`, which shrank a lone
+  letter to a speck. The line-height (`--kbd-leading`) gives it its air.
+
+Corners are `--radius-sm` throughout; the extra inset is what stops the 4px
+corner reading as round. Never write a keycap's padding as a literal.
+
+Colour follows where the keycap sits. In running text, a menu or a tooltip it
+takes the theme border; on a control's own fill (the search field's F, an
+`AppButton`, the shelf's selection bar) it takes `currentColor`, so it follows
+the control's ink. The selection pill's verbs and the add-to controls keep
+`.fm-kbd`, a cap with its own input fill, so they take the theme border too.
+The search menu's list and footer follow their own muted ink the same way. Key
+names are mono; the search field's F (`--kbd-font-field`, `--kbd-size-field`) is
+the one exception. ↵ is always the `mdi-subdirectory-arrow-left` icon, never the
+character: its tall upright is what makes it read as enter. A chord is caps side
+by side, never joined by a `+`, `--kbd-chord-gap` (2px) apart (one global `kbd +
+kbd` rule) so they read as one press. Alternatives such as ← → keep a word space,
+and each key that starts a new press carries `kbd-or`: text between keys does
+not break CSS adjacency, so without it they take the chord gap too. A modifier
+that applies to both alternatives is repeated, ⌘← ⌘→, never left for → to
+borrow. Shift is its own cap, drawn as `mdi-apple-keyboard-shift`; never `⇧Tab`
+in one cap, where the ⇧ is the weakest mark in the row. Write a key with
+`KeyCap` (`components/widgets/KeyCap.vue`): it draws Shift, ⌘, Enter and
+Backspace as icons and carries each one's name as `visually-hidden` text, since
+`v-icon` is `aria-hidden` and the cap would otherwise read as nothing. Its root
+is the `kbd`, so a host's scoped keycap rule still applies. The enter icon's ink
+weighs about 1px right of its box, so every keycap nudges it back (`App.css`);
+measured centred within 0.15px.
+
+**Dialog buttons** wear their keys (owner decision, 2026-07-29; the behavioural
 contract lives in `frontend_architecture.md`, "App* design-system layer"): the
-accept/confirm button carries an **↵** badge and the cancel/abort button an **Esc**
-badge, rendered by `AppButton`'s `key-hint` prop as a `<kbd>` chip — `--font-mono` at
-`--text-2xs`, a 1px `currentColor` border at `--radius-sm`, the whole chip at 0.55
-opacity. `currentColor` is what makes it legal on every variant fill without a new
-token pair, and the opacity is what keeps it a hint rather than a second label. It is
-`aria-hidden` (the accessible name must stay the verb); the machine-readable copy is
-`aria-keyshortcuts` on the button itself.
+accept/confirm button carries an **↵** and the cancel/abort button an **Esc**,
+rendered by `AppButton`'s `key-hint` prop as a `<kbd>` chip at `--text-xs`, a
+fixed `--kbd-h-button` (20px; `--kbd-h-button-sm`, 16px, on a small button) tall
+so both chips match and keep 4px clear inside the button. The ↵ chip is a step
+narrower than it is high, as the key is, with the icon (14px; 12px on a small
+button) centred in it. Text in the chip is centred on its capitals
+(`text-box: trim-both cap alphabetic`), or Esc floats a pixel high. The glyph and its 1px `currentColor` border are at 90%;
+there is no wash and no shadow on the chip (owner, 2026-10-28: both read
+badly). The old 0.55 opacity on the whole chip measured 2.6:1 on amber (2.1:1
+dark); this measures 4.19:1 (3.07:1 dark), 4.67:1 on danger. What keeps it a
+hint is its size beside the 14px label, not a fade. The chip is hidden on a
+coarse pointer, where there is no keyboard to hint at. A hand-made keycap
+inside an `AppButton` is a bug: pass `key-hint` instead. The bar buttons' Esc
+(Clear search) and the shelf pill's verb keys take the same 90% colour. It is
+`aria-hidden` (the accessible name must stay the verb); the machine-readable
+copy is `aria-keyshortcuts` on the button itself.
 
 The full-width bar that appears above the grid to act on a context — the bulk
-**selection bar**, the image-overlay top bar, and the new **Trash restore/purge
+**selection bar**, the lightbox top bar, and the new **Trash restore/purge
 bar** — is one pattern. It reuses the grid; only the bar changes.
 
 - **Anatomy:** a left cluster (a count or title: "12 selected", "Trash") and a right
@@ -979,7 +1059,7 @@ bar** — is one pattern. It reuses the grid; only the bar changes.
   owns `--floating-bottom-h` for the notice stack (`notice-surface.md` §2.2). Whether
   it converges on the full-width pattern or stays a pill is the **One band** open item
   below; until that is decided, the pill is the reference for **floating** contextual
-  actions and the overlay top bar is the reference for the full-width one.
+  actions and the lightbox top bar is the reference for the full-width one.
 - **Action weight:** the primary/affirmative action (Restore) is a `primary` button;
   a destructive action (Purge / Delete forever) is `error`, kept visually distinct,
   and **always behind a confirm** — deletion is irreversible and must never be a
@@ -1007,21 +1087,25 @@ vanish — they **fold** into the ⋯ overflow (`TbOverflowMenu`, a
   the bar. Each bar's ladder is a decision, not an accident — recorded in
   `toolbar-responsive-decisions.md`.
 - **The trigger earns its place.** The ⋯ stays hidden until the first fold
-  step; an overflow with nothing in it is chrome without a job.
+  step; an overflow with nothing in it is chrome without a job. Nor does a
+  bar get a ⋯ for a single control: the burger takes the same width as that
+  control's glyph, so it saves nothing and costs a click. Drop the label and
+  keep the glyph instead (the grid toolbar's View, which is why that bar has
+  no ⋯).
 - **Some controls never fold.** Undo is the recovery control and stays a
   single visible target at every width. A standing state (the scope pill)
   compresses to its icon rather than folding — a filter that hides is a
   filter the user forgets.
 - **State travels with the row.** A folded toggle wears `aria-pressed` and
-  the primary-token pressed colour. The right-rail toggle never folds, so its
-  pulsing amber icon (`prefers-reduced-motion` honoured) keeps background work
-  visible at every width.
+  the primary-token pressed colour. The right-rail toggle never folds.
+  Background work is the title bar's Tasks pill, not this toggle: it does not
+  pulse while tasks run.
 - **The right-rail toggle is one glyph on every screen**, `mdi-dock-right`
   (where something will appear, not what is in it), with open as its pressed
   state and never a second glyph. Its name is fixed per screen and says what
-  the rail holds: *Stats and tasks*, *Inspector*, *Models and tasks*, *Stats*.
-  Busy, the tooltip leads with the count: *3 tasks running · Models and
-  tasks*.
+  the rail holds: *Inspector* (the Media grid's rail, which inspects the
+  selection and shows stats only when nothing is selected, and the Workflows
+  inspector), *Models*, *Picture details* (the lightbox).
 
 ### Closed inspector
 
@@ -1032,7 +1116,9 @@ out around it from the first paint. The Models rail lists the shelf rather than
 describing a selection and starts closed, but closed it wears the same handle:
 it names the shelf's selection and takes the same nudge, and with nothing
 selected it is the same tab reading `All models`, without the selection stripe,
-which also bounces when a card's tray opens. Closed, it is **never re-opened by itself**
+which also bounces when a card's tray opens. The Media grid's stats rail
+inspects the grid's selection (#2161) and wears the same handle: it names the
+one picture the way the rail's head does, or `N pictures`. The Training runs tab wears the Models rail's handle too, naming the picked run or `N runs`. Closed, it is **never re-opened by itself**
 — opening the docked rail takes a column away under the pointer — so the
 closed state has to say what it is hiding. (The reader can still ask for it
 from the content: a **double-click on a card**, a workflow card or a Models set
@@ -1041,25 +1127,34 @@ Models. An open rail keeps its tab.) The handle:
 
 | Part | Value |
 |---|---|
-| Width · max height | 34px · 260px, label ellipsised; a 20×52 chevron handle when nothing is selected (Workflows) |
+| Width · max height | 34px · 260px, label ellipsised |
 | Label | `writing-mode: vertical-rl`, `--text-sm`, `--weight-medium`, chevron-left above it. One item: its name. Several: `N workflows` (on Models: `N models`, `N sets`, `N missing models`, or `N selected` for a mix) |
 | Surface | `--panel`, `--border` on all but the right edge, `--elevation-2` |
 | Corners | `--radius-md`, left corners only |
 | Selection stripe | 3px `--active-bar` on the left edge; none on a label that names no selection (`plain`) |
 | Placement | the content's right edge, vertically centred, `--z-floating` |
 
+- **A cue, not a fixture.** The handle shows on a nudge and goes again 5s
+  later; a new nudge restarts the 5s. With the pointer or focus on it, it stays
+  until they leave and goes 5s after that, so it never vanishes under a click
+  or drops focus. It goes at once when its label empties (the selection was
+  cleared), so there is no unlabelled handle. Closing the rail shows nothing
+  until the next selection.
+- **The full-screen lightbox is the one hover cue.** It has no toolbar toggle
+  on screen and its picture is the selection, so the pointer arriving in the
+  right 48px is its nudge: the tab comes out (and bounces) and still opens only
+  on a click.
 - **Click only**, never hover: the content's scrollbar is on that edge. It is a
   `<button>` in the Tab order, named `Show inspector: <name>`, and opening from
   it persists (it is the same act as the toolbar toggle) and puts focus on the
-  inspector's active tab. While it shows, the content reserves its width on
-  that edge, so a click on a card's edge never lands on it; the scrollbar
-  still runs under it.
+  inspector's active tab. While the rail is closed, Workflows and Models
+  reserve the tab's width on that edge, so a click on a card's edge never
+  lands on it; the scrollbar still runs under it. The Media grid reserves
+  nothing: its rail starts closed, so a gutter would be permanent.
 - **Nudge on a new selection, never on the same one again.** Over
   `--dur-attention` the tab bounces left (0 → −16 → 0 → −7 → 0 → −2 → 0px) and
   the rail toggle's glyph turns `--selected-ink` and fades back — **glyph colour
   only**, no background, ring or border, so it cannot read as the pressed state.
-  While tasks run the amber busy pulse owns that glyph and the flash is skipped;
-  the tab still bounces.
 - **Reduced motion:** neither plays. The label changing is the cue.
 - A deep link that lands on a selection (a picture's Recipe → *Open*) opens the
   inspector for that visit without persisting it.
@@ -1101,8 +1196,8 @@ it, 4500 becomes the new 99999 within two sprints.
 The title bar needs a rung above `--z-modal` because in the desktop build it carries
 the window drag region and the window controls: an overlay painting over it costs the
 user the ability to move or close the window. `--z-modal` is not enough, because
-`ReviewSessionsOverlay` is itself a 4000 stacking context and its full-viewport
-sub-scrims would win that tie on DOM order. A notice then needs one rung above that.
+`ReviewSessionsOverlay`'s full-viewport sub-scrims (the shortcut sheet, the
+zoom) sit on that rung and would win the tie on DOM order. A notice then needs one rung above that.
 
 **The ladder lives inside one stacking context.** `.app-viewport` is
 `position: fixed; z-index: 0`, so every value here competes only with its siblings

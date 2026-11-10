@@ -1,5 +1,6 @@
 """ZIP generation and export functionality for pictures and features."""
 
+import hashlib
 import json
 import logging
 import os
@@ -10,11 +11,13 @@ import tempfile
 import unicodedata
 import zipfile
 
-from PIL import Image, PngImagePlugin
+from PIL import Image, ImageOps, PngImagePlugin
 
+from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture, PictureSet
 from pixlstash.db_models.picture_set import PictureSetMember
 from pixlstash.utils.host_open import open_in_file_manager
+from pixlstash.utils.image_processing.generation_data import strip_generation_data
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.service.caption_utils import CaptionUtils
@@ -62,6 +65,16 @@ _WINDOWS_DEVICE_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
+# What ai-toolkit's data loader lists (``image_extensions`` in
+# ``toolkit/data_loader.py``). Anything else in a dataset folder is skipped
+# without a word, so a training dataset converts the rest to PNG (#2290).
+TRAINER_IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
+
+# ai-toolkit loads every picture with ``convert("RGB")``, which drops alpha and
+# trains the transparent area as whatever colour sits under it (often black).
+# A training dataset flattens alpha onto this neutral grey instead.
+TRAINER_ALPHA_BACKGROUND = (128, 128, 128)
+
 
 def _safe_archive_stem(name: str, fallback: str, *, is_extension: bool = False) -> str:
     """Reduce *name* to a single, safe zip member name component.
@@ -96,13 +109,14 @@ def _safe_archive_stem(name: str, fallback: str, *, is_extension: bool = False) 
     return candidate
 
 
-def _unique_export_stem(stem: str, claimed: dict) -> str:
+def _unique_export_stem(stem: str, claimed: dict, sep: str = "_") -> str:
     """Return a member-name stem no earlier member of this export has taken.
 
     Args:
         stem: The candidate stem, already through :func:`_safe_archive_stem`.
         claimed: Case-folded stem -> highest suffix tried for it. Updated in
             place, so one dict per export run is the whole bookkeeping.
+        sep: What goes between the stem and the suffix (``photo_2``).
 
     Returns:
         A stem that is free, ``stem`` itself the first time it is asked for.
@@ -135,7 +149,7 @@ def _unique_export_stem(stem: str, claimed: dict) -> str:
     candidate = stem
     while _key(candidate) in claimed:
         suffix += 1
-        candidate = f"{stem}_{suffix}"
+        candidate = f"{stem}{sep}{suffix}"
     claimed[key] = suffix
     claimed[_key(candidate)] = suffix
     return candidate
@@ -170,6 +184,70 @@ class _FolderSink:
         kwargs = {} if mode == "wb" else {"encoding": "utf-8"}
         with open(os.path.join(self.root, arcname), mode, **kwargs) as f:
             f.write(data)
+
+
+_STRIPPABLE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+
+
+class _StripGenerationDataSink:
+    """Wrap an export sink so every image member leaves without generation data.
+
+    The export's "Keep the workflow" off (the Share panel and Export row in
+    Settings › Privacy & sharing). Wrapping the sink rather than each write site covers
+    every branch of :meth:`ExportUtils._write_export_pictures` - the original
+    file, a resized re-encode, a trainer PNG, a face crop - in one place. A
+    format :func:`strip_generation_data` does not handle (videos, GIF, TIFF)
+    goes through unchanged, as it does for share copies.
+    """
+
+    def __init__(self, sink):
+        self._sink = sink
+
+    @staticmethod
+    def _strippable(arcname: str) -> bool:
+        return os.path.splitext(arcname)[1].lower() in _STRIPPABLE_EXTS
+
+    @staticmethod
+    def _strip(data: bytes, arcname: str, source: str):
+        """Stripped bytes, ``None`` for an unhandled format, ``False`` if broken."""
+        try:
+            return strip_generation_data(data)
+        except ValueError as exc:
+            # Fail closed: a file whose structure cannot be walked cannot be
+            # promised clean, so it is left out rather than sent as it is, and
+            # one broken picture does not fail the rest of the export.
+            logger.warning(
+                "Left %s (%s) out of the export: could not strip its "
+                "generation data: %s",
+                arcname,
+                source,
+                exc,
+            )
+            return False
+
+    def write(self, full_path: str, arcname: str) -> None:
+        if not self._strippable(arcname):
+            self._sink.write(full_path, arcname=arcname)
+            return
+        # ponytail: reads the whole image into memory; fine for pictures, a
+        # streaming chunk walker if huge originals ever show up here.
+        with open(full_path, "rb") as fh:
+            stripped = self._strip(fh.read(), arcname, full_path)
+        if stripped is False:
+            return
+        if stripped is None:
+            self._sink.write(full_path, arcname=arcname)
+            return
+        self._sink.writestr(arcname, stripped)
+
+    def writestr(self, arcname: str, data) -> None:
+        if isinstance(data, (bytes, bytearray)) and self._strippable(arcname):
+            stripped = self._strip(bytes(data), arcname, "re-encoded")
+            if stripped is False:
+                return
+            if stripped is not None:
+                data = stripped
+        self._sink.writestr(arcname, data)
 
 
 class ExportUtils:
@@ -224,6 +302,93 @@ class ExportUtils:
             save_kwargs = {}
         img.save(buffer, format=fmt, **save_kwargs)
         zip_file.writestr(arcname, buffer.getvalue())
+
+    @staticmethod
+    def _needs_trainer_conversion(full_path, ext) -> bool:
+        """Whether ai-toolkit would skip this still or train its alpha wrong.
+
+        Args:
+            full_path: The picture's source file.
+            ext: Its extension, as the export loop read it.
+
+        Returns:
+            True for a format outside :data:`TRAINER_IMAGE_EXTS`, a picture
+            with transparency, 16-bit grey (the trainer's ``convert("RGB")``
+            clips it to white), or one that cannot be read; False for one the
+            trainer reads as it is, and for a video, which the trainer cuts
+            frames from itself.
+        """
+        if VideoUtils.is_video_file(full_path):
+            return False
+        if ext.lower() not in TRAINER_IMAGE_EXTS:
+            return True
+        try:
+            with Image.open(full_path) as img:
+                return (
+                    img.mode in {"RGBA", "LA", "PA"}
+                    or img.mode.startswith("I;16")
+                    or "transparency" in img.info
+                )
+        except Exception as exc:
+            # A still the trainer cannot decode either: the conversion fails
+            # too, and leaves it out of the dataset rather than miscounted.
+            logger.warning(
+                "Could not read %s to check for transparency (%s).", full_path, exc
+            )
+            return True
+
+    @staticmethod
+    def _write_trainer_png(full_path, arcname, sink, scale) -> bool:
+        """Write *full_path* as an RGB PNG ai-toolkit trains on as it looks.
+
+        Orientation is baked into the pixels (the EXIF that carried it is not
+        written), the colour profile is kept, 16-bit grey is scaled to 8-bit
+        and alpha is flattened onto :data:`TRAINER_ALPHA_BACKGROUND`.
+        An animated GIF gives its first frame.
+
+        Args:
+            full_path: The picture's source file.
+            arcname: The member name to write, ending ``.png``.
+            sink: The dataset's :class:`_FolderSink`.
+            scale: The dataset's resolution factor (1.0 for the original).
+
+        Returns:
+            True when the PNG was written; False when the source could not be
+            decoded, so the picture is left out of the dataset.
+        """
+        try:
+            with Image.open(full_path) as img:
+                icc_profile = img.info.get("icc_profile")
+                img = ImageOps.exif_transpose(img)
+                if img.mode.startswith("I;16"):
+                    # 16-bit grey: convert("RGB") clips every value above 255
+                    # to white, so scale it down first. Plain "I" is left
+                    # alone: a 32-bit file can hold 0-255 already.
+                    img = img.convert("I").point(lambda v: v / 256).convert("L")
+                if img.mode in {"RGBA", "LA", "PA"} or "transparency" in img.info:
+                    rgba = img.convert("RGBA")
+                    img = Image.new("RGB", rgba.size, TRAINER_ALPHA_BACKGROUND)
+                    img.paste(rgba, mask=rgba.getchannel("A"))
+                else:
+                    img = img.convert("RGB")
+                ExportUtils._write_image_to_zip(
+                    img,
+                    arcname,
+                    sink,
+                    ext=".png",
+                    scale=scale,
+                    save_kwargs={"icc_profile": icc_profile} if icc_profile else None,
+                )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Could not convert %s to %s for the training dataset (%s); "
+                "leaving the picture out.",
+                full_path,
+                arcname,
+                exc,
+            )
+            return False
 
     @staticmethod
     def _write_detection_sidecar(
@@ -350,6 +515,9 @@ class ExportUtils:
         )
 
         use_original_file_names = background_data.get("use_original_file_names", False)
+        # Strip unless asked to keep (#2417): the export is a way out like any
+        # other share.
+        keep_generation_data = bool(background_data.get("keep_generation_data", False))
 
         if export_type_d != Picture.ExportType.FULL:
             caption_mode_d = "tags"
@@ -404,6 +572,7 @@ class ExportUtils:
             "picture_ids": picture_ids,
             "select_fields": select_fields,
             "use_original_file_names": use_original_file_names,
+            "keep_generation_data": keep_generation_data,
             "tag_format_d": tag_format_d,
             "bbox_mode_d": bbox_mode_d,
         }
@@ -412,9 +581,10 @@ class ExportUtils:
     def _deduplicate_stacks(pics: list) -> list:
         """Keep only the stack leader from each stack, drop the rest.
 
-        The leader is the newest picture by ``created_at`` (ties broken by
-        highest ``id``), matching the frontend's ``sortStackMembers`` logic.
-        Pictures not in any stack are passed through unchanged.
+        The leader is the cover the grid shows, the lowest ``stack_position``;
+        a stack without positions falls back to the newest picture by
+        ``created_at`` (ties broken by highest ``id``). Pictures not in any
+        stack are passed through unchanged.
         """
         by_stack: dict = {}
         result = []
@@ -426,16 +596,54 @@ class ExportUtils:
                 by_stack.setdefault(stack_id, []).append(pic)
 
         for stack_id, members in by_stack.items():
-            leader = max(
+            newest = sorted(
                 members,
                 key=lambda p: (
                     getattr(p, "created_at", None) or "",
                     getattr(p, "id", 0) or 0,
                 ),
+                reverse=True,
+            )
+            leader = min(
+                newest,
+                key=lambda p: (
+                    p.stack_position is None,
+                    p.stack_position or 0,
+                ),
             )
             result.append(leader)
 
         return result
+
+    @staticmethod
+    def _fetch_character_picture_ids(server, character_id: int, only_deleted: bool):
+        """Resolve a character id to its picture ids via the Face table.
+
+        Every Face row whose ``character_id`` matches contributes its
+        ``picture_id``; the distinct set is then filtered to the requested
+        lifecycle (deleted vs. live).  Used by the training dataset builder,
+        which selects by character; the ZIP/folder routes never pass a
+        ``character_id`` here (they filter by it through the list path).
+        """
+
+        def _query(session, char_id):
+            face_pic_ids = {
+                int(r) if not isinstance(r, tuple) else int(r[0])
+                for r in session.exec(
+                    select(Face.picture_id).where(Face.character_id == char_id)
+                ).all()
+            }
+            if not face_pic_ids:
+                return []
+            rows = session.exec(
+                select(Picture.id).where(
+                    Picture.id.in_(face_pic_ids),
+                    Picture.deleted.is_(bool(only_deleted)),
+                )
+            ).all()
+            return [int(r) if not isinstance(r, tuple) else int(r[0]) for r in rows]
+
+        return server.vault.db.run_task(_query, int(character_id))
 
     @staticmethod
     def _gather_export_pictures(server, request, task_id, background_data, params):
@@ -484,6 +692,19 @@ class ExportUtils:
                 )
 
             pics = server.vault.db.run_task(fetch_members, set_id)
+        elif background_data.get("character_id") is not None:
+            character_id = background_data["character_id"]
+            logger.debug("Exporting pictures for character %s", character_id)
+            char_pic_ids = ExportUtils._fetch_character_picture_ids(
+                server, character_id, only_deleted
+            )
+            if char_pic_ids:
+                pics = server.vault.db.run_task(
+                    Picture.find,
+                    id=char_pic_ids,
+                    select_fields=select_fields,
+                    include_deleted=only_deleted,
+                )
         elif query:
             logger.debug("Exporting pictures using search query: {}".format(query))
 
@@ -550,9 +771,12 @@ class ExportUtils:
 
         # Enforce token scope: remove any pictures the token is not
         # authorised to access before packaging the export.
-        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
-        if scope_allowed is not None and pics:
-            pics = [p for p in pics if getattr(p, "id", None) in scope_allowed]
+        # Trusted server-side callers (the training dataset builder) pass
+        # request=None and carry no token, so there is no scope to apply.
+        if request is not None:
+            scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+            if scope_allowed is not None and pics:
+                pics = [p for p in pics if getattr(p, "id", None) in scope_allowed]
 
         logger.debug(
             f"Export task {task_id}: {len(pics)} pictures matched before stack "
@@ -657,7 +881,13 @@ class ExportUtils:
         ``zipfile.ZipFile`` for :meth:`generate_zip`, or :class:`_FolderSink`
         for :meth:`generate_folder_export`. Neither this loop nor the member
         sidecar helpers it calls care which.
+
+        ``params["keep_generation_data"]`` false strips every image member; a
+        caller that never sets it (the training dataset) keeps the files as
+        they are.
         """
+        if not params.get("keep_generation_data", True):
+            sink = _StripGenerationDataSink(sink)
         export_type_d = params["export_type_d"]
         caption_mode_d = params["caption_mode_d"]
         include_character_name_enabled = params["include_character_name_enabled"]
@@ -705,7 +935,15 @@ class ExportUtils:
                         # "image_00003" must not land on index 3's fallback.
                         name_stem = _unique_export_stem(f"image_{idx:05d}", used_names)
                         arcname = f"{name_stem}{ext}"
-                    if scale_factor < 1.0 and not VideoUtils.is_video_file(full_path):
+                    if params.get("trainer_images") and (
+                        ExportUtils._needs_trainer_conversion(full_path, ext)
+                    ):
+                        arcname = f"{name_stem}.png"
+                        if not ExportUtils._write_trainer_png(
+                            full_path, arcname, sink, scale_factor
+                        ):
+                            continue
+                    elif scale_factor < 1.0 and not VideoUtils.is_video_file(full_path):
                         try:
                             with Image.open(full_path) as img:
                                 save_kwargs = {}
@@ -780,6 +1018,14 @@ class ExportUtils:
                                     else character_names
                                 )
 
+                    # Training datasets lead every caption with the LoRA trigger
+                    # word; exports never set it.
+                    trigger = params.get("trigger_word")
+                    if trigger and caption_mode_d != "none":
+                        caption_text = (
+                            f"{trigger}, {caption_text}" if caption_text else trigger
+                        )
+
                     if caption_mode_d != "none" and caption_text is not None:
                         sink.writestr(
                             f"{name_stem}.txt",
@@ -835,6 +1081,344 @@ class ExportUtils:
                             full_path,
                             exc,
                         )
+
+    @staticmethod
+    def _training_pictures(server, set_id, character_id, params, clips=False):
+        """The pictures a training dataset of the set or character holds.
+
+        The same skips the writer applies, so a manifest's ids and count
+        describe exactly what gets written. Video clips are left out unless
+        *clips*: only a recipe that trains on clips is given them.
+        """
+        pics = ExportUtils._gather_export_pictures(
+            server,
+            None,
+            None,
+            {"set_id": set_id, "character_id": character_id},
+            params,
+        )
+        kept = []
+        for pic in pics:
+            if not getattr(pic, "file_path", None):
+                continue
+            path = ImageUtils.resolve_picture_path(
+                server.vault.image_root, pic.file_path
+            )
+            if os.path.exists(path) and (clips or not VideoUtils.is_video_file(path)):
+                kept.append(pic)
+        return kept
+
+    @staticmethod
+    def count_training_pictures(
+        server, *, set_id=None, character_id=None, clips=False
+    ) -> int:
+        """How many pictures :meth:`build_training_dataset` would write."""
+        params = {
+            "only_deleted": False,
+            "picture_ids": [],
+            "select_fields": Picture.metadata_fields(),
+        }
+        return len(
+            ExportUtils._training_pictures(
+                server, set_id, character_id, params, clips=clips
+            )
+        )
+
+    @staticmethod
+    def training_counts(server, *, set_id=None, character_id=None) -> tuple[int, int]:
+        """The stills and the video clips a training dataset could hold.
+
+        Returns:
+            ``(stills, clips)``: what every recipe trains on, and what a recipe
+            that trains on clips adds to it.
+        """
+        params = {
+            "only_deleted": False,
+            "picture_ids": [],
+            "select_fields": Picture.metadata_fields(),
+        }
+        pics = ExportUtils._training_pictures(
+            server, set_id, character_id, params, clips=True
+        )
+        clips = sum(1 for pic in pics if VideoUtils.is_video_file(pic.file_path))
+        return len(pics) - clips, clips
+
+    @staticmethod
+    def training_captions(
+        server, *, set_id=None, character_id=None
+    ) -> tuple[list[str], list[list[str]]]:
+        """The captions and tags of the pictures a training dataset holds.
+
+        Returns:
+            ``(captions, tags)``, one entry per picture in id order; a picture
+            with no caption has ``""``.
+        """
+        # ponytail: reads every picture's row and stats its file on each call,
+        # like count_training_pictures; cache per set if large sets make the
+        # Train dialog slow to open.
+        pics = ExportUtils._training_rows(server, set_id, character_id)
+        return ExportUtils._captions_and_tags(pics)
+
+    @staticmethod
+    def _training_rows(server, set_id, character_id, clips=False) -> list:
+        """The dataset's pictures with their tags, in id order."""
+        params = {
+            "only_deleted": False,
+            "picture_ids": [],
+            "select_fields": Picture.metadata_fields() | {"tags"},
+        }
+        return sorted(
+            ExportUtils._training_pictures(
+                server, set_id, character_id, params, clips=clips
+            ),
+            key=lambda pic: pic.id,
+        )
+
+    @staticmethod
+    def _captions_and_tags(pics) -> tuple[list[str], list[list[str]]]:
+        captions = [pic.description or "" for pic in pics]
+        tags = [CaptionUtils.build_tag_caption(pic).split(", ") for pic in pics]
+        return captions, [[t for t in row if t] for row in tags]
+
+    @staticmethod
+    def training_facts(server, *, set_id=None, character_id=None) -> dict:
+        """What the Train dialog checks before a run of the set or character.
+
+        Returns:
+            ``{"count", "clips", "untagged", "undescribed", "uncaptioned",
+            "near_duplicates", "other_people"}``: the picture count (stills),
+            the video clips a recipe that trains on clips adds to them, how
+            many pictures have no tags, no description, and neither (what a
+            caption falls back to the trigger word alone on, depending on the
+            recipe's caption form), how many have a near copy in the dataset,
+            and how many show a face named as somebody other than
+            *character_id* (0 without one).
+        """
+        # Local import to break a cycle: dedup_tier_service imports
+        # set_lock_service → stack_membership → pixlstash.utils.service, whose
+        # __init__ imports this module.
+        from pixlstash.services.dedup_tier_service import (
+            DEFAULT_THRESHOLD,
+            NearBucket,
+            near_pairs_in_bucket,
+        )
+
+        rows = ExportUtils._training_rows(server, set_id, character_id, clips=True)
+        pics = [pic for pic in rows if not VideoUtils.is_video_file(pic.file_path)]
+        captions, tags = ExportUtils._captions_and_tags(pics)
+        ids = [pic.id for pic in pics]
+
+        def near_and_others(session):
+            pairs = near_pairs_in_bucket(
+                session,
+                NearBucket("training", "dataset", tuple(ids)),
+                DEFAULT_THRESHOLD,
+            )
+            near = {pid for pair in pairs for pid in pair[:2]}
+            others = 0
+            if character_id is not None and ids:
+                others = len(
+                    set(
+                        session.exec(
+                            select(Face.picture_id).where(
+                                Face.picture_id.in_(ids),
+                                Face.character_id.is_not(None),
+                                Face.character_id != int(character_id),
+                            )
+                        ).all()
+                    )
+                )
+            return len(near), others
+
+        near, others = server.vault.db.run_task(near_and_others)
+        return {
+            "count": len(ids),
+            "clips": len(rows) - len(pics),
+            "untagged": sum(1 for row in tags if not row),
+            "undescribed": sum(1 for text in captions if not text),
+            "uncaptioned": sum(
+                1 for text, row in zip(captions, tags) if not text and not row
+            ),
+            "near_duplicates": near,
+            "other_people": others,
+        }
+
+    @staticmethod
+    def build_training_dataset(
+        server,
+        *,
+        dest_dir,
+        set_id=None,
+        character_id=None,
+        trigger_word=None,
+        caption_mode="tags",
+        resolution="original",
+        tag_format="spaces",
+        clips=False,
+    ):
+        """Build an ai-toolkit training dataset snapshot into ``dest_dir``.
+
+        Runs the same selection, scope-free source resolution and member
+        writer as the folder export (:meth:`generate_folder_export`), so the
+        files match a FULL export made with the same settings: one
+        ``image_NNNNN.<ext>`` plus ``image_NNNNN.txt`` caption per picture.
+        Pictures whose source file is missing are skipped, and so are videos
+        unless ``clips``: those are copied as they are, and ai-toolkit cuts
+        its frames from them. A still ai-toolkit would skip (anything outside
+        :data:`TRAINER_IMAGE_EXTS`) or whose alpha it would train as black is
+        written as ``image_NNNNN.png`` instead, alpha flattened onto
+        :data:`TRAINER_ALPHA_BACKGROUND`; one that cannot be decoded is left
+        out, and the manifest counts only what was written. The rest are
+        copied as they are, or resized at a reduced ``resolution``.
+
+        Captions default to the picture's tags.  When ``trigger_word`` is
+        given it leads every caption as its first comma-separated token.
+
+        The caller owns ``dest_dir``'s lifecycle (cleanup); this creates it if
+        absent and returns a manifest whose ``picture_ids`` feed the
+        training run reproducibility record (the hub ``training_run`` row).
+
+        Args:
+            server: The server instance (provides ``vault.db`` / ``image_root``).
+            dest_dir: Target directory for the image + caption pairs.
+            set_id: Picture-set id to build the dataset from.
+            character_id: Character id to build the dataset from (resolved via
+                the Face table).  One of ``set_id`` / ``character_id`` is required.
+            trigger_word: Optional LoRA trigger word, prepended to each caption.
+            caption_mode: ``"tags"`` (default), ``"description"``, or ``"none"``.
+            resolution: ``"original"`` (default), ``"half"``, or ``"quarter"``.
+            tag_format: ``"spaces"`` (default) or ``"underscores"``.
+            clips: Whether the set's video clips go in beside its stills (a
+                recipe that trains on clips,
+                :func:`pixlstash.training.presets.trains_clips`).
+
+        Returns:
+            Manifest dict: ``{"dest_dir", "image_count", "picture_ids",
+            "caption_mode", "trigger_word"}``.
+        """
+        if set_id is None and character_id is None:
+            raise ValueError("build_training_dataset needs a set_id or a character_id")
+
+        caption_mode_d = (caption_mode or "tags").lower()
+        if caption_mode_d not in {"none", "description", "tags"}:
+            caption_mode_d = "tags"
+
+        tag_format_d = (
+            tag_format if tag_format in {"spaces", "underscores"} else "spaces"
+        )
+
+        resolution_d = (resolution or "original").lower()
+        scale_map = {"original": 1.0, "half": 0.5, "quarter": 0.25}
+        scale_factor = scale_map.get(resolution_d, 1.0)
+
+        trigger = trigger_word.strip() if trigger_word else None
+
+        select_fields = Picture.metadata_fields()
+        if caption_mode_d != "none":
+            select_fields = select_fields | {"tags"}
+
+        params = {
+            "export_type_d": Picture.ExportType.FULL,
+            "caption_mode_d": caption_mode_d,
+            "include_character_name_enabled": False,
+            "scale_factor": scale_factor,
+            "only_deleted": False,
+            "picture_ids": [],
+            "select_fields": select_fields,
+            "use_original_file_names": False,
+            "tag_format_d": tag_format_d,
+            "bbox_mode_d": "none",
+            "trigger_word": trigger,
+            "trainer_images": True,
+        }
+
+        pics = ExportUtils._training_pictures(
+            server, set_id, character_id, params, clips=clips
+        )
+
+        feature_faces_by_pic, face_tags_by_face, detections_by_pic, _ = (
+            ExportUtils._prepare_feature_maps_and_total(server, pics, params)
+        )
+
+        os.makedirs(dest_dir, exist_ok=True)
+        progress = {None: {"processed": 0}}
+        with _FolderSink(dest_dir) as sink:
+            ExportUtils._write_export_pictures(
+                sink,
+                server,
+                None,
+                progress,
+                pics,
+                params,
+                feature_faces_by_pic,
+                face_tags_by_face,
+                detections_by_pic,
+            )
+
+        # Counted from the files written, so a picture the writer could not
+        # convert is in neither the count nor the snapshot (#2290).
+        items = ExportUtils._training_dataset_items(dest_dir, pics)
+        manifest = {
+            "dest_dir": dest_dir,
+            "image_count": len(items),
+            "picture_ids": [item["picture_id"] for item in items],
+            "caption_mode": caption_mode_d,
+            "trigger_word": trigger,
+            "items": items,
+        }
+        logger.info(
+            "Built training dataset in %s: %d images, caption_mode=%s, trigger=%r",
+            dest_dir,
+            len(items),
+            caption_mode_d,
+            trigger,
+        )
+        return manifest
+
+    @staticmethod
+    def _training_dataset_items(dest_dir: str, pics) -> list[dict]:
+        """What the trainer was given, read back from the files just written.
+
+        One item per picture that has a file in *dest_dir*, in dataset order:
+        its ``file_name``, the ``sha256`` of those bytes and the ``caption``
+        file's text (None when none was written). A picture skipped because
+        its source was missing has no file and no item. Training datasets are
+        never named from the originals, so picture *n* is ``image_<n>``.
+
+        Args:
+            dest_dir: The dataset directory the writer filled.
+            pics: The pictures in the order the writer numbered them.
+
+        Returns:
+            The items the dataset snapshot records (#2123).
+        """
+        image_by_stem = {}
+        for name in os.listdir(dest_dir):
+            stem, ext = os.path.splitext(name)
+            if ext.lower() != ".txt":
+                image_by_stem[stem] = name
+        items = []
+        for idx, pic in enumerate(pics, start=1):
+            stem = f"image_{idx:05d}"
+            file_name = image_by_stem.get(stem)
+            if file_name is None:
+                continue
+            with open(os.path.join(dest_dir, file_name), "rb") as fh:
+                sha256 = hashlib.file_digest(fh, "sha256").hexdigest()
+            caption = None
+            caption_path = os.path.join(dest_dir, f"{stem}.txt")
+            if os.path.isfile(caption_path):
+                with open(caption_path, encoding="utf-8") as fh:
+                    caption = fh.read().removesuffix("\n")
+            items.append(
+                {
+                    "picture_id": pic.id,
+                    "file_name": file_name,
+                    "sha256": sha256,
+                    "caption": caption,
+                }
+            )
+        return items
 
     @staticmethod
     def generate_zip(server, request, task_id, export_tasks, background_data):

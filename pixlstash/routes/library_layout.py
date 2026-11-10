@@ -15,8 +15,9 @@ something else - *make it all match, now* - so it is previewed, consented to,
 and reversible in one undo. See ``services/layout_migration_service.py``.
 """
 
+import os
 import re
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,16 +32,21 @@ from pixlstash.services.layout_migration_service import (
 from pixlstash.services.layout_move_service import (
     move_to_match,
     picture_exists,
+    library_folders,
     picture_layout,
 )
 from pixlstash.services.library_settings_service import get_layout, set_layout
 from pixlstash.services.operation_log_service import request_context
+from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.host_open import open_in_file_manager
 from pixlstash.utils.library_layout import (
     DEFAULT_LAYOUT,
     folder_name,
     format_layout,
     parse_layout,
 )
+
+logger = get_logger(__name__)
 
 #: Most ids one "Move to match" request may carry - the same number as
 #: ``ROTATE_MAX_IDS``, and for the same two reasons. Every id is a file
@@ -334,6 +340,37 @@ class MoveToMatchResponse(BaseModel):
     operation_id: Optional[int] = None
 
 
+class LibraryFolder(BaseModel):
+    path: str = Field(description="Relative to the library root, `/`-joined.")
+    name: str = Field(description="The folder's own name on disk.")
+    kind: Literal["project", "character", "set", "global", "unassigned", "folder"]
+    entity_id: Optional[int] = Field(
+        default=None,
+        description="The project, person or set this level names, by the layout.",
+    )
+    project_id: Optional[int] = Field(
+        default=None, description="The nearest project level at or above it."
+    )
+    count: int = Field(description="Pictures filed in this folder and below it.")
+
+
+class LibraryFoldersResponse(BaseModel):
+    folders: list[LibraryFolder]
+
+
+class OpenTreeFolderRequest(BaseModel):
+    """A folder of the Media sidebar's Folders tree (#2458), as that tree listed it."""
+
+    path: str = Field(
+        description="A `path` from GET /library/folders; anything else is 404."
+    )
+
+
+class OpenTreeFolderResponse(BaseModel):
+    status: str = "ok"
+    folder: str = Field(description="The folder opened, relative to the library.")
+
+
 def _response(layout: Optional[str], unfiled: Optional[str]) -> LayoutResponse:
     return LayoutResponse(
         layout=layout,
@@ -537,6 +574,72 @@ def create_router(server) -> APIRouter:
             skipped=result["skipped"],
             operation_id=result["operation_id"],
         )
+
+    @router.get(
+        "/library/folders",
+        include_in_schema=False,
+        summary="The folders pictures are filed in",
+        description=(
+            "Every folder of the library root that holds a picture, or holds a "
+            "folder that does, read from the pictures' stored paths rather "
+            "than the disk. Each level is read through the library's layout, "
+            "so one naming a project, person or set carries its id. Backs the "
+            "Media sidebar's Folders tree."
+        ),
+        response_model=LibraryFoldersResponse,
+    )
+    def list_library_folders():
+        folders = library_folders(server.vault)
+        return LibraryFoldersResponse(folders=folders)
+
+    @router.post(
+        "/library/folders/open",
+        include_in_schema=False,
+        summary="Open a Folders-tree folder in the file manager",
+        description=(
+            "Shows a folder of the Media sidebar's Folders tree in the file "
+            "manager of the machine PixlStash runs on. Only a `path` that GET "
+            "/library/folders lists is opened, and it must lie inside the "
+            "library root after symlinks are resolved."
+        ),
+        response_model=OpenTreeFolderResponse,
+        responses={
+            404: {"description": "No picture is filed there, or it is gone."},
+            500: {"description": "This host has no file manager to open."},
+        },
+    )
+    def open_tree_folder(body: OpenTreeFolderRequest = Body(...)):
+        relative = body.path
+        listed = library_folders(server.vault)
+        # Only a folder the tree lists: the path comes from the client and
+        # names what a host file manager is about to open.
+        if relative not in {folder["path"] for folder in listed}:
+            raise HTTPException(
+                status_code=404, detail=f"No picture is filed in {relative}"
+            )
+        root = os.path.realpath(server.vault.image_root)
+        folder = os.path.realpath(os.path.join(root, *relative.split("/")))
+        try:
+            inside = os.path.commonpath([root, folder]) == root
+        except ValueError:
+            # Windows: a junction to another drive has no common path at all.
+            inside = False
+        if not inside:
+            # A symlinked directory in the library is the one way out, and it
+            # is refused.
+            logger.warning(
+                "Refusing to open %r: it resolves outside the library root %r.",
+                relative,
+                root,
+            )
+            raise HTTPException(status_code=404, detail="Folder not found on disk")
+        if not os.path.isdir(folder):
+            raise HTTPException(
+                status_code=404, detail=f"{relative} is no longer on disk"
+            )
+        if not open_in_file_manager(folder):
+            raise HTTPException(status_code=500, detail="Failed to open the folder")
+        return OpenTreeFolderResponse(folder=relative)
 
     return router
 

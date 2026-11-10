@@ -16,6 +16,7 @@ if TYPE_CHECKING:  # annotations only - see the function-local import note below
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TaggerPlugin
+from pixlstash.utils.accelerator import is_accelerated, is_device_error
 from pixlstash.utils.model_utils import from_pretrained_local_first
 from pixlstash.utils.vram_utils import empty_device_cache, is_vram_oom
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -317,7 +318,7 @@ class Florence2Service:
         """Return the VRAM-constrained batch size for caption generation."""
         max_concurrent = max(1, int(self._max_concurrent_fn()))
         base_batch = min(max_concurrent, max(1, int(self._batch_size)))
-        if self._device == "cuda":
+        if is_accelerated(self._device):
             base_batch = min(
                 base_batch,
                 self._vram_cap_fn(self._base_vram_mb, FLORENCE_PER_IMAGE_VRAM_MB),
@@ -345,7 +346,7 @@ class Florence2Service:
 
         Args:
             image_path: Path to the image or video file.
-            _retry_on_cpu: When True, retry on CPU if a CUDA error occurs.
+            _retry_on_cpu: When True, retry on CPU if a GPU error occurs.
 
         Returns:
             Caption string, or None on failure.
@@ -383,7 +384,7 @@ class Florence2Service:
             return caption
 
         except Exception as e:
-            if _retry_on_cpu and self._is_cuda_error(e):
+            if _retry_on_cpu and self._is_device_error(e):
                 logger.warning(
                     "Florence-2 captioning failed on GPU (%s); retrying on CPU.", e
                 )
@@ -404,7 +405,7 @@ class Florence2Service:
 
         Args:
             image_paths: List of file paths (non-video only).
-            _retry_on_cpu: When True, retry on CPU if a CUDA error occurs.
+            _retry_on_cpu: When True, retry on CPU if a GPU error occurs.
             stop_event: Optional :class:`threading.Event` to interrupt
                 inference mid-batch.
 
@@ -478,7 +479,7 @@ class Florence2Service:
             return captions
 
         except Exception as e:
-            if _retry_on_cpu and self._is_cuda_error(e):
+            if _retry_on_cpu and self._is_device_error(e):
                 logger.warning(
                     "Florence-2 batch captioning failed on GPU (%s); retrying on CPU.",
                     e,
@@ -625,7 +626,7 @@ class Florence2Service:
 
         Returns ``{path: parse(generated text, original size, fed size)}``; a
         path that fails to load is omitted, and a failed batch is ``{}`` after
-        one retry on CPU when the failure was CUDA's.
+        one retry on CPU when the failure was the GPU's.
         """
         import torch
 
@@ -685,7 +686,7 @@ class Florence2Service:
             except Exception as e:
                 if raise_oom and is_vram_oom(e):
                     raise
-                if retry_on_cpu and self._is_cuda_error(e):
+                if retry_on_cpu and self._is_device_error(e):
                     retry_on_cpu = False
                     logger.warning(
                         "Florence-2 %s failed on GPU (%s); retrying on CPU.", what, e
@@ -729,12 +730,24 @@ class Florence2Service:
                 self._load_model(torch.device("cpu"), torch.float32)
                 self._batch_size = FLORENCE_BATCH_SIZE_CPU
                 logger.debug("Florence-2 loaded successfully on CPU")
-            elif requested_device.type == "cuda" and torch.cuda.is_available():
+            elif self._accelerator_available(requested_device):
+                # MPS was held on the CPU in fp32 until #1786: fp32 on Metal was
+                # only 1.15x. fp16 is both checkpoints' own dtype, so this load
+                # casts nothing, and it is the path CUDA has always taken.
+                # Not measured on Metal yet: fp16 speed or output, detection's
+                # num_beams=3, OCR, large-ft, and whether the CUDA-measured
+                # per-image VRAM figure holds; scripts/bench_florence_mps.py
+                # times the first four.
                 try:
-                    logger.debug("Attempting to load Florence-2 on GPU with FP16...")
-                    self._load_model(torch.device("cuda"), torch.float16)
+                    logger.debug(
+                        "Attempting to load Florence-2 on %s with FP16...",
+                        requested_device.type,
+                    )
+                    self._load_model(requested_device, torch.float16)
                     self._batch_size = FLORENCE_BATCH_SIZE_GPU
-                    logger.debug("Florence-2 loaded successfully on GPU (~500MB VRAM)")
+                    logger.debug(
+                        "Florence-2 loaded successfully on %s", requested_device.type
+                    )
                 except Exception as gpu_error:
                     self._record_fallback("init_gpu_load_failed", gpu_error)
                     logger.warning(
@@ -743,52 +756,22 @@ class Florence2Service:
                     self._load_model(torch.device("cpu"), torch.float32)
                     self._batch_size = FLORENCE_BATCH_SIZE_CPU
                     logger.debug("Florence-2 loaded successfully on CPU")
-            elif requested_device.type == "cuda":
-                unavailable = RuntimeError(
-                    "CUDA was explicitly requested but torch.cuda.is_available() is false"
-                )
-                self._record_fallback("cuda_unavailable", unavailable)
-                logger.warning(
-                    "CUDA was explicitly requested but is unavailable; loading "
-                    "Florence-2 on CPU with FP32"
-                )
-                self._load_model(torch.device("cpu"), torch.float32)
-                self._batch_size = FLORENCE_BATCH_SIZE_CPU
-                logger.debug("Florence-2 loaded successfully on CPU")
             else:
-                # Every other accelerator - MPS today - loads on the CPU, and
-                # that is a deliberate hold rather than an oversight. It is a
-                # hold on *value*, not on safety: the correctness question has
-                # been answered.
-                #
-                # Measured on Apple Silicon, driving the model directly with the
-                # caption path's own settings (`<MORE_DETAILED_CAPTION>`,
-                # `do_sample=False`, `num_beams=1`, fp32, 6 real images):
-                # CPU 3851 ms/image against MPS 3346 ms/image - **1.15x** - and
-                # all 6 captions byte-identical. So the failure this hold was
-                # protecting against, a caption model that degrades into fluent
-                # wrong text, did not occur.
-                #
-                # 1.15x is simply a poor return next to the tagger's 23.7x, and
-                # the reason is structural: captioning is autoregressive, so it
-                # is hundreds of sequential single-token forward passes and MPS
-                # dispatch overhead eats most of the gain. Loading on CPU here
-                # is exactly what this machine already did, so holding regresses
-                # nothing while the change is carried by the paths that pay.
-                #
-                # Two gaps if anyone lifts it. Only the **caption** path was
-                # compared; `detect_objects` runs `num_beams=3`, a different and
-                # untested shape. And the measurement used the `base` variant,
-                # not `large-ft`. Lifting it also means giving the OOM path in
-                # ``_is_cuda_error`` the accelerator-blind treatment the
-                # tagger's got, or an MPS OOM here will not fall back.
-                logger.debug(
-                    "Florence-2 loading on CPU: %s acceleration is not yet "
-                    "verified for captioning.",
+                unavailable = RuntimeError(
+                    f"{requested_device.type} was explicitly requested but is "
+                    "not available on this host"
+                )
+                self._record_fallback(
+                    f"{requested_device.type}_unavailable", unavailable
+                )
+                logger.warning(
+                    "%s was explicitly requested but is unavailable; loading "
+                    "Florence-2 on CPU with FP32",
                     requested_device.type,
                 )
                 self._load_model(torch.device("cpu"), torch.float32)
                 self._batch_size = FLORENCE_BATCH_SIZE_CPU
+                logger.debug("Florence-2 loaded successfully on CPU")
 
         except Exception as e:
             logger.error("Failed to load Florence-2: %s", e)
@@ -955,29 +938,23 @@ class Florence2Service:
             detections.append((str(label).strip(), [x1, y1, x2, y2], score))
         return detections
 
-    def _is_cuda_error(self, error: Exception) -> bool:
+    def _is_device_error(self, error: Exception) -> bool:
+        """True when *error* came from the accelerator the model is on.
+
+        Accelerator-blind, so a Metal OOM falls back to the CPU as a CUDA one
+        does.
+        """
+        if self._model_device is None or not is_accelerated(self._model_device):
+            return False
+        return is_vram_oom(error) or is_device_error(error, self._model_device)
+
+    @staticmethod
+    def _accelerator_available(device) -> bool:
         import torch
 
-        if (
-            self._model_device is None
-            or getattr(self._model_device, "type", "") != "cuda"
-        ):
-            return False
-        # PyTorch's typed OOM deliberately does not promise the word "cuda" in
-        # its message. Type identity is the stable signal; the string fallback
-        # retains compatibility with provider/runtime errors raised outside
-        # PyTorch's own exception hierarchy.
-        oom_type = getattr(torch, "OutOfMemoryError", None)
-        cuda_error_type = getattr(torch.cuda, "CudaError", None)
-        typed_cuda_errors = tuple(
-            error_type
-            for error_type in (oom_type, cuda_error_type)
-            if isinstance(error_type, type)
-        )
-        if typed_cuda_errors and isinstance(error, typed_cuda_errors):
-            return True
-        message = str(error).lower()
-        return "cuda" in message or "cudnn" in message or "cublas" in message
+        if device.type == "cuda":
+            return torch.cuda.is_available()
+        return device.type == "mps" and torch.backends.mps.is_available()
 
 
 class Florence2Plugin(TaggerPlugin):

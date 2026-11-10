@@ -20,16 +20,15 @@ after commit, before the unlink  both paths                 the **destination**
 
 Both residues are a *duplicate*, which the shelf already models - one ``model``
 row with two ``model_file`` rows is what a file copied into two registered
-folders is, and a **manual** rescan of either folder reconciles it. Neither
+folders is, and the next scan of either folder reconciles it. Neither
 residue is a dangling row. That is the acceptance bar (shelf plan §6 item 3),
 and ``tests/test_model_move.py`` interrupts both windows to prove it.
 
-**"A rescan fixes it" means the owner presses the button.** ``ModelFolderScanner``
-has exactly one caller, ``POST /model-folders/{id}/rescan``; nothing scans a
-model folder on start or on a schedule. So every reconciliation claim below is a
-claim about a *repair the owner can make*, not about one that happens by itself.
-The residues are chosen so that waiting costs nothing - a duplicate is
-serviceable, a dangling row is not - but nobody should read them as self-healing.
+**"A rescan fixes it" means the next background scan.** ``ModelFolderScanFinder``
+scans a folder when a model file in it changes, when its watch comes up (start-up
+included) and every ten minutes, so the reconciliation claims below heal by
+themselves within that. The residues are still chosen so that waiting costs
+nothing - a duplicate is serviceable, a dangling row is not.
 
 **Same-drive is a rename and skips all of it**, per the ruling. Nothing is
 copied, nothing is verified and no space is needed, because no second copy is
@@ -38,7 +37,7 @@ destination name and then drops the source one (:func:`publish_no_clobber`), so
 a crash between it and the commit leaves the file at the destination - and, if
 the crash lands between those two syscalls, at the source as well - with the row
 still naming the source. That is a ``missing`` row and an unregistered file, or
-a plain duplicate, and a manual rescan of either folder repairs both by content,
+a plain duplicate, and the next scan of either folder repairs both by content,
 because ``model`` is keyed by sha256 and the row keeps its curation. An *error*
 in that gap is not a residue at all: the publication removes the name it claimed
 and the move fails with both files where they were. The window is the
@@ -102,6 +101,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import posixpath
 import shutil
 import sqlite3
 import threading
@@ -206,12 +206,18 @@ class MovePlan:
 
     destination_folder_id: int
     destination_path: str
+    """The directory the files land in: the folder's path, or the subdirectory
+    of it that ``destination_subpath`` names."""
     moves: list[PlannedMove]
     bytes_to_copy: int
     """Total size of the cross-device moves only, samples directories included;
     a rename copies nothing."""
+    destination_subpath: str = ""
+    """POSIX, relative to the folder, ``""`` for its root."""
+    flatten: bool = True
+    """False for a relocation, which recreates its tree under the target."""
     skipped: list["MoveOutcome"] = field(default_factory=list)
-    """Items already in the destination folder: nothing to do, but still
+    """Items already in the destination directory: nothing to do, but still
     *reported*. Dropping them silently left a caller unable to reconcile the
     items it asked for against the results it got back."""
 
@@ -249,6 +255,84 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def subpath_segments(subpath: str) -> list[str]:
+    """Split a destination subpath into its segments, refusing anything not plain.
+
+    ``""`` is the folder's root. Anything else is a relative POSIX path with no
+    empty, ``.`` or ``..`` segment and no backslash, the same rule the folder
+    listing applies to its ``path``, so the tree can only offer what a move
+    accepts. ``resolve_path_within`` still has the final word on the disk: it is
+    what refuses a symlink that leads out of the folder.
+    """
+    if subpath == "":
+        return []
+    segments = subpath.split("/")
+    if "\\" in subpath or any(segment in ("", ".", "..") for segment in segments):
+        raise MoveRefused(
+            f"{subpath!r} is not a folder inside the destination: name it "
+            "relative to the folder, with '/' between the parts."
+        )
+    return segments
+
+
+def resolve_subfolder(
+    folder_path: str, subpath: str, where: str = "the folder"
+) -> tuple[str, str]:
+    """Resolve a POSIX subpath inside a registered folder, refusing what the tree hides.
+
+    Shared by a move's destination, the folder verbs' source and destination,
+    and creating a folder (#2206), so every route that names a directory inside
+    a folder accepts exactly what ``GET /model-folders/{id}/dirs`` offers.
+
+    The folder listing never offers a link, a junction or a dot-name, and the
+    scanner does not walk through a link, so a file moved through one would be
+    registered at a path no rescan finds. Whether the directory exists is the
+    caller's question: a missing destination and a missing source answer with
+    different statuses.
+
+    Returns:
+        ``(subpath, path)``: the normalised POSIX subpath (``""`` for the root)
+        and the resolved absolute path.
+
+    Raises:
+        MoveRefused: 400 for a malformed subpath, a link or hidden folder on the
+            way, or one that resolves outside the folder.
+    """
+    segments = subpath_segments(subpath)
+    is_junction = getattr(os.path, "isjunction", lambda _path: False)
+    for depth in range(1, len(segments) + 1):
+        here = os.path.join(folder_path, *segments[:depth])
+        if (
+            segments[depth - 1].startswith(".")
+            or os.path.islink(here)
+            or is_junction(here)
+        ):
+            raise MoveRefused(
+                f"{subpath!r} goes through a link or a hidden folder, which the "
+                "shelf does not move into."
+            )
+    try:
+        path = resolve_path_within(folder_path, *segments)
+    except ValueError as exc:
+        logger.error(
+            "Refusing %r under %s: it resolves outside the folder (%s).",
+            subpath,
+            folder_path,
+            exc,
+        )
+        raise MoveRefused(f"{subpath!r} is outside {where}.") from exc
+    return "/".join(segments), path
+
+
+def relpath_dir(relpath: str) -> str:
+    """The POSIX directory of a stored ``relpath``, ``""`` at the folder root.
+
+    The scanner stores relpaths with ``os.sep``, so on Windows they carry
+    backslashes; a subpath arrives with ``/``. Both are compared in this form.
+    """
+    return posixpath.dirname(relpath.replace(os.sep, "/"))
+
+
 def same_device(source_path: str, destination_dir: str) -> bool:
     """Whether *source_path* and *destination_dir* sit on one filesystem.
 
@@ -266,7 +350,11 @@ def same_device(source_path: str, destination_dir: str) -> bool:
     return os.stat(source_path).st_dev == os.stat(destination_dir).st_dev
 
 
-def copy_and_digest(source_path: str, destination_path: str) -> str:
+def copy_and_digest(
+    source_path: str,
+    destination_path: str,
+    on_bytes: Optional[Callable[[int], None]] = None,
+) -> str:
     """Copy the file and return the SHA-256 of the bytes that were *read*.
 
     One pass. Hashing the source in a separate read would double the cost of a
@@ -277,21 +365,30 @@ def copy_and_digest(source_path: str, destination_path: str) -> str:
     Mode and timestamps are copied too. The scanner's re-hash short circuit
     compares ``st_mtime_ns`` against the stored value, so a move that reset the
     mtime would make the next scan re-read every byte it just moved.
+
+    *on_bytes*, when given, is called with each chunk's length as it is written,
+    so a caller can show a single large file filling rather than sitting at
+    ``0 / 1`` for the minute it takes.
     """
     digest = hashlib.sha256()
     with open(source_path, "rb") as source, open(destination_path, "wb") as destination:
         while chunk := source.read(_COPY_CHUNK_BYTES):
             digest.update(chunk)
             destination.write(chunk)
+            if on_bytes is not None:
+                on_bytes(len(chunk))
     shutil.copystat(source_path, destination_path)
     return digest.hexdigest()
 
 
-def file_digest(path: str) -> str:
+def file_digest(path: str, on_bytes: Optional[Callable[[int], None]] = None) -> str:
+    """SHA-256 of *path*, calling *on_bytes* with each chunk's length as read."""
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         while chunk := handle.read(_COPY_CHUNK_BYTES):
             digest.update(chunk)
+            if on_bytes is not None:
+                on_bytes(len(chunk))
     return digest.hexdigest()
 
 
@@ -721,6 +818,7 @@ class ModelMover:
         items: list[tuple[int, str]],
         destination_folder_id: int,
         *,
+        destination_subpath: str = "",
         flatten: bool = True,
         relocating: bool = False,
     ) -> MovePlan:
@@ -732,7 +830,15 @@ class ModelMover:
                 already gives the client for every copy of every row.
             destination_folder_id: Where they go. Must be registered, and must
                 be a folder that is catalogued in place: a ``source`` folder is
-                an ai-toolkit output root, taken *from*, never written into.
+                an ai-toolkit output root, taken *from*, never written into. It
+                must also be unlocked (``movable='per_item'``): the managed
+                store, the HuggingFace cache and the InsightFace packs relocate
+                as a whole or not at all, so nothing is dropped into them either.
+            destination_subpath: The directory inside that folder to land in,
+                POSIX and relative, ``""`` for its root. It must already exist:
+                a move never creates a directory the owner did not make, so a
+                typo cannot scatter models into a new folder ComfyUI does not
+                look in.
             flatten: True - the default, and what dropping files onto a folder
                 means - lands every file at its basename. False keeps each
                 file's ``relpath`` verbatim, subdirectories and all, which is
@@ -772,11 +878,32 @@ class ModelMover:
                 "output root or the Downloads folder. Pick a folder the shelf "
                 "catalogues.",
             )
-        destination_path = destination["path"]
+        if destination["movable"] != "per_item" and not relocating:
+            raise MoveRefused(
+                "That folder is locked: PixlStash's own store, the HuggingFace "
+                "cache and the InsightFace packs are not rearranged one file at "
+                "a time, so nothing is moved into them either.",
+                status_code=409,
+            )
+        if not os.path.isdir(destination["path"]):
+            raise MoveRefused(
+                f"Destination folder {destination['path']} is not a readable "
+                "directory right now, so nothing was moved.",
+                status_code=409,
+            )
+        if destination_subpath and relocating:
+            # A relocation moves a whole folder to a new root; landing it inside
+            # a subdirectory of the target would register paths the relocated
+            # folder never had.
+            subpath_segments(destination_subpath)
+            raise MoveRefused("A relocation cannot target a subfolder.")
+        subpath, destination_path = resolve_subfolder(
+            destination["path"], destination_subpath, "the destination folder"
+        )
         if not os.path.isdir(destination_path):
             raise MoveRefused(
-                f"Destination folder {destination_path} is not a readable "
-                "directory right now, so nothing was moved.",
+                f"There is no folder {destination_subpath!r} in the destination. "
+                "Create it first; a move does not make folders.",
                 status_code=409,
             )
 
@@ -788,7 +915,9 @@ class ModelMover:
                 folder_id,
                 relpath,
                 destination_folder_id,
+                destination["path"],
                 destination_path,
+                subpath,
                 flatten=flatten,
                 relocating=relocating,
             )
@@ -798,7 +927,7 @@ class ModelMover:
                         folder_id,
                         relpath,
                         STATUS_SKIPPED,
-                        "Already in the destination folder.",
+                        "Already in that folder.",
                     )
                 )
                 continue
@@ -835,6 +964,8 @@ class ModelMover:
         return MovePlan(
             destination_folder_id=destination_folder_id,
             destination_path=destination_path,
+            destination_subpath=subpath,
+            flatten=flatten,
             moves=moves,
             bytes_to_copy=bytes_to_copy,
             skipped=skipped,
@@ -846,6 +977,8 @@ class ModelMover:
         relpath: str,
         destination_folder_id: int,
         destination_path: str,
+        destination_dir: str,
+        subpath: str,
         *,
         flatten: bool,
         relocating: bool = False,
@@ -892,12 +1025,18 @@ class ModelMover:
                 "rather than relocating anything.",
                 status_code=409,
             )
-        if folder_id == destination_folder_id:
+        if folder_id == destination_folder_id and relpath_dir(relpath) == subpath:
             # Not an error: the shelf lets a user drop a mixed selection onto a
             # folder, and the files already in it are simply nothing to do. The
             # caller still hears about them - ``plan`` turns this ``None`` into
             # a ``skipped`` outcome - because an item that vanishes between the
             # request and the results is one the client cannot account for.
+            #
+            # **The directory, not just the folder.** Comparing folder ids alone
+            # skipped a LoRA at the root of a StabilityMatrix ``Models`` folder
+            # dropped onto ``Models/Lora``: same registered folder, so "already
+            # there", and the move did nothing (#2204). A file is already there
+            # only when it sits directly in the directory it is being moved to.
             return None
 
         try:
@@ -935,7 +1074,11 @@ class ModelMover:
         # refuses the taken name as well, but this is where the refusal is a 4xx
         # naming the file rather than a failed item on a worker thread. Asserted
         # at both ends in ``tests/test_model_move.py``.
-        destination_relpath = os.path.basename(relpath) if flatten else relpath
+        destination_relpath = (
+            os.path.join(*subpath.split("/"), os.path.basename(relpath))
+            if flatten
+            else relpath
+        )
         try:
             resolved_destination = resolve_path_within(
                 destination_path, destination_relpath
@@ -972,7 +1115,9 @@ class ModelMover:
             destination_path=resolved_destination,
             sha256=row["sha256"],
             size=int(os.path.getsize(source_path)),
-            same_device=same_device(source_path, destination_path),
+            # Against the directory the file lands in, not the folder root: a
+            # drive mounted at a subfolder is another device under one folder.
+            same_device=same_device(source_path, destination_dir),
         )
 
     def _check_destination_free(
@@ -1016,8 +1161,8 @@ class ModelMover:
             # only known location. Let a rescan clear it instead.
             raise MoveRefused(
                 f"{destination_relpath} is registered to model "
-                f"{existing['model_id']} in the destination folder. Rescan that "
-                "folder first."
+                f"{existing['model_id']} in the destination folder. Try again "
+                "once that folder's next scan has caught up."
             )
 
     # -- execution --------------------------------------------------------
@@ -1029,6 +1174,7 @@ class ModelMover:
         delete_source: bool = True,
         should_cancel: Optional[Callable[[], bool]] = None,
         on_progress: Optional[Callable[[MoveOutcome], None]] = None,
+        on_bytes: Optional[Callable[[int], None]] = None,
     ) -> MoveReport:
         """Carry out a planned batch, one file at a time.
 
@@ -1043,6 +1189,10 @@ class ModelMover:
                 which is the ruling, and is also the only answer that does not
                 need a second crash-window argument for the rollback.
             on_progress: Called with each :class:`MoveOutcome` as it is decided.
+            on_bytes: Called with a byte count as each chunk of a model file is
+                copied and again as it is read back to verify. Renames report
+                nothing, and nor does a ``<stem>_samples/`` carry, so the sum
+                stays short of twice ``bytes_to_copy`` when previews travel.
 
         Returns:
             A :class:`MoveReport` with one outcome per planned file.
@@ -1070,7 +1220,9 @@ class ModelMover:
                         )
                     )
                 break
-            outcome = self._move_one(move, plan, delete_source=delete_source)
+            outcome = self._move_one(
+                move, plan, delete_source=delete_source, on_bytes=on_bytes
+            )
             report.outcomes.append(outcome)
             if on_progress is not None:
                 on_progress(outcome)
@@ -1083,7 +1235,12 @@ class ModelMover:
         return report
 
     def _move_one(
-        self, move: PlannedMove, plan: MovePlan, *, delete_source: bool
+        self,
+        move: PlannedMove,
+        plan: MovePlan,
+        *,
+        delete_source: bool,
+        on_bytes: Optional[Callable[[int], None]] = None,
     ) -> MoveOutcome:
         try:
             self._check_destination_free(
@@ -1104,12 +1261,15 @@ class ModelMover:
             )
         try:
             # ``flatten=False`` moves a tree, so the destination subdirectory
-            # may not exist yet. A no-op for the flattened case.
-            os.makedirs(os.path.dirname(move.destination_path), exist_ok=True)
+            # may not exist yet. A flattened move never makes one: a subfolder
+            # removed since the plan fails the file (the write finds no
+            # directory) rather than being quietly recreated.
+            if not plan.flatten:
+                os.makedirs(os.path.dirname(move.destination_path), exist_ok=True)
             if move.same_device and delete_source:
                 return self._rename(move, plan)
             return self._copy_verify_repoint_unlink(
-                move, plan, delete_source=delete_source
+                move, plan, delete_source=delete_source, on_bytes=on_bytes
             )
         except (OSError, sqlite3.IntegrityError, RepointLost) as exc:
             logger.error(
@@ -1129,7 +1289,7 @@ class ModelMover:
         No copy, no verify and no space check, because no second copy is made -
         the ruling. The residue of a crash between the two steps is a file at the
         destination that no row names plus a row that will read ``missing``, and
-        a manual rescan of either folder re-links it by content with its
+        the next scan of either folder re-links it by content with its
         curation intact. That is narrower than the copy path's guarantee, and it
         is bought with a window measured in syscalls rather than in minutes of
         I/O.
@@ -1190,16 +1350,21 @@ class ModelMover:
         )
 
     def _copy_verify_repoint_unlink(
-        self, move: PlannedMove, plan: MovePlan, *, delete_source: bool
+        self,
+        move: PlannedMove,
+        plan: MovePlan,
+        *,
+        delete_source: bool,
+        on_bytes: Optional[Callable[[int], None]] = None,
     ) -> MoveOutcome:
         """The invariant, in the only order that has no dangling-row window."""
         partial = move.destination_path + PARTIAL_SUFFIX
         try:
-            written = copy_and_digest(move.source_path, partial)
+            written = copy_and_digest(move.source_path, partial, on_bytes=on_bytes)
             # Read the destination back. The source digest above proves what left;
             # only re-reading proves what arrived, which is the entire point of
             # verifying a copy rather than trusting the write.
-            arrived = file_digest(partial)
+            arrived = file_digest(partial, on_bytes=on_bytes)
             if arrived != written:
                 raise OSError(
                     f"Copy of {move.source_path} verified as {arrived} but "
@@ -1212,8 +1377,8 @@ class ModelMover:
                 # lookup and the public {sha256}/file route both resolve on it.
                 raise OSError(
                     f"{move.source_relpath} hashes as {written} but is "
-                    f"registered as {move.sha256}; rescan its folder before "
-                    "moving it."
+                    f"registered as {move.sha256}; try again once its folder's "
+                    "next scan has re-read it."
                 )
             publish_no_clobber(partial, move.destination_path)
         except OSError:

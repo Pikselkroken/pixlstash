@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import {
   BLOCKS_BATCH,
   FIX_INSTALL_PACK,
+  FIX_UPDATE_PIXLSTASH_PACK,
   LORAS_BYPASSED,
   LORAS_SKIPPED,
   PICTURE_INPUT_UNFILLED,
@@ -75,18 +76,27 @@ describe("pixlstash_nodes (#1521)", () => {
   });
 });
 
-describe("pack_outdated says restart ComfyUI", () => {
-  it("names the checkpoint and the action, and blocks the batch", () => {
-    const files = [{ file: "sd_xl_base_1.0.safetensors", folder: "checkpoints" }];
-    const read = readReason({ code: "pack_outdated", models: files });
+describe("pack_outdated offers the update", () => {
+  const files = [{ file: "sd_xl_base_1.0.safetensors", folder: "checkpoints" }];
+
+  it("offers to update the nodes where PixlStash can, and blocks the batch", () => {
+    const read = readReason({ code: "pack_outdated", models: files, can_update: true });
     expect(read.text).toBe(
-      "ComfyUI-PixlStash is out of date in the running ComfyUI, so it cannot " +
-        "load this model from your model shelf. " +
-        "Restart ComfyUI, or update the pack.",
+      "ComfyUI's PixlStash nodes are too old to load this model from your shelf.",
     );
+    expect(read.fix).toBe(FIX_UPDATE_PIXLSTASH_PACK);
     expect(read.files).toEqual(files);
     expect(read.blocking).toBe(true);
     expect(BLOCKS_BATCH).toContain("pack_outdated");
+  });
+
+  it("says what to do where PixlStash cannot", () => {
+    const read = readReason({ code: "pack_outdated", models: files });
+    expect(read.text).toBe(
+      "ComfyUI's PixlStash nodes are too old to load this model from your " +
+        "shelf. Update ComfyUI-PixlStash, then restart ComfyUI.",
+    );
+    expect(read.fix).toBe(null);
   });
 });
 
@@ -96,7 +106,7 @@ describe("models_downloading refuses until the download lands", () => {
     const read = readReason({ code: "models_downloading", models: files });
     expect(read.text).toBe(
       "A model it needs is still downloading. Run it once it has finished: " +
-        "the Tasks tab shows how far.",
+        "the Tasks list in the title bar shows how far.",
     );
     expect(read.files).toEqual([{ ...files[0], downloading: true }]);
     expect(read.blocking).toBe(true);

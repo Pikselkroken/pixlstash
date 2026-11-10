@@ -39,6 +39,10 @@ VALID_STATUSES = (STATUS_APPLIED, STATUS_UNDONE, STATUS_SUPERSEDED)
 # The only target type today. Declared as a column (not assumed) because the
 # audit log will later record set-, project- and model-shelf-level operations.
 TARGET_PICTURE = "picture"
+# A tag-group move (``tag_groups.move`` in :mod:`pixlstash.services.tag_group_service`)
+# targets no picture: its before/after payload is the tag -> group map it moved,
+# and a post-restore hook writes that map back. ``target_ids`` is empty.
+TARGET_TAG_GROUP = "tag_group"
 
 
 class Operation(SQLModel, table=True):

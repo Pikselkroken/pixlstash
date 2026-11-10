@@ -1435,6 +1435,210 @@ def test_0127_adds_run_workflow_version_once_on_a_fresh_and_a_populated_vault():
         assert again.returncode == 0, again.stderr
 
 
+def test_0133_adds_mouse_preferences_on_a_fresh_and_a_populated_vault():
+    """Both columns arrive either way, an existing user reads NULL (the model
+    default: double-click, wheel zooms), and a re-run is a no-op."""
+    columns = ("grid_open_gesture", "viewer_wheel_action")
+
+    def has_columns(conn):
+        present = {row[1] for row in conn.execute("PRAGMA table_info(user)")}
+        return set(columns) <= present
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert has_columns(conn), "the baseline's create_all()"
+
+        down = _run_alembic(
+            ["downgrade", "0132_add_picture_pending_person"], db_url, _MIGRATIONS_DIR
+        )
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert not has_columns(conn)
+            _insert_minimal_row(conn, "user", username="owner")
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert has_columns(conn), "migration 0133"
+            assert conn.execute(
+                "SELECT username, grid_open_gesture, viewer_wheel_action FROM user"
+            ).fetchall() == [("owner", None, None)]
+            conn.execute(
+                "UPDATE alembic_version SET version_num = ?",
+                ("0132_add_picture_pending_person",),
+            )
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
+def test_0140_drops_picture_unseen_and_its_index_keeping_the_pictures():
+    """The column and its partial index go, a picture flagged unseen survives
+    the drop, and a re-run is a no-op."""
+    before = "0139_add_keep_workflow_on_export"
+
+    def unseen_parts(conn):
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(picture)")}
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(picture)")}
+        return "unseen" in cols, "ix_picture_unseen" in indexes
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert unseen_parts(conn) == (False, False), "the baseline"
+
+        down = _run_alembic(["downgrade", before], db_url, _MIGRATIONS_DIR)
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert unseen_parts(conn) == (True, True)
+            _insert_minimal_row(conn, "picture", file_path="a.png", unseen=1)
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert unseen_parts(conn) == (False, False), "migration 0140"
+            assert conn.execute("SELECT file_path FROM picture").fetchall() == [
+                ("a.png",)
+            ]
+            conn.execute("UPDATE alembic_version SET version_num = ?", (before,))
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
+def test_0139_adds_keep_workflow_on_export_on_a_fresh_and_a_populated_vault():
+    """The column arrives either way, an existing user reads NULL (strip), and
+    a re-run is a no-op."""
+    before = "0138_add_picture_unseen"
+
+    def has_column(conn):
+        present = {row[1] for row in conn.execute("PRAGMA table_info(user)")}
+        return "keep_workflow_on_export" in present
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert has_column(conn), "the baseline's create_all()"
+
+        down = _run_alembic(["downgrade", before], db_url, _MIGRATIONS_DIR)
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert not has_column(conn)
+            _insert_minimal_row(conn, "user", username="owner")
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert has_column(conn), "migration 0139"
+            assert conn.execute(
+                "SELECT username, keep_workflow_on_export FROM user"
+            ).fetchall() == [("owner", None)]
+            conn.execute("UPDATE alembic_version SET version_num = ?", (before,))
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
+def test_0136_adds_comfyui_connections_and_keeps_the_saved_address():
+    """The column arrives either way and an existing user's ``comfyui_url`` is
+    left as it was, reading NULL for the list (one connection, #2167)."""
+
+    def has_column(conn):
+        return "comfyui_connections" in {
+            row[1] for row in conn.execute("PRAGMA table_info(user)")
+        }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert has_column(conn), "the baseline's create_all()"
+
+        before = "0135_add_training_presets_auto_check"
+        down = _run_alembic(["downgrade", before], db_url, _MIGRATIONS_DIR)
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert not has_column(conn)
+            _insert_minimal_row(
+                conn, "user", username="owner", comfyui_url="http://127.0.0.1:8188/"
+            )
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert has_column(conn), "migration 0136"
+            assert conn.execute(
+                "SELECT comfyui_url, comfyui_connections FROM user"
+            ).fetchall() == [("http://127.0.0.1:8188/", None)]
+            conn.execute("UPDATE alembic_version SET version_num = ?", (before,))
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
+def test_0143_adds_whats_changed_on_a_fresh_and_a_populated_vault():
+    """Both columns arrive either way, an existing user reads NULL (never seen,
+    nothing done), and a re-run is a no-op."""
+    columns = ("last_seen_version", "whats_changed")
+
+    def present_columns(conn):
+        return {row[1] for row in conn.execute("PRAGMA table_info(user)")}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert set(columns) <= present_columns(conn), "the baseline's create_all()"
+
+        down = _run_alembic(
+            ["downgrade", "0142_recompute_smart_score_for_face_resolution"],
+            db_url,
+            _MIGRATIONS_DIR,
+        )
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            # Each column on its own: a downgrade that drops only one leaves
+            # the other behind, which a combined check would not see.
+            for column in columns:
+                assert column not in present_columns(conn), column
+            _insert_minimal_row(conn, "user", username="owner")
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            for column in columns:
+                assert column in present_columns(conn), column
+            assert conn.execute(
+                "SELECT username, last_seen_version, whats_changed FROM user"
+            ).fetchall() == [("owner", None, None)]
+            conn.execute(
+                "UPDATE alembic_version SET version_num = ?",
+                ("0142_recompute_smart_score_for_face_resolution",),
+            )
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
 def test_0128_adds_prompt_match_once_on_a_fresh_and_a_populated_vault():
     """Column and probe index arrive either way, existing pictures read NULL
     (not scored), and a second upgrade over a vault that has both is a no-op."""

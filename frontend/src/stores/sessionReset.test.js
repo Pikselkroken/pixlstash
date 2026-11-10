@@ -45,9 +45,12 @@ import { notifySessionReset } from "../utils/apiClient";
 import { useLockedSetsStore } from "./useLockedSetsStore";
 import { useEntityNamesStore } from "./useEntityNamesStore";
 import { useEntityListsStore } from "./useEntityListsStore";
+import { useImportArrivalsStore } from "./useImportArrivalsStore";
 import { useProjectStore } from "./useProjectStore";
 import { useSelectionStore } from "./useSelectionStore";
 import { useSnapshotsStore } from "./useSnapshotsStore";
+import { useTrainingRunsStore } from "./useTrainingRunsStore";
+import { useTrainingStore } from "./useTrainingStore";
 import { useDedupStore } from "./useDedupStore";
 import { useReviewSessionsStore } from "./useReviewSessionsStore";
 import { useOperationStore } from "./useOperationStore";
@@ -57,6 +60,8 @@ import { useModelFoldersStore } from "./useModelFoldersStore";
 import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
 import { useMovesStore } from "./useMovesStore";
+import { useImportFoldersStore } from "./useImportFoldersStore";
+import { useInboxStore } from "./useInboxStore";
 import { useWorkflowsStore } from "./useWorkflowsStore";
 import { useWorkflowTemplatesStore } from "./useWorkflowTemplatesStore";
 import { useRunDialogStore } from "./useRunDialogStore";
@@ -64,6 +69,8 @@ import { useFilterStore } from "./useFilterStore";
 import { useFavouritesStore } from "./useFavouritesStore";
 import { useUpscaleStore } from "./useUpscaleStore";
 import { useNewBatchStore } from "./useNewBatchStore";
+import { useTagClipboardStore } from "./useTagClipboardStore";
+import { useTagGroupsStore } from "./useTagGroupsStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -216,6 +223,16 @@ const STORES = [
     isEmpty: (s) => !s.isNew(11) && !s.isNew(12),
   },
   {
+    // An import's arriving tiles name the pictures they matched (#2512).
+    name: "useImportArrivalsStore",
+    use: useImportArrivalsStore,
+    seed: (s) => {
+      const [key] = s.begin("r1", [new File(["x"], "a.png")]);
+      s.applyOutcomes("r1", [{ key, outcome: "duplicate", picture_id: 11 }]);
+    },
+    isEmpty: (s) => s.runs.length === 0,
+  },
+  {
     // Owner-only hub rows: the next credential may be a share token that
     // must not learn which models and workflows the owner favours.
     name: "useFavouritesStore",
@@ -228,6 +245,27 @@ const STORES = [
       !s.isFavourite("model", "abc") &&
       !s.isFavourite("workflow", "wf-1") &&
       s.loaded === false,
+  },
+  {
+    // The tags copied in one session.
+    name: "useTagClipboardStore",
+    use: useTagClipboardStore,
+    seed: (s) => {
+      s.clipboardTags = ["umbrella"];
+    },
+    isEmpty: (s) => s.clipboardTags.length === 0,
+  },
+  {
+    // The library's tag -> group map. Another library files its tags
+    // differently, and a share session may not read it at all. The view
+    // choices (Tags | By group, Health | Groups) are this machine's and stay.
+    name: "useTagGroupsStore",
+    use: useTagGroupsStore,
+    seed: (s) => {
+      s.groups = [{ id: 1, name: "Character", position: 0 }];
+      s.groupOf = new Map([["red hood", 1]]);
+    },
+    isEmpty: (s) => s.groups.length === 0 && s.groupOf.size === 0,
   },
   {
     name: "useLockedSetsStore",
@@ -245,7 +283,6 @@ const STORES = [
       s.mergeSetNames([{ id: 2, name: "Holiday" }]);
       s.mergeProjectNames([{ id: 3, name: "Client work" }]);
       s.mergeRefFolderLabels([{ id: 4, label: "refs" }]);
-      s.mergeImportFolderLabels([{ id: 5, label: "inbox" }]);
     },
     isEmpty: (s) =>
       [
@@ -253,7 +290,6 @@ const STORES = [
         s.setNames,
         s.projectNames,
         s.refFolderLabels,
-        s.importFolderLabels,
       ].every((map) => Object.keys(map).length === 0),
   },
   {
@@ -305,6 +341,36 @@ const STORES = [
       s.activeJob = { kind: "RESTORE" };
     },
     isEmpty: (s) => s.snapshots.length === 0 && s.activeJob === null,
+  },
+  {
+    name: "useTrainingStore",
+    use: useTrainingStore,
+    seed: (s) => {
+      s.jobs = [{ id: 1, name: "Ada", status: "completed" }];
+      s.aiToolkitRepoPath = "/srv/ai-toolkit";
+      s.configLoaded = true;
+      s.aiToolkitDiscovery = { found: true, repo_path: "/srv/ai-toolkit" };
+      s.aiToolkitCheck = { ok: true, version: "0.13.34" };
+      s.aiToolkitStatus = { configured: true, runs: { run_count: 3 } };
+    },
+    isEmpty: (s) =>
+      s.jobs.length === 0 &&
+      s.aiToolkitRepoPath === "" &&
+      s.configLoaded === false &&
+      s.aiToolkitDiscovery === null &&
+      s.aiToolkitCheck === null &&
+      s.aiToolkitStatus === null,
+  },
+  {
+    name: "useTrainingRunsStore",
+    use: useTrainingRunsStore,
+    seed: (s) => {
+      s.runs = [{ name: "aria_v3", checkpoints: [] }];
+      s.jobs = [{ id: 1, uuid: "u1", name: "aria_v4", status: "running" }];
+      s.chosen = ["run:aria_v3"];
+    },
+    isEmpty: (s) =>
+      s.runs.length === 0 && s.jobs.length === 0 && s.chosen.length === 0,
   },
   {
     name: "useDedupStore",
@@ -381,6 +447,26 @@ const STORES = [
       s.ambiguous.length === 0 &&
       s.offLayout.length === 0 &&
       s.loaded === false,
+  },
+  {
+    // Import-folder roots on the previous credential's host.
+    name: "useImportFoldersStore",
+    use: useImportFoldersStore,
+    seed: (s) => {
+      s.folders = [{ id: 1, folder: "/home/me/renders" }];
+      s.loaded = true;
+    },
+    isEmpty: (s) => s.folders.length === 0 && s.loaded === false,
+  },
+  {
+    // The Inbox counts of the previous credential's library. The period is
+    // the reader's view setting and stays.
+    name: "useInboxStore",
+    use: useInboxStore,
+    seed: (s) => {
+      s.counts = { "14d": 56, "90d": 403 };
+    },
+    isEmpty: (s) => Object.keys(s.counts).length === 0,
   },
 ];
 
@@ -524,6 +610,9 @@ describe("the store matrix is complete", () => {
       "the owner's own preferences, re-hydrated from /config on login; " +
       "clearing them mid-transition would flash the theme (see the issue)",
     "useViewStore.js": "which view is open",
+    "useWhatsChangedStore.js":
+      "the owner's own What's changed progress, re-hydrated from /config; " +
+      "every surface is hidden in a read-only session",
     "useWsStore.js": "the per-tab client id and socket status",
   };
 

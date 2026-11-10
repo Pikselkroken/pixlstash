@@ -44,6 +44,12 @@ export const SOURCE_KIND = "source";
  */
 export const DOWNLOADS_KIND = "downloads";
 
+/**
+ * PixlStash's own roots: its downloads, InsightFace, the HuggingFace cache.
+ * Declared rather than scanned; a rescan re-reads them from their index.
+ */
+export const BUILTIN_KIND = "foreign";
+
 /** The folder kinds a caller may register (`managed`/`foreign` are ours). */
 export const CREATABLE_KINDS = ["user", "source", DOWNLOADS_KIND];
 
@@ -90,9 +96,46 @@ export async function listModelFolderDevices() {
 }
 
 /**
+ * One level of a registered folder's subdirectories, for the Folders tree.
+ *
+ * Lazy by design: the tree asks once per expand. Read from the disk, so an
+ * empty directory is listed; its counts are the `present` copies under it,
+ * recursively. A folder the owner does not lay out (the managed store, the
+ * HuggingFace cache) answers `locked: true` with no `dirs`.
+ *
+ * @param {number|string} id - the registered folder.
+ * @param {string} [path=""] - POSIX, relative to the folder; `""` is its root.
+ * @returns {Promise<Object>} `{folder_id, path, locked, model_count,
+ *   direct_model_count, bytes, dirs: [{name, path, model_count,
+ *   direct_model_count, bytes, has_dirs}]}`.
+ */
+export async function listModelFolderDirs(id, path = "") {
+  return unwrap(
+    apiClient.get(`${MODEL_FOLDERS_URL}/${encodeURIComponent(id)}/dirs`, {
+      params: { path },
+    }),
+  );
+}
+
+/**
+ * Where the owner's ComfyUI loads each kind of model from, inside the
+ * registered folders (#2205). Read live from ComfyUI by the server.
+ *
+ * `known` is false when none of ComfyUI's folders is on the shelf: no ComfyUI
+ * set, not answering, or on another machine. Nothing is misplaced then.
+ *
+ * @returns {Promise<Object>} `{known, reads: [{folder_id, subpath, category,
+ *   kind}]}`, `subpath` POSIX and relative to the folder.
+ */
+export async function getComfyuiReads() {
+  return unwrap(apiClient.get(`${MODEL_FOLDERS_URL}/comfyui-reads`));
+}
+
+/**
  * Register a folder for the shelf to catalogue.
  *
- * Registering does not scan; call {@link rescanModelFolder} afterwards. A path
+ * The server queues the folder's first scan itself and rescans it whenever a
+ * model file in it changes, so the row comes back with `scan_status`. A path
  * that is already registered answers 409, which the picker avoids by disabling
  * the rows it was given in `registeredPaths`.
  *
@@ -168,30 +211,14 @@ export async function forgetModelFolder(id) {
 }
 
 /**
- * Start a scan of a registered folder.
- *
- * Returns 202 as soon as the thread is started, NOT when the scan finishes: a
- * folder of 1,800 adapters is minutes of hashing and there is no progress
- * channel. The only completion signal is `last_checked` advancing on a later
- * {@link listModelFolders}, which is what the store polls for.
- *
- * @param {number|string} id
- * @returns {Promise<Object>} the response body, whose `status` is `started`,
- *   `already_running`, or `skipped` for a `source` folder.
- */
-export async function rescanModelFolder(id) {
-  return unwrap(apiClient.post(`${MODEL_FOLDERS_URL}/${id}/rescan`, {}));
-}
-
-/**
  * Look for model files that landed after their folder's last scan (#1985).
  *
  * *files* are the names a workflow reports missing; they are matched by
- * basename in every folder a rescan would walk. Without `add` this only walks,
+ * basename in every folder the server scans. Without `add` this only walks,
  * nothing is opened or hashed, so it is cheap to ask whenever a file is
  * missing. With `add` each file found is registered as a scan would.
  *
- * §16.3 like the rescan: a remote owner gets a 403.
+ * §16.3 like the folder mutators: a remote owner gets a 403.
  *
  * @param {string[]} files
  * @param {{add?: boolean}} [options]
@@ -202,4 +229,138 @@ export async function pickUpModelFiles(files, { add = false } = {}) {
     apiClient.post(`${MODEL_FOLDERS_URL}/pick-up`, { files, add }),
   );
   return Array.isArray(body?.files) ? body.files : [];
+}
+
+/**
+ * Create a directory inside a registered folder (#2206).
+ *
+ * A plain `mkdir`: one segment, no tree. The server refuses a reserved Windows
+ * name, a leading dot, a trailing dot or space, a slash, and a name already
+ * taken (409), and answers its reason in `detail`, which the caller shows under
+ * the field as it stands. Not offered in Docker (403): the folder is on the
+ * host, behind a bind mount this process cannot write through.
+ *
+ * @param {number|string} id - the registered folder.
+ * @param {Object} options
+ * @param {string} [options.path=""] - the POSIX parent, relative to the folder;
+ *   `""` is its root.
+ * @param {string} options.name - one segment.
+ * @returns {Promise<{folder_id: number, path: string}>} the new directory's
+ *   POSIX relpath.
+ */
+export async function createModelFolderDir(id, { path = "", name }) {
+  return unwrap(
+    apiClient.post(`${MODEL_FOLDERS_URL}/${encodeURIComponent(id)}/dirs`, {
+      path,
+      name,
+    }),
+  );
+}
+
+/**
+ * Rename a registered folder you added, on disk and in the registry. Its
+ * models, its default and download marks and its curation follow, because
+ * everything names the folder by id. Refusals answer their reason in `detail`
+ * (400 for a name the drive cannot hold, 409 for a taken name, a locked
+ * folder, or a scan or move in progress), for the field to show.
+ *
+ * @param {number|string} id - the registered folder.
+ * @param {string} name - its new name, one segment.
+ * @returns {Promise<Object>} the folder as now registered.
+ */
+export async function renameModelFolder(id, name) {
+  return unwrap(
+    apiClient.post(`${MODEL_FOLDERS_URL}/${encodeURIComponent(id)}/rename`, {
+      name,
+    }),
+  );
+}
+
+/**
+ * Ask the server host to show a folder, or a directory inside it, in its
+ * desktop file manager. Loopback-only at the gate, as
+ * `openModelLocation` is: a LAN client gets 403, a headless server 500.
+ *
+ * @param {number|string} id - the registered folder.
+ * @param {string} [path=""] - POSIX, relative to the folder; `""` is its root.
+ * @returns {Promise<{status: string}>}
+ */
+export async function openModelFolder(id, path = "") {
+  return unwrap(
+    apiClient.post(`${MODEL_FOLDERS_URL}/${encodeURIComponent(id)}/open`, null, {
+      params: { path },
+    }),
+  );
+}
+
+/**
+ * Move a folder inside the registry, or rename it (#2206).
+ *
+ * A rename is a move whose destination is the folder's own parent, with a
+ * `newName`. With `dryRun` the server runs every refusal and answers the facts
+ * (`same_drive`, the counts, the bytes) without touching anything, so it doubles
+ * as validation. Without it the answer is a 202 with the job the move corner
+ * card already watches (`kind: "folder"`).
+ *
+ * @param {number|string} id - the folder the directory is in.
+ * @param {Object} options
+ * @param {string} options.path - the directory, POSIX, relative to its folder.
+ * @param {number} options.destinationFolderId
+ * @param {string} options.destinationPath - the directory's new parent.
+ * @param {string} [options.newName] - the new name, for a rename.
+ * @param {boolean} [options.dryRun=false]
+ * @returns {Promise<Object>} the dry-run facts, or the job's first snapshot.
+ */
+export async function moveModelFolderDir(
+  id,
+  { path, destinationFolderId, destinationPath, newName, dryRun = false },
+) {
+  const body = {
+    path,
+    destination_folder_id: destinationFolderId,
+    destination_path: destinationPath,
+  };
+  if (newName) body.new_name = newName;
+  if (dryRun) body.dry_run = true;
+  return unwrap(
+    apiClient.post(
+      `${MODEL_FOLDERS_URL}/${encodeURIComponent(id)}/dirs/move`,
+      body,
+    ),
+  );
+}
+
+/**
+ * Remove a folder inside a registered folder (#2207).
+ *
+ * With `dryRun` it reads only and answers what would go: every file (`files`,
+ * largest first, `model_id` null for one the shelf does not list), `models`,
+ * what `breaks` outside it, `pictures`, the `copies` a move takes and a
+ * `fingerprint`. The removal sends that fingerprint back as `expect`, and the
+ * server answers 409 when the folder changed since, so nothing goes that was
+ * not shown.
+ *
+ * @param {number|string} id - the folder the directory is in.
+ * @param {Object} options
+ * @param {string} options.path - the directory, POSIX, relative to its folder.
+ * @param {boolean} [options.permanent=false] - delete rather than trash.
+ * @param {boolean} [options.dryRun=false]
+ * @param {string} [options.expect] - the dry run's fingerprint.
+ * @returns {Promise<Object>} the plan, or `{files_removed, removed_models,
+ *   permanent, trash_name}`.
+ */
+export async function removeModelFolderDir(
+  id,
+  { path, permanent = false, dryRun = false, expect },
+) {
+  const body = { path };
+  if (permanent) body.permanent = true;
+  if (dryRun) body.dry_run = true;
+  if (expect) body.expect = expect;
+  return unwrap(
+    apiClient.post(
+      `${MODEL_FOLDERS_URL}/${encodeURIComponent(id)}/dirs/remove`,
+      body,
+    ),
+  );
 }

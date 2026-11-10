@@ -16,6 +16,7 @@ import pytest
 from pixlstash.utils.aitoolkit_run import (
     Checkpoint,
     TrainingRun,
+    is_sample_filename,
     read_output_root,
     read_run,
 )
@@ -136,6 +137,15 @@ class TestSamples:
         assert "my-reference.jpg" not in [s.filename for s in run.samples]
         assert len(run.samples) == 4
 
+    def test_a_video_models_clips_are_previews_too(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "samples" / "1712345678901__000000500_0.mp4").write_bytes(b"")
+        run = read_run(str(run_dir))
+        clip = next(s for s in run.samples if s.filename.endswith(".mp4"))
+        assert (clip.step, clip.index, clip.is_video) == (500, 0, True)
+        assert not any(s.is_video for s in run.samples if s is not clip)
+        assert is_sample_filename("1712345678901__000000500_0.mp4")
+
     def test_a_run_with_no_samples_folder_still_reads(self, tmp_path):
         run_dir = tmp_path / "Bare"
         run_dir.mkdir()
@@ -143,46 +153,6 @@ class TestSamples:
         run = read_run(str(run_dir))
         assert run.samples == []
         assert run.steps == [100]
-
-    def test_a_stepped_checkpoint_takes_the_samples_naming_its_step(self, tmp_path):
-        run = read_run(str(_run_folder(tmp_path)))
-        stepped = next(c for c in run.checkpoints if c.step == 250)
-        assert [s.filename for s in run.samples_for(stepped)] == [
-            "1712345678901__000000250_0.jpg",
-            "1712345678901__000000250_1.jpg",
-        ]
-
-    def test_the_bare_final_takes_the_highest_steps_samples(self, tmp_path):
-        """It carries no step of its own and it is the stack cover. A rule that
-        left it blank would make the most visible row of a fresh import the only
-        empty one."""
-        run = read_run(str(_run_folder(tmp_path)))
-        final = next(c for c in run.checkpoints if c.is_final)
-        assert [s.step for s in run.samples_for(final)] == [2750, 2750]
-
-    def test_the_same_step_can_be_claimed_twice(self, tmp_path):
-        """The final and the highest stepped checkpoint share previews, and that
-        duplication is accepted: 15 MB against a cover that reads."""
-        run = read_run(str(_run_folder(tmp_path)))
-        final = next(c for c in run.checkpoints if c.is_final)
-        highest = next(c for c in run.checkpoints if c.step == 2750)
-        assert run.samples_for(final) == run.samples_for(highest)
-
-    def test_a_final_in_a_run_with_no_samples_at_all_gets_an_empty_list(self, tmp_path):
-        run_dir = tmp_path / "Bare"
-        run_dir.mkdir()
-        (run_dir / "Bare.safetensors").write_bytes(b"")
-        run = read_run(str(run_dir))
-        assert run.samples_for(run.checkpoints[0]) == []
-
-    def test_a_step_with_no_previews_of_its_own_gets_none(self, tmp_path):
-        """Not the highest step's, which is the final's rule and only the
-        final's: a stepped checkpoint claims the samples naming it or nothing."""
-        run_dir = _run_folder(tmp_path, steps=(250,))
-        (run_dir / "MyCharacter_000000900.safetensors").write_bytes(b"")
-        run = read_run(str(run_dir))
-        lonely = next(c for c in run.checkpoints if c.step == 900)
-        assert run.samples_for(lonely) == []
 
 
 class TestConfig:
@@ -234,6 +204,63 @@ class TestConfig:
         )
         run = read_run(str(run_dir))
         assert run.trigger_words == ["ohwx", "woman"]
+
+    def test_reads_the_planned_steps_rate_and_preview_prompts(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text(
+            "process:\n"
+            "  - train:\n"
+            "      steps: 3000\n"
+            "      lr: 0.0001\n"
+            "    sample:\n"
+            "      samples:\n"
+            "        - prompt: ohwx, portrait\n"
+            "        - prompt: a red bicycle\n",
+            encoding="utf-8",
+        )
+        run = read_run(str(run_dir))
+        assert run.total_steps == 3000
+        assert run.learning_rate == 0.0001
+        assert run.sample_prompts == ["ohwx, portrait", "a red bicycle"]
+
+    def test_reads_a_rate_yaml_leaves_as_a_string(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text("train:\n  lr: 1e-4\n", encoding="utf-8")
+        assert read_run(str(run_dir)).learning_rate == 0.0001
+
+    def test_a_malformed_sample_keeps_the_rows_in_step(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text(
+            "sample:\n  samples:\n    - oops\n    - prompt: two\n", encoding="utf-8"
+        )
+        assert read_run(str(run_dir)).sample_prompts == ["", "two"]
+
+    def test_a_non_finite_rate_is_left_unknown(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text("train:\n  lr: .nan\n", encoding="utf-8")
+        assert read_run(str(run_dir)).learning_rate is None
+
+    def test_a_malformed_bare_prompt_keeps_the_rows_in_step(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text(
+            "sample:\n  prompts:\n    - 5\n    - two\n", encoding="utf-8"
+        )
+        assert read_run(str(run_dir)).sample_prompts == ["", "two"]
+
+    def test_reads_the_older_bare_prompt_list(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text(
+            "sample:\n  prompts:\n    - one\n    - two\n", encoding="utf-8"
+        )
+        assert read_run(str(run_dir)).sample_prompts == ["one", "two"]
+
+    def test_a_config_without_them_leaves_them_unknown(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text(CONFIG, encoding="utf-8")
+        run = read_run(str(run_dir))
+        assert run.total_steps is None
+        assert run.learning_rate is None
+        assert run.sample_prompts == []
 
 
 class TestOutputRoot:

@@ -969,6 +969,18 @@ class TestApplyAdapter:
         assert apply_adapter(graph, stale, self.ADAPTER, {}) == 0
         assert apply_adapter(graph, None, self.ADAPTER, {}) == 0
 
+    def test_a_stored_graph_takes_the_shelf_name_unless_the_slot_has_it(self):
+        """No `object_info` is an extract (#2350): written by name, unresolved."""
+        graph = self._graph()
+        assert apply_adapter(graph, detect_lora_targets(graph), self.ADAPTER, None) == 2
+        assert graph["1"]["inputs"]["lora_name"] == "subject-v2.safetensors"
+        assert graph["2"]["inputs"]["adapter_sha256"] == "b" * 64
+        # A slot already naming the file keeps ComfyUI's spelling of it.
+        graph = {"1": self._graph()["1"]}
+        graph["1"]["inputs"]["lora_name"] = "Style/Subject-V2.safetensors"
+        assert apply_adapter(graph, detect_lora_targets(graph), self.ADAPTER, None) == 1
+        assert graph["1"]["inputs"]["lora_name"] == "Style/Subject-V2.safetensors"
+
 
 def _loader_spec(outputs, lora_names, clip=True):
     required = {

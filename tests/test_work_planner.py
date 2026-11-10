@@ -441,6 +441,26 @@ def test_the_drain_still_fires_on_the_last_task_completing():
     assert drained == ["drained"], "the drain was missed on the completion edge"
 
 
+def test_a_release_the_drain_returns_is_queued_not_run_on_the_planner():
+    """The face finder's release ends in a device-cache flush: on Metal it must
+    reach the GPU worker as a task rather than run on the planner's thread."""
+    runner = _FastCompleteRunner()
+    finder = _OneShotFinder()
+    release = SimpleNamespace(id="release")
+    finder.on_all_tasks_complete = lambda: release
+    planner = WorkPlanner(task_runner=runner, task_finders=[finder])
+    submitted_tasks = []
+
+    def complete_at_once(task):
+        submitted_tasks.append(task)
+        planner.on_task_complete(task, None)
+
+    runner.on_submit = complete_at_once
+
+    assert planner._run_finders_once() is True
+    assert submitted_tasks[-1] is release
+
+
 def test_the_drain_is_skipped_when_a_new_task_lands_while_the_claims_release():
     """Releasing the claims is what lets the loop thread take the next task.
 

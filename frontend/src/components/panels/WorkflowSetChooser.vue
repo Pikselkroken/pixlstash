@@ -139,12 +139,12 @@
               >
               <!-- What Enter would add, where the size was: says which row
                    the key acts on without making it look pressed. -->
-              <span
+              <KeyCap
                 v-if="pick && item.id === targetKey"
+                k="Enter"
                 class="fm-kbd wsc__enter"
                 aria-hidden="true"
-                >⏎</span
-              >
+              />
             </div>
             <button
               v-if="section.more"
@@ -224,6 +224,7 @@ import {
 import AppButton from "../widgets/AppButton.vue";
 import DownloadingMark from "../widgets/DownloadingMark.vue";
 import FavouriteHeart from "../widgets/FavouriteHeart.vue";
+import KeyCap from "../widgets/KeyCap.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import Segmented from "../widgets/Segmented.vue";
 
@@ -664,7 +665,7 @@ function onKeydown(event) {
     var(--wsc-right);
 }
 
-/* Pointer: the wash. Keyboard cursor: the wash and the inset ink ring, the
+/* Pointer: the wash. Keyboard cursor: the wash and the inset focus ring, the
    filter checklist's `.fm-check--kbd`. The two never look alike. */
 .wsc__r:hover,
 .wsc__r--cur {

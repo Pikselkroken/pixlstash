@@ -3,7 +3,7 @@
 //
 // The route stays the SINGLE SOURCE OF TRUTH for what the grid shows (see
 // frontend_architecture.md §2 "Key Design Principles" and the Phase 0 pin specs
-// `route-as-truth.spec.js` / `stateless-tabs.spec.js`). This store is merely the
+// `route-as-truth.spec.js` / `project-scope.spec.js`). This store is merely the
 // route's parsed reflection: it never pushes a route and never decides
 // navigation. Route *pushing* stays in App.vue (`pushAppRoute` /
 // `pushRouteForCurrentSelection`), where the nav handlers live.
@@ -109,8 +109,8 @@ function parseStackState(raw) {
 /**
  * `?path=<absolute folder>`: the folder facet for folders that have no id.
  *
- * A reference folder and an import folder each have a route of their own
- * (`/ref-folder/:id`, `/import-folder/:id`) and the sidebar owns their payload.
+ * A reference folder has a route of its own (`/ref-folder/:id`) and the
+ * sidebar owns its payload.
  * A folder an "About your library" finding points at has no id of any kind,
  * which is why this param exists.
  *
@@ -120,7 +120,7 @@ function parseStackState(raw) {
  * exactly what a finding opens.
  *
  * It carries the sidebar's subfolder selection too. A subfolder click also
- * carries `referenceFolderId` (`FolderTreeNode.vue` requires it), so
+ * carries `referenceFolderId` (it always does), so
  * `pushRouteForCurrentSelection` takes its ref-folder branch - the id owns the
  * payload and this param says which folder *inside* it is showing. `applyView`
  * therefore refuses to apply the bare `{pathPrefix, label}` on a folder route;
@@ -180,6 +180,9 @@ function characterLabelFor(charId) {
  * modes, the difference base, the category label); everything else is written
  * on every route tick.
  */
+/** `?project=` value naming the pictures in no project (see parseRouteView). */
+export const NOT_IN_PROJECT_QUERY = "none";
+
 function baseView(name) {
   return {
     name,
@@ -225,9 +228,13 @@ export function parseRouteView(route) {
   view.folderFilter = parseFolderPath(query.path);
   if (view.folderFilter) view.clearFolderFilter = false;
   view.faceFilter = parseFaceFilter(query.face);
+  // "Not in a project" (#2159) has no project route of its own, so it rides
+  // as `?project=none` on All media, a person or a set.
+  const notInProject = query.project === NOT_IN_PROJECT_QUERY;
 
   if (name === "all-pictures") {
     view.characterLabel = "All Pictures";
+    if (notInProject) view.projectViewMode = "project";
     return view;
   }
 
@@ -248,6 +255,7 @@ export function parseRouteView(route) {
       view.selectedProjectId = parseProjectId(params.projectId);
     } else {
       view.characterLabel = characterLabelFor(charId);
+      if (notInProject) view.projectViewMode = "project";
     }
     return view;
   }
@@ -263,6 +271,8 @@ export function parseRouteView(route) {
       view.projectViewMode = "project";
       view.selectedProjectId = parseProjectId(params.projectId);
       view.characterLabel = "All Pictures";
+    } else if (notInProject) {
+      view.projectViewMode = "project";
     }
     return view;
   }
@@ -274,13 +284,20 @@ export function parseRouteView(route) {
     return view;
   }
 
-  if (name === "ref-folder" || name === "import-folder") {
+  if (name === "ref-folder") {
     view.clearFolderFilter = false;
     view.characterLabel = "All Pictures";
-    if (params.id) {
-      view.folderKey =
-        name === "ref-folder" ? `rf-${params.id}` : `if-${params.id}`;
-    }
+    if (params.id) view.folderKey = `rf-${params.id}`;
+    return view;
+  }
+
+  // The Inbox: what was added within its period and has no person and no
+  // set (the period is `useInboxStore`'s). A facet of the grid like `?path=`,
+  // so the route owns it and no sidebar payload is waited for.
+  if (name === "inbox") {
+    view.characterLabel = "All Pictures";
+    view.clearFolderFilter = false;
+    view.folderFilter = { inbox: true, label: "Inbox" };
     return view;
   }
 
@@ -362,8 +379,12 @@ function applyView(view, selectionStore, projectStore, filterStore) {
     // this guard is load-bearing: `SideBar.routeSubfolderUnder` applies the
     // path WITH the folder's id once the folder listing is in.
     const current = selectionStore.selectedFolderFilter;
-    if (current?.pathPrefix !== view.folderFilter.pathPrefix) {
-      selectionStore.selectedFolderFilter = view.folderFilter;
+    const next = view.folderFilter;
+    if (
+      current?.pathPrefix !== next.pathPrefix ||
+      Boolean(current?.inbox) !== Boolean(next.inbox)
+    ) {
+      selectionStore.selectedFolderFilter = next;
     }
   }
 
@@ -419,7 +440,7 @@ export const useViewStore = defineStore("view", () => {
   // The last parsed route. `null` for a route the grid is not driven from.
   const view = ref(null);
 
-  // Sidebar folder highlight key ('rf-{id}' / 'if-{id}') for the current route,
+  // Sidebar folder highlight key ('rf-{id}') for the current route,
   // so a deep link or a Back navigation lights the right folder row.
   const activeFolderKey = computed(() => view.value?.folderKey ?? null);
 

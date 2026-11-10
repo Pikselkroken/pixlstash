@@ -629,7 +629,7 @@ Reference chrome is the shipped Vue (`WorkflowTab.vue`, `WorkflowDefaultRow.vue`
   of unsaved changes, its *Save*, and the dot before a row's *Edited*;
   `visual-language.md` §4). No raspberry. Status hues: the existing missing-model
   `surface-warning` flag and inline failure text in `surface-error`.
-- Hover is `--hover-wash`. Focus is the global ink ring (`--focus-width`
+- Hover is `--hover-wash`. Focus is the global focus ring (`--focus-width`
   `--focus-stroke` `--focus-offset`). Pending means the AppButton spinner with no dimming.
 - A secondary line is `rgba(var(--v-theme-on-surface), var(--opacity-text-secondary))`,
   which is the existing `.wftab-quiet` / `.wfrt-quiet`. Never a raw `0.6`.
@@ -1007,7 +1007,7 @@ belongs to the footer Run… only. See Objection 2 on "ghost".
    visible action at rest.
 3. **Drift seen on surfaces this touches**, to fix in the implementing PR:
    `.wfpile:focus-visible .wfpile-top` paints an olive (`primary`) outline where
-   focus must be the ink ring (`--focus-width` `--focus-stroke`
+   focus must be the global focus ring (`--focus-width` `--focus-stroke`
    `--focus-offset`), and `.rund-l` uses a raw `0.6` alpha where
    `--opacity-text-secondary` belongs.
 

@@ -39,6 +39,16 @@ const WORKFLOW_INSPECTOR_KEY = "pixlstash:workflowInspectorOpen";
 // selection, so nothing opens it on the reader's behalf.
 const MODELS_RAIL_KEY = "pixlstash:modelsRailOpen";
 
+// The lightbox's inspector (Info | Recipe | Edit). Its own flag, not the stats
+// rail's: a reader who keeps the grid uncluttered still wants a picture's
+// details beside it, so it defaults OPEN and is then however they left it.
+const LIGHTBOX_RAIL_KEY = "pixlstash:lightboxRailOpen";
+
+// The Tags view's Reviews inspector (Open | Archived | Stickers). It is about
+// the screen rather than a selection, so it defaults OPEN and is then however
+// the reader left it.
+const REVIEWS_RAIL_KEY = "pixlstash:reviewsRailOpen";
+
 // Width: full sidebar vs. narrow icon dock. Set in Settings → Appearance.
 const SIDEBAR_DOCKED_KEY = "pixlstash:sidebarDocked";
 
@@ -54,10 +64,12 @@ export const useSidebarStore = defineStore("sidebar", () => {
   const statsOpen = ref(loadFlag(STATS_KEY, false));
   const workflowInspectorOpen = ref(loadFlag(WORKFLOW_INSPECTOR_KEY, true));
   const modelsRailOpen = ref(loadFlag(MODELS_RAIL_KEY, false));
+  const lightboxRailOpen = ref(loadFlag(LIGHTBOX_RAIL_KEY, true));
+  const reviewsRailOpen = ref(loadFlag(REVIEWS_RAIL_KEY, true));
   // Bumped by whichever screen owns a selection-describing inspector when its
   // selection changes to something NEW. The closed-inspector edge tab and the
   // rail toggle's glyph both play their one-shot nudge on it. A counter, like
-  // `tasksTabRequest`, so two new selections in a row are two nudges.
+  // `tasksPillRequest`, so two new selections in a row are two nudges.
   const inspectorNudge = ref(0);
   // Responsive override: a narrow/mobile window is always auto-hide + full width.
   const sidebarForcedHidden = ref(false);
@@ -125,29 +137,30 @@ export const useSidebarStore = defineStore("sidebar", () => {
     setModelsRailOpen(!modelsRailOpen.value);
   }
 
-  // A deep link's "show me": opened, not persisted (see `showTasksTab`).
+  function toggleLightboxRail() {
+    lightboxRailOpen.value = !lightboxRailOpen.value;
+    saveFlag(LIGHTBOX_RAIL_KEY, lightboxRailOpen.value);
+  }
+
+  function toggleReviewsRail() {
+    reviewsRailOpen.value = !reviewsRailOpen.value;
+    saveFlag(REVIEWS_RAIL_KEY, reviewsRailOpen.value);
+  }
+
+  // A deep link's "show me": opened, not persisted. Opening the rail to answer
+  // one request is not the reader choosing to keep it open, and persisting it
+  // would leave every later session with a rail they never asked for.
   function openWorkflowInspector() {
     workflowInspectorOpen.value = true;
   }
 
-  // "Take me to the task manager", from a notice or a banner. A counter rather
-  // than a flag, so asking twice in a row is two requests and nothing has to
-  // remember to clear it. Whichever inspector is on screen watches it and
-  // selects its own Tasks tab: the rail has more than one occupant, and a
-  // deep link that named one of them by its component ref reached the tab on
-  // every screen except the one that starts the runs.
-  //
-  // Deliberately NOT `saveFlag`, unlike `toggleStats` above: opening the
-  // rail to answer one "show me" is not the reader choosing to keep it open,
-  // and persisting it would leave every later session with a rail they never
-  // asked for. Both rails' flags, because the caller (a notice) does not know
-  // which screen is showing, and only the one on screen is drawn.
-  const tasksTabRequest = ref(0);
+  // "Take me to the task manager", from a notice or a banner: the title bar's
+  // Tasks pill opens its list. No rail has a Tasks tab any more, so none is
+  // opened for it. A counter rather than a flag, so asking twice in a row is
+  // two requests and nothing has to remember to clear it.
+  const tasksPillRequest = ref(0);
   function showTasksTab() {
-    statsOpen.value = true;
-    workflowInspectorOpen.value = true;
-    modelsRailOpen.value = true;
-    tasksTabRequest.value += 1;
+    tasksPillRequest.value += 1;
   }
 
   // A double-click on a card: "show me this one". Opens the screen's rail
@@ -167,6 +180,16 @@ export const useSidebarStore = defineStore("sidebar", () => {
     cardTabRequest.value += 1;
   }
 
+  // T, or the selection pill's Tag: "tag what is selected". Opens the grid's
+  // rail and leaves a request its tag field takes when it is on screen, which
+  // may be a render later when the rail was shut. Not persisted, for the same
+  // reason as `openWorkflowInspector`.
+  const tagFieldPending = ref(false);
+  function requestTagField() {
+    statsOpen.value = true;
+    tagFieldPending.value = true;
+  }
+
   // Back-compat helper used elsewhere.
   function persistSidebarDocked(val) {
     setSidebarDocked(val);
@@ -183,9 +206,12 @@ export const useSidebarStore = defineStore("sidebar", () => {
     statsOpen,
     workflowInspectorOpen,
     modelsRailOpen,
+    lightboxRailOpen,
+    reviewsRailOpen,
     inspectorNudge,
-    tasksTabRequest,
+    tasksPillRequest,
     cardTabRequest,
+    tagFieldPending,
     sidebarForcedHidden,
     statsForcedHidden,
     setSidebarDocked,
@@ -197,8 +223,11 @@ export const useSidebarStore = defineStore("sidebar", () => {
     openWorkflowInspector,
     setModelsRailOpen,
     toggleModelsRail,
+    toggleLightboxRail,
+    toggleReviewsRail,
     showTasksTab,
     showCardInInspector,
+    requestTagField,
     persistSidebarDocked,
   };
 });

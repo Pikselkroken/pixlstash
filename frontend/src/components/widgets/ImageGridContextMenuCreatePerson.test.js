@@ -83,6 +83,21 @@ describe("create-character forwarding", () => {
     expect(wrapper.emitted("create-character")).toEqual([["Alice"]]);
   });
 
+  it("forwards the Set flyout's create as create-set, after closing (#2124)", async () => {
+    const wrapper = mountMenu();
+    const setFlyout = wrapper
+      .findAllComponents(AddToEntityControl)
+      .find((c) => c.props("type") === "set");
+    expect(setFlyout.props("allowCreate")).toBe(true);
+    const intent = { characterId: 7, name: "Wren" };
+
+    setFlyout.vm.$emit("create", intent);
+
+    expect(wrapper.emitted("close")).toBeTruthy();
+    await nextTick();
+    expect(wrapper.emitted("create-set")).toEqual([[intent]]);
+  });
+
   it("declares the create-character emit", () => {
     const wrapper = mountMenu();
     expect(wrapper.vm.$options.emits).toContain("create-character");

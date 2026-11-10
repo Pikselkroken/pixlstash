@@ -140,3 +140,27 @@ export async function detachLibrary(uuid) {
 export async function discardLibrary(uuid) {
   return unwrap(apiClient.post(`${LIBRARIES_URL}/${uuid}/discard`));
 }
+
+/**
+ * The folders of the library root that pictures are filed in, for the Media
+ * sidebar's Folders tree (#2458). Owner only.
+ *
+ * @returns {Promise<{folders: Array<{path: string, name: string, kind: string,
+ *   entity_id: number|null, project_id: number|null, count: number}>}>}
+ */
+export async function listLibraryFolders() {
+  return unwrap(apiClient.get("/library/folders"));
+}
+
+/**
+ * Show a folder of the Folders tree in the file manager of the machine
+ * PixlStash runs on. Loopback-only: 403 from another machine, 404 when the
+ * path is not one `listLibraryFolders` lists (or is gone from disk), 500 on a
+ * host with no desktop.
+ *
+ * @param {string} path - a `path` from `listLibraryFolders`.
+ * @returns {Promise<{status: string, folder: string}>}
+ */
+export async function openLibraryFolder(path) {
+  return unwrap(apiClient.post("/library/folders/open", { path }));
+}

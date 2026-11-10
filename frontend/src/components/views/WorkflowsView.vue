@@ -1,6 +1,6 @@
 <template>
   <!-- The whole view is the drop target for workflow files, the same door as
-       *Add…* (`addWorkflowFiles`). -->
+       the sidebar's *Add workflow* (`addWorkflowFiles`). -->
   <div
     class="wfv"
     :class="{ 'wfv--drop': dropActive }"
@@ -14,83 +14,9 @@
     <p class="visually-hidden" role="status">{{ announcement }}</p>
 
     <div class="wfv-toolbar shelfbar toolbar">
-      <span class="wfv-title">Workflows</span>
-
-      <!-- Two sources for one grid (#2000): the owner's own workflows, and
-           the templates their ComfyUI serves. A view switch, so tablist/tab as
-           the model shelf's Shelf | Training runs: it changes which panel is
-           on screen rather than setting a value. -->
-      <div class="tbm-seg wfv-viewswitch" role="tablist" aria-label="Workflow source">
-        <button
-          id="wfv-tab-mine"
-          type="button"
-          role="tab"
-          class="tbm-seg-btn wfv-viewseg"
-          :class="{ 'tbm-seg-btn--on wfv-viewseg--on': !onTemplates }"
-          :aria-selected="!onTemplates"
-          :tabindex="onTemplates ? -1 : 0"
-          data-testid="wfv-tab-mine"
-          @click="showSource('mine')"
-          @keydown="onSourceKeydown"
-        >
-          <v-icon size="14">mdi-sitemap-outline</v-icon>
-          Mine
-          <span v-if="store.loaded" class="wfv-viewseg-n num">{{
-            store.cards.length
-          }}</span>
-        </button>
-        <button
-          id="wfv-tab-templates"
-          type="button"
-          role="tab"
-          class="tbm-seg-btn wfv-viewseg"
-          :class="{ 'tbm-seg-btn--on wfv-viewseg--on': onTemplates }"
-          :aria-selected="onTemplates"
-          :tabindex="onTemplates ? 0 : -1"
-          data-testid="wfv-tab-templates"
-          @click="showSource('templates')"
-          @keydown="onSourceKeydown"
-        >
-          <ComfyuiIcon :size="14" />
-          Templates
-          <span v-if="templates.loaded" class="wfv-viewseg-n num">{{
-            templates.templates.length
-          }}</span>
-        </button>
-      </div>
-
-      <span v-if="subtitle" class="wfv-sub num">{{ subtitle }}</span>
-
-      <!-- "Add" is today's workflow import, unchanged: the file lands through
-           `POST /comfyui/workflows/import`. A `.json` dropped on the view
-           (not on a dialog or menu over it, which are teleported out of it)
-           takes the same path (`addWorkflowFiles`), and
-           `useWindowFileImport` stands aside for a drop of JSON alone. -->
-      <AppBarButton v-if="!onTemplates" icon="plus" @click="fileInput?.click()"
-        >Add…</AppBarButton
-      >
-      <input
-        ref="fileInput"
-        class="wfv-file-input"
-        type="file"
-        accept=".json,application/json"
-        multiple
-        tabindex="-1"
-        aria-hidden="true"
-        @change="filesChosen"
-      />
-      <!-- *Choose thumbnail…* from the card menu: one image for one card. -->
-      <input
-        ref="thumbnailInput"
-        class="wfv-file-input"
-        type="file"
-        accept="image/png,image/jpeg,image/webp"
-        tabindex="-1"
-        aria-hidden="true"
-        @change="thumbnailChosen"
-        @cancel="focusCursorRow"
-      />
-
+      <!-- The browse controls, in the order a reader reads a list: how it is
+           sorted, what is filtered out, then what is searched for. Mine or
+           Templates is the sidebar's choice now, and Add workflow is its footer's. -->
       <v-menu
         v-model="sortMenuOpen"
         location="bottom start"
@@ -98,24 +24,43 @@
         :offset="8"
         :close-on-content-click="false"
       >
+        <!-- The picture grid's split-button: a direction toggle welded to
+             the menu trigger. -->
         <template #activator="{ props: menuProps }">
-          <AppBarButton
-            v-bind="menuProps"
-            prefix="Sort:"
-            aria-haspopup="menu"
-            :aria-expanded="sortMenuOpen"
-            >{{
-              onTemplates
-                ? TEMPLATE_SORT_LABELS[templates.sortKey].label
-                : SORT_LABELS[store.sortKey].label
-            }}</AppBarButton
+          <div
+            class="bar-split-button wfv-sort"
+            :class="{ 'bar-split-button--open': sortMenuOpen }"
+            role="group"
+            aria-label="Sort"
           >
+            <AppBarButton
+              class="bar-split-toggle"
+              :icon="sortDirectionIcon"
+              :tooltip="sortDirectionLabel"
+              @click.stop="toggleSortDirection"
+            />
+            <AppBarButton
+              v-bind="menuProps"
+              class="bar-split-menu"
+              prefix="Sort:"
+              chevron
+              aria-haspopup="menu"
+              :aria-expanded="sortMenuOpen"
+              :tooltip="`Sort by ${activeSort.label.toLowerCase()}: ${sortDirectionLabel}`"
+              >{{ activeSort.label }}</AppBarButton
+            >
+          </div>
         </template>
         <div class="tbm">
           <span class="tbm-caret tbm-caret--start"></span>
           <div class="tbm-header">
             <v-icon size="18" class="tbm-header-icon">mdi-sort</v-icon>
             <span class="tbm-title">Sort</span>
+            <span class="tbm-spacer"></span>
+            <button class="tbm-ghost" type="button" @click="toggleSortDirection">
+              <v-icon size="16">{{ sortDirectionIcon }}</v-icon>
+              <span>{{ sortDirectionLabel }}</span>
+            </button>
           </div>
           <div class="tbm-section">
             <span class="tbm-label">Sort by</span>
@@ -124,7 +69,7 @@
               :options="templateSortOptions"
               :model-value="templates.sortKey"
               aria-label="Sort by"
-              @update:model-value="(key) => (templates.sortKey = key)"
+              @update:model-value="templates.setSortKey"
             />
             <OptionRows
               v-else
@@ -152,6 +97,111 @@
         </div>
       </v-menu>
 
+      <!-- The ⋯, standing where Sort stood: in a narrow bar (#2629) the
+           split-button leaves and its two choices land here as rows, the sort
+           key and then the direction, in the shown tab's own words. Fold = CSS
+           both ways (`.wfv-sort` and `.wfv-overflow` swap at the `wfvbar`
+           rung below), so nothing here measures. It opens rightward because
+           it sits at the bar's left edge. -->
+      <TbOverflowMenu
+        class="wfv-overflow"
+        align="start"
+        data-testid="wfv-overflow"
+      >
+        <template #default="{ close }">
+          <!-- A group, so the heading names its rows and is not a stray
+               child of the menu. -->
+          <div role="group" aria-labelledby="wfv-overflow-sort-label">
+            <div id="wfv-overflow-sort-label" class="section-label ctx-label">
+              Sort by
+            </div>
+            <button
+              v-for="option in onTemplates ? templateSortOptions : sortOptions"
+              :key="option.id"
+              type="button"
+              role="menuitemradio"
+              class="ctx-item"
+              :aria-checked="option.id === activeSortKey ? 'true' : 'false'"
+              data-testid="wfv-overflow-sort"
+              @click="
+                setSortKey(option.id);
+                close();
+              "
+            >
+              <span class="ctx-label-text">{{ option.label }}</span>
+              <v-icon v-if="option.id === activeSortKey" class="ctx-check"
+                >mdi-check</v-icon
+              >
+            </button>
+          </div>
+          <div class="ctx-sep" role="separator"></div>
+          <button
+            v-for="direction in SORT_DIRECTIONS"
+            :key="direction"
+            type="button"
+            role="menuitemradio"
+            class="ctx-item"
+            :aria-checked="direction === activeDirection ? 'true' : 'false'"
+            data-testid="wfv-overflow-direction"
+            @click="
+              setSortDirection(direction);
+              close();
+            "
+          >
+            <v-icon class="ctx-icon">{{ directionIcon(direction) }}</v-icon>
+            <span class="ctx-label-text">{{ directionLabel(direction) }}</span>
+            <v-icon v-if="direction === activeDirection" class="ctx-check"
+              >mdi-check</v-icon
+            >
+          </button>
+          <!-- The Sort panel's Favourites first box, Mine's alone there too. -->
+          <template v-if="!onTemplates">
+            <div class="ctx-sep" role="separator"></div>
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              class="ctx-item"
+              :aria-checked="store.favouritesLead ? 'true' : 'false'"
+              data-testid="wfv-overflow-favourites"
+              @click="
+                store.setFavouritesLead(!store.favouritesLead);
+                close();
+              "
+            >
+              <v-icon class="ctx-icon">mdi-heart-outline</v-icon>
+              <span class="ctx-label-text">Favourites first</span>
+              <v-icon v-if="store.favouritesLead" class="ctx-check"
+                >mdi-check</v-icon
+              >
+            </button>
+          </template>
+        </template>
+      </TbOverflowMenu>
+
+      <!-- The hidden inputs: *Choose thumbnail…* from the card menu (one image
+           for one card), and the workflow file picker, which the empty state's
+           button and the sidebar's Add workflow (`addRequest`) both open. -->
+      <input
+        ref="fileInput"
+        class="wfv-file-input"
+        type="file"
+        accept=".json,application/json"
+        multiple
+        tabindex="-1"
+        aria-hidden="true"
+        @change="filesChosen"
+      />
+      <input
+        ref="thumbnailInput"
+        class="wfv-file-input"
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        tabindex="-1"
+        aria-hidden="true"
+        @change="thumbnailChosen"
+        @cancel="focusCursorRow"
+      />
+
       <!-- No count on the strip's own chips and a count here, which is the
            reverse of the picture grid: that toolbar keeps its strip on screen
            beside the button, and this one is a row that only exists while a
@@ -172,45 +222,50 @@
             :open="filterMenuOpen"
             aria-haspopup="menu"
             :aria-expanded="filterMenuOpen"
-            >Filters</AppBarButton
+            :aria-label="filterCount ? `${filterCount} Filter` : 'Filter'"
+            tooltip="Filter"
+            ><span class="wfv-filter-label">Filter</span></AppBarButton
           >
         </template>
-        <WorkflowTemplateFilterMenu
-          v-if="onTemplates"
-          :open="filterMenuOpen"
-          :focus-name-request="nameFocusRequest"
-        />
-        <WorkflowFilterMenu
-          v-else
-          :open="filterMenuOpen"
-          :focus-name-request="nameFocusRequest"
-        />
+        <WorkflowTemplateFilterMenu v-if="onTemplates" :open="filterMenuOpen" />
+        <WorkflowFilterMenu v-else :open="filterMenuOpen" />
       </v-menu>
 
-      <!-- The name filter's toolbar copy, bound to the same text as the field
-           at the top of Filters, which is always there when this one folds. -->
-      <NameFilterField
-        v-if="onTemplates"
-        ref="nameFieldRef"
-        class="wfv-name-bar"
-        :model-value="templates.filters.name"
-        placeholder="Filter templates…"
-        label="Filter templates by title, tag or model"
-        @update:model-value="(name) => templates.setFilters({ name })"
-      />
-      <NameFilterField
-        v-else
-        ref="nameFieldRef"
-        class="wfv-name-bar"
-        :model-value="store.filters.name"
-        label="Filter workflows by name"
-        @update:model-value="(name) => store.setFilters({ name })"
+      <!-- The active filters, one chip each with its own ×, in the bar rather
+           than on a row under it. Templates keep their own chips in the
+           templates store. -->
+      <FilterStrip
+        inline
+        class="wfv-strip"
+        :chips="onTemplates ? templates.filterChips : store.filterChips"
+        :of-label="onTemplates ? templates.filterOfLabel : store.filterOfLabel"
+        :on-clear-all="onTemplates ? templates.clearFilters : store.clearFilters"
       />
 
       <span class="wfv-spacer"></span>
-      <!-- The app-wide tail, minus undo: this view replaces the grid and its
-           toolbar, so without it neither Settings nor the right rail has a
-           control on the screen — and the rail is where `WorkflowTab` is
+
+      <!-- The name filter, bound to the same text as the Filters menu's own
+           field: `store.filters.name`, or the templates store's while
+           Templates is shown. F focuses it (`searchFocusToken`). -->
+      <div class="wfv-search">
+        <NameFilterField
+          ref="nameFieldRef"
+          class="wfv-search-field"
+          :model-value="searchName"
+          placeholder="Search"
+          :label="
+            onTemplates
+              ? 'Search templates by title, tag or model'
+              : 'Search workflows by name'
+          "
+          @update:model-value="setSearchName"
+        />
+        <kbd class="wfv-search-key" aria-hidden="true">F</kbd>
+      </div>
+
+      <!-- The app-wide tail (undo/redo and the rail toggle): this view
+           replaces the grid and its toolbar, so without it neither undo nor
+           the right rail has a control on the screen — and the rail is where `WorkflowTab` is
            shown (`AppInspector` gates it on
            `sidebarStore.workflowInspectorOpen`), so the rail would be
            unreachable (#1415). Its own `--space-3` cluster because this bar
@@ -222,14 +277,10 @@
           separator
           rail="workflows"
           rail-name="Inspector"
-          @open-settings="emit('open-settings')"
         />
       </span>
     </div>
 
-    <!-- `on-clear-all` because two of these filters are the server's: removing
-         the chips one at a time would be two `setFilters`, and so two grid
-         reads, where the panel's own Clear all is one. -->
     <WorkflowTemplatesPanel
       v-if="onTemplates"
       :column-min="COLUMN_MIN"
@@ -239,14 +290,6 @@
     />
 
     <template v-else>
-      <FilterStrip
-        inline
-        :chips="store.filterChips"
-        :of-label="store.filterOfLabel"
-        :on-clear-all="store.clearFilters"
-        class="wfv-strip"
-      />
-
       <p v-if="store.error" class="wfv-error" role="alert">{{ store.error }}</p>
 
       <!-- A Recipe section's Open that named a workflow this grid does not list.
@@ -272,6 +315,24 @@
         </button>
       </p>
 
+      <!-- Files an import refused because the library has them already. The
+           view lands on the card and pulses it; this names it, so the reader
+           knows why nothing new appeared. -->
+      <p v-if="alreadyHere.length" class="wfv-note" data-testid="wfv-already-here">
+        {{ alreadyHereSentence }}
+        <button
+          v-if="alreadyHereFiltered"
+          class="wfv-note-clear"
+          type="button"
+          @click="store.clearFilters()"
+        >
+          Clear all
+        </button>
+        <button class="wfv-note-clear" type="button" @click="alreadyHere = []">
+          Dismiss
+        </button>
+      </p>
+
       <!-- The fifth kind of empty: the library HAS workflows and the filters
            leave none. Not the empty state below - that screen offers three ways
            to get a first workflow, and this reader already has some. The strip
@@ -292,49 +353,62 @@
            bordered option rows `LibraryEmptyState` uses — that screen explains
            three unfamiliar choices at first run; these three are one verb each. -->
       <div v-if="showEmptyState" class="wfv-empty">
-        <div class="wfv-empty__card">
-          <div class="wfv-empty__illustration" aria-hidden="true">
-            <img src="/Empty.png" alt="" />
+        <div class="wfv-empty__stack">
+          <div class="wfv-empty__card">
+            <div class="wfv-empty__illustration" aria-hidden="true">
+              <img src="/Empty.png" alt="" />
+            </div>
+            <h2 class="wfv-empty__title">Nothing found yet</h2>
+            <p v-if="withheldNames" class="wfv-empty__lead">
+              Every workflow this library has is being left out of the grid:
+              {{ withheldNames }}. Nothing has been lost.
+            </p>
+            <p v-else class="wfv-empty__lead">
+              A workflow arrives with the pictures it made, or as a file of its own.
+            </p>
+            <div class="wfv-empty__actions">
+              <AppButton
+                size="sm"
+                variant="primary"
+                icon-left="tray-arrow-up"
+                @click="fileInput?.click()"
+              >
+                Drop a workflow file
+              </AppButton>
+              <AppButton
+                v-if="watchedFolder"
+                size="sm"
+                variant="secondary"
+                icon-left="folder-eye-outline"
+                @click="openWatchedFolder"
+              >
+                Open watched folder
+              </AppButton>
+              <!-- Gone once connected: there is nothing to offer somebody who has
+                   already done it. -->
+              <AppButton
+                v-if="!comfyuiConfigured"
+                size="sm"
+                variant="secondary"
+                icon-left="graph-outline"
+                @click="emit('open-settings', 'comfyui')"
+              >
+                Connect ComfyUI
+              </AppButton>
+            </div>
+            <p v-if="watchedFolder" class="wfv-empty__path">{{ watchedPath }}</p>
           </div>
-          <h2 class="wfv-empty__title">Nothing found yet</h2>
-          <p v-if="withheldNames" class="wfv-empty__lead">
-            Every workflow this library has is being left out of the grid:
-            {{ withheldNames }}. Nothing has been lost.
-          </p>
-          <p v-else class="wfv-empty__lead">
-            A workflow arrives with the pictures it made, or as a file of its own.
-          </p>
-          <div class="wfv-empty__actions">
-            <AppButton
-              size="sm"
-              variant="primary"
-              icon-left="tray-arrow-up"
-              @click="fileInput?.click()"
-            >
-              Drop a workflow file
-            </AppButton>
-            <AppButton
-              v-if="watchedFolder"
-              size="sm"
-              variant="secondary"
-              icon-left="folder-eye-outline"
-              @click="openWatchedFolder"
-            >
-              Open watched folder
-            </AppButton>
-            <!-- Gone once connected: there is nothing to offer somebody who has
-                 already done it. -->
-            <AppButton
-              v-if="!comfyuiConfigured"
-              size="sm"
-              variant="secondary"
-              icon-left="graph-outline"
-              @click="emit('open-settings', 'comfyui')"
-            >
-              Connect ComfyUI
-            </AppButton>
-          </div>
-          <p v-if="watchedFolder" class="wfv-empty__path">{{ watchedPath }}</p>
+
+          <!-- Deleting the last workflow leaves its recipes unfiled, and they
+               are still the reader's to rename, extract or delete (#2356). One
+               column at the card's width: no grid is measured here. Hidden
+               while there are none, so a bare library sees only the card. -->
+          <WorkflowRecipesTab
+            unfiled
+            class="wfv-unfiled wfv-empty__recipes"
+            workflow-name="Unfiled recipes"
+            :style="{ '--wf-columns': 1 }"
+          />
         </div>
       </div>
 
@@ -392,7 +466,10 @@
                    workflow's models (useModelDropTarget). -->
               <div
                 class="wfv-cell"
-                :class="{ 'wfv-cell--drop': modelDropKey === entry.key }"
+                :class="{
+                  'wfv-cell--drop': modelDropKey === entry.key,
+                  'wfv-cell--pulse': pulseKeys.includes(entry.key),
+                }"
                 role="gridcell"
                 :data-model-drop-models="dropModels(entry.card)"
                 @dragover="
@@ -441,7 +518,7 @@
       @open="openInspectorFromTab"
     />
 
-    <div v-if="!onTemplates" class="selbar-float">
+    <div v-if="!onTemplates" class="selbar-float wfv-pill-host">
       <WorkflowSelectionBar
         ref="selBarRef"
         @select-all="selectAllShown"
@@ -456,6 +533,7 @@
         @hide="hideSelected"
         @export="exportSelected"
         @duplicate="duplicateSelected"
+        @inpaint-copy="inpaintCopySelected"
         @use-set="useSetOnSelected"
         @download-missing="downloadMissingSelected"
         @favourite="toggleFavourites([...store.selectedKeys])"
@@ -496,6 +574,10 @@
       </template>
     </AppDialog>
 
+    <!-- A delete's Undo/Redo: workflows are not in the library's operation
+         log, so their receipt is a local one, as on the model shelf. The same
+         pill narrates the toolbar's undo/redo of a library action. -->
+    <ActionReceipt />
   </div>
 </template>
 
@@ -520,17 +602,13 @@ import {
 import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
-import { importWorkflow } from "../../api/comfyui";
+import { existingWorkflow, importWorkflow } from "../../api/comfyui";
 import { listImportFolders } from "../../api/folders";
-import {
-  exportWorkflow,
-  preflightWorkflowRun,
-  workflowCoverUrl,
-} from "../../api/workflows";
+import { exportWorkflow, workflowCoverUrl } from "../../api/workflows";
 import { openWorkflowInComfyui } from "../../composables/useComfyuiOpen";
 import { useConfirm } from "../../composables/useConfirm";
 import {
-  downloadableInPreflight,
+  downloadableInWorkflows,
   downloadModels,
 } from "../../composables/useModelDownloads";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
@@ -540,6 +618,7 @@ import {
 } from "../../stores/useFavouritesStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useOperationStore } from "../../stores/useOperationStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
@@ -559,16 +638,17 @@ import { isInternalImageDrag, isWorkflowFile } from "../../utils/media";
 import { outputNoun } from "../../utils/workflowCard";
 import FilterStrip from "../panels/FilterStrip.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
+import TbOverflowMenu from "../panels/TbOverflowMenu.vue";
 import WorkflowFilterMenu from "../panels/WorkflowFilterMenu.vue";
 import WorkflowRecipesTab from "../panels/WorkflowRecipesTab.vue";
 import WorkflowSelectionBar from "../panels/WorkflowSelectionBar.vue";
 import WorkflowTemplateFilterMenu from "../panels/WorkflowTemplateFilterMenu.vue";
 import WorkflowTemplatesPanel from "../panels/WorkflowTemplatesPanel.vue";
+import ActionReceipt from "../widgets/ActionReceipt.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
-import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
 import NameFilterField from "../widgets/NameFilterField.vue";
 import OptionRows from "../widgets/OptionRows.vue";
@@ -602,6 +682,11 @@ const favourites = useFavouritesStore();
 const filterStore = useFilterStore();
 const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
+// A delete's receipt exists only while this screen shows it: its Undo means
+// nothing anywhere else.
+const operationStore = useOperationStore();
+onMounted(() => operationStore.setLocalReceiptHost(true));
+onBeforeUnmount(() => operationStore.setLocalReceiptHost(false));
 const {
   dropKey: modelDropKey,
   onDragOver: onModelDragOver,
@@ -627,20 +712,12 @@ const selBarRef = ref(null);
 const scrollEl = ref(null);
 const sortMenuOpen = ref(false);
 const filterMenuOpen = ref(false);
-const nameFocusRequest = ref(0);
 const nameFieldRef = ref(null);
-// The app's search key (F) finds by name here: the toolbar's field when the bar
-// has room for it, else the one at the top of Filters.
+// The app's search key (F) finds by name here: the bar's Search field, which is
+// always drawn.
 watch(
   () => useSearchStore().searchFocusToken,
-  () => {
-    if (nameFieldRef.value?.isShown()) {
-      nameFieldRef.value.focus();
-      return;
-    }
-    filterMenuOpen.value = true;
-    nameFocusRequest.value += 1;
-  },
+  () => nameFieldRef.value?.focus(),
 );
 const renameOpen = ref(false);
 const renameDraft = ref("");
@@ -655,6 +732,16 @@ const announcement = ref("");
 const linkMissed = ref(false);
 // The same link, but the card IS in the payload and a filter is hiding it.
 const linkFiltered = ref(false);
+// Files an import refused because the library has them already, and the cards
+// that are them: the note names them, and those cards pulse once.
+const alreadyHere = ref([]);
+const pulseKeys = ref([]);
+// Whether that import turned *Show hidden* on to reach a hidden one.
+const revealedHidden = ref(false);
+// Two beats of `--dur-4` (`.wfv-cell--pulse`) and a margin.
+const PULSE_MS = 1000;
+let pulseTimer = null;
+onBeforeUnmount(() => clearTimeout(pulseTimer));
 const watchedFolder = ref(null);
 
 const sortOptions = SORT_KEYS.map((key) => ({
@@ -664,41 +751,91 @@ const sortOptions = SORT_KEYS.map((key) => ({
 
 // ── Mine | Templates (#2000) ──────────────────────────────────────────────
 //
-// The tab lives in the templates store, not here: the right rail is
+// The source lives in the templates store, not here: the right rail is
 // `App.vue`'s, and it mounts the template inspector while this one is shown.
+// The left sidebar chooses it (`shown`); this view only reads it.
 const templates = useWorkflowTemplatesStore();
 const onTemplates = computed(() => templates.shown);
 const templateSortOptions = TEMPLATE_SORT_KEYS.map((key) => ({
   id: key,
   label: TEMPLATE_SORT_LABELS[key].label,
 }));
+/** The shown tab's sort key, as its `SORT_LABELS` entry. */
+const activeSort = computed(() =>
+  onTemplates.value
+    ? TEMPLATE_SORT_LABELS[templates.sortKey]
+    : SORT_LABELS[store.sortKey],
+);
+const activeDirection = computed(() =>
+  onTemplates.value ? templates.sortDirection : store.sortDirection,
+);
+/** The direction in the key's own words: "Newest first", "A to Z". */
+const sortDirectionLabel = computed(
+  () => activeSort.value.words[activeDirection.value === "asc" ? 0 : 1],
+);
+const sortDirectionIcon = computed(() =>
+  activeDirection.value === "asc" ? "mdi-sort-ascending" : "mdi-sort-descending",
+);
+function toggleSortDirection() {
+  if (onTemplates.value) templates.toggleSortDirection();
+  else store.toggleSortDirection();
+}
+
+// The ⋯'s sort rows (a narrow bar folds the split-button into them): the
+// shown tab's key, and each direction in that key's own words.
+const SORT_DIRECTIONS = ["asc", "desc"];
+const activeSortKey = computed(() =>
+  onTemplates.value ? templates.sortKey : store.sortKey,
+);
+function setSortKey(key) {
+  if (onTemplates.value) templates.setSortKey(key);
+  else store.setSortKey(key);
+}
+function setSortDirection(direction) {
+  if (direction !== activeDirection.value) toggleSortDirection();
+}
+function directionLabel(direction) {
+  return activeSort.value.words[direction === "asc" ? 0 : 1];
+}
+function directionIcon(direction) {
+  return direction === "asc" ? "mdi-sort-ascending" : "mdi-sort-descending";
+}
+
 /** The Filters button's badge: the filters the shown tab has on. */
 const filterCount = computed(() =>
   onTemplates.value ? templates.activeFilterCount : store.filterChips.length,
 );
 
-/** Show one source. Templates reads its list, or asks an unanswering ComfyUI again. */
+/** Show one source. Showing Templates reads its list (the watch below). */
 function showSource(which) {
   templates.shown = which === "templates";
-  sortMenuOpen.value = false;
-  filterMenuOpen.value = false;
-  if (templates.shown) templates.fetchTemplates();
 }
 
-// Arrows move between the two tabs and show the one they land on (the APG's
-// automatic activation, as the model shelf's switch does).
-function onSourceKeydown(event) {
-  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-  event.preventDefault();
-  const toTemplates =
-    event.key === "End" ||
-    (["ArrowLeft", "ArrowRight"].includes(event.key) && !onTemplates.value);
-  showSource(toTemplates ? "templates" : "mine");
-  nextTick(() =>
-    document
-      .getElementById(toTemplates ? "wfv-tab-templates" : "wfv-tab-mine")
-      ?.focus(),
-  );
+// However the source changes (the sidebar, a drop, an added template), the
+// menus that belong to the old one close, and Templates reads its list the
+// first time it is shown.
+watch(
+  () => templates.shown,
+  (on) => {
+    sortMenuOpen.value = false;
+    filterMenuOpen.value = false;
+    if (on) templates.fetchTemplates();
+  },
+);
+
+// The sidebar's amber Add workflow: the same file picker the empty state opens.
+watch(
+  () => store.addRequest,
+  () => fileInput.value?.click(),
+);
+
+/** The name filter of whichever source is shown, and its setter. */
+const searchName = computed(() =>
+  onTemplates.value ? templates.filters.name : store.filters.name,
+);
+function setSearchName(name) {
+  if (onTemplates.value) templates.setFilters({ name });
+  else store.setFilters({ name });
 }
 
 // Arriving on a workflow by link means Mine, whatever tab was left open.
@@ -799,17 +936,6 @@ const withheldNames = computed(() => {
   if (store.hidden && !store.filters.showHidden) parts.push("hidden workflows");
   if (withheldOneOffs.value) parts.push(withheldOneOffs.value);
   return parts.join(" and ");
-});
-
-const subtitle = computed(() => {
-  // The strip under the bar counts the templates ("420 of 779"), and the bar
-  // has no room to say it twice beside the switch.
-  if (onTemplates.value) return "";
-  const count = store.sortedCards.length;
-  const parts = [count === 1 ? "1 workflow" : `${count} workflows`];
-  // Only what is still being LEFT OUT, and one-offs alone: see `withheldNames`.
-  if (withheldOneOffs.value) parts.push(withheldOneOffs.value);
-  return parts.join(" · ");
 });
 
 /**
@@ -1142,11 +1268,12 @@ function openInspectorFromTab() {
   );
 }
 
+// Everything the folder ever brought in: the library, Imported from it.
 function openWatchedFolder() {
-  const id = watchedFolder.value?.id;
-  if (id != null) {
-    router.push({ name: "import-folder", params: { id: String(id) } });
-  }
+  const folder = watchedFolder.value?.folder;
+  if (!folder) return;
+  filterStore.importedFromFilter = folder;
+  router.push({ name: "all-pictures" });
 }
 
 // ── Selection ─────────────────────────────────────────────────────────────
@@ -1272,6 +1399,21 @@ function onKeyDown(event) {
       if (!store.selectedKeys.includes(entry.key)) store.select(entry.key);
       toggleFavourites([...store.selectedKeys]);
     }
+    return;
+  }
+  // R is Run…, the key the rail's footer prints beside it: the focused card,
+  // or the selection it is in, which Run takes only one of. A draft has no
+  // graph to run, so the key does nothing there, as the rail's button does.
+  if (
+    event.key.toLowerCase() === "r" &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !event.shiftKey
+  ) {
+    event.preventDefault();
+    if (entry && !store.selectedKeys.includes(entry.key)) store.select(entry.key);
+    if (!event.repeat && !store.runnableCard?.draft) runSelected();
     return;
   }
   switch (event.key) {
@@ -1652,6 +1794,15 @@ async function duplicateSelected() {
   landOn(body.workflow_id);
 }
 
+async function inpaintCopySelected() {
+  const card = onlyCard.value;
+  if (!card) return;
+  const body = await store.inpaintCopyCard(card.id);
+  if (!body) return;
+  notices.push({ level: "success", text: `Converted as ${body.name}.` });
+  landOn(body.workflow_id);
+}
+
 /**
  * Select a workflow this view just made (a duplicate, an import) and put
  * the cursor on its card, so the reader's next look is at what they made.
@@ -1697,20 +1848,7 @@ async function downloadMissingSelected() {
 }
 
 async function downloadMissingOf(cards) {
-  const files = [];
-  let unasked = 0;
-  for (const card of cards) {
-    try {
-      const answer = await preflightWorkflowRun(
-        { workflow_id: card.id, values: [] },
-        { cached: true },
-      );
-      files.push(...downloadableInPreflight(answer));
-    } catch (err) {
-      unasked += 1;
-      console.warn("Could not check what a workflow is missing", card.id, err);
-    }
-  }
+  const { files, unasked } = await downloadableInWorkflows(cards);
   if (unasked === cards.length && cards.length) {
     notices.error(
       cards.length === 1
@@ -1883,25 +2021,38 @@ function filesChosen(event) {
 }
 
 /**
- * Add workflow files, from *Add…* or a drop: each one is a new manual
+ * Add workflow files, from the file picker or a drop: each one is a new manual
  * workflow, and the last to land is opened.
+ *
+ * A file the library already has (the server's 409) is not added: the view
+ * lands on the workflow it already is when nothing new landed, that card
+ * pulses, and the note names it. A hidden one turns *Show hidden* on, since a
+ * card the grid leaves out cannot be shown.
  */
 async function addWorkflowFiles(files) {
   let last = null;
   let added = 0;
+  const refused = [];
+  alreadyHere.value = [];
+  pulseKeys.value = [];
+  revealedHidden.value = false;
   for (const file of files) {
     if (file.size > MAX_WORKFLOW_BYTES) {
       store.error = `${file.name} is too large to be a workflow.`;
       continue;
     }
     try {
-      // Every import is a new manual workflow; the last one is opened.
       last = await importWorkflow({
         name: file.name.replace(/\.json$/i, ""),
         workflow: JSON.parse(await file.text()),
       });
       added += 1;
     } catch (err) {
+      const existing = existingWorkflow(err);
+      if (existing) {
+        refused.push({ file: file.name, ...existing });
+        continue;
+      }
       store.error = errorMessage(
         err,
         `Could not add ${file.name}: it may not be a workflow.`,
@@ -1909,14 +2060,68 @@ async function addWorkflowFiles(files) {
       console.warn(`[workflows] could not add ${file.name}`, err);
     }
   }
-  if (!last) return;
+  if (!last && !refused.length) return;
   // A drop on the Templates tab still adds to Mine, so show Mine.
   if (onTemplates.value) showSource("mine");
+  if (refused.some((r) => r.hidden) && !store.filters.showHidden) {
+    store.setFilters({ showHidden: true });
+    revealedHidden.value = true;
+  }
   await store.refetch();
-  landOn(last.workflow_id);
-  // Opened on the last, but the live region says how many arrived.
-  announcement.value = added > 1 ? `Added ${added} workflows` : `Added ${last.name}`;
+  landOn(last ? last.workflow_id : refused[refused.length - 1].workflow_id);
+  alreadyHere.value = refused;
+  pulseKeys.value = [...new Set(refused.map((r) => r.workflow_id))];
+  // Off on a timer, not on `animationend`: a key left on would pulse the
+  // card again whenever it remounts (a filter toggled off and on).
+  clearTimeout(pulseTimer);
+  pulseTimer = setTimeout(() => (pulseKeys.value = []), PULSE_MS);
+  // Opened on the last, but the live region says how many arrived and which
+  // were here already.
+  const parts = [];
+  if (added) parts.push(added > 1 ? `Added ${added} workflows` : `Added ${last.name}`);
+  if (refused.length) {
+    const subject = added
+      ? refused.length
+      : refused.length > 1
+        ? `${refused.length} files`
+        : refused[0].file;
+    parts.push(
+      `${subject} ${refused.length > 1 ? "are" : "is"} already here as ${refusedNames(refused)}`,
+    );
+  }
+  announcement.value = parts.join("; ");
 }
+
+/** The names of the workflows refused files already are, once each. */
+function refusedNames(refused) {
+  return [...new Set(refused.map((r) => r.name || "an unnamed workflow"))].join(
+    ", ",
+  );
+}
+
+/** Whether a client-side filter hides a card the note names. */
+const alreadyHereFiltered = computed(() =>
+  alreadyHere.value.some(
+    (r) =>
+      !store.sortedCards.some((card) => card.id === r.workflow_id) &&
+      store.cards.some((card) => card.id === r.workflow_id),
+  ),
+);
+
+const alreadyHereSentence = computed(() => {
+  const refused = alreadyHere.value;
+  if (!refused.length) return "";
+  const names = refusedNames(refused);
+  let sentence =
+    refused.length === 1
+      ? `${refused[0].file} is already here as ${names}, so it was not added again.`
+      : `${refused.length} files are already here, so they were not added again: ${names}.`;
+  if (revealedHidden.value && store.filters.showHidden) {
+    sentence += ` ${refused.length === 1 ? "It is" : "One is"} hidden, so hidden workflows are shown now.`;
+  }
+  if (alreadyHereFiltered.value) sentence += " A filter is hiding it.";
+  return sentence;
+});
 
 // ── Drop a workflow file ──────────────────────────────────────────────────
 //
@@ -2023,7 +2228,13 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: var(--space-4);
   container-type: inline-size;
-  container-name: shelfbar toolbar;
+  container-name: wfvbar shelfbar toolbar;
+  /* The containment `container-type` brings makes this bar a stacking
+     context, so the ⋯'s panel can rise no higher than the bar itself; lifted
+     to the sticky-toolbar layer, it opens over the cards' badges and selection
+     wash (`--z-raised`) rather than under them. */
+  position: relative;
+  z-index: var(--z-sticky);
   box-sizing: border-box;
   flex: none;
   height: 36px;
@@ -2032,80 +2243,46 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 
-/* The identity pair every view bar wears, at the one size a 36px band takes.
-   They give first and from the right: every control here is `nowrap`, so
-   without a shrinking member the surplus leaves through the right edge and
-   what gets clipped is the tail. The count gives long before the title: the
-   Mine | Templates switch carries the count too (#2000), and a title cut to
-   one letter beside it named nothing; the title gives only once the count
-   has, so the app-wide tail at the right edge is never what is clipped. */
-.wfv-title {
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-  white-space: nowrap;
-  min-width: 0;
-  flex-shrink: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.wfv-sub {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-toolbar-text), 0.6);
-  white-space: nowrap;
-  min-width: 0;
-  flex-shrink: 40;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .wfv-spacer {
   flex: 1;
 }
 
-/* Mine | Templates: the model shelf's view switch (`.tbm-seg`, `App.css`),
-   sized for this 36px bar the same way - no gap between segments, a 4px
-   inset so the track sits inside the band with room for a focus ring, and
-   `--elevation-1` on the selected one as the cue beyond hue. */
-.wfv-viewswitch {
-  flex: none;
-  gap: 0;
-  padding: var(--space-1);
+/* The chips in the bar: the strip's own row chrome dropped, so each chip sits
+   on the 36px band. The strip shrinks (its chips scroll) rather than pushing
+   the Search field off the right edge. */
+.wfv-toolbar .wfv-strip {
+  flex: 0 1 auto;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  background: none;
+  border-bottom: 0;
 }
 
-.wfv-viewseg {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: none;
-}
-
-.wfv-viewseg--on {
-  box-shadow: var(--elevation-1);
-}
-
-.wfv-viewseg:focus-visible {
+/* The Search field: 260px, and it gives room to the toolbar's other controls
+   before it shrinks below 96px. The F keycap sits inside the field's right
+   edge, where the text does not reach. */
+.wfv-search {
   position: relative;
-  z-index: var(--z-raised);
+  flex: 0 1 260px;
+  min-width: 96px;
 }
-
-.wfv-viewseg-n {
-  font-size: var(--text-2xs);
-  opacity: var(--opacity-text-secondary);
+.wfv-search :deep(.tbm-input) {
+  padding-right: var(--space-7);
 }
-
-/* The toolbar's name field. A fixed width, so typing never moves the bar, and
-   folded on a narrow bar, where the Filters menu's own field takes over. */
-.wfv-name-bar {
-  width: 180px;
-  flex: none;
-}
-/* 960, not the 720 it was: the Mine | Templates switch (#2000) took the room
-   the bar had, and the field folds before the title gives. */
-@container shelfbar (max-width: 960px) {
-  .wfv-name-bar {
-    display: none;
-  }
+.wfv-search-key {
+  position: absolute;
+  top: 50%;
+  right: var(--space-3);
+  transform: translateY(-50%);
+  pointer-events: none;
+  /* The grid search field's F (SearchTokenField): its type, its inset and its
+     text-coloured border. */
+  font-family: var(--kbd-font-field);
+  font-size: var(--kbd-size-field);
+  line-height: var(--kbd-leading);
+  padding: var(--kbd-pad-field);
+  border-color: currentColor;
 }
 
 /* The app-wide tail's own gap: this bar spaces its controls at --space-4, and
@@ -2117,6 +2294,57 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: var(--space-3);
   flex: 0 0 auto;
+}
+
+/* ── The ladder (#2629) ─────────────────────────────────────────────────────
+
+   Every member of this bar is `nowrap`, and with a filter or two on it ran
+   out of room well before the window got small: the chips scrolled inside a
+   sliver and the tail was pushed at the edge. So it gives in steps, cheapest
+   first, and never touches the app-wide tail (undo, the rail toggle).
+
+   The queries are 24px under the bar's outer width: `container-type:
+   inline-size` queries the CONTENT box, and the inset is `0 --space-3 0
+   --space-5`. `wfvbar` is this bar's own name; `toolbar` is the shared one
+   UndoControl writes its own steps against (redo and History drop at 420 and
+   480). The ⋯ is hidden above its rung. */
+.wfv-toolbar .wfv-overflow {
+  display: none;
+}
+
+/* Rung 1. The active filters leave the bar and are left to the Filter menu,
+   which carries the same "N of M" and Clear all in its header; the button
+   keeps its badge and its lit state, so a filter in force is still said. */
+@container wfvbar (max-width: 960px) {
+  .wfv-toolbar .wfv-strip {
+    display: none;
+  }
+}
+
+/* Rung 2. Sort folds into the ⋯, which takes its place at the left edge:
+   the biggest single bite on the bar. 700 leaves room for the longest
+   sort label ("Recently changed") beside a lit Filter and the tail. */
+@container wfvbar (max-width: 700px) {
+  .wfv-toolbar .wfv-sort {
+    display: none;
+  }
+  .wfv-toolbar .wfv-overflow {
+    display: flex;
+  }
+}
+
+/* Rung 3. Filter keeps its funnel and badge and drops its word; its name
+   stays in its `aria-label`. */
+@container wfvbar (max-width: 480px) {
+  .wfv-filter-label {
+    display: none;
+  }
+}
+
+/* The pill's container: its words drop below this width (WorkflowSelectionBar's
+   `wfpill` query), so the pill never runs off the list. */
+.wfv-pill-host {
+  container: wfpill / inline-size;
 }
 
 .wfv-error {
@@ -2156,12 +2384,6 @@ onBeforeUnmount(() => {
   color: rgb(var(--v-theme-primary));
 }
 
-/* The chip strip sits in the flow here (`inline`), so it needs the screen's
-   own side padding rather than the picture grid's full-bleed bar. */
-.wfv-strip {
-  padding-inline: var(--space-5);
-}
-
 /* The scroller, and the only thing here carrying padding: the grid inside it
    has to be a bare track, because its `clientWidth` is what the column count
    is computed from and that measurement includes an element's own padding. */
@@ -2187,11 +2409,11 @@ onBeforeUnmount(() => {
 }
 
 /* Focused by a background click, as the target for Ctrl+A. The ring is the
-   inset form (visual-language.md §11): the outset one would sit outside the
-   pane, under the toolbar and the inspector edge. */
+   inset form (visual-language.md §11) without the glow: anything outset would
+   sit outside the pane, under the toolbar and the inspector edge. */
 .wfv-scroll:focus-visible {
   outline: none;
-  box-shadow: var(--focus-ring-inset);
+  box-shadow: inset 0 0 0 var(--focus-width) var(--focus-stroke);
 }
 
 /* The closed inspector's edge tab (34px) floats over this edge: the cards
@@ -2227,6 +2449,23 @@ onBeforeUnmount(() => {
   outline-offset: 2px;
 }
 
+/* "This one is already here": the selection's olive ring, sent outward twice
+   as an expressive one-shot (`--dur-4`), so the eye finds the card the view
+   just moved to. The selection ring stays; the token file's global
+   reduced-motion rule leaves only that and the note. */
+.wfv-cell--pulse {
+  animation: wfv-cell-pulse var(--dur-4) var(--ease-standard) 2;
+}
+@keyframes wfv-cell-pulse {
+  from {
+    outline: 2px solid var(--active-bar);
+    outline-offset: 2px;
+  }
+  to {
+    outline: 2px solid transparent;
+    outline-offset: var(--space-3);
+  }
+}
 /* Below the cards, on their columns: `--wf-columns` is set inline from the
    same measurement the grid uses. */
 .wfv-unfiled {
@@ -2275,6 +2514,33 @@ onBeforeUnmount(() => {
   color: rgb(var(--v-theme-on-background));
   text-align: center;
   box-shadow: var(--elevation-3);
+}
+
+/* The card and the Unfiled recipes under it, centred as one. `margin: auto`
+   rather than the parent's centring, so a stack taller than the pane scrolls
+   from its top instead of clipping it. */
+.wfv-empty__stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  margin: auto;
+}
+
+/* At the card's width. The gap and the bottom inset go on the header and the
+   list, which are only drawn while there are recipes: with none, the card sits
+   exactly where it always has. */
+.wfv-unfiled.wfv-empty__recipes {
+  width: min(480px, calc(100% - var(--space-7)));
+  margin-top: 0;
+}
+
+.wfv-empty__recipes :deep(.wfrt-head) {
+  margin-top: var(--space-6);
+}
+
+.wfv-empty__recipes :deep(.wfrt-list) {
+  margin-bottom: var(--space-6);
 }
 
 /* The cap `LibraryEmptyState` uses, so the two cards show the art at one size. */

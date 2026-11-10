@@ -19,6 +19,14 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   permissionRepairRequest: () => ipcRenderer.invoke('permissions:request'),
   resolvePermissionRepair: (accepted: boolean) =>
     ipcRenderer.invoke('permissions:resolve', accepted),
+  // Startup recovery for an active library that will not open: main holds the
+  // backend's report, and each action ends in a relaunch or a quit.
+  libraryRecoveryRequest: () => ipcRenderer.invoke('libraryRecovery:request'),
+  findMissingLibrary: () => ipcRenderer.invoke('libraryRecovery:find'),
+  switchToLibrary: (uuid: string) => ipcRenderer.invoke('libraryRecovery:switch', uuid),
+  createReplacementLibrary: () => ipcRenderer.invoke('libraryRecovery:create'),
+  retryLibrary: () => ipcRenderer.invoke('libraryRecovery:retry'),
+  quitLibraryRecovery: () => ipcRenderer.invoke('libraryRecovery:quit'),
   listAccelerators: () => ipcRenderer.invoke('accel:list'),
   installAccelerator: (accel: string) => ipcRenderer.invoke('accel:install', accel),
   useAccelerator: (accel: string | null) => ipcRenderer.invoke('accel:use', accel),
@@ -50,6 +58,13 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
     ipcRenderer.invoke('media:completeSaveAs', { saveId, data }),
   cancelMediaSaveAs: (saveId: string) => ipcRenderer.invoke('media:cancelSaveAs', saveId),
   copyPngToClipboard: (data: ArrayBuffer) => ipcRenderer.invoke('media:copyPng', data),
+  // Share copies (POST /pictures/share-copies paths) as files; main refuses any
+  // path outside its own staging root.
+  copyFilesToClipboard: (paths: string[]) => ipcRenderer.invoke('media:copyFiles', paths),
+  // Drag share copies out of the window as files (#2420), the same paths and
+  // the same check as copyFilesToClipboard. `icon` is optional PNG bytes.
+  startShareDrag: (paths: string[], icon?: ArrayBuffer) =>
+    ipcRenderer.invoke('media:startShareDrag', { paths, icon }),
   // Where a dropped file actually lives. A `File` from a drop carries a name and
   // bytes but no path - a browser sandbox rule, and the reason dropping a model
   // file on the web app can only point at the Add file… menu. The shell can

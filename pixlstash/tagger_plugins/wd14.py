@@ -340,11 +340,16 @@ class WD14Service:
         if active[0] != "CPUExecutionProvider":
             logger.debug("WD14 tagger session is running on %s", active[0])
             return
-        remedy = (
-            "pip uninstall -y onnxruntime && pip install onnxruntime-gpu"
-            if normalise_device(self._device) == CUDA
-            else "pip install --upgrade onnxruntime"
-        )
+        if normalise_device(self._device) != CUDA:
+            remedy = "pip install --upgrade onnxruntime"
+        elif getattr(torch.version, "hip", None):
+            # ROCm torch answers as "cuda"; the NVIDIA wheel is no use here.
+            remedy = (
+                "pip uninstall -y onnxruntime && pip install onnxruntime-migraphx "
+                "(needs MIGraphX from your ROCm install)"
+            )
+        else:
+            remedy = "pip uninstall -y onnxruntime && pip install onnxruntime-gpu"
         logger.warning(
             "WD14 tagger asked onnxruntime for device %s, but the session "
             "loaded with %s: tagging will run on the CPU at a fraction of the "

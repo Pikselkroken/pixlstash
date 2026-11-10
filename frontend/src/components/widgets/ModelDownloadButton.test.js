@@ -1,5 +1,5 @@
 // The download beside a missing model: it sends only the name, says so with a
-// passing notice that opens the Tasks tab, and is busy while that file is.
+// passing notice that opens the task list, and is busy while that file is.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";

@@ -309,7 +309,7 @@ about the branch you are going to build on next.
 ## Fixing a CI failure: update the existing PR, do not open another
 
 **One full gate run costs ~200 runner-minutes** (8 Linux shards, 4 Windows, e2e,
-checks), and every push re-runs the whole gate. This repo once had 13 PRs open
+checks), and every push to a ready PR re-runs the whole gate. This repo once had 13 PRs open
 at once and opened 47 in a day. Runner time is a budget.
 
 1. **A CI failure on a PR is fixed on that PR's branch**, whatever the cause (a

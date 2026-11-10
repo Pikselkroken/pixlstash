@@ -1,3 +1,4 @@
+import { computed } from "vue";
 import { getPictureId } from "../utils/media.js";
 import { isReadOnly } from "../utils/apiClient";
 import {
@@ -8,6 +9,12 @@ import {
 } from "./useJustifiedLayout.js";
 import { useGridStore } from "../stores/useGridStore";
 import { useSearchStore } from "../stores/useSearchStore";
+import { useSidebarStore } from "../stores/useSidebarStore";
+import { FAVOURITE_KEY } from "../stores/useFavouritesStore";
+import { useTagClipboardStore } from "../stores/useTagClipboardStore";
+import { bareDigit } from "../utils/shortcutKeys";
+import { hasNativeCopyContext } from "../utils/dom.js";
+import { canCopyFiles, copyPicturesAsFiles } from "../utils/copyAsFiles.js";
 
 /**
  * Manages keyboard navigation and keyboard-driven actions for the image grid.
@@ -31,10 +38,12 @@ export function useGridKeyboardNav(
     allGridImages,
     rowHeight,
     visibleStart,
-    overlayOpen,
+    lightboxOpen,
     reviewOverlayOpen,
     showSelectionBar,
     searchResultsActive,
+    // Any filter chip is showing: Esc's last rung clears them.
+    filtersActive = { value: false },
     selectedImageIds,
     lastSelectedImageId,
     cursorIdx,
@@ -45,25 +54,101 @@ export function useGridKeyboardNav(
     isJustifiedMode,
     justifiedLayout,
     isGhosted = () => false,
+    // The Scrapheap shows no heart, so H marks nothing there either.
+    isScrapheap = () => false,
   },
   props,
   emit,
   {
     clearFaceSelection,
     clearSearchQuery,
+    clearFilters = () => {},
     scrollCursorIntoView,
     focusCursor = () => {},
-    openOverlay,
+    openLightbox,
     deleteSelected,
     selectionBarRef,
     applyScoresForSelection,
     setScore,
+    toggleFavourite = () => {},
     moveStackMember = () => false,
     getOpenStackPlace = () => null,
+    onPasteResult = () => {},
   },
 ) {
   const searchStore = useSearchStore();
+  const sidebarStore = useSidebarStore();
   const gridStore = useGridStore();
+  const tagClipboard = useTagClipboardStore();
+
+  /**
+   * The star rating a bare digit gives: 0-5 with no modifier held, else null.
+   * Ctrl+2 is not two stars.
+   */
+  function starRating(event) {
+    const digit = bareDigit(event);
+    return digit !== null && digit <= 5 ? digit : null;
+  }
+
+  /**
+   * What the next Esc clears, one layer per press: the selection, then the
+   * multi-selection bar, then the search, then the filters. Null when there is
+   * nothing left to clear.
+   */
+  function escapeTarget() {
+    if (showSelectionBar.value) return "selection";
+    if (isMultiCharacterView.value || isSetOverlapView.value) return "multi";
+    // `searchResultsActive` covers the modes with no query string behind them
+    // (reverse image, similar faces, a person face search), which
+    // `clearSearchQuery` resets as well (merged-grid-action-pill.md §6.1).
+    if (searchResultsActive?.value || searchStore.searchQuery?.trim()) {
+      return "search";
+    }
+    if (filtersActive.value) return "filters";
+    return null;
+  }
+
+  // The auto-hide sidebar floats over the grid; Esc hides it (useGlobalKeydown).
+  function sidebarOwnsEscape() {
+    return sidebarStore.sidebarOverlay && sidebarStore.sidebarVisible;
+  }
+
+  // Whether Esc reaches the filter strip's Clear all, so it can say so. The
+  // sidebar is store state and gates it; an open menu or dialog is DOM state a
+  // computed cannot watch, so the hint would cache a stale answer either way.
+  const escapeClearsFilters = computed(
+    () => !sidebarOwnsEscape() && escapeTarget() === "filters",
+  );
+
+  /**
+   * Something on top of the grid takes this Esc: the floating sidebar, or a
+   * Vuetify menu or dialog. A Vuetify overlay's own Esc listener goes on
+   * `window` when it opens, after the grid's, so the grid sees the key first:
+   * without this the Esc that closes the Filters menu would also clear the
+   * filters.
+   */
+  function overlayOwnsEscape() {
+    if (sidebarOwnsEscape()) return true;
+    return (
+      typeof document !== "undefined" &&
+      document.querySelector(
+        ".v-overlay--active:not(.v-tooltip):not(.v-snackbar)",
+      ) != null
+    );
+  }
+
+  /** Ctrl+V on the grid selection: paste the copied tags. */
+  function pasteOnSelection(ids) {
+    Promise.resolve(tagClipboard.pasteClipboard(ids))
+      .then((result) => {
+        if (result?.pictureIds.length) onPasteResult(result);
+      })
+      .catch((error) => {
+        // pasteClipboard reports its own failures; this is a failed refresh
+        // of the grid afterwards.
+        console.error("Refreshing the grid after a paste failed on", ids, error);
+      });
+  }
   // ── Scrapheap ghosts ────────────────────────────────────────────────────
   // A ghosted tile is on screen but inert: it is already in the Scrapheap and
   // is only being held there while its undo is one click away.
@@ -124,7 +209,7 @@ export function useGridKeyboardNav(
    */
   function moveCursorStackMember(where) {
     if (isReadOnly.value || cursorIdx.value === null) return false;
-    if (overlayOpen.value || reviewOverlayOpen?.value) return false;
+    if (lightboxOpen.value || reviewOverlayOpen?.value) return false;
     const img = allGridImages.value[cursorIdx.value];
     if (img?.id == null || !getOpenStackPlace(img)) return false;
     if (!moveStackMember(img.id, where)) return true;
@@ -159,9 +244,12 @@ export function useGridKeyboardNav(
       // Justified rows don't follow cols × rowHeight; use the packed model's
       // exact pixel height so End/PageDown reach the true bottom.
       const packedLayout = activeJustifiedLayout();
-      const totalHeight = packedLayout
-        ? packedLayout.totalHeight
-        : totalRows * rowHeight.value;
+      // The scroller holds more than the rows (its own padding), so the rows
+      // alone stop End short and leave the last row cut off at the bottom.
+      const totalHeight = Math.max(
+        packedLayout ? packedLayout.totalHeight : totalRows * rowHeight.value,
+        scrollWrapper.value.scrollHeight || 0,
+      );
       const maxScroll = Math.max(
         0,
         totalHeight - scrollWrapper.value.clientHeight,
@@ -186,6 +274,19 @@ export function useGridKeyboardNav(
         scrollWrapper.value.scrollTop = newScrollTop;
       }
     }
+  }
+
+  /**
+   * Whether Ctrl+V may paste. Not on auto-repeat, and not behind a modal
+   * dialog, where its result could not be seen; that is the same
+   * Vuetify-scrim test the global undo key uses.
+   */
+  function canWriteFromKeys(event) {
+    if (event.repeat) return false;
+    return (
+      typeof document === "undefined" ||
+      document.querySelector(".v-overlay--active .v-overlay__scrim") == null
+    );
   }
 
   // Clear selection on ESC key
@@ -215,7 +316,7 @@ export function useGridKeyboardNav(
     ) {
       return;
     }
-    if (overlayOpen.value) return; // Ignore if the lightbox overlay is open
+    if (lightboxOpen.value) return; // Ignore if the lightbox is open
     // The Review Sessions overlay is a modal review surface with its own
     // keyboard handler; it stays mounted over the grid and only consumes the
     // keys it handles, so grid shortcuts (Delete/Backspace, scoring digits,
@@ -223,29 +324,21 @@ export function useGridKeyboardNav(
     if (reviewOverlayOpen?.value) return;
     if (toolbarSelectionMenuOpen?.value) return; // Ignore when selection menu is open
     if (event.key === "Escape") {
-      if (showSelectionBar.value) {
+      if (overlayOwnsEscape()) return;
+      const target = escapeTarget();
+      if (target === "selection") {
         // First ESC clears selection only
         selectedImageIds.value = [];
         lastSelectedImageId = null;
         cursorIdx.value = null;
         clearFaceSelection();
-      } else if (isMultiCharacterView.value || isSetOverlapView.value) {
+      } else if (target === "multi") {
         // No images selected - ESC closes the union/intersect/overlap bar
         emit("clear-multi-selection");
-      } else if (
-        searchResultsActive?.value ||
-        (searchStore.searchQuery && searchStore.searchQuery.trim())
-      ) {
-        // No selection active - ESC also clears search. The query now comes
-        // from `searchStore` rather than a prop (App.vue slim-down, #661).
-        // `searchResultsActive` covers the modes that have no query string
-        // behind them (reverse image, similar faces, a person face search):
-        // `clearSearchQuery` has always reset all of them, but the gate here
-        // only ever asked about the text query, so Esc silently did nothing in
-        // those modes. The pill puts an Esc keycap on the button that clears
-        // them, so the key now has to actually reach it
-        // (merged-grid-action-pill.md §6.1).
+      } else if (target === "search") {
         clearSearchQuery();
+      } else if (target === "filters") {
+        clearFilters();
       } else {
         selectedImageIds.value = [];
         lastSelectedImageId = null;
@@ -428,13 +521,13 @@ export function useGridKeyboardNav(
         }
       }
     } else if (event.key === "Enter") {
-      // Enter: open overlay for cursor image
+      // Enter: open lightbox for cursor image
       if (cursorIdx.value !== null) {
         event.preventDefault();
         if (isGhosted(cursorIdx.value)) return;
         const cursorImg = allGridImages.value[cursorIdx.value];
         if (cursorImg && cursorImg.id) {
-          openOverlay(cursorImg);
+          openLightbox(cursorImg);
         }
       }
     } else if (event.key === "g" || event.key === "G") {
@@ -474,14 +567,64 @@ export function useGridKeyboardNav(
       event.preventDefault();
       selectionBarRef.value?.openTagInput();
     } else if (
-      (hoveredImageIdx.value !== null || selectedImageIds.value.length > 0) &&
-      !overlayOpen.value &&
+      String(event.key).toLowerCase() === FAVOURITE_KEY &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !lightboxOpen.value &&
       !isReadOnly.value &&
-      /^[1-5]$|^0$/.test(event.key)
+      !isScrapheap()
     ) {
-      // Number key pressed, set score for hovered image
+      // H favourites the selection, else the hovered picture, else the
+      // cursor's, as the digits score them.
+      const ids = selectedImageIds.value.length
+        ? selectedImageIds.value.slice()
+        : [
+            allGridImages.value[hoveredImageIdx.value ?? cursorIdx.value]?.id,
+          ].filter(Boolean);
+      if (!ids.length) return;
+      event.preventDefault();
+      toggleFavourite(ids);
+    } else if (
+      (event.ctrlKey || event.metaKey) &&
+      String(event.key).toLowerCase() === "c" &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.repeat &&
+      selectedImageIds.value.length > 0 &&
+      canCopyFiles() &&
+      !hasNativeCopyContext(event.target)
+    ) {
+      // Ctrl/Cmd+C copies the selection as files (share copies) for pasting
+      // into a file manager, mail or chat. Desktop app only; selected tag chips
+      // take the key first (RailTags, capture phase).
+      event.preventDefault();
+      const ids = selectedImageIds.value
+        .map(Number)
+        .filter((id) => Number.isFinite(id) && id > 0);
+      if (ids.length) copyPicturesAsFiles(ids);
+    } else if (
+      (event.code === "KeyV" || event.key === "v" || event.key === "V") &&
+      event.ctrlKey &&
+      !event.metaKey &&
+      !event.shiftKey &&
+      !event.altKey &&
+      selectedImageIds.value.length > 0 &&
+      !isReadOnly.value &&
+      canWriteFromKeys(event)
+    ) {
+      // Ctrl+V pastes the copied tags onto the selection.
+      event.preventDefault();
+      pasteOnSelection(selectedImageIds.value.slice());
+    } else if (
+      (hoveredImageIdx.value !== null || selectedImageIds.value.length > 0) &&
+      !lightboxOpen.value &&
+      !isReadOnly.value &&
+      starRating(event) !== null
+    ) {
+      // A bare 0-5 sets the star rating: the selection, else the hovered picture.
+      const score = starRating(event);
       if (selectedImageIds.value.length > 0) {
-        const score = parseInt(event.key, 10);
         const ids = selectedImageIds.value.slice();
         applyScoresForSelection(ids, score);
         event.preventDefault();
@@ -490,12 +633,11 @@ export function useGridKeyboardNav(
       const idx = hoveredImageIdx.value;
       const img = allGridImages.value[idx];
       if (img && img.id) {
-        let score = parseInt(event.key, 10);
         setScore(img, score);
         event.preventDefault();
       }
     }
   }
 
-  return { onGlobalKeyPress, handleKeyDown };
+  return { onGlobalKeyPress, handleKeyDown, escapeClearsFilters };
 }

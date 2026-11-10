@@ -37,6 +37,7 @@ from pixlstash.services.set_lock_service import (
 )
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.stacking import normalize_stack_positions
+from pixlstash.tasks.face_model_refresh_task import FaceModelRefreshTask
 from pixlstash.utils.field_allowlist import (
     PICTURE_EXTRA_SERVABLE_FIELDS,
     require_servable_field,
@@ -122,6 +123,13 @@ class ApplyScoresResponse(BaseModel):
     reset_triggered: bool
 
 
+class SetFavouriteResponse(BaseModel):
+    status: str
+    favourite: bool
+    updated_ids: list[int] = []
+    updated_count: int
+
+
 class PictureFullMetadataResponse(BaseModel):
     """Single picture's full metadata, tags, optional smart score, and any
     embedded file metadata. The picture model is large/dynamic so common
@@ -204,6 +212,8 @@ class DetectPicturesResponse(BaseModel):
     task_id: Optional[str] = None
     picture_ids: list[int] = []
     prompt: str = ""
+    target: str = "objects"
+    sensitive: bool = False
 
 
 class PicturePatchResponse(BaseModel):
@@ -853,6 +863,80 @@ def register_routes(router, server):
         }
 
     @router.post(
+        "/pictures/favourite",
+        summary="Mark or unmark favourite pictures",
+        description=(
+            "Sets `favourite` on every live picture named in `picture_ids`. "
+            "Recorded as one operation, so one undo reverts the batch."
+        ),
+        response_model=SetFavouriteResponse,
+    )
+    def set_favourite_pictures(request: Request, payload: dict = Body(...)):
+        raw_ids = payload.get("picture_ids")
+        favourite = payload.get("favourite")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            raise HTTPException(
+                status_code=400, detail="picture_ids must be a non-empty list"
+            )
+        if not isinstance(favourite, bool):
+            raise HTTPException(status_code=400, detail="favourite must be a boolean")
+        # Strict: int() would read `true` and `1.9` as picture 1.
+        if not all(type(pid) is int for pid in raw_ids):
+            raise HTTPException(
+                status_code=400, detail="picture_ids must be integer picture ids"
+            )
+        picture_ids = sorted(set(raw_ids))
+
+        def _set_favourite(session: Session, ids: list[int], on: bool) -> list[int]:
+            scope = scope_id_subquery(session, ids, name="_pixlstash_favourite_ids")
+            changed = session.exec(
+                select(Picture.id).where(
+                    Picture.id.in_(scope),
+                    Picture.deleted.is_(False),
+                    Picture.favourite.is_not(on),
+                )
+            ).all()
+            if changed:
+                session.exec(
+                    update(Picture)
+                    .where(Picture.id.in_(scope_id_subquery(session, changed)))
+                    .values(favourite=on)
+                )
+                session.flush()
+            return sorted(int(pid) for pid in changed)
+
+        verb = "Favourited" if favourite else "Unfavourited"
+        updated_ids, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            _set_favourite,
+            picture_ids,
+            favourite,
+            op_type="pictures.favourite",
+            picture_ids=picture_ids,
+            summary=f"{verb} {len(picture_ids)} picture(s)",
+            **operation_log_service.request_context(request),
+        )
+
+        if updated_ids:
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": updated_ids,
+                    "origin_client_id": getattr(
+                        request.state, "origin_client_id", None
+                    ),
+                    "change_kind": "updated",
+                },
+            )
+
+        return {
+            "status": "success",
+            "favourite": favourite,
+            "updated_ids": updated_ids,
+            "updated_count": len(updated_ids),
+        }
+
+    @router.post(
         "/pictures/detect",
         summary="Detect objects in pictures",
         description=(
@@ -861,7 +945,14 @@ def register_routes(router, server):
             "detection; with a non-empty `prompt` it runs open-vocabulary "
             "phrase grounding for that phrase. Detected labelled boxes are "
             "stored per picture (replacing any previous detections) and "
-            "progress surfaces in the task manager."
+            "progress surfaces in the task manager.\n\n"
+            'With `target: "faces"` it detects faces again instead (`prompt` '
+            "is ignored): a face that matches a stored one (by place or by "
+            "likeness) takes the fresh box and embedding and keeps its person, "
+            "a new face is added, a hand-drawn box is left alone, and a stored "
+            "face naming a person that matches nothing is kept as it was. "
+            "`sensitive: true` runs that detection at a lower confidence "
+            "threshold. The completion event reports `new_faces`."
         ),
         response_model=DetectPicturesResponse,
     )
@@ -894,10 +985,16 @@ def register_routes(router, server):
                 status_code=400, detail="At least one valid picture id is required"
             )
 
+        target = payload.get("target") or "objects"
+        if target not in ("objects", "faces"):
+            raise HTTPException(
+                status_code=400, detail='target must be "objects" or "faces"'
+            )
         prompt = payload.get("prompt") or ""
         if not isinstance(prompt, str):
             prompt = str(prompt)
-        prompt = prompt.strip()
+        prompt = "" if target == "faces" else prompt.strip()
+        sensitive = payload.get("sensitive") is True
 
         # Scope guard (BOLA): a scoped token may only run detection on pictures
         # within its granted resource. None == owner / unscoped == no filter; an
@@ -929,15 +1026,25 @@ def register_routes(router, server):
         if not pics:
             raise HTTPException(status_code=404, detail="No pictures found")
 
-        from pixlstash.tasks.detection_task import DetectionTask
+        if target == "faces":
+            task = FaceModelRefreshTask(
+                server.vault.db,
+                engine,
+                list(pics),
+                redetect=True,
+                origin_client_id=origin_client_id,
+                sensitive=sensitive,
+            )
+        else:
+            from pixlstash.tasks.detection_task import DetectionTask
 
-        task = DetectionTask(
-            server.vault.db,
-            engine,
-            list(pics),
-            prompt=prompt or None,
-            origin_client_id=origin_client_id,
-        )
+            task = DetectionTask(
+                server.vault.db,
+                engine,
+                list(pics),
+                prompt=prompt or None,
+                origin_client_id=origin_client_id,
+            )
         task_id = server.vault.submit_task(task)
         if task_id is None:
             raise HTTPException(status_code=503, detail="Task runner not available.")
@@ -947,6 +1054,8 @@ def register_routes(router, server):
             "task_id": task_id,
             "picture_ids": [pic.id for pic in pics],
             "prompt": prompt,
+            "target": target,
+            "sensitive": sensitive and target == "faces",
         }
 
     @router.get(
@@ -1310,7 +1419,6 @@ def register_routes(router, server):
         response_model=ScrapheapRestoreResponse,
     )
     def restore_scrapheap(request: Request, payload: dict | None = Body(None)):
-        origin_client_id = getattr(request.state, "origin_client_id", None)
         picture_ids = None
         if payload:
             ids = payload.get("picture_ids")
@@ -1322,77 +1430,12 @@ def register_routes(router, server):
                     )
                 picture_ids = ids
 
-        def restore_pictures(session: Session, ids: list[int] | None):
-            query = select(Picture).where(
-                Picture.deleted.is_(True),
+        restored_count = len(
+            scrapheap_service.restore_pictures(
+                server.vault,
+                picture_ids,
+                **operation_log_service.request_context(request),
             )
-            if ids is not None:
-                query = query.where(Picture.id.in_(ids))
-            pics = session.exec(query).all()
-            restored_count = 0
-            affected_stack_ids: set[int] = set()
-            for pic in pics:
-                pic.deleted = False
-                # Leaving a stale deleted_at on a live picture would let any
-                # future reader mistake it for a scrapheap deadline. The stamp
-                # describes the CURRENT stay in the scrapheap only; a re-delete
-                # writes a fresh one.
-                pic.deleted_at = None
-                session.add(pic)
-                if pic.stack_id is not None:
-                    affected_stack_ids.add(pic.stack_id)
-                restored_count += 1
-            # Re-fold restored pictures into their stack ordering so a restored
-            # member is not left behind a (now lower-ranked) deleted leader.
-            for stack_id in affected_stack_ids:
-                normalize_stack_positions(session, stack_id)
-            session.flush()
-            return restored_count
-
-        def _scrapheaped_targets(session: Session):
-            # The endpoint's targets are not knowable from the request: an absent
-            # picture_ids means "restore the entire scrapheap", and even a named
-            # subset may include already-live ids that will not change. Resolve
-            # the real set on the mutation's own session so the snapshot covers
-            # exactly what the write is about to touch.
-            query = select(Picture.id).where(Picture.deleted.is_(True))
-            if picture_ids is not None:
-                query = query.where(Picture.id.in_(picture_ids))
-            return list(session.exec(query).all())
-
-        restored_count, _operation = operation_log_service.run_recorded_metadata_task(
-            server.vault,
-            restore_pictures,
-            picture_ids,
-            op_type=operation_log_service.OP_SCRAPHEAP_RESTORE,
-            picture_ids=[],
-            resolve_picture_ids=_scrapheaped_targets,
-            # Same stack caveat as the soft-delete: normalize_stack_positions
-            # renumbers every member of an affected stack, deleted ones included.
-            expand_stacks=True,
-            expand_stacks_include_deleted=True,
-            summary=operation_log_service.scrapheap_restore_summary,
-            # Always batched: the caller's gesture id when it sent one, a
-            # server-minted ``srv-…`` otherwise.
-            **operation_log_service.request_context(
-                request, fallback_batch_id=operation_log_service.new_batch_id()
-            ),
-        )
-        # A restored picture re-enters active views. ``picture_ids`` is the
-        # caller-supplied subset (None == "restore all"); pass it through when
-        # known so the originating tab can target the affected cards.
-        #
-        # ``restored``, not ``added``: the card comes back, but the picture is
-        # not new to the vault. The SPA's sidebar treats ``added`` as a fresh
-        # import and flashes its NEW marker on the counts that grew, which is
-        # wrong for something that was in the library the whole time.
-        server.vault.notify(
-            EventType.CHANGED_PICTURES,
-            {
-                "picture_ids": list(picture_ids) if picture_ids else [],
-                "origin_client_id": origin_client_id,
-                "change_kind": "restored",
-            },
         )
         return {"status": "success", "restored_count": restored_count}
 

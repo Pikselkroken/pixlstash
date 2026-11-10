@@ -69,6 +69,7 @@ import { useNoticeStore } from "../stores/useNoticeStore";
 import { useWsStore } from "../stores/useWsStore";
 import { useTasksStore } from "../stores/useTasksStore";
 import { useGridStore } from "../stores/useGridStore";
+import { useSelectionStore } from "../stores/useSelectionStore";
 import { useWorkflowsStore } from "../stores/useWorkflowsStore";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
 import { useWorkflowTemplatesStore } from "../stores/useWorkflowTemplatesStore";
@@ -154,13 +155,14 @@ afterEach(() => {
  * The composable registers an `onUnmounted` cleanup, so calling it bare would
  * both warn and leave the socket open between cases.
  */
-function connect() {
+function connect({ openModel } = {}) {
   host = mount({
     setup() {
       useUpdatesSocket({
         gridContainer: ref(null),
         refreshSidebar: vi.fn(),
         refreshSidebarPicturesDebounced: vi.fn(),
+        openModel,
       }).connectUpdatesSocket();
       return () => null;
     },
@@ -224,6 +226,29 @@ describe("useUpdatesSocket: routing to the duplicate queue", () => {
       source: "ui",
     });
     expect(applyPictureEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("useUpdatesSocket: the Inbox counts follow arrivals and filings", () => {
+  it("re-reads them on an import, a set change and a person change", async () => {
+    const { useInboxStore } = await import("../stores/useInboxStore");
+    const refreshSoon = vi.spyOn(useInboxStore(), "refreshSoon");
+    connect();
+    receive({ type: "picture_imported", picture_ids: [7] });
+    receive({ type: "pictures_changed", change_kind: "updated", picture_ids: [7] });
+    receive({ type: "characters_changed" });
+    expect(refreshSoon).toHaveBeenCalledTimes(3);
+    receive({ type: "tags_changed", picture_ids: [7] });
+    expect(refreshSoon).toHaveBeenCalledTimes(3);
+  });
+
+  it("stays out of a read-only session", async () => {
+    const { useInboxStore } = await import("../stores/useInboxStore");
+    const refreshSoon = vi.spyOn(useInboxStore(), "refreshSoon");
+    isReadOnly.value = true;
+    connect();
+    receive({ type: "picture_imported", picture_ids: [7] });
+    expect(refreshSoon).not.toHaveBeenCalled();
   });
 });
 
@@ -602,8 +627,8 @@ describe("useUpdatesSocket: text read from a picture (#1197)", () => {
 });
 
 // The wire that carries an undo of a rotate from the socket to the open
-// lightbox. Without it the overlay's watcher is never triggered at all, and
-// nothing that tests the overlay by setting its prop would notice (#1419).
+// lightbox. Without it the lightbox's watcher is never triggered at all, and
+// nothing that tests the lightbox by setting its prop would notice (#1419).
 describe("useUpdatesSocket: a picture was turned (#1419)", () => {
   it("signals the lightbox with the pictures that were turned", () => {
     connect();
@@ -621,7 +646,7 @@ describe("useUpdatesSocket: a picture was turned (#1419)", () => {
   // producers rewrite a file's bytes without turning it: the thumbnail
   // regeneration task (`["pixels"]`, up to 64 ids a batch, streaming for the
   // length of an import) and the layout move route and its task
-  // (`["file_path", "pixels"]`). The overlay's <img> URL is built from the
+  // (`["file_path", "pixels"]`). The lightbox's <img> URL is built from the
   // picture id, the format and the orientation, so none of them touch it.
   it("stays put for a thumbnail regeneration, which turns nothing", () => {
     connect();
@@ -683,6 +708,35 @@ describe("useUpdatesSocket: a picture was turned (#1419)", () => {
   });
 });
 
+// A layout move of a fresh workflow output arrives with no origin. Outside a
+// folder view the file's path selects nothing, so it must not count as a
+// view change; inside one the move can take the card out of the view.
+describe("useUpdatesSocket: a moved file affects only a folder view", () => {
+  it("is invisible to a view that does not filter by folder", () => {
+    connect();
+    useSelectionStore().selectedFolderFilter = null;
+    expect(realtimeDeps.pictureChangeAffectsView(["file_path"])).toBe(false);
+    expect(
+      realtimeDeps.pictureChangeAffectsView(["file_path", "pixels"]),
+    ).toBe(false);
+  });
+
+  it("affects a folder view, by path or by reference folder", () => {
+    connect();
+    const selection = useSelectionStore();
+    selection.selectedFolderFilter = { pathPrefix: "/people/", label: "people" };
+    expect(realtimeDeps.pictureChangeAffectsView(["file_path"])).toBe(true);
+    selection.selectedFolderFilter = { referenceFolderId: 3, label: "refs" };
+    expect(realtimeDeps.pictureChangeAffectsView(["file_path"])).toBe(true);
+  });
+
+  it("does not count the Inbox as a folder view", () => {
+    connect();
+    useSelectionStore().selectedFolderFilter = { inbox: true };
+    expect(realtimeDeps.pictureChangeAffectsView(["file_path"])).toBe(false);
+  });
+});
+
 describe("useUpdatesSocket: models_arrived", () => {
   it("hands the arrival to the shelf store", () => {
     connect();
@@ -690,7 +744,29 @@ describe("useUpdatesSocket: models_arrived", () => {
     receive({ type: "models_arrived", model_ids: [4] });
     expect(arrived).toHaveBeenCalledTimes(1);
     // The ids go along: they are what says an arrival completed a template.
-    expect(arrived).toHaveBeenCalledWith([4]);
+    expect(arrived).toHaveBeenCalledWith([4], { fromDownloads: false });
+  });
+
+  it("announces a Downloads arrival with a Show that opens the shelf on it", () => {
+    const openModel = vi.fn();
+    connect({ openModel });
+    const arrived = vi.spyOn(useModelShelfStore(), "onModelsArrived");
+    receive({ type: "models_arrived", model_ids: [7, 8], from_downloads: true });
+
+    expect(arrived).toHaveBeenCalledWith([7, 8], { fromDownloads: true });
+    const notices = useNoticeStore().notices;
+    expect(notices).toHaveLength(1);
+    expect(notices[0].text).toBe(
+      "2 new models arrived from your Downloads folder.",
+    );
+    notices[0].action.handler();
+    expect(openModel).toHaveBeenCalledWith(7);
+  });
+
+  it("says nothing for a folder scan's arrival", () => {
+    connect({ openModel: vi.fn() });
+    receive({ type: "models_arrived", model_ids: [7] });
+    expect(useNoticeStore().notices).toHaveLength(0);
   });
 
   it("has the Templates tab re-read which of its files are on the shelf", () => {
@@ -808,6 +884,21 @@ describe("useUpdatesSocket: the GPU queue's resource_lease event", () => {
     expect(useNoticeStore().notices).toHaveLength(0);
   });
 
+  it("warns when a trainer exited without giving its GPU memory back", () => {
+    connect();
+    receive({
+      type: "resource_lease",
+      lease_id: "lease-9",
+      tenant: "aitoolkit",
+      change: "warning",
+      code: "aitoolkit_memory_not_released",
+      text: "AI-toolkit exited but 3.0 GB of GPU memory was not released (process 4242).",
+    });
+    const [notice] = useNoticeStore().notices;
+    expect(notice.level).toBe("warning");
+    expect(notice.text).toContain("was not released");
+  });
+
   it("does not warn for a warning with another code", () => {
     connect();
     receive({ type: "resource_lease", change: "warning", code: "something_else", workflow_id: "w", text: "x" });
@@ -815,3 +906,21 @@ describe("useUpdatesSocket: the GPU queue's resource_lease event", () => {
   });
 });
 
+
+describe("useUpdatesSocket: a face redetect landing", () => {
+  it("passes the pictures, the added count and the asking tab on", () => {
+    connect();
+    receive({
+      type: "pictures_changed",
+      change_kind: "updated",
+      fields: ["faces"],
+      picture_ids: [3],
+      new_faces: 0,
+      origin_client_id: "tab-1",
+    });
+    const update = useWsStore().wsFacesUpdate;
+    expect(update.pictureIds).toEqual([3]);
+    expect(update.newFaces).toBe(0);
+    expect(update.originClientId).toBe("tab-1");
+  });
+});

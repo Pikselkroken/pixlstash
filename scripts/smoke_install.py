@@ -216,13 +216,50 @@ def assert_version_payload(payload: dict, expected_version: str | None) -> None:
         )
 
     install_type = payload.get("install_type")
+    # The smoked server is declared a dev machine (see run_smoke), so anything
+    # else here is a smoke run that would be counted as a real install.
+    if install_type != "dev":
+        raise SmokeFailure(
+            f"/version reported install_type={install_type!r}, expected 'dev'."
+        )
+    logger.info("Version payload OK (version=%s install_type=dev)", reported)
+
+
+def assert_undeclared_detection(venv_dir: Path, env: dict[str, str]) -> None:
+    """Assert the installed wheel detects itself as ``pip`` when undeclared.
+
+    The dev declaration outranks channel detection, so ``/version`` can no
+    longer show it. Detection runs here instead, in the same venv with the
+    declaration blanked, and without starting a server that could report.
+
+    Args:
+        venv_dir (Path): Virtual environment with ``pixlstash`` installed.
+        env (dict[str, str]): The smoke's environment, declaration included.
+
+    Raises:
+        SmokeFailure: If the wheel detects anything but ``pip``.
+    """
+    result = subprocess.run(
+        [
+            str(venv_python(venv_dir)),
+            "-c",
+            "from pixlstash.server import Server; print(Server.detect_install_type())",
+        ],
+        env={**env, "PIXLSTASH_TELEMETRY_DEV": ""},
+        capture_output=True,
+        text=True,
+        timeout=READY_TIMEOUT_S,
+    )
+    lines = result.stdout.strip().splitlines()
+    detected = lines[-1] if lines else ""
     # A pip-installed wheel must not be mistaken for Docker or Electron: this
     # value feeds telemetry, and 'other' means detection fell through.
-    if install_type != "pip":
+    if result.returncode != 0 or detected != "pip":
         raise SmokeFailure(
-            f"/version reported install_type={install_type!r}, expected 'pip'."
+            f"Undeclared detection gave {detected!r} (exit {result.returncode}), "
+            f"expected 'pip'. stderr:\n{result.stderr}"
         )
-    logger.info("Version payload OK (version=%s install_type=pip)", reported)
+    logger.info("Undeclared install_type detection OK (pip)")
 
 
 def assert_spa_served(base_url: str, log_path: Path) -> None:
@@ -327,6 +364,10 @@ def run_smoke(venv_dir: Path, port: int, expected_version: str | None) -> None:
         env["HOME"] = str(tmp_path)
         env["USERPROFILE"] = str(tmp_path)
         env.pop("PIXLSTASH_INSTALL_TYPE", None)
+        # Declared ours whoever runs it, CI or a developer: a smoke server is
+        # never a real install. Server.DEV_MACHINE_ENV_VAR.
+        env["PIXLSTASH_TELEMETRY_DEV"] = "1"
+        assert_undeclared_detection(venv_dir, env)
 
         creation_flags = (
             subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0  # type: ignore[attr-defined]

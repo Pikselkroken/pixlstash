@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   downloadBatches,
   evidenceLine,
-  favouriteSetsFirst,
   favouritesLeadSections,
   fillFromSets,
   handMadeCard,
@@ -19,6 +18,7 @@ import {
   orderRows,
   setCard,
   setGroups,
+  setMarks,
   setChanges,
   canReset,
   setName,
@@ -928,6 +928,94 @@ describe("a set whose base model is not on the shelf", () => {
   });
 });
 
+describe("a card's marks, size and missing file", () => {
+  const realvis = () => setGroups(ALL).find((g) => g.key === "model:1");
+
+  it("marks each member by its Type, and the checkpoint is among them", () => {
+    const card = setCard(realvis());
+    expect(card.marks).toHaveLength(5);
+    expect(card.marks.map((mark) => mark.mark).sort()).toEqual([
+      "C",
+      "L",
+      "T",
+      "V",
+      "V",
+    ]);
+    expect(
+      card.marks.find((mark) => mark.mark === "C"),
+    ).toMatchObject({ type: "Checkpoint", tint: "tertiary", missing: false });
+  });
+
+  it("draws an unclassified file as a neutral ?, not another Type's letter", () => {
+    expect(setMarks([{ name: "mystery", kind: "unknown" }])).toEqual([
+      { name: "mystery", mark: "?", tint: "neutral", type: "", missing: false },
+    ]);
+  });
+
+  it("sums the size on disk over the members it holds", () => {
+    expect(setCard(realvis()).sizeBytes).toBe(5000);
+  });
+
+  it("reports a complete set as having no missing file", () => {
+    expect(setCard(realvis()).missingFile).toBe(false);
+  });
+
+  it("names a file the shelf lacks first, and flags the card", () => {
+    const flux = {
+      ...combination("7,8+flux1-dev.sft", [
+        model(7, "flux-vae-bf16", "vae"),
+        model(8, "t5xxl_fp16", "text_encoder"),
+      ]),
+      missing: [{ name: "flux1-dev.sft", workflow_ids: [] }],
+    };
+    const card = setCard(setGroups([flux])[0]);
+    expect(card.missingFile).toBe(true);
+    expect(card.marks[0]).toMatchObject({
+      name: "flux1-dev.sft",
+      mark: "?",
+      missing: true,
+    });
+    expect(card.marks.slice(1).some((mark) => mark.missing)).toBe(false);
+  });
+
+  it("flags a hand-made set's off-shelf member, and sizes only what is on the shelf", () => {
+    const set = {
+      id: 1,
+      picture_count: 0,
+      recipes: 0,
+      members: [
+        {
+          id: 1,
+          sha256: "h1",
+          name: "RealVis XL",
+          kind: "checkpoint",
+          slot: "checkpoint",
+          on_shelf: true,
+          file_size: 2000,
+          base_model: "SDXL",
+        },
+        {
+          id: 2,
+          sha256: "h2",
+          name: "Film Grain",
+          kind: "adapter",
+          slot: "lora",
+          on_shelf: false,
+          file_size: 500,
+        },
+      ],
+    };
+    const card = handMadeCard(set);
+    expect(card.missingFile).toBe(true);
+    expect(card.sizeBytes).toBe(2000);
+    expect(card.baseModel).toBe("SDXL");
+    expect(card.marks.map((mark) => [mark.mark, mark.missing])).toEqual([
+      ["C", false],
+      ["L", true],
+    ]);
+  });
+});
+
 describe("a card's automatic name", () => {
   it("never carries the file's extension", () => {
     const plain = model(9, "moody_v1", "checkpoint", {
@@ -1027,16 +1115,6 @@ describe("favourites lead inside a picker's groups (#1578)", () => {
     const sections = [{ id: "a", items: [{ id: 2, row: {} }, { id: 1, row: {} }] }];
     const ranked = favouritesLeadSections(sections, () => false);
     expect(ranked[0].items.map((i) => i.id)).toEqual([2, 1]);
-  });
-
-  it("keeps the hand-made group first, and a favourite set leads inside each", () => {
-    const sets = [{ key: "model:5" }, { key: "hand:1" }, { key: "hand:2" }];
-    expect(favouriteSetsFirst(sets, (key) => key === "model:5").map((s) => s.key)).toEqual(
-      ["hand:1", "hand:2", "model:5"],
-    );
-    expect(favouriteSetsFirst(sets, (key) => key === "hand:2").map((s) => s.key)).toEqual(
-      ["hand:2", "hand:1", "model:5"],
-    );
   });
 
   it("fill from a set finds a favourite set's members first", () => {

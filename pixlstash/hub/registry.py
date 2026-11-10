@@ -31,6 +31,7 @@ from typing import Optional
 from pixlstash.hub.db import HubDatabase
 from pixlstash.startup_permissions import mkdir_private
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.sqlite_uri import sqlite_file_uri
 
 logger = get_logger(__name__)
 
@@ -165,6 +166,10 @@ class ActiveLibraryError(LibraryError):
     """The operation is refused because the library is the active one."""
 
 
+class ForeignLibraryError(LibraryError):
+    """The folder holds a library, but not the one that was asked for."""
+
+
 class LibraryOverlapError(LibraryError):
     """The folder overlaps a registered library's watch or reference folder."""
 
@@ -275,7 +280,9 @@ def validate_vault_folder(folder: str, *, filename: str = VAULT_FILENAME) -> str
         )
 
     try:
-        conn = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+        conn = sqlite3.connect(
+            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
+        )
     except sqlite3.Error as exc:
         logger.error("Could not open vault %s read-only: %s", vault_path, exc)
         raise NotAVaultError(f"{vault_path} could not be opened: {exc}") from exc
@@ -337,7 +344,9 @@ def read_vault_uuid(folder: str) -> Optional[str]:
     if not os.path.isfile(vault_path):
         return None
     try:
-        conn = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+        conn = sqlite3.connect(
+            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
+        )
     except sqlite3.Error as exc:
         logger.warning("Could not read the fingerprint of %s: %s", vault_path, exc)
         return None
@@ -387,7 +396,9 @@ def read_vault_folder_roots(folder: str) -> list[str]:
     if vault_path is None:
         return []
     try:
-        conn = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+        conn = sqlite3.connect(
+            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
+        )
         try:
             tables = {
                 row[0]
@@ -1060,6 +1071,7 @@ class LibraryRegistry:
         new_folder: str,
         *,
         check_folder_overlap: bool = True,
+        require_same_library: bool = False,
     ) -> Library:
         """Point an existing library at a folder that has moved.
 
@@ -1068,8 +1080,18 @@ class LibraryRegistry:
         attaching at the new path would mint a new identity and leave the old
         share links inert.
 
+        Args:
+            require_same_library: Refuse unless the vault at the new folder
+                carries this library's fingerprint. For "I found it" - the
+                desktop's recovery screen - where a different library picked by
+                mistake must not take over this one's share links. Without it a
+                mismatch is only logged, because an explicit move by somebody
+                at a terminal may be deliberate.
+
         Raises:
             NotAVaultError: The new folder does not hold a vault.
+            ForeignLibraryError: *require_same_library* and the vault there is
+                a different library (or carries no fingerprint).
             LibraryExistsError: Another library is registered at that path.
             LibraryOverlapError: The folder overlaps a registered library's watch
                 or reference folder (skipped when *check_folder_overlap* is off).
@@ -1086,7 +1108,21 @@ class LibraryRegistry:
                 )
 
             fingerprint = read_vault_uuid(resolved)
-            if not _fingerprints_match(library.vault_uuid, fingerprint):
+            matches = _fingerprints_match(library.vault_uuid, fingerprint)
+            if require_same_library and not matches:
+                logger.warning(
+                    "Refused to relocate %s to %s: the library there carries "
+                    "fingerprint %s, expected %s.",
+                    library.name,
+                    resolved,
+                    fingerprint,
+                    library.vault_uuid,
+                )
+                raise ForeignLibraryError(
+                    f'{resolved} holds a different library, not "{library.name}". '
+                    "Nothing was changed."
+                )
+            if not matches:
                 logger.warning(
                     "Relocating %s to %s, where the library carries a different "
                     "fingerprint (%s, expected %s). Proceeding because the move was "

@@ -475,12 +475,25 @@ describe("the cards", () => {
     const cards = wrapper.findAll('[data-testid="model-set-card"]');
     expect(cards).toHaveLength(1);
     expect(cards[0].text()).toContain("realvisXL v5");
-    // The per-kind tally of everything else, and the facts summed over both.
-    expect(cards[0].text()).toContain("VAE 1");
-    expect(cards[0].text()).toContain("LoRA 1");
-    expect(cards[0].text()).toContain("3 models");
-    expect(cards[0].text()).toContain("5 recipes");
-    expect(cards[0].text()).toContain("15 pictures");
+    // The member marks, the checkpoint first, each a Type letter and a name.
+    const marks = cards[0].findAll(".msc__mark-chip");
+    expect(marks.map((chip) => chip.find(".msc__k").text())).toEqual([
+      "C",
+      "V",
+      "L",
+    ]);
+    expect(marks.map((chip) => chip.find(".msc__mark-name").text())).toEqual([
+      "realvisXL v5",
+      "sdxl vae",
+      "filmgrain xl",
+    ]);
+    // The facts the card draws: size on disk (3 × 1000 bytes), never used.
+    expect(cards[0].text()).toContain("2.9 KB");
+    expect(cards[0].text()).toContain("never");
+    // The count line is no longer drawn; it stays in the accessible name.
+    expect(cards[0].attributes("aria-label")).toContain("3 models");
+    expect(cards[0].attributes("aria-label")).toContain("5 recipes");
+    expect(cards[0].attributes("aria-label")).toContain("15 pictures");
   });
 
   it("lays the cover out for the pictures it has, never leaving a hole", async () => {
@@ -497,6 +510,90 @@ describe("the cards", () => {
     expect(cover.classes()).toContain("msc__cover--1");
     expect(cover.findAll(".msc__pic")).toHaveLength(1);
     expect(cover.findAll("img")).toHaveLength(1);
+  });
+
+  it("draws three member marks, then a +N for the rest", async () => {
+    const { wrapper } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [
+        combination("1,2,3,4,5", [
+          CKPT,
+          VAE,
+          LORA,
+          member(4, "soft_light", "adapter"),
+          member(5, "bad_hands", "adapter"),
+        ]),
+      ],
+    });
+
+    const card = wrapper.find('[data-testid="model-set-card"]');
+    expect(card.findAll(".msc__mark-chip")).toHaveLength(3);
+    expect(card.find(".msc__more").text()).toBe("+2");
+    // The clipped two are still named, to a screen reader, on the card's label.
+    expect(card.attributes("aria-label")).toContain("soft light");
+    expect(card.attributes("aria-label")).toContain("bad hands");
+  });
+
+  it("flags a file the shelf lacks: a badge, and its name in warning ink", async () => {
+    const { wrapper } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [
+        {
+          ...combination("1,2", [CKPT, VAE]),
+          missing: [{ name: "qwen_2.5_vl_7b", workflow_ids: [] }],
+        },
+      ],
+    });
+
+    const card = wrapper.find('[data-testid="model-set-card"]');
+    expect(card.find('[data-testid="set-badge-missing"]').text()).toBe(
+      "Missing a file",
+    );
+    const missing = card.findAll(".msc__mark-chip--missing");
+    expect(missing).toHaveLength(1);
+    expect(missing[0].text()).toContain("qwen_2.5_vl_7b");
+    expect(card.attributes("aria-label")).toContain("a file missing from the shelf");
+  });
+
+  it("draws the base model, the size on disk and when it last ran as chips", async () => {
+    const { wrapper } = await mountGrid({
+      rows: [{ ...row(1, "realvisXL_v5", "checkpoint"), base_model: "SDXL" }],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [
+        {
+          ...combination("1,2", [CKPT, VAE]),
+          last_used_at: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
+        },
+      ],
+    });
+
+    // Two members of 1000 bytes each, and three hours since the last picture.
+    const facts = wrapper.findAll(".msc__fact").map((fact) => fact.text());
+    expect(facts).toEqual(["SDXL", "2.0 KB", "3h ago"]);
+  });
+
+  it("mirrors the cards drawn selected into the store, and clears it on unmount", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [combination("1,2", [CKPT, VAE])],
+    });
+    expect(store.pickedCardKeys).toEqual([]);
+
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    expect(store.pickedCardKeys).toEqual(["model:1"]);
+
+    store.clearSelection();
+    await wrapper.vm.$nextTick();
+    expect(store.pickedCardKeys).toEqual([]);
+
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    wrapper.unmount();
+    expect(store.pickedCardKeys).toEqual([]);
   });
 
   it("loads a cover through the api layer, base and cache key and all", async () => {
@@ -538,7 +635,6 @@ describe("the cards", () => {
     const card = wrapper.find('[data-testid="model-set-card"]');
     expect(card.text()).toContain("Ran in ComfyUI");
     expect(card.text()).toContain("3 runs");
-    expect(card.text()).toContain("3 ComfyUI runs");
     expect(card.text()).not.toContain("0 pictures");
     expect(card.findAll("img")).toHaveLength(0);
     expect(card.attributes("aria-label")).toContain("ran in ComfyUI");
@@ -550,10 +646,14 @@ describe("the cards", () => {
       combinations: [combination("1", [CKPT], { recipes: 3 })],
     });
 
-    expect(wrapper.text()).toContain("Nothing else has run with it");
-    // The ▸ is still there: a tray of one model is still a tray, and the card
-    // has no other way to show which file it is.
-    expect(wrapper.find(".msc__toggle").exists()).toBe(true);
+    const card = wrapper.find('[data-testid="model-set-card"]');
+    // Its one mark is the file itself, and the name says nothing else ran with it.
+    expect(card.findAll(".msc__mark-chip")).toHaveLength(1);
+    expect(card.attributes("aria-label")).toContain(
+      "nothing else has run with it",
+    );
+    // No button opens the tray: a click selects, Enter and double-click open it.
+    expect(wrapper.find(".msc__toggle").exists()).toBe(false);
   });
 
   it("opens a tray of the MODELS that have run with the base model", async () => {
@@ -705,6 +805,42 @@ describe("the cards", () => {
     await card.trigger("dblclick");
     expect(store.openSetKey).toBe("");
     expect(sidebar.cardTabRequest).toBe(1);
+  });
+
+  it("does the double-click's work from a card's Edit button", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [combination("1,2", [CKPT, VAE])],
+    });
+    const sidebar = useSidebarStore();
+    const edit = () =>
+      wrapper.find(".msg__row[data-key='model:1'] [data-testid='set-edit']");
+
+    await edit().trigger("click");
+    expect(store.openSetKey).toBe("model:1");
+    expect(sidebar.modelsRailOpen).toBe(true);
+    expect(sidebar.cardTabRequest).toBe(1);
+    // The press opens the tray; it does not select the card.
+    expect([...store.selectedIds]).toEqual([]);
+
+    await edit().trigger("click");
+    expect(store.openSetKey).toBe("");
+
+    // A double click on the button opens once: its second press, still over
+    // the button, must not shut the tray the first one opened.
+    for (const [type, detail] of [
+      ["click", 1],
+      ["click", 2],
+      ["dblclick", 2],
+    ]) {
+      edit().element.dispatchEvent(
+        new MouseEvent(type, { detail, bubbles: true }),
+      );
+      await wrapper.vm.$nextTick();
+    }
+    expect(store.openSetKey).toBe("model:1");
+    wrapper.unmount();
   });
 
   it("opens and closes a tray from the keyboard", async () => {
@@ -1183,6 +1319,24 @@ describe("selection and the verbs", () => {
       await press(cards[1], "dblclick", 2);
       expect(store.openSetKey).toBe("");
     });
+
+    it("swallows the rest of a double click on Edit that moved the tray", async () => {
+      const { wrapper, store, cards, key } = await twoCards();
+      const press = async (el, type, detail) => {
+        el.element.dispatchEvent(
+          new MouseEvent(type, { bubbles: true, cancelable: true, detail }),
+        );
+        await wrapper.vm.$nextTick();
+      };
+      store.toggleSet(key(cards[0]));
+
+      // Edit on the second card closes the first card's tray above it, so the
+      // second press lands on the first card, not on the button.
+      await press(cards[1].find('[data-testid="set-edit"]'), "click", 1);
+      await press(cards[0], "click", 2);
+      await press(cards[0], "dblclick", 2);
+      expect(store.openSetKey).toBe(key(cards[1]));
+    });
   });
 
   it("adds an unlit card with Ctrl or Space rather than toggling its model out", async () => {
@@ -1445,11 +1599,11 @@ describe("selection and the verbs", () => {
     }
   });
 
-  it("leaves the selection alone when the card's chevron is pressed", async () => {
-    // ▸ is navigation: "show me what is in this set". Its click bubbles out of
-    // the button and into the row, so unguarded it replaced the reader's
-    // selection with that card - arming a model they never pointed at for a
-    // verb that has no undo.
+  it("leaves the selection alone when the card's hide button is pressed", async () => {
+    // The card's own buttons are not picks. Hide's click bubbles out of the
+    // button and into the row, so unguarded it replaced the reader's selection
+    // with that card - arming a model they never pointed at for a verb that has
+    // no undo. (The ▸ that once sat here is gone; this is the button left.)
     const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5"), row(3, "filmgrain_xl")],
       support: [row(2, "sdxl_vae", "vae")],
@@ -1461,10 +1615,26 @@ describe("selection and the verbs", () => {
     store.toggleSelected(2);
     store.toggleSelected(3);
 
-    await wrapper.findAll(".msc__toggle")[0].trigger("click");
+    await wrapper.find('[data-testid="set-hide"]').trigger("click");
 
-    expect(store.openSetKey).toBe("model:1");
+    expect(store.openSetKey).toBe("");
     expect([...store.selectedIds].sort()).toEqual([2, 3]);
+  });
+
+  it("selects a card on click and opens its tray only on double-click", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [combination("1,2", [CKPT, VAE])],
+    });
+    const card = wrapper.find('[data-testid="model-set-card"]');
+
+    await card.trigger("click");
+    expect(store.openSetKey).toBe("");
+    expect([...store.selectedIds]).toEqual([1]);
+
+    await card.trigger("dblclick");
+    expect(store.openSetKey).toBe("model:1");
   });
 
   it("offers no selection for a model the shelf has no row for", async () => {
@@ -1694,7 +1864,36 @@ describe("hand-made sets (#1520)", () => {
   const SET_CKPT = slotMember(1, "realvisXL_v5", "checkpoint");
   const SET_VAE = slotMember(2, "sdxl_vae", "vae");
 
-  it("badges every set Automatic or Custom, and says when it has no checkpoint", async () => {
+  it("draws a set made by Edit set in its card's place, a set by hand first", async () => {
+    const { wrapper } = await mountGrid({
+      rows: [
+        row(1, "realvisXL_v5", "checkpoint"),
+        row(4, "juggernautXL_v9", "checkpoint"),
+      ],
+      combinations: [
+        combination("a", [CKPT], { pictures: 20 }),
+        // Covered by set 11, which Edit set made on its checkpoint.
+        {
+          ...combination("b", [OTHER_CKPT], { pictures: 5 }),
+          covered_by: [11],
+        },
+      ],
+      handMade: [
+        handSet(11, [slotMember(4, "juggernautXL_v9", "checkpoint")], {
+          cloned: true,
+          replaces: "model:4",
+          picture_count: 5,
+        }),
+        handSet(10, [SET_CKPT]),
+      ],
+    });
+    const keys = wrapper
+      .findAll(".msg__row[data-key]")
+      .map((el) => el.attributes("data-key"));
+    expect(keys).toEqual(["hand:10", "model:1", "hand:11"]);
+  });
+
+  it("badges every set Yours or nothing, and says when it has no checkpoint", async () => {
     const { wrapper } = await mountGrid({
       rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
       handMade: [
@@ -1708,7 +1907,7 @@ describe("hand-made sets (#1520)", () => {
     // Neither served as automatic: one has no pictures, one no checkpoint.
     for (const card of cards) {
       expect(card.attributes("aria-label")).toContain("custom");
-      expect(card.text()).toContain("Custom");
+      expect(card.text()).toContain("Yours");
     }
     // Named after its checkpoint, in the shelf's own name for it, and
     // "Untitled set" without one.
@@ -1718,7 +1917,7 @@ describe("hand-made sets (#1520)", () => {
     expect(cards[1].text()).toContain("Incomplete: no checkpoint");
     // The name says what is drawn: the warning, not the facts it replaces.
     expect(cards[1].attributes("aria-label")).not.toContain("no pictures yet");
-    expect(cards[0].text()).toContain("no pictures yet");
+    expect(cards[0].attributes("aria-label")).toContain("no pictures yet");
     // No recipe on its checkpoint, so no recipe count.
     expect(cards[0].text()).not.toMatch(/recipe/);
   });
@@ -3439,14 +3638,16 @@ describe("hand-made sets (#1520)", () => {
       });
     }
 
-    it("says Custom, what it follows and what the owner changed on top", async () => {
+    it("says Yours, what it follows and what the owner changed on top", async () => {
       const { wrapper, store } = await mountLiving();
       const card = wrapper.find('[data-testid="model-set-card"]');
-      expect(card.text()).toContain("Custom");
+      expect(card.find('[data-testid="set-badge-yours"]').exists()).toBe(true);
       // Nothing new from the pictures: no dot, and no word of it.
       expect(card.find(".msc__new").exists()).toBe(false);
       expect(card.attributes("aria-label")).not.toContain("new from pictures");
-      expect(card.text()).toContain("3 models · 14 recipes · 212 pictures");
+      expect(card.attributes("aria-label")).toContain(
+        "3 models, 14 recipes, 212 pictures",
+      );
       expect(card.attributes("aria-label")).toContain("custom");
 
       store.toggleSet("hand:10");
@@ -3481,8 +3682,9 @@ describe("hand-made sets (#1520)", () => {
         ],
       });
       const card = wrapper.find('[data-testid="model-set-card"]');
-      expect(card.text()).toContain("Automatic");
-      expect(card.find(".msc__new").exists()).toBe(true);
+      // Automatic draws no badge; the new-model dot stands alone instead.
+      expect(card.find('[data-testid="set-badge-yours"]').exists()).toBe(false);
+      expect(card.find('[data-testid="set-new-dot"]').exists()).toBe(true);
       expect(card.attributes("aria-label")).toContain("1 new from pictures");
       store.toggleSet("hand:10");
       await wrapper.vm.$nextTick();
@@ -4051,6 +4253,7 @@ describe("hiding a set from pictures", () => {
     expect(createWorkflowSet).toHaveBeenCalledWith({
       cloned: true,
       seen: true,
+      replaces: "model:1",
       members: [{ model_id: 1, slot: "checkpoint" }],
     });
     wrapper.unmount();

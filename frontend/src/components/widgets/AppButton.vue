@@ -46,9 +46,20 @@
       {{ loading ? "mdi-loading" : `mdi-${iconLeft}` }}
     </v-icon>
     <span v-if="!iconOnly" class="app-btn__label"><slot /></span>
-    <kbd v-if="keyHint" class="app-btn__key" aria-hidden="true">{{
-      keyLabel
-    }}</kbd>
+    <!-- ↵ is drawn as an icon in a cap taller than it is wide, as the key
+         is: the character renders as a speck, and some mono faces lack it. -->
+    <span v-if="keyHint" class="app-btn__keys" aria-hidden="true"
+      ><kbd
+        v-for="cap in keyCaps"
+        :key="cap"
+        :class="['app-btn__key', { 'app-btn__key--enter': cap === 'enter' }]"
+        ><v-icon
+          v-if="cap === 'enter'"
+          :size="size === 'sm' ? 12 : 14"
+          icon="mdi-subdirectory-arrow-left"
+        /><template v-else>{{ cap }}</template></kbd
+      ></span
+    >
   </button>
 </template>
 
@@ -84,28 +95,32 @@ const props = defineProps({
   tooltip: { type: String, default: "" },
   tooltipLocation: { type: String, default: "top" },
   // The visible shortcut affordance from the dialog keyboard contract:
-  // "enter" wears ↵ and "esc" wears Esc; any other single key (e.g. "s" on
-  // the dedup Keep separate) wears its own uppercase label. A shortcut shown
+  // "enter" wears the ↵ icon, "ctrl+enter" a Ctrl cap beside it and "esc"
+  // Esc; any other single key (e.g. "s" on the dedup Keep separate) wears its
+  // own uppercase label. A shortcut shown
   // next to the action it triggers is the only kind anyone discovers.
   keyHint: { type: String, default: "" },
 });
 
-const keyLabel = computed(() =>
+// One cap per key of the chord; "enter" is drawn as the icon.
+const keyCaps = computed(() =>
   props.keyHint === "enter"
-    ? "↵"
-    : props.keyHint === "esc"
-      ? "Esc"
-      : props.keyHint.toUpperCase(),
+    ? ["enter"]
+    : props.keyHint === "ctrl+enter"
+      ? ["Ctrl", "enter"]
+      : [props.keyHint === "esc" ? "Esc" : props.keyHint.toUpperCase()],
 );
 
 const keyShortcut = computed(() =>
   props.keyHint === "enter"
     ? "Enter"
-    : props.keyHint === "esc"
-      ? "Escape"
-      : props.keyHint
-        ? props.keyHint.toUpperCase()
-        : undefined,
+    : props.keyHint === "ctrl+enter"
+      ? "Control+Enter"
+      : props.keyHint === "esc"
+        ? "Escape"
+        : props.keyHint
+          ? props.keyHint.toUpperCase()
+          : undefined,
 );
 
 const rootEl = ref(null);
@@ -173,9 +188,10 @@ defineExpose({ focus });
 /* ON DARK: the ground stays dark in both themes, so the theme's own values are
    the light theme's wrong ones there. The context swaps the tokens the variants
    read wherever a token exists: the bright amber (#1413), the
-   dark-surface ink for the quiet and outlined labels, the hover wash and the
-   focus ring. Custom properties holding var() resolve where they are declared,
-   so `--hover-wash`, `--hover-neutral` and `--focus-stroke` are restated here
+   dark-surface ink for the quiet and outlined labels and the hover wash (the
+   focus ring is one blue on every ground). Custom properties holding var()
+   resolve where they are declared, so `--hover-wash` and `--hover-neutral` are
+   restated here
    rather than inherited from the theme root. The neutral fill is the ink at
    16%, which is the dark theme's own `cancel-button` to within a shade. */
 .app-btn--on-dark {
@@ -187,8 +203,6 @@ defineExpose({ focus });
     rgba(var(--v-theme-on-dark-surface), 0.16),
     rgba(var(--v-theme-on-dark-surface), 0.16)
   );
-  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
-  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
 }
 /* The neutral fill and the outline have no theme token to remap onto: their
    dark-ground values are washes of the ink, so they are set here. */
@@ -304,17 +318,53 @@ defineExpose({ focus });
   align-items: center;
 }
 
-/* The key-hint badge. currentColor keeps it legible on every variant fill;
-   the reduced opacity keeps it a hint rather than a second label. */
+/* A chord's caps sit side by side; the global `kbd + kbd` rule spaces them. */
+.app-btn__keys {
+  flex-shrink: 0;
+  display: inline-flex;
+}
+
+/* The key-hint badge. currentColor keeps it legible on every variant fill.
+   The glyph and border are at 90%: 0.55 opacity on the whole chip measured
+   2.6:1 on amber (2.1:1 dark). A fixed height, so the ↵ icon and the Esc
+   text sit in equal boxes. */
 .app-btn__key {
   flex-shrink: 0;
-  padding: 0 var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: var(--kbd-h-button);
+  padding: 0 var(--kbd-side-tight);
   font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  line-height: 1.5;
+  font-size: var(--text-xs);
+  line-height: var(--kbd-leading);
+  /* Centre on the capitals, not the line box: the mono face's empty
+     descender room otherwise floats Esc a pixel high in the fixed height. */
+  text-box: trim-both cap alphabetic;
+  color: color-mix(in srgb, currentColor 90%, transparent);
   border: 1px solid currentColor;
   border-radius: var(--radius-sm);
-  opacity: 0.55;
+  /* No wash (owner, 2026-10-28): the global `kbd` fill would add one. */
+  background: none;
+}
+.app-btn--sm .app-btn__key {
+  height: var(--kbd-h-button-sm);
+}
+/* Enter is a tall key: a cap a step narrower than it is high, the icon
+   centred in it. */
+.app-btn__key--enter {
+  justify-content: center;
+  width: calc(var(--kbd-h-button) - var(--space-1));
+  padding: 0;
+}
+.app-btn--sm .app-btn__key--enter {
+  width: calc(var(--kbd-h-button-sm) - var(--space-1));
+}
+/* No keyboard to hint at, and the wider chip pushes dialog buttons to wrap. */
+@media (hover: none) and (pointer: coarse) {
+  .app-btn__keys {
+    display: none;
+  }
 }
 
 /* The spinner keeps spinning under reduced motion. It is a status readout, not

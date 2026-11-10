@@ -220,7 +220,8 @@ the status run goes below `--text-sm`.**
 ### Added
 
 **The query string.** Verified: nothing on screen today names what was searched —
-`SearchResultBar` never shows it, the toolbar popover is closed, and only
+`SearchResultBar` never shows it, the toolbar search field names it only in
+its resting summary, and only
 `bar-btn--active` hints a search is live. A recognition-over-recall failure worth
 fixing while the pill is rebuilt. Truncate to ~24 chars, full string in `title`.
 
@@ -415,9 +416,14 @@ Order, one layer per press, innermost and most reversible first:
    contracting is the feedback; no extra chrome needed.
 3. No selection, multi-character/set-overlap view → clear the multi-selection.
 4. No selection, search active → clear the search. The pill unmounts.
+5. No selection, no search, filters on → clear the filters, as the filter
+   strip's Clear all does. Clear all carries the Esc hint while nothing is
+   selected, no search runs and the auto-hide sidebar is not floating over
+   the grid. The ladder stands aside while a menu, a dialog
+   or the floating auto-hide sidebar is open: that Esc only closes it.
 
 The Esc keycap belongs to exactly **one** visible control at a time — the one Esc
-will actually hit — rendered as the `<kbd>` chip from `visual-language.md` §13,
+will actually hit — rendered as the keycap from `visual-language.md` ("The key-hint badge"),
 with `aria-keyshortcuts="Escape"` on that control only (`aria-keyshortcuts` on a
 button that will not get the key is a 4.1.2 lie).
 
@@ -500,10 +506,15 @@ is a **label on a menu trigger**, not free text, so its affordance says "this is
 a control's state". Static text vs control: different affordance, different
 meaning.
 
+**Changed by #2160.** The workspace redesign draws the count as plain text with
+the verbs after it and ⋯ as the menu, so the affordance difference is gone. The
+unit still separates them: only the selection count says "selected", and it
+sits first in its own group behind a rule.
+
 | Element | Copy |
 |---|---|
-| Menu trigger | `12 selected` + chevron |
-| Trigger title | `Actions for 12 selected — press S` / `…(47 total including stacks) — press S` |
+| Count (#2160: text, the menu is ⋯) | `12 selected`; hover `47 total including stacks` |
+| ⋯ title | `More actions for 12 selected` |
 | Faces only | `3 faces selected` |
 | Both | `12 selected · 3 faces` |
 | Clear selection | `Clear selection (Esc)` when Esc owns it, else `Clear selection` |
@@ -603,10 +614,10 @@ user no signal it opens anything. Add both, plus `aria-keyshortcuts="S"`.
 
 | Key | Action | Change |
 |---|---|---|
-| `F` | Open the search popover (toolbar) | unchanged |
-| `Esc` | The 4-step ladder in §6.1 | behaviour unchanged; the keycap now moves |
+| `F` | Focus the toolbar search field | unchanged |
+| `Esc` | The ladder in §6.1 | the keycap now moves; a filters rung was added last |
 | `Del` / `Backspace` | Delete selected | unchanged |
-| `S` | Toggle the selection menu | unchanged |
+| `S` | Add to set (#2160; it used to toggle the selection menu) | changed |
 | `ArrowDown` | Menu open, focus outside panel → first item | unchanged |
 | `Ctrl+A` | Select all in the result set | + announces via the grid region |
 | `T`, `1`–`5`, `0`, `Ctrl+Z` | Tag, score, undo | unchanged |

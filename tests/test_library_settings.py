@@ -41,6 +41,8 @@ def server():
 def clean(server):
     reset_owner_auth(server)
     library_settings_service.set_similarity_character(server.vault.db, None)
+    with server.hub.transaction() as conn:
+        conn.execute("DELETE FROM user_tag_preference")
     yield
 
 
@@ -376,3 +378,39 @@ class TestCatchingUpADormantLibrary:
             reconcile_settings_fingerprint(server.vault.db, None, {"blurry": 0.5})
             is False
         )
+
+
+class TestTagChipSize:
+    """The tag chip size is the owner's, kept in its own hub table."""
+
+    def test_default_when_nothing_is_stored(self, server):
+        body = _owner(server).get(f"{API}/users/me/config").json()
+        assert body["tag_chip_size"] == "comfortable"
+
+    def test_a_patch_round_trips(self, server):
+        client = _owner(server)
+        response = client.patch(
+            f"{API}/users/me/config", json={"tag_chip_size": "large"}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["updated"] is True
+        assert client.get(f"{API}/users/me/config").json()["tag_chip_size"] == "large"
+
+    def test_an_unknown_size_is_refused(self, server):
+        client = _owner(server)
+        response = client.patch(
+            f"{API}/users/me/config", json={"tag_chip_size": "huge"}
+        )
+        assert response.status_code == 400, response.text
+        body = client.get(f"{API}/users/me/config").json()
+        assert body["tag_chip_size"] == "comfortable"
+
+    def test_a_patch_refused_elsewhere_saves_no_chip_size(self, server):
+        client = _owner(server)
+        response = client.patch(
+            f"{API}/users/me/config",
+            json={"tag_chip_size": "large", "no_such_setting": 1},
+        )
+        assert response.status_code == 400, response.text
+        body = client.get(f"{API}/users/me/config").json()
+        assert body["tag_chip_size"] == "comfortable"

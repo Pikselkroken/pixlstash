@@ -13,7 +13,7 @@ import {
   Tray,
 } from 'electron';
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { cp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { homedir, networkInterfaces } from 'node:os';
@@ -25,6 +25,11 @@ import { BackendManager, OVERLAY_ACCELS, launchWithOverlayFallback } from './bac
 import { uniqueDownloadPath } from './downloads';
 import { restoredWindowSize } from './windowState';
 import { ipcBytes, pngClipboardPayload, safeMediaFilename } from './mediaIpc';
+import {
+  WINDOWS_COPY_FILES_SCRIPT,
+  fileClipboardPayload,
+  requireShareCopyPaths,
+} from './fileClipboard';
 import {
   comfyuiOpenTarget,
   isAllowedNavigation,
@@ -51,6 +56,15 @@ import {
   VaultUnusableError,
 } from './backend/VaultRecovery';
 import {
+  activateLibrary,
+  isLibraryUnavailable,
+  isSameOrInside,
+  LibraryUnavailableError,
+  LibraryUnavailableReport,
+  relocateLibrary,
+  withImageRoot,
+} from './backend/LibraryRecovery';
+import {
   Accel,
   ACCEL_LABELS,
   RuntimeInfo,
@@ -71,6 +85,7 @@ import {
   serverConfigPath,
   serverLogPath,
   setBackendsRoot,
+  shareCopiesRoot,
 } from './config';
 import { inspectFolder } from './setup/InspectFolder';
 import { readLibraryFolder } from './setup/ReadLibraryFolder';
@@ -119,12 +134,33 @@ function loadAppIcon(): Electron.NativeImage {
 
 const APP_ICON = loadAppIcon();
 
+/** What a drag-out shows under the pointer: the dragged picture's thumbnail as
+ * PNG bytes from the renderer, else the app icon, since macOS refuses a drag
+ * without one. A bad icon never stops the drag. */
+function shareDragIcon(bytes: unknown): Electron.NativeImage {
+  if (bytes != null) {
+    try {
+      const image = nativeImage.createFromBuffer(pngClipboardPayload(bytes));
+      if (!image.isEmpty()) return image;
+      console.warn('[drag] the drag icon could not be decoded; using the app icon');
+    } catch (err) {
+      console.warn('[drag] ignoring an unusable drag icon; using the app icon:', err);
+    }
+  }
+  return APP_ICON.resize({ width: 64, height: 64 });
+}
+
 // Keep the desktop app's data dir distinct from a standalone pip/Docker server's
 // (~/.config/pixlstash). Electron's default name ('PixlStash') differs from it
 // only by case - fine on Linux, but a COLLISION on case-insensitive filesystems
 // (Windows, default macOS). Pin it to 'pixlstash-desktop'. Must run before
 // anything reads userData (config paths, the single-instance lock).
-app.setPath('userData', join(app.getPath('appData'), 'pixlstash-desktop'));
+// PIXLSTASH_DESKTOP_USER_DATA is scripts/desktop-dev.sh's scratch copy, so a
+// branch's migrations never touch the real hub and libraries.
+app.setPath(
+  'userData',
+  process.env.PIXLSTASH_DESKTOP_USER_DATA || join(app.getPath('appData'), 'pixlstash-desktop'),
+);
 
 const manager = new BackendManager();
 let serverProcess: ServerProcess | null = null;
@@ -269,8 +305,13 @@ function createMainWindow(): void {
     // Frameless so the app draws its own title bar that blends with the toolbar.
     // macOS keeps native traffic lights (positioned over the custom bar); other
     // platforms get fully custom controls drawn by the renderer.
+    // `titleBarOverlay.height` makes Electron centre the traffic lights in a
+    // strip that tall, whatever size this macOS draws them (Tahoe's are larger),
+    // so they line up with the bar's logo. A fixed `trafficLightPosition` would
+    // turn that centring off. 39 = `.titlebar { height }` in TitleBar.vue (40)
+    // less its 1px bottom border, the box the logo centres in. Keep them in sync.
     ...(process.platform === 'darwin'
-      ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 12, y: 11 } }
+      ? { titleBarStyle: 'hidden' as const, titleBarOverlay: { height: 39 } }
       : { frame: false }),
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
@@ -1018,7 +1059,8 @@ async function startWithOverlayFallback(
     // an accelerator: retrying on the CPU env fails identically and throws the
     // typed error away. Preserve the active overlay and let the caller offer
     // the dedicated recovery dialog.
-    shouldFallback: (error) => !isPermissionRepairRequired(error) && !isVaultUnusable(error),
+    shouldFallback: (error) =>
+      !isPermissionRepairRequired(error) && !isVaultUnusable(error) && !isLibraryUnavailable(error),
   });
 }
 
@@ -1155,6 +1197,248 @@ async function offerPermissionRepair(error: PermissionRepairRequiredError): Prom
   }
 }
 
+/**
+ * The missing-library report the recovery screen is showing, and a note about
+ * the attempt that just failed. Held in main, like the permission report, so
+ * the page can only ever act on a library the backend actually named.
+ */
+let pendingLibraryRecovery: { report: LibraryUnavailableReport; notice: string | null } | null =
+  null;
+
+/** What the person chose on the recovery screen; each one ends in a relaunch or a quit. */
+type LibraryRecoveryChoice =
+  | { quit: true }
+  | {
+      quit: false;
+      recovery: StartupRecovery;
+      /** The config as it was before "Create" changed `image_root`, to put back if that fails. */
+      previousConfig?: string;
+    };
+
+/** Replace the server config in one rename, so a crash cannot leave half a file. */
+function writeServerConfigAtomically(text: string): void {
+  const target = serverConfigPath();
+  const staging = `${target}.recovery-${process.pid}.tmp`;
+  writeFileSync(staging, text);
+  renameSync(staging, target);
+}
+
+const LIBRARY_RECOVERY_CHANNELS = [
+  'libraryRecovery:find',
+  'libraryRecovery:switch',
+  'libraryRecovery:create',
+  'libraryRecovery:retry',
+  'libraryRecovery:quit',
+] as const;
+
+/** Refuse a recovery action that did not come from the recovery screen itself. */
+function requireLibraryRecoveryRenderer(event: Electron.IpcMainInvokeEvent, channel: string): void {
+  const sender = event.senderFrame?.url ?? event.sender.getURL();
+  if (isBundledRendererPage(sender, RENDERER_DIR, 'library-recovery.html')) return;
+  console.warn(`[ipc] refusing ${channel} from ${redactUrl(sender)}: not the recovery screen`);
+  throw new Error(`${channel} is only available on the library recovery screen.`);
+}
+
+/** Run a `pixlstash-cli libraries` verb with the backend's interpreter and hub. */
+function libraryCliRunner(): (
+  file: string,
+  args: string[],
+  options: { timeout: number },
+) => Promise<{ stdout: string; stderr: string }> {
+  return (file, args, options) => execFileP(file, args, { ...options, env: backendEnv() });
+}
+
+/**
+ * Show the recovery screen for a library that will not open, and wait for a
+ * choice that ends in a relaunch or a quit.
+ *
+ * The screen does the work for "Find it" and "Open another library" itself,
+ * through the CLI, while the backend is stopped - so a wrong folder is answered
+ * on the screen ("that is a different library") instead of by another failed
+ * start. "Create a new library" only records the folder; the backend registers
+ * it on the relaunch, through exactly the code a first run uses, and detaches
+ * the old registration only once the new one exists. Nothing here deletes a
+ * file, and nothing creates a database where the missing library belongs.
+ */
+async function askLibraryRecovery(
+  report: LibraryUnavailableReport,
+  notice: string | null,
+): Promise<LibraryRecoveryChoice> {
+  const window = mainWindow;
+  if (!window) return { quit: true };
+  pendingLibraryRecovery = { report, notice };
+  let settle: (choice: LibraryRecoveryChoice) => void = () => undefined;
+  const choice = new Promise<LibraryRecoveryChoice>((resolveChoice) => {
+    let settled = false;
+    settle = (value) => {
+      if (settled) return;
+      settled = true;
+      resolveChoice(value);
+    };
+  });
+  // Closing the window is a quit, not a hang: the boot promise has to settle.
+  const onClosed = () => settle({ quit: true });
+  window.on('closed', onClosed);
+
+  const interpreter = backendInterpreter();
+  const run = libraryCliRunner();
+  const failed = (error: unknown) => ({ ok: false, message: (error as Error).message });
+
+  ipcMain.handle('libraryRecovery:find', async (event) => {
+    requireLibraryRecoveryRenderer(event, 'libraryRecovery:find');
+    const result = await dialog.showOpenDialog(window, {
+      title: `Where is "${report.library.name}" now?`,
+      defaultPath: existsSync(dirname(report.library.path))
+        ? dirname(report.library.path)
+        : homedir(),
+      properties: ['openDirectory'],
+    });
+    const folder = result.canceled ? null : result.filePaths[0];
+    if (!folder) return { ok: false, canceled: true };
+    try {
+      await relocateLibrary(interpreter, hubPath(), report.library, folder, run);
+    } catch (error) {
+      return failed(error);
+    }
+    settle({ quit: false, recovery: {} });
+    return { ok: true };
+  });
+
+  ipcMain.handle('libraryRecovery:switch', async (event, uuid: unknown) => {
+    requireLibraryRecoveryRenderer(event, 'libraryRecovery:switch');
+    // Only a library the backend itself offered - it checked that each opens.
+    const target = report.alternatives.find((other) => other.uuid === uuid);
+    if (!target) return { ok: false, message: 'That library is not one of those offered.' };
+    try {
+      await activateLibrary(interpreter, hubPath(), target, run);
+    } catch (error) {
+      return failed(error);
+    }
+    settle({ quit: false, recovery: {} });
+    return { ok: true };
+  });
+
+  ipcMain.handle('libraryRecovery:create', async (event) => {
+    requireLibraryRecoveryRenderer(event, 'libraryRecovery:create');
+    const result = await dialog.showOpenDialog(window, {
+      title: 'Choose a folder for the new library',
+      defaultPath: defaultLibraryDir(),
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    const folder = result.canceled ? null : result.filePaths[0];
+    if (!folder) return { ok: false, canceled: true };
+    if (isSameOrInside(folder, report.library.path) || isSameOrInside(report.library.path, folder)) {
+      return {
+        ok: false,
+        message:
+          `That folder is, contains or is inside where "${report.library.name}" belongs. A new ` +
+          'library there would hide it if the folder comes back, so choose a different folder.',
+      };
+    }
+    let previousConfig: string;
+    try {
+      // Only `image_root` changes; the port, remote access and every other
+      // setting the person chose stay as they were. The active library still
+      // wins over this until the relaunch below replaces it, and if the
+      // backend refuses the folder the old config is put back.
+      previousConfig = readFileSync(serverConfigPath(), 'utf8');
+      writeServerConfigAtomically(withImageRoot(previousConfig, folder));
+    } catch (error) {
+      return failed(error);
+    }
+    settle({ quit: false, recovery: { replaceLibrary: report.library.uuid }, previousConfig });
+    return { ok: true };
+  });
+
+  ipcMain.handle('libraryRecovery:retry', (event) => {
+    requireLibraryRecoveryRenderer(event, 'libraryRecovery:retry');
+    settle({ quit: false, recovery: {} });
+    return { ok: true };
+  });
+
+  ipcMain.handle('libraryRecovery:quit', (event) => {
+    requireLibraryRecoveryRenderer(event, 'libraryRecovery:quit');
+    settle({ quit: true });
+    return { ok: true };
+  });
+
+  try {
+    await window.loadFile(join(__dirname, 'renderer', 'library-recovery.html'));
+    return await choice;
+  } finally {
+    for (const channel of LIBRARY_RECOVERY_CHANNELS) ipcMain.removeHandler(channel);
+    window.off('closed', onClosed);
+    pendingLibraryRecovery = null;
+  }
+}
+
+/**
+ * Keep offering the recovery screen until the library opens or the person quits.
+ *
+ * A relaunch that fails the same way comes back to the screen with a note -
+ * "Try again" with the drive still unplugged is the obvious case - rather than
+ * to a process-exit message. Any other failure is returned for the caller to
+ * report on the splash screen.
+ */
+async function recoverUnavailableLibrary(first: LibraryUnavailableError): Promise<unknown> {
+  let current = first;
+  let notice: string | null = null;
+  for (;;) {
+    const choice = await askLibraryRecovery(current.report, notice);
+    if (choice.quit) {
+      app.quit();
+      return null;
+    }
+    // The splash shows the start-up progress while the backend relaunches.
+    await mainWindow?.loadFile(join(__dirname, 'renderer', 'index.html'));
+    let recovery = choice.recovery;
+    let failure: unknown = null;
+    try {
+      await retryLaunch(recovery);
+      return null;
+    } catch (retryError) {
+      failure = retryError;
+    }
+    // A folder the person picked that needs the permission repair gets the
+    // same offer boot() makes, once, before anything else.
+    if (isPermissionRepairRequired(failure) && (await offerPermissionRepair(failure))) {
+      recovery = { ...recovery, repairPermissions: true };
+      await mainWindow?.loadFile(join(__dirname, 'renderer', 'index.html'));
+      try {
+        await retryLaunch(recovery);
+        return null;
+      } catch (retryError) {
+        failure = retryError;
+      }
+    }
+    if (choice.previousConfig !== undefined) {
+      // "Create" did not take: the config goes back to naming the library it
+      // named before, so a later lost hub cannot register the abandoned folder.
+      try {
+        writeServerConfigAtomically(choice.previousConfig);
+      } catch (restoreError) {
+        console.error(`[recovery] could not restore the server config: ${String(restoreError)}`);
+      }
+    }
+    if (isLibraryUnavailable(failure)) {
+      current = failure;
+      notice =
+        'PixlStash tried again and still could not open a library. ' +
+        (failure.report.reason || '');
+    } else if (isPermissionRepairRequired(failure) || isVaultUnusable(failure)) {
+      // Both are about the folder just chosen, not the missing library, so the
+      // way forward is still one of this screen's other choices.
+      notice = isVaultUnusable(failure)
+        ? `That folder holds a library database PixlStash cannot open (${failure.report.reason}). ` +
+          'Nothing was changed. Choose another folder.'
+        : 'That folder needs its permissions repaired before PixlStash will open it. ' +
+          'Nothing was changed.';
+    } else {
+      return failure;
+    }
+  }
+}
+
 /** Launch: dev passthrough, or the bundled env (+ active GPU overlay), straight into the library. */
 async function boot(): Promise<void> {
   try {
@@ -1223,6 +1507,12 @@ async function boot(): Promise<void> {
       } catch (retryError) {
         error = retryError;
       }
+    } else if (isLibraryUnavailable(error)) {
+      // The active library's folder or database is gone, unreadable, or a
+      // different library. Settings could fix that but needs the server this
+      // stops, so the recovery screen offers the ways out instead.
+      error = await recoverUnavailableLibrary(error);
+      if (error === null) return;
     }
     sendPhase({ phase: 'error', message: (error as Error).message });
   }
@@ -1472,6 +1762,10 @@ function registerIpc(): void {
   // registered only while that screen is actually waiting for an answer.
   ipcMain.handle('permissions:request', () => pendingPermissionRepair);
 
+  // Read-only, likewise: the recovery screen renders the report; its actions
+  // are registered only while askLibraryRecovery is waiting for one.
+  ipcMain.handle('libraryRecovery:request', () => pendingLibraryRecovery);
+
   // ---- The startup framework ----
   //
   // One screen, a list of steps, and main decides the list. First run asks all
@@ -1634,6 +1928,11 @@ function registerIpc(): void {
             // pixlstash is not installed into the dev env; import it from the checkout.
             execFileP(file, args, { ...options, env: backendEnv() }),
           ),
+        recordInstallIdentity: () =>
+          execFileP(backendInterpreter(), ['-m', 'pixlstash.telemetry', serverConfigPath()], {
+            env: backendEnv(),
+            timeout: 30_000,
+          }),
         // Loopback HTTP; the active runtime drives the device (default_device
         // left as auto).
         writeConfig: (imageRoot) =>
@@ -1801,6 +2100,48 @@ function registerIpc(): void {
     clipboard.writeImage(image);
     return { copied: true };
   });
+  // Copy a grid selection as files (#2419): the share copies the backend just
+  // staged, checked to be inside shareCopiesRoot() before the OS sees them.
+  ipcMain.handle('media:copyFiles', async (event, paths: unknown) => {
+    requireAppRenderer(event, 'media:copyFiles');
+    const files = await requireShareCopyPaths(paths, shareCopiesRoot());
+    if (process.platform === 'win32') {
+      const list = join(app.getPath('temp'), `pixlstash-copy-${randomUUID()}.txt`);
+      await writeFile(list, files.join('\r\n'), 'utf8');
+      try {
+        await execFileP(
+          'powershell',
+          ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_COPY_FILES_SCRIPT],
+          { env: { ...process.env, PIXLSTASH_COPY_FILES: list }, windowsHide: true },
+        );
+      } finally {
+        await rm(list, { force: true });
+      }
+    } else {
+      const { format, data } = fileClipboardPayload(
+        files,
+        process.platform,
+        process.env.XDG_CURRENT_DESKTOP,
+      );
+      clipboard.writeBuffer(format, data);
+    }
+    return { copied: files.length };
+  });
+  // Drag a grid selection out as files (#2420): the share copies the backend
+  // just staged, under the same check as media:copyFiles. The renderer cancels
+  // its own HTML5 drag and asks for this one. Electron's Linux and Windows
+  // startDrag run the OS drag to its end before returning, which is how the
+  // renderer learns the drag is over; macOS returns at once (shareDrag.js).
+  ipcMain.handle(
+    'media:startShareDrag',
+    async (event, request: { paths?: unknown; icon?: unknown }) => {
+      requireAppRenderer(event, 'media:startShareDrag');
+      const files = await requireShareCopyPaths(request?.paths, shareCopiesRoot());
+      event.sender.startDrag({ file: files[0], files, icon: shareDragIcon(request?.icon) });
+      // The resolved paths: a drop back onto the window reports these.
+      return { files };
+    },
+  );
 
   // Desktop-shell preferences (e.g. hide-to-tray-on-close).
   //

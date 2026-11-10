@@ -821,7 +821,7 @@ def create_router(server) -> APIRouter:
         one it was polling reattaches to the resumed run rather than being
         told 404 about work that is very much still happening.
         """
-        if getattr(server.vault, "disable_background_workers", False):
+        if server.vault.disable_background_workers:
             # A read-only deployment does no background work at all; finishing
             # somebody else's import would be the one exception, which is not
             # a promise that flag should quietly break.

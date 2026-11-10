@@ -1,6 +1,7 @@
 import { onMounted, onUnmounted } from "vue";
 import {
   extractSupportedImportFilesFromDataTransfer,
+  isFileDrag,
   isInternalImageDrag,
   isModelFile,
   isSupportedImportFile,
@@ -17,6 +18,11 @@ import { useNoticeStore } from "../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../stores/useReviewSessionsStore";
 import { useSelectionStore } from "../stores/useSelectionStore";
 import { resolveImportTarget } from "../utils/importTarget.js";
+import {
+  isOutgoingDragActive,
+  isOwnShareCopyDrop,
+  outgoingDragIds,
+} from "../utils/shareDrag.js";
 import {
   modelDropTargetOf,
   resolveModelDropFolder,
@@ -57,7 +63,10 @@ export function useWindowFileImport({ sidebarRef }) {
   function isInsideImageGrid(event) {
     const target = event?.target;
     if (!(target instanceof Element)) return false;
-    return Boolean(target.closest(".image-grid, .grid-scroll-wrapper"));
+    // The arriving tiles above the grid are the grid's drop target too.
+    return Boolean(
+      target.closest(".image-grid, .grid-scroll-wrapper, .grid-arriving"),
+    );
   }
 
   /**
@@ -84,9 +93,10 @@ export function useWindowFileImport({ sidebarRef }) {
     // window-level import handler mistakes the assign-drag for an external file
     // drop and imports the picture instead of assigning it.
     if (isInternalImageDrag(dataTransfer)) return false;
-    const files = dataTransfer.files;
-    if (files && files.length > 0) return true;
     const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
+    // A drag from outside the page always says it carries files. Reading
+    // `files` instead let an in-page drag through on the desktop shell, which
+    // fills it for in-page drags too.
     return types.includes("Files") || types.includes("application/x-moz-file");
   }
 
@@ -149,7 +159,7 @@ export function useWindowFileImport({ sidebarRef }) {
     if (!resolved.length) {
       noticeStore.warning(
         "A model file has to be added from the machine running PixlStash. " +
-          "Open Models and use Add ▾ → Add file… to pick it there.",
+          "Open Models and use Add models ▾ → Add file… to pick it there.",
         { key: `model-file-drop-${(modelDropSeq += 1)}` },
       );
       return;
@@ -248,6 +258,17 @@ export function useWindowFileImport({ sidebarRef }) {
         { key: dropKey },
       );
     }
+    // A missing model's row the file was dropped on takes it from here; it
+    // may have gone (another workflow selected) while the copy ran.
+    if (
+      added.length &&
+      dropTarget?.isConnected &&
+      dropTarget.dataset.modelDropReplace
+    ) {
+      dropTarget.dispatchEvent(
+        new CustomEvent("model-file-added", { detail: { files: added } }),
+      );
+    }
     // Reported separately rather than folded into the success line: a partial
     // drop has to name what did NOT land, or the count is the only clue.
     for (const failure of failures) {
@@ -256,6 +277,15 @@ export function useWindowFileImport({ sidebarRef }) {
   }
 
   function handleWindowDragOver(event) {
+    // A drag-out over the window is a file drag no target has claimed yet:
+    // refuse it here, so letting go over empty space does not hand the file to
+    // the browser to open. A target that takes it (a set, a stack) sets its own
+    // drop effect after this.
+    if (isOutgoingDragActive() && isFileDrag(event.dataTransfer)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "none";
+      return;
+    }
     if (!isExternalFileDragEvent(event)) return;
     // The review overlay is a modal review surface; dropping files into it
     // must never start an import. Skip preventDefault so the drag is not shown as
@@ -265,7 +295,24 @@ export function useWindowFileImport({ sidebarRef }) {
   }
 
   async function handleWindowDrop(event) {
+    // The drag-out landed somewhere that does not take it: nothing to do, and
+    // the browser must not open the file.
+    if (outgoingDragIds(event.dataTransfer)) {
+      event.preventDefault();
+      return;
+    }
     if (!isExternalFileDragEvent(event)) return;
+    // Copies from an earlier drag-out dropped back (from a file manager window
+    // still showing the staging folder): they are of pictures already here. The
+    // import paths refuse them too (media.js); this says why.
+    if (isOwnShareCopyDrop(event.dataTransfer)) {
+      event.preventDefault();
+      noticeStore.info(
+        "Those are copies of pictures already in your library, so nothing was imported.",
+        { key: "share-copy-drop-back" },
+      );
+      return;
+    }
     // While the review overlay is open, swallow the drop without importing
     // (still preventDefault so the browser does not navigate to the dropped file).
     if (reviewSessionsStore.overlayOpen) {

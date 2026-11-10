@@ -49,6 +49,7 @@ from pixlstash.utils.query.predicate_filter import (
     ONLY_MADE_BY,
     RUN_VARIANT,
     PredicateFilter,
+    inbox_cutoff,
     is_truthy_flag,
 )
 
@@ -106,6 +107,9 @@ class GridPicture(BaseModel):
     height: int | None = Field(None, description="Image height in pixels.")
     format: str | None = Field(None, description="File format, e.g. PNG, JPEG, MP4.")
     score: int | None = Field(None, description="Manual star rating (0-5).")
+    favourite: bool | None = Field(
+        None, description="The owner has hearted this picture."
+    )
     smart_score: float | None = Field(
         None, description="Model-predicted aesthetic score."
     )
@@ -153,6 +157,18 @@ class GridPicture(BaseModel):
     file_path: str | None = Field(
         None,
         description="Path relative to the image root (omitted when grid_lite=true).",
+    )
+    # Not in the grid projection: returned only to a caller that names them in
+    # `fields` (the stats rail's Properties for several pictures, #2161). Both
+    # are what `GET /pictures/{id}/metadata` already returns for each picture.
+    size_bytes: int | None = Field(
+        None, description="The file's size in bytes (only when asked for in fields)."
+    )
+    comfyui_models: str | None = Field(
+        None,
+        description="JSON list of the checkpoint / UNET names the picture was "
+        "generated with; '[]' when it was checked and has none (only when asked "
+        "for in fields).",
     )
     purge_at: str | None = Field(
         None,
@@ -306,6 +322,9 @@ class PictureListFilters:
                 "(min_score=0 or max_score=5) plus unscored is every picture."
             ),
         ),
+        favourite: bool = Query(
+            False, description="Only the owner's favourite pictures."
+        ),
         smart_score_bucket: str | None = Query(
             None, description="unscored | 1-2 | 2-3 | 3-4 | 4-5"
         ),
@@ -381,6 +400,15 @@ class PictureListFilters:
         ),
         import_source_folder: str | None = Query(
             None, description="Filter by import source folder."
+        ),
+        inbox: Literal["24h", "7d", "14d", "30d", "90d", "all"] | None = Query(
+            None,
+            description=(
+                "Only the Inbox: pictures added (imported) within this period "
+                "that have no person and no set. Implies "
+                "character_id=UNASSIGNED with both halves; `all` has no "
+                "cutoff."
+            ),
         ),
         id: list[str] = Query(
             default=[], description="Restrict to specific picture ids (repeatable)."
@@ -680,6 +708,15 @@ def select_pictures_for_listing(
     limit = int(query_params.pop("limit", limit))
     character_id = _character_id(query_params.pop("character_id", None))
     unassigned_by = query_params.pop("unassigned_by", None)
+    # The Inbox is the unassigned view (no person and no set, both halves)
+    # narrowed to what was added within its period. A local, not a
+    # ``query_params`` entry: ``Picture.find(**query_params)`` would drop a key
+    # that is not a column without a word.
+    inbox_period = query_params.pop("inbox", None)
+    imported_since = inbox_cutoff(inbox_period)
+    if inbox_period is not None:
+        character_id = "UNASSIGNED"
+        unassigned_by = None
     _character_ids_raw = query_params.pop("character_ids", None)
     character_id_list: list[int] = []
     if _character_ids_raw:
@@ -715,6 +752,7 @@ def select_pictures_for_listing(
     # ``Picture.find(**search)``, whose ``hasattr`` fallthrough silently drops any
     # key that is not a Picture column, so the filter would do nothing at all.
     unscored = is_truthy_flag(query_params.pop("unscored", None))
+    favourite_only = is_truthy_flag(query_params.pop("favourite", None))
     smart_score_bucket = query_params.pop("smart_score_bucket", None) or None
     resolution_bucket = query_params.pop("resolution_bucket", None) or None
     project_id_raw = query_params.pop("project_id", None)
@@ -880,6 +918,7 @@ def select_pictures_for_listing(
         min_score_value: int | None = None,
         max_score_value: int | None = None,
         unscored_value: bool = False,
+        favourite_only_value: bool = False,
         smart_score_bucket_value: str | None = None,
         resolution_bucket_value: str | None = None,
         tags_filter_value: list[str] | None = None,
@@ -893,6 +932,8 @@ def select_pictures_for_listing(
         face_filter_value: str | None = None,
         stack_state_value: str | None = None,
         impossible_sources_value: list[str] | None = None,
+        import_source_folder_value: str | None = None,
+        imported_since_value: datetime | None = None,
     ):
         if deleted_only:
             query = select(Picture.id).where(
@@ -928,6 +969,7 @@ def select_pictures_for_listing(
                 and min_score_value is None
                 and max_score_value is None
                 and not unscored_value
+                and not favourite_only_value
                 and smart_score_bucket_value is None
                 and resolution_bucket_value is None
                 and not tags_filter_value
@@ -944,6 +986,8 @@ def select_pictures_for_listing(
                 and not face_filter_value
                 and not stack_state_value
                 and not impossible_sources_value
+                and not import_source_folder_value
+                and imported_since_value is None
             ):
                 return None
             query = select(Picture.id).where(
@@ -982,6 +1026,7 @@ def select_pictures_for_listing(
             min_score=min_score_value,
             max_score=max_score_value,
             unscored=unscored_value,
+            favourite_only=favourite_only_value,
             smart_score_bucket=smart_score_bucket_value,
             resolution_bucket=resolution_bucket_value,
             tags_filter=tags_filter_value,
@@ -995,6 +1040,8 @@ def select_pictures_for_listing(
             face_filter=face_filter_value,
             stack_state=stack_state_value,
             impossible_sources=impossible_sources_value,
+            import_source_folder=import_source_folder_value,
+            imported_since=imported_since_value,
             apply_deleted_filter=False,
         ).apply(query)
 
@@ -1020,6 +1067,7 @@ def select_pictures_for_listing(
             min_score_value=min_score,
             max_score_value=max_score,
             unscored_value=unscored,
+            favourite_only_value=favourite_only,
             smart_score_bucket_value=smart_score_bucket,
             resolution_bucket_value=resolution_bucket,
             tags_filter_value=query_params.get("tags_filter"),
@@ -1037,6 +1085,8 @@ def select_pictures_for_listing(
             face_filter_value=face_filter,
             stack_state_value=stack_state,
             impossible_sources_value=impossible_sources,
+            import_source_folder_value=query_params.get("import_source_folder"),
+            imported_since_value=imported_since,
         )
         if set_filter_ids:
             set_candidate_ids = server.vault.db.run_immediate_read_task(
@@ -1139,12 +1189,15 @@ def select_pictures_for_listing(
                 min_score=min_score,
                 max_score=max_score,
                 unscored=unscored,
+                favourite_only=favourite_only,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
                 stack_state=stack_state,
                 impossible_sources=impossible_sources,
                 file_path_prefix=file_path_prefix,
+                import_source_folder=query_params.get("import_source_folder"),
+                imported_since=imported_since,
                 tags_filter=query_params.get("tags_filter") or None,
                 tags_rejected_filter=query_params.get("tags_rejected_filter") or None,
                 tags_confidence_above_filter=query_params.get(
@@ -1176,6 +1229,7 @@ def select_pictures_for_listing(
             min_score=min_score,
             max_score=max_score,
             unscored=unscored,
+            favourite_only=favourite_only,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             project_id=unassigned_project_id,
@@ -1196,6 +1250,8 @@ def select_pictures_for_listing(
             stack_state=stack_state,
             impossible_sources=impossible_sources,
             file_path_prefix=file_path_prefix,
+            import_source_folder=query_params.get("import_source_folder"),
+            imported_since=imported_since,
             comfyui_models_filter=query_params.get("comfyui_models_filter"),
             comfyui_loras_filter=query_params.get("comfyui_loras_filter"),
             workflow_structural_hashes=workflow_structural_hashes,
@@ -1220,6 +1276,7 @@ def select_pictures_for_listing(
                 min_score=min_score,
                 max_score=max_score,
                 unscored=unscored,
+                favourite_only=favourite_only,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
@@ -1243,6 +1300,7 @@ def select_pictures_for_listing(
             min_score=min_score,
             max_score=max_score,
             unscored=unscored,
+            favourite_only=favourite_only,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             face_filter=face_filter,
@@ -1502,6 +1560,7 @@ def select_pictures_for_listing(
                 min_score=min_score,
                 max_score=max_score,
                 unscored=unscored,
+                favourite_only=favourite_only,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 file_path_prefix=file_path_prefix,
@@ -1523,6 +1582,7 @@ def select_pictures_for_listing(
             min_score=min_score,
             max_score=max_score,
             unscored=unscored,
+            favourite_only=favourite_only,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,

@@ -47,7 +47,7 @@ export const useWsStore = defineStore("ws", () => {
   const wsSmartScoreUpdate = ref({ key: 0, pictureIds: [] });
   // Signals a DetectionTask (Segment) finished for the given pictures. The grid
   // treats `detections` as a card-content field and refreshes the card in place,
-  // but that refresh is deferred while the lightbox is open, and the overlay
+  // but that refresh is deferred while the lightbox is open, and the lightbox
   // fetches its boxes from /pictures/{id}/detections rather than from the card.
   // Without this signal an open overlay kept showing the pre-segment boxes until
   // it was closed and reopened.
@@ -57,12 +57,21 @@ export const useWsStore = defineStore("ws", () => {
   const wsTextUpdate = ref({ key: 0, pictureIds: [] });
   // Signals the given pictures were TURNED (`orientation`): an in-place rotate,
   // or the undo/redo of one. The grid's card refresh for this is deferred while
-  // the lightbox is open (§9.1), and the overlay builds its `<img>` URL from
+  // the lightbox is open (§9.1), and the lightbox builds its `<img>` URL from
   // `orientation`, which none of its other signals re-read - so without this the
   // open lightbox kept showing the picture the wrong way up until it was closed
   // and reopened. Deliberately narrower than `pixels`, which a thumbnail
   // regeneration and a layout move also raise without turning anything.
   const wsOrientationUpdate = ref({ key: 0, pictureIds: [] });
+  // Signals a "Detect faces again" finished: which pictures, how many faces it
+  // added, and which tab asked. The open lightbox re-reads its face boxes, and
+  // useFaceRedetect offers a more sensitive run when none were added.
+  const wsFacesUpdate = ref({
+    key: 0,
+    pictureIds: [],
+    newFaces: null,
+    originClientId: null,
+  });
   const wsPluginProgress = ref({ key: 0, payload: null });
   const isUploadInProgress = ref(false);
 
@@ -129,6 +138,7 @@ export const useWsStore = defineStore("ws", () => {
     wsDetectionUpdate,
     wsTextUpdate,
     wsOrientationUpdate,
+    wsFacesUpdate,
     wsPluginProgress,
     isUploadInProgress,
     clientId,

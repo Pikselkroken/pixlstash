@@ -7,6 +7,7 @@ label, not the same one by another route.
 """
 
 from pixlstash.utils.known_base_models import (
+    SOURCE_CIVITAI,
     SOURCE_DECLARED,
     SOURCE_DECLARED_FUZZY,
     SOURCE_FILENAME,
@@ -183,6 +184,7 @@ def test_a_person_outranks_every_scan():
     order = [
         SOURCE_USER,
         SOURCE_DECLARED,
+        SOURCE_CIVITAI,
         SOURCE_FILENAME,
         SOURCE_DECLARED_FUZZY,
         SOURCE_FILENAME_FUZZY,

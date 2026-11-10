@@ -2,7 +2,7 @@
 //
 // The largest resource in the app. Seeded here with the reads whose call sites
 // have already migrated; the counts, scores, thumbnails, and export endpoints
-// join it as the grid and overlay move over.
+// join it as the grid and lightbox move over.
 
 import {
   apiClient,
@@ -573,6 +573,35 @@ export async function openPictureLocation(id) {
 }
 
 /**
+ * The apps the server's operating system offers for a picture's file type,
+ * editors first (`GET /open-with`). Loopback only.
+ *
+ * @param {number|string} id
+ * @returns {Promise<{apps: Array<{id: string, name: string, default: boolean, editor: boolean}>, other: boolean}>}
+ */
+export async function listOpenWithApps(id) {
+  return unwrap(apiClient.get(`/open-with`, { params: { picture_id: id } }));
+}
+
+/**
+ * Open an edit copy of a picture in an app from {@link listOpenWithApps}, or
+ * in the OS's own chooser. Saving the copy there imports the edit stacked on
+ * the original. Loopback only.
+ *
+ * @param {number|string} id
+ * @param {{appId?: string, other?: boolean}} choice
+ * @returns {Promise<{session: string, app_name: string|null}>}
+ */
+export async function openPictureWith(id, { appId, other } = {}) {
+  return unwrap(
+    apiClient.post(
+      `/open-with`,
+      other ? { picture_id: id, other: true } : { picture_id: id, app_id: appId },
+    ),
+  );
+}
+
+/**
  * Queue object detection over a set of pictures.
  *
  * Runs as a background GPU task: this resolves once the work is accepted, and
@@ -586,6 +615,21 @@ export async function detectPictures(pictureIds, prompt) {
   return unwrap(apiClient.post(`/pictures/detect`, {
     picture_ids: pictureIds,
     prompt,
+  }));
+}
+
+/**
+ * Queue a fresh face detection for pictures; people stay with their faces.
+ * @param {number[]} pictureIds
+ * @param {Object} [options]
+ * @param {boolean} [options.sensitive] - detect at a lower confidence.
+ * @returns {Promise<Object>} the response body.
+ */
+export async function detectFaces(pictureIds, { sensitive = false } = {}) {
+  return unwrap(apiClient.post(`/pictures/detect`, {
+    picture_ids: pictureIds,
+    target: "faces",
+    sensitive,
   }));
 }
 
@@ -729,6 +773,21 @@ export async function applyScores(
 }
 
 /**
+ * Mark or unmark pictures as the owner's favourites.
+ * @param {Array<number|string>} pictureIds
+ * @param {boolean} favourite - true marks, false unmarks.
+ * @returns {Promise<{updated_ids: number[]}>} the response body.
+ */
+export async function setPicturesFavourite(pictureIds, favourite) {
+  return unwrap(
+    apiClient.post(`/pictures/favourite`, {
+      picture_ids: pictureIds,
+      favourite,
+    }),
+  );
+}
+
+/**
  * Read the scores collected from this guest session.
  * @returns {Promise<Object>} the response body, whose `scores` maps picture id
  *   to score.
@@ -779,6 +838,32 @@ export async function startExport(query = "") {
  */
 export async function startFolderExport(query) {
   return unwrap(apiClient.post(`/pictures/export/folder?${query}`));
+}
+
+/**
+ * Stage share-ready copies of pictures on the server host (#2417).
+ *
+ * Generation data is stripped unless `keep_generation_data` is set;
+ * `link_originals` hands over the originals as hard links instead. Loopback
+ * owner only: the answer is host paths, for the desktop app to hand to the
+ * clipboard or a drag (integration_architecture.md §2.5).
+ *
+ * @param {Array<number|string>} pictureIds
+ * @param {Object} [options] - `keep_generation_data`, `max_long_edge`,
+ *   `watermark`, `file_names`.
+ * @returns {Promise<{batch: string, directory: string, files: Array<Object>,
+ *   skipped: Array<{picture_id, reason}>}>}
+ */
+export async function makeShareCopies(pictureIds, options = {}) {
+  return unwrap(
+    apiClient.post(
+      `/pictures/share-copies`,
+      { picture_ids: pictureIds, ...options },
+      // A stripped copy of a whole view is gigabytes to write; the default
+      // minute is too short.
+      { timeout: 5 * 60 * 1000 },
+    ),
+  );
 }
 
 /**

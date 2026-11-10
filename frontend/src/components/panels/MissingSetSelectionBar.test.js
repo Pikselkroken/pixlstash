@@ -19,10 +19,11 @@ const globalOpts = {
     stubs: {
       "v-icon": true,
       Tooltip: true,
+      // Renders the activator too: the pill's ⋯ button is that activator.
       "v-menu": {
         props: ["modelValue"],
         emits: ["update:modelValue"],
-        template: "<div><slot /></div>",
+        template: '<div><slot name="activator" :props="{}" /><slot /></div>',
       },
     },
   },
@@ -46,23 +47,65 @@ function selectMissing(names) {
   return store;
 }
 
-const items = (wrapper) => wrapper.findAll(".ctx-item");
+/** The rows of the context menu, which opens at the pointer (outside the pill). */
+const items = (wrapper) =>
+  wrapper
+    .findAll(".ctx-item")
+    .filter((row) => !row.element.closest(".selbar"));
+/** The rows under the pill's ⋯ button, which the pill holds. */
+const moreItems = (wrapper) =>
+  wrapper
+    .findAll(".selbar .ctx-item");
 const byLabel = (wrapper, label) =>
+  moreItems(wrapper).find((b) => b.text().startsWith(label)) ??
   items(wrapper).find((b) => b.text().startsWith(label));
 
 describe("MissingSetSelectionBar", () => {
   beforeEach(() => setActivePinia(createPinia()));
 
-  it("leads with Replace and keeps the file verbs, disabled", async () => {
+  it("labels Replace on the pill, and keeps the file verbs under ⋯, disabled", async () => {
     selectMissing(["gone.sft"]);
     const wrapper = mount(MissingSetSelectionBar, globalOpts);
+    const replace = wrapper.find('[data-verb="replace-missing"]');
+    expect(replace.text()).toBe("Replace…");
+    expect(replace.attributes("disabled")).toBeUndefined();
+    // Replace is not repeated under ⋯, and the card menu still leads with it.
+    expect(moreItems(wrapper).map((b) => b.text()).join("|")).not.toContain("Replace");
     expect(items(wrapper)[0].text()).toBe("Replace missing model…");
-    expect(items(wrapper)[0].attributes("disabled")).toBeUndefined();
     for (const label of ["Rename", "Set base model…", "Move to…", "Works with…", "Delete"]) {
       expect(byLabel(wrapper, label).attributes("disabled"), label).toBeDefined();
     }
-    await items(wrapper)[0].trigger("click");
+    await replace.trigger("click");
     expect(wrapper.emitted("replace")).toHaveLength(1);
+  });
+
+  it("hands focus back to ⋯ when a verb is picked from its menu", async () => {
+    selectMissing(["gone.sft"]);
+    // A menu that opens on its activator's click, as the real one does.
+    const opening = {
+      props: ["modelValue"],
+      emits: ["update:modelValue"],
+      template:
+        '<div><span @click="$emit(\'update:modelValue\', true)"><slot name="activator" :props="{}" /></span><slot /></div>',
+    };
+    const wrapper = mount(MissingSetSelectionBar, {
+      attachTo: document.body,
+      global: { stubs: { ...globalOpts.global.stubs, "v-menu": opening } },
+    });
+    await wrapper.find('.selbar [data-verb="more"]').trigger("click");
+    document.activeElement?.blur?.();
+    await wrapper.find('.selbar .ctx-menu [data-verb="copy-filenames"]').trigger("click");
+    expect(document.activeElement).toBe(
+      wrapper.find('.selbar [data-verb="more"]').element,
+    );
+    wrapper.unmount();
+  });
+
+  it("puts ⋯ on the pill when the card has more than Replace and Hide", () => {
+    selectMissing(["gone.sft"]);
+    const wrapper = mount(MissingSetSelectionBar, globalOpts);
+    expect(wrapper.find('.selbar [data-verb="more"]').exists()).toBe(true);
+    expect(wrapper.find('.selbar [data-verb="clear"]').exists()).toBe(true);
   });
 
   it("offers Hide on the pill and under Replace, over every selected card", async () => {
@@ -89,6 +132,13 @@ describe("MissingSetSelectionBar", () => {
     selectMissing(["a.sft"]);
     const wrapper = mount(MissingSetSelectionBar, globalOpts);
     expect(wrapper.find('[data-verb="hide-sets"]').exists()).toBe(false);
+  });
+
+  it("clears the selection from the × on the pill", async () => {
+    const store = selectMissing(["a.sft"]);
+    const wrapper = mount(MissingSetSelectionBar, globalOpts);
+    await wrapper.find('[data-verb="clear"]').trigger("click");
+    expect(store.selectedMissing).toEqual([]);
   });
 
   it("copies the missing files' names", async () => {

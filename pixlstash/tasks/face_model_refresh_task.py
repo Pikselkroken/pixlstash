@@ -20,6 +20,18 @@ Matching strategy (per picture):
    or count delta between runs).
 3. Genuinely new detections are inserted; existing rows with no match are removed
    (logged), respecting ``UniqueConstraint(picture_id, frame_index, face_index)``.
+
+The same task is the owner's "Detect faces again" (``redetect=True``, queued by
+``POST /pictures/detect`` with ``target: "faces"``). A re-detection follows a
+change the pack refresh never sees - typically a rotate, which moves every box -
+so three things differ there: the index match of step 1 also needs the two
+boxes to overlap (a face found above another must not take over its row and
+its person), leftovers are also matched by embedding similarity (a turned face
+embeds alike, its box does not overlap), and an existing face that names a
+person and matches nothing is kept as it was - old box, old embedding - rather
+than removed, so a re-detection never takes a person off a picture. The cost
+of that last rule is a stale box beside the new unnamed one when the turned
+face did not match; the owner reassigns it.
 """
 
 from __future__ import annotations
@@ -28,6 +40,7 @@ import os
 import threading
 
 import cv2
+import numpy as np
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
@@ -43,6 +56,15 @@ logger = get_logger(__name__)
 
 # Minimum IoU for the fallback bbox match to be accepted as the same face.
 _IOU_MATCH_THRESHOLD = 0.3
+# Minimum cosine similarity for the redetect-only embedding match. Measured on
+# the repo's sample pictures (buffalo_l): the largest face before and after a
+# quarter turn scored 0.75-0.91 whenever the sideways face had been detected as
+# a face at all; junk detections of a sideways picture scored about 0.
+_EMBEDDING_MATCH_THRESHOLD = 0.5
+# Detector confidence for "Try more sensitive", offered when a redetect added no
+# face. The extractor and every other run use 0.25 (FaceExtractionTask); lower
+# finds smaller, turned or partly hidden faces, and more that are not faces.
+SENSITIVE_DET_THRESH = 0.1
 
 
 def _bbox_iou(a, b) -> float:
@@ -65,6 +87,18 @@ def _bbox_iou(a, b) -> float:
     return inter / union
 
 
+def _embedding_similarity(a, b) -> float:
+    """Return the cosine similarity of two float32 embedding blobs (0 if unusable)."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    va = np.frombuffer(a, dtype=np.float32)
+    vb = np.frombuffer(b, dtype=np.float32)
+    denom = float(np.linalg.norm(va) * np.linalg.norm(vb))
+    if denom <= 0.0:
+        return 0.0
+    return float(np.dot(va, vb)) / denom
+
+
 class FaceModelRefreshTask(BaseTask):
     """Re-compute face embeddings for a batch of pictures and update in place.
 
@@ -73,6 +107,10 @@ class FaceModelRefreshTask(BaseTask):
         engine: :class:`~pixlstash.inference.engine.InferenceEngine` providing the
             currently configured ``insightface_model_pack``.
         pictures: Pictures whose faces should be refreshed to the current pack.
+        redetect: The owner asked for these pictures to be detected again (see
+            the module docstring); runs ahead of background work.
+        sensitive: Detect at ``SENSITIVE_DET_THRESH`` instead of the default.
+        origin_client_id: The requesting tab, for the completion event.
     """
 
     _IMAGE_EXTS = FaceExtractionTask._IMAGE_EXTS
@@ -82,12 +120,28 @@ class FaceModelRefreshTask(BaseTask):
     # pass across many faces in a single ONNX call.
     _DETECT_BATCH_IMAGES = 64
 
-    def __init__(self, database, engine, pictures: list):
+    def __init__(
+        self,
+        database,
+        engine,
+        pictures: list,
+        redetect: bool = False,
+        origin_client_id: str | None = None,
+        sensitive: bool = False,
+    ):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
         super().__init__(
             task_type="FaceModelRefreshTask",
-            params={"picture_ids": picture_ids, "batch_size": len(picture_ids)},
+            params={
+                "picture_ids": picture_ids,
+                "batch_size": len(picture_ids),
+                "redetect": redetect,
+                "sensitive": sensitive,
+                "origin_client_id": origin_client_id,
+            },
         )
+        self._redetect = redetect
+        self._det_thresh = SENSITIVE_DET_THRESH if sensitive else None
         self._db = database
         self._engine = engine
         self._pictures = pictures or []
@@ -98,8 +152,9 @@ class FaceModelRefreshTask(BaseTask):
     @property
     def priority(self) -> TaskPriority:
         # Lower than initial FACE_EXTRACTION (HIGH) so refresh never preempts the
-        # processing of brand-new pictures.
-        return TaskPriority.MEDIUM
+        # processing of brand-new pictures. A redetect is a click waiting on its
+        # answer, so it sits with extraction instead of behind tagging.
+        return TaskPriority.HIGH if self._redetect else TaskPriority.MEDIUM
 
     @property
     def queue_type(self) -> QueueType:
@@ -297,7 +352,7 @@ class FaceModelRefreshTask(BaseTask):
             images = [img for (_pic, _fi, img, _inv) in chunk]
             try:
                 detections = FaceExtractionTask.detect_faces_in_images(
-                    self._insightface_app, images
+                    self._insightface_app, images, det_thresh=self._det_thresh
                 )
             except Exception as exc:
                 # A whole-chunk detection failure must not silently drop the
@@ -329,7 +384,7 @@ class FaceModelRefreshTask(BaseTask):
 
     def _run_task(self) -> dict:
         if not self._pictures:
-            return {"changed_count": 0, "picture_ids": []}
+            return {"changed_count": 0, "picture_ids": [], "new_faces": 0}
 
         model_pack = getattr(self._engine, "insightface_model_pack", DEFAULT_MODEL_PACK)
         self._init_insightface_app()
@@ -367,6 +422,7 @@ class FaceModelRefreshTask(BaseTask):
                 pic.id,
                 new_faces,
                 model_pack,
+                self._redetect,
                 priority=DBPriority.HIGH,
             )
             pending.append((pic.id, future))
@@ -377,9 +433,10 @@ class FaceModelRefreshTask(BaseTask):
         # row keeps the old pack, so the finder will correctly re-select it for
         # another attempt instead of the failure being silently masked.
         changed_ids: list[int] = []
+        new_faces = 0
         for picture_id, future in pending:
             try:
-                future.result()
+                new_faces += future.result() or 0
             except Exception as exc:
                 logger.error(
                     "FaceModelRefreshTask: in-place refresh did not commit for "
@@ -392,15 +449,26 @@ class FaceModelRefreshTask(BaseTask):
                 continue
             changed_ids.append(picture_id)
 
-        return {"changed_count": len(changed_ids), "picture_ids": sorted(changed_ids)}
+        # `new_faces` counts faces that match no stored one: zero is the cue
+        # for the owner's "Try more sensitive".
+        return {
+            "changed_count": len(changed_ids),
+            "picture_ids": sorted(changed_ids),
+            "new_faces": new_faces,
+        }
 
     @staticmethod
-    def _match_existing(existing: list[Face], new_faces: list[Face]):
+    def _match_existing(
+        existing: list[Face], new_faces: list[Face], redetect: bool = False
+    ):
         """Pair existing rows with new detections.
 
         Returns ``(pairs, unmatched_new, unmatched_existing)`` where ``pairs`` is a
         list of ``(existing_face, new_face)``. Matching is by
         ``(frame_index, face_index)`` first, then by bbox IoU for the leftovers.
+        With ``redetect`` the index match also needs the boxes to overlap, and
+        the last leftovers are matched by embedding similarity within the same
+        frame and pack.
         """
         existing_by_key = {(f.frame_index, f.face_index): f for f in existing}
         pairs: list[tuple[Face, Face]] = []
@@ -410,7 +478,13 @@ class FaceModelRefreshTask(BaseTask):
         for nf in new_faces:
             key = (nf.frame_index, nf.face_index)
             ef = existing_by_key.get(key)
-            if ef is not None and id(ef) not in matched_existing:
+            if (
+                ef is not None
+                and id(ef) not in matched_existing
+                and (
+                    not redetect or _bbox_iou(ef.bbox, nf.bbox) >= _IOU_MATCH_THRESHOLD
+                )
+            ):
                 pairs.append((ef, nf))
                 matched_existing.add(id(ef))
             else:
@@ -435,6 +509,29 @@ class FaceModelRefreshTask(BaseTask):
                 matched_existing.add(id(best_ef))
             else:
                 still_unmatched_new.append(nf)
+
+        if redetect:
+            unmatched_new = still_unmatched_new
+            still_unmatched_new = []
+            for nf in unmatched_new:
+                best_ef = None
+                best_sim = _EMBEDDING_MATCH_THRESHOLD
+                for ef in leftover_existing:
+                    if (
+                        ef.frame_index != nf.frame_index
+                        or ef.model_pack != nf.model_pack
+                        or id(ef) in matched_existing
+                    ):
+                        continue
+                    sim = _embedding_similarity(ef.features, nf.features)
+                    if sim >= best_sim:
+                        best_sim = sim
+                        best_ef = ef
+                if best_ef is not None:
+                    pairs.append((best_ef, nf))
+                    matched_existing.add(id(best_ef))
+                else:
+                    still_unmatched_new.append(nf)
 
         unmatched_existing = [f for f in existing if id(f) not in matched_existing]
         return pairs, still_unmatched_new, unmatched_existing
@@ -477,9 +574,20 @@ class FaceModelRefreshTask(BaseTask):
 
     @classmethod
     def _refresh_picture_faces(
-        cls, session, picture_id: int, new_faces: list[Face], model_pack: str
-    ) -> None:
+        cls,
+        session,
+        picture_id: int,
+        new_faces: list[Face],
+        model_pack: str,
+        redetect: bool = False,
+    ) -> int:
         """Update one picture's face rows in place, preserving character_id.
+
+        Returns how many detections were inserted as new faces (0 when the
+        write did not commit).
+
+        With ``redetect`` a detected face that names a person and matches nothing
+        is kept as it is, slot reserved like a manual one, instead of removed.
 
         Manual annotations - a human-drawn bbox with no embedding
         (``features IS NULL``) - are NOT managed by this pack-refresh sweep: there
@@ -511,8 +619,12 @@ class FaceModelRefreshTask(BaseTask):
             # No faces detected now. Remove the detected rows (their embeddings are
             # stale and the current pack no longer finds them) but KEEP manual
             # annotations - they were never detector output.
+            kept = cls._keep_assigned(real_existing, picture_id) if redetect else []
             if real_existing:
+                kept_ids = {id(f) for f in kept}
                 for f in real_existing:
+                    if id(f) in kept_ids:
+                        continue
                     logger.info(
                         "FaceModelRefreshTask: face %s on picture %s no longer "
                         "detected by pack %s; removing.",
@@ -521,8 +633,8 @@ class FaceModelRefreshTask(BaseTask):
                         model_pack,
                     )
                     session.delete(f)
-            if manual_existing:
-                # Picture still holds real (manual) faces, so it is not empty:
+            if manual_existing or kept:
+                # Picture still holds real (manual or kept) faces, so it is not empty:
                 # drop any stray sentinel rather than marking it as no-faces.
                 for s in sentinels:
                     session.delete(s)
@@ -541,7 +653,7 @@ class FaceModelRefreshTask(BaseTask):
                     )
                 )
             cls._commit(session, picture_id)
-            return
+            return 0
 
         # Real detections exist now - any old sentinel is obsolete.
         for s in sentinels:
@@ -550,8 +662,17 @@ class FaceModelRefreshTask(BaseTask):
         # Match only against detected faces; manual rows are never matched, moved,
         # or deleted by the refresh.
         pairs, unmatched_new, unmatched_existing = cls._match_existing(
-            real_existing, new_faces
+            real_existing, new_faces, redetect=redetect
         )
+
+        if redetect:
+            kept = cls._keep_assigned(unmatched_existing, picture_id)
+            kept_ids = {id(f) for f in kept}
+            unmatched_existing = [
+                f for f in unmatched_existing if id(f) not in kept_ids
+            ]
+            for f in kept:
+                reserved.setdefault(f.frame_index, set()).add(f.face_index)
 
         for f in unmatched_existing:
             logger.info(
@@ -568,6 +689,14 @@ class FaceModelRefreshTask(BaseTask):
         # indices that skip the reserved manual slots, so a manually-drawn box is
         # never overwritten by an inserted detection.
         cls._reindex_avoiding_reserved(pairs, unmatched_new, reserved)
+
+        # Park the paired rows on unused negative indices first: two rows that
+        # trade places (two faces side by side, turned) would otherwise collide
+        # on the unique (picture, frame, face_index) key in the per-row UPDATEs.
+        for parked, (ef, _nf) in enumerate(pairs):
+            ef.face_index = -2 - parked
+            session.add(ef)
+        session.flush()
 
         for ef, nf in pairs:
             # Update embedding + pack IN PLACE; preserve character_id and identity.
@@ -586,12 +715,28 @@ class FaceModelRefreshTask(BaseTask):
         for nf in unmatched_new:
             session.add(nf)
 
-        cls._commit(session, picture_id)
+        return len(unmatched_new) if cls._commit(session, picture_id) else 0
 
     @staticmethod
-    def _commit(session, picture_id: int) -> None:
+    def _keep_assigned(faces: list[Face], picture_id: int) -> list[Face]:
+        """The faces among *faces* that name a person, logged as kept."""
+        kept = [f for f in faces if f.character_id is not None]
+        for f in kept:
+            logger.info(
+                "FaceModelRefreshTask: face %s (char=%s) on picture %s not found "
+                "again; kept so the picture stays with its person.",
+                f.face_index,
+                f.character_id,
+                picture_id,
+            )
+        return kept
+
+    @staticmethod
+    def _commit(session, picture_id: int) -> bool:
+        """Commit one picture's write; False when it rolled back on a collision."""
         try:
             session.commit()
+            return True
         except IntegrityError as exc:
             # An IntegrityError here is a known, recoverable per-picture data
             # collision (e.g. a transient unique-constraint race on
@@ -605,6 +750,7 @@ class FaceModelRefreshTask(BaseTask):
                 picture_id,
                 exc,
             )
+            return False
         except Exception as exc:
             # Any other failure is unexpected. Roll back, log with full context,
             # and RE-RAISE so the failure surfaces on the submit_task future

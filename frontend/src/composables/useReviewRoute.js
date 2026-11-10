@@ -1,14 +1,14 @@
 // useReviewRoute.js - URL <-> tag-review-overlay synchronisation.
 //
-// Mirrors the ImageOverlay `?overlay=<pictureId>` mechanics that live inline in
-// ImageGrid.vue (`_pushOverlayRoute` / `_removeOverlayRoute` / the
+// Mirrors the Lightbox `?overlay=<pictureId>` mechanics that live inline in
+// ImageGrid.vue (`_pushLightboxRoute` / `_removeLightboxRoute` / the
 // `route.query.overlay` watcher, ImageGrid.vue ~:3935-3971):
 //
 //   * `router.replace`, never `push` - opening, navigating inside, and closing
 //     the overlay must not stack history entries. Back therefore pops to the
 //     history entry that preceded the overlay, and the read-watcher below
-//     reconciles the overlay shut on the way out. Same contract as the image
-//     overlay; deliberately NOT a second, different back-semantics.
+//     reconciles the overlay shut on the way out. Same contract as the
+//     lightbox; deliberately NOT a second, different back-semantics.
 //   * a `syncing` re-entrancy flag so our own replace doesn't feed the
 //     read-watcher, plus a no-op guard so an unchanged query never navigates.
 //
@@ -159,7 +159,7 @@ export function resolveReviewView(store, reviewId) {
  */
 export function useReviewRoute(route, router, store, { watch }) {
   // Guards the read-watcher against our own writes (mirrors ImageGrid's
-  // `_overlayRoutePushPending`).
+  // `_lightboxRoutePushPending`).
   let syncing = false;
 
   function writeRoute() {

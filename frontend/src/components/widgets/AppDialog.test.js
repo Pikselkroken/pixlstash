@@ -8,7 +8,6 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { mount } from "@vue/test-utils";
-import { h } from "vue";
 
 vi.mock("vuetify/components", () => ({
   VIcon: { name: "v-icon", template: "<i><slot /></i>" },

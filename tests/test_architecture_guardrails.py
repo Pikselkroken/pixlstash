@@ -61,7 +61,7 @@ def _has_private_vault_access(source: str) -> list[tuple[int, str]]:
 def test_no_private_vault_access_from_routes():
     violations = []
     for path in sorted(_iter_python_files(ROUTES_DIR)):
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         hits = _has_private_vault_access(source)
         for lineno, snippet in hits:
             violations.append(
@@ -107,6 +107,7 @@ _DIRECT_DB_CALL_ALLOWLIST = {
     "pixlstash/routes/reference_folders.py",
     "pixlstash/routes/stacks.py",
     "pixlstash/routes/tags.py",
+    "pixlstash/routes/training.py",
 }
 
 
@@ -117,7 +118,7 @@ def test_no_new_direct_db_calls_from_routes():
         # as_posix(): the allowlist uses "/" separators, but relative_to()
         # yields "\" on Windows - str() would never match the allowlist there.
         rel = path.relative_to(REPO_ROOT).as_posix()
-        if not _DB_CALL_PATTERN.search(path.read_text()):
+        if not _DB_CALL_PATTERN.search(path.read_text(encoding="utf-8")):
             continue
         if rel not in _DIRECT_DB_CALL_ALLOWLIST:
             unlisted_violations.append(rel)
@@ -141,6 +142,9 @@ def test_services_no_direct_db_calls():
     # set once it is migrated to accept a Session.
     _direct_db_call_service_allowlist = {
         "pixlstash/services/config_service.py",  # vault-injection pattern
+        # vault-injection pattern; a watcher-thread orchestrator with one read
+        # (the edit's original) beside an import that is import_derived_outputs'
+        "pixlstash/services/edit_copies.py",
         # vault-injection pattern; owns the register -> wait-for-scan -> assign
         # commit lifecycle across separate transactions over time (the
         # scan-status poll cannot share a session with the later write), so no
@@ -149,6 +153,8 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/dedup_sweep_service.py",  # vault-injection pattern; read-only wrapper around plan_sweep_in_session
         "pixlstash/services/dedup_tier_service.py",  # vault-injection pattern; thin wrappers around the *_in_session queue reads and the scan request
         "pixlstash/services/dedup_verdict_service.py",  # vault-injection pattern; thin wrappers around the *_in_session verdict writers
+        "pixlstash/services/e2e_seed_service.py",  # vault-injection pattern; e2e-only start-up seed around register_seed_folder_in_session
+        "pixlstash/services/e2e_workflow_seed.py",  # vault-injection pattern; e2e-only start-up seed and the file-pictures hook, writes through add_pictures_in_session and file_pictures_in_session
         "pixlstash/services/impossible_tag_clear_service.py",  # vault-injection pattern; bulk impossible-tag clear/undo
         "pixlstash/services/keep_cover_only_service.py",  # vault-injection pattern; thin wrappers around the *_in_session keep-cover-only preview and collapse
         "pixlstash/services/library_insights_service.py",  # vault-injection pattern; read-only wrapper around build_insights_in_session
@@ -201,7 +207,7 @@ def test_services_no_direct_db_calls():
     for path in sorted(_iter_python_files(SERVICES_DIR)):
         # as_posix(): allowlist uses "/" separators (see note above).
         rel = path.relative_to(REPO_ROOT).as_posix()
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         if not _DB_CALL_PATTERN.search(source):
             continue
         if rel in _direct_db_call_service_allowlist:
@@ -245,7 +251,7 @@ def _collect_finder_info() -> tuple[set[str], set[str]]:
 
     for path in sorted(TASKS_DIR.glob("*.py")):
         try:
-            tree = ast.parse(path.read_text(), filename=str(path))
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except SyntaxError:
             continue
         for node in ast.walk(tree):
@@ -534,7 +540,7 @@ def _iter_sink_files():
 def _scan_label_sinks():
     """Yield (rel_path, lineno, enclosing_func_name, guarded, line) for each sink."""
     for path in _iter_sink_files():
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
         func_src = {
             node: (ast.get_source_segment(source, node) or "")
@@ -607,7 +613,7 @@ def test_label_sink_guardrail_detects_a_removed_guard():
     # detection is token-driven (not incidental) for a representative sink.
     sample_rel, sample_name = guarded_now[0]
     path = REPO_ROOT / sample_rel
-    source = path.read_text()
+    source = path.read_text(encoding="utf-8")
     stripped = source
     for token in _LOCK_GUARD_TOKENS:
         stripped = stripped.replace(token, "REMOVED_GUARD")
@@ -636,7 +642,7 @@ _LOCK_TAG_CHOKEPOINTS = ("_set_tag", "_reverse_review", "_resolve", "_apply_writ
 def test_lock_chokepoint_callers_are_guarded():
     path = SERVICES_DIR / "tag_suggestion_service.py"
     rel = path.relative_to(REPO_ROOT).as_posix()
-    source = path.read_text()
+    source = path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(path))
     call_res = [re.compile(rf"\b{re.escape(cp)}\s*\(") for cp in _LOCK_TAG_CHOKEPOINTS]
 
@@ -1824,6 +1830,9 @@ _PICTURE_METADATA_FIELDS = {
     "description",
     "description_file",
     "description_file_mtime",
+    # The owner's heart beside the score: a fact about this one picture, the
+    # same class as `score`, naming nothing else.
+    "favourite",
     "file_path",
     "format",
     "height",
@@ -2534,6 +2543,18 @@ def _ml_modules_loaded_by(target: str) -> list[str]:
         f"probe failed to import {target!r}:\n{proc.stdout}\n{proc.stderr}"
     )
     return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["pixlstash.services.dedup_tier_service", "pixlstash.utils.service.export_utils"],
+)
+def test_dedup_and_export_utils_import_first_in_a_fresh_interpreter(target):
+    """Either module imported first must load: the dedup service reaches
+    ``pixlstash.utils.service`` through the set-lock service, so a module-level
+    import of the dedup service in ``export_utils`` is a cycle that only shows
+    when the dedup service is imported first (the e2e dedup seeder does)."""
+    _ml_modules_loaded_by(target)
 
 
 def test_server_import_pulls_no_ml_libraries():
@@ -3338,7 +3359,7 @@ def _hub_tables_keyed_on_a_workflow_key() -> set[str]:
     nothing declares a reference to it, so the column's presence is the only
     thing that says a row belongs to a card.
     """
-    source = (REPO_ROOT / "pixlstash" / "hub" / "schema.py").read_text()
+    source = (REPO_ROOT / "pixlstash" / "hub" / "schema.py").read_text(encoding="utf-8")
     return {
         match.group(1)
         for match in re.finditer(
@@ -3570,3 +3591,80 @@ def test_plugin_check_is_imported_only_by_the_cli():
         if "plugin_check" in path.read_text(encoding="utf-8")
     }
     assert mentions == {"pixlstash/cli.py", "pixlstash/plugin_check.py"}
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: SQLite connection strings come from utils/sqlite_uri (#2210)
+# ---------------------------------------------------------------------------
+
+_SQLITE_PREFIXES = ("file:", "sqlite:///")
+
+
+def _hand_built_sqlite_strings(source: str) -> list[int]:
+    """Return the line of every SQLite URI or URL built by pasting a path in.
+
+    A raw path in ``file:{path}`` or ``sqlite:///{path}`` is cut short at a
+    ``?`` or ``#`` in a folder name. Caught as an f-string, ``+``, ``%`` or
+    ``str.format``.
+    """
+    hits = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.JoinedStr):
+            parts = node.values
+            if (
+                len(parts) > 1
+                and isinstance(parts[0], ast.Constant)
+                and parts[0].value.startswith(_SQLITE_PREFIXES)
+                and isinstance(parts[1], ast.FormattedValue)
+            ):
+                hits.append(node.lineno)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "format"
+            and isinstance(node.func.value, ast.Constant)
+            and isinstance(node.func.value.value, str)
+            and node.func.value.value.startswith(_SQLITE_PREFIXES)
+        ):
+            hits.append(node.lineno)
+        elif (
+            isinstance(node, ast.BinOp)
+            and isinstance(node.op, (ast.Add, ast.Mod))
+            and isinstance(node.left, ast.Constant)
+            and isinstance(node.left.value, str)
+            and node.left.value.startswith(_SQLITE_PREFIXES)
+        ):
+            hits.append(node.lineno)
+    return hits
+
+
+def test_sqlite_connection_strings_are_built_by_the_helper():
+    """Every SQLite URI and SQLAlchemy URL under ``pixlstash/`` is percent-encoded."""
+    helper = PIXLSTASH_DIR / "utils" / "sqlite_uri.py"
+    offenders = [
+        f"  {path.relative_to(REPO_ROOT)}:{lineno}"
+        for path in sorted(PIXLSTASH_DIR.rglob("*.py"))
+        if path != helper
+        for lineno in _hand_built_sqlite_strings(path.read_text("utf-8"))
+    ]
+    assert not offenders, (
+        "Build SQLite connection strings with pixlstash.utils.sqlite_uri "
+        "(sqlite_file_uri / sqlite_url); a raw path breaks on '?' or '#':\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_sqlite_connection_string_guardrail_has_teeth():
+    planted = [
+        'u = f"file:{p}?mode=ro"',
+        'u = f"sqlite:///{p}"',
+        'u = "sqlite:///" + p',
+        'u = "file:%s?mode=ro" % p',
+        'u = f"file://{p}"',
+        'u = f"sqlite:////{p}"',
+        'u = "file:{}?mode=ro".format(p)',
+    ]
+    for snippet in planted:
+        assert _hand_built_sqlite_strings(snippet), snippet
+    assert not _hand_built_sqlite_strings("u = sqlite_file_uri(p, read_only=True)")
+    assert not _hand_built_sqlite_strings('u = f"template-file:{name}".encode()')

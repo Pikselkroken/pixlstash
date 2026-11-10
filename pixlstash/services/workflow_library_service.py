@@ -107,6 +107,65 @@ def recipe_picture_counts(session: Session) -> dict[str, int]:
     }
 
 
+def recipe_filed_pictures(
+    session: Session, live: Sequence[str]
+) -> list[tuple[str, str, int]]:
+    """``(recipe, filed key, kept pictures)`` for every recipe, vault-wide.
+
+    The same predicates as :func:`recipe_picture_counts`, split by the key
+    each picture is filed under (:func:`_filed_as`): a picture made by a live
+    run-filed workflow's run is filed on that workflow, every other on its
+    recipe's variant. So summing the counts of one recipe gives exactly
+    :func:`recipe_picture_counts`'s figure for it.
+
+    Unscoped, like that one: served only to owner routes.
+    """
+    filed = _filed_as(list(live))
+    rows = session.exec(
+        select(Picture.workflow_structural_hash, filed, func.count(Picture.id))
+        .where(Picture.workflow_structural_hash.is_not(None))
+        .where(Picture.deleted.is_(False))
+        .group_by(Picture.workflow_structural_hash, filed)
+    ).all()
+    return [(recipe, key, int(count)) for recipe, key, count in rows]
+
+
+def recipe_latest_pictures(
+    session: Session, per_recipe: int
+) -> list[tuple[str, int, Optional[datetime]]]:
+    """``(recipe, picture id, used at)`` of the newest kept pictures of each recipe.
+
+    ``used at`` is the date the grid's date sort uses (:data:`_USED_AT`), and
+    the ranking is the same, newest first with the id as tie-break. At most
+    *per_recipe* rows per recipe: the newest *n* of a set are always among the
+    newest *n* of its recipes, so one window pass answers every set.
+
+    Unscoped, like :func:`recipe_picture_counts`: served only to owner routes.
+    """
+    ranked = (
+        select(
+            Picture.workflow_structural_hash.label("structural_hash"),
+            Picture.id.label("picture_id"),
+            _USED_AT.label("used_at"),
+            func.row_number()
+            .over(
+                partition_by=Picture.workflow_structural_hash,
+                order_by=(nullslast(_USED_AT.desc()), Picture.id.desc()),
+            )
+            .label("rank"),
+        )
+        .where(Picture.workflow_structural_hash.is_not(None))
+        .where(Picture.deleted.is_(False))
+        .subquery()
+    )
+    rows = session.exec(
+        select(ranked.c.structural_hash, ranked.c.picture_id, ranked.c.used_at).where(
+            ranked.c.rank <= per_recipe
+        )
+    ).all()
+    return [(recipe, int(picture_id), used_at) for recipe, picture_id, used_at in rows]
+
+
 # ---------------------------------------------------------------------------
 # The vault-level entry points the routes call.
 #

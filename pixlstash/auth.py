@@ -245,6 +245,10 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # without this entry, taking it would hand the folder straight back to
         # every share token.
         "/api/v1/taggers/plugin-diagnostics",
+        # The applications installed on this host for a picture's file type
+        # (Open with). LOOPBACK_OWNER_ONLY at the gate; untemplated (the picture
+        # is a query parameter) precisely so it can sit on this belt.
+        "/api/v1/open-with",
         # The plugin list carries the caller's own tagger_settings, which is
         # user settings exactly like /users/me/config above - a plugin may
         # declare a free-text parameter and the owner may have typed a path
@@ -313,7 +317,10 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/favourites",
         "/api/v1/insights",
         "/api/v1/libraries",
+        # The Folders tree (#2458): the owner's folder names and counts.
+        "/api/v1/library/folders",
         "/api/v1/model-folders",
+        "/api/v1/model-folders/comfyui-reads",
         "/api/v1/model-folders/devices",
         "/api/v1/model-stacks/proposals",
         "/api/v1/models/base-models",
@@ -334,6 +341,8 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/snapshots",
         "/api/v1/snapshots/status",
         "/api/v1/tag_health",
+        "/api/v1/tag_groups",
+        "/api/v1/tag_groups/tags",
         "/api/v1/telemetry/install-id",
         "/api/v1/users/me/auth",
         "/api/v1/users/me/shared-resource-ids",
@@ -353,6 +362,8 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/comfyui/pixlstash-node",
         # Which ComfyUI holds a full-access token and the URL it calls.
         "/api/v1/comfyui/link",
+        # Every ComfyUI address the owner saved (#2167).
+        "/api/v1/comfyui/connections",
         # Every stored workflow file by name: the workflow library's listing
         # under another path, hidden workflows included.
         "/api/v1/comfyui/workflows",
@@ -361,6 +372,20 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # shelf holds, so the rollback must not hand either out.
         "/api/v1/comfyui/templates",
         "/api/v1/comfyui/templates/thumbnail",
+        # In-app LoRA training: the owner's jobs (rendered configs carry host
+        # paths), the training recipes, and the sample prompts written from
+        # a set's or a character's captions, and what a run of a set or a
+        # character would hold.
+        "/api/v1/training/jobs",
+        "/api/v1/training/presets",
+        "/api/v1/training/sample-prompts",
+        "/api/v1/training/dataset",
+        # A character's pictures ranked for a training set.
+        "/api/v1/training/character_set_suggestion",
+        # The ai-toolkit install: where the checkout, its Python and the run
+        # folder are on this machine, and the discovery that finds them.
+        "/api/v1/training/ai-toolkit/discover",
+        "/api/v1/training/ai-toolkit/status",
     }
 )
 
@@ -392,6 +417,7 @@ READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
     "/api/v1/recipes/",
     "/api/v1/reviews/",
     "/api/v1/snapshots/",
+    "/api/v1/training/jobs/",
     "/api/v1/workflows/",
 )
 

@@ -19,13 +19,30 @@ import { errorMessage } from "../utils/apiError";
 
 export const TEMPLATE_SORT_KEYS = ["readiness", "popular", "newest", "name", "size"];
 
+/** As the Mine grid's `SORT_LABELS`: name, starting end, `[asc, desc]` words. */
 export const TEMPLATE_SORT_LABELS = {
-  readiness: { label: "Readiness" },
-  popular: { label: "Most used" },
-  newest: { label: "Newest" },
-  name: { label: "Name" },
+  readiness: {
+    label: "Readiness",
+    natural: "asc",
+    words: ["Ready first", "Ready last"],
+  },
+  popular: {
+    label: "Most used",
+    natural: "desc",
+    words: ["Least used first", "Most used first"],
+  },
+  newest: {
+    label: "Newest",
+    natural: "desc",
+    words: ["Oldest first", "Newest first"],
+  },
+  name: { label: "Name", natural: "asc", words: ["A to Z", "Z to A"] },
   // ComfyUI's "Model size (low to high)"; a template that gives none goes last.
-  size: { label: "Model size" },
+  size: {
+    label: "Model size",
+    natural: "asc",
+    words: ["Smallest first", "Largest first"],
+  },
 };
 
 /** Which state a template is in, best first: the readiness sort's order. */
@@ -177,6 +194,30 @@ export const LIST_FILTERS = ["category", "model", "useCase", "runsOn", "readines
 const VIEW_KEY = "pixlstash:workflowTemplatesView";
 const VIEW_SCHEMA_VERSION = 3;
 
+// The template keys this browser has seen, for the sidebar's "N new" pill. Kept
+// apart from the view above: it is a record of what was seen, not a preference.
+const SEEN_KEY = "pixlstash:workflowTemplatesSeen";
+
+/** The stored keys, or null when nothing is stored (or it cannot be read). */
+function readSeen() {
+  try {
+    const list = JSON.parse(window.localStorage?.getItem(SEEN_KEY) || "null");
+    if (!Array.isArray(list)) return null;
+    return list.filter((key) => typeof key === "string");
+  } catch (err) {
+    console.warn(`[templates] could not read ${SEEN_KEY}; counting every template as seen`, err);
+    return null;
+  }
+}
+
+function writeSeen(keys) {
+  try {
+    window.localStorage?.setItem(SEEN_KEY, JSON.stringify(keys));
+  } catch (err) {
+    console.warn(`[templates] could not remember ${SEEN_KEY} for next time`, err);
+  }
+}
+
 /**
  * The remembered sort and filters, each one dropped that this build would not
  * draw. A blob that cannot be read (private mode, a disabled store, a corrupt
@@ -204,10 +245,13 @@ function storedView() {
     const value = ok && Array.isArray(parsed[key]) ? parsed[key] : [];
     filters[key] = [...new Set(value.filter(allowed[key]))];
   }
-  return {
-    sortKey: ok && TEMPLATE_SORT_KEYS.includes(parsed.sortKey) ? parsed.sortKey : "readiness",
-    filters,
-  };
+  const sortKey =
+    ok && TEMPLATE_SORT_KEYS.includes(parsed.sortKey) ? parsed.sortKey : "readiness";
+  const sortDirection =
+    ok && (parsed.sortDirection === "asc" || parsed.sortDirection === "desc")
+      ? parsed.sortDirection
+      : TEMPLATE_SORT_LABELS[sortKey].natural;
+  return { sortKey, sortDirection, filters };
 }
 
 const SORTERS = {
@@ -228,6 +272,12 @@ const SORTERS = {
     const [x, y] = [a.size ?? Infinity, b.size ?? Infinity];
     return x === y ? 0 : x - y;
   },
+};
+
+/** The keys a template can leave unanswered: such a template sorts last. */
+const UNANSWERED = {
+  size: (t) => t.size == null,
+  newest: (t) => !t.date,
 };
 
 /** The words the name filter is matched against: title, tags and models. */
@@ -258,14 +308,20 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
   const adding = ref(false);
   const initial = storedView();
   const sortKey = ref(initial.sortKey);
+  const sortDirection = ref(initial.sortDirection);
   const filters = ref(initial.filters);
   // The name text is left out, as the shelf leaves it out: it is never
   // restored, so writing it would only leave a search lying in storage.
-  watch([sortKey, filters], ([sort, { name: _name, ...kept }]) => {
+  watch([sortKey, sortDirection, filters], ([sort, direction, { name: _name, ...kept }]) => {
     try {
       window.localStorage?.setItem(
         VIEW_KEY,
-        JSON.stringify({ v: VIEW_SCHEMA_VERSION, sortKey: sort, ...kept }),
+        JSON.stringify({
+          v: VIEW_SCHEMA_VERSION,
+          sortKey: sort,
+          sortDirection: direction,
+          ...kept,
+        }),
       );
     } catch (err) {
       console.warn(`[templates] could not remember ${VIEW_KEY} for next time`, err);
@@ -275,6 +331,24 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
   // Bumped by the inspector's Add: the view carries it out, since it lands
   // on the Mine tab afterwards (the `requestUseSet` pattern).
   const addRequest = ref(0);
+  // What this browser has seen. Nothing stored yet means the first list read
+  // marks it all seen, so the whole of ComfyUI is not announced as "new".
+  const storedSeen = readSeen();
+  const seenKeys = ref(new Set(storedSeen ?? []));
+  const seenInitialised = ref(storedSeen !== null);
+
+  /**
+   * Mark *keys* seen, here and in what the browser remembers. An empty list
+   * (ComfyUI down, or none served) is not a sight of the catalogue: taking it
+   * as one would store `[]`, and the whole catalogue would read as new once
+   * ComfyUI answers, in this session and every later one.
+   */
+  function markSeen(keys) {
+    if (!keys.length) return;
+    seenInitialised.value = true;
+    for (const key of keys) seenKeys.value.add(key);
+    writeSeen([...seenKeys.value]);
+  }
 
   let inflight = null;
   // Whether the read in flight asked ComfyUI again (`refresh`).
@@ -315,6 +389,15 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
         comfyuiUrl.value = body?.comfyui_url ?? "";
         detail.value = body?.detail ?? "";
         loaded.value = true;
+        // Seen while the place is on screen, or never seen at all yet. A
+        // read that found nothing (ComfyUI down, or none served) does not
+        // count as having seen the catalogue, or the whole of it would read
+        // as new once ComfyUI answers; `markSeen` ignores an empty list.
+        const firstSight =
+          !seenInitialised.value && reachable.value && templates.value.length;
+        if (firstSight || shown.value) {
+          markSeen(templates.value.map((t) => t.key));
+        }
         const keys = new Set(templates.value.map((t) => t.key));
         selectedKeys.value = selectedKeys.value.filter((key) => keys.has(key));
       } catch (err) {
@@ -333,6 +416,18 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     inflight = read;
     return read;
   }
+
+  // Opening the Templates place marks everything on screen as seen.
+  watch(shown, (on) => {
+    if (on && loaded.value) markSeen(templates.value.map((t) => t.key));
+  });
+
+  /** Templates read since the place was last opened: the sidebar's "N new". */
+  const newCount = computed(() =>
+    loaded.value && reachable.value
+      ? templates.value.filter((t) => !seenKeys.value.has(t.key)).length
+      : 0,
+  );
 
   /** Models reached the shelf: a list already read re-reads what is present. */
   function onModelsArrived() {
@@ -376,13 +471,34 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     });
   });
 
-  const sortedTemplates = computed(() =>
-    [...filtered.value].sort(
+  const sortedTemplates = computed(() => {
+    const sorted = [...filtered.value].sort(
       (a, b) =>
         SORTERS[sortKey.value](a, b) ||
         String(a.title).localeCompare(String(b.title)),
-    ),
-  );
+    );
+    if (sortDirection.value === TEMPLATE_SORT_LABELS[sortKey.value].natural) {
+      return sorted;
+    }
+    // A template that gives no size or date stays last in both directions,
+    // where the natural order already puts it: only the rest is reversed.
+    const blank = UNANSWERED[sortKey.value] ?? (() => false);
+    return [
+      ...sorted.filter((t) => !blank(t)).reverse(),
+      ...sorted.filter(blank),
+    ];
+  });
+
+  /** Sort on a key, starting at its own end. */
+  function setSortKey(key) {
+    if (!TEMPLATE_SORT_KEYS.includes(key) || key === sortKey.value) return;
+    sortKey.value = key;
+    sortDirection.value = TEMPLATE_SORT_LABELS[key].natural;
+  }
+
+  function toggleSortDirection() {
+    sortDirection.value = sortDirection.value === "asc" ? "desc" : "asc";
+  }
 
   /**
    * Each filter's rows with how many templates it holds: categories in the
@@ -560,6 +676,7 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     // What this browser remembers, as a fresh start would read it.
     const view = storedView();
     sortKey.value = view.sortKey;
+    sortDirection.value = view.sortDirection;
     filters.value = view.filters;
   }
 
@@ -568,6 +685,7 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
   return {
     shown,
     templates,
+    newCount,
     loaded,
     loading,
     reachable,
@@ -576,6 +694,9 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     error,
     adding,
     sortKey,
+    sortDirection,
+    setSortKey,
+    toggleSortDirection,
     filters,
     selectedKeys,
     selectedTemplates,
