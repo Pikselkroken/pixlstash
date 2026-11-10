@@ -5,7 +5,7 @@
     :subtitle="subtitle"
     size="2xl"
     :pad-body="false"
-    :persistent="busy || !!sheetStep?.working"
+    :persistent="busy || !!sheetStep?.working || !!sheetStep?.zooming"
     @close="close"
     @accept="onAccept"
   >

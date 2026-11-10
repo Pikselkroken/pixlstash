@@ -1,6 +1,6 @@
 <template>
   <div class="cs-split">
-    <div class="cs-pane" data-testid="cs-main">
+    <div ref="mainPane" class="cs-pane" data-testid="cs-main">
       <template v-if="phase === 'describe'">
         <div class="cs-step-h">
           <h3>Describe {{ name }} and draw sheets</h3>
@@ -145,6 +145,48 @@
         </div>
       </template>
 
+      <div
+        v-else-if="zoomed"
+        class="cs-zoom"
+        data-testid="cs-zoom"
+      >
+        <div class="cs-zoom__bar">
+          <span class="cs-cap"
+            ><b>Sheet {{ zoomed.n }}</b> · {{ sheetWords(zoomed) }}</span
+          >
+          <span class="cs-zoom__hint">{{
+            fullSize ? "Click to fit" : "Click for full size"
+          }}</span>
+          <button
+            type="button"
+            class="cs-link"
+            :disabled="sheetLocked(zoomed)"
+            @click="choose(zoomed.picture_id)"
+          >
+            Choose
+          </button>
+          <button
+            ref="zoomClose"
+            type="button"
+            class="cs-link"
+            @click="closeZoom"
+          >
+            Close
+          </button>
+        </div>
+        <div
+          ref="zoomView"
+          class="cs-zoom__view"
+          :class="{ 'cs-zoom__view--full': fullSize }"
+        >
+          <img
+            :src="sheetUrl(zoomed)"
+            :alt="`Sheet ${zoomed.n}`"
+            @click="toggleSize"
+          />
+        </div>
+      </div>
+
       <template v-else>
         <div class="cs-step-h">
           <h3>Pick a sheet</h3>
@@ -180,13 +222,10 @@
               :class="{ 'cs-sheetimg--on': sheet.picture_id === chosen }"
               :aria-pressed="sheet.picture_id === chosen"
               :aria-label="`Sheet ${sheet.n}: ${sheetWords(sheet)}`"
-              :disabled="
-                (!sheet.faces_read && !gaveUpOnFaces) ||
-                working ||
-                phase === 'filing'
-              "
+              :disabled="sheetLocked(sheet)"
               data-testid="cs-sheet"
               @click="chosen = sheet.picture_id"
+              @dblclick="openZoom(sheet)"
             >
               <img
                 :src="pictureThumbnailUrl(sheet.picture_id)"
@@ -201,8 +240,18 @@
                 ><v-icon size="14">mdi-check</v-icon></span
               >
             </button>
-            <span class="cs-cap">
-              <b>Sheet {{ sheet.n }}</b> · {{ sheetWords(sheet) }}
+            <span class="cs-cap cs-row1">
+              <span><b>Sheet {{ sheet.n }}</b> · {{ sheetWords(sheet) }}</span>
+              <button
+                type="button"
+                class="cs-link"
+                data-testid="cs-zoom-open"
+                :data-sheet="sheet.picture_id"
+                :aria-label="`Zoom in on sheet ${sheet.n}`"
+                @click="openZoom(sheet)"
+              >
+                Zoom
+              </button>
             </span>
           </li>
           <li v-for="slot in pendingSlots" :key="slot.key">
@@ -291,7 +340,15 @@
  * dialog's picker takes over. The dialog owns the footer: it reads `footer`
  * and calls the actions this component exposes.
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
+} from "vue";
 import { VIcon } from "vuetify/components";
 
 import {
@@ -312,8 +369,10 @@ import {
   listWorkflowCards,
   runWorkflowCard,
 } from "../../api/workflows";
+import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import { errorMessage } from "../../utils/apiError";
 import { runKey } from "../../utils/gpuMemory";
+import { buildMediaUrl } from "../../utils/media";
 import AppInput from "../widgets/AppInput.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
@@ -375,6 +434,12 @@ const runs = ref([]); // { key, status, pictureIds, message }
 const ranking = ref({}); // picture id -> RankedSheet
 const order = ref([]); // sheet picture ids in the order they arrived
 const chosen = ref(null);
+// The sheet shown full size over the pick, and whether at 1:1 or fitted.
+const zoomedId = ref(null);
+const fullSize = ref(false);
+const zoomView = ref(null);
+const zoomClose = ref(null);
+const mainPane = ref(null);
 const working = ref(false);
 const error = ref("");
 // Drawing waits for the character's stored description, so a typed one never
@@ -385,6 +450,9 @@ let timer = null;
 let ticking = false;
 let runsEndedAt = 0;
 let alive = true;
+// What the sheets on show were drawn with. A draw with anything else starts a
+// new pick: the earlier sheets are of another prompt, not more of this one.
+let drawnWith = "";
 
 const chosenLora = computed(
   () => loras.value.find((lora) => lora.sha256 === loraSha.value) || null,
@@ -546,6 +614,86 @@ function sheetWords(sheet) {
   return words.join(" · ");
 }
 
+function sheetLocked(sheet) {
+  return (
+    (!sheet.faces_read && !gaveUpOnFaces.value) ||
+    working.value ||
+    phase.value === "filing"
+  );
+}
+
+const zoomed = computed(
+  () =>
+    (phase.value !== "describe" &&
+      sheets.value.find((s) => s.picture_id === zoomedId.value)) ||
+    null,
+);
+
+/** The sheet's own file, full size; the thumbnail until its format is known. */
+function sheetUrl(sheet) {
+  if (!sheet.format) return pictureThumbnailUrl(sheet.picture_id);
+  return appendShareToken(
+    buildMediaUrl({
+      backendUrl: API_BASE_URL,
+      image: { id: sheet.picture_id, format: sheet.format },
+    }),
+  );
+}
+
+// Escape leaves the zoom, wherever focus is (a click on the picture leaves it
+// on the page), and never reaches the dialog behind it.
+function onZoomKey(e) {
+  if (e.key !== "Escape") return;
+  e.stopPropagation();
+  e.preventDefault();
+  closeZoom();
+}
+
+watch(zoomedId, (id) => {
+  if (id == null) window.removeEventListener("keydown", onZoomKey, true);
+  else window.addEventListener("keydown", onZoomKey, true);
+});
+
+async function openZoom(sheet) {
+  zoomedId.value = sheet.picture_id;
+  fullSize.value = false;
+  await nextTick();
+  zoomClose.value?.focus();
+}
+
+/** Back to the pick, focus on the sheet's own Zoom: the list is drawn anew. */
+async function closeZoom() {
+  const id = zoomedId.value;
+  zoomedId.value = null;
+  await nextTick();
+  mainPane.value
+    ?.querySelector(`[data-testid="cs-zoom-open"][data-sheet="${id}"]`)
+    ?.focus();
+}
+
+watch(phase, () => {
+  zoomedId.value = null;
+});
+
+function choose(id) {
+  chosen.value = id;
+  closeZoom();
+}
+
+/** Fitted to 1:1 and back; at 1:1 the clicked spot is brought to the middle. */
+async function toggleSize(event) {
+  const img = event.currentTarget;
+  const fx = event.offsetX / img.clientWidth;
+  const fy = event.offsetY / img.clientHeight;
+  fullSize.value = !fullSize.value;
+  if (!fullSize.value) return;
+  await nextTick();
+  const view = zoomView.value;
+  if (!view) return;
+  view.scrollLeft = fx * img.naturalWidth - view.clientWidth / 2;
+  view.scrollTop = fy * img.naturalHeight - view.clientHeight / 2;
+}
+
 function stopPolling() {
   if (timer) clearTimeout(timer);
   timer = null;
@@ -562,6 +710,8 @@ async function followRuns() {
     if (["completed", "failed"].includes(run.status)) continue;
     try {
       const outcome = await getRunOutcome(run.key);
+      // A new prompt's draw dropped this run while it was being read.
+      if (!runs.value.includes(run)) continue;
       run.status = outcome.status;
       run.message = outcome.message || "";
       for (const id of outcome.picture_ids || []) {
@@ -630,6 +780,12 @@ async function draw() {
       subject: form.subject,
       trigger: trigger.value,
     });
+    const drawing = JSON.stringify([
+      sheet.prompt,
+      workflowId.value,
+      loraSha.value,
+      strength.value,
+    ]);
     const { card } = await getWorkflowCard(workflowId.value);
     const sizes = (card?.defaults || []).filter((d) =>
       ["width", "height"].includes(d.input_name),
@@ -669,6 +825,14 @@ async function draw() {
         answer?.error ||
           "The workflow can't run as it is. Open it from Workflows to see why.",
       );
+    }
+    if (drawing !== drawnWith) {
+      runs.value = [];
+      order.value = [];
+      ranking.value = {};
+      chosen.value = null;
+      runsEndedAt = 0;
+      drawnWith = drawing;
     }
     runs.value.push(
       ...started.map((p) => ({
@@ -834,10 +998,14 @@ async function load() {
 onMounted(load);
 onBeforeUnmount(() => {
   alive = false;
+  window.removeEventListener("keydown", onZoomKey, true);
   stopPolling();
 });
 
-defineExpose({ footer, error, working, loraName, phase });
+// While a sheet is zoomed the dialog does not take Escape; the zoom does.
+const zooming = computed(() => !!zoomed.value);
+
+defineExpose({ footer, error, working, loraName, phase, zooming });
 </script>
 
 <style scoped>
@@ -1102,6 +1270,53 @@ defineExpose({ footer, error, working, loraName, phase });
   color: rgb(var(--v-theme-on-surface));
   text-decoration: underline;
   cursor: pointer;
+}
+
+.cs-zoom {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.cs-zoom__bar {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+}
+
+.cs-zoom__hint {
+  margin-left: auto;
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.cs-zoom__bar .cs-link {
+  margin-left: 0;
+}
+
+.cs-zoom__view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-input-background));
+}
+
+.cs-zoom__view img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+
+.cs-zoom__view--full img {
+  width: auto;
+  height: auto;
+  max-width: none;
+  cursor: zoom-out;
 }
 
 .cs-desc {

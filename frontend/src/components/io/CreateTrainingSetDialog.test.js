@@ -781,6 +781,99 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("adds Draw more to the sheets on show, but starts over on a new prompt", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    const runOf = { r1: [501], r2: [502], r3: [503] };
+    gen.getRunOutcome.mockImplementation(async (key) => ({
+      status: "completed",
+      picture_ids: runOf[key],
+    }));
+    gen.rankSheets.mockImplementation(async (_id, ids) => ({
+      sheets: ids.map((id) => sheet(id, 0.6)),
+      references: 0,
+    }));
+    const drawn = () =>
+      wrapper.findAll('[data-testid="cs-sheet"] img').map((i) => i.attributes("src"));
+    const startsRun = (key) =>
+      gen.runWorkflowCard.mockResolvedValueOnce({
+        status: "success",
+        prompts: [{ run_id: key, status: "queued" }],
+      });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+    startsRun("r1");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(drawn()).toEqual(["/thumb/501.webp"]);
+
+    // The same prompt again: more of the same, side by side.
+    startsRun("r2");
+    await button(wrapper, "Draw 4 more").trigger("click");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(drawn().sort()).toEqual(["/thumb/501.webp", "/thumb/502.webp"]);
+
+    // Edited and drawn again: the earlier sheets are of another prompt.
+    await button(wrapper, "Edit").trigger("click");
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("y");
+    gen.buildSheetPrompt.mockResolvedValueOnce({
+      prompt: "{another layout}",
+      negative: "nsfw",
+      width: 2560,
+      height: 1536,
+    });
+    startsRun("r3");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(drawn()).toEqual(["/thumb/503.webp"]);
+    expect(gen.rankSheets).toHaveBeenLastCalledWith(7, [503]);
+    wrapper.unmount();
+  });
+
+  it("zooms a sheet to its own file, and Escape leaves the zoom, not the dialog", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    gen.runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: [{ run_id: "r1", status: "queued" }],
+    });
+    gen.getRunOutcome.mockResolvedValue({ status: "completed", picture_ids: [501, 502] });
+    gen.rankSheets.mockResolvedValue({
+      sheets: [sheet(501, 0.7, { format: "png" }), sheet(502, 0.5, { format: "png" })],
+      references: 0,
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(3000);
+
+    await wrapper.findAll('[data-testid="cs-zoom-open"]')[1].trigger("click");
+    await flushPromises();
+    const zoom = wrapper.find('[data-testid="cs-zoom"]');
+    expect(zoom.find("img").attributes("src")).toMatch(/\/pictures\/502\.png$/);
+    expect(wrapper.find('[data-testid="cs-sheet"]').exists()).toBe(false);
+
+    await zoom.trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(wrapper.emitted("close")).toBeUndefined();
+    expect(wrapper.find('[data-testid="cs-zoom"]').exists()).toBe(false);
+
+    // Choose from the zoom picks that sheet.
+    await wrapper.findAll('[data-testid="cs-zoom-open"]')[1].trigger("click");
+    await button(wrapper, "Choose").trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cts-generate-primary"]').text()).toContain(
+      "Use sheet 2",
+    );
+    wrapper.unmount();
+  });
+
   it("hands over a cut sheet even when reading its faces fails", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

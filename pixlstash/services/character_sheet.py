@@ -59,6 +59,9 @@ Subject = Literal["woman", "man"]
 STRONG_AGREEMENT = 0.55
 SOME_AGREEMENT = 0.45
 CLOSE_TO_REFERENCES = 0.45
+# Grey level over which a line of the sheet counts as its white frame: the
+# frame is ~250, an overcast sky in a photo ~237.
+FRAME_LEVEL = 244
 
 _PRONOUN = {"woman": ("her", "Her"), "man": ("his", "His")}
 
@@ -349,7 +352,8 @@ def sheet_cells(image: Image.Image) -> list[tuple[int, int, int, int]]:
     The grid's own geometry (passport cells 600×768, body cells 680×1536 at
     2560×1536), scaled to the picture, each cut then moved to the strongest
     full-length edge within ±50 px: MOSS draws its dividers up to ~50 px off
-    the layout. A gutter of 8 px either side of a cut is trimmed off.
+    the layout. A gutter of 8 px either side of a cut is trimmed off, and then
+    whatever is left of the white frame round each photo.
     """
     width, height = image.size
     sx, sy = width / SHEET_WIDTH, height / SHEET_HEIGHT
@@ -362,7 +366,7 @@ def sheet_cells(image: Image.Image) -> list[tuple[int, int, int, int]]:
     row = _strongest_cut(gray, round(768 * sy), slice(0, half), window, False)
     left = (0, column - gutter, column + gutter, half - gutter)
     top = (0, row - gutter, row + gutter, height)
-    return [
+    cells = [
         (left[0], top[0], left[1], top[1]),
         (left[2], top[0], left[3], top[1]),
         (left[0], top[2], left[1], top[3]),
@@ -370,6 +374,50 @@ def sheet_cells(image: Image.Image) -> list[tuple[int, int, int, int]]:
         (half + gutter, 0, bodies - gutter, height),
         (bodies + gutter, 0, width, height),
     ]
+    limit, bleed = round(64 * sx), max(1, round(2 * sx))
+    return [_inside_frame(gray, cell, limit, bleed) for cell in cells]
+
+
+def _inside_frame(
+    gray: np.ndarray, cell: tuple[int, int, int, int], limit: int, bleed: int
+) -> tuple[int, int, int, int]:
+    """*cell* shrunk past the white frame MOSS draws round each photo.
+
+    The sheet's outer border and the gutters between photos are white, wider
+    than the cut's own gutter. From each edge, every line that is almost all
+    near-white is frame, up to *limit* lines. The photos have rounded corners,
+    so each edge then also steps in as far as the white runs diagonally in from
+    its corners. *bleed* more go with any trim, for the soft seam.
+    """
+    # ponytail: a photo whose own edge is blown-out white loses up to *limit*
+    # lines with the frame; tell frame from photo by texture if that shows.
+
+    def run(flags: np.ndarray) -> int:
+        flags = flags[:limit]
+        return len(flags) if flags.all() else int(np.argmin(flags))
+
+    def trimmed(n: int) -> int:
+        return n + bleed if n else 0
+
+    left, top, right, bottom = cell
+    white = gray[top:bottom, left:right] > FRAME_LEVEL
+    rows, cols = white.mean(axis=1) > 0.95, white.mean(axis=0) > 0.95
+    left += trimmed(run(cols))
+    top += trimmed(run(rows))
+    right -= trimmed(run(cols[::-1]))
+    bottom -= trimmed(run(rows[::-1]))
+    white = gray[top:bottom, left:right] > FRAME_LEVEL
+    corner = {
+        (ys, xs): run(np.diagonal(white[::ys, ::xs]))
+        for ys in (1, -1)
+        for xs in (1, -1)
+    }
+    return (
+        left + trimmed(max(corner[1, 1], corner[-1, 1])),
+        top + trimmed(max(corner[1, 1], corner[1, -1])),
+        right - trimmed(max(corner[1, -1], corner[-1, -1])),
+        bottom - trimmed(max(corner[-1, 1], corner[-1, -1])),
+    )
 
 
 def split_sheet(image: Image.Image) -> list[Image.Image]:
@@ -428,13 +476,13 @@ def _vectors(rows: list) -> list[np.ndarray]:
 
 def sheet_faces_in_session(
     session: Session, character_id: int, picture_ids: list[int]
-) -> tuple[dict[int, list], list] | None:
-    """Each sheet's face rows' embeddings, and the character's reference embeddings.
+) -> tuple[dict[int, list], list, dict[int, str]] | None:
+    """Each sheet's face embeddings, the character's reference embeddings, each sheet's format.
 
     ``None`` when the character does not exist. A sheet's list holds a ``None``
     for the row face extraction leaves on a picture with no face, so an empty
     list means its faces are not read yet. The sheets' own faces are never
-    their own references.
+    their own references. The format is what the picture's file is served as.
     """
     if session.get(Character, character_id) is None:
         return None
@@ -448,7 +496,12 @@ def sheet_faces_in_session(
         for face in select_reference_faces_for_character(session, character_id)
         if face.picture_id not in faces
     ]
-    return faces, references
+    formats = dict(
+        session.exec(
+            select(Picture.id, Picture.format).where(Picture.id.in_(picture_ids))
+        ).all()
+    )
+    return faces, references, formats
 
 
 def rank_sheets(
@@ -464,7 +517,7 @@ def rank_sheets(
     found = vault.db.run_immediate_read_task(sheet_faces_in_session, character_id, ids)
     if found is None:
         raise SheetNotFound(f"No character {character_id}.")
-    faces, reference_rows = found
+    faces, reference_rows, formats = found
     references = _vectors(reference_rows)
     out = []
     for picture_id in ids:
@@ -475,6 +528,7 @@ def rank_sheets(
         out.append(
             {
                 "picture_id": picture_id,
+                "format": (formats.get(picture_id) or "").lower() or None,
                 "faces_read": bool(rows),
                 "faces": len(vectors),
                 "agreement": score,

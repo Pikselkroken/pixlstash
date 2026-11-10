@@ -156,6 +156,36 @@ def test_a_person_s_outline_is_not_a_divider():
     assert sheet_cells(image)[4][0] == 1200 + 8
 
 
+def test_the_white_frame_and_rounded_corners_are_cut_away():
+    """MOSS frames each photo in white, wider than the cut's gutter, and rounds
+    its corners; an overcast sky at a photo's edge is not frame."""
+    image = Image.new("RGB", (SHEET_WIDTH, SHEET_HEIGHT), (252, 252, 252))
+    draw = ImageDraw.Draw(image)
+    photos = [
+        (16, 16, 584, 752),
+        (616, 16, 1184, 752),
+        (16, 784, 584, 1520),
+        (616, 784, 1184, 1520),
+        (1216, 16, 1864, 1520),
+        (1896, 16, 2544, 1520),
+    ]
+    for left, top, right, bottom in photos:
+        draw.rounded_rectangle([left, top, right - 1, bottom - 1], 40, (90, 90, 90))
+    # Panel 4 (the beach) has an overcast sky along its top.
+    draw.rectangle([640, 784, 1160, 900], fill=(237, 237, 237))
+    cells = sheet_cells(image)
+    gray = np.asarray(image.convert("L"))
+    for (left, top, right, bottom), photo in zip(cells, photos):
+        panel = gray[top:bottom, left:right]
+        assert panel.max() < 244
+        for edge in (panel[0], panel[-1], panel[:, 0], panel[:, -1]):
+            assert (edge >= 244).sum() == 0
+        # Not cut deep into the photo: past the frame and the corners, no more.
+        assert all(abs(a - b) <= 20 for a, b in zip((left, top, right, bottom), photo))
+    # The sky stays: panel 4 starts at its photo's top, past only the corners.
+    assert cells[3][1] - photos[3][1] <= 20
+
+
 def test_a_smaller_sheet_is_cut_in_proportion():
     cells = sheet_cells(_sheet(size=(1280, 768)))
     assert cells[4] == (604, 0, 936, 768)
@@ -188,6 +218,7 @@ def test_ranking_measures_closeness_against_references_never_the_sheet_itself():
             return (
                 {5: [person.tobytes()] * 6, 6: [other.tobytes()] * 6, 7: []},
                 [person.tobytes()],
+                {5: "PNG", 6: "WEBP"},
             )
 
     vault = type("Vault", (), {"db": Db()})()
@@ -198,6 +229,8 @@ def test_ranking_measures_closeness_against_references_never_the_sheet_itself():
     assert (near["close"], far["close"]) == (True, False)
     assert near["closeness"] == pytest.approx(1.0)
     assert unread["faces_read"] is False and unread["agreement"] is None
+    # The format the full-size picture is served as, for the zoom.
+    assert (near["format"], far["format"], unread["format"]) == ("png", "webp", None)
 
 
 @pytest.fixture(scope="module")

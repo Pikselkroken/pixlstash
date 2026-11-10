@@ -58,6 +58,10 @@ class RankedSheet(BaseModel):
     """One drawn sheet, scored by its own faces."""
 
     picture_id: int
+    format: str | None = Field(
+        description="The file's format, for loading it full size at "
+        "`/pictures/{id}.{format}`."
+    )
     faces_read: bool = Field(
         description="Face extraction has run on it; until then nothing is scored."
     )
