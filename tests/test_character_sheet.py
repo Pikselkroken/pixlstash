@@ -362,39 +362,95 @@ def test_using_a_sheet_refuses_unknown_ids(client, sheet_id):
     assert missing_picture.status_code == 404
 
 
-def test_a_held_sheet_is_kept_then_discarded_and_nothing_else_is(client, monkeypatch):
-    """A run drawn with ``hold`` soft-deletes its pictures and announces none;
-    the sheet can still be cut, and discard destroys only held pictures."""
-    server = client.server
-    held = _upload_sheet(client, [("x", 1910, 0, 1536)])
-    other = _upload_sheet(client, [("x", 1920, 0, 1536)])
-    assert client.delete(f"{API_PREFIX}/pictures/{other}").status_code == 200
+def _library_uuid(server):
+    lease = server.library_coordinator.acquire_read()
+    try:
+        return lease.library_uuid
+    finally:
+        server.library_coordinator.release_read(lease)
+
+
+def _watch_events(server, monkeypatch):
     events = []
     real_notify = server.vault.notify
-    monkeypatch.setattr(
-        server.vault,
-        "notify",
-        lambda kind, payload=None: (
-            events.append((kind, payload)),
-            real_notify(kind, payload),
-        )[1],
-    )
-    monkeypatch.setattr(
-        comfyui_service, "_wait_for_comfyui_outputs", lambda *a, **k: ([], [held])
-    )
-    comfyui_service._process_comfyui_outputs(
-        server, "http://comfy", "held-run", None, None, None, hold=True
-    )
-    assert comfyui_service.run_outcome("held-run")["picture_ids"] == [held]
-    assert not [e for e in events if e[0] == EventType.PICTURE_IMPORTED]
 
-    def state(session, ids):
+    def notify(kind, payload=None):
+        events.append((kind, payload))
+        return real_notify(kind, payload)
+
+    monkeypatch.setattr(server.vault, "notify", notify)
+    return events
+
+
+def _state(server, ids):
+    def read(session):
         return {
             p.id: p for p in session.exec(select(Picture).where(Picture.id.in_(ids)))
         }
 
-    assert server.vault.db.run_task(state, [held])[held].deleted
-    assert comfyui_service.held_picture_ids([held, other]) == {held}
+    return server.vault.db.run_task(read)
+
+
+def test_a_held_run_never_holds_a_picture_it_did_not_import(client, monkeypatch):
+    """A saver node reports ids of its own: they can be pictures the library
+    already had, so a held run leaves them live and never makes them
+    discardable."""
+    server = client.server
+    live = _upload_sheet(client, [("x", 1930, 0, 1536)])
+    monkeypatch.setattr(
+        comfyui_service, "_wait_for_comfyui_outputs", lambda *a, **k: ([], [live])
+    )
+    comfyui_service._process_comfyui_outputs(
+        server,
+        "http://comfy",
+        "held-saver-run",
+        None,
+        None,
+        None,
+        hold=True,
+        origin_library_uuid=_library_uuid(server),
+    )
+    assert not _state(server, [live])[live].deleted
+    assert comfyui_service.held_pictures(_library_uuid(server), [live]) == {}
+
+
+def test_a_held_sheet_is_kept_then_discarded_and_nothing_else_is(client, monkeypatch):
+    """A run drawn with ``hold`` soft-deletes what it imports and announces
+    none; the sheet can still be cut, and discard destroys only held pictures
+    of this library."""
+    server = client.server
+    library = _library_uuid(server)
+    other = _upload_sheet(client, [("x", 1920, 0, 1536)])
+    assert client.delete(f"{API_PREFIX}/pictures/{other}").status_code == 200
+    drawn = io.BytesIO()
+    _sheet([("x", 1910, 0, 1536)]).save(drawn, format="PNG")
+    events = _watch_events(server, monkeypatch)
+    monkeypatch.setattr(
+        comfyui_service,
+        "_wait_for_comfyui_outputs",
+        lambda *a, **k: ([{"filename": "sheet.png"}], None),
+    )
+    monkeypatch.setattr(
+        comfyui_service,
+        "_download_comfyui_image",
+        lambda *a, **k: (drawn.getvalue(), ".png"),
+    )
+    comfyui_service._process_comfyui_outputs(
+        server,
+        "http://comfy",
+        "held-run",
+        None,
+        None,
+        None,
+        hold=True,
+        origin_library_uuid=library,
+    )
+    [held] = comfyui_service.run_outcome("held-run")["picture_ids"]
+    assert not [e for e in events if e[0] == EventType.PICTURE_IMPORTED]
+    assert _state(server, [held])[held].deleted
+    assert set(comfyui_service.held_pictures(library, [held, other])) == {held}
+    # Held in this library only: another library's picture with the id is not.
+    assert comfyui_service.held_pictures("another-library", [held]) == {}
 
     character_id = _new_character(client, "Sheet Held")
     used = client.post(
@@ -405,13 +461,23 @@ def test_a_held_sheet_is_kept_then_discarded_and_nothing_else_is(client, monkeyp
     panels = used.json()["picture_ids"]
     assert len(panels) == 6
 
+    # An id held once but since purged and reused by another Scrapheap
+    # picture: the pixels differ, so it is not that sheet any more.
+    monkeypatch.setitem(
+        comfyui_service._held_pictures, (library, other), "pixels-of-a-purged-sheet"
+    )
+    unknown = client.post(
+        f"{API_PREFIX}/characters/999999/sheets/discard",
+        json={"picture_ids": [held]},
+    )
+    assert unknown.status_code == 404
     gone = client.post(
         f"{API_PREFIX}/characters/{character_id}/sheets/discard",
         json={"picture_ids": [held, other]},
     )
     assert gone.status_code == 200, gone.text
     assert gone.json()["picture_ids"] == [held]
-    left = server.vault.db.run_task(state, [held, other, *panels])
+    left = _state(server, [held, other, *panels])
     assert held not in left
     # A Scrapheap picture that was never held is untouched.
     assert left[other].deleted

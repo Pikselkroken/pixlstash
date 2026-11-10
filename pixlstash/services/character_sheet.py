@@ -665,22 +665,44 @@ def _unlink_sources_in_session(session: Session, picture_ids: list[int]) -> None
     session.commit()
 
 
-def discard_sheets(server, picture_ids: list[int]) -> list[int]:
+def _still_held_in_session(
+    session: Session, character_id: int, held: dict[int, str | None]
+) -> list[int] | None:
+    """Of *held*, the pictures that are still those sheets: in the Scrapheap
+    with the pixels they were held with. ``None`` for an unknown character."""
+    if session.get(Character, character_id) is None:
+        return None
+    rows = session.exec(select(Picture).where(Picture.id.in_(list(held)))).all()
+    return sorted(
+        row.id for row in rows if row.deleted and row.pixel_sha == held[row.id]
+    )
+
+
+def discard_sheets(
+    server, library_uuid: str | None, character_id: int, picture_ids: list[int]
+) -> list[int]:
     """Destroy the held sheets among *picture_ids*: rows and files, for good.
 
-    Only pictures a run imported held (``comfyui_service.held_picture_ids``)
-    are touched, so nothing else in the Scrapheap can be destroyed through
-    here; a sheet that is not held any more (kept, discarded, or held before a
-    restart) is left alone. Panels cut from a sheet keep their pictures and
-    lose only the link to it. Returns the ids destroyed.
+    Only pictures a run in this library imported held
+    (``comfyui_service.held_pictures``) are touched, and only while each is
+    still in the Scrapheap with the pixels it was held with, so nothing else
+    can be destroyed through here: not a picture of another library with the
+    same id, not one that reused a purged id, not one restored meanwhile. Panels
+    cut from a sheet keep their pictures and lose only the link to it. Raises
+    :class:`SheetNotFound` for an unknown character. Returns the ids destroyed.
     """
-    held = sorted(comfyui_service.held_picture_ids(picture_ids))
-    if not held:
-        return []
-    server.vault.db.run_task(_unlink_sources_in_session, held)
-    outcome = scrapheap_service.purge_scrapheap_pictures(
-        server.vault, held, include_protected=False
+    held = comfyui_service.held_pictures(library_uuid, picture_ids)
+    sheets = server.vault.db.run_immediate_read_task(
+        _still_held_in_session, character_id, held
     )
-    comfyui_service.release_held(held)
+    if sheets is None:
+        raise SheetNotFound(f"No character {character_id}.")
+    comfyui_service.release_held(library_uuid, list(held))
+    if not sheets:
+        return []
+    server.vault.db.run_task(_unlink_sources_in_session, sheets)
+    outcome = scrapheap_service.purge_scrapheap_pictures(
+        server.vault, sheets, include_protected=False
+    )
     logger.info("Discarded held character sheets %s", list(outcome.purged_ids))
     return list(outcome.purged_ids)

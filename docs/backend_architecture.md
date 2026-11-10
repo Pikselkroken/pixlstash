@@ -12843,9 +12843,12 @@ is never the library's**: it is drawn held and discarded once the user is done.
   `add_loras`, and `character_ids: []`: a sheet shows one person six times and
   is nobody's until it is chosen and cut. So it queues behind the GPU, shows in
   Tasks, and is imported like any picture; there is no sheet task. It runs
-  with `hold`: `_process_comfyui_outputs` soft-deletes the run's new pictures
-  at once (a locked set's member stays live, as with any delete), sends no
-  import event, and records the ids in `comfyui_service`'s held set. A held
+  with `hold`: `_process_comfyui_outputs` soft-deletes the pictures the run
+  itself imported new (never a duplicate or a saver-reported id, which can be
+  a picture the library had; a locked set's member stays live, as with any
+  delete, and is not held), sends no import event, files nobody (no LoRA
+  person), and records each in `comfyui_service`'s held set under its library
+  and id with its `pixel_sha`. A held
   sheet is in the Scrapheap, out of every listing, while face extraction (which
   does not skip deleted pictures) still reads it and its thumbnail and file are
   still served. The held set is memory: after a restart a held sheet is an
@@ -12878,12 +12881,16 @@ is never the library's**: it is drawn held and discarded once the user is done.
   stack) and filed with `add_person`, which links the largest face once face
   extraction has read it.
 - **Discarding** (`POST /characters/{id}/sheets/discard`) destroys the named
-  sheets that are in the held set, through the Scrapheap's own purge
+  sheets that are in this library's held set and still in the Scrapheap with
+  the pixels they were held with (so not another library's picture with the
+  id, a picture that reused a purged id, or one restored), through the
+  Scrapheap's own purge
   (`purge_scrapheap_pictures`), after clearing any panel's `source_picture_id`
   that names one; anything not held is left alone, so the route can never
   destroy another Scrapheap picture. The dialog discards every sheet once the
   kept ones are cut, the dropped ones when a new prompt is drawn, and all of
-  them when it closes.
+  them when it closes. A run still drawing then lands held later with nobody
+  to discard it: that sheet stays in the Scrapheap until retention purges it.
 - **No reference set is written.** For a character with no pictures, the
   chosen sheet's panels are its only faces, so they are its references by the
   existing rule; a character with rated pictures keeps those.

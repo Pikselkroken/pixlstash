@@ -1042,7 +1042,7 @@ const footer = computed(() => {
   const waiting = waitingRuns.value.length;
   return {
     lead: waiting
-      ? `Drawing ${waiting} more, about a minute each. Sheets are not added to the library; the photos of the ones you keep are.`
+      ? `Drawing ${waiting} more, about a minute each. Sheets are not added to the library; the photos of the ones you keep are. Closing now leaves the ones still drawing in the Scrapheap.`
       : keptSheets.value.length
         ? `${keptWords.value} ${keptSheets.value.length === 1 ? "becomes" : "become"} ${name.value}'s pictures, six each. The sheets themselves are discarded.`
         : "Tick the sheets to keep.",

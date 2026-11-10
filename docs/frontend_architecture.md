@@ -1658,8 +1658,10 @@ the row element to hand focus back to on close).
   user where it sits until they tick or untick one; a broken one says so in
   its caption. *Keep* cuts the ticked ones and then discards every sheet drawn
   (`discardSheets`), as does a new prompt's draw (the dropped ones) and the
-  dialog's close (`discardAll`, exposed); after a keep the step starts again
-  from the form. *Zoom* (or a double-click) shows the
+  dialog's close (`discardAll`, exposed); a run still drawing then is not
+  followed any more, so its sheet stays in the Scrapheap until retention, and
+  the footer says so while runs draw. After a keep the step starts again from
+  the form. *Zoom* (or a double-click) shows the
   sheet's own file over the pick, fitted, a click toggling 1:1; Escape is the
   zoom's (a capture listener, the dialog persistent meanwhile) and focus goes
   back to the sheet's Zoom. *Keep* cuts the ticked sheets, waits (90 s at most)

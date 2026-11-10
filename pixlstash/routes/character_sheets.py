@@ -190,7 +190,15 @@ def create_router(server) -> APIRouter:
         response_model=DiscardedSheets,
     )
     def discard_sheets(request: Request, character_id: int, payload: SheetIds):
-        gone = character_sheet.discard_sheets(server, payload.picture_ids)
+        try:
+            gone = character_sheet.discard_sheets(
+                server,
+                request.state.library_lease.library_uuid,
+                character_id,
+                payload.picture_ids,
+            )
+        except character_sheet.SheetNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         if gone:
             server.vault.notify(
                 EventType.CHANGED_PICTURES,
