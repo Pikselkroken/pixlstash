@@ -8167,6 +8167,7 @@ def create_router(server) -> APIRouter:
             "missing_nodes, missing_models, a1111, picture_input_unfilled, "
             "no_lora_loader, pixlstash_nodes, no_save_node, no_runnable_source, "
             "lora_not_skippable, stage_not_skippable, missing_choices, "
+            "unwired_inputs (a required input with nothing connected to it), "
             "pack_outdated, models_downloading (a model the graph names "
             "that PixlStash is still downloading, with its percent). "
             "A group runs when its reasons are empty - or when the only ones "

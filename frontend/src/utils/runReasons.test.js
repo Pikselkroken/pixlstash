@@ -259,6 +259,23 @@ describe("ui_format", () => {
   });
 });
 
+describe("unwired_inputs", () => {
+  it("names each input once, by the node's title or else its class", () => {
+    const read = readReason({
+      code: "unwired_inputs",
+      inputs: [
+        { node_id: "91", class_type: "CLIPTextEncode", title: "", field: "clip" },
+        { node_id: "65", class_type: "CLIPTextEncode", title: "", field: "clip" },
+        { node_id: "3", class_type: "KSampler", title: "Main pass", field: "model" },
+      ],
+    });
+    expect(read.text).toContain(
+      "Nothing is connected to clip on CLIPTextEncode, model on Main pass,",
+    );
+    expect(read.blocking).toBe(true);
+  });
+});
+
 describe("bypassNotice", () => {
   it("does not call a loader the default recipe leaves out a missing file", () => {
     const notices = bypassNotice({
