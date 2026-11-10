@@ -3,6 +3,8 @@
 
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
@@ -161,6 +163,7 @@ function button(wrapper, text) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  setActivePinia(createPinia());
 });
 
 describe("CreateTrainingSetDialog", () => {
@@ -672,7 +675,7 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
       description: "Adult woman, copper bob",
     });
     expect(gen.buildSheetPrompt).toHaveBeenCalledWith(
-      expect.objectContaining({ trigger: "anna", framing: "full_body" }),
+      expect.objectContaining({ trigger: "anna", framing: "full_body", size: "large" }),
     );
     expect(gen.runWorkflowCard).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -702,12 +705,12 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     await vi.advanceTimersByTimeAsync(3000);
     await flushPromises();
     const sheets = wrapper.findAll('[data-testid="cs-sheet"]');
-    // Best first, and preselected.
+    // Each in its run's place, never reordered; the best is preselected there.
     expect(sheets.map((b) => b.attributes("aria-label"))).toEqual([
-      "Sheet 2: faces agree strongly",
       "Sheet 1: faces agree somewhat",
+      "Sheet 2: faces agree strongly",
     ]);
-    expect(sheets[0].attributes("aria-pressed")).toBe("true");
+    expect(sheets[1].attributes("aria-pressed")).toBe("true");
     expect(wrapper.find('[data-testid="cts-generate-primary"]').text()).toContain(
       "Use sheet 2",
     );
@@ -871,6 +874,57 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     expect(wrapper.find('[data-testid="cts-generate-primary"]').text()).toContain(
       "Use sheet 2",
     );
+    wrapper.unmount();
+  });
+
+  it("keeps each sheet in its run's place and shows the drawing one's progress", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    gen.runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: ["r1", "r2", "r3", "r4"].map((run_id) => ({ run_id, status: "queued" })),
+    });
+    const done = {};
+    gen.getRunOutcome.mockImplementation(async (key) =>
+      done[key] ? { status: "completed", picture_ids: [done[key]] } : { status: "running" },
+    );
+    gen.rankSheets.mockImplementation(async (_id, ids) => ({
+      sheets: ids.map((id) => sheet(id, 0.6)),
+      references: 0,
+    }));
+    const tasks = useTasksStore();
+    tasks.comfyuiRuns = [
+      { run_id: "r1", status: "running", percent: 40 },
+      { run_id: "r2", status: "queued", percent: 0 },
+    ];
+    const places = () =>
+      wrapper
+        .findAll(".cs-sheets > li")
+        .map((li) => (li.find("img").exists() ? li.find("img").attributes("src") : li.text()));
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+
+    // The second run finishes first: its sheet takes the second place.
+    done.r2 = 502;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(places()).toEqual(["drawing", "/thumb/502.webp", "queued", "queued"]);
+    const bar = wrapper.find('[role="progressbar"]');
+    expect(bar.attributes("aria-valuenow")).toBe("40");
+
+    done.r1 = 501;
+    done.r4 = 504;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(places()).toEqual([
+      "/thumb/501.webp",
+      "/thumb/502.webp",
+      "queued",
+      "/thumb/504.webp",
+    ]);
+    expect(wrapper.find('[aria-label="Zoom in on sheet 4"]').exists()).toBe(true);
     wrapper.unmount();
   });
 

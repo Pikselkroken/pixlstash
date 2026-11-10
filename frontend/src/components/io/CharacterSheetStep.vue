@@ -103,20 +103,20 @@
           label="Shoes"
           placeholder="white sneakers"
         />
+        <div class="cs-fld">
+          <FieldLabel>Body photos</FieldLabel>
+          <Segmented
+            v-model="form.framing"
+            aria-label="Body photos"
+            :options="FRAMINGS"
+            data-testid="cs-framing"
+            @pick="framingTouched = true"
+          />
+          <span class="cs-hint" data-testid="cs-framing-hint">{{
+            framingHint
+          }}</span>
+        </div>
         <div class="cs-grid2">
-          <div class="cs-fld">
-            <FieldLabel>Body photos</FieldLabel>
-            <Segmented
-              v-model="form.framing"
-              aria-label="Body photos"
-              :options="FRAMINGS"
-              data-testid="cs-framing"
-              @pick="framingTouched = true"
-            />
-            <span class="cs-hint" data-testid="cs-framing-hint">{{
-              framingHint
-            }}</span>
-          </div>
           <div class="cs-fld">
             <FieldLabel>Sheets to draw</FieldLabel>
             <Segmented
@@ -125,6 +125,16 @@
               :options="COUNTS"
             />
             <span class="cs-hint">About a minute each.</span>
+          </div>
+          <div class="cs-fld">
+            <FieldLabel>Sheet size</FieldLabel>
+            <Segmented
+              v-model="form.size"
+              aria-label="Sheet size"
+              :options="SIZES"
+              data-testid="cs-size"
+            />
+            <span class="cs-hint">{{ sizeHint }}</span>
           </div>
         </div>
         <div class="cs-fld">
@@ -215,47 +225,65 @@
           >
         </p>
         <ul class="cs-sheets">
-          <li v-for="sheet in shownSheets" :key="sheet.picture_id">
-            <button
-              type="button"
-              class="cs-sheetimg"
-              :class="{ 'cs-sheetimg--on': sheet.picture_id === chosen }"
-              :aria-pressed="sheet.picture_id === chosen"
-              :aria-label="`Sheet ${sheet.n}: ${sheetWords(sheet)}`"
-              :disabled="sheetLocked(sheet)"
-              data-testid="cs-sheet"
-              @click="chosen = sheet.picture_id"
-              @dblclick="openZoom(sheet)"
-            >
-              <img
-                :src="pictureThumbnailUrl(sheet.picture_id)"
-                alt=""
-                loading="lazy"
-              />
-              <span class="cs-sheetimg__rk">{{ sheet.n }}</span>
-              <span
-                v-if="sheet.picture_id === chosen"
-                class="cs-sheetimg__ck"
-                aria-hidden="true"
-                ><v-icon size="14">mdi-check</v-icon></span
-              >
-            </button>
-            <span class="cs-cap cs-row1">
-              <span><b>Sheet {{ sheet.n }}</b> · {{ sheetWords(sheet) }}</span>
+          <li v-for="slot in slots" :key="slot.key">
+            <template v-if="slot.sheet">
               <button
                 type="button"
-                class="cs-link"
-                data-testid="cs-zoom-open"
-                :data-sheet="sheet.picture_id"
-                :aria-label="`Zoom in on sheet ${sheet.n}`"
-                @click="openZoom(sheet)"
+                class="cs-sheetimg"
+                :class="{ 'cs-sheetimg--on': slot.sheet.picture_id === chosen }"
+                :aria-pressed="slot.sheet.picture_id === chosen"
+                :aria-label="`Sheet ${slot.n}: ${sheetWords(slot.sheet)}`"
+                :disabled="sheetLocked(slot.sheet)"
+                data-testid="cs-sheet"
+                @click="chosen = slot.sheet.picture_id"
+                @dblclick="openZoom(slot.sheet)"
               >
-                Zoom
+                <img
+                  :src="pictureThumbnailUrl(slot.sheet.picture_id)"
+                  alt=""
+                  loading="lazy"
+                />
+                <span class="cs-sheetimg__rk">{{ slot.n }}</span>
+                <span
+                  v-if="slot.sheet.picture_id === chosen"
+                  class="cs-sheetimg__ck"
+                  aria-hidden="true"
+                  ><v-icon size="14">mdi-check</v-icon></span
+                >
               </button>
+              <span class="cs-cap cs-row1">
+                <span
+                  ><b>Sheet {{ slot.n }}</b> · {{ sheetWords(slot.sheet) }}</span
+                >
+                <button
+                  type="button"
+                  class="cs-link"
+                  data-testid="cs-zoom-open"
+                  :data-sheet="slot.sheet.picture_id"
+                  :aria-label="`Zoom in on sheet ${slot.n}`"
+                  @click="openZoom(slot.sheet)"
+                >
+                  Zoom
+                </button>
+              </span>
+            </template>
+            <span
+              v-else
+              class="cs-sheetimg cs-sheetimg--wait"
+              data-testid="cs-slot"
+            >
+              <span>{{ slot.label }}</span>
+              <span
+                v-if="slot.percent != null"
+                class="cs-progress"
+                role="progressbar"
+                aria-label="Drawing"
+                :aria-valuenow="slot.percent"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                ><span :style="{ width: `${slot.percent}%` }"
+              /></span>
             </span>
-          </li>
-          <li v-for="slot in pendingSlots" :key="slot.key">
-            <span class="cs-sheetimg cs-sheetimg--wait">{{ slot.label }}</span>
           </li>
         </ul>
       </template>
@@ -369,6 +397,7 @@ import {
   listWorkflowCards,
   runWorkflowCard,
 } from "../../api/workflows";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import { errorMessage } from "../../utils/apiError";
 import { runKey } from "../../utils/gpuMemory";
@@ -389,11 +418,19 @@ const props = defineProps({
 const emit = defineEmits(["done"]);
 
 const FRAMINGS = [
+  { id: "waist_up", label: "Waist-up" },
   { id: "mid_thigh", label: "Mid-thigh" },
   { id: "knees_up", label: "Knees-up" },
   { id: "full_body", label: "Full body" },
 ];
 const COUNTS = [2, 3, 4].map((n) => ({ id: n, label: String(n) }));
+// The canvas sizes `POST /character-sheets/prompt` draws at, and the passport
+// photo each cuts to (a 600×768 cell of the large sheet, scaled).
+const SIZES = [
+  { id: "small", label: "Small", passport: "300×384" },
+  { id: "medium", label: "Medium", passport: "431×552" },
+  { id: "large", label: "Large", passport: "600×768" },
+];
 const SUBJECTS = [
   { id: "woman", label: "Woman" },
   { id: "man", label: "Man" },
@@ -409,6 +446,7 @@ const FACE_WAIT_MS = 90_000;
 const SHEET_FACE_WAIT_MS = 120_000;
 const HEIGHT_WORDS = /\b(tall|short|petite|height|legs?|leggy|long-legged)\b/i;
 
+const tasks = useTasksStore();
 const name = computed(() => props.character?.name || "");
 const phase = ref("describe"); // describe | drawing | pick | filing
 const form = reactive({
@@ -418,6 +456,7 @@ const form = reactive({
   trousers: "",
   shoes: "",
   framing: "mid_thigh",
+  size: "large",
   count: 4,
   subject: "woman",
 });
@@ -499,12 +538,17 @@ watch(suggestedFraming, (framing) => {
 const framingHint = computed(() => {
   const reason = chosenLora.value
     ? "Suggested: full body. The LoRA holds the face, so the photos can show the whole body."
-    : "Suggested: mid-thigh. With no LoRA the sheet alone carries the face, so faces need the most pixels.";
+    : "Suggested: mid-thigh, the framing that held its layout best. With no LoRA the sheet alone carries the face; waist-up gives the faces the most pixels.";
   const height =
     form.framing !== "full_body" && HEIGHT_WORDS.test(form.body)
       ? " This framing won't show height."
       : "";
   return reason + height;
+});
+
+const sizeHint = computed(() => {
+  const size = SIZES.find((s) => s.id === form.size);
+  return `Passport photos come out ${size.passport}. Larger is slower to draw.`;
 });
 
 const descriptionHint = computed(() => {
@@ -532,15 +576,14 @@ function score(sheet) {
   return (sheet.agreement ?? -1) + (sheet.closeness ?? 0);
 }
 
-/** Every sheet, numbered by arrival, best first; broken ones last. */
+/** Every sheet, best first; broken ones last. */
 const sheets = computed(() => {
-  const numbered = order.value.map((id, index) => ({
+  const scored = order.value.map((id) => ({
     picture_id: id,
-    n: index + 1,
     faces_read: false,
     ...(ranking.value[id] || {}),
   }));
-  return numbered.sort(
+  return scored.sort(
     (a, b) =>
       Number(!!a.broken) - Number(!!b.broken) ||
       Number(b.faces_read) - Number(a.faces_read) ||
@@ -569,30 +612,58 @@ const noneHold = computed(
   () => allEnded.value && ended.value.length > 0 && !holding.value.length,
 );
 
-// Broken sheets are set aside, and shown only when nothing else is.
-const shownSheets = computed(() => {
-  const unbroken = sheets.value.filter((s) => !s.broken);
-  return unbroken.length || !allEnded.value ? unbroken : sheets.value;
-});
-
 const failures = computed(() =>
   runs.value
     .filter((run) => run.status === "failed")
     .map((run) => run.message || "the run failed."),
 );
 
-const pendingSlots = computed(() =>
-  runs.value
-    .filter((run) => !["completed", "failed"].includes(run.status))
-    .map((run, index) => ({
+function runEnded(run) {
+  return ["completed", "failed"].includes(run.status);
+}
+
+/** What each run shows, in the order the runs were started: as many places as
+ * it drew sheets, or one while it draws. A sheet lands in its run's place and
+ * nothing moves as the others arrive; its number is its place. */
+const slots = computed(() => {
+  const byId = new Map(sheets.value.map((sheet) => [sheet.picture_id, sheet]));
+  const live = new Map(tasks.comfyuiRuns.map((run) => [runKey(run), run]));
+  const out = [];
+  for (const run of runs.value) {
+    const drawn = (run.pictureIds || []).filter((id) => byId.has(id));
+    for (const id of drawn) {
+      out.push({ key: `sheet-${id}`, sheet: byId.get(id) });
+    }
+    if (drawn.length) continue;
+    const progress = live.get(run.key);
+    const drawing = !runEnded(run) && progress?.status === "running";
+    out.push({
       key: run.key,
-      label: run.status === "running" && index === 0 ? "drawing" : "queued",
-    })),
+      label: runEnded(run) ? "didn't draw" : drawing ? "drawing" : "queued",
+      percent: drawing ? Math.round(Number(progress.percent) || 0) : null,
+    });
+  }
+  return out.map((slot, index) => ({ ...slot, n: index + 1 }));
+});
+
+const sheetNumber = computed(
+  () =>
+    new Map(
+      slots.value
+        .filter((slot) => slot.sheet)
+        .map((slot) => [slot.sheet.picture_id, slot.n]),
+    ),
 );
 
-const chosenSheet = computed(
-  () => sheets.value.find((s) => s.picture_id === chosen.value) || null,
-);
+const waitingRuns = computed(() => runs.value.filter((run) => !runEnded(run)));
+
+/** A sheet with its number: its place among the slots. */
+function numbered(id) {
+  const sheet = sheets.value.find((s) => s.picture_id === id);
+  return sheet ? { ...sheet, n: sheetNumber.value.get(id) } : null;
+}
+
+const chosenSheet = computed(() => numbered(chosen.value));
 
 const pickIntro = computed(() => {
   const base =
@@ -622,11 +693,8 @@ function sheetLocked(sheet) {
   );
 }
 
-const zoomed = computed(
-  () =>
-    (phase.value !== "describe" &&
-      sheets.value.find((s) => s.picture_id === zoomedId.value)) ||
-    null,
+const zoomed = computed(() =>
+  phase.value === "describe" ? null : numbered(zoomedId.value),
 );
 
 /** The sheet's own file, full size; the thumbnail until its format is known. */
@@ -714,6 +782,7 @@ async function followRuns() {
       if (!runs.value.includes(run)) continue;
       run.status = outcome.status;
       run.message = outcome.message || "";
+      run.pictureIds = outcome.picture_ids || [];
       for (const id of outcome.picture_ids || []) {
         if (!order.value.includes(id)) order.value.push(id);
       }
@@ -777,6 +846,7 @@ async function draw() {
       trousers: form.trousers,
       shoes: form.shoes,
       framing: form.framing,
+      size: form.size,
       subject: form.subject,
       trigger: trigger.value,
     });
@@ -916,7 +986,7 @@ const footer = computed(() => {
       primary: { label: "Use this sheet", enabled: false, run: use },
     };
   }
-  const waiting = pendingSlots.value.length;
+  const waiting = waitingRuns.value.length;
   return {
     lead: waiting
       ? `Drawing ${waiting} more, about a minute each. Closing this leaves them drawing in Tasks; they land in the library.`
@@ -1182,13 +1252,32 @@ defineExpose({ footer, error, working, loraName, phase, zooming });
 }
 
 .cs-sheetimg--wait {
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
   border: 1px dashed rgb(var(--v-theme-border));
   background: transparent;
   cursor: default;
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The run's percent, as the Tasks panel's run line draws it. */
+.cs-progress {
+  width: 50%;
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-surface), 0.12);
+  overflow: hidden;
+}
+
+.cs-progress span {
+  display: block;
+  height: 100%;
+  background: rgb(var(--v-theme-primary));
+  transition: width var(--dur-3) var(--ease-standard);
 }
 
 .cs-sheetimg__rk,

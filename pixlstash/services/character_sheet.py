@@ -51,8 +51,13 @@ PANEL_COUNT = 6
 # broke its layout and is set aside.
 MAX_FACES = PANEL_COUNT
 
-Framing = Literal["mid_thigh", "knees_up", "full_body"]
+Framing = Literal["waist_up", "mid_thigh", "knees_up", "full_body"]
 Subject = Literal["woman", "man"]
+Size = Literal["small", "medium", "large"]
+# The sheet's canvas at each size, all 5:3 so the layout only scales, and every
+# side a multiple of 16 as MOSS needs: ~1, ~2 and ~4 megapixels, MOSS's own
+# range (it is trained at 1-2 MP and stretches to about 4).
+SIZES = {"small": (1280, 768), "medium": (1840, 1104), "large": (2560, 1536)}
 
 # ponytail: words from scores; thresholds read off the 2026-11 probes (one
 # sheet 0.57-0.70, across sheets 0.37). P6 validation tunes them.
@@ -96,6 +101,23 @@ _PASSPORT_VIEWS = (
     ),
 )
 
+_WAIST_UP_P5 = (
+    (
+        (-740, -70, 748, 590),
+        "Half-length photo from {p} head down to {p} waist, standing upright "
+        "facing the camera straight on, arms relaxed at the sides. The photo is "
+        "cropped at the waist.",
+    ),
+    (
+        (-700, 85, -280, 435),
+        "{P} head faces the camera straight on, eyes looking into the lens.",
+    ),
+    (
+        (-280, -70, 748, 590),
+        "{p} chest and stomach in the {top}, shoulders relaxed, the arms cropped "
+        "at the edges; the photo ends at {p} waist. {P} body shape: {body}.",
+    ),
+)
 _MID_THIGH_P5 = (
     (
         (-740, -70, 748, 590),
@@ -194,6 +216,8 @@ _FULL_BODY = (
     ),
 )
 _FRAMING_SUMMARY = {
+    "waist_up": "half-length photos side by side, each spanning the full "
+    "height and cropped at the waist",
     "mid_thigh": "three-quarter-length photos side by side, each spanning the "
     "full height and cropped at mid-thigh",
     "knees_up": "three-quarter-length photos side by side, each spanning the "
@@ -221,7 +245,11 @@ def _body_items(framing: Framing) -> list[tuple[tuple[int, ...], str]]:
             for n, items in ((5, _FULL_BODY[0]), (6, _FULL_BODY[1]))
             for box, cap in items
         ]
-    p5 = _MID_THIGH_P5 if framing == "mid_thigh" else _KNEES_UP_P5
+    p5 = {
+        "waist_up": _WAIST_UP_P5,
+        "mid_thigh": _MID_THIGH_P5,
+        "knees_up": _KNEES_UP_P5,
+    }[framing]
     out = [(box, f"Panel 5: {cap}") for box, cap in p5]
     for (y1, x1, y2, x2), cap in p5:
         for front, turned in _TURNED.items():
@@ -240,6 +268,7 @@ def sheet_prompt(
     framing: Framing = "mid_thigh",
     subject: Subject = "woman",
     trigger: str = "",
+    size: Size = "large",
 ) -> str:
     """The MOSS layout prompt for one grid sheet of the character described.
 
@@ -248,7 +277,9 @@ def sheet_prompt(
     Trousers are always named (left out, MOSS improvises bare legs); shoes only
     at full body, where they belong, since naming them pulls a cropped framing
     to full length. *trigger* is a character LoRA's trigger word, put first.
+    The boxes are laid out on the large canvas and scaled to *size*'s.
     """
+    scale = SIZES[size][0] / SHEET_WIDTH
     p, cap_p = _PRONOUN[subject]
     body = _phrase(body) or "average build"
     top = _phrase(top) or "a plain crew-neck sweater"
@@ -286,7 +317,11 @@ def sheet_prompt(
             ("character", "object", "object"), (whole, head_box, shoulders), captions
         ):
             items.append(
-                {"label": label, "caption": f"Panel {n}: {caption}", "bbox": list(box)}
+                {
+                    "label": label,
+                    "caption": f"Panel {n}: {caption}",
+                    "bbox": [round(v * scale) for v in box],
+                }
             )
     body_items = _body_items(framing)
     per_panel = len(body_items) // 2
@@ -298,7 +333,7 @@ def sheet_prompt(
             {
                 "label": "character" if first else "object",
                 "caption": f"{prefix}: {text}",
-                "bbox": list(box),
+                "bbox": [round(v * scale) for v in box],
             }
         )
     views = ", ".join(

@@ -1648,8 +1648,16 @@ the row element to hand focus back to on close).
   read, or two minutes after the last run ended: a sheet still unread then (no
   face model, a deleted picture) can be chosen unscored and polling stops.
   Drawing waits for the character to load, so a typed description never
-  overwrites a stored one. The best holding sheet is preselected; broken ones show only when every
-  sheet broke. *Use sheet N* cuts it, waits (90 s at most) for the six
+  overwrites a stored one. Each run keeps its place in the grid from the moment
+  it is started, in run order: its sheet lands where it was drawing and nothing
+  moves as others arrive, so a sheet's number is its place; the run on the GPU
+  shows its percent from the Tasks store's `comfyuiRuns`. A draw with a
+  different prompt, workflow or LoRA starts a new pick; *Draw N more* with the
+  same adds to it. The best holding sheet is preselected where it sits; a
+  broken one says so in its caption. *Zoom* (or a double-click) shows the
+  sheet's own file over the pick, fitted, a click toggling 1:1; Escape is the
+  zoom's (a capture listener, the dialog persistent meanwhile) and focus goes
+  back to the sheet's Zoom. *Use sheet N* cuts it, waits (90 s at most) for the six
   pictures' faces, then hands their ids back: the picker reloads, marks them
   *new*, and offers *All / New only*, which re-ranks the stills from 1 over the
   new pictures so the slider, coverage and Create all read that one list.

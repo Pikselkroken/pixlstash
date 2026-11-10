@@ -39,6 +39,7 @@ class SheetPromptRequest(BaseModel):
     framing: character_sheet.Framing = "mid_thigh"
     subject: character_sheet.Subject = "woman"
     trigger: str = Field("", max_length=200)
+    size: character_sheet.Size = "large"
 
 
 class SheetPrompt(BaseModel):
@@ -106,8 +107,8 @@ def create_router(server) -> APIRouter:
         return SheetPrompt(
             prompt=character_sheet.sheet_prompt(**payload.model_dump()),
             negative=character_sheet.NEGATIVE_PROMPT,
-            width=character_sheet.SHEET_WIDTH,
-            height=character_sheet.SHEET_HEIGHT,
+            width=character_sheet.SIZES[payload.size][0],
+            height=character_sheet.SIZES[payload.size][1],
         )
 
     @router.post(

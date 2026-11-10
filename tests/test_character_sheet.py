@@ -40,7 +40,7 @@ def _panel_of(caption: str) -> int:
     return int(caption.split(":", 1)[0].removeprefix("Panel "))
 
 
-@pytest.mark.parametrize("framing", ["mid_thigh", "knees_up", "full_body"])
+@pytest.mark.parametrize("framing", ["waist_up", "mid_thigh", "knees_up", "full_body"])
 def test_every_box_lands_inside_its_own_panel(framing):
     layout = json.loads(sheet_prompt(description="an adult woman", framing=framing))
     items = layout["items"]
@@ -54,6 +54,33 @@ def test_every_box_lands_inside_its_own_panel(framing):
     characters = [i for i in items if i["label"] == "character"]
     assert len(characters) == 6
     assert all("an adult woman" in i["caption"] for i in characters)
+
+
+@pytest.mark.parametrize("size", ["small", "medium"])
+def test_a_smaller_sheet_scales_the_layout_with_its_canvas(size):
+    width, height = character_sheet.SIZES[size]
+    assert width * 3 == height * 5 and width % 16 == 0 and height % 16 == 0
+    large = json.loads(sheet_prompt(description="x"))
+    scaled = json.loads(sheet_prompt(description="x", size=size))
+    scale = width / SHEET_WIDTH
+    for big, small in zip(large["items"], scaled["items"]):
+        assert small["caption"] == big["caption"]
+        assert small["bbox"] == [round(v * scale) for v in big["bbox"]]
+
+
+def test_waist_up_draws_the_head_bigger_than_mid_thigh():
+    """Waist-up is the framing for pixels: the body photos' heads are larger."""
+
+    def head(framing):
+        items = json.loads(sheet_prompt(description="x", framing=framing))["items"]
+        y1, x1, y2, x2 = next(
+            i["bbox"] for i in items if i["caption"].startswith("Panel 5: Her head")
+        )
+        return (y2 - y1) * (x2 - x1)
+
+    assert head("waist_up") > 1.5 * head("mid_thigh")
+    summary = json.loads(sheet_prompt(description="x", framing="waist_up"))["summary"]
+    assert "cropped at the waist" in summary["caption"]
 
 
 def test_the_mid_thigh_boxes_are_the_probed_ones():
@@ -277,6 +304,11 @@ def test_prompt_route_hands_out_the_canvas(client):
     )
     bad = client.post(f"{API_PREFIX}/character-sheets/prompt", json={"framing": "wide"})
     assert bad.status_code == 422
+    small = client.post(
+        f"{API_PREFIX}/character-sheets/prompt",
+        json={"description": "x", "size": "small"},
+    ).json()
+    assert (small["width"], small["height"]) == (1280, 768)
 
 
 def test_using_a_sheet_files_six_panels_on_the_character(client, sheet_id):

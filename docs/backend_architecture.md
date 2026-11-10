@@ -12824,10 +12824,13 @@ the count the server added. Owner-only
 
 "Create a training set…" can draw the pictures instead of picking them, for a
 character with none or with too few. A **character sheet** is one MOSS-Image
-picture at 2560×1536: four passport photos on the left half (front neutral,
+picture at 5:3: four passport photos on the left half (front neutral,
 three-quarter smiling, profile neutral, other three-quarter laughing) and two
-tall body photos on the right at a framing the user picks (mid-thigh, knees-up
-or full body). Text pins down a type, not a person, so each sheet is a slightly
+tall body photos on the right at a framing the user picks (waist-up,
+mid-thigh, knees-up or full body). The canvas is one of three sizes
+(`SIZES`: 1280×768, 1840×1104, 2560×1536, about 1, 2 and 4 megapixels, the
+range MOSS draws well, every side a multiple of 16); the layout is drawn on
+the largest and scaled. Text pins down a type, not a person, so each sheet is a slightly
 different person, but the six faces within one sheet agree: the user picks one
 sheet and its six panels become the character's pictures.
 
@@ -12850,12 +12853,17 @@ sheet and its six panels become the character's pictures.
   similarity, `closeness` the mean similarity to the character's reference
   faces (`select_reference_faces_for_character`, the sheets' own faces left
   out), and more faces than panels marks a sheet `broken`. A sheet with no
-  `Face` row yet is `faces_read: false` and unscored. The thresholds behind the
+  `Face` row yet is `faces_read: false` and unscored. Each sheet also carries
+  its `format`, so the dialog can show the file itself full size at
+  `/pictures/{id}.{format}`. The thresholds behind the
   words are read off the probes and are placeholders until validation.
 - **Using a sheet** (`POST /characters/{id}/sheets/{picture_id}/use`) cuts it
   with `split_sheet`: the grid's cells scaled to the picture, each cut moved
   to the strongest full-length luminance edge within ±50 px (MOSS draws its
-  dividers off the layout), 8 px of gutter trimmed. The six panels are
+  dividers off the layout), 8 px of gutter trimmed, then the white frame MOSS
+  draws round each photo (lines that are almost all over grey 244, from each
+  edge, then as far as the white runs in diagonally from each rounded corner;
+  an overcast sky, ~237, is not frame). The six panels are
   imported with `import_derived_outputs` (source picture = the sheet, no
   stack) and filed with `add_person`, which links the largest face once face
   extraction has read it. The sheet stays in the library, linked to nobody.
