@@ -173,7 +173,7 @@
             :disabled="sheetLocked(zoomed)"
             @click="choose(zoomed.picture_id)"
           >
-            Choose
+            {{ isKept(zoomed) ? "Don't keep" : "Keep" }}
           </button>
           <button
             ref="zoomClose"
@@ -199,7 +199,7 @@
 
       <template v-else>
         <div class="cs-step-h">
-          <h3>Pick a sheet</h3>
+          <h3>Keep the sheets that look right</h3>
           <span>{{ pickIntro }}</span>
         </div>
         <p
@@ -230,12 +230,12 @@
               <button
                 type="button"
                 class="cs-sheetimg"
-                :class="{ 'cs-sheetimg--on': slot.sheet.picture_id === chosen }"
-                :aria-pressed="slot.sheet.picture_id === chosen"
+                :class="{ 'cs-sheetimg--on': isKept(slot.sheet) }"
+                :aria-pressed="isKept(slot.sheet)"
                 :aria-label="`Sheet ${slot.n}: ${sheetWords(slot.sheet)}`"
                 :disabled="sheetLocked(slot.sheet)"
                 data-testid="cs-sheet"
-                @click="chosen = slot.sheet.picture_id"
+                @click="toggleKeep(slot.sheet.picture_id)"
                 @dblclick="openZoom(slot.sheet)"
               >
                 <img
@@ -245,7 +245,7 @@
                 />
                 <span class="cs-sheetimg__rk">{{ slot.n }}</span>
                 <span
-                  v-if="slot.sheet.picture_id === chosen"
+                  v-if="isKept(slot.sheet)"
                   class="cs-sheetimg__ck"
                   aria-hidden="true"
                   ><v-icon size="14">mdi-check</v-icon></span
@@ -292,15 +292,14 @@
     <aside class="cs-pane cs-pane--side" data-testid="cs-rail">
       <h3 class="cs-secl">{{ name }} so far</h3>
       <div class="cs-rail">
-        <div v-if="chosenSheet" class="cs-item">
+        <div v-for="sheet in keptSheets" :key="sheet.picture_id" class="cs-item">
           <img
             class="cs-rail__sheet"
-            :src="pictureThumbnailUrl(chosenSheet.picture_id)"
+            :src="pictureThumbnailUrl(sheet.picture_id)"
             alt=""
           />
           <span
-            ><b>Sheet {{ chosenSheet.n }}</b> ·
-            {{ chosenSheet.agreement_words }}</span
+            ><b>Sheet {{ sheet.n }}</b> · {{ sheet.agreement_words }}</span
           >
         </div>
         <div v-if="referenceIds.length" class="cs-item">
@@ -381,8 +380,9 @@ import { VIcon } from "vuetify/components";
 
 import {
   buildSheetPrompt,
+  discardSheets,
   rankSheets,
-  useSheet,
+  useSheets,
 } from "../../api/characterSheets";
 import {
   getCharacter,
@@ -472,7 +472,10 @@ const referenceIds = ref([]);
 const runs = ref([]); // { key, status, pictureIds, message }
 const ranking = ref({}); // picture id -> RankedSheet
 const order = ref([]); // sheet picture ids in the order they arrived
-const chosen = ref(null);
+// The sheets to keep, in the order ticked. The best is ticked for the user
+// until they tick or untick one themselves.
+const kept = ref([]);
+let keptTouched = false;
 // The sheet shown full size over the pick, and whether at 1:1 or fitted.
 const zoomedId = ref(null);
 const fullSize = ref(false);
@@ -663,13 +666,23 @@ function numbered(id) {
   return sheet ? { ...sheet, n: sheetNumber.value.get(id) } : null;
 }
 
-const chosenSheet = computed(() => numbered(chosen.value));
+const keptSheets = computed(() =>
+  kept.value.map(numbered).filter(Boolean),
+);
+
+function isKept(sheet) {
+  return kept.value.includes(sheet.picture_id);
+}
+
+function toggleKeep(id) {
+  keptTouched = true;
+  kept.value = kept.value.includes(id)
+    ? kept.value.filter((k) => k !== id)
+    : [...kept.value, id];
+}
 
 const pickIntro = computed(() => {
-  const base =
-    "Sheets are ranked by how well their own faces agree. The six photos of the one you choose become pictures of " +
-    name.value +
-    "; the others stay in the library.";
+  const base = `Each sheet says how well its own faces agree. Tick the ones to keep: the six photos of each become pictures of ${name.value}. The sheets themselves never join the library.`;
   if (!referenceIds.value.length) return base;
   return `${base} Each is also compared with ${name.value}'s reference faces: a sheet that agrees with itself but drifts from them is a different person drawn well.`;
 });
@@ -744,7 +757,7 @@ watch(phase, () => {
 });
 
 function choose(id) {
-  chosen.value = id;
+  toggleKeep(id);
   closeZoom();
 }
 
@@ -819,8 +832,8 @@ async function tick() {
   if (runsEndedAt && Date.now() - runsEndedAt > SHEET_FACE_WAIT_MS) {
     gaveUpOnFaces.value = true;
   }
-  if (!chosen.value && holding.value.length) {
-    chosen.value = holding.value[0].picture_id;
+  if (!keptTouched && !kept.value.length && holding.value.length) {
+    kept.value = [holding.value[0].picture_id];
   }
   if (allEnded.value) {
     if (phase.value === "drawing") phase.value = "pick";
@@ -887,6 +900,8 @@ async function draw() {
       // A sheet is six photos of one person: none of its faces is anybody's
       // until it is chosen and cut, so nothing here names the character.
       character_ids: [],
+      // Not the library's until kept: imported straight to the Scrapheap.
+      hold: true,
       label: `Character sheet · ${name.value}`,
     });
     const started = (answer?.prompts || []).filter((p) => runKey(p));
@@ -897,11 +912,9 @@ async function draw() {
       );
     }
     if (drawing !== drawnWith) {
-      runs.value = [];
-      order.value = [];
-      ranking.value = {};
-      chosen.value = null;
-      runsEndedAt = 0;
+      // The sheets on show are of another prompt: they go, held as they are.
+      discard(order.value);
+      startOver();
       drawnWith = drawing;
     }
     runs.value.push(
@@ -921,22 +934,50 @@ async function draw() {
   }
 }
 
+/** Forget every sheet and run: a new pick starts empty. */
+function startOver() {
+  runs.value = [];
+  order.value = [];
+  ranking.value = {};
+  kept.value = [];
+  keptTouched = false;
+  runsEndedAt = 0;
+  drawnWith = "";
+}
+
+/** Destroy held sheets; a failure leaves them in the Scrapheap, said in the log. */
+function discard(ids) {
+  if (!ids.length) return;
+  discardSheets(props.character.id, [...ids]).catch((e) => {
+    console.warn("Couldn't discard the character sheets", ids, e);
+  });
+}
+
+/** Discard every sheet drawn here: the dialog is closing on them. */
+function discardAll() {
+  discard(order.value);
+  order.value = [];
+}
+
 async function use() {
-  if (working.value || !chosen.value) return;
+  const keep = keptSheets.value.map((sheet) => sheet.picture_id);
+  if (working.value || !keep.length) return;
   working.value = true;
   error.value = "";
   phase.value = "filing";
   let ids;
   try {
-    ({ picture_ids: ids } = await useSheet(props.character.id, chosen.value));
+    ({ picture_ids: ids } = await useSheets(props.character.id, keep));
   } catch (e) {
     phase.value = "pick";
-    error.value = `Couldn't use the sheet. ${errorMessage(e, "Please try again.")}`;
+    error.value = `Couldn't use the sheets. ${errorMessage(e, "Please try again.")}`;
     working.value = false;
     return;
   }
-  // The sheet is cut and filed now; only its faces may still be unread. A
-  // failure from here on is no reason to offer the cut again.
+  // The panels are cut and filed: the sheets, kept or not, are done with.
+  discard(order.value);
+  // Only the panels' faces may still be unread. A failure from here on is no
+  // reason to offer the cut again.
   const deadline = Date.now() + FACE_WAIT_MS;
   while (alive && Date.now() < deadline) {
     try {
@@ -949,10 +990,9 @@ async function use() {
   }
   working.value = false;
   if (!alive) return;
-  // Back on the sheets for a return through the step row, none chosen: this
-  // one is used.
-  phase.value = "pick";
-  chosen.value = null;
+  // The sheets are gone: a return through the step row starts a new draw.
+  startOver();
+  phase.value = "describe";
   emit("done", ids);
 }
 
@@ -963,6 +1003,19 @@ const canDraw = computed(
     !!form.description.trim() &&
     phase.value !== "filing",
 );
+
+const keptWords = computed(() => {
+  const ns = keptSheets.value.map((sheet) => sheet.n);
+  if (ns.length === 1) return `Sheet ${ns[0]}`;
+  return `Sheets ${ns.slice(0, -1).join(", ")} and ${ns[ns.length - 1]}`;
+});
+
+const keepLabel = computed(() => {
+  const count = keptSheets.value.length;
+  if (count === 0) return "Keep a sheet";
+  if (count === 1) return `Keep sheet ${keptSheets.value[0].n}`;
+  return `Keep ${count} sheets`;
+});
 
 const footer = computed(() => {
   const n = form.count;
@@ -982,17 +1035,17 @@ const footer = computed(() => {
   }
   if (phase.value === "filing") {
     return {
-      lead: "Cutting the sheet into six pictures and reading their faces…",
-      primary: { label: "Use this sheet", enabled: false, run: use },
+      lead: "Cutting the sheets into pictures and reading their faces…",
+      primary: { label: keepLabel.value, enabled: false, run: use },
     };
   }
   const waiting = waitingRuns.value.length;
   return {
     lead: waiting
-      ? `Drawing ${waiting} more, about a minute each. Closing this leaves them drawing in Tasks; they land in the library.`
-      : chosenSheet.value
-        ? `Sheet ${chosenSheet.value.n} becomes ${name.value}'s pictures.`
-        : "",
+      ? `Drawing ${waiting} more, about a minute each. Sheets are not added to the library; the photos of the ones you keep are.`
+      : keptSheets.value.length
+        ? `${keptWords.value} ${keptSheets.value.length === 1 ? "becomes" : "become"} ${name.value}'s pictures, six each. The sheets themselves are discarded.`
+        : "Tick the sheets to keep.",
     // The rail's Edit goes back to the form too; the footer offers it only
     // when no sheet is worth using.
     back: noneHold.value
@@ -1004,10 +1057,10 @@ const footer = computed(() => {
       run: draw,
     },
     primary: {
-      label: chosenSheet.value ? `Use sheet ${chosenSheet.value.n}` : "Use a sheet",
+      label: keepLabel.value,
       enabled:
-        !!chosenSheet.value &&
-        (chosenSheet.value.faces_read || gaveUpOnFaces.value) &&
+        keptSheets.value.length > 0 &&
+        keptSheets.value.every((s) => s.faces_read || gaveUpOnFaces.value) &&
         !working.value,
       run: use,
     },
@@ -1075,7 +1128,7 @@ onBeforeUnmount(() => {
 // While a sheet is zoomed the dialog does not take Escape; the zoom does.
 const zooming = computed(() => !!zoomed.value);
 
-defineExpose({ footer, error, working, loraName, phase, zooming });
+defineExpose({ footer, error, working, loraName, phase, zooming, discardAll });
 </script>
 
 <style scoped>

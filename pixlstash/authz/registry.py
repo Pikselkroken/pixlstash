@@ -1529,9 +1529,13 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Rank drawn sheets; POST blocked for READ tokens; owner only",
     ),
-    ("POST", "/api/v1/characters/{character_id}/sheets/{picture_id}/use"): RoutePolicy(
+    ("POST", "/api/v1/characters/{character_id}/sheets/use"): RoutePolicy(
         _OWNER,
-        justification="Cut a sheet into pictures; POST blocked for READ tokens; owner only",
+        justification="Cut sheets into pictures; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/characters/{character_id}/sheets/discard"): RoutePolicy(
+        _OWNER,
+        justification="Destroy held sheets; POST blocked for READ tokens; owner only",
     ),
     # ── picture_sets.py ─────────────────────────────────────────────────────
     ("GET", "/api/v1/picture_sets"): _LIST_AWARE,

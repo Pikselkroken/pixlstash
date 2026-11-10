@@ -30,7 +30,7 @@ from urllib3.util import parse_url
 import requests
 from fastapi import HTTPException
 from websockets.sync.client import connect as ws_connect
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from pixlstash.db_models import (
     Character,
@@ -44,6 +44,7 @@ from pixlstash.db_models import (
     TAG_PENDING_SENTINEL,
 )
 from pixlstash.event_types import EventType
+from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.resources import comfyui_tenant
 from pixlstash.resources.arbiter import arbiter
 from pixlstash.resources.comfyui_tenant import PeakSampler
@@ -150,6 +151,11 @@ _run_ids: dict[str, str] = {}
 # Held runs' cancel events, by run id: set by an abort or a lease cancel, and
 # the run then never reaches ComfyUI. Same lock.
 _held_cancels: dict[str, threading.Event] = {}
+# Pictures a run imported held (``hold``): soft-deleted on import, for a dialog
+# to keep or discard. Only these may be discarded through it, so it can never
+# destroy anything else in the Scrapheap. In memory: after a restart a held
+# picture is an ordinary Scrapheap one, purged by retention. Same lock.
+_held_picture_ids: set[int] = set()
 # Told of every ending, outside the lock, with what ``run_outcome`` would
 # answer: the run log (``services/run_log.py``) keeps it past a restart. One,
 # set by the workflows routes for the server they serve (``on_run_ended``).
@@ -161,6 +167,37 @@ def on_run_ended(listener) -> None:
     whatever was told before: ``listener(outcome)``, outside the lock."""
     global _ending_listener
     _ending_listener = listener
+
+
+def held_picture_ids(picture_ids) -> set[int]:
+    """Which of *picture_ids* a run imported held and nobody has released."""
+    with _run_outcomes_lock:
+        return {int(pid) for pid in picture_ids} & _held_picture_ids
+
+
+def release_held(picture_ids) -> None:
+    """Forget *picture_ids* as held: they were kept or discarded."""
+    with _run_outcomes_lock:
+        _held_picture_ids.difference_update(int(pid) for pid in picture_ids)
+
+
+def _hold_in_session(session: Session, picture_ids: list[int]) -> None:
+    """Soft-delete a held run's new pictures, as the Scrapheap holds them.
+
+    One a locked set already froze (a run's destination can be such a set) is
+    left live, as the bulk delete leaves it.
+    """
+    now = datetime.now(timezone.utc)
+    locked = locked_picture_ids(session, picture_ids)
+    for picture in session.exec(
+        select(Picture).where(Picture.id.in_(picture_ids))
+    ).all():
+        if picture.id in locked:
+            continue
+        picture.deleted = True
+        picture.deleted_at = now
+        session.add(picture)
+    session.commit()
 
 
 def new_run_id() -> str:
@@ -2066,8 +2103,12 @@ def _process_comfyui_outputs(
     vram_model_set: str | None = None,
     vram_pixels: int | None = None,
     label: str | None = None,
+    hold: bool = False,
 ) -> None:
     """Poll ComfyUI for a prompt's outputs, import them, and say how it ended.
+
+    *hold* imports them held: soft-deleted at once and announced to nobody, for
+    the caller to keep or discard (``held_picture_ids``).
 
     *vram_lease* is the run's lease from the VRAM arbiter. It is released the
     moment ComfyUI's history gives the run's final status - not after the
@@ -2395,7 +2436,12 @@ def _process_comfyui_outputs(
                 character_id=view_context.get("character_id"),
             )
 
-        if new_ids:
+        if new_ids and hold:
+            pinned_server.vault.db.run_task(_hold_in_session, new_ids)
+            with _run_outcomes_lock:
+                _held_picture_ids.update(new_ids)
+            logger.info("Prompt %s imported pictures %s held", prompt_id, new_ids)
+        elif new_ids:
             # In-app ComfyUI generation is UI-initiated, but async: there is no
             # optimistic client-side copy to suppress. Emit `picture_imported`
             # with source "ui" and NO origin echo so every owner tab (including

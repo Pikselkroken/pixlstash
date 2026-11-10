@@ -13,7 +13,8 @@ from sqlmodel import select
 
 from pixlstash.db_models import Face, Picture
 from pixlstash.server import Server
-from pixlstash.services import character_sheet
+from pixlstash.event_types import EventType
+from pixlstash.services import character_sheet, comfyui_service
 from pixlstash.services.character_sheet import (
     SHEET_HEIGHT,
     SHEET_WIDTH,
@@ -273,15 +274,19 @@ def client():
             yield test_client
 
 
-@pytest.fixture(scope="module")
-def sheet_id(client):
+def _upload_sheet(client, lines) -> int:
     buffer = io.BytesIO()
-    _sheet([("x", 1900, 0, 1536)]).save(buffer, format="PNG")
+    _sheet(lines).save(buffer, format="PNG")
     status = upload_pictures_and_wait(
         client, [("file", ("sheet.png", buffer.getvalue(), "image/png"))]
     )
     assert status["status"] == "completed", status
     return status["results"][0]["picture_id"]
+
+
+@pytest.fixture(scope="module")
+def sheet_id(client):
+    return _upload_sheet(client, [("x", 1900, 0, 1536)])
 
 
 def _new_character(client, name):
@@ -314,7 +319,8 @@ def test_prompt_route_hands_out_the_canvas(client):
 def test_using_a_sheet_files_six_panels_on_the_character(client, sheet_id):
     character_id = _new_character(client, "Sheet Mira")
     response = client.post(
-        f"{API_PREFIX}/characters/{character_id}/sheets/{sheet_id}/use"
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        json={"picture_ids": [sheet_id]},
     )
     assert response.status_code == 200, response.text
     panel_ids = response.json()["picture_ids"]
@@ -346,13 +352,77 @@ def test_using_a_sheet_files_six_panels_on_the_character(client, sheet_id):
 def test_using_a_sheet_refuses_unknown_ids(client, sheet_id):
     character_id = _new_character(client, "Sheet Kai")
     missing_character = client.post(
-        f"{API_PREFIX}/characters/999999/sheets/{sheet_id}/use"
+        f"{API_PREFIX}/characters/999999/sheets/use", json={"picture_ids": [sheet_id]}
     )
     assert missing_character.status_code == 404
     missing_picture = client.post(
-        f"{API_PREFIX}/characters/{character_id}/sheets/999999/use"
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        json={"picture_ids": [sheet_id, 999999]},
     )
     assert missing_picture.status_code == 404
+
+
+def test_a_held_sheet_is_kept_then_discarded_and_nothing_else_is(client, monkeypatch):
+    """A run drawn with ``hold`` soft-deletes its pictures and announces none;
+    the sheet can still be cut, and discard destroys only held pictures."""
+    server = client.server
+    held = _upload_sheet(client, [("x", 1910, 0, 1536)])
+    other = _upload_sheet(client, [("x", 1920, 0, 1536)])
+    assert client.delete(f"{API_PREFIX}/pictures/{other}").status_code == 200
+    events = []
+    real_notify = server.vault.notify
+    monkeypatch.setattr(
+        server.vault,
+        "notify",
+        lambda kind, payload=None: (
+            events.append((kind, payload)),
+            real_notify(kind, payload),
+        )[1],
+    )
+    monkeypatch.setattr(
+        comfyui_service, "_wait_for_comfyui_outputs", lambda *a, **k: ([], [held])
+    )
+    comfyui_service._process_comfyui_outputs(
+        server, "http://comfy", "held-run", None, None, None, hold=True
+    )
+    assert comfyui_service.run_outcome("held-run")["picture_ids"] == [held]
+    assert not [e for e in events if e[0] == EventType.PICTURE_IMPORTED]
+
+    def state(session, ids):
+        return {
+            p.id: p for p in session.exec(select(Picture).where(Picture.id.in_(ids)))
+        }
+
+    assert server.vault.db.run_task(state, [held])[held].deleted
+    assert comfyui_service.held_picture_ids([held, other]) == {held}
+
+    character_id = _new_character(client, "Sheet Held")
+    used = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        json={"picture_ids": [held]},
+    )
+    assert used.status_code == 200, used.text
+    panels = used.json()["picture_ids"]
+    assert len(panels) == 6
+
+    gone = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/discard",
+        json={"picture_ids": [held, other]},
+    )
+    assert gone.status_code == 200, gone.text
+    assert gone.json()["picture_ids"] == [held]
+    left = server.vault.db.run_task(state, [held, other, *panels])
+    assert held not in left
+    # A Scrapheap picture that was never held is untouched.
+    assert left[other].deleted
+    # The panels stay, without the link to the sheet that is gone.
+    assert all(left[pid].source_picture_id != held for pid in panels)
+    # Discarding again destroys nothing.
+    again = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/discard",
+        json={"picture_ids": [held]},
+    )
+    assert again.json()["picture_ids"] == []
 
 
 def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):

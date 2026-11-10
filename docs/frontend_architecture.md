@@ -1653,12 +1653,17 @@ the row element to hand focus back to on close).
   moves as others arrive, so a sheet's number is its place; the run on the GPU
   shows its percent from the Tasks store's `comfyuiRuns`. A draw with a
   different prompt, workflow or LoRA starts a new pick; *Draw N more* with the
-  same adds to it. The best holding sheet is preselected where it sits; a
-  broken one says so in its caption. *Zoom* (or a double-click) shows the
+  same adds to it. Sheets are drawn with `hold` (backend §25.29) and are
+  ticked to keep, several at once; the best holding one is ticked for the
+  user where it sits until they tick or untick one; a broken one says so in
+  its caption. *Keep* cuts the ticked ones and then discards every sheet drawn
+  (`discardSheets`), as does a new prompt's draw (the dropped ones) and the
+  dialog's close (`discardAll`, exposed); after a keep the step starts again
+  from the form. *Zoom* (or a double-click) shows the
   sheet's own file over the pick, fitted, a click toggling 1:1; Escape is the
   zoom's (a capture listener, the dialog persistent meanwhile) and focus goes
-  back to the sheet's Zoom. *Use sheet N* cuts it, waits (90 s at most) for the six
-  pictures' faces, then hands their ids back: the picker reloads, marks them
+  back to the sheet's Zoom. *Keep* cuts the ticked sheets, waits (90 s at most)
+  for their pictures' faces, then hands their ids back: the picker reloads, marks them
   *new*, and offers *All / New only*, which re-ranks the stills from 1 over the
   new pictures so the slider, coverage and Create all read that one list.
 

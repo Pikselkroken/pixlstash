@@ -1085,6 +1085,8 @@ function train() {
 
 function close() {
   if (busy.value || sheetStep.value?.working) return;
+  // Sheets drawn and not kept were never the library's.
+  sheetStep.value?.discardAll?.();
   emit("close");
   // Opened from a context menu, so Vuetify has no activator to hand focus
   // back to: the character's sidebar row takes it.

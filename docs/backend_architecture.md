@@ -606,8 +606,9 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/characters/membership                                                 | characters      | Batch character membership lookup                             |
 | POST   | /api/v1/characters/{character_id}/faces                                       | characters      | Assign faces to character                                     |
 | DELETE | /api/v1/characters/{character_id}/faces                                       | characters      | Unassign faces from character                                 |
+| POST   | /api/v1/characters/{character_id}/sheets/discard                              | characters      | Discard character sheets                                      |
 | POST   | /api/v1/characters/{character_id}/sheets/rank                                 | characters      | Rank drawn character sheets                                   |
-| POST   | /api/v1/characters/{character_id}/sheets/{picture_id}/use                     | characters      | Use a character sheet                                         |
+| POST   | /api/v1/characters/{character_id}/sheets/use                                  | characters      | Use character sheets                                          |
 | PATCH  | /api/v1/characters/{id}                                                       | characters      | Update character                                              |
 | DELETE | /api/v1/characters/{id}                                                       | characters      | Delete character                                              |
 | GET    | /api/v1/characters/{id}                                                       | characters      | Get character by id                                           |
@@ -12831,8 +12832,9 @@ mid-thigh, knees-up or full body). The canvas is one of three sizes
 (`SIZES`: 1280×768, 1840×1104, 2560×1536, about 1, 2 and 4 megapixels, the
 range MOSS draws well, every side a multiple of 16); the layout is drawn on
 the largest and scaled. Text pins down a type, not a person, so each sheet is a slightly
-different person, but the six faces within one sheet agree: the user picks one
-sheet and its six panels become the character's pictures.
+different person, but the six faces within one sheet agree: the user keeps
+one or more sheets and their panels become the character's pictures. **A sheet
+is never the library's**: it is drawn held and discarded once the user is done.
 
 - **A sheet is an ordinary run.** The dialog runs a MOSS-Image `txt2img`
   workflow through `POST /workflows/run` with the prompt, negative and canvas
@@ -12840,7 +12842,14 @@ sheet and its six panels become the character's pictures.
   `values` at the workflow's own size addresses), an optional character LoRA in
   `add_loras`, and `character_ids: []`: a sheet shows one person six times and
   is nobody's until it is chosen and cut. So it queues behind the GPU, shows in
-  Tasks, and is imported like any picture; there is no sheet task.
+  Tasks, and is imported like any picture; there is no sheet task. It runs
+  with `hold`: `_process_comfyui_outputs` soft-deletes the run's new pictures
+  at once (a locked set's member stays live, as with any delete), sends no
+  import event, and records the ids in `comfyui_service`'s held set. A held
+  sheet is in the Scrapheap, out of every listing, while face extraction (which
+  does not skip deleted pictures) still reads it and its thumbnail and file are
+  still served. The held set is memory: after a restart a held sheet is an
+  ordinary Scrapheap picture, purged by retention.
 - **The prompt** (`services/character_sheet.sheet_prompt`) is a MOSS layout
   prompt, the JSON `MOSSImageLayoutPrompt` emits: a summary caption and one
   item per panel part with a `yxyx` box in `abs_centralized` coordinates. The
@@ -12857,7 +12866,8 @@ sheet and its six panels become the character's pictures.
   its `format`, so the dialog can show the file itself full size at
   `/pictures/{id}.{format}`. The thresholds behind the
   words are read off the probes and are placeholders until validation.
-- **Using a sheet** (`POST /characters/{id}/sheets/{picture_id}/use`) cuts it
+- **Using sheets** (`POST /characters/{id}/sheets/use`, `picture_ids`; a held
+  sheet counts, and every sheet is read before anything is imported) cuts each
   with `split_sheet`: the grid's cells scaled to the picture, each cut moved
   to the strongest full-length luminance edge within ±50 px (MOSS draws its
   dividers off the layout), 8 px of gutter trimmed, then the white frame MOSS
@@ -12866,7 +12876,14 @@ sheet and its six panels become the character's pictures.
   an overcast sky, ~237, is not frame). The six panels are
   imported with `import_derived_outputs` (source picture = the sheet, no
   stack) and filed with `add_person`, which links the largest face once face
-  extraction has read it. The sheet stays in the library, linked to nobody.
+  extraction has read it.
+- **Discarding** (`POST /characters/{id}/sheets/discard`) destroys the named
+  sheets that are in the held set, through the Scrapheap's own purge
+  (`purge_scrapheap_pictures`), after clearing any panel's `source_picture_id`
+  that names one; anything not held is left alone, so the route can never
+  destroy another Scrapheap picture. The dialog discards every sheet once the
+  kept ones are cut, the dropped ones when a new prompt is drawn, and all of
+  them when it closes.
 - **No reference set is written.** For a character with no pictures, the
   chosen sheet's panels are its only faces, so they are its references by the
   existing rule; a character with rated pictures keeps those.

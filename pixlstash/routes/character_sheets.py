@@ -8,9 +8,12 @@ imported like any picture. What is particular to sheets is here:
 * ``POST /character-sheets/prompt`` builds the layout prompt and canvas size.
 * ``POST /characters/{character_id}/sheets/rank`` scores drawn sheets by their
   own faces, which face extraction reads as for any picture.
-* ``POST /characters/{character_id}/sheets/{picture_id}/use`` cuts the chosen
-  sheet into its six panels and files them on the character, where the
-  training-set picker ranks them with the character's other pictures.
+* ``POST /characters/{character_id}/sheets/use`` cuts the chosen sheets into
+  their six panels and files them on the character, where the training-set
+  picker ranks them with the character's other pictures.
+* ``POST /characters/{character_id}/sheets/discard`` destroys the sheets
+  themselves. The dialog draws with ``hold``, so a sheet is soft-deleted on
+  import and never the library's: only the panels of the kept ones are.
 
 The work is in ``services/character_sheet.py``; this module translates.
 """
@@ -84,10 +87,21 @@ class SheetRanking(BaseModel):
     references: int = Field(description="How many reference faces closeness used.")
 
 
-class UsedSheet(BaseModel):
-    """The six panels the chosen sheet became, passport photos first."""
+class SheetIds(BaseModel):
+    picture_ids: list[int] = Field(min_length=1, max_length=MAX_SHEETS)
+
+
+class UsedSheets(BaseModel):
+    """The panels the chosen sheets became: six a sheet, passport photos first."""
 
     picture_ids: list[int]
+
+
+class DiscardedSheets(BaseModel):
+    picture_ids: list[int] = Field(
+        description="The held sheets destroyed. One not held (kept, discarded "
+        "already, or held before a restart) is left alone."
+    )
 
 
 def create_router(server) -> APIRouter:
@@ -131,18 +145,21 @@ def create_router(server) -> APIRouter:
         return SheetRanking(sheets=sheets, references=references)
 
     @router.post(
-        "/characters/{character_id}/sheets/{picture_id}/use",
-        summary="Use a character sheet",
+        "/characters/{character_id}/sheets/use",
+        summary="Use character sheets",
         description=(
-            "Cuts the sheet into its six panels (four passport photos, then two "
-            "body photos), imports each as a picture made from the sheet, and "
-            "files them on the character. The sheet itself stays in the library."
+            "Cuts each sheet into its six panels (four passport photos, then two "
+            "body photos), imports each as a picture made from its sheet, and "
+            "files them on the character. A held sheet counts. The sheets "
+            "themselves are left as they are."
         ),
-        response_model=UsedSheet,
+        response_model=UsedSheets,
     )
-    def use_sheet(request: Request, character_id: int, picture_id: int):
+    def use_sheets(request: Request, character_id: int, payload: SheetIds):
         try:
-            panel_ids = character_sheet.use_sheet(server, character_id, picture_id)
+            panel_ids = character_sheet.use_sheets(
+                server, character_id, payload.picture_ids
+            )
         except character_sheet.SheetNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except character_sheet.SheetUnreadable as exc:
@@ -160,6 +177,31 @@ def create_router(server) -> APIRouter:
         server.vault.notify(
             EventType.CHANGED_CHARACTERS, {"origin_client_id": origin_client_id}
         )
-        return UsedSheet(picture_ids=panel_ids)
+        return UsedSheets(picture_ids=panel_ids)
+
+    @router.post(
+        "/characters/{character_id}/sheets/discard",
+        summary="Discard character sheets",
+        description=(
+            "Destroys the sheets a run drew held (`hold`), rows and files, for "
+            "good: they were never the library's. Any other picture named is "
+            "left alone, so nothing else in the Scrapheap can be destroyed here."
+        ),
+        response_model=DiscardedSheets,
+    )
+    def discard_sheets(request: Request, character_id: int, payload: SheetIds):
+        gone = character_sheet.discard_sheets(server, payload.picture_ids)
+        if gone:
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": gone,
+                    "origin_client_id": getattr(
+                        request.state, "origin_client_id", None
+                    ),
+                    "change_kind": "removed",
+                },
+            )
+        return DiscardedSheets(picture_ids=gone)
 
     return router

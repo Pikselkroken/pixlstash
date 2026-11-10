@@ -39,6 +39,7 @@ from pixlstash.db_models import Character, Face, Picture
 from pixlstash.image_plugins.service import import_derived_outputs
 from pixlstash.pixl_logging import get_logger
 from pixlstash.scoring import select_reference_faces_for_character
+from pixlstash.services import comfyui_service, scrapheap_service
 from pixlstash.services.move_reconciliation_service import add_person
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
@@ -576,14 +577,16 @@ def rank_sheets(
     return out, len(references)
 
 
-def sheet_in_session(
-    session: Session, character_id: int, picture_id: int
-) -> Picture | None:
-    """The sheet picture, or ``None`` when it or the character does not exist."""
+def sheets_in_session(
+    session: Session, character_id: int, picture_ids: list[int]
+) -> list[Picture] | None:
+    """The sheet pictures, in the order asked; ``None`` when the character or
+    any of them does not exist. A held sheet (soft-deleted on import) counts.
+    """
     if session.get(Character, character_id) is None:
         return None
-    picture = session.get(Picture, picture_id)
-    return None if picture is None or picture.deleted else picture
+    sheets = [session.get(Picture, pid) for pid in picture_ids]
+    return None if any(sheet is None for sheet in sheets) else sheets
 
 
 def file_on_character_in_session(
@@ -597,50 +600,87 @@ def file_on_character_in_session(
     session.commit()
 
 
-def use_sheet(server, character_id: int, picture_id: int) -> list[int]:
-    """Cut the sheet into its six panels and file them on the character.
-
-    Each panel is imported as a picture made from the sheet (its
-    ``source_picture_id``), passport photos first; the sheet stays in the
-    library. Returns the panels' picture ids. Raises :class:`SheetNotFound` and
-    :class:`SheetUnreadable`.
-    """
-    sheet = server.vault.db.run_immediate_read_task(
-        sheet_in_session, character_id, picture_id
-    )
-    if sheet is None:
-        raise SheetNotFound(f"No character {character_id} or picture {picture_id}.")
+def _cut(server, sheet: Picture) -> list[tuple[bytes, str]]:
+    """The sheet's six panels as PNG bytes, ready to import."""
     path = ImageUtils.resolve_picture_path(server.vault.image_root, sheet.file_path)
     if not path or not os.path.isfile(path):
         raise SheetUnreadable(
-            f"Picture {picture_id}'s file is missing, so it can't be cut."
+            f"Picture {sheet.id}'s file is missing, so it can't be cut."
         )
     try:
         with Image.open(path) as image:
             panels = split_sheet(image.convert("RGB"))
     except OSError as exc:
         logger.warning(
-            "Couldn't read character sheet %s at %s to cut it: %s",
-            picture_id,
-            path,
-            exc,
+            "Couldn't read character sheet %s at %s to cut it: %s", sheet.id, path, exc
         )
-        raise SheetUnreadable(
-            f"Picture {picture_id} can't be read as an image."
-        ) from exc
+        raise SheetUnreadable(f"Picture {sheet.id} can't be read as an image.") from exc
     entries = []
     for panel in panels:
         buffer = io.BytesIO()
         panel.save(buffer, format="PNG")
         entries.append((buffer.getvalue(), ".png"))
-    _new, _duplicates, panel_ids = import_derived_outputs(
-        server, [sheet] * len(entries), entries, stack=False
+    return entries
+
+
+def use_sheets(server, character_id: int, picture_ids: list[int]) -> list[int]:
+    """Cut each sheet into its six panels and file them on the character.
+
+    Each panel is imported as a picture made from its sheet (its
+    ``source_picture_id``), passport photos first, sheet by sheet. Every sheet
+    is read before anything is imported, so an unreadable one imports nothing.
+    Returns the panels' picture ids. Raises :class:`SheetNotFound` and
+    :class:`SheetUnreadable`. The sheets themselves are left as they are.
+    """
+    ids = list(dict.fromkeys(picture_ids))
+    sheets = server.vault.db.run_immediate_read_task(
+        sheets_in_session, character_id, ids
     )
+    if sheets is None:
+        raise SheetNotFound(f"No character {character_id} or no picture among {ids}.")
+    cuts = [(sheet, _cut(server, sheet)) for sheet in sheets]
+    panel_ids: list[int] = []
+    for sheet, entries in cuts:
+        _new, _duplicates, made = import_derived_outputs(
+            server, [sheet] * len(entries), entries, stack=False
+        )
+        panel_ids.extend(made)
     server.vault.db.run_task(file_on_character_in_session, panel_ids, character_id)
     logger.info(
-        "Character sheet %s cut into pictures %s, filed on character %s",
-        picture_id,
+        "Character sheets %s cut into pictures %s, filed on character %s",
+        ids,
         panel_ids,
         character_id,
     )
     return panel_ids
+
+
+def _unlink_sources_in_session(session: Session, picture_ids: list[int]) -> None:
+    """Forget *picture_ids* as any picture's source, so they can be purged."""
+    for picture in session.exec(
+        select(Picture).where(Picture.source_picture_id.in_(picture_ids))
+    ).all():
+        picture.source_picture_id = None
+        session.add(picture)
+    session.commit()
+
+
+def discard_sheets(server, picture_ids: list[int]) -> list[int]:
+    """Destroy the held sheets among *picture_ids*: rows and files, for good.
+
+    Only pictures a run imported held (``comfyui_service.held_picture_ids``)
+    are touched, so nothing else in the Scrapheap can be destroyed through
+    here; a sheet that is not held any more (kept, discarded, or held before a
+    restart) is left alone. Panels cut from a sheet keep their pictures and
+    lose only the link to it. Returns the ids destroyed.
+    """
+    held = sorted(comfyui_service.held_picture_ids(picture_ids))
+    if not held:
+        return []
+    server.vault.db.run_task(_unlink_sources_in_session, held)
+    outcome = scrapheap_service.purge_scrapheap_pictures(
+        server.vault, held, include_protected=False
+    )
+    comfyui_service.release_held(held)
+    logger.info("Discarded held character sheets %s", list(outcome.purged_ids))
+    return list(outcome.purged_ids)

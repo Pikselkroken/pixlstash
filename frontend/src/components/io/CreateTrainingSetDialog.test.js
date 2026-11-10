@@ -34,7 +34,8 @@ vi.mock("../../api/pictures", () => ({
 const gen = vi.hoisted(() => ({
   buildSheetPrompt: vi.fn(),
   rankSheets: vi.fn(),
-  useSheet: vi.fn(),
+  useSheets: vi.fn(),
+  discardSheets: vi.fn(),
   getCharacter: vi.fn(),
   getReferencePictures: vi.fn(),
   patchCharacter: vi.fn(),
@@ -47,7 +48,8 @@ const gen = vi.hoisted(() => ({
 vi.mock("../../api/characterSheets", () => ({
   buildSheetPrompt: gen.buildSheetPrompt,
   rankSheets: gen.rankSheets,
-  useSheet: gen.useSheet,
+  useSheets: gen.useSheets,
+  discardSheets: gen.discardSheets,
 }));
 vi.mock("../../api/characters", () => ({
   getCharacter: gen.getCharacter,
@@ -577,6 +579,7 @@ const MOSS_CARD = {
 /** Mock the Sheets step's reads: one MOSS workflow, LoRAs newest first. */
 function sheetsWorld({ description = "", loras = [] } = {}) {
   gen.getCharacter.mockResolvedValue({ id: 7, name: "Anna", description });
+  gen.discardSheets.mockResolvedValue({ picture_ids: [] });
   gen.getReferencePictures.mockResolvedValue({ reference_picture_ids: [] });
   gen.patchCharacter.mockResolvedValue({ status: "success" });
   gen.listAdapters.mockResolvedValue(loras);
@@ -683,6 +686,7 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
         prompt: "{layout}",
         count: 4,
         character_ids: [],
+        hold: true,
         values: [
           { slot_label: "lat", input_name: "width", value: 2560 },
           { slot_label: "lat", input_name: "height", value: 1536 },
@@ -712,10 +716,10 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     ]);
     expect(sheets[1].attributes("aria-pressed")).toBe("true");
     expect(wrapper.find('[data-testid="cts-generate-primary"]').text()).toContain(
-      "Use sheet 2",
+      "Keep sheet 2",
     );
 
-    gen.useSheet.mockResolvedValue({ picture_ids: [601, 602] });
+    gen.useSheets.mockResolvedValue({ picture_ids: [601, 602] });
     gen.rankSheets.mockResolvedValue({
       sheets: [sheet(601, null), sheet(602, null)],
       references: 0,
@@ -727,7 +731,9 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     );
     await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
     await flushPromises();
-    expect(gen.useSheet).toHaveBeenCalledWith(7, 502);
+    expect(gen.useSheets).toHaveBeenCalledWith(7, [502]);
+    // The sheets, kept or not, were never the library's: all of them go.
+    expect(gen.discardSheets).toHaveBeenCalledWith(7, [501, 502]);
     expect(wrapper.find('[data-testid="cts-picks"]').isVisible()).toBe(true);
     expect(wrapper.findAll('[data-testid="cts-new"]')).toHaveLength(1);
 
@@ -739,11 +745,14 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     await newOnly.trigger("click");
     expect(shownIds(wrapper)).toEqual(["/thumb/601.webp"]);
 
-    // Back to Sheets through the step row: the step is live, not left filing.
+    // Back to Sheets through the step row: the sheets are gone, so a new draw
+    // starts, and the step is live, not left filing.
     await wrapper.find("button.cts-stp__s").trigger("click");
     expect(wrapper.find('[data-testid="cs-main"]').isVisible()).toBe(true);
-    expect(button(wrapper, "Draw 4 more").attributes("disabled")).toBeUndefined();
-    expect(wrapper.findAll('[data-testid="cs-sheet"]').every((b) => b.attributes("aria-pressed") === "false")).toBe(true);
+    expect(wrapper.findAll('[data-testid="cs-sheet"]')).toHaveLength(0);
+    expect(
+      wrapper.find('[data-testid="cts-generate-primary"]').attributes("disabled"),
+    ).toBeUndefined();
     wrapper.unmount();
   });
 
@@ -833,6 +842,8 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     await vi.advanceTimersByTimeAsync(3000);
     expect(drawn()).toEqual(["/thumb/503.webp"]);
     expect(gen.rankSheets).toHaveBeenLastCalledWith(7, [503]);
+    // The dropped sheets are discarded, never left in the library.
+    expect(gen.discardSheets).toHaveBeenCalledWith(7, [501, 502]);
     wrapper.unmount();
   });
 
@@ -867,13 +878,16 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     expect(wrapper.emitted("close")).toBeUndefined();
     expect(wrapper.find('[data-testid="cs-zoom"]').exists()).toBe(false);
 
-    // Choose from the zoom picks that sheet.
+    // Keep from the zoom adds that sheet to the best one, ticked already.
     await wrapper.findAll('[data-testid="cs-zoom-open"]')[1].trigger("click");
-    await button(wrapper, "Choose").trigger("click");
+    await button(wrapper, "Keep").trigger("click");
     await flushPromises();
     expect(wrapper.find('[data-testid="cts-generate-primary"]').text()).toContain(
-      "Use sheet 2",
+      "Keep 2 sheets",
     );
+    // And closing the dialog discards every sheet drawn.
+    await wrapper.find('[aria-label="Close"]').trigger("click");
+    expect(gen.discardSheets).toHaveBeenCalledWith(7, [501, 502]);
     wrapper.unmount();
   });
 
@@ -945,11 +959,11 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
     await vi.advanceTimersByTimeAsync(3000);
 
-    gen.useSheet.mockResolvedValue({ picture_ids: [601] });
+    gen.useSheets.mockResolvedValue({ picture_ids: [601] });
     gen.rankSheets.mockRejectedValue(new Error("network down"));
     await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
     await vi.advanceTimersByTimeAsync(95_000);
-    expect(gen.useSheet).toHaveBeenCalledTimes(1);
+    expect(gen.useSheets).toHaveBeenCalledTimes(1);
     // The picker took over: the cut is not offered again.
     expect(wrapper.find('[data-testid="cts-picks"]').isVisible()).toBe(true);
     expect(wrapper.find('[data-testid="cs-main"]').isVisible()).toBe(false);
