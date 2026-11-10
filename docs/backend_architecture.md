@@ -12784,6 +12784,8 @@ function over those rows, tested without a server.
   `min_likeness` (`low_likeness`; no likeness counts as 0, default
   `LIKENESS_FLOOR`). `would_add` re-runs the filters with only that reason
   let in, so it is exactly what the switch, or dropping the floor, lets in.
+  `floor_limits` is the highest each floor can go before it alone sets every
+  picture aside: the best likeness and the best score, rounded down to a step.
 - **One greedy pass per group**, stills and clips apart, up to `MAX_PICKS` (50).
   `value = quality * likeness`; each next pick maximises first
   `axes_under_target`, then `value * (1 + W_SEM * min_cosine_distance)`. The

@@ -319,6 +319,21 @@ def _intrinsic_reasons(c: Candidate, floors: tuple[float, float]) -> set[str]:
     return reasons
 
 
+def floor_limits(candidates: list[Candidate]) -> dict[str, float]:
+    """The highest each floor can go and still let a picture through.
+
+    ``min_likeness`` is the best likeness as 0-100 and ``min_score`` the best
+    score, each rounded down to the dialog's step (1 and 0.5). With no scored
+    picture the score floor sets nothing aside, so it is not limited.
+    """
+    likeness = max((c.likeness or 0.0 for c in candidates), default=0.0)
+    scores = [s for c in candidates if (s := c.rating or c.smart_score) is not None]
+    return {
+        "min_likeness": int(max(0.0, min(1.0, likeness)) * 100),
+        "min_score": max(1.0, min(5.0, int(max(scores, default=5.0) * 2) / 2)),
+    }
+
+
 def _components(ids: list[int], pairs) -> list[list[int]]:
     """Connected components of the near pairs, restricted to *ids*."""
     parent = {i: i for i in ids}

@@ -2000,7 +2000,9 @@ unless the client lets them in. The other two are floors the client sets:
 `min_likeness` (0-100, default 30) and `min_score` (1-5, default 3.0; the
 rating where one was given, the smart score where not). `framing_variety` and
 `expression_variety` are each `unimportant`, `somewhat` or `important` (the
-default).
+default). `limits` holds the highest `min_likeness` and `min_score` that still
+let one of the character's pictures through, for the client to stop its
+sliders at.
 `targets` holds a share per label: a set of N wants `max(1, round(share * N))`,
 and the client applies the same rule to draw its coverage bars. The client
 takes a prefix of `picks` per group and creates the set itself

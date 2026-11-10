@@ -369,6 +369,9 @@
   --dialog-w-md: 520px; /* the default: a short form */
   --dialog-w-lg: 720px; /* a list, a tree, two columns */
   --dialog-w-xl: 840px; /* the settings and picker shells */
+  /* A fifth step, added 2026-11-10 for Create a training set: a picture sheet
+     beside a 404px column of controls. Not for a form. */
+  --dialog-w-2xl: 1216px; /* a picture sheet beside a column of controls */
 
   /* Tooltip (buttons.md, "Tooltips"). The one surface is `Tooltip.vue`.
      `--tooltip-delay` is a starting value, not a measurement: Vuetify's own

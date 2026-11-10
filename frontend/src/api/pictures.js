@@ -39,6 +39,20 @@ export function pictureThumbnailUrl(id, { version } = {}) {
 }
 
 /**
+ * The URL a browser loads a picture's own file from, by its format ("png",
+ * "mp4"). Like the thumbnail URL, an `<img src>` or `<video src>`.
+ *
+ * @param {number|string} id
+ * @param {string} format - the picture's `format`, any case.
+ * @returns {string}
+ */
+export function pictureMediaUrl(id, format) {
+  return appendShareToken(
+    `${API_BASE_URL}/pictures/${id}.${String(format).toLowerCase()}`,
+  );
+}
+
+/**
  * Read a picture's thumbnail as image BYTES.
  *
  * The one caller so far is the model shelf's thumbnail verb, and the shape of

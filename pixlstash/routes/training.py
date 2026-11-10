@@ -1215,6 +1215,13 @@ def create_router(server) -> APIRouter:
                 "max(1, round(share * N))."
             ),
         )
+        limits: dict[str, float] = Field(
+            ...,
+            description=(
+                "The highest min_likeness and min_score that still let one of "
+                "the character's pictures through."
+            ),
+        )
 
     class ResolveResponse(BaseModel):
         """What a run would use on this machine, before it is queued."""
@@ -3287,6 +3294,7 @@ def create_router(server) -> APIRouter:
             "stills": group("stills", False),
             "clips": group("clips", True),
             "targets": dataset_picker.TARGET_SHARE,
+            "limits": dataset_picker.floor_limits(candidates),
         }
 
     @router.post(

@@ -2073,6 +2073,9 @@ def test_character_set_suggestion_ranks_stills_and_clips_apart():
         assert framing[a] == ["upper body"]
         assert all(0 <= p["likeness"] <= 100 for p in stills["picks"])
         assert out["targets"]["framing"]["close-up"] == 0.2
+        best = max(p["likeness"] for p in stills["picks"] + clips["picks"])
+        assert best - 1 <= out["limits"]["min_likeness"] <= best
+        assert 1 <= out["limits"]["min_score"] <= 5
 
         r = owner.get(
             url, params={"character_id": char_id, "include_other_people": True}

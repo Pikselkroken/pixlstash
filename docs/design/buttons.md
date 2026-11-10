@@ -837,6 +837,7 @@ other 18 already do.
 | `--dialog-w-md` | 520px | 460 - 560 | 21 |
 | `--dialog-w-lg` | 720px | 620 - 736 | 8 |
 | `--dialog-w-xl` | 840px | 820 - 840 | 3 |
+| `--dialog-w-2xl` | 1216px | added 2026-11-10: a picture sheet beside a 404px column of controls (Create a training set) | 1 |
 | `fullscreen` | 96vw | 980 | 1 |
 
 17 dialogs do not move, 17 grow, 9 shrink by at most 40px. Only three widths

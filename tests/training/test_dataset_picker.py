@@ -135,6 +135,20 @@ def test_the_floors_move_what_is_set_aside():
     assert len(out.picks) == 6 and out.excluded["low_likeness"] == 0
 
 
+def test_floor_limits_are_the_best_values_rounded_down_to_a_step():
+    lib = [
+        _cand(1, rating=0, smart_score=4.3, likeness=0.579),
+        _cand(2, rating=4, smart_score=4.9, likeness=None),
+        _cand(3, rating=0, smart_score=None, likeness=0.2),
+    ]
+    # Picture 2's score is its rating, not its better smart score.
+    assert dp.floor_limits(lib) == {"min_likeness": 57, "min_score": 4.0}
+    at_limit = rank(lib, min_likeness=0.57, min_score=1.0)["stills"]
+    assert _ids(at_limit) == [1]
+    assert dp.floor_limits([_cand(1, rating=0, smart_score=None)])["min_score"] == 5.0
+    assert dp.floor_limits([]) == {"min_likeness": 0, "min_score": 5.0}
+
+
 def test_variety_counts_as_much_as_its_importance_says():
     # One portrait already picked. The full body fills a framing gap; the
     # other portrait is 1.5x (then 1.7x) its value and fills none.
