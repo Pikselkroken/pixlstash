@@ -16,6 +16,7 @@ the suite records that call instead of touching a shelf.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -2613,8 +2614,13 @@ def test_training_longer_from_an_earlier_step_sets_the_later_ones_aside(
     service.train_longer(run["id"], from_step=2, more_steps=4)
 
     take = os.path.join(save_root, "take-1")
-    # Set aside, never deleted: the final and the optimizer that belongs to it.
-    assert sorted(os.listdir(take)) == ["optimizer.pt", f"{stem}.safetensors"]
+    # Set aside, never deleted: the final, the optimizer that belongs to it
+    # and the loss logged on the way there.
+    assert sorted(os.listdir(take)) == [
+        "loss_log.db",
+        "optimizer.pt",
+        f"{stem}.safetensors",
+    ]
     assert _job_status(hub, run["uuid"]).set_aside_take == "take-1"
 
     _run_to_finished(hub, service, run["uuid"], total=6)
@@ -2763,6 +2769,47 @@ def test_a_stamped_file_at_the_finals_step_is_set_aside_too(tmp_path):
         f"{stem}_000000002.safetensors",
         "take-1",
     }
+
+
+def test_training_on_from_an_earlier_step_keeps_the_later_loss_with_the_take(
+    tmp_path,
+):
+    """The abandoned take keeps its loss; the run's log ends at the step."""
+    backend = LocalAiToolkit(str(tmp_path), sys.executable)
+    handle = LocalAiToolkit.handle_for(str(tmp_path / "work"), "abcdef12", "loss")
+    os.makedirs(handle.save_root)
+    stem = os.path.basename(handle.save_root)
+    for step in (2, 4):
+        header = json.dumps(
+            {"__metadata__": {"training_info": json.dumps({"step": step})}}
+        ).encode()
+        name = f"{stem}_{step:09d}.safetensors"
+        with open(os.path.join(handle.save_root, name), "wb") as fh:
+            fh.write(len(header).to_bytes(8, "little") + header)
+    conn = sqlite3.connect(handle.loss_db_path)
+    conn.execute("CREATE TABLE steps (step INTEGER PRIMARY KEY, wall_time REAL)")
+    conn.execute(
+        "CREATE TABLE metrics (step INTEGER, key TEXT, value_real REAL, "
+        "value_text TEXT, PRIMARY KEY (step, key))"
+    )
+    for step in range(1, 5):
+        conn.execute("INSERT INTO steps VALUES (?, 0.0)", (step,))
+        conn.execute(
+            "INSERT INTO metrics VALUES (?, 'loss/loss', ?, NULL)", (step, 1.0 / step)
+        )
+    conn.commit()
+    conn.close()
+
+    def logged(path):
+        curve, max_step = backend._read_loss_db(
+            dataclasses.replace(handle, loss_db_path=path)
+        )
+        return [point["step"] for point in curve], max_step
+
+    assert LocalAiToolkit.carry_on_from(handle, 2) == "take-1"
+    assert logged(handle.loss_db_path) == ([1, 2], 2)
+    kept = os.path.join(handle.save_root, "take-1", "loss_log.db")
+    assert logged(kept) == ([1, 2, 3, 4], 4)
 
 
 def test_a_failed_rename_of_the_final_puts_the_set_aside_back(tmp_path, monkeypatch):
