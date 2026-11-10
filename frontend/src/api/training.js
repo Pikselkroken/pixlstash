@@ -33,14 +33,12 @@ export function getTrainingDataset(params) {
 
 /**
  * A character's pictures ranked for a LoRA training set: stills and clips,
- * each a best-first list a set takes a prefix of. `include` lets a set-aside
- * reason back in: {other_people, near_duplicates, low_quality, low_likeness}.
+ * each a best-first list a set takes a prefix of. `choosing` is the route's
+ * own query: {include_other_people, include_near_duplicates, min_likeness
+ * 0-100, min_score 1-5, framing_variety, expression_variety}.
  */
-export function fetchCharacterSetSuggestion(characterId, include = {}) {
-  const params = { character_id: characterId };
-  for (const [reason, on] of Object.entries(include)) {
-    if (on) params[`include_${reason}`] = true;
-  }
+export function fetchCharacterSetSuggestion(characterId, choosing = {}) {
+  const params = { character_id: characterId, ...choosing };
   return unwrap(apiClient.get("/training/character_set_suggestion", { params }));
 }
 

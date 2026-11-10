@@ -61,7 +61,7 @@ const props = defineProps({
   size: {
     type: String,
     default: "md",
-    validator: (v) => ["sm", "md", "lg", "xl"].includes(v),
+    validator: (v) => ["sm", "md", "lg", "xl", "2xl"].includes(v),
   },
   // When false the body is flush (no padding) - used by the two-pane Settings
   // dialog where the nav rail and content own their own padding.
@@ -192,6 +192,9 @@ function onKeydown(e) {
 }
 .app-dialog--xl {
   width: var(--dialog-w-xl);
+}
+.app-dialog--2xl {
+  width: var(--dialog-w-2xl);
 }
 
 /* One 16px gutter with the footer. The body spaces its own children with

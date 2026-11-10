@@ -9,8 +9,9 @@ reshuffles the earlier ones.
 
 The value of a picture is its quality percentile times its likeness. The
 greedy pass multiplies that by what the picture adds: a framing or expression
-label the picks hold fewer of than :data:`TARGET_SHARE` asks for, and its
-CLIP distance from the nearest pick (outfit, setting, light).
+label the picks hold fewer of than :data:`TARGET_SHARE` asks for, as far as
+the caller says that kind of variety matters (:data:`VARIETY`), and its CLIP
+distance from the nearest pick (outfit, setting, light).
 """
 
 from __future__ import annotations
@@ -29,22 +30,34 @@ MAX_REFERENCES = 10
 """How many of the character's faces the likeness is measured against."""
 
 LIKENESS_FLOOR = 0.30
-"""Below this face similarity (0-1) a picture is set aside as a poor match."""
+"""The default minimum likeness: a face similarity (0-1) below it is set aside."""
 
-SMART_SCORE_FLOOR = 3.0
-"""An unrated picture whose smart score is below this is set aside.
+SCORE_FLOOR = 3.0
+"""The default minimum score: a picture scoring below it is set aside.
 
-Smart scores run about 1-5; this drops roughly the weakest 5% of a library.
+A picture's score is the user's rating where they gave one and its smart score
+where they did not. Smart scores run about 1-5; 3.0 drops 1-2 star pictures
+and roughly the weakest 5% of the unrated ones.
 """
 
-LOW_RATING = 2
-"""A picture the user rated 1-2 stars is set aside."""
+VARIETY = ("unimportant", "somewhat", "important")
+"""How much a kind of variety (:data:`AXES`) matters to the ranking.
+
+``important``: a picture filling a gap beats any repeat. ``somewhat``: its
+value counts :data:`SOMEWHAT_GAIN` more. ``unimportant``: the gap is ignored.
+"""
+
+SOMEWHAT_GAIN = 0.6
+"""At ``somewhat`` a gap-filler beats a repeat up to this much better.
+
+Per axis: a picture filling a gap on two such axes counts twice this.
+"""
 
 W_SEM = 1.5
 """The gain per unit of CLIP cosine distance from the nearest pick."""
 
 REASONS = ("other_people", "near_duplicates", "low_quality", "low_likeness")
-"""The four set-aside reasons, each with an ``include_<reason>`` toggle."""
+"""The four set-aside reasons; ``include`` lets one's pictures back in."""
 
 _FRAMING_TAGS = (
     # For a picture with no face box. The first label its tags name wins:
@@ -288,18 +301,43 @@ def _quality(cands: list[Candidate]) -> dict[int, float]:
     return out
 
 
-def _intrinsic_reasons(c: Candidate) -> set[str]:
+def _intrinsic_reasons(c: Candidate, floors: tuple[float, float]) -> set[str]:
+    """The reasons against *c* at ``(min_likeness 0-1, min_score)``.
+
+    A picture with no likeness counts as 0, and one with neither a rating nor
+    a smart score has no score to fail.
+    """
+    min_likeness, min_score = floors
     reasons = set()
     if c.face_count_max > 1:
         reasons.add("other_people")
-    rating = c.rating or 0
-    if 0 < rating <= LOW_RATING or (
-        rating == 0 and c.smart_score is not None and c.smart_score < SMART_SCORE_FLOOR
-    ):
+    score = c.rating or c.smart_score
+    if score is not None and score < min_score:
         reasons.add("low_quality")
-    if c.likeness is None or c.likeness < LIKENESS_FLOOR:
+    if (c.likeness or 0.0) < min_likeness:
         reasons.add("low_likeness")
     return reasons
+
+
+def floor_limits(candidates: list[Candidate]) -> dict[str, float]:
+    """The highest each floor can go and still let a picture through.
+
+    ``min_likeness`` is the best likeness as 0-100 and ``min_score`` the best
+    score, each rounded down to the dialog's step (1 and 0.5). With no scored
+    picture the score floor sets nothing aside, so it is not limited.
+    """
+    likeness = max((c.likeness or 0.0 for c in candidates), default=0.0)
+    likeness = max(0.0, min(1.0, likeness))
+    # The highest step the filter (likeness < step / 100) still passes:
+    # 0.29 * 100 is 28.999..., which alone would stop a step short.
+    step = int(likeness * 100)
+    if (step + 1) / 100 <= likeness:
+        step += 1
+    scores = [s for c in candidates if (s := c.rating or c.smart_score) is not None]
+    return {
+        "min_likeness": step,
+        "min_score": max(1.0, min(5.0, int(max(scores, default=5.0) * 2) / 2)),
+    }
 
 
 def _components(ids: list[int], pairs) -> list[list[int]]:
@@ -321,7 +359,7 @@ def _components(ids: list[int], pairs) -> list[list[int]]:
     return list(groups.values())
 
 
-def _stack_reasons(candidates: list[Candidate]) -> dict[int, set[str]]:
+def _stack_reasons(candidates: list[Candidate], floors) -> dict[int, set[str]]:
     """The reasons against each stack: the union over its members.
 
     A set takes a whole stack, so a stack passes only if every member showing
@@ -330,15 +368,19 @@ def _stack_reasons(candidates: list[Candidate]) -> dict[int, set[str]]:
     by_stack: dict[int, set[str]] = {}
     for c in candidates:
         if c.stack_id is not None:
-            by_stack.setdefault(c.stack_id, set()).update(_intrinsic_reasons(c))
+            by_stack.setdefault(c.stack_id, set()).update(_intrinsic_reasons(c, floors))
     return by_stack
 
 
-def _passing(cands, value, pairs, include, by_stack) -> tuple[list[Candidate], dict]:
+def _passing(
+    cands, value, pairs, include, by_stack, floors
+) -> tuple[list[Candidate], dict]:
     """The candidates that pass the filters, and how many each reason sets aside."""
     reasons = {
         c.picture_id: (
-            by_stack[c.stack_id] if c.stack_id is not None else _intrinsic_reasons(c)
+            by_stack[c.stack_id]
+            if c.stack_id is not None
+            else _intrinsic_reasons(c, floors)
         )
         for c in cands
     }
@@ -369,7 +411,9 @@ def _unit(embedding) -> np.ndarray | None:
     return vec / norm if norm > 1e-8 else None
 
 
-def _greedy(pool: list[Candidate], value: dict[int, float]) -> list[Candidate]:
+def _greedy(
+    pool: list[Candidate], value: dict[int, float], variety: dict[str, str]
+) -> list[Candidate]:
     """Order *pool* by greedy gain, up to :data:`MAX_PICKS`."""
     rest = sorted(pool, key=lambda c: c.picture_id)
     units = {c.picture_id: _unit(c.embedding) for c in rest}
@@ -380,22 +424,29 @@ def _greedy(pool: list[Candidate], value: dict[int, float]) -> list[Candidate]:
     while rest and len(picks) < MAX_PICKS:
         size = len(picks) + 1
 
-        # Filling a gap comes first: the filters already decided what is good
-        # enough, so a weaker picture of a missing framing beats a better
-        # repeat. Quality and variety order the rest.
+        # On an important axis filling a gap comes first: the filters already
+        # decided what is good enough, so a weaker picture of a missing
+        # framing beats a better repeat. On a somewhat important one the gap
+        # is a bonus on the value. Quality and look order the rest.
         def gain(c):
             if not picks:
                 return (0, value[c.picture_id])
-            short = 0
+            must, bonus = 0, 0.0
             for name, labels_of in AXES:
-                if any(
+                if variety[name] == "unimportant" or not any(
                     counts[name].get(label, 0) < target(name, label, size)
                     for label in labels_of(c)
                 ):
-                    short += 1
+                    continue
+                if variety[name] == "important":
+                    must += 1
+                else:
+                    bonus += SOMEWHAT_GAIN
             return (
-                short,
-                value[c.picture_id] * (1 + W_SEM * (min_dist[c.picture_id] or 0.0)),
+                must,
+                value[c.picture_id]
+                * (1 + bonus)
+                * (1 + W_SEM * (min_dist[c.picture_id] or 0.0)),
             )
 
         # max() keeps the first of equal gains: rest is in picture_id order.
@@ -416,19 +467,21 @@ def _greedy(pool: list[Candidate], value: dict[int, float]) -> list[Candidate]:
     return picks
 
 
-def _rank_group(cands, pairs, include, by_stack) -> Ranking:
+def _rank_group(cands, pairs, include, by_stack, floors, variety) -> Ranking:
     quality = _quality(cands)
     value = {
         c.picture_id: quality[c.picture_id] * max(0.0, min(1.0, c.likeness or 0.0))
         for c in cands
     }
-    pool, excluded = _passing(cands, value, pairs, include, by_stack)
+    pool, excluded = _passing(cands, value, pairs, include, by_stack, floors)
     would_add = {}
     for reason in REASONS:
         if include[reason]:
             would_add[reason] = 0
             continue
-        wider, _ = _passing(cands, value, pairs, {**include, reason: True}, by_stack)
+        wider, _ = _passing(
+            cands, value, pairs, {**include, reason: True}, by_stack, floors
+        )
         would_add[reason] = len(wider) - len(pool)
     available = {name: {label: 0 for label in TARGET_SHARE[name]} for name, _ in AXES}
     for c in pool:
@@ -446,7 +499,7 @@ def _rank_group(cands, pairs, include, by_stack) -> Ranking:
             ),
             buckets={name: list(labels_of(c)) for name, labels_of in AXES},
         )
-        for i, c in enumerate(_greedy(pool, value))
+        for i, c in enumerate(_greedy(pool, value, variety))
     ]
     return Ranking(
         picks=picks,
@@ -462,6 +515,9 @@ def rank(
     near_pairs=(),
     *,
     include: dict[str, bool] | None = None,
+    min_likeness: float = LIKENESS_FLOOR,
+    min_score: float = SCORE_FLOOR,
+    variety: dict[str, str] | None = None,
 ) -> dict[str, Ranking]:
     """Rank the stills and the clips, each on its own.
 
@@ -470,16 +526,27 @@ def rank(
         near_pairs: ``(picture_id_a, picture_id_b)`` pairs that are near
             copies of each other; each group keeps its best member.
         include: Reason -> True to let the pictures it sets aside back in.
+        min_likeness: The likeness (0-1) below which a picture is set aside.
+        min_score: The score (rating, else smart score) below which one is.
+        variety: Axis name -> one of :data:`VARIETY`; ``important`` when
+            the axis is not named.
 
     Returns:
         ``{"stills": Ranking, "clips": Ranking}``.
     """
     include = {r: bool((include or {}).get(r)) for r in REASONS}
     pairs = [(int(p[0]), int(p[1])) for p in near_pairs]
-    by_stack = _stack_reasons(candidates)
+    floors = (min_likeness, min_score)
+    variety = {name: (variety or {}).get(name, "important") for name, _ in AXES}
+    by_stack = _stack_reasons(candidates, floors)
     return {
         group: _rank_group(
-            [c for c in candidates if c.is_clip == is_clip], pairs, include, by_stack
+            [c for c in candidates if c.is_clip == is_clip],
+            pairs,
+            include,
+            by_stack,
+            floors,
+            variety,
         )
         for group, is_clip in (("stills", False), ("clips", True))
     }

@@ -1993,14 +1993,21 @@ Any other value, including a malformed `__group:abc`, is a literal tag name as b
 
 ### 2.7 The training-set suggestion contract
 
-`GET /training/character_set_suggestion?character_id=&include_<reason>=`
+`GET /training/character_set_suggestion?character_id=&include_<reason>=&min_likeness=&min_score=&framing_variety=&expression_variety=`
 (owner-only) answers `{character_name, set_name, has_clips, targets, stills,
 clips}`. Each group carries `candidates`, `passing`, `picks` (up to 50, best
 first: `{picture_id, rank, likeness 0-100, buckets: {framing: [...],
 expression: [...]}}`), `excluded` and `would_add` per reason, and `available`
 (passing pictures per label). The reasons are `other_people`,
-`near_duplicates`, `low_quality` and `low_likeness`; each flag defaults to
-false, so every reason sets its pictures aside unless the client lets them in.
+`near_duplicates`, `low_quality` and `low_likeness`. The first two have an
+`include_<reason>` flag, false by default, so they set their pictures aside
+unless the client lets them in. The other two are floors the client sets:
+`min_likeness` (0-100, default 30) and `min_score` (1-5, default 3.0; the
+rating where one was given, the smart score where not). `framing_variety` and
+`expression_variety` are each `unimportant`, `somewhat` or `important` (the
+default). `limits` holds the highest `min_likeness` and `min_score` that still
+let one of the character's pictures through, for the client to stop its
+sliders at.
 `targets` holds a share per label: a set of N wants `max(1, round(share * N))`,
 and the client applies the same rule to draw its coverage bars. The client
 takes a prefix of `picks` per group and creates the set itself

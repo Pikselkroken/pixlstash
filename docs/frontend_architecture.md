@@ -1358,7 +1358,7 @@ The house-styled form/control primitives that wrap Vuetify with the PixlStash to
 
 **`AppDialog fullscreen`** (2026-07-29): a near-viewport dialog (min(1800px, 96vw) × 94vh, flexing body) for working surfaces where the content is the point — first user: the dedup Compare dialog, per the owner's "take the full space of the grid view". Ordinary forms take a `size` step.
 
-**One dialog chrome** (issue #1298, spec `docs/design/buttons.md` "Dialogs: one chrome, four widths"). Every dialog is an `AppDialog`; `v-dialog` appears only as its root, and `v-card` is not dialog chrome. Width is `size`: `sm` 420, `md` 520 (the default), `lg` 720, `xl` 840, from `--dialog-w-*`, or `fullscreen`. **Never a pixel width at a call site.** The header (left), body and footer share one 16px gutter (`--space-5`); the header keeps 12px on the right for the 32px close button; the body is a flex column that spaces its children with `gap: --space-5`, so a field in a dialog carries no trailing margin. The title `h2` has a `useId()` id passed to `<v-dialog>` as `aria-labelledby`, which falls through to the `.v-overlay` root where Vuetify puts `role="dialog"`. The enter/leave is Vuetify's default `dialog-transition`; it is a Web Animations call the global CSS reduce rule cannot reach, so `AppDialog` passes `transition=false` when `prefers-reduced-motion: reduce` matches at mount.
+**One dialog chrome** (issue #1298, spec `docs/design/buttons.md` "Dialogs: one chrome, four widths"). Every dialog is an `AppDialog`; `v-dialog` appears only as its root, and `v-card` is not dialog chrome. Width is `size`: `sm` 420, `md` 520 (the default), `lg` 720, `xl` 840, `2xl` 1216 (a picture sheet beside a column of controls), from `--dialog-w-*`, or `fullscreen`. **Never a pixel width at a call site.** The header (left), body and footer share one 16px gutter (`--space-5`); the header keeps 12px on the right for the 32px close button; the body is a flex column that spaces its children with `gap: --space-5`, so a field in a dialog carries no trailing margin. The title `h2` has a `useId()` id passed to `<v-dialog>` as `aria-labelledby`, which falls through to the `.v-overlay` root where Vuetify puts `role="dialog"`. The enter/leave is Vuetify's default `dialog-transition`; it is a Web Animations call the global CSS reduce rule cannot reach, so `AppDialog` passes `transition=false` when `prefers-reduced-motion: reduce` matches at mount.
 
 **The dialog keyboard contract (owner decision, 2026-07-29).** Every dialog dismisses on **Escape** and accepts on plain **Enter**, and the buttons wear the keys. `AppDialog` implements both on its own subtree so no page-level Escape owner is consulted first: Escape emits `close` and Enter emits `accept`; `persistent` suppresses both, so a destructive or in-flight accept only fires from its own button. Enter is deliberately inert where the key already has a meaning — multiline fields, buttons and links (native activation wins, so Enter on a focused Cancel cancels), selects, `<summary>`, ARIA text boxes, and any element that already handled the event (`defaultPrevented`). To adopt: wire the primary action to `@accept`, give the accept/confirm button `AppButton key-hint="enter"` (an ↵ badge, plus `aria-keyshortcuts`) and the cancel/abort button `key-hint="esc"`, and let the disabled state of the button — not the handler — be what gates the keypress (the `accept` handler must check the same `canSubmit` the button uses). New dialogs must follow this; existing dialogs adopt it as they are touched.
 
@@ -1595,17 +1595,30 @@ Load-bearing behaviours:
 
 #### `CreateTrainingSetDialog.vue` (`io/`)
 
-The character sidebar menu's *Create a training set…*, `AppDialog size="xl"`
-with a flush body split in two: the picks on the left, a 280px coverage column
+The character sidebar menu's *Create a training set…*, `AppDialog size="2xl"`
+with a flush body split in two: the picks on the left, a 404px coverage column
 on the right that stays in view. Mounted in **`App.vue`**, opened by the
 sidebar's `create-training-set` event (the character's id, name, projects and
 the row element to hand focus back to on close).
 
 - **One request per filter state.** `fetchCharacterSetSuggestion` on open and on
-  every *Set aside* switch; the switches are on by default (on = those pictures
-  stay out). The sliders take a prefix of each group's `picks` and never
-  refetch: Pictures runs 5-50 with the part past what passes hatched, Video
-  clips (shown only with `has_clips`) runs 1 to what passes.
+  every change under *Choosing*: two floor sliders (minimum likeness 0-100,
+  minimum score 1-5 in half steps, each with its count set aside; they refetch
+  on `change`: when the thumb is let go, or on each keyboard step; the track
+  keeps its full scale and the thumb stops at the response's `limits`, the
+  part past it hatched), a three-step `Segmented` each for
+  different framings and different expressions, and two *Set aside* switches,
+  on by default (on = those pictures stay out). The size sliders take a prefix
+  of each group's `picks` and never refetch: Pictures runs 5-50 with the part
+  past what passes hatched, Video clips (shown only with `has_clips`) runs 1
+  to what passes. A tile's corner button leaves that pick out by hand
+  (`removed`, kept across refetches, cleared on open): `data` is the response
+  (`ranked`) without those picks, so the next pick takes the place and every
+  count follows, and `tilesOf` draws the left-out ones greyed in their ranked
+  place so they can be put back. The tile itself opens
+  `TrainingPickPreview.vue` (`AppDialog size="xl"`): the thumbnail until
+  `getPictureMetadata` gives the format for `pictureMediaUrl`, a clip playing,
+  a click for full size, and the same leave-out button.
 - **Coverage** draws one bar per framing and expression label over the current
   picks, against `target = max(1, round(share * N))` from the response. A short
   label is sorted into *The slider can close* (with a *Show N* that moves the
