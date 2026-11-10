@@ -1,0 +1,1 @@
+- The Run popup's Workflow list (Create with LoRA… included) shows each workflow's base model and type under its name, as its card on the Workflows view does.

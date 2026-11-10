@@ -1290,7 +1290,7 @@ import { deriveModelName } from "../../utils/modelShelf";
 import { insertWords, namesWord, triggerWord, wordSpans } from "../../utils/triggerWords";
 import { wouldDuplicate } from "../../utils/recipeKey";
 import { runTaskLabel } from "../../utils/runTaskLabel";
-import { UNMATCHED_REPLACEMENTS_TEXT } from "../../utils/workflowCard";
+import { pickerOption, UNMATCHED_REPLACEMENTS_TEXT } from "../../utils/workflowCard";
 import {
   answering,
   changesWord,
@@ -2700,7 +2700,9 @@ const seedOptions = [
 /**
  * The workflows the picker offers: the one being run, and - for "Run a
  * workflow on these…" - the whole library. Workflows only (#1623): there are
- * no stack members to switch between any more.
+ * no stack members to switch between any more. Each is drawn as its card on
+ * the Workflows grid reads (`pickerOption`): the name over its base model
+ * and facts.
  */
 /**
  * Create with LoRA's narrowing: against every LoRA attached to the person or
@@ -2785,27 +2787,28 @@ const workflowOptions = computed(() => {
     const known = fits.loras.some((lora) => lora.base_model_family);
     return [
       ...favouritesFirst(
-        fits.match.map((entry) => ({ value: entry.card.id, label: entry.card.name })),
+        fits.match.map((entry) => pickerOption(entry.card)),
         favouriteWorkflow,
       ),
       ...favouritesFirst(
-        fits.unknown.map((entry) => ({
-          value: entry.card.id,
-          label:
+        fits.unknown.map((entry) =>
+          pickerOption(
+            entry.card,
             known && !entry.checkpoint?.base_model_family
-              ? `${entry.card.name} (base model not known)`
-              : entry.card.name,
-        })),
+              ? "Base model not known"
+              : null,
+          ),
+        ),
         favouriteWorkflow,
       ),
     ];
   }
   // The card being run stays first; the rest lead with their favourites.
-  const first = card.value ? [{ value: card.value.id, label: card.value.name }] : [];
+  const first = card.value ? [pickerOption(card.value)] : [];
   const rest = [];
   for (const row of props.source?.pickWorkflow ? cards.value : []) {
     if (![...first, ...rest].some((option) => option.value === row.id)) {
-      rest.push({ value: row.id, label: row.name });
+      rest.push(pickerOption(row));
     }
   }
   return [...first, ...favouritesFirst(rest, favouriteWorkflow)];

@@ -560,6 +560,35 @@ export function factChips(card, { short = false } = {}) {
   });
 }
 
+/**
+ * A card as one option of an `AppSelect`: the name over the facts the
+ * Workflows grid prints under it, so a picker reads like the grid. The chips
+ * are the card's base model (row 3) and then its facts row, spelled the way
+ * the card spells them. `note` leads them: what the picker itself has to say
+ * about the row, which must not be the chip that clips away.
+ */
+export function pickerOption(card, note = null) {
+  const facts = factChips(card, { short: true });
+  const type = shortTypeLabel(card);
+  const chipDetails = Object.fromEntries(
+    facts.filter((chip) => chip.title).map((chip) => [chip.label, chip.title]),
+  );
+  // The short type is an abbreviation; hover and speech get the words.
+  if (card.type_label && card.type_label !== type) {
+    chipDetails[type] = card.type_label;
+  }
+  return {
+    value: card.id,
+    label: card.name,
+    chips: [
+      note,
+      baseModelText(baseModels(card)) || null,
+      ...facts.map((chip) => chip.label),
+    ].filter(Boolean),
+    chipDetails,
+  };
+}
+
 /** "4.9 of 5", or null when nothing is rated (0 or missing). */
 /**
  * What a card's output is called: "video" for a workflow that saves video

@@ -902,8 +902,13 @@ test.describe("the picker moves to another workflow", () => {
     await page.getByText("Ada", { exact: true }).click({ button: "right" });
     await page.getByRole("button", { name: "Create with LoRA…" }).click();
     await expect(dialog(page)).toBeVisible();
+    // A listbox of the workflows as their cards read, not a native select.
     const picker = dialog(page).getByRole("combobox", { name: "Workflow" });
-    await picker.selectOption(WF);
+    const pick = async (name) => {
+      await picker.click();
+      await dialog(page).getByRole("option", { name }).click();
+    };
+    await pick(/^Portrait, soft window light/);
     await expect(dialog(page).getByRole("spinbutton", { name: "Steps" })).toBeVisible();
     // A change on the first workflow: the band is up.
     await dialog(page).getByRole("spinbutton", { name: "Steps" }).fill("32");
@@ -911,7 +916,7 @@ test.describe("the picker moves to another workflow", () => {
 
     // The card of the other is held on the wire.
     net.hold.card = gate();
-    await picker.selectOption(OTHER_WF);
+    await pick(/^Landscape, golden hour/);
     const wait = dialog(page).locator("footer p");
     await expect(wait).toHaveText("Reading this workflow…");
     await expect(band(page)).toHaveCount(0);
