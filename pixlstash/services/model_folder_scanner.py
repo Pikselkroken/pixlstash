@@ -522,9 +522,13 @@ class ModelFolderScanner:
             # An unmounted drive often leaves its mount point behind, empty and
             # readable. Sweeping that would mark every model missing and hash
             # it all again when the drive returns, so a folder with nothing at
-            # all in it is read as unreachable. A folder whose models were
-            # deleted but that still holds anything else is swept as usual.
-            if self._lists_files(folder_id):
+            # all in it is read as unreachable - unless the directory itself
+            # changed after its files were last seen, which is somebody
+            # emptying it. A folder whose models were deleted but that still
+            # holds anything else is swept as usual.
+            if self._lists_files(folder_id) and not self._emptied_since_seen(
+                folder_id, path
+            ):
                 return self._mark_unreachable(folder_id, path, "is empty")
         total = len(files)
         if progress is not None:
@@ -1231,6 +1235,39 @@ class ModelFolderScanner:
             )
             is not None
         )
+
+    def _emptied_since_seen(self, folder_id: int, path: str) -> bool:
+        """Whether an empty *path* was emptied after its files were last seen.
+
+        Removing the last entry stamps the directory's mtime, and that happens
+        after the last scan that saw a file there. A mount point left behind by
+        an unmounted drive was made before the drive was ever mounted over it,
+        so its mtime is older than every ``seen_at``.
+        """
+        # ponytail: a mount point re-created on every boot (tmpfs /media) reads
+        # as emptied and is swept to missing; record st_dev per folder if that
+        # ever bites.
+        row = self._hub.fetchone(
+            "SELECT MAX(seen_at) AS seen FROM model_file "
+            "WHERE model_folder_id = ? AND state NOT IN (?, ?)",
+            (folder_id, STATE_MISSING, STATE_REMOVED),
+        )
+        seen = row["seen"] if row is not None else None
+        if not seen:
+            return False
+        try:
+            changed = datetime.fromtimestamp(os.stat(path).st_mtime, timezone.utc)
+            return changed > datetime.fromisoformat(seen)
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "Cannot tell whether model folder %s (id=%s) was emptied "
+                "(last seen %r): %s; reading it as unreachable.",
+                path,
+                folder_id,
+                seen,
+                exc,
+            )
+            return False
 
     def _mark_unreachable(
         self, folder_id: int, path: str, reason: str = "is not a readable directory"
