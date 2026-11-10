@@ -609,7 +609,10 @@ const visibleGroups = computed(() => {
       capPercent:
         key === "stills" ? ((trackMax - Math.max(reachable, min)) / span) * 100 : 0,
       capped: reachable < TRACK_MAX && size >= reachable && key === "stills",
-      cappedText: `Only ${reachable} ${unit} pass.${wouldAddText(group, unit)}`,
+      cappedText:
+        group.passing > reachable
+          ? `Only ${reachable} of the ranked ${unit} are left: the rest were left out by hand. Put one back to go higher.`
+          : `Only ${reachable} ${unit} pass.${wouldAddText(group, unit)}`,
       noneText: `0 ${unit} pass.${wouldAddText(group, unit)}`,
       mark: firstGap
         ? {

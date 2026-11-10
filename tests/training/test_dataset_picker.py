@@ -147,6 +147,12 @@ def test_floor_limits_are_the_best_values_rounded_down_to_a_step():
     assert _ids(at_limit) == [1]
     assert dp.floor_limits([_cand(1, rating=0, smart_score=None)])["min_score"] == 5.0
     assert dp.floor_limits([]) == {"min_likeness": 0, "min_score": 5.0}
+    # Every whole step is its own limit, 0.29 (28.999... as a product) too,
+    # and the picture still passes there.
+    for n in range(101):
+        one = [_cand(1, likeness=n / 100)]
+        assert dp.floor_limits(one)["min_likeness"] == n
+        assert _ids(rank(one, min_likeness=n / 100, min_score=1.0)["stills"]) == [1]
 
 
 def test_variety_counts_as_much_as_its_importance_says():

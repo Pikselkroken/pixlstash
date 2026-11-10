@@ -327,9 +327,15 @@ def floor_limits(candidates: list[Candidate]) -> dict[str, float]:
     picture the score floor sets nothing aside, so it is not limited.
     """
     likeness = max((c.likeness or 0.0 for c in candidates), default=0.0)
+    likeness = max(0.0, min(1.0, likeness))
+    # The highest step the filter (likeness < step / 100) still passes:
+    # 0.29 * 100 is 28.999..., which alone would stop a step short.
+    step = int(likeness * 100)
+    if (step + 1) / 100 <= likeness:
+        step += 1
     scores = [s for c in candidates if (s := c.rating or c.smart_score) is not None]
     return {
-        "min_likeness": int(max(0.0, min(1.0, likeness)) * 100),
+        "min_likeness": step,
         "min_score": max(1.0, min(5.0, int(max(scores, default=5.0) * 2) / 2)),
     }
 

@@ -389,6 +389,23 @@ describe("CreateTrainingSetDialog", () => {
     wrapper.unmount();
   });
 
+  it("does not blame the filters when leaving picks out is what caps the set", async () => {
+    // 135 pass, the ranking holds 50: one left out leaves 49 to choose from.
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: stills(50, { passing: 135 }) }),
+    );
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.findAll('[data-testid="cts-pick-toggle"]')[0].trigger("click");
+    const slider = wrapper.find('[data-testid="cts-slider-stills"]');
+    await slider.setValue("50");
+    expect(slider.element.value).toBe("49");
+    const notice = wrapper.find('[data-testid="cts-capped-stills"]').text();
+    expect(notice).toContain("Only 49 of the ranked pictures are left");
+    expect(notice).not.toContain("pass.");
+    wrapper.unmount();
+  });
+
   it("puts a left-out pick back, and opens a tile's preview", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
     const wrapper = mountDialog();
