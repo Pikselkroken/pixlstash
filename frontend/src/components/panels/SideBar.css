@@ -1127,10 +1127,20 @@
   color: rgba(var(--v-theme-on-surface), 0.85);
 }
 
-/* The "finish organising" resume row. Accented rather than the plain
-   sidebar-text colour of an ordinary row, because it names unfinished work the
-   owner asked to come back to. */
-.sidebar-mapping-resume-row,
+/* The "finish organising" resume row and its dismiss. Only the mark is
+   accented, because it names unfinished work the owner asked to come back to;
+   the label keeps the row ink. */
+.sidebar-mapping-resume {
+  display: flex;
+  align-items: center;
+  padding-right: var(--space-3);
+}
+
+.sidebar-mapping-resume-row {
+  flex: 1;
+  min-width: 0;
+}
+
 .sidebar-mapping-resume-row .v-icon {
   color: rgb(var(--v-theme-accent));
 }

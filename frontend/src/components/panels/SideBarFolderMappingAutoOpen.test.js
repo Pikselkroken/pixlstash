@@ -334,6 +334,30 @@ describe("an ordinary reference-folder pending entry", () => {
     wrapper.unmount();
   });
 
+  it("names the folder, not its path, and can be dismissed", async () => {
+    const unnamed = { ...reference, label: "" };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(unnamed));
+    commitStatus("running");
+    const wrapper = await mountSidebar();
+    await flushPromises();
+
+    const row = wrapper.find(".sidebar-mapping-resume-row");
+    expect(row.find(".sidebar-list-label-text").text()).toBe(
+      "Finish organising External…",
+    );
+
+    await wrapper.find('[data-testid="sidebar-mapping-dismiss"]').trigger("click");
+
+    expect(useFolderMappingStore().pending).toBe(null);
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBe(null);
+    expect(wrapper.find(".sidebar-mapping-resume-row").exists()).toBe(false);
+    expect(wrapper.findComponent(FolderMappingWizard).props("open")).toBe(
+      false,
+    );
+
+    wrapper.unmount();
+  });
+
   it("does not auto-open - only the resume row offers it", async () => {
     window.localStorage.setItem(
       STORAGE_KEY,
@@ -423,6 +447,33 @@ describe("the loose-pictures offer for an empty library", () => {
 
     wrapper.unmount();
   });
+
+  it("offers nothing when the library was only emptied into the scrapheap", async () => {
+    // Select-all, delete: the grid is empty and the folder is full of the
+    // library's own pictures. That is not a library to set up.
+    const path = "/home/me/Pictures";
+    activeLibraryAt(path);
+    const libraries = useLibrariesStore();
+    libraries.hasLoadedSuccessfully = true;
+    libraries.canManage = true;
+    apiGet.mockImplementation((url) => {
+      if (url.includes("inspect")) {
+        return Promise.resolve({ data: { picture_count: 12 } });
+      }
+      if (url.includes("SCRAPHEAP/summary")) {
+        return Promise.resolve({ data: { image_count: 12 } });
+      }
+      return Promise.resolve(respond());
+    });
+    const wrapper = await mountSidebar();
+
+    await wrapper.vm.offerLoosePictures();
+
+    expect(useFolderMappingStore().wizardOpen).toBe(false);
+
+    wrapper.unmount();
+  });
+
   it("resumes the read the desktop startup screen already finished", async () => {
     // The startup screen reads the folder while the GPU runtime downloads, so
     // the wizard has a completed task to open on. Starting a second read here

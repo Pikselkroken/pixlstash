@@ -493,7 +493,11 @@ and, when there is anything there, opens `FolderMappingWizard` with
 read saves the pending entry as any resumed read does, so Cancel leaves the
 sidebar's "Finish organising…" row offering it. Once per page load, like the
 pending-entry auto-open beside it, and never for a read-only session, a remote
-one (`canManage` false), or while an entry is already pending. The wizard's
+one (`canManage` false), or while an entry is already pending. Nor when the
+scrapheap holds anything: a library emptied by a select-all delete still has
+its pictures on disk and is not one to set up. The row names the folder
+(its label, else the last path segment) and carries a dismiss that clears the
+entry and cancels its read if that is still running. The wizard's
 "Drop this, organise later" commits with no assignments when the library
 already exists rather than trying to add it again.
 
