@@ -137,7 +137,7 @@ def test_the_floors_move_what_is_set_aside():
 
 def test_variety_counts_as_much_as_its_importance_says():
     # One portrait already picked. The full body fills a framing gap; the
-    # other portrait is 1.5x (then 2x) its value and fills none.
+    # other portrait is 1.5x (then 1.7x) its value and fills none.
     same = _emb(1)
 
     def second(variety, repeat_likeness):
@@ -155,7 +155,7 @@ def test_variety_counts_as_much_as_its_importance_says():
 
     assert second("important", 0.8) == 3
     assert second("somewhat", 0.6) == 3  # 1.5x better: within the 60%
-    assert second("somewhat", 0.8) == 2  # 2x better: the repeat wins
+    assert second("somewhat", 0.68) == 2  # 1.7x better: the repeat wins
     assert second("unimportant", 0.6) == 2
 
 

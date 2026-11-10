@@ -1604,7 +1604,7 @@ the row element to hand focus back to on close).
 - **One request per filter state.** `fetchCharacterSetSuggestion` on open and on
   every change under *Choosing*: two floor sliders (minimum likeness 0-100,
   minimum score 1-5 in half steps, each with its count set aside; they refetch
-  on `change`, when the thumb is let go), a three-step `Segmented` each for
+  on `change`: when the thumb is let go, or on each keyboard step), a three-step `Segmented` each for
   different framings and different expressions, and two *Set aside* switches,
   on by default (on = those pictures stay out). The size sliders take a prefix
   of each group's `picks` and never refetch: Pictures runs 5-50 with the part

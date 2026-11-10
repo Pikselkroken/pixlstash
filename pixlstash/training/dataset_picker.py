@@ -48,13 +48,16 @@ value counts :data:`SOMEWHAT_GAIN` more. ``unimportant``: the gap is ignored.
 """
 
 SOMEWHAT_GAIN = 0.6
-"""At ``somewhat`` a gap-filler beats a repeat up to this much better."""
+"""At ``somewhat`` a gap-filler beats a repeat up to this much better.
+
+Per axis: a picture filling a gap on two such axes counts twice this.
+"""
 
 W_SEM = 1.5
 """The gain per unit of CLIP cosine distance from the nearest pick."""
 
 REASONS = ("other_people", "near_duplicates", "low_quality", "low_likeness")
-"""The four set-aside reasons, each with an ``include_<reason>`` toggle."""
+"""The four set-aside reasons; ``include`` lets one's pictures back in."""
 
 _FRAMING_TAGS = (
     # For a picture with no face box. The first label its tags name wins:

@@ -12790,8 +12790,9 @@ function over those rows, tested without a server.
   filters decide what is good enough, so a weaker picture of a missing framing
   or expression beats any better repeat. That is an axis at `important`
   (`framing_variety`, `expression_variety`; the default). At `somewhat` the
-  axis leaves the first key and multiplies the value by `1 + SOMEWHAT_GAIN`
-  instead, and at `unimportant` it counts for nothing.
+  axis leaves the first key and adds `SOMEWHAT_GAIN` to a bonus the value is
+  multiplied by (`1 + bonus`, so two such axes add twice), and at
+  `unimportant` it counts for nothing.
   An axis is under target when the candidate brings a label the picks hold
   fewer of than `target()` asks for at the next set size: `TARGET_SHARE` per
   label, never below one. Framing comes from the largest face box:

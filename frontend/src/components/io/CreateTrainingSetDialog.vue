@@ -283,7 +283,7 @@
             density="compact"
             hide-details
             :aria-label="`Set aside: ${r.title}`"
-            :disabled="busy || loading"
+            :disabled="busy || loading || !!created"
             :data-testid="`cts-switch-${r.key}`"
             @update:model-value="(v) => toggle(r.key, !!v)"
           />
