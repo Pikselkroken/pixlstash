@@ -1290,7 +1290,7 @@ import { deriveModelName } from "../../utils/modelShelf";
 import { insertWords, namesWord, triggerWord, wordSpans } from "../../utils/triggerWords";
 import { wouldDuplicate } from "../../utils/recipeKey";
 import { runTaskLabel } from "../../utils/runTaskLabel";
-import { UNMATCHED_REPLACEMENTS_TEXT } from "../../utils/workflowCard";
+import { pickerOption, UNMATCHED_REPLACEMENTS_TEXT } from "../../utils/workflowCard";
 import {
   answering,
   changesWord,
@@ -2700,7 +2700,9 @@ const seedOptions = [
 /**
  * The workflows the picker offers: the one being run, and - for "Run a
  * workflow on these…" - the whole library. Workflows only (#1623): there are
- * no stack members to switch between any more.
+ * no stack members to switch between any more. Each is drawn as its card on
+ * the Workflows grid reads (`pickerOption`): the name over its base model
+ * and facts.
  */
 /**
  * Create with LoRA's narrowing: against every LoRA attached to the person or
@@ -2720,7 +2722,18 @@ const loraFits = computed(() => {
   const loras = attached
     ? attachedLoras.value
     : adapters.value.filter((row) => row.sha256 === sha).slice(0, 1);
-  return { loras, ...fitWorkflows(cards.value, loras, handMadeSets.value) };
+  const fits = fitWorkflows(cards.value, loras, handMadeSets.value);
+  // A workflow whose own base model nobody has read is not one the LoRA is
+  // for: beside a LoRA with a known base model it is left out and counted.
+  // (A LoRA with no base model recorded narrows nothing, so it stays.)
+  const known = loras.some((lora) => lora.base_model_family);
+  const unread = (entry) => known && !entry.checkpoint?.base_model_family;
+  return {
+    loras,
+    ...fits,
+    unknown: fits.unknown.filter((entry) => !unread(entry)),
+    unread: fits.unknown.filter(unread),
+  };
 });
 
 /** What the narrowing left out, said rather than hidden without a word. */
@@ -2742,6 +2755,9 @@ const loraFitNote = computed(() => {
   const parts = [];
   if (fits.clash.length) {
     parts.push(`${fits.clash.length} for another base model`);
+  }
+  if (fits.unread.length) {
+    parts.push(`${fits.unread.length} whose base model is not known`);
   }
   if (fits.needsPicture.length) {
     parts.push(`${fits.needsPicture.length} that start from a picture`);
@@ -2779,33 +2795,25 @@ const favouriteWorkflow = (option) =>
 const workflowOptions = computed(() => {
   const fits = loraFits.value;
   if (fits) {
-    // Matches first, then the workflows whose base model nobody has read,
-    // said so: they may fit, and hiding them would hide every workflow on a
-    // model the shelf has not identified. A favourite leads inside each.
-    const known = fits.loras.some((lora) => lora.base_model_family);
+    // Matches first, then the workflows a LoRA with no base model recorded
+    // may fit. A favourite leads inside each.
     return [
       ...favouritesFirst(
-        fits.match.map((entry) => ({ value: entry.card.id, label: entry.card.name })),
+        fits.match.map((entry) => pickerOption(entry.card)),
         favouriteWorkflow,
       ),
       ...favouritesFirst(
-        fits.unknown.map((entry) => ({
-          value: entry.card.id,
-          label:
-            known && !entry.checkpoint?.base_model_family
-              ? `${entry.card.name} (base model not known)`
-              : entry.card.name,
-        })),
+        fits.unknown.map((entry) => pickerOption(entry.card)),
         favouriteWorkflow,
       ),
     ];
   }
   // The card being run stays first; the rest lead with their favourites.
-  const first = card.value ? [{ value: card.value.id, label: card.value.name }] : [];
+  const first = card.value ? [pickerOption(card.value)] : [];
   const rest = [];
   for (const row of props.source?.pickWorkflow ? cards.value : []) {
     if (![...first, ...rest].some((option) => option.value === row.id)) {
-      rest.push({ value: row.id, label: row.name });
+      rest.push(pickerOption(row));
     }
   }
   return [...first, ...favouritesFirst(rest, favouriteWorkflow)];
