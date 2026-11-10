@@ -203,13 +203,15 @@ export function useGlobalKeydown({
       !e.metaKey &&
       !e.altKey &&
       !isEditable &&
-      !isReadOnly.value
+      !isReadOnly.value &&
+      !isModalOverlayOpen() &&
+      // A list with its own rename (Workflows, Models) has taken this press.
+      !e.defaultPrevented
     ) {
-      const gridHasFocus = gridContainer.value?.hasCursorFocus === true;
-      if (!gridHasFocus) {
-        e.preventDefault();
-        sidebarRef.value?.openCurrentSelectionEditor?.();
-      }
+      // Whatever has the grid's cursor: the grid has no F2 of its own, and a
+      // clicked picture used to swallow this one.
+      e.preventDefault();
+      sidebarRef.value?.openCurrentSelectionEditor?.();
     }
   }
 
