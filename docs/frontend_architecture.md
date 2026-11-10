@@ -1596,16 +1596,20 @@ Load-bearing behaviours:
 #### `CreateTrainingSetDialog.vue` (`io/`)
 
 The character sidebar menu's *Create a training set…*, `AppDialog size="xl"`
-with a flush body split in two: the picks on the left, a 280px coverage column
+with a flush body split in two: the picks on the left, a 340px coverage column
 on the right that stays in view. Mounted in **`App.vue`**, opened by the
 sidebar's `create-training-set` event (the character's id, name, projects and
 the row element to hand focus back to on close).
 
 - **One request per filter state.** `fetchCharacterSetSuggestion` on open and on
-  every *Set aside* switch; the switches are on by default (on = those pictures
-  stay out). The sliders take a prefix of each group's `picks` and never
-  refetch: Pictures runs 5-50 with the part past what passes hatched, Video
-  clips (shown only with `has_clips`) runs 1 to what passes.
+  every change under *Choosing*: two floor sliders (minimum likeness 0-100,
+  minimum score 1-5 in half steps, each with its count set aside; they refetch
+  on `change`, when the thumb is let go), a three-step `Segmented` each for
+  different framings and different expressions, and two *Set aside* switches,
+  on by default (on = those pictures stay out). The size sliders take a prefix
+  of each group's `picks` and never refetch: Pictures runs 5-50 with the part
+  past what passes hatched, Video clips (shown only with `has_clips`) runs 1
+  to what passes.
 - **Coverage** draws one bar per framing and expression label over the current
   picks, against `target = max(1, round(share * N))` from the response. A short
   label is sorted into *The slider can close* (with a *Show N* that moves the

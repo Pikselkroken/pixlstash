@@ -12775,18 +12775,23 @@ function over those rows, tested without a server.
   (the grid's likeness sort) is not used and not changed.
 - **Quality** is a percentile in the group: the user's rating first, smart score
   second, so a rated picture outranks every unrated one.
-- **Four reasons set a picture aside**, each with an `include_<reason>` flag:
-  a face on some frame that is not the character (`other_people`), a weaker
-  member of a near
-  group (`near_duplicates`, judged after the other three), a 1-2★ rating or an
-  unrated smart score under `SMART_SCORE_FLOOR` (`low_quality`), and a likeness
-  under `LIKENESS_FLOOR` or none (`low_likeness`). `would_add` re-runs the
-  filters with only that flag flipped, so it is exactly what the toggle lets in.
+- **Four reasons set a picture aside.** Two are facts with an
+  `include_<reason>` flag: a face on some frame that is not the character
+  (`other_people`) and a weaker member of a near group (`near_duplicates`,
+  judged after the other three). Two are floors the caller sets: a score under
+  `min_score` (`low_quality`; the score is the rating where one was given and
+  the smart score where not, default `SCORE_FLOOR`) and a likeness under
+  `min_likeness` (`low_likeness`; no likeness counts as 0, default
+  `LIKENESS_FLOOR`). `would_add` re-runs the filters with only that reason
+  let in, so it is exactly what the switch, or dropping the floor, lets in.
 - **One greedy pass per group**, stills and clips apart, up to `MAX_PICKS` (50).
   `value = quality * likeness`; each next pick maximises first
   `axes_under_target`, then `value * (1 + W_SEM * min_cosine_distance)`. The
   filters decide what is good enough, so a weaker picture of a missing framing
-  or expression beats any better repeat.
+  or expression beats any better repeat. That is an axis at `important`
+  (`framing_variety`, `expression_variety`; the default). At `somewhat` the
+  axis leaves the first key and multiplies the value by `1 + SOMEWHAT_GAIN`
+  instead, and at `unimportant` it counts for nothing.
   An axis is under target when the candidate brings a label the picks hold
   fewer of than `target()` asks for at the next set size: `TARGET_SHARE` per
   label, never below one. Framing comes from the largest face box:

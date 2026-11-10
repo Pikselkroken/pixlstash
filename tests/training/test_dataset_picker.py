@@ -72,7 +72,7 @@ def test_each_exclusion_sets_aside_and_its_toggle_lets_back_in():
         _cand(1, rating=5),
         _cand(2, face_count_max=2),
         _cand(3, rating=2),
-        _cand(4, rating=0, smart_score=dp.SMART_SCORE_FLOOR - 0.5),
+        _cand(4, rating=0, smart_score=dp.SCORE_FLOOR - 0.5),
         _cand(5, likeness=dp.LIKENESS_FLOOR - 0.05),
         _cand(6, likeness=None),
         _cand(7, rating=4),
@@ -111,6 +111,52 @@ def test_would_add_counts_only_what_that_toggle_alone_lets_in():
     assert out.excluded["other_people"] == 1 and out.excluded["low_quality"] == 2
     assert out.would_add["other_people"] == 0
     assert out.would_add["low_quality"] == 1
+
+
+def test_the_floors_move_what_is_set_aside():
+    lib = [
+        _cand(1, rating=5),
+        _cand(2, rating=3),
+        _cand(3, rating=0, smart_score=3.4),
+        _cand(4, rating=0, smart_score=None),
+        _cand(5, likeness=0.5),
+        _cand(6, likeness=None),
+    ]
+    assert sorted(_ids(rank(lib)["stills"])) == [1, 2, 3, 4, 5]
+    # The rating where there is one, the smart score where not; a picture
+    # with neither has no score to fail.
+    out = rank(lib, min_score=3.5)["stills"]
+    assert sorted(_ids(out)) == [1, 4, 5] and out.excluded["low_quality"] == 2
+    assert out.would_add["low_quality"] == 2
+    out = rank(lib, min_likeness=0.6)["stills"]
+    assert sorted(_ids(out)) == [1, 2, 3, 4] and out.excluded["low_likeness"] == 2
+    # At 0 the likeness floor is off, a picture with no likeness included.
+    out = rank(lib, min_likeness=0.0, min_score=1.0)["stills"]
+    assert len(out.picks) == 6 and out.excluded["low_likeness"] == 0
+
+
+def test_variety_counts_as_much_as_its_importance_says():
+    # One portrait already picked. The full body fills a framing gap; the
+    # other portrait is 1.5x (then 2x) its value and fills none.
+    same = _emb(1)
+
+    def second(variety, repeat_likeness):
+        lib = [
+            _cand(1, likeness=0.9, tags=("portrait",), embedding=same),
+            _cand(2, likeness=repeat_likeness, tags=("portrait",), embedding=same),
+            _cand(3, likeness=0.4, tags=("full body",), embedding=same),
+        ]
+        # Expression never differs here; keep it out of the gain.
+        return _ids(
+            rank(lib, variety={"framing": variety, "expression": "unimportant"})[
+                "stills"
+            ]
+        )[1]
+
+    assert second("important", 0.8) == 3
+    assert second("somewhat", 0.6) == 3  # 1.5x better: within the 60%
+    assert second("somewhat", 0.8) == 2  # 2x better: the repeat wins
+    assert second("unimportant", 0.6) == 2
 
 
 def test_a_near_duplicate_group_keeps_its_best_member():

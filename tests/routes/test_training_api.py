@@ -2080,6 +2080,18 @@ def test_character_set_suggestion_ranks_stills_and_clips_apart():
         assert r.status_code == 200, r.text
         assert c in {p["picture_id"] for p in r.json()["stills"]["picks"]}
 
+        # The floors are the caller's: at 0 the picture with no likeness is in.
+        r = owner.get(url, params={"character_id": char_id, "min_likeness": 0})
+        assert r.status_code == 200, r.text
+        assert r.json()["stills"]["excluded"]["low_likeness"] == 0
+        assert other_pack in {p["picture_id"] for p in r.json()["stills"]["picks"]}
+        r = owner.get(url, params={"character_id": char_id, "min_score": 5})
+        assert r.status_code == 200, r.text
+        assert r.json()["stills"]["excluded"]["low_quality"] >= 1
+        for bad in ({"min_likeness": 101}, {"framing_variety": "very"}):
+            r = owner.get(url, params={"character_id": char_id, **bad})
+            assert r.status_code == 422, r.text
+
         owner.post("/picture_sets", json={"name": "Anna training set"})
         r = owner.get(url, params={"character_id": char_id})
         assert r.json()["set_name"] == "Anna training set 2"

@@ -176,8 +176,8 @@ describe("CreateTrainingSetDialog", () => {
     expect(slider.element.value).toBe("9");
     const notice = wrapper.find('[data-testid="cts-capped-stills"]').text();
     expect(notice).toContain("Only 9 pictures pass.");
-    expect(notice).toContain("Turning off Near-duplicates would let 14 more");
-    expect(notice).toContain("Below the quality floor 6 more");
+    expect(notice).toContain("Keeping near-duplicates would let 14 more");
+    expect(notice).toContain("no minimum score 6 more");
     wrapper.unmount();
   });
 
@@ -235,32 +235,91 @@ describe("CreateTrainingSetDialog", () => {
     wrapper.unmount();
   });
 
-  it("sets every reason aside by default; switching one off asks again", async () => {
+  it("sets both reasons aside by default; switching one off asks again", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
     const wrapper = mountDialog();
     await flushPromises();
     expect(api.fetchCharacterSetSuggestion).toHaveBeenLastCalledWith(7, {
-      other_people: false,
-      near_duplicates: false,
-      low_quality: false,
-      low_likeness: false,
+      include_other_people: false,
+      include_near_duplicates: false,
+      min_likeness: 30,
+      min_score: 3,
+      framing_variety: "important",
+      expression_variety: "important",
     });
     const switches = wrapper.findAllComponents({ name: "VSwitch" });
     // The stub declares no props, so the bound value lands as an attribute.
     expect(switches.map((s) => s.attributes("model-value"))).toEqual([
       "true",
       "true",
-      "true",
-      "true",
     ]);
     switches[1].vm.$emit("update:modelValue", false);
     await flushPromises();
     expect(api.fetchCharacterSetSuggestion).toHaveBeenLastCalledWith(7, {
-      other_people: false,
-      near_duplicates: true,
-      low_quality: false,
-      low_likeness: false,
+      include_other_people: false,
+      include_near_duplicates: true,
+      min_likeness: 30,
+      min_score: 3,
+      framing_variety: "important",
+      expression_variety: "important",
     });
+    wrapper.unmount();
+  });
+
+  it("asks again with a floor when its slider is let go, not while it moves", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    const wrapper = mountDialog();
+    await flushPromises();
+    const floor = wrapper.find('[data-testid="cts-floor-min_score"]');
+    // 23 stills are under the score floor; the count sits under its slider.
+    expect(floor.text()).toContain("★ 3.0");
+    expect(floor.text()).toContain("23 set aside");
+    const slider = wrapper.find('[data-testid="cts-slider-min_score"]');
+    slider.element.value = "4.5";
+    await slider.trigger("input");
+    expect(floor.text()).toContain("★ 4.5");
+    expect(api.fetchCharacterSetSuggestion).toHaveBeenCalledTimes(1);
+    await slider.trigger("change");
+    await flushPromises();
+    expect(api.fetchCharacterSetSuggestion).toHaveBeenLastCalledWith(
+      7,
+      expect.objectContaining({ min_score: 4.5, min_likeness: 30 }),
+    );
+
+    const likeness = wrapper.find('[data-testid="cts-slider-min_likeness"]');
+    likeness.element.value = "55";
+    await likeness.trigger("input");
+    await likeness.trigger("change");
+    await flushPromises();
+    expect(api.fetchCharacterSetSuggestion).toHaveBeenLastCalledWith(
+      7,
+      expect.objectContaining({ min_score: 4.5, min_likeness: 55 }),
+    );
+    wrapper.unmount();
+  });
+
+  it("asks again with how much a kind of variety matters", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    const wrapper = mountDialog();
+    await flushPromises();
+    const framing = wrapper.find('[data-testid="cts-variety-framing_variety"]');
+    expect(framing.text()).toContain("A missing framing always wins.");
+    expect(
+      framing.find('[role="radio"][aria-checked="true"]').text(),
+    ).toBe("Important");
+    await framing
+      .findAll('[role="radio"]')
+      .find((b) => b.text() === "Somewhat")
+      .trigger("click");
+    await flushPromises();
+    expect(api.fetchCharacterSetSuggestion).toHaveBeenLastCalledWith(
+      7,
+      expect.objectContaining({
+        framing_variety: "somewhat",
+        expression_variety: "important",
+      }),
+    );
+    expect(framing.text()).toContain("A gap beats a repeat up to 60% better.");
     wrapper.unmount();
   });
 
