@@ -268,7 +268,7 @@ Sub-components that manage independent data (e.g. `AccountSection`, `SmartScoreS
 
 **`SideBar` exposes:** `refreshSidebar()`, `openSettingsDialog()`, `startLocalImport()`, `currentProjectId`, `openCurrentSelectionEditor()`
 
-**`ImageGrid` exposes:** `gridEl`, `onGlobalKeyPress()`, `updateVisibleThumbnails()`, `expandAllStacks()`, `collapseAllStacks()`, `exportCurrentViewToZip()`, `getExportCount()`, `removeImagesById()`, `clearFaceSelection()`, `runComfyuiOnGridImages()`, `hasCursorFocus`
+**`ImageGrid` exposes:** `gridEl`, `onGlobalKeyPress()`, `updateVisibleThumbnails()`, `expandAllStacks()`, `collapseAllStacks()`, `exportCurrentViewToZip()`, `getExportCount()`, `removeImagesById()`, `clearFaceSelection()`, `runComfyuiOnGridImages()`
 
 **These refs are not guaranteed to be set in `App.vue`'s `onMounted`.** Vuetify's `<v-app>` renders its slot inside a `<Suspense>`, so while any `defineAsyncComponent` in the first render is still loading its chunk (the workflows, models, duplicates, insights and moves views, or the review overlay on any route), every template ref and mounted hook *inside* `<v-app>` is held back, and `App.vue`'s own mounted hook, which sits outside the boundary, runs first. A page loaded that way therefore sees `sidebarRef.value === null` at start-up. `useSidebarRefresh` covers the sidebar: a `refreshSidebar()` that finds no sidebar is remembered and delivered when the ref arrives, because nothing else is certain to ask again. The main area's `ResizeObserver` is created from a `watch` on its ref for the same reason. Any other start-up work that needs one of these refs must wait for the ref (`watch`), not assume it.
 

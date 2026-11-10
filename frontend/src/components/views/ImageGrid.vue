@@ -8742,7 +8742,6 @@ defineExpose({
   markLightboxDeferredRefresh,
   hasPendingGridImages,
   clearFaceSelection,
-  hasCursorFocus: computed(() => cursorIdx.value !== null),
   // Lets the sidebar's Scrapheap context menu reach the same consent-gated
   // empty-scrapheap flow the empty-state placeholder uses. The caller navigates
   // to the scrapheap view first, so the post-confirm grid refetch is correct.

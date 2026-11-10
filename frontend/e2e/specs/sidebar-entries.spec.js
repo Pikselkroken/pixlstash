@@ -586,3 +586,50 @@ test.describe('projects', () => {
     expect(pictureIds(await listPictures(apiContext, { set_id: set.id }))).toEqual(ids)
   })
 })
+
+// F2 edits whichever person or set is on screen. It used to do nothing once a
+// picture had been clicked, which is the state anyone looking at a person is in.
+test.describe('F2', () => {
+  test('F2 opens the editor of the person on screen, also after a picture is clicked', async ({
+    page,
+    grid,
+    sidebar,
+    apiContext,
+  }) => {
+    const { person } = await seededPersonPictures(apiContext)
+    await grid.goto()
+    await personRow(sidebar, person.name).first().click()
+    await expect.poll(() => pathname(page)).toBe(`/character/${person.id}`)
+
+    await page.keyboard.press('F2')
+    await expect(editor(page)).toContainText('Edit')
+    await expect(nameField(page)).toHaveValue(new RegExp(`^${person.name}$`, 'i'))
+    await page.keyboard.press('Escape')
+    await expect(editor(page)).toBeHidden()
+
+    await grid.waitForLoaded()
+    await page.locator('.thumbnail-card').first().click()
+    await page.keyboard.press('F2')
+    await expect(nameField(page)).toHaveValue(new RegExp(`^${person.name}$`, 'i'))
+  })
+
+  test('F2 opens the editor of the set on screen, also after a picture is clicked', async ({
+    page,
+    grid,
+    sidebar,
+    apiContext,
+  }) => {
+    const { ids } = await seededPersonPictures(apiContext)
+    const set = await apiSet(apiContext, uniq('E2E F2 set'))
+    await addToSet(apiContext, set.id, ids)
+    await grid.goto()
+    await setRow(sidebar, set.name).click()
+    await expect.poll(() => pathname(page)).toBe(`/set/${set.id}`)
+    await grid.waitForLoaded()
+    await page.locator('.thumbnail-card').first().click()
+
+    await page.keyboard.press('F2')
+    await expect(editor(page)).toContainText('Edit picture set')
+    await expect(nameField(page)).toHaveValue(set.name)
+  })
+})
