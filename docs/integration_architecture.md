@@ -903,6 +903,10 @@ Seven rules the client must not re-derive:
    option. The body answers it with `choices: [{node_id, field, value}]`,
    applied after `values` and for that run only; the Run popup offers each as
    a select and re-asks.
+   `unwired_inputs: {inputs: [{node_id, class_type, title, field}]}` - a
+   required input that takes a link and has none, on a node some output
+   reads, which ComfyUI would refuse the whole prompt for (a graph saved from
+   a canvas that could not draw one of its nodes loses that node's links).
    `picture_input_unfilled` replaced `fixed_input_deleted` in #1457 with the
    same payload shape plus each input's `title` (a slot label is a hash); a client that only knows the old code no longer
    recognises the refusal and must fall back to its generic sentence. It names

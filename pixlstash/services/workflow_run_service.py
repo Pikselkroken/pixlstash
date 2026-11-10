@@ -39,6 +39,7 @@ from pixlstash.services.comfyui_recipe_service import (
     detect_seed_targets,
     find_input_spec,
     listed_options,
+    live_node_ids,
     preflight_prompt,
     sanitize_prompt_graph,
     unchecked_preflight,
@@ -116,6 +117,9 @@ LORA_NOT_SKIPPABLE = "lora_not_skippable"
 STAGE_NOT_SKIPPABLE = "stage_not_skippable"
 MASK_NOT_READ = "mask_not_read"
 MISSING_CHOICES = "missing_choices"
+# A node input ComfyUI requires a link on, with nothing connected: ComfyUI
+# refuses the whole prompt for it, naming a node number and nothing else.
+UNWIRED_INPUTS = "unwired_inputs"
 
 # The sampler settings a run can swap for one this ComfyUI lists, and the
 # replacement offered first: a sampler or scheduler from a node pack this
@@ -729,6 +733,9 @@ def judge(
         choices = missing_choices(graph, object_info)
         if choices:
             reasons.append(Reason(MISSING_CHOICES, {"choices": choices}))
+        unwired = unwired_inputs(graph, object_info)
+        if unwired:
+            reasons.append(Reason(UNWIRED_INPUTS, {"inputs": unwired}))
     # Only meaningful when the graph was actually inspected: an unchecked
     # pre-flight reports no save node because it read nothing, and refusing on
     # that would turn "ComfyUI is down" into "your workflow is broken".
@@ -769,6 +776,61 @@ def missing_choices(graph: dict, object_info: dict) -> list[dict]:
                     "value": value,
                     "options": options,
                     "replacement": fallback if fallback in options else options[0],
+                }
+            )
+    return found
+
+
+def unwired_inputs(graph: dict, object_info: dict) -> list[dict]:
+    """Every required input of *graph* that takes a link and has none.
+
+    A graph saved from a canvas where a node could not be drawn (its pack is
+    not installed there) comes back without that node and without the links
+    it fed, so a text encoder is left with no CLIP. ComfyUI refuses such a
+    prompt whole. Only what ComfyUI would run is read (a node no output reads
+    is never validated, and where ``object_info`` names no output node
+    nothing is reported), and only an input whose declared type some node
+    hands out: a widget's value and ComfyUI's own dynamic inputs
+    (``COMFY_*``), which a graph spells under other names, are not links.
+
+    Returns:
+        ``{node_id, class_type, title, field}`` per input, in graph order.
+    """
+    socket_types = {
+        kind
+        for spec in object_info.values()
+        if isinstance(spec, dict) and isinstance(spec.get("output"), list)
+        for kind in spec["output"]
+        if isinstance(kind, str)
+    } - {*_FORM_KINDS, "COMBO"}
+    live = live_node_ids(graph, object_info)
+    if live is None:
+        # Nothing says which nodes ComfyUI would run, so nothing says which
+        # of them it would validate.
+        return []
+    found = []
+    for node_id, node in graph.items():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(inputs, dict):
+            continue
+        if str(node_id) not in live:
+            continue
+        spec = object_info.get(node.get("class_type"))
+        required = ((spec or {}).get("input") or {}).get("required")
+        if not isinstance(required, dict):
+            continue
+        for field_name, entry in required.items():
+            declared = entry[0] if isinstance(entry, (list, tuple)) and entry else None
+            if field_name in inputs or not isinstance(declared, str):
+                continue
+            if not set(declared.split(",")) <= socket_types:
+                continue
+            found.append(
+                {
+                    "node_id": str(node_id),
+                    "class_type": node.get("class_type"),
+                    "title": _node_title(node),
+                    "field": field_name,
                 }
             )
     return found

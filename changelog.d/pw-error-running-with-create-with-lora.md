@@ -1,0 +1,1 @@
+- A workflow with a required input left unconnected (a text encoder with no CLIP, say, after a save from a ComfyUI that lacks one of its nodes) now says which input before the run, instead of failing with ComfyUI's node numbers.
