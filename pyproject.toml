@@ -1,6 +1,6 @@
 [project]
 name = "pixlstash"
-version = "2.0.0rc5"
+version = "2.0.0"
 description = "Image library for photographers and creators, with local AI tagging, search, ComfyUI workflows, editing and LoRA training"
 readme = "README.md"
 license = "GPL-3.0-only AND MIT"
