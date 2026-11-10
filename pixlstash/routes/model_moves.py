@@ -81,6 +81,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.routes.model_folders import _validate_folder_conflicts
 from pixlstash.services.builtin_caches import (
     insightface_models_dir_under,
     is_insightface_models_dir,
@@ -808,6 +809,21 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail=error)
         return destination_path
 
+    def _refuse_overlap(destination: str, relocating_id: int) -> None:
+        """Refuse a destination that overlaps the library or another folder.
+
+        The checks a folder registered by hand goes through, run before the
+        destination is created. The folder being relocated is left out: it is
+        retired when the move ends, so moving into or out of itself leaves no
+        nested pair. So is a row already at the destination, which is an
+        interrupted relocation being retried.
+        """
+        existing = server.hub.fetchone(
+            "SELECT id FROM model_folder WHERE path = ?", (destination,)
+        )
+        if existing is None:
+            _validate_folder_conflicts(server, destination, exclude_id=relocating_id)
+
     def _relocate_insightface_packs(
         folder: dict, payload: RelocateRequest, identity: tuple[str, str, str]
     ) -> dict:
@@ -850,6 +866,7 @@ def create_router(server) -> APIRouter:
         source_dir = folder["path"]
         if os.path.realpath(source_dir) == os.path.realpath(destination_dir):
             raise HTTPException(status_code=400, detail="The packs are already there.")
+        _refuse_overlap(destination_dir, folder["id"])
         try:
             os.makedirs(destination_dir, exist_ok=True)
         except OSError as exc:
@@ -1073,6 +1090,7 @@ def create_router(server) -> APIRouter:
         destination_path = _validated_destination(payload)
         if os.path.realpath(folder["path"]) == destination_path:
             raise HTTPException(status_code=400, detail="The store is already there.")
+        _refuse_overlap(destination_path, folder_id)
         try:
             os.makedirs(destination_path, exist_ok=True)
         except OSError as exc:

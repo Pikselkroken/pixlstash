@@ -512,6 +512,36 @@ def test_a_destination_already_holding_a_pack_is_refused_before_anything_moves(
     assert model_utils.insightface_root() == str(face_env.root)
 
 
+def test_a_destination_inside_a_registered_folder_is_refused(face_env, tmp_path):
+    """The overlap a hand-registered folder is refused for (#2665 item 3)."""
+    user_dir = tmp_path / "my-loras"
+    user_dir.mkdir()
+    face_env.register_folder(str(user_dir), kind="user", movable="per_item")
+
+    r = face_env.owner.post(
+        f"{API}/model-folders/{face_env.folder_id}/relocate",
+        json={"path": str(user_dir / "faces")},
+    )
+    assert r.status_code == 409, r.text
+    assert str(user_dir) in r.json()["detail"]
+    assert not (user_dir / "faces").exists(), "refused before anything was made"
+    assert (face_env.models_dir / "buffalo_l").is_dir(), "nothing was moved"
+    assert face_env.folder_path(face_env.folder_id) == str(face_env.models_dir)
+
+    # The model store's own relocation goes through the same refusal.
+    store = face_env.server.hub.fetchone(
+        "SELECT id, path FROM model_folder WHERE kind = 'managed'"
+    )
+    r = face_env.owner.post(
+        f"{API}/model-folders/{store['id']}/relocate",
+        json={"path": str(user_dir / "store")},
+    )
+    assert r.status_code == 409, r.text
+    assert str(user_dir) in r.json()["detail"]
+    assert not (user_dir / "store").exists()
+    assert face_env.folder_path(store["id"]) == store["path"]
+
+
 def test_the_huggingface_cache_still_cannot_be_relocated(face_env, tmp_path):
     """``fixed`` means it cannot move at all - its location is ``HF_HOME``.
 

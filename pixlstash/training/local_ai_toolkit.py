@@ -117,6 +117,11 @@ _JOB_STEM_SEP_RUN = re.compile(r"[._-]{2,}")
 # Leading/trailing separators to strip so the stem is never "..", a hidden file,
 # or a name that argv-parses as a flag ("-rf").
 _JOB_STEM_STRIP = "._-"
+# The MS-DOS device names Windows resolves ahead of the filesystem: a folder
+# whose name up to the first dot is one of these cannot be made there.
+_WINDOWS_DEVICE_STEM_RE = re.compile(
+    r"(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|\Z)", re.IGNORECASE
+)
 # A preview's step: ``<time>__<step:09d>_<n>.<ext>`` (SEAM.md, "Outputs").
 _SAMPLE_STEP_RE = re.compile(r"^\d+__(\d+)_\d+\.")
 
@@ -225,7 +230,8 @@ class LocalAiToolkit(TrainerBackend):
         :meth:`prepare` uses it to lay out a fresh run, and callers that need to
         reconstruct a handle after a restart (for cancel/reconcile) without
         having persisted the whole handle can rebuild it from just the work dir,
-        job id, job name, and PID. Pure path computation: it touches no disk.
+        job id, job name, and PID. Path computation only; the one thing it
+        reads from disk is whether a reserved-name folder already exists.
 
         The display *job_name* is run through :func:`safe_job_stem` before it
         becomes a path component, so an odd or hostile name (``../escape``,
@@ -233,6 +239,11 @@ class LocalAiToolkit(TrainerBackend):
         per-job ``work_dir``. The sanitisation is deterministic in
         ``(job_name, job_id)``, so a handle rebuilt later from the stored display
         name (cancel / reattach / reconcile) resolves the identical ``save_root``.
+
+        A stem Windows reserves for a device (``con``, ``NUL``, ``com1.v2``:
+        the part before the first dot decides) cannot be a folder there, so
+        the job uuid stands in for the name. A run that already has a folder
+        under such a name, made where the name is allowed, keeps it.
 
         Args:
             work_dir: The per-job working directory PixlStash owns.
@@ -252,10 +263,15 @@ class LocalAiToolkit(TrainerBackend):
         work_dir = os.path.abspath(work_dir)
         if training_folder is None:
             training_folder = os.path.join(work_dir, "output")
-            stem = safe_job_stem(job_name, job_id)
+            suffix = ""
         else:
             training_folder = os.path.abspath(training_folder)
-            stem = f"{safe_job_stem(job_name, job_id)}_{job_id[:8]}"
+            suffix = f"_{job_id[:8]}"
+        stem = safe_job_stem(job_name, job_id) + suffix
+        if _WINDOWS_DEVICE_STEM_RE.match(stem) and not os.path.isdir(
+            os.path.join(training_folder, stem)
+        ):
+            stem = job_id + suffix
         save_root = os.path.join(training_folder, stem)
         return TrainingHandle(
             job_id=job_id,
@@ -345,7 +361,8 @@ class LocalAiToolkit(TrainerBackend):
         - From an earlier step, every later checkpoint, the final, the
           optimizer and the later previews move into ``take-<n>/`` (never
           deleted); the chosen file is then the newest left, and the trainer
-          starts a fresh optimizer from it.
+          starts a fresh optimizer from it. The loss log is copied into the
+          take and its rows past *step* dropped from the run's own.
 
         Args:
             handle: The run's handle.
@@ -440,7 +457,48 @@ class LocalAiToolkit(TrainerBackend):
                 except OSError as exc:
                     logger.warning("Could not remove empty %s: %s", empty, exc)
             raise
+        if folder:
+            LocalAiToolkit._set_loss_log_aside(handle.loss_db_path, folder, step)
         return take_name
+
+    @staticmethod
+    def _set_loss_log_aside(loss_db: str, folder: str, step: int) -> None:
+        """Copy the loss log into the take, then drop its rows past *step*.
+
+        ai-toolkit drops those rows itself, but only on its first logged step
+        after the restart and without keeping them; until then
+        :meth:`progress` would read the abandoned take's last step. A failure
+        here is logged and leaves the log as it was: the trainer still prunes.
+
+        Args:
+            loss_db: The run's ``loss_log.db``.
+            folder: The take folder the later files were set aside in.
+            step: The step the run carries on from.
+        """
+        if not os.path.isfile(loss_db):
+            return
+        kept = os.path.join(folder, os.path.basename(loss_db))
+        try:
+            source = sqlite3.connect(loss_db, timeout=2.0)
+            try:
+                dest = sqlite3.connect(kept)
+                try:
+                    source.backup(dest)
+                finally:
+                    dest.close()
+                with source:
+                    source.execute("DELETE FROM metrics WHERE step > ?", (step,))
+                    source.execute("DELETE FROM steps WHERE step > ?", (step,))
+            finally:
+                source.close()
+        except sqlite3.Error as exc:
+            logger.warning(
+                "Could not set the loss log %s aside in %s past step %s: %s",
+                loss_db,
+                folder,
+                step,
+                exc,
+            )
 
     @staticmethod
     def template_from_rendered(config: dict) -> dict:

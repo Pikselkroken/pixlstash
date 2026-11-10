@@ -142,25 +142,95 @@ class _FakeTrainingService:
         pass
 
 
-def _setup(checkout=True):
-    """Create a Server, log in as owner, and stub the training service.
+# The module's one Server, built by the first ``_setup()`` and closed by
+# ``_shared_server``. Standing one up costs far more than any test here.
+_SHARED = {}
 
-    With *checkout*, a fake ai-toolkit checkout that ships the z_image model
-    code is saved, as a job needs one to be queued.
+# Hub tables a test here fills, children first. Rows that were there when the
+# Server came up (the shelf's own folders) are kept.
+_HUB_TABLES = (
+    "model_capability",
+    "model_file",
+    "model",
+    "model_folder",
+    "dataset_snapshot",
+    "training_profile_measurement",
+    "training_run",
+)
 
-    Returns ``(temp_dir, owner_client, server, read_token)`` where
-    ``read_token`` is a global READ-scoped token (scoped, so the authz gate
-    must reject it on every training endpoint).
-    """
-    temp_dir = tempfile.TemporaryDirectory()
-    image_root = os.path.join(temp_dir.name, "images")
-    os.makedirs(image_root, exist_ok=True)
-    server_config_path = os.path.join(temp_dir.name, "server-config.json")
+
+def _hub_ids(hub, table):
+    return {row[0] for row in hub.fetchall(f"SELECT rowid FROM {table}")}
+
+
+def _build_shared():
+    root = tempfile.TemporaryDirectory()
+    server_config_path = os.path.join(root.name, "server-config.json")
     with open(server_config_path, "w") as f:
         # Disable background workers so the real TrainingService worker never
         # starts and can never claim a queued job our fake enqueues.
         f.write(json.dumps({"port": 8000, "disable_background_workers": True}))
     server = Server(server_config_path)
+    _SHARED.update(root=root, server=server)
+    client = TestClient(server.api, raise_server_exceptions=True)
+    resp = client.post(
+        "/login", json={"username": "owner", "password": "example-ownerpass1"}
+    )
+    assert resp.status_code == 200, resp.text
+    hub = server.vault.hub
+    _SHARED.update(
+        client=client,
+        kept={table: _hub_ids(hub, table) for table in _HUB_TABLES},
+        user=dict(hub.fetchone("SELECT * FROM user")),
+    )
+
+
+def _reset_shared():
+    """Put the shared Server back to how it came up: no runs, no shelf folders
+    of a test's, the owner's settings as first saved, the vault unpatched."""
+    server = _SHARED["server"]
+    vault = server.vault
+    # What a test may have hung on the vault itself, over the class's own.
+    for name in ("choose_training_cover", "training_room"):
+        vars(vault).pop(name, None)
+    user = _SHARED["user"]
+    with vault.hub.transaction() as conn:
+        for table in _HUB_TABLES:
+            for rowid in _hub_ids(vault.hub, table) - _SHARED["kept"][table]:
+                conn.execute(f"DELETE FROM {table} WHERE rowid = ?", (rowid,))
+        conn.execute(
+            f"UPDATE user SET {', '.join(f'{column} = ?' for column in user)} "
+            "WHERE id = ?",
+            (*user.values(), user["id"]),
+        )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _shared_server():
+    yield
+    if _SHARED:
+        _SHARED["server"].close()
+        _SHARED["root"].cleanup()
+        _SHARED.clear()
+        gc.collect()
+
+
+def _setup(checkout=True):
+    """Hand out the module's Server, reset, with the training service stubbed.
+
+    With *checkout*, a fake ai-toolkit checkout that ships the z_image model
+    code is saved, as a job needs one to be queued.
+
+    Returns ``(temp_dir, owner_client, server, read_token)`` where
+    ``temp_dir`` is the test's own and ``read_token`` is a global READ-scoped
+    token minted for it (scoped, so the authz gate must reject it on every
+    training endpoint).
+    """
+    if not _SHARED:
+        _build_shared()
+    _reset_shared()
+    server, client = _SHARED["server"], _SHARED["client"]
+    temp_dir = tempfile.TemporaryDirectory(dir=_SHARED["root"].name)
 
     # Replace the real training service with a fake so enqueue/cancel never
     # touch a GPU or spawn a subprocess.
@@ -169,12 +239,6 @@ def _setup(checkout=True):
     )
     # A 24 GB card, as the arbiter would report it, unless a test says otherwise.
     server.vault.training_room = lambda: dict(_ROOM_24GB)
-
-    client = TestClient(server.api, raise_server_exceptions=True)
-    resp = client.post(
-        "/login", json={"username": "owner", "password": "example-ownerpass1"}
-    )
-    assert resp.status_code == 200, resp.text
 
     # Mint a global READ token (scoped → token_scope set → must be rejected).
     resp = client.post("/users/me/token", json={"description": "read", "scope": "READ"})
@@ -202,9 +266,7 @@ def _teardown(temp_dir, server):
     ExportUtils.count_training_pictures = staticmethod(_COUNT_TRAINING_PICTURES)
     ExportUtils.training_counts = staticmethod(_TRAINING_COUNTS)
     _PICTURES.pop("clips", None)
-    server.close()
     temp_dir.cleanup()
-    gc.collect()
 
 
 def _scoped_client(server, read_token):
