@@ -12,7 +12,7 @@ import time
 import pytest
 
 from pixlstash.services.comfyui_recipe_service import CLIP_TYPE_BY_FAMILY
-from pixlstash.services.workflow_card_service import _mark_fields
+from pixlstash.services.workflow_card_service import ShelfMark, _mark_fields
 from pixlstash.utils.known_base_models import (
     COMPANION_LAYOUTS,
     FAMILY_ICONS,
@@ -836,7 +836,24 @@ def test_a_card_slot_the_shelf_does_not_hold_is_named_from_its_filename():
     )
     assert "mark" not in _mark_fields(None, "add_detail.safetensors", "lora")
     # A slot whose name was never recorded names no tile, and does not fail.
-    assert _mark_fields(None, None, "unet") == {"quant": None}
+    assert _mark_fields(None, None, "unet") == {
+        "quant": None,
+        "base_model_family": None,
+    }
+
+
+def test_a_base_model_the_shelf_cannot_answer_for_takes_its_filenames_family():
+    """A guess is still an answer: what narrows workflows to a LoRA."""
+    assert _mark_fields(None, "flux1-dev.sft", "unet")["base_model_family"] == "flux1"
+    # A name several shelf files share resolves to a mark with nothing in it.
+    ambiguous = ShelfMark()
+    fields = _mark_fields(ambiguous, "qwen_image_2512_fp8.safetensors", "unet")
+    assert fields["base_model_family"] == "qwen"
+    # The shelf's own answer wins over the filename's.
+    stated = ShelfMark(base_model_family="sdxl")
+    assert _mark_fields(stated, "flux1-dev.sft", "unet")["base_model_family"] == "sdxl"
+    # Only a base model: a VAE named for one is not a model of that family.
+    assert _mark_fields(None, "flux1-dev.sft", "vae")["base_model_family"] is None
 
 
 def test_a_training_run_wears_its_base_models_release_tile():

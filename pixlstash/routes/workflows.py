@@ -508,7 +508,9 @@ class WorkflowSlotModel(BaseModel):
             "The family of the base model the shelf identified this file as "
             "(`sdxl`, `flux1`, `krea2`, …), filename guesses included: the "
             "same value as `base_model_family` on its `GET /adapters` or "
-            "`GET /checkpoints` row, or null where the shelf cannot say. What "
+            "`GET /checkpoints` row. A base model the shelf does not hold, "
+            "cannot pin down to one file or has no family for takes the "
+            "family its filename names; null where that names none. What "
             "a client compares a LoRA's `base_model_family` against to narrow "
             "the workflows it fits."
         ),
@@ -8167,6 +8169,7 @@ def create_router(server) -> APIRouter:
             "missing_nodes, missing_models, a1111, picture_input_unfilled, "
             "no_lora_loader, pixlstash_nodes, no_save_node, no_runnable_source, "
             "lora_not_skippable, stage_not_skippable, missing_choices, "
+            "unwired_inputs (a required input with nothing connected to it), "
             "pack_outdated, models_downloading (a model the graph names "
             "that PixlStash is still downloading, with its percent). "
             "A group runs when its reasons are empty - or when the only ones "

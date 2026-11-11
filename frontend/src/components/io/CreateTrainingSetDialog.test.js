@@ -176,8 +176,8 @@ describe("CreateTrainingSetDialog", () => {
     expect(slider.element.value).toBe("9");
     const notice = wrapper.find('[data-testid="cts-capped-stills"]').text();
     expect(notice).toContain("Only 9 pictures pass.");
-    expect(notice).toContain("Turning off Near-duplicates would let 14 more");
-    expect(notice).toContain("Below the quality floor 6 more");
+    expect(notice).toContain("Keeping near-duplicates would let 14 more");
+    expect(notice).toContain("no minimum score 6 more");
     wrapper.unmount();
   });
 
@@ -235,32 +235,203 @@ describe("CreateTrainingSetDialog", () => {
     wrapper.unmount();
   });
 
-  it("sets every reason aside by default; switching one off asks again", async () => {
+  it("sets both reasons aside by default; switching one off asks again", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
     const wrapper = mountDialog();
     await flushPromises();
     expect(api.fetchCharacterSetSuggestion).toHaveBeenLastCalledWith(7, {
-      other_people: false,
-      near_duplicates: false,
-      low_quality: false,
-      low_likeness: false,
+      include_other_people: false,
+      include_near_duplicates: false,
+      min_likeness: 30,
+      min_score: 3,
+      framing_variety: "important",
+      expression_variety: "important",
     });
     const switches = wrapper.findAllComponents({ name: "VSwitch" });
     // The stub declares no props, so the bound value lands as an attribute.
     expect(switches.map((s) => s.attributes("model-value"))).toEqual([
       "true",
       "true",
-      "true",
-      "true",
     ]);
     switches[1].vm.$emit("update:modelValue", false);
     await flushPromises();
     expect(api.fetchCharacterSetSuggestion).toHaveBeenLastCalledWith(7, {
-      other_people: false,
-      near_duplicates: true,
-      low_quality: false,
-      low_likeness: false,
+      include_other_people: false,
+      include_near_duplicates: true,
+      min_likeness: 30,
+      min_score: 3,
+      framing_variety: "important",
+      expression_variety: "important",
     });
+    wrapper.unmount();
+  });
+
+  it("asks again with a floor when its slider is let go, not while it moves", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    const wrapper = mountDialog();
+    await flushPromises();
+    const floor = wrapper.find('[data-testid="cts-floor-min_score"]');
+    // 23 stills are under the score floor; the count sits under its slider.
+    expect(floor.text()).toContain("★ 3.0");
+    expect(floor.text()).toContain("23 set aside");
+    const slider = wrapper.find('[data-testid="cts-slider-min_score"]');
+    slider.element.value = "4.5";
+    await slider.trigger("input");
+    expect(floor.text()).toContain("★ 4.5");
+    expect(api.fetchCharacterSetSuggestion).toHaveBeenCalledTimes(1);
+    await slider.trigger("change");
+    await flushPromises();
+    expect(api.fetchCharacterSetSuggestion).toHaveBeenLastCalledWith(
+      7,
+      expect.objectContaining({ min_score: 4.5, min_likeness: 30 }),
+    );
+
+    const likeness = wrapper.find('[data-testid="cts-slider-min_likeness"]');
+    likeness.element.value = "55";
+    await likeness.trigger("input");
+    await likeness.trigger("change");
+    await flushPromises();
+    expect(api.fetchCharacterSetSuggestion).toHaveBeenLastCalledWith(
+      7,
+      expect.objectContaining({ min_score: 4.5, min_likeness: 55 }),
+    );
+    wrapper.unmount();
+  });
+
+  it("asks again with how much a kind of variety matters", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    const wrapper = mountDialog();
+    await flushPromises();
+    const framing = wrapper.find('[data-testid="cts-variety-framing_variety"]');
+    expect(framing.text()).toContain("a missing framing always wins");
+    expect(
+      framing.find('[role="radio"][aria-checked="true"]').text(),
+    ).toBe("Important");
+    await framing
+      .findAll('[role="radio"]')
+      .find((b) => b.text() === "Somewhat")
+      .trigger("click");
+    await flushPromises();
+    expect(api.fetchCharacterSetSuggestion).toHaveBeenLastCalledWith(
+      7,
+      expect.objectContaining({
+        framing_variety: "somewhat",
+        expression_variety: "important",
+      }),
+    );
+    expect(framing.text()).toContain("a gap beats a repeat up to 60% better");
+    wrapper.unmount();
+  });
+
+  it("stops a floor slider at the best value among the pictures", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue({
+      ...suggestion(),
+      limits: { min_likeness: 80, min_score: 4.5 },
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    const slider = wrapper.find('[data-testid="cts-slider-min_likeness"]');
+    // The track keeps its whole scale; the part past 80 is hatched.
+    expect(slider.attributes("max")).toBe("100");
+    const floor = wrapper.find('[data-testid="cts-floor-min_likeness"]');
+    expect(floor.find(".cts-range__cap").attributes("style")).toContain(
+      "width: 20%",
+    );
+    slider.element.value = "95";
+    await slider.trigger("input");
+    expect(slider.element.value).toBe("80");
+    await slider.trigger("change");
+    await flushPromises();
+    expect(api.fetchCharacterSetSuggestion).toHaveBeenLastCalledWith(
+      7,
+      expect.objectContaining({ min_likeness: 80 }),
+    );
+    slider.element.value = "60";
+    await slider.trigger("input");
+    expect(slider.element.value).toBe("60");
+    wrapper.unmount();
+  });
+
+  it("greys a pick left out by hand and takes the next one in its place", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    api.createPictureSet.mockResolvedValue({ picture_set: { id: 58 } });
+    api.bulkAddPicturesToSet.mockResolvedValue({ added: 15 });
+    const wrapper = mountDialog();
+    await flushPromises();
+    const tiles = () => wrapper.findAll('[data-testid="cts-pick"]');
+    const toggles = () => wrapper.findAll('[data-testid="cts-pick-toggle"]');
+    expect(tiles()).toHaveLength(15);
+    await toggles()[1].trigger("click");
+    // Still shown, greyed, in its place; pick 16 joins at the end.
+    expect(tiles()).toHaveLength(16);
+    expect(tiles()[1].classes()).toContain("cts-pick--off");
+    expect(toggles()[1].attributes("aria-pressed")).toBe("true");
+    expect(shownIds(wrapper).at(-1)).toBe("/thumb/115.webp");
+    expect(button(wrapper, "Create set of").text()).toContain("15");
+    expect(wrapper.find('[data-testid="cts-group-stills"]').text()).toContain(
+      "of 49",
+    );
+
+    // It stays out when the ranking is asked for again.
+    wrapper.findAllComponents({ name: "VSwitch" })[0].vm.$emit(
+      "update:modelValue",
+      false,
+    );
+    await flushPromises();
+    expect(tiles()[1].classes()).toContain("cts-pick--off");
+
+    await button(wrapper, "Create set of").trigger("click");
+    await flushPromises();
+    const ids = api.bulkAddPicturesToSet.mock.calls[0][1];
+    expect(ids).toHaveLength(15);
+    expect(ids).not.toContain(101);
+    expect(ids).toContain(115);
+    wrapper.unmount();
+  });
+
+  it("does not blame the filters when leaving picks out is what caps the set", async () => {
+    // 135 pass, the ranking holds 50: one left out leaves 49 to choose from.
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: stills(50, { passing: 135 }) }),
+    );
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.findAll('[data-testid="cts-pick-toggle"]')[0].trigger("click");
+    const slider = wrapper.find('[data-testid="cts-slider-stills"]');
+    await slider.setValue("50");
+    expect(slider.element.value).toBe("49");
+    const notice = wrapper.find('[data-testid="cts-capped-stills"]').text();
+    expect(notice).toContain("Only 49 of the ranked pictures are left");
+    expect(notice).not.toContain("pass.");
+    wrapper.unmount();
+  });
+
+  it("puts a left-out pick back, and opens a tile's preview", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    const wrapper = mountDialog();
+    await flushPromises();
+    const toggle = () => wrapper.findAll('[data-testid="cts-pick-toggle"]')[0];
+    await toggle().trigger("click");
+    await toggle().trigger("click");
+    expect(wrapper.findAll('[data-testid="cts-pick"]')).toHaveLength(15);
+    expect(wrapper.find(".cts-pick--off").exists()).toBe(false);
+
+    const preview = wrapper.findComponent({ name: "TrainingPickPreview" });
+    expect(preview.props("pick")).toBeNull();
+    await wrapper.findAll(".cts-tile")[2].trigger("click");
+    expect(preview.props("pick")).toMatchObject({
+      picture_id: 102,
+      rank: 3,
+      off: false,
+    });
+    // Leaving it out from the preview is the same de-select.
+    preview.vm.$emit("toggle", 102);
+    await flushPromises();
+    expect(preview.props("pick").off).toBe(true);
+    expect(wrapper.findAll(".cts-pick--off")).toHaveLength(1);
+    preview.vm.$emit("close");
+    await flushPromises();
+    expect(preview.props("pick")).toBeNull();
     wrapper.unmount();
   });
 

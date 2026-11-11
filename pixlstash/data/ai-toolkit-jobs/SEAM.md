@@ -95,7 +95,9 @@ Verified against the local clone at v0.13.32 (`jobs/process/BaseSDTrainProcess.p
   at 3,000 to 4,000 starts again at 15% of its base rate and decays to the new end; carried on as it
   was, it would sit near zero and the extra steps would train nothing. Training on from an earlier
   step to the old total repeats the original schedule exactly. Every schedule is offered.
-- **`loss_log.db`** drops rows past the resumed step by itself.
+- **`loss_log.db`** drops rows past the resumed step by itself, on its first logged step. When an
+  earlier step sets a take aside, PixlStash copies the log into the take and drops those rows
+  itself first, so the abandoned steps' loss is kept and progress never reads their last step.
 - **From the final:** PixlStash renames `<name>.safetensors` to `<name>_<step:09d>.safetensors` (on
   POSIX the rename makes it the newest ctime; on Windows ctime is creation time and the final was
   created last anyway), raises `train.steps`, sets `train.skip_first_sample`, and

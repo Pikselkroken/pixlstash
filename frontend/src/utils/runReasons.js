@@ -412,6 +412,17 @@ export function readReason(reason) {
       }
       return read(nodes.map(pixlstashNodeSentence).join(" "));
     }
+    case "unwired_inputs": {
+      // A required input with nothing connected, which ComfyUI would refuse
+      // the whole run for. Named by the node's title, else its class.
+      const said = (reason.inputs || [])
+        .filter(Boolean)
+        .map((input) => `${input.field} on ${input.title || input.class_type}`);
+      const what = said.length ? [...new Set(said)].join(", ") : "one of its inputs";
+      return read(
+        `Nothing is connected to ${what}, so ComfyUI would refuse to run this. Open it in ComfyUI and connect it, or go back to an earlier version of the workflow.`,
+      );
+    }
     case "no_save_node":
       return read("This graph saves no picture or video, so a run would produce nothing to keep.");
     case "a1111":

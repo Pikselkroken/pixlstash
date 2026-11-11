@@ -903,6 +903,10 @@ Seven rules the client must not re-derive:
    option. The body answers it with `choices: [{node_id, field, value}]`,
    applied after `values` and for that run only; the Run popup offers each as
    a select and re-asks.
+   `unwired_inputs: {inputs: [{node_id, class_type, title, field}]}` - a
+   required input that takes a link and has none, on a node some output
+   reads, which ComfyUI would refuse the whole prompt for (a graph saved from
+   a canvas that could not draw one of its nodes loses that node's links).
    `picture_input_unfilled` replaced `fixed_input_deleted` in #1457 with the
    same payload shape plus each input's `title` (a slot label is a hash); a client that only knows the old code no longer
    recognises the refusal and must fall back to its generic sentence. It names
@@ -1404,9 +1408,10 @@ the two sides have agreed:
    family of the base model the shelf identified it as
    (`model_shelf_service.base_model_family`: filename guesses included, the
    same value as `base_model_family` on its `GET /adapters` or
-   `GET /checkpoints` row, where `family` stays the stated-only one). Both are
-   null where the shelf does not hold the file or the name could be more than
-   one file. They let a client narrow workflows to a LoRA's base model, and
+   `GET /checkpoints` row, where `family` stays the stated-only one). `sha256`
+   is null where the shelf does not hold the file or the name could be more
+   than one file; a base model's `base_model_family` is then the one its
+   filename names (`flux1-dev` is `flux1`), null only where that names none. They let a client narrow workflows to a LoRA's base model, and
    match the checkpoint against a hand-made workflow set, without another
    request: Create with LoRA… does both (`frontend/src/utils/loraWorkflows.js`).
 
@@ -1988,14 +1993,21 @@ Any other value, including a malformed `__group:abc`, is a literal tag name as b
 
 ### 2.7 The training-set suggestion contract
 
-`GET /training/character_set_suggestion?character_id=&include_<reason>=`
+`GET /training/character_set_suggestion?character_id=&include_<reason>=&min_likeness=&min_score=&framing_variety=&expression_variety=`
 (owner-only) answers `{character_name, set_name, has_clips, targets, stills,
 clips}`. Each group carries `candidates`, `passing`, `picks` (up to 50, best
 first: `{picture_id, rank, likeness 0-100, buckets: {framing: [...],
 expression: [...]}}`), `excluded` and `would_add` per reason, and `available`
 (passing pictures per label). The reasons are `other_people`,
-`near_duplicates`, `low_quality` and `low_likeness`; each flag defaults to
-false, so every reason sets its pictures aside unless the client lets them in.
+`near_duplicates`, `low_quality` and `low_likeness`. The first two have an
+`include_<reason>` flag, false by default, so they set their pictures aside
+unless the client lets them in. The other two are floors the client sets:
+`min_likeness` (0-100, default 30) and `min_score` (1-5, default 3.0; the
+rating where one was given, the smart score where not). `framing_variety` and
+`expression_variety` are each `unimportant`, `somewhat` or `important` (the
+default). `limits` holds the highest `min_likeness` and `min_score` that still
+let one of the character's pictures through, for the client to stop its
+sliders at.
 `targets` holds a share per label: a set of N wants `max(1, round(share * N))`,
 and the client applies the same rule to draw its coverage bars. The client
 takes a prefix of `picks` per group and creates the set itself

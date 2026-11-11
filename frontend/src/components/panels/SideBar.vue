@@ -54,7 +54,10 @@ import {
   listLibraryFolders,
   openLibraryFolder,
 } from "../../api/libraries";
-import { getFolderStructureCommitStatus } from "../../api/folderStructure";
+import {
+  cancelFolderStructureRead,
+  getFolderStructureCommitStatus,
+} from "../../api/folderStructure";
 import { deleteProject, getProjectSummary } from "../../api/projects";
 import {
   listReferenceFolders,
@@ -844,6 +847,35 @@ watch(
   { immediate: true },
 );
 
+// What the row calls the folder: its name, never the whole path, which the
+// sidebar's width cut off mid-word. The tooltip carries the path.
+const pendingName = computed(() => {
+  const entry = pendingForThisLibrary.value;
+  if (!entry) return "";
+  return (
+    entry.label || entry.path.split(/[\\/]/).filter(Boolean).pop() || entry.path
+  );
+});
+
+/**
+ * The row's dismiss: forget the entry, and stop its read if one is still
+ * running, since nothing would be left to show what it found. The server
+ * answers a settled read with its status and changes nothing, and a commit
+ * that has started is not a read and carries on.
+ */
+function dismissPendingMapping() {
+  const entry = pendingForThisLibrary.value;
+  if (entry?.taskId && !entry.commitTaskId) {
+    cancelFolderStructureRead(entry.taskId).catch((error) => {
+      console.warn("Could not cancel the dismissed folder read", {
+        taskId: entry.taskId,
+        error,
+      });
+    });
+  }
+  mappingStore.clear();
+}
+
 /** The "Finish organising…" row: the same check as every other way in. */
 async function openPendingMapping() {
   const entry = pendingForThisLibrary.value;
@@ -949,6 +981,17 @@ async function _offerLoosePictures() {
   if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
   const path = activeRoot.value;
   if (!path || !librariesStore.canManage) return;
+  // A library emptied into the scrapheap is not a new one: its pictures are
+  // still on disk, so the count below would offer to set up a library that
+  // is already set up (and did, after a select-all delete).
+  try {
+    const heap = await getCharacterSummary(SCRAPHEAP_PICTURES_ID, undefined);
+    if (heap?.image_count > 0) return;
+  } catch (error) {
+    console.warn("Could not count the scrapheap before offering an import", {
+      error,
+    });
+  }
   // On desktop the startup screen may have read this very folder already,
   // alongside the runtime download. Resuming that read is the whole point of
   // doing it there: the wizard opens on its questions instead of on a second
@@ -6128,30 +6171,47 @@ defineExpose({
 
           <!-- A pending folder read for this library: the wizard's way back
                in. -->
-          <button
+          <div
             v-if="pendingForThisLibrary && !isReadOnly"
-            type="button"
-            class="sidebar-list-item sidebar-mapping-resume-row"
-            @click="openPendingMapping"
+            class="sidebar-mapping-resume"
           >
-            <Tooltip
-              :text="
-                pendingForThisLibrary.taskId
-                  ? 'The scan is kept - reopening this does not re-scan'
-                  : 'Reopening this starts scanning that folder'
-              "
-              activator="parent"
-            />
-            <span class="sidebar-list-icon"
-              ><v-icon size="16">mdi-map-marker-path</v-icon></span
+            <button
+              type="button"
+              class="sidebar-list-item sidebar-mapping-resume-row"
+              @click="openPendingMapping"
             >
-            <span class="sidebar-list-label"
-              ><span class="sidebar-list-label-text"
-                >Finish organising
-                {{ pendingForThisLibrary.label || pendingForThisLibrary.path }}…</span
-              ></span
+              <Tooltip
+                :text="`${pendingForThisLibrary.path}: ${
+                  pendingForThisLibrary.taskId
+                    ? 'the scan is kept, reopening this does not re-scan'
+                    : 'reopening this starts scanning that folder'
+                }`"
+                activator="parent"
+              />
+              <span class="sidebar-list-icon"
+                ><v-icon size="16">mdi-map-marker-path</v-icon></span
+              >
+              <span class="sidebar-list-label"
+                ><span class="sidebar-list-label-text"
+                  >Finish organising {{ pendingName }}…</span
+                ></span
+              >
+            </button>
+            <button
+              type="button"
+              class="sidebar-find-clear"
+              aria-label="Dismiss this reminder"
+              data-testid="sidebar-mapping-dismiss"
+              @click="dismissPendingMapping"
             >
-          </button>
+              <Tooltip
+                text="Dismiss this reminder"
+                activator="parent"
+                :describe="false"
+              />
+              <v-icon size="14">mdi-close</v-icon>
+            </button>
+          </div>
           <!-- In a project's scope the People and Sets "+" open these: make
                a new one in the project, or tick existing ones in or out. -->
           <Teleport to="body">

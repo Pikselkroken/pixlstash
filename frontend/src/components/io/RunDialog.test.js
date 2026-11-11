@@ -486,7 +486,7 @@ describe("switching to another workflow", () => {
   it("offers the workflow alone, never a list of stack members (#1623)", async () => {
     const wrapper = await mountRun();
     expect(wrapper.vm.workflowOptions).toEqual([
-      { value: KEY, label: "Cinematic portrait" },
+      { value: KEY, label: "Cinematic portrait", chips: [], chipDetails: {} },
     ]);
   });
 
@@ -1632,7 +1632,7 @@ describe("\"Run a workflow on these…\", which opens with no workflow chosen", 
     wrapper.vm.workflowId = KEY;
     await flushPromises();
 
-    expect(wrapper.vm.workflowOptions).toEqual([
+    expect(wrapper.vm.workflowOptions.map(({ value, label }) => ({ value, label }))).toEqual([
       { value: KEY, label: "Cinematic portrait" },
       { value: `auto:${"e".repeat(64)}`, label: "Portrait" },
     ]);
@@ -3183,14 +3183,23 @@ describe("Create with LoRA", () => {
     }));
   });
 
-  it("narrows the picker to the LoRA's base model, unknowns after", async () => {
+  it("narrows the picker to the LoRA's base model, unknowns counted", async () => {
     const wrapper = await mountRun(fromPerson);
     expect(listAdapters).toHaveBeenCalledWith({ fileKind: "adapter", characterId: 3 });
+    // Each row reads as its card on the Workflows grid does: the name over
+    // the base model and the type. Only what the LoRA is for is listed: a
+    // workflow whose base model nobody has read is counted, not offered.
     expect(wrapper.vm.workflowOptions).toEqual([
-      { value: KREA, label: "Krea portrait" },
-      { value: UNREAD, label: "Unread (base model not known)" },
+      {
+        value: KREA,
+        label: "Krea portrait",
+        chips: ["model", "T2I"],
+        chipDetails: {},
+      },
     ]);
-    expect(wrapper.text()).toContain("Not listed: 1 for another base model.");
+    expect(wrapper.text()).toContain(
+      "Not listed: 1 for another base model, 1 whose base model is not known.",
+    );
     // It opens on the best fit rather than on an empty picker.
     expect(getWorkflowCard).toHaveBeenCalledWith(KREA);
   });

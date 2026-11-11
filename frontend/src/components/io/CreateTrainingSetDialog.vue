@@ -3,7 +3,7 @@
     :open="open"
     title="Create a training set"
     :subtitle="subtitle"
-    size="xl"
+    size="2xl"
     :pad-body="false"
     :persistent="busy"
     @close="close"
@@ -82,12 +82,36 @@
             </p>
             <ul class="cts-sheet">
               <li
-                v-for="p in g.shown"
+                v-for="p in tilesOf(g)"
                 :key="p.picture_id"
                 class="cts-pick"
+                :class="{ 'cts-pick--off': p.off }"
                 data-testid="cts-pick"
               >
-                <div class="cts-tile">
+                <button
+                  type="button"
+                  class="cts-pick__x"
+                  :aria-label="
+                    p.off
+                      ? `Put pick ${p.rank} back in the set`
+                      : `Leave pick ${p.rank} out of the set`
+                  "
+                  :aria-pressed="p.off ? 'true' : 'false'"
+                  :disabled="busy || !!created"
+                  data-testid="cts-pick-toggle"
+                  @click="toggleOff(p.picture_id)"
+                >
+                  <v-icon size="14">{{ p.off ? "mdi-undo" : "mdi-close" }}</v-icon>
+                </button>
+                <div
+                  class="cts-tile"
+                  role="button"
+                  tabindex="0"
+                  :aria-label="`Preview pick ${p.rank}`"
+                  @click="previewId = p.picture_id"
+                  @keydown.enter.prevent.stop="previewId = p.picture_id"
+                  @keydown.space.prevent="previewId = p.picture_id"
+                >
                   <img
                     class="cts-tile__img"
                     :src="pictureThumbnailUrl(p.picture_id)"
@@ -220,8 +244,71 @@
         </div>
       </template>
 
-      <div class="cts-gapbox">
-        <h4 class="cts-gk">Set aside</h4>
+      <div class="cts-gapbox" data-testid="cts-choosing">
+        <TrainingPickPreview
+          :pick="previewPick"
+          :locked="busy || !!created"
+          @close="previewId = null"
+          @toggle="toggleOff"
+        />
+        <h3 class="cts-secl">Choosing</h3>
+        <div class="cts-two">
+          <div
+            v-for="f in floorRows"
+            :key="f.key"
+            class="cts-ctl"
+            :data-testid="`cts-floor-${f.key}`"
+          >
+            <div class="cts-ctl__h">
+              <label :for="`${uid}-${f.key}`">{{ f.title }}</label>
+              <span class="cts-val">{{ f.shown }}</span>
+            </div>
+            <div class="cts-range">
+              <input
+                :id="`${uid}-${f.key}`"
+                class="cts-range__input"
+                type="range"
+                :min="f.min"
+                :max="f.max"
+                :step="f.step"
+                :value="choosing[f.key]"
+                :disabled="busy || !!created"
+                :aria-valuetext="`${f.shown}, ${f.count} set aside`"
+                :data-testid="`cts-slider-${f.key}`"
+                @input="onFloor(f, $event)"
+                @change="load"
+                @keydown.enter.prevent
+              />
+              <span
+                v-if="f.capPercent > 0"
+                class="cts-range__cap"
+                :style="{ width: `${f.capPercent}%` }"
+                aria-hidden="true"
+              />
+            </div>
+            <small class="cts-note"><b>{{ f.count }}</b> set aside</small>
+          </div>
+        </div>
+        <div
+          v-for="v in varietyRows"
+          :key="v.key"
+          class="cts-ctl"
+          :data-testid="`cts-variety-${v.key}`"
+          @keydown.enter.prevent
+        >
+          <div class="cts-ctl__h">
+            <span>{{ v.title }}</span>
+            <small class="cts-note">{{ v.hint }}</small>
+          </div>
+          <Segmented
+            full
+            :model-value="choosing[v.key]"
+            :aria-label="v.ariaLabel"
+            :options="VARIETY_STEPS"
+            @update:model-value="(id) => setVariety(v.key, id)"
+          />
+        </div>
+        <div class="cts-two">
         <div
           v-for="r in reasonRows"
           :key="r.key"
@@ -229,10 +316,7 @@
           :data-testid="`cts-reason-${r.key}`"
           @keydown.enter.prevent
         >
-          <span class="cts-ex__t">
-            <span>{{ r.title }}</span>
-            <small>{{ r.hint }}</small>
-          </span>
+          <span class="cts-ex__t">Set aside {{ r.title.toLowerCase() }}</span>
           <span class="cts-badge">{{ r.count }}</span>
           <v-switch
             :model-value="setAside[r.key]"
@@ -240,10 +324,11 @@
             density="compact"
             hide-details
             :aria-label="`Set aside: ${r.title}`"
-            :disabled="busy || loading"
+            :disabled="busy || loading || !!created"
             :data-testid="`cts-switch-${r.key}`"
             @update:model-value="(v) => toggle(r.key, !!v)"
           />
+        </div>
         </div>
       </div>
     </aside>
@@ -296,7 +381,10 @@
  * Ranks the character's stills and clips (GET /training/character_set_suggestion)
  * and takes a prefix of each ranking with a slider, so a bigger set only adds
  * the next pick. The coverage column measures the picks against a target per
- * framing and expression. "Create" makes an ordinary child set under the
+ * framing and expression; under it, Choosing sets the two floors, how much
+ * each kind of variety matters and the two set-aside switches. A tile opens
+ * its picture at full size; its corner button leaves it out of the set, and
+ * the next pick in the ranking takes its place. "Create" makes an ordinary child set under the
  * character; the user edits it like any other and trains on it.
  */
 import { computed, nextTick, ref, useId, watch } from "vue";
@@ -313,6 +401,7 @@ import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
+import TrainingPickPreview from "./TrainingPickPreview.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -326,23 +415,50 @@ const emit = defineEmits(["close", "created", "train"]);
 
 const TRACK_MAX = 50;
 const DEFAULT_SIZE = { stills: 15, clips: 5 };
+// The two yes-or-no reasons: a switch each.
 const REASONS = [
+  { key: "other_people", title: "Other people" },
+  { key: "near_duplicates", title: "Near-duplicates" },
+];
+// What the dialog builds until a control is moved. The floors match the
+// backend's defaults; "important" lets a missing framing beat any repeat.
+const CHOOSING = {
+  min_likeness: 30,
+  min_score: 3,
+  framing_variety: "important",
+  expression_variety: "important",
+};
+// `reason` is the floor's key in the response's excluded and would_add.
+const FLOORS = [
   {
-    key: "other_people",
-    title: "Other people",
-    hint: "Someone else in frame",
+    key: "min_likeness",
+    reason: "low_likeness",
+    title: "Minimum likeness",
+    min: 0,
+    max: 100,
+    step: 1,
   },
   {
-    key: "near_duplicates",
-    title: "Near-duplicates",
-    hint: "Weaker copies of one shot",
+    key: "min_score",
+    reason: "low_quality",
+    title: "Minimum score",
+    min: 1,
+    max: 5,
+    step: 0.5,
   },
+];
+const VARIETY_STEPS = [
+  { id: "unimportant", label: "Unimportant" },
+  { id: "somewhat", label: "Somewhat" },
+  { id: "important", label: "Important" },
+];
+const VARIETIES = [
+  { key: "framing_variety", title: "Different framings", word: "framing" },
   {
-    key: "low_quality",
-    title: "Below the quality floor",
-    hint: "Scored 1–2, or low smart score",
+    key: "expression_variety",
+    title: "Different expressions",
+    word: "expression",
   },
-  { key: "low_likeness", title: "Below the likeness floor", hint: "" },
 ];
 const AXIS_TITLES = { framing: "Framing", expression: "Expression" };
 
@@ -353,6 +469,15 @@ const sizes = ref({ ...DEFAULT_SIZE });
 // Every reason sets its pictures aside until the user switches it off.
 const allSetAside = () => Object.fromEntries(REASONS.map((r) => [r.key, true]));
 const setAside = ref(allSetAside());
+const choosing = ref({ ...CHOOSING });
+// The ranking as the server gave it. `data` is this without the picks the
+// user left out by hand, so the next pick in the ranking takes each one's
+// place and every count follows.
+// ponytail: replacements come from the 50 ranked picks only; ask the server
+// for a longer ranking if people leave out many.
+const ranked = ref(null);
+const removed = ref(new Set());
+const previewId = ref(null);
 const coverageKey = ref("stills");
 const busy = ref(false);
 // A request is in flight: the picks on screen are for the previous filters.
@@ -441,13 +566,19 @@ function gapsOf(key) {
 }
 
 function wouldAddText(group, unit) {
-  const extra = REASONS.filter((r) => setAside.value[r.key])
-    .map((r) => [r.title, group.would_add[r.key] || 0])
+  const extra = [
+    ...REASONS.filter((r) => setAside.value[r.key]).map((r) => [
+      `Keeping ${r.title.toLowerCase()}`,
+      r.key,
+    ]),
+    ...FLOORS.map((f) => [`No ${f.title.toLowerCase()}`, f.reason]),
+  ]
+    .map(([what, reason]) => [what, group.would_add[reason] || 0])
     .filter(([, n]) => n > 0);
   if (!extra.length) return "";
   const [first, ...rest] = extra;
-  return ` Turning off ${first[0]} would let ${first[1]} more ${unit} in${rest
-    .map(([t, n]) => `, ${t} ${n} more`)
+  return ` ${first[0]} would let ${first[1]} more ${unit} in${rest
+    .map(([t, n]) => `, ${t[0].toLowerCase()}${t.slice(1)} ${n} more`)
     .join("")}.`;
 }
 
@@ -478,7 +609,10 @@ const visibleGroups = computed(() => {
       capPercent:
         key === "stills" ? ((trackMax - Math.max(reachable, min)) / span) * 100 : 0,
       capped: reachable < TRACK_MAX && size >= reachable && key === "stills",
-      cappedText: `Only ${reachable} ${unit} pass.${wouldAddText(group, unit)}`,
+      cappedText:
+        group.passing > reachable
+          ? `Only ${reachable} of the ranked ${unit} are left: the rest were left out by hand. Put one back to go higher.`
+          : `Only ${reachable} ${unit} pass.${wouldAddText(group, unit)}`,
       noneText: `0 ${unit} pass.${wouldAddText(group, unit)}`,
       mark: firstGap
         ? {
@@ -520,17 +654,81 @@ const coverage = computed(() => {
   };
 });
 
+function withoutRemoved(result) {
+  const strip = (group) => {
+    const picks = group.picks.filter((p) => !removed.value.has(p.picture_id));
+    return {
+      ...group,
+      picks,
+      passing: group.passing - (group.picks.length - picks.length),
+    };
+  };
+  return { ...result, stills: strip(result.stills), clips: strip(result.clips) };
+}
+
+/** A group's tiles: its picks, and in their ranked place the ones left out. */
+function tilesOf(g) {
+  const off = (ranked.value?.[g.key]?.picks || [])
+    .filter((p) => removed.value.has(p.picture_id))
+    .map((p) => ({ ...p, off: true }));
+  return off.length ? [...g.shown, ...off].sort((a, b) => a.rank - b.rank) : g.shown;
+}
+
+const previewPick = computed(() => {
+  if (previewId.value == null || !ranked.value) return null;
+  const p = [...ranked.value.stills.picks, ...ranked.value.clips.picks].find(
+    (pick) => pick.picture_id === previewId.value,
+  );
+  return p
+    ? { ...p, label: chipLine(p), off: removed.value.has(p.picture_id) }
+    : null;
+});
+
+function toggleOff(id) {
+  if (busy.value || created.value || !ranked.value) return;
+  const next = new Set(removed.value);
+  if (!next.delete(id)) next.add(id);
+  removed.value = next;
+  data.value = withoutRemoved(ranked.value);
+  for (const key of ["stills", "clips"]) {
+    sizes.value[key] = clampSize(key, sizes.value[key]);
+  }
+}
+
+/** How many pictures and clips *reason* sets aside; a dash before the answer. */
+function setAsideCount(reason) {
+  if (!data.value) return "–";
+  return (
+    (data.value.stills.excluded[reason] || 0) +
+    (data.value.has_clips ? data.value.clips.excluded[reason] || 0 : 0)
+  );
+}
+
 const reasonRows = computed(() =>
-  REASONS.map((r) => ({
-    ...r,
-    hint:
-      r.key === "low_likeness"
-        ? `Face matches ${characterName.value} poorly`
-        : r.hint,
-    count: data.value
-      ? (data.value.stills.excluded[r.key] || 0) +
-        (data.value.has_clips ? data.value.clips.excluded[r.key] || 0 : 0)
-      : "–",
+  REASONS.map((r) => ({ ...r, count: setAsideCount(r.key) })),
+);
+
+const floorRows = computed(() =>
+  FLOORS.map((f) => ({
+    ...f,
+    shown:
+      f.key === "min_score"
+        ? `★ ${choosing.value.min_score.toFixed(1)}`
+        : String(choosing.value[f.key]),
+    count: setAsideCount(f.reason),
+    capPercent: ((f.max - floorCap(f)) / (f.max - f.min)) * 100,
+  })),
+);
+
+const varietyRows = computed(() =>
+  VARIETIES.map((v) => ({
+    ...v,
+    ariaLabel: `How important ${v.title.toLowerCase()} are`,
+    hint: {
+      unimportant: "the best pictures win",
+      somewhat: "a gap beats a repeat up to 60% better",
+      important: `a missing ${v.word} always wins`,
+    }[choosing.value[v.key]],
   })),
 );
 
@@ -571,13 +769,13 @@ async function load() {
   const seq = ++fetchSeq;
   loadError.value = "";
   loading.value = true;
-  const include = Object.fromEntries(
-    REASONS.map((r) => [r.key, !setAside.value[r.key]]),
-  );
+  const query = { ...choosing.value };
+  for (const r of REASONS) query[`include_${r.key}`] = !setAside.value[r.key];
   try {
-    const result = await fetchCharacterSetSuggestion(props.character.id, include);
+    const result = await fetchCharacterSetSuggestion(props.character.id, query);
     if (seq !== fetchSeq) return;
-    data.value = result;
+    ranked.value = result;
+    data.value = withoutRemoved(result);
     for (const key of ["stills", "clips"]) {
       sizes.value[key] = clampSize(key, sizes.value[key]);
     }
@@ -597,6 +795,9 @@ watch(
   () => props.open,
   (open) => {
     if (!open) return;
+    choosing.value = { ...CHOOSING };
+    removed.value = new Set();
+    previewId.value = null;
     data.value = null;
     created.value = null;
     createError.value = "";
@@ -610,6 +811,25 @@ watch(
 
 function toggle(key, on) {
   setAside.value = { ...setAside.value, [key]: on };
+  load();
+}
+
+/** The highest a floor goes: past it, it alone sets every picture aside. */
+function floorCap(f) {
+  const limit = data.value?.limits?.[f.key] ?? f.max;
+  return Math.max(f.min, Math.min(f.max, limit));
+}
+
+function onFloor(f, event) {
+  const value = Math.min(Number(event.target.value), floorCap(f));
+  choosing.value[f.key] = value;
+  // The track keeps its whole scale (hatched past the cap); the thumb stops.
+  if (String(value) !== event.target.value) event.target.value = String(value);
+}
+
+function setVariety(key, id) {
+  if (busy.value || created.value) return;
+  choosing.value = { ...choosing.value, [key]: id };
   load();
 }
 
@@ -704,7 +924,7 @@ function close() {
 
 /* The coverage column stays in view while the picks scroll. */
 .cts-pane--side {
-  flex: 0 0 280px;
+  flex: 0 0 404px;
   gap: var(--space-4);
   border-left: 1px solid rgb(var(--v-theme-divider));
 }
@@ -768,14 +988,18 @@ function close() {
 .cts-range__cap {
   position: absolute;
   right: 0;
-  height: 4px;
+  height: var(--space-3);
   pointer-events: none;
   border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-  background: repeating-linear-gradient(
-    90deg,
-    rgba(var(--v-theme-on-surface), 0.3) 0 3px,
-    transparent 3px 6px
-  );
+  /* Opaque under the hatch: the browser draws the track itself, light or
+     dark as it likes, and a hatch alone vanished on a light one. */
+  background:
+    repeating-linear-gradient(
+      90deg,
+      rgba(var(--v-theme-on-surface), 0.45) 0 3px,
+      transparent 3px 6px
+    ),
+    rgb(var(--v-theme-surface));
 }
 
 .cts-val {
@@ -817,7 +1041,8 @@ function close() {
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* Six across at the dialog's full width, fewer in a narrow window. */
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
   gap: var(--space-4) var(--space-3);
 }
 
@@ -834,6 +1059,50 @@ function close() {
   overflow: hidden;
   border-radius: var(--radius-md);
   background: rgb(var(--v-theme-input-background));
+}
+
+.cts-tile[role="button"] {
+  cursor: zoom-in;
+}
+
+/* Left out by hand: greyed, still in its ranked place so it can come back. */
+.cts-pick--off .cts-tile,
+.cts-pick--off .cts-cap {
+  opacity: var(--opacity-disabled);
+}
+
+.cts-pick--off .cts-tile__img {
+  filter: grayscale(1);
+}
+
+.cts-pick {
+  position: relative;
+}
+
+.cts-pick__x {
+  position: absolute;
+  z-index: var(--z-raised);
+  top: var(--space-2);
+  right: var(--space-2);
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  cursor: pointer;
+}
+
+.cts-pick__x:hover:not(:disabled) {
+  background: var(--scrim-photo-strong);
+}
+
+.cts-pick__x:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
 }
 
 .cts-tile__img {
@@ -1031,13 +1300,34 @@ function close() {
 .cts-ex__t {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
 }
 
-.cts-ex__t small {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+/* The two floors side by side, each with its own count under its slider. */
+.cts-two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-5);
+}
+
+.cts-ctl {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-sm);
+}
+
+.cts-ctl__h {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 var(--space-3);
+}
+
+.cts-note b {
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .cts-ex .v-switch {

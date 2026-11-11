@@ -247,7 +247,7 @@ const open = computed(() => props.modelValue);
         </tr>
         <tr :class="{ 'shortcut-disabled': isReadOnly }">
           <td><kbd>F2</kbd></td>
-          <td>Edit selected character or picture set</td>
+          <td>Rename or edit the person or picture set on screen</td>
         </tr>
         <tr>
           <td><kbd>?</kbd> / <kbd class="kbd-or">F1</kbd></td>

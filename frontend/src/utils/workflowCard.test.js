@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   cardAccessibleName,
   factChips,
+  pickerOption,
   fitChipCount,
   ratingLabel,
   baseModels,
@@ -121,6 +122,38 @@ describe("card chips", () => {
     expect(factChips({ ...CARD, hidden: false }).map((c) => c.label)).toEqual([
       "txt2img",
     ]);
+  });
+});
+
+describe("pickerOption", () => {
+  const card = {
+    id: "auto:1",
+    name: "Krea 2: Text to Image",
+    type: "txt2img",
+    type_label: "Text to Image",
+    imported: true,
+    models: [
+      { kind: "unet", name: "krea2", title: "Krea 2" },
+      { kind: "controlnet", name: "canny", title: "Canny XL" },
+    ],
+  };
+
+  it("draws a card as the grid does: base model, then the facts row", () => {
+    expect(pickerOption(card)).toEqual({
+      value: "auto:1",
+      label: "Krea 2: Text to Image",
+      chips: ["Krea 2", "T2I", "ControlNet", "imported"],
+      chipDetails: { T2I: "Text to Image", ControlNet: "Canny XL" },
+    });
+  });
+
+  it("says nothing it has not read", () => {
+    expect(pickerOption({ id: "auto:2", name: "Bare" })).toEqual({
+      value: "auto:2",
+      label: "Bare",
+      chips: [],
+      chipDetails: {},
+    });
   });
 });
 

@@ -30,7 +30,7 @@ from typing import Any, Literal, Optional
 
 import numpy as np
 import psutil
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, or_
@@ -1174,15 +1174,17 @@ def create_router(server) -> APIRouter:
         excluded: dict[str, int] = Field(
             ...,
             description=(
-                "How many each reason sets aside, whether or not it is "
+                "How many each reason sets aside (other_people, "
+                "near_duplicates, low_quality for the minimum score, "
+                "low_likeness for the minimum likeness), whether or not it is "
                 "included; a picture can fail more than one."
             ),
         )
         would_add: dict[str, int] = Field(
             ...,
             description=(
-                "How many more would pass with only that reason included "
-                "(0 when it already is)."
+                "How many more would pass with only that reason included, "
+                "or that minimum dropped (0 when it already is)."
             ),
         )
         available: dict[str, dict[str, int]] = Field(
@@ -1211,6 +1213,13 @@ def create_router(server) -> APIRouter:
             description=(
                 "The share of a set each label should hold; a set of N wants "
                 "max(1, round(share * N))."
+            ),
+        )
+        limits: dict[str, float] = Field(
+            ...,
+            description=(
+                "The highest min_likeness and min_score that still let one of "
+                "the character's pictures through."
             ),
         )
 
@@ -3198,9 +3207,10 @@ def create_router(server) -> APIRouter:
         description=(
             "Ranks the character's pictures and clips for a LoRA training set: "
             "likeness and quality first, then variety in framing, expression "
-            "and look. Pictures with someone else in frame, near copies, low "
-            "quality or a poor likeness are set aside unless included. "
-            "Computed on each call; nothing is stored. Owner-only."
+            "and look. Pictures with someone else in frame and near copies "
+            "are set aside unless included; so are pictures under the minimum "
+            "likeness or the minimum score. Computed on each call; nothing is "
+            "stored. Owner-only."
         ),
     )
     def get_character_set_suggestion(
@@ -3208,8 +3218,29 @@ def create_router(server) -> APIRouter:
         character_id: int,
         include_other_people: bool = False,
         include_near_duplicates: bool = False,
-        include_low_quality: bool = False,
-        include_low_likeness: bool = False,
+        min_likeness: int = Query(
+            round(dataset_picker.LIKENESS_FLOOR * 100),
+            ge=0,
+            le=100,
+            description="Pictures with a likeness (0-100) below this are set aside.",
+        ),
+        min_score: float = Query(
+            dataset_picker.SCORE_FLOOR,
+            ge=1,
+            le=5,
+            description=(
+                "Pictures scoring below this are set aside: the rating where "
+                "one was given, the smart score where not."
+            ),
+        ),
+        framing_variety: Literal["unimportant", "somewhat", "important"] = Query(
+            "important",
+            description="How much a framing the picks lack counts for a picture.",
+        ),
+        expression_variety: Literal["unimportant", "somewhat", "important"] = Query(
+            "important",
+            description="How much an expression the picks lack counts for a picture.",
+        ),
     ):
         _ensure_secure(request)
         engine = getattr(server.vault, "_engine", None)
@@ -3238,9 +3269,10 @@ def create_router(server) -> APIRouter:
             include={
                 "other_people": include_other_people,
                 "near_duplicates": include_near_duplicates,
-                "low_quality": include_low_quality,
-                "low_likeness": include_low_likeness,
             },
+            min_likeness=min_likeness / 100,
+            min_score=min_score,
+            variety={"framing": framing_variety, "expression": expression_variety},
         )
 
         def group(key, is_clip):
@@ -3262,6 +3294,7 @@ def create_router(server) -> APIRouter:
             "stills": group("stills", False),
             "clips": group("clips", True),
             "targets": dataset_picker.TARGET_SHARE,
+            "limits": dataset_picker.floor_limits(candidates),
         }
 
     @router.post(

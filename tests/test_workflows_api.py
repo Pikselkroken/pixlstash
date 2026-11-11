@@ -10418,6 +10418,45 @@ def test_a_model_this_comfyui_does_not_have_names_the_file_and_the_folder(runnab
     )
 
 
+def test_a_required_input_with_nothing_connected_is_refused_before_the_run(runnable):
+    """``unwired_inputs`` names the input ComfyUI would refuse the prompt for.
+
+    A graph saved from a canvas that could not draw its text encoder's loader
+    comes back with the encoder's ``clip`` gone. Wrong if a node no output
+    reads is named too, or if the same graph wired still carries the reason.
+    """
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"].update({"steps": 13, "cfg": 1.5, "seed": 5})
+    document["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    document["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    document["2"]["_meta"] = {"title": "Detail"}
+    # Dead: no output reads it, so ComfyUI never validates it.
+    document["9"] = {
+        "class_type": "LoraLoader",
+        "inputs": {"lora_name": "add_detail.safetensors"},
+    }
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["SaveImage"]["output_node"] = True
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+    def unwired(graph):
+        manual = create_manual_workflow(runnable.server.hub, "Cut", graph, "import")
+        payload = _preflight(runnable.owner, workflow_id=manual)
+        return [
+            (i["node_id"], i["class_type"], i["title"], i["field"])
+            for g in payload["groups"]
+            for r in g["reasons"]
+            if r["code"] == "unwired_inputs"
+            for i in r["inputs"]
+        ]
+
+    assert unwired(document) == [("2", "LoraLoader", "Detail", "clip")]
+    document["2"]["inputs"]["clip"] = ["1", 1]
+    assert unwired(document) == []
+
+
 def test_a_sampler_this_comfyui_lacks_is_offered_a_replacement(runnable):
     """``missing_choices`` names the option list and euler/simple; ``choices`` runs it.
 
@@ -14568,7 +14607,11 @@ def test_a_saved_recipes_lora_never_lands_in_a_loader_wired_into_nothing(runnabl
         },
         "2": {
             "class_type": "LoraLoader",
-            "inputs": {"lora_name": "add_detail.safetensors", "model": ["1", 0]},
+            "inputs": {
+                "lora_name": "add_detail.safetensors",
+                "model": ["1", 0],
+                "clip": ["1", 1],
+            },
         },
         "3": {
             "class_type": "KSampler",

@@ -775,6 +775,37 @@ def test_safe_job_stem_maps_hostile_names(name, expected_stem):
     assert os.path.basename(stem) == stem
 
 
+@pytest.mark.parametrize("name", ["con", "NUL", "aux.v2", "Com1", "lpt9.a.b"])
+@pytest.mark.parametrize("training_folder", [None, "shelf"])
+def test_a_windows_device_name_never_becomes_the_run_folder(
+    tmp_path, name, training_folder
+):
+    """Windows cannot make a folder named for a device, so the uuid stands in."""
+    folder = training_folder and str(tmp_path / training_folder)
+    job_id = "0123456789abcdef"
+    handle = LocalAiToolkit.handle_for(
+        str(tmp_path / "work"), job_id, name, None, folder
+    )
+    stem = os.path.basename(handle.save_root)
+    if folder and "." not in name:
+        # "con_01234567" is an ordinary name: the suffix joined the device's.
+        assert stem == f"{name}_{job_id[:8]}"
+    else:
+        assert stem == (f"{job_id}_{job_id[:8]}" if folder else job_id)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows cannot make the folder")
+def test_a_run_already_in_a_device_named_folder_keeps_it(tmp_path):
+    """Made where the name is allowed; renaming it would lose the run."""
+    work = str(tmp_path / "work")
+    os.makedirs(os.path.join(work, "output", "aux.v2"))
+    handle = LocalAiToolkit.handle_for(work, "0123456789abcdef", "aux.v2")
+    assert os.path.basename(handle.save_root) == "aux.v2"
+    # A name that only starts like a device is not one.
+    handle = LocalAiToolkit.handle_for(work, "0123456789abcdef", "console")
+    assert os.path.basename(handle.save_root) == "console"
+
+
 def test_safe_job_stem_caps_length():
     """An over-long name is capped so save_root stays within OS limits."""
     stem = safe_job_stem("x" * 500, "uuid")
