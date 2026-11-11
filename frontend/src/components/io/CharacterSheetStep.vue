@@ -152,6 +152,14 @@
             :options="workflowOptions"
             compact
           />
+          <p
+            v-if="workflowProblem"
+            class="cs-notice cs-notice--bad"
+            data-testid="cs-workflow-problem"
+          >
+            <v-icon size="16">mdi-alert-circle-outline</v-icon>
+            <span>{{ workflowProblem }}</span>
+          </p>
         </div>
       </template>
 
@@ -395,6 +403,7 @@ import {
   getRunOutcome,
   getWorkflowCard,
   listWorkflowCards,
+  preflightWorkflowRun,
   runWorkflowCard,
 } from "../../api/workflows";
 import { useTasksStore } from "../../stores/useTasksStore";
@@ -468,6 +477,10 @@ const strength = ref(0.8);
 const workflows = ref([]);
 const workflowsLoaded = ref(false);
 const workflowId = ref("");
+// The chosen workflow's pre-flight: its width/height inputs, and why it can't
+// draw a sheet ("" while it can, null while still checking).
+const workflowSizes = ref([]);
+const workflowProblem = ref(null);
 const referenceIds = ref([]);
 const runs = ref([]); // { key, status, pictureIds, message }
 const ranking = ref({}); // picture id -> RankedSheet
@@ -714,10 +727,7 @@ const zoomed = computed(() =>
 function sheetUrl(sheet) {
   if (!sheet.format) return pictureThumbnailUrl(sheet.picture_id);
   return appendShareToken(
-    buildMediaUrl({
-      backendUrl: API_BASE_URL,
-      image: { id: sheet.picture_id, format: sheet.format },
-    }),
+    buildMediaUrl({ backendUrl: API_BASE_URL, image: { id: sheet.picture_id, format: sheet.format } }),
   );
 }
 
@@ -729,6 +739,36 @@ function onZoomKey(e) {
   e.preventDefault();
   closeZoom();
 }
+
+// Pre-flight: a sheet is drawn at a size of its own, so the workflow must have
+// one to set, and it must be able to run at all.
+watch(workflowId, async (id) => {
+  workflowSizes.value = [];
+  workflowProblem.value = id ? null : "";
+  if (!id) return;
+  try {
+    const [{ card }, check] = await Promise.all([
+      getWorkflowCard(id),
+      preflightWorkflowRun({ workflow_id: id, count: 1 }, { cached: true }),
+    ]);
+    if (id !== workflowId.value) return;
+    const name = card?.name || "This workflow";
+    const sizes = (card?.defaults || []).filter((d) =>
+      ["width", "height"].includes(d.input_name),
+    );
+    const refused = (check?.groups || []).some((g) => g.reasons?.length);
+    workflowSizes.value = sizes;
+    workflowProblem.value = !sizes.length
+      ? `${name} has no picture size to set, so it can't draw a sheet.`
+      : refused
+        ? `${name} can't run as it is. Open it from Workflows to see why.`
+        : "";
+  } catch (e) {
+    if (id !== workflowId.value) return;
+    console.warn("Couldn't check the sheet workflow", id, e);
+    workflowProblem.value = `Couldn't check this workflow: ${errorMessage(e)}`;
+  }
+});
 
 watch(zoomedId, (id) => {
   if (id == null) window.removeEventListener("keydown", onZoomKey, true);
@@ -869,15 +909,7 @@ async function draw() {
       loraSha.value,
       strength.value,
     ]);
-    const { card } = await getWorkflowCard(workflowId.value);
-    const sizes = (card?.defaults || []).filter((d) =>
-      ["width", "height"].includes(d.input_name),
-    );
-    if (!sizes.length) {
-      throw new Error(
-        `${card?.name || "The workflow"} has no picture size to set, so it can't draw a sheet.`,
-      );
-    }
+    const sizes = workflowSizes.value;
     const answer = await runWorkflowCard({
       workflow_id: workflowId.value,
       prompt: sheet.prompt,
@@ -1000,6 +1032,7 @@ const canDraw = computed(
   () =>
     loaded.value &&
     !!workflowId.value &&
+    workflowProblem.value === "" &&
     !!form.description.trim() &&
     phase.value !== "filing",
 );

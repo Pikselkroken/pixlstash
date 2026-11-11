@@ -697,12 +697,16 @@ def discard_sheets(
     )
     if sheets is None:
         raise SheetNotFound(f"No character {character_id}.")
+    if sheets:
+        server.vault.db.run_task(_unlink_sources_in_session, sheets)
+        purged = list(
+            scrapheap_service.purge_scrapheap_pictures(
+                server.vault, sheets, include_protected=False
+            ).purged_ids
+        )
+    else:
+        purged = []
+    # Only now: a discard that raised above can be asked for again.
     comfyui_service.release_held(library_uuid, list(held))
-    if not sheets:
-        return []
-    server.vault.db.run_task(_unlink_sources_in_session, sheets)
-    outcome = scrapheap_service.purge_scrapheap_pictures(
-        server.vault, sheets, include_protected=False
-    )
-    logger.info("Discarded held character sheets %s", list(outcome.purged_ids))
-    return list(outcome.purged_ids)
+    logger.info("Discarded held character sheets %s", purged)
+    return purged

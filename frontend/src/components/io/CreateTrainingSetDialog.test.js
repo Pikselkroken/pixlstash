@@ -43,6 +43,7 @@ const gen = vi.hoisted(() => ({
   getRunOutcome: vi.fn(),
   getWorkflowCard: vi.fn(),
   listWorkflowCards: vi.fn(),
+  preflightWorkflowRun: vi.fn(),
   runWorkflowCard: vi.fn(),
 }));
 vi.mock("../../api/characterSheets", () => ({
@@ -61,6 +62,7 @@ vi.mock("../../api/workflows", () => ({
   getRunOutcome: gen.getRunOutcome,
   getWorkflowCard: gen.getWorkflowCard,
   listWorkflowCards: gen.listWorkflowCards,
+  preflightWorkflowRun: gen.preflightWorkflowRun,
   runWorkflowCard: gen.runWorkflowCard,
 }));
 
@@ -599,6 +601,10 @@ function sheetsWorld({ description = "", loras = [] } = {}) {
       ],
     },
   });
+  gen.preflightWorkflowRun.mockResolvedValue({
+    ok: true,
+    groups: [{ reasons: [] }],
+  });
   gen.buildSheetPrompt.mockResolvedValue({
     prompt: "{layout}",
     negative: "nsfw",
@@ -651,6 +657,45 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     const primary = wrapper.find('[data-testid="cts-generate-primary"]');
     expect(primary.text()).toContain("Draw 4 sheets");
     expect(primary.attributes("disabled")).toBeDefined();
+    wrapper.unmount();
+  });
+
+  it("refuses a workflow with no picture size, or one that can't run, before drawing", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.getWorkflowCard.mockResolvedValue({
+      card: { name: "MOSS sheet", defaults: [{ slot_label: "ks", input_name: "steps", value: 25 }] },
+    });
+    let wrapper = mountDialog();
+    await flushPromises();
+    const primary = () => wrapper.find('[data-testid="cts-generate-primary"]');
+    expect(wrapper.find('[data-testid="cs-workflow-problem"]').text()).toContain(
+      "has no picture size",
+    );
+    expect(primary().attributes("disabled")).toBeDefined();
+    wrapper.unmount();
+
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.preflightWorkflowRun.mockResolvedValue({
+      ok: false,
+      groups: [{ reasons: [{ code: "missing_models", models: [] }] }],
+    });
+    wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cs-workflow-problem"]').text()).toContain(
+      "can't run as it is",
+    );
+    expect(primary().attributes("disabled")).toBeDefined();
+    wrapper.unmount();
+
+    // The positive control: a sized workflow that runs can draw.
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cs-workflow-problem"]').exists()).toBe(false);
+    expect(primary().attributes("disabled")).toBeUndefined();
     wrapper.unmount();
   });
 

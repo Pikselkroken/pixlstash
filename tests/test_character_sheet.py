@@ -491,6 +491,33 @@ def test_a_held_sheet_is_kept_then_discarded_and_nothing_else_is(client, monkeyp
     assert again.json()["picture_ids"] == []
 
 
+def test_a_discard_that_fails_can_be_asked_for_again(client, monkeypatch):
+    """The sheet stays held until it is actually purged."""
+    server = client.server
+    library = _library_uuid(server)
+    sheet = _upload_sheet(client, [("x", 1900, 0, 1536)])
+    assert client.delete(f"{API_PREFIX}/pictures/{sheet}").status_code == 200
+    monkeypatch.setitem(
+        comfyui_service._held_pictures,
+        (library, sheet),
+        _state(server, [sheet])[sheet].pixel_sha,
+    )
+    character_id = _new_character(client, "Sheet Retry")
+
+    def refuse(*_a, **_k):
+        raise RuntimeError("disk said no")
+
+    with monkeypatch.context() as m:
+        m.setattr(character_sheet.scrapheap_service, "purge_scrapheap_pictures", refuse)
+        with pytest.raises(RuntimeError):
+            character_sheet.discard_sheets(server, library, character_id, [sheet])
+    assert comfyui_service.held_pictures(library, [sheet])
+    assert character_sheet.discard_sheets(server, library, character_id, [sheet]) == [
+        sheet
+    ]
+    assert comfyui_service.held_pictures(library, [sheet]) == {}
+
+
 def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
     character_id = _new_character(client, "Sheet Anna")
     url = f"{API_PREFIX}/characters/{character_id}/sheets/rank"
