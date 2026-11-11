@@ -391,7 +391,9 @@
     </div>
 
     <template v-if="mode === 'generate'" #footer>
-      <span class="cts-lead">{{ sheetStep?.footer?.lead }}</span>
+      <span class="cts-lead cts-lead--one" :title="sheetStep?.footer?.lead">{{
+        sheetStep?.footer?.lead
+      }}</span>
       <p v-if="sheetStep?.error" class="cts-bad" role="alert">
         {{ sheetStep.error }}
       </p>
@@ -1104,6 +1106,10 @@ function close() {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* One height for every step and state, so the dialog never resizes as
+     sheets arrive, notices show or sheets are ticked: the panes scroll
+     instead. About 680px with the title and footer, less on a short window. */
+  height: min(568px, calc(100vh - 200px));
 }
 
 .cts-split {
@@ -1683,6 +1689,16 @@ button.cts-stp__s:not(:disabled) {
   gap: var(--space-2);
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The sheet step's lead stays one line, so the footer keeps its height. */
+.cts-lead--one {
+  display: block;
+  min-width: 0;
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cts-lead b {

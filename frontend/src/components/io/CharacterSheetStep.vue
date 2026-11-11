@@ -163,48 +163,6 @@
         </div>
       </template>
 
-      <div
-        v-else-if="zoomed"
-        class="cs-zoom"
-        data-testid="cs-zoom"
-      >
-        <div class="cs-zoom__bar">
-          <span class="cs-cap"
-            ><b>Sheet {{ zoomed.n }}</b> · {{ sheetWords(zoomed) }}</span
-          >
-          <span class="cs-zoom__hint">{{
-            fullSize ? "Click to fit" : "Click for full size"
-          }}</span>
-          <button
-            type="button"
-            class="cs-link"
-            :disabled="sheetLocked(zoomed)"
-            @click="choose(zoomed.picture_id)"
-          >
-            {{ isKept(zoomed) ? "Don't keep" : "Keep" }}
-          </button>
-          <button
-            ref="zoomClose"
-            type="button"
-            class="cs-link"
-            @click="closeZoom"
-          >
-            Close
-          </button>
-        </div>
-        <div
-          ref="zoomView"
-          class="cs-zoom__view"
-          :class="{ 'cs-zoom__view--full': fullSize }"
-        >
-          <img
-            :src="sheetUrl(zoomed)"
-            :alt="`Sheet ${zoomed.n}`"
-            @click="toggleSize"
-          />
-        </div>
-      </div>
-
       <template v-else>
         <div class="cs-step-h">
           <h3>Keep the sheets that look right</h3>
@@ -235,45 +193,49 @@
         <ul class="cs-sheets">
           <li v-for="slot in slots" :key="slot.key">
             <template v-if="slot.sheet">
-              <button
-                type="button"
-                class="cs-sheetimg"
-                :class="{ 'cs-sheetimg--on': isKept(slot.sheet) }"
-                :aria-pressed="isKept(slot.sheet)"
-                :aria-label="`Sheet ${slot.n}: ${sheetWords(slot.sheet)}`"
-                :disabled="sheetLocked(slot.sheet)"
-                data-testid="cs-sheet"
-                @click="toggleKeep(slot.sheet.picture_id)"
-                @dblclick="openZoom(slot.sheet)"
-              >
-                <img
-                  :src="pictureThumbnailUrl(slot.sheet.picture_id)"
-                  alt=""
-                  loading="lazy"
-                />
-                <span class="cs-sheetimg__rk">{{ slot.n }}</span>
-                <span
-                  v-if="isKept(slot.sheet)"
-                  class="cs-sheetimg__ck"
-                  aria-hidden="true"
-                  ><v-icon size="14">mdi-check</v-icon></span
-                >
-              </button>
-              <span class="cs-cap cs-row1">
-                <span
-                  ><b>Sheet {{ slot.n }}</b> · {{ sheetWords(slot.sheet) }}</span
-                >
+              <div class="cs-tile">
                 <button
                   type="button"
-                  class="cs-link"
+                  class="cs-sheetimg"
+                  :class="{ 'cs-sheetimg--on': isKept(slot.sheet) }"
+                  :aria-pressed="isKept(slot.sheet)"
+                  :aria-label="`Sheet ${slot.n}: ${sheetWords(slot.sheet)}`"
+                  :aria-keyshortcuts="'Z'"
+                  :disabled="sheetLocked(slot.sheet)"
+                  data-testid="cs-sheet"
+                  @click="toggleKeep(slot.sheet.picture_id)"
+                  @dblclick="openZoom(slot.sheet)"
+                  @wheel="onTileWheel($event, slot.sheet)"
+                  @keydown.z.exact="openZoom(slot.sheet)"
+                >
+                  <img
+                    :src="pictureThumbnailUrl(slot.sheet.picture_id)"
+                    alt=""
+                    loading="lazy"
+                  />
+                  <span class="cs-sheetimg__rk">{{ slot.n }}</span>
+                  <span
+                    v-if="isKept(slot.sheet)"
+                    class="cs-sheetimg__ck"
+                    aria-hidden="true"
+                    ><v-icon size="14">mdi-check</v-icon></span
+                  >
+                </button>
+                <!-- Zoom has its own control: a click on the sheet ticks it. -->
+                <button
+                  type="button"
+                  class="cs-mag"
                   data-testid="cs-zoom-open"
                   :data-sheet="slot.sheet.picture_id"
                   :aria-label="`Zoom in on sheet ${slot.n}`"
                   @click="openZoom(slot.sheet)"
                 >
-                  Zoom
+                  <v-icon size="16">mdi-magnify-plus-outline</v-icon>
                 </button>
-              </span>
+              </div>
+              <span class="cs-cap"
+                ><b>Sheet {{ slot.n }}</b> · {{ sheetWords(slot.sheet) }}</span
+              >
             </template>
             <span
               v-else
@@ -300,16 +262,21 @@
     <aside class="cs-pane cs-pane--side" data-testid="cs-rail">
       <h3 class="cs-secl">{{ name }} so far</h3>
       <div class="cs-rail">
-        <div v-for="sheet in keptSheets" :key="sheet.picture_id" class="cs-item">
-          <img
-            class="cs-rail__sheet"
-            :src="pictureThumbnailUrl(sheet.picture_id)"
-            alt=""
-          />
-          <span
-            ><b>Sheet {{ sheet.n }}</b> · {{ sheet.agreement_words }}</span
-          >
-        </div>
+        <ul
+          v-if="keptSheets.length"
+          class="cs-keptgrid"
+          aria-label="Kept sheets"
+          data-testid="cs-kept"
+        >
+          <li v-for="sheet in keptSheets" :key="sheet.picture_id">
+            <img
+              class="cs-rail__sheet"
+              :src="pictureThumbnailUrl(sheet.picture_id)"
+              alt=""
+            />
+            <b>Sheet {{ sheet.n }}</b>
+          </li>
+        </ul>
         <div v-if="referenceIds.length" class="cs-item">
           <span class="cs-faces">
             <img
@@ -361,6 +328,29 @@
         </div>
       </div>
     </aside>
+
+    <ZoomPopout
+      :open="!!zoomed"
+      :src="zoomed ? sheetUrl(zoomed) : ''"
+      :alt="zoomed ? `Sheet ${zoomed.n}` : ''"
+      :caption="zoomed ? `Sheet ${zoomed.n} · ${sheetWords(zoomed)}` : ''"
+      :has-prev="zoomPos > 0"
+      :has-next="zoomPos >= 0 && zoomPos < zoomList.length - 1"
+      :entry="zoomEntry"
+      @close="closeZoom"
+      @prev="stepZoom(-1)"
+      @next="stepZoom(1)"
+    >
+      <template #actions>
+        <AppButton
+          v-if="zoomed"
+          :disabled="sheetLocked(zoomed)"
+          @click="toggleKeep(zoomed.picture_id)"
+        >
+          {{ isKept(zoomed) ? "Don't keep" : "Keep" }}
+        </AppButton>
+      </template>
+    </ZoomPopout>
   </div>
 </template>
 
@@ -411,11 +401,13 @@ import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import { errorMessage } from "../../utils/apiError";
 import { runKey } from "../../utils/gpuMemory";
 import { buildMediaUrl } from "../../utils/media";
+import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
 import Segmented from "../widgets/Segmented.vue";
+import ZoomPopout from "../widgets/ZoomPopout.vue";
 
 const props = defineProps({
   /** { id, name } of the character. */
@@ -489,11 +481,9 @@ const order = ref([]); // sheet picture ids in the order they arrived
 // until they tick or untick one themselves.
 const kept = ref([]);
 let keptTouched = false;
-// The sheet shown full size over the pick, and whether at 1:1 or fitted.
+// The sheet in the zoom pop-out, and the wheel that opened it, if one did.
 const zoomedId = ref(null);
-const fullSize = ref(false);
-const zoomView = ref(null);
-const zoomClose = ref(null);
+const zoomEntry = ref(null);
 const mainPane = ref(null);
 const working = ref(false);
 const error = ref("");
@@ -731,15 +721,6 @@ function sheetUrl(sheet) {
   );
 }
 
-// Escape leaves the zoom, wherever focus is (a click on the picture leaves it
-// on the page), and never reaches the dialog behind it.
-function onZoomKey(e) {
-  if (e.key !== "Escape") return;
-  e.stopPropagation();
-  e.preventDefault();
-  closeZoom();
-}
-
 // Pre-flight: a sheet is drawn at a size of its own, so the workflow must have
 // one to set, and it must be able to run at all.
 watch(workflowId, async (id) => {
@@ -770,19 +751,39 @@ watch(workflowId, async (id) => {
   }
 });
 
-watch(zoomedId, (id) => {
-  if (id == null) window.removeEventListener("keydown", onZoomKey, true);
-  else window.addEventListener("keydown", onZoomKey, true);
-});
+// The pop-out steps through the sheets on show, in their places.
+const zoomList = computed(() =>
+  slots.value.filter((slot) => slot.sheet).map((slot) => slot.sheet.picture_id),
+);
+const zoomPos = computed(() => zoomList.value.indexOf(zoomedId.value));
 
-async function openZoom(sheet) {
+function openZoom(sheet, entry = null) {
+  zoomEntry.value = entry;
   zoomedId.value = sheet.picture_id;
-  fullSize.value = false;
-  await nextTick();
-  zoomClose.value?.focus();
 }
 
-/** Back to the pick, focus on the sheet's own Zoom: the list is drawn anew. */
+/** Wheel up over a sheet opens it zoomed, at the point under the cursor; the
+ * same gesture goes on zooming in the pop-out. Wheel down still scrolls. */
+function onTileWheel(event, sheet) {
+  if (event.deltaY >= 0) return;
+  event.preventDefault();
+  const r = event.currentTarget.getBoundingClientRect();
+  openZoom(sheet, {
+    deltaY: event.deltaY,
+    deltaMode: event.deltaMode,
+    fx: (event.clientX - r.left) / r.width,
+    fy: (event.clientY - r.top) / r.height,
+  });
+}
+
+function stepZoom(d) {
+  const id = zoomList.value[zoomPos.value + d];
+  if (id == null) return;
+  zoomEntry.value = null;
+  zoomedId.value = id;
+}
+
+/** Back to the pick, focus on the sheet's own zoom control. */
 async function closeZoom() {
   const id = zoomedId.value;
   zoomedId.value = null;
@@ -795,25 +796,6 @@ async function closeZoom() {
 watch(phase, () => {
   zoomedId.value = null;
 });
-
-function choose(id) {
-  toggleKeep(id);
-  closeZoom();
-}
-
-/** Fitted to 1:1 and back; at 1:1 the clicked spot is brought to the middle. */
-async function toggleSize(event) {
-  const img = event.currentTarget;
-  const fx = event.offsetX / img.clientWidth;
-  const fy = event.offsetY / img.clientHeight;
-  fullSize.value = !fullSize.value;
-  if (!fullSize.value) return;
-  await nextTick();
-  const view = zoomView.value;
-  if (!view) return;
-  view.scrollLeft = fx * img.naturalWidth - view.clientWidth / 2;
-  view.scrollTop = fy * img.naturalHeight - view.clientHeight / 2;
-}
 
 function stopPolling() {
   if (timer) clearTimeout(timer);
@@ -1154,7 +1136,6 @@ async function load() {
 onMounted(load);
 onBeforeUnmount(() => {
   alive = false;
-  window.removeEventListener("keydown", onZoomKey, true);
   stopPolling();
 });
 
@@ -1447,51 +1428,63 @@ defineExpose({ footer, error, working, loraName, phase, zooming, discardAll });
   cursor: pointer;
 }
 
-.cs-zoom {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
+/* The tile and its zoom control: the check sits top right, the magnifier
+   bottom right, so a tick and a zoom never share a target. */
+.cs-tile {
+  position: relative;
+}
+
+.cs-mag {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  cursor: zoom-in;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-standard);
+}
+
+.cs-tile:hover .cs-mag,
+.cs-mag:focus-visible,
+.cs-sheetimg:focus-visible + .cs-mag {
+  opacity: 1;
+}
+
+/* No hover on touch: the control stays shown. */
+@media (hover: none) {
+  .cs-mag {
+    opacity: 1;
+  }
+}
+
+/* Kept sheets two across; more rows scroll with the rail. */
+.cs-keptgrid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
 }
 
-.cs-zoom__bar {
+.cs-keptgrid li {
   display: flex;
-  align-items: baseline;
-  gap: var(--space-4);
-}
-
-.cs-zoom__hint {
-  margin-left: auto;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
   font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.cs-zoom__bar .cs-link {
-  margin-left: 0;
-}
-
-.cs-zoom__view {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  border-radius: var(--radius-md);
-  background: rgb(var(--v-theme-input-background));
-}
-
-.cs-zoom__view img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  cursor: zoom-in;
-}
-
-.cs-zoom__view--full img {
-  width: auto;
-  height: auto;
-  max-width: none;
-  cursor: zoom-out;
+.cs-keptgrid b {
+  font-weight: var(--weight-medium);
 }
 
 .cs-desc {

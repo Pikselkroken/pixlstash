@@ -3872,11 +3872,24 @@ keys' path; the sum resets after a `ZOOM_EXIT_GESTURE_GAP_MS` pause, so a mouse
 notch is one picture and a trackpad swipe does not race. Review Sessions and
 Compare do not dispatch this way.
 
+**`widgets/ZoomPopout.vue` — the family's pop-out frame.** A large panel over
+whatever opened it, for looking closely at one picture from a dialog or list:
+a `StackLayer` (so it clears a modal with no z-index), a bar with caption,
+optional prev/next, an `actions` slot, zoom −/readout/+ and fit ↔ 100%, and a
+dark stage on the transform transport with floor policy `rest`. It owns its
+keys (Escape closes only the pop-out, arrows step, `Z`, `+`/`-`) and stops them
+there. An `entry` wheel (`{deltaY, deltaMode, fx, fy}`, the cursor as a
+fraction of the thumbnail) is applied once the picture is measured, anchored
+at that point, so a wheel-up over a thumbnail carries on as one zoom gesture:
+the character-sheet pick (`CharacterSheetStep.vue`) opens it that way. The
+caller restores focus on `close`.
+
 Named follow-ups (recorded, not yet done):
 
 1. **`ReviewSessionsOverlay` migration onto `useWheelZoom`.** Its `.rs-zoom`
    full-screen zoom still carries its own scroll-to-magnify implementation;
-   it should become the third consumer of the shared core.
+   it should become the third consumer of the shared core, likely through
+   `ZoomPopout`, as should the `CharacterEditor` reference preview.
 2. **Pinch support.** The anchor equation takes any `{x, y}` in container
    space, so a pinch centroid drives `wheelZoom`/`snapTo` unchanged — the
    composable is pinch-ready; only the gesture recognition is missing.

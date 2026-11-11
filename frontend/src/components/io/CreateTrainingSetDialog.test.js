@@ -892,7 +892,7 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     wrapper.unmount();
   });
 
-  it("zooms a sheet to its own file, and Escape leaves the zoom, not the dialog", async () => {
+  it("zooms a sheet in a pop-out over the dialog, and Escape leaves only the pop-out", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
     );
@@ -906,30 +906,56 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
       sheets: [sheet(501, 0.7, { format: "png" }), sheet(502, 0.5, { format: "png" })],
       references: 0,
     });
+    const popout = () => document.querySelector('[data-testid="zoom-popout"]');
+    const popButton = (text) =>
+      [...popout().querySelectorAll("button")].find((b) => b.textContent.trim() === text);
     const wrapper = mountDialog();
     await flushPromises();
     await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
     await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
     await vi.advanceTimersByTimeAsync(3000);
 
+    // Clicking the sheet ticks it; only its magnifier zooms.
+    expect(popout()).toBeNull();
     await wrapper.findAll('[data-testid="cs-zoom-open"]')[1].trigger("click");
     await flushPromises();
-    const zoom = wrapper.find('[data-testid="cs-zoom"]');
-    expect(zoom.find("img").attributes("src")).toMatch(/\/pictures\/502\.png$/);
-    expect(wrapper.find('[data-testid="cs-sheet"]').exists()).toBe(false);
+    expect(popout().querySelector("img").getAttribute("src")).toMatch(/\/pictures\/502\.png$/);
+    // The pick stays as it was behind it: the dialog does not change.
+    expect(wrapper.findAll('[data-testid="cs-sheet"]')).toHaveLength(2);
 
-    await zoom.trigger("keydown", { key: "Escape" });
+    popout().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await flushPromises();
     expect(wrapper.emitted("close")).toBeUndefined();
-    expect(wrapper.find('[data-testid="cs-zoom"]').exists()).toBe(false);
+    expect(popout()).toBeNull();
 
-    // Keep from the zoom adds that sheet to the best one, ticked already.
+    // Keep in the pop-out adds that sheet to the best one, ticked already, and
+    // the kept sheets sit in the rail's grid.
     await wrapper.findAll('[data-testid="cs-zoom-open"]')[1].trigger("click");
-    await button(wrapper, "Keep").trigger("click");
     await flushPromises();
+    popButton("Keep").click();
+    await flushPromises();
+    expect(popButton("Don't keep")).toBeTruthy();
     expect(wrapper.find('[data-testid="cts-generate-primary"]').text()).toContain(
       "Keep 2 sheets",
     );
+    expect(wrapper.findAll('[data-testid="cs-kept"] li')).toHaveLength(2);
+
+    // Left steps to the sheet before, in its place.
+    popout().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    await flushPromises();
+    expect(popout().querySelector("img").getAttribute("src")).toMatch(/\/pictures\/501\.png$/);
+    popout().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushPromises();
+
+    // Wheel up over a sheet opens it; wheel down leaves the page to scroll.
+    await wrapper.findAll('[data-testid="cs-sheet"]')[0].trigger("wheel", { deltaY: 100 });
+    expect(popout()).toBeNull();
+    await wrapper.findAll('[data-testid="cs-sheet"]')[0].trigger("wheel", { deltaY: -100 });
+    await flushPromises();
+    expect(popout().querySelector("img").getAttribute("src")).toMatch(/\/pictures\/501\.png$/);
+    popout().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushPromises();
+
     // And closing the dialog discards every sheet drawn.
     await wrapper.find('[aria-label="Close"]').trigger("click");
     expect(gen.discardSheets).toHaveBeenCalledWith(7, [501, 502]);
