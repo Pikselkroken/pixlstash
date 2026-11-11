@@ -1667,7 +1667,10 @@ the row element to hand focus back to on close).
   it) opens the sheet's own file in `ZoomPopout` over the dialog, the dialog
   persistent meanwhile; its *Keep* / *Drop* control is a `Segmented`, so it
   keeps one size in both states, and focus goes back to the sheet's
-  magnifier. *Keep* cuts the ticked sheets, waits (90 s at most)
+  magnifier. Kept sheets the ranking names in each other's `different_from`
+  turn the footer lead into a warning (`footer.warn`: icon, `role="status"`)
+  naming the pair; *Use* stays enabled, since with a LoRA several sheets can
+  be one person and the owner decides. *Keep* cuts the ticked sheets, waits (90 s at most)
   for their pictures' faces, then hands their ids back: the picker reloads, marks them
   *new*, and offers *All / New only*, which re-ranks the stills from 1 over the
   new pictures so the slider, coverage and Create all read that one list.

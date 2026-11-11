@@ -1035,6 +1035,30 @@ const canDraw = computed(
     phase.value !== "filing",
 );
 
+/** Kept sheets whose faces look like different people, as pairs of numbers.
+ * Without a LoRA each sheet is its own person, so keeping two usually mixes
+ * faces; with one, several sheets can be the same person and pass. */
+const mixedPairs = computed(() => {
+  const kept = keptSheets.value;
+  const pairs = [];
+  for (const sheet of kept) {
+    for (const id of sheet.different_from || []) {
+      const other = kept.find((k) => k.picture_id === id);
+      if (other && sheet.n < other.n) pairs.push([sheet.n, other.n]);
+    }
+  }
+  return pairs;
+});
+
+const mixedWarning = computed(() => {
+  const pairs = mixedPairs.value;
+  if (!pairs.length) return "";
+  if (pairs.length === 1) {
+    return `Sheets ${pairs[0][0]} and ${pairs[0][1]} look like different people; using both mixes faces.`;
+  }
+  return "Kept sheets look like different people; using them mixes faces.";
+});
+
 /** What happens to the sheets not kept, said where the user decides. */
 const droppedWords = computed(() => {
   const n = order.value.length - keptSheets.value.length;
@@ -1079,11 +1103,15 @@ const footer = computed(() => {
   }
   const waiting = waitingRuns.value.length;
   return {
-    lead: waiting
-      ? `Drawing ${waiting} more, about a minute each.`
-      : keptSheets.value.length
-        ? `${keptWords.value} ${keptSheets.value.length === 1 ? "becomes" : "become"} ${name.value}'s pictures${droppedWords.value}.`
-        : "Keep the sheets to use. The rest go to the Scrapheap.",
+    // Warned, not refused: the owner may want two looks of one character.
+    warn: !!mixedWarning.value,
+    lead:
+      mixedWarning.value ||
+      (waiting
+        ? `Drawing ${waiting} more, about a minute each.`
+        : keptSheets.value.length
+          ? `${keptWords.value} ${keptSheets.value.length === 1 ? "becomes" : "become"} ${name.value}'s pictures${droppedWords.value}.`
+          : "Keep the sheets to use. The rest go to the Scrapheap."),
     // The rail's Edit goes back to the form too; the footer offers it only
     // when no sheet is worth using.
     back: noneHold.value
@@ -1479,6 +1507,17 @@ defineExpose({ footer, error, working, loraName, phase, zooming });
 .cs-mag:focus-visible,
 .cs-sheetimg:focus-visible + .cs-mag {
   opacity: 1;
+}
+
+/* Pointed at, it answers: a deeper backing and a ring, never a fade. Focus
+   keeps the app's own focus ring and takes only the backing. */
+.cs-mag:hover,
+.cs-mag:focus-visible {
+  background: var(--scrim-photo-strong);
+}
+
+.cs-mag:hover {
+  box-shadow: 0 0 0 2px rgb(var(--v-theme-on-dark-surface));
 }
 
 /* No hover on touch: the control stays shown. */

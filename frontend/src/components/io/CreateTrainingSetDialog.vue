@@ -391,9 +391,17 @@
     </div>
 
     <template v-if="mode === 'generate'" #footer>
-      <span class="cts-lead cts-lead--one" :title="sheetStep?.footer?.lead">{{
-        sheetStep?.footer?.lead
-      }}</span>
+      <span
+        class="cts-lead cts-lead--one"
+        :class="{ 'cts-lead--warn': sheetStep?.footer?.warn }"
+        :title="sheetStep?.footer?.lead"
+        :role="sheetStep?.footer?.warn ? 'status' : undefined"
+        data-testid="cts-generate-lead"
+        ><v-icon v-if="sheetStep?.footer?.warn" size="16"
+          >mdi-alert-outline</v-icon
+        >
+        {{ sheetStep?.footer?.lead }}</span
+      >
       <p v-if="sheetStep?.error" class="cts-bad" role="alert">
         {{ sheetStep.error }}
       </p>
@@ -1697,6 +1705,15 @@ button.cts-stp__s:not(:disabled) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.cts-lead--warn {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.cts-lead--warn .v-icon {
+  color: rgb(var(--v-theme-surface-warning));
+  vertical-align: -3px;
 }
 
 .cts-lead b {

@@ -555,10 +555,11 @@ def rank_sheets(
         raise SheetNotFound(f"No character {character_id}.")
     faces, reference_rows, formats = found
     references = _vectors(reference_rows)
+    vectors_of = {pid: _vectors(faces[pid]) for pid in ids}
     out = []
     for picture_id in ids:
         rows = faces[picture_id]
-        vectors = _vectors(rows)
+        vectors = vectors_of[picture_id]
         score = agreement(vectors)
         near = closeness(vectors, references)
         out.append(
@@ -572,6 +573,16 @@ def rank_sheets(
                 "closeness": near,
                 "close": None if near is None else near >= CLOSE_TO_REFERENCES,
                 "broken": len(vectors) > MAX_FACES,
+                # Kept together, these would mix two people into one set: their
+                # faces agree across sheets less than one sheet's need to hold.
+                "different_from": [
+                    other
+                    for other in ids
+                    if other != picture_id
+                    and vectors
+                    and vectors_of[other]
+                    and closeness(vectors, vectors_of[other]) < SOME_AGREEMENT
+                ],
             }
         )
     return out, len(references)

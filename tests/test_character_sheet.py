@@ -259,6 +259,23 @@ def test_ranking_measures_closeness_against_references_never_the_sheet_itself():
     assert unread["faces_read"] is False and unread["agreement"] is None
     # The format the full-size picture is served as, for the zoom.
     assert (near["format"], far["format"], unread["format"]) == ("png", "webp", None)
+    # Two people: each names the other; an unread sheet is compared with none.
+    assert (near["different_from"], far["different_from"]) == ([6], [5])
+    assert unread["different_from"] == []
+
+
+def test_ranking_names_no_difference_between_sheets_of_one_person():
+    """The positive control: sheets alike across sheets are not flagged."""
+    person = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    near_person = np.array([0.9, 0.3, 0.0], dtype=np.float32)
+
+    class Db:
+        def run_immediate_read_task(self, fn, *args):
+            return ({5: [person.tobytes()] * 6, 6: [near_person.tobytes()] * 6}, [], {})
+
+    vault = type("Vault", (), {"db": Db()})()
+    sheets, _ = character_sheet.rank_sheets(vault, 1, [5, 6])
+    assert [s["different_from"] for s in sheets] == [[], []]
 
 
 @pytest.fixture(scope="module")

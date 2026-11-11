@@ -12867,7 +12867,10 @@ is never the library's**: it is drawn held and discarded once the user is done.
   out), and more faces than panels marks a sheet `broken`. A sheet with no
   `Face` row yet is `faces_read: false` and unscored. Each sheet also carries
   its `format`, so the dialog can show the file itself full size at
-  `/pictures/{id}.{format}`. The thresholds behind the
+  `/pictures/{id}.{format}`. `different_from` lists the other sheets asked
+  about whose faces match this one's less than `SOME_AGREEMENT` (the mean
+  cross-sheet cosine): keeping both would mix two people in one set, which
+  the dialog warns about but allows. The thresholds behind the
   words are read off the probes and are placeholders until validation.
 - **Using sheets** (`POST /characters/{id}/sheets/use`, `picture_ids`; a held
   sheet counts, and every sheet is read before anything is imported) cuts each

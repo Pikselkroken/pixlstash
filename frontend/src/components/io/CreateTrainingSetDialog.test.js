@@ -1002,6 +1002,51 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("warns, without refusing, when the sheets kept look like different people", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    const keepBoth = async (ranked) => {
+      sheetsWorld();
+      gen.runWorkflowCard.mockResolvedValue({
+        status: "success",
+        prompts: [{ run_id: "r1", status: "queued" }],
+      });
+      gen.getRunOutcome.mockResolvedValue({ status: "completed", picture_ids: [501, 502] });
+      gen.rankSheets.mockResolvedValue({ sheets: ranked, references: 0 });
+      const wrapper = mountDialog();
+      await flushPromises();
+      await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+      await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+      await vi.advanceTimersByTimeAsync(3000);
+      return wrapper;
+    };
+    const lead = (w) => w.find('[data-testid="cts-generate-lead"]');
+
+    let wrapper = await keepBoth([
+      sheet(501, 0.5, { different_from: [502] }),
+      sheet(502, 0.7, { different_from: [501] }),
+    ]);
+    // One kept: nothing to mix.
+    expect(lead(wrapper).classes()).not.toContain("cts-lead--warn");
+    await wrapper.findAll('[data-testid="cs-sheet"]')[0].trigger("click");
+    expect(lead(wrapper).text()).toContain(
+      "Sheets 1 and 2 look like different people",
+    );
+    expect(lead(wrapper).classes()).toContain("cts-lead--warn");
+    const primary = wrapper.find('[data-testid="cts-generate-primary"]');
+    expect(primary.text()).toContain("Use 2 sheets");
+    expect(primary.attributes("disabled")).toBeUndefined();
+    wrapper.unmount();
+
+    // The positive control: two sheets of one person, kept together, pass.
+    wrapper = await keepBoth([sheet(501, 0.5), sheet(502, 0.7)]);
+    await wrapper.findAll('[data-testid="cs-sheet"]')[0].trigger("click");
+    expect(lead(wrapper).text()).toContain("become Anna's pictures");
+    expect(lead(wrapper).classes()).not.toContain("cts-lead--warn");
+    wrapper.unmount();
+  });
+
   it("keeps each sheet in its run's place and shows the drawing one's progress", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

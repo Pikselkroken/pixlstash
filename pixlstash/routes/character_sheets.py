@@ -80,6 +80,11 @@ class RankedSheet(BaseModel):
     broken: bool = Field(
         description="More faces than panels: a panel holds more than one person."
     )
+    different_from: list[int] = Field(
+        default_factory=list,
+        description="The other sheets asked about whose faces look like a "
+        "different person: keeping both mixes two people in one set.",
+    )
 
 
 class SheetRanking(BaseModel):
