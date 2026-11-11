@@ -2452,6 +2452,7 @@ def _process_comfyui_outputs(
                 character_id=view_context.get("character_id"),
             )
 
+        announced = new_ids
         if new_ids and hold:
             held_now = (
                 pinned_server.vault.db.run_task(_hold_in_session, imported_ids)
@@ -2464,7 +2465,10 @@ def _process_comfyui_outputs(
             logger.info(
                 "Prompt %s imported pictures %s held", prompt_id, sorted(held_now)
             )
-        elif new_ids:
+            # What a locked set kept live, and a saver's own ids, are ordinary
+            # pictures: they still get their import event.
+            announced = [pid for pid in new_ids if pid not in held_now]
+        if announced:
             # In-app ComfyUI generation is UI-initiated, but async: there is no
             # optimistic client-side copy to suppress. Emit `picture_imported`
             # with source "ui" and NO origin echo so every owner tab (including
@@ -2474,7 +2478,7 @@ def _process_comfyui_outputs(
             pinned_server.vault.notify(
                 EventType.PICTURE_IMPORTED,
                 {
-                    "ids": new_ids,
+                    "ids": announced,
                     "source": "ui",
                     "change_kind": "added",
                 },

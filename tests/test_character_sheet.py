@@ -397,6 +397,7 @@ def test_a_held_run_never_holds_a_picture_it_did_not_import(client, monkeypatch)
     discardable."""
     server = client.server
     live = _upload_sheet(client, [("x", 1930, 0, 1536)])
+    events = _watch_events(server, monkeypatch)
     monkeypatch.setattr(
         comfyui_service, "_wait_for_comfyui_outputs", lambda *a, **k: ([], [live])
     )
@@ -412,6 +413,9 @@ def test_a_held_run_never_holds_a_picture_it_did_not_import(client, monkeypatch)
     )
     assert not _state(server, [live])[live].deleted
     assert comfyui_service.held_pictures(_library_uuid(server), [live]) == {}
+    # Left live, so announced like any run's picture.
+    imported = [e for e in events if e[0] == EventType.PICTURE_IMPORTED]
+    assert [e[1]["ids"] for e in imported] == [[live]]
 
 
 def test_a_held_sheet_is_kept_then_discarded_and_nothing_else_is(client, monkeypatch):
