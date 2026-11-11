@@ -761,7 +761,7 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     ]);
     expect(sheets[1].attributes("aria-pressed")).toBe("true");
     expect(wrapper.find('[data-testid="cts-generate-primary"]').text()).toContain(
-      "Keep sheet 2",
+      "Use sheet 2",
     );
 
     gen.useSheets.mockResolvedValue({ picture_ids: [601, 602] });
@@ -777,8 +777,8 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
     await flushPromises();
     expect(gen.useSheets).toHaveBeenCalledWith(7, [502]);
-    // The sheets, kept or not, were never the library's: all of them go.
-    expect(gen.discardSheets).toHaveBeenCalledWith(7, [501, 502]);
+    // The sheet cut into pictures goes; the one dropped stays in the Scrapheap.
+    expect(gen.discardSheets.mock.calls).toEqual([[7, [502]]]);
     expect(wrapper.find('[data-testid="cts-picks"]').isVisible()).toBe(true);
     expect(wrapper.findAll('[data-testid="cts-new"]')).toHaveLength(1);
 
@@ -887,8 +887,8 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     await vi.advanceTimersByTimeAsync(3000);
     expect(drawn()).toEqual(["/thumb/503.webp"]);
     expect(gen.rankSheets).toHaveBeenLastCalledWith(7, [503]);
-    // The dropped sheets are discarded, never left in the library.
-    expect(gen.discardSheets).toHaveBeenCalledWith(7, [501, 502]);
+    // The sheets of the earlier prompt stay in the Scrapheap, not destroyed.
+    expect(gen.discardSheets).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
@@ -907,8 +907,6 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
       references: 0,
     });
     const popout = () => document.querySelector('[data-testid="zoom-popout"]');
-    const popButton = (text) =>
-      [...popout().querySelectorAll("button")].find((b) => b.textContent.trim() === text);
     const wrapper = mountDialog();
     await flushPromises();
     await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
@@ -932,11 +930,21 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     // the kept sheets sit in the rail's grid.
     await wrapper.findAll('[data-testid="cs-zoom-open"]')[1].trigger("click");
     await flushPromises();
-    popButton("Keep").click();
+    const choice = () =>
+      Object.fromEntries(
+        [...popout().querySelectorAll('[role="radio"]')].map((b) => [
+          b.querySelector(".seg__label").textContent,
+          b.getAttribute("aria-checked"),
+        ]),
+      );
+    expect(choice()).toEqual({ Keep: "false", Drop: "true" });
+    [...popout().querySelectorAll('[role="radio"]')]
+      .find((b) => b.textContent.includes("Keep"))
+      .click();
     await flushPromises();
-    expect(popButton("Don't keep")).toBeTruthy();
+    expect(choice()).toEqual({ Keep: "true", Drop: "false" });
     expect(wrapper.find('[data-testid="cts-generate-primary"]').text()).toContain(
-      "Keep 2 sheets",
+      "Use 2 sheets",
     );
     expect(wrapper.findAll('[data-testid="cs-kept"] li')).toHaveLength(2);
 
@@ -956,9 +964,10 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     popout().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await flushPromises();
 
-    // And closing the dialog discards every sheet drawn.
+    // Closing leaves every sheet drawn in the Scrapheap, destroying none.
     await wrapper.find('[aria-label="Close"]').trigger("click");
-    expect(gen.discardSheets).toHaveBeenCalledWith(7, [501, 502]);
+    expect(wrapper.emitted("close")).toBeTruthy();
+    expect(gen.discardSheets).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 

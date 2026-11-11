@@ -12887,10 +12887,10 @@ is never the library's**: it is drawn held and discarded once the user is done.
   Scrapheap's own purge
   (`purge_scrapheap_pictures`), after clearing any panel's `source_picture_id`
   that names one; anything not held is left alone, so the route can never
-  destroy another Scrapheap picture. The dialog discards every sheet once the
-  kept ones are cut, the dropped ones when a new prompt is drawn, and all of
-  them when it closes. A run still drawing then lands held later with nobody
-  to discard it: that sheet stays in the Scrapheap until retention purges it.
+  destroy another Scrapheap picture. The dialog discards only the sheets it
+  has cut; every other sheet (dropped, of an earlier prompt, left at close, or
+  landing after) stays in the Scrapheap for the owner to restore or for its
+  retention to purge.
 - **No reference set is written.** For a character with no pictures, the
   chosen sheet's panels are its only faces, so they are its references by the
   existing rule; a character with rated pictures keeps those.

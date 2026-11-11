@@ -1656,15 +1656,18 @@ the row element to hand focus back to on close).
   same adds to it. Sheets are drawn with `hold` (backend §25.29) and are
   ticked to keep, several at once; the best holding one is ticked for the
   user where it sits until they tick or untick one; a broken one says so in
-  its caption. *Keep* cuts the ticked ones and then discards every sheet drawn
-  (`discardSheets`), as does a new prompt's draw (the dropped ones) and the
-  dialog's close (`discardAll`, exposed); a run still drawing then is not
-  followed any more, so its sheet stays in the Scrapheap until retention, and
-  the footer says so while runs draw. After a keep the step starts again from
-  the form. *Zoom* (or a double-click) shows the
-  sheet's own file over the pick, fitted, a click toggling 1:1; Escape is the
-  zoom's (a capture listener, the dialog persistent meanwhile) and focus goes
-  back to the sheet's Zoom. *Keep* cuts the ticked sheets, waits (90 s at most)
+  its caption. *Use N sheets* cuts the kept ones and then destroys those
+  sheets (`discardSheets`): their photos are the pictures now. **Every other
+  sheet stays where it was drawn, in the Scrapheap**: the ones dropped, those
+  of an earlier prompt, everything left when the dialog closes, and a run
+  still drawing then. A dropped sheet can be a nice picture that is wrong for
+  the set, so it is restorable rather than destroyed; the intro and the footer
+  say where dropped sheets go. After a use the step starts again from the
+  form. The magnifier on a sheet (or a double-click, `Z`, or a wheel-up over
+  it) opens the sheet's own file in `ZoomPopout` over the dialog, the dialog
+  persistent meanwhile; its *Keep* / *Drop* control is a `Segmented`, so it
+  keeps one size in both states, and focus goes back to the sheet's
+  magnifier. *Keep* cuts the ticked sheets, waits (90 s at most)
   for their pictures' faces, then hands their ids back: the picker reloads, marks them
   *new*, and offers *All / New only*, which re-ranks the stills from 1 over the
   new pictures so the slider, coverage and Create all read that one list.

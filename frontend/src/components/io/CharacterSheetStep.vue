@@ -342,13 +342,16 @@
       @next="stepZoom(1)"
     >
       <template #actions>
-        <AppButton
+        <!-- Both choices always shown, so the control never changes size and
+             says which one the sheet is on. -->
+        <Segmented
           v-if="zoomed"
-          :disabled="sheetLocked(zoomed)"
-          @click="toggleKeep(zoomed.picture_id)"
-        >
-          {{ isKept(zoomed) ? "Don't keep" : "Keep" }}
-        </AppButton>
+          :model-value="isKept(zoomed) ? 'keep' : 'drop'"
+          :options="keepOptions(zoomed)"
+          variant="icon-label"
+          aria-label="This sheet"
+          @update:model-value="setKept(zoomed.picture_id, $event === 'keep')"
+        />
       </template>
     </ZoomPopout>
   </div>
@@ -401,7 +404,6 @@ import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import { errorMessage } from "../../utils/apiError";
 import { runKey } from "../../utils/gpuMemory";
 import { buildMediaUrl } from "../../utils/media";
-import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
@@ -677,6 +679,18 @@ function isKept(sheet) {
   return kept.value.includes(sheet.picture_id);
 }
 
+function setKept(id, on) {
+  if (isKept({ picture_id: id }) !== on) toggleKeep(id);
+}
+
+function keepOptions(sheet) {
+  const disabled = sheetLocked(sheet);
+  return [
+    { id: "keep", label: "Keep", icon: "check", disabled },
+    { id: "drop", label: "Drop", icon: "delete-outline", disabled },
+  ];
+}
+
 function toggleKeep(id) {
   keptTouched = true;
   kept.value = kept.value.includes(id)
@@ -685,7 +699,7 @@ function toggleKeep(id) {
 }
 
 const pickIntro = computed(() => {
-  const base = `Each sheet says how well its own faces agree. Tick the ones to keep: the six photos of each become pictures of ${name.value}. The sheets themselves never join the library.`;
+  const base = `Each sheet says how well its own faces agree. Keep the ones to use: the six photos of each become pictures of ${name.value}. Sheets you drop go to the Scrapheap, where you can restore any you like.`;
   if (!referenceIds.value.length) return base;
   return `${base} Each is also compared with ${name.value}'s reference faces: a sheet that agrees with itself but drifts from them is a different person drawn well.`;
 });
@@ -926,8 +940,7 @@ async function draw() {
       );
     }
     if (drawing !== drawnWith) {
-      // The sheets on show are of another prompt: they go, held as they are.
-      discard(order.value);
+      // The sheets on show are of another prompt: they stay in the Scrapheap.
       startOver();
       drawnWith = drawing;
     }
@@ -959,18 +972,14 @@ function startOver() {
   drawnWith = "";
 }
 
-/** Destroy held sheets; a failure leaves them in the Scrapheap, said in the log. */
+/** Destroy the sheets that were cut: their photos are the pictures now. Every
+ * other sheet stays in the Scrapheap, where it was drawn, to be restored or
+ * left to its retention. A failure leaves these there too, said in the log. */
 function discard(ids) {
   if (!ids.length) return;
   discardSheets(props.character.id, [...ids]).catch((e) => {
     console.warn("Couldn't discard the character sheets", ids, e);
   });
-}
-
-/** Discard every sheet drawn here: the dialog is closing on them. */
-function discardAll() {
-  discard(order.value);
-  order.value = [];
 }
 
 async function use() {
@@ -988,8 +997,8 @@ async function use() {
     working.value = false;
     return;
   }
-  // The panels are cut and filed: the sheets, kept or not, are done with.
-  discard(order.value);
+  // The panels are cut and filed: the sheets they came from are done with.
+  discard(keep);
   // Only the panels' faces may still be unread. A failure from here on is no
   // reason to offer the cut again.
   const deadline = Date.now() + FACE_WAIT_MS;
@@ -1019,6 +1028,13 @@ const canDraw = computed(
     phase.value !== "filing",
 );
 
+/** What happens to the sheets not kept, said where the user decides. */
+const droppedWords = computed(() => {
+  const n = order.value.length - keptSheets.value.length;
+  if (!n) return "";
+  return n === 1 ? "; 1 dropped goes to the Scrapheap" : `; ${n} dropped go to the Scrapheap`;
+});
+
 const keptWords = computed(() => {
   const ns = keptSheets.value.map((sheet) => sheet.n);
   if (ns.length === 1) return `Sheet ${ns[0]}`;
@@ -1027,9 +1043,9 @@ const keptWords = computed(() => {
 
 const keepLabel = computed(() => {
   const count = keptSheets.value.length;
-  if (count === 0) return "Keep a sheet";
-  if (count === 1) return `Keep sheet ${keptSheets.value[0].n}`;
-  return `Keep ${count} sheets`;
+  if (count === 0) return "Use a sheet";
+  if (count === 1) return `Use sheet ${keptSheets.value[0].n}`;
+  return `Use ${count} sheets`;
 });
 
 const footer = computed(() => {
@@ -1057,10 +1073,10 @@ const footer = computed(() => {
   const waiting = waitingRuns.value.length;
   return {
     lead: waiting
-      ? `Drawing ${waiting} more, about a minute each. Sheets are not added to the library; the photos of the ones you keep are. Closing now leaves the ones still drawing in the Scrapheap.`
+      ? `Drawing ${waiting} more, about a minute each.`
       : keptSheets.value.length
-        ? `${keptWords.value} ${keptSheets.value.length === 1 ? "becomes" : "become"} ${name.value}'s pictures, six each. The sheets themselves are discarded.`
-        : "Tick the sheets to keep.",
+        ? `${keptWords.value} ${keptSheets.value.length === 1 ? "becomes" : "become"} ${name.value}'s pictures${droppedWords.value}.`
+        : "Keep the sheets to use. The rest go to the Scrapheap.",
     // The rail's Edit goes back to the form too; the footer offers it only
     // when no sheet is worth using.
     back: noneHold.value
@@ -1142,7 +1158,7 @@ onBeforeUnmount(() => {
 // While a sheet is zoomed the dialog does not take Escape; the zoom does.
 const zooming = computed(() => !!zoomed.value);
 
-defineExpose({ footer, error, working, loraName, phase, zooming, discardAll });
+defineExpose({ footer, error, working, loraName, phase, zooming });
 </script>
 
 <style scoped>
