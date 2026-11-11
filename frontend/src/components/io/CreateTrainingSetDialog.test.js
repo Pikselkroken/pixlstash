@@ -699,6 +699,37 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("draws with the workflow chosen when Draw was pressed, not one picked meanwhile", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    let built;
+    gen.buildSheetPrompt.mockReturnValueOnce(new Promise((r) => (built = r)));
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    // While the prompt is built, another workflow, with no size to set.
+    gen.getWorkflowCard.mockResolvedValue({ card: { name: "SDXL", defaults: [] } });
+    wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .find((c) => c.props("label") === "Sheet workflow")
+      .vm.$emit("update:modelValue", "auto:sdxl");
+    await flushPromises();
+    built({ prompt: "{layout}", negative: "nsfw", width: 2560, height: 1536 });
+    await flushPromises();
+    expect(gen.runWorkflowCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflow_id: "manual:moss",
+        values: [
+          { slot_label: "lat", input_name: "width", value: 2560 },
+          { slot_label: "lat", input_name: "height", value: 1536 },
+        ],
+      }),
+    );
+    wrapper.unmount();
+  });
+
   it("draws, ranks, and files the chosen sheet as new pictures in the ranking", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

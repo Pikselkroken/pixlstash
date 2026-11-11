@@ -882,6 +882,14 @@ async function draw() {
   if (working.value || !canDraw.value) return;
   working.value = true;
   error.value = "";
+  // What the draw runs with, read before any await: a choice changed while
+  // the prompt is built must not reach this run (the sizes are the checked
+  // workflow's own).
+  const workflow = workflowId.value;
+  const sizes = workflowSizes.value;
+  const lora = chosenLora.value;
+  const weight = strength.value;
+  const count = form.count;
   try {
     const description = form.description.trim();
     if (!savedDescription.value && description) {
@@ -901,13 +909,12 @@ async function draw() {
     });
     const drawing = JSON.stringify([
       sheet.prompt,
-      workflowId.value,
-      loraSha.value,
-      strength.value,
+      workflow,
+      lora?.sha256 || "",
+      weight,
     ]);
-    const sizes = workflowSizes.value;
     const answer = await runWorkflowCard({
-      workflow_id: workflowId.value,
+      workflow_id: workflow,
       prompt: sheet.prompt,
       negative: sheet.negative,
       values: sizes.map((d) => ({
@@ -915,16 +922,16 @@ async function draw() {
         input_name: d.input_name,
         value: d.input_name === "width" ? sheet.width : sheet.height,
       })),
-      add_loras: chosenLora.value
+      add_loras: lora
         ? [
             {
-              sha256: chosenLora.value.sha256,
-              strength_model: strength.value,
-              strength_clip: strength.value,
+              sha256: lora.sha256,
+              strength_model: weight,
+              strength_clip: weight,
             },
           ]
         : [],
-      count: form.count,
+      count,
       // A sheet is six photos of one person: none of its faces is anybody's
       // until it is chosen and cut, so nothing here names the character.
       character_ids: [],
