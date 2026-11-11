@@ -815,11 +815,15 @@ def create_router(server) -> APIRouter:
         The checks a folder registered by hand goes through, run before the
         destination is created. The folder being relocated is left out: it is
         retired when the move ends, so moving into or out of itself leaves no
-        nested pair. So is a row already at the destination, which is an
-        interrupted relocation being retried.
+        nested pair. So is an ordinary ``user`` row already at the destination:
+        that is what `_register_or_reuse` leaves when a relocation is
+        interrupted, and the retry promotes it. A row of any other kind there
+        is a different folder, which the promotion would overwrite.
         """
         existing = server.hub.fetchone(
-            "SELECT id FROM model_folder WHERE path = ?", (destination,)
+            "SELECT id FROM model_folder WHERE path = ? "
+            "AND kind = 'user' AND movable = 'per_item'",
+            (destination,),
         )
         if existing is None:
             _validate_folder_conflicts(server, destination, exclude_id=relocating_id)
