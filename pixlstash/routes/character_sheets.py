@@ -11,9 +11,10 @@ imported like any picture. What is particular to sheets is here:
 * ``POST /characters/{character_id}/sheets/use`` cuts the chosen sheets into
   their six panels and files them on the character, where the training-set
   picker ranks them with the character's other pictures.
-* ``POST /characters/{character_id}/sheets/discard`` destroys the sheets
-  themselves. The dialog draws with ``hold``, so a sheet is soft-deleted on
-  import and never the library's: only the panels of the kept ones are.
+
+The dialog draws with ``hold``, so a sheet is soft-deleted on import and never
+the library's: only the panels cut from it are. Every sheet stays in the
+Scrapheap, for the owner to restore or for its retention to purge.
 
 The work is in ``services/character_sheet.py``; this module translates.
 """
@@ -102,13 +103,6 @@ class UsedSheets(BaseModel):
     picture_ids: list[int]
 
 
-class DiscardedSheets(BaseModel):
-    picture_ids: list[int] = Field(
-        description="The held sheets destroyed. One not held (kept, discarded "
-        "already, or held before a restart) is left alone."
-    )
-
-
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
@@ -183,38 +177,5 @@ def create_router(server) -> APIRouter:
             EventType.CHANGED_CHARACTERS, {"origin_client_id": origin_client_id}
         )
         return UsedSheets(picture_ids=panel_ids)
-
-    @router.post(
-        "/characters/{character_id}/sheets/discard",
-        summary="Discard character sheets",
-        description=(
-            "Destroys the sheets a run drew held (`hold`), rows and files, for "
-            "good: they were never the library's. Any other picture named is "
-            "left alone, so nothing else in the Scrapheap can be destroyed here."
-        ),
-        response_model=DiscardedSheets,
-    )
-    def discard_sheets(request: Request, character_id: int, payload: SheetIds):
-        try:
-            gone = character_sheet.discard_sheets(
-                server,
-                request.state.library_lease.library_uuid,
-                character_id,
-                payload.picture_ids,
-            )
-        except character_sheet.SheetNotFound as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        if gone:
-            server.vault.notify(
-                EventType.CHANGED_PICTURES,
-                {
-                    "picture_ids": gone,
-                    "origin_client_id": getattr(
-                        request.state, "origin_client_id", None
-                    ),
-                    "change_kind": "removed",
-                },
-            )
-        return DiscardedSheets(picture_ids=gone)
 
     return router

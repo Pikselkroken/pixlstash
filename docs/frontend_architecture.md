@@ -1656,13 +1656,12 @@ the row element to hand focus back to on close).
   same adds to it. Sheets are drawn with `hold` (backend §25.29) and are
   ticked to keep, several at once; the best holding one is ticked for the
   user where it sits until they tick or untick one; a broken one says so in
-  its caption. *Use N sheets* cuts the kept ones and then destroys those
-  sheets (`discardSheets`): their photos are the pictures now. **Every other
-  sheet stays where it was drawn, in the Scrapheap**: the ones dropped, those
-  of an earlier prompt, everything left when the dialog closes, and a run
-  still drawing then. A dropped sheet can be a nice picture that is wrong for
-  the set, so it is restorable rather than destroyed; the intro and the footer
-  say where dropped sheets go. After a use the step starts again from the
+  its caption. *Use N sheets* cuts the kept ones into pictures. **Every sheet
+  stays where it was drawn, in the Scrapheap**: the ones used, the ones
+  dropped, those of an earlier prompt, everything left when the dialog closes,
+  and a run still drawing then. A sheet can be a nice picture in its own right,
+  so nothing here destroys one; it is restorable until the Scrapheap's
+  retention purges it, and the intro and the footer say so. After a use the step starts again from the
   form. The magnifier on a sheet (or a double-click, `Z`, or a wheel-up over
   it) opens the sheet's own file in `ZoomPopout` over the dialog, the dialog
   persistent meanwhile; its *Keep* / *Drop* control is a `Segmented`, so it

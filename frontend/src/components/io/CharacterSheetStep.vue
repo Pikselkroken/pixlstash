@@ -381,7 +381,6 @@ import { VIcon } from "vuetify/components";
 
 import {
   buildSheetPrompt,
-  discardSheets,
   rankSheets,
   useSheets,
 } from "../../api/characterSheets";
@@ -699,7 +698,7 @@ function toggleKeep(id) {
 }
 
 const pickIntro = computed(() => {
-  const base = `Each sheet says how well its own faces agree. Keep the ones to use: the six photos of each become pictures of ${name.value}. Sheets you drop go to the Scrapheap, where you can restore any you like.`;
+  const base = `Each sheet says how well its own faces agree. Keep the ones to use: the six photos of each become pictures of ${name.value}. Every sheet stays in the Scrapheap, used or not, where you can restore any you like.`;
   if (!referenceIds.value.length) return base;
   return `${base} Each is also compared with ${name.value}'s reference faces: a sheet that agrees with itself but drifts from them is a different person drawn well.`;
 });
@@ -979,16 +978,6 @@ function startOver() {
   drawnWith = "";
 }
 
-/** Destroy the sheets that were cut: their photos are the pictures now. Every
- * other sheet stays in the Scrapheap, where it was drawn, to be restored or
- * left to its retention. A failure leaves these there too, said in the log. */
-function discard(ids) {
-  if (!ids.length) return;
-  discardSheets(props.character.id, [...ids]).catch((e) => {
-    console.warn("Couldn't discard the character sheets", ids, e);
-  });
-}
-
 async function use() {
   const keep = keptSheets.value.map((sheet) => sheet.picture_id);
   if (working.value || !keep.length) return;
@@ -1004,8 +993,6 @@ async function use() {
     working.value = false;
     return;
   }
-  // The panels are cut and filed: the sheets they came from are done with.
-  discard(keep);
   // Only the panels' faces may still be unread. A failure from here on is no
   // reason to offer the cut again.
   const deadline = Date.now() + FACE_WAIT_MS;
@@ -1020,7 +1007,7 @@ async function use() {
   }
   working.value = false;
   if (!alive) return;
-  // The sheets are gone: a return through the step row starts a new draw.
+  // The sheets are used: a return through the step row starts a new draw.
   startOver();
   phase.value = "describe";
   emit("done", ids);
@@ -1057,13 +1044,6 @@ const mixedWarning = computed(() => {
     return `Sheets ${pairs[0][0]} and ${pairs[0][1]} look like different people; using both mixes faces.`;
   }
   return "Kept sheets look like different people; using them mixes faces.";
-});
-
-/** What happens to the sheets not kept, said where the user decides. */
-const droppedWords = computed(() => {
-  const n = order.value.length - keptSheets.value.length;
-  if (!n) return "";
-  return n === 1 ? "; 1 dropped goes to the Scrapheap" : `; ${n} dropped go to the Scrapheap`;
 });
 
 const keptWords = computed(() => {
@@ -1110,8 +1090,8 @@ const footer = computed(() => {
       (waiting
         ? `Drawing ${waiting} more, about a minute each.`
         : keptSheets.value.length
-          ? `${keptWords.value} ${keptSheets.value.length === 1 ? "becomes" : "become"} ${name.value}'s pictures${droppedWords.value}.`
-          : "Keep the sheets to use. The rest go to the Scrapheap."),
+          ? `${keptWords.value} ${keptSheets.value.length === 1 ? "becomes" : "become"} ${name.value}'s pictures; the sheets stay in the Scrapheap.`
+          : "Keep the sheets to use. Every sheet stays in the Scrapheap."),
     // The rail's Edit goes back to the form too; the footer offers it only
     // when no sheet is worth using.
     back: noneHold.value

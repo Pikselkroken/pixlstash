@@ -606,7 +606,6 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/characters/membership                                                 | characters      | Batch character membership lookup                             |
 | POST   | /api/v1/characters/{character_id}/faces                                       | characters      | Assign faces to character                                     |
 | DELETE | /api/v1/characters/{character_id}/faces                                       | characters      | Unassign faces from character                                 |
-| POST   | /api/v1/characters/{character_id}/sheets/discard                              | characters      | Discard character sheets                                      |
 | POST   | /api/v1/characters/{character_id}/sheets/rank                                 | characters      | Rank drawn character sheets                                   |
 | POST   | /api/v1/characters/{character_id}/sheets/use                                  | characters      | Use character sheets                                          |
 | PATCH  | /api/v1/characters/{id}                                                       | characters      | Update character                                              |
@@ -12834,7 +12833,7 @@ range MOSS draws well, every side a multiple of 16); the layout is drawn on
 the largest and scaled. Text pins down a type, not a person, so each sheet is a slightly
 different person, but the six faces within one sheet agree: the user keeps
 one or more sheets and their panels become the character's pictures. **A sheet
-is never the library's**: it is drawn held and discarded once the user is done.
+is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 
 - **A sheet is an ordinary run.** The dialog runs a MOSS-Image `txt2img`
   workflow through `POST /workflows/run` with the prompt, negative and canvas
@@ -12847,12 +12846,11 @@ is never the library's**: it is drawn held and discarded once the user is done.
   itself imported new (never a duplicate or a saver-reported id, which can be
   a picture the library had; a locked set's member stays live, as with any
   delete, and is not held), sends no import event, files nobody (no LoRA
-  person), and records each in `comfyui_service`'s held set under its library
-  and id with its `pixel_sha`. A held
-  sheet is in the Scrapheap, out of every listing, while face extraction (which
-  does not skip deleted pictures) still reads it and its thumbnail and file are
-  still served. The held set is memory: after a restart a held sheet is an
-  ordinary Scrapheap picture, purged by retention.
+  person). A held sheet is an ordinary Scrapheap picture, out of every
+  listing, while face extraction (which does not skip deleted pictures) still
+  reads it and its thumbnail and file are still served. Nothing destroys it
+  but the Scrapheap's own purge, so the owner can restore any sheet, used or
+  not.
 - **The prompt** (`services/character_sheet.sheet_prompt`) is a MOSS layout
   prompt, the JSON `MOSSImageLayoutPrompt` emits: a summary caption and one
   item per panel part with a `yxyx` box in `abs_centralized` coordinates. The
@@ -12882,18 +12880,10 @@ is never the library's**: it is drawn held and discarded once the user is done.
   an overcast sky, ~237, is not frame). The six panels are
   imported with `import_derived_outputs` (source picture = the sheet, no
   stack) and filed with `add_person`, which links the largest face once face
-  extraction has read it.
-- **Discarding** (`POST /characters/{id}/sheets/discard`) destroys the named
-  sheets that are in this library's held set and still in the Scrapheap with
-  the pixels they were held with (so not another library's picture with the
-  id, a picture that reused a purged id, or one restored), through the
-  Scrapheap's own purge
-  (`purge_scrapheap_pictures`), after clearing any panel's `source_picture_id`
-  that names one; anything not held is left alone, so the route can never
-  destroy another Scrapheap picture. The dialog discards only the sheets it
-  has cut; every other sheet (dropped, of an earlier prompt, left at close, or
-  landing after) stays in the Scrapheap for the owner to restore or for its
-  retention to purge.
+  extraction has read it. Filing clears each panel's `source_picture_id`: the
+  sheet stays in the Scrapheap, and a picture naming it as source would fail
+  its purge on the foreign key (a sheet's faces are nobody's, so source-face
+  likeness has nothing to pass on).
 - **No reference set is written.** For a character with no pictures, the
   chosen sheet's panels are its only faces, so they are its references by the
   existing rule; a character with rated pictures keeps those.

@@ -39,7 +39,6 @@ from pixlstash.db_models import Character, Face, Picture
 from pixlstash.image_plugins.service import import_derived_outputs
 from pixlstash.pixl_logging import get_logger
 from pixlstash.scoring import select_reference_faces_for_character
-from pixlstash.services import comfyui_service, scrapheap_service
 from pixlstash.services.move_reconciliation_service import add_person
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
@@ -603,11 +602,19 @@ def sheets_in_session(
 def file_on_character_in_session(
     session: Session, picture_ids: list[int], character_id: int
 ) -> None:
-    """File each picture on the character: its largest face, or once one is read."""
+    """File each picture on the character: its largest face, or once one is read.
+
+    Each also drops the link to its sheet: the sheet stays in the Scrapheap,
+    and a picture naming it as source would fail its purge on the foreign key.
+    The link only lets source-face likeness pass on a character, and a sheet's
+    faces are nobody's.
+    """
     for picture in session.exec(
         select(Picture).where(Picture.id.in_(picture_ids))
     ).all():
         add_person(session, picture, character_id)
+        picture.source_picture_id = None
+        session.add(picture)
     session.commit()
 
 
@@ -637,11 +644,10 @@ def _cut(server, sheet: Picture) -> list[tuple[bytes, str]]:
 def use_sheets(server, character_id: int, picture_ids: list[int]) -> list[int]:
     """Cut each sheet into its six panels and file them on the character.
 
-    Each panel is imported as a picture made from its sheet (its
-    ``source_picture_id``), passport photos first, sheet by sheet. Every sheet
-    is read before anything is imported, so an unreadable one imports nothing.
-    Returns the panels' picture ids. Raises :class:`SheetNotFound` and
-    :class:`SheetUnreadable`. The sheets themselves are left as they are.
+    Passport photos first, sheet by sheet. Every sheet is read before anything
+    is imported, so an unreadable one imports nothing. Returns the panels'
+    picture ids. Raises :class:`SheetNotFound` and :class:`SheetUnreadable`.
+    The sheets themselves stay in the Scrapheap.
     """
     ids = list(dict.fromkeys(picture_ids))
     sheets = server.vault.db.run_immediate_read_task(
@@ -664,60 +670,3 @@ def use_sheets(server, character_id: int, picture_ids: list[int]) -> list[int]:
         character_id,
     )
     return panel_ids
-
-
-def _unlink_sources_in_session(session: Session, picture_ids: list[int]) -> None:
-    """Forget *picture_ids* as any picture's source, so they can be purged."""
-    for picture in session.exec(
-        select(Picture).where(Picture.source_picture_id.in_(picture_ids))
-    ).all():
-        picture.source_picture_id = None
-        session.add(picture)
-    session.commit()
-
-
-def _still_held_in_session(
-    session: Session, character_id: int, held: dict[int, str | None]
-) -> list[int] | None:
-    """Of *held*, the pictures that are still those sheets: in the Scrapheap
-    with the pixels they were held with. ``None`` for an unknown character."""
-    if session.get(Character, character_id) is None:
-        return None
-    rows = session.exec(select(Picture).where(Picture.id.in_(list(held)))).all()
-    return sorted(
-        row.id for row in rows if row.deleted and row.pixel_sha == held[row.id]
-    )
-
-
-def discard_sheets(
-    server, library_uuid: str | None, character_id: int, picture_ids: list[int]
-) -> list[int]:
-    """Destroy the held sheets among *picture_ids*: rows and files, for good.
-
-    Only pictures a run in this library imported held
-    (``comfyui_service.held_pictures``) are touched, and only while each is
-    still in the Scrapheap with the pixels it was held with, so nothing else
-    can be destroyed through here: not a picture of another library with the
-    same id, not one that reused a purged id, not one restored meanwhile. Panels
-    cut from a sheet keep their pictures and lose only the link to it. Raises
-    :class:`SheetNotFound` for an unknown character. Returns the ids destroyed.
-    """
-    held = comfyui_service.held_pictures(library_uuid, picture_ids)
-    sheets = server.vault.db.run_immediate_read_task(
-        _still_held_in_session, character_id, held
-    )
-    if sheets is None:
-        raise SheetNotFound(f"No character {character_id}.")
-    if sheets:
-        server.vault.db.run_task(_unlink_sources_in_session, sheets)
-        purged = list(
-            scrapheap_service.purge_scrapheap_pictures(
-                server.vault, sheets, include_protected=False
-            ).purged_ids
-        )
-    else:
-        purged = []
-    # Only now: a discard that raised above can be asked for again.
-    comfyui_service.release_held(library_uuid, list(held))
-    logger.info("Discarded held character sheets %s", purged)
-    return purged

@@ -35,7 +35,6 @@ const gen = vi.hoisted(() => ({
   buildSheetPrompt: vi.fn(),
   rankSheets: vi.fn(),
   useSheets: vi.fn(),
-  discardSheets: vi.fn(),
   getCharacter: vi.fn(),
   getReferencePictures: vi.fn(),
   patchCharacter: vi.fn(),
@@ -50,7 +49,6 @@ vi.mock("../../api/characterSheets", () => ({
   buildSheetPrompt: gen.buildSheetPrompt,
   rankSheets: gen.rankSheets,
   useSheets: gen.useSheets,
-  discardSheets: gen.discardSheets,
 }));
 vi.mock("../../api/characters", () => ({
   getCharacter: gen.getCharacter,
@@ -581,7 +579,6 @@ const MOSS_CARD = {
 /** Mock the Sheets step's reads: one MOSS workflow, LoRAs newest first. */
 function sheetsWorld({ description = "", loras = [] } = {}) {
   gen.getCharacter.mockResolvedValue({ id: 7, name: "Anna", description });
-  gen.discardSheets.mockResolvedValue({ picture_ids: [] });
   gen.getReferencePictures.mockResolvedValue({ reference_picture_ids: [] });
   gen.patchCharacter.mockResolvedValue({ status: "success" });
   gen.listAdapters.mockResolvedValue(loras);
@@ -808,8 +805,6 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
     await flushPromises();
     expect(gen.useSheets).toHaveBeenCalledWith(7, [502]);
-    // The sheet cut into pictures goes; the one dropped stays in the Scrapheap.
-    expect(gen.discardSheets.mock.calls).toEqual([[7, [502]]]);
     expect(wrapper.find('[data-testid="cts-picks"]').isVisible()).toBe(true);
     expect(wrapper.findAll('[data-testid="cts-new"]')).toHaveLength(1);
 
@@ -918,8 +913,6 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     await vi.advanceTimersByTimeAsync(3000);
     expect(drawn()).toEqual(["/thumb/503.webp"]);
     expect(gen.rankSheets).toHaveBeenLastCalledWith(7, [503]);
-    // The sheets of the earlier prompt stay in the Scrapheap, not destroyed.
-    expect(gen.discardSheets).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
@@ -995,10 +988,9 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     popout().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await flushPromises();
 
-    // Closing leaves every sheet drawn in the Scrapheap, destroying none.
+    // Closing closes the dialog, not only the pop-out.
     await wrapper.find('[aria-label="Close"]').trigger("click");
     expect(wrapper.emitted("close")).toBeTruthy();
-    expect(gen.discardSheets).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 

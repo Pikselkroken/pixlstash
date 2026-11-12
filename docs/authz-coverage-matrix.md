@@ -371,7 +371,6 @@ listing to suppress.
 | POST | `/api/v1/character-sheets/prompt` | owner_only |  | Build a sheet prompt; POST blocked for READ tokens; owner only |
 | POST | `/api/v1/characters/{character_id}/sheets/rank` | owner_only |  | Rank drawn sheets; POST blocked for READ tokens; owner only |
 | POST | `/api/v1/characters/{character_id}/sheets/use` | owner_only |  | Cut sheets into pictures; POST blocked for READ tokens; owner only |
-| POST | `/api/v1/characters/{character_id}/sheets/discard` | owner_only |  | Destroy held sheets; POST blocked for READ tokens; owner only |
 | GET | `/api/v1/characters/{id}` | character_scoped | id=id |  |
 | PATCH | `/api/v1/characters/{id}` | owner_only |  | Update character; PATCH blocked for READ tokens; owner only |
 | DELETE | `/api/v1/characters/{id}` | owner_only |  | Delete character; DELETE blocked for READ tokens; owner only |

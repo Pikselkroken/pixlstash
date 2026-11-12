@@ -14,7 +14,7 @@ from sqlmodel import select
 from pixlstash.db_models import Face, Picture
 from pixlstash.server import Server
 from pixlstash.event_types import EventType
-from pixlstash.services import character_sheet, comfyui_service
+from pixlstash.services import character_sheet, comfyui_service, scrapheap_service
 from pixlstash.services.character_sheet import (
     SHEET_HEIGHT,
     SHEET_WIDTH,
@@ -359,7 +359,8 @@ def test_using_a_sheet_files_six_panels_on_the_character(client, sheet_id):
     assert sizes[4:] == [(684, 1536), (652, 1536)]
     for picture_id in panel_ids:
         picture = pictures[picture_id]
-        assert picture.source_picture_id == sheet_id
+        # No link back to the sheet, which stays in the Scrapheap to be purged.
+        assert picture.source_picture_id is None
         # Filed on the character: its face now, or its largest face once read.
         assert (
             picture_id in with_face or picture.pending_character_id == character_id
@@ -410,8 +411,7 @@ def _state(server, ids):
 
 def test_a_held_run_never_holds_a_picture_it_did_not_import(client, monkeypatch):
     """A saver node reports ids of its own: they can be pictures the library
-    already had, so a held run leaves them live and never makes them
-    discardable."""
+    already had, so a held run leaves them live."""
     server = client.server
     live = _upload_sheet(client, [("x", 1930, 0, 1536)])
     events = _watch_events(server, monkeypatch)
@@ -429,20 +429,16 @@ def test_a_held_run_never_holds_a_picture_it_did_not_import(client, monkeypatch)
         origin_library_uuid=_library_uuid(server),
     )
     assert not _state(server, [live])[live].deleted
-    assert comfyui_service.held_pictures(_library_uuid(server), [live]) == {}
     # Left live, so announced like any run's picture.
     imported = [e for e in events if e[0] == EventType.PICTURE_IMPORTED]
     assert [e[1]["ids"] for e in imported] == [[live]]
 
 
-def test_a_held_sheet_is_kept_then_discarded_and_nothing_else_is(client, monkeypatch):
+def test_a_used_sheet_stays_in_the_scrapheap_and_purges_cleanly(client, monkeypatch):
     """A run drawn with ``hold`` soft-deletes what it imports and announces
-    none; the sheet can still be cut, and discard destroys only held pictures
-    of this library."""
+    none; the sheet can still be cut, stays in the Scrapheap afterwards, and
+    the Scrapheap's own purge removes it without touching its panels."""
     server = client.server
-    library = _library_uuid(server)
-    other = _upload_sheet(client, [("x", 1920, 0, 1536)])
-    assert client.delete(f"{API_PREFIX}/pictures/{other}").status_code == 200
     drawn = io.BytesIO()
     _sheet([("x", 1910, 0, 1536)]).save(drawn, format="PNG")
     events = _watch_events(server, monkeypatch)
@@ -464,14 +460,11 @@ def test_a_held_sheet_is_kept_then_discarded_and_nothing_else_is(client, monkeyp
         None,
         None,
         hold=True,
-        origin_library_uuid=library,
+        origin_library_uuid=_library_uuid(server),
     )
     [held] = comfyui_service.run_outcome("held-run")["picture_ids"]
     assert not [e for e in events if e[0] == EventType.PICTURE_IMPORTED]
     assert _state(server, [held])[held].deleted
-    assert set(comfyui_service.held_pictures(library, [held, other])) == {held}
-    # Held in this library only: another library's picture with the id is not.
-    assert comfyui_service.held_pictures("another-library", [held]) == {}
 
     character_id = _new_character(client, "Sheet Held")
     used = client.post(
@@ -481,62 +474,17 @@ def test_a_held_sheet_is_kept_then_discarded_and_nothing_else_is(client, monkeyp
     assert used.status_code == 200, used.text
     panels = used.json()["picture_ids"]
     assert len(panels) == 6
+    assert _state(server, [held])[held].deleted
 
-    # An id held once but since purged and reused by another Scrapheap
-    # picture: the pixels differ, so it is not that sheet any more.
-    monkeypatch.setitem(
-        comfyui_service._held_pictures, (library, other), "pixels-of-a-purged-sheet"
+    # Retention or Empty Scrapheap: a panel still naming its sheet as source
+    # would fail the purge on the foreign key.
+    purged = scrapheap_service.purge_scrapheap_pictures(
+        server.vault, [held], include_protected=False
     )
-    unknown = client.post(
-        f"{API_PREFIX}/characters/999999/sheets/discard",
-        json={"picture_ids": [held]},
-    )
-    assert unknown.status_code == 404
-    gone = client.post(
-        f"{API_PREFIX}/characters/{character_id}/sheets/discard",
-        json={"picture_ids": [held, other]},
-    )
-    assert gone.status_code == 200, gone.text
-    assert gone.json()["picture_ids"] == [held]
-    left = _state(server, [held, other, *panels])
+    assert list(purged.purged_ids) == [held]
+    left = _state(server, [held, *panels])
     assert held not in left
-    # A Scrapheap picture that was never held is untouched.
-    assert left[other].deleted
-    # The panels stay, without the link to the sheet that is gone.
-    assert all(left[pid].source_picture_id != held for pid in panels)
-    # Discarding again destroys nothing.
-    again = client.post(
-        f"{API_PREFIX}/characters/{character_id}/sheets/discard",
-        json={"picture_ids": [held]},
-    )
-    assert again.json()["picture_ids"] == []
-
-
-def test_a_discard_that_fails_can_be_asked_for_again(client, monkeypatch):
-    """The sheet stays held until it is actually purged."""
-    server = client.server
-    library = _library_uuid(server)
-    sheet = _upload_sheet(client, [("x", 1900, 0, 1536)])
-    assert client.delete(f"{API_PREFIX}/pictures/{sheet}").status_code == 200
-    monkeypatch.setitem(
-        comfyui_service._held_pictures,
-        (library, sheet),
-        _state(server, [sheet])[sheet].pixel_sha,
-    )
-    character_id = _new_character(client, "Sheet Retry")
-
-    def refuse(*_a, **_k):
-        raise RuntimeError("disk said no")
-
-    with monkeypatch.context() as m:
-        m.setattr(character_sheet.scrapheap_service, "purge_scrapheap_pictures", refuse)
-        with pytest.raises(RuntimeError):
-            character_sheet.discard_sheets(server, library, character_id, [sheet])
-    assert comfyui_service.held_pictures(library, [sheet])
-    assert character_sheet.discard_sheets(server, library, character_id, [sheet]) == [
-        sheet
-    ]
-    assert comfyui_service.held_pictures(library, [sheet]) == {}
+    assert all(not left[pid].deleted for pid in panels)
 
 
 def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
