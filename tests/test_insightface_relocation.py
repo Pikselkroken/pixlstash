@@ -541,6 +541,21 @@ def test_a_destination_inside_a_registered_folder_is_refused(face_env, tmp_path)
     assert not (user_dir / "store").exists()
     assert face_env.folder_path(store["id"]) == store["path"]
 
+    # Nor onto a locked folder's own path: the promotion at the end of the
+    # move would turn that folder's row into the store.
+    cache = tmp_path / "hf-cache"
+    cache.mkdir()
+    cache_id = face_env.register_folder(str(cache), kind="foreign", movable="fixed")
+    r = face_env.owner.post(
+        f"{API}/model-folders/{store['id']}/relocate", json={"path": str(cache)}
+    )
+    assert r.status_code == 409, r.text
+    row = face_env.server.hub.fetchone(
+        "SELECT kind FROM model_folder WHERE id = ?", (cache_id,)
+    )
+    assert row["kind"] == "foreign"
+    assert face_env.folder_path(store["id"]) == store["path"]
+
 
 def test_the_huggingface_cache_still_cannot_be_relocated(face_env, tmp_path):
     """``fixed`` means it cannot move at all - its location is ``HF_HOME``.
