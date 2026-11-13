@@ -77,6 +77,7 @@ def _serialize(review: Review) -> dict:
     return {
         "id": review.id,
         "tag": review.tag,
+        "source": review.source,
         "scope": {
             "project_id": review.project_id,
             "set_id": review.set_id,
@@ -123,6 +124,32 @@ def _resolve_scope_ids(
     return vault.db.run_immediate_read_task(_fetch)
 
 
+def _scan(
+    vault: "Vault",
+    review: Review,
+    scope_ids: set[int] | None,
+    *,
+    include_reviewed: bool = False,
+) -> dict:
+    """Run the review's own candidate source into it (create and refresh)."""
+    if review.source == tag_scan_service.MODEL_SOURCE:
+        return tag_scan_service.scan_boundary(
+            vault,
+            review.tag,
+            picture_ids=scope_ids,
+            limit=review.candidate_limit or tag_scan_service.DEFAULT_BOUNDARY_LIMIT,
+            review_id=review.id,
+        )
+    return tag_scan_service.scan_tag(
+        vault,
+        review.tag,
+        project=None,  # scope comes from the resolved picture ids
+        picture_ids=scope_ids,
+        review_id=review.id,
+        include_reviewed=include_reviewed,
+    )
+
+
 def _auto_resolvable_count(vault: "Vault", review: Review) -> int:
     """How many of the review's PENDING rows the bulk auto-resolve would apply.
 
@@ -145,12 +172,19 @@ def create_review(
     vault: "Vault",
     tag: str,
     *,
+    source: str = tag_scan_service.SOURCE,
+    limit: int | None = None,
     project_id: int | None = None,
     set_id: int | None = None,
     character_id: str | None = None,
     include_reviewed: bool = False,
 ) -> dict:
     """Create a review for ``tag``, run its scan, and return the receipt.
+
+    ``source`` picks what fills the queue: ``"near_neighbor"`` (label
+    disagreements, the default) or ``"model"`` (the ``limit`` unreviewed
+    pictures the tagger is least sure about; ``include_reviewed`` does not
+    apply). Both are frozen onto the review, so a refresh asks the same way.
 
     The scope (project/set/character) is frozen onto the review row; the scan
     is restricted to the resolved scope picture ids. At most one OPEN review
@@ -174,6 +208,8 @@ def create_review(
             )
         review = Review(
             tag=tag,
+            source=source,
+            candidate_limit=limit if source == tag_scan_service.MODEL_SOURCE else None,
             project_id=project_id,
             set_id=set_id,
             character_id=character_id,
@@ -195,14 +231,7 @@ def create_review(
     )
 
     try:
-        scan = tag_scan_service.scan_tag(
-            vault,
-            tag,
-            project=None,  # scope comes from the resolved picture ids
-            picture_ids=scope_ids,
-            review_id=review.id,
-            include_reviewed=include_reviewed,
-        )
+        scan = _scan(vault, review, scope_ids, include_reviewed=include_reviewed)
     except Exception:
         # Don't leave a half-created OPEN review blocking the tag.
         def _abort(session: Session) -> None:
@@ -511,14 +540,7 @@ def refresh_review(
         set_id=review.set_id,
         character_id=review.character_id,
     )
-    scan = tag_scan_service.scan_tag(
-        vault,
-        review.tag,
-        project=None,
-        picture_ids=scope_ids,
-        review_id=review_id,
-        include_reviewed=False,
-    )
+    scan = _scan(vault, review, scope_ids)
 
     def _update(session: Session) -> dict:
         row = session.get(Review, review_id)

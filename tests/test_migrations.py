@@ -1592,6 +1592,40 @@ def test_0136_adds_comfyui_connections_and_keeps_the_saved_address():
         assert again.returncode == 0, again.stderr
 
 
+def test_0144_adds_review_source_and_existing_reviews_read_near_neighbor():
+    """Both columns arrive on a fresh and a populated vault, and a review made
+    before the column existed reads the only source there was."""
+    columns = ("source", "candidate_limit")
+
+    def present_columns(conn):
+        return {row[1] for row in conn.execute("PRAGMA table_info(review)")}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert set(columns) <= present_columns(conn), "the baseline's create_all()"
+
+        down = _run_alembic(
+            ["downgrade", "0143_add_whats_changed"], db_url, _MIGRATIONS_DIR
+        )
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            for column in columns:
+                assert column not in present_columns(conn), column
+            _insert_minimal_row(conn, "review", tag="blurry")
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert conn.execute(
+                "SELECT tag, source, candidate_limit FROM review"
+            ).fetchall() == [("blurry", "near_neighbor", None)]
+
+
 def test_0143_adds_whats_changed_on_a_fresh_and_a_populated_vault():
     """Both columns arrive either way, an existing user reads NULL (never seen,
     nothing done), and a re-run is a no-op."""
