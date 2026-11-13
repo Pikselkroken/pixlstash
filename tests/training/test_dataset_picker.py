@@ -147,6 +147,21 @@ def test_floor_limits_are_the_best_values_rounded_down_to_a_step():
     assert _ids(at_limit) == [1]
     assert dp.floor_limits([_cand(1, rating=0, smart_score=None)])["min_score"] == 5.0
     assert dp.floor_limits([]) == {"min_likeness": 0, "min_score": 5.0}
+    # What each position would leave: picture 2 has no likeness (0), picture 3
+    # no score, so no score floor sets it aside; 4.3 and 4 both fall at 4.5.
+    kept = dp.floor_kept(lib)
+    assert len(kept["min_likeness"]) == 101 and len(kept["min_score"]) == 9
+    assert [kept["min_likeness"][n] for n in (0, 1, 20, 21, 57, 58)] == [
+        3,
+        2,
+        2,
+        1,
+        1,
+        0,
+    ]
+    assert kept["min_score"] == [3, 3, 3, 3, 3, 3, 3, 1, 1]
+    # A floor at its limit still leaves a picture; one step on, none.
+    assert kept["min_likeness"][dp.floor_limits(lib)["min_likeness"]] == 1
     # Every whole step is its own limit, 0.29 (28.999... as a product) too,
     # and the picture still passes there.
     for n in range(101):

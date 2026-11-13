@@ -177,12 +177,18 @@
                   <span v-if="g.key === 'clips'" class="cts-tile__clip">
                     <v-icon size="12">mdi-video-outline</v-icon>
                   </span>
-                </div>
-                <div class="cts-cap" aria-hidden="true">
-                  <span>{{ labelsLine(p) }}</span>
-                  <span v-if="p.likeness != null" class="cts-cap__lk">{{
+                  <span v-if="p.likeness != null" class="cts-tile__lk">{{
                     p.likeness
                   }}</span>
+                </div>
+                <div class="cts-cap" aria-hidden="true">
+                  <span
+                    v-for="c in chipsOf(p)"
+                    :key="c.label"
+                    class="cts-chip"
+                    :class="c.hue"
+                    >{{ c.label }}</span
+                  >
                 </div>
               </li>
             </ul>
@@ -194,6 +200,10 @@
     <aside class="cts-pane cts-pane--side" data-testid="cts-coverage">
       <div class="cts-side-h">
         <h3 class="cts-secl">Coverage</h3>
+        <div v-if="coverage" class="cts-legend">
+          <u />picked <i />target for {{ coverage.size }}
+          {{ coverage.unit }}
+        </div>
         <Segmented
           v-if="data?.has_clips"
           v-model="coverageKey"
@@ -205,10 +215,6 @@
         />
       </div>
       <template v-if="coverage">
-        <div class="cts-legend">
-          <u />picked <i />target for {{ coverage.size }}
-          {{ coverage.unit }}
-        </div>
         <div
           v-for="axis in coverage.axes"
           :key="axis.name"
@@ -220,19 +226,26 @@
             v-for="row in axis.rows"
             :key="row.label"
             class="cts-bar"
-            :class="{ 'cts-bar--zero': !row.count }"
+            :class="{ 'cts-bar--zero': !row.count, 'cts-bar--none': row.none }"
             :data-testid="`cts-bar-${row.label}`"
           >
             <span>{{ row.label }}</span>
             <span class="cts-bar__track">
               <span
                 class="cts-bar__fill"
+                :class="hueOf(axis.name, row.label)"
                 :style="{ width: `${row.fillPercent}%` }"
               />
               <span
                 class="cts-bar__tgt"
                 :style="{ left: `${row.targetPercent}%` }"
               />
+              <span
+                v-if="row.none"
+                class="cts-bar__none"
+                :style="noneStyle(row)"
+                >not in the library</span
+              >
             </span>
             <span class="cts-bar__v">{{ row.count }}</span>
             <span class="cts-bar__of" :class="{ 'cts-bar__of--short': row.short }"
@@ -242,9 +255,11 @@
           </div>
         </div>
 
-        <div class="cts-gapbox">
+        <div
+          v-if="coverage.closable.length || coverage.outside.length"
+          class="cts-gaps"
+        >
           <template v-if="coverage.closable.length">
-            <h4 class="cts-gk">The slider can close</h4>
             <div
               v-for="gap in coverage.closable"
               :key="gap.label"
@@ -266,7 +281,6 @@
             </div>
           </template>
           <template v-if="coverage.outside.length">
-            <h4 class="cts-gk">Past the top 50</h4>
             <div
               v-for="gap in coverage.outside"
               :key="gap.label"
@@ -278,21 +292,6 @@
                 >{{ capital(gap.label) }}: {{ gap.available }} in the pool,
                 {{ gap.inTop ? `only ${gap.inTop}` : "none" }} in the top
                 {{ gap.top }}</span
-              >
-            </div>
-          </template>
-          <template v-if="coverage.missing.length">
-            <h4 class="cts-gk">Not in the library</h4>
-            <div
-              v-for="gap in coverage.missing"
-              :key="gap.label"
-              class="cts-g"
-              data-testid="cts-gap-missing"
-            >
-              <v-icon size="16">mdi-minus-circle-outline</v-icon>
-              <span class="cts-g__t"
-                >No {{ gap.label.replace(/ /g, "-") }} {{ coverage.unit }} of
-                {{ characterName }}</span
               >
             </div>
           </template>
@@ -318,7 +317,11 @@
               <label :for="`${uid}-${f.key}`">{{ f.title }}</label>
               <span class="cts-val">{{ f.shown }}</span>
             </div>
-            <div class="cts-range">
+            <div
+              class="cts-range cts-range--kept"
+              :style="{ '--cts-kept': f.shade, '--cts-at': f.at }"
+            >
+              <span class="cts-range__fill" aria-hidden="true" />
               <input
                 :id="`${uid}-${f.key}`"
                 class="cts-range__input"
@@ -334,12 +337,6 @@
                 @change="load"
                 @keydown.enter.prevent
               />
-              <span
-                v-if="f.capPercent > 0"
-                class="cts-range__cap"
-                :style="{ width: `${f.capPercent}%` }"
-                aria-hidden="true"
-              />
             </div>
             <small class="cts-note"><b>{{ f.count }}</b> set aside</small>
           </div>
@@ -347,23 +344,25 @@
         <div
           v-for="v in varietyRows"
           :key="v.key"
-          class="cts-ctl"
+          class="cts-ctl cts-var"
           :data-testid="`cts-variety-${v.key}`"
           @keydown.enter.prevent
         >
-          <div class="cts-ctl__h">
-            <span>{{ v.title }}</span>
-            <small class="cts-note">{{ v.hint }}</small>
+          <div class="cts-var__row">
+            <span class="cts-var__l">{{ v.short }}</span>
+            <Segmented
+              full
+              :model-value="choosing[v.key]"
+              :aria-label="v.ariaLabel"
+              :options="VARIETY_STEPS"
+              @update:model-value="(id) => setVariety(v.key, id)"
+            />
           </div>
-          <Segmented
-            full
-            :model-value="choosing[v.key]"
-            :aria-label="v.ariaLabel"
-            :options="VARIETY_STEPS"
-            @update:model-value="(id) => setVariety(v.key, id)"
-          />
+          <small class="cts-note cts-var__hint">{{ v.hint }}</small>
         </div>
-        <div class="cts-two">
+        <div class="cts-aside">
+        <span class="cts-note">Set aside</span>
+        <div class="cts-two cts-two--tight">
         <div
           v-for="r in reasonRows"
           :key="r.key"
@@ -371,7 +370,7 @@
           :data-testid="`cts-reason-${r.key}`"
           @keydown.enter.prevent
         >
-          <span class="cts-ex__t">Set aside {{ r.title.toLowerCase() }}</span>
+          <span class="cts-ex__t">{{ r.title }}</span>
           <span class="cts-badge">{{ r.count }}</span>
           <v-switch
             :model-value="setAside[r.key]"
@@ -383,6 +382,7 @@
             :data-testid="`cts-switch-${r.key}`"
             @update:model-value="(v) => toggle(r.key, !!v)"
           />
+        </div>
         </div>
         </div>
       </div>
@@ -571,10 +571,16 @@ const VARIETY_STEPS = [
   { id: "important", label: "Important" },
 ];
 const VARIETIES = [
-  { key: "framing_variety", title: "Different framings", word: "framing" },
+  {
+    key: "framing_variety",
+    title: "Different framings",
+    short: "Framings",
+    word: "framing",
+  },
   {
     key: "expression_variety",
     title: "Different expressions",
+    short: "Expressions",
     word: "expression",
   },
 ];
@@ -690,7 +696,7 @@ function gapsOf(key) {
   const size = sizes.value[key];
   const reachable = reachableOf(group);
   const top = group.picks.slice(0, size);
-  const out = { rows: {}, closable: [], outside: [], missing: [] };
+  const out = { rows: {}, closable: [], outside: [] };
   for (const axis of Object.keys(data.value.targets)) {
     out.rows[axis] = [];
     for (const label of Object.keys(data.value.targets[axis])) {
@@ -700,10 +706,8 @@ function gapsOf(key) {
       const available = group.available[axis]?.[label] ?? 0;
       out.rows[axis].push({ label, count, want, short, none: !available });
       if (!short) continue;
-      if (!available) {
-        out.missing.push({ label });
-        continue;
-      }
+      // Not in the library: the bar itself says so.
+      if (!available) continue;
       let at = null;
       for (let k = size + 1; k <= reachable; k++) {
         const picksK = group.picks.slice(0, k);
@@ -811,7 +815,6 @@ const coverage = computed(() => {
     axes,
     closable: gaps.closable,
     outside: gaps.outside,
-    missing: gaps.missing,
   };
 });
 
@@ -877,9 +880,30 @@ const floorRows = computed(() =>
         ? `★ ${choosing.value.min_score.toFixed(1)}`
         : String(choosing.value[f.key]),
     count: setAsideCount(f.reason),
-    capPercent: ((f.max - floorCap(f)) / (f.max - f.min)) * 100,
+    at: (choosing.value[f.key] - f.min) / (f.max - f.min),
+    shade: keptShade(data.value?.kept?.[f.key]),
   })),
 );
+
+/**
+ * A floor's track, shaded by how many pictures each position would leave
+ * (`kept`, one count per step): light where all remain, black where none do.
+ */
+function keptShade(counts) {
+  if (!counts?.[0]) return undefined;
+  const last = counts.length - 1;
+  // ponytail: at most ~25 stops; the likeness floor has 101 steps.
+  const every = Math.ceil(counts.length / 25);
+  const stops = [];
+  for (let i = 0; i <= last; i += every) stops.push(i);
+  if (stops.at(-1) !== last) stops.push(last);
+  return `linear-gradient(90deg, ${stops
+    .map(
+      (i) =>
+        `color-mix(in srgb, var(--cts-kept-all) ${Math.round((counts[i] / counts[0]) * 100)}%, var(--cts-kept-none)) ${Math.round((i / last) * 100)}%`,
+    )
+    .join(", ")})`;
+}
 
 const varietyRows = computed(() =>
   VARIETIES.map((v) => ({
@@ -909,6 +933,26 @@ const pickedIds = computed(() => {
 });
 
 const total = computed(() => pickedIds.value.length);
+
+/** The colour of *label* on *axis*: the same on its bar and on its chips. */
+function hueOf(axis, label) {
+  const at = Object.keys(data.value?.targets?.[axis] || {}).indexOf(label);
+  return at < 0 ? "" : `cts-hue--${axis}-${at % 4}`;
+}
+
+/** A pick's chips: its framings, then its expressions. */
+function chipsOf(p) {
+  return ["framing", "expression"].flatMap((axis) =>
+    (p.buckets[axis] || []).map((label) => ({ label, hue: hueOf(axis, label) })),
+  );
+}
+
+/** "not in the library" sits beside the target mark, on whichever side has room. */
+function noneStyle(row) {
+  return row.targetPercent > 50
+    ? { right: `calc(${100 - row.targetPercent}% + var(--space-3))` }
+    : { left: `calc(${row.targetPercent}% + var(--space-3))` };
+}
 
 function labelsLine(p) {
   return [...(p.buckets.framing || []), ...(p.buckets.expression || [])].join(
@@ -990,7 +1034,7 @@ function floorCap(f) {
 function onFloor(f, event) {
   const value = Math.min(Number(event.target.value), floorCap(f));
   choosing.value[f.key] = value;
-  // The track keeps its whole scale (hatched past the cap); the thumb stops.
+  // The track keeps its whole scale (black where nothing is left); the thumb stops.
   if (String(value) !== event.target.value) event.target.value = String(value);
 }
 
@@ -1114,8 +1158,54 @@ function close() {
   flex-direction: column;
   /* One height for every step and state, so the dialog never resizes as
      sheets arrive, notices show or sheets are ticked: the panes scroll
-     instead. About 680px with the title and footer, less on a short window. */
-  height: min(568px, calc(100vh - 200px));
+     instead. About 768px with the title and footer, less on a short window. */
+  height: min(652px, calc(100vh - 160px));
+  /* One colour per coverage bar and its chips, from four hues, each deep and
+     light. The same eight in both themes: the light ones are mixed toward the
+     dark-surface text colour and carry a dark label. */
+  --cts-light: rgb(var(--v-theme-on-dark-surface));
+  --cts-kept-all: rgb(var(--v-theme-on-dark-surface));
+  --cts-kept-none: rgb(var(--v-theme-scrim));
+}
+
+.cts-hue--framing-0 {
+  background: color-mix(in srgb, rgb(var(--v-theme-tertiary)) 55%, var(--cts-light));
+  color: rgb(var(--v-theme-dark-surface));
+}
+
+.cts-hue--framing-1 {
+  background: rgb(var(--v-theme-tertiary));
+  color: rgb(var(--v-theme-on-tertiary));
+}
+
+.cts-hue--framing-2 {
+  background: rgb(var(--v-theme-dark-surface-primary));
+  color: rgb(var(--v-theme-dark-surface));
+}
+
+.cts-hue--framing-3 {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+
+.cts-hue--expression-0 {
+  background: color-mix(in srgb, rgb(var(--v-theme-secondary)) 55%, var(--cts-light));
+  color: rgb(var(--v-theme-dark-surface));
+}
+
+.cts-hue--expression-1 {
+  background: rgb(var(--v-theme-secondary));
+  color: rgb(var(--v-theme-on-secondary));
+}
+
+.cts-hue--expression-2 {
+  background: color-mix(in srgb, rgb(var(--v-theme-quaternary)) 55%, var(--cts-light));
+  color: rgb(var(--v-theme-dark-surface));
+}
+
+.cts-hue--expression-3 {
+  background: rgb(var(--v-theme-quaternary));
+  color: rgb(var(--v-theme-on-primary));
 }
 
 .cts-split {
@@ -1221,7 +1311,7 @@ button.cts-stp__s:not(:disabled) {
 
 /* The coverage column stays in view while the picks scroll. */
 .cts-pane--side {
-  flex: 0 0 404px;
+  flex: 0 0 410px;
   gap: var(--space-4);
   border-left: 1px solid rgb(var(--v-theme-divider));
 }
@@ -1299,6 +1389,78 @@ button.cts-stp__s:not(:disabled) {
     rgb(var(--v-theme-surface));
 }
 
+/* A floor's slider: the track is shaded by how many pictures each position
+   would leave (--cts-kept), under a translucent fill up to the thumb. Not a
+   DS slider variant yet; the native track is cleared and drawn here. */
+.cts-range--kept {
+  height: var(--space-5);
+}
+
+.cts-range--kept::before {
+  content: "";
+  position: absolute;
+  inset: var(--space-2) 0;
+  border-radius: var(--radius-pill);
+  background: var(--cts-kept, var(--track-trough));
+  box-shadow: inset 0 0 0 1px var(--track-ring);
+}
+
+/* Ends under the thumb's centre, which travels the track less its own width. */
+.cts-range__fill {
+  position: absolute;
+  left: 0;
+  top: var(--space-2);
+  bottom: var(--space-2);
+  width: calc(7px + (100% - 14px) * var(--cts-at, 0));
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+  background: rgba(var(--v-theme-primary), 0.4);
+  pointer-events: none;
+}
+
+.cts-range--kept .cts-range__input {
+  position: relative;
+  height: var(--space-5);
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+}
+
+.cts-range--kept .cts-range__input::-webkit-slider-runnable-track {
+  height: 14px;
+  background: transparent;
+}
+
+.cts-range--kept .cts-range__input::-moz-range-track {
+  background: transparent;
+}
+
+.cts-range--kept .cts-range__input::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgb(var(--v-theme-primary));
+  box-shadow: 0 0 0 2px rgb(var(--v-theme-surface));
+}
+
+.cts-range--kept .cts-range__input::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: rgb(var(--v-theme-primary));
+  box-shadow: 0 0 0 2px rgb(var(--v-theme-surface));
+}
+
+.cts-range--kept .cts-range__input:disabled {
+  cursor: not-allowed;
+}
+
+.cts-range--kept:has(:disabled) {
+  opacity: var(--opacity-disabled);
+}
+
 .cts-val {
   min-width: 2ch;
   text-align: right;
@@ -1338,8 +1500,9 @@ button.cts-stp__s:not(:disabled) {
   margin: 0;
   padding: 0;
   display: grid;
-  /* Six across at the dialog's full width, fewer in a narrow window. */
-  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  /* Five across at the dialog's full width, fewer in a narrow window: 144px
+     is what the longest pair of chips needs on one line. */
+  grid-template-columns: repeat(auto-fill, minmax(144px, 1fr));
   gap: var(--space-4) var(--space-3);
 }
 
@@ -1410,6 +1573,7 @@ button.cts-stp__s:not(:disabled) {
 }
 
 .cts-tile__rk,
+.cts-tile__lk,
 .cts-tile__clip {
   position: absolute;
   min-width: 18px;
@@ -1436,6 +1600,13 @@ button.cts-stp__s:not(:disabled) {
   left: var(--space-2);
 }
 
+.cts-tile__lk {
+  bottom: var(--space-2);
+  right: var(--space-2);
+  font-family: var(--font-mono);
+  font-weight: var(--weight-regular);
+}
+
 .cts-tile__new {
   position: absolute;
   top: var(--space-2);
@@ -1460,28 +1631,25 @@ button.cts-stp__s:not(:disabled) {
 
 .cts-cap {
   display: flex;
-  justify-content: space-between;
   gap: var(--space-2);
-  font-size: var(--text-xs);
-}
-
-.cts-cap span:first-child {
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.cts-cap__lk {
-  font-family: var(--font-mono);
+.cts-chip {
+  flex: none;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  line-height: var(--space-5);
+  white-space: nowrap;
 }
 
 .cts-side-h {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: var(--space-2) var(--space-3);
 }
 
 .cts-legend {
@@ -1497,7 +1665,7 @@ button.cts-stp__s:not(:disabled) {
   width: 12px;
   height: 8px;
   border-radius: var(--radius-sm);
-  background: rgb(var(--v-theme-tertiary));
+  background: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .cts-legend i {
@@ -1520,25 +1688,33 @@ button.cts-stp__s:not(:disabled) {
   align-items: center;
   gap: var(--space-3);
   font-size: var(--text-xs);
+  line-height: var(--space-5);
 }
 
 .cts-bar__track {
   position: relative;
-  height: 18px;
+  height: var(--space-5);
   overflow: hidden;
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.07);
 }
 
-/* One identity hue per chart: framing teal, expression raspberry. */
+/* Each bar takes its own colour (.cts-hue--*), shared with its chips. */
 .cts-bar__fill {
   position: absolute;
   inset: 0 auto 0 0;
-  background: rgb(var(--v-theme-tertiary));
 }
 
-.cts-axis--expression .cts-bar__fill {
-  background: rgb(var(--v-theme-secondary));
+.cts-bar__none {
+  position: absolute;
+  top: 0;
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.cts-bar--none .cts-bar__tgt {
+  opacity: 0.55;
 }
 
 .cts-bar__tgt {
@@ -1586,11 +1762,11 @@ button.cts-stp__s:not(:disabled) {
   border-top: 1px solid rgb(var(--v-theme-divider));
 }
 
-.cts-gk {
-  margin: 0 0 calc(-1 * var(--space-2));
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-regular);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+/* The gaps under the bars, a line each: two fit without scrolling. */
+.cts-gaps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .cts-g {
@@ -1619,6 +1795,45 @@ button.cts-stp__s:not(:disabled) {
 .cts-ex__t {
   flex: 1;
   min-width: 0;
+  white-space: nowrap;
+}
+
+/* A variety control on one line: its short label beside the steps, the hint
+   under them. */
+.cts-var {
+  gap: var(--space-1);
+}
+
+.cts-var__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.cts-var__l {
+  flex: 0 0 88px;
+}
+
+/* Three long words in the width left: tighter sides than a segment's own. */
+.cts-var :deep(.seg__opt) {
+  padding: 0 var(--space-2);
+}
+
+.cts-var__hint {
+  text-align: right;
+  font-size: var(--text-2xs);
+}
+
+.cts-aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-4);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+.cts-two--tight {
+  gap: var(--space-4);
 }
 
 /* The two floors side by side, each with its own count under its slider. */
@@ -1651,6 +1866,16 @@ button.cts-stp__s:not(:disabled) {
 
 .cts-ex .v-switch {
   flex: 0 0 auto;
+}
+
+/* Vuetify's compact switch is still 40px tall: the row takes the small
+   control height instead. */
+.cts-ex :deep(.v-selection-control) {
+  min-height: var(--control-h-sm);
+}
+
+.cts-ex :deep(.v-selection-control__wrapper) {
+  height: var(--control-h-sm);
 }
 
 .cts-badge {

@@ -226,12 +226,13 @@ describe("CreateTrainingSetDialog", () => {
     expect(closable.map((g) => g.text())).toEqual([
       expect.stringContaining("Closed eyes 1 short · at 18"),
     ]);
-    const missing = wrapper.findAll('[data-testid="cts-gap-missing"]');
-    expect(missing.map((g) => g.find(".cts-g__t").text())).toEqual([
-      "No full-body pictures of Anna",
-    ]);
-    expect(wrapper.find('[data-testid="cts-bar-full body"]').text()).toContain(
-      "none",
+    // What the library has none of gets no line: its bar says so.
+    const none = wrapper.find('[data-testid="cts-bar-full body"]');
+    expect(none.text()).toContain("not in the library");
+    expect(none.text()).toContain("none");
+    expect(wrapper.findAll(".cts-bar__none")).toHaveLength(1);
+    expect(wrapper.find('[data-testid="cts-coverage"]').text()).not.toContain(
+      "No full-body",
     );
 
     await button(wrapper, "Show 18").trigger("click");
@@ -360,6 +361,49 @@ describe("CreateTrainingSetDialog", () => {
     wrapper.unmount();
   });
 
+  it("gives a bar and the chips of its pictures the same colour", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    const wrapper = mountDialog();
+    await flushPromises();
+    const hue = (el) => el.classes().find((c) => c.startsWith("cts-hue--"));
+    const fill = (label) =>
+      hue(wrapper.find(`[data-testid="cts-bar-${label}"] .cts-bar__fill`));
+    // Pick 1 is a close-up smile, pick 2 a portrait neutral.
+    const chips = wrapper
+      .findAll('[data-testid="cts-pick"]')
+      .slice(0, 2)
+      .map((pick) => pick.findAll(".cts-chip"));
+    expect(chips[0].map((c) => c.text())).toEqual(["close-up", "smile"]);
+    expect(chips[0].map(hue)).toEqual([fill("close-up"), fill("smile")]);
+    expect(chips[1].map(hue)).toEqual([fill("portrait"), fill("neutral")]);
+    // Eight bars, eight colours.
+    const all = wrapper.findAll(".cts-bar__fill").map(hue);
+    expect(new Set(all).size).toBe(8);
+    wrapper.unmount();
+  });
+
+  it("shades a floor's track by what each position would leave", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue({
+      ...suggestion(),
+      kept: { min_likeness: [], min_score: [8, 8, 8, 8, 6, 4, 2, 0, 0] },
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    const track = (key) =>
+      wrapper
+        .find(`[data-testid="cts-floor-${key}"] .cts-range`)
+        .attributes("style");
+    // All eight remain at the low end, half at ★ 3.5, none from ★ 4.5.
+    expect(track("min_score")).toContain("var(--cts-kept-all) 100%, var(--cts-kept-none)) 0%");
+    expect(track("min_score")).toContain("var(--cts-kept-all) 50%, var(--cts-kept-none)) 63%");
+    expect(track("min_score")).toContain("var(--cts-kept-all) 0%, var(--cts-kept-none)) 100%");
+    // The fill ends at the thumb: ★ 3.0 is halfway along 1-5.
+    expect(track("min_score")).toContain("--cts-at: 0.5");
+    // No counts, no shading.
+    expect(track("min_likeness")).not.toContain("--cts-kept:");
+    wrapper.unmount();
+  });
+
   it("stops a floor slider at the best value among the pictures", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue({
       ...suggestion(),
@@ -368,12 +412,8 @@ describe("CreateTrainingSetDialog", () => {
     const wrapper = mountDialog();
     await flushPromises();
     const slider = wrapper.find('[data-testid="cts-slider-min_likeness"]');
-    // The track keeps its whole scale; the part past 80 is hatched.
+    // The track keeps its whole scale; the thumb stops at 80.
     expect(slider.attributes("max")).toBe("100");
-    const floor = wrapper.find('[data-testid="cts-floor-min_likeness"]');
-    expect(floor.find(".cts-range__cap").attributes("style")).toContain(
-      "width: 20%",
-    );
     slider.element.value = "95";
     await slider.trigger("input");
     expect(slider.element.value).toBe("80");
