@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205), [25.26 Creating, renaming and moving a folder inside a model folder (#2206)](#2526-creating-renaming-and-moving-a-folder-inside-a-model-folder-2206), [25.27 Removing a folder inside a model folder (#2207)](#2527-removing-a-folder-inside-a-model-folder-2207), [25.28 Training set picker](#2528-training-set-picker)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205), [25.26 Creating, renaming and moving a folder inside a model folder (#2206)](#2526-creating-renaming-and-moving-a-folder-inside-a-model-folder-2206), [25.27 Removing a folder inside a model folder (#2207)](#2527-removing-a-folder-inside-a-model-folder-2207), [25.28 Training set picker](#2528-training-set-picker), [25.29 Character sheets: drawing a training set](#2529-character-sheets-drawing-a-training-set)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -599,12 +599,15 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/adapters/{sha256}                                                     | model_shelf     | One adapter by hash                                           |
 | PUT    | /api/v1/adapters/{sha256}/attachments                                         | model_shelf     | Set which characters and sets use an adapter                  |
 | GET    | /api/v1/adapters/{sha256}/file                                                | model_shelf     | Download one adapter's bytes                                  |
+| POST   | /api/v1/character-sheets/prompt                                               | characters      | Build a character sheet prompt                                |
 | GET    | /api/v1/characters                                                            | characters      | List characters                                               |
 | POST   | /api/v1/characters                                                            | characters      | Create character                                              |
 | POST   | /api/v1/characters/likeness-search                                            | characters      | Search characters by face likeness                            |
 | POST   | /api/v1/characters/membership                                                 | characters      | Batch character membership lookup                             |
 | POST   | /api/v1/characters/{character_id}/faces                                       | characters      | Assign faces to character                                     |
 | DELETE | /api/v1/characters/{character_id}/faces                                       | characters      | Unassign faces from character                                 |
+| POST   | /api/v1/characters/{character_id}/sheets/rank                                 | characters      | Rank drawn character sheets                                   |
+| POST   | /api/v1/characters/{character_id}/sheets/use                                  | characters      | Use character sheets                                          |
 | PATCH  | /api/v1/characters/{id}                                                       | characters      | Update character                                              |
 | DELETE | /api/v1/characters/{id}                                                       | characters      | Delete character                                              |
 | GET    | /api/v1/characters/{id}                                                       | characters      | Get character by id                                           |
@@ -12816,6 +12819,76 @@ its whole stack when the set is filled (`POST /picture_sets/{id}/members`
 expands stacks), so the set can hold more than N pictures; the dialog reports
 the count the server added. Owner-only
 (`ROUTE_POLICIES` and `READ_BLOCKED_GET_PATHS`).
+
+### 25.29 Character sheets: drawing a training set
+
+"Create a training set…" can draw the pictures instead of picking them, for a
+character with none or with too few. A **character sheet** is one MOSS-Image
+picture at 5:3: four passport photos on the left half (front neutral,
+three-quarter smiling, profile neutral, other three-quarter laughing) and two
+tall body photos on the right at a framing the user picks (waist-up,
+mid-thigh, knees-up or full body). The canvas is one of three sizes
+(`SIZES`: 1280×768, 1840×1104, 2560×1536, about 1, 2 and 4 megapixels, the
+range MOSS draws well, every side a multiple of 16); the layout is drawn on
+the largest and scaled. Text pins down a type, not a person, so each sheet is a slightly
+different person, but the six faces within one sheet agree: the user keeps
+one or more sheets and their panels become the character's pictures. **A sheet
+is never the library's**: it is drawn held, into the Scrapheap, and stays there.
+
+- **A sheet is an ordinary run.** The dialog runs a MOSS-Image `txt2img`
+  workflow through `POST /workflows/run` with the prompt, negative and canvas
+  `POST /character-sheets/prompt` hands it (the width and height go in as
+  `values` at the workflow's own size addresses), an optional character LoRA in
+  `add_loras`, and `character_ids: []`: a sheet shows one person six times and
+  is nobody's until it is chosen and cut. So it queues behind the GPU, shows in
+  Tasks, and is imported like any picture; there is no sheet task. It runs
+  with `hold`: `_process_comfyui_outputs` soft-deletes the pictures the run
+  itself imported new (never a duplicate or a saver-reported id, which can be
+  a picture the library had; a locked set's member stays live, as with any
+  delete, and is not held), sends no import event, files nobody (no LoRA
+  person). A held sheet is an ordinary Scrapheap picture, out of every
+  listing, while face extraction (which does not skip deleted pictures) still
+  reads it and its thumbnail and file are still served. Nothing destroys it
+  but the Scrapheap's own purge, so the owner can restore any sheet, used or
+  not.
+- **The prompt** (`services/character_sheet.sheet_prompt`) is a MOSS layout
+  prompt, the JSON `MOSSImageLayoutPrompt` emits: a summary caption and one
+  item per panel part with a `yxyx` box in `abs_centralized` coordinates. The
+  boxes are the ones that held their layout on 16 of 16 probe sheets; the test
+  pins the mid-thigh set. Every panel's caption carries the whole character,
+  build included (a different build draws a different face). Trousers are
+  always named, shoes only at full body. A LoRA's first trigger word leads.
+- **Ranking** (`POST /characters/{id}/sheets/rank`) reads the faces face
+  extraction stored on each sheet: `agreement` is their mean pairwise cosine
+  similarity, `closeness` the mean similarity to the character's reference
+  faces (`select_reference_faces_for_character`, the sheets' own faces left
+  out), and more faces than panels marks a sheet `broken`. A sheet with no
+  `Face` row yet is `faces_read: false` and unscored. Each sheet also carries
+  its `format`, so the dialog can show the file itself full size at
+  `/pictures/{id}.{format}`. `different_from` lists the other sheets asked
+  about whose faces match this one's less than `SOME_AGREEMENT` (the mean
+  cross-sheet cosine): keeping both would mix two people in one set, which
+  the dialog warns about but allows. The thresholds behind the
+  words are read off the probes and are placeholders until validation.
+- **Using sheets** (`POST /characters/{id}/sheets/use`, `picture_ids`; a held
+  sheet counts, and every sheet is read before anything is imported) cuts each
+  with `split_sheet`: the grid's cells scaled to the picture, each cut moved
+  to the strongest full-length luminance edge within ±50 px (MOSS draws its
+  dividers off the layout), 8 px of gutter trimmed, then the white frame MOSS
+  draws round each photo (lines that are almost all over grey 244, from each
+  edge, then as far as the white runs in diagonally from each rounded corner;
+  an overcast sky, ~237, is not frame). The six panels are
+  imported with `import_derived_outputs` (source picture = the sheet, no
+  stack) and filed with `add_person`, which links the largest face once face
+  extraction has read it. Filing clears each panel's `source_picture_id`: the
+  sheet stays in the Scrapheap, and a picture naming it as source would fail
+  its purge on the foreign key (a sheet's faces are nobody's, so source-face
+  likeness has nothing to pass on).
+- **No reference set is written.** For a character with no pictures, the
+  chosen sheet's panels are its only faces, so they are its references by the
+  existing rule; a character with rated pictures keeps those.
+- The prompt route is pure; the other two are a `*_in_session` read or write
+  behind a thin vault wrapper in `services/character_sheet.py` (§10.1).
 
 ## 26. Prompt match
 

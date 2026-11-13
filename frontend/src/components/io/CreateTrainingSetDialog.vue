@@ -5,10 +5,47 @@
     :subtitle="subtitle"
     size="2xl"
     :pad-body="false"
-    :persistent="busy"
+    :persistent="busy || !!sheetStep?.working || !!sheetStep?.zooming"
     @close="close"
     @accept="onAccept"
   >
+    <div class="cts-frame">
+    <nav v-if="stepped" class="cts-stp" aria-label="Steps" data-testid="cts-steps">
+      <button
+        type="button"
+        class="cts-stp__s"
+        :class="mode === 'generate' ? 'cts-stp__s--on' : 'cts-stp__s--done'"
+        :aria-current="mode === 'generate' ? 'step' : undefined"
+        :disabled="mode === 'generate' || busy || !!created"
+        @click="mode = 'generate'"
+      >
+        <span class="cts-stp__n"
+          ><v-icon v-if="mode !== 'generate'" size="12">mdi-check</v-icon
+          ><template v-else>1</template></span
+        >Sheets
+      </button>
+      <span class="cts-stp__sep" aria-hidden="true" />
+      <span
+        class="cts-stp__s"
+        :class="{ 'cts-stp__s--on': mode === 'pick' }"
+        :aria-current="mode === 'pick' ? 'step' : undefined"
+      >
+        <span class="cts-stp__n">2</span>Pick the set
+      </span>
+      <span v-if="sheetStep?.loraName" class="cts-stp__lora"
+        ><v-icon size="12">mdi-puzzle-outline</v-icon>with
+        {{ sheetStep.loraName }}</span
+      >
+    </nav>
+    <CharacterSheetStep
+      v-if="stepped && character"
+      v-show="mode === 'generate'"
+      ref="sheetStep"
+      :character="character"
+      :picture-count="data?.stills?.candidates ?? 0"
+      @done="onGenerated"
+    />
+    <div v-show="mode === 'pick'" class="cts-split">
     <div class="cts-pane" data-testid="cts-picks">
       <p v-if="loadError" class="cts-notice cts-notice--bad" role="alert">
         <v-icon size="16">mdi-alert-circle-outline</v-icon>
@@ -26,6 +63,18 @@
           <div class="cts-grp-h">
             <h3 class="cts-secl">{{ g.title }}</h3>
             <span class="cts-note">{{ g.note }}</span>
+            <Segmented
+              v-if="g.key === 'stills' && generated.length"
+              v-model="newOnly"
+              class="cts-newonly"
+              aria-label="Show"
+              :options="[
+                { id: false, label: 'All' },
+                { id: true, label: 'New only' },
+              ]"
+              data-testid="cts-new-only"
+              @update:model-value="onNewOnly"
+            />
           </div>
           <p
             v-if="!g.reachable"
@@ -119,6 +168,12 @@
                     loading="lazy"
                   />
                   <span class="cts-tile__rk">{{ p.rank }}</span>
+                  <span
+                    v-if="generatedSet.has(p.picture_id)"
+                    class="cts-tile__new"
+                    data-testid="cts-new"
+                    ><i aria-hidden="true" />new</span
+                  >
                   <span v-if="g.key === 'clips'" class="cts-tile__clip">
                     <v-icon size="12">mdi-video-outline</v-icon>
                   </span>
@@ -332,8 +387,58 @@
         </div>
       </div>
     </aside>
+    </div>
+    </div>
 
-    <template #footer>
+    <template v-if="mode === 'generate'" #footer>
+      <span
+        class="cts-lead cts-lead--one"
+        :class="{ 'cts-lead--warn': sheetStep?.footer?.warn }"
+        :title="sheetStep?.footer?.lead"
+        :role="sheetStep?.footer?.warn ? 'status' : undefined"
+        data-testid="cts-generate-lead"
+        ><v-icon v-if="sheetStep?.footer?.warn" size="16"
+          >mdi-alert-outline</v-icon
+        >
+        {{ sheetStep?.footer?.lead }}</span
+      >
+      <p v-if="sheetStep?.error" class="cts-bad" role="alert">
+        {{ sheetStep.error }}
+      </p>
+      <AppButton
+        v-if="sheetStep?.footer?.back"
+        :disabled="!!sheetStep?.working"
+        @click="sheetStep.footer.back.run()"
+      >
+        {{ sheetStep.footer.back.label }}
+      </AppButton>
+      <AppButton
+        key-hint="esc"
+        :disabled="!!sheetStep?.working"
+        data-testid="cts-generate-cancel"
+        @click="leaveGenerate"
+      >
+        {{ hasPictures ? "Back to the picker" : "Cancel" }}
+      </AppButton>
+      <AppButton
+        v-if="sheetStep?.footer?.secondary"
+        :disabled="!sheetStep.footer.secondary.enabled"
+        @click="sheetStep.footer.secondary.run()"
+      >
+        {{ sheetStep.footer.secondary.label }}
+      </AppButton>
+      <AppButton
+        variant="primary"
+        key-hint="enter"
+        :loading="!!sheetStep?.working"
+        :disabled="!sheetStep?.footer?.primary?.enabled"
+        data-testid="cts-generate-primary"
+        @click="sheetStep.footer.primary.run()"
+      >
+        {{ sheetStep?.footer?.primary?.label || "Draw sheets" }}
+      </AppButton>
+    </template>
+    <template v-else #footer>
       <span v-if="created" class="cts-lead" data-testid="cts-created">
         <v-icon size="16" class="cts-ok">mdi-check-circle-outline</v-icon>
         Created <b>{{ created.name }}</b> · {{ created.members }}
@@ -356,6 +461,14 @@
         </AppButton>
       </template>
       <template v-else>
+        <AppButton
+          icon-left="draw"
+          :disabled="busy || !data"
+          data-testid="cts-generate"
+          @click="startGenerate"
+        >
+          {{ hasPictures ? "Generate more…" : "Generate pictures…" }}
+        </AppButton>
         <AppButton key-hint="esc" :disabled="busy" @click="close">
           Cancel
         </AppButton>
@@ -386,6 +499,10 @@
  * its picture at full size; its corner button leaves it out of the set, and
  * the next pick in the ranking takes its place. "Create" makes an ordinary child set under the
  * character; the user edits it like any other and trains on it.
+ *
+ * "Generate pictures…" draws the set instead (CharacterSheetStep): character
+ * sheets, one chosen and cut into six pictures, which then join this ranking
+ * marked new. A character with no pictures opens straight on that step.
  */
 import { computed, nextTick, ref, useId, watch } from "vue";
 import { VIcon, VSwitch } from "vuetify/components";
@@ -399,6 +516,7 @@ import {
 import { fetchCharacterSetSuggestion } from "../../api/training";
 import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
+import CharacterSheetStep from "./CharacterSheetStep.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
 import TrainingPickPreview from "./TrainingPickPreview.vue";
@@ -485,15 +603,37 @@ const loading = ref(false);
 const created = ref(null);
 const createError = ref("");
 let fetchSeq = 0;
+// "generate" draws sheets (step 1), "pick" is the ranking (step 2, or the
+// whole dialog when nothing is generated).
+const mode = ref("pick");
+const stepped = ref(false);
+const sheetStep = ref(null);
+// Pictures made in this dialog, marked new in the ranking.
+const generated = ref([]);
+const generatedSet = computed(() => new Set(generated.value));
+const newOnly = ref(false);
 
 const characterName = computed(
   () => data.value?.character_name || props.character?.name || "",
 );
 
+const hasPictures = computed(
+  () =>
+    !!data.value &&
+    (data.value.stills.candidates > 0 ||
+      (data.value.has_clips && data.value.clips.candidates > 0)),
+);
+
 const subtitle = computed(() => {
   if (!data.value) return characterName.value;
   const s = data.value.stills.candidates;
-  const parts = [characterName.value, `${s} ${s === 1 ? "picture" : "pictures"}`];
+  const fresh = generated.value.length;
+  const parts = [
+    characterName.value,
+    s ? `${s} ${s === 1 ? "picture" : "pictures"}` : "no pictures yet",
+  ];
+  // Made here: a panel whose face was never found is made but not filed.
+  if (fresh) parts.push(`${fresh} new`);
   if (data.value.has_clips) {
     const c = data.value.clips.candidates;
     parts.push(`${c} ${c === 1 ? "clip" : "clips"}`);
@@ -505,8 +645,29 @@ function reachableOf(group) {
   return Math.min(group.passing, group.picks.length);
 }
 
+/**
+ * The ranking of *key* as shown: with "New only", just the pictures made here,
+ * re-ranked from 1 and counted afresh, so the slider, the coverage and the set
+ * all read the same list.
+ */
+function groupOf(key) {
+  const group = data.value[key];
+  if (!newOnly.value || key !== "stills") return group;
+  const picks = group.picks
+    .filter((p) => generatedSet.value.has(p.picture_id))
+    .map((p, index) => ({ ...p, rank: index + 1 }));
+  const available = {};
+  for (const [axis, labels] of Object.entries(data.value.targets)) {
+    available[axis] = {};
+    for (const label of Object.keys(labels)) {
+      available[axis][label] = countIn(picks, axis, label);
+    }
+  }
+  return { ...group, picks, passing: picks.length, available };
+}
+
 function clampSize(key, value) {
-  const reachable = reachableOf(data.value[key]);
+  const reachable = reachableOf(groupOf(key));
   return Math.max(Math.min(value, reachable), Math.min(minOf(key), reachable));
 }
 
@@ -525,7 +686,7 @@ function countIn(picks, axis, label) {
 
 /** Every label short of its target at the group's size, sorted into kinds. */
 function gapsOf(key) {
-  const group = data.value[key];
+  const group = groupOf(key);
   const size = sizes.value[key];
   const reachable = reachableOf(group);
   const top = group.picks.slice(0, size);
@@ -586,7 +747,7 @@ const visibleGroups = computed(() => {
   if (!data.value) return [];
   const keys = data.value.has_clips ? ["stills", "clips"] : ["stills"];
   return keys.map((key) => {
-    const group = data.value[key];
+    const group = groupOf(key);
     const reachable = reachableOf(group);
     const size = sizes.value[key];
     const unit = key === "stills" ? "pictures" : "clips";
@@ -629,7 +790,7 @@ const visibleGroups = computed(() => {
 const coverage = computed(() => {
   if (!data.value) return null;
   const key = data.value.has_clips ? coverageKey.value : "stills";
-  if (!reachableOf(data.value[key])) return null;
+  if (!reachableOf(groupOf(key))) return null;
   const gaps = gapsOf(key);
   const axes = Object.entries(gaps.rows).map(([name, rows]) => {
     const scale = Math.max(1, ...rows.map((r) => Math.max(r.count, r.want)));
@@ -734,8 +895,8 @@ const varietyRows = computed(() =>
 
 const pickedIds = computed(() => {
   if (!data.value) return [];
-  const ids = data.value.stills.picks
-    .slice(0, sizes.value.stills)
+  const ids = groupOf("stills")
+    .picks.slice(0, sizes.value.stills)
     .map((p) => p.picture_id);
   if (data.value.has_clips) {
     ids.push(
@@ -783,6 +944,8 @@ async function load() {
     if (!reachableOf(result.stills) && reachableOf(result.clips)) {
       coverageKey.value = "clips";
     }
+    // Nothing to pick from: drawing is the only way to a set.
+    if (!hasPictures.value && !generated.value.length) startGenerate();
   } catch (e) {
     if (seq !== fetchSeq) return;
     loadError.value = `Couldn't rank the pictures. ${errorDetail(e) || "Please try again."}`;
@@ -804,6 +967,10 @@ watch(
     coverageKey.value = "stills";
     sizes.value = { ...DEFAULT_SIZE };
     setAside.value = allSetAside();
+    mode.value = "pick";
+    stepped.value = false;
+    generated.value = [];
+    newOnly.value = false;
     if (props.character?.id != null) load();
   },
   { immediate: true },
@@ -888,7 +1055,34 @@ async function create() {
   busy.value = false;
 }
 
+function startGenerate() {
+  stepped.value = true;
+  mode.value = "generate";
+}
+
+function leaveGenerate() {
+  if (hasPictures.value || generated.value.length) mode.value = "pick";
+  else close();
+}
+
+function onGenerated(ids) {
+  generated.value = [...new Set([...generated.value, ...ids])];
+  mode.value = "pick";
+  load();
+}
+
+function onNewOnly() {
+  for (const key of ["stills", "clips"]) {
+    sizes.value[key] = clampSize(key, sizes.value[key]);
+  }
+}
+
 function onAccept() {
+  if (mode.value === "generate") {
+    const primary = sheetStep.value?.footer?.primary;
+    if (primary?.enabled) primary.run();
+    return;
+  }
   if (created.value) train();
   else create();
 }
@@ -900,7 +1094,7 @@ function train() {
 }
 
 function close() {
-  if (busy.value) return;
+  if (busy.value || sheetStep.value?.working) return;
   emit("close");
   // Opened from a context menu, so Vuetify has no activator to hand focus
   // back to: the character's sidebar row takes it.
@@ -912,6 +1106,109 @@ function close() {
 </script>
 
 <style scoped>
+.cts-frame {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* One height for every step and state, so the dialog never resizes as
+     sheets arrive, notices show or sheets are ticked: the panes scroll
+     instead. About 680px with the title and footer, less on a short window. */
+  height: min(568px, calc(100vh - 200px));
+}
+
+.cts-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* The wizard's steps: a numbered row under the title. Not a DS component yet
+   (the design draws it new); built from the selection tokens. */
+.cts-stp {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.cts-stp__s {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  border: 1px solid transparent;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+}
+
+button.cts-stp__s:not(:disabled) {
+  cursor: pointer;
+}
+
+.cts-stp__s--on {
+  color: rgb(var(--v-theme-on-surface));
+  font-weight: var(--weight-medium);
+}
+
+.cts-stp__s--done {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.cts-stp__n {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid rgb(var(--v-theme-border));
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.cts-stp__s--on .cts-stp__n {
+  background: var(--active-wash);
+  border-color: var(--active-bar);
+}
+
+.cts-stp__s--done .cts-stp__n {
+  background: rgb(var(--v-theme-primary));
+  border-color: transparent;
+  color: rgb(var(--v-theme-on-primary));
+}
+
+.cts-stp__sep {
+  flex: 1;
+  min-width: 12px;
+  max-width: 40px;
+  height: 1px;
+  background: rgb(var(--v-theme-border));
+}
+
+/* Names the LoRA in use: it identifies, it does not select, so neutral. */
+.cts-stp__lora {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 20px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-cancel-button));
+  font-size: var(--text-2xs);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.cts-newonly {
+  margin-left: auto;
+}
+
 .cts-pane {
   flex: 1;
   min-width: 0;
@@ -1137,6 +1434,28 @@ function close() {
 .cts-tile__clip {
   bottom: var(--space-2);
   left: var(--space-2);
+}
+
+.cts-tile__new {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  height: 18px;
+  padding: 0 var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xs);
+}
+
+.cts-tile__new i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--active-bar);
 }
 
 .cts-cap {
@@ -1376,6 +1695,25 @@ function close() {
   gap: var(--space-2);
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The sheet step's lead stays one line, so the footer keeps its height. */
+.cts-lead--one {
+  display: block;
+  min-width: 0;
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cts-lead--warn {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.cts-lead--warn .v-icon {
+  color: rgb(var(--v-theme-surface-warning));
+  vertical-align: -3px;
 }
 
 .cts-lead b {
