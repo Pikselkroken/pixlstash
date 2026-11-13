@@ -48,6 +48,17 @@ class Review(SQLModel, table=True):
     )
     refreshed_at: Optional[datetime] = Field(default=None)
 
+    # Which candidate source filled (and refreshes) the queue: "near_neighbor"
+    # (label disagreements) or "model" (the pictures the tagger is least sure
+    # about, capped at ``candidate_limit``). See ``tag_scan_service``.
+    source: str = Field(
+        default="near_neighbor",
+        sa_column=sa.Column(
+            sa.String(), nullable=False, server_default="near_neighbor"
+        ),
+    )
+    candidate_limit: Optional[int] = Field(default=None)
+
     # Frozen ``{"receipt": {...}, "progress": {...}}`` JSON, written when the
     # review is closed (ARCHIVED/ABORTED). A closed review's receipt/progress
     # otherwise aggregate LIVE over its suggestion rows, so a later scan that

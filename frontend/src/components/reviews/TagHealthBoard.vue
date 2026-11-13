@@ -350,6 +350,27 @@
               :class="numClass(r.mismatch, 'tertiary')"
               >{{ r.mismatch ?? 0 }}</span
             >
+            <!-- The share of predictions the tagger is unsure about. A link when
+                 a review of those pictures can be started from here: the tag
+                 has a model signal, something is unsure, and no review of the
+                 tag is open (one open review per tag). -->
+            <button
+              v-if="canReviewUnsure(r)"
+              class="rs-board-num rs-board-num--link"
+              type="button"
+              :aria-label="`${unsureLabel(r)} unsure, review those pictures for ${r.tag}`"
+              @click="emit('start-review', r.tag, 'model')"
+            >
+              <Tooltip
+                text="Review the pictures the tagger is least sure about"
+                activator="parent"
+                :describe="false"
+              />
+              {{ unsureLabel(r) }}
+            </button>
+            <span v-else class="rs-board-num rs-board-num--zero">{{
+              unsureLabel(r)
+            }}</span>
             <span class="rs-board-num rs-board-num--muted">{{
               lastLabel(r)
             }}</span>
@@ -556,6 +577,7 @@ const SORT_OPTS = [
   { label: "Most wrong", key: "wrong", dir: "desc" },
   { label: "Most missing", key: "missing", dir: "desc" },
   { label: "Most conflicts", key: "dups", dir: "desc" },
+  { label: "Most unsure", key: "unsure", dir: "desc" },
   { label: "Recently reviewed", key: "last", dir: "asc" },
 ];
 
@@ -566,6 +588,7 @@ const SUBTITLE = {
   wrong: "Sorted by how many pictures probably have this tag by mistake.",
   missing: "Sorted by how many pictures are probably missing this tag.",
   dups: "Sorted by how many near-identical shots disagree on this tag.",
+  unsure: "Sorted by how much of the tagger’s output for each tag is a coin toss.",
   last: "Sorted by when each tag was last reviewed - longest ago first.",
 };
 
@@ -597,6 +620,12 @@ const headers = [
     tip: "Near-identical images (duplicates or burst shots) that disagree on this tag - one has it, the other doesn’t",
   },
   {
+    label: "Unsure",
+    key: "unsure",
+    center: true,
+    tip: "Share of this tag’s predictions where the tagger is between 35% and 65% confident. Click a figure to review the pictures closest to the tag’s threshold.",
+  },
+  {
     icon: "mdi-clock-outline",
     key: "last",
     center: true,
@@ -608,6 +637,24 @@ const headers = [
 
 function isAnomaly(r) {
   return store.isAnomalyTag(r.tag);
+}
+
+// `boundary_pct` is a 0-1 share. A non-zero share that rounds to 0 reads
+// "<1%" so a link is never labelled "0%".
+function unsureLabel(r) {
+  const share = r.boundary_pct ?? 0;
+  if (share <= 0) return "0%";
+  const pct = Math.round(share * 100);
+  return pct < 1 ? "<1%" : `${pct}%`;
+}
+
+function canReviewUnsure(r) {
+  return (
+    !isReadOnly.value &&
+    r.has_model !== false &&
+    (r.boundary_pct ?? 0) > 0 &&
+    !openSessionFor(r.tag)
+  );
 }
 
 // `last_reviewed_at` is not in the /tag_health contract yet - treat a missing
@@ -640,6 +687,8 @@ function keyval(r, key) {
       return estDisplay(r.est_missing, r.est_missing_adj);
     case "dups":
       return r.mismatch ?? 0;
+    case "unsure":
+      return r.boundary_pct ?? 0;
     case "last":
       return lastValue(r);
     default:
@@ -1132,8 +1181,10 @@ const TAIL_TOGGLE_TITLE =
   min-width: min-content;
   display: grid;
   /* Compact density (locked): tag · needs-review · wrong · missing · mismatch ·
-     last · why · action (Verified column cut - see Spec E) */
-  grid-template-columns: 172px 116px 98px 106px 84px 56px minmax(160px, 1fr) 116px;
+     unsure · last · why · action (Verified column cut - see Spec E) */
+  grid-template-columns:
+    172px 116px 98px 106px 84px 72px 56px minmax(160px, 1fr)
+    116px;
   gap: 10px;
   padding: 7px 14px;
   border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.08);
@@ -1256,6 +1307,22 @@ button.rs-board-hdr {
 .rs-board-num--muted {
   color: rgba(var(--v-theme-on-dark-surface), 0.55);
   font-weight: var(--weight-regular);
+}
+/* A figure that opens something: the number, underlined, on the row's own
+   hover wash. */
+.rs-board-num--link {
+  justify-self: center;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-on-dark-surface));
+  min-height: var(--control-h-sm);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.rs-board-num--link:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 .rs-board-num--error {
   color: rgb(var(--v-theme-dark-surface-error));

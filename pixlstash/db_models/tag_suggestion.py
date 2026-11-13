@@ -21,7 +21,9 @@ class TagSuggestion(SQLModel, table=True):
     Suggestions come from several signals (``source``), all feeding one queue:
       * "near_neighbor"        – model-independent: visually near-identical images
                                  disagree on the tag (the cold-start signal).
-      * "model"                – confident-learning-style mining from the tagger.
+      * "model"                – unreviewed pictures whose tagger confidence sits
+                                 closest to the tag's threshold
+                                 (``tag_scan_service.scan_boundary``).
       * "propagation"          – kNN label propagation for bootstrapping a new tag.
       * "version_disagreement" – two model versions flip relative to the label.
 
