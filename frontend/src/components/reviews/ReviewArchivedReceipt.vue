@@ -7,12 +7,25 @@
       </div>
 
       <div class="rs-archived-grid">
-        <span class="rs-archived-label">Scanned</span>
-        <span>{{ (review.stats?.scanned ?? 0).toLocaleString() }} pictures</span>
-        <span class="rs-archived-label">Suspects found</span>
-        <span>{{ review.stats?.found ?? 0 }}</span>
-        <span class="rs-archived-label">Handled earlier</span>
-        <span>{{ review.stats?.prev_reviewed ?? 0 }}</span>
+        <!-- A review of a supplied list: nothing was scanned or suspected. -->
+        <template v-if="review.kind === 'LIST'">
+          <span class="rs-archived-label">Listed</span>
+          <span
+            >{{ (review.stats?.scanned ?? 0).toLocaleString() }} pictures</span
+          >
+          <span class="rs-archived-label">Cards</span>
+          <span>{{ review.stats?.found ?? 0 }}</span>
+        </template>
+        <template v-else>
+          <span class="rs-archived-label">Scanned</span>
+          <span
+            >{{ (review.stats?.scanned ?? 0).toLocaleString() }} pictures</span
+          >
+          <span class="rs-archived-label">Suspects found</span>
+          <span>{{ review.stats?.found ?? 0 }}</span>
+          <span class="rs-archived-label">Handled earlier</span>
+          <span>{{ review.stats?.prev_reviewed ?? 0 }}</span>
+        </template>
         <span class="rs-archived-label">Created</span>
         <span>{{ formatWhen(review.created_at) }}</span>
         <template v-if="review.refreshed_at">
@@ -25,6 +38,10 @@
         <span class="rs-archived-removed">✗ {{ receipt.removed }} removed</span>
         <span class="rs-archived-added">+ {{ receipt.added }} added</span>
         <span class="rs-archived-kept">✓ {{ receipt.kept }} kept</span>
+      </p>
+      <p v-if="controlParts.length" class="rs-archived-controls">
+        Controls: {{ controlParts.join(" · ") }}. Answers on controls changed
+        no tags.
       </p>
 
       <button class="rs-archived-back" type="button" @click="store.showBoard()">
@@ -39,6 +56,7 @@
 // board's overturn rate feeds on.
 import { computed } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+import { controlScoreParts } from "./controlScores";
 
 const props = defineProps({
   review: { type: Object, required: true },
@@ -47,6 +65,11 @@ const props = defineProps({
 const store = useReviewSessionsStore();
 
 const receipt = computed(() => store.receiptFor(props.review.id));
+// `receiptFor` flattens to the four counts; the control scores ride on the
+// frozen server receipt beside them.
+const controlParts = computed(() =>
+  controlScoreParts(store.details[props.review.id]?.receipt?.controls),
+);
 
 function formatWhen(iso) {
   if (!iso) return "—";
@@ -105,6 +128,10 @@ function formatWhen(iso) {
   display: flex;
   gap: var(--space-4);
   font-size: var(--text-sm);
+}
+.rs-archived-controls {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 .rs-archived-removed {
   color: rgb(var(--v-theme-dark-surface-error));

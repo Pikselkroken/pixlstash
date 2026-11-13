@@ -12,13 +12,15 @@ Mirrors the vault-task conventions of the sibling services (all DB access via
 """
 
 import json
+import random
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Picture, PictureSet, Review, TaggerRun
+from pixlstash.db_models import Picture, PictureSet, Review, Tag, TaggerRun
+from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import tag_scan_service, tag_suggestion_service
@@ -31,6 +33,7 @@ from pixlstash.utils.near_neighbor import hamming_distance
 from pixlstash.utils.service.filter_helpers import (
     fetch_tag_review_scope_picture_ids,
 )
+from pixlstash.utils.service.label_ledger import HUMAN, NEG, POS
 from pixlstash.utils.service.scope_table import scope_id_subquery
 
 if TYPE_CHECKING:
@@ -46,6 +49,21 @@ OPEN = "OPEN"
 ARCHIVED = "ARCHIVED"
 ABORTED = "ABORTED"
 VALID_STATUSES = (OPEN, ARCHIVED, ABORTED)
+
+# Review.kind: where the queue came from.
+SCAN_KIND = "SCAN"
+LIST_KIND = "LIST"
+# TagSuggestion.source of a row a LIST review made for a listed picture or a
+# control. Distinct from the scan's source so the two never upsert each other.
+LIST_SOURCE = "supplied_list"
+# Controls may be at most half of a queue.
+MAX_CONTROL_SHARE = 0.5
+# How many unknown ids a refusal names before it just counts the rest.
+_MISSING_IDS_SHOWN = 20
+
+
+class ReviewInputError(ValueError):
+    """The create request cannot be carried out as given (the route's 400)."""
 
 
 class ReviewConflictError(Exception):
@@ -83,6 +101,7 @@ def _serialize(review: Review) -> dict:
             "character_id": review.character_id,
         },
         "status": review.status,
+        "kind": review.kind,
         "stats": {
             "scanned": review.scanned,
             "found": review.found,
@@ -149,8 +168,15 @@ def create_review(
     set_id: int | None = None,
     character_id: str | None = None,
     include_reviewed: bool = False,
+    picture_ids: list[int] | None = None,
+    control_share: float = 0.0,
 ) -> dict:
-    """Create a review for ``tag``, run its scan, and return the receipt.
+    """Create a review for ``tag``, fill its queue, and return the receipt.
+
+    With ``picture_ids`` the review is a LIST review: no scan runs, and every
+    listed picture gets a card (see :func:`_fill_from_list`). ``control_share``
+    then mixes in that share of known-answer controls. Without ``picture_ids``
+    the near-neighbour scan fills the queue, as before.
 
     The scope (project/set/character) is frozen onto the review row; the scan
     is restricted to the resolved scope picture ids. At most one OPEN review
@@ -161,9 +187,19 @@ def create_review(
 
     Raises:
         ReviewConflictError: An OPEN review for the tag already exists.
+        ReviewInputError: The list is empty or names a picture that is not in
+            the library, or ``control_share`` came without a list.
     """
+    if picture_ids is None and control_share:
+        raise ReviewInputError("control_share needs picture_ids")
+    if picture_ids is not None and not picture_ids:
+        raise ReviewInputError("picture_ids is empty")
+    if not 0 <= control_share <= MAX_CONTROL_SHARE:
+        raise ReviewInputError(
+            f"control_share must be between 0 and {MAX_CONTROL_SHARE}"
+        )
 
-    def _create(session: Session) -> Review:
+    def _create(session: Session) -> Review | tuple[Review, int]:
         _assert_set_scope_not_locked(session, set_id)
         open_existing = session.exec(
             select(Review).where(Review.tag == tag, Review.status == OPEN)
@@ -178,14 +214,33 @@ def create_review(
             set_id=set_id,
             character_id=character_id,
             status=OPEN,
+            kind=SCAN_KIND if picture_ids is None else LIST_KIND,
             created_at=datetime.now(timezone.utc),
         )
         session.add(review)
+        if picture_ids is None:
+            session.commit()
+            session.refresh(review)
+            return review
+        # One transaction with the review row: a refused list leaves no
+        # half-created OPEN review blocking the tag.
+        session.flush()
+        controls = _fill_from_list(session, review, picture_ids, control_share)
         session.commit()
         session.refresh(review)
-        return review
+        return review, controls
 
-    review = vault.db.run_task(_create)
+    created = vault.db.run_task(_create)
+    if picture_ids is not None:
+        review, controls = created
+        out = _serialize(review)
+        # A list has no twins, so nothing in it is ever auto-resolvable.
+        out["stats"]["auto_resolvable"] = 0
+        # How many controls were actually mixed in: fewer than asked when the
+        # scope holds too few pictures with a human verdict for the tag.
+        out["stats"]["controls"] = controls
+        return out
+    review = created
 
     scope_ids = _resolve_scope_ids(
         vault,
@@ -227,6 +282,142 @@ def create_review(
     out = _serialize(review)
     out["stats"]["auto_resolvable"] = _auto_resolvable_count(vault, review)
     return out
+
+
+def _fill_from_list(
+    session: Session, review: Review, picture_ids: list[int], control_share: float
+) -> int:
+    """Fill a LIST review's queue: one card per listed picture, plus controls.
+
+    Every listed picture is shown, in the order given. Its card's ``direction``
+    is only the current label read backwards - ``remove`` when the picture
+    carries the tag, ``add`` when it does not - so the usual accept/dismiss
+    pair records the reviewer's yes or no exactly as it does for a suspect.
+
+    Controls are pictures that already carry a human POS/NEG verdict for the
+    tag, drawn at random from the review's scope (the whole library when it
+    has none), half POS and half NEG as far as the scope allows, never from
+    the list itself and never from a locked set. They land at random places in
+    the queue and are told apart only by ``control_state``, which the queue
+    never serialises. ``control_share`` is their share of the finished queue.
+
+    A picture judged in an earlier LIST review for the tag keeps its one row
+    (``picture_id, tag, source`` is unique): it is moved into this review and
+    re-pended. That earlier review is closed, so its frozen receipt stands.
+
+    No commit. Returns the number of controls mixed in.
+
+    Raises:
+        ReviewInputError: A listed id is not a live picture.
+    """
+    listed = list(dict.fromkeys(int(i) for i in picture_ids))
+    listed_sub = scope_id_subquery(
+        session, listed, name="_pixlstash_review_list_picture_ids"
+    )
+    live = set(
+        session.exec(
+            select(Picture.id).where(
+                Picture.id.in_(listed_sub), Picture.deleted.is_(False)
+            )
+        ).all()
+    )
+    missing = [pid for pid in listed if pid not in live]
+    if missing:
+        shown = ", ".join(str(pid) for pid in missing[:_MISSING_IDS_SHOWN])
+        more = len(missing) - _MISSING_IDS_SHOWN
+        raise ReviewInputError(
+            f"{len(missing)} listed picture(s) are not in the library: {shown}"
+            + (f" and {more} more" if more > 0 else "")
+        )
+
+    controls: dict[int, str] = {}
+    wanted = round(len(listed) * control_share / (1 - control_share))
+    if wanted:
+        q = (
+            select(TagPrediction.picture_id, TagPrediction.label_state)
+            .join(Picture, Picture.id == TagPrediction.picture_id)
+            .where(
+                TagPrediction.tag == review.tag,
+                TagPrediction.label_source == HUMAN,
+                TagPrediction.label_state.in_([POS, NEG]),
+                Picture.deleted.is_(False),
+                TagPrediction.picture_id.notin_(listed_sub),
+                TagPrediction.picture_id.notin_(locked_picture_id_subquery()),
+            )
+        )
+        scope_ids = fetch_tag_review_scope_picture_ids(
+            session,
+            project_id=review.project_id,
+            set_id=review.set_id,
+            character_id=review.character_id,
+        )
+        if scope_ids is not None:
+            q = q.where(
+                TagPrediction.picture_id.in_(
+                    scope_id_subquery(
+                        session, scope_ids, name="_pixlstash_review_control_scope_ids"
+                    )
+                )
+            )
+        by_state: dict[str, list[int]] = {POS: [], NEG: []}
+        for pid, state in session.exec(q).all():
+            by_state[state].append(pid)
+        n_pos = min(len(by_state[POS]), (wanted + 1) // 2)
+        n_neg = min(len(by_state[NEG]), wanted - n_pos)
+        n_pos = min(len(by_state[POS]), wanted - n_neg)
+        for state, n in ((POS, n_pos), (NEG, n_neg)):
+            for pid in random.sample(by_state[state], n):
+                controls[pid] = state
+
+    queue = list(listed)
+    for pid in controls:
+        queue.insert(random.randrange(len(queue) + 1), pid)
+
+    queue_sub = scope_id_subquery(
+        session, queue, name="_pixlstash_review_list_picture_ids"
+    )
+    tagged = set(
+        session.exec(
+            select(Tag.picture_id).where(
+                Tag.tag == review.tag, Tag.picture_id.in_(queue_sub)
+            )
+        ).all()
+    )
+    existing = {
+        row.picture_id: row
+        for row in session.exec(
+            select(TagSuggestion).where(
+                TagSuggestion.tag == review.tag,
+                TagSuggestion.source == LIST_SOURCE,
+                TagSuggestion.picture_id.in_(queue_sub),
+            )
+        ).all()
+    }
+    now = datetime.now(timezone.utc)
+    for position, pid in enumerate(queue):
+        has_tag = pid in tagged
+        row = existing.get(pid)
+        if row is None:
+            row = TagSuggestion(picture_id=pid, tag=review.tag, source=LIST_SOURCE)
+            session.add(row)
+        row.direction = "remove" if has_tag else "add"
+        # The queue is served highest score first; this keeps the given order.
+        row.score = 1.0 - position / len(queue)
+        row.reason = (
+            f"Tagged “{review.tag}” now."
+            if has_tag
+            else f"Not tagged “{review.tag}” now."
+        )
+        row.review_id = review.id
+        row.control_state = controls.get(pid)
+        row.status = "PENDING"
+        row.created_at = now
+        row.reviewed_at = None
+        row.prior_review_id = row.prior_status = row.prior_reviewed_at = None
+
+    review.scanned = len(listed)
+    review.found = len(queue)
+    return len(controls)
 
 
 def preview_review(
@@ -337,17 +528,41 @@ def _receipt(session: Session, review_id: int) -> dict:
     changed the twin in the suggestion's direction's favour (remove-direction
     → the twin gained the tag, add-direction → the twin lost it); SKIPPED
     made no decision at all and is reported as its own count.
+
+    Controls (rows with a ``control_state``) changed no label, so they are
+    counted apart under ``controls``: per earlier verdict, how many the
+    reviewer repeated (``*_confirmed``) or contradicted (``*_overturned``),
+    plus how many were skipped or are still pending. The key is absent when
+    the review has no controls.
     """
     removed = added = kept = skipped = 0
-    for status, direction, n in session.exec(
-        select(TagSuggestion.status, TagSuggestion.direction, func.count())
-        .where(
-            TagSuggestion.review_id == review_id,
-            TagSuggestion.status != "PENDING",
+    controls: dict[str, int] = {}
+    for status, direction, control_state, n in session.exec(
+        select(
+            TagSuggestion.status,
+            TagSuggestion.direction,
+            TagSuggestion.control_state,
+            func.count(),
         )
-        .group_by(TagSuggestion.status, TagSuggestion.direction)
+        .where(TagSuggestion.review_id == review_id)
+        .group_by(
+            TagSuggestion.status, TagSuggestion.direction, TagSuggestion.control_state
+        )
     ).all():
-        if status == "ACCEPTED":
+        if control_state is not None:
+            if not controls:
+                controls = dict.fromkeys(_CONTROL_KEYS, 0)
+            if status in ("ACCEPTED", "DISMISSED"):
+                # accept follows the card's direction; dismiss goes against it.
+                said_yes = (direction == "add") == (status == "ACCEPTED")
+                agreed = said_yes == (control_state == POS)
+                key = f"{control_state.lower()}_" + (
+                    "confirmed" if agreed else "overturned"
+                )
+            else:
+                key = "skipped" if status == "SKIPPED" else "pending"
+            controls[key] += n
+        elif status == "ACCEPTED":
             if direction == "remove":
                 removed += n
             else:
@@ -364,7 +579,20 @@ def _receipt(session: Session, review_id: int) -> dict:
                 removed += n
         elif status == "SKIPPED":
             skipped += n
-    return {"removed": removed, "added": added, "kept": kept, "skipped": skipped}
+    out = {"removed": removed, "added": added, "kept": kept, "skipped": skipped}
+    if controls:
+        out["controls"] = controls
+    return out
+
+
+_CONTROL_KEYS = (
+    "pos_confirmed",
+    "pos_overturned",
+    "neg_confirmed",
+    "neg_overturned",
+    "skipped",
+    "pending",
+)
 
 
 def _frozen_snapshot(review: Review) -> dict | None:
@@ -400,6 +628,8 @@ def _latest_vault_change(session: Session) -> datetime | None:
 
 
 def _is_stale(review: Review, latest_change: datetime | None) -> bool:
+    if review.kind == LIST_KIND:
+        return False  # a supplied list has no scan for the vault to outdate
     anchor = review.refreshed_at or review.created_at
     if latest_change is None or anchor is None:
         return False
@@ -503,6 +733,10 @@ def refresh_review(
     if review.status != OPEN:
         raise ReviewConflictError(
             f"Review {review_id} is {review.status}; only OPEN reviews can refresh"
+        )
+    if review.kind == LIST_KIND:
+        raise ReviewConflictError(
+            f"Review {review_id} judges a supplied list; it has no scan to refresh"
         )
 
     scope_ids = _resolve_scope_ids(

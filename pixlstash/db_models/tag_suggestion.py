@@ -24,6 +24,8 @@ class TagSuggestion(SQLModel, table=True):
       * "model"                – confident-learning-style mining from the tagger.
       * "propagation"          – kNN label propagation for bootstrapping a new tag.
       * "version_disagreement" – two model versions flip relative to the label.
+      * "supplied_list"        – not a suspicion at all: the caller listed the
+                                 picture for judging (a LIST review).
 
     A suggestion outlives any single ``model_version``; re-running a scan upserts on
     (picture_id, tag, source) and must not resurrect a row the user already reviewed.
@@ -105,6 +107,14 @@ class TagSuggestion(SQLModel, table=True):
     prior_review_id: Optional[int] = Field(default=None)
     prior_status: Optional[str] = Field(default=None)
     prior_reviewed_at: Optional[datetime] = Field(default=None)
+
+    # Known-answer control (LIST reviews only): the human verdict, POS or NEG,
+    # the picture already carried for the tag when it was mixed into the queue.
+    # NULL for every ordinary row. A control measures the reviewer, not the
+    # picture: its verdict is stored on this row's ``status`` and reported on
+    # the review's receipt, and never written to the Tag table or the ledger.
+    # Never serialised to the queue, so a control card looks like any other.
+    control_state: Optional[str] = Field(default=None)
 
     __table_args__ = (
         UniqueConstraint("picture_id", "tag", "source"),

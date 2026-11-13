@@ -38,6 +38,15 @@ class Review(SQLModel, table=True):
 
     status: str = Field(default="OPEN", index=True)  # OPEN | ARCHIVED | ABORTED
 
+    # Where the queue came from. SCAN = the near-neighbour scan's suspects.
+    # LIST = a caller-supplied picture list, every one of them shown, with
+    # optional known-answer controls mixed in (``TagSuggestion.control_state``).
+    # A LIST review has no scan to re-run, so it cannot refresh or go stale.
+    kind: str = Field(
+        default="SCAN",
+        sa_column=sa.Column(sa.String(), nullable=False, server_default="SCAN"),
+    )
+
     # Scan receipt ("Scanned 4,812 pictures · 23 suspects · 61 handled earlier").
     scanned: int = Field(default=0)
     found: int = Field(default=0)

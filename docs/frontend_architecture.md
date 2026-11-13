@@ -3628,7 +3628,7 @@ The accept / dismiss / fix / undo action bar shared by the decision cards.
 Session-complete celebration screen.
 
 #### `ReviewArchivedReceipt.vue` (`reviews/`, ~135 lines)
-Summary receipt shown for an archived session (what was decided).
+Summary receipt shown for an archived session (what was decided). For a review of a supplied list (`kind === "LIST"`) it and `ReviewSessionView`'s completion state also print how the known-answer controls scored (`controlScores.js`, from the server's `receipt.controls`); the session view reads the server receipt there instead of the local tally, because a control's answer changes no tag, and no card ever says it is a control.
 
 #### `ReviewSticker.vue` (`reviews/`, ~85 lines)
 Die-cut sticker award. The sticker vocabulary is imported from the Picture Set palette (`utils/setAppearance.js`) so sets and stickers never drift.
