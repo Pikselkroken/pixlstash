@@ -641,7 +641,8 @@ def _write_suspects(
         row.reason = r["reason"]
         row.twin_picture_id = r["twin_picture_id"]
         row.twin_sim = r["twin_sim"]
-        row.model_version = model_version
+        if model_version is not None:
+            row.model_version = model_version
         row.neighbors = json.dumps(r["neighbors"])
 
     for r in suspects:
