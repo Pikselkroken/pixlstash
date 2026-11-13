@@ -6,7 +6,8 @@ from sqlmodel import Field, SQLModel
 
 
 class Review(SQLModel, table=True):
-    """A review session: one tag + an optional frozen scope + one scan's results.
+    """A review session: one tag + an optional frozen scope + one queue (a scan's
+    results, or a supplied picture list - see ``source``).
 
     The first-class noun of the tag-review workflow (see
     ``docs/reviews/2026-07-review-sessions-redesign-draft.md``). A review is
@@ -51,6 +52,9 @@ class Review(SQLModel, table=True):
     # Which candidate source filled (and refreshes) the queue: "near_neighbor"
     # (label disagreements) or "model" (the pictures the tagger is least sure
     # about, capped at ``candidate_limit``). See ``tag_scan_service``.
+    # "supplied_list" is no scan at all: the caller listed the pictures, every
+    # one is shown, optionally with known-answer controls mixed in
+    # (``TagSuggestion.control_state``); it cannot refresh or go stale.
     source: str = Field(
         default="near_neighbor",
         sa_column=sa.Column(

@@ -417,6 +417,52 @@ describe("ReviewSessionView", () => {
     expect(w.findAll(".rs-pair-pane")).toHaveLength(2);
   });
 
+  // A review of a supplied list (#2676): at the end it reads the SERVER receipt,
+  // which keeps the control answers out of removed/added/kept and scores them.
+  it("ends a list review on the server receipt and the control scores", async () => {
+    const store = useReviewSessionsStore();
+    const list = { ...session, source: "supplied_list", stats: { found: 6, scanned: 4 } };
+    store.sessions = [list];
+    store.view = { type: "session", id: "sess1" };
+    store.queues = { sess1: { items: [], loading: false, error: null } };
+    // The blind local tally counted a contradicted control as a removal.
+    store.tallies = { sess1: { removed: 2, added: 0, kept: 4, skipped: 0 } };
+    store.fetchDetail = async (id) => {
+      store.details = {
+        [id]: {
+          receipt: {
+            removed: 1,
+            added: 0,
+            kept: 3,
+            skipped: 0,
+            controls: {
+              pos_confirmed: 0,
+              pos_overturned: 1,
+              neg_confirmed: 1,
+              neg_overturned: 0,
+              skipped: 0,
+              pending: 0,
+            },
+          },
+        },
+      };
+    };
+    const w = mount(ReviewSessionView, { props: { session: list }, global: globalOpts });
+    await flushPromises();
+    await nextTick();
+
+    const text = w.text().replace(/\s+/g, " ");
+    expect(text).toContain("Your list · 6 pictures to judge");
+    expect(text).toContain("6 pictures judged");
+    expect(text).toContain("✗ 1 removed");
+    expect(text).toContain("✓ 3 kept");
+    expect(text).toContain(
+      "Controls: 0 of 1 earlier “yes” repeated · 1 of 1 earlier “no” repeated.",
+    );
+    // No scan behind a list, so nothing to refresh.
+    expect(text).not.toContain("Refresh");
+  });
+
   it("blocks decisions when the current suspect is in a locked set", async () => {
     const store = useReviewSessionsStore();
     seed(store, { items: [binaryItem({ id: 1, picture_id: 10 })], loading: false, error: null });

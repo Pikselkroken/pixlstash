@@ -1673,6 +1673,40 @@ def test_0143_adds_whats_changed_on_a_fresh_and_a_populated_vault():
         assert again.returncode == 0, again.stderr
 
 
+def test_0145_adds_control_state_to_a_populated_vault():
+    """The column arrives, an existing suggestion reads as not a control, and a
+    re-run is a no-op."""
+    previous = "0144_add_review_source"
+
+    def columns(conn, table):
+        return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        down = _run_alembic(["downgrade", previous], db_url, _MIGRATIONS_DIR)
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert "control_state" not in columns(conn, "tag_suggestion")
+            _insert_minimal_row(conn, "picture", id=1)
+            _insert_minimal_row(conn, "tag_suggestion", id=1, picture_id=1, tag="t")
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert conn.execute(
+                "SELECT control_state FROM tag_suggestion"
+            ).fetchall() == [(None,)]
+            conn.execute("UPDATE alembic_version SET version_num = ?", (previous,))
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
 def test_0128_adds_prompt_match_once_on_a_fresh_and_a_populated_vault():
     """Column and probe index arrive either way, existing pictures read NULL
     (not scored), and a second upgrade over a vault that has both is a no-op."""

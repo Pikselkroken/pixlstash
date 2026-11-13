@@ -45,6 +45,8 @@ export async function listReviewSuggestions(id, params) {
  * Create a review for one tag within an optional scope.
  * @param {Object} body - `{ tag }` plus any of `project_id`, `set_id`,
  *   `character_id`, `include_reviewed`.
+ *   With `picture_ids` the review judges exactly those pictures instead of
+ *   scanning, and `control_share` (0 to 0.5) mixes in known-answer controls.
  * @returns {Promise<Object>} the created review (the response body).
  */
 export async function createReview(body) {

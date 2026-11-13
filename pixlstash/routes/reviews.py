@@ -8,14 +8,19 @@ actions themselves stay on the ``/tag_suggestions`` routes.
 See :mod:`pixlstash.services.review_service` for semantics.
 """
 
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import review_service
-from pixlstash.services.review_service import ReviewConflictError, ReviewLockedError
+from pixlstash.services.review_service import (
+    MAX_CONTROL_SHARE,
+    ReviewConflictError,
+    ReviewInputError,
+    ReviewLockedError,
+)
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 
 logger = get_logger(__name__)
@@ -40,6 +45,15 @@ class CreateReviewRequest(BaseModel):
     # Re-surface suspects already decided in earlier reviews (default off -
     # same protection as the old permanent suppression, now a visible choice).
     include_reviewed: bool = False
+    # Judge exactly these pictures instead of scanning: every one gets a card,
+    # in this order. The project/set/character scope then only says where
+    # controls are drawn from, and the scan options (``source``, ``limit``,
+    # ``include_reviewed``) are ignored: the review's ``source`` comes back as
+    # "supplied_list". Bounded to what a SQLite rowid can hold.
+    picture_ids: Optional[list[Annotated[int, Field(ge=1, le=2**63 - 1)]]] = None
+    # With ``picture_ids``: the share of the finished queue made up of pictures
+    # that already carry a human verdict for the tag, mixed in unmarked.
+    control_share: float = Field(default=0.0, ge=0.0, le=MAX_CONTROL_SHARE)
 
 
 class ReviewStatsResponse(BaseModel):
@@ -53,6 +67,9 @@ class ReviewStatsResponse(BaseModel):
     # Present on create/detail: how many PENDING rows bulk auto-resolve would
     # apply at the default threshold (the "N obvious pairs - auto-resolve?" count).
     auto_resolvable: Optional[int] = None
+    # Present on the create response of a list review: how many controls were
+    # mixed in (fewer than asked when too few pictures carry a human verdict).
+    controls: Optional[int] = None
 
 
 class ReviewProgressResponse(BaseModel):
@@ -72,7 +89,16 @@ class ReviewProgressResponse(BaseModel):
 
 
 class ReviewReceiptResponse(BaseModel):
-    """Outcome receipt over the review's resolved rows."""
+    """Outcome receipt over the review's resolved rows.
+
+    A review that had known-answer controls mixed in also carries ``controls``:
+    ``{"pos_confirmed", "pos_overturned", "neg_confirmed", "neg_overturned",
+    "skipped", "pending"}`` - earlier human POS / NEG verdicts the reviewer
+    repeated or contradicted. Controls change no label and are counted there
+    only, never in the four counts below. The key is absent otherwise.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     removed: int = 0
     added: int = 0
@@ -190,7 +216,13 @@ def create_router(server) -> APIRouter:
             "whose tagger confidence is closest to the tag's threshold, nearest "
             "first. "
             "``include_reviewed=true`` re-surfaces previously-decided suspects "
-            "into this review. 409 when the tag already has an OPEN review."
+            "into this review. 409 when the tag already has an OPEN review. "
+            "With ``picture_ids`` no scan runs: every listed picture gets a "
+            "card, in the order given, and ``control_share`` mixes in that "
+            "share of pictures that already carry a human verdict for the tag "
+            "(drawn from the scope, unmarked). A control's answer changes no "
+            "label; the detail's ``receipt.controls`` reports how they scored. "
+            "400 when the list is empty or names a picture not in the library."
         ),
         response_model=ReviewResponse,
     )
@@ -214,7 +246,11 @@ def create_router(server) -> APIRouter:
                 set_id=payload.set_id,
                 character_id=payload.character_id,
                 include_reviewed=payload.include_reviewed,
+                picture_ids=payload.picture_ids,
+                control_share=payload.control_share,
             )
+        except ReviewInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         except ReviewConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
         except ReviewLockedError as exc:
@@ -358,7 +394,8 @@ def create_router(server) -> APIRouter:
         description=(
             "Re-runs the review's own candidate source for its tag and frozen "
             "scope. New suspects are appended; the review's decided rows are "
-            "never resurrected. Updates ``refreshed_at`` and ``found``."
+            "never resurrected. Updates ``refreshed_at`` and ``found``. 409 "
+            "for a review of a supplied list, which has no scan."
         ),
         response_model=RefreshReviewResponse,
     )

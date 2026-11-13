@@ -472,6 +472,9 @@ def compute_tag_health_rows(
             .where(
                 Picture.deleted.is_(False),
                 TagSuggestion.status.in_(["ACCEPTED", "DISMISSED"]),
+                # A known-answer control's verdict changes no label, so it
+                # overturned nothing.
+                TagSuggestion.control_state.is_(None),
             ),
             TagSuggestion.picture_id,
         ).group_by(TagSuggestion.tag, TagSuggestion.status)

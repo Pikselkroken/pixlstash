@@ -1074,18 +1074,41 @@ TagHealth: id, tag (unique), est_wrong, est_missing,
 TagSuggestion: id, picture_id, tag, direction ("add"|"remove"),
                source, score, reason, twin_picture_id, twin_sim,
                review_id, neighbors (JSON), status, created_at,
-               reviewed_at, prior_review_id/status/reviewed_at
+               reviewed_at, prior_review_id/status/reviewed_at,
+               control_state
                (suspected label fixes in the review queue)
 
 Review: id, tag, project_id, set_id, character_id, status
         (OPEN|ARCHIVED|ABORTED), scanned, found, prev_reviewed,
         created_at, refreshed_at, receipt_snapshot
-        (one review session = one tag + a frozen scope + one scan)
+        (one review session = one tag + a frozen scope + one scan,
+         or one supplied picture list)
 
 TaggerRun: id, run (unique), model_version, verdict, recommend,
            accepted, anomaly_macro_f1, report (JSON), created_at
            (tagger eval runs pushed from PixlTagger)
 ```
+
+**A list review judges a supplied list instead of scanning (#2676).**
+`POST /reviews` with `picture_ids` runs no scan and sets `Review.source` to
+`supplied_list`: `review_service._fill_from_list`
+writes one `TagSuggestion` per listed picture (`source="supplied_list"`, in the
+order given, `direction` = the current label read backwards so accept/dismiss
+record a plain yes/no), in the same transaction as the review row. It cannot
+refresh (409) and is never stale. `control_share` (at most 0.5, the share of the
+finished queue) mixes in pictures that already carry a human POS/NEG ledger
+verdict for the tag, drawn at random from the review's scope, half of each as
+far as it allows, never from the list or a locked set. A control row is told
+apart only by `control_state` (the earlier verdict), which no response
+serialises. **A control's answer is recorded on the row and nowhere else**:
+`accept_suggestion`, `dismiss_suggestion` and `_reverse_review` skip the Tag and
+ledger writes for it, so a strict or lenient session cannot damage the labels it
+is measured against, and undo cannot clear them. `_receipt` counts controls only
+under `receipt.controls` (`pos_/neg_confirmed`, `pos_/neg_overturned`, `skipped`,
+`pending`), and the health board's overturn rate leaves them out. Deleting a
+review deletes its control rows (every other row is detached, as before).
+"Unmarked" is a property of the review screen: the caller that supplied the
+list can always tell a control by its absence from it.
 
 ### 6.1 Tag groups: a library-wide tag-name → group map (#2469)
 
