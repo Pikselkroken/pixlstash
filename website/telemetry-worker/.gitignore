@@ -1,3 +1,0 @@
-.wrangler/
-# Temporary config written and removed by scripts/deploy.mjs.
-wrangler.deploy.jsonc

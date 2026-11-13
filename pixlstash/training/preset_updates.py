@@ -4,8 +4,7 @@ without shipping PixlStash.
 The site publishes ``training-presets/v1/index.json`` (id, version, sha256 and
 ``min_pixlstash`` per recipe) and the recipe files beside it, generated from
 ``pixlstash/data/training-presets/`` by :func:`site_files`
-(``scripts/build_training_presets_site.py``; a guardrail test fails when the
-committed copy drifts).
+(the pixlstash-website repository writes them from each release).
 
 The backend fetches, never the browser, and only when the owner presses the
 Train dialog's check button or has turned on the automatic check (at most once

@@ -29,7 +29,7 @@ SECURITY_LEVELS = ("Critical", "High", "Moderate", "Low")
 #: An ATX heading, by CommonMark: one to six ``#`` then whitespace or the end of
 #: the line. Leading indentation is stripped before this is applied, because
 #: indenting a heading does not stop it being one - to CommonMark, and to
-#: ``release-version.yml``, which strips each line before testing it for ``#``.
+#: the website's release update, which strips each line before testing ``#``.
 #: ``#1234`` is deliberately not a heading: no space after the hashes, so a
 #: continuation line citing an issue number stays legal.
 _ATX_HEADING = re.compile(r"^#{1,6}(?:\s|$)")
@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         "--security",
         choices=SECURITY_LEVELS,
         help=(
-            "Tag the heading '[Security:LEVEL]'. The release workflow reads "
+            "Tag the heading '[Security:LEVEL]'. The website's update reads "
             "this off the top heading to publish latest-version.json."
         ),
     )
@@ -122,8 +122,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.security:
         heading += f" [Security:{args.security}]"
 
-    # The heading is written even with nothing under it. `release-version.yml`
-    # reads `[Security:LEVEL]` off whatever heading is at the top of the
+    # The heading is written even with nothing under it. The website's release
+    # update (pixlstash-website, scripts/update_for_release.py) reads `[Security:LEVEL]` off whatever heading is at the top of the
     # released tag's CHANGELOG.md, so a release that skipped this step would
     # publish the PREVIOUS release's security level as its own. A release with
     # no user-visible change is a real thing - an rc bump, a cycle of internal

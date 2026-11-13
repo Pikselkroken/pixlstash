@@ -98,7 +98,7 @@ Explicitly undecided / planned (do not treat as shipped):
   endorsement or affiliation. The existing identity is fixed, not open for
   reinvention.
 - Logo asset: `Logo.png` at repo root; screenshot/marketing assets under
-  `website/assets/`.
+  `site/assets/` in the pixlstash-website repository.
 - Project / vendor name: **Pikselkroken** (GitHub org, container registry).
 - Website: `pixlstash.dev` (install / upgrade / demo pages).
 - Existing design system is the incumbent visual authority: repo is source of
@@ -113,7 +113,7 @@ Explicitly undecided / planned (do not treat as shipped):
 - Real, shipped product at version 1.7.1 with a public site (`pixlstash.dev`), a
   public demo (`demo.pixlstash.dev`), Docker images (`ghcr.io/pikselkroken`), and
   a pip package.
-- Real screenshots/marketing assets under `website/assets/` (e.g.
+- Real screenshots/marketing assets on the website (`pixlstash.dev/assets/`, e.g.
   `ScreenshotGrid.jpg`, install/upgrade/demo banners).
 - Product/legal docs in repo: `README.md`, `PRIVACY.md`, `BRANDING.md`,
   `LICENSE`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`.

@@ -1,7 +1,10 @@
-"""The install-type bucket list must agree in all four places that hold it.
+"""The install-type bucket list must agree in every place that holds it.
 
 ``install_type`` is one string that four independent components have to recognise,
-and three of them are not Python:
+and three of them are not Python. This file checks the two that live here, (1)
+against (2); the other two live in the pixlstash-website repository, which
+checks itself against each release (``scripts/check_against_app.py`` there, and
+its release update writes one manifest per ``Server.INSTALL_TYPES`` entry):
 
 1. ``Server.INSTALL_TYPES`` decides what the backend will report at all.
 2. ``TELEMETRY_INSTALL_BUCKETS`` (``useVersionCheck.js``) decides what the
@@ -9,7 +12,7 @@ and three of them are not Python:
    ``other``.
 3. ``INSTALL_TYPES`` (``telemetry-worker/src/validate.js``) decides which install
    pings the ingestion Worker accepts rather than rejecting outright.
-4. ``website/latest-version/<bucket>.json`` decides whether the version-check URL
+4. ``site/latest-version/<bucket>.json`` decides whether the version-check URL
    for that bucket answers JSON or a 404 page.
 
 Adding a bucket to some-but-not-all of those is the exact shape of the bug this
@@ -24,11 +27,10 @@ signal. The bucket answers 404 *HTML*, and the client used to stamp its
 24-hour throttle only after parsing JSON, so the first machine to ask for a
 bucket with no file would have re-checked on every page load. That combination
 never shipped -- every released bucket had a manifest, so every check got JSON --
-and ``useVersionCheck.js`` now stamps before the request. This test keeps the
-other half of the invariant.
+and ``useVersionCheck.js`` now stamps before the request.
 
 A fifth holder, ``INSTALL_BUCKETS`` in the pixlstash-metrics collector, lives in
-another repository and cannot be checked from here. It is the *consumer*: a
+a third repository and nothing checks it. It is the *consumer*: a
 bucket it does not know is counted as real rather than dropped, which
 over-reports installs instead of losing them. Adding a bucket means editing it
 too.
@@ -36,7 +38,6 @@ too.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
@@ -49,14 +50,10 @@ from pixlstash.server import Server
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VERSION_CHECK_JS = REPO_ROOT / "frontend" / "src" / "composables" / "useVersionCheck.js"
-WORKER_VALIDATE_JS = REPO_ROOT / "website" / "telemetry-worker" / "src" / "validate.js"
 
 
 # Every test here is cut off from the developer's machine (conftest.py).
 pytestmark = pytest.mark.usefixtures("isolate_the_machine")
-
-
-MANIFEST_DIR = REPO_ROOT / "website" / "latest-version"
 
 
 def _string_literals(block: str) -> set[str]:
@@ -90,41 +87,6 @@ def test_frontend_version_check_buckets_match_the_backend():
     assert _js_collection(VERSION_CHECK_JS, "TELEMETRY_INSTALL_BUCKETS") == set(
         Server.INSTALL_TYPES
     )
-
-
-def test_telemetry_worker_accepts_every_backend_install_type():
-    """A ping the backend can send must not be rejected as an unknown bucket."""
-    assert _js_collection(WORKER_VALIDATE_JS, "export const INSTALL_TYPES") == set(
-        Server.INSTALL_TYPES
-    )
-
-
-def test_every_bucket_has_a_published_version_manifest():
-    """Every bucket resolves to a real file, so no bucket can answer 404 HTML.
-
-    The live URL carries a version segment
-    (``/latest-version/{version}/{bucket}.json``) that a Cloudflare rewrite rule
-    strips before serving these files, so the filename is the whole contract.
-    """
-    published = {p.stem for p in MANIFEST_DIR.glob("*.json")}
-    missing = set(Server.INSTALL_TYPES) - published
-    assert not missing, (
-        f"No website/latest-version/ manifest for {sorted(missing)}. Those buckets "
-        "would answer 404 HTML, which leaves the client's 24h throttle unstamped "
-        "and re-checks on every page load. Add the file on main and deploy it "
-        "BEFORE shipping a client that asks for the bucket."
-    )
-
-
-def test_version_manifests_agree_on_the_version():
-    """All manifests carry the identical payload, as the release job writes them."""
-    payloads = {
-        p.name: json.loads(p.read_text(encoding="utf-8"))
-        for p in MANIFEST_DIR.glob("*.json")
-    }
-    assert payloads, "no version manifests found at all"
-    distinct = {json.dumps(v, sort_keys=True) for v in payloads.values()}
-    assert len(distinct) == 1, f"version manifests disagree: {payloads}"
 
 
 @pytest.mark.parametrize("bucket", Server.INSTALL_TYPES)

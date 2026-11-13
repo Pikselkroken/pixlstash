@@ -1,3 +1,2 @@
 # Published byte for byte: the site index carries each file's sha256.
 pixlstash/data/training-presets/*.json eol=lf
-website/training-presets/** eol=lf

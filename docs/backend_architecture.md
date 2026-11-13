@@ -12372,14 +12372,12 @@ ai-toolkit probe end to end, and the after-training pass's
 ### 25.21 Recipe updates from pixlstash.dev (#2122)
 
 A recipe (§25.16) can be corrected without shipping PixlStash. The site serves
-`website/training-presets/v1/`: `index.json` (`id`, `version`, `file`, `sha256`
-and `min_pixlstash` per recipe) and each shipped recipe byte for byte.
-`scripts/build_training_presets_site.py` writes it from
-`pixlstash/data/training-presets/` (`preset_updates.site_files`), and
-`tests/training/test_preset_updates.py` fails while the committed copy has
-drifted, so a recipe edit lands on the site with the next Pages deploy of
-`main`. `.gitattributes` pins both trees to LF, because the index carries each
-file's hash. `min_pixlstash` is `preset_updates.MIN_PIXLSTASH`: raise it when
+`training-presets/v1/`: `index.json` (`id`, `version`, `file`, `sha256`
+and `min_pixlstash` per recipe) and each shipped recipe byte for byte. The site
+is its own repository, pixlstash-website, whose release update writes that
+directory from each release's `preset_updates.site_files()`, so a recipe edit
+reaches the site with the release that ships it. `.gitattributes` pins the
+recipes to LF, because the index carries each file's hash. `min_pixlstash` is `preset_updates.MIN_PIXLSTASH`: raise it when
 the schema changes in a way an older app would misread.
 
 **The backend fetches, never the browser.** `POST /training/presets/check`
