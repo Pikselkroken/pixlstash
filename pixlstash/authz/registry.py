@@ -1915,6 +1915,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Vault-wide rebuild; inline _reject_scoped_tokens; owner/full only",
     ),
+    # ── tag_predictions.py: the label ledger in bulk (#2675; owner-only) ────
+    ("GET", "/api/v1/tag_predictions/labels"): RoutePolicy(
+        _OWNER,
+        justification="Library-wide label ledger, paged: every picture id that carries a tag verdict. Lists picture ids across the whole library and a total, so narrowing it to a share token's scope would be a second query, not a filter (same reasoning as tag_health and the reviews reads); owner only",
+    ),
     # ── tag_groups.py (library-wide tag name -> group map; owner-only) ──────
     ("GET", "/api/v1/tag_groups"): RoutePolicy(
         _OWNER,
