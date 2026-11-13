@@ -3,23 +3,19 @@
 // appearance the originals use (dark theme, sensible grid density) via the
 // user-config API, so every capture matches. For every reproducible scene
 // (scenes.js) it drives the app into the right state and writes a JPEG to
-// website/screenshots/output/, named after the site asset it replaces. A final
+// the website checkout's screenshots/output/ (websiteDir.js), named after the site asset it replaces. A final
 // coverage check reads the website "script" (script.json) and fails if any
 // feature illustration is neither reproduced nor explicitly listed as
 // manual/branding — so nothing is silently dropped.
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { test, expect, freshUiState } from './electronApp.js'
 import { GridPage } from '../pages/GridPage.js'
 import { Lightbox } from '../pages/Lightbox.js'
 import { SettingsDialog } from '../pages/SettingsDialog.js'
 import { SideBar } from '../pages/SideBar.js'
 import { scenes, manual, sceneForAsset } from './scenes.js'
-
-const here = dirname(fileURLToPath(import.meta.url))
-const OUT_DIR = join(here, '..', '..', '..', 'website', 'screenshots', 'output')
-const SCRIPT = join(here, '..', '..', '..', 'website', 'screenshots', 'script.json')
+import { OUT_DIR, SCRIPT } from './websiteDir.js'
 
 // Pure branding / non-feature art that we never reproduce from the app.
 const IGNORE = new Set([
@@ -92,7 +88,7 @@ test.describe('reproduce website screenshots', () => {
     const lines = [
       '# Website screenshot reproduction — coverage',
       '',
-      `Generated from \`website/screenshots/script.json\` (${images.length} feature illustrations).`,
+      `Generated from the website's \`screenshots/script.json\` (${images.length} feature illustrations).`,
       '',
       `- Reproduced from the SPA: **${reproduced.length}**`,
       `- Manual / external / branding: **${manualList.length}**`,

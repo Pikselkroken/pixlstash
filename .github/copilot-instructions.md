@@ -404,7 +404,7 @@ every occurrence is a deliberate declaration**: the plugin `author` field
 (`pixlstash/image_plugins/built-in/*.py`, `pixlstash/tagger_plugins/*.py`),
 package authorship (`pyproject.toml`, `electron/package.json`), and the contact
 a reporter is told to use (`SECURITY.md`, `PRIVACY.md`, `CODE_OF_CONDUCT.md`,
-`website/privacy.html`, and the gated test that asserts it,
+and the gated test that asserts it,
 `tests/test_security_supported_versions.py`). Do not remove or rewrite any of
 them: editing the contact out of `SECURITY.md` reds the gate *and* deletes the
 address somebody is supposed to report a vulnerability to.

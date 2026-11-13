@@ -1,15 +1,15 @@
 # PixlStash
 <p align="center">
-  <img src="website/assets/ScreenshotGrid.jpg" alt="PixlStash Screenshot" width="800"/>
+  <img src="https://pixlstash.dev/assets/ScreenshotGrid.jpg" alt="PixlStash Screenshot" width="800"/>
 </p>
 
 <p align="center">
   <a href="https://pixlstash.dev/install.html">
-    <img src="website/assets/install-banner.svg" alt="Install PixlStash" width="320"/>
+    <img src="https://pixlstash.dev/assets/install-banner.svg" alt="Install PixlStash" width="320"/>
   </a>
   &nbsp;
   <a href="https://demo.pixlstash.dev?token=o75qQ-w0fy_FraPb2sdxcGOVTBoKFmmZwStycljomSs">
-    <img src="website/assets/demo-banner.svg" alt="Try the Demo" width="320"/>
+    <img src="https://pixlstash.dev/assets/demo-banner.svg" alt="Try the Demo" width="320"/>
   </a>
 </p>
 
@@ -62,7 +62,7 @@ same in the desktop app and in a browser.
   cloud API.
 
 <p align="center">
-  <img src="website/assets/ScreenshotSemanticSearch.jpg" alt="Semantic search for an old man surrounded by photographs" width="800"/>
+  <img src="https://pixlstash.dev/assets/ScreenshotSemanticSearch.jpg" alt="Semantic search for an old man surrounded by photographs" width="800"/>
 </p>
 
 ### Workflows and recipes
@@ -99,11 +99,11 @@ a local one, installs the PixlStash nodes into it and links the two apps.
   which GPU PixlStash uses.
 
 <p align="center">
-  <img src="website/assets/ScreenshotComfyUi.jpg" alt="The Workflows workspace with workflow cards and the selected workflow's models, LoRAs and parameters" width="800"/>
+  <img src="https://pixlstash.dev/assets/ScreenshotComfyUi.jpg" alt="The Workflows workspace with workflow cards and the selected workflow's models, LoRAs and parameters" width="800"/>
 </p>
 
 <p align="center">
-  <img src="website/assets/ComfyWorkflow.png" alt="PixlStash loader and saver nodes in a ComfyUI workflow" width="800"/>
+  <img src="https://pixlstash.dev/assets/ComfyWorkflow.png" alt="PixlStash loader and saver nodes in a ComfyUI workflow" width="800"/>
 </p>
 
 ### Inpaint, crop and compare
@@ -123,7 +123,7 @@ a local one, installs the PixlStash nodes into it and links the two apps.
   comes back stacked on the original.
 
 <p align="center">
-  <img src="website/assets/InpaintAxe.gif" alt="Inpainting an axe head into a gnome's hand in the Edit tab" width="800"/>
+  <img src="https://pixlstash.dev/assets/InpaintAxe.gif" alt="Inpainting an axe head into a gnome's hand in the Edit tab" width="800"/>
 </p>
 
 ### Your folders
@@ -149,7 +149,7 @@ a local one, installs the PixlStash nodes into it and links the two apps.
   as the original files.
 
 <p align="center">
-  <img src="website/assets/ScreenshotMapPreview.jpg" alt="Folder import preview listing the projects and sets the folders become" width="800"/>
+  <img src="https://pixlstash.dev/assets/ScreenshotMapPreview.jpg" alt="Folder import preview listing the projects and sets the folders become" width="800"/>
 </p>
 
 ### Libraries, models and training
@@ -185,7 +185,7 @@ a local one, installs the PixlStash nodes into it and links the two apps.
   installs plugins.
 
 <p align="center">
-  <img src="website/assets/TrainingReport.jpg" alt="A training run's page with loss and likeness curves and previews per checkpoint" width="800"/>
+  <img src="https://pixlstash.dev/assets/TrainingReport.jpg" alt="A training run's page with loss and likeness curves and previews per checkpoint" width="800"/>
 </p>
 
 ### Browse and organise
@@ -247,11 +247,11 @@ Full breakdown, including a capability-by-capability comparison table:
 
 <p align="center">
   <a href="https://pixlstash.dev/install.html">
-    <img src="website/assets/install-banner.svg" alt="Install PixlStash" width="200"/>
+    <img src="https://pixlstash.dev/assets/install-banner.svg" alt="Install PixlStash" width="200"/>
   </a>
   &nbsp;
   <a href="https://demo.pixlstash.dev?token=o75qQ-w0fy_FraPb2sdxcGOVTBoKFmmZwStycljomSs">
-    <img src="website/assets/demo-banner.svg" alt="Try the Demo" width="200"/>
+    <img src="https://pixlstash.dev/assets/demo-banner.svg" alt="Try the Demo" width="200"/>
   </a>
 </p>
 
@@ -716,7 +716,7 @@ python -m pixlstash.app --cleanup-missing-pictures
 
 <p align="center">
   <a href="https://pixlstash.dev/upgrade.html">
-    <img src="website/assets/upgrade-banner.svg" alt="Upgrade PixlStash" width="320"/>
+    <img src="https://pixlstash.dev/assets/upgrade-banner.svg" alt="Upgrade PixlStash" width="320"/>
   </a>
 </p>
 
