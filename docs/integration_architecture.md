@@ -2007,7 +2007,9 @@ rating where one was given, the smart score where not). `framing_variety` and
 `expression_variety` are each `unimportant`, `somewhat` or `important` (the
 default). `limits` holds the highest `min_likeness` and `min_score` that still
 let one of the character's pictures through, for the client to stop its
-sliders at.
+sliders at. `kept` holds, per floor, how many pictures each step would leave
+by itself (`min_likeness` 101 counts, `min_score` 9), which the client shades
+the slider tracks with.
 `targets` holds a share per label: a set of N wants `max(1, round(share * N))`,
 and the client applies the same rule to draw its coverage bars. The client
 takes a prefix of `picks` per group and creates the set itself

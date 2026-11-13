@@ -1600,8 +1600,9 @@ Load-bearing behaviours:
 #### `CreateTrainingSetDialog.vue` (`io/`)
 
 The character sidebar menu's *Create a training set…*, `AppDialog size="2xl"`
-with a flush body split in two: the picks on the left, a 404px coverage column
-on the right that stays in view. Mounted in **`App.vue`**, opened by the
+with a flush body split in two: the picks on the left, a 410px coverage column
+on the right that stays in view and is laid out to fit without scrolling
+(the frame is 652px, less on a short window; two gap lines still fit). Mounted in **`App.vue`**, opened by the
 sidebar's `create-training-set` event (the character's id, name, projects and
 the row element to hand focus back to on close).
 
@@ -1609,9 +1610,11 @@ the row element to hand focus back to on close).
   every change under *Choosing*: two floor sliders (minimum likeness 0-100,
   minimum score 1-5 in half steps, each with its count set aside; they refetch
   on `change`: when the thumb is let go, or on each keyboard step; the track
-  keeps its full scale and the thumb stops at the response's `limits`, the
-  part past it hatched), a three-step `Segmented` each for
-  different framings and different expressions, and two *Set aside* switches,
+  keeps its full scale and the thumb stops at the response's `limits`; the
+  track is shaded from the response's `kept`, light where every picture
+  remains and black where none does, under a translucent fill), a three-step
+  `Segmented` each for framings and expressions, on one line with its hint
+  under it, and two *Set aside* switches side by side,
   on by default (on = those pictures stay out). The size sliders take a prefix
   of each group's `picks` and never refetch: Pictures runs 5-50 with the part
   past what passes hatched, Video clips (shown only with `has_clips`) runs 1
@@ -1624,9 +1627,14 @@ the row element to hand focus back to on close).
   `getPictureMetadata` gives the format for `pictureMediaUrl`, a clip playing,
   a click for full size, and the same leave-out button.
 - **Coverage** draws one bar per framing and expression label over the current
-  picks, against `target = max(1, round(share * N))` from the response. A short
-  label is sorted into *The slider can close* (with a *Show N* that moves the
-  slider), *Past the top 50*, or *Not in the library* (`available` is 0).
+  picks, against `target = max(1, round(share * N))` from the response. Each
+  bar has its own colour (`hueOf`: teal and olive for framing, raspberry and
+  violet for expression, each deep and light), and a tile's chips wear the
+  colours of its bars; the sheet's 144px minimum tile width is what the longest
+  pair of chips needs. A short label gets one line under the bars: one the
+  slider can close (with a *Show N* that moves the slider) or one past the top
+  50. A label with `available` 0 gets no line: its bar is drawn empty and says
+  *not in the library*.
 - **Create** posts the set with `parent_character_id` and the character's
   projects, then bulk-adds the picks; if the add fails it deletes the empty set
   and says so. After it, *Train a LoRA on it* emits `train`, which App routes
