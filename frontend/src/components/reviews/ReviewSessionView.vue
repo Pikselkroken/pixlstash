@@ -456,7 +456,7 @@ const reopenableSkips = computed(() =>
   store.reopenableSkipsFor(props.session.id),
 );
 // A review of a supplied picture list (no scan behind it, so no refresh).
-const isList = computed(() => props.session.kind === "LIST");
+const isList = computed(() => props.session.source === "supplied_list");
 // A list review's completion state reads the SERVER receipt, not the local
 // tally: the tally counts every answer alike, which keeps a control card
 // indistinguishable while reviewing, but a control's answer changes no tag, so

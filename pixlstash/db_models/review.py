@@ -7,7 +7,7 @@ from sqlmodel import Field, SQLModel
 
 class Review(SQLModel, table=True):
     """A review session: one tag + an optional frozen scope + one queue (a scan's
-    results, or a supplied picture list - see ``kind``).
+    results, or a supplied picture list - see ``source``).
 
     The first-class noun of the tag-review workflow (see
     ``docs/reviews/2026-07-review-sessions-redesign-draft.md``). A review is
@@ -39,15 +39,6 @@ class Review(SQLModel, table=True):
 
     status: str = Field(default="OPEN", index=True)  # OPEN | ARCHIVED | ABORTED
 
-    # Where the queue came from. SCAN = the near-neighbour scan's suspects.
-    # LIST = a caller-supplied picture list, every one of them shown, with
-    # optional known-answer controls mixed in (``TagSuggestion.control_state``).
-    # A LIST review has no scan to re-run, so it cannot refresh or go stale.
-    kind: str = Field(
-        default="SCAN",
-        sa_column=sa.Column(sa.String(), nullable=False, server_default="SCAN"),
-    )
-
     # Scan receipt ("Scanned 4,812 pictures · 23 suspects · 61 handled earlier").
     scanned: int = Field(default=0)
     found: int = Field(default=0)
@@ -57,6 +48,20 @@ class Review(SQLModel, table=True):
         default_factory=lambda: datetime.now(timezone.utc)
     )
     refreshed_at: Optional[datetime] = Field(default=None)
+
+    # Which candidate source filled (and refreshes) the queue: "near_neighbor"
+    # (label disagreements) or "model" (the pictures the tagger is least sure
+    # about, capped at ``candidate_limit``). See ``tag_scan_service``.
+    # "supplied_list" is no scan at all: the caller listed the pictures, every
+    # one is shown, optionally with known-answer controls mixed in
+    # (``TagSuggestion.control_state``); it cannot refresh or go stale.
+    source: str = Field(
+        default="near_neighbor",
+        sa_column=sa.Column(
+            sa.String(), nullable=False, server_default="near_neighbor"
+        ),
+    )
+    candidate_limit: Optional[int] = Field(default=None)
 
     # Frozen ``{"receipt": {...}, "progress": {...}}`` JSON, written when the
     # review is closed (ARCHIVED/ABORTED). A closed review's receipt/progress

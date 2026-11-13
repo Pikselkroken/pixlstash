@@ -8,7 +8,7 @@ actions themselves stay on the ``/tag_suggestions`` routes.
 See :mod:`pixlstash.services.review_service` for semantics.
 """
 
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,6 +30,15 @@ class CreateReviewRequest(BaseModel):
     """Create a review: one tag + an optional scope, frozen at creation."""
 
     tag: str
+    # What fills the queue: label disagreements between near-identical pictures
+    # (the default), or "model" - the ``limit`` unreviewed pictures whose tagger
+    # confidence sits closest to the tag's threshold.
+    source: Literal["near_neighbor", "model"] = "near_neighbor"
+    limit: int = Field(
+        default=review_service.tag_scan_service.DEFAULT_BOUNDARY_LIMIT,
+        ge=1,
+        le=review_service.tag_scan_service.MAX_BOUNDARY_LIMIT,
+    )
     project_id: Optional[int] = None
     set_id: Optional[int] = None
     character_id: Optional[str] = None
@@ -38,8 +47,9 @@ class CreateReviewRequest(BaseModel):
     include_reviewed: bool = False
     # Judge exactly these pictures instead of scanning: every one gets a card,
     # in this order. The project/set/character scope then only says where
-    # controls are drawn from, and ``include_reviewed`` (a scan option) is
-    # ignored. Bounded to what a SQLite rowid can hold.
+    # controls are drawn from, and the scan options (``source``, ``limit``,
+    # ``include_reviewed``) are ignored: the review's ``source`` comes back as
+    # "supplied_list". Bounded to what a SQLite rowid can hold.
     picture_ids: Optional[list[Annotated[int, Field(ge=1, le=2**63 - 1)]]] = None
     # With ``picture_ids``: the share of the finished queue made up of pictures
     # that already carry a human verdict for the tag, mixed in unmarked.
@@ -103,10 +113,9 @@ class ReviewResponse(BaseModel):
 
     id: int
     tag: str
+    source: str = "near_neighbor"
     scope: dict
     status: str
-    # "SCAN" (near-neighbour suspects) or "LIST" (a supplied picture list).
-    kind: str = "SCAN"
     stats: ReviewStatsResponse
     created_at: Optional[str] = None
     refreshed_at: Optional[str] = None
@@ -203,6 +212,9 @@ def create_router(server) -> APIRouter:
             "scope), runs the near-neighbour scan once into it, and returns the "
             "receipt: pictures scanned, suspects found, suspects handled in "
             "earlier reviews, and how many the bulk auto-resolve would settle. "
+            "``source=model`` instead queues the ``limit`` unreviewed pictures "
+            "whose tagger confidence is closest to the tag's threshold, nearest "
+            "first. "
             "``include_reviewed=true`` re-surfaces previously-decided suspects "
             "into this review. 409 when the tag already has an OPEN review. "
             "With ``picture_ids`` no scan runs: every listed picture gets a "
@@ -228,6 +240,8 @@ def create_router(server) -> APIRouter:
             return review_service.create_review(
                 server.vault,
                 tag,
+                source=payload.source,
+                limit=payload.limit,
                 project_id=payload.project_id,
                 set_id=payload.set_id,
                 character_id=payload.character_id,
@@ -378,7 +392,7 @@ def create_router(server) -> APIRouter:
         "/reviews/{review_id}/refresh",
         summary="Re-scan a review append-only",
         description=(
-            "Re-runs the near-neighbour scan for the review's tag and frozen "
+            "Re-runs the review's own candidate source for its tag and frozen "
             "scope. New suspects are appended; the review's decided rows are "
             "never resurrected. Updates ``refreshed_at`` and ``found``. 409 "
             "for a review of a supplied list, which has no scan."

@@ -32,6 +32,7 @@ from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.server import Server
 from pixlstash.services.review_service import derive_kind
+from pixlstash.services.tag_scan_service import effective_threshold
 from pixlstash.tasks import TaskType
 from pixlstash.utils.service.label_ledger import NEG, POS, record_human_label
 from tests.utils import upload_pictures_and_wait
@@ -662,6 +663,128 @@ def test_auto_resolvable_counts_review_scoped_bulk_dry_run(client, server):
         "skipped": 0,
         "locked": 0,
     }
+
+
+@pytest.fixture
+def threshold(server, monkeypatch):
+    """The tag's threshold, held still for the test.
+
+    The tagger's meta.json loads in the background, so the per-label threshold
+    can arrive between seeding and scanning. Without the file every tag falls
+    back to the global acceptance threshold, which does not move.
+    """
+    monkeypatch.setattr(server.vault, "get_pixlstash_tagger_meta_path", lambda: None)
+    return effective_threshold(server.vault, TAG)
+
+
+def test_effective_threshold_is_the_label_threshold_plus_the_offset(tmp_path):
+    meta = tmp_path / "meta.json"
+    meta.write_text(json.dumps({"label_thresholds": {TAG: 0.75}}))
+    vault = SimpleNamespace(
+        get_pixlstash_tagger_meta_path=lambda: str(meta),
+        get_pixlstash_tagger_threshold_offset=lambda: -0.1,
+        get_pixlstash_acceptance_threshold=lambda: 0.4,
+    )
+    assert effective_threshold(vault, TAG) == pytest.approx(0.65)
+    assert effective_threshold(vault, "uncalibrated") == 0.4
+
+
+def _seed_unsure(client, server, threshold, offsets, *, state="UNKNOWN"):
+    """One picture per offset, predicted at the threshold plus the offset.
+
+    Returns the picture ids in the order given.
+    """
+    ids = [_upload_named(client) for _ in offsets]
+
+    def seed(session):
+        for pid, offset in zip(ids, offsets):
+            session.add(
+                TagPrediction(
+                    picture_id=pid,
+                    tag=TAG,
+                    confidence=threshold + offset,
+                    model_version="test-v1",
+                    label_state=state,
+                    label_source=None if state == "UNKNOWN" else "human",
+                )
+            )
+        session.commit()
+
+    server.vault.db.run_task(seed)
+    return ids
+
+
+def test_model_review_queues_the_unsure_pictures_nearest_first(
+    client, server, threshold
+):
+    # Seeded far-to-near so neither insertion order nor picture id gives the
+    # expected order by accident.
+    farther, far, mid, near = _seed_unsure(
+        client, server, threshold, [0.4, 0.3, -0.05, 0.02]
+    )
+    _seed_tag(server, near)  # above the threshold, so the tagger applied it
+    (judged,) = _seed_unsure(client, server, threshold, [0.0], state="POS")
+
+    body = client.post(
+        f"{API}/reviews", json={"tag": TAG, "source": "model", "limit": 2}
+    ).json()
+    rid = body["id"]
+    assert body["source"] == "model"
+    # Four unreviewed predictions were ranked; the cap kept two.
+    assert body["stats"]["scanned"] == 4
+    assert body["stats"]["found"] == 2
+    # A near-threshold score must never read as an obvious, auto-resolvable fix.
+    assert body["stats"]["auto_resolvable"] == 0
+
+    rows = client.get(f"{API}/reviews/{rid}/suggestions").json()
+    assert [r["picture_id"] for r in rows] == [near, mid]
+    assert {r["source"] for r in rows} == {"model"}
+    assert {r["model_version"] for r in rows} == {"test-v1"}
+    # The question follows the current label, so either answer is a verdict.
+    assert [r["direction"] for r in rows] == ["remove", "add"]
+    assert rows[0]["score"] > rows[1]["score"]
+    assert "unsure" in rows[0]["reason"]
+    assert judged not in [r["picture_id"] for r in rows]
+
+    # A refresh adds the next two nearest. Pictures already in the review do
+    # not use up the cap, and the decided row stays decided.
+    assert client.post(f"/tag_suggestions/{rows[0]['id']}/dismiss").status_code == 200
+    refreshed = client.post(f"{API}/reviews/{rid}/refresh").json()
+    assert refreshed["new_count"] == 2
+    pending = client.get(f"{API}/reviews/{rid}/suggestions").json()
+    assert [r["picture_id"] for r in pending] == [mid, far, farther]
+    assert _get_suggestion(server, rows[0]["id"]).status == "DISMISSED"
+
+
+def test_model_review_skips_locked_pictures_and_respects_scope(
+    client, server, threshold
+):
+    frozen, free, outside = _seed_unsure(client, server, threshold, [0.0, 0.1, 0.01])
+    locked_set = _new_set(client, "Frozen")
+    _add_to_set(client, locked_set, frozen)
+    _set_locked(client, locked_set, True)
+    scope = _new_set(client, "Scope")
+    _add_to_set(client, scope, frozen)
+    _add_to_set(client, scope, free)
+
+    body = client.post(
+        f"{API}/reviews", json={"tag": TAG, "source": "model", "set_id": scope}
+    ).json()
+    # Counted on the receipt, not the queue: the queue withholds a locked row
+    # at read time whether or not the scan wrote one.
+    assert body["stats"]["scanned"] == 1
+    assert body["stats"]["found"] == 1
+    rows = client.get(f"{API}/reviews/{body['id']}/suggestions").json()
+    assert [r["picture_id"] for r in rows] == [free]
+
+
+def test_review_source_defaults_to_near_neighbour_and_is_validated(client, server):
+    assert client.post(f"{API}/reviews", json={"tag": TAG}).json()["source"] == (
+        "near_neighbor"
+    )
+    for bad in ({"source": "propagation"}, {"source": "model", "limit": 0}):
+        resp = client.post(f"{API}/reviews", json={"tag": "other", **bad})
+        assert resp.status_code == 422, resp.text
 
 
 def test_skip_records_no_decision_and_reopens(client, server):
@@ -1755,7 +1878,7 @@ def test_list_review_shows_every_listed_picture_in_the_order_given(client, serve
     resp = client.post(f"{API}/reviews", json={"tag": TAG, "picture_ids": [c, a, b, a]})
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["kind"] == "LIST"
+    assert body["source"] == "supplied_list"
     assert body["stats"]["scanned"] == 3  # the repeat of `a` collapses
     assert body["stats"]["found"] == 3
     assert body["stats"]["controls"] == 0
@@ -1783,7 +1906,7 @@ def test_list_review_shows_every_listed_picture_in_the_order_given(client, serve
     assert _has_tag(server, b) and _ledger_state(server, b) == (POS, "human")
 
     detail = client.get(f"{API}/reviews/{rid}").json()
-    assert detail["kind"] == "LIST"
+    assert detail["source"] == "supplied_list"
     assert detail["receipt"]["added"] == 1 and detail["receipt"]["kept"] == 1
     assert "controls" not in detail["receipt"]
     assert detail["progress"]["pending"] == 1

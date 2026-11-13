@@ -8,7 +8,7 @@
 
       <div class="rs-archived-grid">
         <!-- A review of a supplied list: nothing was scanned or suspected. -->
-        <template v-if="review.kind === 'LIST'">
+        <template v-if="review.source === 'supplied_list'">
           <span class="rs-archived-label">Listed</span>
           <span
             >{{ (review.stats?.scanned ?? 0).toLocaleString() }} pictures</span

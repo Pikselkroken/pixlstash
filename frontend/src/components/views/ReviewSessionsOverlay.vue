@@ -54,7 +54,7 @@
         v-else
         ref="boardRef"
         :toolbar-target="`#${TOOLBAR_TOOLS_ID}`"
-        @start-review="openNewReview($event)"
+        @start-review="openNewReview"
       />
     </div>
 
@@ -62,6 +62,7 @@
       v-if="dialog"
       :preset="dialog.preset"
       :initial-scope="dialog.initialScope"
+      :preset-source="dialog.source"
       @close="dialog = null"
     />
 
@@ -340,7 +341,7 @@ function initialScopeFromSelection() {
   return scope;
 }
 
-function openNewReview(preset = "") {
+function openNewReview(preset = "", source = "near_neighbor") {
   store.createError = null;
   // A review started from a board row (preset tag) covers what that row
   // describes, never the grid selection (a review of 3 selected pictures finds
@@ -354,7 +355,7 @@ function openNewReview(preset = "") {
       : preset || store.healthScoped
         ? { ...store.healthScope }
         : initialScopeFromSelection();
-  dialog.value = { preset, initialScope };
+  dialog.value = { preset, initialScope, source };
 }
 
 // The current card's picture(s), for the tag panel.

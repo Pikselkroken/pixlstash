@@ -52,11 +52,9 @@ ARCHIVED = "ARCHIVED"
 ABORTED = "ABORTED"
 VALID_STATUSES = (OPEN, ARCHIVED, ABORTED)
 
-# Review.kind: where the queue came from.
-SCAN_KIND = "SCAN"
-LIST_KIND = "LIST"
-# TagSuggestion.source of a row a LIST review made for a listed picture or a
-# control. Distinct from the scan's source so the two never upsert each other.
+# Review.source of a LIST review, and TagSuggestion.source of the rows it makes
+# for its listed pictures and controls. Distinct from the scan sources, so the
+# scans never upsert its rows.
 LIST_SOURCE = "supplied_list"
 # Controls may be at most half of a queue.
 MAX_CONTROL_SHARE = 0.5
@@ -97,13 +95,13 @@ def _serialize(review: Review) -> dict:
     return {
         "id": review.id,
         "tag": review.tag,
+        "source": review.source,
         "scope": {
             "project_id": review.project_id,
             "set_id": review.set_id,
             "character_id": review.character_id,
         },
         "status": review.status,
-        "kind": review.kind,
         "stats": {
             "scanned": review.scanned,
             "found": review.found,
@@ -144,6 +142,32 @@ def _resolve_scope_ids(
     return vault.db.run_immediate_read_task(_fetch)
 
 
+def _scan(
+    vault: "Vault",
+    review: Review,
+    scope_ids: set[int] | None,
+    *,
+    include_reviewed: bool = False,
+) -> dict:
+    """Run the review's own candidate source into it (create and refresh)."""
+    if review.source == tag_scan_service.MODEL_SOURCE:
+        return tag_scan_service.scan_boundary(
+            vault,
+            review.tag,
+            picture_ids=scope_ids,
+            limit=review.candidate_limit or tag_scan_service.DEFAULT_BOUNDARY_LIMIT,
+            review_id=review.id,
+        )
+    return tag_scan_service.scan_tag(
+        vault,
+        review.tag,
+        project=None,  # scope comes from the resolved picture ids
+        picture_ids=scope_ids,
+        review_id=review.id,
+        include_reviewed=include_reviewed,
+    )
+
+
 def _auto_resolvable_count(vault: "Vault", review: Review) -> int:
     """How many of the review's PENDING rows the bulk auto-resolve would apply.
 
@@ -166,6 +190,8 @@ def create_review(
     vault: "Vault",
     tag: str,
     *,
+    source: str = tag_scan_service.SOURCE,
+    limit: int | None = None,
     project_id: int | None = None,
     set_id: int | None = None,
     character_id: str | None = None,
@@ -179,6 +205,11 @@ def create_review(
     listed picture gets a card (see :func:`_fill_from_list`). ``control_share``
     then mixes in that share of known-answer controls. Without ``picture_ids``
     the near-neighbour scan fills the queue, as before.
+
+    ``source`` picks what fills the queue: ``"near_neighbor"`` (label
+    disagreements, the default) or ``"model"`` (the ``limit`` unreviewed
+    pictures the tagger is least sure about; ``include_reviewed`` does not
+    apply). Both are frozen onto the review, so a refresh asks the same way.
 
     The scope (project/set/character) is frozen onto the review row; the scan
     is restricted to the resolved scope picture ids. At most one OPEN review
@@ -212,11 +243,14 @@ def create_review(
             )
         review = Review(
             tag=tag,
+            source=source if picture_ids is None else LIST_SOURCE,
+            candidate_limit=limit
+            if picture_ids is None and source == tag_scan_service.MODEL_SOURCE
+            else None,
             project_id=project_id,
             set_id=set_id,
             character_id=character_id,
             status=OPEN,
-            kind=SCAN_KIND if picture_ids is None else LIST_KIND,
             created_at=datetime.now(timezone.utc),
         )
         session.add(review)
@@ -252,14 +286,7 @@ def create_review(
     )
 
     try:
-        scan = tag_scan_service.scan_tag(
-            vault,
-            tag,
-            project=None,  # scope comes from the resolved picture ids
-            picture_ids=scope_ids,
-            review_id=review.id,
-            include_reviewed=include_reviewed,
-        )
+        scan = _scan(vault, review, scope_ids, include_reviewed=include_reviewed)
     except Exception:
         # Don't leave a half-created OPEN review blocking the tag.
         def _abort(session: Session) -> None:
@@ -630,7 +657,7 @@ def _latest_vault_change(session: Session) -> datetime | None:
 
 
 def _is_stale(review: Review, latest_change: datetime | None) -> bool:
-    if review.kind == LIST_KIND:
+    if review.source == LIST_SOURCE:
         return False  # a supplied list has no scan for the vault to outdate
     anchor = review.refreshed_at or review.created_at
     if latest_change is None or anchor is None:
@@ -736,7 +763,7 @@ def refresh_review(
         raise ReviewConflictError(
             f"Review {review_id} is {review.status}; only OPEN reviews can refresh"
         )
-    if review.kind == LIST_KIND:
+    if review.source == LIST_SOURCE:
         raise ReviewConflictError(
             f"Review {review_id} judges a supplied list; it has no scan to refresh"
         )
@@ -747,14 +774,7 @@ def refresh_review(
         set_id=review.set_id,
         character_id=review.character_id,
     )
-    scan = tag_scan_service.scan_tag(
-        vault,
-        review.tag,
-        project=None,
-        picture_ids=scope_ids,
-        review_id=review_id,
-        include_reviewed=False,
-    )
+    scan = _scan(vault, review, scope_ids)
 
     def _update(session: Session) -> dict:
         row = session.get(Review, review_id)

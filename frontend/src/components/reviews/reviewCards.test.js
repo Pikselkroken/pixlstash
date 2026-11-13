@@ -421,7 +421,7 @@ describe("ReviewSessionView", () => {
   // which keeps the control answers out of removed/added/kept and scores them.
   it("ends a list review on the server receipt and the control scores", async () => {
     const store = useReviewSessionsStore();
-    const list = { ...session, kind: "LIST", stats: { found: 6, scanned: 4 } };
+    const list = { ...session, source: "supplied_list", stats: { found: 6, scanned: 4 } };
     store.sessions = [list];
     store.view = { type: "session", id: "sess1" };
     store.queues = { sess1: { items: [], loading: false, error: null } };
