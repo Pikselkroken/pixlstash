@@ -6,7 +6,8 @@ from sqlmodel import Field, SQLModel
 
 
 class Review(SQLModel, table=True):
-    """A review session: one tag + an optional frozen scope + one scan's results.
+    """A review session: one tag + an optional frozen scope + one queue (a scan's
+    results, or a supplied picture list - see ``kind``).
 
     The first-class noun of the tag-review workflow (see
     ``docs/reviews/2026-07-review-sessions-redesign-draft.md``). A review is

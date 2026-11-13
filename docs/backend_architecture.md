@@ -1076,7 +1076,8 @@ TagSuggestion: id, picture_id, tag, direction ("add"|"remove"),
 Review: id, tag, project_id, set_id, character_id, status
         (OPEN|ARCHIVED|ABORTED), scanned, found, prev_reviewed,
         created_at, refreshed_at, receipt_snapshot, kind (SCAN|LIST)
-        (one review session = one tag + a frozen scope + one scan)
+        (one review session = one tag + a frozen scope + one scan,
+         or one supplied picture list)
 
 TaggerRun: id, run (unique), model_version, verdict, recommend,
            accepted, anomaly_macro_f1, report (JSON), created_at
@@ -1098,7 +1099,10 @@ serialises. **A control's answer is recorded on the row and nowhere else**:
 ledger writes for it, so a strict or lenient session cannot damage the labels it
 is measured against, and undo cannot clear them. `_receipt` counts controls only
 under `receipt.controls` (`pos_/neg_confirmed`, `pos_/neg_overturned`, `skipped`,
-`pending`), and the health board's overturn rate leaves them out.
+`pending`), and the health board's overturn rate leaves them out. Deleting a
+review deletes its control rows (every other row is detached, as before).
+"Unmarked" is a property of the review screen: the caller that supplied the
+list can always tell a control by its absence from it.
 
 ### 6.1 Tag groups: a library-wide tag-name → group map (#2469)
 

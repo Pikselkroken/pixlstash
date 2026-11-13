@@ -1,4 +1,6 @@
-"""Service layer for review sessions - one tag + a frozen scope + one scan's results.
+"""Service layer for review sessions - one tag + a frozen scope + one queue:
+one scan's results, or a supplied picture list (a LIST review, see
+:func:`_fill_from_list`).
 
 A :class:`~pixlstash.db_models.review.Review` is the first-class noun of the tag
 review workflow (see ``docs/reviews/2026-07-review-sessions-redesign-draft.md``):
@@ -17,7 +19,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, or_
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from pixlstash.db_models import Picture, PictureSet, Review, Tag, TaggerRun
 from pixlstash.db_models.tag_prediction import TagPrediction
@@ -374,7 +376,7 @@ def _fill_from_list(
         queue.insert(random.randrange(len(queue) + 1), pid)
 
     queue_sub = scope_id_subquery(
-        session, queue, name="_pixlstash_review_list_picture_ids"
+        session, queue, name="_pixlstash_review_queue_picture_ids"
     )
     tagged = set(
         session.exec(
@@ -820,6 +822,23 @@ def set_review_status(vault: "Vault", review_id: int, status: str) -> dict:
     return _serialize(review)
 
 
+def _delete_control_rows(session: Session, review_ids: list[int]) -> None:
+    """Delete the control rows of reviews about to be deleted. No commit.
+
+    The one kind of suggestion row that does not outlive its review. A control
+    recorded no label decision, only a score on that review's receipt, so with
+    the review gone it has nothing left to say - and detached it would turn up
+    in the global queue as a card whose answer is written nowhere.
+    """
+    for review_id in review_ids:
+        session.exec(
+            delete(TagSuggestion).where(
+                TagSuggestion.review_id == review_id,
+                TagSuggestion.control_state.is_not(None),
+            )
+        )
+
+
 def delete_review(vault: "Vault", review_id: int) -> None:
     """Delete one review session by id (any status).
 
@@ -850,6 +869,7 @@ def delete_review(vault: "Vault", review_id: int) -> None:
         review = session.get(Review, review_id)
         if review is None:
             raise KeyError(f"Review not found: id={review_id}")
+        _delete_control_rows(session, [review.id])
         # No ORM relationship maps Review -> TagSuggestion, so this issues a bare
         # DELETE and the DB-level ON DELETE SET NULL detaches the suggestion rows.
         session.delete(review)
@@ -877,6 +897,7 @@ def clear_reviews(vault: "Vault", status: str) -> int:
         reviews = list(
             session.exec(select(Review).where(Review.status == normalized)).all()
         )
+        _delete_control_rows(session, [review.id for review in reviews])
         for review in reviews:
             session.delete(review)
         session.commit()

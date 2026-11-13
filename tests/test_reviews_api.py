@@ -1807,6 +1807,13 @@ def test_list_review_refuses_an_unusable_list_and_leaves_the_tag_free(client, se
         client.post(f"{API}/reviews", json={"tag": TAG, "picture_ids": []}).status_code
         == 400
     )
+    # An id no rowid can hold is refused at the door, not a 500 further in.
+    assert (
+        client.post(
+            f"{API}/reviews", json={"tag": TAG, "picture_ids": [a, 2**70]}
+        ).status_code
+        == 422
+    )
     unknown = client.post(
         f"{API}/reviews", json={"tag": TAG, "picture_ids": [a, 987654]}
     )
@@ -1920,6 +1927,18 @@ def test_list_review_controls_are_unmarked_scored_and_change_no_label(client, se
     # The frozen receipt of the closed review carries the control scores.
     assert client.post(f"{API}/reviews/{rid}/archive").status_code == 200
     assert client.get(f"{API}/reviews/{rid}").json()["receipt"]["controls"] == expected
+
+    # Deleting the review takes its control rows with it (they would otherwise
+    # surface in the global queue as cards whose answer goes nowhere); the
+    # listed pictures' rows are detached, as for any review.
+    assert client.delete(f"{API}/reviews/{rid}").status_code == 200
+    left = server.vault.db.run_immediate_read_task(
+        lambda s: {
+            row.picture_id
+            for row in s.exec(select(TagSuggestion).where(TagSuggestion.tag == TAG))
+        }
+    )
+    assert left == set(listed)
 
 
 def test_list_review_draws_controls_only_from_the_scope(client, server):

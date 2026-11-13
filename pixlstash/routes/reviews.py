@@ -8,7 +8,7 @@ actions themselves stay on the ``/tag_suggestions`` routes.
 See :mod:`pixlstash.services.review_service` for semantics.
 """
 
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -38,8 +38,9 @@ class CreateReviewRequest(BaseModel):
     include_reviewed: bool = False
     # Judge exactly these pictures instead of scanning: every one gets a card,
     # in this order. The project/set/character scope then only says where
-    # controls are drawn from.
-    picture_ids: Optional[list[int]] = None
+    # controls are drawn from, and ``include_reviewed`` (a scan option) is
+    # ignored. Bounded to what a SQLite rowid can hold.
+    picture_ids: Optional[list[Annotated[int, Field(ge=1, le=2**63 - 1)]]] = None
     # With ``picture_ids``: the share of the finished queue made up of pictures
     # that already carry a human verdict for the tag, mixed in unmarked.
     control_share: float = Field(default=0.0, ge=0.0, le=MAX_CONTROL_SHARE)
