@@ -16,7 +16,7 @@ const props = defineProps({
   version: { type: String, default: "" },
 });
 
-/** The report page; `website/report.html` reads `version` and `install`. */
+/** The report page; `report.html` on the website reads `version` and `install`. */
 const REPORT_PAGE_URL = "https://pixlstash.dev/report.html";
 
 /**

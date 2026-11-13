@@ -35,6 +35,11 @@ explicit ``include_reviewed`` toggle), not the old permanent ``reviewed_pids``
 skip. Runs synchronously - fast enough for an interactive click on a typical
 vault.
 
+A second candidate source, :func:`scan_boundary` (``source="model"``), queues the
+unreviewed pictures the tagger is least sure about instead of running the
+neighbour vote. It writes through the same :func:`_write_suspects`, so the
+adopt / skip / re-parent rules above hold for both sources.
+
 Suggestion *kind* ("pair" for true versions of one shot vs "binary") is derived
 at read time (see :func:`pixlstash.services.review_service.derive_kind`) from
 the pictures' ``stack_id`` and dhash - not stored - so legacy rows and
@@ -46,7 +51,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import numpy as np
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 from sqlmodel import Session, select
 
 from pixlstash.db_models import (
@@ -60,6 +65,7 @@ from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import locked_picture_id_subquery
 from pixlstash.services.tag_health_service import EST_MISSING_MIN_CONF
+from pixlstash.utils.service.anomaly_thresholds import load_label_thresholds
 from pixlstash.utils.service.scope_table import scope_id_subquery
 from pixlstash.utils.near_neighbor import (
     EMBEDDING_BYTES,
@@ -76,6 +82,13 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 SOURCE = "near_neighbor"
+
+# The second candidate source: unreviewed pictures the tagger is least sure
+# about (see :func:`scan_boundary`).
+MODEL_SOURCE = "model"
+SOURCES = (SOURCE, MODEL_SOURCE)
+DEFAULT_BOUNDARY_LIMIT = 50
+MAX_BOUNDARY_LIMIT = 500
 
 # Default dhash Hamming threshold for both the displayed-twin override at scan
 # time and the read-time "pair" kind derivation (same shot, altered copy).
@@ -575,106 +588,9 @@ def scan_tag(
     # same review - keep one per pair so the queue doesn't show it twice.
     suspects = dedupe_by_pair(suspects)
 
-    def _write(session: Session) -> dict:
-        # Diff-insert against ALL existing rows for (tag, source): the unique
-        # constraint is on (picture_id, tag, source), so a suspect with any prior
-        # row is updated-or-skipped, never re-inserted. Nothing is ever deleted.
-        existing = {
-            row.picture_id: row
-            for row in session.exec(
-                select(TagSuggestion).where(
-                    TagSuggestion.tag == tag, TagSuggestion.source == SOURCE
-                )
-            ).all()
-        }
-        now = datetime.now(timezone.utc)
-        new_count = 0
-        prev_reviewed = 0
-
-        def _refresh_scan_fields(row: TagSuggestion, r: dict) -> None:
-            row.direction = r["direction"]
-            row.score = r["score"]
-            row.reason = r["reason"]
-            row.twin_picture_id = r["twin_picture_id"]
-            row.twin_sim = r["twin_sim"]
-            row.neighbors = json.dumps(r["neighbors"])
-
-        for r in suspects:
-            row = existing.get(r["picture_id"])
-            if row is None:
-                session.add(
-                    TagSuggestion(
-                        picture_id=r["picture_id"],
-                        tag=tag,
-                        direction=r["direction"],
-                        source=SOURCE,
-                        score=r["score"],
-                        reason=r["reason"],
-                        twin_picture_id=r["twin_picture_id"],
-                        twin_sim=r["twin_sim"],
-                        status="PENDING",
-                        created_at=now,
-                        review_id=review_id,
-                        neighbors=json.dumps(r["neighbors"]),
-                    )
-                )
-                new_count += 1
-                continue
-            if review_id is not None and row.review_id == review_id:
-                # Already part of this review - pending, skipped, or decided.
-                # Never touch it: a refresh must not resurrect this review's own
-                # decisions, nor re-pend a row it deliberately skipped.
-                continue
-            if row.status in ("PENDING", "SKIPPED"):
-                # Undecided (PENDING or SKIPPED - no decision was ever made) row
-                # from the legacy global queue or a closed/legacy review. SKIPPED
-                # adopts exactly like PENDING and is NOT prev_reviewed; only
-                # genuinely decided rows are (see the branch below).
-                if review_id is not None:
-                    # Adopt it into this review with fresh scan evidence,
-                    # re-pending a SKIPPED row so it re-appears in the queue.
-                    # Nobody decided it, so this resurrects nothing.
-                    row.review_id = review_id
-                    row.status = "PENDING"
-                    row.reviewed_at = None
-                    _refresh_scan_fields(row, r)
-                    new_count += 1
-                elif row.status == "PENDING":
-                    # Legacy scan (review_id=None): no review to adopt into, so
-                    # refresh the stale evidence in place on the existing PENDING
-                    # row. DELIBERATE no-purge decision - this is what replaces
-                    # the old delete-and-rebuild "rebuild" path: a re-scan
-                    # UPDATES direction/score/reason/twin/neighbours and never
-                    # deletes or recreates the row, so UNIQUE(picture_id, tag,
-                    # source) and the audit trail both survive. Nothing is ever
-                    # deleted here. (SKIPPED legacy rows have no review to adopt
-                    # into and are left untouched.)
-                    _refresh_scan_fields(row, r)
-                continue
-            # Genuinely DECIDED in an earlier review (or the legacy queue):
-            # ACCEPTED / DISMISSED / SWAPPED / TWIN_FIXED. Only these are
-            # prev_reviewed.
-            prev_reviewed += 1
-            if include_reviewed and review_id is not None:
-                # Explicit re-surfacing: re-parent the decided row into this
-                # review and reopen it. The row (and its history in the ledger)
-                # is kept - UNIQUE(picture_id, tag, source) stays intact. Capture
-                # the decision being overwritten (its review_id/status/
-                # reviewed_at) into prior_* FIRST, so undo can restore it -
-                # re-exposing the original decision for a normal reversal
-                # instead of silently erasing it.
-                row.prior_review_id = row.review_id
-                row.prior_status = row.status
-                row.prior_reviewed_at = row.reviewed_at
-                row.review_id = review_id
-                row.status = "PENDING"
-                row.reviewed_at = None
-                _refresh_scan_fields(row, r)
-                new_count += 1
-        session.commit()
-        return {"new": new_count, "prev_reviewed": prev_reviewed}
-
-    write_stats = vault.db.run_task(_write)
+    write_stats = vault.db.run_task(
+        _write_suspects, tag, SOURCE, suspects, review_id, include_reviewed
+    )
 
     added = sum(1 for r in suspects if r["direction"] == "add")
     removed = sum(1 for r in suspects if r["direction"] == "remove")
@@ -684,6 +600,269 @@ def scan_tag(
         "added": added,
         "removed": removed,
         "scanned": len(ids),
+        "new": write_stats["new"],
+        "prev_reviewed": write_stats["prev_reviewed"],
+    }
+
+
+def _write_suspects(
+    session: Session,
+    tag: str,
+    source: str,
+    suspects: list[dict],
+    review_id: int | None,
+    include_reviewed: bool,
+    model_version: str | None = None,
+) -> dict:
+    """Diff-insert ``suspects`` for ``(tag, source)``; see the module docstring.
+
+    Shared by :func:`scan_tag` and :func:`scan_boundary` so both sources adopt,
+    skip and re-parent existing rows by the same rules. Returns
+    ``{"new", "prev_reviewed"}``.
+    """
+    # Diff-insert against ALL existing rows for (tag, source): the unique
+    # constraint is on (picture_id, tag, source), so a suspect with any prior
+    # row is updated-or-skipped, never re-inserted. Nothing is ever deleted.
+    existing = {
+        row.picture_id: row
+        for row in session.exec(
+            select(TagSuggestion).where(
+                TagSuggestion.tag == tag, TagSuggestion.source == source
+            )
+        ).all()
+    }
+    now = datetime.now(timezone.utc)
+    new_count = 0
+    prev_reviewed = 0
+
+    def _refresh_scan_fields(row: TagSuggestion, r: dict) -> None:
+        row.direction = r["direction"]
+        row.score = r["score"]
+        row.reason = r["reason"]
+        row.twin_picture_id = r["twin_picture_id"]
+        row.twin_sim = r["twin_sim"]
+        if model_version is not None:
+            row.model_version = model_version
+        row.neighbors = json.dumps(r["neighbors"])
+
+    for r in suspects:
+        row = existing.get(r["picture_id"])
+        if row is None:
+            session.add(
+                TagSuggestion(
+                    picture_id=r["picture_id"],
+                    tag=tag,
+                    direction=r["direction"],
+                    source=source,
+                    model_version=model_version,
+                    score=r["score"],
+                    reason=r["reason"],
+                    twin_picture_id=r["twin_picture_id"],
+                    twin_sim=r["twin_sim"],
+                    status="PENDING",
+                    created_at=now,
+                    review_id=review_id,
+                    neighbors=json.dumps(r["neighbors"]),
+                )
+            )
+            new_count += 1
+            continue
+        if review_id is not None and row.review_id == review_id:
+            # Already part of this review - pending, skipped, or decided.
+            # Never touch it: a refresh must not resurrect this review's own
+            # decisions, nor re-pend a row it deliberately skipped.
+            continue
+        if row.status in ("PENDING", "SKIPPED"):
+            # Undecided (PENDING or SKIPPED - no decision was ever made) row
+            # from the legacy global queue or a closed/legacy review. SKIPPED
+            # adopts exactly like PENDING and is NOT prev_reviewed; only
+            # genuinely decided rows are (see the branch below).
+            if review_id is not None:
+                # Adopt it into this review with fresh scan evidence,
+                # re-pending a SKIPPED row so it re-appears in the queue.
+                # Nobody decided it, so this resurrects nothing.
+                row.review_id = review_id
+                row.status = "PENDING"
+                row.reviewed_at = None
+                _refresh_scan_fields(row, r)
+                new_count += 1
+            elif row.status == "PENDING":
+                # Legacy scan (review_id=None): no review to adopt into, so
+                # refresh the stale evidence in place on the existing PENDING
+                # row. DELIBERATE no-purge decision - this is what replaces
+                # the old delete-and-rebuild "rebuild" path: a re-scan
+                # UPDATES direction/score/reason/twin/neighbours and never
+                # deletes or recreates the row, so UNIQUE(picture_id, tag,
+                # source) and the audit trail both survive. Nothing is ever
+                # deleted here. (SKIPPED legacy rows have no review to adopt
+                # into and are left untouched.)
+                _refresh_scan_fields(row, r)
+            continue
+        # Genuinely DECIDED in an earlier review (or the legacy queue):
+        # ACCEPTED / DISMISSED / SWAPPED / TWIN_FIXED. Only these are
+        # prev_reviewed.
+        prev_reviewed += 1
+        if include_reviewed and review_id is not None:
+            # Explicit re-surfacing: re-parent the decided row into this
+            # review and reopen it. The row (and its history in the ledger)
+            # is kept - UNIQUE(picture_id, tag, source) stays intact. Capture
+            # the decision being overwritten (its review_id/status/
+            # reviewed_at) into prior_* FIRST, so undo can restore it -
+            # re-exposing the original decision for a normal reversal
+            # instead of silently erasing it.
+            row.prior_review_id = row.review_id
+            row.prior_status = row.status
+            row.prior_reviewed_at = row.reviewed_at
+            row.review_id = review_id
+            row.status = "PENDING"
+            row.reviewed_at = None
+            _refresh_scan_fields(row, r)
+            new_count += 1
+    session.commit()
+    return {"new": new_count, "prev_reviewed": prev_reviewed}
+
+
+def effective_threshold(vault: "Vault", tag: str) -> float:
+    """The confidence at which the PixlStash tagger applies ``tag``.
+
+    The per-label threshold from the tagger's ``meta.json`` plus the user's
+    offset, else the global acceptance threshold - the rule
+    ``PixlStashTaggerService.tag_items`` applies.
+    """
+    return load_label_thresholds(
+        vault.get_pixlstash_tagger_meta_path(),
+        vault.get_pixlstash_tagger_threshold_offset(),
+    ).get(tag, vault.get_pixlstash_acceptance_threshold())
+
+
+def scan_boundary(
+    vault: "Vault",
+    tag: str,
+    *,
+    picture_ids: set[int] | None = None,
+    limit: int = DEFAULT_BOUNDARY_LIMIT,
+    review_id: int | None = None,
+) -> dict:
+    """Queue the unreviewed pictures the tagger is least sure about for ``tag``.
+
+    Candidates are ``TagPrediction`` rows for the literal tag on the current
+    (most recently written, non-``manual``) model version whose ledger
+    ``label_state`` is ``UNKNOWN`` - nobody has judged them. They are ranked by
+    how close the confidence sits to the tag's effective threshold (the
+    per-label threshold from the tagger's ``meta.json`` plus the user's offset,
+    else the global acceptance threshold), nearest first, and the first
+    ``limit`` are written as ``source="model"`` suggestions through
+    :func:`_write_suspects`. Deleted pictures and pictures frozen by a locked
+    set are never candidates.
+
+    The direction follows the picture's current label so both answers record a
+    verdict: no ``Tag`` row is ``add`` (accept tags it, dismiss records NEG),
+    a ``Tag`` row is ``remove`` (accept untags it, dismiss records POS).
+    ``score`` is ``1 - |confidence - threshold|``, so the queue's
+    score-descending order is nearest first.
+
+    Args:
+        vault: Application vault, used for DB task dispatch.
+        tag: The tag to ask about.
+        picture_ids: Optional explicit scope; ``None`` = whole vault, an empty
+            set selects nothing.
+        limit: The most candidates to select, not counting pictures already
+            in ``review_id``.
+        review_id: When set, write the candidates into this review.
+
+    Returns:
+        The same shape as :func:`scan_tag`. ``scanned`` is how many unreviewed
+        predictions were ranked, ``count`` how many were selected.
+    """
+    threshold = effective_threshold(vault, tag)
+
+    def _load(session: Session) -> tuple[str | None, int, list]:
+        current_version = session.exec(
+            select(TagPrediction.model_version)
+            .where(TagPrediction.model_version != "manual")
+            .order_by(TagPrediction.predicted_at.desc())
+            .limit(1)
+        ).first()
+        if current_version is None:
+            return None, 0, []
+        where = [
+            Picture.deleted.is_(False),
+            TagPrediction.tag == tag,
+            TagPrediction.model_version == current_version,
+            TagPrediction.label_state == "UNKNOWN",
+            TagPrediction.picture_id.notin_(locked_picture_id_subquery()),
+        ]
+        if picture_ids is not None:
+            where.append(
+                TagPrediction.picture_id.in_(scope_id_subquery(session, picture_ids))
+            )
+        if review_id is not None:
+            # A refresh asks for the next ``limit`` pictures. Without this a
+            # row the review skipped (still UNKNOWN) is picked again, found
+            # already present, and silently shrinks the top-up.
+            where.append(
+                TagPrediction.picture_id.notin_(
+                    select(TagSuggestion.picture_id).where(
+                        TagSuggestion.review_id == review_id,
+                        TagSuggestion.tag == tag,
+                        TagSuggestion.source == MODEL_SOURCE,
+                    )
+                )
+            )
+        total = session.exec(
+            select(func.count())
+            .select_from(TagPrediction)
+            .join(Picture, Picture.id == TagPrediction.picture_id)
+            .where(*where)
+        ).one()
+        rows = session.exec(
+            select(TagPrediction.picture_id, TagPrediction.confidence, Tag.picture_id)
+            .join(Picture, Picture.id == TagPrediction.picture_id)
+            .outerjoin(
+                Tag,
+                and_(
+                    Tag.picture_id == TagPrediction.picture_id,
+                    Tag.tag == TagPrediction.tag,
+                ),
+            )
+            .where(*where)
+            .order_by(
+                func.abs(TagPrediction.confidence - threshold),
+                TagPrediction.picture_id,
+            )
+            .limit(limit)
+        ).all()
+        return current_version, int(total), rows
+
+    model_version, scanned, rows = vault.db.run_immediate_read_task(_load)
+
+    suspects = []
+    for pic_id, confidence, tagged_id in rows:
+        conf = float(confidence)
+        suspects.append(
+            {
+                "picture_id": int(pic_id),
+                "direction": "remove" if tagged_id is not None else "add",
+                "score": round(1.0 - abs(conf - threshold), 4),
+                "twin_picture_id": None,
+                "twin_sim": None,
+                "reason": (
+                    f"The tagger is unsure: {conf:.0%} confident, and it applies "
+                    f"this tag from {threshold:.0%}."
+                ),
+                "neighbors": [],
+            }
+        )
+
+    write_stats = vault.db.run_task(
+        _write_suspects, tag, MODEL_SOURCE, suspects, review_id, False, model_version
+    )
+    return {
+        "tag": tag,
+        "count": len(suspects),
+        "added": sum(1 for r in suspects if r["direction"] == "add"),
+        "removed": sum(1 for r in suspects if r["direction"] == "remove"),
+        "scanned": scanned,
         "new": write_stats["new"],
         "prev_reviewed": write_stats["prev_reviewed"],
     }

@@ -261,6 +261,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | POST | `/api/v1/pictures/{id}/tag_predictions/delete` | picture_scoped | id=id |  |
 | POST | `/api/v1/pictures/{id}/tag_predictions/{tag}/confirm` | picture_scoped | id=id |  |
 | POST | `/api/v1/pictures/{id}/tag_predictions/{tag}/reject` | picture_scoped | id=id |  |
+| GET | `/api/v1/tag_predictions/labels` | owner_only |  | The label ledger in bulk (#2675): every picture id carrying a tag verdict, paged, with a library-wide total. Not narrowed to a share token's scope (same reasoning as tag_health and the reviews reads). Reads only. Also on READ_BLOCKED_GET_PATHS |
 | GET | `/api/v1/tagger/label-thresholds` | any_token |  |  |
 
 ### stacks.py
@@ -368,6 +369,9 @@ listing to suppress.
 | POST | `/api/v1/characters/membership` | scoped_list |  |  |
 | POST | `/api/v1/characters/{character_id}/faces` | owner_only |  | Assign face; POST blocked for READ tokens; owner only |
 | DELETE | `/api/v1/characters/{character_id}/faces` | owner_only |  | Remove faces; DELETE blocked for READ tokens; owner only |
+| POST | `/api/v1/character-sheets/prompt` | owner_only |  | Build a sheet prompt; POST blocked for READ tokens; owner only |
+| POST | `/api/v1/characters/{character_id}/sheets/rank` | owner_only |  | Rank drawn sheets; POST blocked for READ tokens; owner only |
+| POST | `/api/v1/characters/{character_id}/sheets/use` | owner_only |  | Cut sheets into pictures; POST blocked for READ tokens; owner only |
 | GET | `/api/v1/characters/{id}` | character_scoped | id=id |  |
 | PATCH | `/api/v1/characters/{id}` | owner_only |  | Update character; PATCH blocked for READ tokens; owner only |
 | DELETE | `/api/v1/characters/{id}` | owner_only |  | Delete character; DELETE blocked for READ tokens; owner only |

@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205), [25.26 Creating, renaming and moving a folder inside a model folder (#2206)](#2526-creating-renaming-and-moving-a-folder-inside-a-model-folder-2206), [25.27 Removing a folder inside a model folder (#2207)](#2527-removing-a-folder-inside-a-model-folder-2207), [25.28 Training set picker](#2528-training-set-picker)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205), [25.26 Creating, renaming and moving a folder inside a model folder (#2206)](#2526-creating-renaming-and-moving-a-folder-inside-a-model-folder-2206), [25.27 Removing a folder inside a model folder (#2207)](#2527-removing-a-folder-inside-a-model-folder-2207), [25.28 Training set picker](#2528-training-set-picker), [25.29 Character sheets: drawing a training set](#2529-character-sheets-drawing-a-training-set)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -414,6 +414,8 @@ List, create, update, delete characters; fetch reference picture set; list pictu
 ### `tags.py` / `tag_predictions.py`
 Add/remove user tags; bulk clear; confirm or reject model-predicted tags (`TagPrediction` → `Tag`).
 
+**The label ledger in bulk (#2675).** `GET /tag_predictions/labels` pages through every `TagPrediction` row carrying a POS or NEG verdict (`tag_prediction_service.list_labels`), so a tool that trains or evaluates a tagger reads the verdicts from the library instead of keeping its own copy. It filters on `tag`, `label_source` (default `human`), `label_state` and `labeled_since`, leaves out pictures on the Scrapheap, and orders by prediction id. `OWNER_ONLY`, and on `READ_BLOCKED_GET_PATHS`. Read-only. Contract: `docs/integration_architecture.md` §2.8. Tests: `tests/test_tag_predictions_api.py`.
+
 ### `projects.py`, `picture_sets.py`, `stacks.py`
 Standard CRUD; set/stack membership management; stack reordering.
 
@@ -599,12 +601,15 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/adapters/{sha256}                                                     | model_shelf     | One adapter by hash                                           |
 | PUT    | /api/v1/adapters/{sha256}/attachments                                         | model_shelf     | Set which characters and sets use an adapter                  |
 | GET    | /api/v1/adapters/{sha256}/file                                                | model_shelf     | Download one adapter's bytes                                  |
+| POST   | /api/v1/character-sheets/prompt                                               | characters      | Build a character sheet prompt                                |
 | GET    | /api/v1/characters                                                            | characters      | List characters                                               |
 | POST   | /api/v1/characters                                                            | characters      | Create character                                              |
 | POST   | /api/v1/characters/likeness-search                                            | characters      | Search characters by face likeness                            |
 | POST   | /api/v1/characters/membership                                                 | characters      | Batch character membership lookup                             |
 | POST   | /api/v1/characters/{character_id}/faces                                       | characters      | Assign faces to character                                     |
 | DELETE | /api/v1/characters/{character_id}/faces                                       | characters      | Unassign faces from character                                 |
+| POST   | /api/v1/characters/{character_id}/sheets/rank                                 | characters      | Rank drawn character sheets                                   |
+| POST   | /api/v1/characters/{character_id}/sheets/use                                  | characters      | Use character sheets                                          |
 | PATCH  | /api/v1/characters/{id}                                                       | characters      | Update character                                              |
 | DELETE | /api/v1/characters/{id}                                                       | characters      | Delete character                                              |
 | GET    | /api/v1/characters/{id}                                                       | characters      | Get character by id                                           |
@@ -1069,18 +1074,41 @@ TagHealth: id, tag (unique), est_wrong, est_missing,
 TagSuggestion: id, picture_id, tag, direction ("add"|"remove"),
                source, score, reason, twin_picture_id, twin_sim,
                review_id, neighbors (JSON), status, created_at,
-               reviewed_at, prior_review_id/status/reviewed_at
+               reviewed_at, prior_review_id/status/reviewed_at,
+               control_state
                (suspected label fixes in the review queue)
 
 Review: id, tag, project_id, set_id, character_id, status
         (OPEN|ARCHIVED|ABORTED), scanned, found, prev_reviewed,
         created_at, refreshed_at, receipt_snapshot
-        (one review session = one tag + a frozen scope + one scan)
+        (one review session = one tag + a frozen scope + one scan,
+         or one supplied picture list)
 
 TaggerRun: id, run (unique), model_version, verdict, recommend,
            accepted, anomaly_macro_f1, report (JSON), created_at
            (tagger eval runs pushed from PixlTagger)
 ```
+
+**A list review judges a supplied list instead of scanning (#2676).**
+`POST /reviews` with `picture_ids` runs no scan and sets `Review.source` to
+`supplied_list`: `review_service._fill_from_list`
+writes one `TagSuggestion` per listed picture (`source="supplied_list"`, in the
+order given, `direction` = the current label read backwards so accept/dismiss
+record a plain yes/no), in the same transaction as the review row. It cannot
+refresh (409) and is never stale. `control_share` (at most 0.5, the share of the
+finished queue) mixes in pictures that already carry a human POS/NEG ledger
+verdict for the tag, drawn at random from the review's scope, half of each as
+far as it allows, never from the list or a locked set. A control row is told
+apart only by `control_state` (the earlier verdict), which no response
+serialises. **A control's answer is recorded on the row and nowhere else**:
+`accept_suggestion`, `dismiss_suggestion` and `_reverse_review` skip the Tag and
+ledger writes for it, so a strict or lenient session cannot damage the labels it
+is measured against, and undo cannot clear them. `_receipt` counts controls only
+under `receipt.controls` (`pos_/neg_confirmed`, `pos_/neg_overturned`, `skipped`,
+`pending`), and the health board's overturn rate leaves them out. Deleting a
+review deletes its control rows (every other row is detached, as before).
+"Unmarked" is a property of the review screen: the caller that supplied the
+list can always tell a control by its absence from it.
 
 ### 6.1 Tag groups: a library-wide tag-name → group map (#2469)
 
@@ -2064,8 +2092,8 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/library_insights_service.py](../pixlstash/services/library_insights_service.py) | **"About your library" findings (v1.11 Phase 6), read-only.** Five checks over one gathered pass of the library: the largest folder whose pictures carry no set, project or person; two folders holding mostly the same pictures (grouped on tier 1's own `(pixel_sha, size_bytes)` identity, so the finding is true on a library nobody has swept); uncaptioned; a face nobody has named; untagged.<br><br>**Every check answers in both directions.** A check that finds nothing returns `state="clear"` with the number that made it clear rather than disappearing — a screen where every row is a complaint reads as a nag, and a check that vanishes when it passes cannot be trusted when it fires. **A folder means the owner's folder:** `Picture.file_path` is absolute only for pictures indexed in place, so the folder-shaped checks read `os.path.dirname` and skip the flat `<uuid>.png` a vault-managed picture carries; a library with no folder tree gets one row saying so instead of arithmetic over zero folders. **A finding counts what its own button can show**, and where the two disagreed the CHECK was changed rather than the destination: a number the owner cannot reach reads as the feature being broken. Three consequences, each of which was a real defect first. The unnamed-faces check intersects with *unassigned* (that is what `/character/UNASSIGNED?face=with_face` is) and excludes `face.face_index = -1`, the sentinel row `FaceExtractionTask` writes for a picture holding **no** face — read as an unnamed face it fired on most of a scanned library and opened an empty grid. Counts are in grid **rows**, not pictures, because every grid request carries `fields=grid` (`stack_leaders_only`) and a stack of eight is one row. And the overlap check scopes the duplicate queue to the pair's **common ancestor**, never to one of the two folders (tier 1 applies the scope predicate inside `HAVING count(*) > 1`, so a scope holding one copy of each shared file finds nothing), falling back to the unscoped queue when that ancestor would not narrow anything — two unrelated trees under one home directory are siblings, structurally identical to two folders inside a library, so only `SCOPE_MAX_WIDENING` separates them. Nothing here writes, queues work, or reads a pixel |
 | [services/tag_health_service.py](../pixlstash/services/tag_health_service.py) | Tag health board cache — computes one `TagHealth` row per tag from indexed SQL over `tag_prediction` / `tag` / `tag_suggestion` / `picture` plus stored `PictureLikeness` pairs; rebuilt in the background |
 | [services/tag_suggestion_service.py](../pixlstash/services/tag_suggestion_service.py) | Human half of the tag-suggestion review queue: list ranked suspects and apply (write through to `Tag`) or dismiss them |
-| [services/tag_scan_service.py](../pixlstash/services/tag_scan_service.py) | On-demand near-neighbour tag scan — finds one tag's suspects and appends them; reuses the shared `knn_disagreement_with_neighbors` kernel so CLI and UI can't drift |
-| [services/review_service.py](../pixlstash/services/review_service.py) | Service layer for review sessions (one tag + a frozen scope + one scan's results): create, scan-once, append-only refresh, archive/abort, and per-item decisions |
+| [services/tag_scan_service.py](../pixlstash/services/tag_scan_service.py) | On-demand near-neighbour tag scan — finds one tag's suspects and appends them; reuses the shared `knn_disagreement_with_neighbors` kernel so CLI and UI can't drift. `scan_boundary` is the second candidate source (`source="model"`): the unreviewed pictures (`label_state` UNKNOWN) whose confidence is closest to the tag's effective threshold, nearest first, capped; both sources write through `_write_suspects` |
+| [services/review_service.py](../pixlstash/services/review_service.py) | Service layer for review sessions (one tag + a frozen scope + one scan's results): create, scan-once, append-only refresh, archive/abort, and per-item decisions. `Review.source` and `candidate_limit` freeze which candidate source fills the queue, so a refresh asks the same way |
 | [services/operation_log_service.py](../pixlstash/services/operation_log_service.py) | The operation log (§21): snapshots the reversible metadata facets of the affected pictures before and after a mutation, records the diff as one append-only `Operation` row (with a batch id when it is part of a bulk action), and applies a recorded state back for undo/redo. `run_recorded_metadata_task` is the wrapper mutation sites call instead of `vault.db.run_task`, so capture, mutation and recording share one queued task |
 | [services/impossible_tag_clear_service.py](../pixlstash/services/impossible_tag_clear_service.py) | Bulk-clear the filter-implied wrong tags for the human-reviewed "Impossible tags" grid selection (recording a human NEG per removed tag), plus the symmetric undo; used by the impossible-tags routes |
 
@@ -12372,14 +12400,12 @@ ai-toolkit probe end to end, and the after-training pass's
 ### 25.21 Recipe updates from pixlstash.dev (#2122)
 
 A recipe (§25.16) can be corrected without shipping PixlStash. The site serves
-`website/training-presets/v1/`: `index.json` (`id`, `version`, `file`, `sha256`
-and `min_pixlstash` per recipe) and each shipped recipe byte for byte.
-`scripts/build_training_presets_site.py` writes it from
-`pixlstash/data/training-presets/` (`preset_updates.site_files`), and
-`tests/training/test_preset_updates.py` fails while the committed copy has
-drifted, so a recipe edit lands on the site with the next Pages deploy of
-`main`. `.gitattributes` pins both trees to LF, because the index carries each
-file's hash. `min_pixlstash` is `preset_updates.MIN_PIXLSTASH`: raise it when
+`training-presets/v1/`: `index.json` (`id`, `version`, `file`, `sha256`
+and `min_pixlstash` per recipe) and each shipped recipe byte for byte. The site
+is its own repository, pixlstash-website, whose release update writes that
+directory from each release's `preset_updates.site_files()`, so a recipe edit
+reaches the site with the release that ships it. `.gitattributes` pins the
+recipes to LF, because the index carries each file's hash. `min_pixlstash` is `preset_updates.MIN_PIXLSTASH`: raise it when
 the schema changes in a way an older app would misread.
 
 **The backend fetches, never the browser.** `POST /training/presets/check`
@@ -12786,6 +12812,8 @@ function over those rows, tested without a server.
   let in, so it is exactly what the switch, or dropping the floor, lets in.
   `floor_limits` is the highest each floor can go before it alone sets every
   picture aside: the best likeness and the best score, rounded down to a step.
+  `floor_kept` counts what each step of each floor would leave by itself, for
+  the dialog to shade its sliders with.
 - **One greedy pass per group**, stills and clips apart, up to `MAX_PICKS` (50).
   `value = quality * likeness`; each next pick maximises first
   `axes_under_target`, then `value * (1 + W_SEM * min_cosine_distance)`. The
@@ -12816,6 +12844,76 @@ its whole stack when the set is filled (`POST /picture_sets/{id}/members`
 expands stacks), so the set can hold more than N pictures; the dialog reports
 the count the server added. Owner-only
 (`ROUTE_POLICIES` and `READ_BLOCKED_GET_PATHS`).
+
+### 25.29 Character sheets: drawing a training set
+
+"Create a training set…" can draw the pictures instead of picking them, for a
+character with none or with too few. A **character sheet** is one MOSS-Image
+picture at 5:3: four passport photos on the left half (front neutral,
+three-quarter smiling, profile neutral, other three-quarter laughing) and two
+tall body photos on the right at a framing the user picks (waist-up,
+mid-thigh, knees-up or full body). The canvas is one of three sizes
+(`SIZES`: 1280×768, 1840×1104, 2560×1536, about 1, 2 and 4 megapixels, the
+range MOSS draws well, every side a multiple of 16); the layout is drawn on
+the largest and scaled. Text pins down a type, not a person, so each sheet is a slightly
+different person, but the six faces within one sheet agree: the user keeps
+one or more sheets and their panels become the character's pictures. **A sheet
+is never the library's**: it is drawn held, into the Scrapheap, and stays there.
+
+- **A sheet is an ordinary run.** The dialog runs a MOSS-Image `txt2img`
+  workflow through `POST /workflows/run` with the prompt, negative and canvas
+  `POST /character-sheets/prompt` hands it (the width and height go in as
+  `values` at the workflow's own size addresses), an optional character LoRA in
+  `add_loras`, and `character_ids: []`: a sheet shows one person six times and
+  is nobody's until it is chosen and cut. So it queues behind the GPU, shows in
+  Tasks, and is imported like any picture; there is no sheet task. It runs
+  with `hold`: `_process_comfyui_outputs` soft-deletes the pictures the run
+  itself imported new (never a duplicate or a saver-reported id, which can be
+  a picture the library had; a locked set's member stays live, as with any
+  delete, and is not held), sends no import event, files nobody (no LoRA
+  person). A held sheet is an ordinary Scrapheap picture, out of every
+  listing, while face extraction (which does not skip deleted pictures) still
+  reads it and its thumbnail and file are still served. Nothing destroys it
+  but the Scrapheap's own purge, so the owner can restore any sheet, used or
+  not.
+- **The prompt** (`services/character_sheet.sheet_prompt`) is a MOSS layout
+  prompt, the JSON `MOSSImageLayoutPrompt` emits: a summary caption and one
+  item per panel part with a `yxyx` box in `abs_centralized` coordinates. The
+  boxes are the ones that held their layout on 16 of 16 probe sheets; the test
+  pins the mid-thigh set. Every panel's caption carries the whole character,
+  build included (a different build draws a different face). Trousers are
+  always named, shoes only at full body. A LoRA's first trigger word leads.
+- **Ranking** (`POST /characters/{id}/sheets/rank`) reads the faces face
+  extraction stored on each sheet: `agreement` is their mean pairwise cosine
+  similarity, `closeness` the mean similarity to the character's reference
+  faces (`select_reference_faces_for_character`, the sheets' own faces left
+  out), and more faces than panels marks a sheet `broken`. A sheet with no
+  `Face` row yet is `faces_read: false` and unscored. Each sheet also carries
+  its `format`, so the dialog can show the file itself full size at
+  `/pictures/{id}.{format}`. `different_from` lists the other sheets asked
+  about whose faces match this one's less than `SOME_AGREEMENT` (the mean
+  cross-sheet cosine): keeping both would mix two people in one set, which
+  the dialog warns about but allows. The thresholds behind the
+  words are read off the probes and are placeholders until validation.
+- **Using sheets** (`POST /characters/{id}/sheets/use`, `picture_ids`; a held
+  sheet counts, and every sheet is read before anything is imported) cuts each
+  with `split_sheet`: the grid's cells scaled to the picture, each cut moved
+  to the strongest full-length luminance edge within ±50 px (MOSS draws its
+  dividers off the layout), 8 px of gutter trimmed, then the white frame MOSS
+  draws round each photo (lines that are almost all over grey 244, from each
+  edge, then as far as the white runs in diagonally from each rounded corner;
+  an overcast sky, ~237, is not frame). The six panels are
+  imported with `import_derived_outputs` (source picture = the sheet, no
+  stack) and filed with `add_person`, which links the largest face once face
+  extraction has read it. Filing clears each panel's `source_picture_id`: the
+  sheet stays in the Scrapheap, and a picture naming it as source would fail
+  its purge on the foreign key (a sheet's faces are nobody's, so source-face
+  likeness has nothing to pass on).
+- **No reference set is written.** For a character with no pictures, the
+  chosen sheet's panels are its only faces, so they are its references by the
+  existing rule; a character with rated pictures keeps those.
+- The prompt route is pure; the other two are a `*_in_session` read or write
+  behind a thin vault wrapper in `services/character_sheet.py` (§10.1).
 
 ## 26. Prompt match
 

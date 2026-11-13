@@ -16,7 +16,7 @@ name: Rebuild release
 #
 # Not dispatched: ci.yml (the tag's commit already passed its own gate, and
 # main's test file list need not exist in an old tree) and release-version.yml
-# (the website update; it already takes a tag when run by hand).
+# (the SECURITY.md update; it already takes a tag when run by hand).
 on:
   workflow_dispatch:
     inputs:

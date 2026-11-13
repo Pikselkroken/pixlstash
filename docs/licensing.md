@@ -32,14 +32,14 @@ Basics:
 - See frontend/LICENSE for the full license text.
 - No CLA is required for frontend contributions.
 
-### The Project Website, Logos, Example Images and Utility Scripts
-- Located in the "website", "pictures" and "scripts" directories.
+### Logos, Example Images and Utility Scripts
+- Located in the "pictures" and "scripts" directories. The project website is its own repository, pixlstash-website, under the same terms.
 - Licensed under the MIT License.
 - However: PixlStash name and logo are property of the project’s copyright owner. You may not use the PixlStash name, logo, or branding in a way that suggests official endorsement or affiliation without explicit permission.
 
 To avoid ambiguity, this file does not assign license by "subject matter".
 Use the license files in each component path (for example `pixlstash/LICENSE`,
-`frontend/LICENSE`, `scripts/LICENSE`, `tests/LICENSE`, and `website/LICENSE`) to
+`frontend/LICENSE`, `scripts/LICENSE`, and `tests/LICENSE`) to
 determine the applicable license for files in that path.
 
 This document is informational and does not replace the component license texts.

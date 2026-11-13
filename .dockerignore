@@ -28,10 +28,7 @@ CONTRIBUTING.md
 TODO.txt
 tasksystem.md
 docs/
-website/
 tmp/
-# ...except the one page the holiday-mode image (holiday/Dockerfile) serves.
-!website/demo-holiday.html
 
 # Docker files themselves (avoid recursive context issues)
 Dockerfile

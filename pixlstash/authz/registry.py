@@ -1520,6 +1520,19 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("DELETE", "/api/v1/characters/{character_id}/faces"): RoutePolicy(
         _OWNER, justification="Remove faces; DELETE blocked for READ tokens; owner only"
     ),
+    # ── character_sheets.py ─────────────────────────────────────────────────
+    ("POST", "/api/v1/character-sheets/prompt"): RoutePolicy(
+        _OWNER,
+        justification="Build a sheet prompt; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/characters/{character_id}/sheets/rank"): RoutePolicy(
+        _OWNER,
+        justification="Rank drawn sheets; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/characters/{character_id}/sheets/use"): RoutePolicy(
+        _OWNER,
+        justification="Cut sheets into pictures; POST blocked for READ tokens; owner only",
+    ),
     # ── picture_sets.py ─────────────────────────────────────────────────────
     ("GET", "/api/v1/picture_sets"): _LIST_AWARE,
     ("GET", "/api/v1/picture_sets/locked-members"): _LIST_AWARE,
@@ -1901,6 +1914,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/tag_health/rebuild"): RoutePolicy(
         _OWNER,
         justification="Vault-wide rebuild; inline _reject_scoped_tokens; owner/full only",
+    ),
+    # ── tag_predictions.py: the label ledger in bulk (#2675; owner-only) ────
+    ("GET", "/api/v1/tag_predictions/labels"): RoutePolicy(
+        _OWNER,
+        justification="Library-wide label ledger, paged: every picture id that carries a tag verdict. Lists picture ids across the whole library and a total, so narrowing it to a share token's scope would be a second query, not a filter (same reasoning as tag_health and the reviews reads); owner only",
     ),
     # ── tag_groups.py (library-wide tag name -> group map; owner-only) ──────
     ("GET", "/api/v1/tag_groups"): RoutePolicy(

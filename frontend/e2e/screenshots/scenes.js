@@ -1,6 +1,6 @@
 // The app scene behind each marketing-site illustration. Each scene drives the
 // live SPA into the state the ORIGINAL screenshot shows (verified against
-// website/assets/*), then returns the locator to capture (or null for the whole
+// the website's assets), then returns the locator to capture (or null for the whole
 // viewport). One scene can satisfy several site assets. Non-reproducible
 // illustrations are listed in `manual` with a reason.
 //

@@ -340,6 +340,23 @@ def floor_limits(candidates: list[Candidate]) -> dict[str, float]:
     }
 
 
+def floor_kept(candidates: list[Candidate]) -> dict[str, list[int]]:
+    """How many pictures each position of a floor would leave, by itself.
+
+    One count per step the dialog's slider has: ``min_likeness`` 0 to 100,
+    ``min_score`` 1 to 5 in halves. The same tests as ``_intrinsic_reasons``:
+    no likeness counts as 0, and a picture with no score has none to fail.
+    """
+    likeness = [c.likeness or 0.0 for c in candidates]
+    scores = [c.rating or c.smart_score for c in candidates]
+    return {
+        "min_likeness": [sum(v >= step / 100 for v in likeness) for step in range(101)],
+        "min_score": [
+            sum(s is None or s >= half / 2 for s in scores) for half in range(2, 11)
+        ],
+    }
+
+
 def _components(ids: list[int], pairs) -> list[list[int]]:
     """Connected components of the near pairs, restricted to *ids*."""
     parent = {i: i for i in ids}

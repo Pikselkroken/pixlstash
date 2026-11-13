@@ -181,7 +181,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--output-dir",
-        default=os.path.join("website", "api"),
+        default="api",
         help="Directory where openapi.json and docs HTML will be written.",
     )
     args = parser.parse_args()

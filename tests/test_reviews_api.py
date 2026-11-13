@@ -7,6 +7,7 @@ import io
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -24,13 +25,16 @@ from pixlstash.db_models import (
     PictureStack,
     Review,
     Tag,
+    TaggerRun,
     UserToken,
 )
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.server import Server
 from pixlstash.services.review_service import derive_kind
+from pixlstash.services.tag_scan_service import effective_threshold
 from pixlstash.tasks import TaskType
+from pixlstash.utils.service.label_ledger import NEG, POS, record_human_label
 from tests.utils import upload_pictures_and_wait
 
 API = "/api/v1"
@@ -659,6 +663,128 @@ def test_auto_resolvable_counts_review_scoped_bulk_dry_run(client, server):
         "skipped": 0,
         "locked": 0,
     }
+
+
+@pytest.fixture
+def threshold(server, monkeypatch):
+    """The tag's threshold, held still for the test.
+
+    The tagger's meta.json loads in the background, so the per-label threshold
+    can arrive between seeding and scanning. Without the file every tag falls
+    back to the global acceptance threshold, which does not move.
+    """
+    monkeypatch.setattr(server.vault, "get_pixlstash_tagger_meta_path", lambda: None)
+    return effective_threshold(server.vault, TAG)
+
+
+def test_effective_threshold_is_the_label_threshold_plus_the_offset(tmp_path):
+    meta = tmp_path / "meta.json"
+    meta.write_text(json.dumps({"label_thresholds": {TAG: 0.75}}))
+    vault = SimpleNamespace(
+        get_pixlstash_tagger_meta_path=lambda: str(meta),
+        get_pixlstash_tagger_threshold_offset=lambda: -0.1,
+        get_pixlstash_acceptance_threshold=lambda: 0.4,
+    )
+    assert effective_threshold(vault, TAG) == pytest.approx(0.65)
+    assert effective_threshold(vault, "uncalibrated") == 0.4
+
+
+def _seed_unsure(client, server, threshold, offsets, *, state="UNKNOWN"):
+    """One picture per offset, predicted at the threshold plus the offset.
+
+    Returns the picture ids in the order given.
+    """
+    ids = [_upload_named(client) for _ in offsets]
+
+    def seed(session):
+        for pid, offset in zip(ids, offsets):
+            session.add(
+                TagPrediction(
+                    picture_id=pid,
+                    tag=TAG,
+                    confidence=threshold + offset,
+                    model_version="test-v1",
+                    label_state=state,
+                    label_source=None if state == "UNKNOWN" else "human",
+                )
+            )
+        session.commit()
+
+    server.vault.db.run_task(seed)
+    return ids
+
+
+def test_model_review_queues_the_unsure_pictures_nearest_first(
+    client, server, threshold
+):
+    # Seeded far-to-near so neither insertion order nor picture id gives the
+    # expected order by accident.
+    farther, far, mid, near = _seed_unsure(
+        client, server, threshold, [0.4, 0.3, -0.05, 0.02]
+    )
+    _seed_tag(server, near)  # above the threshold, so the tagger applied it
+    (judged,) = _seed_unsure(client, server, threshold, [0.0], state="POS")
+
+    body = client.post(
+        f"{API}/reviews", json={"tag": TAG, "source": "model", "limit": 2}
+    ).json()
+    rid = body["id"]
+    assert body["source"] == "model"
+    # Four unreviewed predictions were ranked; the cap kept two.
+    assert body["stats"]["scanned"] == 4
+    assert body["stats"]["found"] == 2
+    # A near-threshold score must never read as an obvious, auto-resolvable fix.
+    assert body["stats"]["auto_resolvable"] == 0
+
+    rows = client.get(f"{API}/reviews/{rid}/suggestions").json()
+    assert [r["picture_id"] for r in rows] == [near, mid]
+    assert {r["source"] for r in rows} == {"model"}
+    assert {r["model_version"] for r in rows} == {"test-v1"}
+    # The question follows the current label, so either answer is a verdict.
+    assert [r["direction"] for r in rows] == ["remove", "add"]
+    assert rows[0]["score"] > rows[1]["score"]
+    assert "unsure" in rows[0]["reason"]
+    assert judged not in [r["picture_id"] for r in rows]
+
+    # A refresh adds the next two nearest. Pictures already in the review do
+    # not use up the cap, and the decided row stays decided.
+    assert client.post(f"/tag_suggestions/{rows[0]['id']}/dismiss").status_code == 200
+    refreshed = client.post(f"{API}/reviews/{rid}/refresh").json()
+    assert refreshed["new_count"] == 2
+    pending = client.get(f"{API}/reviews/{rid}/suggestions").json()
+    assert [r["picture_id"] for r in pending] == [mid, far, farther]
+    assert _get_suggestion(server, rows[0]["id"]).status == "DISMISSED"
+
+
+def test_model_review_skips_locked_pictures_and_respects_scope(
+    client, server, threshold
+):
+    frozen, free, outside = _seed_unsure(client, server, threshold, [0.0, 0.1, 0.01])
+    locked_set = _new_set(client, "Frozen")
+    _add_to_set(client, locked_set, frozen)
+    _set_locked(client, locked_set, True)
+    scope = _new_set(client, "Scope")
+    _add_to_set(client, scope, frozen)
+    _add_to_set(client, scope, free)
+
+    body = client.post(
+        f"{API}/reviews", json={"tag": TAG, "source": "model", "set_id": scope}
+    ).json()
+    # Counted on the receipt, not the queue: the queue withholds a locked row
+    # at read time whether or not the scan wrote one.
+    assert body["stats"]["scanned"] == 1
+    assert body["stats"]["found"] == 1
+    rows = client.get(f"{API}/reviews/{body['id']}/suggestions").json()
+    assert [r["picture_id"] for r in rows] == [free]
+
+
+def test_review_source_defaults_to_near_neighbour_and_is_validated(client, server):
+    assert client.post(f"{API}/reviews", json={"tag": TAG}).json()["source"] == (
+        "near_neighbor"
+    )
+    for bad in ({"source": "propagation"}, {"source": "model", "limit": 0}):
+        resp = client.post(f"{API}/reviews", json={"tag": "other", **bad})
+        assert resp.status_code == 422, resp.text
 
 
 def test_skip_records_no_decision_and_reopens(client, server):
@@ -1690,3 +1816,294 @@ def test_locked_twin_blocks_only_the_pair_corners_and_makes_decisions_one_way(
     assert restored["twin_locked"] is False
     assert restored["twin_locked_sets"] == []
     assert restored["kind"] == "pair"
+
+
+# --- LIST reviews: a supplied picture list, with known-answer controls (#2676) ---
+
+
+def _human_verdict(server, pic_id, state, tag=TAG):
+    """Give a picture a human ledger verdict (and the matching Tag row)."""
+
+    def write(session):
+        if state == POS:
+            session.add(Tag(picture_id=pic_id, tag=tag))
+        record_human_label(session, pic_id, tag, state)
+        session.commit()
+
+    server.vault.db.run_task(write)
+
+
+def _ledger_state(server, pic_id, tag=TAG):
+    def read(session):
+        row = session.exec(
+            select(TagPrediction).where(
+                TagPrediction.picture_id == pic_id, TagPrediction.tag == tag
+            )
+        ).first()
+        return None if row is None else (row.label_state, row.label_source)
+
+    return server.vault.db.run_immediate_read_task(read)
+
+
+def _has_tag(server, pic_id, tag=TAG):
+    return server.vault.db.run_immediate_read_task(
+        lambda s: (
+            s.exec(select(Tag).where(Tag.picture_id == pic_id, Tag.tag == tag)).first()
+            is not None
+        )
+    )
+
+
+def _control_rows(server, rid):
+    """``picture_id -> (suggestion id, control_state)`` for the review's controls."""
+    return server.vault.db.run_immediate_read_task(
+        lambda s: {
+            row.picture_id: (row.id, row.control_state)
+            for row in s.exec(
+                select(TagSuggestion).where(
+                    TagSuggestion.review_id == rid,
+                    TagSuggestion.control_state.is_not(None),
+                )
+            ).all()
+        }
+    )
+
+
+def test_list_review_shows_every_listed_picture_in_the_order_given(client, server):
+    a, b, c = (_upload_named(client) for _ in range(3))
+    _seed_tag(server, a)
+    # A fourth picture that is NOT listed must never get a card.
+    bystander = _upload_named(client)
+
+    resp = client.post(f"{API}/reviews", json={"tag": TAG, "picture_ids": [c, a, b, a]})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["source"] == "supplied_list"
+    assert body["stats"]["scanned"] == 3  # the repeat of `a` collapses
+    assert body["stats"]["found"] == 3
+    assert body["stats"]["controls"] == 0
+    rid = body["id"]
+
+    rows = client.get(f"{API}/reviews/{rid}/suggestions").json()
+    assert [r["picture_id"] for r in rows] == [c, a, b]
+    assert bystander not in [r["picture_id"] for r in rows]
+    by_pic = {r["picture_id"]: r for r in rows}
+    assert by_pic[a]["direction"] == "remove"  # tagged: "should it be?"
+    assert by_pic[b]["direction"] == "add"
+    assert all(r["kind"] == "binary" and r["twin_picture_id"] is None for r in rows)
+
+    # "Yes" on the tagged picture = dismiss: the tag stays, the ledger says POS.
+    assert (
+        client.post(f"{API}/tag_suggestions/{by_pic[a]['id']}/dismiss").status_code
+        == 200
+    )
+    assert _has_tag(server, a) and _ledger_state(server, a) == (POS, "human")
+    # "Yes" on an untagged picture = accept: the tag is added.
+    assert (
+        client.post(f"{API}/tag_suggestions/{by_pic[b]['id']}/accept").status_code
+        == 200
+    )
+    assert _has_tag(server, b) and _ledger_state(server, b) == (POS, "human")
+
+    detail = client.get(f"{API}/reviews/{rid}").json()
+    assert detail["source"] == "supplied_list"
+    assert detail["receipt"]["added"] == 1 and detail["receipt"]["kept"] == 1
+    assert "controls" not in detail["receipt"]
+    assert detail["progress"]["pending"] == 1
+
+    # No scan behind it: it never goes stale and cannot refresh.
+    def add_run(session):
+        session.add(
+            TaggerRun(run="list-review-run", created_at=datetime.now(timezone.utc))
+        )
+        session.commit()
+
+    server.vault.db.run_task(add_run)
+    assert client.get(f"{API}/reviews/{rid}").json()["stale"] is False
+    assert client.post(f"{API}/reviews/{rid}/refresh").status_code == 409
+
+
+def test_list_review_refuses_an_unusable_list_and_leaves_the_tag_free(client, server):
+    a = _upload_named(client)
+
+    assert (
+        client.post(f"{API}/reviews", json={"tag": TAG, "picture_ids": []}).status_code
+        == 400
+    )
+    # An id no rowid can hold is refused at the door, not a 500 further in.
+    assert (
+        client.post(
+            f"{API}/reviews", json={"tag": TAG, "picture_ids": [a, 2**70]}
+        ).status_code
+        == 422
+    )
+    unknown = client.post(
+        f"{API}/reviews", json={"tag": TAG, "picture_ids": [a, 987654]}
+    )
+    assert unknown.status_code == 400
+    assert "987654" in unknown.json()["detail"]
+    # control_share only means something with a list, and at most half.
+    assert (
+        client.post(
+            f"{API}/reviews", json={"tag": TAG, "control_share": 0.2}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            f"{API}/reviews",
+            json={"tag": TAG, "picture_ids": [a], "control_share": 0.9},
+        ).status_code
+        == 422
+    )
+    # None of the refusals left an OPEN review holding the tag.
+    assert client.get(f"{API}/reviews").json() == []
+    ok = client.post(f"{API}/reviews", json={"tag": TAG, "picture_ids": [a]})
+    assert ok.status_code == 200, ok.text
+
+
+def test_list_review_controls_are_unmarked_scored_and_change_no_label(client, server):
+    listed = [_upload_named(client) for _ in range(4)]
+    pos = [_upload_named(client) for _ in range(2)]
+    neg = [_upload_named(client) for _ in range(2)]
+    for pid in pos:
+        _human_verdict(server, pid, POS)
+    for pid in neg:
+        _human_verdict(server, pid, NEG)
+    # A listed picture with a verdict of its own is judged, never a control.
+    _human_verdict(server, listed[0], POS)
+
+    body = client.post(
+        f"{API}/reviews",
+        json={"tag": TAG, "picture_ids": listed, "control_share": 0.5},
+    ).json()
+    rid = body["id"]
+    assert body["stats"]["scanned"] == 4
+    assert body["stats"]["controls"] == 4  # half of the finished queue of 8
+    assert body["stats"]["found"] == 8
+
+    rows = client.get(f"{API}/reviews/{rid}/suggestions").json()
+    assert {r["picture_id"] for r in rows} == set(listed) | set(pos) | set(neg)
+    # Nothing on a card says which ones are controls.
+    assert not any("control" in key for r in rows for key in r)
+    # The listed pictures keep their order around the mixed-in controls.
+    assert [r["picture_id"] for r in rows if r["picture_id"] in listed] == listed
+
+    controls = _control_rows(server, rid)
+    assert {pid: state for pid, (_sid, state) in controls.items()} == {
+        pos[0]: POS,
+        pos[1]: POS,
+        neg[0]: NEG,
+        neg[1]: NEG,
+    }
+
+    def act(pid, action):
+        resp = client.post(f"{API}/tag_suggestions/{controls[pid][0]}/{action}")
+        assert resp.status_code == 200, resp.text
+
+    act(pos[0], "dismiss")  # tagged + "yes"  → earlier POS repeated
+    act(pos[1], "accept")  # tagged + "no"   → earlier POS contradicted
+    act(neg[0], "dismiss")  # untagged + "no" → earlier NEG repeated
+    act(neg[1], "skip")
+
+    # The contradicted control kept its tag and its earlier verdict.
+    assert _has_tag(server, pos[1])
+    assert _ledger_state(server, pos[1]) == (POS, "human")
+    assert not _has_tag(server, neg[0])
+    assert _ledger_state(server, neg[0]) == (NEG, "human")
+
+    expected = {
+        "pos_confirmed": 1,
+        "pos_overturned": 1,
+        "neg_confirmed": 1,
+        "neg_overturned": 0,
+        "skipped": 1,
+        "pending": 0,
+    }
+    receipt = client.get(f"{API}/reviews/{rid}").json()["receipt"]
+    assert receipt["controls"] == expected
+    # Controls are counted there and nowhere else.
+    assert (receipt["removed"], receipt["added"], receipt["kept"]) == (0, 0, 0)
+    assert receipt["skipped"] == 0
+
+    # Undo on a control re-pends it without clearing the earlier verdict.
+    act(pos[0], "reopen")
+    assert _ledger_state(server, pos[0]) == (POS, "human")
+    assert (
+        client.get(f"{API}/reviews/{rid}").json()["receipt"]["controls"]["pending"] == 1
+    )
+    act(pos[0], "dismiss")
+
+    # Taking the whole review back leaves the earlier verdicts standing too.
+    assert (
+        client.post(
+            f"{API}/tag_suggestions/bulk-reopen", json={"ids": [], "review_id": rid}
+        ).status_code
+        == 200
+    )
+    for pid in pos:
+        assert _ledger_state(server, pid) == (POS, "human")
+    act(pos[0], "dismiss")
+    act(pos[1], "accept")
+    act(neg[0], "dismiss")
+
+    # The frozen receipt of the closed review carries the control scores.
+    assert client.post(f"{API}/reviews/{rid}/archive").status_code == 200
+    assert client.get(f"{API}/reviews/{rid}").json()["receipt"]["controls"] == expected
+
+    # Deleting the review takes its control rows with it (they would otherwise
+    # surface in the global queue as cards whose answer goes nowhere); the
+    # listed pictures' rows are detached, as for any review.
+    assert client.delete(f"{API}/reviews/{rid}").status_code == 200
+    left = server.vault.db.run_immediate_read_task(
+        lambda s: {
+            row.picture_id
+            for row in s.exec(select(TagSuggestion).where(TagSuggestion.tag == TAG))
+        }
+    )
+    assert left == set(listed)
+
+
+def test_list_review_draws_controls_only_from_the_scope(client, server):
+    listed = [_upload_named(client) for _ in range(4)]
+    inside, outside = _upload_named(client), _upload_named(client)
+    _human_verdict(server, inside, POS)
+    _human_verdict(server, outside, NEG)
+    set_id = _new_set(client, "Control scope")
+    _add_to_set(client, set_id, inside)
+    # In scope and carrying a verdict, but listed: judged, never a control.
+    _human_verdict(server, listed[0], POS)
+    _add_to_set(client, set_id, listed[0])
+
+    body = client.post(
+        f"{API}/reviews",
+        json={
+            "tag": TAG,
+            "picture_ids": listed,
+            "set_id": set_id,
+            "control_share": 0.5,
+        },
+    ).json()
+    # Four were asked for; the scope holds one unlisted picture with a verdict.
+    assert body["stats"]["controls"] == 1
+    assert set(_control_rows(server, body["id"])) == {inside}
+    # The list itself is not narrowed by the scope.
+    rows = client.get(f"{API}/reviews/{body['id']}/suggestions").json()
+    assert {r["picture_id"] for r in rows} == set(listed) | {inside}
+
+
+def test_list_review_rejudges_a_picture_from_an_earlier_list(client, server):
+    a = _upload_named(client)
+    first = client.post(f"{API}/reviews", json={"tag": TAG, "picture_ids": [a]}).json()
+    sid = client.get(f"{API}/reviews/{first['id']}/suggestions").json()[0]["id"]
+    assert client.post(f"{API}/tag_suggestions/{sid}/accept").status_code == 200
+    assert client.post(f"{API}/reviews/{first['id']}/archive").status_code == 200
+
+    second = client.post(f"{API}/reviews", json={"tag": TAG, "picture_ids": [a]})
+    assert second.status_code == 200, second.text
+    rows = client.get(f"{API}/reviews/{second.json()['id']}/suggestions").json()
+    assert [r["picture_id"] for r in rows] == [a]
+    # The tag the first review added is what the second one asks about.
+    assert rows[0]["direction"] == "remove" and rows[0]["status"] == "PENDING"
+    # The first review's frozen receipt still shows its decision.
+    assert client.get(f"{API}/reviews/{first['id']}").json()["receipt"]["added"] == 1

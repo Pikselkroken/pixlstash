@@ -1878,6 +1878,10 @@ class RunRequest(BaseModel):
     character_ids: list[Annotated[int, Field(ge=1, le=MAX_PICTURE_ID)]] | None = Field(
         None, max_length=MAX_DEFAULTS
     )
+    # Import the pictures held: soft-deleted at once, announced to nobody, for
+    # the caller to keep or discard. "Create a training set…"'s character
+    # sheets, which are not the library's until one is chosen.
+    hold: bool = False
     # What fills each picture input of the workflow (#1457), first answer wins:
     # an entry here, a `fixed` pin whose picture is still kept, a stored
     # `selection` fed from `picture_ids`, and - once those have been applied
@@ -8700,6 +8704,7 @@ def create_router(server) -> APIRouter:
                     pixels = vram_history.run_pixels(instance, fed_pixels)
                     library = request.state.library_lease
                     poll_kwargs = {
+                        "hold": body.hold,
                         "view_context": destination,
                         "origin_generation": library.generation,
                         "origin_library_uuid": library.library_uuid,

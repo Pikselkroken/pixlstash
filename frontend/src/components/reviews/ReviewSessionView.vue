@@ -128,7 +128,11 @@
       <!-- Completion: the queue is empty - a real state with a receipt. -->
       <div v-else-if="!current" class="rs-state rs-state--done">
         <v-icon size="48" class="rs-state-check">mdi-check-decagram</v-icon>
-        <p class="rs-state-big">
+        <p v-if="isList" class="rs-state-big">
+          Review complete - {{ found }} picture{{ found === 1 ? "" : "s" }}
+          judged.
+        </p>
+        <p v-else class="rs-state-big">
           Review complete - {{ found }} suspect{{ found === 1 ? "" : "s" }}
           reviewed.
         </p>
@@ -139,6 +143,12 @@
           <span v-if="receipt.skipped" class="rs-tally-skipped"
             >{{ receipt.skipped }} skipped</span
           >
+        </p>
+        <!-- Known-answer controls: how the reviewer judged on the day. Only
+             here, once the queue is empty - a card never says it is one. -->
+        <p v-if="controlParts.length" class="rs-state-sub rs-state-sub--muted">
+          Controls: {{ controlParts.join(" · ") }}. Your answers on controls
+          changed no tags.
         </p>
         <div class="rs-state-actions">
           <button
@@ -167,6 +177,7 @@
             {{ reopenableSkips }} skipped
           </button>
           <button
+            v-if="!isList"
             class="rs-state-btn"
             type="button"
             @click="store.refreshSession(session.id)"
@@ -277,6 +288,7 @@ import ReviewDecisionBar from "./ReviewDecisionBar.vue";
 import KeyCap from "../widgets/KeyCap.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import ReviewCelebration from "./ReviewCelebration.vue";
+import { controlScoreParts } from "./controlScores";
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -443,7 +455,21 @@ const emptyScan = computed(() => found.value === 0);
 const reopenableSkips = computed(() =>
   store.reopenableSkipsFor(props.session.id),
 );
-const receipt = computed(() => store.receiptFor(props.session.id));
+// A review of a supplied picture list (no scan behind it, so no refresh).
+const isList = computed(() => props.session.source === "supplied_list");
+// A list review's completion state reads the SERVER receipt, not the local
+// tally: the tally counts every answer alike, which keeps a control card
+// indistinguishable while reviewing, but a control's answer changes no tag, so
+// only the server can say what was really removed, added and kept - and how
+// the controls scored. Fetched once the queue is empty and every pending
+// write has landed; dropped again the moment a card comes back (undo).
+const finalReceipt = ref(null);
+const receipt = computed(
+  () => finalReceipt.value || store.receiptFor(props.session.id),
+);
+const controlParts = computed(() =>
+  controlScoreParts(finalReceipt.value?.controls),
+);
 const queueError = computed(
   () => store.queues[props.session.id]?.error ?? null,
 );
@@ -459,6 +485,11 @@ const xp = computed(() => store.decisionsCount * 100);
 const receiptLine = computed(() => {
   const s = props.session;
   const created = formatWhen(s.created_at);
+  if (isList.value) {
+    return `Your list · ${found.value.toLocaleString()} pictures to judge${
+      created ? ` · ${created}` : ""
+    }`;
+  }
   return `Scanned ${scanned.value.toLocaleString()} pictures · ${found.value} suspects · ${
     s.stats?.prev_reviewed ?? 0
   } handled earlier${created ? ` · ${created}` : ""}`;
@@ -522,6 +553,25 @@ watch(
     announcement.value = "";
     // Focus follows the card (the container is re-keyed per card).
     nextTick(() => cardRef.value?.focus?.({ preventScroll: true }));
+  },
+  { immediate: true },
+);
+
+// A list review that has run out of cards: read its server receipt (see
+// `finalReceipt`). Waits for the writes still in flight, so the last answer is
+// in the counts it shows.
+watch(
+  () =>
+    isList.value && !current.value && !loadingEmpty.value && !queueError.value,
+  async (finished) => {
+    finalReceipt.value = null;
+    if (!finished) return;
+    const id = props.session.id;
+    await Promise.all((store.undoStacks[id] || []).map((e) => e.written));
+    await store.fetchDetail(id);
+    if (!current.value && props.session.id === id) {
+      finalReceipt.value = store.details[id]?.receipt ?? null;
+    }
   },
   { immediate: true },
 );

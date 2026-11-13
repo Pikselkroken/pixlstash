@@ -1,8 +1,10 @@
 // "Create a training set…": the slider takes a prefix of one ranking, the
 // coverage column sorts gaps into kinds, and Create makes then fills a set.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
@@ -26,6 +28,40 @@ vi.mock("../../api/pictureSets", () => ({
 }));
 vi.mock("../../api/pictures", () => ({
   pictureThumbnailUrl: (id) => `/thumb/${id}.webp`,
+}));
+
+// The Sheets step (CharacterSheetStep): what it reads and what it runs.
+const gen = vi.hoisted(() => ({
+  buildSheetPrompt: vi.fn(),
+  rankSheets: vi.fn(),
+  useSheets: vi.fn(),
+  getCharacter: vi.fn(),
+  getReferencePictures: vi.fn(),
+  patchCharacter: vi.fn(),
+  listAdapters: vi.fn(),
+  getRunOutcome: vi.fn(),
+  getWorkflowCard: vi.fn(),
+  listWorkflowCards: vi.fn(),
+  preflightWorkflowRun: vi.fn(),
+  runWorkflowCard: vi.fn(),
+}));
+vi.mock("../../api/characterSheets", () => ({
+  buildSheetPrompt: gen.buildSheetPrompt,
+  rankSheets: gen.rankSheets,
+  useSheets: gen.useSheets,
+}));
+vi.mock("../../api/characters", () => ({
+  getCharacter: gen.getCharacter,
+  getReferencePictures: gen.getReferencePictures,
+  patchCharacter: gen.patchCharacter,
+}));
+vi.mock("../../api/modelShelf", () => ({ listAdapters: gen.listAdapters }));
+vi.mock("../../api/workflows", () => ({
+  getRunOutcome: gen.getRunOutcome,
+  getWorkflowCard: gen.getWorkflowCard,
+  listWorkflowCards: gen.listWorkflowCards,
+  preflightWorkflowRun: gen.preflightWorkflowRun,
+  runWorkflowCard: gen.runWorkflowCard,
 }));
 
 import CreateTrainingSetDialog from "./CreateTrainingSetDialog.vue";
@@ -129,6 +165,7 @@ function button(wrapper, text) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  setActivePinia(createPinia());
 });
 
 describe("CreateTrainingSetDialog", () => {
@@ -189,12 +226,13 @@ describe("CreateTrainingSetDialog", () => {
     expect(closable.map((g) => g.text())).toEqual([
       expect.stringContaining("Closed eyes 1 short · at 18"),
     ]);
-    const missing = wrapper.findAll('[data-testid="cts-gap-missing"]');
-    expect(missing.map((g) => g.find(".cts-g__t").text())).toEqual([
-      "No full-body pictures of Anna",
-    ]);
-    expect(wrapper.find('[data-testid="cts-bar-full body"]').text()).toContain(
-      "none",
+    // What the library has none of gets no line: its bar says so.
+    const none = wrapper.find('[data-testid="cts-bar-full body"]');
+    expect(none.text()).toContain("not in the library");
+    expect(none.text()).toContain("none");
+    expect(wrapper.findAll(".cts-bar__none")).toHaveLength(1);
+    expect(wrapper.find('[data-testid="cts-coverage"]').text()).not.toContain(
+      "No full-body",
     );
 
     await button(wrapper, "Show 18").trigger("click");
@@ -323,6 +361,49 @@ describe("CreateTrainingSetDialog", () => {
     wrapper.unmount();
   });
 
+  it("gives a bar and the chips of its pictures the same colour", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    const wrapper = mountDialog();
+    await flushPromises();
+    const hue = (el) => el.classes().find((c) => c.startsWith("cts-hue--"));
+    const fill = (label) =>
+      hue(wrapper.find(`[data-testid="cts-bar-${label}"] .cts-bar__fill`));
+    // Pick 1 is a close-up smile, pick 2 a portrait neutral.
+    const chips = wrapper
+      .findAll('[data-testid="cts-pick"]')
+      .slice(0, 2)
+      .map((pick) => pick.findAll(".cts-chip"));
+    expect(chips[0].map((c) => c.text())).toEqual(["close-up", "smile"]);
+    expect(chips[0].map(hue)).toEqual([fill("close-up"), fill("smile")]);
+    expect(chips[1].map(hue)).toEqual([fill("portrait"), fill("neutral")]);
+    // Eight bars, eight colours.
+    const all = wrapper.findAll(".cts-bar__fill").map(hue);
+    expect(new Set(all).size).toBe(8);
+    wrapper.unmount();
+  });
+
+  it("shades a floor's track by what each position would leave", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue({
+      ...suggestion(),
+      kept: { min_likeness: [], min_score: [8, 8, 8, 8, 6, 4, 2, 0, 0] },
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    const track = (key) =>
+      wrapper
+        .find(`[data-testid="cts-floor-${key}"] .cts-range`)
+        .attributes("style");
+    // All eight remain at the low end, half at ★ 3.5, none from ★ 4.5.
+    expect(track("min_score")).toContain("var(--cts-kept-all) 100%, var(--cts-kept-none)) 0%");
+    expect(track("min_score")).toContain("var(--cts-kept-all) 50%, var(--cts-kept-none)) 63%");
+    expect(track("min_score")).toContain("var(--cts-kept-all) 0%, var(--cts-kept-none)) 100%");
+    // The fill ends at the thumb: ★ 3.0 is halfway along 1-5.
+    expect(track("min_score")).toContain("--cts-at: 0.5");
+    // No counts, no shading.
+    expect(track("min_likeness")).not.toContain("--cts-kept:");
+    wrapper.unmount();
+  });
+
   it("stops a floor slider at the best value among the pictures", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue({
       ...suggestion(),
@@ -331,12 +412,8 @@ describe("CreateTrainingSetDialog", () => {
     const wrapper = mountDialog();
     await flushPromises();
     const slider = wrapper.find('[data-testid="cts-slider-min_likeness"]');
-    // The track keeps its whole scale; the part past 80 is hatched.
+    // The track keeps its whole scale; the thumb stops at 80.
     expect(slider.attributes("max")).toBe("100");
-    const floor = wrapper.find('[data-testid="cts-floor-min_likeness"]');
-    expect(floor.find(".cts-range__cap").attributes("style")).toContain(
-      "width: 20%",
-    );
     slider.element.value = "95";
     await slider.trigger("input");
     expect(slider.element.value).toBe("80");
@@ -527,6 +604,586 @@ describe("CreateTrainingSetDialog", () => {
       [{ type: "set", id: 55, name: "Anna training set" }],
     ]);
     expect(wrapper.emitted("close")).toHaveLength(1);
+    wrapper.unmount();
+  });
+});
+
+const MOSS_CARD = {
+  id: "manual:moss",
+  name: "MOSS sheet",
+  type: "txt2img",
+  last_used: "2026-11-09T20:00:00Z",
+  models: [{ base_model_family: "moss_image" }],
+};
+
+/** Mock the Sheets step's reads: one MOSS workflow, LoRAs newest first. */
+function sheetsWorld({ description = "", loras = [] } = {}) {
+  gen.getCharacter.mockResolvedValue({ id: 7, name: "Anna", description });
+  gen.getReferencePictures.mockResolvedValue({ reference_picture_ids: [] });
+  gen.patchCharacter.mockResolvedValue({ status: "success" });
+  gen.listAdapters.mockResolvedValue(loras);
+  gen.listWorkflowCards.mockResolvedValue({
+    cards: [
+      MOSS_CARD,
+      { id: "auto:sdxl", name: "SDXL", type: "txt2img", models: [] },
+    ],
+  });
+  gen.getWorkflowCard.mockResolvedValue({
+    card: {
+      name: "MOSS sheet",
+      defaults: [
+        { slot_label: "ks", input_name: "steps", value: 25 },
+        { slot_label: "lat", input_name: "width", value: 1024 },
+        { slot_label: "lat", input_name: "height", value: 1024 },
+      ],
+    },
+  });
+  gen.preflightWorkflowRun.mockResolvedValue({
+    ok: true,
+    groups: [{ reasons: [] }],
+  });
+  gen.buildSheetPrompt.mockResolvedValue({
+    prompt: "{layout}",
+    negative: "nsfw",
+    width: 2560,
+    height: 1536,
+  });
+  gen.runWorkflowCard.mockResolvedValue({
+    status: "success",
+    prompts: [
+      { run_id: "r1", status: "queued" },
+      { run_id: "r2", status: "queued" },
+    ],
+  });
+}
+
+function sheet(id, agreement, extra = {}) {
+  return {
+    picture_id: id,
+    faces_read: true,
+    faces: 6,
+    agreement,
+    agreement_words: agreement >= 0.55 ? "faces agree strongly" : "faces agree somewhat",
+    closeness: null,
+    close: null,
+    broken: false,
+    ...extra,
+  };
+}
+
+describe("CreateTrainingSetDialog: generating the pictures", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("opens a character with no pictures on the Sheets step", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cts-steps"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="cs-main"]').isVisible()).toBe(true);
+    expect(wrapper.find('[data-testid="cts-picks"]').isVisible()).toBe(false);
+    // Nothing to describe yet: drawing waits for a description.
+    const primary = wrapper.find('[data-testid="cts-generate-primary"]');
+    expect(primary.text()).toContain("Draw 4 sheets");
+    expect(primary.attributes("disabled")).toBeDefined();
+    wrapper.unmount();
+  });
+
+  it("refuses a workflow with no picture size, or one that can't run, before drawing", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.getWorkflowCard.mockResolvedValue({
+      card: { name: "MOSS sheet", defaults: [{ slot_label: "ks", input_name: "steps", value: 25 }] },
+    });
+    let wrapper = mountDialog();
+    await flushPromises();
+    const primary = () => wrapper.find('[data-testid="cts-generate-primary"]');
+    expect(wrapper.find('[data-testid="cs-workflow-problem"]').text()).toContain(
+      "has no picture size",
+    );
+    expect(primary().attributes("disabled")).toBeDefined();
+    wrapper.unmount();
+
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.preflightWorkflowRun.mockResolvedValue({
+      ok: false,
+      groups: [{ reasons: [{ code: "missing_models", models: [] }] }],
+    });
+    wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cs-workflow-problem"]').text()).toContain(
+      "can't run as it is",
+    );
+    expect(primary().attributes("disabled")).toBeDefined();
+    wrapper.unmount();
+
+    // The positive control: a sized workflow that runs can draw.
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cs-workflow-problem"]').exists()).toBe(false);
+    expect(primary().attributes("disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("draws with the workflow chosen when Draw was pressed, not one picked meanwhile", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    let built;
+    gen.buildSheetPrompt.mockReturnValueOnce(new Promise((r) => (built = r)));
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    // While the prompt is built, another workflow, with no size to set.
+    gen.getWorkflowCard.mockResolvedValue({ card: { name: "SDXL", defaults: [] } });
+    wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .find((c) => c.props("label") === "Sheet workflow")
+      .vm.$emit("update:modelValue", "auto:sdxl");
+    await flushPromises();
+    built({ prompt: "{layout}", negative: "nsfw", width: 2560, height: 1536 });
+    await flushPromises();
+    expect(gen.runWorkflowCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflow_id: "manual:moss",
+        values: [
+          { slot_label: "lat", input_name: "width", value: 2560 },
+          { slot_label: "lat", input_name: "height", value: 1536 },
+        ],
+      }),
+    );
+    wrapper.unmount();
+  });
+
+  it("draws, ranks, and files the chosen sheet as new pictures in the ranking", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({
+      loras: [
+        // Newest, but for another model: listed, never preselected.
+        { sha256: "sdxl", display_name: "Anna SDXL", base_model_family: "sdxl", added_at: "2026-11-09" },
+        { sha256: "moss1", display_name: "Anna v1", base_model_family: "moss_image", trigger_words: ["anna"], added_at: "2026-11-08" },
+      ],
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper
+      .find('[data-testid="cs-description"] textarea')
+      .setValue("Adult woman, copper bob");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+
+    // No description on the character: the typed one becomes hers.
+    expect(gen.patchCharacter).toHaveBeenCalledWith(7, {
+      description: "Adult woman, copper bob",
+    });
+    expect(gen.buildSheetPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ trigger: "anna", framing: "full_body", size: "large" }),
+    );
+    expect(gen.runWorkflowCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflow_id: "manual:moss",
+        prompt: "{layout}",
+        count: 4,
+        character_ids: [],
+        hold: true,
+        values: [
+          { slot_label: "lat", input_name: "width", value: 2560 },
+          { slot_label: "lat", input_name: "height", value: 1536 },
+        ],
+        add_loras: [{ sha256: "moss1", strength_model: 0.8, strength_clip: 0.8 }],
+      }),
+    );
+    expect(wrapper.find('[data-testid="cts-steps"]').text()).toContain(
+      "with Anna v1",
+    );
+
+    gen.getRunOutcome.mockImplementation(async (key) => ({
+      status: "completed",
+      picture_ids: key === "r1" ? [501] : [502],
+    }));
+    gen.rankSheets.mockResolvedValue({
+      sheets: [sheet(501, 0.5), sheet(502, 0.66)],
+      references: 0,
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+    await flushPromises();
+    const sheets = wrapper.findAll('[data-testid="cs-sheet"]');
+    // Each in its run's place, never reordered; the best is preselected there.
+    expect(sheets.map((b) => b.attributes("aria-label"))).toEqual([
+      "Sheet 1: faces agree somewhat",
+      "Sheet 2: faces agree strongly",
+    ]);
+    expect(sheets[1].attributes("aria-pressed")).toBe("true");
+    expect(wrapper.find('[data-testid="cts-generate-primary"]').text()).toContain(
+      "Use sheet 2",
+    );
+
+    gen.useSheets.mockResolvedValue({ picture_ids: [601, 602] });
+    gen.rankSheets.mockResolvedValue({
+      sheets: [sheet(601, null), sheet(602, null)],
+      references: 0,
+    });
+    const after = stills(3);
+    after.picks[0].picture_id = 601;
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: after }),
+    );
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    expect(gen.useSheets).toHaveBeenCalledWith(7, [502]);
+    expect(wrapper.find('[data-testid="cts-picks"]').isVisible()).toBe(true);
+    expect(wrapper.findAll('[data-testid="cts-new"]')).toHaveLength(1);
+
+    // "New only" keeps just what was made here.
+    const newOnly = wrapper
+      .find('[data-testid="cts-new-only"]')
+      .findAll("button")
+      .find((b) => b.text() === "New only");
+    await newOnly.trigger("click");
+    expect(shownIds(wrapper)).toEqual(["/thumb/601.webp"]);
+
+    // Back to Sheets through the step row: the sheets are gone, so a new draw
+    // starts, and the step is live, not left filing.
+    await wrapper.find("button.cts-stp__s").trigger("click");
+    expect(wrapper.find('[data-testid="cs-main"]').isVisible()).toBe(true);
+    expect(wrapper.findAll('[data-testid="cs-sheet"]')).toHaveLength(0);
+    expect(
+      wrapper.find('[data-testid="cts-generate-primary"]').attributes("disabled"),
+    ).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("stops waiting for faces that never come and lets the sheet be used", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    gen.runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: [{ run_id: "r1", status: "queued" }],
+    });
+    gen.getRunOutcome.mockResolvedValue({ status: "completed", picture_ids: [501] });
+    gen.rankSheets.mockResolvedValue({
+      sheets: [{ ...sheet(501, null), faces_read: false, faces: 0 }],
+      references: 0,
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(10_000);
+    const tile = () => wrapper.find('[data-testid="cs-sheet"]');
+    expect(tile().attributes("aria-label")).toBe("Sheet 1: reading faces…");
+    expect(tile().attributes("disabled")).toBeDefined();
+
+    await vi.advanceTimersByTimeAsync(125_000);
+    expect(tile().attributes("aria-label")).toBe("Sheet 1: faces not read");
+    expect(tile().attributes("disabled")).toBeUndefined();
+    // Polling has stopped.
+    const calls = gen.rankSheets.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(gen.rankSheets.mock.calls.length).toBe(calls);
+    await tile().trigger("click");
+    expect(
+      wrapper.find('[data-testid="cts-generate-primary"]').attributes("disabled"),
+    ).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("adds Draw more to the sheets on show, but starts over on a new prompt", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    const runOf = { r1: [501], r2: [502], r3: [503] };
+    gen.getRunOutcome.mockImplementation(async (key) => ({
+      status: "completed",
+      picture_ids: runOf[key],
+    }));
+    gen.rankSheets.mockImplementation(async (_id, ids) => ({
+      sheets: ids.map((id) => sheet(id, 0.6)),
+      references: 0,
+    }));
+    const drawn = () =>
+      wrapper.findAll('[data-testid="cs-sheet"] img').map((i) => i.attributes("src"));
+    const startsRun = (key) =>
+      gen.runWorkflowCard.mockResolvedValueOnce({
+        status: "success",
+        prompts: [{ run_id: key, status: "queued" }],
+      });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+    startsRun("r1");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(drawn()).toEqual(["/thumb/501.webp"]);
+
+    // The same prompt again: more of the same, side by side.
+    startsRun("r2");
+    await button(wrapper, "Draw 4 more").trigger("click");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(drawn().sort()).toEqual(["/thumb/501.webp", "/thumb/502.webp"]);
+
+    // Edited and drawn again: the earlier sheets are of another prompt.
+    await button(wrapper, "Edit").trigger("click");
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("y");
+    gen.buildSheetPrompt.mockResolvedValueOnce({
+      prompt: "{another layout}",
+      negative: "nsfw",
+      width: 2560,
+      height: 1536,
+    });
+    startsRun("r3");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(drawn()).toEqual(["/thumb/503.webp"]);
+    expect(gen.rankSheets).toHaveBeenLastCalledWith(7, [503]);
+    wrapper.unmount();
+  });
+
+  it("zooms a sheet in a pop-out over the dialog, and Escape leaves only the pop-out", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    gen.runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: [{ run_id: "r1", status: "queued" }],
+    });
+    gen.getRunOutcome.mockResolvedValue({ status: "completed", picture_ids: [501, 502] });
+    gen.rankSheets.mockResolvedValue({
+      sheets: [sheet(501, 0.7, { format: "png" }), sheet(502, 0.5, { format: "png" })],
+      references: 0,
+    });
+    const popout = () => document.querySelector('[data-testid="zoom-popout"]');
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(3000);
+
+    // Clicking the sheet ticks it; only its magnifier zooms.
+    expect(popout()).toBeNull();
+    await wrapper.findAll('[data-testid="cs-zoom-open"]')[1].trigger("click");
+    await flushPromises();
+    expect(popout().querySelector("img").getAttribute("src")).toMatch(/\/pictures\/502\.png$/);
+    // The pick stays as it was behind it: the dialog does not change.
+    expect(wrapper.findAll('[data-testid="cs-sheet"]')).toHaveLength(2);
+
+    popout().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushPromises();
+    expect(wrapper.emitted("close")).toBeUndefined();
+    expect(popout()).toBeNull();
+
+    // Keep in the pop-out adds that sheet to the best one, ticked already, and
+    // the kept sheets sit in the rail's grid.
+    await wrapper.findAll('[data-testid="cs-zoom-open"]')[1].trigger("click");
+    await flushPromises();
+    const choice = () =>
+      Object.fromEntries(
+        [...popout().querySelectorAll('[role="radio"]')].map((b) => [
+          b.querySelector(".seg__label").textContent,
+          b.getAttribute("aria-checked"),
+        ]),
+      );
+    expect(choice()).toEqual({ Keep: "false", Drop: "true" });
+    [...popout().querySelectorAll('[role="radio"]')]
+      .find((b) => b.textContent.includes("Keep"))
+      .click();
+    await flushPromises();
+    expect(choice()).toEqual({ Keep: "true", Drop: "false" });
+    expect(wrapper.find('[data-testid="cts-generate-primary"]').text()).toContain(
+      "Use 2 sheets",
+    );
+    expect(wrapper.findAll('[data-testid="cs-kept"] li')).toHaveLength(2);
+
+    // Left steps to the sheet before, in its place.
+    popout().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    await flushPromises();
+    expect(popout().querySelector("img").getAttribute("src")).toMatch(/\/pictures\/501\.png$/);
+    popout().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushPromises();
+
+    // Wheel up over a sheet opens it; wheel down leaves the page to scroll.
+    await wrapper.findAll('[data-testid="cs-sheet"]')[0].trigger("wheel", { deltaY: 100 });
+    expect(popout()).toBeNull();
+    await wrapper.findAll('[data-testid="cs-sheet"]')[0].trigger("wheel", { deltaY: -100 });
+    await flushPromises();
+    expect(popout().querySelector("img").getAttribute("src")).toMatch(/\/pictures\/501\.png$/);
+    popout().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushPromises();
+
+    // Closing closes the dialog, not only the pop-out.
+    await wrapper.find('[aria-label="Close"]').trigger("click");
+    expect(wrapper.emitted("close")).toBeTruthy();
+    wrapper.unmount();
+  });
+
+  it("warns, without refusing, when the sheets kept look like different people", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    const keepBoth = async (ranked) => {
+      sheetsWorld();
+      gen.runWorkflowCard.mockResolvedValue({
+        status: "success",
+        prompts: [{ run_id: "r1", status: "queued" }],
+      });
+      gen.getRunOutcome.mockResolvedValue({ status: "completed", picture_ids: [501, 502] });
+      gen.rankSheets.mockResolvedValue({ sheets: ranked, references: 0 });
+      const wrapper = mountDialog();
+      await flushPromises();
+      await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+      await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+      await vi.advanceTimersByTimeAsync(3000);
+      return wrapper;
+    };
+    const lead = (w) => w.find('[data-testid="cts-generate-lead"]');
+
+    let wrapper = await keepBoth([
+      sheet(501, 0.5, { different_from: [502] }),
+      sheet(502, 0.7, { different_from: [501] }),
+    ]);
+    // One kept: nothing to mix.
+    expect(lead(wrapper).classes()).not.toContain("cts-lead--warn");
+    await wrapper.findAll('[data-testid="cs-sheet"]')[0].trigger("click");
+    expect(lead(wrapper).text()).toContain(
+      "Sheets 1 and 2 look like different people",
+    );
+    expect(lead(wrapper).classes()).toContain("cts-lead--warn");
+    const primary = wrapper.find('[data-testid="cts-generate-primary"]');
+    expect(primary.text()).toContain("Use 2 sheets");
+    expect(primary.attributes("disabled")).toBeUndefined();
+    wrapper.unmount();
+
+    // The positive control: two sheets of one person, kept together, pass.
+    wrapper = await keepBoth([sheet(501, 0.5), sheet(502, 0.7)]);
+    await wrapper.findAll('[data-testid="cs-sheet"]')[0].trigger("click");
+    expect(lead(wrapper).text()).toContain("become Anna's pictures");
+    expect(lead(wrapper).classes()).not.toContain("cts-lead--warn");
+    wrapper.unmount();
+  });
+
+  it("keeps each sheet in its run's place and shows the drawing one's progress", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    gen.runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: ["r1", "r2", "r3", "r4"].map((run_id) => ({ run_id, status: "queued" })),
+    });
+    const done = {};
+    gen.getRunOutcome.mockImplementation(async (key) =>
+      done[key] ? { status: "completed", picture_ids: [done[key]] } : { status: "running" },
+    );
+    gen.rankSheets.mockImplementation(async (_id, ids) => ({
+      sheets: ids.map((id) => sheet(id, 0.6)),
+      references: 0,
+    }));
+    const tasks = useTasksStore();
+    tasks.comfyuiRuns = [
+      { run_id: "r1", status: "running", percent: 40 },
+      { run_id: "r2", status: "queued", percent: 0 },
+    ];
+    const places = () =>
+      wrapper
+        .findAll(".cs-sheets > li")
+        .map((li) => (li.find("img").exists() ? li.find("img").attributes("src") : li.text()));
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+
+    // The second run finishes first: its sheet takes the second place.
+    done.r2 = 502;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(places()).toEqual(["drawing", "/thumb/502.webp", "queued", "queued"]);
+    const bar = wrapper.find('[role="progressbar"]');
+    expect(bar.attributes("aria-valuenow")).toBe("40");
+
+    done.r1 = 501;
+    done.r4 = 504;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(places()).toEqual([
+      "/thumb/501.webp",
+      "/thumb/502.webp",
+      "queued",
+      "/thumb/504.webp",
+    ]);
+    expect(wrapper.find('[aria-label="Zoom in on sheet 4"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("hands over a cut sheet even when reading its faces fails", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    gen.runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: [{ run_id: "r1", status: "queued" }],
+    });
+    gen.getRunOutcome.mockResolvedValue({ status: "completed", picture_ids: [501] });
+    gen.rankSheets.mockResolvedValue({ sheets: [sheet(501, 0.7)], references: 0 });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(3000);
+
+    gen.useSheets.mockResolvedValue({ picture_ids: [601] });
+    gen.rankSheets.mockRejectedValue(new Error("network down"));
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(95_000);
+    expect(gen.useSheets).toHaveBeenCalledTimes(1);
+    // The picker took over: the cut is not offered again.
+    expect(wrapper.find('[data-testid="cts-picks"]').isVisible()).toBe(true);
+    expect(wrapper.find('[data-testid="cs-main"]').isVisible()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("keeps a character's own description and starts a picker from Generate more", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    sheetsWorld({ description: "Woman in her thirties, dark hair" });
+    const wrapper = mountDialog();
+    await flushPromises();
+    // Pictures exist: the picker first, generation one click away.
+    expect(wrapper.find('[data-testid="cts-steps"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="cts-generate"]').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="cs-description"] textarea').element.value,
+    ).toBe("Woman in her thirties, dark hair");
+    expect(wrapper.find('[data-testid="cs-likeness"]').text()).toContain(
+      "drawn from words, not from Anna's 300 pictures",
+    );
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    expect(gen.patchCharacter).not.toHaveBeenCalled();
+    expect(gen.runWorkflowCard).toHaveBeenCalledWith(
+      expect.objectContaining({ add_loras: [] }),
+    );
+    expect(gen.buildSheetPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ framing: "mid_thigh", trigger: "" }),
+    );
+    await wrapper.find('[data-testid="cts-generate-cancel"]').trigger("click");
+    expect(wrapper.find('[data-testid="cts-picks"]').isVisible()).toBe(true);
     wrapper.unmount();
   });
 });
