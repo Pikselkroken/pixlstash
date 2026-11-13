@@ -1,4 +1,5 @@
-from typing import Optional
+from datetime import datetime
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
@@ -99,6 +100,25 @@ class ResetStatusResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     status: str
+
+
+class TagLabelResponse(BaseModel):
+    """One verdict from the label ledger."""
+
+    picture_id: int
+    tag: str
+    label_state: str
+    label_source: str
+    labeled_at: Optional[str] = None
+    label_model_version: Optional[str] = None
+    label_confidence: Optional[float] = None
+
+
+class TagLabelsResponse(BaseModel):
+    """One page of the label ledger; ``total`` counts every match."""
+
+    total: int
+    labels: list[TagLabelResponse] = []
 
 
 class LabelThresholdResponse(BaseModel):
@@ -412,6 +432,44 @@ def create_router(server) -> APIRouter:
             ids, engine_name=payload.model, origin_client_id=origin_client_id
         )
         return {"status": "reset", "count": count}
+
+    @router.get(
+        "/tag_predictions/labels",
+        summary="Page through the tag verdicts recorded across the library",
+        description=(
+            "The label ledger in bulk: one row per (picture, tag) that carries a "
+            "POS or NEG verdict, ordered by prediction id. ``label_source`` "
+            "defaults to ``human``. ``tag`` is an exact tag name. "
+            "``labeled_since`` keeps verdicts recorded at or after that time (a "
+            "value with no offset is read as UTC). ``label_model_version`` and "
+            "``label_confidence`` are what the tagger said when the verdict was "
+            "given, null when there was no prediction. Pictures on the Scrapheap "
+            "are left out. ``total`` counts every match, not the page. Owner only."
+        ),
+        response_model=TagLabelsResponse,
+    )
+    def list_tag_labels(
+        tag: Optional[str] = Query(None, min_length=1, max_length=200),
+        label_source: Literal["human", "propagated", "model"] = "human",
+        label_state: Optional[Literal["POS", "NEG"]] = None,
+        labeled_since: Optional[datetime] = None,
+        offset: int = Query(0, ge=0, le=100_000_000),
+        limit: int = Query(1000, ge=1, le=5000),
+    ):
+        try:
+            return tag_prediction_service.list_labels(
+                server.vault,
+                tag=tag,
+                label_source=label_source,
+                label_state=label_state,
+                labeled_since=labeled_since,
+                offset=offset,
+                limit=limit,
+            )
+        except OverflowError:
+            # A time at the edge of the calendar whose offset has no UTC
+            # equivalent; the caller's mistake, not a server fault.
+            raise HTTPException(status_code=422, detail="labeled_since is out of range")
 
     @router.get(
         "/tagger/label-thresholds",

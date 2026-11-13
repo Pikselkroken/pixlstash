@@ -2014,6 +2014,34 @@ takes a prefix of `picks` per group and creates the set itself
 (`POST /picture_sets` with `parent_character_id`, then
 `POST /picture_sets/{id}/members`). Backend: §25.28 of the backend document.
 
+### 2.8 The label ledger read (#2675)
+
+`GET /api/v1/tag_predictions/labels` pages through the tag verdicts recorded across the
+library, for a tool that trains or evaluates a tagger. `OWNER_ONLY`, and on the
+read-blocked belt. Read-only.
+
+| Query | Meaning |
+|---|---|
+| `tag` | exact tag name, as stored (no trimming or case folding), 1–200 characters; omitted: every tag |
+| `label_source` | `human` (default), `propagated` or `model` |
+| `label_state` | `POS` or `NEG`; omitted: both. `UNKNOWN` rows are never returned |
+| `labeled_since` | ISO 8601 time; keeps verdicts recorded at or after it. No offset means UTC |
+| `offset`, `limit` | `limit` 1–5000, default 1000 |
+
+```json
+{"total": 2, "labels": [{"picture_id": 7, "tag": "bad hands", "label_state": "NEG",
+  "label_source": "human", "labeled_at": "2026-11-13T09:30:00+00:00",
+  "label_model_version": "v43", "label_confidence": 0.81}]}
+```
+
+- Ordered by prediction id. `total` counts every match, not the page. A verdict
+  withdrawn between two page reads shifts the rows after it by one, so a client that
+  needs every row re-reads from the start when `total` changes between pages.
+- `label_model_version` and `label_confidence` are what the tagger said when the verdict
+  was given; both are null when there was no prediction to judge.
+- Pictures on the Scrapheap are left out.
+- A value outside the table above is a 422.
+
 ---
 
 

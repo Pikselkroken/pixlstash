@@ -261,6 +261,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | POST | `/api/v1/pictures/{id}/tag_predictions/delete` | picture_scoped | id=id |  |
 | POST | `/api/v1/pictures/{id}/tag_predictions/{tag}/confirm` | picture_scoped | id=id |  |
 | POST | `/api/v1/pictures/{id}/tag_predictions/{tag}/reject` | picture_scoped | id=id |  |
+| GET | `/api/v1/tag_predictions/labels` | owner_only |  | The label ledger in bulk (#2675): every picture id carrying a tag verdict, paged, with a library-wide total. Not narrowed to a share token's scope (same reasoning as tag_health and the reviews reads). Reads only. Also on READ_BLOCKED_GET_PATHS |
 | GET | `/api/v1/tagger/label-thresholds` | any_token |  |  |
 
 ### stacks.py

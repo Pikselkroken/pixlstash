@@ -414,6 +414,8 @@ List, create, update, delete characters; fetch reference picture set; list pictu
 ### `tags.py` / `tag_predictions.py`
 Add/remove user tags; bulk clear; confirm or reject model-predicted tags (`TagPrediction` → `Tag`).
 
+**The label ledger in bulk (#2675).** `GET /tag_predictions/labels` pages through every `TagPrediction` row carrying a POS or NEG verdict (`tag_prediction_service.list_labels`), so a tool that trains or evaluates a tagger reads the verdicts from the library instead of keeping its own copy. It filters on `tag`, `label_source` (default `human`), `label_state` and `labeled_since`, leaves out pictures on the Scrapheap, and orders by prediction id. `OWNER_ONLY`, and on `READ_BLOCKED_GET_PATHS`. Read-only. Contract: `docs/integration_architecture.md` §2.8. Tests: `tests/test_tag_predictions_api.py`.
+
 ### `projects.py`, `picture_sets.py`, `stacks.py`
 Standard CRUD; set/stack membership management; stack reordering.
 
