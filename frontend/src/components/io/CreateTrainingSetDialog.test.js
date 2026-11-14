@@ -213,7 +213,10 @@ describe("CreateTrainingSetDialog", () => {
     await slider.setValue("30");
     expect(shownIds(wrapper)).toHaveLength(9);
     expect(slider.element.value).toBe("9");
-    const notice = wrapper.find('[data-testid="cts-capped-stills"]').text();
+    const capped = wrapper.find('[data-testid="cts-capped-stills"]');
+    // Short in the heading; the switches that widen it are its tooltip.
+    expect(capped.text()).toBe("Only 9 pictures pass");
+    const notice = capped.attributes("title");
     expect(notice).toContain("Only 9 pictures pass.");
     expect(notice).toContain("Keeping near-duplicates would let 14 more");
     expect(notice).toContain("no minimum score 6 more");
@@ -454,7 +457,7 @@ describe("CreateTrainingSetDialog", () => {
     await slider.setValue("50");
     expect(slider.element.value).toBe("49");
     const notice = wrapper.find('[data-testid="cts-capped-stills"]').text();
-    expect(notice).toContain("Only 49 of the ranked pictures are left");
+    expect(notice).toBe("Only 49 left: put one back for more");
     expect(notice).not.toContain("pass.");
     wrapper.unmount();
   });

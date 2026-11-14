@@ -62,7 +62,14 @@
         >
           <div class="cts-grp-h">
             <h3 class="cts-secl">{{ g.title }}</h3>
-            <span class="cts-note">{{ g.note }}</span>
+            <span
+              v-if="g.capped && g.reachable"
+              class="cts-note cts-note--warn"
+              :title="g.cappedText"
+              :data-testid="`cts-capped-${g.key}`"
+              >{{ g.cappedShort }}</span
+            >
+            <span v-else class="cts-note">{{ g.note }}</span>
             <Segmented
               v-if="g.key === 'stills' && generated.length"
               v-model="newOnly"
@@ -115,14 +122,6 @@
                 <span class="cts-note">of {{ g.passing }}</span>
               </div>
             </div>
-            <p
-              v-if="g.capped"
-              class="cts-notice"
-              :data-testid="`cts-capped-${g.key}`"
-            >
-              <v-icon size="16">mdi-information-outline</v-icon>
-              <span>{{ g.cappedText }}</span>
-            </p>
             <ul class="cts-sheet">
               <li
                 v-for="p in tilesOf(g)"
@@ -705,6 +704,11 @@ const visibleGroups = computed(() => {
       capPercent:
         key === "stills" ? ((trackMax - Math.max(reachable, min)) / span) * 100 : 0,
       capped: reachable < TRACK_MAX && size >= reachable && key === "stills",
+      // In the heading, where it moves nothing; the long form is its tooltip.
+      cappedShort:
+        group.passing > reachable
+          ? `Only ${reachable} left: put one back for more`
+          : `Only ${reachable} ${unit} pass`,
       cappedText:
         group.passing > reachable
           ? `Only ${reachable} of the ranked ${unit} are left: the rest were left out by hand. Put one back to go higher.`
@@ -1280,6 +1284,10 @@ button.cts-stp__s:not(:disabled) {
   margin: 0;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.cts-note--warn {
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .cts-slw {
