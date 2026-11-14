@@ -247,48 +247,6 @@
             >
           </div>
         </div>
-
-        <div
-          v-if="coverage.closable.length || coverage.outside.length"
-          class="cts-gaps"
-        >
-          <template v-if="coverage.closable.length">
-            <div
-              v-for="gap in coverage.closable"
-              :key="gap.label"
-              class="cts-g"
-              data-testid="cts-gap-closable"
-            >
-              <v-icon size="16">mdi-arrow-right</v-icon>
-              <span class="cts-g__t"
-                >{{ capital(gap.label) }} {{ gap.short }} short · at
-                {{ gap.at }}</span
-              >
-              <AppButton
-                size="sm"
-                :disabled="busy || !!created"
-                @click="setSize(coverageKey, gap.at)"
-              >
-                Show {{ gap.at }}
-              </AppButton>
-            </div>
-          </template>
-          <template v-if="coverage.outside.length">
-            <div
-              v-for="gap in coverage.outside"
-              :key="gap.label"
-              class="cts-g"
-              data-testid="cts-gap-outside"
-            >
-              <v-icon size="16">mdi-dots-horizontal</v-icon>
-              <span class="cts-g__t"
-                >{{ capital(gap.label) }}: {{ gap.available }} in the pool,
-                {{ gap.inTop ? `only ${gap.inTop}` : "none" }} in the top
-                {{ gap.top }}</span
-              >
-            </div>
-          </template>
-        </div>
       </template>
 
       <div class="cts-gapbox" data-testid="cts-choosing">
@@ -683,43 +641,22 @@ function countIn(picks, axis, label) {
   return picks.filter((p) => (p.buckets[axis] || []).includes(label)).length;
 }
 
-/** Every label short of its target at the group's size, sorted into kinds. */
-function gapsOf(key) {
+/** Each label's count against its target at the group's size, per axis. */
+function coverageRows(key) {
   const group = groupOf(key);
   const size = sizes.value[key];
-  const reachable = reachableOf(group);
   const top = group.picks.slice(0, size);
-  const out = { rows: {}, closable: [], outside: [] };
+  const out = {};
   for (const axis of Object.keys(data.value.targets)) {
-    out.rows[axis] = [];
+    out[axis] = [];
     for (const label of Object.keys(data.value.targets[axis])) {
       const count = countIn(top, axis, label);
       const want = target(axis, label, size);
       const short = Math.max(0, want - count);
       const available = group.available[axis]?.[label] ?? 0;
-      out.rows[axis].push({ label, count, want, short, none: !available });
-      if (!short) continue;
-      // Not in the library: the bar itself says so.
-      if (!available) continue;
-      let at = null;
-      for (let k = size + 1; k <= reachable; k++) {
-        const picksK = group.picks.slice(0, k);
-        if (countIn(picksK, axis, label) >= target(axis, label, k)) {
-          at = k;
-          break;
-        }
-      }
-      if (at) out.closable.push({ label, short, at });
-      else
-        out.outside.push({
-          label,
-          available,
-          inTop: countIn(group.picks, axis, label),
-          top: group.picks.length,
-        });
+      out[axis].push({ label, count, want, short, none: !available });
     }
   }
-  out.closable.sort((a, b) => a.at - b.at);
   return out;
 }
 
@@ -780,8 +717,7 @@ const coverage = computed(() => {
   if (!data.value) return null;
   const key = data.value.has_clips ? coverageKey.value : "stills";
   if (!reachableOf(groupOf(key))) return null;
-  const gaps = gapsOf(key);
-  const axes = Object.entries(gaps.rows).map(([name, rows]) => {
+  const axes = Object.entries(coverageRows(key)).map(([name, rows]) => {
     const scale = Math.max(1, ...rows.map((r) => Math.max(r.count, r.want)));
     return {
       name,
@@ -798,8 +734,6 @@ const coverage = computed(() => {
     size: sizes.value[key],
     unit: key === "stills" ? "pictures" : "clips",
     axes,
-    closable: gaps.closable,
-    outside: gaps.outside,
   };
 });
 
@@ -949,10 +883,6 @@ function chipLine(p) {
   const labels = labelsLine(p);
   const likeness = p.likeness != null ? `likeness ${p.likeness}` : "";
   return [labels, likeness].filter(Boolean).join(" · ");
-}
-
-function capital(text) {
-  return text ? text[0].toUpperCase() + text.slice(1) : text;
 }
 
 async function load() {
@@ -1739,29 +1669,6 @@ button.cts-stp__s:not(:disabled) {
   gap: var(--space-3);
   padding-top: var(--space-4);
   border-top: 1px solid rgb(var(--v-theme-divider));
-}
-
-/* The gaps under the bars, a line each: two fit without scrolling. */
-.cts-gaps {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.cts-g {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-size: var(--text-sm);
-}
-
-.cts-g .v-icon {
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-.cts-g__t {
-  flex: 1;
-  min-width: 0;
 }
 
 .cts-ex {

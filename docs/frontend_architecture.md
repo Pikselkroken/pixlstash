@@ -1631,10 +1631,9 @@ the row element to hand focus back to on close).
   bar has its own colour (`hueOf`: teal and olive for framing, raspberry and
   violet for expression, each deep and light), and a tile's chips wear the
   colours of its bars; the sheet is four tiles across at most, so a pick with
-  two expressions has room for its three chips. A short label gets one line under the bars: one the
-  slider can close (with a *Show N* that moves the slider) or one past the top
-  50. A label with `available` 0 gets no line: its bar is drawn empty and says
-  *not in the library*.
+  two expressions has room for its three chips. A short label says so on its
+  own bar (*N short*), and nothing is added under the bars. A label with
+  `available` 0 has its bar drawn empty, saying *not in the library*.
 - **Create** posts the set with `parent_character_id` and the character's
   projects, then bulk-adds the picks; if the add fails it deletes the empty set
   and says so. After it, *Train a LoRA on it* emits `train`, which App routes

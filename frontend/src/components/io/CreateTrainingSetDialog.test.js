@@ -220,45 +220,19 @@ describe("CreateTrainingSetDialog", () => {
     wrapper.unmount();
   });
 
-  it("tells a gap the slider can close from one the library cannot", async () => {
+  it("says a label is short on its bar, with no line under the bars", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
     const wrapper = mountDialog();
     await flushPromises();
-    const closable = wrapper.findAll('[data-testid="cts-gap-closable"]');
-    expect(closable.map((g) => g.text())).toEqual([
-      expect.stringContaining("Closed eyes 1 short · at 18"),
-    ]);
-    // What the library has none of gets no line: its bar says so.
+    expect(wrapper.find('[data-testid="cts-bar-closed eyes"]').text()).toContain(
+      "1 short",
+    );
     const none = wrapper.find('[data-testid="cts-bar-full body"]');
     expect(none.text()).toContain("not in the library");
     expect(none.text()).toContain("none");
     expect(wrapper.findAll(".cts-bar__none")).toHaveLength(1);
     expect(wrapper.find('[data-testid="cts-coverage"]').text()).not.toContain(
-      "No full-body",
-    );
-
-    await button(wrapper, "Show 18").trigger("click");
-    expect(shownIds(wrapper)).toHaveLength(18);
-    expect(wrapper.findAll('[data-testid="cts-gap-closable"]')).toHaveLength(0);
-    wrapper.unmount();
-  });
-
-  it("offers a slider position only where the target there is met", async () => {
-    // Smiles at ranks 16 and 30 only: 2 at 30, but a set of 30 wants 4.
-    const group = stills(50);
-    group.picks.forEach((p, i) => {
-      p.buckets.expression = [i === 15 || i === 29 ? "smile" : "neutral"];
-    });
-    api.fetchCharacterSetSuggestion.mockResolvedValue(
-      suggestion({ stillsGroup: group }),
-    );
-    const wrapper = mountDialog();
-    await flushPromises();
-    const texts = (id) =>
-      wrapper.findAll(`[data-testid="${id}"]`).map((g) => g.text());
-    expect(texts("cts-gap-closable").join()).not.toContain("Smile");
-    expect(texts("cts-gap-outside")).toContainEqual(
-      expect.stringContaining("Smile: 9 in the pool, only 2 in the top 50"),
+      "short ·",
     );
     wrapper.unmount();
   });
