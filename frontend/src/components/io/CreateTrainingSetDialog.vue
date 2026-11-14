@@ -87,7 +87,14 @@
           <template v-else>
             <div class="cts-slw">
               <div class="cts-sl">
-                <div class="cts-range">
+                <div class="cts-range cts-range--kept" :style="{ '--cts-at': g.at }">
+                  <span class="cts-range__fill" aria-hidden="true" />
+                  <span
+                    v-if="g.capPercent > 0"
+                    class="cts-range__cap"
+                    :style="{ width: `${g.capPercent}%` }"
+                    aria-hidden="true"
+                  />
                   <input
                     :id="`${uid}-${g.key}`"
                     class="cts-range__input"
@@ -102,12 +109,6 @@
                     :data-testid="`cts-slider-${g.key}`"
                     @input="onSlide(g.key, $event)"
                     @keydown.enter.prevent
-                  />
-                  <span
-                    v-if="g.capPercent > 0"
-                    class="cts-range__cap"
-                    :style="{ width: `${g.capPercent}%` }"
-                    aria-hidden="true"
                   />
                 </div>
                 <span class="cts-val">{{ g.size }}</span>
@@ -700,6 +701,7 @@ const visibleGroups = computed(() => {
       size,
       min,
       trackMax,
+      at: (size - min) / span,
       capPercent:
         key === "stills" ? ((trackMax - Math.max(reachable, min)) / span) * 100 : 0,
       capped: reachable < TRACK_MAX && size >= reachable && key === "stills",
@@ -1307,21 +1309,19 @@ button.cts-stp__s:not(:disabled) {
 }
 
 /* The part of the track no position can reach, one flat grey, so the scale
-   stays 5-50 between visits and the reason the thumb stops is visible. */
+   stays 5-50 between visits and the reason the thumb stops is visible. It
+   comes before the input, so the thumb is drawn over it. */
 .cts-range__cap {
   position: absolute;
   right: 0;
-  height: var(--space-3);
+  top: var(--space-2);
+  bottom: var(--space-2);
   pointer-events: none;
   border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-  /* Opaque under the grey: the browser draws the track itself, light or
-     dark as it likes. */
-  background:
-    linear-gradient(var(--track-trough), var(--track-trough)),
-    rgb(var(--v-theme-surface));
+  background: var(--track-ring);
 }
 
-/* A floor's slider: the track is shaded by how many pictures each position
+/* A drawn slider (the floors, and the count): the track is shaded by how many pictures each position
    would leave (--cts-kept), under a translucent fill up to the thumb. Not a
    DS slider variant yet; the native track is cleared and drawn here. */
 .cts-range--kept {
