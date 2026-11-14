@@ -1421,4 +1421,17 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     expect(wrapper.find('[data-testid="cs-convert"]').exists()).toBe(false);
     wrapper.unmount();
   });
+
+  it("goes to the reference mode when the sheet workflow is the only one", async () => {
+    referenceWorld({ cards: [QWEN_EDIT] });
+    gen.sheetCopyWorkflow.mockResolvedValue({ workflow_id: QWEN_SHEET.id });
+    const wrapper = mountDialog();
+    await flushPromises();
+    gen.listWorkflowCards.mockResolvedValue({ cards: [QWEN_EDIT, QWEN_SHEET] });
+    await button(wrapper, "Make a sheet workflow from Qwen edit").trigger("click");
+    await flushPromises();
+    expect(mode(wrapper).text()).toBe("Reference and text");
+    expect(gen.getWorkflowCard).toHaveBeenCalledWith(QWEN_SHEET.id);
+    wrapper.unmount();
+  });
 });

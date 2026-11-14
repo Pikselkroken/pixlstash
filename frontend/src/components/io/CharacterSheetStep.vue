@@ -1300,7 +1300,12 @@ async function makeSheetWorkflow() {
   try {
     await sheetCopyWorkflow(convertible.value.id);
     const { cards } = await listWorkflowCards();
-    if (alive) sortCards(cards);
+    if (!alive) return;
+    sortCards(cards);
+    // With no text workflow the new mode is the only one: go to it, as load() does.
+    if (!modeCards.value.length && referenceCards.value.length) {
+      mode.value = "reference";
+    }
   } catch (e) {
     error.value = `Couldn't make the sheet workflow. ${errorMessage(e, "Please try again.")}`;
   } finally {
