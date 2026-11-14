@@ -46,7 +46,7 @@
       @done="onGenerated"
     />
     <div v-show="mode === 'pick'" class="cts-split">
-    <div class="cts-pane" data-testid="cts-picks">
+    <div class="cts-pane cts-pane--picks" data-testid="cts-picks">
       <p v-if="loadError" class="cts-notice cts-notice--bad" role="alert">
         <v-icon size="16">mdi-alert-circle-outline</v-icon>
         <span>{{ loadError }}</span>
@@ -1307,6 +1307,27 @@ button.cts-stp__s:not(:disabled) {
   gap: var(--space-3);
 }
 
+/* Only the tiles scroll: a group's heading and count slider stay above them.
+   Two groups (pictures and clips) share the height evenly. */
+.cts-pane--picks {
+  overflow: hidden;
+}
+
+.cts-pane--picks .cts-grp {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.cts-pane--picks .cts-sheet {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  /* The scrollbar sits at the pane's edge, not inside its padding. */
+  margin-right: calc(-1 * var(--space-5));
+  padding-right: var(--space-5);
+}
+
 .cts-grp-h {
   display: flex;
   align-items: baseline;
@@ -1329,14 +1350,7 @@ button.cts-stp__s:not(:disabled) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-/* The count slider stays put while its picks scroll under it. */
 .cts-slw {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  margin-block: calc(-1 * var(--space-3));
-  padding-block: var(--space-3);
-  background: rgb(var(--v-theme-surface));
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
