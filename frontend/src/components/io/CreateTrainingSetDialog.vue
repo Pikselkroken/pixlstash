@@ -1271,6 +1271,9 @@ button.cts-stp__s:not(:disabled) {
   display: flex;
   align-items: baseline;
   gap: var(--space-3);
+  /* As tall with the heading alone as with a note or the New only switch
+     beside it, so the slider below never moves when one appears. */
+  min-height: var(--control-h);
 }
 
 .cts-secl {
