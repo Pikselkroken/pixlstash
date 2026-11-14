@@ -1630,8 +1630,8 @@ the row element to hand focus back to on close).
   picks, against `target = max(1, round(share * N))` from the response. Each
   bar has its own colour (`hueOf`: teal and olive for framing, raspberry and
   violet for expression, each deep and light), and a tile's chips wear the
-  colours of its bars; the sheet's 144px minimum tile width is what the longest
-  pair of chips needs. A short label gets one line under the bars: one the
+  colours of its bars; the sheet is four tiles across at most, so a pick with
+  two expressions has room for its three chips. A short label gets one line under the bars: one the
   slider can close (with a *Show N* that moves the slider) or one past the top
   50. A label with `available` 0 gets no line: its bar is drawn empty and says
   *not in the library*.

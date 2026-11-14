@@ -1500,9 +1500,12 @@ button.cts-stp__s:not(:disabled) {
   margin: 0;
   padding: 0;
   display: grid;
-  /* Five across at the dialog's full width, fewer in a narrow window: 144px
-     is what the longest pair of chips needs on one line. */
-  grid-template-columns: repeat(auto-fill, minmax(144px, 1fr));
+  /* Four across at most, fewer in a narrow window: a pick can carry two
+     expressions beside its framing, and three chips need the wider tile. */
+  grid-template-columns: repeat(
+    auto-fill,
+    minmax(max(144px, calc((100% - 3 * var(--space-3)) / 4)), 1fr)
+  );
   gap: var(--space-4) var(--space-3);
 }
 
