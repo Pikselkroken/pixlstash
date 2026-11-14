@@ -456,14 +456,14 @@ def convert_to_sheet(graph: dict) -> dict:
             "_meta": {"title": "Sheet canvas"},
         }
         inputs["latent_image"] = [new_id, 0]
-        # The picture's latent was drawn over in part; an empty one is not.
-        if "denoise" in inputs and not is_link(inputs["denoise"]):
-            inputs["denoise"] = 1.0
     else:
         raise SheetConversionRefused(
             f"Its sampler starts from {source_class or 'nothing'}, which "
             "PixlStash cannot swap for a canvas of the sheet's size."
         )
+    # A picture's latent can be drawn over in part; an empty canvas cannot.
+    if "denoise" in inputs and not is_link(inputs["denoise"]):
+        inputs["denoise"] = 1.0
     return out
 
 

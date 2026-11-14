@@ -234,6 +234,17 @@ def _klein_graph() -> dict:
         (_klein_graph(), 1),
         # The sampler starts from the picture's own latent: not a reference.
         (_edit_graph("encode"), 0),
+        # A picture read for something else (a ControlNet's pose) is no reference.
+        (
+            {
+                **_klein_graph(),
+                "4": {
+                    "class_type": "ControlNetApplyAdvanced",
+                    "inputs": {"positive": ["3", 0], "image": ["1", 0]},
+                },
+            },
+            0,
+        ),
         # Text to image reads no picture.
         (
             {
@@ -274,8 +285,7 @@ def test_converting_to_a_sheet_workflow_gives_the_canvas_a_size_of_its_own(laten
     # The picture still reaches the reference input, and now nothing else.
     assert sheet["2"]["inputs"]["image1"] == ["1", 0]
     assert reference_input_count(reduce_api_graph(sheet)) == 1
-    if latent == "encode":
-        assert sheet["3"]["inputs"]["denoise"] == 1.0
+    assert sheet["3"]["inputs"]["denoise"] == 1.0
 
 
 @pytest.mark.parametrize(
@@ -285,6 +295,13 @@ def test_converting_to_a_sheet_workflow_gives_the_canvas_a_size_of_its_own(laten
         (
             {k: v for k, v in _edit_graph("literal").items() if k != "1"},
             "reads no picture",
+        ),
+        (
+            {
+                **_edit_graph("sized"),
+                "9": {"class_type": "KSampler", "inputs": {"latent_image": ["3", 0]}},
+            },
+            "samples in 2 passes",
         ),
         # A picture's own latent with no Qwen edit encoder: no canvas class
         # is known for it.

@@ -1385,12 +1385,19 @@ def reduced_workflow_type(nodes: dict[str, ReducedNode]) -> Optional[str]:
     return None
 
 
+# Where an edit model takes the picture it is to keep: Flux's
+# ``ReferenceLatent``, and the Qwen and MOSS edit encoders' image inputs.
+_REFERENCE_INPUT_RE = re.compile(r"^ReferenceLatent$|^TextEncode.*ImageEdit")
+
+
 def reference_input_count(nodes: dict[str, ReducedNode]) -> int:
     """How many pictures the graph reads as a reference rather than as its canvas.
 
-    Its picture loaders, when every sampler starts from an empty latent: the
-    picture is read (an edit model's reference input) and the canvas is not the
-    picture, so a run can draw at a size of its own. ``0`` for a graph whose
+    The picture loaders feeding an edit model's reference input
+    (:data:`_REFERENCE_INPUT_RE`), when every sampler starts from an empty
+    latent: the picture is read and the canvas is not the picture, so a run
+    can draw at a size of its own. A loader feeding anything else (a
+    ControlNet's pose, a mask) is not a reference. ``0`` for a graph whose
     sampler starts from the picture's own latent, and for any type but
     ``txt2img`` / ``img2img``. :func:`reduced_workflow_type` cannot say this:
     an edit graph that encodes its reference for ``ReferenceLatent`` reads
@@ -1407,7 +1414,21 @@ def reference_input_count(nodes: dict[str, ReducedNode]) -> int:
     ]
     if not starts or not all(_starts_empty(source, nodes) for source in starts):
         return 0
-    return sum(is_picture_loader(node.class_type) for node in nodes.values())
+    seen, stack = (
+        set(),
+        [
+            node_id
+            for node_id, node in nodes.items()
+            if _REFERENCE_INPUT_RE.search(node.class_type)
+        ],
+    )
+    while stack:
+        current = stack.pop()
+        if current in seen or current not in nodes:
+            continue
+        seen.add(current)
+        stack.extend(source for _name, source, _slot in nodes[current].inputs)
+    return sum(is_picture_loader(nodes[node_id].class_type) for node_id in seen)
 
 
 def _starts_empty(node_id: str, nodes: dict[str, ReducedNode]) -> bool:

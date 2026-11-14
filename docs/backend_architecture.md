@@ -12923,7 +12923,9 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   particular to sheets: the picture goes in through `RunRequest.inputs` at the
   address the pre-flight's `picture_inputs` names. Four pieces serve it:
   - `workflow_identity.reference_input_count(nodes)` says which graphs can:
-    the picture loaders of a `txt2img` / `img2img` graph whose every sampler
+    the picture loaders feeding an edit model's reference input
+    (`ReferenceLatent`, `TextEncode…ImageEdit…`; a ControlNet's pose is not
+    one) in a `txt2img` / `img2img` graph whose every sampler
     starts from an empty latent (followed through `latent_image` only, an
     empty latent ending the walk, so one sized from the picture still counts)
     and never from the picture's own. The type cannot say this: an edit graph
@@ -12937,7 +12939,7 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
     at its picture's size: an empty latent whose size is wired from the
     picture gets a literal `width` and `height`; a Qwen edit graph whose
     sampler starts from the picture's own `VAEEncode` gets a new
-    `EmptySD3LatentImage` and `denoise` 1.0. Anything else is a 422 with the
+    `EmptySD3LatentImage`; either way `denoise` becomes 1.0. Anything else is a 422 with the
     reason (no picture read, more than one pass, already sized, or a start it
     has no canvas class for).
   - `sheet_prompt(reference=True)` names "the same {subject} as in the

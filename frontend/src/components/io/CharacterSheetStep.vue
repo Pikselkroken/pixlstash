@@ -953,7 +953,7 @@ function toggleKeep(id) {
 const pickIntro = computed(() => {
   if (drawnFrom.value) {
     // Sheets keep their run's place, so the closest is kept, not moved first.
-    return `Each sheet says how close it comes to the picture on the right, and the closest is kept for you. Keep the ones to use: the six photos of each become pictures of ${name.value}. Every sheet stays in the Scrapheap, used or not.`;
+    return `Each sheet says how close it comes to the picture on the right. The closest is kept for you if it comes close enough. Keep the ones to use: the six photos of each become pictures of ${name.value}. Every sheet stays in the Scrapheap, used or not.`;
   }
   const base = `Each sheet says how well its own faces agree. Keep the ones to use: the six photos of each become pictures of ${name.value}. Every sheet stays in the Scrapheap, used or not, where you can restore any you like.`;
   if (!referenceIds.value.length) return base;
