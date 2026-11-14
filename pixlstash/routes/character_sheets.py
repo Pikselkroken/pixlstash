@@ -44,6 +44,16 @@ class SheetPromptRequest(BaseModel):
     subject: character_sheet.Subject = "woman"
     trigger: str = Field("", max_length=200)
     size: character_sheet.Size = "large"
+    reference: bool = Field(
+        False,
+        description="The run feeds a reference picture: every photo names the "
+        "person in it ahead of the description.",
+    )
+    layout: character_sheet.Layout = Field(
+        "moss",
+        description="`moss` is MOSS-Image's layout JSON; `prose` is the same "
+        "sheet as one sentence, for a model that takes no layout.",
+    )
 
 
 class SheetPrompt(BaseModel):
@@ -57,6 +67,13 @@ class SheetPrompt(BaseModel):
 
 class SheetRankRequest(BaseModel):
     picture_ids: list[int] = Field(min_length=1, max_length=MAX_SHEETS)
+    reference_picture_ids: list[int] | None = Field(
+        None,
+        max_length=4,
+        description="The pictures the sheets were drawn from: closeness is "
+        "measured against their faces instead of the character's reference "
+        "faces. An id with no faces counts for nothing.",
+    )
 
 
 class RankedSheet(BaseModel):
@@ -74,8 +91,8 @@ class RankedSheet(BaseModel):
     agreement: float | None
     agreement_words: str
     closeness: float | None = Field(
-        description="Mean similarity to the character's reference faces; null "
-        "when the character has none."
+        description="Mean similarity to the reference faces (the character's, "
+        "or the request's `reference_picture_ids`); null when there are none."
     )
     close: bool | None
     broken: bool = Field(
@@ -110,9 +127,11 @@ def create_router(server) -> APIRouter:
         "/character-sheets/prompt",
         summary="Build a character sheet prompt",
         description=(
-            "The MOSS-Image layout prompt, negative and canvas size for one "
-            "character sheet: four passport photos and two body photos of the "
-            "character described. Run it with `POST /workflows/run`."
+            "The layout prompt, negative and canvas size for one character "
+            "sheet: four passport photos and two body photos of the character "
+            "described. MOSS-Image's layout JSON, or with `layout: prose` one "
+            "sentence for a model drawing from a reference picture. Run it "
+            "with `POST /workflows/run`."
         ),
         response_model=SheetPrompt,
     )
@@ -128,8 +147,9 @@ def create_router(server) -> APIRouter:
         "/characters/{character_id}/sheets/rank",
         summary="Rank drawn character sheets",
         description=(
-            "Scores each sheet by how alike its own faces are and, when the "
-            "character has reference faces, by how close they come to them. "
+            "Scores each sheet by how alike its own faces are and by how close "
+            "they come to the character's reference faces, or to the faces of "
+            "`reference_picture_ids` when the sheets were drawn from pictures. "
             "A sheet whose faces are not read yet comes back unscored."
         ),
         response_model=SheetRanking,
@@ -137,7 +157,10 @@ def create_router(server) -> APIRouter:
     def rank_sheets(character_id: int, payload: SheetRankRequest):
         try:
             sheets, references = character_sheet.rank_sheets(
-                server.vault, character_id, payload.picture_ids
+                server.vault,
+                character_id,
+                payload.picture_ids,
+                payload.reference_picture_ids,
             )
         except character_sheet.SheetNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

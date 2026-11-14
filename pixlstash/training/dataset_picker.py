@@ -84,7 +84,9 @@ _FACE_ROOM_FRAMING = (
 
 _EXPRESSION_TAGS = (
     ("smile", ("smile", "grin")),
-    ("open mouth", ("open mouth",)),
+    # The tagger gives "open mouth" to few of the mouths that are open; a
+    # picture showing teeth has one too, and may be a smile as well.
+    ("open mouth", ("open mouth", "teeth")),
     ("closed eyes", ("closed eyes",)),
 )
 

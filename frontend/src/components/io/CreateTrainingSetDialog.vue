@@ -46,7 +46,7 @@
       @done="onGenerated"
     />
     <div v-show="mode === 'pick'" class="cts-split">
-    <div class="cts-pane" data-testid="cts-picks">
+    <div class="cts-pane cts-pane--picks" data-testid="cts-picks">
       <p v-if="loadError" class="cts-notice cts-notice--bad" role="alert">
         <v-icon size="16">mdi-alert-circle-outline</v-icon>
         <span>{{ loadError }}</span>
@@ -62,7 +62,14 @@
         >
           <div class="cts-grp-h">
             <h3 class="cts-secl">{{ g.title }}</h3>
-            <span class="cts-note">{{ g.note }}</span>
+            <span
+              v-if="g.capped && g.reachable"
+              class="cts-note cts-note--warn"
+              :data-testid="`cts-capped-${g.key}`"
+              >{{ g.cappedShort
+              }}<Tooltip :text="g.cappedText" activator="parent"
+            /></span>
+            <span v-else class="cts-note">{{ g.note }}</span>
             <Segmented
               v-if="g.key === 'stills' && generated.length"
               v-model="newOnly"
@@ -87,7 +94,14 @@
           <template v-else>
             <div class="cts-slw">
               <div class="cts-sl">
-                <div class="cts-range">
+                <div class="cts-range cts-range--kept" :style="{ '--cts-at': g.at }">
+                  <span class="cts-range__fill" aria-hidden="true" />
+                  <span
+                    v-if="g.capPercent > 0"
+                    class="cts-range__cap"
+                    :style="{ width: `${g.capPercent}%` }"
+                    aria-hidden="true"
+                  />
                   <input
                     :id="`${uid}-${g.key}`"
                     class="cts-range__input"
@@ -103,32 +117,11 @@
                     @input="onSlide(g.key, $event)"
                     @keydown.enter.prevent
                   />
-                  <span
-                    v-if="g.capPercent > 0"
-                    class="cts-range__cap"
-                    :style="{ width: `${g.capPercent}%` }"
-                    aria-hidden="true"
-                  />
                 </div>
                 <span class="cts-val">{{ g.size }}</span>
                 <span class="cts-note">of {{ g.passing }}</span>
               </div>
-              <div v-if="g.mark" class="cts-marks" aria-hidden="true">
-                <span
-                  class="cts-mk"
-                  :style="{ left: `${g.mark.percent}%` }"
-                  >{{ g.mark.at }} · {{ g.mark.label }}</span
-                >
-              </div>
             </div>
-            <p
-              v-if="g.capped"
-              class="cts-notice"
-              :data-testid="`cts-capped-${g.key}`"
-            >
-              <v-icon size="16">mdi-information-outline</v-icon>
-              <span>{{ g.cappedText }}</span>
-            </p>
             <ul class="cts-sheet">
               <li
                 v-for="p in tilesOf(g)"
@@ -254,48 +247,6 @@
             >
           </div>
         </div>
-
-        <div
-          v-if="coverage.closable.length || coverage.outside.length"
-          class="cts-gaps"
-        >
-          <template v-if="coverage.closable.length">
-            <div
-              v-for="gap in coverage.closable"
-              :key="gap.label"
-              class="cts-g"
-              data-testid="cts-gap-closable"
-            >
-              <v-icon size="16">mdi-arrow-right</v-icon>
-              <span class="cts-g__t"
-                >{{ capital(gap.label) }} {{ gap.short }} short · at
-                {{ gap.at }}</span
-              >
-              <AppButton
-                size="sm"
-                :disabled="busy || !!created"
-                @click="setSize(coverageKey, gap.at)"
-              >
-                Show {{ gap.at }}
-              </AppButton>
-            </div>
-          </template>
-          <template v-if="coverage.outside.length">
-            <div
-              v-for="gap in coverage.outside"
-              :key="gap.label"
-              class="cts-g"
-              data-testid="cts-gap-outside"
-            >
-              <v-icon size="16">mdi-dots-horizontal</v-icon>
-              <span class="cts-g__t"
-                >{{ capital(gap.label) }}: {{ gap.available }} in the pool,
-                {{ gap.inTop ? `only ${gap.inTop}` : "none" }} in the top
-                {{ gap.top }}</span
-              >
-            </div>
-          </template>
-        </div>
       </template>
 
       <div class="cts-gapbox" data-testid="cts-choosing">
@@ -331,14 +282,14 @@
                 :step="f.step"
                 :value="choosing[f.key]"
                 :disabled="busy || !!created"
-                :aria-valuetext="`${f.shown}, ${f.count} set aside`"
+                :aria-valuetext="`${f.shown}, ${f.count} excluded`"
                 :data-testid="`cts-slider-${f.key}`"
                 @input="onFloor(f, $event)"
                 @change="load"
                 @keydown.enter.prevent
               />
             </div>
-            <small class="cts-note"><b>{{ f.count }}</b> set aside</small>
+            <small class="cts-note"><b>{{ f.count }}</b> excluded</small>
           </div>
         </div>
         <div
@@ -361,7 +312,7 @@
           <small class="cts-note cts-var__hint">{{ v.hint }}</small>
         </div>
         <div class="cts-aside">
-        <span class="cts-note">Set aside</span>
+        <span class="cts-note">Exclude</span>
         <div class="cts-two cts-two--tight">
         <div
           v-for="r in reasonRows"
@@ -377,7 +328,7 @@
             color="primary"
             density="compact"
             hide-details
-            :aria-label="`Set aside: ${r.title}`"
+            :aria-label="`Exclude: ${r.title}`"
             :disabled="busy || loading || !!created"
             :data-testid="`cts-switch-${r.key}`"
             @update:model-value="(v) => toggle(r.key, !!v)"
@@ -519,6 +470,7 @@ import AppButton from "../widgets/AppButton.vue";
 import CharacterSheetStep from "./CharacterSheetStep.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import TrainingPickPreview from "./TrainingPickPreview.vue";
 
 const props = defineProps({
@@ -690,43 +642,22 @@ function countIn(picks, axis, label) {
   return picks.filter((p) => (p.buckets[axis] || []).includes(label)).length;
 }
 
-/** Every label short of its target at the group's size, sorted into kinds. */
-function gapsOf(key) {
+/** Each label's count against its target at the group's size, per axis. */
+function coverageRows(key) {
   const group = groupOf(key);
   const size = sizes.value[key];
-  const reachable = reachableOf(group);
   const top = group.picks.slice(0, size);
-  const out = { rows: {}, closable: [], outside: [] };
+  const out = {};
   for (const axis of Object.keys(data.value.targets)) {
-    out.rows[axis] = [];
+    out[axis] = [];
     for (const label of Object.keys(data.value.targets[axis])) {
       const count = countIn(top, axis, label);
       const want = target(axis, label, size);
       const short = Math.max(0, want - count);
       const available = group.available[axis]?.[label] ?? 0;
-      out.rows[axis].push({ label, count, want, short, none: !available });
-      if (!short) continue;
-      // Not in the library: the bar itself says so.
-      if (!available) continue;
-      let at = null;
-      for (let k = size + 1; k <= reachable; k++) {
-        const picksK = group.picks.slice(0, k);
-        if (countIn(picksK, axis, label) >= target(axis, label, k)) {
-          at = k;
-          break;
-        }
-      }
-      if (at) out.closable.push({ label, short, at });
-      else
-        out.outside.push({
-          label,
-          available,
-          inTop: countIn(group.picks, axis, label),
-          top: group.picks.length,
-        });
+      out[axis].push({ label, count, want, short, none: !available });
     }
   }
-  out.closable.sort((a, b) => a.at - b.at);
   return out;
 }
 
@@ -758,34 +689,35 @@ const visibleGroups = computed(() => {
     const min = Math.min(minOf(key), Math.max(reachable, 1));
     const trackMax = key === "stills" ? TRACK_MAX : Math.max(reachable, min);
     const span = Math.max(trackMax - min, 1);
-    const firstGap = key === coverageKey.value ? gapsOf(key).closable[0] : null;
     return {
       key,
       title: key === "stills" ? "Pictures" : "Video clips",
       note:
         key === "stills"
-          ? "Used by every model."
+          ? // Only worth saying beside the clips, which are not.
+            data.value.has_clips
+            ? "Used whichever model you train, picture or video."
+            : ""
           : "Used only when you train a video model. Still-picture models skip them, so it is safe to include both.",
       passing: group.passing,
       reachable,
       size,
       min,
       trackMax,
+      at: (size - min) / span,
       capPercent:
         key === "stills" ? ((trackMax - Math.max(reachable, min)) / span) * 100 : 0,
       capped: reachable < TRACK_MAX && size >= reachable && key === "stills",
+      // In the heading, where it moves nothing; the long form is its tooltip.
+      cappedShort:
+        group.passing > reachable
+          ? `Only ${reachable} left: put one back for more`
+          : `Only ${reachable} ${unit} pass`,
       cappedText:
         group.passing > reachable
           ? `Only ${reachable} of the ranked ${unit} are left: the rest were left out by hand. Put one back to go higher.`
           : `Only ${reachable} ${unit} pass.${wouldAddText(group, unit)}`,
       noneText: `0 ${unit} pass.${wouldAddText(group, unit)}`,
-      mark: firstGap
-        ? {
-            at: firstGap.at,
-            label: firstGap.label,
-            percent: ((firstGap.at - min) / span) * 100,
-          }
-        : null,
       shown: group.picks.slice(0, size),
     };
   });
@@ -795,8 +727,7 @@ const coverage = computed(() => {
   if (!data.value) return null;
   const key = data.value.has_clips ? coverageKey.value : "stills";
   if (!reachableOf(groupOf(key))) return null;
-  const gaps = gapsOf(key);
-  const axes = Object.entries(gaps.rows).map(([name, rows]) => {
+  const axes = Object.entries(coverageRows(key)).map(([name, rows]) => {
     const scale = Math.max(1, ...rows.map((r) => Math.max(r.count, r.want)));
     return {
       name,
@@ -813,8 +744,6 @@ const coverage = computed(() => {
     size: sizes.value[key],
     unit: key === "stills" ? "pictures" : "clips",
     axes,
-    closable: gaps.closable,
-    outside: gaps.outside,
   };
 });
 
@@ -966,10 +895,6 @@ function chipLine(p) {
   return [labels, likeness].filter(Boolean).join(" · ");
 }
 
-function capital(text) {
-  return text ? text[0].toUpperCase() + text.slice(1) : text;
-}
-
 async function load() {
   const seq = ++fetchSeq;
   loadError.value = "";
@@ -1051,7 +976,7 @@ function setSize(key, value) {
 function onSlide(key, event) {
   const value = Number(event.target.value);
   setSize(key, value);
-  // The track runs past what passes (hatched); the thumb stops at the cap.
+  // The track runs past what passes (greyed); the thumb stops at the cap.
   if (sizes.value[key] !== value) event.target.value = String(sizes.value[key]);
 }
 
@@ -1162,14 +1087,14 @@ function close() {
   height: min(652px, calc(100vh - 160px));
   /* One colour per coverage bar and its chips, from four hues, each deep and
      light. The same eight in both themes: the light ones are mixed toward the
-     dark-surface text colour and carry a dark label. */
+     dark-surface text colour and carry a dark label, at 6.9:1 or better. */
   --cts-light: rgb(var(--v-theme-on-dark-surface));
   --cts-kept-all: rgb(var(--v-theme-on-dark-surface));
   --cts-kept-none: rgb(var(--v-theme-scrim));
 }
 
 .cts-hue--framing-0 {
-  background: color-mix(in srgb, rgb(var(--v-theme-tertiary)) 55%, var(--cts-light));
+  background: color-mix(in srgb, rgb(var(--v-theme-tertiary)) 40%, var(--cts-light));
   color: rgb(var(--v-theme-dark-surface));
 }
 
@@ -1179,7 +1104,11 @@ function close() {
 }
 
 .cts-hue--framing-2 {
-  background: rgb(var(--v-theme-dark-surface-primary));
+  background: color-mix(
+    in srgb,
+    rgb(var(--v-theme-dark-surface-primary)) 70%,
+    var(--cts-light)
+  );
   color: rgb(var(--v-theme-dark-surface));
 }
 
@@ -1189,7 +1118,7 @@ function close() {
 }
 
 .cts-hue--expression-0 {
-  background: color-mix(in srgb, rgb(var(--v-theme-secondary)) 55%, var(--cts-light));
+  background: color-mix(in srgb, rgb(var(--v-theme-secondary)) 40%, var(--cts-light));
   color: rgb(var(--v-theme-dark-surface));
 }
 
@@ -1199,7 +1128,7 @@ function close() {
 }
 
 .cts-hue--expression-2 {
-  background: color-mix(in srgb, rgb(var(--v-theme-quaternary)) 55%, var(--cts-light));
+  background: color-mix(in srgb, rgb(var(--v-theme-quaternary)) 40%, var(--cts-light));
   color: rgb(var(--v-theme-dark-surface));
 }
 
@@ -1322,10 +1251,34 @@ button.cts-stp__s:not(:disabled) {
   gap: var(--space-3);
 }
 
+/* Only the tiles scroll: a group's heading and count slider stay above them.
+   Two groups (pictures and clips) share the height evenly. */
+.cts-pane--picks {
+  overflow: hidden;
+}
+
+.cts-pane--picks .cts-grp {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.cts-pane--picks .cts-sheet {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  /* The scrollbar sits at the pane's edge, not inside its padding. */
+  margin-right: calc(-1 * var(--space-5));
+  padding-right: var(--space-5);
+}
+
 .cts-grp-h {
   display: flex;
   align-items: baseline;
   gap: var(--space-3);
+  /* As tall with the heading alone as with a note or the New only switch
+     beside it, so the slider below never moves when one appears. */
+  min-height: var(--control-h);
 }
 
 .cts-secl {
@@ -1342,6 +1295,10 @@ button.cts-stp__s:not(:disabled) {
   margin: 0;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.cts-note--warn {
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .cts-slw {
@@ -1370,26 +1327,20 @@ button.cts-stp__s:not(:disabled) {
   cursor: pointer;
 }
 
-/* The part of the track no position can reach, hatched so the scale stays
-   5-50 between visits and the reason the thumb stops is visible. */
+/* The part of the track no position can reach, one flat grey, so the scale
+   stays 5-50 between visits and the reason the thumb stops is visible. It
+   comes before the input, so the thumb is drawn over it. */
 .cts-range__cap {
   position: absolute;
   right: 0;
-  height: var(--space-3);
+  top: var(--space-2);
+  bottom: var(--space-2);
   pointer-events: none;
   border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-  /* Opaque under the hatch: the browser draws the track itself, light or
-     dark as it likes, and a hatch alone vanished on a light one. */
-  background:
-    repeating-linear-gradient(
-      90deg,
-      rgba(var(--v-theme-on-surface), 0.45) 0 3px,
-      transparent 3px 6px
-    ),
-    rgb(var(--v-theme-surface));
+  background: var(--track-ring);
 }
 
-/* A floor's slider: the track is shaded by how many pictures each position
+/* A drawn slider (the floors, and the count): the track is shaded by how many pictures each position
    would leave (--cts-kept), under a translucent fill up to the thumb. Not a
    DS slider variant yet; the native track is cleared and drawn here. */
 .cts-range--kept {
@@ -1469,40 +1420,17 @@ button.cts-stp__s:not(:disabled) {
   font-variant-numeric: tabular-nums;
 }
 
-.cts-marks {
-  position: relative;
-  height: 16px;
-  margin-right: 84px;
-}
-
-.cts-mk {
-  position: absolute;
-  transform: translateX(-50%);
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  white-space: nowrap;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  line-height: 1;
-}
-
-.cts-mk::before {
-  content: "";
-  width: 1px;
-  height: 5px;
-  margin-bottom: var(--space-1);
-  background: currentColor;
-}
-
 .cts-sheet {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  /* Five across at the dialog's full width, fewer in a narrow window: 144px
-     is what the longest pair of chips needs on one line. */
-  grid-template-columns: repeat(auto-fill, minmax(144px, 1fr));
+  /* Four across at most, fewer in a narrow window: a pick can carry two
+     expressions beside its framing, and three chips need the wider tile. */
+  grid-template-columns: repeat(
+    auto-fill,
+    minmax(max(144px, calc((100% - 3 * var(--space-3)) / 4)), 1fr)
+  );
   gap: var(--space-4) var(--space-3);
 }
 
@@ -1640,6 +1568,7 @@ button.cts-stp__s:not(:disabled) {
   padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
   line-height: var(--space-5);
   white-space: nowrap;
 }
@@ -1760,29 +1689,6 @@ button.cts-stp__s:not(:disabled) {
   gap: var(--space-3);
   padding-top: var(--space-4);
   border-top: 1px solid rgb(var(--v-theme-divider));
-}
-
-/* The gaps under the bars, a line each: two fit without scrolling. */
-.cts-gaps {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.cts-g {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-size: var(--text-sm);
-}
-
-.cts-g .v-icon {
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-.cts-g__t {
-  flex: 1;
-  min-width: 0;
 }
 
 .cts-ex {

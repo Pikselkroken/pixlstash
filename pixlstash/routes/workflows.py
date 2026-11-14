@@ -206,6 +206,10 @@ from pixlstash.services import (
 from pixlstash.resources import comfyui_tenant
 from pixlstash.resources.arbiter import LeaseKind, LeaseState, Tenant, arbiter
 from pixlstash.services.model_icons import MAX_ICON_BYTES, IconRefused, store_icon
+from pixlstash.services.character_sheet import (
+    SheetConversionRefused,
+    convert_to_sheet,
+)
 from pixlstash.services.inpaint_conversion import (
     InpaintConversionRefused,
     convert_to_inpaint,
@@ -776,6 +780,15 @@ class WorkflowCard(BaseModel):
         ),
     )
     type: str | None = None
+    reference_inputs: int = Field(
+        0,
+        description=(
+            "How many pictures the graph reads as a reference while its "
+            "sampler starts from an empty latent, so a run can draw at a size "
+            "of its own from them. Read from a stored workflow's own graph; 0 "
+            "for a workflow grouped from pictures."
+        ),
+    )
     type_label: str | None = Field(
         None,
         description=(
@@ -4262,6 +4275,7 @@ def _entry(figure, recipe=None, names=None) -> WorkflowCard:
         or _display_name(figure.card, figure.models),
         type=figure.card.workflow_type,
         type_label=_TYPE_LABELS.get(figure.card.workflow_type),
+        reference_inputs=figure.card.reference_inputs,
         imported=figure.card.imported,
         manual=figure.card.manual,
         from_name=figure.card.from_name,
@@ -10518,6 +10532,60 @@ def create_router(server) -> APIRouter:
         name, landed = _store_copy(
             hub,
             f"{_file_stem(card, workflow.name)} (inpaint)",
+            graph,
+            source.bindings,
+            "duplicate",
+            workflow,
+            card,
+        )
+        _announce(request, [landed], "imported")
+        return WorkflowFile(name=name, workflow_id=landed)
+
+    @router.post(
+        "/workflows/{workflow_id}/sheet-copy",
+        summary="Convert a workflow to draw character sheets",
+        description=(
+            "Store a new manual workflow made from this image-edit workflow "
+            "that draws on a canvas of its own size instead of its picture's, "
+            "so the picture is a reference only: what a character sheet drawn "
+            "from a reference picture runs. The original is not changed."
+        ),
+        response_model=WorkflowFile,
+        status_code=201,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "There is no graph to convert."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
+            422: {
+                "description": "This graph cannot be converted; the detail says why."
+            },
+            500: {"description": "The copy could not be written."},
+        },
+    )
+    def sheet_copy_workflow(request: Request, workflow_id: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        workflow, card = _require_base(hub, workflow_id)
+        source = _card_source(
+            card,
+            workflow_id=workflow.workflow_id,
+            comfyui_url=_comfyui_url(_user(request)),
+        )
+        try:
+            graph = convert_to_sheet(source.graph)
+        except SheetConversionRefused as exc:
+            logger.info(
+                "[workflows] Workflow %s was not converted to a sheet workflow: %s",
+                workflow.workflow_id,
+                exc.reason,
+            )
+            raise HTTPException(status_code=422, detail=exc.reason) from exc
+        # Stored as a duplicate, as the inpaint copy is.
+        name, landed = _store_copy(
+            hub,
+            f"{_file_stem(card, workflow.name)} (sheet)",
             graph,
             source.bindings,
             "duplicate",

@@ -241,6 +241,12 @@ def test_a_picture_is_framed_by_the_room_below_its_face():
         assert Candidate(picture_id=1, face_room=room).framing == label, room
     assert Candidate(picture_id=1).framing is None
     assert Candidate(picture_id=1).expressions == ("neutral",)
+    # Teeth showing is an open mouth, beside the smile it often comes with.
+    assert Candidate(picture_id=1, tags=("teeth",)).expressions == ("open mouth",)
+    assert Candidate(picture_id=1, tags=("Smile", "Teeth")).expressions == (
+        "smile",
+        "open mouth",
+    )
 
 
 def test_face_room_measures_the_picture_as_shown():

@@ -2122,6 +2122,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Store a Crop & Stitch inpaint copy of a workflow's graph; POST blocked for READ tokens; owner only",
     ),
+    ("POST", "/api/v1/workflows/{workflow_id}/sheet-copy"): RoutePolicy(
+        _OWNER,
+        justification="Store a copy of a workflow's graph that draws at a canvas size of its own; POST blocked for READ tokens; owner only",
+    ),
     ("POST", "/api/v1/workflows/{workflow_id}/fixed-copy"): RoutePolicy(
         _OWNER,
         justification="Write a copy of a workflow's graph with this ComfyUI's repairs applied; POST blocked for READ tokens; owner only",

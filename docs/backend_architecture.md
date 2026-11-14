@@ -924,6 +924,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/workflows/{workflow_id}/save                                          | workflows       | Save a workflow's changes over it                             |
 | POST   | /api/v1/workflows/{workflow_id}/save-as-new                                   | workflows       | Save a workflow's changes as a new workflow                   |
 | POST   | /api/v1/workflows/{workflow_id}/set-clone-plans                               | workflows       | What cloning a workflow onto each workflow set would write    |
+| POST   | /api/v1/workflows/{workflow_id}/sheet-copy                                    | workflows       | Convert a workflow to draw character sheets                   |
 | POST   | /api/v1/workflows/{workflow_id}/thumbnail                                     | workflows       | Give a workflow a custom thumbnail                            |
 | GET    | /api/v1/workflows/{workflow_id}/versions                                      | workflows       | A workflow's versions                                         |
 | POST   | /api/v1/workflows/{workflow_id}/versions/{version}/opening                    | workflows       | Hold an earlier version of a workflow for ComfyUI to open     |
@@ -12912,6 +12913,42 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 - **No reference set is written.** For a character with no pictures, the
   chosen sheet's panels are its only faces, so they are its references by the
   existing rule; a character with rated pictures keeps those.
+- **From a reference picture plus the words (#2679).** Text pins down a type,
+  so a character that already has a face is matched only by luck. The second
+  way to draw runs an **image-edit** workflow (Qwen-Image-Edit, the owner's
+  pick; no probe has measured it yet) that reads the picture for the face and
+  draws on an empty canvas of the sheet's size. Nothing about the run is
+  particular to sheets: the picture goes in through `RunRequest.inputs` at the
+  address the pre-flight's `picture_inputs` names. Four pieces serve it:
+  - `workflow_identity.reference_input_count(nodes)` says which graphs can:
+    the picture loaders feeding an edit model's reference input
+    (`ReferenceLatent`, `TextEncode…ImageEdit…`; a ControlNet's pose is not
+    one) in a `txt2img` / `img2img` graph whose every sampler
+    starts from an empty latent (followed through `latent_image` only, an
+    empty latent ending the walk, so one sized from the picture still counts)
+    and never from the picture's own. The type cannot say this: an edit graph
+    that encodes its reference for `ReferenceLatent` reads `img2img` whatever
+    its sampler starts from. The card carries it as `reference_inputs`, read
+    from a **manual** workflow's own graph (`workflow_card_reads`, cached per
+    version beside its type); an automatic card stores no edges and says 0.
+  - `convert_to_sheet(graph)` (`POST /workflows/{workflow_id}/sheet-copy`, a
+    copy stored through `_store_copy` as `<stem> (sheet)`, owner only as
+    `inpaint-copy` is) makes such a graph from an edit workflow, which draws
+    at its picture's size: an empty latent whose size is wired from the
+    picture gets a literal `width` and `height`; a Qwen edit graph whose
+    sampler starts from the picture's own `VAEEncode` gets a new
+    `EmptySD3LatentImage`; either way `denoise` becomes 1.0. Anything else is a 422 with the
+    reason (no picture read, more than one pass, already sized, or a start it
+    has no canvas class for).
+  - `sheet_prompt(reference=True)` names "the same {subject} as in the
+    reference picture" ahead of the description in every photo, the boxes
+    unchanged; `layout="prose"` returns the summary sentence instead of the
+    MOSS JSON, for a model that takes no layout. Both wordings are
+    provisional until probed.
+  - `rank_sheets(..., reference_picture_ids)` measures closeness against the
+    faces of the pictures the sheets were drawn from (at most 4, every face of
+    each, an id with no faces ignored) instead of the character's reference
+    faces: a picked picture need not be one of those.
 - The prompt route is pure; the other two are a `*_in_session` read or write
   behind a thin vault wrapper in `services/character_sheet.py` (§10.1).
 

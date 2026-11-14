@@ -51,6 +51,7 @@ from pixlstash.services.workflow_identity import (
     model_fix_kind,
     reduced_traits,
     reduced_workflow_type,
+    reference_input_count,
     slots,
 )
 from pixlstash.services import workflow_bindings
@@ -89,6 +90,11 @@ class Card:
     topology_hash: str
     core_hash: Optional[str] = None
     workflow_type: Optional[str] = None
+    # How many pictures the graph reads as a reference, its canvas being an
+    # empty latent (``workflow_identity.reference_input_count``). Read from a
+    # manual workflow's own graph only: an automatic card stores its type and
+    # not its graph's edges, so it says 0.
+    reference_inputs: int = 0
     specials: Optional[tuple[str, ...]] = None
     # What the core does beyond its type (``workflow_identity.graph_traits``),
     # with the same ``None`` rule as ``specials``.
@@ -248,6 +254,7 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
             topology_hash=row["workflow_id"],
             workflow_type=facts[0],
             traits=facts[1],
+            reference_inputs=_MANUAL_FACTS[row["workflow_id"]][2],
             imported=True,
             manual=True,
             from_name=row["from_name"],
@@ -269,11 +276,11 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
     ]
 
 
-# ``{workflow id: (version, (workflow_type, traits))}``: one entry per manual
+# ``{workflow id: (version, (workflow_type, traits), reference_inputs)}``: one entry per manual
 # workflow, replaced when a save makes a new version (`hub/workflow_versions.py`)
 # and dropped when the workflow is (`_manual_cards`), so no document is held
 # and an old version is never described.
-_MANUAL_FACTS: dict[str, tuple[object, tuple]] = {}
+_MANUAL_FACTS: dict[str, tuple[object, tuple, int]] = {}
 
 
 def _manual_facts_of(
@@ -293,8 +300,25 @@ def _manual_facts_of(
         return cached[1]
     nodes = _manual_reduction(workflow_id, document)
     facts = (None, None) if nodes is None else _manual_facts(workflow_id, nodes)
-    _MANUAL_FACTS[workflow_id] = (version, facts)
+    _MANUAL_FACTS[workflow_id] = (version, facts, _reference_inputs(workflow_id, nodes))
     return facts
+
+
+def _reference_inputs(workflow_id: str, nodes: Optional[dict]) -> int:
+    """``Card.reference_inputs`` of a reduced manual graph; 0 (logged) if it
+    will not read, as the type is ``None``."""
+    if nodes is None:
+        return 0
+    try:
+        return reference_input_count(nodes)
+    except (WorkflowGraphError, ValueError, TypeError, KeyError) as exc:
+        logger.warning(
+            "Manual workflow %s: its graph could not be read for its reference "
+            "inputs, so it shows none: %s",
+            workflow_id,
+            exc,
+        )
+        return 0
 
 
 def _manual_facts(

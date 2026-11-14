@@ -45,26 +45,30 @@
           />
           <AppBarButton icon="close" tooltip="Close (Esc)" @click="emit('close')" />
         </div>
-        <div
-          ref="stageEl"
-          class="zp-stage"
-          :class="{ 'zp-stage--pan': zoom.aboveFit.value, 'zp-stage--drag': dragging }"
-          @wheel.prevent="onWheel"
-          @pointerdown="onDown"
-          @pointermove="onMove"
-          @pointerup="onUp"
-          @pointercancel="onUp"
-          @dblclick="zoom.toggleSnap(cursor($event))"
-        >
-          <!-- draggable=false: the browser's own image drag would win the
-               race with the pan. -->
-          <img
-            :src="src"
-            :alt="alt"
-            :style="imgStyle"
-            draggable="false"
-            @load="onLoad"
-          />
+        <div class="zp-main">
+          <!-- Something to compare the picture with, beside it. -->
+          <slot name="aside" />
+          <div
+            ref="stageEl"
+            class="zp-stage"
+            :class="{ 'zp-stage--pan': zoom.aboveFit.value, 'zp-stage--drag': dragging }"
+            @wheel.prevent="onWheel"
+            @pointerdown="onDown"
+            @pointermove="onMove"
+            @pointerup="onUp"
+            @pointercancel="onUp"
+            @dblclick="zoom.toggleSnap(cursor($event))"
+          >
+            <!-- draggable=false: the browser's own image drag would win the
+                 race with the pan. -->
+            <img
+              :src="src"
+              :alt="alt"
+              :style="imgStyle"
+              draggable="false"
+              @load="onLoad"
+            />
+          </div>
         </div>
         <span class="zp-sr" role="status">{{ zoom.announcement.value }}</span>
       </div>
@@ -265,9 +269,16 @@ function onKey(event) {
 }
 
 /* A photo-judgement ground: dark in both themes, like the lightbox. */
+.zp-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
 .zp-stage {
   position: relative;
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   background: rgb(var(--v-theme-dark-surface));
