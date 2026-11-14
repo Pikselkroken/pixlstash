@@ -1329,7 +1329,14 @@ button.cts-stp__s:not(:disabled) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
+/* The count slider stays put while its picks scroll under it. */
 .cts-slw {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  margin-block: calc(-1 * var(--space-3));
+  padding-block: var(--space-3);
+  background: rgb(var(--v-theme-surface));
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
