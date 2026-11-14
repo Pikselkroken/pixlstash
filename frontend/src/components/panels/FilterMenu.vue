@@ -277,7 +277,6 @@
         :tags="tagRows"
         :rows="tagFieldRows"
         grouped
-        :footer="tagFooter"
         @add="setTag"
         @flip="
           (chip, from) => setTag(chip.tag, from === 'has' ? 'lacks' : 'has')
@@ -812,13 +811,6 @@ const tagFieldRows = computed(() => [
     chips: store.tagRejectedFilter.map(tagChip),
   },
 ]);
-
-// The groups are named in the footer only where they are listed.
-const tagFooter = computed(() =>
-  tagGroups.hasGroups
-    ? "Click a group or tag to require it, Shift-click to exclude it. Click a chip to flip it."
-    : "Click a chip to flip it between has and lacks.",
-);
 
 // The Tags submenu lists the groups, so their map is read as it opens.
 watch(sub, (kind) => {
