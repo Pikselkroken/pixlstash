@@ -1086,14 +1086,14 @@ function close() {
   height: min(652px, calc(100vh - 160px));
   /* One colour per coverage bar and its chips, from four hues, each deep and
      light. The same eight in both themes: the light ones are mixed toward the
-     dark-surface text colour and carry a dark label. */
+     dark-surface text colour and carry a dark label, at 6.9:1 or better. */
   --cts-light: rgb(var(--v-theme-on-dark-surface));
   --cts-kept-all: rgb(var(--v-theme-on-dark-surface));
   --cts-kept-none: rgb(var(--v-theme-scrim));
 }
 
 .cts-hue--framing-0 {
-  background: color-mix(in srgb, rgb(var(--v-theme-tertiary)) 55%, var(--cts-light));
+  background: color-mix(in srgb, rgb(var(--v-theme-tertiary)) 40%, var(--cts-light));
   color: rgb(var(--v-theme-dark-surface));
 }
 
@@ -1103,7 +1103,11 @@ function close() {
 }
 
 .cts-hue--framing-2 {
-  background: rgb(var(--v-theme-dark-surface-primary));
+  background: color-mix(
+    in srgb,
+    rgb(var(--v-theme-dark-surface-primary)) 70%,
+    var(--cts-light)
+  );
   color: rgb(var(--v-theme-dark-surface));
 }
 
@@ -1113,7 +1117,7 @@ function close() {
 }
 
 .cts-hue--expression-0 {
-  background: color-mix(in srgb, rgb(var(--v-theme-secondary)) 55%, var(--cts-light));
+  background: color-mix(in srgb, rgb(var(--v-theme-secondary)) 40%, var(--cts-light));
   color: rgb(var(--v-theme-dark-surface));
 }
 
@@ -1123,7 +1127,7 @@ function close() {
 }
 
 .cts-hue--expression-2 {
-  background: color-mix(in srgb, rgb(var(--v-theme-quaternary)) 55%, var(--cts-light));
+  background: color-mix(in srgb, rgb(var(--v-theme-quaternary)) 40%, var(--cts-light));
   color: rgb(var(--v-theme-dark-surface));
 }
 
@@ -1563,6 +1567,7 @@ button.cts-stp__s:not(:disabled) {
   padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
   line-height: var(--space-5);
   white-space: nowrap;
 }
