@@ -49,7 +49,12 @@ from pixlstash.image_plugins.service import import_derived_outputs
 from pixlstash.pixl_logging import get_logger
 from pixlstash.scoring import select_reference_faces_for_character
 from pixlstash.services.move_reconciliation_service import add_person
-from pixlstash.services.workflow_hash import is_link
+from pixlstash.services.workflow_hash import (
+    WorkflowGraphError,
+    is_link,
+    reduce_api_graph,
+)
+from pixlstash.services.workflow_identity import reference_input_count
 from pixlstash.services.workflow_io import is_picture_loader
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
@@ -406,8 +411,9 @@ def convert_to_sheet(graph: dict) -> dict:
 
     Raises:
         SheetConversionRefused: No picture is read, there is not exactly one
-            sampler, the canvas already has a size of its own, or the sampler
-            starts from something this cannot replace.
+            sampler, the canvas already has a size of its own, the sampler
+            starts from something this cannot replace, or the picture does
+            not reach a reference input.
     """
     out = copy.deepcopy(graph)
     nodes = {
@@ -464,6 +470,18 @@ def convert_to_sheet(graph: dict) -> dict:
     # A picture's latent can be drawn over in part; an empty canvas cannot.
     if "denoise" in inputs and not is_link(inputs["denoise"]):
         inputs["denoise"] = 1.0
+    # A picture that only poses a ControlNet, or reaches nothing, is no
+    # reference: the copy would draw a sheet from words alone.
+    try:
+        references = reference_input_count(reduce_api_graph(out))
+    except (WorkflowGraphError, TypeError, KeyError) as exc:
+        logger.warning("A sheet copy's graph could not be read: %s", exc)
+        references = 0
+    if not references:
+        raise SheetConversionRefused(
+            "This workflow's picture does not reach an edit model's reference "
+            "input, so a sheet would be drawn from words alone."
+        )
     return out
 
 

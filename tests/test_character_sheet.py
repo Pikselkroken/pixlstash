@@ -303,6 +303,14 @@ def test_converting_to_a_sheet_workflow_gives_the_canvas_a_size_of_its_own(laten
             },
             "samples in 2 passes",
         ),
+        # The picture sizes the canvas but reaches no reference input.
+        (
+            {
+                **_edit_graph("sized"),
+                "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "x"}},
+            },
+            "does not reach an edit model's reference",
+        ),
         # A picture's own latent with no Qwen edit encoder: no canvas class
         # is known for it.
         (
