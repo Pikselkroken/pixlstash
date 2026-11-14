@@ -65,10 +65,10 @@
             <span
               v-if="g.capped && g.reachable"
               class="cts-note cts-note--warn"
-              :title="g.cappedText"
               :data-testid="`cts-capped-${g.key}`"
-              >{{ g.cappedShort }}</span
-            >
+              >{{ g.cappedShort
+              }}<Tooltip :text="g.cappedText" activator="parent"
+            /></span>
             <span v-else class="cts-note">{{ g.note }}</span>
             <Segmented
               v-if="g.key === 'stills' && generated.length"
@@ -470,6 +470,7 @@ import AppButton from "../widgets/AppButton.vue";
 import CharacterSheetStep from "./CharacterSheetStep.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import TrainingPickPreview from "./TrainingPickPreview.vue";
 
 const props = defineProps({

@@ -67,6 +67,7 @@ vi.mock("../../api/workflows", () => ({
 }));
 
 import CreateTrainingSetDialog from "./CreateTrainingSetDialog.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const TARGETS = {
   framing: {
@@ -216,7 +217,7 @@ describe("CreateTrainingSetDialog", () => {
     const capped = wrapper.find('[data-testid="cts-capped-stills"]');
     // Short in the heading; the switches that widen it are its tooltip.
     expect(capped.text()).toBe("Only 9 pictures pass");
-    const notice = capped.attributes("title");
+    const notice = capped.findComponent(Tooltip).props("text");
     expect(notice).toContain("Only 9 pictures pass.");
     expect(notice).toContain("Keeping near-duplicates would let 14 more");
     expect(notice).toContain("no minimum score 6 more");
