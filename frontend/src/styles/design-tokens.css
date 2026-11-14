@@ -335,10 +335,11 @@
   /* The toolbar filter menu (FilterMenu) and each submenu beside it. Narrower
      than a lone toolbar panel (the old filter panel was 376px) because two sit
      side by side: 320 + 280 keeps the pair near 610px with Score open. The
-     submenus with long rows (the tag field, the checklists) take the menu's
-     own 320. */
+     checklists, with their long rows, take the menu's own 320; the tag field,
+     whose rows carry a group, a count and long chips, takes 400. */
   --filter-menu-w: 320px;
   --filter-submenu-w: 280px;
+  --filter-tag-menu-w: 400px;
 
   /* The toolbar band. The inspector's tab band is pinned to it so one bottom
      rule runs across the window; the toolbar and the sidebar tabs still spell

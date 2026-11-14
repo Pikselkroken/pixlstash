@@ -603,9 +603,8 @@ describe("FilterMenu: tag groups in the Tags menu (#2469)", () => {
     await openKind(wrapper, "Tags");
     // Opening the Tags menu reads the map.
     expect(getTagGroups).toHaveBeenCalled();
-    expect(wrapper.find(".tbm-footer").text()).toBe(
-      "Click a group or tag to require it, Shift-click to exclude it. Click a chip to flip it.",
-    );
+    // The Tags menu explains nothing in a footer.
+    expect(wrapper.find(".tbm-footer").exists()).toBe(false);
 
     const row = (name) =>
       wrapper
@@ -645,12 +644,10 @@ describe("FilterMenu: tag groups in the Tags menu (#2469)", () => {
     ]);
   });
 
-  it("gives the Tags menu its plain footer when no groups are filed", async () => {
+  it("gives the Tags menu no footer and no group list when no groups are filed", async () => {
     const wrapper = await mountMenu();
     await openKind(wrapper, "Tags");
-    expect(wrapper.find(".tbm-footer").text()).toBe(
-      "Click a chip to flip it between has and lacks.",
-    );
+    expect(wrapper.find(".tbm-footer").exists()).toBe(false);
     expect(wrapper.text()).not.toContain("By group");
   });
 });
