@@ -1036,7 +1036,7 @@ function setSize(key, value) {
 function onSlide(key, event) {
   const value = Number(event.target.value);
   setSize(key, value);
-  // The track runs past what passes (hatched); the thumb stops at the cap.
+  // The track runs past what passes (greyed); the thumb stops at the cap.
   if (sizes.value[key] !== value) event.target.value = String(sizes.value[key]);
 }
 
@@ -1376,22 +1376,18 @@ button.cts-stp__s:not(:disabled) {
   cursor: pointer;
 }
 
-/* The part of the track no position can reach, hatched so the scale stays
-   5-50 between visits and the reason the thumb stops is visible. */
+/* The part of the track no position can reach, one flat grey, so the scale
+   stays 5-50 between visits and the reason the thumb stops is visible. */
 .cts-range__cap {
   position: absolute;
   right: 0;
   height: var(--space-3);
   pointer-events: none;
   border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-  /* Opaque under the hatch: the browser draws the track itself, light or
-     dark as it likes, and a hatch alone vanished on a light one. */
+  /* Opaque under the grey: the browser draws the track itself, light or
+     dark as it likes. */
   background:
-    repeating-linear-gradient(
-      90deg,
-      rgba(var(--v-theme-on-surface), 0.45) 0 3px,
-      transparent 3px 6px
-    ),
+    linear-gradient(var(--track-trough), var(--track-trough)),
     rgb(var(--v-theme-surface));
 }
 

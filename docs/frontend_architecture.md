@@ -1617,7 +1617,7 @@ the row element to hand focus back to on close).
   under it, and two *Set aside* switches side by side,
   on by default (on = those pictures stay out). The size sliders take a prefix
   of each group's `picks` and never refetch: Pictures runs 5-50 with the part
-  past what passes hatched, Video clips (shown only with `has_clips`) runs 1
+  past what passes greyed, Video clips (shown only with `has_clips`) runs 1
   to what passes. A tile's corner button leaves that pick out by hand
   (`removed`, kept across refetches, cleared on open): `data` is the response
   (`ranked`) without those picks, so the next pick takes the place and every
