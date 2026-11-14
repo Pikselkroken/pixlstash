@@ -290,7 +290,7 @@ describe("CreateTrainingSetDialog", () => {
     const floor = wrapper.find('[data-testid="cts-floor-min_score"]');
     // 23 stills are under the score floor; the count sits under its slider.
     expect(floor.text()).toContain("★ 3.0");
-    expect(floor.text()).toContain("23 set aside");
+    expect(floor.text()).toContain("23 excluded");
     const slider = wrapper.find('[data-testid="cts-slider-min_score"]');
     slider.element.value = "4.5";
     await slider.trigger("input");

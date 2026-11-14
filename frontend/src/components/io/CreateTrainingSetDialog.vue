@@ -282,14 +282,14 @@
                 :step="f.step"
                 :value="choosing[f.key]"
                 :disabled="busy || !!created"
-                :aria-valuetext="`${f.shown}, ${f.count} set aside`"
+                :aria-valuetext="`${f.shown}, ${f.count} excluded`"
                 :data-testid="`cts-slider-${f.key}`"
                 @input="onFloor(f, $event)"
                 @change="load"
                 @keydown.enter.prevent
               />
             </div>
-            <small class="cts-note"><b>{{ f.count }}</b> set aside</small>
+            <small class="cts-note"><b>{{ f.count }}</b> excluded</small>
           </div>
         </div>
         <div
@@ -312,7 +312,7 @@
           <small class="cts-note cts-var__hint">{{ v.hint }}</small>
         </div>
         <div class="cts-aside">
-        <span class="cts-note">Set aside</span>
+        <span class="cts-note">Exclude</span>
         <div class="cts-two cts-two--tight">
         <div
           v-for="r in reasonRows"
@@ -328,7 +328,7 @@
             color="primary"
             density="compact"
             hide-details
-            :aria-label="`Set aside: ${r.title}`"
+            :aria-label="`Exclude: ${r.title}`"
             :disabled="busy || loading || !!created"
             :data-testid="`cts-switch-${r.key}`"
             @update:model-value="(v) => toggle(r.key, !!v)"
