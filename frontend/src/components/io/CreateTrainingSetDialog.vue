@@ -113,13 +113,6 @@
                 <span class="cts-val">{{ g.size }}</span>
                 <span class="cts-note">of {{ g.passing }}</span>
               </div>
-              <div v-if="g.mark" class="cts-marks" aria-hidden="true">
-                <span
-                  class="cts-mk"
-                  :style="{ left: `${g.mark.percent}%` }"
-                  >{{ g.mark.at }} · {{ g.mark.label }}</span
-                >
-              </div>
             </div>
             <p
               v-if="g.capped"
@@ -758,7 +751,6 @@ const visibleGroups = computed(() => {
     const min = Math.min(minOf(key), Math.max(reachable, 1));
     const trackMax = key === "stills" ? TRACK_MAX : Math.max(reachable, min);
     const span = Math.max(trackMax - min, 1);
-    const firstGap = key === coverageKey.value ? gapsOf(key).closable[0] : null;
     return {
       key,
       title: key === "stills" ? "Pictures" : "Video clips",
@@ -779,13 +771,6 @@ const visibleGroups = computed(() => {
           ? `Only ${reachable} of the ranked ${unit} are left: the rest were left out by hand. Put one back to go higher.`
           : `Only ${reachable} ${unit} pass.${wouldAddText(group, unit)}`,
       noneText: `0 ${unit} pass.${wouldAddText(group, unit)}`,
-      mark: firstGap
-        ? {
-            at: firstGap.at,
-            label: firstGap.label,
-            percent: ((firstGap.at - min) / span) * 100,
-          }
-        : null,
       shown: group.picks.slice(0, size),
     };
   });
@@ -1467,32 +1452,6 @@ button.cts-stp__s:not(:disabled) {
   font-family: var(--font-mono);
   font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
-}
-
-.cts-marks {
-  position: relative;
-  height: 16px;
-  margin-right: 84px;
-}
-
-.cts-mk {
-  position: absolute;
-  transform: translateX(-50%);
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  white-space: nowrap;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  line-height: 1;
-}
-
-.cts-mk::before {
-  content: "";
-  width: 1px;
-  height: 5px;
-  margin-bottom: var(--space-1);
-  background: currentColor;
 }
 
 .cts-sheet {
