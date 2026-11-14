@@ -693,7 +693,10 @@ const visibleGroups = computed(() => {
       title: key === "stills" ? "Pictures" : "Video clips",
       note:
         key === "stills"
-          ? "Used by every model."
+          ? // Only worth saying beside the clips, which are not.
+            data.value.has_clips
+            ? "Used whichever model you train, picture or video."
+            : ""
           : "Used only when you train a video model. Still-picture models skip them, so it is safe to include both.",
       passing: group.passing,
       reachable,
