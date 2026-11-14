@@ -283,6 +283,7 @@ _WORKFLOW_WRITE_ROUTES = (
     # whole library the way the run route does, and write a file.
     ("POST", "/api/v1/workflows/{workflow_id}/duplicate"),
     ("POST", "/api/v1/workflows/{workflow_id}/inpaint-copy"),
+    ("POST", "/api/v1/workflows/{workflow_id}/sheet-copy"),
     ("POST", "/api/v1/workflows/{workflow_id}/fixed-copy"),
     ("PUT", "/api/v1/workflows/{workflow_id}/lora-chain"),
     ("POST", "/api/v1/workflows/{workflow_id}/clone-with-models"),
@@ -7472,6 +7473,7 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
         ),
         ("POST", f"{API}/workflows/{BUSY_WF}/duplicate", None),
         ("POST", f"{API}/workflows/{BUSY_WF}/inpaint-copy", None),
+        ("POST", f"{API}/workflows/{BUSY_WF}/sheet-copy", None),
         ("POST", f"{API}/workflows/{BUSY_WF}/fixed-copy", None),
         ("PUT", f"{API}/workflows/{BUSY_WF}/lora-chain", {"entries": []}),
         (
@@ -7599,6 +7601,12 @@ _EVERY_WORKFLOW_ROUTE = (
         "POST",
         "/workflows/{workflow_id}/inpaint-copy",
         f"/workflows/{BUSY_WF}/inpaint-copy",
+        None,
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/sheet-copy",
+        f"/workflows/{BUSY_WF}/sheet-copy",
         None,
     ),
     (
@@ -16455,6 +16463,45 @@ def test_converting_an_inpaint_workflow_is_refused_with_its_reason(i2i):
     r = i2i.owner.post(f"{API}/workflows/{RUN_WF}/inpaint-copy")
     assert r.status_code == 422, r.text
     assert r.json()["detail"] == "This workflow already inpaints."
+    assert _manual_ids(i2i) == stored
+
+
+def test_a_sheet_copy_draws_on_its_own_canvas_and_says_it_takes_a_reference(i2i):
+    """#2679: the copy's sampler starts empty at a literal size, the card says
+    one reference input, and the original stands."""
+    graph = _full_i2i_graph()
+    graph["8"] = {
+        "class_type": "TextEncodeQwenImageEditPlus",
+        "inputs": {"clip": ["1", 1], "image1": ["5", 0], "prompt": "x"},
+    }
+    i2i.graph = graph
+    owner = i2i.owner
+    graph_before = owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
+    assert _by_key(_cards(owner))[RUN_WF]["reference_inputs"] == 0
+    r = owner.post(f"{API}/workflows/{RUN_WF}/sheet-copy")
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"].endswith(" (sheet)")
+    written = _written(i2i, body)
+    canvas = written[written["3"]["inputs"]["latent_image"][0]]
+    assert canvas["class_type"] == "EmptySD3LatentImage"
+    assert (canvas["inputs"]["width"], canvas["inputs"]["height"]) == (2560, 1536)
+    assert written["3"]["inputs"]["denoise"] == 1.0
+    card = _by_key(_cards(owner, "?include_one_offs=true"))[body["workflow_id"]]
+    assert (card["manual"], card["reference_inputs"]) == (True, 1)
+    # The size the Sheets step sets is on the copy's card.
+    detail = owner.get(f"{API}/workflows/{body['workflow_id']}").json()["card"]
+    assert {"width", "height"} <= {d["input_name"] for d in detail["defaults"]}
+    assert owner.get(f"{API}/workflows/{RUN_WF}/graph").json() == graph_before
+
+
+def test_a_sheet_copy_of_a_plain_img2img_workflow_is_refused(i2i):
+    """422 with the reason, and nothing is stored."""
+    i2i.graph = _full_i2i_graph()
+    stored = _manual_ids(i2i)
+    r = i2i.owner.post(f"{API}/workflows/{RUN_WF}/sheet-copy")
+    assert r.status_code == 422, r.text
+    assert "VAEEncode" in r.json()["detail"]
     assert _manual_ids(i2i) == stored
 
 

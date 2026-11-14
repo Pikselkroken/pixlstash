@@ -9,11 +9,18 @@ so each sheet is a slightly different person; within one sheet the six faces
 agree, which is why the person picks one sheet and its six panels become the
 character's pictures.
 
-Three pure pieces live here, the routes in ``routes/character_sheets.py``:
+A sheet can also be drawn from a reference picture plus the words (#2679):
+an edit workflow (Qwen-Image-Edit) reads the picture for the face and draws on
+an empty canvas of the sheet's size. No probe has measured that route yet.
+
+Four pure pieces live here, the routes in ``routes/character_sheets.py``:
 
 * :func:`sheet_prompt` builds the MOSS layout prompt (the JSON
   ``MOSSImageLayoutPrompt`` emits). The boxes and captions are the ones that
   held their layout on 16 of 16 probe sheets; change them only with new probes.
+  With ``layout="prose"`` it is the same sheet in one sentence.
+* :func:`convert_to_sheet` rewrites an edit workflow's graph to draw at the
+  sheet's size (``POST /workflows/{workflow_id}/sheet-copy``).
 * :func:`split_sheet` cuts a drawn sheet into its six panels.
 * :func:`agreement` / :func:`closeness` score a sheet's faces, against each
   other and against the character's reference faces.
@@ -25,9 +32,11 @@ vault wrapper (backend architecture §10.1): :func:`rank_sheets` and
 
 from __future__ import annotations
 
+import copy
 import io
 import json
 import os
+import re
 from itertools import combinations
 from typing import Literal
 
@@ -40,6 +49,13 @@ from pixlstash.image_plugins.service import import_derived_outputs
 from pixlstash.pixl_logging import get_logger
 from pixlstash.scoring import select_reference_faces_for_character
 from pixlstash.services.move_reconciliation_service import add_person
+from pixlstash.services.workflow_hash import (
+    WorkflowGraphError,
+    is_link,
+    reduce_api_graph,
+)
+from pixlstash.services.workflow_identity import reference_input_count
+from pixlstash.services.workflow_io import is_picture_loader
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 logger = get_logger(__name__)
@@ -54,6 +70,8 @@ MAX_FACES = PANEL_COUNT
 Framing = Literal["waist_up", "mid_thigh", "knees_up", "full_body"]
 Subject = Literal["woman", "man"]
 Size = Literal["small", "medium", "large"]
+# How the prompt is written: MOSS's layout JSON, or the sheet in one sentence.
+Layout = Literal["moss", "prose"]
 # The sheet's canvas at each size, all 5:3 so the layout only scales, and every
 # side a multiple of 16 as MOSS needs: ~1, ~2 and ~4 megapixels, MOSS's own
 # range (it is trained at 1-2 MP and stretches to about 4).
@@ -269,8 +287,16 @@ def sheet_prompt(
     subject: Subject = "woman",
     trigger: str = "",
     size: Size = "large",
+    reference: bool = False,
+    layout: Layout = "moss",
 ) -> str:
-    """The MOSS layout prompt for one grid sheet of the character described.
+    """The prompt for one grid sheet of the character described.
+
+    The MOSS layout prompt by default; with *layout* ``prose``, the same
+    sheet as one plain sentence, for a model that takes no layout (an edit
+    model drawing from a reference picture). With *reference*, every photo
+    names the person in the reference picture ahead of the description: the
+    picture sets the face, the words the build and the clothes.
 
     Every panel's caption carries the whole character, the body included: a
     different build draws a different face, so the build is part of who it is.
@@ -287,7 +313,12 @@ def sheet_prompt(
     shoes = _phrase(shoes) if framing == "full_body" else ""
     full_outfit = f"{top}, {trousers} and {shoes}" if shoes else f"{top} and {trousers}"
     lead = f"{_phrase(trigger)}, " if _phrase(trigger) else ""
-    who = f"{lead}{_phrase(description) or f'an adult {subject}'}, {body}"
+    described = _phrase(description)
+    if reference:
+        # ponytail: provisional wording, no probe has measured it (#2679).
+        same = f"the same {subject} as in the reference picture"
+        described = f"{same}, {described}" if described else same
+    who = f"{lead}{described or f'an adult {subject}'}, {body}"
     character = f"{who}, wearing {full_outfit}"
     # A passport photo shows only the top; at full body the trousers and shoes
     # would pull those panels to full length too.
@@ -348,6 +379,8 @@ def sheet_prompt(
         f"(6) standing, three-quarter view. The {subject} is {character}. "
         "Identical face, hair, body shape and clothing in every photo."
     )
+    if layout == "prose":
+        return summary
     return json.dumps(
         {
             "summary": {"caption": summary},
@@ -356,6 +389,100 @@ def sheet_prompt(
             "bbox_format": "yxyx",
         }
     )
+
+
+class SheetConversionRefused(ValueError):
+    """The graph is not one :func:`convert_to_sheet` can rewrite; ``reason`` says why."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def convert_to_sheet(graph: dict) -> dict:
+    """A copy of an image-edit API graph that draws on a canvas of its own.
+
+    An edit workflow draws at its picture's size: the sampler starts from an
+    empty latent sized from the picture, or from the picture's own latent. A
+    sheet is drawn from a reference picture at the sheet's size, so the copy's
+    sampler starts from an empty latent with a literal ``width`` and
+    ``height`` (the large sheet's; a run sets its own), and the picture
+    reaches the reference input only. *graph* is not modified.
+
+    Raises:
+        SheetConversionRefused: No picture is read, there is not exactly one
+            sampler, the canvas already has a size of its own, the sampler
+            starts from something this cannot replace, or the picture does
+            not reach a reference input.
+    """
+    out = copy.deepcopy(graph)
+    nodes = {
+        node_id: node
+        for node_id, node in out.items()
+        if isinstance(node, dict) and isinstance(node.get("class_type"), str)
+    }
+    classes = [node["class_type"] for node in nodes.values()]
+    if not any(is_picture_loader(cls) for cls in classes):
+        raise SheetConversionRefused(
+            "This workflow reads no picture, so it has nowhere to take a reference."
+        )
+    samplers = [
+        node
+        for node in nodes.values()
+        if "Sampler" in node["class_type"]
+        and is_link((node.get("inputs") or {}).get("latent_image"))
+    ]
+    if len(samplers) != 1:
+        raise SheetConversionRefused(
+            f"This workflow samples in {len(samplers)} passes. Only a "
+            "single-pass workflow can be made into a sheet workflow."
+        )
+    inputs = samplers[0]["inputs"]
+    source = nodes.get(str(inputs["latent_image"][0])) or {}
+    source_class = source.get("class_type", "")
+    width, height = SIZES["large"]
+    if re.search(r"Empty.*Latent", source_class):
+        size = source.setdefault("inputs", {})
+        if not is_link(size.get("width")) and not is_link(size.get("height")):
+            raise SheetConversionRefused(
+                "This workflow already draws at a size of its own, so it can "
+                "draw a sheet as it is."
+            )
+        size["width"], size["height"] = width, height
+    elif source_class == "VAEEncode" and any(
+        cls.startswith("TextEncodeQwenImageEdit") for cls in classes
+    ):
+        # ponytail: Qwen-Image-Edit only, the one model whose template starts
+        # from the picture's own latent that sheets are drawn with. Another
+        # needs its own empty latent class (4, 16 or 32 channels).
+        new_id = str(max((int(k) for k in out if str(k).isdigit()), default=0) + 1)
+        out[new_id] = {
+            "class_type": "EmptySD3LatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+            "_meta": {"title": "Sheet canvas"},
+        }
+        inputs["latent_image"] = [new_id, 0]
+    else:
+        raise SheetConversionRefused(
+            f"Its sampler starts from {source_class or 'nothing'}, which "
+            "PixlStash cannot swap for a canvas of the sheet's size."
+        )
+    # A picture's latent can be drawn over in part; an empty canvas cannot.
+    if "denoise" in inputs and not is_link(inputs["denoise"]):
+        inputs["denoise"] = 1.0
+    # A picture that only poses a ControlNet, or reaches nothing, is no
+    # reference: the copy would draw a sheet from words alone.
+    try:
+        references = reference_input_count(reduce_api_graph(out))
+    except (WorkflowGraphError, TypeError, KeyError) as exc:
+        logger.warning("A sheet copy's graph could not be read: %s", exc)
+        references = 0
+    if not references:
+        raise SheetConversionRefused(
+            "This workflow's picture does not reach an edit model's reference "
+            "input, so a sheet would be drawn from words alone."
+        )
+    return out
 
 
 def _strongest_cut(
@@ -510,13 +637,18 @@ def _vectors(rows: list) -> list[np.ndarray]:
 
 
 def sheet_faces_in_session(
-    session: Session, character_id: int, picture_ids: list[int]
+    session: Session,
+    character_id: int,
+    picture_ids: list[int],
+    reference_picture_ids: list[int] | None = None,
 ) -> tuple[dict[int, list], list, dict[int, str]] | None:
-    """Each sheet's face embeddings, the character's reference embeddings, each sheet's format.
+    """Each sheet's face embeddings, the reference embeddings, each sheet's format.
 
     ``None`` when the character does not exist. A sheet's list holds a ``None``
     for the row face extraction leaves on a picture with no face, so an empty
-    list means its faces are not read yet. The sheets' own faces are never
+    list means its faces are not read yet. The references are the character's
+    reference faces, or, given *reference_picture_ids*, the faces of those
+    pictures: what the sheets were drawn from. The sheets' own faces are never
     their own references. The format is what the picture's file is served as.
     """
     if session.get(Character, character_id) is None:
@@ -526,11 +658,20 @@ def sheet_faces_in_session(
         select(Face.picture_id, Face.features).where(Face.picture_id.in_(picture_ids))
     ).all():
         faces[picture_id].append(features)
-    references = [
-        face.features
-        for face in select_reference_faces_for_character(session, character_id)
-        if face.picture_id not in faces
-    ]
+    if reference_picture_ids is None:
+        references = [
+            face.features
+            for face in select_reference_faces_for_character(session, character_id)
+            if face.picture_id not in faces
+        ]
+    else:
+        # ponytail: every face of a picked picture counts; a group photo as
+        # the reference measures against everyone in it.
+        references = session.exec(
+            select(Face.features).where(
+                Face.picture_id.in_(set(reference_picture_ids) - set(faces))
+            )
+        ).all()
     formats = dict(
         session.exec(
             select(Picture.id, Picture.format).where(Picture.id.in_(picture_ids))
@@ -540,16 +681,23 @@ def sheet_faces_in_session(
 
 
 def rank_sheets(
-    vault, character_id: int, picture_ids: list[int]
+    vault,
+    character_id: int,
+    picture_ids: list[int],
+    reference_picture_ids: list[int] | None = None,
 ) -> tuple[list[dict], int]:
-    """Score each sheet by its own faces and by the character's reference faces.
+    """Score each sheet by its own faces and by the reference faces.
 
-    Returns one dict per sheet, in the order asked, and how many reference
-    faces closeness was measured against. Raises :class:`SheetNotFound` for an
-    unknown character.
+    The references are the character's, or the faces of
+    *reference_picture_ids* when given (an unknown id has no faces and is
+    ignored). Returns one dict per sheet, in the order asked, and how many
+    reference faces closeness was measured against. Raises
+    :class:`SheetNotFound` for an unknown character.
     """
     ids = list(dict.fromkeys(picture_ids))
-    found = vault.db.run_immediate_read_task(sheet_faces_in_session, character_id, ids)
+    found = vault.db.run_immediate_read_task(
+        sheet_faces_in_session, character_id, ids, reference_picture_ids
+    )
     if found is None:
         raise SheetNotFound(f"No character {character_id}.")
     faces, reference_rows, formats = found

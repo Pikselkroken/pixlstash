@@ -11,7 +11,11 @@
           >
         </div>
 
-        <p v-if="likenessNotice" class="cs-notice" data-testid="cs-likeness">
+        <p
+          v-if="likenessNotice && !fromReference"
+          class="cs-notice"
+          data-testid="cs-likeness"
+        >
           <v-icon size="16">{{
             chosenLora ? "mdi-account-check-outline" : "mdi-alert-outline"
           }}</v-icon>
@@ -24,8 +28,11 @@
         >
           <v-icon size="16">mdi-alert-circle-outline</v-icon>
           <span
-            >Sheets need a MOSS-Image text-to-image workflow, and the library
-            has none. Import one from Workflows, then come back.</span
+            >{{
+              fromReference
+                ? "Sheets from a reference need a Qwen-Image-Edit sheet workflow, and the library has none."
+                : "Sheets need a MOSS-Image text-to-image workflow, and the library has none. Import one from Workflows, then come back."
+            }}</span
           >
         </p>
 
@@ -52,11 +59,14 @@
           <span v-if="chosenLora && trigger" class="cs-hint"
             >Loaded into the sheet workflow, with the trigger word
             <b>{{ trigger }}</b> added to every sheet prompt. Only LoRAs for
-            MOSS-Image, the sheet workflow's model, can be chosen.</span
+            {{ engine.name }}, the sheet workflow's model, can be chosen.</span
           >
           <span v-else-if="chosenLora" class="cs-hint"
-            >Loaded into the sheet workflow. Only LoRAs for MOSS-Image, the
-            sheet workflow's model, can be chosen.</span
+            >Loaded into the sheet workflow. Only LoRAs for {{ engine.name }},
+            the sheet workflow's model, can be chosen.</span
+          >
+          <span v-else-if="fromReference" class="cs-hint"
+            >Without a LoRA, the reference picture alone carries the face.</span
           >
           <span v-else class="cs-hint"
             >Without a LoRA, each sheet is a slightly different person, so you
@@ -181,6 +191,14 @@
           >
         </p>
         <p
+          v-if="noneClose"
+          class="cs-notice cs-notice--warn"
+          data-testid="cs-none-close"
+        >
+          <v-icon size="16">mdi-alert-outline</v-icon>
+          <span>{{ noneClose }}</span>
+        </p>
+        <p
           v-if="failures.length"
           class="cs-notice cs-notice--bad"
           data-testid="cs-failed"
@@ -233,7 +251,23 @@
                   <v-icon size="16">mdi-magnify-plus-outline</v-icon>
                 </button>
               </div>
-              <span class="cs-cap"
+              <span
+                v-if="drawnFrom && slot.sheet.closeness != null"
+                class="cs-ccap"
+                data-testid="cs-closeness"
+              >
+                <span class="cs-cline"
+                  ><b>Sheet {{ slot.n }}</b
+                  ><span class="cs-meter" aria-hidden="true"
+                    ><span :style="{ width: meterWidth(slot.sheet) }" /></span
+                  ><span class="cs-num">{{
+                    slot.sheet.closeness.toFixed(2)
+                  }}</span
+                  ><span>{{ closeWords(slot.sheet) }}</span></span
+                >
+                <span class="cs-cap">{{ slot.sheet.agreement_words }}</span>
+              </span>
+              <span v-else class="cs-cap"
                 ><b>Sheet {{ slot.n }}</b> · {{ sheetWords(slot.sheet) }}</span
               >
             </template>
@@ -259,8 +293,104 @@
       </template>
     </div>
 
-    <aside class="cs-pane cs-pane--side" data-testid="cs-rail">
-      <h3 class="cs-secl">{{ name }} so far</h3>
+    <aside
+      class="cs-pane cs-pane--side"
+      :class="{ 'cs-pane--wide': referenceCards.length || drawnFrom }"
+      data-testid="cs-rail"
+    >
+      <template v-if="phase === 'describe' && referenceCards.length">
+        <div class="cs-fld">
+          <FieldLabel>Draw from</FieldLabel>
+          <Segmented
+            v-model="mode"
+            aria-label="Draw from"
+            :options="MODES"
+            full
+            data-testid="cs-mode"
+          />
+        </div>
+        <template v-if="fromReference">
+          <img
+            v-if="referenceId"
+            class="cs-cbig"
+            :src="pictureThumbnailUrl(referenceId)"
+            alt="The reference picture"
+            data-testid="cs-reference"
+          />
+          <div class="cs-cstrip" role="group" aria-label="Reference picture">
+            <button
+              v-for="(id, index) in referenceIds"
+              :key="id"
+              type="button"
+              class="cs-reft"
+              :class="{ 'cs-reft--on': id === referenceId }"
+              :aria-pressed="id === referenceId"
+              :aria-label="`${name}'s ${ORDINALS[index]} reference face`"
+              data-testid="cs-reference-choice"
+              @click="referenceId = id"
+            >
+              <img :src="pictureThumbnailUrl(id)" alt="" />
+            </button>
+            <button
+              type="button"
+              class="cs-reft cs-reft--add"
+              aria-label="Pick another picture"
+              data-testid="cs-reference-pick"
+              @click="pickerOpen = true"
+            >
+              <v-icon size="14">mdi-image-plus-outline</v-icon>
+            </button>
+          </div>
+          <span class="cs-hint">{{ referenceHint }}</span>
+          <p class="cs-notice cs-notice--warn" data-testid="cs-reference-warning">
+            <v-icon size="16">mdi-alert-outline</v-icon>
+            <span
+              >These sheets are drawn to look like the person in the picture.
+              Use a real person's picture only with their agreement.</span
+            >
+          </p>
+        </template>
+      </template>
+      <div
+        v-else-if="phase === 'describe' && convertible"
+        class="cs-item"
+        data-testid="cs-convert"
+      >
+        <span
+          >Sheets can also be drawn from a reference picture, with a copy of a
+          Qwen-Image-Edit workflow that draws at the sheet's size.</span
+        >
+        <button
+          type="button"
+          class="cs-link cs-link--start"
+          :disabled="working"
+          @click="makeSheetWorkflow"
+        >
+          Make a sheet workflow from {{ convertible.name }}
+        </button>
+      </div>
+      <template v-if="phase !== 'describe' && drawnFrom">
+        <h3 class="cs-secl">Drawn from</h3>
+        <img
+          class="cs-cbig"
+          :src="pictureThumbnailUrl(drawnFrom)"
+          alt="The reference picture"
+          data-testid="cs-drawn-from"
+        />
+        <span class="cs-cline"
+          ><span>{{ referenceWords(drawnFrom) }}</span
+          ><button
+            type="button"
+            class="cs-link"
+            :disabled="working || phase === 'filing'"
+            @click="phase = 'describe'"
+          >
+            Draw from another
+          </button></span
+        >
+      </template>
+      <h3 v-if="!railIsReference" class="cs-secl">{{ name }} so far</h3>
+      <h3 v-else-if="keptSheets.length" class="cs-secl">Kept</h3>
       <div class="cs-rail">
         <ul
           v-if="keptSheets.length"
@@ -277,7 +407,7 @@
             <b>Sheet {{ sheet.n }}</b>
           </li>
         </ul>
-        <div v-if="referenceIds.length" class="cs-item">
+        <div v-if="referenceIds.length && !railIsReference" class="cs-item">
           <span class="cs-faces">
             <img
               v-for="id in referenceIds"
@@ -291,7 +421,7 @@
             close they come to these.</span
           >
         </div>
-        <div class="cs-item">
+        <div v-if="!railIsReference" class="cs-item">
           <span class="cs-row1"
             ><b>Description</b>
             <button
@@ -341,6 +471,16 @@
       @prev="stepZoom(-1)"
       @next="stepZoom(1)"
     >
+      <template v-if="drawnFrom" #aside>
+        <div class="cs-zoomref">
+          <span class="cs-secl">Drawn from</span>
+          <img
+            class="cs-cbig"
+            :src="pictureThumbnailUrl(drawnFrom)"
+            alt="The reference picture"
+          />
+        </div>
+      </template>
       <template #actions>
         <!-- Both choices always shown, so the control never changes size and
              says which one the sheet is on. -->
@@ -354,6 +494,16 @@
         />
       </template>
     </ZoomPopout>
+
+    <!-- Mounted only while open, as the Run popup's is: it loads the
+         library's facets when it opens. -->
+    <PicturePicker
+      v-if="pickerOpen"
+      open
+      subtitle="for the reference"
+      @close="pickerOpen = false"
+      @pick="onPicked"
+    />
   </div>
 </template>
 
@@ -364,7 +514,11 @@
  * Draws 2-4 character sheets with a MOSS-Image workflow (an ordinary
  * `POST /workflows/run`, so it queues and shows in Tasks like any run), ranks
  * them by how alike each sheet's own faces are, and cuts the one the user picks
- * into six pictures on the character. Emits `done` with their ids, and the
+ * into six pictures on the character. Where the library has a Qwen-Image-Edit
+ * sheet workflow (a card with `reference_inputs`), the rail offers a second
+ * way to draw: from a reference picture plus the words (#2679). The picture
+ * goes in through the run's own `inputs`, the sheets are ranked by closeness
+ * to it, and it stays in the rail beside them. Emits `done` with their ids, and the
  * dialog's picker takes over. The dialog owns the footer: it reads `footer`
  * and calls the actions this component exposes.
  */
@@ -397,6 +551,7 @@ import {
   listWorkflowCards,
   preflightWorkflowRun,
   runWorkflowCard,
+  sheetCopyWorkflow,
 } from "../../api/workflows";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
@@ -407,6 +562,7 @@ import AppInput from "../widgets/AppInput.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
+import PicturePicker from "../widgets/PicturePicker.vue";
 import Segmented from "../widgets/Segmented.vue";
 import ZoomPopout from "../widgets/ZoomPopout.vue";
 
@@ -438,6 +594,14 @@ const SUBJECTS = [
   { id: "man", label: "Man" },
 ];
 const MOSS = "moss_image";
+// What draws a sheet from a reference picture (#2679).
+// ponytail: one engine, the owner's pick; no probe has measured it yet.
+const QWEN = "qwen";
+const MODES = [
+  { id: "text", label: "Text" },
+  { id: "reference", label: "Reference and text" },
+];
+const ORDINALS = ["first", "second", "third", "fourth"];
 const POLL_MS = 2500;
 // Panels are filed before their faces are read; the picker ranks by face, so
 // it waits for them, but not forever: a slow queue still hands over.
@@ -468,6 +632,20 @@ const loras = ref([]);
 const loraSha = ref("");
 const strength = ref(0.8);
 const workflows = ref([]);
+// Cards that read a picture while drawing on a canvas of their own, and the
+// edit card one could be made from when there is none.
+const referenceCards = ref([]);
+const convertible = ref(null);
+const mode = ref("text"); // text | reference
+// The picture the next sheets are drawn from, and the one the sheets on show
+// were: the rail and the ranking follow the second.
+const referenceId = ref(null);
+const drawnFrom = ref(null);
+const pickerOpen = ref(false);
+// The chosen workflow's picture inputs, as the pre-flight names them.
+const workflowInputs = ref([]);
+// How many faces the last ranking measured closeness against.
+const rankedAgainst = ref(0);
 const workflowsLoaded = ref(false);
 const workflowId = ref("");
 // The chosen workflow's pre-flight: its width/height inputs, and why it can't
@@ -500,6 +678,17 @@ let alive = true;
 // new pick: the earlier sheets are of another prompt, not more of this one.
 let drawnWith = "";
 
+const fromReference = computed(() => mode.value === "reference");
+const engine = computed(() =>
+  fromReference.value
+    ? { family: QWEN, name: "Qwen-Image" }
+    : { family: MOSS, name: "MOSS-Image" },
+);
+/** The rail is the reference's: its control before drawing, the picture after. */
+const railIsReference = computed(() =>
+  phase.value === "describe" ? fromReference.value : !!drawnFrom.value,
+);
+
 const chosenLora = computed(
   () => loras.value.find((lora) => lora.sha256 === loraSha.value) || null,
 );
@@ -516,23 +705,62 @@ const loraName = computed(() =>
 const loraOptions = computed(() => [
   { value: "", label: "No LoRA" },
   ...loras.value.map((lora) => {
-    const fits = lora.base_model_family === MOSS;
+    const fits = lora.base_model_family === engine.value.family;
     return {
       value: lora.sha256,
       label: lora.display_name || lora.filename,
       disabled: !fits,
       chips: [
         fits
-          ? lora.base_model || "MOSS-Image"
-          : `For ${lora.base_model || "another model"}; sheets run MOSS-Image`,
+          ? lora.base_model || engine.value.name
+          : `For ${lora.base_model || "another model"}; sheets run ${engine.value.name}`,
       ],
     };
   }),
 ]);
 
-const workflowOptions = computed(() =>
-  workflows.value.map((card) => ({ value: card.id, label: card.name })),
+const modeCards = computed(() =>
+  fromReference.value ? referenceCards.value : workflows.value,
 );
+
+const workflowOptions = computed(() =>
+  modeCards.value.map((card) => ({ value: card.id, label: card.name })),
+);
+
+/** The newest LoRA that loads into the mode's sheet workflow. */
+function fittingLora() {
+  return (
+    loras.value.find((l) => l.base_model_family === engine.value.family)
+      ?.sha256 || ""
+  );
+}
+
+// Each mode has its own workflows and its own model, so its own LoRAs.
+watch(mode, () => {
+  workflowId.value = modeCards.value[0]?.id || "";
+  if (chosenLora.value?.base_model_family !== engine.value.family) {
+    loraSha.value = fittingLora();
+  }
+});
+
+const referenceHint = computed(() => {
+  const faces = referenceIds.value.length
+    ? `${name.value}'s reference faces. `
+    : "";
+  return `${faces}The sheet workflow takes one picture; the dashed tile opens the picker.`;
+});
+
+function referenceWords(id) {
+  const index = referenceIds.value.indexOf(id);
+  return index < 0
+    ? "A picture you picked"
+    : `${name.value}'s ${ORDINALS[index]} reference face`;
+}
+
+function onPicked(picture) {
+  pickerOpen.value = false;
+  if (picture?.id) referenceId.value = picture.id;
+}
 
 const suggestedFraming = computed(() =>
   chosenLora.value ? "full_body" : "mid_thigh",
@@ -559,6 +787,10 @@ const sizeHint = computed(() => {
 });
 
 const descriptionHint = computed(() => {
+  if (fromReference.value) {
+    const from = savedDescription.value ? `From ${name.value}. ` : "";
+    return `${from}In this mode the picture sets the face; these words are sent with it.`;
+  }
   if (savedDescription.value) {
     return `From ${name.value}. Changes here apply to these sheets only.`;
   }
@@ -583,6 +815,15 @@ function score(sheet) {
   return (sheet.agreement ?? -1) + (sheet.closeness ?? 0);
 }
 
+/** Drawn from a picture, closeness to it is what matters most. */
+function better(a, b) {
+  if (!drawnFrom.value) return score(b) - score(a);
+  return (
+    (b.closeness ?? -1) - (a.closeness ?? -1) ||
+    (b.agreement ?? -1) - (a.agreement ?? -1)
+  );
+}
+
 /** Every sheet, best first; broken ones last. */
 const sheets = computed(() => {
   const scored = order.value.map((id) => ({
@@ -594,7 +835,7 @@ const sheets = computed(() => {
     (a, b) =>
       Number(!!a.broken) - Number(!!b.broken) ||
       Number(b.faces_read) - Number(a.faces_read) ||
-      score(b) - score(a),
+      better(a, b),
   );
 });
 
@@ -618,6 +859,18 @@ const allEnded = computed(
 const noneHold = computed(
   () => allEnded.value && ended.value.length > 0 && !holding.value.length,
 );
+
+/** Drawn from a picture, only a sheet close to it is kept for the user: why
+ * none was, or "". */
+const noneClose = computed(() => {
+  if (!drawnFrom.value || !allEnded.value || !holding.value.length) return "";
+  if (holding.value.some((sheet) => sheet.close)) return "";
+  if (!rankedAgainst.value) {
+    return "No face was read in the reference picture, so the sheets can't be compared with it and none is kept for you. A reference with the face to the camera works best.";
+  }
+  const n = ended.value.length;
+  return `None of the ${n} sheets came close to the reference, so none is kept for you. Drawing more usually finds one. A different reference picture, face to the camera, helps too.`;
+});
 
 const failures = computed(() =>
   runs.value
@@ -698,6 +951,10 @@ function toggleKeep(id) {
 }
 
 const pickIntro = computed(() => {
+  if (drawnFrom.value) {
+    // Sheets keep their run's place, so the closest is kept, not moved first.
+    return `Each sheet says how close it comes to the picture on the right. The closest is kept for you if it comes close enough. Keep the ones to use: the six photos of each become pictures of ${name.value}. Every sheet stays in the Scrapheap, used or not.`;
+  }
   const base = `Each sheet says how well its own faces agree. Keep the ones to use: the six photos of each become pictures of ${name.value}. Every sheet stays in the Scrapheap, used or not, where you can restore any you like.`;
   if (!referenceIds.value.length) return base;
   return `${base} Each is also compared with ${name.value}'s reference faces: a sheet that agrees with itself but drifts from them is a different person drawn well.`;
@@ -709,9 +966,23 @@ function sheetWords(sheet) {
   }
   if (sheet.broken) return "more than one person in a photo";
   const words = [sheet.agreement_words];
-  if (sheet.close === true) words.push(`close to ${name.value}`);
-  if (sheet.close === false) words.push(`drifts from ${name.value}`);
+  if (sheet.close != null) {
+    const near = closeWords(sheet);
+    // Drawn from a picture, closeness leads, with its number.
+    if (drawnFrom.value) words.unshift(`${sheet.closeness.toFixed(2)} ${near}`);
+    else words.push(near);
+  }
   return words.join(" · ");
+}
+
+/** Closeness in words: to the picture drawn from, else to the character. */
+function closeWords(sheet) {
+  const whom = drawnFrom.value ? "the reference" : name.value;
+  return sheet.close ? `close to ${whom}` : `drifts from ${whom}`;
+}
+
+function meterWidth(sheet) {
+  return `${Math.round(Math.min(1, Math.max(0, sheet.closeness)) * 100)}%`;
 }
 
 function sheetLocked(sheet) {
@@ -738,8 +1009,10 @@ function sheetUrl(sheet) {
 // one to set, and it must be able to run at all.
 watch(workflowId, async (id) => {
   workflowSizes.value = [];
+  workflowInputs.value = [];
   workflowProblem.value = id ? null : "";
   if (!id) return;
+  const reference = fromReference.value;
   try {
     const [{ card }, check] = await Promise.all([
       getWorkflowCard(id),
@@ -750,13 +1023,27 @@ watch(workflowId, async (id) => {
     const sizes = (card?.defaults || []).filter((d) =>
       ["width", "height"].includes(d.input_name),
     );
-    const refused = (check?.groups || []).some((g) => g.reasons?.length);
+    const groups = check?.groups || [];
+    // The draw fills the picture inputs itself; a pinned one keeps its pin.
+    const inputs = reference
+      ? groups.flatMap((g) => g.picture_inputs || []).filter((i) => i.mode !== "fixed")
+      : [];
+    const refused = groups.some((g) =>
+      (g.reasons || []).some(
+        (r) => !(reference && r.code === "picture_input_unfilled"),
+      ),
+    );
     workflowSizes.value = sizes;
+    workflowInputs.value = inputs;
     workflowProblem.value = !sizes.length
       ? `${name} has no picture size to set, so it can't draw a sheet.`
       : refused
         ? `${name} can't run as it is. Open it from Workflows to see why.`
-        : "";
+        : reference && !inputs.length
+          ? `${name} has no picture input to put the reference in.`
+          : reference && !groups.some((g) => g.prompt?.positive_settable)
+            ? `${name} has no prompt PixlStash can write the sheet into.`
+            : "";
   } catch (e) {
     if (id !== workflowId.value) return;
     console.warn("Couldn't check the sheet workflow", id, e);
@@ -851,7 +1138,11 @@ async function tick() {
   try {
     await followRuns();
     if (order.value.length) {
-      const answer = await rankSheets(props.character.id, order.value);
+      // Drawn from a picture, the sheets are measured against that picture.
+      const answer = drawnFrom.value
+        ? await rankSheets(props.character.id, order.value, [drawnFrom.value])
+        : await rankSheets(props.character.id, order.value);
+      rankedAgainst.value = answer.references || 0;
       ranking.value = Object.fromEntries(
         answer.sheets.map((sheet) => [sheet.picture_id, sheet]),
       );
@@ -867,8 +1158,12 @@ async function tick() {
   if (runsEndedAt && Date.now() - runsEndedAt > SHEET_FACE_WAIT_MS) {
     gaveUpOnFaces.value = true;
   }
-  if (!keptTouched && !kept.value.length && holding.value.length) {
-    kept.value = [holding.value[0].picture_id];
+  // Drawn from a picture, only a sheet close to it is kept for the user.
+  const best = drawnFrom.value
+    ? holding.value.find((sheet) => sheet.close)
+    : holding.value[0];
+  if (!keptTouched && !kept.value.length && best) {
+    kept.value = [best.picture_id];
   }
   if (allEnded.value) {
     if (phase.value === "drawing") phase.value = "pick";
@@ -889,6 +1184,8 @@ async function draw() {
   const lora = chosenLora.value;
   const weight = strength.value;
   const count = form.count;
+  const reference = fromReference.value ? referenceId.value : null;
+  const inputs = workflowInputs.value;
   try {
     const description = form.description.trim();
     if (!savedDescription.value && description) {
@@ -905,12 +1202,16 @@ async function draw() {
       size: form.size,
       subject: form.subject,
       trigger: trigger.value,
+      // An edit model takes no layout: the sheet in one sentence, naming
+      // the person in the picture.
+      ...(reference ? { reference: true, layout: "prose" } : {}),
     });
     const drawing = JSON.stringify([
       sheet.prompt,
       workflow,
       lora?.sha256 || "",
       weight,
+      reference,
     ]);
     const answer = await runWorkflowCard({
       workflow_id: workflow,
@@ -930,6 +1231,15 @@ async function draw() {
             },
           ]
         : [],
+      ...(reference
+        ? {
+            inputs: inputs.map((input) => ({
+              slot_label: input.slot_label,
+              input_name: input.input_name,
+              picture_id: reference,
+            })),
+          }
+        : {}),
       count,
       // A sheet is six photos of one person: none of its faces is anybody's
       // until it is chosen and cut, so nothing here names the character.
@@ -949,6 +1259,7 @@ async function draw() {
       // The sheets on show are of another prompt: they stay in the Scrapheap.
       startOver();
       drawnWith = drawing;
+      drawnFrom.value = reference;
     }
     runs.value.push(
       ...started.map((p) => ({
@@ -976,6 +1287,30 @@ function startOver() {
   keptTouched = false;
   runsEndedAt = 0;
   drawnWith = "";
+  drawnFrom.value = null;
+  rankedAgainst.value = 0;
+}
+
+/** Store a copy of the library's Qwen edit workflow that draws at the sheet's
+ * size, and offer the mode it makes possible. */
+async function makeSheetWorkflow() {
+  if (working.value || !convertible.value) return;
+  working.value = true;
+  error.value = "";
+  try {
+    await sheetCopyWorkflow(convertible.value.id);
+    const { cards } = await listWorkflowCards();
+    if (!alive) return;
+    sortCards(cards);
+    // With no text workflow the new mode is the only one: go to it, as load() does.
+    if (!modeCards.value.length && referenceCards.value.length) {
+      mode.value = "reference";
+    }
+  } catch (e) {
+    error.value = `Couldn't make the sheet workflow. ${errorMessage(e, "Please try again.")}`;
+  } finally {
+    working.value = false;
+  }
 }
 
 async function use() {
@@ -1018,7 +1353,8 @@ const canDraw = computed(
     loaded.value &&
     !!workflowId.value &&
     workflowProblem.value === "" &&
-    !!form.description.trim() &&
+    // The picture says who; in words alone the description has to.
+    (fromReference.value ? !!referenceId.value : !!form.description.trim()) &&
     phase.value !== "filing",
 );
 
@@ -1113,6 +1449,27 @@ const footer = computed(() => {
   };
 });
 
+/** The cards each mode can draw with, most recently used first. */
+function sortCards(cards) {
+  const recent = (a, b) =>
+    String(b.last_used || "").localeCompare(String(a.last_used || ""));
+  const of = (card, family) =>
+    (card.models || []).some((m) => m.base_model_family === family);
+  workflows.value = cards
+    .filter((card) => card.type === "txt2img" && of(card, MOSS))
+    .sort(recent);
+  referenceCards.value = cards
+    .filter((card) => card.reference_inputs > 0 && of(card, QWEN))
+    .sort(recent);
+  // An edit workflow that draws on its picture's own canvas: a sheet copy of
+  // it is what the reference mode runs.
+  convertible.value = referenceCards.value.length
+    ? null
+    : cards
+        .filter((card) => card.type === "img2img" && of(card, QWEN))
+        .sort(recent)[0] || null;
+}
+
 async function load() {
   const id = props.character.id;
   const [character, adapters, cards, references] = await Promise.allSettled([
@@ -1131,28 +1488,28 @@ async function load() {
       String(b.added_at || "").localeCompare(String(a.added_at || "")),
     );
     // The newest LoRA that loads into the sheet workflow is preselected.
-    loraSha.value =
-      loras.value.find((lora) => lora.base_model_family === MOSS)?.sha256 || "";
+    loraSha.value = fittingLora();
   }
-  if (cards.status === "fulfilled") {
-    workflows.value = cards.value.cards
-      .filter(
-        (card) =>
-          card.type === "txt2img" &&
-          (card.models || []).some((m) => m.base_model_family === MOSS),
-      )
-      .sort((a, b) =>
-        String(b.last_used || "").localeCompare(String(a.last_used || "")),
-      );
-    workflowId.value = workflows.value[0]?.id || "";
-  }
-  workflowsLoaded.value = true;
   if (references.status === "fulfilled") {
     referenceIds.value = (references.value?.reference_picture_ids || []).slice(
       0,
       4,
     );
+    referenceId.value = referenceIds.value[0] ?? null;
   }
+  if (cards.status === "fulfilled") {
+    sortCards(cards.value.cards);
+    // A character with a face is drawn from it where a workflow can; one
+    // with no pictures, from words.
+    if (
+      referenceCards.value.length &&
+      (referenceIds.value.length || !workflows.value.length)
+    ) {
+      mode.value = "reference";
+    }
+    workflowId.value = modeCards.value[0]?.id || "";
+  }
+  workflowsLoaded.value = true;
   loaded.value = character.status === "fulfilled";
   if (!loaded.value) {
     error.value = `Couldn't read ${name.value}. Close and open the dialog to try again.`;
@@ -1171,7 +1528,8 @@ onBeforeUnmount(() => {
 });
 
 // While a sheet is zoomed the dialog does not take Escape; the zoom does.
-const zooming = computed(() => !!zoomed.value);
+// The picture picker is a dialog over this one, and takes Escape the same way.
+const zooming = computed(() => !!zoomed.value || pickerOpen.value);
 
 defineExpose({ footer, error, working, loraName, phase, zooming });
 </script>
@@ -1197,6 +1555,10 @@ defineExpose({ footer, error, working, loraName, phase, zooming });
   flex: 0 0 280px;
   gap: var(--space-4);
   border-left: 1px solid rgb(var(--v-theme-divider));
+}
+
+.cs-pane--wide {
+  flex-basis: 320px;
 }
 
 .cs-step-h {
@@ -1419,6 +1781,108 @@ defineExpose({ footer, error, working, loraName, phase, zooming });
   color: rgb(var(--v-theme-on-surface));
 }
 
+/* The reference picture, large: what the sheets are judged against. */
+.cs-cbig {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+}
+
+.cs-cstrip {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: var(--space-2);
+}
+
+.cs-reft {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-input-background));
+  cursor: pointer;
+}
+
+.cs-reft img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cs-reft--on {
+  box-shadow: 0 0 0 2px var(--active-bar);
+}
+
+.cs-reft--add {
+  display: grid;
+  place-items: center;
+  border: 1px dashed rgb(var(--v-theme-border));
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.cs-reft--add:hover {
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+/* A sheet's closeness: its name, a bar, the number, the words. */
+.cs-ccap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.cs-cline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.cs-cline b {
+  font-weight: var(--weight-medium);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+/* Data wears teal; a track is a pill. */
+.cs-meter {
+  flex: 1;
+  max-width: 160px;
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-surface), 0.12);
+  overflow: hidden;
+}
+
+.cs-meter span {
+  display: block;
+  height: 100%;
+  background: rgb(var(--v-theme-tertiary));
+}
+
+.cs-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+/* The reference beside a zoomed sheet, at a passport photo's size. */
+.cs-zoomref {
+  flex: 0 0 240px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  overflow-y: auto;
+}
+
 .cs-secl {
   margin: 0;
   font-size: var(--text-2xs);
@@ -1446,6 +1910,12 @@ defineExpose({ footer, error, working, loraName, phase, zooming });
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
+}
+
+.cs-link--start {
+  align-self: flex-start;
+  margin-left: 0;
+  text-align: left;
 }
 
 .cs-link {

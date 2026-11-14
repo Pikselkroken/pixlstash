@@ -44,6 +44,7 @@ const gen = vi.hoisted(() => ({
   listWorkflowCards: vi.fn(),
   preflightWorkflowRun: vi.fn(),
   runWorkflowCard: vi.fn(),
+  sheetCopyWorkflow: vi.fn(),
 }));
 vi.mock("../../api/characterSheets", () => ({
   buildSheetPrompt: gen.buildSheetPrompt,
@@ -62,9 +63,11 @@ vi.mock("../../api/workflows", () => ({
   listWorkflowCards: gen.listWorkflowCards,
   preflightWorkflowRun: gen.preflightWorkflowRun,
   runWorkflowCard: gen.runWorkflowCard,
+  sheetCopyWorkflow: gen.sheetCopyWorkflow,
 }));
 
 import CreateTrainingSetDialog from "./CreateTrainingSetDialog.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const TARGETS = {
   framing: {
@@ -211,52 +214,29 @@ describe("CreateTrainingSetDialog", () => {
     await slider.setValue("30");
     expect(shownIds(wrapper)).toHaveLength(9);
     expect(slider.element.value).toBe("9");
-    const notice = wrapper.find('[data-testid="cts-capped-stills"]').text();
+    const capped = wrapper.find('[data-testid="cts-capped-stills"]');
+    // Short in the heading; the switches that widen it are its tooltip.
+    expect(capped.text()).toBe("Only 9 pictures pass");
+    const notice = capped.findComponent(Tooltip).props("text");
     expect(notice).toContain("Only 9 pictures pass.");
     expect(notice).toContain("Keeping near-duplicates would let 14 more");
     expect(notice).toContain("no minimum score 6 more");
     wrapper.unmount();
   });
 
-  it("tells a gap the slider can close from one the library cannot", async () => {
+  it("says a label is short on its bar, with no line under the bars", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
     const wrapper = mountDialog();
     await flushPromises();
-    const closable = wrapper.findAll('[data-testid="cts-gap-closable"]');
-    expect(closable.map((g) => g.text())).toEqual([
-      expect.stringContaining("Closed eyes 1 short · at 18"),
-    ]);
-    // What the library has none of gets no line: its bar says so.
+    expect(wrapper.find('[data-testid="cts-bar-closed eyes"]').text()).toContain(
+      "1 short",
+    );
     const none = wrapper.find('[data-testid="cts-bar-full body"]');
     expect(none.text()).toContain("not in the library");
     expect(none.text()).toContain("none");
     expect(wrapper.findAll(".cts-bar__none")).toHaveLength(1);
     expect(wrapper.find('[data-testid="cts-coverage"]').text()).not.toContain(
-      "No full-body",
-    );
-
-    await button(wrapper, "Show 18").trigger("click");
-    expect(shownIds(wrapper)).toHaveLength(18);
-    expect(wrapper.findAll('[data-testid="cts-gap-closable"]')).toHaveLength(0);
-    wrapper.unmount();
-  });
-
-  it("offers a slider position only where the target there is met", async () => {
-    // Smiles at ranks 16 and 30 only: 2 at 30, but a set of 30 wants 4.
-    const group = stills(50);
-    group.picks.forEach((p, i) => {
-      p.buckets.expression = [i === 15 || i === 29 ? "smile" : "neutral"];
-    });
-    api.fetchCharacterSetSuggestion.mockResolvedValue(
-      suggestion({ stillsGroup: group }),
-    );
-    const wrapper = mountDialog();
-    await flushPromises();
-    const texts = (id) =>
-      wrapper.findAll(`[data-testid="${id}"]`).map((g) => g.text());
-    expect(texts("cts-gap-closable").join()).not.toContain("Smile");
-    expect(texts("cts-gap-outside")).toContainEqual(
-      expect.stringContaining("Smile: 9 in the pool, only 2 in the top 50"),
+      "short ·",
     );
     wrapper.unmount();
   });
@@ -311,7 +291,7 @@ describe("CreateTrainingSetDialog", () => {
     const floor = wrapper.find('[data-testid="cts-floor-min_score"]');
     // 23 stills are under the score floor; the count sits under its slider.
     expect(floor.text()).toContain("★ 3.0");
-    expect(floor.text()).toContain("23 set aside");
+    expect(floor.text()).toContain("23 excluded");
     const slider = wrapper.find('[data-testid="cts-slider-min_score"]');
     slider.element.value = "4.5";
     await slider.trigger("input");
@@ -478,7 +458,7 @@ describe("CreateTrainingSetDialog", () => {
     await slider.setValue("50");
     expect(slider.element.value).toBe("49");
     const notice = wrapper.find('[data-testid="cts-capped-stills"]').text();
-    expect(notice).toContain("Only 49 of the ranked pictures are left");
+    expect(notice).toBe("Only 49 left: put one back for more");
     expect(notice).not.toContain("pass.");
     wrapper.unmount();
   });
@@ -1184,6 +1164,252 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     );
     await wrapper.find('[data-testid="cts-generate-cancel"]').trigger("click");
     expect(wrapper.find('[data-testid="cts-picks"]').isVisible()).toBe(true);
+    wrapper.unmount();
+  });
+
+  // ── Drawn from a reference picture (#2679) ──
+
+  const QWEN_SHEET = {
+    id: "manual:qwen-sheet",
+    name: "Qwen edit (sheet)",
+    type: "img2img",
+    reference_inputs: 1,
+    models: [{ base_model_family: "qwen" }],
+  };
+  const QWEN_EDIT = {
+    id: "auto:qwen-edit",
+    name: "Qwen edit",
+    type: "img2img",
+    reference_inputs: 0,
+    models: [{ base_model_family: "qwen" }],
+  };
+
+  /** sheetsWorld plus reference faces and what the library's cards are. */
+  function referenceWorld({ cards = [MOSS_CARD, QWEN_SHEET], faces = [31, 32] } = {}) {
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.getReferencePictures.mockResolvedValue({ reference_picture_ids: faces });
+    gen.listWorkflowCards.mockResolvedValue({ cards });
+    // Its picture input is open until the draw fills it.
+    gen.preflightWorkflowRun.mockResolvedValue({
+      ok: false,
+      groups: [
+        {
+          reasons: [{ code: "picture_input_unfilled" }],
+          picture_inputs: [
+            { slot_label: "load", input_name: "image", mode: "picker" },
+            { slot_label: "pinned", input_name: "image", mode: "fixed" },
+          ],
+          prompt: { positive_settable: true },
+        },
+      ],
+    });
+    gen.runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: [{ run_id: "r1", status: "queued" }],
+    });
+    gen.getRunOutcome.mockResolvedValue({
+      status: "completed",
+      picture_ids: [501, 502],
+    });
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+  }
+
+  const mode = (wrapper) =>
+    wrapper.find('[data-testid="cs-mode"] [aria-checked="true"]');
+  const draw = (wrapper) =>
+    wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+
+  it("offers the reference mode only where a reference workflow exists", async () => {
+    // No such card: no control, and words alone draw.
+    referenceWorld({ cards: [MOSS_CARD] });
+    let wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cs-mode"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="cs-reference"]').exists()).toBe(false);
+    wrapper.unmount();
+
+    // A card, but a character with no pictures: offered, and text is chosen.
+    referenceWorld({ faces: [] });
+    wrapper = mountDialog();
+    await flushPromises();
+    expect(mode(wrapper).text()).toBe("Text");
+    expect(wrapper.find('[data-testid="cs-reference-warning"]').exists()).toBe(false);
+    wrapper.unmount();
+
+    // A card and a face: drawn from the first reference face, with the warning.
+    referenceWorld();
+    wrapper = mountDialog();
+    await flushPromises();
+    expect(mode(wrapper).text()).toBe("Reference and text");
+    expect(wrapper.find('[data-testid="cs-reference"]').attributes("src")).toBe(
+      "/thumb/31.webp",
+    );
+    expect(wrapper.find('[data-testid="cs-reference-warning"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="cs-likeness"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("feeds the reference through the run's inputs and ranks against it", async () => {
+    referenceWorld();
+    gen.rankSheets.mockResolvedValue({
+      sheets: [
+        // Both close; the first agrees with itself far better.
+        sheet(501, 0.95, { closeness: 0.5, close: true }),
+        sheet(502, 0.5, { closeness: 0.74, close: true }),
+      ],
+      references: 1,
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await draw(wrapper);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(gen.buildSheetPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ reference: true, layout: "prose" }),
+    );
+    const body = gen.runWorkflowCard.mock.calls[0][0];
+    expect(body.workflow_id).toBe("manual:qwen-sheet");
+    // The open input takes the picture; the pinned one keeps its pin.
+    expect(body.inputs).toEqual([
+      { slot_label: "load", input_name: "image", picture_id: 31 },
+    ]);
+    expect(body.hold).toBe(true);
+    expect(gen.rankSheets).toHaveBeenLastCalledWith(7, [501, 502], [31]);
+    // Closeness decides: the closer sheet is kept, though its faces agree less.
+    const sheets = wrapper.findAll('[data-testid="cs-sheet"]');
+    expect(sheets.map((b) => b.attributes("aria-pressed"))).toEqual(["false", "true"]);
+    expect(sheets[1].attributes("aria-label")).toBe(
+      "Sheet 2: 0.74 close to the reference · faces agree somewhat",
+    );
+    expect(wrapper.findAll('[data-testid="cs-closeness"]')[0].text()).toContain(
+      "0.50close to the reference",
+    );
+    // The picture stays in the rail beside the sheets.
+    expect(wrapper.find('[data-testid="cs-drawn-from"]').attributes("src")).toBe(
+      "/thumb/31.webp",
+    );
+    expect(wrapper.find('[data-testid="cs-none-close"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("keeps no sheet for the user when none comes close to the reference", async () => {
+    referenceWorld();
+    gen.rankSheets.mockResolvedValue({
+      sheets: [
+        sheet(501, 0.7, { closeness: 0.31, close: false }),
+        sheet(502, 0.6, { closeness: 0.4, close: false }),
+      ],
+      references: 1,
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await draw(wrapper);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(
+      wrapper.findAll('[data-testid="cs-sheet"]').map((b) => b.attributes("aria-pressed")),
+    ).toEqual(["false", "false"]);
+    expect(wrapper.find('[data-testid="cs-none-close"]').text()).toContain(
+      "None of the 2 sheets came close to the reference",
+    );
+    expect(wrapper.findAll('[data-testid="cs-closeness"]')[0].text()).toContain(
+      "drifts from the reference",
+    );
+    wrapper.unmount();
+  });
+
+  it("starts a new pick when the reference picture is changed", async () => {
+    referenceWorld();
+    gen.rankSheets.mockImplementation(async (_id, ids) => ({
+      sheets: ids.map((id) => sheet(id, 0.6, { closeness: 0.7, close: true })),
+      references: 1,
+    }));
+    const wrapper = mountDialog();
+    await flushPromises();
+    await draw(wrapper);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(wrapper.findAll('[data-testid="cs-sheet"]')).toHaveLength(2);
+
+    await button(wrapper, "Draw from another").trigger("click");
+    await wrapper.findAll('[data-testid="cs-reference-choice"]')[1].trigger("click");
+    gen.runWorkflowCard.mockResolvedValueOnce({
+      status: "success",
+      prompts: [{ run_id: "r2", status: "queued" }],
+    });
+    gen.getRunOutcome.mockResolvedValue({ status: "completed", picture_ids: [503] });
+    await draw(wrapper);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(gen.runWorkflowCard.mock.calls[1][0].inputs[0].picture_id).toBe(32);
+    expect(
+      wrapper.findAll('[data-testid="cs-sheet"] img').map((i) => i.attributes("src")),
+    ).toEqual(["/thumb/503.webp"]);
+    expect(gen.rankSheets).toHaveBeenLastCalledWith(7, [503], [32]);
+    wrapper.unmount();
+  });
+
+  it("refuses a reference workflow with nowhere to put the picture or the prompt", async () => {
+    referenceWorld();
+    gen.preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      groups: [{ reasons: [], picture_inputs: [], prompt: { positive_settable: true } }],
+    });
+    let wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cs-workflow-problem"]').text()).toContain(
+      "no picture input",
+    );
+    wrapper.unmount();
+
+    referenceWorld();
+    gen.preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      groups: [
+        {
+          reasons: [],
+          picture_inputs: [{ slot_label: "load", input_name: "image", mode: "picker" }],
+          prompt: { positive_settable: false },
+        },
+      ],
+    });
+    wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cs-workflow-problem"]').text()).toContain(
+      "no prompt",
+    );
+    expect(
+      wrapper.find('[data-testid="cts-generate-primary"]').attributes("disabled"),
+    ).toBeDefined();
+    wrapper.unmount();
+  });
+
+  it("makes a sheet workflow from the library's Qwen edit workflow", async () => {
+    referenceWorld({ cards: [MOSS_CARD, QWEN_EDIT] });
+    gen.sheetCopyWorkflow.mockResolvedValue({ workflow_id: QWEN_SHEET.id });
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cs-mode"]').exists()).toBe(false);
+    gen.listWorkflowCards.mockResolvedValue({
+      cards: [MOSS_CARD, QWEN_EDIT, QWEN_SHEET],
+    });
+    await button(wrapper, "Make a sheet workflow from Qwen edit").trigger("click");
+    await flushPromises();
+    expect(gen.sheetCopyWorkflow).toHaveBeenCalledWith("auto:qwen-edit");
+    // The mode is now offered; the one chosen does not change under the user.
+    expect(mode(wrapper).text()).toBe("Text");
+    expect(wrapper.find('[data-testid="cs-convert"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("goes to the reference mode when the sheet workflow is the only one", async () => {
+    referenceWorld({ cards: [QWEN_EDIT] });
+    gen.sheetCopyWorkflow.mockResolvedValue({ workflow_id: QWEN_SHEET.id });
+    const wrapper = mountDialog();
+    await flushPromises();
+    gen.listWorkflowCards.mockResolvedValue({ cards: [QWEN_EDIT, QWEN_SHEET] });
+    await button(wrapper, "Make a sheet workflow from Qwen edit").trigger("click");
+    await flushPromises();
+    expect(mode(wrapper).text()).toBe("Reference and text");
+    expect(gen.getWorkflowCard).toHaveBeenCalledWith(QWEN_SHEET.id);
     wrapper.unmount();
   });
 });

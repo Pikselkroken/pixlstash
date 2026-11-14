@@ -1608,16 +1608,16 @@ the row element to hand focus back to on close).
 
 - **One request per filter state.** `fetchCharacterSetSuggestion` on open and on
   every change under *Choosing*: two floor sliders (minimum likeness 0-100,
-  minimum score 1-5 in half steps, each with its count set aside; they refetch
+  minimum score 1-5 in half steps, each with its count excluded; they refetch
   on `change`: when the thumb is let go, or on each keyboard step; the track
   keeps its full scale and the thumb stops at the response's `limits`; the
   track is shaded from the response's `kept`, light where every picture
   remains and black where none does, under a translucent fill), a three-step
   `Segmented` each for framings and expressions, on one line with its hint
-  under it, and two *Set aside* switches side by side,
+  under it, and two *Exclude* switches side by side,
   on by default (on = those pictures stay out). The size sliders take a prefix
   of each group's `picks` and never refetch: Pictures runs 5-50 with the part
-  past what passes hatched, Video clips (shown only with `has_clips`) runs 1
+  past what passes greyed, Video clips (shown only with `has_clips`) runs 1
   to what passes. A tile's corner button leaves that pick out by hand
   (`removed`, kept across refetches, cleared on open): `data` is the response
   (`ranked`) without those picks, so the next pick takes the place and every
@@ -1630,11 +1630,10 @@ the row element to hand focus back to on close).
   picks, against `target = max(1, round(share * N))` from the response. Each
   bar has its own colour (`hueOf`: teal and olive for framing, raspberry and
   violet for expression, each deep and light), and a tile's chips wear the
-  colours of its bars; the sheet's 144px minimum tile width is what the longest
-  pair of chips needs. A short label gets one line under the bars: one the
-  slider can close (with a *Show N* that moves the slider) or one past the top
-  50. A label with `available` 0 gets no line: its bar is drawn empty and says
-  *not in the library*.
+  colours of its bars; the sheet is four tiles across at most, so a pick with
+  two expressions has room for its three chips. A short label says so on its
+  own bar (*N short*), and nothing is added under the bars. A label with
+  `available` 0 has its bar drawn empty, saying *not in the library*.
 - **Create** posts the set with `parent_character_id` and the character's
   projects, then bulk-adds the picks; if the add fails it deletes the empty set
   and says so. After it, *Train a LoRA on it* emits `train`, which App routes
@@ -1681,6 +1680,33 @@ the row element to hand focus back to on close).
   for their pictures' faces, then hands their ids back: the picker reloads, marks them
   *new*, and offers *All / New only*, which re-ranks the stills from 1 over the
   new pictures so the slider, coverage and Create all read that one list.
+- **Drawn from a reference picture** (#2679, backend §25.29; design
+  "Reference pinned beside the sheets"). Where the library has a
+  Qwen-Image-Edit card with `reference_inputs > 0`, the step's rail (320px
+  then, 280px otherwise) opens with a *Draw from* `Segmented`: *Text* /
+  *Reference and text*. Without such a card the control is not shown; if an
+  edit card exists that a sheet copy could be made from, the rail offers
+  *Make a sheet workflow from …* (`sheetCopyWorkflow`). The mode defaults to
+  the reference when the character has reference faces. In it the rail holds
+  the chosen picture large, the character's reference faces as a strip to
+  swap with one click, a dashed tile that opens `PicturePicker`, and the
+  likeness warning (the form's own likeness notice is not shown beside it).
+  The form does not change, but each mode has its own workflow list and its
+  own model, so the LoRA field offers that model's LoRAs, and a description
+  is required only in text mode. The workflow check also needs an open
+  picture input and a settable prompt from the pre-flight, and ignores
+  `picture_input_unfilled`, which the draw fills. *Draw* sends
+  `reference: true, layout: "prose"` to the prompt route and the picture as
+  `inputs` on the run, one entry per open picture input (a pinned one keeps
+  its pin); the reference joins what a draw is compared by, so another
+  picture starts a new pick. While sheets are on show the rail keeps the
+  picture they were drawn from under *Drawn from*, in place of the
+  description block; ranking sends it as `reference_picture_ids`; each
+  caption leads with closeness as a bar and its number; the zoom shows the
+  picture beside the sheet (`ZoomPopout`'s `aside` slot). Closeness sorts
+  first, then agreement, and only a sheet that is `close` is kept for the
+  user: when none is, none is ticked and a notice says so. Sheets still keep
+  their run's place in the grid.
 
 #### `TrainLoraDialog.vue` (`io/`, #2119)
 **Outcome choices, numbers derived** (design artifact "Outcome choices, numbers derived"). The Train a LoRA dialog, `AppDialog size="lg"`, mounted in **`App.vue`** and opened by `useTrainingStore.openForScope({type, id, name})` from the toolbar's Train button, its overflow row and the sidebar's *Train LoRA…*. It replaced the toolbar popover `TbTrainPanel`.
@@ -3888,7 +3914,8 @@ Compare do not dispatch this way.
 **`widgets/ZoomPopout.vue` — the family's pop-out frame.** A large panel over
 whatever opened it, for looking closely at one picture from a dialog or list:
 a `StackLayer` (so it clears a modal with no z-index), a bar with caption,
-optional prev/next, an `actions` slot, zoom −/readout/+ and fit ↔ 100%, and a
+optional prev/next, an `actions` slot, zoom −/readout/+ and fit ↔ 100%, an
+`aside` slot beside the stage for something to compare the picture with, and a
 dark stage on the transform transport with floor policy `rest`. It owns its
 keys (Escape closes only the pop-out, arrows step, `Z`, `+`/`-`) and stops them
 there. An `entry` wheel (`{deltaY, deltaMode, fx, fy}`, the cursor as a
