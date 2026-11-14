@@ -15,6 +15,8 @@ from pixlstash.db_models import Face, Picture
 from pixlstash.server import Server
 from pixlstash.event_types import EventType
 from pixlstash.services import character_sheet, comfyui_service, scrapheap_service
+from pixlstash.services.workflow_hash import reduce_api_graph
+from pixlstash.services.workflow_identity import reference_input_count
 from pixlstash.services.character_sheet import (
     SHEET_HEIGHT,
     SHEET_WIDTH,
@@ -130,6 +132,175 @@ def test_build_trigger_and_subject_reach_every_panel():
     )
     assert "same man" in layout["summary"]["caption"]
     assert " her " not in json.dumps(layout)
+
+
+def test_a_reference_prompt_names_the_picture_and_keeps_every_box():
+    """#2679: the picture sets the face, so each photo names it; the layout
+    the cut relies on does not move."""
+    plain = json.loads(sheet_prompt(description="Auburn hair", body="slim"))
+    drawn = json.loads(
+        sheet_prompt(description="Auburn hair", body="slim", reference=True)
+    )
+    assert [i["bbox"] for i in drawn["items"]] == [i["bbox"] for i in plain["items"]]
+    characters = [i for i in drawn["items"] if i["label"] == "character"]
+    assert len(characters) == 6
+    for item in characters:
+        assert (
+            "the same woman as in the reference picture, auburn hair, slim"
+            in item["caption"]
+        )
+    assert "reference picture" not in json.dumps(plain)
+    # No description: the picture alone says who.
+    bare = json.loads(sheet_prompt(description="", reference=True))
+    assert (
+        "the same woman as in the reference picture, average build"
+        in (bare["items"][0]["caption"])
+    )
+
+
+def test_a_prose_prompt_is_the_summary_sentence_not_the_layout():
+    layout = json.loads(sheet_prompt(description="x", reference=True))
+    prose = sheet_prompt(description="x", reference=True, layout="prose")
+    assert prose == layout["summary"]["caption"]
+    assert prose.startswith("Character reference sheet of one and the same woman")
+
+
+def _edit_graph(latent: str) -> dict:
+    """A Qwen-style edit graph: the picture feeds the encoder's reference and,
+    by *latent*, the canvas (``encode``), its size only (``sized``), or
+    nothing (``literal``)."""
+    graph = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "a.png"}},
+        "2": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"image1": ["1", 0], "prompt": "x"},
+        },
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "positive": ["2", 0],
+                "latent_image": ["4", 0],
+                "denoise": 0.8,
+            },
+        },
+        "5": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0]}},
+        "6": {"class_type": "SaveImage", "inputs": {"images": ["5", 0]}},
+    }
+    if latent == "encode":
+        graph["4"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["1", 0]}}
+    else:
+        graph["7"] = {"class_type": "GetImageSize", "inputs": {"image": ["1", 0]}}
+        sized = latent == "sized"
+        graph["4"] = {
+            "class_type": "EmptySD3LatentImage",
+            "inputs": {
+                "width": ["7", 0] if sized else 1024,
+                "height": ["7", 1] if sized else 1024,
+                "batch_size": 1,
+            },
+        }
+    return graph
+
+
+def _klein_graph() -> dict:
+    """The reference is encoded for ``ReferenceLatent``; the canvas is empty."""
+    return {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "a.png"}},
+        "2": {"class_type": "VAEEncode", "inputs": {"pixels": ["1", 0]}},
+        "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "x"}},
+        "4": {
+            "class_type": "ReferenceLatent",
+            "inputs": {"conditioning": ["3", 0], "latent": ["2", 0]},
+        },
+        "5": {
+            "class_type": "EmptyFlux2LatentImage",
+            "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
+        },
+        "6": {
+            "class_type": "KSampler",
+            "inputs": {"positive": ["4", 0], "latent_image": ["5", 0]},
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("graph", "count"),
+    [
+        # The canvas is empty and the picture is read: a reference.
+        (_edit_graph("literal"), 1),
+        # An empty latent sized from the picture still starts from nothing.
+        (_edit_graph("sized"), 1),
+        # Typed img2img for its VAEEncode, yet the sampler starts empty.
+        (_klein_graph(), 1),
+        # The sampler starts from the picture's own latent: not a reference.
+        (_edit_graph("encode"), 0),
+        # Text to image reads no picture.
+        (
+            {
+                "1": {"class_type": "EmptyLatentImage", "inputs": {}},
+                "2": {"class_type": "KSampler", "inputs": {"latent_image": ["1", 0]}},
+            },
+            0,
+        ),
+    ],
+)
+def test_reference_inputs_are_pictures_read_while_the_canvas_starts_empty(graph, count):
+    assert reference_input_count(reduce_api_graph(graph)) == count
+
+
+def test_a_second_pass_starting_from_the_first_keeps_the_reference():
+    """A hires pass's latent comes from the first sampler, whose conditioning
+    holds the reference: only its own latent is followed."""
+    graph = _klein_graph()
+    graph["7"] = {
+        "class_type": "KSampler",
+        "inputs": {"positive": ["4", 0], "latent_image": ["6", 0]},
+    }
+    assert reference_input_count(reduce_api_graph(graph)) == 1
+
+
+@pytest.mark.parametrize("latent", ["encode", "sized"])
+def test_converting_to_a_sheet_workflow_gives_the_canvas_a_size_of_its_own(latent):
+    graph = _edit_graph(latent)
+    before = json.dumps(graph)
+    sheet = character_sheet.convert_to_sheet(graph)
+    assert json.dumps(graph) == before
+    canvas = sheet[sheet["3"]["inputs"]["latent_image"][0]]
+    assert canvas["class_type"] == "EmptySD3LatentImage"
+    assert (canvas["inputs"]["width"], canvas["inputs"]["height"]) == (
+        SHEET_WIDTH,
+        SHEET_HEIGHT,
+    )
+    # The picture still reaches the reference input, and now nothing else.
+    assert sheet["2"]["inputs"]["image1"] == ["1", 0]
+    assert reference_input_count(reduce_api_graph(sheet)) == 1
+    if latent == "encode":
+        assert sheet["3"]["inputs"]["denoise"] == 1.0
+
+
+@pytest.mark.parametrize(
+    ("graph", "words"),
+    [
+        (_edit_graph("literal"), "already draws at a size of its own"),
+        (
+            {k: v for k, v in _edit_graph("literal").items() if k != "1"},
+            "reads no picture",
+        ),
+        # A picture's own latent with no Qwen edit encoder: no canvas class
+        # is known for it.
+        (
+            {
+                **_edit_graph("encode"),
+                "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "x"}},
+            },
+            "starts from VAEEncode",
+        ),
+    ],
+)
+def test_a_graph_that_cannot_draw_a_sheet_is_refused_with_its_reason(graph, words):
+    with pytest.raises(character_sheet.SheetConversionRefused) as refused:
+        character_sheet.convert_to_sheet(graph)
+    assert words in refused.value.reason
 
 
 def _sheet(lines=(), size=(SHEET_WIDTH, SHEET_HEIGHT)) -> Image.Image:
@@ -251,7 +422,7 @@ def test_ranking_measures_closeness_against_references_never_the_sheet_itself():
 
     vault = type("Vault", (), {"db": Db()})()
     sheets, references = character_sheet.rank_sheets(vault, 1, [5, 6, 7, 5])
-    assert seen["args"] == (1, [5, 6, 7])
+    assert seen["args"] == (1, [5, 6, 7], None)
     assert references == 1
     near, far, unread = sheets
     assert (near["close"], far["close"]) == (True, False)
@@ -331,6 +502,12 @@ def test_prompt_route_hands_out_the_canvas(client):
         json={"description": "x", "size": "small"},
     ).json()
     assert (small["width"], small["height"]) == (1280, 768)
+    prose = client.post(
+        f"{API_PREFIX}/character-sheets/prompt",
+        json={"description": "x", "reference": True, "layout": "prose"},
+    ).json()["prompt"]
+    assert "the same woman as in the reference picture, x" in prose
+    assert not prose.startswith("{")
 
 
 def test_using_a_sheet_files_six_panels_on_the_character(client, sheet_id):
@@ -533,3 +710,42 @@ def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
         f"{API_PREFIX}/characters/999999/sheets/rank", json={"picture_ids": [sheet_id]}
     )
     assert missing.status_code == 404
+
+    # #2679: drawn from a picture, the sheet is measured against that picture's
+    # faces, whoever's they are; an id with no faces counts for nothing.
+    reference_id = _upload_sheet(client, [(600, 0, 600, 1536)])
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        read = client.post(url, json={"picture_ids": [reference_id]})
+        if read.json()["sheets"][0]["faces_read"]:
+            break
+        time.sleep(0.5)
+
+    def add_reference(session):
+        session.add(
+            Face(picture_id=reference_id, face_index=100, features=person.tobytes())
+        )
+        session.commit()
+
+    client.server.vault.db.run_task(add_reference)
+    response = client.post(
+        url,
+        json={
+            "picture_ids": [sheet_id],
+            "reference_picture_ids": [reference_id, 999999],
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["references"] == 1
+    assert body["sheets"][0]["closeness"] > 0.8
+    assert body["sheets"][0]["close"] is True
+    # The sheet is never its own reference, named or not.
+    own = client.post(
+        url, json={"picture_ids": [sheet_id], "reference_picture_ids": [sheet_id]}
+    )
+    assert own.json()["references"] == 0
+    too_many = client.post(
+        url, json={"picture_ids": [sheet_id], "reference_picture_ids": [1, 2, 3, 4, 5]}
+    )
+    assert too_many.status_code == 422

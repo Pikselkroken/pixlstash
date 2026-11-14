@@ -1385,6 +1385,59 @@ def reduced_workflow_type(nodes: dict[str, ReducedNode]) -> Optional[str]:
     return None
 
 
+def reference_input_count(nodes: dict[str, ReducedNode]) -> int:
+    """How many pictures the graph reads as a reference rather than as its canvas.
+
+    Its picture loaders, when every sampler starts from an empty latent: the
+    picture is read (an edit model's reference input) and the canvas is not the
+    picture, so a run can draw at a size of its own. ``0`` for a graph whose
+    sampler starts from the picture's own latent, and for any type but
+    ``txt2img`` / ``img2img``. :func:`reduced_workflow_type` cannot say this:
+    an edit graph that encodes its reference for ``ReferenceLatent`` reads
+    ``img2img`` whatever its sampler starts from.
+    """
+    if reduced_workflow_type(nodes) not in ("txt2img", "img2img"):
+        return 0
+    starts = [
+        source
+        for node in nodes.values()
+        if _SAMPLER_CLASS_RE.search(node.class_type)
+        for name, source, _slot in node.inputs
+        if name == "latent_image"
+    ]
+    if not starts or not all(_starts_empty(source, nodes) for source in starts):
+        return 0
+    return sum(is_picture_loader(node.class_type) for node in nodes.values())
+
+
+def _starts_empty(node_id: str, nodes: dict[str, ReducedNode]) -> bool:
+    """Whether the latent *node_id* makes comes from an empty one and no picture.
+
+    An empty latent ends the walk, so one sized from the picture
+    (``GetImageSize``) still counts; a sampler is followed through its own
+    ``latent_image`` only, since its conditioning is where a reference goes.
+    """
+    seen, stack, empty = set(), [node_id], False
+    while stack:
+        current = stack.pop()
+        if current in seen or current not in nodes:
+            continue
+        seen.add(current)
+        node = nodes[current]
+        if is_picture_loader(node.class_type):
+            return False
+        if re.search(r"Empty.*Latent", node.class_type):
+            empty = True
+            continue
+        sampler = bool(_SAMPLER_CLASS_RE.search(node.class_type))
+        stack.extend(
+            source
+            for name, source, _slot in node.inputs
+            if not sampler or name == "latent_image"
+        )
+    return empty
+
+
 def _samples_only_seedvr2(nodes: dict[str, ReducedNode]) -> bool:
     """Whether SeedVR2 is the only model this graph samples with (#1939).
 
