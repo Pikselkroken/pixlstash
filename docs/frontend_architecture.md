@@ -1681,6 +1681,33 @@ the row element to hand focus back to on close).
   for their pictures' faces, then hands their ids back: the picker reloads, marks them
   *new*, and offers *All / New only*, which re-ranks the stills from 1 over the
   new pictures so the slider, coverage and Create all read that one list.
+- **Drawn from a reference picture** (#2679, backend §25.29; design
+  "Reference pinned beside the sheets"). Where the library has a
+  Qwen-Image-Edit card with `reference_inputs > 0`, the step's rail (320px
+  then, 280px otherwise) opens with a *Draw from* `Segmented`: *Text* /
+  *Reference and text*. Without such a card the control is not shown; if an
+  edit card exists that a sheet copy could be made from, the rail offers
+  *Make a sheet workflow from …* (`sheetCopyWorkflow`). The mode defaults to
+  the reference when the character has reference faces. In it the rail holds
+  the chosen picture large, the character's reference faces as a strip to
+  swap with one click, a dashed tile that opens `PicturePicker`, and the
+  likeness warning (the form's own likeness notice is not shown beside it).
+  The form does not change, but each mode has its own workflow list and its
+  own model, so the LoRA field offers that model's LoRAs, and a description
+  is required only in text mode. The workflow check also needs an open
+  picture input and a settable prompt from the pre-flight, and ignores
+  `picture_input_unfilled`, which the draw fills. *Draw* sends
+  `reference: true, layout: "prose"` to the prompt route and the picture as
+  `inputs` on the run, one entry per open picture input (a pinned one keeps
+  its pin); the reference joins what a draw is compared by, so another
+  picture starts a new pick. While sheets are on show the rail keeps the
+  picture they were drawn from under *Drawn from*, in place of the
+  description block; ranking sends it as `reference_picture_ids`; each
+  caption leads with closeness as a bar and its number; the zoom shows the
+  picture beside the sheet (`ZoomPopout`'s `aside` slot). Closeness sorts
+  first, then agreement, and only a sheet that is `close` is kept for the
+  user: when none is, none is ticked and a notice says so. Sheets still keep
+  their run's place in the grid.
 
 #### `TrainLoraDialog.vue` (`io/`, #2119)
 **Outcome choices, numbers derived** (design artifact "Outcome choices, numbers derived"). The Train a LoRA dialog, `AppDialog size="lg"`, mounted in **`App.vue`** and opened by `useTrainingStore.openForScope({type, id, name})` from the toolbar's Train button, its overflow row and the sidebar's *Train LoRA…*. It replaced the toolbar popover `TbTrainPanel`.
@@ -3888,7 +3915,8 @@ Compare do not dispatch this way.
 **`widgets/ZoomPopout.vue` — the family's pop-out frame.** A large panel over
 whatever opened it, for looking closely at one picture from a dialog or list:
 a `StackLayer` (so it clears a modal with no z-index), a bar with caption,
-optional prev/next, an `actions` slot, zoom −/readout/+ and fit ↔ 100%, and a
+optional prev/next, an `actions` slot, zoom −/readout/+ and fit ↔ 100%, an
+`aside` slot beside the stage for something to compare the picture with, and a
 dark stage on the transform transport with floor policy `rest`. It owns its
 keys (Escape closes only the pop-out, arrows step, `Z`, `+`/`-`) and stops them
 there. An `entry` wheel (`{deltaY, deltaMode, fx, fy}`, the cursor as a

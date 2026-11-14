@@ -399,6 +399,18 @@ export async function inpaintCopyWorkflow(workflowId) {
 }
 
 /**
+ * Store a copy of an image-edit workflow that draws on a canvas of its own
+ * size, its picture a reference only: what a character sheet drawn from a
+ * reference runs. A graph it cannot convert is a 422 whose detail says why.
+ *
+ * @param {string} workflowId
+ * @returns {Promise<{name: string, workflow_id: string}>}
+ */
+export async function sheetCopyWorkflow(workflowId) {
+  return unwrap(apiClient.post(wf(workflowId, "/sheet-copy")));
+}
+
+/**
  * What a workflow's model files could be changed to.
  *
  * Without `checkpointId`: the model files the card's graph names (each
