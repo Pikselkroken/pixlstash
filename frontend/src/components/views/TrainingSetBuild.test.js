@@ -1085,7 +1085,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
-  it("keeps each sheet in its run's place and shows the drawing one's progress", async () => {
+  it("keeps each sheet in its run's place: generating, displaying, queued", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
     );
@@ -1119,9 +1119,22 @@ describe("TrainingSetBuild: generating the pictures", () => {
     // The second run finishes first: its sheet takes the second place.
     done.r2 = 502;
     await vi.advanceTimersByTimeAsync(3000);
-    expect(places()).toEqual(["drawing", "/thumb/502.webp", "queued", "queued"]);
+    expect(places()).toEqual(["generating", "/thumb/502.webp", "queued", "queued"]);
     const bar = wrapper.find('[role="progressbar"]');
     expect(bar.attributes("aria-valuenow")).toBe("40");
+
+    // ComfyUI is done with r1 and PixlStash imports it: never "queued" again.
+    tasks.comfyuiRuns = [
+      { run_id: "r1", status: "running", percent: 100, generated: true },
+      { run_id: "r3", status: "queued", percent: 0 },
+    ];
+    await flushPromises();
+    expect(places()).toEqual(["displaying", "/thumb/502.webp", "queued", "queued"]);
+    expect(wrapper.find('[role="progressbar"]').exists()).toBe(false);
+    // Imported, gone from the runs in flight, its outcome not read yet.
+    tasks.comfyuiRuns = [{ run_id: "r3", status: "queued", percent: 0 }];
+    await flushPromises();
+    expect(places()).toEqual(["displaying", "/thumb/502.webp", "queued", "queued"]);
 
     done.r1 = 501;
     done.r4 = 504;

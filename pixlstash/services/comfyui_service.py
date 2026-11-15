@@ -488,12 +488,16 @@ def follow_run(
 def live_runs(library_uuid: str | None) -> list[dict]:
     """The runs in flight that were started in *library_uuid*, oldest first:
     ``run_id``, ``prompt_id`` (None while held), ``label``, ``workflow_id``,
-    ``status`` (``waiting`` for the GPU, ``queued`` or ``running``) and
-    ``percent``, the running node's own progress."""
+    ``status`` (``waiting`` for the GPU, ``queued`` or ``running``),
+    ``percent``, the running node's own progress, and ``generated``: ComfyUI
+    has finished the prompt and PixlStash is still importing what it made."""
     shown = ("run_id", "prompt_id", "label", "workflow_id", "status", "percent")
     with _run_outcomes_lock:
         return [
-            {key: run[key] for key in shown}
+            {
+                **{key: run[key] for key in shown},
+                "generated": bool(run.get("ended")),
+            }
             for run in _live_runs.values()
             if run["library_uuid"] in (None, library_uuid)
         ]

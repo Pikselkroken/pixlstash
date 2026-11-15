@@ -329,3 +329,35 @@ def test_cancel_runs_does_not_count_a_run_comfyui_refused(monkeypatch):
         with comfyui_service._run_outcomes_lock:
             for pid in codes:
                 comfyui_service._live_runs.pop(pid, None)
+
+
+def test_a_live_run_says_when_comfyui_has_finished_generating():
+    with comfyui_service._run_outcomes_lock:
+        comfyui_service._live_runs["p-gen"] = {
+            "run_id": "run-gen",
+            "prompt_id": "p-gen",
+            "label": "Character sheet",
+            "workflow_id": None,
+            "status": "queued",
+            "percent": 0.0,
+            "library_uuid": "lib-gen",
+            "base_url": "http://comfy.invalid",
+        }
+    try:
+        listed = lambda: comfyui_service.live_runs("lib-gen")[0]  # noqa: E731
+        assert listed()["generated"] is False
+        comfyui_service._note_run_message(
+            json.dumps(
+                {"type": "executing", "data": {"node": "3", "prompt_id": "p-gen"}}
+            )
+        )
+        assert (listed()["status"], listed()["generated"]) == ("running", False)
+        comfyui_service._note_run_message(
+            json.dumps(
+                {"type": "executing", "data": {"node": None, "prompt_id": "p-gen"}}
+            )
+        )
+        assert (listed()["status"], listed()["generated"]) == ("running", True)
+    finally:
+        with comfyui_service._run_outcomes_lock:
+            comfyui_service._live_runs.pop("p-gen", None)

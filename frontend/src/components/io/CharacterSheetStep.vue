@@ -968,15 +968,44 @@ const slots = computed(() => {
     }
     if (drawn.length) continue;
     const progress = live.get(run.key);
-    const drawing = !runEnded(run) && progress?.status === "running";
+    // ComfyUI drawing it; done there and being imported (or gone from the
+    // runs in flight once seen, until its outcome is read); not started.
+    const generating =
+      progress?.status === "running" && !progress.generated;
+    const displaying =
+      progress?.status === "running" ||
+      (!progress && seenLive.value.has(run.key));
     out.push({
       key: run.key,
-      label: runEnded(run) ? "didn't draw" : drawing ? "drawing" : "queued",
-      percent: drawing ? Math.round(Number(progress.percent) || 0) : null,
+      label: runEnded(run)
+        ? "didn't draw"
+        : generating
+          ? "generating"
+          : displaying
+            ? "displaying"
+            : "queued",
+      percent: generating ? Math.round(Number(progress.percent) || 0) : null,
     });
   }
   return out.map((slot, index) => ({ ...slot, n: index + 1 }));
 });
+
+// The runs the Tasks store has listed as in flight at least once: one gone
+// from that list since has finished on ComfyUI, not still waiting to start.
+const seenLive = ref(new Set());
+watch(
+  [() => tasks.comfyuiRuns, () => runs.value.length],
+  ([live]) => {
+    const listed = new Set(live.map((run) => runKey(run)));
+    const seen = runs.value.filter(
+      (run) => listed.has(run.key) && !seenLive.value.has(run.key),
+    );
+    if (seen.length) {
+      seenLive.value = new Set([...seenLive.value, ...seen.map((r) => r.key)]);
+    }
+  },
+  { immediate: true },
+);
 
 const sheetNumber = computed(
   () =>

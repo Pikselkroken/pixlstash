@@ -58,7 +58,8 @@
     "label": "Portrait, soft window light",
     "workflow_id": "auto:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "status": "running",
-    "percent": 40.0
+    "percent": 40.0,
+    "generated": false
   },
   "finished": {
     "id": "run-e2e-1",
