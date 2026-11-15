@@ -1,4 +1,6 @@
-"""Character sheets: one MOSS-Image or Krea 2 picture of one person, drawn six times.
+"""Character sheets: one picture of one person, drawn six times.
+
+Drawn by MOSS-Image, Krea 2, Qwen-Image or FLUX.2 Klein.
 
 The "Create a training set…" dialog can draw a character instead of picking
 from pictures that exist. A sheet is a 2560×1536 grid: four passport photos on
@@ -10,8 +12,9 @@ agree, which is why the person picks one sheet and its six panels become the
 character's pictures.
 
 A sheet can also be drawn from a reference picture plus the words (#2679):
-an edit workflow (Qwen-Image-Edit) reads the picture for the face and draws on
-an empty canvas of the sheet's size. No probe has measured that route yet.
+an edit workflow (Qwen-Image-Edit, or FLUX.2 Klein, #2700) reads the picture
+for the face and draws on an empty canvas of the sheet's size. No probe has
+measured that route yet.
 
 Four pure pieces live here, the routes in ``routes/character_sheets.py``:
 
@@ -294,7 +297,8 @@ def sheet_prompt(
 
     The MOSS layout prompt by default; with *layout* ``prose``, the same
     sheet as one plain sentence, for a model that takes no layout (Krea 2,
-    or an edit model drawing from a reference picture). With *reference*, every photo
+    Qwen-Image, FLUX.2 Klein, or an edit model drawing from a reference
+    picture). With *reference*, every photo
     names the person in the reference picture ahead of the description: the
     picture sets the face, the words the build and the clothes.
 
@@ -411,11 +415,13 @@ def convert_to_sheet(graph: dict) -> dict:
     """A copy of an image-edit API graph that draws on a canvas of its own.
 
     An edit workflow draws at its picture's size: the sampler starts from an
-    empty latent sized from the picture, or from the picture's own latent. A
-    sheet is drawn from a reference picture at the sheet's size, so the copy's
-    sampler starts from an empty latent with a literal ``width`` and
-    ``height`` (the large sheet's; a run sets its own), and the picture
-    reaches the reference input only. *graph* is not modified.
+    empty latent sized from the picture, from the picture's own latent, or
+    from a switch between the two (Qwen-Image 2.1). A sheet is drawn from a
+    reference picture at the sheet's size, so the copy's sampler starts from
+    an empty latent with a literal ``width`` and ``height`` (the large
+    sheet's; a run sets its own), anything else sized from the picture takes
+    the same size, and the picture reaches the reference input only. The copy
+    saves with ``SaveImage``. *graph* is not modified.
 
     Raises:
         SheetConversionRefused: No picture is read, there is not exactly one
@@ -448,15 +454,48 @@ def convert_to_sheet(graph: dict) -> dict:
     inputs = samplers[0]["inputs"]
     source = nodes.get(str(inputs["latent_image"][0])) or {}
     source_class = source.get("class_type", "")
+    switched = False
+    if "Switch" in source_class:
+        # A switch between the picture's own latent and an empty canvas
+        # (Qwen-Image 2.1's template): the copy takes the canvas.
+        canvas = next(
+            (
+                value
+                for value in (source.get("inputs") or {}).values()
+                if is_link(value)
+                and re.search(
+                    r"Empty.*Latent",
+                    (nodes.get(str(value[0])) or {}).get("class_type", ""),
+                )
+            ),
+            None,
+        )
+        if canvas is not None:
+            inputs["latent_image"] = list(canvas)
+            source = nodes[str(canvas[0])]
+            source_class = source["class_type"]
+            switched = True
     width, height = SIZES["large"]
     if re.search(r"Empty.*Latent", source_class):
         size = source.setdefault("inputs", {})
-        if not is_link(size.get("width")) and not is_link(size.get("height")):
+        linked = {
+            name: size.get(name)
+            for name in ("width", "height")
+            if is_link(size.get(name))
+        }
+        if not linked and not switched:
             raise SheetConversionRefused(
                 "This workflow already draws at a size of its own, so it can "
                 "draw a sheet as it is."
             )
         size["width"], size["height"] = width, height
+        # Whatever else was sized from the picture (FLUX.2's scheduler, which
+        # shifts its sigmas by the canvas's area) follows the canvas.
+        for node in nodes.values():
+            node_inputs = node.get("inputs") or {}
+            for name, link in linked.items():
+                if node_inputs.get(name) == link:
+                    node_inputs[name] = size[name]
     elif source_class == "VAEEncode" and any(
         cls.startswith("TextEncodeQwenImageEdit") for cls in classes
     ):
@@ -478,6 +517,7 @@ def convert_to_sheet(graph: dict) -> dict:
     # A picture's latent can be drawn over in part; an empty canvas cannot.
     if "denoise" in inputs and not is_link(inputs["denoise"]):
         inputs["denoise"] = 1.0
+    _save_with_save_image(nodes)
     # A picture that only poses a ControlNet, or reaches nothing, is no
     # reference: the copy would draw a sheet from words alone.
     try:
@@ -491,6 +531,31 @@ def convert_to_sheet(graph: dict) -> dict:
             "input, so a sheet would be drawn from words alone."
         )
     return out
+
+
+def _save_with_save_image(nodes: dict) -> None:
+    """Swap each ``SaveImageAdvanced`` in *nodes* for a ``SaveImage``.
+
+    PixlStash collects a run's pictures from the savers it knows, and the
+    advanced one is not among them (it can write EXR or AVIF too). A sheet is
+    a PNG either way. The advanced saver hands its picture on; whatever read
+    that reads the decoded picture instead.
+    """
+    for node_id, node in nodes.items():
+        if node["class_type"] != "SaveImageAdvanced":
+            continue
+        old = node.get("inputs") or {}
+        images = old.get("images")
+        node["class_type"] = "SaveImage"
+        node["inputs"] = {
+            "images": images,
+            "filename_prefix": old.get("filename_prefix", "ComfyUI"),
+        }
+        for other in nodes.values():
+            other_inputs = other.get("inputs") or {}
+            for name, value in other_inputs.items():
+                if is_link(value) and str(value[0]) == str(node_id):
+                    other_inputs[name] = images
 
 
 def _strongest_cut(

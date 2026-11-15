@@ -1715,8 +1715,11 @@ Escape and Enter do nothing here: cancelling deletes a set.
   description when it opens. The step reads the
   character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
   model is listed disabled, the newest MOSS-Image one preselected, and its name
-  rides in the step row as a neutral pill) and the MOSS-Image or Krea 2 `txt2img`
-  workflows; *Draw* saves the typed description on a character that had none,
+  rides in the step row as a neutral pill) and the MOSS-Image, Krea 2,
+  Qwen-Image or FLUX.2 Klein `txt2img` workflows with no reference input
+  (`cardEngine`: the diffusion model's family, #2700), after asking for the
+  four shipped sheet workflows' cards (`SHEET_BUILT_INS` through
+  `cardForWorkflow`; one that fails is logged and left out); *Draw* saves the typed description on a character that had none,
   then runs the workflow (`runWorkflowCard`, the canvas as `values` at the
   card's own width/height addresses) and polls each run's outcome and
   `POST /characters/{id}/sheets/rank` every 2.5 s until every sheet's faces are
@@ -1751,17 +1754,26 @@ Escape and Enter do nothing here: cancelling deletes a set.
   new pictures so the slider, coverage and Create all read that one list.
 - **Drawn from a reference picture** (#2679, backend §25.29; design
   "Reference pinned beside the sheets"). Where the library has a
-  Qwen-Image-Edit card with `reference_inputs > 0`, the step's rail (320px
+  Qwen-Image-Edit or FLUX.2 Klein card with `reference_inputs > 0` (#2700;
+  `referenceEngine` reads the card's diffusion model, `unet` or `checkpoint`,
+  never its text encoder or VAE: Krea 2 and MOSS-Image load a Qwen encoder,
+  and matching on that is how Krea 2's style reference got listed), the
+  step's rail (320px
   then, 280px otherwise) opens with a *Draw from* `Segmented`: *Text* /
   *Reference and text*. Without such a card the control is not shown; if an
   edit card exists that a sheet copy could be made from, the rail offers
-  *Make a sheet workflow from …* (`sheetCopyWorkflow`). The mode defaults to
+  *Make a sheet workflow from …* (`sheetCopyWorkflow`). While no reference
+  card passes its pre-flight and one fails only for want of a size of its own
+  (an edit workflow drawing at its picture's size, `sizeless`), the problem
+  notice offers *Make a sheet copy that can* for it (#2700). The mode defaults to
   the reference when the character has reference faces. In it the rail holds
   the chosen picture large, the character's reference faces as a strip to
   swap with one click, a dashed tile that opens `PicturePicker`, and the
   likeness warning (the form's own likeness notice is not shown beside it).
-  The form does not change, but each mode has its own workflow list and its
-  own model, so the LoRA field offers that model's LoRAs, and a description
+  The form does not change, but each mode has its own workflow list, and each
+  model its own LoRAs (`ENGINES[…].fits`: a Klein workflow takes only LoRAs
+  the shelf files as FLUX.2 Klein, not FLUX.2 dev's), so the LoRA field
+  follows the chosen workflow's model, and a description
   is required only in text mode. The workflow check also needs an open
   picture input and a settable prompt from the pre-flight, and ignores
   `picture_input_unfilled`, which the draw fills. *Draw* sends
