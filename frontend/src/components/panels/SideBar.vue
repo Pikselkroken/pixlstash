@@ -284,6 +284,7 @@ const emit = defineEmits([
   "select-set",
   "train-lora",
   "create-training-set",
+  "character-sheets",
   "face-clusters",
   "import-finished",
   "set-error",
@@ -6695,6 +6696,23 @@ defineExpose({
         >
           <v-icon class="ctx-icon">mdi-face-recognition</v-icon>
           <span class="ctx-label-text">Faces and reference cluster…</span>
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly"
+          data-testid="ctx-character-sheets"
+          @click="
+            emit('character-sheets', {
+              id: sidebarCtxCharacter.id,
+              name: sidebarCtxCharacter.name,
+              image_count: sidebarCtxCharacter.image_count,
+              returnFocusTo: sidebarCtxCharacterEl,
+            });
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon class="ctx-icon">mdi-draw</v-icon>
+          <span class="ctx-label-text">Generate character sheets…</span>
         </button>
         <button
           class="ctx-item"

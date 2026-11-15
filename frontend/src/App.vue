@@ -79,6 +79,7 @@ import ConfirmDialog from "./components/widgets/ConfirmDialog.vue";
 import ModelDropFolderDialog from "./components/dialogs/ModelDropFolderDialog.vue";
 import TrainLoraDialog from "./components/io/TrainLoraDialog.vue";
 import TrainingSetBuild from "./components/views/TrainingSetBuild.vue";
+import CharacterSheetsDialog from "./components/io/CharacterSheetsDialog.vue";
 import FaceClustersDialog from "./components/io/FaceClustersDialog.vue";
 import LibrarySwitchOverlay from "./components/settings/LibrarySwitchOverlay.vue";
 import Tooltip from "./components/widgets/Tooltip.vue";
@@ -579,6 +580,23 @@ async function handleTrainLora(scope) {
 // SideBar context-menu "Faces and reference cluster…".
 const faceClustersCharacter = ref(null);
 
+// SideBar context-menu "Generate character sheets…".
+const sheetsCharacter = ref(null);
+
+function onSheetsCut({ character, pictureIds }) {
+  const n = pictureIds.length;
+  noticeStore.push({
+    level: "success",
+    text: `Added ${n} ${n === 1 ? "picture" : "pictures"} to ${character.name}.`,
+    action: {
+      label: "Show them",
+      handler: () =>
+        handleSelectCharacter({ id: character.id, label: character.name }),
+    },
+    key: `character-sheets-cut-${character.id}`,
+  });
+}
+
 /**
  * SideBar context-menu "Create a training set…": makes the set at once, under
  * the character and marked as being built, and opens it. Its screen
@@ -1062,6 +1080,7 @@ defineExpose({
             @open-tag-review="reviewSessionsStore.overlayOpen = true"
             @train-lora="handleTrainLora"
             @create-training-set="handleCreateTrainingSet"
+            @character-sheets="sheetsCharacter = $event"
             @face-clusters="faceClustersCharacter = $event"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMoved"
@@ -1331,6 +1350,13 @@ defineExpose({
     <ConfirmDialog />
     <ModelDropFolderDialog />
     <TrainLoraDialog />
+    <CharacterSheetsDialog
+      :open="!!sheetsCharacter"
+      :character="sheetsCharacter"
+      :return-focus-to="sheetsCharacter?.returnFocusTo ?? null"
+      @close="sheetsCharacter = null"
+      @done="onSheetsCut"
+    />
     <FaceClustersDialog
       :open="!!faceClustersCharacter"
       :character="faceClustersCharacter"
