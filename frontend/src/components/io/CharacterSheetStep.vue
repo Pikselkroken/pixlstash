@@ -2149,7 +2149,7 @@ defineExpose({
 .cs-sheetimg img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
 }
 
@@ -2245,13 +2245,16 @@ defineExpose({
   color: rgb(var(--v-theme-on-surface));
 }
 
-/* The reference picture, large: what the sheets are judged against. */
+/* The reference picture, large: what the sheets are judged against. Every
+   picture here is letterboxed on its tile's surface, as in the picture
+   picker: a crop cuts a full-body reference down to its torso. */
 .cs-cbig {
   display: block;
   width: 100%;
   aspect-ratio: 4 / 5;
-  object-fit: cover;
+  object-fit: contain;
   border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-input-background));
 }
 
 .cs-cstrip {
@@ -2275,7 +2278,7 @@ defineExpose({
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .cs-reft--on {
@@ -2475,8 +2478,9 @@ defineExpose({
 .cs-rail__sheet {
   width: 100%;
   aspect-ratio: 5 / 3;
-  object-fit: cover;
+  object-fit: contain;
   border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-input-background));
 }
 
 .cs-faces {
@@ -2488,8 +2492,9 @@ defineExpose({
 .cs-faces img {
   width: 100%;
   aspect-ratio: 1 / 1;
-  object-fit: cover;
+  object-fit: contain;
   border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-input-background));
 }
 
 .cs-gapbox {
