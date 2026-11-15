@@ -1,4 +1,4 @@
-"""Character sheets: one MOSS-Image picture of one person, drawn six times.
+"""Character sheets: one MOSS-Image or Krea 2 picture of one person, drawn six times.
 
 The "Create a training set…" dialog can draw a character instead of picking
 from pictures that exist. A sheet is a 2560×1536 grid: four passport photos on

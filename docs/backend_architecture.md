@@ -12853,7 +12853,7 @@ the count the server added. Owner-only
 
 "Create a training set…" can draw the pictures instead of picking them, for a
 character with none or with too few. A **character sheet** is one MOSS-Image
-picture at 5:3: four passport photos on the left half (front neutral,
+(or Krea 2) picture at 5:3: four passport photos on the left half (front neutral,
 three-quarter smiling, profile neutral, other three-quarter laughing) and two
 tall body photos on the right at a framing the user picks (waist-up,
 mid-thigh, knees-up or full body). The canvas is one of three sizes
