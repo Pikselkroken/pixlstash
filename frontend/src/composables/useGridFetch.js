@@ -230,6 +230,7 @@ export function useGridFetch(
       workflowFilter: new URLSearchParams(
         workflowFilterParams(filterStore.workflowFilter),
       ).toString(),
+      faceClusterFilter: filterStore.faceClusterFilter,
       referenceFolderIdFilter: referenceFolderIdFilter.value ?? null,
       filePathPrefixFilter: filePathPrefixFilter.value ?? null,
       importSourceFolderFilter: importSourceFolderFilter.value ?? null,
@@ -282,7 +283,19 @@ export function useGridFetch(
     }
   }
 
-  function _appendSelectionParams(params, { unassignedOnly = true } = {}) {
+  // The Likeness filter's cluster: only in one person's view, which is the
+  // only view whose clusters it numbers.
+  function _appendFaceClusterParams(params) {
+    const pick = filterStore.faceClusterFilter;
+    if (!pick) return;
+    params.set("face_cluster", String(pick.cluster));
+    params.set("face_cluster_threshold", String(pick.threshold));
+  }
+
+  function _appendSelectionParams(
+    params,
+    { unassignedOnly = true, faceCluster = true } = {},
+  ) {
     if (hasSetSelection.value) {
       if (isSetOverlapView.value) {
         for (const setId of normalizedSelectedSetIds.value) {
@@ -355,6 +368,7 @@ export function useGridFetch(
         params.append("only_deleted", "true");
       } else {
         params.append("character_id", selectionStore.selectedCharacter);
+        if (faceCluster) _appendFaceClusterParams(params);
         if (projectStore.projectViewMode === "project") {
           params.append(
             "project_id",
@@ -528,7 +542,7 @@ export function useGridFetch(
   function buildFilterCountBaseQuery() {
     if (searchStore.searchQuery && searchStore.searchQuery.trim()) return null;
     const params = new URLSearchParams();
-    _appendSelectionParams(params, { unassignedOnly: false });
+    _appendSelectionParams(params, { unassignedOnly: false, faceCluster: false });
     params.append("stack_leaders_only", "true");
     // Character likeness changes the row set, so the count needs the sort.
     if (
@@ -1071,6 +1085,7 @@ export function useGridFetch(
           _selChar !== ALL_PICTURES_ID
         ) {
           _charP.set("character_id", String(_selChar));
+          _appendFaceClusterParams(_charP);
           if (projectStore.projectViewMode === "project") {
             _charP.set(
               "project_id",

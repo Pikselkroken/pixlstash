@@ -1149,6 +1149,91 @@ def test_likeness_search_by_set_survives_mixed_embedding_widths(set_env):
     assert ids["odd"] not in returned
 
 
+def test_face_cluster_filter_lists_the_cluster_views_clusters(set_env):
+    """``face_cluster=N`` narrows a person's grid to the cluster view's
+    "Cluster N", in the view's order (reference first), on both the plain and
+    the likeness-sorted path, and the count agrees."""
+    client, server, ids, _sets = set_env
+    resp = client.post(f"{API_PREFIX}/characters", json={"name": "Ida"})
+    assert resp.status_code == 200, resp.text
+    ida = resp.json()["character"]["id"]
+    big = ["m1", "m2", "m3"]
+    small = ["near", "far"]
+    vectors = {
+        "m1": [1, 0, 0, 0, 0, 0, 0, 0],
+        "m2": [0.95, 0.3, 0, 0, 0, 0, 0, 0],
+        "m3": [0.95, -0.3, 0, 0, 0, 0, 0, 0],
+        "near": [0, 0, 0, 1, 0, 0, 0, 0],
+        "far": [0, 0, 0, 0.95, 0.3, 0, 0, 0],
+        "bare": [0, 0, 0, 0, 0, 0, 1, 0],  # matches no one: unclustered
+    }
+    face_ids = [
+        _add_face_with_features(server, ids[k], ida, _unit(v))
+        for k, v in vectors.items()
+    ]
+    try:
+
+        def listed(**params):
+            resp = client.get(
+                f"{API_PREFIX}/pictures",
+                params={"character_id": ida, "fields": "id", **params},
+            )
+            assert resp.status_code == 200, resp.text
+            return sorted(row["id"] for row in resp.json())
+
+        def view_clusters():
+            resp = client.get(f"{API_PREFIX}/face-clusters?character_id={ida}")
+            assert resp.status_code == 200, resp.text
+            return [
+                sorted(m["picture_id"] for m in c["members"])
+                for c in resp.json()["clusters"]
+            ]
+
+        assert view_clusters() == [
+            sorted(ids[k] for k in big),
+            sorted(ids[k] for k in small),
+        ]
+        assert listed(face_cluster=1) == sorted(ids[k] for k in big)
+        assert listed(face_cluster=2) == sorted(ids[k] for k in small)
+        assert listed(face_cluster=3) == []
+        assert ids["bare"] in listed()
+
+        # Picking the small cluster as the reference moves it to Cluster 1.
+        resp = client.put(
+            f"{API_PREFIX}/characters/{ida}/reference-cluster",
+            json={"picture_ids": [ids[k] for k in small]},
+        )
+        assert resp.status_code == 200, resp.text
+        assert view_clusters()[0] == listed(face_cluster=1)
+        assert listed(face_cluster=1) == sorted(ids[k] for k in small)
+
+        # The likeness sort reads no ``id`` list; it narrows all the same.
+        likeness = {
+            "sort": "CHARACTER_LIKENESS",
+            "reference_character_id": ida,
+            "face_cluster": 2,
+        }
+        assert listed(**likeness) == sorted(ids[k] for k in big)
+        resp = client.get(
+            f"{API_PREFIX}/pictures/count",
+            params={"character_id": ida, "face_cluster": 2},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["count"] == len(big)
+
+        # A cluster belongs to one person.
+        resp = client.get(f"{API_PREFIX}/pictures", params={"face_cluster": 1})
+        assert resp.status_code == 422, resp.text
+    finally:
+
+        def _drop(session):
+            for face_id in face_ids:
+                session.delete(session.get(Face, face_id))
+            session.commit()
+
+        server.vault.db.run_task(_drop)
+
+
 def _on_event_loop() -> bool:
     """Whether the calling thread is running an asyncio event loop."""
     try:

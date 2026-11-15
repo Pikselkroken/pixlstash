@@ -7497,6 +7497,7 @@ watch(
     // remounts this component (it is `v-else` in `App.vue`) and a remount
     // fetches anyway. Removal has no such accident behind it.
     () => filterStore.workflowFilter,
+    () => filterStore.faceClusterFilter,
   ],
   () => {
     _resetGridState();

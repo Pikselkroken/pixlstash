@@ -84,12 +84,6 @@ class ReferenceCluster(BaseModel):
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
-    def model_pack():
-        engine = getattr(server.vault, "_engine", None)
-        return getattr(engine, "insightface_model_pack", None) or getattr(
-            server.vault, "_insightface_model_pack", None
-        )
-
     @router.get(
         "/face-clusters",
         summary="Group a person's faces by identity",
@@ -113,7 +107,9 @@ def create_router(server) -> APIRouter:
             description="The mean likeness two groups need to count as one person.",
         ),
     ):
-        found = face_clusters.read_person(server.vault, character_id, model_pack())
+        found = face_clusters.read_person(
+            server.vault, character_id, face_clusters.model_pack_of(server.vault)
+        )
         if found is None:
             raise HTTPException(status_code=404, detail=f"No character {character_id}.")
         faces, reference = found
@@ -121,15 +117,7 @@ def create_router(server) -> APIRouter:
         clusters, unclustered = face_clusters.cluster_faces(
             [(face.picture_id, face.vector) for face in faces], threshold
         )
-        chosen = set(reference)
-        shares = [
-            sum(pid in chosen for pid, _ in c.members) / len(c.members)
-            for c in clusters
-        ]
-        best = max(range(len(clusters)), key=lambda i: shares[i], default=None)
-        if best is not None and shares[best] == 0:
-            best = None
-        order = sorted(range(len(clusters)), key=lambda i: i != best)
+        order, best, shares = face_clusters.reference_first(clusters, reference)
         in_reference = [by_id[pid].vector for pid in reference if pid in by_id]
         if in_reference:
             target = face_clusters.centroid(in_reference)

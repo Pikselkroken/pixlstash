@@ -1,7 +1,8 @@
-import { ref, onScopeDispose } from "vue";
+import { ref, onScopeDispose, watch } from "vue";
 import { defineStore } from "pinia";
 
 import { onSessionReset } from "../utils/apiClient";
+import { useSelectionStore } from "./useSelectionStore";
 
 export const useFilterStore = defineStore("filter", () => {
   const mediaTypeFilter = ref("all"); // 'all' | 'images' | 'videos'
@@ -67,6 +68,20 @@ export const useFilterStore = defineStore("filter", () => {
   // Workflow chip's × clears that too. The names are carried because the chips
   // have to say which, and the grid holds no workflow cards to look them up in.
   const workflowFilter = ref([]);
+  // "Likeness" (one person's view): the cluster view's "Cluster N" at a
+  // strictness, `{cluster, threshold, label}` (`face_cluster` /
+  // `face_cluster_threshold`), or null. The numbers are that person's, so
+  // leaving the person drops it.
+  const faceClusterFilter = ref(null);
+  const selection = useSelectionStore();
+  watch(
+    () => selection.selectedCharacter,
+    () => {
+      faceClusterFilter.value = null;
+    },
+    // At the change itself, so a pick made right after it survives.
+    { flush: "sync" },
+  );
 
   function resetFilters() {
     mediaTypeFilter.value = "all";
@@ -90,6 +105,7 @@ export const useFilterStore = defineStore("filter", () => {
     impossibleSources.value = [];
     stackStateFilter.value = "all";
     workflowFilter.value = [];
+    faceClusterFilter.value = null;
   }
 
   return {
@@ -117,6 +133,7 @@ export const useFilterStore = defineStore("filter", () => {
     impossibleSources,
     stackStateFilter,
     workflowFilter,
+    faceClusterFilter,
     resetFilters,
   };
 });

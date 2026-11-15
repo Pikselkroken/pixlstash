@@ -5,6 +5,7 @@ import pytest
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from pixlstash.db_models import Character, Face, Picture
+from pixlstash.services import face_clusters
 from pixlstash.services.face_clusters import (
     NotThePersonsFace,
     centrality,
@@ -145,3 +146,21 @@ def test_a_face_without_an_embedding_does_not_carry_the_person():
             for f in reference_cluster_faces(session, person.id, 10)
         }
         assert chosen == {both: 1, plain: 0}
+
+
+def test_person_clusters_are_recomputed_when_a_face_changes(monkeypatch):
+    """The grid filter's cache never answers for faces it was not built from."""
+    a, b = _person(), _person()
+    faces = [
+        face_clusters.PersonFace(pid, vec, None, None)
+        for pid, vec in _faces_of(a, [1, 2, 3], 0.1) + _faces_of(b, [4, 5], 0.1)
+    ]
+    monkeypatch.setattr(face_clusters, "read_person", lambda *_: (faces, []))
+    clusters = face_clusters.person_cluster_ids(None, 99)
+    assert [sorted(c) for c in clusters] == [[1, 2, 3], [4, 5]]
+    # Picture 3's face is re-read as the other person's.
+    faces[2] = face_clusters.PersonFace(
+        3, b + RNG.standard_normal(DIM) * 0.1, None, None
+    )
+    clusters = face_clusters.person_cluster_ids(None, 99)
+    assert [sorted(c) for c in clusters] == [[3, 4, 5], [1, 2]]

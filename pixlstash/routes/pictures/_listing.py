@@ -31,6 +31,7 @@ from pixlstash.db_models import (
 from pixlstash.db_models.guest_score import GuestScore
 from pixlstash.db_models.user_token import UserToken
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services import face_clusters
 from pixlstash.scoring import (
     count_pictures_by_character_likeness,
     find_pictures_by_character_likeness_sql,
@@ -413,6 +414,21 @@ class PictureListFilters:
         id: list[str] = Query(
             default=[], description="Restrict to specific picture ids (repeatable)."
         ),
+        face_cluster: int | None = Query(
+            None,
+            ge=1,
+            description=(
+                "With one character_id: only the person's 'Cluster N', "
+                "numbered as `GET /face-clusters` lists them (reference "
+                "cluster first, then largest first). Recomputed per request."
+            ),
+        ),
+        face_cluster_threshold: float | None = Query(
+            None,
+            ge=0.05,
+            le=0.95,
+            description="The face_cluster strictness, as `/face-clusters` takes it.",
+        ),
     ):
         # Values are intentionally not stored: the handlers read them from
         # request.query_params. This dependency exists purely to document and
@@ -557,6 +573,37 @@ def _variants_run_by(server, workflow_id: str) -> list[str]:
             ).all()
         )
     )
+
+
+def _face_cluster_ids(server, character_id, cluster_raw, threshold_raw):
+    """The picture ids of the person's "Cluster N", or ``None`` with no
+    ``face_cluster`` param. A cluster past the last is an empty set."""
+    if cluster_raw is None:
+        return None
+    if not isinstance(character_id, int):
+        raise HTTPException(
+            status_code=422, detail="face_cluster needs one person's character_id"
+        )
+    try:
+        number = int(cluster_raw)
+        threshold = (
+            face_clusters.SAME_PERSON if threshold_raw is None else float(threshold_raw)
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid face_cluster {cluster_raw!r} or "
+            f"face_cluster_threshold {threshold_raw!r}",
+        ) from exc
+    if number < 1 or not 0.05 <= threshold <= 0.95:
+        raise HTTPException(
+            status_code=422,
+            detail="face_cluster counts from 1; face_cluster_threshold is 0.05-0.95",
+        )
+    clusters = face_clusters.person_cluster_ids(server.vault, character_id, threshold)
+    if clusters is None or number > len(clusters):
+        return set()
+    return set(clusters[number - 1])
 
 
 def select_pictures_for_listing(
@@ -815,6 +862,24 @@ def select_pictures_for_listing(
             ]
         else:
             query_params["id"] = [str(scope_picture_id)]
+
+    # One of the person's face clusters, numbered as the cluster view numbers
+    # them ("Cluster N" at a threshold). Narrows through ``query_params["id"]``
+    # like the scopes above; the likeness sort, which never reads it,
+    # intersects ``face_cluster_ids`` itself.
+    face_cluster_ids = _face_cluster_ids(
+        server,
+        character_id,
+        query_params.pop("face_cluster", None),
+        query_params.pop("face_cluster_threshold", None),
+    )
+    if face_cluster_ids is not None:
+        existing_ids = query_params.get("id")
+        query_params["id"] = [
+            str(i)
+            for i in sorted(face_cluster_ids)
+            if existing_ids is None or str(i) in {str(e) for e in existing_ids}
+        ]
 
     # Shared-only filter: restrict to pictures that have an active READ token for the current user.
     if shared_only:
@@ -1109,6 +1174,12 @@ def select_pictures_for_listing(
                 {scope_picture_id}
                 if candidate_ids is None
                 else set(candidate_ids) & {scope_picture_id}
+            )
+        if face_cluster_ids is not None:
+            candidate_ids = (
+                face_cluster_ids
+                if candidate_ids is None
+                else set(candidate_ids) & face_cluster_ids
             )
         if candidate_ids is not None and not candidate_ids:
             return _empty_result()

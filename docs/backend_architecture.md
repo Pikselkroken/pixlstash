@@ -13053,6 +13053,15 @@ translates.
   untemplated so it can also sit on `READ_BLOCKED_GET_PATHS`. The route only
   translates: `read_person` and `save_reference_cluster` are thin vault
   wrappers (§10.1), and the clustering runs outside the reader.
+- **The grid filter.** `/pictures`, `/pictures/stream` and `/pictures/count`
+  take `face_cluster=N` (+ `face_cluster_threshold`, default `SAME_PERSON`)
+  beside one `character_id`: only that person's "Cluster N" as the view
+  numbers it (`person_cluster_ids`, which shares `reference_first` with the
+  route, so the two cannot order differently). It narrows through
+  `query_params["id"]` like a scope, and the Character-likeness sort, which
+  never reads that list, intersects its candidates itself. Recomputed on every
+  request; without a single `character_id` it is a 422. Search does not take
+  it.
 - Not to be confused with the grid's likeness groups
   (`GET /pictures/likeness-groups`), which join near-duplicate pictures.
 
