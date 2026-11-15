@@ -1762,6 +1762,16 @@ describe("TrainingSetBuild: generating the pictures", () => {
     expect(select(wrapper, "Character LoRA · optional").props("modelValue")).toBe("");
     expect(on(wrapper, "Sheet size")).toBe("Small");
     expect(on(wrapper, "Sheets to draw")).toBe("2");
+    await click(wrapper, "Draw from", "Reference and text");
+    await flushPromises();
+    wrapper.unmount();
+
+    // A remembered reference mode needs a face to draw from.
+    wrapper = await open(undefined, []);
+    expect(mode(wrapper).text()).toBe("Text");
+    wrapper.unmount();
+    wrapper = await open();
+    expect(mode(wrapper).text()).toBe("Reference and text");
     wrapper.unmount();
 
     // A set with a build of its own opens as it was left, not as last chosen.

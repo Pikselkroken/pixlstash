@@ -1874,8 +1874,10 @@ A step with nothing saved, here or on a training set's build screen, starts
 from the choices last made on this machine (`CharacterSheetStep.vue`,
 `localStorage` `pixlstash:characterSheetChoices`): the mode, each mode's
 workflow, the size, the count and, per person, a LoRA other than the default.
-Only a change made after `restore` is remembered, so a default (a face drawing
-from its reference) never is; a saved `snapshot` stands over all of it.
+Only a change made after `restore` is remembered, so the mode `load` picks (a
+face drawing from its reference) never is, though a mode switch remembers the
+workflow it lands on; a remembered reference mode applies only to a person with
+a face. A saved `snapshot` stands over all of it.
 
 #### `TrainLoraDialog.vue` (`io/`, #2119)
 **Outcome choices, numbers derived** (design artifact "Outcome choices, numbers derived"). The Train a LoRA dialog, `AppDialog size="lg"`, mounted in **`App.vue`** and opened by `useTrainingStore.openForScope({type, id, name})` from the toolbar's Train button, its overflow row and the sidebar's *Train LoRA…*. It replaced the toolbar popover `TbTrainPanel`.

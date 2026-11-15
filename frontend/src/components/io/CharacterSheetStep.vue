@@ -1884,11 +1884,17 @@ function readChoices() {
 }
 
 /** The remembered choices as `restore` reads them, or null: a mode only where
- * it has workflows, and this person's own LoRA. */
+ * it can draw (from a reference only for a person with a face, as `load`
+ * decides), and this person's own LoRA. */
 function recalled() {
   if (!remembered) return null;
-  const has = { text: workflows.value, reference: referenceCards.value };
-  const pick = has[remembered.mode]?.length ? remembered.mode : mode.value;
+  const usable = {
+    text: workflows.value.length,
+    reference:
+      referenceCards.value.length &&
+      (referenceIds.value.length || !workflows.value.length),
+  };
+  const pick = usable[remembered.mode] ? remembered.mode : mode.value;
   const lora = remembered.loras?.[props.character.id];
   return {
     mode: pick,
