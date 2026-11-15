@@ -761,12 +761,35 @@ describe("TrainingSetBuild: generating the pictures", () => {
       ok: false,
       groups: [{ reasons: [{ code: "comfyui_unreachable" }] }],
     });
-    const wrapper = mountDialog();
+    let wrapper = mountDialog();
     await flushPromises();
     const problem = () => wrapper.find('[data-testid="cs-workflow-problem"]');
     expect(problem().text()).toContain("ComfyUI isn't answering");
     expect(problem().text()).not.toContain("picture size");
     expect(problem().text()).not.toContain("None of");
+
+    // Its address is taken away meanwhile: Settings is named, and the step
+    // stops asking.
+    gen.preflightWorkflowRun.mockResolvedValue({
+      ok: false,
+      groups: [{ reasons: [{ code: "comfyui_not_configured" }] }],
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flushPromises();
+    expect(problem().text()).toContain("Add one in Settings");
+    const asked = gen.preflightWorkflowRun.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(gen.preflightWorkflowRun.mock.calls.length).toBe(asked);
+
+    // Back to unreachable, as a fresh open would find it, then ComfyUI answers.
+    gen.preflightWorkflowRun.mockResolvedValue({
+      ok: false,
+      groups: [{ reasons: [{ code: "comfyui_unreachable" }] }],
+    });
+    wrapper.unmount();
+    wrapper = mountDialog();
+    await flushPromises();
+    expect(problem().text()).toContain("ComfyUI isn't answering");
 
     // ComfyUI comes back: the step finds out by itself.
     sheetsWorld({ description: "Adult woman, copper bob" });

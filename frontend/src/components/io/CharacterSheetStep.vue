@@ -1355,7 +1355,9 @@ function recheckWhenComfyuiAnswers(card) {
         { cached: true },
       );
       if (!alive || run !== checkRun) return;
-      if (!comfyuiDown(check?.groups)) {
+      // Answered, or now a failure Settings fixes: check afresh, which says
+      // so and waits no longer.
+      if (comfyuiDown(check?.groups) !== "comfyui_unreachable") {
         await checkCards();
         return;
       }
