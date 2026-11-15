@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 from sqlmodel import select
 
-from pixlstash.db_models import Face, Picture
+from pixlstash.db_models import CharacterReferenceMember, Face, Picture
 from pixlstash.server import Server
 from pixlstash.event_types import EventType
 from pixlstash.services import character_sheet, comfyui_service, scrapheap_service
@@ -27,7 +27,12 @@ from pixlstash.services.character_sheet import (
     sheet_cells,
     sheet_prompt,
 )
-from tests.utils import API_PREFIX, upload_pictures_and_wait
+from tests.utils import (
+    API_PREFIX,
+    bearer_client,
+    mint_read_token,
+    upload_pictures_and_wait,
+)
 
 # Panel 1-6 of the 2560×1536 grid in MOSS's centred y-x boxes.
 CELLS = [
@@ -808,3 +813,146 @@ def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
         url, json={"picture_ids": [sheet_id], "reference_picture_ids": [1, 2, 3, 4, 5]}
     )
     assert too_many.status_code == 422
+
+
+def test_a_reference_cluster_chooses_the_reference_faces(client):
+    """Face clusters and the reference cluster, end to end (§25.30)."""
+    character_id = _new_character(client, "Cluster Ida")
+    files = []
+    for n in range(9):
+        buffer = io.BytesIO()
+        _sheet([("x", 40 + 37 * n, 0, 300)], size=(640, 384)).save(buffer, "PNG")
+        files.append(("file", (f"face{n}.png", buffer.getvalue(), "image/png")))
+    status = upload_pictures_and_wait(client, files)
+    assert status["status"] == "completed", status
+    ids = [r["picture_id"] for r in status["results"]]
+    assert len(set(ids)) == 9
+    # Let face extraction read them first, so it never overwrites these rows.
+    url = f"{API_PREFIX}/characters/{character_id}/sheets/rank"
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        read = client.post(url, json={"picture_ids": ids}).json()["sheets"]
+        if all(sheet["faces_read"] for sheet in read):
+            break
+        time.sleep(0.5)
+
+    rng = np.random.default_rng(23)
+    a, b = rng.normal(size=512), rng.normal(size=512)
+    a_ids, b_ids, plain = ids[:4], ids[4:8], ids[8]
+    b_centre = b_ids[2]
+
+    def add_faces(session):
+        for pid in ids:
+            person = a if pid in a_ids else b
+            vec = person if pid == b_centre else person + rng.normal(size=512) * 0.6
+            if pid == plain:
+                vec = rng.normal(size=512)
+            session.add(
+                Face(
+                    picture_id=pid,
+                    face_index=100,
+                    character_id=character_id,
+                    features=vec.astype(np.float32).tobytes(),
+                    model_pack=DEFAULT_MODEL_PACK,
+                )
+            )
+            # A is the rated identity: today's rule would pick it.
+            session.get(Picture, pid).score = 5 if pid in a_ids else None
+        session.commit()
+
+    client.server.vault.db.run_task(add_faces)
+    refs_url = f"{API_PREFIX}/characters/{character_id}/reference_pictures"
+    assert set(client.get(refs_url).json()["reference_picture_ids"][:4]) == set(a_ids)
+
+    clusters_url = f"{API_PREFIX}/face-clusters?character_id={character_id}"
+    body = client.get(clusters_url).json()
+    assert body["reference_cluster"] is None
+    assert body["faces"] == 9
+    assert sorted(
+        sorted(m["picture_id"] for m in c["members"]) for c in body["clusters"]
+    ) == sorted([sorted(a_ids), sorted(b_ids)])
+    assert [u["picture_id"] for u in body["unclustered"]] == [plain]
+    assert not any(c["is_reference"] for c in body["clusters"])
+
+    cluster_url = f"{API_PREFIX}/characters/{character_id}/reference-cluster"
+    put = client.put(cluster_url, json={"picture_ids": b_ids})
+    assert put.status_code == 200, put.text
+    assert put.json()["picture_ids"] == sorted(b_ids)
+    refs = client.get(refs_url).json()["reference_picture_ids"]
+    assert set(refs) == set(b_ids) and refs[0] == b_centre
+
+    body = client.get(clusters_url).json()
+    assert body["reference_cluster"] == sorted(b_ids)
+    first = body["clusters"][0]
+    assert first["is_reference"] and first["reference_share"] == 1.0
+    assert first["members"][0]["picture_id"] == b_centre
+    assert body["clusters"][1]["similarity_to_reference"] < 0.45
+
+    # A picture without the person's face is refused, and nothing is stored.
+    bad = client.put(cluster_url, json={"picture_ids": [b_ids[0], 999999]})
+    assert bad.status_code == 422
+    assert bad.json()["detail"]["picture_ids"] == [999999]
+    assert client.get(clusters_url).json()["reference_cluster"] == sorted(b_ids)
+
+    # With every member gone, the person has no reference cluster again.
+    def set_deleted(flag):
+        def run(session):
+            for pid in b_ids:
+                session.get(Picture, pid).deleted = flag
+            session.commit()
+
+        client.server.vault.db.run_task(run)
+
+    set_deleted(True)
+    try:
+        assert client.get(clusters_url).json()["reference_cluster"] is None
+        refs = client.get(refs_url).json()["reference_picture_ids"]
+        assert set(refs[:4]) == set(a_ids)
+    finally:
+        set_deleted(False)
+
+    cleared = client.put(cluster_url, json={"picture_ids": []})
+    assert cleared.json()["picture_ids"] == []
+    assert set(client.get(refs_url).json()["reference_picture_ids"][:4]) == set(a_ids)
+    assert (
+        client.get(f"{API_PREFIX}/face-clusters?character_id=999999").status_code == 404
+    )
+
+    # Owner only: a READ token and one scoped to this very person are refused
+    # both routes, which the owner reached above (so they resolve).
+    for restriction in (
+        {},
+        {"resource_type": "character", "resource_id": character_id},
+    ):
+        token = mint_read_token(client, "face clusters", **restriction)
+        guest = bearer_client(client.server, token)
+        assert guest.get(clusters_url).status_code == 403, restriction
+        refused = guest.put(cluster_url, json={"picture_ids": b_ids})
+        assert refused.status_code == 403, restriction
+    assert client.get(clusters_url).json()["reference_cluster"] is None
+
+    # Purging a member deletes its row, so a picture that reuses the id
+    # never joins the frozen cluster.
+    client.put(cluster_url, json={"picture_ids": b_ids})
+    gone = b_ids[0]
+
+    def soft_delete(session):
+        session.get(Picture, gone).deleted = True
+        session.commit()
+
+    client.server.vault.db.run_task(soft_delete)
+    purged = scrapheap_service.purge_scrapheap_pictures(
+        client.server.vault, [gone], include_protected=True
+    )
+    assert list(purged.purged_ids) == [gone]
+
+    def stored(session):
+        return sorted(
+            session.exec(
+                select(CharacterReferenceMember.picture_id).where(
+                    CharacterReferenceMember.character_id == character_id
+                )
+            ).all()
+        )
+
+    assert client.server.vault.db.run_task(stored) == sorted(b_ids[1:])

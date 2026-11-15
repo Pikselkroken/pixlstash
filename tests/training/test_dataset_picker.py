@@ -371,3 +371,65 @@ def test_a_stack_reason_reaches_across_stills_and_clips():
     assert _ids(out["stills"]) == [3]
     assert out["stills"].excluded["other_people"] == 1
     assert _ids(out["clips"]) == []
+
+
+def _identity_faces():
+    """Faces of two people: A rated 5 stars, B unrated. Rows as the route gives."""
+    rng = np.random.default_rng(11)
+    a, b = rng.standard_normal(64), rng.standard_normal(64)
+
+    def face(fid, pid, person, rating, spread=0.4):
+        vec = (person + rng.standard_normal(64) * spread).astype(np.float32)
+        return (fid, pid, rating, 3.0, vec.tobytes())
+
+    faces = [face(100 + i, i, a, 5) for i in range(1, 7)]
+    faces += [face(200 + i, 10 + i, b, None) for i in range(1, 7)]
+    # B's most typical face: the identity itself.
+    faces.append((300, 30, None, 3.0, b.astype(np.float32).tobytes()))
+    return faces, a, b
+
+
+def test_a_reference_cluster_gives_its_most_central_faces_over_five_stars():
+    faces, _a, _b = _identity_faces()
+    cluster = {11, 12, 13, 14, 15, 16, 30}
+    refs = dp.pick_references(faces, cluster)
+    assert {r[1] for r in refs} == cluster
+    assert refs[0][1] == 30
+    # Without one, the 5-star pictures of A lead as before.
+    assert {r[1] for r in dp.pick_references(faces)[:6]} == {1, 2, 3, 4, 5, 6}
+    # A cluster none of whose pictures has a face falls back too.
+    assert dp.pick_references(faces, {999}) == dp.pick_references(faces)
+
+
+def test_the_floor_measures_against_the_chosen_identity():
+    faces, _a, b = _identity_faces()
+    cluster = {11, 12, 13, 14, 15}
+    refs = dp.pick_references(faces, cluster)
+    rng = np.random.default_rng(5)
+    good_profile = (b + rng.standard_normal(64) * 0.5).astype(np.float32)
+    scores = dp.face_likeness(
+        [(r[0], r[4]) for r in refs],
+        [(f[0], f[4]) for f in faces] + [(400, good_profile.tobytes())],
+    )
+    # The other identity falls under the default floor; a good picture of the
+    # chosen one outside the cluster still clears it.
+    assert all(scores[100 + i] < dp.LIKENESS_FLOOR for i in range(1, 7))
+    assert scores[400] > dp.LIKENESS_FLOOR
+
+
+def test_a_reference_picture_counts_by_its_lowest_usable_face():
+    """As the cluster view does: the order rows arrive in does not decide it."""
+    faces, _a, b = _identity_faces()
+    good = b.astype(np.float32).tobytes()
+    flat = np.zeros(64, dtype=np.float32).tobytes()
+    other = (-b).astype(np.float32).tobytes()
+    # Picture 40 carries the person three times, listed out of id order: a
+    # directionless face (the lowest id), then a later face, then the usable
+    # face with the lower id of the two.
+    faces += [
+        (503, 40, None, 3.0, other),
+        (501, 40, None, 3.0, flat),
+        (502, 40, None, 3.0, good),
+    ]
+    refs = dp.pick_references(faces, {40})
+    assert [r[0] for r in refs] == [502]

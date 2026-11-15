@@ -266,3 +266,32 @@ export async function removeCharacterFacesByFaceId(id, faceIds) {
 export async function getReferencePictures(id) {
   return unwrap(apiClient.get(charactersUrl(`/${id}/reference_pictures`)));
 }
+
+/**
+ * A person's faces grouped by identity, at a strictness.
+ * @param {number|string} id
+ * @param {number} threshold - the mean likeness two groups need to merge.
+ * @returns {Promise<Object>} `{threshold, faces, reference_cluster, clusters,
+ *   unclustered}`; clusters carry their members most typical first.
+ */
+export async function getFaceClusters(id, threshold) {
+  return unwrap(
+    apiClient.get("/face-clusters", {
+      params: { character_id: id, threshold },
+    }),
+  );
+}
+
+/**
+ * Store the pictures picked as who a person is; `[]` clears it.
+ * @param {number|string} id
+ * @param {number[]} pictureIds
+ * @returns {Promise<Object>} `{picture_ids}`, the stored ids.
+ */
+export async function setReferenceCluster(id, pictureIds) {
+  return unwrap(
+    apiClient.put(charactersUrl(`/${id}/reference-cluster`), {
+      picture_ids: pictureIds,
+    }),
+  );
+}

@@ -3,6 +3,7 @@
     :open="open"
     :title="isExisting ? 'Edit person' : 'New person'"
     :size="isExisting ? 'lg' : 'md'"
+    :persistent="facesOpen"
     @close="emit('close')"
   >
     <!-- Two columns rather than one tall stack, so the form stops outgrowing
@@ -47,10 +48,32 @@
         <div class="ref-pictures-section">
           <div class="ref-pictures-header">
             <span :id="refsHeadingId" class="section-label">Reference Images</span>
+            <AppButton
+              class="ref-faces-btn"
+              variant="ghost"
+              size="sm"
+              icon-left="face-recognition"
+              data-testid="editor-faces"
+              @click="openFaces"
+              >Faces…</AppButton
+            >
           </div>
+          <AppSelect
+            v-if="clusterOptions.length > 1"
+            :model-value="clusterChoice"
+            label="Reference cluster"
+            :options="clusterOptions"
+            :disabled="clusterSaving"
+            data-testid="editor-reference-cluster"
+            @update:model-value="pickCluster"
+          />
           <p class="ref-pictures-help">
-            Automatically selected from the highest-scoring images of this
-            person. Click one to use it as this person's thumbnail.
+            {{
+              faceClusters?.reference_cluster
+                ? "The most typical faces of this person's reference cluster."
+                : "Automatically selected from the highest-scoring images of this person."
+            }}
+            Click one to use it as this person's thumbnail.
           </p>
           <!-- Named through its heading, or the group is an unlabelled pile of
                images - the same wiring AdapterTray puts on its list, and it
@@ -198,6 +221,13 @@
       />
     </div>
   </StackLayer>
+
+  <FaceClustersDialog
+    :open="facesOpen"
+    :character="{ id: character?.id, name: character?.name || '' }"
+    :return-focus-to="facesOpener"
+    @close="onFacesClosed"
+  />
 </template>
 
 <script setup>
@@ -207,6 +237,8 @@ import {
   createCharacter,
   patchCharacter,
   getReferencePictures,
+  getFaceClusters,
+  setReferenceCluster,
 } from "../../api/characters";
 import { listPicturesByIds } from "../../api/pictures";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
@@ -221,6 +253,7 @@ import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import StackLayer from "../widgets/StackLayer.vue";
 import AdapterTray from "../widgets/AdapterTray.vue";
+import FaceClustersDialog from "../io/FaceClustersDialog.vue";
 import { errorDetail } from "../../utils/apiError";
 
 // Failures report through the notice surface instead of a blocking native
@@ -362,6 +395,95 @@ async function fetchReferencePictures(characterId, requestId) {
   }
 }
 
+// ── The reference cluster (backend §25.30) ─────────────────────────────────
+// The person's faces at Normal, for the drop-down: pick a cluster outright, or
+// open the faces dialog to look closer and trim it.
+const faceClusters = ref(null);
+const clusterSaving = ref(false);
+const facesOpen = ref(false);
+const facesOpener = ref(null);
+
+async function fetchFaceClusters(characterId, requestId) {
+  try {
+    const body = await getFaceClusters(characterId, 0.45);
+    if (requestId === referenceRequestId) faceClusters.value = body;
+  } catch (e) {
+    console.warn("Couldn't read the face clusters", characterId, e);
+  }
+}
+
+const clusterOptions = computed(() => {
+  const body = faceClusters.value;
+  if (!body?.clusters?.length) return [];
+  const options = [{ value: "auto", label: "None: the highest-scoring pictures" }];
+  body.clusters.forEach((c, i) => {
+    options.push({
+      value: `c${i}`,
+      label: `Cluster ${i + 1} · ${c.size} pictures${c.from_sheets ? " · from sheets" : ""}`,
+    });
+  });
+  if (body.reference_cluster && !body.clusters.some((c) => c.is_reference)) {
+    options.push({
+      value: "custom",
+      label: `As picked (${body.reference_cluster.length} pictures)`,
+      disabled: true,
+    });
+  }
+  return options;
+});
+
+const clusterChoice = computed(() => {
+  const body = faceClusters.value;
+  if (!body?.reference_cluster) return "auto";
+  const at = body.clusters.findIndex((c) => c.is_reference);
+  return at < 0 ? "custom" : `c${at}`;
+});
+
+async function refreshFaces() {
+  const id = props.character?.id;
+  if (id == null) return;
+  const requestId = ++referenceRequestId;
+  await Promise.all([
+    fetchReferencePictures(id, requestId),
+    fetchFaceClusters(id, requestId),
+  ]);
+}
+
+/** A whole cluster as the reference, or none; trimming is the dialog's. */
+async function pickCluster(value) {
+  const body = faceClusters.value;
+  const id = props.character?.id;
+  if (!body || id == null || value === clusterChoice.value || value === "custom") {
+    return;
+  }
+  const ids =
+    value === "auto"
+      ? []
+      : body.clusters[Number(value.slice(1))].members.map((m) => m.picture_id);
+  clusterSaving.value = true;
+  try {
+    await setReferenceCluster(id, ids);
+    await refreshFaces();
+  } catch (e) {
+    noticeStore.error(
+      `Couldn't set the reference cluster. ${errorDetail(e) || "Please try again."}`,
+      { key: "character-reference-cluster" },
+    );
+  } finally {
+    clusterSaving.value = false;
+  }
+}
+
+function openFaces(event) {
+  facesOpener.value = event?.currentTarget ?? null;
+  facesOpen.value = true;
+}
+
+function onFacesClosed() {
+  facesOpen.value = false;
+  refreshFaces();
+}
+
 // One watcher over `[open, id]` owns both the layout branch and the reference
 // list, because both answer the same question and a second copy of the source
 // would only drift.
@@ -398,7 +520,11 @@ watch(
     // late response off the wrong person is that counter; this is about the gap
     // before any response, and both are needed.
     referencePictures.value = [];
-    if (charId) fetchReferencePictures(charId, requestId);
+    faceClusters.value = null;
+    if (charId) {
+      fetchReferencePictures(charId, requestId);
+      fetchFaceClusters(charId, requestId);
+    }
   },
   { immediate: true },
 );
@@ -474,6 +600,8 @@ const { pending: saving, run: save } = useSubmitGuard(submitCharacter);
 
 // Keyboard shortcuts
 function handleKeydown(event) {
+  // The faces dialog over this one takes its own keys.
+  if (facesOpen.value) return;
   if (event.key === "Escape") {
     if (previewPic.value) {
       previewPic.value = null;
@@ -614,6 +742,10 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   display: flex;
   align-items: center;
   gap: var(--space-3);
+}
+
+.ref-faces-btn {
+  margin-left: auto;
 }
 
 /* --text-xs, not --text-sm: this hint sits under a `.section-label` heading at
