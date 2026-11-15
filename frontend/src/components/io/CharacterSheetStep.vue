@@ -593,6 +593,7 @@ import { subjectFromDescription } from "../../utils/trainingSetBuild";
 import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import { errorMessage } from "../../utils/apiError";
 import { runKey } from "../../utils/gpuMemory";
+import { UNCHECKED_CODES } from "../../utils/runReasons";
 import { buildMediaUrl } from "../../utils/media";
 import AppInput from "../widgets/AppInput.vue";
 import AppSelect from "../widgets/AppSelect.vue";
@@ -693,6 +694,18 @@ const MODES = [
 ];
 const ORDINALS = ["first", "second", "third", "fourth"];
 const POLL_MS = 2500;
+// A ComfyUI that did not answer is asked again this often. The server keeps a
+// failed read for a minute (`OBJECT_INFO_CACHE_TTL_S`), so asking sooner only
+// hears the same failure.
+const RECHECK_MS = 15_000;
+// What the step says instead of blaming the workflows when ComfyUI never
+// answered their check: nothing is known about any of them.
+const COMFYUI_DOWN = {
+  comfyui_unreachable:
+    "ComfyUI isn't answering, so no sheet can be drawn. Start ComfyUI: the sheet workflows are checked again by themselves within a minute.",
+  comfyui_not_configured:
+    "PixlStash has no ComfyUI to draw sheets with. Add one in Settings.",
+};
 // Panels are filed before their faces are read; the picker ranks by face, so
 // it waits for them, but not forever: a slow queue still hands over.
 const FACE_WAIT_MS = 90_000;
@@ -759,6 +772,7 @@ const error = ref("");
 const loaded = ref(false);
 const gaveUpOnFaces = ref(false);
 let timer = null;
+let recheckTimer = null;
 let ticking = false;
 let runsEndedAt = 0;
 let alive = true;
@@ -850,6 +864,10 @@ const workflowInputs = computed(
 const workflowProblem = computed(() => {
   if (!checksDone.value || !modeCards.value.length) return null;
   if (usableCards.value.length) return workflowId.value ? "" : null;
+  const down = modeCards.value
+    .map((card) => checks.value[card.id])
+    .find((check) => check?.down);
+  if (down) return down.problem;
   const first = checks.value[modeCards.value[0].id]?.problem || "";
   return modeCards.value.length === 1
     ? first
@@ -1238,6 +1256,9 @@ async function checkCard(card, reference) {
       ["width", "height"].includes(d.input_name),
     );
     const groups = check?.groups || [];
+    // ComfyUI never answered, so nothing is known about this workflow (nor
+    // any other): that is what to say, not the workflow's own shortcomings.
+    const down = comfyuiDown(groups);
     // The draw fills the picture inputs itself; a pinned one keeps its pin.
     const inputs = reference
       ? groups.flatMap((g) => g.picture_inputs || []).filter((i) => i.mode !== "fixed")
@@ -1247,19 +1268,21 @@ async function checkCard(card, reference) {
         (r) => !(reference && r.code === "picture_input_unfilled"),
       ),
     );
-    const problem = !sizes.length
-      ? `${name} has no picture size to set, so it can't draw a sheet.`
-      : refused
-        ? `${name} can't run as it is. Open it from Workflows to see why.`
-        : reference && !inputs.length
-          ? `${name} has no picture input to put the reference in.`
-          : reference && !groups.some((g) => g.prompt?.positive_settable)
-            ? `${name} has no prompt PixlStash can write the sheet into.`
-            : "";
+    const problem = down
+      ? COMFYUI_DOWN[down]
+      : !sizes.length
+        ? `${name} has no picture size to set, so it can't draw a sheet.`
+        : refused
+          ? `${name} can't run as it is. Open it from Workflows to see why.`
+          : reference && !inputs.length
+            ? `${name} has no picture input to put the reference in.`
+            : reference && !groups.some((g) => g.prompt?.positive_settable)
+              ? `${name} has no prompt PixlStash can write the sheet into.`
+              : "";
     // All an edit workflow drawing at its picture's size lacks: a sheet copy
     // fixes that (#2700).
     const sizeless = reference && !sizes.length && !refused;
-    return { sizes, inputs, problem, sizeless };
+    return { sizes, inputs, problem, sizeless, down };
   } catch (e) {
     console.warn("Couldn't check the sheet workflow", card.id, e);
     return {
@@ -1270,20 +1293,70 @@ async function checkCard(card, reference) {
   }
 }
 
+/** The reason code saying ComfyUI never answered a pre-flight, or "". */
+function comfyuiDown(groups) {
+  const reasons = (groups || []).flatMap((g) => g.reasons || []);
+  return reasons.find((r) => UNCHECKED_CODES.includes(r.code))?.code || "";
+}
+
+/** The mode's first card that passed, once every card before it has
+ * answered: the one the whole check would pick, as soon as it is known. */
+function firstUsable() {
+  for (const card of modeCards.value) {
+    const check = checks.value[card.id];
+    if (!check) return "";
+    if (check.problem === "") return card.id;
+  }
+  return "";
+}
+
 /** Pre-flight every candidate card of both modes, then keep the chosen one
- * only while it passes. */
+ * only while it passes. Each answer lands as it comes, so the mode on show
+ * (checked first) offers its workflows before the other mode is done. */
 async function checkCards() {
+  clearTimeout(recheckTimer);
+  const first = fromReference.value;
   const all = [
     ...workflows.value.map((card) => [card, false]),
     ...referenceCards.value.map((card) => [card, true]),
-  ];
-  const results = await Promise.all(all.map(([card, ref]) => checkCard(card, ref)));
+  ].sort(([, a], [, b]) => Number(b === first) - Number(a === first));
+  const results = await Promise.all(
+    all.map(async ([card, ref]) => {
+      const result = await checkCard(card, ref);
+      if (alive) {
+        checks.value = { ...checks.value, [card.id]: result };
+        if (!workflowId.value) workflowId.value = firstUsable();
+      }
+      return result;
+    }),
+  );
   if (!alive) return;
-  checks.value = Object.fromEntries(all.map(([card], i) => [card.id, results[i]]));
   checksDone.value = true;
   if (!usableCards.value.some((card) => card.id === workflowId.value)) {
     workflowId.value = usableCards.value[0]?.id || "";
   }
+  if (results.some((result) => result.down)) recheckWhenComfyuiAnswers(all[0][0]);
+}
+
+/** Ask after one card until ComfyUI answers, then check them all again. */
+function recheckWhenComfyuiAnswers(card) {
+  recheckTimer = setTimeout(async () => {
+    try {
+      const check = await preflightWorkflowRun(
+        { workflow_id: card.id, count: 1 },
+        { cached: true },
+      );
+      if (!alive) return;
+      if (!comfyuiDown(check?.groups)) {
+        await checkCards();
+        return;
+      }
+    } catch (e) {
+      console.warn("Couldn't ask whether ComfyUI answers yet", card.id, e);
+      if (!alive) return;
+    }
+    recheckWhenComfyuiAnswers(card);
+  }, RECHECK_MS);
 }
 
 // The pop-out steps through the sheets on show, in their places.
@@ -1934,6 +2007,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   alive = false;
+  clearTimeout(recheckTimer);
   stopPolling();
 });
 
