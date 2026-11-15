@@ -479,6 +479,52 @@ def test_cuts_follow_dividers_drawn_off_the_grid():
         assert np.asarray(image.crop((left, top, right, bottom))).min() > 100
 
 
+def test_cuts_follow_an_edit_model_s_dividers_further_off_the_grid():
+    """Qwen-Image and FLUX.2 Klein, drawing from a reference picture, put
+    their dividers up to ~190 px off the layout's cells (measured on real
+    sheets): the cut must not fall back to the grid line through a photo."""
+    image = _sheet(
+        [
+            ("x", 523, 0, 1536),  # passport column, 77 px left
+            ("x", 1064, 0, 1536),  # passport | body, 136 px left
+            ("x", 1689, 0, 1536),  # body | body, 191 px left
+            ("y", 700, 0, 1064),  # passport row, 68 px up
+        ]
+    )
+    cells = sheet_cells(image)
+    assert abs(cells[0][2] - (523 - 8)) <= 4
+    assert abs(cells[1][0] - (523 + 8)) <= 4
+    assert abs(cells[0][3] - (700 - 8)) <= 4
+    assert abs(cells[1][2] - (1064 - 8)) <= 4
+    assert abs(cells[4][0] - (1064 + 8)) <= 4
+    assert abs(cells[4][2] - (1689 - 8)) <= 4
+    assert abs(cells[5][0] - (1689 + 8)) <= 4
+
+
+def test_the_nearest_divider_wins_over_a_stronger_one_further_off():
+    """A sheet that broke its layout can show a second seam in a cut's
+    window; the gutter nearest the grid line is the one the cut belongs in."""
+    image = _sheet(
+        [
+            ("x", 1180, 0, 1300),  # the gutter, over 85% of the height
+            ("x", 1350, 0, 1536),  # a full-height seam 150 px off
+        ]
+    )
+    assert abs(sheet_cells(image)[4][0] - (1180 + 8)) <= 4
+
+
+def test_a_cell_that_is_all_frame_is_kept_rather_than_inverted():
+    """Two dividers ~200 px apart leave a passport cell narrower than the
+    frame trim; on white it must still cut, not crash the crop."""
+    image = Image.new("RGB", (SHEET_WIDTH, SHEET_HEIGHT), (252, 252, 252))
+    draw = ImageDraw.Draw(image)
+    for at in (800, 1000):
+        draw.rectangle([at, 0, at + 3, SHEET_HEIGHT - 1], fill=(40, 40, 40))
+    for left, top, right, bottom in sheet_cells(image):
+        assert left < right and top < bottom
+    assert len(character_sheet.split_sheet(image)) == 6
+
+
 def test_a_person_s_outline_is_not_a_divider():
     """An edge that does not run the cut's whole length leaves the cut where it is."""
     image = _sheet([("x", 1220, 300, 900)])
