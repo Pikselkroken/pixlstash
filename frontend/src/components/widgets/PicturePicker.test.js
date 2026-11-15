@@ -600,6 +600,19 @@ describe("a person's face clusters", () => {
     expect(tileIds(w)).toEqual([81, 82]);
   });
 
+  it("says so when the faces cannot be grouped, and lands on all of the person", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    getFaceClusters.mockRejectedValue(new Error("403"));
+    const w = await mountPicker();
+    await facetRow(w, "Clementine").trigger("click");
+    await flush(w);
+
+    expect(w.find(".pp-rail-note").text()).toBe("Could not group the faces.");
+    expect(facetRow(w, "All of Clementine").classes()).toContain("pp-facet--on");
+    expect(lastStreamQuery().get("character_id")).toBe("7");
+    console.warn.mockRestore();
+  });
+
   it("cuts a search inside a cluster to its members", async () => {
     getFaceClusters.mockResolvedValue(groups([[member(31), member(32)]]));
     searchPictures.mockResolvedValue([{ id: 32 }, { id: 99 }, { id: 31 }]);

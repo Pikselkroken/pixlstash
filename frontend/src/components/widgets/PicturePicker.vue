@@ -72,7 +72,8 @@
               <span class="pp-facet__count">{{ groupedNumber(row.count) }}</span>
             </button>
             <template v-if="group === 'character' && unfolded === row.id">
-              <p v-if="grouping || groupingFailed" class="pp-rail-note" role="status">
+              <!-- Not a live region: the grid's note announces the grouping. -->
+              <p v-if="grouping || groupingFailed" class="pp-rail-note">
                 {{ grouping ? "Grouping faces…" : "Could not group the faces." }}
               </p>
               <button
@@ -544,6 +545,7 @@ function landOnReference(id) {
 }
 
 async function openCharacter(row) {
+  if (unfolded.value === row.id && grouping.value) return;
   if (unfolded.value === row.id && faceGroups.value) {
     landOnReference(row.id);
     return;
@@ -801,7 +803,9 @@ watch(includeVideos, () => {
 const importsRunning = computed(() => Object.keys(tasks.importRuns).length);
 
 watch(importsRunning, (now, before) => {
-  if (!props.open || now !== 0 || !before) return;
+  // Mid-grouping the landing reads the list itself; a read now would flash
+  // all of the person first.
+  if (!props.open || now !== 0 || !before || grouping.value) return;
   load();
 });
 

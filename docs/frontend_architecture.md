@@ -1391,7 +1391,12 @@ holds "Grouping faces…" until the answer says where. A cluster's tiles are its
 members in the answer's order, most typical first, with no listing read; a
 search inside one is the person's search cut to its members. A line above the
 grid and the footer receipt name the cluster. Choosing a project or set folds
-the person; a late answer for a folded person is dropped.
+the person; a late answer for a folded person is dropped. A failed read (a
+scoped token is refused this owner-only route) says "Could not group the faces."
+in the rail and lands on *All of*. The clusters are read once per unfold, so a
+picture imported meanwhile shows under *All of* until the person is unfolded
+again. Cluster tiles carry no file name (the tooltip reads "Picture N"), and the
+row counts stay all-media like every facet count.
 
 **Single-select on purpose.** Every caller needs exactly one picture — a model's
 thumbnail, a workflow's Fixed input, a run-time answer — and multi-select would
