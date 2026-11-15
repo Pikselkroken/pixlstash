@@ -15724,6 +15724,7 @@ def test_a_run_in_flight_is_reported_with_the_workers_until_it_ends(runnable):
         "workflow_id": RUN_WF,
         "status": "queued",
         "percent": 0.0,
+        "generated": False,
     }
     # A run nobody named is called after its workflow, as the grid names it.
     assert runs[unnamed]["label"] == "Krea 2: Text to Image"
@@ -15735,6 +15736,8 @@ def test_a_run_in_flight_is_reported_with_the_workers_until_it_ends(runnable):
     )
     runs = reported()
     assert (runs[named]["status"], runs[named]["percent"]) == ("running", 25.0)
+    # Still drawing: ComfyUI has not finished it.
+    assert runs[named]["generated"] is False
     assert runs[unnamed]["status"] == "queued"
 
     # A run is the owner's: a narrower token reads the workers and no run.
