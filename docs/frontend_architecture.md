@@ -1686,7 +1686,8 @@ the row element to hand focus back to on close).
   Qwen-Image-Edit or FLUX.2 Klein card with `reference_inputs > 0` (#2700;
   `referenceEngine` reads the card's diffusion model, `unet` or `checkpoint`,
   never its text encoder or VAE: Krea 2 and MOSS-Image load a Qwen encoder,
-  and matching that listed Krea 2's style reference), the step's rail (320px
+  and matching on that is how Krea 2's style reference got listed), the
+  step's rail (320px
   then, 280px otherwise) opens with a *Draw from* `Segmented`: *Text* /
   *Reference and text*. Without such a card the control is not shown; if an
   edit card exists that a sheet copy could be made from, the rail offers

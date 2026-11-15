@@ -538,8 +538,8 @@
  * them by how alike each sheet's own faces are, and cuts the one the user picks
  * into six pictures on the character. Where the library has a Qwen-Image-Edit
  * or FLUX.2 Klein sheet workflow (a card with `reference_inputs`, #2700),
- * the rail offers a second
- * way to draw: from a reference picture plus the words (#2679). The picture
+ * the rail offers a second way to draw: from a reference picture plus the
+ * words (#2679). The picture
  * goes in through the run's own `inputs`, the sheets are ranked by closeness
  * to it, and it stays in the rail beside them. Emits `done` with their ids, and the
  * dialog's picker takes over. The dialog owns the footer: it reads `footer`
