@@ -1028,7 +1028,9 @@ const mixedWarning = computed(() => {
     }
   }
   if (!pairs.length) return "";
-  if (pairs.length === 1) {
+  // A sheet's number is its place in its own draw: named only when every kept
+  // sheet is in one draw, so the numbers say which sheets they are.
+  if (pairs.length === 1 && new Set(keep.map((s) => s.drawId)).size === 1) {
     return `Sheets ${pairs[0][0]} and ${pairs[0][1]} look like different people; using both mixes faces.`;
   }
   return "Kept sheets look like different people; using them mixes faces.";

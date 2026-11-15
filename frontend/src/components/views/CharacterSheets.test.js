@@ -736,14 +736,18 @@ describe("CharacterSheets", () => {
   });
 
   it("warns, without refusing, when the sheets kept look like different people", async () => {
-    const keepBoth = async (ranked) => {
+    const keepBoth = async (ranked, earlier = null) => {
       sheetsWorld();
+      if (earlier) storedDraw(earlier);
       gen.runWorkflowCard.mockResolvedValue({
         status: "success",
         prompts: [{ run_id: "r1", status: "queued" }],
       });
       db.outcomes.r1 = { status: "completed", picture_ids: [501, 502] };
-      gen.rankSheets.mockResolvedValue({ sheets: ranked, references: 0 });
+      gen.rankSheets.mockImplementation(async (_cid, ids) => ({
+        sheets: ids.map((id) => ranked.find((s) => s.picture_id === id) || sheet(id, 0.6)),
+        references: 0,
+      }));
       const wrapper = mountScreen();
       await flushPromises();
       await describeAndDraw(wrapper);
@@ -763,6 +767,27 @@ describe("CharacterSheets", () => {
     expect(warning(wrapper).text()).toContain("Sheets 1 and 2 look like different people");
     expect(useButton(wrapper).text()).toContain("Use 2 sheets");
     expect(useButton(wrapper).attributes("disabled")).toBeUndefined();
+    wrapper.unmount();
+
+    // A sheet kept in an earlier draw too: "Sheets 1 and 2" would not say which
+    // draw, so no number is named.
+    wrapper = await keepBoth(
+      [
+        sheet(501, 0.5, { different_from: [502] }),
+        sheet(502, 0.7, { different_from: [501] }),
+      ],
+      {
+        settings: { signature: "old", description: "older" },
+        runs: [{ key: "o1", status: "completed", message: "", picture_ids: [401] }],
+        kept: [401],
+        seen: true,
+      },
+    );
+    await tiles(wrapper)[0].trigger("click");
+    await flushPromises();
+    expect(warning(wrapper).text()).toContain(
+      "Kept sheets look like different people; using them mixes faces.",
+    );
     wrapper.unmount();
 
     // The positive control: two sheets of one person, kept together, pass.
