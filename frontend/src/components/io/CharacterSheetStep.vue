@@ -83,7 +83,8 @@
           >
         </div>
 
-        <div class="cs-fld">
+        <!-- The description takes whatever height the form leaves. -->
+        <div class="cs-fld cs-fld--grow">
           <AppTextarea
             v-model="form.description"
             label="Description"
@@ -123,38 +124,46 @@
           label="Shoes"
           placeholder="white sneakers"
         />
-        <!-- The four choices of how a sheet is drawn, side by side as compact
-             selects, with one line of hints under them. -->
+        <!-- The four choices of how a sheet is drawn: toggles side by side,
+             wrapping only on a narrow window, with one line of hints under
+             them. -->
         <div class="cs-fld">
-          <div class="cs-grid4">
-            <AppSelect
-              :model-value="form.framing"
-              label="Body photos"
-              :options="FRAMINGS"
-              compact
-              data-testid="cs-framing"
-              @update:model-value="pickFraming"
-            />
-            <AppSelect
-              :model-value="form.count"
-              label="Sheets to draw"
-              :options="COUNTS"
-              compact
-              @update:model-value="(n) => (form.count = Number(n))"
-            />
-            <AppSelect
-              v-model="form.size"
-              label="Sheet size"
-              :options="SIZES"
-              compact
-              data-testid="cs-size"
-            />
-            <AppSelect
-              v-model="form.subject"
-              label="Draw a"
-              :options="SUBJECTS"
-              compact
-            />
+          <div class="cs-opts">
+            <div class="cs-opt">
+              <FieldLabel>Body photos</FieldLabel>
+              <Segmented
+                v-model="form.framing"
+                aria-label="Body photos"
+                :options="FRAMINGS"
+                data-testid="cs-framing"
+                @pick="framingTouched = true"
+              />
+            </div>
+            <div class="cs-opt">
+              <FieldLabel>Sheets to draw</FieldLabel>
+              <Segmented
+                v-model="form.count"
+                aria-label="Sheets to draw"
+                :options="COUNTS"
+              />
+            </div>
+            <div class="cs-opt">
+              <FieldLabel>Sheet size</FieldLabel>
+              <Segmented
+                v-model="form.size"
+                aria-label="Sheet size"
+                :options="SIZES"
+                data-testid="cs-size"
+              />
+            </div>
+            <div class="cs-opt">
+              <FieldLabel>Draw a</FieldLabel>
+              <Segmented
+                v-model="form.subject"
+                aria-label="Draw a"
+                :options="SUBJECTS"
+              />
+            </div>
           </div>
           <span class="cs-hint" data-testid="cs-framing-hint">{{
             framingHint
@@ -582,24 +591,23 @@ const props = defineProps({
 
 const emit = defineEmits(["cut", "done", "faces"]);
 
-// Options for compact selects: { value, label }.
 const FRAMINGS = [
-  { value: "waist_up", label: "Waist-up" },
-  { value: "mid_thigh", label: "Mid-thigh" },
-  { value: "knees_up", label: "Knees-up" },
-  { value: "full_body", label: "Full body" },
+  { id: "waist_up", label: "Waist-up" },
+  { id: "mid_thigh", label: "Mid-thigh" },
+  { id: "knees_up", label: "Knees-up" },
+  { id: "full_body", label: "Full body" },
 ];
-const COUNTS = [2, 3, 4].map((n) => ({ value: n, label: String(n) }));
+const COUNTS = [2, 3, 4].map((n) => ({ id: n, label: String(n) }));
 // The canvas sizes `POST /character-sheets/prompt` draws at, and the passport
 // photo each cuts to (a 600×768 cell of the large sheet, scaled).
 const SIZES = [
-  { value: "small", label: "Small", passport: "300×384" },
-  { value: "medium", label: "Medium", passport: "431×552" },
-  { value: "large", label: "Large", passport: "600×768" },
+  { id: "small", label: "Small", passport: "300×384" },
+  { id: "medium", label: "Medium", passport: "431×552" },
+  { id: "large", label: "Large", passport: "600×768" },
 ];
 const SUBJECTS = [
-  { value: "woman", label: "Woman" },
-  { value: "man", label: "Man" },
+  { id: "woman", label: "Woman" },
+  { id: "man", label: "Man" },
 ];
 const MOSS = "moss_image";
 // What draws a sheet from a reference picture (#2679).
@@ -818,11 +826,6 @@ watch(suggestedFraming, (framing) => {
   if (!framingTouched.value) form.framing = framing;
 });
 
-/** A framing the user picked: no longer the suggested one. */
-function pickFraming(framing) {
-  framingTouched.value = true;
-  form.framing = framing;
-}
 
 const framingHint = computed(() => {
   const reason = chosenLora.value
@@ -836,7 +839,7 @@ const framingHint = computed(() => {
 });
 
 const sizeHint = computed(() => {
-  const size = SIZES.find((s) => s.value === form.size);
+  const size = SIZES.find((s) => s.id === form.size);
   return `Passport photos come out ${size.passport}. Larger is slower to draw.`;
 });
 
@@ -1769,10 +1772,33 @@ defineExpose({
   gap: var(--space-4);
 }
 
-.cs-grid4 {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--space-3);
+.cs-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+}
+
+.cs-opt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cs-fld--grow {
+  flex: 1 1 auto;
+}
+
+.cs-fld--grow :deep(.app-textarea),
+.cs-fld--grow :deep(.app-textarea__box) {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.cs-fld--grow :deep(.app-textarea__field) {
+  flex: 1 1 auto;
+  resize: none;
 }
 
 .cs-lora {

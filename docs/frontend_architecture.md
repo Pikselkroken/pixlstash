@@ -1705,8 +1705,9 @@ Escape and Enter do nothing here: cancelling deletes a set.
   no size to set, one that cannot run, or (from a reference) one with no
   picture input or no settable prompt is left out; with none left the form
   says why, naming the first one's problem. The four draw choices (*Body
-  photos*, *Sheets to draw*, *Sheet size*, *Draw a*) are compact selects on
-  one row with one line of hints. The step reads the
+  photos*, *Sheets to draw*, *Sheet size*, *Draw a*) are `Segmented` toggles
+  side by side, wrapping only on a narrow window, with one line of hints; the
+  description takes the height the form leaves. The step reads the
   character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
   model is listed disabled, the newest MOSS-Image one preselected, and its name
   rides in the step row as a neutral pill) and the MOSS-Image `txt2img`
