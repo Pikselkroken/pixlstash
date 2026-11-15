@@ -534,12 +534,15 @@
  * the rail offers a second way to draw: from a reference picture plus the
  * words (#2679). The picture
  * goes in through the run's own `inputs`, the sheets are ranked by closeness
- * to it, and it stays in the rail beside them. Emits `cut` with the new
- * pictures' ids as soon as a sheet is cut, then `done` once their faces are
- * read, and the build's picker takes over. The build screen owns the footer:
- * it reads `footer` and calls the actions this component exposes. It also
- * stores `snapshot` on the set and hands it back as `saved`, so the step comes
- * back as it was left; the ranking is not stored, it is read again.
+ * to it, and it stays in the rail beside them. Emits `done` with their ids, and the
+ * dialog's picker takes over. The dialog owns the footer: it reads `footer`
+ * and calls the actions this component exposes.
+ *
+ * On a training set's build screen (views/TrainingSetBuild.vue) the "dialog"
+ * is that screen. The step also emits `cut` with the new pictures' ids as soon
+ * as a sheet is cut, before `done`, and stores `snapshot` on the set, handed
+ * back as `saved`, so it comes back as it was left: the sheets and their
+ * ranking at once, the choices that name what it reads once it has read them.
  */
 import {
   computed,
