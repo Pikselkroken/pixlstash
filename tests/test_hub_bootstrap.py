@@ -23,6 +23,7 @@ from pixlstash import app as app_module
 from pixlstash.hub import bootstrap as bootstrap_module
 from pixlstash.hub.bootstrap import (
     LIBRARY_REPLACE_ENV,
+    LIBRARY_STAMP_BACK_ENV,
     HubBootstrapError,
     LibraryUnavailableError,
     UnusableVaultError,
@@ -1584,6 +1585,37 @@ class TestTheRecoveryReport:
         text = app_module._format_library_unavailable(report)
         assert "Update PixlStash: https://" in text
         assert "relocate" not in text
+
+    def test_a_vault_a_newer_build_opened_is_stamped_back_when_asked(
+        self, hub_with_two, monkeypatch
+    ):
+        """Only for the library named, and only the revision row changes."""
+        hub_path, kept, gone, gone_uuid = hub_with_two
+        conn = sqlite3.connect(os.path.join(gone, "vault.db"))
+        conn.execute("UPDATE alembic_version SET version_num = '9999_from_the_future'")
+        conn.execute("CREATE TABLE added_by_the_newer_build (id INTEGER)")
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setenv(
+            LIBRARY_STAMP_BACK_ENV, "00000000-0000-4000-8000-0000000000aa"
+        )
+        with pytest.raises(LibraryUnavailableError):
+            bootstrap_hub(kept, hub_path)
+        assert vault_query(gone, "SELECT version_num FROM alembic_version") == [
+            ("9999_from_the_future",)
+        ]
+
+        monkeypatch.setenv(LIBRARY_STAMP_BACK_ENV, gone_uuid)
+        result = bootstrap_hub(kept, hub_path)
+
+        assert result.library.uuid == gone_uuid
+        assert vault_query(gone, "SELECT version_num FROM alembic_version") == [
+            (max(bootstrap_module.known_vault_revisions()),)
+        ]
+        assert vault_query(gone, "SELECT COUNT(*) FROM added_by_the_newer_build") == [
+            (0,)
+        ]
 
     def test_a_vault_a_newer_build_opened_is_not_offered_as_another(self, hub_with_two):
         hub_path, kept, gone, _uuid = hub_with_two

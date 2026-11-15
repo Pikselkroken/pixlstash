@@ -315,7 +315,8 @@ accelerator, and retrying there would throw the typed error away.
 **The third is an active library that will not open at all** (#2637): its
 folder is gone, its `vault.db` is gone, it cannot be read, it is a different
 library, or a newer PixlStash has migrated it (kind `newer`: the screen offers
-**Get the latest PixlStash** in place of **Find it…**). The backend prints `PIXLSTASH_LIBRARY_UNAVAILABLE=` and the shell turns
+**Get the latest PixlStash** and **Open it with this version**, which relaunches
+with `PIXLSTASH_STAMP_BACK_LIBRARY=<uuid>`, in place of **Find it…**). The backend prints `PIXLSTASH_LIBRARY_UNAVAILABLE=` and the shell turns
 it into `LibraryUnavailableError` (`backend/LibraryRecovery.ts`). This one gets
 a full window (`renderer/library-recovery.html`) rather than a native box,
 because there are several answers, not one: **Try again** (relaunch, for a

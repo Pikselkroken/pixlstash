@@ -2494,8 +2494,15 @@ or `newer` (`_refuse_newer_library` reads `alembic_version` read-only and raises
 the reason, and the attached libraries that pass the same read-only check. A
 `newer` library is never offered the recreate-the-vault question or relocate:
 its way out is an update, so the screen shows **Get the latest PixlStash**
-instead of **Find it**. Create-a-new-library is still offered; it only detaches
-the registration and never touches the vault.
+instead of **Find it**, or **Open it with this version**:
+`PIXLSTASH_STAMP_BACK_LIBRARY=<uuid>` on the next start makes
+`_stamp_back_newer_library` rewrite only `alembic_version` to this build's
+newest revision. That is the usual answer in development, where every checkout
+shares one library and a branch's migration moves it past `main`. What the
+newer build added stays in the vault, unused, and its migrations re-apply when
+it next opens the library (additive migrations are written to be re-runnable).
+Create-a-new-library is still offered; it only detaches the registration and
+never touches the vault.
 `app.main` prints what is missing, the likely cause and every way out as
 copy-pasteable commands (`cli_hint`), and for Electron a final
 `PIXLSTASH_LIBRARY_UNAVAILABLE=` JSON line the shell turns into its recovery

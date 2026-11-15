@@ -51,8 +51,15 @@
       <div id="error" class="error hidden" role="alert"></div>
 
       <ul class="recovery-actions" aria-label="Ways to carry on">
+        <li id="stamp-back-row" class="recovery-action hidden">
+          <button id="stamp-back" type="button">Open it with this version</button>
+          <span class="sub">
+            Marks the library as this version’s. What the newer version added stays in it,
+            unused, and comes back when that version opens it again.
+          </span>
+        </li>
         <li id="update-row" class="recovery-action hidden">
-          <button id="update" type="button">Get the latest PixlStash</button>
+          <button id="update" type="button" class="secondary">Get the latest PixlStash</button>
           <span class="sub">Opens the download page in your browser.</span>
         </li>
         <li class="recovery-action">

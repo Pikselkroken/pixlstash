@@ -204,12 +204,14 @@ describe('the recovery screen assets', () => {
     assert.match(html, /id="update"/);
     assert.match(script, /report\.kind === 'newer'[\s\S]*?els\.findRow\.classList\.add\('hidden'\)/);
     assert.match(script, /releases\/latest/);
+    assert.match(script, /api\.stampBackLibrary\(/);
+    assert.match(script, /els\.stampBackRow\.classList\.remove\('hidden'\)/);
   });
 
   it('is exposed through the preload bridge on the channels main serves', () => {
     const preload = readFileSync(join(rendererDir, '..', 'preload.ts'), 'utf8');
     const main = readFileSync(join(rendererDir, '..', 'main.ts'), 'utf8');
-    for (const channel of ['request', 'find', 'switch', 'create', 'retry', 'quit']) {
+    for (const channel of ['request', 'find', 'switch', 'create', 'retry', 'stampBack', 'quit']) {
       assert.match(preload, new RegExp(`'libraryRecovery:${channel}'`));
       assert.match(main, new RegExp(`'libraryRecovery:${channel}'`));
     }

@@ -23,6 +23,7 @@ from pixlstash.startup_checks import StartupCheckError  # noqa: E402
 from pixlstash.telemetry import ensure_install_identity  # noqa: E402
 from pixlstash.hub.bootstrap import (  # noqa: E402
     HubBootstrapError,
+    LIBRARY_STAMP_BACK_ENV,
     LibraryUnavailableError,
     RELEASES_URL,
     UnusableVaultError,
@@ -320,7 +321,14 @@ def _format_library_unavailable(exc: LibraryUnavailableError) -> str:
         "To carry on, do one of these and start PixlStash again:",
     ]
     if exc.kind == LibraryUnavailableError.NEWER:
-        lines.append(f"- Update PixlStash: {RELEASES_URL}")
+        lines.extend(
+            [
+                f"- Update PixlStash: {RELEASES_URL}",
+                "- Or open it with this version, leaving what the newer one "
+                "added unused:",
+                f"    {LIBRARY_STAMP_BACK_ENV}={library.uuid} pixlstash-server",
+            ]
+        )
     else:
         lines.extend(
             [

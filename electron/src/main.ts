@@ -1228,6 +1228,7 @@ const LIBRARY_RECOVERY_CHANNELS = [
   'libraryRecovery:switch',
   'libraryRecovery:create',
   'libraryRecovery:retry',
+  'libraryRecovery:stampBack',
   'libraryRecovery:quit',
 ] as const;
 
@@ -1353,6 +1354,14 @@ async function askLibraryRecovery(
   ipcMain.handle('libraryRecovery:retry', (event) => {
     requireLibraryRecoveryRenderer(event, 'libraryRecovery:retry');
     settle({ quit: false, recovery: {} });
+    return { ok: true };
+  });
+
+  ipcMain.handle('libraryRecovery:stampBack', (event) => {
+    requireLibraryRecoveryRenderer(event, 'libraryRecovery:stampBack');
+    // Only for the report that said a newer build migrated this library.
+    if (report.kind !== 'newer') return { ok: false, message: 'This library is not from a newer PixlStash.' };
+    settle({ quit: false, recovery: { stampBackLibrary: report.library.uuid } });
     return { ok: true };
   });
 

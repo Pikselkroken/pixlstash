@@ -31,6 +31,11 @@ export interface StartupRecovery {
    * means the flag can only ever act on the one the screen was showing.
    */
   replaceLibrary?: string;
+  /**
+   * The uuid of a library a newer PixlStash migrated, which the user chose to
+   * open with this version anyway: its schema revision is stamped back.
+   */
+  stampBackLibrary?: string;
 }
 
 export interface RunningServer {
@@ -386,6 +391,8 @@ export class ServerProcess {
       // Only after "Create a new library" on the recovery screen. Explicitly
       // empty otherwise, so a parent-shell value never reaches the backend.
       PIXLSTASH_REPLACE_LIBRARY: recovery.replaceLibrary ?? '',
+      // Only after "Open it with this version" on the recovery screen.
+      PIXLSTASH_STAMP_BACK_LIBRARY: recovery.stampBackLibrary ?? '',
       // Force the inference device to match this runtime (the bundled env is
       // CPU-only); overrides default_device in the shared on-disk config.
       ...(device ? { PIXLSTASH_DEFAULT_DEVICE: device } : {}),

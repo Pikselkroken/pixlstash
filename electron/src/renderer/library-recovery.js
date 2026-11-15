@@ -14,6 +14,8 @@ const els = {
   reason: document.getElementById('reason'),
   notice: document.getElementById('notice'),
   error: document.getElementById('error'),
+  stampBack: document.getElementById('stamp-back'),
+  stampBackRow: document.getElementById('stamp-back-row'),
   update: document.getElementById('update'),
   updateRow: document.getElementById('update-row'),
   retry: document.getElementById('retry'),
@@ -57,7 +59,7 @@ const COPY = {
     intro: (library) =>
       `“${library.name}” in ${library.path} was last opened by a newer version of PixlStash, and this version cannot read it.`,
     cause:
-      'The newer version updated the library in a way this one does not understand yet, so PixlStash left it closed and nothing in it changed. A PixlStash at least as new as that one opens it as it was.',
+      'The newer version, perhaps a development or preview build, updated the library in a way this one does not understand yet, so PixlStash left it closed and nothing in it changed. You can still open it with this version, or with one at least as new as that one.',
     retryNote: 'After updating PixlStash.',
   },
 };
@@ -146,6 +148,7 @@ async function render() {
     : `PixlStash could not open “${report.library.name}”. It was expected in ${report.library.path}.`;
   els.cause.textContent = copy.cause;
   if (report.kind === 'newer') {
+    els.stampBackRow.classList.remove('hidden');
     els.updateRow.classList.remove('hidden');
     els.findRow.classList.add('hidden');
     els.retry.classList.add('secondary');
@@ -160,6 +163,7 @@ async function render() {
   els.others.classList.toggle('hidden', alternatives.length === 0);
 }
 
+els.stampBack.addEventListener('click', () => act(() => api.stampBackLibrary()));
 els.update.addEventListener('click', () => window.open(RELEASES_URL, '_blank'));
 els.retry.addEventListener('click', () => act(() => api.retryLibrary()));
 els.find.addEventListener('click', () => act(() => api.findMissingLibrary()));

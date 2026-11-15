@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   switchToLibrary: (uuid: string) => ipcRenderer.invoke('libraryRecovery:switch', uuid),
   createReplacementLibrary: () => ipcRenderer.invoke('libraryRecovery:create'),
   retryLibrary: () => ipcRenderer.invoke('libraryRecovery:retry'),
+  stampBackLibrary: () => ipcRenderer.invoke('libraryRecovery:stampBack'),
   quitLibraryRecovery: () => ipcRenderer.invoke('libraryRecovery:quit'),
   listAccelerators: () => ipcRenderer.invoke('accel:list'),
   installAccelerator: (accel: string) => ipcRenderer.invoke('accel:install', accel),

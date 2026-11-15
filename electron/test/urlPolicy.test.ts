@@ -545,7 +545,7 @@ describe('IPC gating is complete, not opt-in', () => {
     const actions = handlers.filter(
       ([c]) => c.startsWith('libraryRecovery:') && c !== 'libraryRecovery:request',
     );
-    assert.equal(actions.length, 5, `found ${actions.map(([c]) => c).join(', ')}`);
+    assert.equal(actions.length, 6, `found ${actions.map(([c]) => c).join(', ')}`);
     const listStart = main.indexOf('const LIBRARY_RECOVERY_CHANNELS = [');
     assert.ok(listStart >= 0, 'LIBRARY_RECOVERY_CHANNELS not found');
     const removalList = main.slice(listStart, main.indexOf('] as const', listStart));

@@ -83,6 +83,13 @@ class UnusableVaultError(HubBootstrapError):
 # value left in a shell cannot act on a library it was not meant for.
 LIBRARY_REPLACE_ENV = "PIXLSTASH_REPLACE_LIBRARY"
 
+# Set to the uuid of a library a newer PixlStash has migrated, by a caller that
+# has asked a human (the recovery screen's "Open it with this version"). Its
+# ``alembic_version`` is stamped back to this build's newest revision and
+# nothing else changes: what the newer build added stays in the vault, unused,
+# and that build re-applies its migrations when it next opens the library.
+LIBRARY_STAMP_BACK_ENV = "PIXLSTASH_STAMP_BACK_LIBRARY"
+
 
 class LibraryFingerprintConflictError(HubBootstrapError):
     """The registered folder holds a readable vault that is another library."""
@@ -1013,6 +1020,13 @@ def _offer_a_usable_library(
         failure = exc
         reason = str(exc)
 
+    if (
+        isinstance(failure, NewerLibraryError)
+        and os.environ.get(LIBRARY_STAMP_BACK_ENV, "").strip() == library.uuid
+    ):
+        _stamp_back_newer_library(library)
+        return library
+
     if _vault_gone_from_a_populated_folder(library):
         logger.warning(
             "The library database %s is missing but the folder still has "
@@ -1159,6 +1173,45 @@ def _refuse_newer_library(library: Library) -> None:
                 unknown, library=f'The library "{library.name}" ({library.path})'
             )
         )
+
+
+def _stamp_back_newer_library(library: Library) -> None:
+    """Point a newer build's vault at this build's newest revision.
+
+    Asked for by :data:`LIBRARY_STAMP_BACK_ENV`. Only the ``alembic_version``
+    row changes; no table, column or row the newer build wrote is removed.
+    """
+    head = max(known_vault_revisions())
+    guard = TrustedSQLiteLocation.open(library.vault_path)
+    try:
+        conn = sqlite3.connect(guard.path, timeout=5)
+        try:
+            guard.verify_after_open()
+            with conn:
+                before = [
+                    row[0]
+                    for row in conn.execute("SELECT version_num FROM alembic_version")
+                ]
+                conn.execute("DELETE FROM alembic_version")
+                conn.execute(
+                    "INSERT INTO alembic_version (version_num) VALUES (?)", (head,)
+                )
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        raise HubBootstrapError(
+            f"Could not stamp {library.vault_path} back to {head}: {exc}"
+        ) from exc
+    finally:
+        guard.close()
+    logger.warning(
+        "Stamped the library %s (%s) back from %s to %s, as asked on the "
+        "recovery screen. What the newer PixlStash added is still in the vault.",
+        library.name,
+        library.vault_path,
+        ", ".join(before),
+        head,
+    )
 
 
 def _opened_revision_rows(connection) -> list[str]:
