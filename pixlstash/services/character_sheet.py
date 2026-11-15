@@ -1,4 +1,6 @@
-"""Character sheets: one MOSS-Image or Krea 2 picture of one person, drawn six times.
+"""Character sheets: one picture of one person, drawn six times.
+
+Drawn by MOSS-Image, Krea 2, Qwen-Image or FLUX.2 Klein.
 
 The "Create a training set…" dialog can draw a character instead of picking
 from pictures that exist. A sheet is a 2560×1536 grid: four passport photos on
@@ -295,7 +297,8 @@ def sheet_prompt(
 
     The MOSS layout prompt by default; with *layout* ``prose``, the same
     sheet as one plain sentence, for a model that takes no layout (Krea 2,
-    or an edit model drawing from a reference picture). With *reference*, every photo
+    Qwen-Image, FLUX.2 Klein, or an edit model drawing from a reference
+    picture). With *reference*, every photo
     names the person in the reference picture ahead of the description: the
     picture sets the face, the words the build and the clothes.
 
