@@ -1,3 +1,284 @@
+# [2.0.1]
+
+## Training sets
+
+- **Generate a character's training pictures.** *Create a training set…* can
+  now draw them: describe the character, draw 2-4 character sheets with a
+  MOSS-Image workflow (optionally with the character's LoRA), and keep the
+  sheets that look right. Their photos become the character's pictures, marked
+  *new* in the picker; the sheets go to the Scrapheap, where any can be
+  restored. A character with no pictures opens straight on this step.
+- Character sheets can start from one of the character's pictures, with a
+  Qwen-Image-Edit workflow, so they keep that face. Each sheet says how close
+  it comes to the picture, and the closest is kept for you when close enough.
+- *Faces and reference cluster…* on a person's menu groups their faces by who
+  they look like. The group you pick decides who the person is when ranking
+  character sheets and choosing a training set, so a few pictures of someone
+  slightly different no longer pull the likeness off.
+- Create a training set: a minimum likeness and a minimum score slider, and a
+  say in how much different framings and expressions matter. Click a pick to
+  see it full size, and leave it out from its corner; the next best takes its
+  place.
+
+## Tag reviews
+
+- A review can ask about the pictures the tagger is least sure about: pick
+  "Unsure pictures" in the New review dialog, or click a tag's Unsure figure
+  on the Tag health board.
+- API: `POST /reviews` takes `picture_ids` to review a list you supply, and
+  `control_share` mixes in pictures you have already judged, so the receipt
+  shows how consistent you were. `GET /tag_predictions/labels` returns your
+  tag verdicts across the library in pages. Owner only.
+
+## Tasks and workflows
+
+- A LoRA training run's progress shows as a bar under its row in Tasks. The
+  progress card over the picture grid, which never filled, is gone.
+- **Clear finished** in Tasks clears every finished run, including those with
+  unsaved workflow changes, which are discarded. Before, it skipped them, so it
+  could appear to do nothing.
+- Create with LoRA… lists only the workflows the LoRA is for, matching a
+  checkpoint by its guessed base model instead of listing it as "base model
+  not known". The Run popup shows each workflow's base model and type.
+- A workflow with a required input left unconnected names that input before
+  the run, instead of failing with ComfyUI's node numbers.
+
+## Fixes
+
+- Fixed: a training run named after a device name Windows reserves (`con`,
+  `nul`, `aux` and the like) failed to start on Windows.
+- Fixed: F2 did nothing on a person or set once you had clicked a picture.
+- Fixed: training on from an earlier step showed the abandoned last step until
+  the trainer logged again. The abandoned steps' loss curve is kept with the
+  rest of what was set aside.
+- Deleting every picture no longer offers to set the library up again, and the
+  sidebar's "Finish organising…" reminder can be dismissed.
+- Moving the model store or the face models into a folder already on the
+  model shelf is refused.
+
+# [2.0.0]
+
+Upgrading opens a **What's changed** checklist beside the grid: the gestures
+that moved, each ticked off as you try it, with the old way one click away
+where there is one. A card at the foot of the sidebar starts a short tour of
+training a LoRA. Both come back from Settings, beside the version.
+
+## A new layout
+
+- Media, Workflows and Models are three workspaces, switched from the centre
+  of the title bar. The title bar shows in the browser too, with the library
+  picker and its drive space, Tasks, and Settings.
+- The Media sidebar is one list: All media, Favourites, Review (Inbox,
+  Scrapheap, Duplicates, Tags), then a Library / Folders switch. Library is the
+  project picker with its People and Sets; Folders shows the folders your
+  pictures are filed in. Find in library filters people, sets and folders.
+- Sets can sit inside a person or another set, up to three levels deep. People
+  and Sets show as trees, and fold away from a caret.
+- An Inbox under Review holds what you added lately that has no person and no
+  set yet. Import folders moved to Settings › Libraries & imports.
+- The grid toolbar is for browsing: sort, Filter, View, search and the right
+  panel. Export, Train LoRA, Tag (T) and Add to set (S) are on the selection
+  pill. Undo, Redo and History are in the toolbar on every screen.
+- The right panel, now the Inspector, shows what you have selected: one
+  picture with its faces, tags, description, properties and recipe, or the
+  tags several pictures share. With nothing selected it shows the view's
+  statistics.
+- The left sidebar can be resized in every workspace, and the docked sidebar
+  is a narrow strip of icons.
+- Settings is twelve panes under five headings, none of which scroll.
+- The picture right-click menu is about half as tall, with the tools grouped
+  under Analyse, Generate, Adjust and Find & compare.
+- A redrawn keyboard focus ring, larger keyboard hints, and sub-menus that
+  open upwards near the bottom of the window.
+
+## Pictures
+
+- Pictures open with a double-click; a single click selects. Prefer the old
+  way? Settings › Appearance › Mouse.
+- A picture opens inside the library window: the title bar, sidebar and panel
+  stay, and the filmstrip runs along the bottom. Leave with Esc, a click on
+  the dark area or a middle-click. The wheel zooms or steps through pictures,
+  your choice.
+- The viewer's toolbar only gets you around; its tools moved into the
+  inspector's Info and Edit tabs. Press F for full screen, I for the
+  inspector. Face boxes show when you point at a face; hold Shift for all.
+- Deleting in the viewer moves on to the next picture, and Ctrl+Z brings it
+  back.
+- Favourite pictures with the heart or H. Filters › Favourites only narrows
+  whatever you are looking at.
+- Dropped and imported pictures appear at the top of the grid straight away,
+  with their progress on each tile. The import progress dialog is gone.
+- Importing a file whose picture is in the Scrapheap restores it.
+- The search field lists every filter whose name matches (tags, faces,
+  checkpoints, LoRAs, workflows) as you type. Tab adds one, Shift+Tab its
+  opposite, Enter searches the words. A pasted prompt becomes one filter per
+  tag. Esc, or the amber ×, clears every filter.
+- In the desktop app, Ctrl+C copies the selected pictures as files, and a
+  Ctrl-drag (Option on a Mac) drags them out as files.
+- Open a picture in another app from Open with; save there and the edit comes
+  back stacked on the original. Show in folder opens its folder.
+- Exports strip generation data (workflow, prompt, parameters) from PNG, JPEG
+  and WebP by default. Keep the workflow in the Export panel or Settings to
+  keep it.
+- **Analyse ▸ Detect faces again** finds the faces afresh, for example after
+  rotating. Named faces keep their person.
+- A filter or Upscale… run from the viewer ends in a before / after
+  comparison. The Upscale… dialog shows the target size and offers to download
+  RealESRGAN.
+- A JSON prompt reads as labelled fields in the Recipe tab.
+- The stack chip in the viewer wears its stack's colour and steps through the
+  stack. On small tiles the rating shows as "3★".
+
+## Tags
+
+- Tags are organised into groups (People, Hair, Clothing, Pose & action and
+  more), with defaults that file thousands of tagger tags. A picture's tags
+  have a By group tab, and Filters can require or exclude a whole group. The
+  Tags view can import a Danbooru tag database.
+- Tags that name a colour show their chip in that colour.
+- Tagging is in the side panel: select pictures and press T, type a tag and
+  Enter, and it goes on all of them. Shading shows how many have it.
+- Copy and paste tags between pictures (Ctrl+C, Ctrl+V), rejected tags
+  included. Pasted comma-separated text becomes one tag per item.
+- Tag chips come in three sizes.
+- The Tags view opens in the main area, with a Reviews panel listing open
+  reviews, archived receipts and stickers. A review ends with End review…,
+  which asks whether to keep or undo its changes.
+- Star ratings only react to a digit pressed on its own, so Ctrl+2 no longer
+  sets two stars.
+- The anomaly tagger is now a DINOv3 ViT-B/16; its average AUC on held-out
+  pictures rises from 0.81 to 0.85. It downloads once (about 355 MB) under the
+  DINOv3 License, saved beside the weights.
+
+## Training LoRAs
+
+- **Train a LoRA from a person or a set.** The Train dialog asks what the
+  pictures are of, how hard to train and how to fit your GPU, and works out
+  the rest from the pictures and the free memory. Advanced shows every value.
+  It warns about too few pictures, untagged pictures, near copies and other
+  people's faces.
+- Right-click a person and choose Create a training set… to have PixlStash
+  pick the pictures: the best likeness and quality across close-ups,
+  full-body shots and expressions, without near copies or other people.
+- Training learns your machine: the first run of a setup measures memory and
+  speed, and later runs are fitted to it, with a time estimate.
+- Watch a run train in Models › Training runs: loss, previews by checkpoint,
+  GPU and RAM, speed and time left. A character run rates each preview's
+  likeness and marks the best step.
+- Training a person holds a description most captions share ("an elderly
+  man") to what the model drew before, so the LoRA does not learn that everyone
+  who matches is them.
+- Runs can be stopped, retried, trained longer from any kept step, deleted to
+  the Trash, and put on the shelf from any checkpoint. A failed run says why in
+  one sentence.
+- A run records exactly what it was trained on, exportable as a zip.
+- When ComfyUI holds the memory a run needs, PixlStash offers to clear
+  ComfyUI's memory first, and to quit it only if that is not enough. It never
+  quits ComfyUI without asking.
+- Captions can be tags, full descriptions or none. MiniMax H3 motion fits a
+  32 GB GPU, and a motion recipe needs video clips in the set.
+- Runs made outside PixlStash open their own page too.
+
+## Models
+
+- The Models workspace has its own sidebar with Sets, Favourites, type and
+  base model rows, Training runs, and a Folders tree of every drive and model
+  folder with its free space.
+- Move models by dragging them onto a folder, with Cut and Paste, or Move to….
+  Folders inside a model folder can be created, renamed, moved and removed,
+  and a model folder itself renamed. StabilityMatrix and ComfyUI folders light
+  up where a dragged model belongs.
+- Model folders keep themselves up to date; the Rescan button is gone.
+- Look up a missing base model on Civitai by file hash, and confirm a guessed
+  base model with one click.
+- Models in a locked folder are hatched and padlocked, and say why they will
+  not move.
+- Deleting a workflow or models to the Trash can be undone.
+- A model arriving from your Downloads folder is announced, with a Show
+  button.
+- A model can be downloaded when only your ComfyUI's own templates know where
+  it lives.
+
+## Workflows and ComfyUI
+
+- Workflows has its own sidebar (All, Favourites, Recently used, ComfyUI
+  templates, Type and Base model), and its panel is rearranged into
+  collapsible Models, LoRAs, Parameters, GPU memory and Latest pictures
+  sections. R runs the selected workflow.
+- Keep more than one ComfyUI, such as this PC and a render box, and pick where
+  runs go from the sidebar's Run on menu. Settings › ComfyUI lists every
+  connection.
+- **Convert to Inpainting workflow** makes a workflow that redraws only the
+  area you select. Two more inpainting templates ship: Qwen Image 2.1 and MOSS
+  Image.
+- A ComfyUI run shows its progress as a line under its row in Tasks, and
+  ComfyUI has its own row with a broom to clear its memory.
+- Adding a workflow file you already have points at the existing one instead
+  of making a copy.
+- When ComfyUI's PixlStash nodes are too old, PixlStash offers to update them
+  and restart ComfyUI.
+- The Generate button left the Media toolbar; run from Workflows, from a
+  selection or from Create with LoRA….
+- Finished runs in Tasks have a Clear all, and go away after two hours; a run
+  with unsaved workflow changes stays until you save or dismiss it.
+
+## Other
+
+- AI agents can ask which workflows your pictures were made with
+  (`list_picture_workflows`).
+- On Apple Silicon, Florence-2 runs on the GPU, and with "Keep models in
+  memory" off the search models are released when idle.
+- On AMD GPUs (ROCm, experimental), face extraction and the WD14 tagger use
+  the GPU when `onnxruntime-migraphx` is installed.
+- Settings › ComfyUI and AI-toolkit say what each program is and where to get
+  it.
+- Settings ends with a "PixlStash needs you!" card that turns a bug, idea or
+  security problem into a ready-to-send report.
+- If your library's folder is missing, the desktop app says what is missing
+  and lets you find it, open another library or start a new one.
+  `pixlstash-cli libraries activate` chooses the library to open.
+- Many smaller improvements across the app.
+
+## Fixes
+
+- Fixed: cropping a picture down to a face cost it Quality score. Pictures
+  with a face are now judged on the face's pixels and rescored in the
+  background.
+- Fixed: exporting or training a set used a stack's newest picture rather than
+  the one on top.
+- Fixed: a library folder whose name contains `?`, `#` or `%` would not open.
+- Fixed: the Windows server installer accepted Python 3.10 and left a
+  PixlStash that would not start. It now requires Python 3.11.
+- Fixed: on Apple Silicon with "Keep models in memory" off, unloading idle
+  models could crash the app while tagging or captioning.
+- Fixed: a workflow loading an fp8 diffusion model called it missing when only
+  your shelf had it. Needs the updated ComfyUI-PixlStash node pack.
+- Fixed: a VAE, text encoder or diffusion model downloaded from PixlStash now
+  lands in your launcher's subfolder for its kind, and MiniMax H3's video VAE
+  is recognised.
+- Fixed: a ComfyUI on this computer kept calling a PixlStash that had stopped
+  after another copy ran.
+- Fixed: a ComfyUI run could wait for GPU memory ComfyUI itself held, or wait
+  for ever when it used all the free memory last time.
+- Fixed: downloading a gated Hugging Face model failed with "401"; it now
+  offers to open the model's page.
+- Fixed: Start review covered the grid's selection instead of the board's
+  scope, and Undo straight after a review decision could do nothing.
+- Fixed: dropping several pictures onto a set failed when some were already
+  in it, and dropping onto a locked set said only "status code 409".
+- Fixed: rotating a picture could leave the grid showing it the old way round.
+- Fixed: End in the grid cut off the last row.
+- Fixed: running a workflow brought up "View changed externally".
+- Fixed: Extract workflow failed when ComfyUI was not running.
+- Fixed: Open in ComfyUI opened a dead tab when ComfyUI was not running.
+- Fixed: Crop in the viewer's Edit tab ignored a marked selection.
+- Fixed: moving a large model to another drive showed an empty progress bar.
+- Fixed: selecting or dragging on a large model shelf stalled.
+- Fixed: the PixlStash inpainting templates for Flux.2 Klein 9B, MOSS Image
+  and Qwen Image Edit 2511 left two crop dropdowns empty.
+- Fixed: a text-embedding model that could not load was retried several times
+  a second.
+
 # [1.13.2]
 
 - Windows installers, which failed to sign for 1.13.1. No other changes.
