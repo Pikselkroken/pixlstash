@@ -51,6 +51,13 @@ export function useZoomPopout(list, onClosed) {
     zoomedId.value = id;
   }
 
+  // A reload can replace the list under an open pop-out (a new strictness in
+  // the faces dialog, sheets arriving); close it rather than show a picture
+  // that is no longer in the list, with dead prev and next.
+  watch(zoomPos, (pos) => {
+    if (pos < 0 && zoomedId.value != null) zoomedId.value = null;
+  });
+
   async function closeZoom() {
     const id = zoomedId.value;
     if (id == null) return;
