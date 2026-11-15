@@ -769,6 +769,7 @@ let timer = null;
 let ticking = false;
 let runsEndedAt = 0;
 let alive = true;
+let restoring = false;
 // What the sheets on show were drawn with. A draw with anything else starts a
 // new pick: the earlier sheets are of another prompt, not more of this one.
 const drawnWith = ref("");
@@ -1807,7 +1808,12 @@ async function load() {
   if (!loaded.value) {
     error.value = `Couldn't read ${name.value}. Open the set again to try again.`;
   }
+  // What `restore` puts back is not a choice made: its watchers run after it
+  // has set `restored`, so they are let run before choices are remembered.
+  restoring = true;
   await restore(props.saved || recalled());
+  await nextTick();
+  restoring = false;
   for (const result of [character, adapters, cards, references]) {
     if (result.status === "rejected") {
       console.warn("Couldn't load part of the sheet form", result.reason);
@@ -1907,7 +1913,7 @@ function recalled() {
 /** Remember one choice for the next fresh step: only one made once the
  * step is restored, so a default is never remembered as a choice. */
 function remember(update) {
-  if (!restored.value) return;
+  if (!restored.value || restoring) return;
   try {
     const all = readChoices();
     update(all);

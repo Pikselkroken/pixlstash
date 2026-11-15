@@ -1791,6 +1791,29 @@ describe("TrainingSetBuild: generating the pictures", () => {
     expect(on(wrapper, "Sheet size")).toBe("Large");
     expect(on(wrapper, "Sheets to draw")).toBe("4");
     wrapper.unmount();
+
+    // Opening a saved build is not choosing: it leaves the choices as they were.
+    wrapper = await open({
+      v: 1,
+      stage: "generate",
+      stepped: true,
+      sheets: {
+        phase: "describe",
+        form: { description: "Adult woman" },
+        mode: "text",
+        workflow_id: KREA.id,
+        lora_sha: "moss1",
+        strength: 1.2,
+      },
+    });
+    expect(select(wrapper, "Sheet workflow").props("modelValue")).toBe(KREA.id);
+    wrapper.unmount();
+    wrapper = await open();
+    expect(select(wrapper, "Character LoRA · optional").props("modelValue")).toBe("");
+    await click(wrapper, "Draw from", "Text");
+    await flushPromises();
+    expect(select(wrapper, "Sheet workflow").props("modelValue")).toBe("manual:moss");
+    wrapper.unmount();
   });
 
   it("starts a new pick when the reference picture is changed", async () => {
