@@ -22,6 +22,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from pixlstash.scoring import compute_character_likeness_for_faces
+from pixlstash.services.face_clusters import most_central, vector
 
 MAX_PICKS = 50
 """The longest ranking a group returns: the dialog's slider stops here."""
@@ -209,13 +210,24 @@ class Candidate:
         self.expressions = expression_labels(folded, self.description)
 
 
-def pick_references(faces: list) -> list:
+def pick_references(faces: list, reference_cluster=None) -> list:
     """The reference faces for likeness, best evidence first.
 
     *faces* are ``(face_id, picture_id, rating, smart_score, features)``
-    tuples. 5-star pictures first, then 4-star, then by smart score; one face
-    per picture, at most :data:`MAX_REFERENCES`.
+    tuples. With a *reference_cluster* (picture ids) holding any of them, the
+    references are its faces, most central first: the identity the owner
+    chose, whatever the ratings say. Otherwise 5-star pictures first, then
+    4-star, then by smart score. One face per picture, at most
+    :data:`MAX_REFERENCES`.
     """
+    if reference_cluster:
+        first = {}
+        for row in faces:
+            if row[1] in reference_cluster and row[4] is not None:
+                first.setdefault(row[1], row)
+        chosen = most_central(list(first.values()), lambda row: vector(row[4]))
+        if chosen:
+            return chosen[:MAX_REFERENCES]
 
     def order(row):
         _face_id, picture_id, rating, smart, _features = row

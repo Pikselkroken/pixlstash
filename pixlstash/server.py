@@ -96,6 +96,9 @@ from pixlstash.services.managed_model_store import ensure_managed_folder
 from pixlstash.telemetry import ensure_install_identity, start_periodic_sender
 from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
+from pixlstash.routes.character_face_clusters import (
+    create_router as create_character_face_clusters_router,
+)
 from pixlstash.routes.character_sheets import (
     create_router as create_character_sheets_router,
 )
@@ -1947,6 +1950,12 @@ class Server(
         )
         self.api.include_router(
             create_character_sheets_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["characters"],
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_character_face_clusters_router(self),
             prefix=API_V1_PREFIX,
             tags=["characters"],
             dependencies=gate,
