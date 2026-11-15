@@ -49,6 +49,7 @@ from pixlstash.resources.ledger import ledger
 from pixlstash.resources.ledger import ram as read_ram
 from pixlstash.routes.model_folders import register_model_folder
 from pixlstash.scoring import select_reference_faces_for_character
+from pixlstash.services import face_clusters
 from pixlstash.services.dedup_tier_service import (
     DEFAULT_THRESHOLD,
     NearBucket,
@@ -3108,7 +3109,8 @@ def create_router(server) -> APIRouter:
                 (fid, pid, pic["score"], pic["smart"], feat)
                 for pid, pic in pictures.items()
                 for fid, _bbox, feat in pic["faces"]
-            ]
+            ],
+            set(face_clusters.reference_cluster_ids(session, character_id)),
         )
         likeness = dataset_picker.face_likeness(
             [(fid, feat) for fid, _pid, _r, _s, feat in references],

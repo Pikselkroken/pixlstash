@@ -38,6 +38,13 @@ const gen = vi.hoisted(() => ({
   getCharacter: vi.fn(),
   getReferencePictures: vi.fn(),
   patchCharacter: vi.fn(),
+  getFaceClusters: vi.fn(async () => ({
+    faces: 0,
+    reference_cluster: null,
+    clusters: [],
+    unclustered: [],
+  })),
+  setReferenceCluster: vi.fn(),
   listAdapters: vi.fn(),
   getRunOutcome: vi.fn(),
   getWorkflowCard: vi.fn(),
@@ -56,6 +63,8 @@ vi.mock("../../api/characters", () => ({
   getCharacter: gen.getCharacter,
   getReferencePictures: gen.getReferencePictures,
   patchCharacter: gen.patchCharacter,
+  getFaceClusters: gen.getFaceClusters,
+  setReferenceCluster: gen.setReferenceCluster,
 }));
 vi.mock("../../api/modelShelf", () => ({ listAdapters: gen.listAdapters }));
 vi.mock("../../api/workflows", () => ({
@@ -173,6 +182,38 @@ beforeEach(() => {
 });
 
 describe("CreateTrainingSetDialog", () => {
+  it("asks for a reference cluster when the faces look like several people", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    const cluster = (size) => ({ size, members: [] });
+    gen.getFaceClusters.mockResolvedValueOnce({
+      faces: 12,
+      reference_cluster: null,
+      clusters: [cluster(6), cluster(4), cluster(2)],
+      unclustered: [],
+    });
+    let wrapper = mountDialog();
+    await flushPromises();
+    // Two clusters of three or more; the pair does not count as a person.
+    expect(wrapper.find('[data-testid="cts-faces-notice"]').text()).toContain(
+      "Anna's faces look like 2 people.",
+    );
+    wrapper.unmount();
+
+    gen.getFaceClusters.mockResolvedValueOnce({
+      faces: 12,
+      reference_cluster: [1, 2, 3, 4, 5],
+      clusters: [cluster(6), cluster(4)],
+      unclustered: [],
+    });
+    wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cts-faces-notice"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="cts-faces-steered"]').text()).toContain(
+      "Steered by Anna's reference cluster (5 pictures).",
+    );
+    wrapper.unmount();
+  });
+
   it("shows the clips group only when the character has clips", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
     let wrapper = mountDialog();

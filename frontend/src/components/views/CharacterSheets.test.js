@@ -920,6 +920,24 @@ describe("CharacterSheets", () => {
     wrapper.unmount();
   });
 
+  it("Change… opens the faces dialog and shows the new reference faces after", async () => {
+    referenceWorld();
+    const wrapper = mountScreen({ FaceClustersDialog: true });
+    await flushPromises();
+    const dialog = () => wrapper.findComponent({ name: "FaceClustersDialog" });
+    expect(dialog().props("open")).toBe(false);
+    await wrapper.find('[data-testid="cs-change-faces"]').trigger("click");
+    expect(dialog().props("open")).toBe(true);
+    gen.getReferencePictures.mockResolvedValue({ reference_picture_ids: [41] });
+    dialog().vm.$emit("close");
+    await flushPromises();
+    expect(dialog().props("open")).toBe(false);
+    expect(wrapper.find('[data-testid="cs-reference"]').attributes("src")).toBe(
+      "/thumb/41.webp",
+    );
+    wrapper.unmount();
+  });
+
   it("refuses a reference workflow with nowhere to put the picture or the prompt", async () => {
     referenceWorld();
     gen.preflightWorkflowRun.mockResolvedValue({

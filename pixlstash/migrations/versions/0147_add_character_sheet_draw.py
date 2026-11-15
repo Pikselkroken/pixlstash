@@ -4,8 +4,8 @@ One row per draw of character sheets on a character: its settings, runs,
 sheets, kept and used sheets, and whether the owner has seen it. Schema-only
 and additive.
 
-Revision ID: 0146_add_character_sheet_draw
-Revises: 0145_add_tag_suggestion_control_state
+Revision ID: 0147_add_character_sheet_draw
+Revises: 0146_add_character_reference_cluster
 Create Date: 2026-11-15
 """
 
@@ -15,8 +15,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0146_add_character_sheet_draw"
-down_revision: Union[str, None] = "0145_add_tag_suggestion_control_state"
+revision: str = "0147_add_character_sheet_draw"
+down_revision: Union[str, None] = "0146_add_character_reference_cluster"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

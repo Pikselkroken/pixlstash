@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205), [25.26 Creating, renaming and moving a folder inside a model folder (#2206)](#2526-creating-renaming-and-moving-a-folder-inside-a-model-folder-2206), [25.27 Removing a folder inside a model folder (#2207)](#2527-removing-a-folder-inside-a-model-folder-2207), [25.28 Training set picker](#2528-training-set-picker), [25.29 Character sheets: drawing a training set](#2529-character-sheets-drawing-a-training-set)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205), [25.26 Creating, renaming and moving a folder inside a model folder (#2206)](#2526-creating-renaming-and-moving-a-folder-inside-a-model-folder-2206), [25.27 Removing a folder inside a model folder (#2207)](#2527-removing-a-folder-inside-a-model-folder-2207), [25.28 Training set picker](#2528-training-set-picker), [25.29 Character sheets: drawing a training set](#2529-character-sheets-drawing-a-training-set), [25.30 Face clusters and the reference cluster](#2530-face-clusters-and-the-reference-cluster)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -619,6 +619,7 @@ Public guest scoring and shared-link endpoints.
 | DELETE | /api/v1/characters/{id}                                                       | characters      | Delete character                                              |
 | GET    | /api/v1/characters/{id}                                                       | characters      | Get character by id                                           |
 | GET    | /api/v1/characters/{id}/faces                                                 | characters      | List character faces                                          |
+| PUT    | /api/v1/characters/{id}/reference-cluster                                     | characters      | Set a person's reference cluster                              |
 | GET    | /api/v1/characters/{id}/reference_pictures                                    | characters      | List reference pictures                                       |
 | GET    | /api/v1/characters/{id}/summary                                               | characters      | Get character category summary                                |
 | GET    | /api/v1/characters/{id}/{field}                                               | characters      | Get character field                                           |
@@ -641,6 +642,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/dedup/verdicts/keep-separate                                          | dedup           | Record that a group is not duplicates                         |
 | POST   | /api/v1/dedup/verdicts/reopen                                                 | dedup           | Return a decided group to the queue                           |
 | POST   | /api/v1/dedup/verdicts/stack                                                  | dedup           | Stack a duplicate group                                       |
+| GET    | /api/v1/face-clusters                                                         | characters      | Group a person's faces by identity                            |
 | GET    | /api/v1/favourites                                                            | favourites      | The owner's favourites                                        |
 | PUT    | /api/v1/favourites                                                            | favourites      | Mark or unmark favourites                                     |
 | GET    | /api/v1/insights                                                              | insights        | Findings about the library, read-only                         |
@@ -12799,7 +12801,8 @@ stray face on an original never sets aside the crop the owner put on top. `pixls
 function over those rows, tested without a server.
 
 - **Likeness** is the face similarity (0-1, shown 0-100) against up to
-  `MAX_REFERENCES` faces picked locally: 5★ pictures, then 4★, then by smart
+  `MAX_REFERENCES` faces picked locally: with a reference cluster (§25.30) the
+  cluster's most central faces, otherwise 5★ pictures, then 4★, then by smart
   score, one face per picture. A reference is scored against the *other*
   references, or it would score itself near 1. Only embeddings from the active
   InsightFace pack are compared (a wholly legacy set is used as is), as face
@@ -12957,7 +12960,7 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 - The prompt route is pure; the other two are a `*_in_session` read or write
   behind a thin vault wrapper in `services/character_sheet.py` (§10.1).
 - **Draws are stored on the character** (`character_sheet_draw`, table
-  `db_models/character_sheet_draw.py`, migration 0146), so the dialog's state
+  `db_models/character_sheet_draw.py`, migration 0147), so the dialog's state
   survives closing it or a reload. A draw is one run of "Draw": its opaque
   `settings`, `drawn_from` (a picture id, a plain column because purges
   hard-delete pictures), its `runs` (`{key, status, message, picture_ids}`,
@@ -12979,6 +12982,67 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   `GET /characters/{character_id}/sheets/draws` is on
   `READ_BLOCKED_GET_TEMPLATES`, an exact match, because a prefix over
   `/api/v1/characters/` would also swallow the character's scoped reads.
+- The character's reference faces that ranking and the step's reference strip
+  use come from `select_reference_faces_for_character`, so a reference cluster
+  (§25.30) steers both.
+
+### 25.30 Face clusters and the reference cluster
+
+A person's pictures can hold several individuals: generated originals drift
+from picture to picture, and a sheet drawn from text is a new face. Nothing
+real is ground truth, so the owner decides who the person *is*.
+`services/face_clusters.py` holds the work; `routes/character_face_clusters.py`
+translates.
+
+- **Clustering** (`cluster_faces`, pure): average-linkage on cosine distance
+  (`scipy.cluster.hierarchy`), cut at `1 - threshold`, so two groups merge
+  while the mean likeness between their faces clears the threshold. One face a
+  picture (`person_faces`: the person's first face, active InsightFace pack as
+  §25.28, every picture stacked or not as the selectors see them, minority
+  embedding widths and zero or non-finite embeddings dropped). A group of one
+  is `unclustered`. `# ponytail:` O(n²) distance matrix; cap or sample past
+  ~5k faces.
+- **Centrality** is a face's cosine similarity to its group's centroid (the
+  unit mean of the unit embeddings). The view sizes faces by it, and both
+  reference selectors order by it, so "typical" means one thing.
+- **Thresholds.** `SAME_PERSON = 0.45` is the default, the sheet ranking's
+  `SOME_AGREEMENT`; `STRICTNESS` is Loose 0.35 / Normal 0.45 / Strict 0.55.
+  These are placeholders until calibrated on real libraries (clusters per
+  person, whether a text-only sheet's panels form their own cluster, whether a
+  reference-drawn sheet's panels join the reference picture's).
+- **The reference cluster** is table `character_reference_member`
+  (`character_id` cascade-deletes with the person; `picture_id` a plain id for
+  the reason `Character.thumbnail_picture_id` is one). A table rather than a
+  `Character` column so no character payload and not the by-name field reader
+  (`GET /characters/{id}/{field}`) serves the ids to a scoped token. It is
+  **frozen**: stored at the pick, never grown; the Scrapheap purge deletes the
+  rows of the pictures it removes, as it clears a pinned thumbnail, so a
+  reused picture id never joins. `reference_cluster_ids` drops an
+  id whose picture is deleted or no longer carries the person's face; none left
+  means no reference cluster.
+- **Steering.** `select_reference_faces_for_character` returns the person's
+  faces on the reference cluster, most central first, capped at `max_refs`,
+  before its star rules; so sheet ranking, the Sheets step's reference strip,
+  grid likeness sort, face auto-assignment and the Train dialog's preview all
+  follow it. The training-set picker passes the cluster to
+  `dataset_picker.pick_references`, which takes its `MAX_REFERENCES` most
+  central faces. Membership is **not** a hard filter: a picture outside the
+  cluster is picked if its likeness clears `min_likeness`, and the other
+  identities fall under the floor as `low_likeness`, visibly.
+- `GET /face-clusters?character_id=&threshold=` answers each cluster's
+  members (picture, centrality, score, format), `cohesion` (mean pairwise
+  likeness), `reference_share`, `is_reference` (the one holding most of the
+  reference), `similarity_to_reference` (centroid to the reference cluster's
+  centroid, or the largest cluster's before one is picked) and `from_sheets`
+  (most members share a source picture with three others: cut from a sheet);
+  the reference cluster first, then largest first. `PUT
+  /characters/{id}/reference-cluster` stores `picture_ids`, 422 naming any id
+  without the person's face, `[]` clears. Both are `OWNER_ONLY`; the GET is
+  untemplated so it can also sit on `READ_BLOCKED_GET_PATHS`. The route only
+  translates: `read_person` and `save_reference_cluster` are thin vault
+  wrappers (§10.1), and the clustering runs outside the reader.
+- Not to be confused with the grid's likeness groups
+  (`GET /pictures/likeness-groups`), which join near-duplicate pictures.
 
 ## 26. Prompt match
 

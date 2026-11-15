@@ -5,7 +5,7 @@
     :subtitle="subtitle"
     size="2xl"
     :pad-body="false"
-    :persistent="busy"
+    :persistent="busy || facesOpen"
     @close="close"
     @accept="onAccept"
   >
@@ -17,6 +17,29 @@
         <span>{{ loadError }}</span>
       </p>
       <p v-else-if="!data" class="cts-note">Ranking the pictures…</p>
+
+      <p
+        v-if="data && faces.people > 1 && !faces.reference"
+        class="cts-notice"
+        data-testid="cts-faces-notice"
+      >
+        <v-icon size="16">mdi-face-recognition</v-icon>
+        <span
+          >{{ characterName }}'s faces look like {{ faces.people }} people.
+          <button type="button" class="cts-link" @click="openFaces"
+            >Choose a reference cluster…</button
+          ></span
+        >
+      </p>
+      <p
+        v-else-if="data && faces.reference"
+        class="cts-note"
+        data-testid="cts-faces-steered"
+      >
+        Steered by {{ characterName }}'s reference cluster ({{ faces.reference }}
+        pictures).
+        <button type="button" class="cts-link" @click="openFaces">Change…</button>
+      </p>
 
       <template v-if="data">
         <section
@@ -352,6 +375,12 @@
         </AppButton>
       </template>
     </template>
+    <FaceClustersDialog
+      :open="facesOpen"
+      :character="{ id: character?.id, name: characterName }"
+      :return-focus-to="facesOpener"
+      @close="onFacesClosed"
+    />
   </AppDialog>
 </template>
 
@@ -385,8 +414,10 @@ import {
   deletePictureSet,
 } from "../../api/pictureSets";
 import { fetchCharacterSetSuggestion } from "../../api/training";
+import { getFaceClusters } from "../../api/characters";
 import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
+import FaceClustersDialog from "./FaceClustersDialog.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -809,6 +840,39 @@ function chipLine(p) {
   return [labels, likeness].filter(Boolean).join(" · ");
 }
 
+// The person's faces at Normal: how many people they look like (clusters of
+// three or more) and how big the reference cluster is, for the notice.
+const faces = ref({ people: 0, reference: 0 });
+const facesOpen = ref(false);
+const facesOpener = ref(null);
+
+async function loadFaces() {
+  const id = props.character?.id;
+  faces.value = { people: 0, reference: 0 };
+  try {
+    const result = await getFaceClusters(id, 0.45);
+    if (id !== props.character?.id) return;
+    faces.value = {
+      people: result.clusters.filter((c) => c.size >= 3).length,
+      reference: result.reference_cluster?.length || 0,
+    };
+  } catch (e) {
+    console.warn("Couldn't read the face clusters", id, e);
+  }
+}
+
+function openFaces(event) {
+  facesOpener.value = event?.currentTarget ?? null;
+  facesOpen.value = true;
+}
+
+/** The reference may have moved: rank again. */
+function onFacesClosed() {
+  facesOpen.value = false;
+  load();
+  loadFaces();
+}
+
 async function load() {
   const seq = ++fetchSeq;
   loadError.value = "";
@@ -855,6 +919,7 @@ watch(
     if (props.character?.id != null) {
       load();
       loadGenerated(props.character.id);
+      loadFaces();
     }
   },
   { immediate: true },
@@ -1127,6 +1192,24 @@ function close() {
   margin: 0;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.cts-link {
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  color: rgb(var(--v-theme-on-surface));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cts-link:focus-visible {
+  outline: none;
+  border-color: var(--focus-stroke);
+  box-shadow: var(--focus-glow);
 }
 
 .cts-note--warn {

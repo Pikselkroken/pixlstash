@@ -862,11 +862,10 @@ describe("leaving the run with Escape, as the back button's keycap says", () => 
     expect(wrapper.find(".trl-status").text()).toContain("Setting up");
     expect(wrapper.find(".trl-status").text()).not.toContain("Loading");
     expect(wrapper.find(".trl-setup").text()).toBe("Loading the model");
-    // Step 0 is drawn after set-up; later steps say when they are due, from
+    // Step 0 is the before picture; later steps say when they are due, from
     // the status bar's 16-21 min spread over the 1,500 steps.
     const future = wrapper.findAll(".trl-cell--future");
-    expect(future[0].text()).toBe("after set-up");
-    expect(future[1].text()).toBe("");
+    expect(future.map((cell) => cell.text())).toEqual(["before picture", "before picture"]);
     const subs = wrapper.findAll(".trl-stepsub").map((n) => n.text());
     expect(subs[1]).toBe("~3 min");
     expect(subs[6]).toBe("~19 min");
@@ -906,6 +905,101 @@ describe("leaving the run with Escape, as the back button's keycap says", () => 
     expect(tips).not.toContain("earlier step is the better one");
     expect(window.localStorage.getItem("pixlstash.trainingRunTips")).toBe("open");
     window.localStorage.removeItem("pixlstash.trainingRunTips");
+  });
+});
+
+describe("the board before it has data", () => {
+  const settingUp = (overrides = {}) =>
+    payload({
+      phase: "loading",
+      step: 0,
+      previews: null,
+      phases: [{ phase: "loading", seconds: 42 }],
+      rows: payload().rows.map((row) => ({ ...row, cells: cells(Array(7).fill("future")) })),
+      coverable: [],
+      cover_step: null,
+      ...overrides,
+    });
+  const likeness = {
+    character_id: 4,
+    character_name: "Someone",
+    with_trigger: Array(7).fill(null),
+    without_trigger: Array(7).fill(null),
+    best_step: null,
+    best: null,
+    pending: 0,
+    references: 5,
+  };
+
+  it("puts each tip where its data will land while a run waits for step 1", async () => {
+    const wrapper = await open(settingUp({ likeness }));
+    expect(wrapper.find("[data-testid='trl-loss-tip']").text()).toContain("Noisy is normal.");
+    expect(wrapper.find("[data-testid='trl-loss-tip']").text()).toContain(
+      "The curve starts with the first training step.",
+    );
+    expect(wrapper.find(".chart-stub").exists()).toBe(false);
+    expect(wrapper.find("[data-testid='trl-likeness-tip']").text()).toContain(
+      "if it climbs too, the LoRA is leaking",
+    );
+    // Both spill past the columns to the board's edge.
+    expect(wrapper.find(".trl-chart").attributes("style")).toContain("grid-column: 2 / -1");
+    expect(wrapper.find(".trl-likeness").attributes("style")).toContain("grid-column: 2 / -1");
+
+    const cards = wrapper.findAll("[data-testid='trl-group-tip']");
+    expect(cards).toHaveLength(2);
+    expect(cards[0].text()).toContain("Step 0 is the base model on its own");
+    expect(cards[0].text()).toContain("The first previews land at step 250, in about 3 min.");
+    expect(cards[1].text()).toContain("on the next run, vary the background");
+    expect(cards[0].attributes("style")).toContain("grid-column: 3 / -1");
+    // One cell per prompt row: step 0's, the card covers the rest.
+    expect(wrapper.findAll(".trl-cellwrap")).toHaveLength(2);
+    // The folded tips would only repeat the board.
+    expect(wrapper.find(".trl-tips").exists()).toBe(false);
+  });
+
+  it("gives a group's columns back once one of them starts drawing", async () => {
+    const run = settingUp({ phase: "previews", previews: { drawing: 1, total: 1 } });
+    run.rows[0].cells = cells(["sample", "drawing", ...Array(5).fill("future")]);
+    const wrapper = await open(run);
+    const cards = wrapper.findAll("[data-testid='trl-group-tip']");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].text()).toContain("on the next run");
+    expect(wrapper.findAll(".trl-cellwrap")).toHaveLength(7 + 1);
+  });
+
+  it("draws the chart and the tips once training has a step", async () => {
+    const wrapper = await open(payload({ likeness }));
+    expect(wrapper.find("[data-testid='trl-loss-tip']").exists()).toBe(false);
+    expect(wrapper.find("[data-testid='trl-likeness-tip']").exists()).toBe(false);
+    expect(wrapper.find("[data-testid='trl-group-tip']").exists()).toBe(false);
+    expect(wrapper.find(".chart-stub").exists()).toBe(true);
+    expect(wrapper.find(".trl-chart").attributes("style")).toContain("grid-column: 2 / span 7");
+    expect(wrapper.find(".trl-tips").exists()).toBe(true);
+    // Nor before step 1 with no reference faces: nothing would ever score.
+    const noFaces = await open(settingUp({ likeness: { ...likeness, references: 0 } }));
+    expect(noFaces.find("[data-testid='trl-likeness-tip']").exists()).toBe(false);
+  });
+
+  it("says a run that stopped before step 1 measured nothing, and promises nothing", async () => {
+    const wrapper = await open(
+      settingUp({ status: "stopped", phase: null, columns: [0], likeness, rows: payload().rows.map((row) => ({ ...row, cells: cells(["missing"]) })) }),
+    );
+    const note = wrapper.find("[data-testid='trl-loss-ended']");
+    expect(note.text()).toBe("Stopped before the first step, so nothing was measured.");
+    expect(wrapper.find(".trl-chart").attributes("style")).toContain("grid-column: 2 / -1");
+    expect(wrapper.find(".trl-setup").text()).toBe("Stopped during set-up");
+    expect(wrapper.find("[data-testid='trl-likeness']").exists()).toBe(false);
+    expect(wrapper.find(".trl-gline").text()).toContain("none were drawn");
+    expect(wrapper.findAll(".trl-cellwrap")).toHaveLength(0);
+    expect(wrapper.find("[data-testid='trl-group-tip']").exists()).toBe(false);
+    expect(wrapper.find(".trl-tips").exists()).toBe(false);
+
+    const failed = await open(
+      settingUp({ status: "error", phase: null, error: "Training failed.", report: null }),
+    );
+    expect(failed.find("[data-testid='trl-loss-ended']").text()).toContain(
+      "Retry it from Training runs once it is fixed.",
+    );
   });
 });
 
