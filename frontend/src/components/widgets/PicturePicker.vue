@@ -746,8 +746,9 @@ watch(
    over one property - which is how the chosen state was once hidden from the
    reader who has no other way to see it (a focused, chosen tile showed only
    the ring). */
-/* The wash, over the image rather than under it - a tile IS its picture, so
-   there is no surface left to tint. A pseudo-element because it carries no
+/* The wash, over the image rather than under it - a tinted letterbox alone
+   would leave a square picture showing no wash at all - and over the whole
+   square, since the tile is the control. A pseudo-element because it carries no
    text: nothing for the accessibility tree to pick up (unlike the tick, see
    the template). */
 .pp-cell--on::after {
