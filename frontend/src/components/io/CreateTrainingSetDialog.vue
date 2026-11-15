@@ -1134,7 +1134,7 @@ function close() {
 
 .cts-hue--expression-3 {
   background: rgb(var(--v-theme-quaternary));
-  color: rgb(var(--v-theme-on-primary));
+  color: rgb(var(--v-theme-on-quaternary));
 }
 
 .cts-split {

@@ -67,6 +67,7 @@ vi.mock("../../api/workflows", () => ({
 }));
 
 import CreateTrainingSetDialog from "./CreateTrainingSetDialog.vue";
+import PicturePicker from "../widgets/PicturePicker.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
 const TARGETS = {
@@ -1344,6 +1345,32 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
       wrapper.findAll('[data-testid="cs-sheet"] img').map((i) => i.attributes("src")),
     ).toEqual(["/thumb/503.webp"]);
     expect(gen.rankSheets).toHaveBeenLastCalledWith(7, [503], [32]);
+    wrapper.unmount();
+  });
+
+  it("hands focus back to the pick button when the picture picker closes", async () => {
+    referenceWorld();
+    // The picker itself reads the library when it opens; only its events matter.
+    const wrapper = mount(CreateTrainingSetDialog, {
+      props: { open: true, character: { id: 7, name: "Anna", project_ids: [3] } },
+      global: { stubs: { teleport: true, PicturePicker: true } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    const pick = () => wrapper.find('[data-testid="cs-reference-pick"]');
+    for (const [event, payload] of [["close"], ["pick", { id: 77 }]]) {
+      await pick().trigger("click");
+      await flushPromises();
+      // Focus is inside the picker while it is open, not on the button.
+      pick().element.blur();
+      wrapper.findComponent(PicturePicker).vm.$emit(event, payload);
+      await flushPromises();
+      expect(wrapper.findComponent(PicturePicker).exists()).toBe(false);
+      expect(document.activeElement).toBe(pick().element);
+    }
+    expect(wrapper.find('[data-testid="cs-reference"]').attributes("src")).toBe(
+      "/thumb/77.webp",
+    );
     wrapper.unmount();
   });
 
