@@ -725,10 +725,13 @@ watch(
   overflow: hidden;
   cursor: pointer;
 }
+/* The whole frame, letterboxed on the tile's own surface: a square crop cut a
+   full-body picture down to its torso, so two framings of one person read as
+   the same shot - and the framing is often what is being picked. */
 .pp-cell img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
 }
 /* The chosen tile wears the whole §11 selected vocabulary - `--active-wash`
@@ -743,8 +746,9 @@ watch(
    over one property - which is how the chosen state was once hidden from the
    reader who has no other way to see it (a focused, chosen tile showed only
    the ring). */
-/* The wash, over the image rather than under it - a tile IS its picture, so
-   there is no surface left to tint. A pseudo-element because it carries no
+/* The wash, over the image rather than under it - a tinted letterbox alone
+   would leave a square picture showing no wash at all - and over the whole
+   square, since the tile is the control. A pseudo-element because it carries no
    text: nothing for the accessibility tree to pick up (unlike the tick, see
    the template). */
 .pp-cell--on::after {
