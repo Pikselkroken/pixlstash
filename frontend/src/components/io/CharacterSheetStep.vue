@@ -1099,8 +1099,10 @@ const slots = computed(() => {
                 ? "displaying"
                 : "queued",
       percent: generating ? Math.round(Number(progress.percent) || 0) : null,
-      // Done drawing and being imported, there is nothing left to stop.
-      stoppable: !runEnded(run) && !run.stopping && !displaying,
+      // Done drawing and being imported, there is nothing left to stop; while
+      // it draws (`displaying` holds then too) it can still be stopped.
+      stoppable:
+        !runEnded(run) && !run.stopping && (generating || !displaying),
     });
   }
   return out.map((slot, index) => ({ ...slot, n: index + 1 }));
