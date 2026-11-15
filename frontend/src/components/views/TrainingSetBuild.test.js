@@ -1186,10 +1186,17 @@ describe("TrainingSetBuild: generating the pictures", () => {
     popout().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await flushPromises();
 
-    // Wheel up over a sheet opens it; wheel down leaves the page to scroll.
+    // A plain wheel scrolls the sheets either way; Ctrl+wheel up opens one.
     await wrapper.findAll('[data-testid="cs-sheet"]')[0].trigger("wheel", { deltaY: 100 });
     expect(popout()).toBeNull();
     await wrapper.findAll('[data-testid="cs-sheet"]')[0].trigger("wheel", { deltaY: -100 });
+    await flushPromises();
+    expect(popout()).toBeNull();
+    wrapper
+      .findAll('[data-testid="cs-sheet"]')[0]
+      .element.dispatchEvent(
+        new window.WheelEvent("wheel", { deltaY: -100, ctrlKey: true, cancelable: true }),
+      );
     await flushPromises();
     expect(popout().querySelector("img").getAttribute("src")).toMatch(/\/pictures\/501\.png$/);
     popout().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

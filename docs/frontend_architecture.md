@@ -1740,8 +1740,8 @@ Escape and Enter do nothing here: cancelling deletes a set.
   cancelled or deleted. A sheet can be a nice picture in its own right,
   so nothing here destroys one; it is restorable until the Scrapheap's
   retention purges it, and the intro and the footer say so. After a use the step starts again from the
-  form. The magnifier on a sheet (or a double-click, `Z`, or a wheel-up over
-  it) opens the sheet's own file in `ZoomPopout` over the dialog (the opening,
+  form. The magnifier on a sheet (or a double-click, `Z`, or a Ctrl+wheel-up over
+  it; a plain wheel scrolls the list) opens the sheet's own file in `ZoomPopout` over the dialog (the opening,
   stepping and closing are `composables/useZoomPopout.js`, shared with
   `FaceClustersDialog`), the dialog persistent meanwhile; its *Keep* / *Drop* control is a `Segmented`, so it
   keeps one size in both states, and focus goes back to the sheet's
@@ -1829,7 +1829,7 @@ up).
   its centrality as a chip on `--scrim-photo-strong`, and its score (`N★`) in
   the other corner when rated. **A click selects** a face (olive ring,
   `aria-pressed`) and shows it at the top of the side panel; **a double-click,
-  wheel up, `Z` or Enter zooms** in `ZoomPopout` (`useZoomPopout`, which also
+  Ctrl+wheel up, `Z` or Enter zooms** in `ZoomPopout` (`useZoomPopout`, which also
   closes it on Escape wherever focus is), whose `aside` holds the cluster's
   centre face (and the reference's on another cluster). The face field is one
   tab stop with a roving focus; arrows walk the faces by rank.
@@ -4060,7 +4060,7 @@ dark stage on the transform transport with floor policy `rest`. It owns its
 keys (Escape closes only the pop-out, arrows step, `Z`, `+`/`-`) and stops them
 there. An `entry` wheel (`{deltaY, deltaMode, fx, fy}`, the cursor as a
 fraction of the thumbnail) is applied once the picture is measured, anchored
-at that point, so a wheel-up over a thumbnail carries on as one zoom gesture:
+at that point, so a Ctrl+wheel-up over a thumbnail carries on as one zoom gesture:
 the character-sheet pick (`CharacterSheetStep.vue`) opens it that way. The
 caller restores focus on `close`.
 
