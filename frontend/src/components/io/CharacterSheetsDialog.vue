@@ -5,7 +5,7 @@
     :subtitle="step?.loraName ? `with ${step.loraName}` : ''"
     fullscreen
     :pad-body="false"
-    :persistent="!!step?.working || !!step?.zooming || facesOpen"
+    :persistent="held"
     @close="close"
   >
     <template #header-right>
@@ -24,7 +24,7 @@
       ref="step"
       :character="character"
       :picture-count="character.image_count ?? 0"
-      :saved="saved.get(character.id) ?? null"
+      :saved="savedFor(character)"
       @cut="onCut"
       @faces="openFaces"
     />
@@ -106,12 +106,30 @@ const step = ref(null);
 const facesOpen = ref(false);
 const facesOpener = ref(null);
 const name = computed(() => props.character?.name || "");
+// Mid-cut the sheets are still on show: closing then would offer them again.
+// A zoom or the faces dialog over this one takes Escape and the close itself.
+// AppDialog's X ignores `persistent`, so close() checks this too.
+const held = computed(
+  () => !!step.value?.working || !!step.value?.zooming || facesOpen.value,
+);
+
+/** The draw kept for this person, if it is theirs: a deleted person's id can
+ * come back on a new one, so the name has to match too. */
+function savedFor(character) {
+  const entry = saved.get(character.id);
+  return entry?.name === character.name ? entry.snapshot : null;
+}
 
 function close() {
-  // Mid-cut the sheets are still on show: closing then would offer them again.
-  if (step.value?.working) return;
+  if (held.value) return;
   const snapshot = step.value?.snapshot;
-  if (props.character && snapshot) saved.set(props.character.id, snapshot);
+  if (props.character && snapshot) {
+    saved.set(props.character.id, { name: props.character.name, snapshot });
+  }
+  leave();
+}
+
+function leave() {
   emit("close");
   const row = props.returnFocusTo;
   nextTick(() => {
@@ -125,7 +143,7 @@ function close() {
 function onCut(ids) {
   saved.delete(props.character.id);
   emit("done", { character: props.character, pictureIds: ids });
-  emit("close");
+  leave();
 }
 
 function openFaces(event) {
@@ -141,7 +159,8 @@ function onFacesClosed() {
 </script>
 
 <script>
-/** person id -> the sheet step's last `snapshot`, shared by every mount.
+/** person id -> `{name, snapshot}`: the sheet step's last `snapshot`,
+ * shared by every mount.
  * ponytail: held for the app session only; a reload forgets an unfinished
  * draw (its sheets stay in the Scrapheap). Store it on the character if that
  * turns out to matter. */

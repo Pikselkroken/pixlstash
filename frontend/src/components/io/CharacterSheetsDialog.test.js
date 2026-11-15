@@ -11,7 +11,7 @@ vi.mock("vuetify/components", async () => {
   return vuetifyComponentStubs();
 });
 
-const stepState = vi.hoisted(() => ({ working: false, savedSeen: [] }));
+const stepState = vi.hoisted(() => ({ working: false, zooming: false, savedSeen: [] }));
 vi.mock("./CharacterSheetStep.vue", () => ({
   default: defineComponent({
     props: { character: Object, pictureCount: Number, saved: Object },
@@ -20,6 +20,7 @@ vi.mock("./CharacterSheetStep.vue", () => ({
       stepState.savedSeen.push(props.saved);
       expose({
         working: ref(stepState.working),
+        zooming: ref(stepState.zooming),
         snapshot: ref({ phase: "pick", order: [41, 42] }),
         footer: ref({ lead: "", primary: { label: "Keep", enabled: true, run() {} } }),
         error: ref(""),
@@ -62,6 +63,12 @@ describe("CharacterSheetsDialog", () => {
     await flushPromises();
     expect(stepState.savedSeen.at(-1)).toEqual({ phase: "pick", order: [41, 42] });
     again.unmount();
+
+    // A deleted person's id reused by a new one: the old draw is not theirs.
+    const stranger = mountDialog({ id: 3, name: "Someone else" });
+    await flushPromises();
+    expect(stepState.savedSeen.at(-1)).toBeNull();
+    stranger.unmount();
   });
 
   it("closes once the sheets are cut, and forgets the draw", async () => {
@@ -87,12 +94,16 @@ describe("CharacterSheetsDialog", () => {
     third.unmount();
   });
 
-  it("does not close while a cut is in flight", async () => {
-    stepState.working = true;
+  it.each([
+    ["a cut is in flight", { working: true, zooming: false }],
+    ["a sheet is zoomed", { working: false, zooming: true }],
+  ])("does not close while %s", async (_, state) => {
+    Object.assign(stepState, state);
     const wrapper = mountDialog({ id: 9, name: "Kit" });
     await flushPromises();
     await closeButton(wrapper).trigger("click");
     expect(wrapper.emitted("close")).toBeUndefined();
     wrapper.unmount();
+    Object.assign(stepState, { working: false, zooming: false });
   });
 });
