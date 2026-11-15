@@ -1,7 +1,7 @@
 // Character sheets - see `pixlstash/routes/character_sheets.py`.
 //
 // A sheet is drawn with an ordinary `POST /workflows/run` of a MOSS-Image
-// workflow, `hold` set so it lands in the Scrapheap rather than the library;
+// (or Krea 2) workflow, `hold` set so it lands in the Scrapheap rather than the library;
 // these calls are what is particular to sheets: the prompt and canvas to run
 // with, the ranking of what was drawn, the cut of the kept sheets into
 // pictures on the character. The sheets themselves stay in the Scrapheap.
