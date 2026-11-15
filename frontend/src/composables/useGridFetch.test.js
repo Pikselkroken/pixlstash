@@ -185,6 +185,31 @@ describe("useGridFetch streaming path", () => {
     });
   });
 
+  it("narrows a person's count and stream to the Likeness cluster, never the menu's count base", async () => {
+    getPictureCount.mockResolvedValue({ count: 1 });
+    streamPictures.mockResolvedValue({
+      pictures: [{ id: 17 }],
+      done: true,
+      next_offset: 1,
+    });
+    const { grid } = makeHarness();
+    useSelectionStore().selectedCharacter = 7;
+    useFilterStore().faceClusterFilter = {
+      cluster: 2,
+      strictness: "strict",
+      threshold: 0.55,
+      label: "cluster 2 · strict",
+    };
+
+    await grid.fetchAllGridImages({ force: true });
+
+    const cluster = "face_cluster=2&face_cluster_threshold=0.55";
+    expect(getPictureCount.mock.calls[0][0]).toContain(cluster);
+    expect(streamPictures.mock.calls[0][0]).toContain(cluster);
+    expect(grid.buildPictureIdsQueryParams()).toContain(cluster);
+    expect(grid.buildFilterCountBaseQuery()).not.toContain("face_cluster");
+  });
+
   it("trims trailing placeholders when the stream yields fewer rows than the count", async () => {
     const pics = [{ id: 21 }, { id: 22 }, { id: 23 }];
     // Count says 5, stream only ever delivers 3 - the last 2 cells would

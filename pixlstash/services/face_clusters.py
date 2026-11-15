@@ -26,6 +26,8 @@ and ``dataset_picker.pick_references`` (the training-set picker).
 
 from __future__ import annotations
 
+import hashlib
+import threading
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -43,6 +45,10 @@ logger = get_logger(__name__)
 # are calibrated on real libraries (docs/backend_architecture.md §25.30).
 SAME_PERSON = 0.45
 STRICTNESS = {"loose": 0.35, "normal": SAME_PERSON, "strict": 0.55}
+
+# person_cluster_ids' last answers, keyed on everything they are computed from.
+_PERSON_CLUSTERS: dict[tuple, list[list[int]]] = {}
+_PERSON_CLUSTERS_LOCK = threading.Lock()
 
 # A sheet cuts into six panels sharing one source picture; four of a person's
 # pictures from one source is a sheet, not an edit or two.
@@ -299,6 +305,74 @@ def read_person(vault, character_id: int, model_pack: str | None):
     return vault.db.run_immediate_read_task(
         read_person_in_session, character_id, model_pack
     )
+
+
+def model_pack_of(vault) -> str | None:
+    """The InsightFace pack whose embeddings the person's faces are read in."""
+    engine = getattr(vault, "_engine", None)
+    return getattr(engine, "insightface_model_pack", None) or getattr(
+        vault, "_insightface_model_pack", None
+    )
+
+
+def reference_first(
+    clusters: list[Cluster], reference: list[int]
+) -> tuple[list[int], int | None, list[float]]:
+    """The order the cluster view lists *clusters* in.
+
+    Returns:
+        ``(order, best, shares)``: cluster indices with the reference cluster
+        first and the rest as given (largest first); the index of the cluster
+        holding most of *reference*, or ``None`` when none holds any; and each
+        cluster's share of members in *reference*.
+    """
+    chosen = set(reference)
+    shares = [
+        sum(pid in chosen for pid, _ in c.members) / len(c.members) for c in clusters
+    ]
+    best = max(range(len(clusters)), key=lambda i: shares[i], default=None)
+    if best is not None and shares[best] == 0:
+        best = None
+    order = sorted(range(len(clusters)), key=lambda i: i != best)
+    return order, best, shares
+
+
+def person_cluster_ids(
+    vault, character_id: int, threshold: float = SAME_PERSON
+) -> list[list[int]] | None:
+    """The picture ids of each of the person's clusters, as the cluster view
+    numbers them: "Cluster N" is entry ``N - 1``. ``None`` for no person.
+
+    Recomputed on each call, like the view; nothing is stored.
+    """
+    found = read_person(vault, character_id, model_pack_of(vault))
+    if found is None:
+        return None
+    faces, reference = found
+    # The grid asks once for its count and again for every stream batch; the
+    # linkage is what costs (about 1 s at 5k faces), the read is not. Keyed on
+    # the faces read, so any change to them clusters afresh.
+    digest = hashlib.blake2b(digest_size=16)
+    for face in faces:
+        digest.update(face.picture_id.to_bytes(8, "little"))
+        digest.update(face.vector.tobytes())
+    key = (character_id, threshold, tuple(reference), digest.digest())
+    with _PERSON_CLUSTERS_LOCK:
+        cached = _PERSON_CLUSTERS.get(key)
+    if cached is not None:
+        return [list(ids) for ids in cached]
+    clusters, _ = cluster_faces(
+        [(face.picture_id, face.vector) for face in faces], threshold
+    )
+    order, _, _ = reference_first(clusters, reference)
+    result = [[pid for pid, _ in clusters[i].members] for i in order]
+    # ponytail: keeps the last four keys, oldest out first; an LRU if several
+    # people's grids are filtered at once.
+    with _PERSON_CLUSTERS_LOCK:
+        while len(_PERSON_CLUSTERS) >= 4:
+            _PERSON_CLUSTERS.pop(next(iter(_PERSON_CLUSTERS)))
+        _PERSON_CLUSTERS[key] = result
+    return [list(ids) for ids in result]
 
 
 def _save_in_session(session: Session, character_id: int, picture_ids: list[int]):

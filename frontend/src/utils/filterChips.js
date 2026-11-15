@@ -20,6 +20,15 @@ export const MEDIA_OPTIONS = [
   { id: "videos", label: "Video", chip: "video", icon: "mdi-video-outline" },
 ];
 
+// The cluster view's strictness steps (FaceClustersDialog, and
+// services/face_clusters.py STRICTNESS): the Likeness filter numbers its
+// clusters at the same cuts, so "Cluster 2" is the same group in both.
+export const FACE_CLUSTER_STRICTNESS = [
+  { id: "loose", label: "Loose", threshold: 0.35 },
+  { id: "normal", label: "Normal", threshold: 0.45 },
+  { id: "strict", label: "Strict", threshold: 0.55 },
+];
+
 export const FACE_OPTIONS = [
   {
     id: "with_face",
@@ -268,6 +277,11 @@ export function filterChips(store, { allPicturesView = true } = {}) {
   if (media) {
     push("media", "Media", media.chip, () => {
       store.mediaTypeFilter = "all";
+    });
+  }
+  if (store.faceClusterFilter) {
+    push("likeness", "Likeness", store.faceClusterFilter.label, () => {
+      store.faceClusterFilter = null;
     });
   }
   const faces = FACE_OPTIONS.find((o) => o.id === store.faceBboxFilter);

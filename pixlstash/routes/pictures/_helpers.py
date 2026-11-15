@@ -17,7 +17,7 @@ from pixlstash.db_models import (
     Tag,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services import import_dedup_service, scrapheap_service
+from pixlstash.services import face_clusters, import_dedup_service, scrapheap_service
 from pixlstash.services.layout_move_service import resolve_placement
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import (
@@ -69,6 +69,47 @@ MEDIA_TYPE_BY_FORMAT = {
     "mkv": "video/x-matroska",
     "m4v": "video/mp4",
 }
+
+
+def _face_cluster_ids(
+    server, request: Request, character_id, cluster_raw, threshold_raw
+):
+    """The picture ids of the person's "Cluster N" (``face_cluster``), or
+    ``None`` without one. A cluster past the last is an empty set.
+
+    Owner only, as ``GET /face-clusters`` is: the grouping spans the person's
+    whole library, so a scoped token could read it through the pictures it
+    can see. *character_id* is an int for one person; anything else is a 422.
+    """
+    if cluster_raw is None:
+        return None
+    server.auth.require_unscoped_owner(request)
+    if isinstance(character_id, str) and character_id.isdigit():
+        character_id = int(character_id)
+    if not isinstance(character_id, int):
+        raise HTTPException(
+            status_code=422, detail="face_cluster needs one person's character_id"
+        )
+    try:
+        number = int(cluster_raw)
+        threshold = (
+            face_clusters.SAME_PERSON if threshold_raw is None else float(threshold_raw)
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid face_cluster {cluster_raw!r} or "
+            f"face_cluster_threshold {threshold_raw!r}",
+        ) from exc
+    if number < 1 or not 0.05 <= threshold <= 0.95:
+        raise HTTPException(
+            status_code=422,
+            detail="face_cluster counts from 1; face_cluster_threshold is 0.05-0.95",
+        )
+    clusters = face_clusters.person_cluster_ids(server.vault, character_id, threshold)
+    if clusters is None or number > len(clusters):
+        return set()
+    return set(clusters[number - 1])
 
 
 def _get_hidden_tags_from_request(server, request: Request) -> list[str]:

@@ -62,6 +62,7 @@ from pixlstash.utils.service.filter_helpers import (
 from pixlstash.utils.query.predicate_filter import PredicateFilter
 
 from ._helpers import (
+    _face_cluster_ids,
     _fetch_hidden_picture_ids,
 )
 
@@ -622,6 +623,22 @@ def register_routes(router, server):
                         fetch_character_ids, int(character_id)
                     )
                 )
+
+        # One of the person's face clusters (``face_cluster``), as the listing
+        # takes it.
+        face_cluster_ids = _face_cluster_ids(
+            server,
+            request,
+            character_id,
+            request.query_params.get("face_cluster"),
+            request.query_params.get("face_cluster_threshold"),
+        )
+        if face_cluster_ids is not None:
+            candidate_ids = (
+                face_cluster_ids
+                if candidate_ids is None
+                else set(candidate_ids) & face_cluster_ids
+            )
 
         if project_id is not None:
 

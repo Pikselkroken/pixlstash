@@ -131,6 +131,68 @@
         </div>
       </div>
 
+      <!-- Likeness: one person's face clusters, numbered and cut as the
+           Faces and reference cluster view numbers and cuts them. -->
+      <div
+        v-else-if="sub === 'likeness'"
+        class="tbm fm-sub"
+        role="group"
+        aria-label="Likeness"
+      >
+        <div class="tbm-header">
+          <span class="tbm-title">Likeness</span>
+        </div>
+        <div class="tbm-section">
+          <Segmented
+            :model-value="clusterStrictness"
+            :options="FACE_CLUSTER_STRICTNESS"
+            aria-label="Strictness"
+            full
+            @update:model-value="setClusterStrictness"
+          />
+        </div>
+        <div class="tbm-section">
+          <p v-if="clusterError" class="fm-hint" role="alert">
+            {{ clusterError }}
+          </p>
+          <p v-else-if="!clusterData" class="fm-hint">Grouping the faces…</p>
+          <template v-else>
+            <OptionRows
+              :options="clusterOptions"
+              :model-value="clusterValue"
+              aria-label="Likeness"
+              @update:model-value="setCluster"
+              @pick="backToRow"
+            >
+              <template #label="{ option }">
+                <span class="fm-cluster">
+                  <img
+                    v-if="option.face"
+                    class="fm-cluster-face"
+                    :src="pictureThumbnailUrl(option.face)"
+                    alt=""
+                  />
+                  {{ option.label }}
+                </span>
+              </template>
+              <template #meta="{ option }">
+                <span class="fm-n">{{ formatCount(option.count) }}</span>
+              </template>
+            </OptionRows>
+            <p v-if="!clusterData.clusters.length" class="fm-hint">
+              No two faces look alike at {{ clusterStrictnessLabel }}.
+            </p>
+            <p v-if="clusterValue === 'elsewhere'" class="fm-hint">
+              Showing {{ store.faceClusterFilter.label }}; pick a row to change
+              it.
+            </p>
+          </template>
+        </div>
+        <div class="tbm-footer">
+          The clusters of this person's Faces and reference cluster view.
+        </div>
+      </div>
+
       <div
         v-else-if="sub === 'score'"
         class="tbm fm-sub"
@@ -356,15 +418,23 @@
  */
 import { computed, ref, watch } from "vue";
 import OptionRows from "../widgets/OptionRows.vue";
+import Segmented from "../widgets/Segmented.vue";
 import FilterChecklistMenu from "./FilterChecklistMenu.vue";
 import FilterTagField from "./FilterTagField.vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { listTags } from "../../api/tags";
-import { listComfyuiLoras, listComfyuiModels } from "../../api/pictures";
+import { getFaceClusters } from "../../api/characters";
+import {
+  listComfyuiLoras,
+  listComfyuiModels,
+  pictureThumbnailUrl,
+} from "../../api/pictures";
+import { errorDetail } from "../../utils/apiError";
 import { listWorkflowCards, workflowCoverUrl } from "../../api/workflows";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useImportFoldersStore } from "../../stores/useImportFoldersStore";
+import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 import { PIL_IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from "../../utils/media.js";
 import { useCascadeMenu } from "../../composables/useCascadeMenu";
@@ -375,6 +445,7 @@ import {
 import {
   CONFIDENCE_THRESHOLDS,
   DOUBTFUL_THRESHOLDS,
+  FACE_CLUSTER_STRICTNESS,
   FACE_OPTIONS,
   IMPOSSIBLE_OPTIONS,
   MEDIA_OPTIONS,
@@ -399,11 +470,14 @@ const props = defineProps({
 const store = useFilterStore();
 const gridStore = useGridStore();
 const importFoldersStore = useImportFoldersStore();
+const selection = useSelectionStore();
 const tagGroups = useTagGroupsStore();
 
 const PICTURE_KINDS = [
   { id: "media", label: "Media", icon: "mdi-image-multiple-outline" },
   { id: "faces", label: "Faces", icon: "mdi-face-recognition" },
+  // One person's view only: the clusters are that person's.
+  { id: "likeness", label: "Likeness", icon: "mdi-account-multiple-outline" },
   { id: "stacks", label: "Stacks", icon: "mdi-layers-outline" },
   { id: "sharing", label: "Sharing", icon: "mdi-share-variant-outline" },
   // Everything one import folder ever brought in, not only the Inbox's new.
@@ -488,8 +562,17 @@ const PICK_ONE = {
   },
 };
 
-// Sharing and Imported from are the owner's: a share token has neither.
+// The person whose view this is: a single named person, else null.
+const personId = computed(() => {
+  const id = String(selection.selectedCharacter ?? "");
+  const many = (selection.selectedCharacterIds || []).length > 1;
+  return /^\d+$/.test(id) && !many ? Number(id) : null;
+});
+
+// Sharing and Imported from are the owner's: a share token has neither, nor
+// the face clusters behind Likeness.
 function pictureKindShown(id) {
+  if (id === "likeness") return !isReadOnly.value && personId.value != null;
   if (id === "sharing") return !isReadOnly.value;
   if (id === "importedFrom")
     return !isReadOnly.value && importFoldersStore.hasFolders;
@@ -541,6 +624,7 @@ const ofLabel = computed(() => {
 const KIND_OF_CHIP = {
   Media: "media",
   Faces: "faces",
+  Likeness: "likeness",
   Stacks: "stacks",
   Sharing: "sharing",
   "Imported from": "importedFrom",
@@ -600,6 +684,84 @@ function pickValue(kind) {
 function setPick(kind, id) {
   const def = PICK_ONE[kind];
   store[def.field] = id == null ? def.off : id;
+}
+
+// ── Likeness ─────────────────────────────────────────────────────────────────
+// Fetched when its menu opens and at each strictness, never cached: the view
+// recomputes too, so the two agree on what "Cluster N" holds.
+const clusterStrictness = ref("normal");
+const clusterData = ref(null);
+const clusterError = ref("");
+let clusterSeq = 0;
+
+const clusterStep = computed(() =>
+  FACE_CLUSTER_STRICTNESS.find((s) => s.id === clusterStrictness.value),
+);
+const clusterStrictnessLabel = computed(() => clusterStep.value.label);
+
+async function loadClusters() {
+  const person = personId.value;
+  if (person == null) return;
+  const seq = ++clusterSeq;
+  clusterData.value = null;
+  clusterError.value = "";
+  try {
+    const body = await getFaceClusters(person, clusterStep.value.threshold);
+    if (seq === clusterSeq) clusterData.value = body;
+  } catch (err) {
+    if (seq !== clusterSeq) return;
+    console.warn(
+      `Failed to load face clusters for person ${person} at ${clusterStrictness.value}`,
+      err,
+    );
+    clusterError.value = errorDetail(err) || "Could not group the faces.";
+  }
+}
+
+watch(
+  () => sub.value === "likeness" && personId.value,
+  (person) => {
+    if (person == null || person === false) return;
+    const pick = store.faceClusterFilter;
+    if (pick) clusterStrictness.value = pick.strictness;
+    loadClusters();
+  },
+);
+
+function setClusterStrictness(id) {
+  clusterStrictness.value = id;
+  loadClusters();
+}
+
+const clusterOptions = computed(() => [
+  { id: null, label: "Any", count: total.value },
+  ...(clusterData.value?.clusters || []).map((c, i) => ({
+    id: i + 1,
+    label: `Cluster ${i + 1}${c.is_reference ? " · reference" : ""}`,
+    face: c.members[0]?.picture_id,
+    count: c.size,
+  })),
+]);
+
+// The pick shows only at the strictness it was made at: Cluster 2 at Loose is
+// another group than Cluster 2 at Strict. At another, no row is marked (not
+// Any, which would say the grid is unfiltered) and a line names the pick.
+const clusterValue = computed(() => {
+  const pick = store.faceClusterFilter;
+  if (!pick) return null;
+  return pick.strictness === clusterStrictness.value ? pick.cluster : "elsewhere";
+});
+
+function setCluster(n) {
+  store.faceClusterFilter =
+    n == null
+      ? null
+      : {
+          cluster: n,
+          strictness: clusterStrictness.value,
+          threshold: clusterStep.value.threshold,
+          label: `cluster ${n} · ${clusterStrictnessLabel.value.toLowerCase()}`,
+        };
 }
 
 // ── Score ────────────────────────────────────────────────────────────────────
@@ -937,6 +1099,18 @@ function clearConfidence() {
 }
 .fm-fav-heart {
   color: rgb(var(--v-theme-favourite));
+}
+.fm-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.fm-cluster-face {
+  width: var(--space-6);
+  height: var(--space-6);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  flex: none;
 }
 .fm-hint {
   font-size: var(--text-xs);

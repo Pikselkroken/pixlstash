@@ -13063,6 +13063,24 @@ translates.
   untemplated so it can also sit on `READ_BLOCKED_GET_PATHS`. The route only
   translates: `read_person` and `save_reference_cluster` are thin vault
   wrappers (§10.1), and the clustering runs outside the reader.
+- **The grid filter.** `/pictures`, `/pictures/stream`, `/pictures/count`,
+  `/pictures/search` and `/pictures/likeness-groups` take `face_cluster=N`
+  (+ `face_cluster_threshold`, default `SAME_PERSON`) beside one
+  `character_id`: only that person's "Cluster N" as the view numbers it
+  (`person_cluster_ids`, which shares `reference_first` with the route, so the
+  two cannot order differently). One helper resolves it for all five
+  (`routes/pictures/_helpers._face_cluster_ids`). The listing narrows through
+  `query_params["id"]` like a scope, and its Character-likeness sort, which
+  never reads that list, intersects its candidates itself; search and the
+  likeness groups intersect their candidate sets. Without a single
+  `character_id` it is a 422. It is **owner only** (403 for any scoped token,
+  `require_unscoped_owner`), as `/face-clusters` is: the grouping spans the
+  person's whole library, so a token could otherwise read it through the
+  pictures in its scope. The routes' gate policies are unchanged; this is a
+  parameter the gate cannot express. Each read re-reads the faces; the
+  clustering itself is cached for the last four keys of (person, threshold,
+  reference, a digest of every face's picture id and embedding), because the
+  grid asks once per stream batch and the linkage is about 1 s at 5k faces.
 - Not to be confused with the grid's likeness groups
   (`GET /pictures/likeness-groups`), which join near-duplicate pictures.
 

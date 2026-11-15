@@ -11,6 +11,9 @@ import { setActivePinia, createPinia } from "pinia";
 
 import FilterMenu from "./FilterMenu.vue";
 import { useFilterStore } from "../../stores/useFilterStore.js";
+import { useSelectionStore } from "../../stores/useSelectionStore.js";
+import { getFaceClusters } from "../../api/characters";
+import { filterChips } from "../../utils/filterChips";
 import { getPictureCount } from "../../api/pictures";
 import { getTagGroups } from "../../api/tagGroups";
 import { resetFilterCounts } from "../../composables/useFilterCounts";
@@ -34,6 +37,10 @@ vi.mock("../../api/pictures", () => ({
     .mockResolvedValue([{ value: "flux1-dev.safetensors", name: null }]),
   listComfyuiLoras: vi.fn().mockResolvedValue([]),
   getPictureCount: vi.fn().mockResolvedValue({ count: 3 }),
+  pictureThumbnailUrl: (id) => `http://api/thumb/${id}`,
+}));
+vi.mock("../../api/characters", () => ({
+  getFaceClusters: vi.fn(),
 }));
 
 vi.mock("../../api/workflows", () => ({
@@ -649,5 +656,79 @@ describe("FilterMenu: tag groups in the Tags menu (#2469)", () => {
     await openKind(wrapper, "Tags");
     expect(wrapper.find(".tbm-footer").exists()).toBe(false);
     expect(wrapper.text()).not.toContain("By group");
+  });
+});
+
+describe("FilterMenu: Likeness, a person's face clusters", () => {
+  const rowLabels = (wrapper) =>
+    wrapper.findAll("button.fm-row .fm-row-label").map((l) => l.text());
+
+  beforeEach(() => {
+    getFaceClusters.mockReset();
+    getFaceClusters.mockImplementation(async (_id, threshold) => ({
+      clusters:
+        threshold === 0.45
+          ? [
+              { size: 5, is_reference: true, members: [{ picture_id: 11 }] },
+              { size: 2, is_reference: false, members: [{ picture_id: 22 }] },
+            ]
+          : [{ size: 7, is_reference: false, members: [{ picture_id: 33 }] }],
+    }));
+  });
+
+  it("is offered in one person's view only", async () => {
+    expect(rowLabels(await mountMenu())).not.toContain("Likeness");
+    useSelectionStore().selectedCharacter = "7";
+    expect(rowLabels(await mountMenu())).toContain("Likeness");
+  });
+
+  it("lists the cluster view's clusters and picks one at its strictness", async () => {
+    const selection = useSelectionStore();
+    selection.selectedCharacter = "7";
+    const store = useFilterStore();
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Likeness");
+
+    expect(getFaceClusters).toHaveBeenLastCalledWith(7, 0.45);
+    const rows = wrapper.findAll(".fm-sub .optrow");
+    expect(rows.map((r) => r.find(".optrow__label").text())).toEqual([
+      "Any",
+      "Cluster 1 · reference",
+      "Cluster 2",
+    ]);
+    expect(rows[2].find("img").attributes("src")).toBe("http://api/thumb/22");
+
+    await rows[2].trigger("click");
+    expect(store.faceClusterFilter).toMatchObject({
+      cluster: 2,
+      strictness: "normal",
+      threshold: 0.45,
+    });
+    const chip = filterChips(store).find((c) => c.kind === "Likeness");
+    expect(chip.value).toBe("cluster 2 · normal");
+
+    // Another strictness numbers other groups: the pick does not carry over.
+    await openKind(wrapper, "Likeness");
+    const loose = wrapper
+      .findAll(".fm-sub .seg__opt")
+      .find((b) => b.text() === "Loose");
+    await loose.trigger("click");
+    await flushPromises();
+    expect(getFaceClusters).toHaveBeenLastCalledWith(7, 0.35);
+    // No row is marked, not even Any: the grid is still on the pick.
+    expect(wrapper.findAll('.fm-sub .optrow[aria-checked="true"]')).toHaveLength(0);
+    expect(wrapper.text()).toContain("Showing cluster 2 · normal");
+    expect(store.faceClusterFilter.cluster).toBe(2);
+
+    // The same person by another spelling keeps it; another person, or
+    // several, drops it.
+    selection.selectedCharacter = 7;
+    expect(store.faceClusterFilter).not.toBeNull();
+    selection.selectedCharacterIds = ["7", "8"];
+    expect(store.faceClusterFilter).toBeNull();
+    selection.selectedCharacterIds = [];
+    store.faceClusterFilter = { cluster: 1, strictness: "normal" };
+    selection.selectedCharacter = "8";
+    expect(store.faceClusterFilter).toBeNull();
   });
 });
