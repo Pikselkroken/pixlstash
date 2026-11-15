@@ -332,6 +332,7 @@
               <img :src="pictureThumbnailUrl(id)" alt="" />
             </button>
             <button
+              ref="pickButton"
               type="button"
               class="cs-reft cs-reft--add"
               aria-label="Pick another picture"
@@ -509,7 +510,7 @@
       v-if="pickerOpen"
       open
       subtitle="for the reference"
-      @close="pickerOpen = false"
+      @close="closePicker"
       @pick="onPicked"
     />
   </div>
@@ -650,6 +651,7 @@ const mode = ref("text"); // text | reference
 const referenceId = ref(null);
 const drawnFrom = ref(null);
 const pickerOpen = ref(false);
+const pickButton = ref(null);
 // The chosen workflow's picture inputs, as the pre-flight names them.
 const workflowInputs = ref([]);
 // How many faces the last ranking measured closeness against.
@@ -762,8 +764,15 @@ function referenceWords(id) {
     : `${name.value}'s ${ORDINALS[index]} reference face`;
 }
 
-function onPicked(picture) {
+/** The picker opens programmatically, so Vuetify has no activator to hand
+ * focus back to: the pick button takes it. */
+function closePicker() {
   pickerOpen.value = false;
+  nextTick(() => pickButton.value?.focus());
+}
+
+function onPicked(picture) {
+  closePicker();
   if (picture?.id) referenceId.value = picture.id;
 }
 

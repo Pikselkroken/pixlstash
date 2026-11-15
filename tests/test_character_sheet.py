@@ -480,6 +480,30 @@ def test_ranking_names_no_difference_between_sheets_of_one_person():
     assert [s["different_from"] for s in sheets] == [[], []]
 
 
+def test_a_sheet_that_fails_to_import_leaves_the_earlier_panels_filed(monkeypatch):
+    """Panels already imported are filed before the next sheet is tried."""
+    filed = []
+
+    class Db:
+        def run_immediate_read_task(self, fn, *args):
+            return [Picture(id=1), Picture(id=2)]
+
+        def run_task(self, fn, picture_ids, character_id):
+            filed.append((list(picture_ids), character_id))
+
+    def import_panels(server, sources, entries, stack):
+        if sources[0].id == 2:
+            raise OSError("disk full")
+        return [], [], [10, 11]
+
+    monkeypatch.setattr(character_sheet, "_cut", lambda server, sheet: [b""] * 2)
+    monkeypatch.setattr(character_sheet, "import_derived_outputs", import_panels)
+    server = type("Server", (), {"vault": type("Vault", (), {"db": Db()})()})()
+    with pytest.raises(OSError):
+        character_sheet.use_sheets(server, 3, [1, 2])
+    assert filed == [([10, 11], 3)]
+
+
 @pytest.fixture(scope="module")
 def client():
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -711,6 +735,9 @@ def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
     rng = np.random.default_rng(7)
     person = rng.normal(size=512).astype(np.float32)
 
+    # Stamped with the server's pack: a hand-written embedding without one
+    # reads as stale, and the pack-refresh sweep re-detects the picture and
+    # replaces these with what it really finds (nothing, on a drawn sheet).
     def add_faces(session):
         for index in range(7):
             vector = person + rng.normal(scale=0.3, size=512).astype(np.float32)
@@ -719,6 +746,7 @@ def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
                     picture_id=sheet_id,
                     face_index=100 + index,
                     features=vector.astype(np.float32).tobytes(),
+                    model_pack=DEFAULT_MODEL_PACK,
                 )
             )
         session.commit()
@@ -754,7 +782,12 @@ def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
 
     def add_reference(session):
         session.add(
-            Face(picture_id=reference_id, face_index=100, features=person.tobytes())
+            Face(
+                picture_id=reference_id,
+                face_index=100,
+                features=person.tobytes(),
+                model_pack=DEFAULT_MODEL_PACK,
+            )
         )
         session.commit()
 
