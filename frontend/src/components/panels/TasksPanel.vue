@@ -181,6 +181,18 @@
                 >{{ aitoolkitProgress(entry) }}</span
               >
             </span>
+            <!-- The run's steps as the same hairline a ComfyUI run draws. -->
+            <span
+              class="tm-run-line"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-valuenow="aitoolkitPercent(entry)"
+              :aria-label="`${entry.label} progress`"
+              data-testid="tm-aitoolkit-line"
+            >
+              <span class="tm-run-line-fill" :style="{ width: `${aitoolkitPercent(entry)}%` }"></span>
+            </span>
             <span class="tm-figure">
               <span class="tm-fig-text">{{ formatGb(entry.figureMb) }}</span>
               <!-- The run's own page, in the shelf's Training runs tab. -->
@@ -197,6 +209,11 @@
                 </button>
               </span>
             </span>
+            <Tooltip
+              :text="`${aitoolkitProgress(entry) || entry.label}, ${aitoolkitPercent(entry)}%`"
+              activator="parent"
+              :describe="false"
+            />
           </div>
           <!-- PixlStash's own background work: one card, its row on top and,
                open, one line per task below a hairline, on the same columns:
@@ -867,6 +884,14 @@ function aitoolkitProgress(entry) {
   if (progress.loss == null || !Number.isFinite(Number(progress.loss))) return step;
   const loss = Number(progress.loss);
   return `${step} · loss ${loss < 0.01 ? loss.toExponential(2) : loss.toFixed(3)}`;
+}
+
+/** The AI Toolkit row's step over total as a whole percent, 0 until it has a total. */
+function aitoolkitPercent(entry) {
+  const total = Number(entry.progress?.total);
+  if (!(total > 0)) return 0;
+  const step = Number(entry.progress.step) || 0;
+  return Math.min(100, Math.max(0, Math.round((step / total) * 100)));
 }
 
 /**

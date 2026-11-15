@@ -2828,6 +2828,9 @@ watch(
     if (!wrapped || typeof wrapped !== "object") return;
     const payload = wrapped.payload;
     if (!payload || typeof payload !== "object") return;
+    // A training run's progress is its row in the Tasks tab. Left before the
+    // timer below, so its events neither show nor hide another plugin's.
+    if (String(payload.plugin || "").toLowerCase() === "ai-toolkit") return;
 
     if (pluginProgressHideTimer) {
       clearTimeout(pluginProgressHideTimer);

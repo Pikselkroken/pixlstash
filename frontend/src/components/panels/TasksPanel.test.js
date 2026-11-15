@@ -1628,6 +1628,10 @@ describe("the AI Toolkit run in the task manager", () => {
     );
     expect(row.find(".tm-fig-text").text()).toBe("14.0 GB");
     expect(row.find(".tm-mark").classes("tm-mark--running")).toBe(true);
+    // Its steps are the hairline a ComfyUI run draws under its name.
+    const line = row.find('[data-testid="tm-aitoolkit-line"]');
+    expect(line.attributes("aria-valuenow")).toBe("69");
+    expect(line.find(".tm-run-line-fill").attributes("style")).toContain("width: 69%");
   });
 
   it("names the memory probe instead of its own steps", () => {
@@ -1671,6 +1675,9 @@ describe("the AI Toolkit run in the task manager", () => {
     const wrapper = mount(TasksPanel, globalOpts);
     expect(wrapper.find('[data-testid="tm-aitoolkit-row"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="tm-aitoolkit-progress"]').exists()).toBe(false);
+    const line = wrapper.find('[data-testid="tm-aitoolkit-line"]');
+    expect(line.attributes("aria-valuenow")).toBe("0");
+    expect(line.find(".tm-run-line-fill").attributes("style")).toContain("width: 0%");
   });
 
   it("draws the run once, with no PixlStash fold or worker row of its own", () => {
