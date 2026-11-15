@@ -1821,7 +1821,9 @@ up).
 - **The pane** shows the selected cluster packed round its most typical face
   (`utils/clusterLayout.js`: each face in rank order takes the free spot beside
   a placed face nearest the centre) in four size bands by rank, top 10% / 30% /
-  35% / 25%; at most 60 faces, *+n more*. **It never scrolls**: the layout is
+  35% / 25%; at most 60 faces, *+n more*. Each tile keeps its picture's
+  aspect ratio (`displayedAspectRatio`, clamped to 1:2 … 2:1), the band's size
+  being its long side. **It never scrolls**: the layout is
   fitted to the measured stage, trying `STEP_LADDER` (96/64/48/32, then
   64/48/32/24, then 48/32/24/16: `--face-thumb-xl`, `--space-9` … `-5`) and at
   each size first a 2px gap, then none, so the spacing goes before the faces

@@ -160,8 +160,8 @@
                   :style="{
                     left: `${f.x}px`,
                     top: `${f.y}px`,
-                    width: `${f.size}px`,
-                    height: `${f.size}px`,
+                    width: `${f.w}px`,
+                    height: `${f.h}px`,
                   }"
                   :tabindex="rank === focusRank ? 0 : -1"
                   :aria-label="faceName(rank)"
@@ -330,7 +330,7 @@ import ZoomPopout from "../widgets/ZoomPopout.vue";
 import { getFaceClusters, setReferenceCluster } from "../../api/characters";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
-import { buildMediaUrl } from "../../utils/media";
+import { buildMediaUrl, displayedAspectRatio } from "../../utils/media";
 import { errorDetail } from "../../utils/apiError";
 import { STEP_LADDER, layoutCluster } from "../../utils/clusterLayout.js";
 import { useZoomPopout } from "../../composables/useZoomPopout.js";
@@ -388,7 +388,14 @@ const current = computed(() => clusters.value[selected.value] || null);
 const shown = computed(() => current.value?.members.slice(0, MAX_SHOWN) || []);
 const hidden = computed(() => (current.value?.size || 0) - shown.value.length);
 const layout = computed(() =>
-  layoutCluster(shown.value, STEP_LADDER, box.value),
+  layoutCluster(
+    shown.value.map((m) => ({
+      picture_id: m.picture_id,
+      aspect: displayedAspectRatio(m),
+    })),
+    STEP_LADDER,
+    box.value,
+  ),
 );
 /** Even the smallest faces with no spacing overflow: shrink the whole field. */
 const fieldStyle = computed(() => {

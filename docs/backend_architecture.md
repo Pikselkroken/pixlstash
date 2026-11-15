@@ -13042,7 +13042,8 @@ translates.
   cluster is picked if its likeness clears `min_likeness`, and the other
   identities fall under the floor as `low_likeness`, visibly.
 - `GET /face-clusters?character_id=&threshold=` answers each cluster's
-  members (picture, centrality, score, format), `cohesion` (mean pairwise
+  members (picture, centrality, score, format, and the sizes and orientation
+  the tile's aspect ratio comes from), `cohesion` (mean pairwise
   likeness), `reference_share`, `is_reference` (the one holding most of the
   reference), `similarity_to_reference` (centroid to the reference cluster's
   centroid, or the largest cluster's before one is picked) and `from_sheets`

@@ -152,6 +152,12 @@ class PersonFace:
     score: int | None
     source_picture_id: int | None
     format: str | None = None
+    # The picture's shape, for the cluster view's tiles (`displayedAspectRatio`).
+    width: int | None = None
+    height: int | None = None
+    thumbnail_width: int | None = None
+    thumbnail_height: int | None = None
+    orientation: int | None = None
 
 
 def person_faces(
@@ -173,6 +179,11 @@ def person_faces(
             Picture.score,
             Picture.source_picture_id,
             Picture.format,
+            Picture.width,
+            Picture.height,
+            Picture.thumbnail_width,
+            Picture.thumbnail_height,
+            Picture.orientation,
         )
         .join(Picture, Face.picture_id == Picture.id)
         .where(
@@ -186,12 +197,12 @@ def person_faces(
     if model_pack and packs != {None}:
         rows = [row for row in rows if row[2] == model_pack]
     out, seen = [], set()
-    for pid, features, _pack, score, source, fmt in rows:
+    for pid, features, _pack, score, source, fmt, *shape in rows:
         vec = vector(features)
         if pid in seen or vec is None:
             continue
         seen.add(pid)
-        out.append(PersonFace(pid, vec, score, source, fmt))
+        out.append(PersonFace(pid, vec, score, source, fmt, *shape))
     # Embeddings of another width (a pack change mid-refresh) cannot be compared.
     width = Counter(face.vector.size for face in out).most_common(1)
     return [face for face in out if width and face.vector.size == width[0][0]]
