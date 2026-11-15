@@ -840,6 +840,93 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("draws text sheets with a MiniMax H3 text-to-image workflow, in prose", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({
+      description: "Adult woman, copper bob",
+      loras: [
+        { sha256: "qwen", display_name: "Anna Qwen", base_model_family: "qwen", added_at: "2026-11-09" },
+        { sha256: "h3", display_name: "Anna H3", base_model_family: "minimax_h3", added_at: "2026-11-08" },
+      ],
+    });
+    gen.listWorkflowCards.mockResolvedValue({
+      cards: [
+        MOSS_CARD,
+        {
+          id: "manual:h3-t2i",
+          name: "MiniMax H3: Text to Image",
+          type: "txt2img",
+          last_used: "2026-11-12T20:00:00Z",
+          models: [
+            { kind: "clip", base_model_family: "minimax_h3" },
+            { kind: "unet", base_model_family: "minimax_h3" },
+          ],
+        },
+        // A video workflow of the same model draws no sheet.
+        {
+          id: "manual:h3-t2v",
+          name: "MiniMax H3: Text to Video",
+          type: "video",
+          last_used: "2026-11-13T20:00:00Z",
+          models: [{ kind: "unet", base_model_family: "minimax_h3" }],
+        },
+      ],
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    const select = (label) =>
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === label);
+    expect(select("Sheet workflow").props("options").map((o) => o.value)).toEqual([
+      "manual:h3-t2i",
+      "manual:moss",
+    ]);
+    expect(select("Character LoRA · optional").props("modelValue")).toBe("h3");
+    expect(
+      select("Character LoRA · optional")
+        .props("options")
+        .filter((o) => o.value && !o.disabled)
+        .map((o) => o.value),
+    ).toEqual(["h3"]);
+    // H3 wants a large canvas: Small and Medium are greyed out, 4K is chosen.
+    const sizes = () =>
+      wrapper
+        .findAll('[data-testid="cs-size"] button')
+        .map((b) => [b.text(), b.attributes("disabled") !== undefined, b.attributes("aria-checked")]);
+    expect(sizes()).toEqual([
+      ["Small", true, "false"],
+      ["Medium", true, "false"],
+      ["Large", false, "false"],
+      ["4K", false, "true"],
+    ]);
+    // Another model greys 4K out and goes back to Large.
+    select("Sheet workflow").vm.$emit("update:modelValue", "manual:moss");
+    await flushPromises();
+    expect(sizes()).toEqual([
+      ["Small", false, "false"],
+      ["Medium", false, "false"],
+      ["Large", false, "true"],
+      ["4K", true, "false"],
+    ]);
+    select("Sheet workflow").vm.$emit("update:modelValue", "manual:h3-t2i");
+    await flushPromises();
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    expect(gen.buildSheetPrompt).toHaveBeenLastCalledWith(
+      expect.objectContaining({ layout: "prose", size: "4k" }),
+    );
+    expect(gen.runWorkflowCard).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        workflow_id: "manual:h3-t2i",
+        add_loras: [expect.objectContaining({ sha256: "h3" })],
+      }),
+    );
+    wrapper.unmount();
+  });
+
   it("draws text sheets with Qwen-Image and FLUX.2 Klein, read off the diffusion model (#2700)", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
@@ -1721,6 +1808,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
       "Sheet-Qwen-Image-2.1-Reference.json",
       "Sheet-Flux2-Klein-9B.json",
       "Sheet-Flux2-Klein-9B-Reference.json",
+      "Sheet-MiniMax-H3-Reference.json",
     ]);
     expect(
       Math.max(...gen.cardForWorkflow.mock.invocationCallOrder),
@@ -1746,6 +1834,52 @@ describe("TrainingSetBuild: generating the pictures", () => {
     await flushPromises();
     expect(usable()).toEqual(["qwen"]);
     expect(select("Character LoRA · optional").props("modelValue")).toBe("qwen");
+    wrapper.unmount();
+  });
+
+  it("lists a MiniMax H3 reference sheet workflow, with H3 LoRAs only", async () => {
+    const H3_SHEET = {
+      id: "manual:h3-sheet",
+      name: "Sheet MiniMax H3 Reference",
+      type: "txt2img",
+      reference_inputs: 1,
+      last_used: "2026-11-12T20:00:00Z",
+      models: [
+        { kind: "clip", base_model_family: "minimax_h3" },
+        { kind: "unet", base_model_family: "minimax_h3" },
+      ],
+    };
+    referenceWorld({ cards: [MOSS_CARD, QWEN_SHEET, H3_SHEET] });
+    gen.listAdapters.mockResolvedValue([
+      { sha256: "qwen", display_name: "Anna Qwen", base_model_family: "qwen", added_at: "2026-11-09" },
+      { sha256: "h3", display_name: "Anna H3", base_model_family: "minimax_h3", added_at: "2026-11-08" },
+    ]);
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(mode(wrapper).text()).toBe("Reference and text");
+    const select = (label) =>
+      wrapper.findAllComponents({ name: "AppSelect" }).find((c) => c.props("label") === label);
+    const workflow = select("Sheet workflow");
+    expect(workflow.props("options").map((o) => o.value)).toEqual([
+      H3_SHEET.id,
+      QWEN_SHEET.id,
+    ]);
+    expect(workflow.props("modelValue")).toBe(H3_SHEET.id);
+    expect(
+      select("Character LoRA · optional")
+        .props("options")
+        .filter((o) => o.value && !o.disabled)
+        .map((o) => o.value),
+    ).toEqual(["h3"]);
+    expect(select("Character LoRA · optional").props("modelValue")).toBe("h3");
+    await draw(wrapper);
+    await flushPromises();
+    expect(gen.buildSheetPrompt).toHaveBeenLastCalledWith(
+      expect.objectContaining({ layout: "prose", reference: true }),
+    );
+    expect(gen.runWorkflowCard).toHaveBeenLastCalledWith(
+      expect.objectContaining({ workflow_id: H3_SHEET.id }),
+    );
     wrapper.unmount();
   });
 
@@ -2108,6 +2242,40 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     await vi.advanceTimersByTimeAsync(700);
     expect(lastBuild().sheets.form).not.toHaveProperty("body");
     wrapper.unmount();
+  });
+
+  it("keeps a size saved for an H3 workflow, unless H3 cannot draw it", async () => {
+    const H3 = {
+      id: "manual:h3-t2i",
+      name: "MiniMax H3: Text to Image",
+      type: "txt2img",
+      models: [{ kind: "unet", base_model_family: "minimax_h3" }],
+    };
+    const open = async (size) => {
+      api.fetchCharacterSetSuggestion.mockResolvedValue(
+        suggestion({ stillsGroup: emptyGroup() }),
+      );
+      sheetsWorld({ description: "Adult woman" });
+      gen.listWorkflowCards.mockResolvedValue({ cards: [MOSS_CARD, H3] });
+      const wrapper = mountDialog({
+        v: 1,
+        stage: "generate",
+        stepped: true,
+        sheets: {
+          phase: "describe",
+          form: { description: "Adult woman", size },
+          workflow_id: H3.id,
+        },
+      });
+      await flushPromises();
+      const chosen = wrapper
+        .find('[data-testid="cs-size"] [aria-checked="true"]')
+        .text();
+      wrapper.unmount();
+      return chosen;
+    };
+    expect(await open("large")).toBe("Large");
+    expect(await open("small")).toBe("4K");
   });
 
   it("keeps following a run still drawing when the build is opened again", async () => {

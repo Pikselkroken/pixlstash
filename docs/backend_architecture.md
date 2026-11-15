@@ -12854,21 +12854,26 @@ the count the server added. Owner-only
 
 "Create a training set…" can draw the pictures instead of picking them, for a
 character with none or with too few. A **character sheet** is one MOSS-Image
-(or Krea 2, Qwen-Image or FLUX.2 Klein) picture at 5:3: four passport photos on the left half (front neutral,
+(or Krea 2, Qwen-Image, FLUX.2 Klein or MiniMax H3) picture at 5:3: four passport photos on the left half (front neutral,
 three-quarter smiling, profile neutral, other three-quarter laughing) and two
 tall body photos on the right at a framing the user picks (waist-up,
-mid-thigh, knees-up or full body). The canvas is one of three sizes
+mid-thigh, knees-up or full body). The canvas is one of four sizes
 (`SIZES`: 1280×768, 1840×1104, 2560×1536, about 1, 2 and 4 megapixels, the
-range MOSS draws well, every side a multiple of 16); the layout is drawn on
-the largest and scaled. Text pins down a type, not a person, so each sheet is a slightly
+range MOSS draws well, every side a multiple of 16, and `4k`, 5280×3168,
+about 17 megapixels, MiniMax's own "4K", for MiniMax H3, which wants a large
+canvas; the step offers each model only its own); the layout is drawn on
+2560×1536 and scaled. Text pins down a type, not a person, so each sheet is a slightly
 different person, but the six faces within one sheet agree: the user keeps
 one or more sheets and their panels become the character's pictures. **A sheet
 is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 
 - **A sheet is an ordinary run.** The dialog runs a MOSS-Image, Krea 2,
-  Qwen-Image or FLUX.2 Klein `txt2img` workflow (PixlStash ships four, #2700:
-  `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
-  `Sheet-Flux2-Klein-9B*.json`, a text and a `-Reference` one of each, every
+  Qwen-Image, FLUX.2 Klein or MiniMax H3 `txt2img` workflow (PixlStash ships
+  five, #2700: `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
+  `Sheet-Flux2-Klein-9B*.json`, a text and a `-Reference` one of each, and
+  `Sheet-MiniMax-H3-Reference.json`, a reference one only, since ComfyUI's
+  own H3 text-to-image template can draw sheets: its size is wired from a
+  `ResolutionSelector`, and the card offers that as a size a run sets; every
   size a literal 2560×1536 and the encoder and VAE loaded by digest; the step
   files their cards through `POST /comfyui/workflows/{name}/card` before it
   lists the cards) through `POST /workflows/run` with the prompt, negative and canvas
@@ -12891,7 +12896,7 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   item per panel part with a `yxyx` box in `abs_centralized` coordinates. The
   boxes are the ones that held their layout on 16 of 16 probe sheets; the test
   pins the mid-thigh set. Only MOSS-Image reads the layout JSON, so a Krea 2,
-  Qwen-Image or FLUX.2 Klein workflow is sent `layout: "prose"`, the summary
+  Qwen-Image, FLUX.2 Klein or MiniMax H3 workflow is sent `layout: "prose"`, the summary
   caption alone; no probe has measured how their sheets hold the grid or cut. Every panel's caption carries the whole character,
   build included (a different build draws a different face). Trousers are
   always named, shoes only at full body. A LoRA's first trigger word leads.
@@ -12927,14 +12932,16 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 - **From a reference picture plus the words (#2679).** Text pins down a type,
   so a character that already has a face is matched only by luck. The second
   way to draw runs an **image-edit** workflow (Qwen-Image-Edit or FLUX.2
-  Klein, #2700; no probe has measured either yet) that reads the picture for the face and
+  Klein, #2700, or MiniMax H3's reference-to-video model drawing one frame on
+  an empty image latent; no probe has measured any yet) that reads the picture for the face and
   draws on an empty canvas of the sheet's size. Nothing about the run is
   particular to sheets: the picture goes in through `RunRequest.inputs` at the
   address the pre-flight's `picture_inputs` names. Four pieces serve it:
   - `workflow_identity.reference_input_count(nodes)` says which graphs can:
     the picture loaders feeding an edit model's reference input
     (`ReferenceLatent`, `TextEncode…ImageEdit…`, Qwen-Image 2.1's
-    `TextEncodeQwenImage21`; a ControlNet's pose is not one) in a `txt2img` / `img2img` graph whose every sampler
+    `TextEncodeQwenImage21`, MiniMax H3's `MiniMaxH3ReferenceToVideo`; a
+    ControlNet's pose is not one) in a `txt2img` / `img2img` graph whose every sampler
     starts from an empty latent (followed through `latent_image` only, an
     empty latent ending the walk, so one sized from the picture still counts)
     and never from the picture's own. The type cannot say this: an edit graph

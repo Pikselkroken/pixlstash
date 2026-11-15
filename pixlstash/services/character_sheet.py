@@ -1,6 +1,6 @@
 """Character sheets: one picture of one person, drawn six times.
 
-Drawn by MOSS-Image, Krea 2, Qwen-Image or FLUX.2 Klein.
+Drawn by MOSS-Image, Krea 2, Qwen-Image, FLUX.2 Klein or MiniMax H3.
 
 The "Create a training set…" dialog can draw a character instead of picking
 from pictures that exist. A sheet is a 2560×1536 grid: four passport photos on
@@ -12,7 +12,8 @@ agree, which is why the person picks one sheet and its six panels become the
 character's pictures.
 
 A sheet can also be drawn from a reference picture plus the words (#2679):
-an edit workflow (Qwen-Image-Edit, or FLUX.2 Klein, #2700) reads the picture
+an edit workflow (Qwen-Image-Edit, FLUX.2 Klein, #2700, or MiniMax H3's
+reference model) reads the picture
 for the face and draws on an empty canvas of the sheet's size. No probe has
 measured that route yet.
 
@@ -77,8 +78,18 @@ Size = Literal["small", "medium", "large"]
 Layout = Literal["moss", "prose"]
 # The sheet's canvas at each size, all 5:3 so the layout only scales, and every
 # side a multiple of 16 as MOSS needs: ~1, ~2 and ~4 megapixels, MOSS's own
-# range (it is trained at 1-2 MP and stretches to about 4).
-SIZES = {"small": (1280, 768), "medium": (1840, 1104), "large": (2560, 1536)}
+# range (it is trained at 1-2 MP and stretches to about 4), and ~17 for
+# MiniMax H3, which wants a large canvas (MiniMax's "4K" is 16.6 MP or more;
+# every side a multiple of its 32 too). The step offers each model its own.
+SIZES = {
+    "small": (1280, 768),
+    "medium": (1840, 1104),
+    "large": (2560, 1536),
+    "4k": (5280, 3168),
+}
+# MiniMax H3's own size joins the three every model has (a nested ``Literal``
+# flattens to all four).
+Size = Literal[Size, "4k"]
 
 # ponytail: words from scores; thresholds read off the 2026-11 probes (one
 # sheet 0.57-0.70, across sheets 0.37). P6 validation tunes them.
