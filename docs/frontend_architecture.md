@@ -6919,7 +6919,8 @@ listing itself is still not polled.
 
 **The run's progress is that Tasks row and nothing else.** The row draws the
 lease's `step`/`total` as the same hairline under its name that a ComfyUI run
-draws, with the step and loss in its tooltip. The trainer's own `plugin_progress`
+draws, with the step and loss in its tooltip; a side pass (`shown_as`) counts
+its own steps, so the line stays empty for it. The trainer's own `plugin_progress`
 events (`plugin: "ai-toolkit"`) are not drawn: `ImageGrid` returns on them before
 its plugin overlay or that overlay's hide timer is touched.
 

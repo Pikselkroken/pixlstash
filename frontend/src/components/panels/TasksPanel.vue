@@ -210,7 +210,11 @@
               </span>
             </span>
             <Tooltip
-              :text="`${aitoolkitProgress(entry) || entry.label}, ${aitoolkitPercent(entry)}%`"
+              :text="
+                entry.progress?.shown_as
+                  ? aitoolkitProgress(entry)
+                  : `${aitoolkitProgress(entry) || entry.label}, ${aitoolkitPercent(entry)}%`
+              "
               activator="parent"
               :describe="false"
             />
@@ -886,10 +890,14 @@ function aitoolkitProgress(entry) {
   return `${step} · loss ${loss < 0.01 ? loss.toExponential(2) : loss.toFixed(3)}`;
 }
 
-/** The AI Toolkit row's step over total as a whole percent, 0 until it has a total. */
+/**
+ * The AI Toolkit row's step over total as a whole percent, 0 until it has a
+ * total. A side pass's steps are its own (the 6-step probe would read 100%),
+ * so it reads 0, as ModelsSideBar's runs status leaves it out.
+ */
 function aitoolkitPercent(entry) {
   const total = Number(entry.progress?.total);
-  if (!(total > 0)) return 0;
+  if (entry.progress?.shown_as || !(total > 0)) return 0;
   const step = Number(entry.progress.step) || 0;
   return Math.min(100, Math.max(0, Math.round((step / total) * 100)));
 }

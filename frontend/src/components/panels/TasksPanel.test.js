@@ -1646,6 +1646,10 @@ describe("the AI Toolkit run in the task manager", () => {
     expect(wrapper.find('[data-testid="tm-aitoolkit-progress"]').text()).toBe(
       "checking memory and speed",
     );
+    // Its 6/6 is the probe's own, not the run's: the line stays empty.
+    expect(
+      wrapper.find('[data-testid="tm-aitoolkit-line"]').attributes("aria-valuenow"),
+    ).toBe("0");
     setGpu(
       gpuAnswer({
         leases: [
@@ -1657,6 +1661,9 @@ describe("the AI Toolkit run in the task manager", () => {
     expect(after.find('[data-testid="tm-aitoolkit-progress"]').text()).toBe(
       "generating previews",
     );
+    expect(
+      after.find('[data-testid="tm-aitoolkit-line"]').attributes("aria-valuenow"),
+    ).toBe("0");
   });
 
   it("opens the run's page in the shelf's Training runs tab", async () => {
