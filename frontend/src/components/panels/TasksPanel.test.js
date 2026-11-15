@@ -1142,10 +1142,10 @@ describe("the Finished group", () => {
     expect(rows(wrapper)).toHaveLength(2);
   });
 
-  it("heads the group with Clear all, and a read-only session with Made", async () => {
+  it("heads the group with Clear finished, and a read-only session with Made", async () => {
     let wrapper = await mountWith([run()]);
     const head = () => wrapper.find('[data-testid="tm-finished"] .tm-group-col');
-    expect(head().text()).toBe("Clear all");
+    expect(head().text()).toBe("Clear finished");
     wrapper.unmount();
     readOnly.ref.value = true;
     wrapper = await mountWith([run()]);
@@ -1153,18 +1153,21 @@ describe("the Finished group", () => {
     expect(wrapper.find('[data-testid="tm-finished-clear"]').exists()).toBe(false);
   });
 
-  it("clears every run but those with unsaved changes", async () => {
+  it("clears every run, those with unsaved changes too", async () => {
+    const runDialog = useRunDialogStore();
+    runDialog.ranWith(WF, { name: "Portrait SDXL", count: 1, text: "Steps.", runIds: ["run-a"] });
     const wrapper = await mountWith([
       run({ id: "run-a", offer: true }),
       run({ id: "run-b", label: "Inpaint fill" }),
       run({ id: "run-c", label: "Flux upscale" }),
     ]);
+    expect(within(rows(wrapper)[0], "tm-finished-pill").text()).toBe("1 change");
     await wrapper.find('[data-testid="tm-finished-clear"]').trigger("click");
     await flushPromises();
     expect(clearFinishedRuns).toHaveBeenCalledTimes(1);
     expect(dismissFinishedRun).not.toHaveBeenCalled();
-    expect(rows(wrapper).map((row) => row.attributes("data-run"))).toEqual(["run-a"]);
-    expect(within(rows(wrapper)[0], "tm-finished-pill").text()).toBe("1 change");
+    expect(rows(wrapper)).toHaveLength(0);
+    expect(runDialog.ranChanges[WF]).toBeUndefined();
   });
 });
 
@@ -1628,6 +1631,10 @@ describe("the AI Toolkit run in the task manager", () => {
     );
     expect(row.find(".tm-fig-text").text()).toBe("14.0 GB");
     expect(row.find(".tm-mark").classes("tm-mark--running")).toBe(true);
+    // Its steps are the hairline a ComfyUI run draws under its name.
+    const line = row.find('[data-testid="tm-aitoolkit-line"]');
+    expect(line.attributes("aria-valuenow")).toBe("69");
+    expect(line.find(".tm-run-line-fill").attributes("style")).toContain("width: 69%");
   });
 
   it("names the memory probe instead of its own steps", () => {
@@ -1642,6 +1649,10 @@ describe("the AI Toolkit run in the task manager", () => {
     expect(wrapper.find('[data-testid="tm-aitoolkit-progress"]').text()).toBe(
       "checking memory and speed",
     );
+    // Its 6/6 is the probe's own, not the run's: the line stays empty.
+    expect(
+      wrapper.find('[data-testid="tm-aitoolkit-line"]').attributes("aria-valuenow"),
+    ).toBe("0");
     setGpu(
       gpuAnswer({
         leases: [
@@ -1653,6 +1664,9 @@ describe("the AI Toolkit run in the task manager", () => {
     expect(after.find('[data-testid="tm-aitoolkit-progress"]').text()).toBe(
       "generating previews",
     );
+    expect(
+      after.find('[data-testid="tm-aitoolkit-line"]').attributes("aria-valuenow"),
+    ).toBe("0");
   });
 
   it("opens the run's page in the shelf's Training runs tab", async () => {
@@ -1671,6 +1685,9 @@ describe("the AI Toolkit run in the task manager", () => {
     const wrapper = mount(TasksPanel, globalOpts);
     expect(wrapper.find('[data-testid="tm-aitoolkit-row"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="tm-aitoolkit-progress"]').exists()).toBe(false);
+    const line = wrapper.find('[data-testid="tm-aitoolkit-line"]');
+    expect(line.attributes("aria-valuenow")).toBe("0");
+    expect(line.find(".tm-run-line-fill").attributes("style")).toContain("width: 0%");
   });
 
   it("draws the run once, with no PixlStash fold or worker row of its own", () => {

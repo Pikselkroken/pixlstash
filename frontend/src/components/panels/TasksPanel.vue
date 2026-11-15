@@ -181,6 +181,18 @@
                 >{{ aitoolkitProgress(entry) }}</span
               >
             </span>
+            <!-- The run's steps as the same hairline a ComfyUI run draws. -->
+            <span
+              class="tm-run-line"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-valuenow="aitoolkitPercent(entry)"
+              :aria-label="`${entry.label} progress`"
+              data-testid="tm-aitoolkit-line"
+            >
+              <span class="tm-run-line-fill" :style="{ width: `${aitoolkitPercent(entry)}%` }"></span>
+            </span>
             <span class="tm-figure">
               <span class="tm-fig-text">{{ formatGb(entry.figureMb) }}</span>
               <!-- The run's own page, in the shelf's Training runs tab. -->
@@ -197,6 +209,15 @@
                 </button>
               </span>
             </span>
+            <Tooltip
+              :text="
+                entry.progress?.shown_as
+                  ? aitoolkitProgress(entry)
+                  : `${aitoolkitProgress(entry) || entry.label}, ${aitoolkitPercent(entry)}%`
+              "
+              activator="parent"
+              :describe="false"
+            />
           </div>
           <!-- PixlStash's own background work: one card, its row on top and,
                open, one line per task below a hairline, on the same columns:
@@ -496,9 +517,9 @@
     >
       <div class="tm-group-head tm-group-head--finished">
         <span id="tm-finished-head" class="section-label">Finished</span>
-        <!-- Clear all stands in the column label's place, always shown: on
-             hover alone nobody found it. It never throws away unsaved
-             changes. -->
+        <!-- Clear finished stands in the column label's place, always shown:
+             on hover alone nobody found it. It clears every row, unsaved
+             changes too, as each row's × would. -->
         <span class="tm-group-col">
           <span v-if="isReadOnly" aria-hidden="true">Made</span>
           <button
@@ -506,11 +527,11 @@
             class="tm-head-act"
             type="button"
             data-testid="tm-finished-clear"
-            aria-label="Clear all finished runs. Runs with unsaved changes stay."
+            aria-label="Clear finished: also discards their unsaved workflow changes"
             :disabled="Boolean(dismissing) || Boolean(busy)"
             @click="clearFinished"
           >
-            Clear all
+            Clear finished
           </button>
         </span>
       </div>
@@ -867,6 +888,18 @@ function aitoolkitProgress(entry) {
   if (progress.loss == null || !Number.isFinite(Number(progress.loss))) return step;
   const loss = Number(progress.loss);
   return `${step} · loss ${loss < 0.01 ? loss.toExponential(2) : loss.toFixed(3)}`;
+}
+
+/**
+ * The AI Toolkit row's step over total as a whole percent, 0 until it has a
+ * total. A side pass's steps are its own (the 6-step probe would read 100%),
+ * so it reads 0, as ModelsSideBar's runs status leaves it out.
+ */
+function aitoolkitPercent(entry) {
+  const total = Number(entry.progress?.total);
+  if (entry.progress?.shown_as || !(total > 0)) return 0;
+  const step = Number(entry.progress.step) || 0;
+  return Math.min(100, Math.max(0, Math.round((step / total) * 100)));
 }
 
 /**
@@ -1291,6 +1324,18 @@ async function focusRowAt(at) {
   next?.focus();
 }
 
+/** Forget what this tab holds of the offers of *workflowIds*, gone with their runs. */
+function dropOffers(workflowIds) {
+  if (!workflowIds.length) return;
+  const next = { ...confirmed.value };
+  for (const workflowId of workflowIds) {
+    delete next[workflowId];
+    if (naming.value === workflowId) naming.value = "";
+    runDialog.ranWith(workflowId, null);
+  }
+  confirmed.value = next;
+}
+
 /** The × of a row: the run, and with an offer what its workflow kept from it. */
 async function dismiss(run) {
   if (dismissing.value || busy.value) return;
@@ -1300,13 +1345,7 @@ async function dismiss(run) {
     const answer = await dismissFinishedRun(run.id);
     tasksStore.forgetFinished([run.id]);
     const workflowId = answer?.workflow_id || run.offer?.workflowId;
-    if (workflowId) {
-      const next = { ...confirmed.value };
-      delete next[workflowId];
-      confirmed.value = next;
-      if (naming.value === workflowId) naming.value = "";
-      runDialog.ranWith(workflowId, null);
-    }
+    if (workflowId) dropOffers([workflowId]);
     await focusRowAt(at);
   } catch (err) {
     console.warn(`[tasks] could not dismiss the run ${run.id}`, err);
@@ -1317,16 +1356,18 @@ async function dismiss(run) {
   }
 }
 
-/** The group's Clear: every finished run but those with unsaved changes. */
+/** The group's Clear finished: every finished run, unsaved changes and all. */
 async function clearFinished() {
   // A save out keeps the keyboard where it is: Clear would move it.
   if (dismissing.value || busy.value) return;
   dismissing.value = "clear";
   try {
+    // The rows as the poll listed them: an offer still being confirmed is
+    // one the server clears too.
+    const cleared = tasksStore.finishedRuns;
     await clearFinishedRuns();
-    tasksStore.forgetFinished(
-      tasksStore.finishedRuns.filter((run) => !run.offer).map((run) => run.id),
-    );
+    tasksStore.forgetFinished(cleared.map((run) => run.id));
+    dropOffers(cleared.flatMap((run) => (run.offer && run.workflow_id ? [run.workflow_id] : [])));
     await focusRowAt(0);
   } catch (err) {
     console.warn("[tasks] could not clear the finished runs", err);

@@ -41,6 +41,14 @@ describe("a failed run reaches its workflow", () => {
     }
   });
 
+  // A training run's progress is its row in the Tasks tab, not the grid's
+  // overlay, and its events return before the overlay's hide timer is touched.
+  it("leaves AI Toolkit progress out of the grid's plugin overlay", () => {
+    expect(grid).toMatch(
+      /if \(String\(payload\.plugin \|\| ""\)\.toLowerCase\(\) === "ai-toolkit"\) return;\s*\n\s*if \(pluginProgressHideTimer\)/,
+    );
+  });
+
   it("is handed to the workflow's card", () => {
     expect(view).toMatch(
       /<WorkflowCard[^>]*:run-failure="runDialog\.failures\[entry\.card\.id\] \?\? null"/,
