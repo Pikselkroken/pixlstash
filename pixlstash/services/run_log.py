@@ -13,7 +13,7 @@ one that offers to save it.
 
 How long a batch stays: the newest :data:`KEPT_BATCHES` of the last
 :data:`KEPT_FOR`, and a batch a run set names until that set goes (dismissed,
-saved, or the workflow run again).
+saved, or the workflow run again, or the group cleared).
 
 Table in ``hub/schema.py``: ``workflow_run_log``.
 """
@@ -177,44 +177,48 @@ def forget(hub, batch_id: str, library_uuid: str | None) -> tuple[int, str | Non
     of another library is left alone, and so is its set.
     """
     with hub.transaction() as conn:
-        gone = conn.execute(
-            "DELETE FROM workflow_run_log WHERE batch_id = ? AND "
-            "(library_uuid IS NULL OR library_uuid = ?)",
-            (batch_id, library_uuid),
-        ).rowcount
-        if not gone:
-            return 0, None
-        workflow_id = next(
-            (
-                wf
-                for wf, named, _base in _run_sets(
-                    conn.execute(_RUN_SETS, (RAN,)).fetchall()
-                )
-                if named == batch_id
-            ),
-            None,
-        )
-        if workflow_id is not None:
-            clear_changes(conn, workflow_id, RAN)
+        return _forget(conn, batch_id, library_uuid)
+
+
+def _forget(conn, batch_id: str, library_uuid: str | None) -> tuple[int, str | None]:
+    """:func:`forget` inside the caller's transaction *conn*."""
+    gone = conn.execute(
+        "DELETE FROM workflow_run_log WHERE batch_id = ? AND "
+        "(library_uuid IS NULL OR library_uuid = ?)",
+        (batch_id, library_uuid),
+    ).rowcount
+    if not gone:
+        return 0, None
+    workflow_id = next(
+        (
+            wf
+            for wf, named, _base in _run_sets(
+                conn.execute(_RUN_SETS, (RAN,)).fetchall()
+            )
+            if named == batch_id
+        ),
+        None,
+    )
+    if workflow_id is not None:
+        clear_changes(conn, workflow_id, RAN)
     return gone, workflow_id
 
 
-def forget_finished(hub, library_uuid: str | None) -> int:
-    """Clear the Finished group of *library_uuid*: every batch it lists but
-    those with a run set, which only their own dismiss throws away. One past
-    what it lists is already on its way out (:func:`_prune`). Answers how
-    many batches went."""
-    gone = [
-        batch["id"]
-        for batch in finished(hub, library_uuid, lambda _ids: set())
-        if not batch["offer"]
-    ]
+def forget_finished(hub, library_uuid: str | None) -> tuple[int, list[str]]:
+    """Clear the Finished group of *library_uuid*: every batch it lists, each
+    with the run set made with it, as :func:`forget` does one, in one
+    transaction. One past what it lists is already on its way out
+    (:func:`_prune`). Answers how many batches went and the workflows whose
+    run sets went with them."""
+    listed = [b["id"] for b in finished(hub, library_uuid, lambda _ids: set())]
+    cleared, workflow_ids = 0, []
     with hub.transaction() as conn:
-        conn.executemany(
-            "DELETE FROM workflow_run_log WHERE batch_id = ?",
-            [(batch_id,) for batch_id in gone],
-        )
-    return len(gone)
+        for batch_id in listed:
+            gone, workflow_id = _forget(conn, batch_id, library_uuid)
+            cleared += bool(gone)
+            if workflow_id is not None:
+                workflow_ids.append(workflow_id)
+    return cleared, workflow_ids
 
 
 def _ids(row) -> list[int]:

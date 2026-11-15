@@ -8480,18 +8480,19 @@ def create_router(server) -> APIRouter:
         description=(
             "Forget the runs of this library that have ended, as the Tasks "
             "tab's Finished group lists them (`GET /workers/progress`, "
-            "`finished`). A run whose changes can still be saved is kept: "
-            "only its own `DELETE /workflows/runs/{run_id}` throws them away."
+            "`finished`), each with the changes its workflow kept from it, as "
+            "`DELETE /workflows/runs/{run_id}` does one."
         ),
         response_model=RunsCleared,
     )
     def clear_finished_runs(request: Request):
         server.auth.ensure_secure_when_required(request)
-        return RunsCleared(
-            cleared=run_log.forget_finished(
-                _hub(), request.state.library_lease.library_uuid
-            )
+        cleared, workflow_ids = run_log.forget_finished(
+            _hub(), request.state.library_lease.library_uuid
         )
+        if workflow_ids:
+            _announce(request, workflow_ids, "changed")
+        return RunsCleared(cleared=cleared)
 
     @router.delete(
         "/workflows/runs/{run_id}",

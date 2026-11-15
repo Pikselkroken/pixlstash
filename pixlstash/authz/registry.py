@@ -2258,7 +2258,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # it. A run id names no library object a token could be scoped to.
     ("DELETE", "/api/v1/workflows/runs"): RoutePolicy(
         _OWNER,
-        justification="Forget the owner's finished runs, keeping any whose changes can still be saved; DELETE blocked for READ tokens; owner only",
+        justification="Forget the owner's finished runs and the changes their workflows kept from them; DELETE blocked for READ tokens; owner only",
     ),
     ("DELETE", "/api/v1/workflows/runs/{run_id}"): RoutePolicy(
         _OWNER,

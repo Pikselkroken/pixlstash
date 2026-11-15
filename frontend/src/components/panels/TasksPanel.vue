@@ -517,9 +517,9 @@
     >
       <div class="tm-group-head tm-group-head--finished">
         <span id="tm-finished-head" class="section-label">Finished</span>
-        <!-- Clear all stands in the column label's place, always shown: on
-             hover alone nobody found it. It never throws away unsaved
-             changes. -->
+        <!-- Clear finished stands in the column label's place, always shown:
+             on hover alone nobody found it. It clears every row, unsaved
+             changes too, as each row's × would. -->
         <span class="tm-group-col">
           <span v-if="isReadOnly" aria-hidden="true">Made</span>
           <button
@@ -527,11 +527,11 @@
             class="tm-head-act"
             type="button"
             data-testid="tm-finished-clear"
-            aria-label="Clear all finished runs. Runs with unsaved changes stay."
+            aria-label="Clear finished: also discards their unsaved workflow changes"
             :disabled="Boolean(dismissing) || Boolean(busy)"
             @click="clearFinished"
           >
-            Clear all
+            Clear finished
           </button>
         </span>
       </div>
@@ -1324,6 +1324,18 @@ async function focusRowAt(at) {
   next?.focus();
 }
 
+/** Forget what this tab holds of the offers of *workflowIds*, gone with their runs. */
+function dropOffers(workflowIds) {
+  if (!workflowIds.length) return;
+  const next = { ...confirmed.value };
+  for (const workflowId of workflowIds) {
+    delete next[workflowId];
+    if (naming.value === workflowId) naming.value = "";
+    runDialog.ranWith(workflowId, null);
+  }
+  confirmed.value = next;
+}
+
 /** The × of a row: the run, and with an offer what its workflow kept from it. */
 async function dismiss(run) {
   if (dismissing.value || busy.value) return;
@@ -1333,13 +1345,7 @@ async function dismiss(run) {
     const answer = await dismissFinishedRun(run.id);
     tasksStore.forgetFinished([run.id]);
     const workflowId = answer?.workflow_id || run.offer?.workflowId;
-    if (workflowId) {
-      const next = { ...confirmed.value };
-      delete next[workflowId];
-      confirmed.value = next;
-      if (naming.value === workflowId) naming.value = "";
-      runDialog.ranWith(workflowId, null);
-    }
+    if (workflowId) dropOffers([workflowId]);
     await focusRowAt(at);
   } catch (err) {
     console.warn(`[tasks] could not dismiss the run ${run.id}`, err);
@@ -1350,16 +1356,18 @@ async function dismiss(run) {
   }
 }
 
-/** The group's Clear: every finished run but those with unsaved changes. */
+/** The group's Clear finished: every finished run, unsaved changes and all. */
 async function clearFinished() {
   // A save out keeps the keyboard where it is: Clear would move it.
   if (dismissing.value || busy.value) return;
   dismissing.value = "clear";
   try {
+    // The rows as the poll listed them: an offer still being confirmed is
+    // one the server clears too.
+    const cleared = tasksStore.finishedRuns;
     await clearFinishedRuns();
-    tasksStore.forgetFinished(
-      tasksStore.finishedRuns.filter((run) => !run.offer).map((run) => run.id),
-    );
+    tasksStore.forgetFinished(cleared.map((run) => run.id));
+    dropOffers(cleared.flatMap((run) => (run.offer && run.workflow_id ? [run.workflow_id] : [])));
     await focusRowAt(0);
   } catch (err) {
     console.warn("[tasks] could not clear the finished runs", err);

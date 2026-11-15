@@ -96,9 +96,8 @@ async function stubRun(page, world = {}) {
       }
       if (method === "DELETE" && path === "/workflows/runs") {
         sent.clears += 1;
-        const kept = now.finished.filter((run) => run.offer);
-        const cleared = now.finished.length - kept.length;
-        now.finished = kept;
+        const cleared = now.finished.length;
+        now.finished = [];
         return json({ ...FAKES.cleared, cleared });
       }
       const dismissed = /^\/workflows\/runs\/([^/]+)$/.exec(path);
