@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 from sqlmodel import select
 
-from pixlstash.db_models import Face, Picture
+from pixlstash.db_models import CharacterReferenceMember, Face, Picture
 from pixlstash.server import Server
 from pixlstash.event_types import EventType
 from pixlstash.services import character_sheet, comfyui_service, scrapheap_service
@@ -27,7 +27,12 @@ from pixlstash.services.character_sheet import (
     sheet_cells,
     sheet_prompt,
 )
-from tests.utils import API_PREFIX, upload_pictures_and_wait
+from tests.utils import (
+    API_PREFIX,
+    bearer_client,
+    mint_read_token,
+    upload_pictures_and_wait,
+)
 
 # Panel 1-6 of the 2560×1536 grid in MOSS's centred y-x boxes.
 CELLS = [
@@ -879,3 +884,42 @@ def test_a_reference_cluster_chooses_the_reference_faces(client):
     assert (
         client.get(f"{API_PREFIX}/face-clusters?character_id=999999").status_code == 404
     )
+
+    # Owner only: a READ token and one scoped to this very person are refused
+    # both routes, which the owner reached above (so they resolve).
+    for restriction in (
+        {},
+        {"resource_type": "character", "resource_id": character_id},
+    ):
+        token = mint_read_token(client, "face clusters", **restriction)
+        guest = bearer_client(client.server, token)
+        assert guest.get(clusters_url).status_code == 403, restriction
+        refused = guest.put(cluster_url, json={"picture_ids": b_ids})
+        assert refused.status_code == 403, restriction
+    assert client.get(clusters_url).json()["reference_cluster"] is None
+
+    # Purging a member deletes its row, so a picture that reuses the id
+    # never joins the frozen cluster.
+    client.put(cluster_url, json={"picture_ids": b_ids})
+    gone = b_ids[0]
+
+    def soft_delete(session):
+        session.get(Picture, gone).deleted = True
+        session.commit()
+
+    client.server.vault.db.run_task(soft_delete)
+    purged = scrapheap_service.purge_scrapheap_pictures(
+        client.server.vault, [gone], include_protected=True
+    )
+    assert list(purged.purged_ids) == [gone]
+
+    def stored(session):
+        return sorted(
+            session.exec(
+                select(CharacterReferenceMember.picture_id).where(
+                    CharacterReferenceMember.character_id == character_id
+                )
+            ).all()
+        )
+
+    assert client.server.vault.db.run_task(stored) == sorted(b_ids[1:])

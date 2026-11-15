@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from pixlstash.services.face_clusters import centrality, cluster_faces
+from pixlstash.services.face_clusters import centrality, cluster_faces, vector
 
 RNG = np.random.default_rng(3)
 DIM = 64
@@ -53,3 +53,10 @@ def test_a_stricter_threshold_splits_a_loose_cluster():
     strict, _ = cluster_faces(faces, 0.75)
     assert [len(c.members) for c in loose] == [12]
     assert len(strict) == 2
+
+
+def test_an_embedding_without_a_direction_is_no_vector():
+    assert vector(np.zeros(8, dtype=np.float32).tobytes()) is None
+    assert vector(np.full(8, np.nan, dtype=np.float32).tobytes()) is None
+    assert vector(b"") is None
+    assert vector(np.ones(8, dtype=np.float32).tobytes()) is not None

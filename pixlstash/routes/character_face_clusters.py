@@ -94,7 +94,7 @@ def create_router(server) -> APIRouter:
         "/face-clusters",
         summary="Group a person's faces by identity",
         description=(
-            "Clusters the person's faces (one a picture, stack covers only) by "
+            "Clusters the person's faces (one a picture) by "
             "average-linkage on cosine distance: groups merge while the mean "
             "likeness between their faces clears `threshold`. Each member "
             "carries its likeness to its cluster's centre. A face that matches "

@@ -35,7 +35,6 @@ from sqlmodel import Session, delete, select
 
 from pixlstash.db_models import Character, CharacterReferenceMember, Face, Picture
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.service.export_utils import ExportUtils
 
 logger = get_logger(__name__)
 
@@ -66,11 +65,17 @@ class Cluster:
 
 
 def vector(features) -> np.ndarray | None:
-    """A stored face embedding as a float vector, or ``None`` when empty."""
+    """A stored face embedding as a float vector.
+
+    ``None`` when empty, zero or not finite: such a vector has no direction,
+    and one of them would make the whole person's clustering fail.
+    """
     if features is None:
         return None
     arr = np.frombuffer(bytes(features), dtype=np.float32)
-    return arr if arr.size else None
+    if not arr.size or not np.isfinite(arr).all() or not arr.any():
+        return None
+    return arr
 
 
 def _unit(vectors) -> np.ndarray:
@@ -152,8 +157,10 @@ class PersonFace:
 def person_faces(
     session: Session, character_id: int, model_pack: str | None
 ) -> list[PersonFace]:
-    """The person's faces: one a picture, stack covers only.
+    """The person's faces: one a picture.
 
+    Every picture counts, stacked or not, as it does for the reference
+    selectors, so the view and what steers agree on what the cluster holds.
     Only embeddings from *model_pack* are compared, as the training-set picker
     does; a wholly legacy set (no pack recorded) is used as is. Where a picture
     carries the person twice, its first face counts.
@@ -165,7 +172,6 @@ def person_faces(
             Face.model_pack,
             Picture.score,
             Picture.source_picture_id,
-            Picture.stack_id,
             Picture.format,
         )
         .join(Picture, Face.picture_id == Picture.id)
@@ -179,19 +185,10 @@ def person_faces(
     packs = {row[2] for row in rows}
     if model_pack and packs != {None}:
         rows = [row for row in rows if row[2] == model_pack]
-    stacks = {row[5] for row in rows} - {None}
-    covers = set()
-    if stacks:
-        members = session.exec(
-            select(
-                Picture.id, Picture.stack_id, Picture.stack_position, Picture.created_at
-            ).where(Picture.stack_id.in_(stacks), Picture.deleted.is_(False))
-        ).all()
-        covers = {row.id for row in ExportUtils._deduplicate_stacks(members)}
     out, seen = [], set()
-    for pid, features, _pack, score, source, stack, fmt in rows:
+    for pid, features, _pack, score, source, fmt in rows:
         vec = vector(features)
-        if pid in seen or vec is None or (stack is not None and pid not in covers):
+        if pid in seen or vec is None:
             continue
         seen.add(pid)
         out.append(PersonFace(pid, vec, score, source, fmt))

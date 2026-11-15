@@ -12970,7 +12970,8 @@ translates.
   (`scipy.cluster.hierarchy`), cut at `1 - threshold`, so two groups merge
   while the mean likeness between their faces clears the threshold. One face a
   picture (`person_faces`: the person's first face, active InsightFace pack as
-  §25.28, stack covers only, minority embedding widths dropped). A group of one
+  §25.28, every picture stacked or not as the selectors see them, minority
+  embedding widths and zero or non-finite embeddings dropped). A group of one
   is `unclustered`. `# ponytail:` O(n²) distance matrix; cap or sample past
   ~5k faces.
 - **Centrality** is a face's cosine similarity to its group's centroid (the
@@ -12986,7 +12987,9 @@ translates.
   the reason `Character.thumbnail_picture_id` is one). A table rather than a
   `Character` column so no character payload and not the by-name field reader
   (`GET /characters/{id}/{field}`) serves the ids to a scoped token. It is
-  **frozen**: stored at the pick, never grown. `reference_cluster_ids` drops an
+  **frozen**: stored at the pick, never grown; the Scrapheap purge deletes the
+  rows of the pictures it removes, as it clears a pinned thumbnail, so a
+  reused picture id never joins. `reference_cluster_ids` drops an
   id whose picture is deleted or no longer carries the person's face; none left
   means no reference cluster.
 - **Steering.** `select_reference_faces_for_character` returns the person's

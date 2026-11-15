@@ -2059,9 +2059,9 @@ reference cluster first and then largest first. `unclustered` is
 `PUT /characters/{id}/reference-cluster` with `{picture_ids}` stores the
 reference cluster and answers `{picture_ids}`; `[]` clears it, and an id
 without the person's face is a 422 whose `detail.picture_ids` names them. It
-fires `CHANGED_CHARACTERS`. The stored ids are never served elsewhere: the
-reference faces reach clients only through `GET /characters/{id}/reference_pictures`
-and the training-set suggestion's likeness. Backend: §25.30 of the backend
+fires `CHANGED_CHARACTERS`. Only the GET above serves the stored ids; other
+clients see the effect, through `GET /characters/{id}/reference_pictures` and
+the training-set suggestion's likeness. Backend: §25.30 of the backend
 document.
 
 ---
