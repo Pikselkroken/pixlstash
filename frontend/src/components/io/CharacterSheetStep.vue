@@ -423,7 +423,7 @@
               type="button"
               class="cs-link cs-link--inline"
               data-testid="cs-change-faces"
-              @click="emit('faces')"
+              @click="emit('faces', $event)"
             >
               Change…
             </button></span

@@ -118,6 +118,27 @@ describe("FaceClustersDialog", () => {
     wrapper.unmount();
   });
 
+  it("selects a face on a click, zooms on a double-click, and Escape closes the zoom", async () => {
+    api.getFaceClusters.mockResolvedValue(clusters({ reference: true }));
+    const wrapper = mountDialog();
+    await flushPromises();
+    const faces = () => wrapper.findAll('[data-testid="fc-face"]');
+    await faces()[2].trigger("click");
+    expect(faces()[2].attributes("aria-pressed")).toBe("true");
+    expect(wrapper.find('[data-testid="fc-picked"]').text()).toContain("Face 3 of 4");
+    expect(document.querySelector('[data-testid="zoom-popout"]')).toBeNull();
+    await faces()[2].trigger("dblclick");
+    await flushPromises();
+    expect(document.querySelector('[data-testid="zoom-popout"]')).not.toBeNull();
+    // Focus left on the face: Escape still closes the zoom, not the dialog.
+    faces()[2].element.focus();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flushPromises();
+    expect(document.querySelector('[data-testid="zoom-popout"]')).toBeNull();
+    expect(wrapper.emitted("close")).toBeUndefined();
+    wrapper.unmount();
+  });
+
   it("asks again at another strictness", async () => {
     api.getFaceClusters.mockResolvedValue(clusters({ reference: false }));
     const wrapper = mountDialog();

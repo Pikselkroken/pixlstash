@@ -117,7 +117,7 @@
                 >Clear</AppButton
               >
               <AppButton
-                v-if="changed"
+                v-if="changed && kept.length"
                 variant="primary"
                 :loading="saving"
                 data-testid="fc-save"
@@ -138,12 +138,13 @@
 
           <div class="fc-body">
             <div class="fc-fieldwrap">
+              <div ref="stageEl" class="fc-stage">
               <div
                 ref="fieldEl"
                 class="fc-field"
                 role="group"
                 :aria-label="`Faces of cluster ${selected + 1}, most typical first`"
-                :style="{ width: `${layout.width}px`, height: `${layout.height}px` }"
+                :style="fieldStyle"
                 data-testid="fc-field"
                 @keydown="onFieldKey"
               >
@@ -152,7 +153,10 @@
                   :key="f.picture_id"
                   type="button"
                   class="fc-face"
-                  :class="{ 'fc-face--out': isOut(rank) }"
+                  :class="{
+                    'fc-face--out': isOut(rank),
+                    'fc-face--on': rank === focusRank,
+                  }"
                   :style="{
                     left: `${f.x}px`,
                     top: `${f.y}px`,
@@ -161,11 +165,13 @@
                   }"
                   :tabindex="rank === focusRank ? 0 : -1"
                   :aria-label="faceName(rank)"
-                  :aria-keyshortcuts="'Z'"
+                  :aria-pressed="rank === focusRank"
+                  :aria-keyshortcuts="'Z Enter'"
                   :data-rank="rank"
                   data-testid="fc-face"
                   @focus="focusRank = rank"
-                  @click="openZoom(f.picture_id)"
+                  @click="focusFace(rank)"
+                  @dblclick="openZoom(f.picture_id)"
                   @wheel="onTileWheel($event, f.picture_id)"
                 >
                   <img :src="pictureThumbnailUrl(f.picture_id)" alt="" loading="lazy" />
@@ -175,10 +181,32 @@
                   >
                 </button>
               </div>
+              </div>
               <span v-if="hidden" class="fc-note">+{{ hidden }} more, less typical</span>
             </div>
 
             <aside class="fc-side">
+              <div v-if="picked" class="fc-picked" data-testid="fc-picked">
+                <img :src="pictureThumbnailUrl(picked.picture_id)" alt="" />
+                <span>
+                  <b>Face {{ focusRank + 1 }} of {{ current.size }}</b><br />
+                  {{ fixed(picked.centrality) }} to the centre<template
+                    v-if="picked.score"
+                  >
+                    · {{ picked.score }}★</template
+                  ><br />
+                  <span class="fc-note">{{
+                    isOut(focusRank) ? "Left out at this cut." : "Counts at this cut."
+                  }}</span>
+                  <button
+                    type="button"
+                    class="fc-link"
+                    @click="openZoom(picked.picture_id)"
+                  >
+                    Zoom (Z)
+                  </button>
+                </span>
+              </div>
               <div v-if="comparison" class="fc-card" data-testid="fc-compare">
                 <h4 class="fc-lbl">Against the reference</h4>
                 <div class="fc-pair">
@@ -248,8 +276,8 @@
             </aside>
           </div>
           <p class="fc-note fc-scale">
-            Size: four bands of how typical a face is. Click, wheel up or Z on a
-            face to zoom.
+            Size: four bands of how typical a face is. Click a face to see it
+            here; double-click, wheel up or Z to zoom.
           </p>
         </section>
       </div>
@@ -294,7 +322,7 @@
  * (`PUT /characters/{id}/reference-cluster`). Any face opens in the zoom
  * pop-out, beside the cluster's centre face.
  */
-import { computed, nextTick, ref, useId, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Segmented from "../widgets/Segmented.vue";
@@ -304,7 +332,7 @@ import { pictureThumbnailUrl } from "../../api/pictures";
 import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import { buildMediaUrl } from "../../utils/media";
 import { errorDetail } from "../../utils/apiError";
-import { layoutCluster } from "../../utils/clusterLayout.js";
+import { STEP_LADDER, layoutCluster } from "../../utils/clusterLayout.js";
 import { useZoomPopout } from "../../composables/useZoomPopout.js";
 
 const props = defineProps({
@@ -322,8 +350,6 @@ const STRICTNESS = [
   { id: "normal", label: "Normal", threshold: 0.45 },
   { id: "strict", label: "Strict", threshold: 0.55 },
 ];
-// The face sizes, most typical first: --face-thumb-xl, --space-9, -8, -7.
-const STEPS = [96, 64, 48, 32];
 const MAX_SHOWN = 60;
 
 const uid = useId();
@@ -335,7 +361,22 @@ const cuts = ref({}); // cluster index -> the slider's value
 const saving = ref(false);
 const focusRank = ref(0);
 const fieldEl = ref(null);
+const stageEl = ref(null);
+const box = ref({ width: 0, height: 0 });
 let seq = 0;
+
+// The room the faces have: they are laid out to fit it, never to scroll.
+let observer = null;
+watch(stageEl, (el) => {
+  observer?.disconnect();
+  observer = null;
+  if (!el || typeof ResizeObserver === "undefined") return;
+  observer = new ResizeObserver(() => {
+    box.value = { width: el.clientWidth, height: el.clientHeight };
+  });
+  observer.observe(el);
+});
+onBeforeUnmount(() => observer?.disconnect());
 
 const name = computed(() => props.character?.name || "This person");
 const strictnessLabel = computed(
@@ -346,7 +387,21 @@ const unclustered = computed(() => data.value?.unclustered || []);
 const current = computed(() => clusters.value[selected.value] || null);
 const shown = computed(() => current.value?.members.slice(0, MAX_SHOWN) || []);
 const hidden = computed(() => (current.value?.size || 0) - shown.value.length);
-const layout = computed(() => layoutCluster(shown.value, STEPS));
+const layout = computed(() =>
+  layoutCluster(shown.value, STEP_LADDER, box.value),
+);
+/** Even the smallest faces with no spacing overflow: shrink the whole field. */
+const fieldStyle = computed(() => {
+  const { width, height, fits } = layout.value;
+  const { width: w, height: h } = box.value;
+  const scale = !fits && w && h ? Math.min(1, w / width, h / height) : 1;
+  return {
+    width: `${width}px`,
+    height: `${height}px`,
+    transform: scale < 1 ? `scale(${scale})` : undefined,
+  };
+});
+const picked = computed(() => shown.value[focusRank.value] || null);
 const saved = computed(() => new Set(data.value?.reference_cluster || []));
 
 const subtitle = computed(() => {
@@ -522,7 +577,11 @@ function onFieldKey(event) {
   } else if (event.key === "Home" || event.key === "End") {
     event.preventDefault();
     focusFace(event.key === "Home" ? 0 : last);
-  } else if ((event.key === "z" || event.key === "Z") && !event.ctrlKey && !event.metaKey) {
+  } else if (
+    (event.key === "z" || event.key === "Z" || event.key === "Enter") &&
+    !event.ctrlKey &&
+    !event.metaKey
+  ) {
     event.preventDefault();
     openZoom(shown.value[focusRank.value].picture_id);
   }
@@ -585,6 +644,7 @@ function close() {
 <style scoped>
 .fc {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -595,6 +655,7 @@ function close() {
 }
 .fc-split {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
 }
@@ -780,19 +841,30 @@ function close() {
 }
 .fc-body {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
-  gap: var(--space-7);
+  gap: var(--space-5);
 }
 .fc-fieldwrap {
   flex: 1;
   min-width: 0;
-  overflow: auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: safe center;
   gap: var(--space-3);
+}
+/* The faces are laid out to fit this box (clusterLayout), so it never
+   scrolls; the field shrinks as a whole only past the smallest sizes. */
+.fc-stage {
+  flex: 1;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
 }
 .fc-field {
   position: relative;
@@ -825,6 +897,10 @@ function close() {
     var(--focus-glow);
   z-index: var(--z-raised);
 }
+.fc-face--on {
+  border-color: var(--active-bar);
+  box-shadow: inset 0 0 0 var(--focus-width) var(--active-bar);
+}
 .fc-face--out {
   opacity: var(--opacity-disabled);
   transform: scale(0.82);
@@ -850,6 +926,38 @@ function close() {
 .fc-chip--sc {
   right: var(--space-1);
   top: var(--space-1);
+}
+.fc-picked {
+  display: flex;
+  gap: var(--space-4);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.fc-picked img {
+  width: var(--space-9);
+  height: var(--space-9);
+  flex: none;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+}
+.fc-link {
+  display: block;
+  padding: 0;
+  margin-top: var(--space-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-on-surface));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.fc-link:focus-visible {
+  outline: none;
+  border-color: var(--focus-stroke);
+  box-shadow: var(--focus-glow);
 }
 .fc-side {
   width: 264px;

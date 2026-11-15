@@ -1,4 +1,4 @@
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 
 /**
  * Open a list of pictures in ZoomPopout: which one is zoomed, the wheel that
@@ -6,6 +6,11 @@ import { computed, nextTick, ref } from "vue";
  *
  * Shared by the Sheets step and the faces dialog, so a wheel up, double-click
  * or Z opens a thumbnail the same way on both.
+ *
+ * Escape closes the pop-out wherever focus is. The pop-out handles its own
+ * keys only while focus is inside it, and the dialog it opens over can keep
+ * focus on the thumbnail that opened it; Escape then reached only the
+ * dialog, which is persistent while zoomed, and nothing closed.
  *
  * @param {import("vue").Ref<Array<number>>} list - the ids in stepping order.
  * @param {(id: number) => void} [onClosed] - after closing, with the id that was
@@ -48,10 +53,28 @@ export function useZoomPopout(list, onClosed) {
 
   async function closeZoom() {
     const id = zoomedId.value;
+    if (id == null) return;
     zoomedId.value = null;
     await nextTick();
     onClosed?.(id);
   }
+
+  function onEscape(event) {
+    if (event.key !== "Escape" || zoomedId.value == null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeZoom();
+  }
+
+  // Capture, so it is heard before a dialog's own document listener.
+  watch(zoomedId, (id, before) => {
+    if (id != null && before == null) {
+      window.addEventListener("keydown", onEscape, true);
+    } else if (id == null) {
+      window.removeEventListener("keydown", onEscape, true);
+    }
+  });
+  onBeforeUnmount(() => window.removeEventListener("keydown", onEscape, true));
 
   return {
     zoomedId,
