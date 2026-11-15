@@ -2280,6 +2280,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Forget one finished run and the changes its workflow kept from it; DELETE blocked for READ tokens; owner only",
     ),
+    ("POST", "/api/v1/workflows/runs/{run_id}/stop"): RoutePolicy(
+        _OWNER,
+        justification="Stop one run the owner started, and no other; POST blocked for READ tokens; owner only",
+    ),
     # ── recipes.py (saved recipes, plan §5.5 / step B6) ─────────────────────
     # OWNER_ONLY throughout, and a decision rather than a default. A saved
     # recipe holds the owner's prompt and names the models they run, and the

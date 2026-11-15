@@ -279,6 +279,7 @@ _WORKFLOW_WRITE_ROUTES = (
     # The Finished group (#2050): the owner forgetting their own runs.
     ("DELETE", "/api/v1/workflows/runs"),
     ("DELETE", "/api/v1/workflows/runs/{run_id}"),
+    ("POST", "/api/v1/workflows/runs/{run_id}/stop"),
     # The file gestures (v1.12 B8). Each resolves the card's graph out of the
     # whole library the way the run route does, and write a file.
     ("POST", "/api/v1/workflows/{workflow_id}/duplicate"),
@@ -7523,6 +7524,13 @@ _EVERY_WORKFLOW_ROUTE = (
     # The Finished group (#2050): forgetting nothing is still reached.
     ("DELETE", "/workflows/runs", "/workflows/runs", None),
     ("DELETE", "/workflows/runs/{run_id}", "/workflows/runs/gate-probe", None),
+    # Stopping a run nobody queued is a 404: reached.
+    (
+        "POST",
+        "/workflows/runs/{run_id}/stop",
+        "/workflows/runs/gate-probe/stop",
+        None,
+    ),
     (
         "GET",
         "/workflows/{workflow_id}/lora-chain",
@@ -15124,6 +15132,67 @@ def test_cancelling_a_waiting_lease_cancels_its_run_and_only_a_waiting_one(held)
     blocker.release()
     time.sleep(0.6)
     assert held.runnable.submitted == []
+
+
+def test_stopping_one_held_run_leaves_the_others_to_run(held):
+    """Draw 4 more twice, stop one: only that one ends, the rest still draw."""
+    blocker = _hold_the_card(held.arbiter)
+    r = held.owner.post(
+        f"{API}/workflows/run", json={"workflow_id": RUN_WF, "count": 2}
+    )
+    stopped, kept = (p["run_id"] for p in r.json()["prompts"])
+    path = f"{API}/workflows/runs/{stopped}/stop"
+    assert_real_route(
+        held.runnable.server.api, "POST", path, API + "/workflows/runs/{run_id}/stop"
+    )
+    r = held.owner.post(path)
+    assert (r.status_code, r.json()) == (200, {"stopped": 1}), r.text
+    outcome = held.owner.get(f"{API}/workflows/runs/{stopped}").json()
+    assert (outcome["status"], outcome["stopped"]) == ("failed", True)
+    assert held.owner.get(f"{API}/workflows/runs/{kept}").json()["status"] == (
+        "waiting"
+    )
+    # Ended already: nothing left to stop.
+    assert held.owner.post(path).json() == {"stopped": 0}
+    assert held.owner.post(f"{API}/workflows/runs/run-nope/stop").status_code == 404
+    # Another library's run is not this one's to stop.
+    with comfyui_service._run_outcomes_lock:
+        outcome = comfyui_service._run_outcomes[kept]
+        library, outcome["library_uuid"] = outcome["library_uuid"], "another-library"
+    try:
+        r = held.owner.post(f"{API}/workflows/runs/{kept}/stop")
+    finally:
+        with comfyui_service._run_outcomes_lock:
+            outcome["library_uuid"] = library
+    assert r.status_code == 404, r.text
+    blocker.release()
+    assert _until(lambda: len(held.runnable.submitted) == 1)
+    time.sleep(0.6)
+    assert len(held.runnable.submitted) == 1, "the stopped run was sent anyway"
+
+
+def test_stopping_the_drawing_run_interrupts_it_and_no_other(held):
+    r = held.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    (prompt,) = r.json()["prompts"]
+    sent = []
+    # Never the ComfyUI on the default address: a development box runs one.
+    held.runnable.monkeypatch.setattr(
+        comfyui_service.requests,
+        "post",
+        lambda url, json=None, **k: (
+            sent.append((url.rsplit("/", 1)[-1], json))
+            or SimpleNamespace(status_code=200, text="")
+        ),
+    )
+    with comfyui_service._run_outcomes_lock:
+        comfyui_service._live_runs["prompt-1"]["status"] = "running"
+    r = held.owner.post(f"{API}/workflows/runs/{prompt['run_id']}/stop")
+    assert (r.status_code, r.json()) == (200, {"stopped": 1}), r.text
+    # By its prompt id: never ComfyUI's bare interrupt or a queue clear.
+    assert sent == [
+        ("interrupt", {"prompt_id": "prompt-1"}),
+        ("queue", {"delete": ["prompt-1"]}),
+    ]
 
 
 def test_a_held_run_is_either_sent_or_cancelled_never_both(held):

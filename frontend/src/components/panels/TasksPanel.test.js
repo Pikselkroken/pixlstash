@@ -19,6 +19,7 @@ const saveWorkflow = vi.fn();
 const saveWorkflowAsNew = vi.fn();
 const dismissFinishedRun = vi.fn();
 const clearFinishedRuns = vi.fn();
+const stopRun = vi.fn(async () => ({ stopped: 1 }));
 // The rest of the module is the Workflows store's, which the panel only reads.
 vi.mock("../../api/workflows", async (original) => ({
   ...(await original()),
@@ -27,6 +28,7 @@ vi.mock("../../api/workflows", async (original) => ({
   saveWorkflowAsNew: (...args) => saveWorkflowAsNew(...args),
   dismissFinishedRun: (...args) => dismissFinishedRun(...args),
   clearFinishedRuns: (...args) => clearFinishedRuns(...args),
+  stopRun: (...args) => stopRun(...args),
 }));
 // Where a run's picture opens: the screen the panel is on.
 const nav = vi.hoisted(() => ({
@@ -172,12 +174,13 @@ describe("what the task manager shows", () => {
     expect(lines.map((line) => line.attributes("aria-valuenow"))).toEqual(["0", "40", "0"]);
     expect(lines[1].find(".tm-run-line-fill").attributes("style")).toContain("width: 40%");
 
-    // The stop asks the backend, not a handler some view registered.
-    const stop = wrapper.find('button[aria-label="Stop ComfyUI"]');
-    expect(stop.exists()).toBe(true);
+    // A row's stop asks the backend to stop that run alone, never ComfyUI's
+    // whole queue: "Draw 4 more" twice is eight rows, and one stop is one run.
+    const stops = wrapper.findAll('button[aria-label="Stop this run"]');
+    expect(stops).toHaveLength(3);
+    await stops[1].trigger("click");
+    expect(stopRun.mock.calls).toEqual([["p-2"]]);
     expect(abortRun).not.toHaveBeenCalled();
-    await stop.trigger("click");
-    expect(abortRun).toHaveBeenCalledTimes(1);
   });
 
   // A row leaves with its run, and a focused Stop leaves with it: focus falls
@@ -195,7 +198,7 @@ describe("what the task manager shows", () => {
       },
       { ...globalOpts, attachTo: document.body },
     );
-    const stop = wrapper.find('button[aria-label="Stop ComfyUI"]').element;
+    const stop = wrapper.find('button[aria-label="Stop this run"]').element;
     stop.focus();
     return { tasksStore, wrapper, stop, tab: wrapper.find('[role="dialog"]').element };
   }
@@ -1460,7 +1463,7 @@ describe("the GPU queue in the task manager", () => {
     expect(wrapper.find('[data-testid="tm-run-anyway"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="tm-cancel-wait"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="tm-quit-comfyui"]').exists()).toBe(false);
-    expect(wrapper.find('button[aria-label="Stop ComfyUI"]').exists()).toBe(false);
+    expect(wrapper.find('button[aria-label="Stop this run"]').exists()).toBe(false);
   });
 
   it("lists the waiting run in the order the queue runs it, with its need and no units", () => {

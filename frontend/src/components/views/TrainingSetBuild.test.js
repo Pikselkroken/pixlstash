@@ -49,6 +49,7 @@ const gen = vi.hoisted(() => ({
   setReferenceCluster: vi.fn(),
   listAdapters: vi.fn(),
   getRunOutcome: vi.fn(),
+  stopRun: vi.fn(async () => ({ stopped: 1 })),
   getWorkflowCard: vi.fn(),
   listWorkflowCards: vi.fn(),
   preflightWorkflowRun: vi.fn(),
@@ -72,6 +73,7 @@ vi.mock("../../api/modelShelf", () => ({ listAdapters: gen.listAdapters }));
 vi.mock("../../api/comfyui", () => ({ cardForWorkflow: gen.cardForWorkflow }));
 vi.mock("../../api/workflows", () => ({
   getRunOutcome: gen.getRunOutcome,
+  stopRun: gen.stopRun,
   getWorkflowCard: gen.getWorkflowCard,
   listWorkflowCards: gen.listWorkflowCards,
   preflightWorkflowRun: gen.preflightWorkflowRun,
@@ -1275,7 +1277,11 @@ describe("TrainingSetBuild: generating the pictures", () => {
     const places = () =>
       wrapper
         .findAll(".cs-sheets > li")
-        .map((li) => (li.find("img").exists() ? li.find("img").attributes("src") : li.text()));
+        .map((li) =>
+          li.find("img").exists()
+            ? li.find("img").attributes("src")
+            : li.find('[data-testid="cs-slot"] > span').text(),
+        );
     const wrapper = mountDialog();
     await flushPromises();
     await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
@@ -1311,6 +1317,62 @@ describe("TrainingSetBuild: generating the pictures", () => {
       "/thumb/504.webp",
     ]);
     expect(wrapper.find('[aria-label="Zoom in on sheet 4"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("stops one sheet's run from its place, and the others keep drawing", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    gen.runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: ["r1", "r2", "r3"].map((run_id) => ({ run_id, status: "queued" })),
+    });
+    const stopped = new Set();
+    gen.getRunOutcome.mockImplementation(async (key) =>
+      stopped.has(key)
+        ? { status: "failed", stopped: true, message: "Stopped." }
+        : { status: "running" },
+    );
+    gen.rankSheets.mockResolvedValue({ sheets: [], references: 0 });
+    const tasks = useTasksStore();
+    tasks.comfyuiRuns = [
+      { run_id: "r1", status: "running", percent: 100, generated: true },
+      { run_id: "r2", status: "queued", percent: 0 },
+      { run_id: "r3", status: "queued", percent: 0 },
+    ];
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(3000);
+    const labels = () =>
+      wrapper.findAll('[data-testid="cs-slot"] > span').map((label) => label.text());
+    const stops = () =>
+      wrapper.findAll('[data-testid="cs-stop-run"]').map((b) => b.attributes("aria-label"));
+    // Done drawing and being imported, the first has nothing left to stop.
+    expect(labels()).toEqual(["displaying", "queued", "queued"]);
+    expect(stops()).toEqual(["Stop generation of sheet 2", "Stop generation of sheet 3"]);
+
+    // A stop that stopped nothing leaves the place as it was, stop and all.
+    gen.stopRun.mockResolvedValueOnce({ stopped: 0 });
+    await wrapper.find('[aria-label="Stop generation of sheet 3"]').trigger("click");
+    await flushPromises();
+    expect(labels()).toEqual(["displaying", "queued", "queued"]);
+    gen.stopRun.mockClear();
+
+    await wrapper.find('[aria-label="Stop generation of sheet 2"]').trigger("click");
+    // That run alone, never ComfyUI's whole queue.
+    expect(gen.stopRun.mock.calls).toEqual([["r2"]]);
+    await flushPromises();
+    expect(labels()).toEqual(["displaying", "stopping", "queued"]);
+    stopped.add("r2");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(labels()).toEqual(["displaying", "stopped", "queued"]);
+    expect(stops()).toEqual(["Stop generation of sheet 3"]);
+    // Stopped on purpose is not a failure to warn about.
+    expect(wrapper.find('[data-testid="cs-failed"]').exists()).toBe(false);
     wrapper.unmount();
   });
 

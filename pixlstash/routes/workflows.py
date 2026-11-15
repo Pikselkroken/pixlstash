@@ -184,6 +184,7 @@ from pixlstash.services.comfyui_service import (
     _submit_comfyui_prompt,
     _download_comfyui_image,
     _upload_image_to_comfyui,
+    cancel_runs,
     library_ids_named,
     own_picture_ids,
     claim_held_run,
@@ -2065,6 +2066,17 @@ class RunsCleared(BaseModel):
         description=(
             "The workflow whose kept changes went with the run, null when none did."
         ),
+    )
+
+
+class RunStopped(BaseModel):
+    """``POST /workflows/runs/{run_id}/stop``."""
+
+    stopped: int = Field(
+        description=(
+            "1 when the run was still going and was stopped, 0 when it had "
+            "already ended."
+        )
     )
 
 
@@ -8514,6 +8526,31 @@ def create_router(server) -> APIRouter:
         if workflow_id is not None:
             _announce(request, [workflow_id], "changed")
         return RunsCleared(cleared=1 if gone else 0, workflow_id=workflow_id)
+
+    @router.post(
+        "/workflows/runs/{run_id}/stop",
+        summary="Stop one run",
+        description=(
+            "Stop the one run named, by its run_id or prompt_id, and no other: "
+            "held by PixlStash it is cancelled, queued in ComfyUI it is taken "
+            "off the queue, drawing it is interrupted. It then ends as a "
+            "failed run with `stopped` set. A run that already ended stops "
+            "nothing; one PixlStash does not know, or another library's, "
+            "answers 404."
+        ),
+        response_model=RunStopped,
+    )
+    def stop_run(request: Request, run_id: str):
+        server.auth.ensure_secure_when_required(request)
+        outcome = run_outcome(run_id)
+        started_in = (outcome or {}).get("library_uuid")
+        if outcome is None or (
+            started_in and started_in != request.state.library_lease.library_uuid
+        ):
+            raise HTTPException(
+                status_code=404, detail="No run with that id is being followed."
+            )
+        return RunStopped(stopped=cancel_runs([run_id]))
 
     def _upload_planned(plan: Plan, picture_id: int) -> str:
         """Upload one of ``plan.files`` to ComfyUI, answering the name it loads by.

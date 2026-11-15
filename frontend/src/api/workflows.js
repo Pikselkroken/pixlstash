@@ -328,6 +328,20 @@ export async function getRunOutcome(runId) {
 }
 
 /**
+ * Stop one run `runWorkflowCard` queued, and no other: held, queued in
+ * ComfyUI or drawing. It then reads as `failed` with `stopped` set. A 404 for
+ * a run the backend no longer knows.
+ *
+ * @param {string} runId a `run_id` or a `prompt_id`
+ * @returns {Promise<{stopped: number}>} 0 when it had already ended.
+ */
+export async function stopRun(runId) {
+  return unwrap(
+    apiClient.post(`/workflows/runs/${encodeURIComponent(runId)}/stop`),
+  );
+}
+
+/**
  * Dismiss one finished run, by the `id` `GET /workers/progress` lists it under
  * in `finished`, and with it the changes its workflow kept from it (#2050).
  *
