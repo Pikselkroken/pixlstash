@@ -31,7 +31,7 @@
             >{{
               fromReference
                 ? "Sheets from a reference need a Qwen-Image-Edit or FLUX.2 Klein sheet workflow, and the library has none."
-                : "Sheets need a MOSS-Image or Krea 2 text-to-image workflow, and the library has none. Import one from Workflows, then come back."
+                : "Sheets need a MOSS-Image, Krea 2, Qwen-Image or FLUX.2 Klein text-to-image workflow, and the library has none. Import one from Workflows, then come back."
             }}</span
           >
         </p>
@@ -213,7 +213,7 @@
           >
         </p>
         <ul class="cs-sheets">
-          <li v-for="slot in slots" :key="slot.key">
+          <li v-for="slot in slots" :key="slot.key" :data-slot="slot.key">
             <template v-if="slot.sheet">
               <div class="cs-tile">
                 <button
@@ -525,7 +525,8 @@
 /**
  * Step 1 of "Create a training set…" when the set is drawn rather than picked.
  *
- * Draws 2-4 character sheets with a MOSS-Image or Krea 2 workflow (an ordinary
+ * Draws 2-4 character sheets with a MOSS-Image, Krea 2, Qwen-Image or FLUX.2
+ * Klein text-to-image workflow (#2700; an ordinary
  * `POST /workflows/run`, so it queues and shows in Tasks like any run), ranks
  * them by how alike each sheet's own faces are, and cuts the one the user picks
  * into six pictures on the character. Where the library has a Qwen-Image-Edit
@@ -616,12 +617,11 @@ const SUBJECTS = [
   { id: "man", label: "Man" },
 ];
 const MOSS = "moss_image";
-// Krea 2 reads no layout JSON: its sheet is the prose prompt.
-// ponytail: no probe has measured Krea 2's sheets or how they cut.
+// Only MOSS-Image reads the layout JSON; every other engine's sheet is the
+// prose prompt. Qwen-Image and FLUX.2 Klein also draw from a reference
+// picture (#2679, #2700). Each engine loads its own LoRAs.
+// ponytail: no probe has measured Krea 2's, Qwen's or Klein's sheets yet.
 const KREA = "krea2";
-// What draws a sheet from a reference picture (#2679, #2700): the edit
-// models that keep the person in the picture, and the LoRAs each loads.
-// ponytail: no probe has measured either engine's sheets yet.
 const QWEN = "qwen";
 const KLEIN = /klein/i;
 const ENGINES = {
@@ -746,7 +746,7 @@ const fromReference = computed(() => mode.value === "reference");
 const engine = computed(() => {
   if (!fromReference.value) {
     const card = workflows.value.find((c) => c.id === workflowId.value);
-    return card && usesFamily(card, KREA) ? ENGINES.krea : ENGINES.moss;
+    return cardEngine(card) || ENGINES.moss;
   }
   const card =
     referenceCards.value.find((c) => c.id === workflowId.value) ||
@@ -1337,8 +1337,8 @@ async function draw() {
   const count = form.count;
   const reference = fromReference.value ? referenceId.value : null;
   const inputs = workflowInputs.value;
-  // An edit model and Krea 2 take no layout: the sheet in one sentence.
-  const prose = !!reference || engine.value.family === KREA;
+  // Only MOSS-Image takes a layout: the others get the sheet in one sentence.
+  const prose = !!reference || engine.value !== ENGINES.moss;
   try {
     const description = form.description.trim();
     if (!savedDescription.value && description) {
@@ -1424,11 +1424,24 @@ async function draw() {
     phase.value = "drawing";
     gaveUpOnFaces.value = false;
     schedule();
+    showSlot(runKey(started[0]));
   } catch (e) {
     error.value = `Couldn't start the sheets. ${errorMessage(e, "Please try again.")}`;
   } finally {
     working.value = false;
   }
+}
+
+/** Scroll the place of run *key* into view: *Draw N more* adds its places
+ * below the sheets on show, out of sight on a short window. */
+function showSlot(key) {
+  nextTick(() => {
+    const slot = [...(mainPane.value?.querySelectorAll("[data-slot]") || [])].find(
+      (el) => el.dataset.slot === key,
+    );
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    slot?.scrollIntoView?.({ block: "start", behavior: still ? "auto" : "smooth" });
+  });
 }
 
 /** Forget every sheet and run: a new pick starts empty. */
@@ -1613,26 +1626,26 @@ const footer = computed(() => {
   };
 });
 
-/** Whether *card* runs a model of *family*. */
-function usesFamily(card, family) {
-  return (card.models || []).some((m) => m.base_model_family === family);
-}
-
-/** The reference engine *card* draws with, or null. Read off its diffusion
- * model only: a Krea 2 or MOSS-Image graph loads a Qwen text encoder, and
- * matching on that is how Krea 2's style reference got listed. */
-function referenceEngine(card) {
+/** The engine *card* draws a sheet with, or null. Read off its diffusion
+ * model only: a Krea 2, MOSS-Image or Z-Image graph loads a Qwen text
+ * encoder, and matching on that is how Krea 2's style reference got listed. */
+function cardEngine(card) {
   const model = (card?.models || []).find((m) =>
     ["unet", "checkpoint"].includes(m.kind),
   );
-  if (model?.base_model_family === QWEN) return ENGINES.qwen;
-  if (
-    model?.base_model_family === "flux2" &&
-    KLEIN.test(`${model.base_model || ""} ${model.filename || ""}`)
-  ) {
-    return ENGINES.klein;
+  const family = model?.base_model_family;
+  if (family === "flux2") {
+    const klein = KLEIN.test(`${model.base_model || ""} ${model.filename || ""}`);
+    return klein ? ENGINES.klein : null;
   }
-  return null;
+  return Object.values(ENGINES).find((e) => e.family === family) || null;
+}
+
+/** The engine *card* draws a sheet from a reference picture with, or null:
+ * the edit models that keep the person in the picture. */
+function referenceEngine(card) {
+  const engine = cardEngine(card);
+  return [ENGINES.qwen, ENGINES.klein].includes(engine) ? engine : null;
 }
 
 /** The cards each mode can draw with, most recently used first. */
@@ -1642,8 +1655,7 @@ function sortCards(cards) {
   workflows.value = cards
     .filter(
       (card) =>
-        card.type === "txt2img" &&
-        (usesFamily(card, MOSS) || usesFamily(card, KREA)),
+        card.type === "txt2img" && !card.reference_inputs && cardEngine(card),
     )
     .sort(recent);
   referenceCards.value = cards
