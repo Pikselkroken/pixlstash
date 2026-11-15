@@ -32,7 +32,10 @@ export function freeTrainingSetName(name, sets) {
  */
 export function liveBuildRuns(building, liveRuns) {
   const keys = new Set(
-    (building?.sheets?.runs || []).map((r) => r.key).filter(Boolean),
+    [
+      ...(building?.run_keys || []),
+      ...(building?.sheets?.runs || []).map((r) => r.key),
+    ].filter(Boolean),
   );
   return (liveRuns || []).filter((run) => keys.has(runKey(run)));
 }

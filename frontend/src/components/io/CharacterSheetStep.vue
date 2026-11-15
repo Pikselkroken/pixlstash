@@ -692,6 +692,9 @@ const cutDone = ref(false);
 // Tasks finds the set a Character sheet row belongs to.
 const runHistory = ref([]);
 const drawnIds = ref([]);
+// Runs still going when a new draw or a cut started over: no longer on show,
+// but still the build's, so deleting the set stops them too.
+const strayKeys = ref([]);
 
 const fromReference = computed(() => mode.value === "reference");
 const engine = computed(() =>
@@ -1327,6 +1330,9 @@ async function draw() {
 
 /** Forget every sheet and run: a new pick starts empty. */
 function startOver() {
+  strayKeys.value = [
+    ...new Set([...strayKeys.value, ...waitingRuns.value.map((run) => run.key)]),
+  ];
   runs.value = [];
   order.value = [];
   ranking.value = {};
@@ -1604,6 +1610,7 @@ async function restore(saved) {
     drawnFrom.value = saved.drawn_from ?? null;
     runHistory.value = [...(saved.run_history || [])];
     drawnIds.value = [...(saved.drawn_ids || [])];
+    strayKeys.value = [...(saved.stray_run_keys || [])];
     phase.value = ["drawing", "pick"].includes(saved.phase)
       ? saved.phase
       : "describe";
@@ -1644,8 +1651,13 @@ const snapshot = computed(() => {
     kept_touched: cut ? false : keptTouched.value,
     drawn_with: cut ? "" : drawnWith.value,
     drawn_from: cut ? null : drawnFrom.value,
-    // The runs still going, which deleting the set stops.
-    run_keys: cut ? [] : waitingRuns.value.map((run) => run.key),
+    // The runs still going, which deleting the set stops; one that ended is
+    // skipped there.
+    run_keys: [
+      ...strayKeys.value,
+      ...(cut ? [] : waitingRuns.value.map((run) => run.key)),
+    ],
+    stray_run_keys: strayKeys.value,
     run_history: runHistory.value,
     drawn_ids: drawnIds.value,
   };

@@ -1534,6 +1534,59 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     wrapper.unmount();
   });
 
+  it("keeps runs a new draw started over from on the list a delete stops", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.getRunOutcome.mockResolvedValue({ status: "running" });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    // Another prompt: a new pick, while r1 and r2 still draw.
+    await button(wrapper, "Edit").trigger("click");
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("Adult man");
+    gen.buildSheetPrompt.mockResolvedValue({
+      prompt: "another {layout}",
+      negative: "nsfw",
+      width: 2560,
+      height: 1536,
+    });
+    gen.runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: [
+        { run_id: "r3", status: "queued" },
+        { run_id: "r4", status: "queued" },
+      ],
+    });
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(700);
+    const build = lastBuild();
+    expect(build.sheets.runs.map((r) => r.key)).toEqual(["r3", "r4"]);
+    expect(build.run_keys).toEqual(["r1", "r2", "r3", "r4"]);
+    wrapper.unmount();
+  });
+
+  it("writes no build over a set Create is finishing", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    let land;
+    api.bulkAddPicturesToSet.mockReturnValue(new Promise((r) => (land = r)));
+    const wrapper = mountDialog();
+    await flushPromises();
+    // A change whose save is still waiting when Create is pressed.
+    await wrapper.find('[data-testid="cts-slider-stills"]').setValue("20");
+    await wrapper.find('[data-testid="cts-create"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(2000);
+    land({ added: 20 });
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(2000);
+    const writes = api.patchPictureSet.mock.calls.map(([, body]) => body.building);
+    expect(writes).toEqual([null]);
+    wrapper.unmount();
+  });
+
   it("stores a cut sheet as used before its faces are read", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

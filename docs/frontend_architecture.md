@@ -1627,7 +1627,11 @@ Escape and Enter do nothing here: cancelling deletes a set.
   form, mode, workflow, LoRA and strength, reference, runs with their
   outcomes, the sheet order, the kept marks, what the sheets were drawn with,
   and `run_history` / `drawn_ids`, which nothing clears), and `run_keys`, the
-  runs still going. The ranking is not stored: it is read again. Each save
+  runs still going: the ones on show and `stray_run_keys`, those a new draw
+  or a cut started over from while they still drew. The ranking is not
+  stored: it is read again. Saves are whole-object, last writer wins (two
+  tabs on one build overwrite each other). Create stops saving before it
+  fills the set, so no save lands after `building: null`. Each save
   emits `changed`, and App invalidates the sets list, which the sidebar row
   reads. **Leaving the screen loses nothing and stops nothing**: any other
   row, Back or a reload unmounts it; the runs go on, and the set's row brings
@@ -1649,7 +1653,11 @@ Escape and Enter do nothing here: cancelling deletes a set.
   is built: *not drawn yet*, *drawing 2 of 4* with the drawing run's percent
   in the count's place (from the Tasks store's `comfyuiRuns`), *4 drawn · keep
   one*, *1 of 4 failed* in the error hue, *picking · 40 of 52*. Its menu's
-  delete reads *Delete set…* with *stops N runs*, and the confirmation says so.
+  delete reads *Delete set…* with *stops N runs*, and the confirmation says so;
+  *Lock set* is disabled, since a locked set could neither save its build nor
+  be cancelled. A set whose person was deleted (lifted to the top level) has
+  no build screen, which needs the person: its row shows its count and its
+  grid opens.
 - **Tasks** (`TasksPanel`, `utils/trainingSetBuild.setOfSheetRun`): every
   Character sheet row, running or finished, carries an always-shown *Open set*
   link to the set it is building, found by run key (running) or by the sheets

@@ -1140,6 +1140,11 @@ async function create() {
   const { id, name } = props.set;
   // What the user submitted, taken before the first await.
   const ids = pickedIds.value;
+  // No save of the build may land after the set is finished: none is
+  // written while the set is filled, and a failure lets them go again.
+  over = true;
+  clearTimeout(saveTimer);
+  saveTimer = null;
   let why;
   try {
     const added = await bulkAddPicturesToSet(id, ids);
@@ -1149,8 +1154,6 @@ async function create() {
       // Filled: the set is finished, and its build goes. A failure here
       // leaves the picks in the set and the build to finish again.
       await patchPictureSet(id, { building: null });
-      over = true;
-      clearTimeout(saveTimer);
       created.value = { id, name, members: added.added ?? ids.length };
       busy.value = false;
       emit("finished", created.value);
@@ -1159,6 +1162,7 @@ async function create() {
   } catch (e) {
     why = errorDetail(e) || "Please try again.";
   }
+  over = false;
   createError.value = `Couldn't create the set. ${why}`;
   busy.value = false;
 }

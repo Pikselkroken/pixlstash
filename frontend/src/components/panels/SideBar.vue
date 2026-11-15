@@ -2042,8 +2042,11 @@ const ctxSetDeleteIds = computed(() => {
 
 const tasksStore = useTasksStore();
 
-/** What a training set's row says while it is built, or null when it is not. */
+/** What a training set's row says while it is built, or null when it is not.
+ * A set whose person was deleted has no build screen (it needs the person),
+ * so its row shows its count. */
 function setBuildLine(set) {
+  if (set?.parent_character_id == null) return null;
   return buildLine(set?.building, tasksStore.comfyuiRuns);
 }
 
@@ -5789,7 +5792,7 @@ defineExpose({
                       <!-- Being built, the sub-line stands in for the count;
                            a sheet drawing shows its percent there. -->
                       <span
-                        v-if="!row.set.building"
+                        v-if="!setBuildLine(row.set)"
                         class="sidebar-list-count"
                         >{{ row.set.picture_count ?? 0 }}</span
                       >
@@ -6057,7 +6060,7 @@ defineExpose({
                       <!-- Being built, the sub-line stands in for the count;
                            a sheet drawing shows its percent there. -->
                       <span
-                        v-if="!row.set.building"
+                        v-if="!setBuildLine(row.set)"
                         class="sidebar-list-count"
                         >{{ row.set.picture_count ?? 0 }}</span
                       >
@@ -7081,9 +7084,11 @@ defineExpose({
               : "Move to the top level"
           }}</span>
         </button>
+        <!-- A set still being built saves its build as it goes: locked, it
+             could neither save nor be cancelled. -->
         <button
           class="ctx-item"
-          :disabled="isReadOnly"
+          :disabled="isReadOnly || !!sidebarCtxSet.building"
           @click="toggleSetLock(sidebarCtxSet)"
         >
           <v-icon class="ctx-icon">{{
