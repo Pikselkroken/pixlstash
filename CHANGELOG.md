@@ -42,9 +42,9 @@
   not known". The Run popup shows each workflow's base model and type.
 - A workflow with a required input left unconnected names that input before
   the run, instead of failing with ComfyUI's node numbers.
-- Ships the ComfyUI-PixlStash 1.9.0 nodes. A token ComfyUI's nodes are
-  refused or are missing now says how to fix it: link ComfyUI in Settings ›
-  ComfyUI and reload the ComfyUI page, or paste a current token.
+- Ships the ComfyUI-PixlStash 1.9.0 nodes. When they have no token, or theirs
+  is refused, they now say how to fix it: link ComfyUI in Settings › ComfyUI
+  and reload the ComfyUI page, or paste a current token.
 
 ## Fixes
 
