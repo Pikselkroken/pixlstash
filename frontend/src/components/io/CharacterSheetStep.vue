@@ -222,9 +222,9 @@
                   :disabled="sheetLocked(slot.sheet)"
                   data-testid="cs-sheet"
                   @click="toggleKeep(slot.sheet.picture_id)"
-                  @dblclick="openZoom(slot.sheet)"
-                  @wheel="onTileWheel($event, slot.sheet)"
-                  @keydown.z.exact="openZoom(slot.sheet)"
+                  @dblclick="openZoom(slot.sheet.picture_id)"
+                  @wheel="onTileWheel($event, slot.sheet.picture_id)"
+                  @keydown.z.exact="openZoom(slot.sheet.picture_id)"
                 >
                   <img
                     :src="pictureThumbnailUrl(slot.sheet.picture_id)"
@@ -246,7 +246,7 @@
                   data-testid="cs-zoom-open"
                   :data-sheet="slot.sheet.picture_id"
                   :aria-label="`Zoom in on sheet ${slot.n}`"
-                  @click="openZoom(slot.sheet)"
+                  @click="openZoom(slot.sheet.picture_id)"
                 >
                   <v-icon size="16">mdi-magnify-plus-outline</v-icon>
                 </button>
@@ -418,7 +418,15 @@
           </span>
           <span
             ><b>{{ name }}'s reference faces</b>. New sheets are ranked by how
-            close they come to these.</span
+            close they come to these.
+            <button
+              type="button"
+              class="cs-link cs-link--inline"
+              data-testid="cs-change-faces"
+              @click="emit('faces')"
+            >
+              Change…
+            </button></span
           >
         </div>
         <div v-if="!railIsReference" class="cs-item">
@@ -464,8 +472,8 @@
       :src="zoomed ? sheetUrl(zoomed) : ''"
       :alt="zoomed ? `Sheet ${zoomed.n}` : ''"
       :caption="zoomed ? `Sheet ${zoomed.n} · ${sheetWords(zoomed)}` : ''"
-      :has-prev="zoomPos > 0"
-      :has-next="zoomPos >= 0 && zoomPos < zoomList.length - 1"
+      :has-prev="hasPrev"
+      :has-next="hasNext"
       :entry="zoomEntry"
       @close="closeZoom"
       @prev="stepZoom(-1)"
@@ -524,7 +532,6 @@
  */
 import {
   computed,
-  nextTick,
   onBeforeUnmount,
   onMounted,
   reactive,
@@ -565,6 +572,7 @@ import FieldLabel from "../widgets/FieldLabel.vue";
 import PicturePicker from "../widgets/PicturePicker.vue";
 import Segmented from "../widgets/Segmented.vue";
 import ZoomPopout from "../widgets/ZoomPopout.vue";
+import { useZoomPopout } from "../../composables/useZoomPopout.js";
 
 const props = defineProps({
   /** { id, name } of the character. */
@@ -573,7 +581,7 @@ const props = defineProps({
   pictureCount: { type: Number, default: 0 },
 });
 
-const emit = defineEmits(["done"]);
+const emit = defineEmits(["done", "faces"]);
 
 const FRAMINGS = [
   { id: "waist_up", label: "Waist-up" },
@@ -660,9 +668,6 @@ const order = ref([]); // sheet picture ids in the order they arrived
 // until they tick or untick one themselves.
 const kept = ref([]);
 let keptTouched = false;
-// The sheet in the zoom pop-out, and the wheel that opened it, if one did.
-const zoomedId = ref(null);
-const zoomEntry = ref(null);
 const mainPane = ref(null);
 const working = ref(false);
 const error = ref("");
@@ -1055,43 +1060,22 @@ watch(workflowId, async (id) => {
 const zoomList = computed(() =>
   slots.value.filter((slot) => slot.sheet).map((slot) => slot.sheet.picture_id),
 );
-const zoomPos = computed(() => zoomList.value.indexOf(zoomedId.value));
-
-function openZoom(sheet, entry = null) {
-  zoomEntry.value = entry;
-  zoomedId.value = sheet.picture_id;
-}
-
-/** Wheel up over a sheet opens it zoomed, at the point under the cursor; the
- * same gesture goes on zooming in the pop-out. Wheel down still scrolls. */
-function onTileWheel(event, sheet) {
-  if (event.deltaY >= 0) return;
-  event.preventDefault();
-  const r = event.currentTarget.getBoundingClientRect();
-  openZoom(sheet, {
-    deltaY: event.deltaY,
-    deltaMode: event.deltaMode,
-    fx: (event.clientX - r.left) / r.width,
-    fy: (event.clientY - r.top) / r.height,
-  });
-}
-
-function stepZoom(d) {
-  const id = zoomList.value[zoomPos.value + d];
-  if (id == null) return;
-  zoomEntry.value = null;
-  zoomedId.value = id;
-}
-
-/** Back to the pick, focus on the sheet's own zoom control. */
-async function closeZoom() {
-  const id = zoomedId.value;
-  zoomedId.value = null;
-  await nextTick();
+// The sheet in the zoom pop-out, and the wheel that opened it, if one did.
+// Closing goes back to the pick, focus on the sheet's own zoom control.
+const {
+  zoomedId,
+  zoomEntry,
+  hasPrev,
+  hasNext,
+  openZoom,
+  onTileWheel,
+  stepZoom,
+  closeZoom,
+} = useZoomPopout(zoomList, (id) =>
   mainPane.value
     ?.querySelector(`[data-testid="cs-zoom-open"][data-sheet="${id}"]`)
-    ?.focus();
-}
+    ?.focus(),
+);
 
 watch(phase, () => {
   zoomedId.value = null;
@@ -1490,13 +1474,7 @@ async function load() {
     // The newest LoRA that loads into the sheet workflow is preselected.
     loraSha.value = fittingLora();
   }
-  if (references.status === "fulfilled") {
-    referenceIds.value = (references.value?.reference_picture_ids || []).slice(
-      0,
-      4,
-    );
-    referenceId.value = referenceIds.value[0] ?? null;
-  }
+  if (references.status === "fulfilled") showReferences(references.value);
   if (cards.status === "fulfilled") {
     sortCards(cards.value.cards);
     // A character with a face is drawn from it where a workflow can; one
@@ -1521,6 +1499,20 @@ async function load() {
   }
 }
 
+function showReferences(body) {
+  referenceIds.value = (body?.reference_picture_ids || []).slice(0, 4);
+  referenceId.value = referenceIds.value[0] ?? null;
+}
+
+/** The reference faces again, after the reference cluster changed. */
+async function reloadReferences() {
+  try {
+    showReferences(await getReferencePictures(props.character.id));
+  } catch (e) {
+    console.warn("Couldn't reload the reference faces", e);
+  }
+}
+
 onMounted(load);
 onBeforeUnmount(() => {
   alive = false;
@@ -1531,7 +1523,15 @@ onBeforeUnmount(() => {
 // The picture picker is a dialog over this one, and takes Escape the same way.
 const zooming = computed(() => !!zoomed.value || pickerOpen.value);
 
-defineExpose({ footer, error, working, loraName, phase, zooming });
+defineExpose({
+  footer,
+  error,
+  working,
+  loraName,
+  phase,
+  zooming,
+  reloadReferences,
+});
 </script>
 
 <style scoped>
@@ -1916,6 +1916,10 @@ defineExpose({ footer, error, working, loraName, phase, zooming });
   align-self: flex-start;
   margin-left: 0;
   text-align: left;
+}
+
+.cs-link.cs-link--inline {
+  margin-left: var(--space-1);
 }
 
 .cs-link {

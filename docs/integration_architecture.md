@@ -2045,6 +2045,25 @@ read-blocked belt. Read-only.
 - Pictures on the Scrapheap are left out.
 - A value outside the table above is a 422.
 
+### 2.9 Face clusters and the reference cluster
+
+`GET /face-clusters?character_id=&threshold=` (owner-only; `threshold`
+0.05-0.95, default 0.45; the client's *Loose / Normal / Strict* send 0.35 /
+0.45 / 0.55) answers `{threshold, faces, reference_cluster: [picture_id] | null,
+clusters, unclustered}`. A cluster is `{members: [{picture_id, centrality,
+score, format}], size, cohesion, reference_share, is_reference,
+similarity_to_reference, from_sheets}`, members most typical first, the
+reference cluster first and then largest first. `unclustered` is
+`[{picture_id, score, similarity_to_reference}]`.
+
+`PUT /characters/{id}/reference-cluster` with `{picture_ids}` stores the
+reference cluster and answers `{picture_ids}`; `[]` clears it, and an id
+without the person's face is a 422 whose `detail.picture_ids` names them. It
+fires `CHANGED_CHARACTERS`. The stored ids are never served elsewhere: the
+reference faces reach clients only through `GET /characters/{id}/reference_pictures`
+and the training-set suggestion's likeness. Backend: §25.30 of the backend
+document.
+
 ---
 
 

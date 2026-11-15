@@ -57,6 +57,10 @@
   --entity-thumb: 24px; /* identity slot for a row carrying a picture; the
                            sidebar overrides it from its thumbnail slider,
                            the model list sets it to --space-8. */
+  --face-thumb-xl: 96px; /* the most typical face of a face cluster: the one
+                           face step above --space-9, so faces that differ
+                           by a jawline can be told apart (FaceClustersDialog;
+                           its other steps are --space-9, -8 and -7). */
 
   /* ---------------------------------------------------------------------------
      TREE - the sidebar's child sets (#2124). A guide line drops from a parent's

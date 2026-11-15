@@ -282,6 +282,7 @@ const emit = defineEmits([
   "select-set",
   "train-lora",
   "create-training-set",
+  "face-clusters",
   "import-finished",
   "set-error",
   "set-loading",
@@ -6617,6 +6618,22 @@ defineExpose({
         >
           <v-icon class="ctx-icon">mdi-school-outline</v-icon>
           <span class="ctx-label-text">Train LoRA…</span>
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly"
+          data-testid="ctx-face-clusters"
+          @click="
+            emit('face-clusters', {
+              id: sidebarCtxCharacter.id,
+              name: sidebarCtxCharacter.name,
+              returnFocusTo: sidebarCtxCharacterEl,
+            });
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon class="ctx-icon">mdi-face-recognition</v-icon>
+          <span class="ctx-label-text">Faces and reference cluster…</span>
         </button>
         <button
           class="ctx-item"
