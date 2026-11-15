@@ -1189,9 +1189,16 @@ describe("TrainingSetBuild: generating the pictures", () => {
       wrapper.findAll('[data-testid="cs-stop-run"]').map((b) => b.attributes("aria-label"));
     // Done drawing and being imported, the first has nothing left to stop.
     expect(labels()).toEqual(["displaying", "queued", "queued"]);
-    expect(stops()).toEqual(["Stop generating sheet 2", "Stop generating sheet 3"]);
+    expect(stops()).toEqual(["Stop generation of sheet 2", "Stop generation of sheet 3"]);
 
-    await wrapper.find('[aria-label="Stop generating sheet 2"]').trigger("click");
+    // A stop that stopped nothing leaves the place as it was, stop and all.
+    gen.stopRun.mockResolvedValueOnce({ stopped: 0 });
+    await wrapper.find('[aria-label="Stop generation of sheet 3"]').trigger("click");
+    await flushPromises();
+    expect(labels()).toEqual(["displaying", "queued", "queued"]);
+    gen.stopRun.mockClear();
+
+    await wrapper.find('[aria-label="Stop generation of sheet 2"]').trigger("click");
     // That run alone, never ComfyUI's whole queue.
     expect(gen.stopRun.mock.calls).toEqual([["r2"]]);
     await flushPromises();
@@ -1199,7 +1206,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
     stopped.add("r2");
     await vi.advanceTimersByTimeAsync(3000);
     expect(labels()).toEqual(["displaying", "stopped", "queued"]);
-    expect(stops()).toEqual(["Stop generating sheet 3"]);
+    expect(stops()).toEqual(["Stop generation of sheet 3"]);
     // Stopped on purpose is not a failure to warn about.
     expect(wrapper.find('[data-testid="cs-failed"]').exists()).toBe(false);
     wrapper.unmount();

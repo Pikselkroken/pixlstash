@@ -142,21 +142,21 @@ export const useTasksStore = defineStore("tasks", () => {
   /**
    * Stop one run in flight and no other, whichever tab or tool started it:
    * held, queued in ComfyUI or drawing. It then ends as stopped, and the next
-   * poll drops it. False when the backend could not be asked.
+   * poll drops it. How many runs stopped: 0 when it had ended, or when the
+   * backend could not be asked.
    */
   async function stopComfyuiRun(runId) {
-    let asked = true;
+    let stopped = 0;
     try {
-      await stopRun(runId);
+      stopped = (await stopRun(runId))?.stopped ?? 0;
     } catch (e) {
-      asked = false;
       console.warn("tasks: the run could not be stopped", runId, e);
       useNoticeStore().error("The run could not be stopped.", {
         key: "comfyui-abort-failed",
       });
     }
     nudge();
-    return asked;
+    return stopped;
   }
 
   // ── Model downloads (backend-reported) ────────────────────────────────────

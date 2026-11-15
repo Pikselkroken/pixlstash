@@ -131,7 +131,7 @@ describe("the runs in flight", () => {
     try {
       const polls = getWorkerProgress.mock.calls.length;
       getWorkerProgress.mockResolvedValue(answer([]));
-      await store.stopComfyuiRun("run-1");
+      expect(await store.stopComfyuiRun("run-1")).toBe(1);
       expect(stopRun.mock.calls).toEqual([["run-1"]]);
       await vi.waitFor(() =>
         expect(getWorkerProgress.mock.calls.length).toBeGreaterThan(polls),
@@ -146,7 +146,7 @@ describe("the runs in flight", () => {
   it("say so when the backend could not stop them", async () => {
     const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
     stopRun.mockRejectedValueOnce(new Error("ComfyUI unreachable"));
-    await useTasksStore().stopComfyuiRun("run-1");
+    expect(await useTasksStore().stopComfyuiRun("run-1")).toBe(0);
     expect(useNoticeStore().notices.map((notice) => notice.text)).toEqual([
       "The run could not be stopped.",
     ]);

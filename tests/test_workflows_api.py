@@ -15155,6 +15155,16 @@ def test_stopping_one_held_run_leaves_the_others_to_run(held):
     # Ended already: nothing left to stop.
     assert held.owner.post(path).json() == {"stopped": 0}
     assert held.owner.post(f"{API}/workflows/runs/run-nope/stop").status_code == 404
+    # Another library's run is not this one's to stop.
+    with comfyui_service._run_outcomes_lock:
+        outcome = comfyui_service._run_outcomes[kept]
+        library, outcome["library_uuid"] = outcome["library_uuid"], "another-library"
+    try:
+        r = held.owner.post(f"{API}/workflows/runs/{kept}/stop")
+    finally:
+        with comfyui_service._run_outcomes_lock:
+            outcome["library_uuid"] = library
+    assert r.status_code == 404, r.text
     blocker.release()
     assert _until(lambda: len(held.runnable.submitted) == 1)
     time.sleep(0.6)

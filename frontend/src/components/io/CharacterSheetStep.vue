@@ -285,7 +285,7 @@
                 type="button"
                 class="cs-link cs-stop"
                 data-testid="cs-stop-run"
-                :aria-label="`Stop generating sheet ${slot.n}`"
+                :aria-label="`Stop generation of sheet ${slot.n}`"
                 @click="stopSheetRun(slot.run)"
               >
                 Stop generation
@@ -1283,7 +1283,8 @@ async function tick() {
 /** Stop one sheet's run from its place; it then reads "stopped". */
 async function stopSheetRun(run) {
   run.stopping = true;
-  run.stopping = await tasks.stopComfyuiRun(run.key);
+  // Nothing stopped (it ended, or ComfyUI refused): the place is as it was.
+  run.stopping = (await tasks.stopComfyuiRun(run.key)) > 0;
   schedule();
 }
 
@@ -1660,6 +1661,7 @@ function restoreState(saved) {
     status: run.status,
     message: run.message || "",
     pictureIds: run.picture_ids || [],
+    stopped: !!run.stopped,
   }));
   order.value = [...(saved.order || [])];
   ranking.value = { ...(saved.ranking || {}) };
@@ -1724,6 +1726,7 @@ const snapshot = computed(() => {
           status: run.status,
           message: run.message || "",
           picture_ids: run.pictureIds || [],
+          stopped: !!run.stopped,
         })),
     order: cut ? [] : order.value,
     // The sheets' scores, so they show at once when the screen opens again;
