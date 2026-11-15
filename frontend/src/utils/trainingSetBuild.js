@@ -58,7 +58,12 @@ export function buildLine(building, liveRuns) {
   }
   const runs = building.sheets?.runs || [];
   if (!runs.length) return line("not drawn yet");
-  const live = liveBuildRuns(building, liveRuns);
+  // The draw on show: runs an earlier draw left still going (`run_keys`) are
+  // stopped by a delete but are not this draw's sheets.
+  const current = new Set(runs.map((r) => r.key));
+  const live = liveBuildRuns(building, liveRuns).filter((r) =>
+    current.has(runKey(r)),
+  );
   if (live.length) {
     const drawing = live.find((r) => r.status === "running");
     const at = runs.length - live.length + 1;

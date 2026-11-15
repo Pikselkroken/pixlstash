@@ -78,4 +78,21 @@ describe("trainingSetBuild", () => {
     expect(buildingSetOf(sets, people, 6)).toBeNull();
     expect(buildingSetOf(sets, people, null)).toBeNull();
   });
+
+  it("counts only the draw on show, not runs an earlier draw left going", () => {
+    const building = {
+      stage: "generate",
+      run_keys: ["old-1", "old-2", "old-3", "r2"],
+      sheets: { runs: runs("completed", "queued") },
+    };
+    const live = [
+      { run_id: "old-1", status: "running", percent: 10 },
+      { run_id: "old-2", status: "queued" },
+      { run_id: "old-3", status: "queued" },
+      { run_id: "r2", status: "queued" },
+    ];
+    expect(buildLine(building, live).text).toBe("drawing 2 of 2");
+    // A delete still stops all four.
+    expect(liveBuildRuns(building, live)).toHaveLength(4);
+  });
 });

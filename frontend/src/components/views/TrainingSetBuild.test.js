@@ -1780,6 +1780,37 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     wrapper.unmount();
   });
 
+  it("keeps following a run still drawing when the build is opened again", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    let finished = false;
+    gen.getRunOutcome.mockImplementation(async () =>
+      finished ? { status: "completed", picture_ids: [501] } : { status: "running" },
+    );
+    gen.rankSheets.mockResolvedValue({ sheets: [sheet(501, 0.6)], references: 0 });
+    const wrapper = mountDialog({
+      v: 1,
+      stage: "generate",
+      stepped: true,
+      sheets: {
+        phase: "drawing",
+        form: { description: "Adult woman, copper bob" },
+        runs: [{ key: "r1", status: "queued", picture_ids: [] }],
+      },
+    });
+    await flushPromises();
+    expect(wrapper.findAll('[data-testid="cs-sheet"]')).toHaveLength(0);
+    // Polled again and again, not once: it lands three polls later.
+    await vi.advanceTimersByTimeAsync(5000);
+    finished = true;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(wrapper.findAll('[data-testid="cs-sheet"]')).toHaveLength(1);
+    expect(gen.getRunOutcome.mock.calls.length).toBeGreaterThan(2);
+    wrapper.unmount();
+  });
+
   it("stores a cut sheet as used before its faces are read", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
