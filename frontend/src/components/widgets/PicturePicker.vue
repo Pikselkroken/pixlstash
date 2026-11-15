@@ -725,10 +725,13 @@ watch(
   overflow: hidden;
   cursor: pointer;
 }
+/* The whole frame, letterboxed on the tile's own surface: a square crop cut a
+   full-body picture down to its torso, so two framings of one person read as
+   the same shot - and the framing is often what is being picked. */
 .pp-cell img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
 }
 /* The chosen tile wears the whole §11 selected vocabulary - `--active-wash`
