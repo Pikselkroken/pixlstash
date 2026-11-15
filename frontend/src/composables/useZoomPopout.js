@@ -4,8 +4,8 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
  * Open a list of pictures in ZoomPopout: which one is zoomed, the wheel that
  * opened it, and stepping through the list.
  *
- * Shared by the Sheets step and the faces dialog, so a wheel up, double-click
- * or Z opens a thumbnail the same way on both.
+ * Shared by the Sheets step and the faces dialog, so a Ctrl+wheel up,
+ * double-click or Z opens a thumbnail the same way on both.
  *
  * Escape closes the pop-out wherever focus is. The pop-out handles its own
  * keys only while focus is inside it, and the dialog it opens over can keep
@@ -30,11 +30,16 @@ export function useZoomPopout(list, onClosed) {
     zoomedId.value = id;
   }
 
-  /** Wheel up over a thumbnail opens it zoomed, at the point under the cursor;
-   * the same gesture goes on zooming in the pop-out. Wheel down still scrolls. */
+  /** Ctrl+wheel up over a thumbnail opens it zoomed, at the point under the
+   * cursor; the same gesture goes on zooming in the pop-out. The thumbnails sit
+   * in scrolling lists, so a plain wheel always scrolls: scrolling up must
+   * never land in a zoom. Ctrl/Meta is the app's "always zoom" modifier, and a
+   * trackpad pinch arrives as Ctrl+wheel; its down half must not zoom the
+   * page instead. */
   function onTileWheel(event, id) {
-    if (event.deltaY >= 0) return;
+    if (!(event.ctrlKey || event.metaKey)) return;
     event.preventDefault();
+    if (event.deltaY >= 0) return;
     const r = event.currentTarget.getBoundingClientRect();
     openZoom(id, {
       deltaY: event.deltaY,

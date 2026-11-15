@@ -277,7 +277,7 @@
           </div>
           <p class="fc-note fc-scale">
             Size: four bands of how typical a face is. Click a face to see it
-            here; double-click, wheel up or Z to zoom.
+            here; double-click, Ctrl+wheel or Z to zoom.
           </p>
         </section>
       </div>
