@@ -279,6 +279,17 @@
                 aria-valuemax="100"
                 ><span :style="{ width: `${slot.percent}%` }"
               /></span>
+              <!-- This sheet's run alone; the others keep drawing. -->
+              <button
+                v-if="slot.stoppable"
+                type="button"
+                class="cs-link cs-stop"
+                data-testid="cs-stop-run"
+                :aria-label="`Stop generating sheet ${slot.n}`"
+                @click="stopSheetRun(slot.run)"
+              >
+                Stop generation
+              </button>
             </span>
           </li>
         </ul>
@@ -939,7 +950,7 @@ const noneClose = computed(() => {
 
 const failures = computed(() =>
   runs.value
-    .filter((run) => run.status === "failed")
+    .filter((run) => run.status === "failed" && !run.stopped)
     .map((run) => run.message || "the run failed."),
 );
 
@@ -970,14 +981,21 @@ const slots = computed(() => {
       (!progress && seenLive.value.has(run.key));
     out.push({
       key: run.key,
-      label: runEnded(run)
-        ? "didn't draw"
-        : generating
-          ? "generating"
-          : displaying
-            ? "displaying"
-            : "queued",
+      run,
+      label: run.stopped
+        ? "stopped"
+        : runEnded(run)
+          ? "didn't draw"
+          : run.stopping
+            ? "stopping"
+            : generating
+              ? "generating"
+              : displaying
+                ? "displaying"
+                : "queued",
       percent: generating ? Math.round(Number(progress.percent) || 0) : null,
+      // Done drawing and being imported, there is nothing left to stop.
+      stoppable: !runEnded(run) && !run.stopping && !displaying,
     });
   }
   return out.map((slot, index) => ({ ...slot, n: index + 1 }));
@@ -1205,6 +1223,7 @@ async function followRuns() {
       if (!runs.value.includes(run)) continue;
       run.status = outcome.status;
       run.message = outcome.message || "";
+      run.stopped = !!outcome.stopped;
       run.pictureIds = outcome.picture_ids || [];
       for (const id of outcome.picture_ids || []) {
         if (!order.value.includes(id)) order.value.push(id);
@@ -1258,6 +1277,13 @@ async function tick() {
     if (phase.value === "drawing") phase.value = "pick";
     return;
   }
+  schedule();
+}
+
+/** Stop one sheet's run from its place; it then reads "stopped". */
+async function stopSheetRun(run) {
+  run.stopping = true;
+  run.stopping = await tasks.stopComfyuiRun(run.key);
   schedule();
 }
 
@@ -1975,6 +2001,24 @@ defineExpose({
   cursor: default;
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* Shown on hover or focus, as the zoom control is: the pending sheet's stop. */
+.cs-link.cs-stop {
+  margin-left: 0;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-standard);
+}
+
+.cs-sheetimg--wait:hover .cs-stop,
+.cs-stop:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .cs-link.cs-stop {
+    opacity: 1;
+  }
 }
 
 /* The run's percent, as the Tasks panel's run line draws it. */

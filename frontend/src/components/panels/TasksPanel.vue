@@ -115,7 +115,7 @@
         <template v-for="entry in tasksStore.runningEntries" :key="entry.key">
           <!-- A ComfyUI run in flight: its own row, named for what it is. The
                stop button takes the figure's place on hover or focus, and stops
-               every run ComfyUI has, as it always has. -->
+               this run alone. -->
           <div
             v-if="entry.kind === 'comfyui'"
             class="tm-row tm-row--run"
@@ -158,10 +158,10 @@
                 <button
                   class="tm-act"
                   type="button"
-                  aria-label="Stop ComfyUI"
-                  @click="tasksStore.abortComfyuiRuns()"
+                  aria-label="Stop this run"
+                  @click="tasksStore.stopComfyuiRun(entry.runId)"
                 >
-                  <Tooltip text="Stop ComfyUI" activator="parent" :describe="false" />
+                  <Tooltip text="Stop this run" activator="parent" :describe="false" />
                   <v-icon size="16">mdi-stop</v-icon>
                 </button>
               </span>

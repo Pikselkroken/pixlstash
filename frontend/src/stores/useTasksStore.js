@@ -2,7 +2,7 @@ import { computed, onScopeDispose, reactive, ref } from "vue";
 import { defineStore } from "pinia";
 import { isReadOnly, onSessionReset } from "../utils/apiClient";
 import { getWorkerProgress } from "../api/workers";
-import { abortRun } from "../api/comfyui";
+import { stopRun } from "../api/workflows";
 import { cancelModelDownload } from "../api/modelDownloads";
 import { formatModelSize } from "../utils/modelShelf";
 import { cancelLease, freeComfyui, runLeaseAnyway } from "../api/resources";
@@ -140,20 +140,23 @@ export const useTasksStore = defineStore("tasks", () => {
   const resources = ref(null);
 
   /**
-   * Stop ComfyUI: the run in progress is interrupted and its queue emptied,
-   * which is every run in flight, whichever tab or tool started it. Each
-   * then ends as stopped, and the next poll drops it.
+   * Stop one run in flight and no other, whichever tab or tool started it:
+   * held, queued in ComfyUI or drawing. It then ends as stopped, and the next
+   * poll drops it. False when the backend could not be asked.
    */
-  async function abortComfyuiRuns() {
+  async function stopComfyuiRun(runId) {
+    let asked = true;
     try {
-      await abortRun();
+      await stopRun(runId);
     } catch (e) {
-      console.warn("tasks: ComfyUI could not be told to stop", e);
-      useNoticeStore().error("ComfyUI could not be told to stop.", {
+      asked = false;
+      console.warn("tasks: the run could not be stopped", runId, e);
+      useNoticeStore().error("The run could not be stopped.", {
         key: "comfyui-abort-failed",
       });
     }
     nudge();
+    return asked;
   }
 
   // ── Model downloads (backend-reported) ────────────────────────────────────
@@ -521,7 +524,7 @@ export const useTasksStore = defineStore("tasks", () => {
 
   // One row per ComfyUI run that is not held: the run's own label, its percent
   // and the VRAM its lease holds. ComfyUI works through them one at a time, and
-  // the abort on a row stops every run in flight.
+  // the stop on a row stops that run alone.
   const comfyuiEntries = computed(() =>
     comfyuiRuns.value
       .filter((run) => run.status !== "waiting")
@@ -969,7 +972,7 @@ export const useTasksStore = defineStore("tasks", () => {
     series,
     // comfyui runs
     comfyuiRuns,
-    abortComfyuiRuns,
+    stopComfyuiRun,
     finishedRuns,
     finishedOpen,
     noteFinished,
