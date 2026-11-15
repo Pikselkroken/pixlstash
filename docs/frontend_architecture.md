@@ -1848,6 +1848,20 @@ up).
   reload. On open the slider sits at the lowest saved face of the reference
   cluster.
 
+#### `CharacterSheetsDialog.vue` (`io/`)
+
+*Generate character sheets…* on the person's sidebar menu (`character-sheets`
+event, mounted in `App.vue`): the Sheets step (`CharacterSheetStep.vue`) on
+its own, so sheets are drawn and cut into pictures on the person without
+making a training set. `AppDialog fullscreen`, flush body; it draws the
+step's `footer` and workflow select the way `TrainingSetBuild.vue` does, and
+mounts its own `FaceClustersDialog` for the step's *Change…*. It closes on
+the step's `cut` (nothing here reads the panels' faces) and App says how many
+pictures were added, with *Show them* selecting the person. Closing mid-draw
+keeps the step's `snapshot` per person in memory for the app session, so
+reopening finds the sheets and the runs still going; a cut in flight cannot
+be closed out of.
+
 #### `TrainLoraDialog.vue` (`io/`, #2119)
 **Outcome choices, numbers derived** (design artifact "Outcome choices, numbers derived"). The Train a LoRA dialog, `AppDialog size="lg"`, mounted in **`App.vue`** and opened by `useTrainingStore.openForScope({type, id, name})` from the toolbar's Train button, its overflow row and the sidebar's *Train LoRA…*. It replaced the toolbar popover `TbTrainPanel`.
 
