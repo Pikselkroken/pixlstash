@@ -1707,7 +1707,10 @@ Escape and Enter do nothing here: cancelling deletes a set.
   says why, naming the first one's problem. The four draw choices (*Body
   photos*, *Sheets to draw*, *Sheet size*, *Draw a*) are `Segmented` toggles
   side by side, wrapping only on a narrow window, with one line of hints; the
-  description takes the height the form leaves. The step reads the
+  description takes the height the form leaves. *Draw a* follows the
+  description (`subjectFromDescription`: "man", "he", "his" against "woman",
+  "she", "her") until a toggle is picked by hand, as the framing follows its
+  suggestion. The step reads the
   character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
   model is listed disabled, the newest MOSS-Image one preselected, and its name
   rides in the step row as a neutral pill) and the MOSS-Image `txt2img`

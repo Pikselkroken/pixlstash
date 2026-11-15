@@ -162,6 +162,8 @@
                 v-model="form.subject"
                 aria-label="Draw a"
                 :options="SUBJECTS"
+                data-testid="cs-subject"
+                @pick="subjectTouched = true"
               />
             </div>
           </div>
@@ -567,6 +569,7 @@ import {
   sheetCopyWorkflow,
 } from "../../api/workflows";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { subjectFromDescription } from "../../utils/trainingSetBuild";
 import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import { errorMessage } from "../../utils/apiError";
 import { runKey } from "../../utils/gpuMemory";
@@ -643,6 +646,8 @@ const form = reactive({
   subject: "woman",
 });
 const framingTouched = ref(false);
+// Picked by hand: the description no longer decides who is drawn.
+const subjectTouched = ref(false);
 const savedDescription = ref("");
 const loras = ref([]);
 const loraSha = ref("");
@@ -825,6 +830,16 @@ const suggestedFraming = computed(() =>
 watch(suggestedFraming, (framing) => {
   if (!framingTouched.value) form.framing = framing;
 });
+
+// "Adult man, …" draws a man: the description decides until a toggle is
+// picked by hand.
+watch(
+  () => form.description,
+  (text) => {
+    const subject = subjectFromDescription(text);
+    if (subject && !subjectTouched.value) form.subject = subject;
+  },
+);
 
 
 const framingHint = computed(() => {
@@ -1583,6 +1598,7 @@ async function restore(saved) {
   if (saved && alive) {
     Object.assign(form, saved.form || {});
     framingTouched.value = !!saved.framing_touched;
+    subjectTouched.value = !!saved.subject_touched;
     if (saved.mode && saved.mode !== mode.value) {
       mode.value = saved.mode;
       // The mode's own watcher picks its first workflow and a fitting LoRA;
@@ -1636,6 +1652,7 @@ const snapshot = computed(() => {
         : phase.value,
     form: { ...form },
     framing_touched: framingTouched.value,
+    subject_touched: subjectTouched.value,
     mode: mode.value,
     workflow_id: workflowId.value,
     lora_sha: loraSha.value,

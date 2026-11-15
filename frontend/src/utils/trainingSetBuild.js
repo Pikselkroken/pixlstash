@@ -98,3 +98,22 @@ export function setOfSheetRun(sets, { runKeys = [], pictureIds = [] }) {
     }) || null
   );
 }
+
+const MAN_WORDS =
+  /\b(man|men|male|boy|guy|gentleman|husband|father|he|him|his|himself)\b/gi;
+const WOMAN_WORDS =
+  /\b(woman|women|female|girl|lady|wife|mother|she|her|hers|herself)\b/gi;
+
+/**
+ * Who a character sheet draws, read from the description: "man" or "woman"
+ * when its words lean one way, null when they say nothing or both equally.
+ *
+ * @param {string} text - the description
+ * @returns {"man"|"woman"|null}
+ */
+export function subjectFromDescription(text) {
+  const men = (String(text || "").match(MAN_WORDS) || []).length;
+  const women = (String(text || "").match(WOMAN_WORDS) || []).length;
+  if (men === women) return null;
+  return men > women ? "man" : "woman";
+}
