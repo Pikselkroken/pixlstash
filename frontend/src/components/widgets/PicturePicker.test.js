@@ -112,6 +112,9 @@ describe("the facets", () => {
     expect(labels).toContain("Clementine");
     expect(labels).toContain("Good detail");
     expect(labels).not.toContain("ref");
+    // A character is a person to whoever is choosing a picture.
+    const headings = w.findAll(".pp-sec").map((n) => n.text());
+    expect(headings).toEqual(["Project", "Person", "Picture set"]);
   });
 
   it("scopes the read to the one that was picked", async () => {
