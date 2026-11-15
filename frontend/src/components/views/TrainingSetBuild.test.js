@@ -1811,6 +1811,35 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     wrapper.unmount();
   });
 
+  it("finishes on a retry when the picks went in but marking the set done failed", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    // The add skips members, as the backend does: a second add adds none.
+    api.bulkAddPicturesToSet
+      .mockResolvedValueOnce({ added: 15 })
+      .mockResolvedValueOnce({ added: 0 });
+    api.patchPictureSet.mockImplementation(async (_id, body) => {
+      if (body.building === null && !api.patchPictureSet.failedOnce) {
+        api.patchPictureSet.failedOnce = true;
+        throw new Error("offline");
+      }
+      return { status: "success" };
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cts-create"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[role="alert"]').text()).toContain("Couldn't create the set.");
+    expect(wrapper.emitted("finished")).toBeUndefined();
+
+    await wrapper.find('[data-testid="cts-create"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.emitted("finished")).toEqual([
+      [{ id: 55, name: "Anna training set", members: 15 }],
+    ]);
+    delete api.patchPictureSet.failedOnce;
+    wrapper.unmount();
+  });
+
   it("stores a cut sheet as used before its faces are read", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

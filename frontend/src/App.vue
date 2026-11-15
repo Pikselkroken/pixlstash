@@ -638,7 +638,9 @@ function onTrainingSetFinished(set) {
 
 async function onTrainingSetCancelled({ characterId }) {
   await entityLists.invalidate(["sets"]);
-  const person = entityLists.characters.find((c) => c.id === characterId);
+  const person = entityLists.characters.find(
+    (c) => Number(c.id) === Number(characterId),
+  );
   await handleSelectCharacter({ id: characterId, label: person?.name });
 }
 

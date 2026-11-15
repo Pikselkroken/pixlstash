@@ -1634,8 +1634,10 @@ Escape and Enter do nothing here: cancelling deletes a set.
   fills the set, so no save lands after `building: null`. Each save
   emits `changed`, and App invalidates the sets list, which the sidebar row
   reads. **Leaving the screen loses nothing and stops nothing**: any other
-  row, Back or a reload unmounts it; the runs go on, and the set's row brings
-  the screen back as it was. **A cut is stored as done before its faces are
+  row or Back unmounts it, which saves at once; the runs go on, and the set's
+  row brings the screen back as it was. A reload or a closed window does not
+  unmount anything, so a change made in the last 600 ms before it (the save's
+  wait) can be lost; everything saved before that comes back. **A cut is stored as done before its faces are
   read**: from the moment `useSheets` answers, the step emits `cut` with the
   new ids (the picker stores them as new) and its snapshot stores no runs, no
   sheets and no kept marks, so a screen reopened mid-wait never offers the

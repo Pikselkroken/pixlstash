@@ -1153,6 +1153,11 @@ function onSlide(key, event) {
   if (sizes.value[key] !== value) event.target.value = String(sizes.value[key]);
 }
 
+// How many picks an earlier Create put in the set when only marking it
+// finished then failed: a retry adds just what is new (the add skips
+// members), so 0 added is no failure then.
+let filled = 0;
+
 async function create() {
   if (busy.value || loading.value || loadError.value) return;
   if (created.value || !total.value) return;
@@ -1167,13 +1172,15 @@ async function create() {
   try {
     await stopSaving();
     const added = await bulkAddPicturesToSet(id, ids);
-    if (added.added === 0) {
+    const members = filled + (added.added ?? ids.length);
+    if (members === 0) {
       why = "None of the picked pictures could be added; they may have been deleted.";
     } else {
       // Filled: the set is finished, and its build goes. A failure here
       // leaves the picks in the set and the build to finish again.
+      filled = members;
       await patchPictureSet(id, { building: null });
-      created.value = { id, name, members: added.added ?? ids.length };
+      created.value = { id, name, members };
       busy.value = false;
       emit("finished", created.value);
       return;
