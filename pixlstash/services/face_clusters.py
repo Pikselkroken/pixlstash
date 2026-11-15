@@ -208,6 +208,8 @@ def sheet_panels(faces: list[PersonFace]) -> set[int]:
 
 
 def _carrying_face(session: Session, character_id: int, picture_ids) -> set[int]:
+    """The live pictures among *picture_ids* with a face of the person that has
+    an embedding: one without has nothing to steer with."""
     if not picture_ids:
         return set()
     return set(
@@ -217,6 +219,7 @@ def _carrying_face(session: Session, character_id: int, picture_ids) -> set[int]
             .where(
                 Face.character_id == character_id,
                 Face.picture_id.in_(list(picture_ids)),
+                Face.features.is_not(None),
                 Picture.deleted.is_(False),
             )
         ).all()
@@ -341,5 +344,10 @@ def reference_cluster_faces(
         )
         .order_by(Face.picture_id, Face.id)
     ).all()
-    one_each = list({face.picture_id: face for face in reversed(faces)}.values())
-    return most_central(one_each, lambda face: vector(face.features))[:max_refs]
+    # The first face of each picture, as person_faces takes it.
+    first = {}
+    for face in faces:
+        first.setdefault(face.picture_id, face)
+    return most_central(list(first.values()), lambda face: vector(face.features))[
+        :max_refs
+    ]
