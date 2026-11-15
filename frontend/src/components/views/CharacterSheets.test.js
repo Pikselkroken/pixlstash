@@ -369,6 +369,43 @@ describe("CharacterSheets", () => {
     wrapper.unmount();
   });
 
+  it("saves quick ticks one after another and loses none when the first fails", async () => {
+    sheetsWorld();
+    const draw = storedDraw({
+      settings: { signature: "old", description: "older" },
+      runs: [{ key: "o1", status: "completed", message: "", picture_ids: [401, 402] }],
+      seen: true,
+    });
+    gen.rankSheets.mockImplementation(async (_cid, ids) => ({
+      sheets: ids.map((id) => sheet(id, 0.6)),
+      references: 0,
+    }));
+    const wrapper = mountScreen();
+    await flushPromises();
+    const serve = gen.updateSheetDraw.getMockImplementation();
+    let failFirst;
+    gen.updateSheetDraw.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (failFirst = reject)),
+    );
+
+    await tiles(wrapper)[0].trigger("click");
+    await tiles(wrapper)[1].trigger("click");
+    await flushPromises();
+    // The second waits for the first, so the server ends on the last tick.
+    expect(gen.updateSheetDraw).toHaveBeenCalledTimes(1);
+    gen.updateSheetDraw.mockImplementation(serve);
+    failFirst(new Error("offline"));
+    await flushPromises();
+
+    expect(gen.updateSheetDraw).toHaveBeenLastCalledWith(7, draw.id, { kept: [401, 402] });
+    expect(db.draws[0].kept).toEqual([401, 402]);
+    expect(tiles(wrapper).map((t) => t.attributes("aria-pressed"))).toEqual([
+      "true",
+      "true",
+    ]);
+    wrapper.unmount();
+  });
+
   it("refuses a workflow with no picture size, or one that can't run, before drawing", async () => {
     sheetsWorld({ description: "Adult woman, copper bob" });
     gen.getWorkflowCard.mockResolvedValue({

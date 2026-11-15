@@ -1093,17 +1093,31 @@ function store(saved) {
   else draws.value.unshift(saved);
 }
 
-async function saveKept(draw, kept) {
-  const before = draw.kept;
+// draw id -> the last kept save queued for it, and how many were queued.
+const keptSaves = {};
+
+/** Saves for one draw go one after another, so the server ends on the last
+ * tick; only the newest answer is shown, and a failure reads the draws back. */
+function saveKept(draw, kept) {
   store({ ...draw, kept });
-  try {
-    store(await updateSheetDraw(props.characterId, draw.id, { kept }));
-    sheetDraws.refresh();
-  } catch (e) {
-    console.warn("Couldn't store the kept sheets", draw.id, kept, e);
-    store({ ...draw, kept: before });
-    error.value = `Couldn't keep the sheet. ${errorMessage(e, "Please try again.")}`;
-  }
+  const queue = (keptSaves[draw.id] ||= { last: Promise.resolve(), n: 0 });
+  const n = ++queue.n;
+  queue.last = queue.last.then(async () => {
+    try {
+      const saved = await updateSheetDraw(props.characterId, draw.id, { kept });
+      if (n === queue.n) store(saved);
+      sheetDraws.refresh();
+    } catch (e) {
+      console.warn("Couldn't store the kept sheets", draw.id, kept, e);
+      error.value = `Couldn't keep the sheet. ${errorMessage(e, "Please try again.")}`;
+      try {
+        await reload();
+      } catch (again) {
+        console.warn("Couldn't read the draws back", draw.id, again);
+      }
+    }
+  });
+  return queue.last;
 }
 
 function toggleKeep(sheet) {
