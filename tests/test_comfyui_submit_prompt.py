@@ -193,6 +193,7 @@ def test_the_listener_reads_progress_until_no_run_is_in_flight(listening, monkey
             "workflow_id": None,
             "status": "queued",
             "percent": 0.0,
+            "generated": False,
         },
         "run-b": {
             "run_id": None,
@@ -201,6 +202,8 @@ def test_the_listener_reads_progress_until_no_run_is_in_flight(listening, monkey
             "workflow_id": "wf-1",
             "status": "running",
             "percent": 75.0,
+            # Still on node 3: ComfyUI has not finished it.
+            "generated": False,
         },
     }
     # Struck off, and only once its socket was closed: the next run starts a

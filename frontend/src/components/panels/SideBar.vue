@@ -130,6 +130,8 @@ import { useGridStore } from "../../stores/useGridStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorDetail } from "../../utils/apiError";
+import { buildLine, liveBuildRuns } from "../../utils/trainingSetBuild";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { activateOnEnterOrSpace } from "../../utils/keyboardActivation.js";
 import {
   ALL_PICTURES_ID,
@@ -2038,6 +2040,24 @@ const ctxSetDeleteIds = computed(() => {
     : [id];
 });
 
+const tasksStore = useTasksStore();
+
+/** What a training set's row says while it is built, or null when it is not.
+ * A set whose person was deleted has no build screen (it needs the person),
+ * so its row shows its count. */
+function setBuildLine(set) {
+  if (set?.parent_character_id == null) return null;
+  return buildLine(set?.building, tasksStore.comfyuiRuns);
+}
+
+/** How many sheet runs deleting these sets stops. */
+function setRunsStopped(ids) {
+  return ids.reduce((n, id) => {
+    const set = pictureSets.value.find((s) => Number(s.id) === Number(id));
+    return n + liveBuildRuns(set?.building, tasksStore.comfyuiRuns).length;
+  }, 0);
+}
+
 async function deleteSetsByIds(ids) {
   if (!ids?.length) return;
 
@@ -2050,9 +2070,14 @@ async function deleteSetsByIds(ids) {
   const setName = single
     ? pictureSets.value.find((s) => Number(s.id) === normalizedIds[0])?.name
     : null;
+  // A training set still being built takes its sheet runs with it.
+  const runs = setRunsStopped(normalizedIds);
+  const stops = runs
+    ? ` This stops ${runs} sheet ${runs === 1 ? "run" : "runs"}; the sheets drawn so far stay in the Scrapheap.`
+    : "";
   const msg = single
-    ? `Delete picture set "${setName}"? This will unassign all their images.`
-    : `Delete ${normalizedIds.length} picture sets? This will unassign all their images.`;
+    ? `Delete picture set "${setName}"? This will unassign all their images.${stops}`
+    : `Delete ${normalizedIds.length} picture sets? This will unassign all their images.${stops}`;
   if (!window.confirm(msg)) return;
 
   const { deleted, failure } = await settleDeletes(
@@ -5731,6 +5756,15 @@ defineExpose({
                         <span v-if="row.childCount" class="sidebar-tree-sub">{{
                           childSetsLabel(row.childCount)
                         }}</span>
+                        <span
+                          v-if="setBuildLine(row.set)"
+                          class="sidebar-tree-sub"
+                          :class="{
+                            'sidebar-tree-sub--bad': setBuildLine(row.set).error,
+                          }"
+                          data-testid="set-build-line"
+                          >{{ setBuildLine(row.set).text }}</span
+                        >
                       </span>
                       <Tooltip v-if="row.set.locked" :text="SET_LOCKED_ROW_TITLE">
                         <template #activator="{ props: tipProps }">
@@ -5755,9 +5789,18 @@ defineExpose({
                           >
                         </template>
                       </Tooltip>
-                      <span class="sidebar-list-count">{{
-                        row.set.picture_count ?? 0
-                      }}</span>
+                      <!-- Being built, the sub-line stands in for the count;
+                           a sheet drawing shows its percent there. -->
+                      <span
+                        v-if="!setBuildLine(row.set)"
+                        class="sidebar-list-count"
+                        >{{ row.set.picture_count ?? 0 }}</span
+                      >
+                      <span
+                        v-else-if="setBuildLine(row.set)?.percent != null"
+                        class="sidebar-list-count"
+                        >{{ setBuildLine(row.set).percent }}%</span
+                      >
                     </div>
                   </div>
                 </div>
@@ -5981,6 +6024,15 @@ defineExpose({
                         <span v-if="row.childCount" class="sidebar-tree-sub">{{
                           childSetsLabel(row.childCount)
                         }}</span>
+                        <span
+                          v-if="setBuildLine(row.set)"
+                          class="sidebar-tree-sub"
+                          :class="{
+                            'sidebar-tree-sub--bad': setBuildLine(row.set).error,
+                          }"
+                          data-testid="set-build-line"
+                          >{{ setBuildLine(row.set).text }}</span
+                        >
                       </span>
                       <Tooltip v-if="row.set.locked" :text="SET_LOCKED_ROW_TITLE">
                         <template #activator="{ props: tipProps }">
@@ -6005,9 +6057,18 @@ defineExpose({
                           >
                         </template>
                       </Tooltip>
-                      <span class="sidebar-list-count">{{
-                        row.set.picture_count ?? 0
-                      }}</span>
+                      <!-- Being built, the sub-line stands in for the count;
+                           a sheet drawing shows its percent there. -->
+                      <span
+                        v-if="!setBuildLine(row.set)"
+                        class="sidebar-list-count"
+                        >{{ row.set.picture_count ?? 0 }}</span
+                      >
+                      <span
+                        v-else-if="setBuildLine(row.set)?.percent != null"
+                        class="sidebar-list-count"
+                        >{{ setBuildLine(row.set).percent }}%</span
+                      >
                     </div>
                   </div>
                 </div>
@@ -7023,9 +7084,11 @@ defineExpose({
               : "Move to the top level"
           }}</span>
         </button>
+        <!-- A set still being built saves its build as it goes: locked, it
+             could neither save nor be cancelled. -->
         <button
           class="ctx-item"
-          :disabled="isReadOnly"
+          :disabled="isReadOnly || !!sidebarCtxSet.building"
           @click="toggleSetLock(sidebarCtxSet)"
         >
           <v-icon class="ctx-icon">{{
@@ -7051,8 +7114,14 @@ defineExpose({
           {{
             ctxSetDeleteIds.length > 1
               ? `Delete ${ctxSetDeleteIds.length} sets`
-              : "Delete"
+              : sidebarCtxSet.building
+                ? "Delete set…"
+                : "Delete"
           }}
+          <span v-if="setRunsStopped(ctxSetDeleteIds)" class="ctx-meta"
+            >stops {{ setRunsStopped(ctxSetDeleteIds) }}
+            {{ setRunsStopped(ctxSetDeleteIds) === 1 ? "run" : "runs" }}</span
+          >
         </button>
       </template>
       <template v-if="sidebarCtxProject">
