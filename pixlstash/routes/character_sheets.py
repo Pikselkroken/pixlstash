@@ -1,6 +1,7 @@
 """Character sheets: draw a character for "Create a training set…".
 
-The dialog draws sheets by running a MOSS-Image text-to-image workflow through
+The dialog draws sheets by running a MOSS-Image, Krea 2, Qwen-Image or FLUX.2
+Klein text-to-image workflow through
 ``POST /workflows/run`` with the prompt and canvas this module hands it, so a
 sheet is an ordinary run: queued behind the GPU, cancellable in Tasks, and
 imported like any picture. What is particular to sheets is here:

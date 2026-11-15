@@ -12853,7 +12853,7 @@ the count the server added. Owner-only
 
 "Create a training set…" can draw the pictures instead of picking them, for a
 character with none or with too few. A **character sheet** is one MOSS-Image
-picture at 5:3: four passport photos on the left half (front neutral,
+(or Krea 2, Qwen-Image or FLUX.2 Klein) picture at 5:3: four passport photos on the left half (front neutral,
 three-quarter smiling, profile neutral, other three-quarter laughing) and two
 tall body photos on the right at a framing the user picks (waist-up,
 mid-thigh, knees-up or full body). The canvas is one of three sizes
@@ -12864,8 +12864,13 @@ different person, but the six faces within one sheet agree: the user keeps
 one or more sheets and their panels become the character's pictures. **A sheet
 is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 
-- **A sheet is an ordinary run.** The dialog runs a MOSS-Image `txt2img`
-  workflow through `POST /workflows/run` with the prompt, negative and canvas
+- **A sheet is an ordinary run.** The dialog runs a MOSS-Image, Krea 2,
+  Qwen-Image or FLUX.2 Klein `txt2img` workflow (PixlStash ships four, #2700:
+  `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
+  `Sheet-Flux2-Klein-9B*.json`, a text and a `-Reference` one of each, every
+  size a literal 2560×1536 and the encoder and VAE loaded by digest; the step
+  files their cards through `POST /comfyui/workflows/{name}/card` before it
+  lists the cards) through `POST /workflows/run` with the prompt, negative and canvas
   `POST /character-sheets/prompt` hands it (the width and height go in as
   `values` at the workflow's own size addresses), an optional character LoRA in
   `add_loras`, and `character_ids: []`: a sheet shows one person six times and
@@ -12884,7 +12889,9 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   prompt, the JSON `MOSSImageLayoutPrompt` emits: a summary caption and one
   item per panel part with a `yxyx` box in `abs_centralized` coordinates. The
   boxes are the ones that held their layout on 16 of 16 probe sheets; the test
-  pins the mid-thigh set. Every panel's caption carries the whole character,
+  pins the mid-thigh set. Only MOSS-Image reads the layout JSON, so a Krea 2,
+  Qwen-Image or FLUX.2 Klein workflow is sent `layout: "prose"`, the summary
+  caption alone; no probe has measured how their sheets hold the grid or cut. Every panel's caption carries the whole character,
   build included (a different build draws a different face). Trousers are
   always named, shoes only at full body. A LoRA's first trigger word leads.
 - **Ranking** (`POST /characters/{id}/sheets/rank`) reads the faces face
@@ -12918,15 +12925,15 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   existing rule; a character with rated pictures keeps those.
 - **From a reference picture plus the words (#2679).** Text pins down a type,
   so a character that already has a face is matched only by luck. The second
-  way to draw runs an **image-edit** workflow (Qwen-Image-Edit, the owner's
-  pick; no probe has measured it yet) that reads the picture for the face and
+  way to draw runs an **image-edit** workflow (Qwen-Image-Edit or FLUX.2
+  Klein, #2700; no probe has measured either yet) that reads the picture for the face and
   draws on an empty canvas of the sheet's size. Nothing about the run is
   particular to sheets: the picture goes in through `RunRequest.inputs` at the
   address the pre-flight's `picture_inputs` names. Four pieces serve it:
   - `workflow_identity.reference_input_count(nodes)` says which graphs can:
     the picture loaders feeding an edit model's reference input
-    (`ReferenceLatent`, `TextEncode…ImageEdit…`; a ControlNet's pose is not
-    one) in a `txt2img` / `img2img` graph whose every sampler
+    (`ReferenceLatent`, `TextEncode…ImageEdit…`, Qwen-Image 2.1's
+    `TextEncodeQwenImage21`; a ControlNet's pose is not one) in a `txt2img` / `img2img` graph whose every sampler
     starts from an empty latent (followed through `latent_image` only, an
     empty latent ending the walk, so one sized from the picture still counts)
     and never from the picture's own. The type cannot say this: an edit graph
@@ -12938,9 +12945,13 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
     copy stored through `_store_copy` as `<stem> (sheet)`, owner only as
     `inpaint-copy` is) makes such a graph from an edit workflow, which draws
     at its picture's size: an empty latent whose size is wired from the
-    picture gets a literal `width` and `height`; a Qwen edit graph whose
+    picture gets a literal `width` and `height`, and so does every other input
+    wired to the same size (FLUX.2's `Flux2Scheduler`); a Qwen edit graph whose
     sampler starts from the picture's own `VAEEncode` gets a new
-    `EmptySD3LatentImage`; either way `denoise` becomes 1.0. Anything else is a 422 with the
+    `EmptySD3LatentImage`; a sampler fed by a switch between the picture's
+    latent and an empty one (Qwen-Image 2.1's template) is wired to the empty
+    one; either way `denoise` becomes 1.0, and a `SaveImageAdvanced` becomes a
+    `SaveImage`, the saver PixlStash collects from. Anything else is a 422 with the
     reason (no picture read, more than one pass, already sized, or a start it
     has no canvas class for).
   - `sheet_prompt(reference=True)` names "the same {subject} as in the

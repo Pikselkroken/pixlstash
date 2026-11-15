@@ -54,6 +54,7 @@ const gen = vi.hoisted(() => ({
   preflightWorkflowRun: vi.fn(),
   runWorkflowCard: vi.fn(),
   sheetCopyWorkflow: vi.fn(),
+  cardForWorkflow: vi.fn(async () => ({})),
 }));
 vi.mock("../../api/characterSheets", () => ({
   buildSheetPrompt: gen.buildSheetPrompt,
@@ -68,6 +69,7 @@ vi.mock("../../api/characters", () => ({
   setReferenceCluster: gen.setReferenceCluster,
 }));
 vi.mock("../../api/modelShelf", () => ({ listAdapters: gen.listAdapters }));
+vi.mock("../../api/comfyui", () => ({ cardForWorkflow: gen.cardForWorkflow }));
 vi.mock("../../api/workflows", () => ({
   getRunOutcome: gen.getRunOutcome,
   getWorkflowCard: gen.getWorkflowCard,
@@ -623,7 +625,7 @@ const MOSS_CARD = {
   name: "MOSS sheet",
   type: "txt2img",
   last_used: "2026-11-09T20:00:00Z",
-  models: [{ base_model_family: "moss_image" }],
+  models: [{ kind: "unet", base_model_family: "moss_image" }],
 };
 
 /** Mock the Sheets step's reads: one MOSS workflow, LoRAs newest first. */
@@ -772,6 +774,153 @@ describe("TrainingSetBuild: generating the pictures", () => {
           { slot_label: "lat", input_name: "width", value: 2560 },
           { slot_label: "lat", input_name: "height", value: 1536 },
         ],
+      }),
+    );
+    wrapper.unmount();
+  });
+
+  it("draws with a Krea 2 workflow in prose, with a Krea 2 LoRA", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({
+      description: "Adult woman, copper bob",
+      loras: [
+        { sha256: "krea1", display_name: "Anna Krea", base_model_family: "krea2", added_at: "2026-11-09" },
+        { sha256: "moss1", display_name: "Anna v1", base_model_family: "moss_image", added_at: "2026-11-08" },
+      ],
+    });
+    gen.listWorkflowCards.mockResolvedValue({
+      cards: [
+        MOSS_CARD,
+        {
+          id: "manual:krea",
+          name: "Krea sheet",
+          type: "txt2img",
+          last_used: "2026-11-10T20:00:00Z",
+          models: [{ kind: "checkpoint", base_model_family: "krea2" }],
+        },
+      ],
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    const select = (label) =>
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === label);
+    // Both models are offered; the most recently used, Krea 2, is chosen and
+    // its LoRA follows it.
+    expect(select("Sheet workflow").props("options").map((o) => o.value)).toEqual([
+      "manual:krea",
+      "manual:moss",
+    ]);
+    expect(select("Character LoRA · optional").props("modelValue")).toBe("krea1");
+    // The LoRA follows a workflow of the other model, there and back.
+    const pick = async (id) => {
+      select("Sheet workflow").vm.$emit("update:modelValue", id);
+      await flushPromises();
+      return select("Character LoRA · optional").props("modelValue");
+    };
+    expect(await pick("manual:moss")).toBe("moss1");
+    expect(await pick("manual:krea")).toBe("krea1");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    expect(gen.buildSheetPrompt).toHaveBeenLastCalledWith(
+      expect.objectContaining({ layout: "prose" }),
+    );
+    expect(gen.buildSheetPrompt.mock.lastCall[0]).not.toHaveProperty("reference");
+    expect(gen.runWorkflowCard).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        workflow_id: "manual:krea",
+        add_loras: [expect.objectContaining({ sha256: "krea1" })],
+      }),
+    );
+    wrapper.unmount();
+  });
+
+  it("draws text sheets with Qwen-Image and FLUX.2 Klein, read off the diffusion model (#2700)", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({
+      description: "Adult woman, copper bob",
+      loras: [
+        { sha256: "dev", display_name: "Anna dev", base_model_family: "flux2", base_model_canonical: "FLUX.2", added_at: "2026-11-09" },
+        { sha256: "klein", display_name: "Anna Klein", base_model_family: "flux2", base_model_canonical: "FLUX.2 Klein", added_at: "2026-11-08" },
+        { sha256: "qwen", display_name: "Anna Qwen", base_model_family: "qwen", added_at: "2026-11-07" },
+      ],
+    });
+    gen.listWorkflowCards.mockResolvedValue({
+      cards: [
+        MOSS_CARD,
+        {
+          id: "manual:klein-t2i",
+          name: "Klein T2I",
+          type: "txt2img",
+          last_used: "2026-11-12T20:00:00Z",
+          models: [
+            { kind: "clip", base_model_family: "qwen" },
+            { kind: "unet", base_model_family: "flux2", filename: "flux-2-klein-9b.safetensors" },
+          ],
+        },
+        {
+          id: "manual:qwen-t2i",
+          name: "Qwen T2I",
+          type: "txt2img",
+          last_used: "2026-11-11T20:00:00Z",
+          models: [{ kind: "unet", base_model_family: "qwen" }],
+        },
+        // A Qwen text encoder does not make a Qwen workflow.
+        {
+          id: "auto:zimage",
+          name: "Z-Image",
+          type: "txt2img",
+          last_used: "2026-11-13T20:00:00Z",
+          models: [
+            { kind: "unet", base_model_family: "zimage" },
+            { kind: "clip", base_model_family: "qwen" },
+          ],
+        },
+      ],
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    const select = (label) =>
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === label);
+    expect(select("Sheet workflow").props("options").map((o) => o.value)).toEqual([
+      "manual:klein-t2i",
+      "manual:qwen-t2i",
+      "manual:moss",
+    ]);
+    // Klein takes its own LoRAs, not FLUX.2 dev's.
+    expect(select("Character LoRA · optional").props("modelValue")).toBe("klein");
+    expect(
+      select("Character LoRA · optional")
+        .props("options")
+        .filter((o) => o.value && !o.disabled)
+        .map((o) => o.value),
+    ).toEqual(["klein"]);
+    // Qwen takes Qwen's, and back.
+    const pick = async (id) => {
+      select("Sheet workflow").vm.$emit("update:modelValue", id);
+      await flushPromises();
+      return select("Character LoRA · optional").props("modelValue");
+    };
+    expect(await pick("manual:qwen-t2i")).toBe("qwen");
+    expect(await pick("manual:klein-t2i")).toBe("klein");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    // No layout JSON for Klein: the sheet in one sentence, and no reference.
+    expect(gen.buildSheetPrompt).toHaveBeenLastCalledWith(
+      expect.objectContaining({ layout: "prose" }),
+    );
+    expect(gen.buildSheetPrompt.mock.lastCall[0]).not.toHaveProperty("reference");
+    expect(gen.runWorkflowCard).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        workflow_id: "manual:klein-t2i",
+        add_loras: [expect.objectContaining({ sha256: "klein" })],
       }),
     );
     wrapper.unmount();
@@ -943,9 +1092,17 @@ describe("TrainingSetBuild: generating the pictures", () => {
     await vi.advanceTimersByTimeAsync(3000);
     expect(drawn()).toEqual(["/thumb/501.webp"]);
 
-    // The same prompt again: more of the same, side by side.
+    // The same prompt again: more of the same, side by side, and the new
+    // place is scrolled into view below the sheets on show.
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = function () {
+      scrolled(this.dataset.slot);
+    };
     startsRun("r2");
     await button(wrapper, "Draw 4 more").trigger("click");
+    await flushPromises();
+    expect(scrolled).toHaveBeenLastCalledWith("r2");
+    delete Element.prototype.scrollIntoView;
     await vi.advanceTimersByTimeAsync(3000);
     expect(drawn().sort()).toEqual(["/thumb/501.webp", "/thumb/502.webp"]);
 
@@ -1214,14 +1371,38 @@ describe("TrainingSetBuild: generating the pictures", () => {
     name: "Qwen edit (sheet)",
     type: "img2img",
     reference_inputs: 1,
-    models: [{ base_model_family: "qwen" }],
+    models: [{ kind: "unet", base_model_family: "qwen" }],
   };
   const QWEN_EDIT = {
     id: "auto:qwen-edit",
     name: "Qwen edit",
     type: "img2img",
     reference_inputs: 0,
-    models: [{ base_model_family: "qwen" }],
+    models: [{ kind: "unet", base_model_family: "qwen" }],
+  };
+  // Both load a Qwen text encoder; only the diffusion model says what draws.
+  const KLEIN_SHEET = {
+    id: "manual:klein-sheet",
+    name: "Klein edit (sheet)",
+    type: "img2img",
+    reference_inputs: 1,
+    last_used: "2026-11-10T20:00:00Z",
+    models: [
+      { kind: "clip", base_model_family: "qwen" },
+      { kind: "unet", base_model_family: "flux2", base_model: "FLUX.2 Klein 9B" },
+    ],
+  };
+  const KREA_REFERENCE = {
+    id: "manual:krea-style",
+    name: "Krea 2: style reference",
+    type: "txt2img",
+    reference_inputs: 1,
+    last_used: "2026-11-11T20:00:00Z",
+    models: [
+      { kind: "clip", base_model_family: "qwen" },
+      { kind: "unet", base_model_family: "krea2" },
+      { kind: "vae", base_model_family: "qwen" },
+    ],
   };
 
   /** sheetsWorld plus reference faces and what the library's cards are. */
@@ -1448,6 +1629,86 @@ describe("TrainingSetBuild: generating the pictures", () => {
     expect(
       wrapper.find('[data-testid="cts-generate-primary"]').attributes("disabled"),
     ).toBeDefined();
+    wrapper.unmount();
+  });
+
+  it("lists Qwen and Klein sheet workflows, never Krea 2's style reference (#2700)", async () => {
+    referenceWorld({ cards: [MOSS_CARD, QWEN_SHEET, KREA_REFERENCE, KLEIN_SHEET] });
+    gen.listAdapters.mockResolvedValue([
+      { sha256: "dev", display_name: "Anna FLUX.2 dev", base_model_family: "flux2", base_model_canonical: "FLUX.2", added_at: "2026-11-09" },
+      { sha256: "klein", display_name: "Anna Klein", base_model_family: "flux2", base_model_canonical: "FLUX.2 Klein", added_at: "2026-11-08" },
+      { sha256: "qwen", display_name: "Anna Qwen", base_model_family: "qwen", added_at: "2026-11-07" },
+    ]);
+    // One shipped sheet workflow cannot be filed: the others still are, and
+    // the owner's own workflows are listed after them.
+    gen.cardForWorkflow.mockImplementation(async (name) => {
+      if (name === "Sheet-Flux2-Klein-9B.json") throw new Error("no hub");
+      return {};
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(gen.cardForWorkflow.mock.calls.map(([name]) => name)).toEqual([
+      "Sheet-Qwen-Image-2.1.json",
+      "Sheet-Qwen-Image-2.1-Reference.json",
+      "Sheet-Flux2-Klein-9B.json",
+      "Sheet-Flux2-Klein-9B-Reference.json",
+    ]);
+    expect(
+      Math.max(...gen.cardForWorkflow.mock.invocationCallOrder),
+    ).toBeLessThan(gen.listWorkflowCards.mock.invocationCallOrder[0]);
+    const select = (label) =>
+      wrapper.findAllComponents({ name: "AppSelect" }).find((c) => c.props("label") === label);
+    const workflow = select("Sheet workflow");
+    expect(workflow.props("options").map((o) => o.value)).toEqual([
+      KLEIN_SHEET.id,
+      QWEN_SHEET.id,
+    ]);
+    // Klein takes Klein LoRAs only: not FLUX.2 dev's, not Qwen's.
+    const usable = () =>
+      select("Character LoRA · optional")
+        .props("options")
+        .filter((o) => o.value && !o.disabled)
+        .map((o) => o.value);
+    expect(workflow.props("modelValue")).toBe(KLEIN_SHEET.id);
+    expect(usable()).toEqual(["klein"]);
+    expect(select("Character LoRA · optional").props("modelValue")).toBe("klein");
+    // Another engine's workflow swaps the LoRA for one that loads into it.
+    workflow.vm.$emit("update:modelValue", QWEN_SHEET.id);
+    await flushPromises();
+    expect(usable()).toEqual(["qwen"]);
+    expect(select("Character LoRA · optional").props("modelValue")).toBe("qwen");
+    wrapper.unmount();
+  });
+
+  it("offers a sheet copy of a reference workflow that draws at its picture's size", async () => {
+    const copy = { ...KLEIN_SHEET, id: "manual:klein-copy", name: "Klein edit (sheet) (sheet)" };
+    referenceWorld({ cards: [MOSS_CARD, KLEIN_SHEET] });
+    // Its canvas is sized from the picture: no width or height to set.
+    gen.getWorkflowCard.mockImplementation(async (id) => ({
+      card: {
+        name: id === copy.id ? copy.name : KLEIN_SHEET.name,
+        defaults:
+          id === copy.id
+            ? [
+                { slot_label: "lat", input_name: "width", value: 2560 },
+                { slot_label: "lat", input_name: "height", value: 1536 },
+              ]
+            : [],
+      },
+    }));
+    gen.sheetCopyWorkflow.mockResolvedValue({ workflow_id: copy.id });
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cs-workflow-problem"]').text()).toContain(
+      "no picture size to set",
+    );
+    gen.listWorkflowCards.mockResolvedValue({ cards: [MOSS_CARD, KLEIN_SHEET, copy] });
+    await wrapper.find('[data-testid="cs-convert-chosen"]').trigger("click");
+    await flushPromises();
+    expect(gen.sheetCopyWorkflow).toHaveBeenCalledWith(KLEIN_SHEET.id);
+    // The copy is chosen in its place, and it can draw.
+    expect(gen.getWorkflowCard).toHaveBeenLastCalledWith(copy.id);
+    expect(wrapper.find('[data-testid="cs-workflow-problem"]').exists()).toBe(false);
     wrapper.unmount();
   });
 

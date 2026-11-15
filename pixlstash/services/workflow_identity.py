@@ -1386,8 +1386,11 @@ def reduced_workflow_type(nodes: dict[str, ReducedNode]) -> Optional[str]:
 
 
 # Where an edit model takes the picture it is to keep: Flux's
-# ``ReferenceLatent``, and the Qwen and MOSS edit encoders' image inputs.
-_REFERENCE_INPUT_RE = re.compile(r"^ReferenceLatent$|^TextEncode.*ImageEdit")
+# ``ReferenceLatent``, the Qwen and MOSS edit encoders' image inputs, and
+# Qwen-Image 2.1's encoder, which edits without "Edit" in its name.
+_REFERENCE_INPUT_RE = re.compile(
+    r"^ReferenceLatent$|^TextEncode.*ImageEdit|^TextEncodeQwenImage21$"
+)
 
 
 def reference_input_count(nodes: dict[str, ReducedNode]) -> int:
