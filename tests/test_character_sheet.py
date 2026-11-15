@@ -980,6 +980,9 @@ def test_a_reference_cluster_chooses_the_reference_faces(client):
     ) == sorted([sorted(a_ids), sorted(b_ids)])
     assert [u["picture_id"] for u in body["unclustered"]] == [plain]
     assert not any(c["is_reference"] for c in body["clusters"])
+    # Each member carries its shape, so the view can keep its aspect ratio.
+    member = body["clusters"][0]["members"][0]
+    assert (member["width"], member["height"]) == (640, 384)
 
     cluster_url = f"{API_PREFIX}/characters/{character_id}/reference-cluster"
     put = client.put(cluster_url, json={"picture_ids": b_ids})

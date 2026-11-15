@@ -2051,7 +2051,8 @@ read-blocked belt. Read-only.
 0.05-0.95, default 0.45; the client's *Loose / Normal / Strict* send 0.35 /
 0.45 / 0.55) answers `{threshold, faces, reference_cluster: [picture_id] | null,
 clusters, unclustered}`. A cluster is `{members: [{picture_id, centrality,
-score, format}], size, cohesion, reference_share, is_reference,
+score, format, width, height, thumbnail_width, thumbnail_height, orientation}],
+size, cohesion, reference_share, is_reference,
 similarity_to_reference, from_sheets}`, members most typical first, the
 reference cluster first and then largest first. `unclustered` is
 `[{picture_id, score, similarity_to_reference}]`.

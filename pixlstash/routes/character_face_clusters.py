@@ -32,6 +32,14 @@ class ClusterMember(BaseModel):
         description="The file's format, for loading it full size at "
         "`/pictures/{id}.{format}`."
     )
+    width: int | None = None
+    height: int | None = None
+    thumbnail_width: int | None = None
+    thumbnail_height: int | None = None
+    orientation: int | None = Field(
+        default=None,
+        description="EXIF orientation; with the sizes, the tile's aspect ratio.",
+    )
 
 
 class FaceCluster(BaseModel):
@@ -156,6 +164,11 @@ def create_router(server) -> APIRouter:
                             centrality=round(c, 4),
                             score=by_id[pid].score,
                             format=by_id[pid].format,
+                            width=by_id[pid].width,
+                            height=by_id[pid].height,
+                            thumbnail_width=by_id[pid].thumbnail_width,
+                            thumbnail_height=by_id[pid].thumbnail_height,
+                            orientation=by_id[pid].orientation,
                         )
                         for pid, c in clusters[i].members
                     ],
