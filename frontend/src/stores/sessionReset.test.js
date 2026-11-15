@@ -62,6 +62,7 @@ import { useModelMovesStore } from "./useModelMovesStore";
 import { useMovesStore } from "./useMovesStore";
 import { useImportFoldersStore } from "./useImportFoldersStore";
 import { useInboxStore } from "./useInboxStore";
+import { useSheetDrawsStore } from "./useSheetDrawsStore";
 import { useWorkflowsStore } from "./useWorkflowsStore";
 import { useWorkflowTemplatesStore } from "./useWorkflowTemplatesStore";
 import { useRunDialogStore } from "./useRunDialogStore";
@@ -467,6 +468,15 @@ const STORES = [
       s.counts = { "14d": 56, "90d": 403 };
     },
     isEmpty: (s) => Object.keys(s.counts).length === 0,
+  },
+  {
+    // Which of the previous library's characters have sheet draws.
+    name: "useSheetDrawsStore",
+    use: useSheetDrawsStore,
+    seed: (s) => {
+      s.byCharacter = { 7: { character_id: 7, draws: 1, run_keys: ["r1"] } };
+    },
+    isEmpty: (s) => Object.keys(s.byCharacter).length === 0,
   },
 ];
 

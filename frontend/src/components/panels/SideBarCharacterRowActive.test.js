@@ -302,6 +302,62 @@ describe("the shelf's two routes are one destination", () => {
   });
 });
 
+describe("a person's Sheets row", () => {
+  const SUMMARY = {
+    characters: [
+      {
+        character_id: ADA.id,
+        draws: 1,
+        newest: {
+          id: 1,
+          runs: [{ key: "r1", status: "completed", picture_ids: [41, 42] }],
+          kept: [],
+          used: [],
+          used_sheets: [],
+          seen: false,
+        },
+        run_keys: ["r1"],
+      },
+    ],
+  };
+
+  async function mountWithSheets() {
+    apiGet.mockImplementation((url) =>
+      Promise.resolve(
+        String(url).includes("/character-sheets/draws")
+          ? { data: SUMMARY }
+          : respond(url),
+      ),
+    );
+    const { useSheetDrawsStore } = await import("../../stores/useSheetDrawsStore");
+    await useSheetDrawsStore().refresh();
+    return mountSidebar();
+  }
+
+  it("leads back to the sheets, lit on their screen in place of the person", async () => {
+    nav.route.name = "character-sheets";
+    nav.route.params = { id: String(ADA.id) };
+    useSelectionStore().selectedCharacter = ADA.id;
+    useSelectionStore().selectedCharacterIds = [ADA.id];
+    const wrapper = await mountWithSheets();
+    const rows = wrapper.findAll('[data-testid="sidebar-sheets-row"]');
+    // Ada has a draw; Grace has none.
+    expect(rows.map((r) => r.attributes("data-character"))).toEqual([String(ADA.id)]);
+    const row = rows[0];
+    expect(row.text()).toContain("2 drawn · pick one");
+    // Drawn and not opened since: the attention dot.
+    expect(row.find(".sidebar-dedup-dot").exists()).toBe(true);
+    expect(row.classes()).toContain("active");
+    expect(row.attributes("aria-current")).toBe("page");
+    // One destination lit: the person's own row yields to it.
+    expect(characterRowIsActive(wrapper, ADA.name)).toBe(false);
+    expect(characterRow(wrapper, ADA.name).text()).toContain("1 entry");
+    wrapper.unmount();
+    nav.route.name = "all-pictures";
+    nav.route.params = {};
+  });
+});
+
 describe("the docked rail's node flyout (#2448)", () => {
   it("uses menu semantics, arrow keys, and Escape back to its button", async () => {
     const wrapper = await mountSidebar({ docked: true });

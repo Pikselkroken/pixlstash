@@ -53,6 +53,11 @@ import { abortRun } from "../../api/comfyui";
 import RunAnywayDialog from "./RunAnywayDialog.vue";
 
 vi.mock("../../api/comfyui", () => ({ abortRun: vi.fn(async () => ({})) }));
+// Which characters' sheet draws hold which runs (useSheetDrawsStore).
+const sheetSummary = vi.hoisted(() => ({ characters: [] }));
+vi.mock("../../api/characterSheets", () => ({
+  listSheetDrawSummary: vi.fn(async () => sheetSummary),
+}));
 const runLeaseAnyway = vi.fn(async () => ({ status: "success" }));
 const cancelLease = vi.fn(async () => ({ status: "success" }));
 const freeComfyui = vi.fn(async () => ({ status: "success", freed_mb: 0 }));
@@ -1878,5 +1883,45 @@ describe("clearing ComfyUI's memory from Tasks", () => {
     setGpu(gpuAnswer());
     const wrapper = mount(TasksPanel, globalOpts);
     expect(wrapper.find('[data-testid="tm-comfy-host"]').exists()).toBe(false);
+  });
+});
+
+describe("the way back to a character's sheets", () => {
+  it("links every Character sheet run, running, waiting or finished, and no other", async () => {
+    sheetSummary.characters = [
+      { character_id: 9, draws: 1, newest: {}, run_keys: ["run-a", "run-b", "run-c"] },
+    ];
+    const tasks = useTasksStore();
+    const { useSheetDrawsStore } = await import("../../stores/useSheetDrawsStore");
+    await useSheetDrawsStore().refresh();
+    tasks.comfyuiRuns = [
+      { run_id: "run-a", label: "Character sheet · Mira", status: "running", percent: 40 },
+      { run_id: "run-b", label: "Character sheet · Mira", status: "waiting" },
+      { run_id: "run-x", label: "Night market", status: "queued", percent: 0 },
+    ];
+    tasks.noteFinished([
+      {
+        id: "run-c",
+        label: "Character sheet · Mira",
+        ended_at: new Date().toISOString(),
+        status: "completed",
+        made: 1,
+        picture_ids: [5],
+      },
+    ]);
+    const wrapper = mount(TasksPanel, globalOpts);
+    await flushPromises();
+    const links = wrapper.findAll('[data-testid="tm-open-sheets"]');
+    // The running row, the waiting row and the finished row; not Night market.
+    expect(links).toHaveLength(3);
+    const night = wrapper
+      .findAll('[data-testid="tm-comfy-row"]')
+      .find((row) => row.text().includes("Night market"));
+    expect(night.find('[data-testid="tm-open-sheets"]').exists()).toBe(false);
+    await links[2].trigger("click");
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "character-sheets",
+      params: { id: "9" },
+    });
   });
 });

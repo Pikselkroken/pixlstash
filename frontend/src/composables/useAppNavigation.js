@@ -460,7 +460,8 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
           WORKFLOW_ROUTES.includes(name) ||
           name === "insights" ||
           name === "moves" ||
-          name === "inbox")
+          name === "inbox" ||
+          name === "character-sheets")
       )
         replaceAppRoute({ name: "all-pictures" });
     },
@@ -491,6 +492,20 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   const isMovesView = computed(
     () => !isReadOnly.value && route.name === "moves",
   );
+
+  // A character's Sheets screen draws and stores sheets: owner-only, gated on
+  // `isReadOnly` like the destinations above.
+  const isSheetsView = computed(
+    () => !isReadOnly.value && route.name === "character-sheets",
+  );
+
+  /** Open a character's Sheets screen. */
+  function handleOpenSheets(characterId) {
+    pushAppRoute({
+      name: "character-sheets",
+      params: { id: String(characterId) },
+    });
+  }
 
   /** Open the reconciliation queue for moves made outside PixlStash. */
   function handleSelectMoves() {
@@ -580,6 +595,8 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     isMovesView,
     isInboxView,
     isWorkflowsView,
+    isSheetsView,
+    handleOpenSheets,
     handleSelectInsights,
     handleSelectMoves,
     handleSelectInbox,

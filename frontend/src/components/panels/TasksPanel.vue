@@ -119,6 +119,7 @@
           <div
             v-if="entry.kind === 'comfyui'"
             class="tm-row tm-row--run"
+            :class="{ 'tm-row--sheet': sheetsCharacter(entry.runId) != null }"
             data-testid="tm-comfy-row"
           >
             <span
@@ -141,6 +142,16 @@
             >
               <span class="tm-run-line-fill" :style="{ width: barWidth(entry.run) }"></span>
             </span>
+            <button
+              v-if="sheetsCharacter(entry.runId) != null"
+              class="tm-sheet-link"
+              type="button"
+              data-testid="tm-open-sheets"
+              :aria-label="`Open the sheets of ${entry.run.label}`"
+              @click="openSheets(entry.runId)"
+            >
+              <v-icon size="14">mdi-view-grid-outline</v-icon>Open sheets
+            </button>
             <span class="tm-figure">
               <span class="tm-fig-text">{{ formatGb(entry.figureMb) }}</span>
               <span v-if="!isReadOnly" class="tm-acts">
@@ -399,6 +410,7 @@
           v-for="entry in tasksStore.waitingEntries"
           :key="entry.key"
           class="tm-row tm-row--waiting"
+          :class="{ 'tm-row--sheet': sheetsCharacter(entry.runId) != null }"
           data-testid="tm-waiting-row"
         >
           <span class="tm-mark tm-mark--waiting" aria-hidden="true">
@@ -418,7 +430,17 @@
           />
           <span v-else class="tm-app-gap" aria-hidden="true"></span>
           <span class="tm-name">{{ entry.label }}</span>
-          <span class="tm-figure">
+          <button
+              v-if="sheetsCharacter(entry.runId) != null"
+              class="tm-sheet-link"
+              type="button"
+              data-testid="tm-open-sheets"
+              :aria-label="`Open the sheets of ${entry.label}`"
+              @click="openSheets(entry.runId)"
+            >
+              <v-icon size="14">mdi-view-grid-outline</v-icon>Open sheets
+            </button>
+            <span class="tm-figure">
             <span class="tm-fig-text">{{ needText(entry) }}</span>
             <span v-if="actionsOf(entry).length" class="tm-acts">
               <button
@@ -546,7 +568,13 @@
           :aria-label="run.offer ? `Changes the run of ${run.offer.name} was made with` : undefined"
           :data-offer="run.offer ? run.offer.workflowId : undefined"
         >
-          <div class="tm-row tm-row--done" :class="{ 'tm-row--open': run.open }">
+          <div
+            class="tm-row tm-row--done"
+            :class="{
+              'tm-row--open': run.open,
+              'tm-row--sheet': sheetsCharacter(run.id) != null,
+            }"
+          >
             <span
               class="tm-mark tm-mark--done"
               :data-state="run.failed ? 'failed' : 'done'"
@@ -563,6 +591,16 @@
                 changesWord(run.offer.count)
               }}</span>
             </span>
+            <button
+              v-if="sheetsCharacter(run.id) != null"
+              class="tm-sheet-link"
+              type="button"
+              data-testid="tm-open-sheets"
+              :aria-label="`Open the sheets of ${run.label}`"
+              @click="openSheets(run.id)"
+            >
+              <v-icon size="14">mdi-view-grid-outline</v-icon>Open sheets
+            </button>
             <span class="tm-figure">
               <span class="tm-fig-text">
                 <v-icon size="12">mdi-image-outline</v-icon>
@@ -783,6 +821,7 @@ import {
 } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { useSheetDrawsStore } from "../../stores/useSheetDrawsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { isReadOnly } from "../../utils/apiClient";
@@ -865,6 +904,23 @@ function togglePixl() {
 /** Open an AI Toolkit run's page in the shelf's Training runs tab (#2118). */
 function watchTraining(entry) {
   router.push({ name: "models-runs", query: { run: entry.jobId } });
+}
+
+// A Character sheet run leads back to its character's Sheets screen, running,
+// waiting or finished: the draw is stored on the character, so the screen
+// shows it whether or not it was left open. Always shown, not on hover: it is
+// the way back.
+const sheetDraws = useSheetDrawsStore();
+
+function sheetsCharacter(runId) {
+  return sheetDraws.characterOfRun(runId);
+}
+
+function openSheets(runId) {
+  const id = sheetsCharacter(runId);
+  if (id != null) {
+    router.push({ name: "character-sheets", params: { id: String(id) } });
+  }
 }
 
 /** What a side pass (the lease's shown_as) is doing, in place of its steps. */
@@ -2209,6 +2265,30 @@ const tmSystemItems = computed(() => {
 .tm-group-col {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* A Character sheet run's row has a fifth column, its link to the sheets. */
+.tm-row.tm-row--sheet {
+  grid-template-columns: var(--gutter-glyph) 18px minmax(0, 1fr) auto auto;
+}
+
+.tm-sheet-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-on-surface));
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tm-sheet-link:hover {
+  background: var(--hover-wash);
 }
 
 /* One line per task, on one grid: state mark, app mark, name, figure. */

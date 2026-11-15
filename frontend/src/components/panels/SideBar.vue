@@ -115,7 +115,7 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSetTreeExpansion } from "../../composables/useSetTreeExpansion";
 import { useSectionCollapse } from "../../composables/useSectionCollapse";
 import { useSidebarWidth } from "../../composables/useSidebarWidth";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
 import { useMovesStore } from "../../stores/useMovesStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -129,6 +129,9 @@ import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { useSheetDrawsStore } from "../../stores/useSheetDrawsStore";
+import { useTasksStore } from "../../stores/useTasksStore";
+import { runKey } from "../../utils/gpuMemory";
 import { errorDetail } from "../../utils/apiError";
 import { activateOnEnterOrSpace } from "../../utils/keyboardActivation.js";
 import {
@@ -221,6 +224,77 @@ const isInsightsView = computed(
   () => route.name === "insights" && !isTagReviewView.value,
 );
 
+// --- A character's Sheets row: the way back to its sheet draws ---
+// Shown under a character once it has a draw (useSheetDrawsStore), first among
+// its children, in a child set's shape. The screen is a route, so like the
+// destinations above it takes the highlight from the selection.
+const router = useRouter();
+const sheetDraws = useSheetDrawsStore();
+const tasksStore = useTasksStore();
+const isSheetsView = computed(
+  () => route.name === "character-sheets" && !isTagReviewView.value,
+);
+
+function sheetsOf(charId) {
+  return isReadOnly.value ? null : sheetDraws.summaryOf(charId);
+}
+
+/** A person's children: their child sets, and the Sheets row. */
+function kidsOf(branch, char) {
+  return branch.childCount(char.id) + (sheetsOf(char.id) ? 1 : 0);
+}
+
+function kidsLabel(branch, char) {
+  const sets = branch.childCount(char.id);
+  if (!sheetsOf(char.id)) return childSetsLabel(sets);
+  return sets === 0 ? "1 entry" : `${sets + 1} entries`;
+}
+
+function isSheetsRowActive(charId) {
+  return isSheetsView.value && String(route.params.id) === String(charId);
+}
+
+function openSheets(charId) {
+  router.push({ name: "character-sheets", params: { id: String(charId) } });
+}
+
+/**
+ * What the Sheets row says of the newest draw: `sub` under the name, and at
+ * the end a percent with the run line (`percent`), a word (`words`), a
+ * count (`count`) or the new dot (`fresh`, drawn and not opened since).
+ */
+function sheetsState(charId) {
+  const draw = sheetsOf(charId)?.newest;
+  if (!draw) return null;
+  const runs = draw.runs || [];
+  const ended = (run) => run.status === "completed" || run.status === "failed";
+  const live = new Map(tasksStore.comfyuiRuns.map((run) => [runKey(run), run]));
+  const total = runs.length;
+  const done = runs.filter(ended).length;
+  const sheets = runs.reduce((n, run) => n + (run.picture_ids?.length || 0), 0);
+  if (done < total) {
+    const running = runs.find(
+      (run) => !ended(run) && (live.get(run.key)?.status ?? run.status) === "running",
+    );
+    if (!running) return { sub: "waiting for the GPU", words: "queued" };
+    const percent = Math.round(Number(live.get(running.key)?.percent) || 0);
+    return { sub: `drawing ${done + 1} of ${total}`, words: `${percent}%`, percent };
+  }
+  if (draw.used?.length) {
+    const kept = draw.used_sheets?.length || draw.kept.length;
+    return {
+      sub: `${kept} kept · ${draw.used.length} pictures filed`,
+      count: draw.used.length,
+    };
+  }
+  const failed = runs.filter((run) => run.status === "failed").length;
+  if (failed) {
+    return { sub: `${failed} of ${total} failed`, bad: true, words: `${sheets} drawn` };
+  }
+  return { sub: `${sheets} drawn · pick one`, fresh: !draw.seen };
+}
+
+
 // Same show-but-disable rule again. GET /insights is owner-only because its
 // numbers ARE the vault-wide aggregate - narrowing them to a share token's
 // scope would leak that out-of-scope pictures exist - so the row is visible,
@@ -309,6 +383,15 @@ const dragOverSet = ref(null);
 // localStorage so the tree's shape survives a reload.
 const { expandedTreeKeys, toggleTreeKey, expandTreeKeys } =
   useSetTreeExpansion();
+
+// On the Sheets screen its person is open, so the row it lights is on screen.
+watch(
+  () => (isSheetsView.value ? String(route.params.id) : null),
+  (id) => {
+    if (id) expandTreeKeys([`c:${id}`]);
+  },
+  { immediate: true },
+);
 
 // The People and Sets sections fold away under their heads, remembered across
 // reloads like an inspector section.
@@ -2724,7 +2807,8 @@ const selectionOwnsHighlight = computed(
     !isDuplicatesView.value &&
     !isModelsView.value &&
     !isInsightsView.value &&
-    !isWorkflowsView.value,
+    !isWorkflowsView.value &&
+    !isSheetsView.value,
 );
 
 const isAllPicturesRowActive = computed(() => {
@@ -5432,7 +5516,7 @@ defineExpose({
                       'sidebar-character-group',
                       {
                         'sidebar-tree-group':
-                          branch.childCount(char.id) &&
+                          kidsOf(branch, char) &&
                           isTreeOpen(`c:${char.id}`),
                       },
                     ]"
@@ -5470,14 +5554,14 @@ defineExpose({
                         selectCharacter(char.id, char.name || 'Character', $event)
                       "
                       :aria-expanded="
-                        branch.childCount(char.id)
+                        kidsOf(branch, char)
                           ? String(isTreeOpen(`c:${char.id}`))
                           : undefined
                       "
                       @keydown="
                         onTreeRowKeydown(
                           `c:${char.id}`,
-                          branch.childCount(char.id),
+                          kidsOf(branch, char),
                           $event,
                         )
                       "
@@ -5498,11 +5582,11 @@ defineExpose({
                         activator="parent"
                       />
                       <button
-                        v-if="branch.childCount(char.id)"
+                        v-if="kidsOf(branch, char)"
                         type="button"
                         class="sidebar-tree-toggle"
                         tabindex="-1"
-                        :aria-label="`${isTreeOpen(`c:${char.id}`) ? 'Hide' : 'Show'} the sets in ${char.name}`"
+                        :aria-label="`${isTreeOpen(`c:${char.id}`) ? 'Hide' : 'Show'} what is in ${char.name}`"
                         @click.stop="toggleTreeKey(`c:${char.id}`)"
                       >
                         <v-icon size="16">{{
@@ -5513,7 +5597,7 @@ defineExpose({
                       </button>
                       <span
                         v-if="
-                          branch.childCount(char.id) && isTreeOpen(`c:${char.id}`)
+                          kidsOf(branch, char) && isTreeOpen(`c:${char.id}`)
                         "
                         class="sidebar-tree-stub"
                         :style="{ '--tree-stub-x': treeGuideX(1) }"
@@ -5556,9 +5640,9 @@ defineExpose({
                           <span>{{ char.name }}</span>
                         </Tooltip>
                         <span
-                          v-if="branch.childCount(char.id)"
+                          v-if="kidsOf(branch, char)"
                           class="sidebar-tree-sub"
-                          >{{ childSetsLabel(branch.childCount(char.id)) }}</span
+                          >{{ kidsLabel(branch, char) }}</span
                         >
                       </span>
                       <span class="sidebar-character-actions">
@@ -5582,6 +5666,65 @@ defineExpose({
                           <span>{{ personCountIn(branch.countScope, char) }}</span>
                         </span>
                       </span>
+                    </div>
+                    <div
+                      v-if="sheetsState(char.id) && isTreeOpen(`c:${char.id}`)"
+                      :class="[
+                        'sidebar-list-item',
+                        'sidebar-set-item',
+                        'sidebar-tree-kid',
+                        'sidebar-sheets-row',
+                        {
+                          'sidebar-tree-kid--last': !branch.childCount(char.id),
+                          active: isSheetsRowActive(char.id),
+                        },
+                      ]"
+                      :style="{
+                        '--tree-x': treeGuideX(1),
+                        '--tree-spacer': treeSpacerWidth(1),
+                      }"
+                      role="button"
+                      tabindex="0"
+                      :aria-current="isSheetsRowActive(char.id) ? 'page' : undefined"
+                      :aria-label="`${char.name}'s sheets: ${sheetsState(char.id).sub}`"
+                      data-testid="sidebar-sheets-row"
+                      :data-character="char.id"
+                      @click="openSheets(char.id)"
+                      @keydown="activateOnEnterOrSpace"
+                    >
+                      <span class="sidebar-tree-spacer" aria-hidden="true" />
+                      <span class="sidebar-list-icon sidebar-tree-mark">
+                        <v-icon :size="treeMarkPx(1) - 4">mdi-view-grid-outline</v-icon>
+                      </span>
+                      <span class="sidebar-list-label">
+                        <span class="sidebar-list-label-text">Sheets</span>
+                        <span
+                          :class="[
+                            'sidebar-tree-sub',
+                            { 'sidebar-sheets-sub--bad': sheetsState(char.id).bad },
+                          ]"
+                          >{{ sheetsState(char.id).sub }}</span
+                        >
+                      </span>
+                      <span
+                        v-if="sheetsState(char.id).fresh"
+                        class="sidebar-dedup-dot"
+                        aria-hidden="true"
+                      />
+                      <span
+                        v-else-if="sheetsState(char.id).count != null"
+                        class="sidebar-list-count"
+                        >{{ sheetsState(char.id).count }}</span
+                      >
+                      <span v-else-if="sheetsState(char.id).words" class="sidebar-sheets-words">{{
+                        sheetsState(char.id).words
+                      }}</span>
+                      <span
+                        v-if="sheetsState(char.id).percent != null"
+                        class="sidebar-sheets-line"
+                        aria-hidden="true"
+                        ><span :style="{ width: `${sheetsState(char.id).percent}%` }"
+                      /></span>
                     </div>
                     <div
                       v-for="row in branch.rowsByCharacter.get(Number(char.id)) ?? []"
@@ -6633,6 +6776,18 @@ defineExpose({
         >
           <v-icon class="ctx-icon">mdi-image-multiple-outline</v-icon>
           <span class="ctx-label-text">Create a training set…</span>
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly"
+          data-testid="sidebar-draw-sheets"
+          @click="
+            openSheets(sidebarCtxCharacter.id);
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon class="ctx-icon">mdi-view-grid-outline</v-icon>
+          <span class="ctx-label-text">Draw sheets…</span>
         </button>
         <button
           class="ctx-item"

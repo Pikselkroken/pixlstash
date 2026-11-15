@@ -18,7 +18,7 @@
 10. [Naming and Coding Conventions](#10-naming-and-coding-conventions)
 11. [Build Configuration](#11-build-configuration)
 12. [Mermaid Diagrams](#12-mermaid-diagrams)
-13. [Destinations (whole screens)](#13-destinations-whole-screens) — [13.1 The model shelf](#131-the-model-shelf), [13.2 The workflow library](#132-the-workflow-library), [13.3 Duplicates](#133-duplicates), [13.4 About your library](#134-about-your-library), [13.5 Moves](#135-moves), [13.6 The Inbox](#136-the-inbox)
+13. [Destinations (whole screens)](#13-destinations-whole-screens) — [13.1 The model shelf](#131-the-model-shelf), [13.2 The workflow library](#132-the-workflow-library), [13.3 Duplicates](#133-duplicates), [13.4 About your library](#134-about-your-library), [13.5 Moves](#135-moves), [13.6 The Inbox](#136-the-inbox), [13.7 Character sheets](#137-character-sheets)
 
 ---
 
@@ -1638,75 +1638,13 @@ the row element to hand focus back to on close).
   projects, then bulk-adds the picks; if the add fails it deletes the empty set
   and says so. After it, *Train a LoRA on it* emits `train`, which App routes
   to `handleTrainLora` on the new set.
-- **Drawing the pictures instead** (`CharacterSheetStep.vue`, backend §25.29).
-  *Generate pictures…* (*Generate more…* once there are pictures) puts a
-  two-step row under the title, *Sheets* then *Pick the set*, and a character
-  with no pictures opens on *Sheets*. The step is mounted once and kept with
-  `v-show`, so drawn sheets survive going back and forth; the dialog draws its
-  footer from the step's exposed `footer` (`lead`; `back`, a label and a
-  `run`; `secondary` and `primary`, each with an `enabled` too). The step reads the
-  character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
-  model is listed disabled, the newest MOSS-Image one preselected, and its name
-  rides in the step row as a neutral pill) and the MOSS-Image `txt2img`
-  workflows; *Draw* saves the typed description on a character that had none,
-  then runs the workflow (`runWorkflowCard`, the canvas as `values` at the
-  card's own width/height addresses) and polls each run's outcome and
-  `POST /characters/{id}/sheets/rank` every 2.5 s until every sheet's faces are
-  read, or two minutes after the last run ended: a sheet still unread then (no
-  face model, a deleted picture) can be chosen unscored and polling stops.
-  Drawing waits for the character to load, so a typed description never
-  overwrites a stored one. Each run keeps its place in the grid from the moment
-  it is started, in run order: its sheet lands where it was drawing and nothing
-  moves as others arrive, so a sheet's number is its place; the run on the GPU
-  shows its percent from the Tasks store's `comfyuiRuns`. A draw with a
-  different prompt, workflow or LoRA starts a new pick; *Draw N more* with the
-  same adds to it. Sheets are drawn with `hold` (backend §25.29) and are
-  ticked to keep, several at once; the best holding one is ticked for the
-  user where it sits until they tick or untick one; a broken one says so in
-  its caption. *Use N sheets* cuts the kept ones into pictures. **Every sheet
-  stays where it was drawn, in the Scrapheap**: the ones used, the ones
-  dropped, those of an earlier prompt, everything left when the dialog closes,
-  and a run still drawing then. A sheet can be a nice picture in its own right,
-  so nothing here destroys one; it is restorable until the Scrapheap's
-  retention purges it, and the intro and the footer say so. After a use the step starts again from the
-  form. The magnifier on a sheet (or a double-click, `Z`, or a wheel-up over
-  it) opens the sheet's own file in `ZoomPopout` over the dialog, the dialog
-  persistent meanwhile; its *Keep* / *Drop* control is a `Segmented`, so it
-  keeps one size in both states, and focus goes back to the sheet's
-  magnifier. Kept sheets the ranking names in each other's `different_from`
-  turn the footer lead into a warning (`footer.warn`: icon, `role="status"`)
-  naming the pair; *Use* stays enabled, since with a LoRA several sheets can
-  be one person and the owner decides. *Keep* cuts the ticked sheets, waits (90 s at most)
-  for their pictures' faces, then hands their ids back: the picker reloads, marks them
-  *new*, and offers *All / New only*, which re-ranks the stills from 1 over the
-  new pictures so the slider, coverage and Create all read that one list.
-- **Drawn from a reference picture** (#2679, backend §25.29; design
-  "Reference pinned beside the sheets"). Where the library has a
-  Qwen-Image-Edit card with `reference_inputs > 0`, the step's rail (320px
-  then, 280px otherwise) opens with a *Draw from* `Segmented`: *Text* /
-  *Reference and text*. Without such a card the control is not shown; if an
-  edit card exists that a sheet copy could be made from, the rail offers
-  *Make a sheet workflow from …* (`sheetCopyWorkflow`). The mode defaults to
-  the reference when the character has reference faces. In it the rail holds
-  the chosen picture large, the character's reference faces as a strip to
-  swap with one click, a dashed tile that opens `PicturePicker`, and the
-  likeness warning (the form's own likeness notice is not shown beside it).
-  The form does not change, but each mode has its own workflow list and its
-  own model, so the LoRA field offers that model's LoRAs, and a description
-  is required only in text mode. The workflow check also needs an open
-  picture input and a settable prompt from the pre-flight, and ignores
-  `picture_input_unfilled`, which the draw fills. *Draw* sends
-  `reference: true, layout: "prose"` to the prompt route and the picture as
-  `inputs` on the run, one entry per open picture input (a pinned one keeps
-  its pin); the reference joins what a draw is compared by, so another
-  picture starts a new pick. While sheets are on show the rail keeps the
-  picture they were drawn from under *Drawn from*, in place of the
-  description block; ranking sends it as `reference_picture_ids`; each
-  caption leads with closeness as a bar and its number; the zoom shows the
-  picture beside the sheet (`ZoomPopout`'s `aside` slot). Closeness sorts
-  first, then agreement, and only a sheet that is `close` is kept for the
-  user: when none is, none is ticked and a notice says so. Sheets still keep
-  their run's place in the grid.
+- **Drawing the pictures instead.** *Draw sheets…* in the footer emits
+  `draw-sheets` and closes; App routes it to the character's Sheets screen
+  (§13.7). A character with no pictures goes straight there, since there is
+  nothing to pick. The newest cut draw's pictures (`listSheetDraws`, its
+  `used`) are marked *new* in the ranking, with *All / New only*, which
+  re-ranks the stills from 1 over them so the slider, coverage and Create all
+  read that one list.
 
 #### `TrainLoraDialog.vue` (`io/`, #2119)
 **Outcome choices, numbers derived** (design artifact "Outcome choices, numbers derived"). The Train a LoRA dialog, `AppDialog size="lg"`, mounted in **`App.vue`** and opened by `useTrainingStore.openForScope({type, id, name})` from the toolbar's Train button, its overflow row and the sidebar's *Train LoRA…*. It replaced the toolbar popover `TbTrainPanel`.
@@ -3921,7 +3859,7 @@ keys (Escape closes only the pop-out, arrows step, `Z`, `+`/`-`) and stops them
 there. An `entry` wheel (`{deltaY, deltaMode, fx, fy}`, the cursor as a
 fraction of the thumbnail) is applied once the picture is measured, anchored
 at that point, so a wheel-up over a thumbnail carries on as one zoom gesture:
-the character-sheet pick (`CharacterSheetStep.vue`) opens it that way. The
+the Sheets screen (`views/CharacterSheets.vue`, §13.7) opens it that way. The
 caller restores focus on `close`.
 
 Named follow-ups (recorded, not yet done):
@@ -8429,4 +8367,53 @@ destinations.
 - **Empty.** With no filter or search on, an empty Inbox names its period and the date it
   reaches back to, and offers the narrowest wider period that holds anything
   (`inboxEmptyState`), so a narrow period never hides an older pile.
+
+### 13.7 Character sheets
+
+**People › a character › Sheets** (`/character/:id/sheets`,
+`views/CharacterSheets.vue`, backend §25.29): drawing a character as character
+sheets, a page of the library rather than a step of the *Create a training
+set* dialog (design "Sheets as a screen under the character"). It used to be
+that step, and closing the dialog lost the draw: its runs, ranking and kept
+marks lived only in the component. **Every draw is now stored on the
+character** (`/characters/{id}/sheets/draws`), so leaving the screen loses
+nothing; the runs keep going in ComfyUI, and the screen reads them back.
+
+- **The screen.** Owner sessions only (`useAppNavigation.isSheetsView`, bounced
+  for READ like Insights). Its own 36px toolbar: back, *Sheets*, the character
+  with its draw and sheet counts, and the amber *Use N sheets*. The sheets fill
+  the centre, newest draw on top with its state (*Today 14:02 · drawing 2 of
+  4*) and the draw's run line; every earlier draw is listed under it, smaller
+  and dimmed, still pickable. Each draw has a delete, which forgets the record
+  only: its sheets stay in the Scrapheap, its cut pictures on the character.
+  The draw settings are the screen's own 288px inspector (App's right rail
+  stays empty on this route): the form the step had, plus *Draw N sheets*, or
+  *Draw N more* when the form is what the newest draw was drawn with (its
+  `settings.signature`), which then adds runs to it; anything else starts a
+  new draw on top. Coming back restores the form from the newest draw's
+  `settings`.
+- **Drawing** runs the workflow as the step did (`runWorkflowCard` with
+  `hold`, the canvas as `values`, the reference as `inputs`), then stores the
+  run keys (`createSheetDraw`, or `updateSheetDraw` with `add_run_keys`).
+  While a draw is unfinished the screen re-reads the draws every 2.5 s (the
+  server reads each run's ending into its draw, and also writes it when the
+  run ends with nobody looking) and ranks each draw's unread sheets against
+  what it was drawn from. A draw whose sheets are all read (or given up on, two
+  minutes after its runs ended) is marked `seen`; if nobody kept or dropped one
+  of its sheets here, its best is kept for the user then. A tick on a sheet
+  stores `kept` at once.
+- **Use** cuts every kept sheet not cut yet, draw by draw
+  (`useSheets(..., drawId)`, which records `used` and `used_sheets`), waits
+  for the pictures' faces, then offers *Create a training set* in a notice.
+- **The ways back.** `useSheetDrawsStore` reads `GET /character-sheets/draws`
+  at start and whenever the set of ComfyUI runs in flight changes. The
+  sidebar draws a **Sheets** row first under a character that has a draw, in
+  a child set's shape (it counts among the character's entries and opens with
+  them; on the route the character is opened), lit while its screen is shown,
+  with the newest draw's state under its name: *waiting for the GPU*,
+  *drawing 2 of 4* with the percent and the run line, *4 drawn · pick one*
+  with the attention dot until it is seen, *1 of 4 failed*, or *1 kept · 6
+  pictures filed*. The character's menu has *Draw sheets…*. In Tasks, every
+  running, waiting or finished run whose key belongs to a draw has an *Open
+  sheets* link, always shown.
 

@@ -11,6 +11,9 @@ import App from "../App.vue";
 //   /                                       → All Pictures
 //   /character/:id                          → Character view (id = "UNASSIGNED" | numeric)
 //   /character/:id?ids=1,2,3&mode=union     → Multi-character
+//   /character/:id/sheets                   → The character's sheet draws (People ›
+//                                            Mira › Sheets): draw, keep and cut
+//                                            character sheets. Owner sessions only.
 //   /set/:id                                → Set view (primary set id = numeric)
 //   /set/:id?ids=1,2,3&mode=intersection&base=1  → Multi-set
 //   /project/:id                            → Project view (all pictures)
@@ -83,6 +86,7 @@ import App from "../App.vue";
 const routes = [
   { path: "/", name: "all-pictures", component: App },
   { path: "/character/:id", name: "character", component: App },
+  { path: "/character/:id/sheets", name: "character-sheets", component: App },
   { path: "/set/:id", name: "set", component: App },
   { path: "/project/:id", name: "project", component: App },
   {

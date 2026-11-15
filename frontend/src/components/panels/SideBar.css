@@ -1376,3 +1376,42 @@
 .sidebar-rail-node--open {
   background: var(--hover-wash);
 }
+
+/* A character's Sheets row (People › Mira › Sheets): a child set's shape,
+   with the newest draw's state under its name. While a draw runs, its percent
+   sits at the end and the Tasks panel's run line under the row. */
+.sidebar-sheets-words {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-sidebar-text), var(--opacity-text-secondary));
+}
+
+.sidebar-sheets-row .sidebar-dedup-dot,
+.sidebar-sheets-row .sidebar-list-count {
+  margin-left: auto;
+}
+
+.sidebar-sheets-sub--bad {
+  color: rgb(var(--v-theme-surface-error));
+}
+
+.sidebar-sheets-line {
+  position: absolute;
+  left: calc(var(--tree-row-start, 0px) + var(--tree-spacer));
+  right: var(--space-3);
+  bottom: var(--space-1);
+  height: 2px;
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-sidebar-text), 0.12);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.sidebar-sheets-line span {
+  display: block;
+  height: 100%;
+  background: rgb(var(--v-theme-primary));
+  transition: width var(--dur-3) var(--ease-standard);
+}

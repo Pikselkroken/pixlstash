@@ -5,47 +5,12 @@
     :subtitle="subtitle"
     size="2xl"
     :pad-body="false"
-    :persistent="busy || !!sheetStep?.working || !!sheetStep?.zooming"
+    :persistent="busy"
     @close="close"
     @accept="onAccept"
   >
     <div class="cts-frame">
-    <nav v-if="stepped" class="cts-stp" aria-label="Steps" data-testid="cts-steps">
-      <button
-        type="button"
-        class="cts-stp__s"
-        :class="mode === 'generate' ? 'cts-stp__s--on' : 'cts-stp__s--done'"
-        :aria-current="mode === 'generate' ? 'step' : undefined"
-        :disabled="mode === 'generate' || busy || !!created"
-        @click="mode = 'generate'"
-      >
-        <span class="cts-stp__n"
-          ><v-icon v-if="mode !== 'generate'" size="12">mdi-check</v-icon
-          ><template v-else>1</template></span
-        >Sheets
-      </button>
-      <span class="cts-stp__sep" aria-hidden="true" />
-      <span
-        class="cts-stp__s"
-        :class="{ 'cts-stp__s--on': mode === 'pick' }"
-        :aria-current="mode === 'pick' ? 'step' : undefined"
-      >
-        <span class="cts-stp__n">2</span>Pick the set
-      </span>
-      <span v-if="sheetStep?.loraName" class="cts-stp__lora"
-        ><v-icon size="12">mdi-puzzle-outline</v-icon>with
-        {{ sheetStep.loraName }}</span
-      >
-    </nav>
-    <CharacterSheetStep
-      v-if="stepped && character"
-      v-show="mode === 'generate'"
-      ref="sheetStep"
-      :character="character"
-      :picture-count="data?.stills?.candidates ?? 0"
-      @done="onGenerated"
-    />
-    <div v-show="mode === 'pick'" class="cts-split">
+    <div class="cts-split">
     <div class="cts-pane cts-pane--picks" data-testid="cts-picks">
       <p v-if="loadError" class="cts-notice cts-notice--bad" role="alert">
         <v-icon size="16">mdi-alert-circle-outline</v-icon>
@@ -341,55 +306,7 @@
     </div>
     </div>
 
-    <template v-if="mode === 'generate'" #footer>
-      <span
-        class="cts-lead cts-lead--one"
-        :class="{ 'cts-lead--warn': sheetStep?.footer?.warn }"
-        :title="sheetStep?.footer?.lead"
-        :role="sheetStep?.footer?.warn ? 'status' : undefined"
-        data-testid="cts-generate-lead"
-        ><v-icon v-if="sheetStep?.footer?.warn" size="16"
-          >mdi-alert-outline</v-icon
-        >
-        {{ sheetStep?.footer?.lead }}</span
-      >
-      <p v-if="sheetStep?.error" class="cts-bad" role="alert">
-        {{ sheetStep.error }}
-      </p>
-      <AppButton
-        v-if="sheetStep?.footer?.back"
-        :disabled="!!sheetStep?.working"
-        @click="sheetStep.footer.back.run()"
-      >
-        {{ sheetStep.footer.back.label }}
-      </AppButton>
-      <AppButton
-        key-hint="esc"
-        :disabled="!!sheetStep?.working"
-        data-testid="cts-generate-cancel"
-        @click="leaveGenerate"
-      >
-        {{ hasPictures ? "Back to the picker" : "Cancel" }}
-      </AppButton>
-      <AppButton
-        v-if="sheetStep?.footer?.secondary"
-        :disabled="!sheetStep.footer.secondary.enabled"
-        @click="sheetStep.footer.secondary.run()"
-      >
-        {{ sheetStep.footer.secondary.label }}
-      </AppButton>
-      <AppButton
-        variant="primary"
-        key-hint="enter"
-        :loading="!!sheetStep?.working"
-        :disabled="!sheetStep?.footer?.primary?.enabled"
-        data-testid="cts-generate-primary"
-        @click="sheetStep.footer.primary.run()"
-      >
-        {{ sheetStep?.footer?.primary?.label || "Draw sheets" }}
-      </AppButton>
-    </template>
-    <template v-else #footer>
+    <template #footer>
       <span v-if="created" class="cts-lead" data-testid="cts-created">
         <v-icon size="16" class="cts-ok">mdi-check-circle-outline</v-icon>
         Created <b>{{ created.name }}</b> · {{ created.members }}
@@ -414,11 +331,11 @@
       <template v-else>
         <AppButton
           icon-left="draw"
-          :disabled="busy || !data"
+          :disabled="busy"
           data-testid="cts-generate"
-          @click="startGenerate"
+          @click="drawSheets"
         >
-          {{ hasPictures ? "Generate more…" : "Generate pictures…" }}
+          Draw sheets…
         </AppButton>
         <AppButton key-hint="esc" :disabled="busy" @click="close">
           Cancel
@@ -451,13 +368,16 @@
  * the next pick in the ranking takes its place. "Create" makes an ordinary child set under the
  * character; the user edits it like any other and trains on it.
  *
- * "Generate pictures…" draws the set instead (CharacterSheetStep): character
- * sheets, one chosen and cut into six pictures, which then join this ranking
- * marked new. A character with no pictures opens straight on that step.
+ * "Draw sheets…" goes to the character's Sheets screen
+ * (`/character/:id/sheets`), where character sheets are drawn and the kept
+ * ones cut into six pictures each on the character. Those pictures join this
+ * ranking, the newest draw's marked new. A character with no pictures goes
+ * straight there: there is nothing here to pick from.
  */
 import { computed, nextTick, ref, useId, watch } from "vue";
 import { VIcon, VSwitch } from "vuetify/components";
 
+import { listSheetDraws } from "../../api/characterSheets";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import {
   bulkAddPicturesToSet,
@@ -467,7 +387,6 @@ import {
 import { fetchCharacterSetSuggestion } from "../../api/training";
 import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
-import CharacterSheetStep from "./CharacterSheetStep.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -481,7 +400,7 @@ const props = defineProps({
   returnFocusTo: { type: Object, default: null },
 });
 
-const emit = defineEmits(["close", "created", "train"]);
+const emit = defineEmits(["close", "created", "train", "draw-sheets"]);
 
 const TRACK_MAX = 50;
 const DEFAULT_SIZE = { stills: 15, clips: 5 };
@@ -561,12 +480,7 @@ const loading = ref(false);
 const created = ref(null);
 const createError = ref("");
 let fetchSeq = 0;
-// "generate" draws sheets (step 1), "pick" is the ranking (step 2, or the
-// whole dialog when nothing is generated).
-const mode = ref("pick");
-const stepped = ref(false);
-const sheetStep = ref(null);
-// Pictures made in this dialog, marked new in the ranking.
+// The pictures the newest sheet draw was cut into, marked new in the ranking.
 const generated = ref([]);
 const generatedSet = computed(() => new Set(generated.value));
 const newOnly = ref(false);
@@ -914,7 +828,7 @@ async function load() {
       coverageKey.value = "clips";
     }
     // Nothing to pick from: drawing is the only way to a set.
-    if (!hasPictures.value && !generated.value.length) startGenerate();
+    if (!hasPictures.value) drawSheets();
   } catch (e) {
     if (seq !== fetchSeq) return;
     loadError.value = `Couldn't rank the pictures. ${errorDetail(e) || "Please try again."}`;
@@ -936,11 +850,12 @@ watch(
     coverageKey.value = "stills";
     sizes.value = { ...DEFAULT_SIZE };
     setAside.value = allSetAside();
-    mode.value = "pick";
-    stepped.value = false;
     generated.value = [];
     newOnly.value = false;
-    if (props.character?.id != null) load();
+    if (props.character?.id != null) {
+      load();
+      loadGenerated(props.character.id);
+    }
   },
   { immediate: true },
 );
@@ -1024,20 +939,23 @@ async function create() {
   busy.value = false;
 }
 
-function startGenerate() {
-  stepped.value = true;
-  mode.value = "generate";
+/** The pictures the newest cut sheet draw made, for the "new" marks. */
+async function loadGenerated(characterId) {
+  try {
+    const { draws } = await listSheetDraws(characterId);
+    if (props.character?.id !== characterId) return;
+    generated.value = (draws || []).find((d) => d.used?.length)?.used || [];
+  } catch (e) {
+    console.warn("Couldn't read the character's sheet draws", characterId, e);
+  }
 }
 
-function leaveGenerate() {
-  if (hasPictures.value || generated.value.length) mode.value = "pick";
-  else close();
-}
-
-function onGenerated(ids) {
-  generated.value = [...new Set([...generated.value, ...ids])];
-  mode.value = "pick";
-  load();
+/** Sheets are drawn on the character's Sheets screen, not in this dialog. */
+function drawSheets() {
+  const character = props.character;
+  if (busy.value || !character) return;
+  emit("draw-sheets", { id: character.id, name: character.name });
+  emit("close");
 }
 
 function onNewOnly() {
@@ -1047,11 +965,6 @@ function onNewOnly() {
 }
 
 function onAccept() {
-  if (mode.value === "generate") {
-    const primary = sheetStep.value?.footer?.primary;
-    if (primary?.enabled) primary.run();
-    return;
-  }
   if (created.value) train();
   else create();
 }
@@ -1063,7 +976,7 @@ function train() {
 }
 
 function close() {
-  if (busy.value || sheetStep.value?.working) return;
+  if (busy.value) return;
   emit("close");
   // Opened from a context menu, so Vuetify has no activator to hand focus
   // back to: the character's sidebar row takes it.
@@ -1141,87 +1054,6 @@ function close() {
   flex: 1;
   min-height: 0;
   display: flex;
-}
-
-/* The wizard's steps: a numbered row under the title. Not a DS component yet
-   (the design draws it new); built from the selection tokens. */
-.cts-stp {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-5);
-  border-bottom: 1px solid rgb(var(--v-theme-divider));
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-.cts-stp__s {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0;
-  border: 1px solid transparent;
-  background: none;
-  color: inherit;
-  font: inherit;
-  white-space: nowrap;
-}
-
-button.cts-stp__s:not(:disabled) {
-  cursor: pointer;
-}
-
-.cts-stp__s--on {
-  color: rgb(var(--v-theme-on-surface));
-  font-weight: var(--weight-medium);
-}
-
-.cts-stp__s--done {
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.cts-stp__n {
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  border: 1px solid rgb(var(--v-theme-border));
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-}
-
-.cts-stp__s--on .cts-stp__n {
-  background: var(--active-wash);
-  border-color: var(--active-bar);
-}
-
-.cts-stp__s--done .cts-stp__n {
-  background: rgb(var(--v-theme-primary));
-  border-color: transparent;
-  color: rgb(var(--v-theme-on-primary));
-}
-
-.cts-stp__sep {
-  flex: 1;
-  min-width: 12px;
-  max-width: 40px;
-  height: 1px;
-  background: rgb(var(--v-theme-border));
-}
-
-/* Names the LoRA in use: it identifies, it does not select, so neutral. */
-.cts-stp__lora {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: 20px;
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-pill);
-  background: rgb(var(--v-theme-cancel-button));
-  font-size: var(--text-2xs);
-  color: rgb(var(--v-theme-on-surface));
 }
 
 .cts-newonly {
@@ -1826,25 +1658,6 @@ button.cts-stp__s:not(:disabled) {
   gap: var(--space-2);
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-/* The sheet step's lead stays one line, so the footer keeps its height. */
-.cts-lead--one {
-  display: block;
-  min-width: 0;
-  flex: 1 1 auto;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cts-lead--warn {
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.cts-lead--warn .v-icon {
-  color: rgb(var(--v-theme-surface-warning));
-  vertical-align: -3px;
 }
 
 .cts-lead b {

@@ -30,6 +30,7 @@ import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
 import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
+import { useSheetDrawsStore } from "./stores/useSheetDrawsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useOperationStore } from "./stores/useOperationStore";
 import { DEFAULT_TIMEOUTS, useNoticeStore } from "./stores/useNoticeStore";
@@ -87,6 +88,9 @@ const DuplicateQueue = defineAsyncComponent(
 );
 const ModelShelf = defineAsyncComponent(
   () => import("./components/views/ModelShelf.vue"),
+);
+const CharacterSheets = defineAsyncComponent(
+  () => import("./components/views/CharacterSheets.vue"),
 );
 const LibraryInsights = defineAsyncComponent(
   () => import("./components/views/LibraryInsights.vue"),
@@ -153,6 +157,17 @@ const wsStore = useWsStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
+// Which characters have sheet draws: the sidebar's Sheets rows and the Tasks
+// panel's links back to them. Re-read by the store itself as sheet runs come
+// and go.
+const sheetDraws = useSheetDrawsStore();
+watch(
+  isReadOnly,
+  (readOnly) => {
+    if (!readOnly) sheetDraws.refresh();
+  },
+  { immediate: true },
+);
 const operationStore = useOperationStore();
 const librariesStore = useLibrariesStore();
 const librarySwitchStore = useLibrarySwitchStore();
@@ -243,6 +258,8 @@ const {
   isMovesView,
   isInboxView,
   isWorkflowsView,
+  isSheetsView,
+  handleOpenSheets,
   handleSelectInsights,
   handleSelectMoves,
   handleSelectInbox,
@@ -433,6 +450,7 @@ const tagReviewBackLabel = computed(() => {
   if (isDuplicatesView.value) return "Duplicates";
   if (isMovesView.value) return "Moves";
   if (isInsightsView.value) return "About your library";
+  if (isSheetsView.value) return "Sheets";
   if (isInboxView.value) return "Inbox";
   if (isWorkflowsView.value) return "Workflows";
   if (isModelsView.value) return "Models";
@@ -696,7 +714,8 @@ const isGridView = computed(
     !isModelsView.value &&
     !isInsightsView.value &&
     !isMovesView.value &&
-    !isWorkflowsView.value,
+    !isWorkflowsView.value &&
+    !isSheetsView.value,
 );
 watch(
   () => selectionStore.selectedImageIds,
@@ -1095,6 +1114,15 @@ defineExpose({
                    than pictures in this library, so like the shelf it replaces
                    the grid instead of floating over it, and the grid stays
                    unmounted while it is open. -->
+              <!-- A character's Sheets: a page of the library rather than a
+                   dialog, so leaving it loses nothing (the draws are stored on
+                   the character). It carries its own inspector. -->
+              <CharacterSheets
+                v-else-if="isSheetsView"
+                :key="String(route.params.id)"
+                :character-id="Number(route.params.id)"
+                @create-training-set="handleCreateTrainingSet"
+              />
               <WorkflowsView
                 v-else-if="isWorkflowsView"
                 @open-settings="openSettingsDialog"
@@ -1181,7 +1209,7 @@ defineExpose({
         <WorkflowTab v-else-if="isWorkflowsView" />
         <ModelsRail v-else-if="isModelsView" />
         <WhatsChangedRail v-else-if="whatsChanged.railShown" />
-        <StatsSidebar v-else
+        <StatsSidebar v-else-if="!isSheetsView"
           ref="statsSidebarRef"
           :view-name="activeCategoryLabel"
           :pictures="railPictures"
@@ -1259,6 +1287,7 @@ defineExpose({
       :return-focus-to="trainingSetCharacter?.returnFocusTo ?? null"
       @close="trainingSetCharacter = null"
       @created="sidebarRef?.refreshSidebar?.()"
+      @draw-sheets="(character) => handleOpenSheets(character.id)"
       @train="handleTrainLora"
     />
     <LibrarySwitchOverlay />
