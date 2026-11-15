@@ -22713,7 +22713,6 @@ def test_a_finished_run_is_listed_and_carries_the_offer_to_save_it(saving):
     comfyui_service.record_run_outcome(offered["prompt_id"], "completed")
     assert finished()[offered["run_id"]]["offer"] is True
 
-    # Clear keeps the batch that can still be saved, and forgets the rest.
     # A completed run stays completed: a failure recorded after it does not
     # turn it into a run that made nothing.
     comfyui_service.record_run_outcome(offered["prompt_id"], "failed", message="late")
@@ -22733,13 +22732,18 @@ def test_a_finished_run_is_listed_and_carries_the_offer_to_save_it(saving):
     ]
     assert (refused["status"], refused["made"]) == ("failed", 0)
 
-    # Clear keeps the batch that can still be saved, and forgets the rest.
-    # By identity: the module's other tests leave runs of their own.
+    # Clear forgets every batch, and with the offered one what its workflow
+    # kept from it. By identity: the module's other tests leave runs of their own.
+    assert _changes(saving, saving.manual)["ran"] is not None
     mine = {batch, plain["run_id"], offered["run_id"], refused["id"]}
     r = saving.owner.delete(f"{API}/workflows/runs")
     assert r.status_code == 200, r.text
-    assert r.json()["cleared"] >= 3
-    assert set(finished()) & mine == {offered["run_id"]}
+    assert r.json()["cleared"] >= 4
+    assert set(finished()) & mine == set()
+    assert _changes(saving, saving.manual)["ran"] is None
+
+    (offered,) = run(**SKIP_FIVE)
+    comfyui_service.record_run_outcome(offered["prompt_id"], "completed")
 
     # Another library's dismiss of it clears nothing, nor its set.
     assert run_log.forget(saving.server.hub, offered["run_id"], "another-library") == (
