@@ -1766,10 +1766,12 @@ button.cts-stp__s:not([aria-disabled="true"]) {
   cursor: not-allowed;
 }
 
+/* The whole frame, letterboxed: a square crop cut a full-body pick down to its
+   torso and hid the framing it was picked for. */
 .cts-tile__img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
 }
 
