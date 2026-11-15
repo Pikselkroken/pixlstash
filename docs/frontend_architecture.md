@@ -6917,6 +6917,13 @@ The tab wears the amber attention dot while any AI Toolkit lease is held or
 waiting, read from `useTasksStore().resources`, the poll that already runs; the
 listing itself is still not polled.
 
+**The run's progress is that Tasks row and nothing else.** The row draws the
+lease's `step`/`total` as the same hairline under its name that a ComfyUI run
+draws, with the step and loss in its tooltip; a side pass (`shown_as`) counts
+its own steps, so the line stays empty for it. The trainer's own `plugin_progress`
+events (`plugin: "ai-toolkit"`) are not drawn: `ImageGrid` returns on them before
+its plugin overlay or that overlay's hide timer is touched.
+
 **Train longer** (owner ruling 2026-11-04, "same run"). `io/TrainLongerPopover.vue`
 is a `.tbm` panel (340 px) with two decisions: *From*, an `OptionRows` of the steps
 `GET /training/jobs/{id}/train-longer` offers (newest preselected; only it says
