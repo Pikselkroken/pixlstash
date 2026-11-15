@@ -40,6 +40,15 @@
         {{ step?.footer?.lead }}</span
       >
       <p v-if="step?.error" class="csd-bad" role="alert">{{ step.error }}</p>
+      <!-- Esc and the X keep the draw for later; this drops it. -->
+      <AppButton
+        :disabled="held"
+        tooltip="Stop the sheets still drawing and forget this draw"
+        data-testid="csd-cancel"
+        @click="cancel"
+      >
+        Cancel
+      </AppButton>
       <AppButton
         v-if="step?.footer?.back"
         :disabled="!!step?.working"
@@ -82,7 +91,8 @@
  * views/TrainingSetBuild.vue does.
  *
  * Closing mid-draw keeps the step's `snapshot` per person, so reopening the
- * dialog finds the sheets and the runs still going.
+ * dialog finds the sheets and the runs still going. Cancel instead stops the
+ * runs and forgets the draw.
  */
 import { computed, nextTick, ref } from "vue";
 import { VIcon } from "vuetify/components";
@@ -126,6 +136,15 @@ function close() {
   if (props.character && snapshot) {
     saved.set(props.character.id, { name: props.character.name, snapshot });
   }
+  leave();
+}
+
+/** Stop what is still drawing and forget the draw: reopening starts fresh.
+ * The sheets already drawn stay in the Scrapheap. */
+function cancel() {
+  if (held.value) return;
+  step.value?.stopAll?.();
+  if (props.character) saved.delete(props.character.id);
   leave();
 }
 

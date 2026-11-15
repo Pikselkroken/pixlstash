@@ -1398,6 +1398,17 @@ async function stopSheetRun(run) {
   schedule();
 }
 
+/** Stop every run of this draw still going, and those a new draw set aside
+ * that Tasks still lists; the sheets already drawn stay in the Scrapheap. */
+function stopAll() {
+  const live = new Set(tasks.comfyuiRuns.map((run) => runKey(run)));
+  const keys = new Set([
+    ...waitingRuns.value.map((run) => run.key),
+    ...strayKeys.value.filter((key) => live.has(key)),
+  ]);
+  for (const key of keys) tasks.stopComfyuiRun(key);
+}
+
 async function draw() {
   if (working.value || !canDraw.value) return;
   working.value = true;
@@ -1954,6 +1965,7 @@ defineExpose({
   zooming,
   reloadReferences,
   snapshot,
+  stopAll,
 });
 </script>
 
