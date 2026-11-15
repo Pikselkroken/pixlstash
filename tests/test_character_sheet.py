@@ -140,6 +140,19 @@ def test_build_trigger_and_subject_reach_every_panel():
     assert " her " not in json.dumps(layout)
 
 
+@pytest.mark.parametrize("framing", ["waist_up", "mid_thigh", "knees_up", "full_body"])
+def test_no_build_given_says_none_and_a_given_one_reaches_the_torso(framing):
+    """The build lives in the description: with no separate body nothing
+    stands in for it, since "average build" would contradict "curvy"."""
+    described = sheet_prompt(description="Adult woman, curvy", framing=framing)
+    assert "average build" not in described
+    assert "body shape:" not in described
+    assert "{" not in "".join(i["caption"] for i in json.loads(described)["items"])
+    given = sheet_prompt(description="Adult woman", body="curvy", framing=framing)
+    assert "Her body shape: curvy." in given
+    assert "adult woman, curvy" in given
+
+
 def test_a_reference_prompt_names_the_picture_and_keeps_every_box():
     """#2679: the picture sets the face, so each photo names it; the layout
     the cut relies on does not move."""
@@ -159,7 +172,7 @@ def test_a_reference_prompt_names_the_picture_and_keeps_every_box():
     # No description: the picture alone says who.
     bare = json.loads(sheet_prompt(description="", reference=True))
     assert (
-        "the same woman as in the reference picture, average build"
+        "the same woman as in the reference picture, wearing"
         in (bare["items"][0]["caption"])
     )
 

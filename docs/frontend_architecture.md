@@ -1710,7 +1710,9 @@ Escape and Enter do nothing here: cancelling deletes a set.
   description takes the height the form leaves. *Draw a* follows the
   description (`subjectFromDescription`: "man", "he", "his" against "woman",
   "she", "her") until a toggle is picked by hand, as the framing follows its
-  suggestion. The step reads the
+  suggestion. There is no Body field: the build belongs in the description,
+  and a build saved while there was one has its body text joined to the
+  description when it opens. The step reads the
   character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
   model is listed disabled, the newest MOSS-Image one preselected, and its name
   rides in the step row as a neutral pill) and the MOSS-Image `txt2img`

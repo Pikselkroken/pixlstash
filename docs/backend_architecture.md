@@ -12952,6 +12952,11 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
     faces of the pictures the sheets were drawn from (at most 4, every face of
     each, an id with no faces ignored) instead of the character's reference
     faces: a picked picture need not be one of those.
+- **The build is in the description.** `body` is still taken, said after the
+  description and as a "body shape" sentence on the body photos' torso, but
+  only when given: nothing stands in for it (no "average build"), since a
+  default would contradict a build the description states. The Sheets step
+  no longer sends it.
 - The prompt route is pure; the other two are a `*_in_session` read or write
   behind a thin vault wrapper in `services/character_sheet.py` (§10.1).
 - The character's reference faces that ranking and the step's reference strip

@@ -89,21 +89,10 @@
             v-model="form.description"
             label="Description"
             :rows="2"
-            placeholder="Adult, hair, eyes, anything that makes the face theirs"
+            placeholder="Adult woman, dark hair in a low bun, brown eyes, freckles, slim build"
             data-testid="cs-description"
           />
           <span class="cs-hint">{{ descriptionHint }}</span>
-        </div>
-        <div class="cs-fld">
-          <AppInput
-            v-model="form.body"
-            label="Body"
-            placeholder="slim build · curvy with full hips · tall and athletic"
-          />
-          <span class="cs-hint"
-            >Goes into every photo, the passport photos too: a different build
-            draws a different face. Empty is an average build.</span
-          >
         </div>
         <div class="cs-grid2">
           <AppInput
@@ -636,7 +625,6 @@ const name = computed(() => props.character?.name || "");
 const phase = ref("describe"); // describe | drawing | pick | filing
 const form = reactive({
   description: "",
-  body: "",
   top: "",
   trousers: "",
   shoes: "",
@@ -847,7 +835,7 @@ const framingHint = computed(() => {
     ? "Suggested: full body. The LoRA holds the face, so the photos can show the whole body."
     : "Suggested: mid-thigh, the framing that held its layout best. With no LoRA the sheet alone carries the face; waist-up gives the faces the most pixels.";
   const height =
-    form.framing !== "full_body" && HEIGHT_WORDS.test(form.body)
+    form.framing !== "full_body" && HEIGHT_WORDS.test(form.description)
       ? " This framing won't show height."
       : "";
   return reason + height;
@@ -863,10 +851,12 @@ const descriptionHint = computed(() => {
     const from = savedDescription.value ? `From ${name.value}. ` : "";
     return `${from}In this mode the picture sets the face; these words are sent with it.`;
   }
+  // The build used to be a field of its own; it belongs in the words now.
+  const build = " Say the build too: it is in every photo, and a different build draws a different face.";
   if (savedDescription.value) {
-    return `From ${name.value}. Changes here apply to these sheets only.`;
+    return `From ${name.value}. Changes here apply to these sheets only.${build}`;
   }
-  return `${name.value} has no description yet. This one is saved as theirs when the first sheets are drawn.`;
+  return `${name.value} has no description yet. This one is saved as theirs when the first sheets are drawn.${build}`;
 });
 
 const likenessNotice = computed(() => {
@@ -1290,7 +1280,6 @@ async function draw() {
     }
     const sheet = await buildSheetPrompt({
       description,
-      body: form.body,
       top: form.top,
       trousers: form.trousers,
       shoes: form.shoes,
@@ -1629,7 +1618,14 @@ function restoreState(saved) {
   if (!saved) return;
   framingTouched.value = !!saved.framing_touched;
   subjectTouched.value = !!saved.subject_touched;
-  Object.assign(form, saved.form || {});
+  // A build saved when the build had a field of its own joins the description.
+  const { body = "", ...fields } = saved.form || {};
+  Object.assign(form, fields);
+  if (body.trim()) {
+    form.description = [form.description.trim(), body.trim()]
+      .filter(Boolean)
+      .join(", ");
+  }
   runs.value = (saved.runs || []).map((run) => ({
     key: run.key,
     status: run.status,

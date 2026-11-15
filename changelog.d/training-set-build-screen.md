@@ -7,4 +7,7 @@
 - Fixed: closing the training set dialog lost the character sheets being
   drawn, with no way back to them.
 - The sheet form is more compact: the sheet workflow is chosen in the toolbar,
-  and only workflows that can actually draw a sheet are offered.
+  and only workflows that can actually draw a sheet are offered. Body is no
+  longer a separate field: describe the build in the description, and the
+  sheets no longer add "average build" against it. *Draw a* follows the
+  description.

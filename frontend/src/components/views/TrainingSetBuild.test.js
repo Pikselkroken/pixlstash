@@ -1754,6 +1754,32 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     wrapper.unmount();
   });
 
+  it("folds a build saved with a body into the description, and sends no body", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman" });
+    const wrapper = mountDialog({
+      v: 1,
+      stage: "generate",
+      stepped: true,
+      sheets: { phase: "describe", form: { description: "Adult woman", body: "curvy" } },
+    });
+    await flushPromises();
+    const text = wrapper.find('[data-testid="cs-description"] textarea');
+    expect(text.element.value).toBe("Adult woman, curvy");
+    // No Body field ("Body photos" is the framing, not a field).
+    expect(wrapper.text()).not.toMatch(/Body(?! photos)/);
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    const sent = gen.buildSheetPrompt.mock.calls[0][0];
+    expect(sent.description).toBe("Adult woman, curvy");
+    expect(sent).not.toHaveProperty("body");
+    await vi.advanceTimersByTimeAsync(700);
+    expect(lastBuild().sheets.form).not.toHaveProperty("body");
+    wrapper.unmount();
+  });
+
   it("stores a cut sheet as used before its faces are read", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
