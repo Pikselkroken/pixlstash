@@ -1670,6 +1670,43 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     expect(lastBuild().picker.sizes.stills).toBe(20);
   });
 
+  it("waits for every save on its way, not only the newest, before finishing", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    api.bulkAddPicturesToSet.mockResolvedValue({ added: 20 });
+    const order = [];
+    const lands = [];
+    api.patchPictureSet.mockImplementation((_id, body) => {
+      if (body.building === null) {
+        order.push("finish");
+        return Promise.resolve({ status: "success" });
+      }
+      const n = lands.length + 1;
+      order.push(`save ${n} sent`);
+      return new Promise((resolve) => {
+        lands.push(() => {
+          order.push(`save ${n} landed`);
+          resolve({ status: "success" });
+        });
+      });
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    // Two saves on the wire at once: the older one is still out.
+    await wrapper.find('[data-testid="cts-slider-stills"]').setValue("20");
+    await vi.advanceTimersByTimeAsync(700);
+    await wrapper.find('[data-testid="cts-slider-stills"]').setValue("22");
+    await vi.advanceTimersByTimeAsync(700);
+    expect(order).toEqual(["save 1 sent", "save 2 sent"]);
+    await wrapper.find('[data-testid="cts-create"]').trigger("click");
+    lands[1]();
+    await flushPromises();
+    expect(order).not.toContain("finish");
+    lands[0]();
+    await flushPromises();
+    expect(order.at(-1)).toBe("finish");
+    wrapper.unmount();
+  });
+
   it("stores a cut sheet as used before its faces are read", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

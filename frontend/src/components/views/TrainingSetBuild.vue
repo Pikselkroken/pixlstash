@@ -1068,9 +1068,9 @@ let saveTimer = null;
 // Once the set is finished or deleted, nothing writes a build to it again.
 let over = false;
 
-// The save on its way to the server, if one is: Create and Cancel wait for
-// it, so it cannot land after the set is finished or deleted.
-let saving = null;
+// The saves on their way to the server: Create and Cancel wait for every one,
+// so none can land after the set is finished or deleted.
+const saving = new Set();
 
 async function save() {
   clearTimeout(saveTimer);
@@ -1088,17 +1088,20 @@ async function save() {
       console.warn("Couldn't save the training set's build", props.set.id, e);
     }
   })();
-  saving = run;
-  await run;
-  if (saving === run) saving = null;
+  saving.add(run);
+  try {
+    await run;
+  } finally {
+    saving.delete(run);
+  }
 }
 
-/** Stop saving: no timer left, and the save in flight, if any, landed. */
+/** Stop saving: no timer left, and every save in flight landed. */
 async function stopSaving() {
   over = true;
   clearTimeout(saveTimer);
   saveTimer = null;
-  await saving;
+  await Promise.all([...saving]);
 }
 
 watch(
