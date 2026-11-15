@@ -1597,14 +1597,72 @@ Load-bearing behaviours:
 - **Pictures are of** (the left column, under *Results go to*) says who the run's pictures are of, as a list (`ofRows`). It fills itself with everyone whose LoRA the run loads: `loraPeople` reads the form the way the server's `_lora_people` reads the graph, the people the shelf attaches to each LoRA row (`attachments` of `adapters` and `unknownLoras`, hidden rows included, plus the person a picked row was added for), less a row taken off or at strength zero; each is a row saying *by their LoRA*. The × on such a row takes the link off and leaves the LoRA running (`ofRemoved`): the row stays, struck through, saying *LoRA still runs*, with Undo, for a LoRA used for a look. **Add someone** (an `AppSelect` of everyone not listed, with typeahead) adds a row saying *linked only*, which loads nothing (`ofAdded`); its × just removes it. An empty list is a *No one* row. With two or more people the note says each face goes to whichever of them it looks most like, which the server does by likeness. Every row not struck through is sent as `character_ids`, and the server takes that list over what the LoRAs say, so the column says what will happen, a dead loader no output reads included. The one exception is a run with no LoRA person and nobody added: the field is left out, and the server reads the graph itself, so a LoRA the form could not name (a filename the shelf resolves by digest, or attachments still loading) still links its person. Offered on every kind of run, and absent in a library with no people. Neither list is remembered between popups, unlike the set: a wrong person on a later run's pictures is worse than one more pick. It is not `destination.character_id`, which files into a person's reference pictures and names no face.
 - **Save as recipe** opens `io/SaveRecipeDialog.vue` from the footer (F6, #1408; F5 shipped it as an inline name field, which that step replaced). It `POST /recipes` with the prompt, the LoRAs and the edits as `overrides`, addressed `"<slot_label>/<input_name>"` — the form `POST /workflows/run` unpacks back into `values` when that recipe is run. Since #1480 the button reads an inert **Saved** once one of the card's saved recipes would be *duplicated* by this form (`wouldDuplicate`, not `keepsTheSameLook` — an edited parameter is a variation, not a duplicate), and a typed name already on the workflow offers **Replace** instead of a second row with the same name.
 
-#### `CreateTrainingSetDialog.vue` (`io/`)
+#### `TrainingSetBuild.vue` (`views/`): a training set being built
 
-The character sidebar menu's *Create a training set…*, `AppDialog size="2xl"`
-with a flush body split in two: the picks on the left, a 410px coverage column
-on the right that stays in view and is laid out to fit without scrolling
-(the frame is 652px, less on a short window; two gap lines still fit). Mounted in **`App.vue`**, opened by the
-sidebar's `create-training-set` event (the character's id, name, projects and
-the row element to hand focus back to on close).
+The character sidebar menu's *Create a training set…* makes the set at once
+(`App.handleCreateTrainingSet`: `POST /picture_sets` under the character, with
+its projects, the name `utils/trainingSetBuild.freeTrainingSetName` gives,
+"<name> training set" and numbered when taken, and `building: {v: 1, stage:
+"pick"}`) and opens it. **A set whose row carries `building` is still being
+built: its screen is this, not its grid.** App renders it in the centre
+column's view chain just before `ImageGrid` (`buildingSet`: the selected set,
+alone, with `building`, and the person it is under), keyed by the set, with
+the stats rail hidden (`v-show`) and the F1 button lifted over its footer. It
+was the dialog of the same name and is laid out the way that dialog was
+(design "Training set as a page in steps"): a toolbar with the set's name,
+"being built · under <person>", the two-step strip (*Sheets*, *Pick the set*)
+and, on the Sheets step, the **sheet workflow** select; the body split in two,
+the picks on the left and a 410px coverage column on the right; and the
+dialog's footer kept whole as a 52px bar (`tsb-foot`), a departure from
+"actions in the toolbar" the design chose so the footer moves over unchanged.
+Escape and Enter do nothing here: cancelling deletes a set.
+
+- **The build is stored on the set** (`PictureSet.building`, backend
+  `routes/picture_sets.py`). The screen reads `set.building` once, on mount,
+  and writes `snapshot` back with `PATCH /picture_sets/{id}` 600 ms after the
+  last change, and at once on unmount: `stage` and `stepped`, the picker's
+  choices (`picker`: floors, varieties, switches, sizes, the picks left out,
+  the pictures made here, *New only*, the coverage tab), `line` (`picked` of
+  `passing`, for the sidebar), the Sheets step's own `snapshot` (`sheets`: the
+  form, mode, workflow, LoRA and strength, reference, runs with their
+  outcomes, the sheet order, the kept marks, what the sheets were drawn with,
+  and `run_history` / `drawn_ids`, which nothing clears), and `run_keys`, the
+  runs still going: the ones on show and `stray_run_keys`, those a new draw
+  or a cut started over from while they still drew. The ranking is not
+  stored: it is read again. Saves are whole-object, last writer wins (two
+  tabs on one build overwrite each other). Create stops saving before it
+  fills the set, so no save lands after `building: null`. Each save
+  emits `changed`, and App invalidates the sets list, which the sidebar row
+  reads. **Leaving the screen loses nothing and stops nothing**: any other
+  row, Back or a reload unmounts it; the runs go on, and the set's row brings
+  the screen back as it was. **A cut is stored as done before its faces are
+  read**: from the moment `useSheets` answers, the step emits `cut` with the
+  new ids (the picker stores them as new) and its snapshot stores no runs, no
+  sheets and no kept marks, so a screen reopened mid-wait never offers the
+  cut again.
+- **Create set of N** bulk-adds the picks to the set and then PATCHes
+  `building: null`; the set is an ordinary child set of the person from then
+  on, App shows its grid, and a notice offers *Train a LoRA on it*
+  (`handleTrainLora`). A failed add says so and leaves the set and its build
+  as they were. **Cancel set** asks once (`useConfirm`, naming the sheet runs
+  it stops) and deletes the set: the backend stops the runs `run_keys` names
+  (backend `cancel_runs`), the drawn sheets stay in the Scrapheap and pictures
+  already cut stay on the person; App goes to the person.
+- **The sidebar row** (`SideBar.setBuildLine`, `utils/trainingSetBuild.buildLine`)
+  is the ordinary set row with a sub-line in place of the count while the set
+  is built: *not drawn yet*, *drawing 2 of 4* with the drawing run's percent
+  in the count's place (from the Tasks store's `comfyuiRuns`), *4 drawn · keep
+  one*, *1 of 4 failed* in the error hue, *picking · 40 of 52*. Its menu's
+  delete reads *Delete set…* with *stops N runs*, and the confirmation says so;
+  *Lock set* is disabled, since a locked set could neither save its build nor
+  be cancelled. A set whose person was deleted (lifted to the top level) has
+  no build screen, which needs the person: its row shows its count and its
+  grid opens.
+- **Tasks** (`TasksPanel`, `utils/trainingSetBuild.setOfSheetRun`): every
+  Character sheet row, running or finished, carries an always-shown *Open set*
+  link to the set it is building, found by run key (running) or by the sheets
+  the batch drew (finished, which names no run ids). A finished set's runs no
+  longer link: its build is gone.
 
 - **One request per filter state.** `fetchCharacterSetSuggestion` on open and on
   every change under *Choosing*: two floor sliders (minimum likeness 0-100,
@@ -1634,17 +1692,27 @@ the row element to hand focus back to on close).
   two expressions has room for its three chips. A short label says so on its
   own bar (*N short*), and nothing is added under the bars. A label with
   `available` 0 has its bar drawn empty, saying *not in the library*.
-- **Create** posts the set with `parent_character_id` and the character's
-  projects, then bulk-adds the picks; if the add fails it deletes the empty set
-  and says so. After it, *Train a LoRA on it* emits `train`, which App routes
-  to `handleTrainLora` on the new set.
 - **Drawing the pictures instead** (`CharacterSheetStep.vue`, backend §25.29).
   *Generate pictures…* (*Generate more…* once there are pictures) puts a
   two-step row under the title, *Sheets* then *Pick the set*, and a character
   with no pictures opens on *Sheets*. The step is mounted once and kept with
   `v-show`, so drawn sheets survive going back and forth; the dialog draws its
   footer from the step's exposed `footer` (`lead`; `back`, a label and a
-  `run`; `secondary` and `primary`, each with an `enabled` too). The step reads the
+  `run`; `secondary` and `primary`, each with an `enabled` too), and the
+  toolbar's workflow select from its `workflowId` and `workflowOptions`.
+  **Only workflows that can draw a sheet are offered**: on load the step
+  pre-flights every candidate card of both modes (`checkCards`), and one with
+  no size to set, one that cannot run, or (from a reference) one with no
+  picture input or no settable prompt is left out; with none left the form
+  says why, naming the first one's problem. The four draw choices (*Body
+  photos*, *Sheets to draw*, *Sheet size*, *Draw a*) are `Segmented` toggles
+  side by side, wrapping only on a narrow window, with one line of hints; the
+  description takes the height the form leaves. *Draw a* follows the
+  description (`subjectFromDescription`: "man", "he", "his" against "woman",
+  "she", "her") until a toggle is picked by hand, as the framing follows its
+  suggestion. There is no Body field: the build belongs in the description,
+  and a build saved while there was one has its body text joined to the
+  description when it opens. The step reads the
   character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
   model is listed disabled, the newest MOSS-Image one preselected, and its name
   rides in the step row as a neutral pill) and the MOSS-Image or Krea 2 `txt2img`
@@ -1665,8 +1733,8 @@ the row element to hand focus back to on close).
   user where it sits until they tick or untick one; a broken one says so in
   its caption. *Use N sheets* cuts the kept ones into pictures. **Every sheet
   stays where it was drawn, in the Scrapheap**: the ones used, the ones
-  dropped, those of an earlier prompt, everything left when the dialog closes,
-  and a run still drawing then. A sheet can be a nice picture in its own right,
+  dropped, those of an earlier prompt, and everything left when the set is
+  cancelled or deleted. A sheet can be a nice picture in its own right,
   so nothing here destroys one; it is restorable until the Scrapheap's
   retention purges it, and the intro and the footer say so. After a use the step starts again from the
   form. The magnifier on a sheet (or a double-click, `Z`, or a wheel-up over
@@ -1691,7 +1759,10 @@ the row element to hand focus back to on close).
   then, 280px otherwise) opens with a *Draw from* `Segmented`: *Text* /
   *Reference and text*. Without such a card the control is not shown; if an
   edit card exists that a sheet copy could be made from, the rail offers
-  *Make a sheet workflow from …* (`sheetCopyWorkflow`). The mode defaults to
+  *Make a sheet workflow from …* (`sheetCopyWorkflow`). While no reference
+  card passes its pre-flight and one fails only for want of a size of its own
+  (an edit workflow drawing at its picture's size, `sizeless`), the problem
+  notice offers *Make a sheet copy that can* for it (#2700). The mode defaults to
   the reference when the character has reference faces. In it the rail holds
   the chosen picture large, the character's reference faces as a strip to
   swap with one click, a dashed tile that opens `PicturePicker`, and the

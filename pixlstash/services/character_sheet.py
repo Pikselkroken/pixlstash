@@ -299,8 +299,12 @@ def sheet_prompt(
     names the person in the reference picture ahead of the description: the
     picture sets the face, the words the build and the clothes.
 
-    Every panel's caption carries the whole character, the body included: a
+    Every panel's caption carries the whole character, the build included: a
     different build draws a different face, so the build is part of who it is.
+    The build is usually in the description; *body* is said on its own as
+    well, and on the torso of the body photos ("body shape"), only when given.
+    Without it nothing stands in for it: an "average build" default would
+    contradict a build the description states.
     Trousers are always named (left out, MOSS improvises bare legs); shoes only
     at full body, where they belong, since naming them pulls a cropped framing
     to full length. *trigger* is a character LoRA's trigger word, put first.
@@ -308,7 +312,7 @@ def sheet_prompt(
     """
     scale = SIZES[size][0] / SHEET_WIDTH
     p, cap_p = _PRONOUN[subject]
-    body = _phrase(body) or "average build"
+    body = _phrase(body)
     top = _phrase(top) or "a plain crew-neck sweater"
     trousers = _phrase(trousers) or "dark straight jeans"
     shoes = _phrase(shoes) if framing == "full_body" else ""
@@ -319,7 +323,9 @@ def sheet_prompt(
         # ponytail: provisional wording, no probe has measured it (#2679).
         same = f"the same {subject} as in the reference picture"
         described = f"{same}, {described}" if described else same
-    who = f"{lead}{described or f'an adult {subject}'}, {body}"
+    who = f"{lead}{described or f'an adult {subject}'}"
+    if body:
+        who = f"{who}, {body}"
     character = f"{who}, wearing {full_outfit}"
     # A passport photo shows only the top; at full body the trousers and shoes
     # would pull those panels to full length too.
@@ -328,6 +334,8 @@ def sheet_prompt(
     )
 
     def fill(text: str) -> str:
+        if not body:
+            text = text.replace(" {P} body shape: {body}.", "")
         return text.format(
             p=p, P=cap_p, subject=subject, body=body, trousers=trousers, top=top
         )
