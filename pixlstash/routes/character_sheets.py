@@ -53,7 +53,10 @@ class SheetPromptRequest(BaseModel):
     layout: character_sheet.Layout = Field(
         "moss",
         description="`moss` is MOSS-Image's layout JSON; `prose` is the same "
-        "sheet as one sentence, for a model that takes no layout.",
+        "sheet as one sentence, for a model that takes no layout; `regions` is "
+        "the layout JSON with its canvas size and captions that stand alone, "
+        "for a sheet workflow made from another text-to-image one "
+        "(ComfyUI-PixlStash's Layout Text Encode).",
     )
 
 

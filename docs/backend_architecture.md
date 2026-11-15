@@ -12894,6 +12894,26 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   caption alone; no probe has measured how their sheets hold the grid or cut. Every panel's caption carries the whole character,
   build included (a different build draws a different face). Trousers are
   always named, shoes only at full body. A LoRA's first trigger word leads.
+- **Another text-to-image model, laid out as MOSS lays it out.** `sheet-copy` of a
+  text-to-image workflow (one that reads no picture) stores a copy whose one
+  `CLIPTextEncode` prompt becomes ComfyUI-PixlStash's
+  `PixlStashLayoutTextEncode` (`workflow_identity.SHEET_LAYOUT_ENCODER`), its
+  `clip` and `text` wiring kept so the run's prompt lands where it did, and
+  the canvas set to the large sheet's literal 5:3 size (a run sets its own;
+  on another shape the regions would stretch). That node reads the layout
+  prompt as regional conditioning: the summary over the whole canvas, each
+  item's caption over its own box (a `percentage` area, ComfyUI's
+  `ConditioningSetAreaPercentage` shape), so the photos should land where
+  `split_sheet` cuts whatever the model. Such a graph's card says `sheet_layout`
+  (read from a manual workflow's graph and cached per version beside
+  `reference_inputs`), and the step sends it `layout: "regions"`: the MOSS
+  JSON plus `canvas: [width, height]` (centred pixel boxes need it), each
+  caption without its "Panel n:" and every part's led by the character, since
+  it is encoded alone. Refused (422): a sampler not starting from an empty
+  latent, other than one prompt, a prompt node the negative shares, an
+  encoder with fields of its own (SDXL's `CLIPTextEncodeSDXL`), or a graph
+  that already draws sheets. No probe has
+  measured these sheets yet; `region_strength` (1.0) is the knob.
 - **Ranking** (`POST /characters/{id}/sheets/rank`) reads the faces face
   extraction stored on each sheet: `agreement` is their mean pairwise cosine
   similarity, `closeness` the mean similarity to the character's reference

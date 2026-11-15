@@ -789,6 +789,15 @@ class WorkflowCard(BaseModel):
             "for a workflow grouped from pictures."
         ),
     )
+    sheet_layout: bool = Field(
+        False,
+        description=(
+            "Whether the graph encodes its prompt with ComfyUI-PixlStash's "
+            "Layout Text Encode, so it draws a character sheet's layout prompt "
+            "as regions on any model: what `sheet-copy` makes of a "
+            "text-to-image workflow. A stored workflow's own graph only."
+        ),
+    )
     type_label: str | None = Field(
         None,
         description=(
@@ -4276,6 +4285,7 @@ def _entry(figure, recipe=None, names=None) -> WorkflowCard:
         type=figure.card.workflow_type,
         type_label=_TYPE_LABELS.get(figure.card.workflow_type),
         reference_inputs=figure.card.reference_inputs,
+        sheet_layout=figure.card.sheet_layout,
         imported=figure.card.imported,
         manual=figure.card.manual,
         from_name=figure.card.from_name,
@@ -10549,7 +10559,10 @@ def create_router(server) -> APIRouter:
             "Store a new manual workflow made from this image-edit workflow "
             "that draws on a canvas of its own size instead of its picture's, "
             "so the picture is a reference only: what a character sheet drawn "
-            "from a reference picture runs. The original is not changed."
+            "from a reference picture runs. Made from a text-to-image "
+            "workflow, the copy encodes its prompt with ComfyUI-PixlStash's "
+            "Layout Text Encode, which draws a sheet's layout prompt as "
+            "regions on any model. The original is not changed."
         ),
         response_model=WorkflowFile,
         status_code=201,

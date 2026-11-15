@@ -16498,6 +16498,61 @@ def test_a_sheet_copy_draws_on_its_own_canvas_and_says_it_takes_a_reference(i2i)
     assert owner.get(f"{API}/workflows/{RUN_WF}/graph").json() == graph_before
 
 
+def test_a_sheet_copy_of_a_text_to_image_workflow_reads_its_prompt_as_a_layout(i2i):
+    """The copy encodes its prompt with Layout Text Encode, and its card says
+    so: what the Sheets step lists for drawing sheets on any model."""
+    i2i.graph = {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "realvisxl.safetensors"},
+        },
+        "2": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"clip": ["1", 1], "text": "a portrait"},
+        },
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "steps": 20,
+                "cfg": 7.0,
+                "seed": 1,
+                "model": ["1", 0],
+                "positive": ["2", 0],
+                "latent_image": ["6", 0],
+            },
+        },
+        "6": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
+        },
+        "7": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["3", 0], "vae": ["1", 2]},
+        },
+        "4": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": "out", "images": ["7", 0]},
+        },
+    }
+    owner = i2i.owner
+    assert _by_key(_cards(owner))[RUN_WF]["sheet_layout"] is False
+    r = owner.post(f"{API}/workflows/{RUN_WF}/sheet-copy")
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"].endswith(" (sheet)")
+    written = _written(i2i, body)
+    assert written["2"]["class_type"] == "PixlStashLayoutTextEncode"
+    assert written["2"]["inputs"]["text"] == "a portrait"
+    card = _by_key(_cards(owner, "?include_one_offs=true"))[body["workflow_id"]]
+    assert (card["type"], card["sheet_layout"], card["reference_inputs"]) == (
+        "txt2img",
+        True,
+        0,
+    )
+    detail = owner.get(f"{API}/workflows/{body['workflow_id']}").json()["card"]
+    assert {"width", "height"} <= {d["input_name"] for d in detail["defaults"]}
+
+
 def test_a_sheet_copy_of_a_plain_img2img_workflow_is_refused(i2i):
     """422 with the reason, and nothing is stored."""
     i2i.graph = _full_i2i_graph()

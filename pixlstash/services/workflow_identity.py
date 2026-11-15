@@ -1392,6 +1392,15 @@ _REFERENCE_INPUT_RE = re.compile(
     r"^ReferenceLatent$|^TextEncode.*ImageEdit|^TextEncodeQwenImage21$"
 )
 
+# The ComfyUI-PixlStash encoder that reads a character sheet's layout prompt
+# as regions, so a model other than MOSS-Image draws the sheet's grid.
+SHEET_LAYOUT_ENCODER = "PixlStashLayoutTextEncode"
+
+
+def draws_sheet_layout(nodes: dict[str, ReducedNode]) -> bool:
+    """Whether the graph encodes its prompt with :data:`SHEET_LAYOUT_ENCODER`."""
+    return any(node.class_type == SHEET_LAYOUT_ENCODER for node in nodes.values())
+
 
 def reference_input_count(nodes: dict[str, ReducedNode]) -> int:
     """How many pictures the graph reads as a reference rather than as its canvas.
