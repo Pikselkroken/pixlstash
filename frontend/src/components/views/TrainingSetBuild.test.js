@@ -1961,6 +1961,12 @@ describe("TrainingSetBuild: generating the pictures", () => {
     expect(gen.sheetCopyWorkflow).toHaveBeenCalledWith(KLEIN_SHEET.id);
     // The copy is chosen in its place, and it can draw.
     expect(gen.getWorkflowCard).toHaveBeenCalledWith(copy.id);
+    expect(
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === "Sheet workflow")
+        .props("modelValue"),
+    ).toBe(copy.id);
     expect(wrapper.find('[data-testid="cs-workflow-problem"]').exists()).toBe(false);
     wrapper.unmount();
   });

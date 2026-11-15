@@ -702,9 +702,9 @@ const RECHECK_MS = 15_000;
 // answered their check: nothing is known about any of them.
 const COMFYUI_DOWN = {
   comfyui_unreachable:
-    "ComfyUI isn't answering, so no sheet can be drawn. Start ComfyUI: the sheet workflows are checked again by themselves within a minute.",
+    "ComfyUI isn't answering, so no sheet can be drawn. Start ComfyUI: the sheet workflows are checked again by themselves once it answers.",
   comfyui_not_configured:
-    "PixlStash has no ComfyUI to draw sheets with. Add one in Settings.",
+    "PixlStash has no ComfyUI address to draw sheets with. Add one in Settings, then open this again.",
 };
 // Panels are filed before their faces are read; the picker ranks by face, so
 // it waits for them, but not forever: a slow queue still hands over.
@@ -773,6 +773,8 @@ const loaded = ref(false);
 const gaveUpOnFaces = ref(false);
 let timer = null;
 let recheckTimer = null;
+// Bumped by each `checkCards`: an answer from an earlier one is dropped.
+let checkRun = 0;
 let ticking = false;
 let runsEndedAt = 0;
 let alive = true;
@@ -1315,6 +1317,7 @@ function firstUsable() {
  * (checked first) offers its workflows before the other mode is done. */
 async function checkCards() {
   clearTimeout(recheckTimer);
+  const run = ++checkRun;
   const first = fromReference.value;
   const all = [
     ...workflows.value.map((card) => [card, false]),
@@ -1323,37 +1326,42 @@ async function checkCards() {
   const results = await Promise.all(
     all.map(async ([card, ref]) => {
       const result = await checkCard(card, ref);
-      if (alive) {
+      if (alive && run === checkRun) {
         checks.value = { ...checks.value, [card.id]: result };
         if (!workflowId.value) workflowId.value = firstUsable();
       }
       return result;
     }),
   );
-  if (!alive) return;
+  if (!alive || run !== checkRun) return;
   checksDone.value = true;
   if (!usableCards.value.some((card) => card.id === workflowId.value)) {
     workflowId.value = usableCards.value[0]?.id || "";
   }
-  if (results.some((result) => result.down)) recheckWhenComfyuiAnswers(all[0][0]);
+  // Not configured is fixed in Settings and said so; only a ComfyUI that may
+  // yet start is waited for.
+  if (results.some((result) => result.down === "comfyui_unreachable")) {
+    recheckWhenComfyuiAnswers(all[0][0]);
+  }
 }
 
 /** Ask after one card until ComfyUI answers, then check them all again. */
 function recheckWhenComfyuiAnswers(card) {
+  const run = checkRun;
   recheckTimer = setTimeout(async () => {
     try {
       const check = await preflightWorkflowRun(
         { workflow_id: card.id, count: 1 },
         { cached: true },
       );
-      if (!alive) return;
+      if (!alive || run !== checkRun) return;
       if (!comfyuiDown(check?.groups)) {
         await checkCards();
         return;
       }
     } catch (e) {
       console.warn("Couldn't ask whether ComfyUI answers yet", card.id, e);
-      if (!alive) return;
+      if (!alive || run !== checkRun) return;
     }
     recheckWhenComfyuiAnswers(card);
   }, RECHECK_MS);
