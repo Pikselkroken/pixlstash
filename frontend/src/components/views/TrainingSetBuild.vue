@@ -1109,9 +1109,10 @@ watch(
   },
 );
 
-// Leaving the screen saves what was not saved yet; the draw goes on.
+// Leaving the screen saves what was not saved yet, a failed save included;
+// the draw goes on. save() does nothing when nothing changed or the set is over.
 onBeforeUnmount(() => {
-  if (saveTimer) save();
+  save();
 });
 
 function toggle(key, on) {

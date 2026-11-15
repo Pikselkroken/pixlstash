@@ -1643,6 +1643,20 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     wrapper.unmount();
   });
 
+  it("saves on leaving after a save failed, though nothing was pending", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    api.patchPictureSet.mockRejectedValueOnce(new Error("offline"));
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cts-slider-stills"]').setValue("20");
+    await vi.advanceTimersByTimeAsync(700);
+    expect(api.patchPictureSet).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+    await flushPromises();
+    expect(api.patchPictureSet).toHaveBeenCalledTimes(2);
+    expect(lastBuild().picker.sizes.stills).toBe(20);
+  });
+
   it("stores a cut sheet as used before its faces are read", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

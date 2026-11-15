@@ -615,7 +615,7 @@ async function handleCreateTrainingSet(character) {
 const buildingSet = computed(() => {
   if (selectionStore.selectedSetIds.length > 1) return null;
   const set = entityLists.pictureSets.find(
-    (s) => s.id === selectionStore.selectedSet && s.building,
+    (s) => Number(s.id) === Number(selectionStore.selectedSet) && s.building,
   );
   if (!set) return null;
   const person = entityLists.characters.find(
