@@ -1813,6 +1813,46 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     wrapper.unmount();
   });
 
+  it("keeps a saved No LoRA on a saved Krea 2 workflow", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({
+      description: "Adult woman",
+      loras: [
+        { sha256: "krea1", display_name: "Anna Krea", base_model_family: "krea2", added_at: "2026-11-09" },
+        { sha256: "moss1", display_name: "Anna v1", base_model_family: "moss_image", added_at: "2026-11-08" },
+      ],
+    });
+    // MOSS-Image was used last, so it is the step's own first pick.
+    gen.listWorkflowCards.mockResolvedValue({
+      cards: [
+        MOSS_CARD,
+        { id: "manual:krea", name: "Krea sheet", type: "txt2img", last_used: "2026-11-01T20:00:00Z", models: [{ base_model_family: "krea2" }] },
+      ],
+    });
+    const wrapper = mountDialog({
+      v: 1,
+      stage: "generate",
+      stepped: true,
+      sheets: {
+        phase: "describe",
+        form: { description: "Adult woman" },
+        mode: "text",
+        workflow_id: "manual:krea",
+        lora_sha: "",
+      },
+    });
+    await flushPromises();
+    const select = (label) =>
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === label);
+    expect(select("Sheet workflow").props("modelValue")).toBe("manual:krea");
+    expect(select("Character LoRA · optional").props("modelValue")).toBe("");
+    wrapper.unmount();
+  });
+
   it("folds a build saved with a body into the description, and sends no body", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

@@ -1684,6 +1684,9 @@ async function restore(saved) {
     }
     if (usableCards.value.some((card) => card.id === saved.workflow_id)) {
       workflowId.value = saved.workflow_id;
+      // A workflow of the other model re-picks a fitting LoRA; the saved
+      // one goes over that.
+      await nextTick();
     }
     if (
       saved.lora_sha === "" ||
