@@ -263,12 +263,17 @@ function openSheets(charId) {
  * the end a percent with the run line (`percent`), a word (`words`), a
  * count (`count`) or the new dot (`fresh`, drawn and not opened since).
  */
+// The runs in flight by key, built once per change rather than on every call.
+const liveRuns = computed(
+  () => new Map(tasksStore.comfyuiRuns.map((run) => [runKey(run), run])),
+);
+
 function sheetsState(charId) {
   const draw = sheetsOf(charId)?.newest;
   if (!draw) return null;
   const runs = draw.runs || [];
   const ended = (run) => run.status === "completed" || run.status === "failed";
-  const live = new Map(tasksStore.comfyuiRuns.map((run) => [runKey(run), run]));
+  const live = liveRuns.value;
   const total = runs.length;
   const done = runs.filter(ended).length;
   const sheets = runs.reduce((n, run) => n + (run.picture_ids?.length || 0), 0);

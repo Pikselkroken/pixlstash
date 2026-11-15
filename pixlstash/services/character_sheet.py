@@ -815,48 +815,60 @@ def use_sheets(
     """
     ids = list(dict.fromkeys(picture_ids))
     if draw_id is not None:
-        used = server.vault.db.run_immediate_read_task(
-            used_sheets_in_session, character_id, draw_id
+        # Claimed on the writer before the cut, so a second tab or a repeated
+        # request racing this one is refused instead of filing panels twice.
+        again = server.vault.db.run_task(
+            claim_sheets_in_session, character_id, draw_id, ids
         )
-        if used is None:
+        if again is None:
             raise SheetNotFound(f"No draw {draw_id} on character {character_id}.")
-        # The screen offers a cut sheet no more; a second tab or a repeated
-        # request must not file its panels twice either.
-        again = [sheet_id for sheet_id in ids if sheet_id in used]
         if again:
             raise SheetUsed(f"Sheets {again} were cut already.")
-    sheets = server.vault.db.run_immediate_read_task(
-        sheets_in_session, character_id, ids
-    )
-    if sheets is None:
-        raise SheetNotFound(f"No character {character_id} or no picture among {ids}.")
-    cuts = [(sheet, _cut(server, sheet)) for sheet in sheets]
     panel_ids: list[int] = []
-    for sheet, entries in cuts:
-        _new, _duplicates, made = import_derived_outputs(
-            server, [sheet] * len(entries), entries, stack=False
+    filed: list[int] = []
+    try:
+        sheets = server.vault.db.run_immediate_read_task(
+            sheets_in_session, character_id, ids
         )
-        # Filed sheet by sheet: a later sheet failing to import must not leave
-        # these on no character, still linked to a sheet the purge removes.
-        server.vault.db.run_task(file_on_character_in_session, made, character_id)
-        panel_ids.extend(made)
-    logger.info(
-        "Character sheets %s cut into pictures %s, filed on character %s",
-        ids,
-        panel_ids,
-        character_id,
-    )
-    if draw_id is not None and not server.vault.db.run_task(
-        record_used_in_session, character_id, draw_id, panel_ids, ids
-    ):
-        logger.warning(
-            "Draw %s on character %s was deleted while sheets %s were cut; "
-            "panels %s are filed but not recorded on it.",
-            draw_id,
-            character_id,
+        if sheets is None:
+            raise SheetNotFound(
+                f"No character {character_id} or no picture among {ids}."
+            )
+        cuts = [(sheet, _cut(server, sheet)) for sheet in sheets]
+        for sheet, entries in cuts:
+            _new, _duplicates, made = import_derived_outputs(
+                server, [sheet] * len(entries), entries, stack=False
+            )
+            # Filed sheet by sheet: a later sheet failing to import must not
+            # leave these on no character, still linked to a sheet the purge
+            # removes.
+            server.vault.db.run_task(file_on_character_in_session, made, character_id)
+            panel_ids.extend(made)
+            filed.append(sheet.id)
+        logger.info(
+            "Character sheets %s cut into pictures %s, filed on character %s",
             ids,
             panel_ids,
+            character_id,
         )
+    finally:
+        # The panels filed are recorded, and a sheet the cut never filed is
+        # released, so a failed cut can be tried again.
+        if draw_id is not None and not server.vault.db.run_task(
+            record_used_in_session,
+            character_id,
+            draw_id,
+            panel_ids,
+            [sheet_id for sheet_id in ids if sheet_id not in filed],
+        ):
+            logger.warning(
+                "Draw %s on character %s was deleted while sheets %s were cut; "
+                "panels %s are filed but not recorded on it.",
+                draw_id,
+                character_id,
+                ids,
+                panel_ids,
+            )
     return panel_ids
 
 
@@ -1036,14 +1048,22 @@ def _newest_first():
     return (CharacterSheetDraw.created_at.desc(), CharacterSheetDraw.id.desc())
 
 
-def used_sheets_in_session(
-    session: Session, character_id: int, draw_id: int
-) -> set[int] | None:
-    """The sheets of *draw_id* cut already; ``None`` when it is not *character_id*'s."""
+def claim_sheets_in_session(
+    session: Session, character_id: int, draw_id: int, sheet_ids: list[int]
+) -> list[int] | None:
+    """Mark *sheet_ids* cut on *draw_id* unless any is already; the ones that
+    were (nothing is claimed then), or ``None`` when the draw is not
+    *character_id*'s. Run on the writer, so two claims cannot interleave."""
     row = _draw_of(session, character_id, draw_id)
     if row is None:
         return None
-    return set(_ints(_json_list(row.used_sheets, "used_sheets", row.id)))
+    used = _ints(_json_list(row.used_sheets, "used_sheets", row.id))
+    again = [sheet_id for sheet_id in sheet_ids if sheet_id in used]
+    if not again:
+        row.used_sheets = json.dumps(list(dict.fromkeys(used + sheet_ids)))
+        session.add(row)
+        session.commit()
+    return again
 
 
 def _without_purged(session: Session, draws: list[dict]) -> list[dict]:
@@ -1175,17 +1195,18 @@ def record_used_in_session(
     character_id: int,
     draw_id: int,
     panel_ids: list[int],
-    sheet_ids: list[int],
+    released: list[int],
 ) -> bool:
-    """Record the panels filed and the sheets cut on a draw; False when it is gone."""
+    """Record the panels filed on a draw and release the sheets its claim
+    (``claim_sheets_in_session``) took but never filed; False when it is gone."""
     row = _draw_of(session, character_id, draw_id)
     if row is None:
         return False
-    # Panels are appended as the cut returned them; the sheets cut once each.
+    # Panels are appended as the cut returned them.
     used = _ints(_json_list(row.used, "used", row.id)) + panel_ids
-    used_sheets = _ints(_json_list(row.used_sheets, "used_sheets", row.id)) + sheet_ids
+    used_sheets = _ints(_json_list(row.used_sheets, "used_sheets", row.id))
     row.used = json.dumps(used)
-    row.used_sheets = json.dumps(list(dict.fromkeys(used_sheets)))
+    row.used_sheets = json.dumps([s for s in used_sheets if s not in released])
     session.add(row)
     session.commit()
     return True

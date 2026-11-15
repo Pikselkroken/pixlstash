@@ -12974,8 +12974,10 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   (a run it no longer knows is `failed`, with the restart message), and the
   ending listener (`routes/workflows.py`, `character_sheet.settle_run`) writes
   a completed or failed ending onto the draw that holds the run, even with no
-  one looking. `use` with `draw_id` records the panels and the sheets cut on
-  that draw. The JSON columns are read tolerantly: unreadable is logged and
+  one looking. `use` with `draw_id` claims its sheets on that draw before
+  cutting (on the writer, so a second cut of one is a 409, however close the
+  two requests), records the panels filed after, and releases any sheet a
+  failed cut never filed. The JSON columns are read tolerantly: unreadable is logged and
   read as empty. Deleting a character cascades to its draws.
 - Authz: every draw route is owner-only (§16). The untemplated
   `GET /character-sheets/draws` is on `READ_BLOCKED_GET_PATHS`; the templated

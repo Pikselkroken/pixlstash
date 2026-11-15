@@ -1044,10 +1044,10 @@ def test_draws_round_trip_newest_first(client, monkeypatch):
     assert [run["key"] for run in draws[1]["runs"]] == keys_a
 
 
-def test_a_draw_settles_from_how_each_run_ended(client, monkeypatch):
+def test_a_draw_settles_from_how_each_run_ended(client, sheet_id, monkeypatch):
     done, live, lost = _key(), _key(), _key()
     outcomes = {
-        done: {"status": "completed", "message": "made", "picture_ids": [11, 12]},
+        done: {"status": "completed", "message": "made", "picture_ids": [sheet_id]},
         live: _running(live),
     }
     _fake_outcomes(monkeypatch, outcomes)
@@ -1061,7 +1061,7 @@ def test_a_draw_settles_from_how_each_run_ended(client, monkeypatch):
         "key": done,
         "status": "completed",
         "message": "made",
-        "picture_ids": [11, 12],
+        "picture_ids": [sheet_id],
     }
     assert runs[live]["status"] == "running"
     # No recorded ending any more: a restart lost it, so it is failed, not queued.
@@ -1077,7 +1077,7 @@ def test_a_draw_settles_from_how_each_run_ended(client, monkeypatch):
     (again,) = _list_draws(client, character_id)
     again_runs = {run["key"]: run for run in again["runs"]}
     assert again_runs[done]["status"] == "completed"
-    assert again_runs[done]["picture_ids"] == [11, 12]
+    assert again_runs[done]["picture_ids"] == [sheet_id]
     assert _stored_runs(client.server, draw["id"])[1]["status"] == "failed"
 
 
@@ -1169,7 +1169,8 @@ def test_another_characters_draw_is_not_found(client, monkeypatch):
     url = f"{API_PREFIX}/characters/{other}/sheets/draws/{draw['id']}"
 
     assert client.patch(url, json={"seen": True}).status_code == 404
-    assert client.delete(url).status_code == 404
+    deleted = client.delete(url)
+    assert deleted.status_code == 404
     # Refused both ways: the owner's draw is untouched, and the stranger has none.
     (kept_draw,) = _list_draws(client, owner)
     assert kept_draw["seen"] is False and kept_draw["id"] == draw["id"]
@@ -1250,6 +1251,41 @@ def test_use_with_a_draw_records_the_panels_and_the_sheets_cut(
     assert _list_draws(client, stranger) == []
 
 
+def test_a_cut_in_progress_holds_its_sheets_and_a_failed_one_lets_go(
+    client, sheet_id, monkeypatch
+):
+    _fake_outcomes(monkeypatch, {})
+    character_id = _new_character(client, "Racing Draw")
+    draw = _post_draw(client, character_id, [_key()])
+    url = f"{API_PREFIX}/characters/{character_id}/sheets/use"
+    body = {"picture_ids": [sheet_id], "draw_id": draw["id"]}
+    real_cut = character_sheet._cut
+    raced = []
+
+    def cut_while_another_asks(server, sheet):
+        # A second request for the same sheet, mid-cut: refused before it cuts.
+        try:
+            character_sheet.use_sheets(server, character_id, [sheet.id], draw["id"])
+        except character_sheet.SheetUsed as exc:
+            raced.append(exc)
+        raise character_sheet.SheetUnreadable("the first cut fails")
+
+    monkeypatch.setattr(character_sheet, "_cut", cut_while_another_asks)
+    failed = client.post(url, json=body)
+    assert failed.status_code == 409, failed.text
+    assert len(raced) == 1
+    # The failed cut filed nothing and released the sheet, so it can be cut.
+    (released,) = _list_draws(client, character_id)
+    assert released["used_sheets"] == [] and released["used"] == []
+
+    monkeypatch.setattr(character_sheet, "_cut", real_cut)
+    response = client.post(url, json=body)
+    assert response.status_code == 200, response.text
+    (recorded,) = _list_draws(client, character_id)
+    assert recorded["used_sheets"] == [sheet_id]
+    assert recorded["used"] == response.json()["picture_ids"]
+
+
 def test_a_purged_sheet_drops_out_of_the_draw_shown(client, sheet_id, monkeypatch):
     key = _key()
     gone = 987_654_321
@@ -1277,14 +1313,16 @@ def test_deleting_a_draw_keeps_nothing_of_it(client, monkeypatch):
     response = client.delete(url)
     assert response.status_code == 200 and response.json() == {"deleted": True}
     assert _list_draws(client, character_id) == []
-    assert client.delete(url).status_code == 404
+    second_delete = client.delete(url)
+    assert second_delete.status_code == 404
 
 
 def test_deleting_a_character_deletes_its_draws(client, monkeypatch):
     _fake_outcomes(monkeypatch, {})
     character_id = _new_character(client, "Delete With Draws")
     draw = _post_draw(client, character_id, [_key()])
-    assert client.delete(f"{API_PREFIX}/characters/{character_id}").status_code == 200
+    response = client.delete(f"{API_PREFIX}/characters/{character_id}")
+    assert response.status_code == 200
 
     def remaining(session):
         return session.exec(
