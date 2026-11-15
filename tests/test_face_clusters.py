@@ -110,9 +110,22 @@ def test_a_face_without_an_embedding_does_not_carry_the_person():
             ]
         )
         session.commit()
+        flat = Picture()
+        session.add(flat)
+        session.commit()
+        session.add(
+            Face(
+                picture_id=flat.id,
+                face_index=0,
+                character_id=person.id,
+                features=np.zeros(64, dtype=np.float32).tobytes(),
+            )
+        )
+        session.commit()
+        # No embedding, or one with no direction: neither carries the person.
         with pytest.raises(NotThePersonsFace) as refused:
-            set_reference_cluster(session, person.id, [both, bare])
-        assert refused.value.picture_ids == [bare]
+            set_reference_cluster(session, person.id, [both, bare, flat.id])
+        assert refused.value.picture_ids == [bare, flat.id]
         assert reference_cluster_ids(session, person.id) == []
         set_reference_cluster(session, person.id, [both, plain])
         assert reference_cluster_ids(session, person.id) == [both, plain]

@@ -212,18 +212,18 @@ def _carrying_face(session: Session, character_id: int, picture_ids) -> set[int]
     an embedding: one without has nothing to steer with."""
     if not picture_ids:
         return set()
-    return set(
-        session.exec(
-            select(Face.picture_id)
-            .join(Picture, Face.picture_id == Picture.id)
-            .where(
-                Face.character_id == character_id,
-                Face.picture_id.in_(list(picture_ids)),
-                Face.features.is_not(None),
-                Picture.deleted.is_(False),
-            )
-        ).all()
-    )
+    rows = session.exec(
+        select(Face.picture_id, Face.features)
+        .join(Picture, Face.picture_id == Picture.id)
+        .where(
+            Face.character_id == character_id,
+            Face.picture_id.in_(list(picture_ids)),
+            Face.features.is_not(None),
+            Picture.deleted.is_(False),
+        )
+    ).all()
+    # A zero or non-finite embedding has no direction to steer with either.
+    return {pid for pid, features in rows if vector(features) is not None}
 
 
 def reference_cluster_ids(session: Session, character_id: int) -> list[int]:

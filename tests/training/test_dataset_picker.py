@@ -415,3 +415,21 @@ def test_the_floor_measures_against_the_chosen_identity():
     # chosen one outside the cluster still clears it.
     assert all(scores[100 + i] < dp.LIKENESS_FLOOR for i in range(1, 7))
     assert scores[400] > dp.LIKENESS_FLOOR
+
+
+def test_a_reference_picture_counts_by_its_lowest_usable_face():
+    """As the cluster view does: the order rows arrive in does not decide it."""
+    faces, _a, b = _identity_faces()
+    good = b.astype(np.float32).tobytes()
+    flat = np.zeros(64, dtype=np.float32).tobytes()
+    other = (-b).astype(np.float32).tobytes()
+    # Picture 40 carries the person three times, listed out of id order: a
+    # directionless face (the lowest id), then a later face, then the usable
+    # face with the lower id of the two.
+    faces += [
+        (503, 40, None, 3.0, other),
+        (501, 40, None, 3.0, flat),
+        (502, 40, None, 3.0, good),
+    ]
+    refs = dp.pick_references(faces, {40})
+    assert [r[0] for r in refs] == [502]

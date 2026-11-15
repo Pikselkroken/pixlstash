@@ -221,10 +221,14 @@ def pick_references(faces: list, reference_cluster=None) -> list:
     :data:`MAX_REFERENCES`.
     """
     if reference_cluster:
+        # Each picture's usable face with the lowest id, as the cluster view
+        # and select_reference_faces_for_character take it.
         first = {}
         for row in faces:
-            if row[1] in reference_cluster and row[4] is not None:
-                first.setdefault(row[1], row)
+            if row[1] not in reference_cluster or vector(row[4]) is None:
+                continue
+            if row[1] not in first or row[0] < first[row[1]][0]:
+                first[row[1]] = row
         chosen = most_central(list(first.values()), lambda row: vector(row[4]))
         if chosen:
             return chosen[:MAX_REFERENCES]
