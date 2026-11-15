@@ -6968,13 +6968,13 @@ board"). A last `1fr` track takes the width the checkpoint columns leave, so a
 board of one column still spans the window. While a live run is before step 1,
 the loss chart's place holds an annotated sketch of a loss curve, drawn in ink
 and never the chart's teal so it cannot read as this run's data, beside the
-loss tip; a run with a character gets the same for its likeness lines until a
-score lands. Each prompt group whose later columns have not started drawing
+loss tip; a run with a character that has reference faces gets the same for
+its likeness lines. Each prompt group whose later columns have not started drawing
 keeps its step 0 "before picture" cell and covers the rest with one dashed
 card holding that group's tip (`groupTips`); a group's card goes once any of
-its later columns draws. These notes span to the board's edge (`2 / -1`) and
-keep at least the chart's height, so the rows under them do not move, and the
-folded *Tips* section is not drawn meanwhile. A run that stopped or failed
+its later columns draws. These notes span to the board's edge (`2 / -1`); the
+loss note keeps at least the chart's height, so the rows under it do not move
+when the curve lands, and the folded *Tips* section is not drawn meanwhile. A run that stopped or failed
 before step 1 instead frames one sentence in the chart's place ("Stopped
 before the first step, so nothing was measured."), drops an unscored likeness
 row, and, with no picture drawn, says "Previews · none were drawn" in place of

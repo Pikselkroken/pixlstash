@@ -968,13 +968,16 @@ describe("the board before it has data", () => {
   });
 
   it("draws the chart and the tips once training has a step", async () => {
-    const wrapper = await open(payload({ likeness: { ...likeness, with_trigger: [1] } }));
+    const wrapper = await open(payload({ likeness }));
     expect(wrapper.find("[data-testid='trl-loss-tip']").exists()).toBe(false);
     expect(wrapper.find("[data-testid='trl-likeness-tip']").exists()).toBe(false);
     expect(wrapper.find("[data-testid='trl-group-tip']").exists()).toBe(false);
     expect(wrapper.find(".chart-stub").exists()).toBe(true);
     expect(wrapper.find(".trl-chart").attributes("style")).toContain("grid-column: 2 / span 7");
     expect(wrapper.find(".trl-tips").exists()).toBe(true);
+    // Nor before step 1 with no reference faces: nothing would ever score.
+    const noFaces = await open(settingUp({ likeness: { ...likeness, references: 0 } }));
+    expect(noFaces.find("[data-testid='trl-likeness-tip']").exists()).toBe(false);
   });
 
   it("says a run that stopped before step 1 measured nothing, and promises nothing", async () => {

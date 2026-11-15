@@ -917,9 +917,13 @@ const likenessEmpty = computed(
       (value) => value != null,
     ),
 );
-// Waiting for its first score, the chart's place says what to read in it; a
-// run that ended before any has no likeness row at all.
-const likenessTip = computed(() => isLive.value && likenessEmpty.value);
+// Before step 1 the chart's place says what to read in it, when there are
+// reference faces to score against; a run that ended before any score has no
+// likeness row at all.
+const likenessTip = computed(
+  () =>
+    isLive.value && !live.value.step && likenessEmpty.value && Boolean(likeness.value?.references),
+);
 const showLikeness = computed(
   () => Boolean(likeness.value) && !(endedEarly.value && likenessEmpty.value),
 );
