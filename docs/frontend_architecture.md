@@ -1706,7 +1706,10 @@ Escape and Enter do nothing here: cancelling deletes a set.
   picture input or no settable prompt is left out; with none left the form
   says why, naming the first one's problem. The four draw choices (*Body
   photos*, *Sheets to draw*, *Sheet size*, *Draw a*) are `Segmented` toggles
-  side by side, wrapping only on a narrow window, with one line of hints; the
+  side by side (*Sheet size* greys out what the chosen model does not draw
+  well, `ENGINES[…].sizes`: 4K for all but MiniMax H3, Small and Medium for
+  H3, and choosing an H3 workflow picks 4K; a size saved with the set stands
+  where the model draws it), wrapping only on a narrow window, with one line of hints; the
   description takes the height the form leaves. *Draw a* follows the
   description (`subjectFromDescription`: "man", "he", "his" against "woman",
   "she", "her") until a toggle is picked by hand, as the framing follows its

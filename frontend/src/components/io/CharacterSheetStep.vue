@@ -153,7 +153,7 @@
               <Segmented
                 v-model="form.size"
                 aria-label="Sheet size"
-                :options="SIZES"
+                :options="sizeOptions"
                 data-testid="cs-size"
               />
             </div>
@@ -616,7 +616,12 @@ const SIZES = [
   { id: "small", label: "Small", passport: "300×384" },
   { id: "medium", label: "Medium", passport: "431×552" },
   { id: "large", label: "Large", passport: "600×768" },
+  { id: "4k", label: "4K", passport: "1237×1584" },
 ];
+// The sizes a model draws well, and the one it starts at; the rest are greyed
+// out. MOSS-Image, Krea 2, Qwen and Klein are known good to ~4 MP; MiniMax H3
+// wants a large canvas (`ENGINES.minimax.sizes`).
+const SIZES_DRAWN_WELL = ["small", "medium", "large"];
 const SUBJECTS = [
   { id: "woman", label: "Woman" },
   { id: "man", label: "Man" },
@@ -658,6 +663,8 @@ const ENGINES = {
     family: "minimax_h3",
     name: "MiniMax H3",
     fits: (lora) => lora.base_model_family === "minimax_h3",
+    sizes: ["large", "4k"],
+    size: "4k",
   },
 };
 // The sheet workflows PixlStash ships (#2700): a built-in has no card until
@@ -866,6 +873,22 @@ watch(engine, () => {
   }
 });
 
+// Each model its own sizes, so the size follows the chosen workflow's model
+// too: a model with a size of its own (MiniMax H3) starts there, any other
+// keeps a size it draws well. Only once restored, and a size saved with the
+// set stands over the one `load`'s first workflow would pick.
+const sizesDrawnWell = computed(() => engine.value.sizes || SIZES_DRAWN_WELL);
+const sizeOptions = computed(() =>
+  SIZES.map((s) => ({ ...s, disabled: !sizesDrawnWell.value.includes(s.id) })),
+);
+watch([engine, restored], ([now, done], [, wasDone]) => {
+  if (!done) return;
+  const saved = !wasDone && !!props.saved?.form?.size;
+  const keep =
+    sizesDrawnWell.value.includes(form.size) && (!now.size || saved);
+  if (!keep) form.size = now.size || "large";
+});
+
 const referenceHint = computed(() => {
   const faces = referenceIds.value.length
     ? `${name.value}'s reference faces. `
@@ -924,7 +947,11 @@ const framingHint = computed(() => {
 
 const sizeHint = computed(() => {
   const size = SIZES.find((s) => s.id === form.size);
-  return `Passport photos come out ${size.passport}. Larger is slower to draw.`;
+  const why =
+    engine.value === ENGINES.minimax
+      ? " MiniMax H3 needs Large or 4K."
+      : " 4K is for MiniMax H3.";
+  return `Passport photos come out ${size.passport}. Larger is slower to draw.${why}`;
 });
 
 const descriptionHint = computed(() => {

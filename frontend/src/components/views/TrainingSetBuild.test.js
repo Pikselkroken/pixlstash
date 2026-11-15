@@ -889,10 +889,32 @@ describe("TrainingSetBuild: generating the pictures", () => {
         .filter((o) => o.value && !o.disabled)
         .map((o) => o.value),
     ).toEqual(["h3"]);
+    // H3 wants a large canvas: Small and Medium are greyed out, 4K is chosen.
+    const sizes = () =>
+      wrapper
+        .findAll('[data-testid="cs-size"] button')
+        .map((b) => [b.text(), b.attributes("disabled") !== undefined, b.attributes("aria-checked")]);
+    expect(sizes()).toEqual([
+      ["Small", true, "false"],
+      ["Medium", true, "false"],
+      ["Large", false, "false"],
+      ["4K", false, "true"],
+    ]);
+    // Another model greys 4K out and goes back to Large.
+    select("Sheet workflow").vm.$emit("update:modelValue", "manual:moss");
+    await flushPromises();
+    expect(sizes()).toEqual([
+      ["Small", false, "false"],
+      ["Medium", false, "false"],
+      ["Large", false, "true"],
+      ["4K", true, "false"],
+    ]);
+    select("Sheet workflow").vm.$emit("update:modelValue", "manual:h3-t2i");
+    await flushPromises();
     await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
     await flushPromises();
     expect(gen.buildSheetPrompt).toHaveBeenLastCalledWith(
-      expect.objectContaining({ layout: "prose" }),
+      expect.objectContaining({ layout: "prose", size: "4k" }),
     );
     expect(gen.runWorkflowCard).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -2151,6 +2173,40 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     await vi.advanceTimersByTimeAsync(700);
     expect(lastBuild().sheets.form).not.toHaveProperty("body");
     wrapper.unmount();
+  });
+
+  it("keeps a size saved for an H3 workflow, unless H3 cannot draw it", async () => {
+    const H3 = {
+      id: "manual:h3-t2i",
+      name: "MiniMax H3: Text to Image",
+      type: "txt2img",
+      models: [{ kind: "unet", base_model_family: "minimax_h3" }],
+    };
+    const open = async (size) => {
+      api.fetchCharacterSetSuggestion.mockResolvedValue(
+        suggestion({ stillsGroup: emptyGroup() }),
+      );
+      sheetsWorld({ description: "Adult woman" });
+      gen.listWorkflowCards.mockResolvedValue({ cards: [MOSS_CARD, H3] });
+      const wrapper = mountDialog({
+        v: 1,
+        stage: "generate",
+        stepped: true,
+        sheets: {
+          phase: "describe",
+          form: { description: "Adult woman", size },
+          workflow_id: H3.id,
+        },
+      });
+      await flushPromises();
+      const chosen = wrapper
+        .find('[data-testid="cs-size"] [aria-checked="true"]')
+        .text();
+      wrapper.unmount();
+      return chosen;
+    };
+    expect(await open("large")).toBe("Large");
+    expect(await open("small")).toBe("4K");
   });
 
   it("keeps following a run still drawing when the build is opened again", async () => {

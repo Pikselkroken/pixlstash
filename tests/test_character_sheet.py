@@ -67,8 +67,8 @@ def test_every_box_lands_inside_its_own_panel(framing):
     assert all("an adult woman" in i["caption"] for i in characters)
 
 
-@pytest.mark.parametrize("size", ["small", "medium"])
-def test_a_smaller_sheet_scales_the_layout_with_its_canvas(size):
+@pytest.mark.parametrize("size", ["small", "medium", "4k"])
+def test_another_sheet_size_scales_the_layout_with_its_canvas(size):
     width, height = character_sheet.SIZES[size]
     assert width * 3 == height * 5 and width % 16 == 0 and height % 16 == 0
     large = json.loads(sheet_prompt(description="x"))
@@ -657,6 +657,13 @@ def test_prompt_route_hands_out_the_canvas(client):
         json={"description": "x", "size": "small"},
     ).json()
     assert (small["width"], small["height"]) == (1280, 768)
+    # MiniMax H3's size: the route takes it like any other.
+    four_k = client.post(
+        f"{API_PREFIX}/character-sheets/prompt",
+        json={"description": "x", "size": "4k", "layout": "prose"},
+    )
+    assert four_k.status_code == 200, four_k.text
+    assert (four_k.json()["width"], four_k.json()["height"]) == (5280, 3168)
     prose = client.post(
         f"{API_PREFIX}/character-sheets/prompt",
         json={"description": "x", "reference": True, "layout": "prose"},

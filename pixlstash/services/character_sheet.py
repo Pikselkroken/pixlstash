@@ -78,8 +78,18 @@ Size = Literal["small", "medium", "large"]
 Layout = Literal["moss", "prose"]
 # The sheet's canvas at each size, all 5:3 so the layout only scales, and every
 # side a multiple of 16 as MOSS needs: ~1, ~2 and ~4 megapixels, MOSS's own
-# range (it is trained at 1-2 MP and stretches to about 4).
-SIZES = {"small": (1280, 768), "medium": (1840, 1104), "large": (2560, 1536)}
+# range (it is trained at 1-2 MP and stretches to about 4), and ~17 for
+# MiniMax H3, which wants a large canvas (MiniMax's "4K" is 16.6 MP or more;
+# every side a multiple of its 32 too). The step offers each model its own.
+SIZES = {
+    "small": (1280, 768),
+    "medium": (1840, 1104),
+    "large": (2560, 1536),
+    "4k": (5280, 3168),
+}
+# MiniMax H3's own size joins the three every model has (a nested ``Literal``
+# flattens to all four).
+Size = Literal[Size, "4k"]
 
 # ponytail: words from scores; thresholds read off the 2026-11 probes (one
 # sheet 0.57-0.70, across sheets 0.37). P6 validation tunes them.
