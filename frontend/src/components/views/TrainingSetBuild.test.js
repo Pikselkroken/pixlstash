@@ -4,6 +4,7 @@
 
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
+import { nextTick } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { useTasksStore } from "../../stores/useTasksStore";
 
@@ -1704,6 +1705,52 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     lands[0]();
     await flushPromises();
     expect(order.at(-1)).toBe("finish");
+    wrapper.unmount();
+  });
+
+  it("shows the saved sheets at once, before anything is read again", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    // Nothing the step reads answers: the character, its LoRAs, the workflows,
+    // the outcome of a run and a new ranking all hang.
+    const never = () => new Promise(() => {});
+    for (const fn of [
+      gen.getCharacter,
+      gen.listAdapters,
+      gen.listWorkflowCards,
+      gen.getReferencePictures,
+      gen.getRunOutcome,
+      gen.rankSheets,
+    ]) {
+      fn.mockImplementation(never);
+    }
+    const wrapper = mountDialog({
+      v: 1,
+      stage: "generate",
+      stepped: true,
+      sheets: {
+        phase: "pick",
+        form: { description: "Adult woman, copper bob" },
+        runs: [
+          { key: "r1", status: "completed", picture_ids: [501] },
+          { key: "r2", status: "completed", picture_ids: [502] },
+        ],
+        order: [501, 502],
+        ranking: { 501: sheet(501, 0.5), 502: sheet(502, 0.66) },
+        kept: [502],
+        kept_touched: true,
+      },
+    });
+    await nextTick();
+    const sheets = wrapper.findAll('[data-testid="cs-sheet"]');
+    expect(sheets.map((b) => b.attributes("aria-label"))).toEqual([
+      "Sheet 1: faces agree somewhat",
+      "Sheet 2: faces agree strongly",
+    ]);
+    expect(sheets[1].attributes("aria-pressed")).toBe("true");
+    expect(wrapper.find('[data-testid="cs-description"]').exists()).toBe(false);
     wrapper.unmount();
   });
 

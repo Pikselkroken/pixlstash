@@ -1623,11 +1623,35 @@ async function load() {
 }
 
 /** Put back what `snapshot` stored, over the choices `load` defaulted. */
+/** Put back the sheets, the form and where the step was, as soon as the
+ * screen opens: none of it waits for the step's own reads. */
+function restoreState(saved) {
+  if (!saved) return;
+  framingTouched.value = !!saved.framing_touched;
+  subjectTouched.value = !!saved.subject_touched;
+  Object.assign(form, saved.form || {});
+  runs.value = (saved.runs || []).map((run) => ({
+    key: run.key,
+    status: run.status,
+    message: run.message || "",
+    pictureIds: run.picture_ids || [],
+  }));
+  order.value = [...(saved.order || [])];
+  ranking.value = { ...(saved.ranking || {}) };
+  kept.value = [...(saved.kept || [])];
+  keptTouched.value = !!saved.kept_touched;
+  drawnWith.value = saved.drawn_with || "";
+  drawnFrom.value = saved.drawn_from ?? null;
+  runHistory.value = [...(saved.run_history || [])];
+  drawnIds.value = [...(saved.drawn_ids || [])];
+  strayKeys.value = [...(saved.stray_run_keys || [])];
+  phase.value = ["drawing", "pick"].includes(saved.phase) ? saved.phase : "describe";
+}
+
+/** Put back the choices that name what `load` read (the mode, workflow,
+ * LoRA and reference picture) over the defaults it picked. */
 async function restore(saved) {
   if (saved && alive) {
-    Object.assign(form, saved.form || {});
-    framingTouched.value = !!saved.framing_touched;
-    subjectTouched.value = !!saved.subject_touched;
     if (saved.mode && saved.mode !== mode.value) {
       mode.value = saved.mode;
       // The mode's own watcher picks its first workflow and a fitting LoRA;
@@ -1645,27 +1669,8 @@ async function restore(saved) {
     }
     if (saved.strength != null) strength.value = saved.strength;
     if (saved.reference_id != null) referenceId.value = saved.reference_id;
-    runs.value = (saved.runs || []).map((run) => ({
-      key: run.key,
-      status: run.status,
-      message: run.message || "",
-      pictureIds: run.picture_ids || [],
-    }));
-    order.value = [...(saved.order || [])];
-    kept.value = [...(saved.kept || [])];
-    keptTouched.value = !!saved.kept_touched;
-    drawnWith.value = saved.drawn_with || "";
-    drawnFrom.value = saved.drawn_from ?? null;
-    runHistory.value = [...(saved.run_history || [])];
-    drawnIds.value = [...(saved.drawn_ids || [])];
-    strayKeys.value = [...(saved.stray_run_keys || [])];
-    phase.value = ["drawing", "pick"].includes(saved.phase)
-      ? saved.phase
-      : "describe";
   }
   restored.value = true;
-  // Runs may have ended while the screen was away: read them and rank again.
-  if (alive && runs.value.length) tick();
 }
 
 /** What the set stores of this step. A cut whose faces are still being read
@@ -1696,6 +1701,9 @@ const snapshot = computed(() => {
           picture_ids: run.pictureIds || [],
         })),
     order: cut ? [] : order.value,
+    // The sheets' scores, so they show at once when the screen opens again;
+    // they are ranked afresh behind them.
+    ranking: cut ? {} : ranking.value,
     kept: cut ? [] : kept.value,
     kept_touched: cut ? false : keptTouched.value,
     drawn_with: cut ? "" : drawnWith.value,
@@ -1726,7 +1734,12 @@ async function reloadReferences() {
   }
 }
 
-onMounted(load);
+restoreState(props.saved);
+onMounted(() => {
+  load();
+  // Runs may have ended while the screen was away: read them and rank again.
+  if (runs.value.length || order.value.length) tick();
+});
 onBeforeUnmount(() => {
   alive = false;
   stopPolling();
