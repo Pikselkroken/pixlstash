@@ -1,6 +1,6 @@
 {
  "source": "comfyui-workflow-templates-json",
- "version": "0.1.129",
+ "version": "0.1.133",
  "templates": [
   {
    "name": "3d_hunyuan3d-v2.1",
@@ -16,10 +16,10 @@
     "Tencent"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.3.28",
+   "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 4939212390,
-   "usage": 163,
+   "usage": 159,
    "files": [
     {
      "name": "hunyuan_3d_v2.1.safetensors",
@@ -43,10 +43,10 @@
     "Tencent"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.3.28",
+   "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 4939212390,
-   "usage": 51,
+   "usage": 58,
    "files": [
     {
      "name": "hunyuan3d-dit-v2_fp16.safetensors",
@@ -73,7 +73,7 @@
    "min_comfyui_version": "0.3.28",
    "requires_custom_nodes": false,
    "size": 4928474972,
-   "usage": 59,
+   "usage": 68,
    "files": [
     {
      "name": "hunyuan3d-dit-v2-mv_fp16.safetensors",
@@ -100,7 +100,7 @@
    "min_comfyui_version": "0.3.28",
    "requires_custom_nodes": false,
    "size": 4928474972,
-   "usage": 29,
+   "usage": 32,
    "files": [
     {
      "name": "hunyuan3d-dit-v2-mv-turbo_fp16.safetensors",
@@ -127,7 +127,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 3758096384,
-   "usage": 20,
+   "usage": 197,
    "files": [
     {
      "name": "birefnet.safetensors",
@@ -177,7 +177,7 @@
    "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 644245094,
-   "usage": 31,
+   "usage": 19,
    "files": [
     {
      "name": "moge_2_vitl_normal_fp16.safetensors",
@@ -203,7 +203,7 @@
    "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 644245094,
-   "usage": 83,
+   "usage": 63,
    "files": [
     {
      "name": "moge_2_vitl_normal_fp16.safetensors",
@@ -227,10 +227,10 @@
     "Pixal3D"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.35.0",
+   "min_comfyui_version": "0.42.0",
    "requires_custom_nodes": false,
    "size": 9341553869,
-   "usage": 235,
+   "usage": 250,
    "files": [
     {
      "name": "trellis_2_texture_vae_bf16.safetensors",
@@ -279,10 +279,10 @@
     "TRELLIS.2"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.34.0",
+   "min_comfyui_version": "0.42.0",
    "requires_custom_nodes": false,
    "size": 15354508083,
-   "usage": 831,
+   "usage": 791,
    "files": [
     {
      "name": "trellis_2_texture_vae_bf16.safetensors",
@@ -344,7 +344,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 3972844749,
-   "usage": 198,
+   "usage": 193,
    "files": [
     {
      "name": "birefnet.safetensors",
@@ -483,7 +483,7 @@
     "ACE-Step"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.12.0",
+   "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 19864223744,
    "usage": 27,
@@ -526,10 +526,10 @@
     "ACE-Step"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.12.0",
+   "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 19864223744,
-   "usage": 72,
+   "usage": 19,
    "files": [
     {
      "name": "acestep_v1.5_xl_sft_bf16.safetensors",
@@ -570,10 +570,10 @@
     "ACE-Step"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.12.0",
+   "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 19864223744,
-   "usage": 244,
+   "usage": 113,
    "files": [
     {
      "name": "acestep_v1.5_xl_turbo_bf16.safetensors",
@@ -615,10 +615,10 @@
     "ACE-Step"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.12.0",
+   "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 10737418240,
-   "usage": 112,
+   "usage": 75,
    "files": [
     {
      "name": "ace_step_1.5_turbo_aio.safetensors",
@@ -645,7 +645,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 10737418240,
-   "usage": 34,
+   "usage": 44,
    "files": [
     {
      "name": "acestep_v1.5_turbo.safetensors",
@@ -690,7 +690,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 14710262989,
-   "usage": 79,
+   "usage": 14,
    "files": [
     {
      "name": "acestep_v1.5_turbo.safetensors",
@@ -735,7 +735,7 @@
    "min_comfyui_version": "0.35.2",
    "requires_custom_nodes": false,
    "size": 9985798963,
-   "usage": 65,
+   "usage": 14,
    "files": [
     {
      "name": "qwen_0.6b_ace15.safetensors",
@@ -776,10 +776,10 @@
     "ACE-Step"
    ],
    "open_source": false,
-   "min_comfyui_version": "0.3.35",
+   "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 7698728878,
-   "usage": 35,
+   "usage": 14,
    "files": [
     {
      "name": "ace_step_v1_3.5b.safetensors",
@@ -828,7 +828,7 @@
     "ACE-Step"
    ],
    "open_source": false,
-   "min_comfyui_version": "0.3.35",
+   "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 7698728878,
    "usage": 12,
@@ -857,7 +857,7 @@
    "min_comfyui_version": "0.33.1",
    "requires_custom_nodes": false,
    "size": 15354508083,
-   "usage": 645,
+   "usage": 416,
    "files": [
     {
      "name": "minimax_music3_dit_fp16.safetensors",
@@ -891,10 +891,10 @@
     "Stable Audio"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.19.2",
+   "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 15676630630,
-   "usage": 183,
+   "usage": 128,
    "files": [
     {
      "name": "qwen3.5_2b_bf16.safetensors",
@@ -928,10 +928,10 @@
     "Stable Audio"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.19.2",
+   "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 15891378995,
-   "usage": 41,
+   "usage": 93,
    "files": [
     {
      "name": "qwen3.5_2b_bf16.safetensors",
@@ -967,10 +967,10 @@
     "Stable Audio"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.3.35",
+   "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 5690831667,
-   "usage": 32,
+   "usage": 28,
    "files": [
     {
      "name": "stable-audio-open-1.0.safetensors",
@@ -1104,7 +1104,7 @@
    "min_comfyui_version": "0.3.57",
    "requires_custom_nodes": false,
    "size": 18575733555,
-   "usage": 214,
+   "usage": 222,
    "files": [
     {
      "name": "flux1-dev-fp8.safetensors",
@@ -1149,7 +1149,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 22226455757,
-   "usage": 105,
+   "usage": 58,
    "files": [
     {
      "name": "clip_l.safetensors",
@@ -1194,7 +1194,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 34177202258,
-   "usage": 151,
+   "usage": 29,
    "files": [
     {
      "name": "clip_l.safetensors",
@@ -1302,7 +1302,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 34144990003,
-   "usage": 152,
+   "usage": 90,
    "files": [
     {
      "name": "ae.safetensors",
@@ -1347,7 +1347,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 34144990003,
-   "usage": 178,
+   "usage": 179,
    "files": [
     {
      "name": "ae.safetensors",
@@ -1392,7 +1392,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 34144990003,
-   "usage": 564,
+   "usage": 412,
    "files": [
     {
      "name": "clip_l.safetensors",
@@ -1437,7 +1437,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 10372346020,
-   "usage": 144,
+   "usage": 162,
    "files": [
     {
      "name": "clip_l.safetensors",
@@ -1481,7 +1481,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 17609365914,
-   "usage": 262,
+   "usage": 224,
    "files": [
     {
      "name": "ae.safetensors",
@@ -1526,7 +1526,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 35154307318,
-   "usage": 20,
+   "usage": 16,
    "files": [
     {
      "name": "flux1-dev.safetensors",
@@ -1583,7 +1583,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 17233556275,
-   "usage": 35,
+   "usage": 24,
    "files": [
     {
      "name": "flux1-schnell-fp8.safetensors",
@@ -1610,7 +1610,7 @@
    "min_comfyui_version": "0.0.4",
    "requires_custom_nodes": false,
    "size": 34144990003,
-   "usage": 48,
+   "usage": 52,
    "files": [
     {
      "name": "ae.safetensors",
@@ -1654,7 +1654,7 @@
    "min_comfyui_version": "0.3.45",
    "requires_custom_nodes": false,
    "size": 50465865728,
-   "usage": 36,
+   "usage": 29,
    "files": [
     {
      "name": "hidream_e1_1_bf16.safetensors",
@@ -1976,10 +1976,10 @@
     "Qwen-Image-Edit"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.3.60",
+   "min_comfyui_version": "0.5.0",
    "requires_custom_nodes": false,
    "size": 50787988275,
-   "usage": 52,
+   "usage": 55,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -2023,7 +2023,7 @@
    "min_comfyui_version": "0.16.0",
    "requires_custom_nodes": false,
    "size": 5798205850,
-   "usage": 734,
+   "usage": 529,
    "files": [
     {
      "name": "qwen_3_06b_base.safetensors",
@@ -2067,7 +2067,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 5798205850,
-   "usage": 38,
+   "usage": 27,
    "files": [
     {
      "name": "qwen_3_06b_base.safetensors",
@@ -2116,7 +2116,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 7086696038,
-   "usage": 0,
+   "usage": 27,
    "files": [
     {
      "name": "qwen_3_06b_base.safetensors",
@@ -2172,7 +2172,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 5798205850,
-   "usage": 64,
+   "usage": 47,
    "files": [
     {
      "name": "qwen_3_06b_base.safetensors",
@@ -2222,7 +2222,7 @@
    "min_comfyui_version": "0.11.0",
    "requires_custom_nodes": false,
    "size": 5583457485,
-   "usage": 270,
+   "usage": 273,
    "files": [
     {
      "name": "qwen_3_06b_base.safetensors",
@@ -2259,7 +2259,7 @@
    "min_comfyui_version": "0.26.0",
    "requires_custom_nodes": false,
    "size": 21260088115,
-   "usage": 27,
+   "usage": 35,
    "files": [
     {
      "name": "boogu_image_edit_fp8_scaled.safetensors",
@@ -2297,7 +2297,7 @@
    "min_comfyui_version": "0.26.0",
    "requires_custom_nodes": false,
    "size": 22333829939,
-   "usage": 12,
+   "usage": 20,
    "files": [
     {
      "name": "boogu_image_edit_int8_convrot.safetensors",
@@ -2335,7 +2335,7 @@
    "min_comfyui_version": "0.26.0",
    "requires_custom_nodes": false,
    "size": 21260088115,
-   "usage": 13,
+   "usage": 27,
    "files": [
     {
      "name": "qwen3vl_8b_fp8_scaled.safetensors",
@@ -2373,7 +2373,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 24159191040,
-   "usage": 19,
+   "usage": 18,
    "files": [
     {
      "name": "t5xxl_fp8_e4m3fn_scaled.safetensors",
@@ -2406,7 +2406,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 23300197581,
-   "usage": 107,
+   "usage": 114,
    "files": [
     {
      "name": "ae.safetensors",
@@ -2445,7 +2445,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 41446434406,
-   "usage": 32,
+   "usage": 34,
    "files": [
     {
      "name": "wan_2.1_vae.safetensors",
@@ -2491,10 +2491,10 @@
     "ERNIE-Image"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.15.0",
+   "min_comfyui_version": "0.19.0",
    "requires_custom_nodes": false,
    "size": 25984552141,
-   "usage": 54,
+   "usage": 56,
    "files": [
     {
      "name": "ernie-image.safetensors",
@@ -2535,10 +2535,10 @@
     "ERNIE-Image"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.15.0",
+   "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 25984552141,
-   "usage": 28,
+   "usage": 76,
    "files": [
     {
      "name": "ernie-image-turbo.safetensors",
@@ -2579,7 +2579,7 @@
     "Fibo 2.0"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.43.0",
+   "min_comfyui_version": "0.44.0",
    "requires_custom_nodes": false,
    "size": 26971291510,
    "usage": 0,
@@ -2623,7 +2623,7 @@
     "Fibo 2.0"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.43.0",
+   "min_comfyui_version": "0.44.0",
    "requires_custom_nodes": false,
    "size": 26950919782,
    "usage": 0,
@@ -2669,7 +2669,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 51324859187,
-   "usage": 762,
+   "usage": 496,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -2714,7 +2714,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 22333829939,
-   "usage": 79,
+   "usage": 62,
    "files": [
     {
      "name": "ae.safetensors",
@@ -2766,7 +2766,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 74088185856,
-   "usage": 904,
+   "usage": 728,
    "files": [
     {
      "name": "full_encoder_small_decoder.safetensors",
@@ -2812,7 +2812,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 56586194125,
-   "usage": 100,
+   "usage": 122,
    "files": [
     {
      "name": "flux2-vae.safetensors",
@@ -2892,10 +2892,10 @@
     "FLUX.2 Klein"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.3.72",
+   "min_comfyui_version": "0.9.2",
    "requires_custom_nodes": false,
    "size": 17072495002,
-   "usage": 282,
+   "usage": 229,
    "files": [
     {
      "name": "flux-2-klein-base-4b-fp8.safetensors",
@@ -2931,10 +2931,10 @@
     "FLUX.2 Klein"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.3.72",
+   "min_comfyui_version": "0.9.2",
    "requires_custom_nodes": false,
    "size": 12455405158,
-   "usage": 300,
+   "usage": 718,
    "files": [
     {
      "name": "flux-2-klein-4b-fp8.safetensors",
@@ -2970,10 +2970,10 @@
     "FLUX.2 Klein"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.3.72",
+   "min_comfyui_version": "0.9.2",
    "requires_custom_nodes": false,
    "size": 19327352832,
-   "usage": 727,
+   "usage": 619,
    "files": [
     {
      "name": "flux-2-klein-base-9b-fp8.safetensors",
@@ -3008,7 +3008,7 @@
     "FLUX.2 Klein"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.3.72",
+   "min_comfyui_version": "0.9.2",
    "requires_custom_nodes": false,
    "size": 19112604467,
    "usage": 56,
@@ -3046,10 +3046,10 @@
     "FLUX.2 Klein"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.3.72",
+   "min_comfyui_version": "0.9.2",
    "requires_custom_nodes": false,
    "size": 17072495002,
-   "usage": 108,
+   "usage": 94,
    "files": [
     {
      "name": "flux-2-klein-base-4b.safetensors",
@@ -3094,7 +3094,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 71403831296,
-   "usage": 403,
+   "usage": 409,
    "files": [
     {
      "name": "full_encoder_small_decoder.safetensors",
@@ -3136,10 +3136,10 @@
     "FLUX.2 Klein"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.3.72",
+   "min_comfyui_version": "0.9.2",
    "requires_custom_nodes": false,
    "size": 19219978650,
-   "usage": 244,
+   "usage": 283,
    "files": [
     {
      "name": "flux-2-klein-base-9b-fp8.safetensors",
@@ -3175,7 +3175,7 @@
    "min_comfyui_version": "0.41.0",
    "requires_custom_nodes": false,
    "size": 21474836480,
-   "usage": 614,
+   "usage": 527,
    "files": [
     {
      "name": "flux3-image-klein-int8-convrot.safetensors",
@@ -3214,7 +3214,7 @@
    "min_comfyui_version": "0.41.0",
    "requires_custom_nodes": false,
    "size": 22226455757,
-   "usage": 211,
+   "usage": 177,
    "files": [
     {
      "name": "qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors",
@@ -3253,7 +3253,7 @@
    "min_comfyui_version": "0.41.0",
    "requires_custom_nodes": false,
    "size": 21474836480,
-   "usage": 1262,
+   "usage": 956,
    "files": [
     {
      "name": "qwen3vl_4b_int8_convrot.safetensors",
@@ -3292,7 +3292,7 @@
    "min_comfyui_version": "0.41.0",
    "requires_custom_nodes": false,
    "size": 21474836480,
-   "usage": 1394,
+   "usage": 1113,
    "files": [
     {
      "name": "qwen3.5_9b_flux3_prompt_upsampler_w4a8.safetensors",
@@ -3332,7 +3332,7 @@
    "min_comfyui_version": "0.21.1",
    "requires_custom_nodes": false,
    "size": 25447681229,
-   "usage": 20,
+   "usage": 17,
    "files": [
     {
      "name": "hidream_o1_image_bf16.safetensors",
@@ -3395,7 +3395,7 @@
    "min_comfyui_version": "0.24.0",
    "requires_custom_nodes": false,
    "size": 26521423053,
-   "usage": 26,
+   "usage": 33,
    "files": [
     {
      "name": "flux2-vae.safetensors",
@@ -3439,7 +3439,7 @@
    "min_comfyui_version": "0.24.0",
    "requires_custom_nodes": false,
    "size": 30064771072,
-   "usage": 24,
+   "usage": 15,
    "files": [
     {
      "name": "flux2-vae.safetensors",
@@ -3484,7 +3484,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 26736171418,
-   "usage": 12,
+   "usage": 44,
    "files": [
     {
      "name": "joyai_image_edit_int8_convrot.safetensors",
@@ -3522,7 +3522,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 21689584845,
-   "usage": 14,
+   "usage": 20,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -3564,10 +3564,10 @@
     "Krea 2"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.24.1",
+   "min_comfyui_version": "0.26.0",
    "requires_custom_nodes": false,
    "size": 19434727014,
-   "usage": 353,
+   "usage": 373,
    "files": [
     {
      "name": "krea2_turbo_int8_convrot.safetensors",
@@ -3607,10 +3607,10 @@
     "Krea 2"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.24.1",
+   "min_comfyui_version": "0.26.0",
    "requires_custom_nodes": false,
    "size": 19112604467,
-   "usage": 9480,
+   "usage": 8626,
    "files": [
     {
      "name": "krea2_turbo_fp8_scaled.safetensors",
@@ -3651,10 +3651,10 @@
     "Krea 2"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.24.1",
+   "min_comfyui_version": "0.26.0",
    "requires_custom_nodes": false,
    "size": 19112604467,
-   "usage": 667,
+   "usage": 756,
    "files": [
     {
      "name": "krea2_turbo_int8_convrot.safetensors",
@@ -3694,7 +3694,7 @@
     "Lens"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.16.4",
+   "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 21796959027,
    "usage": 37,
@@ -3731,7 +3731,7 @@
     "Lens"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.16.4",
+   "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 21796959027,
    "usage": 27,
@@ -3769,7 +3769,7 @@
     "LongCat Image Edit"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.9.0",
+   "min_comfyui_version": "0.16.0",
    "requires_custom_nodes": false,
    "size": 22226455757,
    "usage": 36,
@@ -3881,7 +3881,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 13421772800,
-   "usage": 22,
+   "usage": 36,
    "files": [
     {
      "name": "mage_flow_edit_int8_convrot.safetensors",
@@ -3919,7 +3919,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 13421772800,
-   "usage": 30,
+   "usage": 21,
    "files": [
     {
      "name": "mage_flow_edit_turbo_int8_convrot.safetensors",
@@ -3957,7 +3957,7 @@
    "min_comfyui_version": "0.29.0",
    "requires_custom_nodes": false,
    "size": 13421772800,
-   "usage": 14,
+   "usage": 99,
    "files": [
     {
      "name": "mage_flow_int8_convrot.safetensors",
@@ -4034,7 +4034,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 22441204122,
-   "usage": 23,
+   "usage": 19,
    "files": [
     {
      "name": "qwen_image_edit_2509_int8_convrot.safetensors",
@@ -4078,7 +4078,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 22441204122,
-   "usage": 118,
+   "usage": 57,
    "files": [
     {
      "name": "qwen_image_edit_2509_int8_convrot.safetensors",
@@ -4122,7 +4122,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 22441204122,
-   "usage": 33,
+   "usage": 48,
    "files": [
     {
      "name": "qwen_image_edit_2509_int8_convrot.safetensors",
@@ -4165,7 +4165,7 @@
    "min_comfyui_version": "0.38.0",
    "requires_custom_nodes": false,
    "size": 25984552141,
-   "usage": 31,
+   "usage": 34,
    "files": [
     {
      "name": "ming_image_0.1_design_int8_convrot.safetensors",
@@ -4200,7 +4200,7 @@
     "Ming Image"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.37.3",
+   "min_comfyui_version": "0.44.0",
    "requires_custom_nodes": false,
    "size": 43271795507,
    "usage": 20,
@@ -4232,6 +4232,93 @@
    ]
   },
   {
+   "name": "image_minimax_h3_image_edit",
+   "title": "MiniMax-H3-Image: Image Edit",
+   "description": "Edit a picture by describing the change. MiniMax-H3-Image reads the source as <Picture 1> and rewrites only what the instruction asks for, keeping the rest of the frame intact, so one checkpoint handles both text-to-image and reference-guided edits at about 16 MP. Ideal for swapping products, props or vehicles in a shot, changing a material, or restyling a still frame.",
+   "kind": "edit",
+   "tags": [
+    "Image",
+    "Image Edit"
+   ],
+   "models": [
+    "MiniMax H3 Image"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.45.0",
+   "requires_custom_nodes": false,
+   "size": 66571993088,
+   "usage": 2087,
+   "files": [
+    {
+     "name": "minimax_h3_image_pruned_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "83eb140f1ff95c068f8a6886e6d3f3d0d4ab2e07bb2fe6d2ef992a51146ee622"
+    },
+    {
+     "name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+     "directory": "text_encoders",
+     "sha256": "bc2ced0fbea64757fa9acddccfc0b3f4819d1dcf1da6c124d690d368be283923"
+    },
+    {
+     "name": "minimax_h3_image_vae_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/vae/minimax_h3_image_vae_fp16.safetensors",
+     "directory": "vae",
+     "sha256": "d80e9c2e5cfc9844869961ff5a58c9a9e52182df6bfb30b26018dd7f348721af"
+    },
+    {
+     "name": "qwen3.5_9b_w4a8_gptq.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Qwen3.5/resolve/main/text_encoders/qwen3.5_9b_w4a8_gptq.safetensors",
+     "directory": "text_encoders",
+     "sha256": "4cc6a1543ad2061806da46f35f90cadb4801dcba246c44782cf42ec0feb6407c"
+    }
+   ]
+  },
+  {
+   "name": "image_minimax_h3_image_t2i",
+   "title": "MiniMax-H3-Image: Text to Image",
+   "description": "Generate a photoreal or graphic image from a text prompt with MiniMax-H3-Image, an open-weights model whose single checkpoint handles both text-to-image and image editing. Generation is distilled to 6 steps with no CFG and outputs about 16 MP natively, and an optional prompt expander turns a short request into the detailed caption the model reads best.",
+   "kind": "image",
+   "tags": [
+    "Text to Image"
+   ],
+   "models": [
+    "MiniMax H3 Image"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.45.0",
+   "requires_custom_nodes": false,
+   "size": 66571993088,
+   "usage": 1286,
+   "files": [
+    {
+     "name": "minimax_h3_image_pruned_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "83eb140f1ff95c068f8a6886e6d3f3d0d4ab2e07bb2fe6d2ef992a51146ee622"
+    },
+    {
+     "name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+     "directory": "text_encoders",
+     "sha256": "bc2ced0fbea64757fa9acddccfc0b3f4819d1dcf1da6c124d690d368be283923"
+    },
+    {
+     "name": "minimax_h3_image_vae_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/vae/minimax_h3_image_vae_fp16.safetensors",
+     "directory": "vae",
+     "sha256": "d80e9c2e5cfc9844869961ff5a58c9a9e52182df6bfb30b26018dd7f348721af"
+    },
+    {
+     "name": "qwen3.5_9b_w4a8_gptq.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Qwen3.5/resolve/main/text_encoders/qwen3.5_9b_w4a8_gptq.safetensors",
+     "directory": "text_encoders",
+     "sha256": "4cc6a1543ad2061806da46f35f90cadb4801dcba246c44782cf42ec0feb6407c"
+    }
+   ]
+  },
+  {
    "name": "image_minimax_h3_t2i",
    "title": "MiniMax H3: Text to Image",
    "description": "Generate a single still image from a text prompt with MiniMax H3, an omni-modal video model used here for its first-frame decode. No file inputs required: the graph samples an empty latent and decodes it through the H3 video VAE. Best suited to a single subject with a defined light source and a simple or blurred background.",
@@ -4244,10 +4331,10 @@
     "MiniMax H3"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.30.0",
+   "min_comfyui_version": "0.32.0",
    "requires_custom_nodes": false,
    "size": 41865330663,
-   "usage": 983,
+   "usage": 1447,
    "files": [
     {
      "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
@@ -4287,10 +4374,10 @@
     "MOSS-Image"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.41.3",
+   "min_comfyui_version": "0.42.0",
    "requires_custom_nodes": false,
    "size": 22226455757,
-   "usage": 2254,
+   "usage": 1611,
    "files": [
     {
      "name": "moss_image_base_int8_convrot.safetensors",
@@ -4325,10 +4412,10 @@
     "MOSS-Image"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.41.3",
+   "min_comfyui_version": "0.42.0",
    "requires_custom_nodes": false,
    "size": 22226455757,
-   "usage": 128,
+   "usage": 44,
    "files": [
     {
      "name": "moss_image_base_int8_convrot.safetensors",
@@ -4356,8 +4443,8 @@
    "description": "Re-pose and re-style a reference photo with MOSS-Image: the graph estimates the reference's geometry with MoGe 3, then generates a new image that keeps the pose, framing and silhouette while the prompt decides the character, wardrobe, setting and light. A color/depth control adapter LoRA makes the model follow the estimated map, and the color map socket is there for region-painted layouts.",
    "kind": "image",
    "tags": [
-    "Image",
-    "Depth"
+    "Depth",
+    "Image"
    ],
    "models": [
     "MOSS-Image"
@@ -4366,7 +4453,7 @@
    "min_comfyui_version": "0.43.0",
    "requires_custom_nodes": false,
    "size": 18253611008,
-   "usage": 217,
+   "usage": 239,
    "files": [
     {
      "name": "moss_image_sft_int8_convrot.safetensors",
@@ -4415,7 +4502,7 @@
    "min_comfyui_version": "0.43.0",
    "requires_custom_nodes": false,
    "size": 13314398618,
-   "usage": 1703,
+   "usage": 2158,
    "files": [
     {
      "name": "moss_image_sft_int8_convrot.safetensors",
@@ -4455,10 +4542,10 @@
     "MOSS-Image"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.41.3",
+   "min_comfyui_version": "0.42.0",
    "requires_custom_nodes": false,
    "size": 22222122562,
-   "usage": 6885,
+   "usage": 5456,
    "files": [
     {
      "name": "moss_image_sft_int8_convrot.safetensors",
@@ -4493,16 +4580,16 @@
     "MOSS-Image"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.41.3",
+   "min_comfyui_version": "0.42.0",
    "requires_custom_nodes": false,
    "size": 15461882266,
-   "usage": 352,
+   "usage": 159,
    "files": [
     {
      "name": "moss_image_sft_int8_convrot.safetensors",
-     "url": "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/diffusion_models/moss_image_base_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/diffusion_models/moss_image_sft_int8_convrot.safetensors",
      "directory": "diffusion_models",
-     "sha256": "f601c1e1161915fb3fea003da0c1782e374dd960fbb3978bc0e4e3fa1f2d8e6f"
+     "sha256": "b4d1475bc7eeffd7b809e82ea13a1fba1fb85c4e18365af3813722faa5c0fe4f"
     },
     {
      "name": "qwen3.5_9b_w4a8_gptq.safetensors",
@@ -4535,7 +4622,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 10630044058,
-   "usage": 80,
+   "usage": 79,
    "files": [
     {
      "name": "NetaYumev35_pretrained_all_in_one.safetensors",
@@ -4559,10 +4646,10 @@
     "NewBie"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.3.42",
+   "min_comfyui_version": "0.6.0",
    "requires_custom_nodes": false,
    "size": 16213501542,
-   "usage": 38,
+   "usage": 34,
    "files": [
     {
      "name": "NewBie-Image-Exp0.1-bf16.safetensors",
@@ -4721,7 +4808,7 @@
    "min_comfyui_version": "0.44.0",
    "requires_custom_nodes": false,
    "size": 40355148082,
-   "usage": 269,
+   "usage": 3266,
    "files": [
     {
      "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
@@ -4772,7 +4859,7 @@
    "min_comfyui_version": "0.44.0",
    "requires_custom_nodes": false,
    "size": 37918538036,
-   "usage": 245,
+   "usage": 1191,
    "files": [
     {
      "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
@@ -4818,10 +4905,10 @@
     "PixelDiT"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.16.0",
+   "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 7838315315,
-   "usage": 20,
+   "usage": 16,
    "files": [
     {
      "name": "gemma_2_2b_it_elm_bf16.safetensors",
@@ -4854,7 +4941,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31782757990,
-   "usage": 273,
+   "usage": 270,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -4898,7 +4985,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 35326106010,
-   "usage": 39,
+   "usage": 56,
    "files": [
     {
      "name": "Qwen-Image-2512-Fun-Controlnet-Union-2602.safetensors",
@@ -4948,7 +5035,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31782757990,
-   "usage": 14,
+   "usage": 15,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -4993,7 +5080,7 @@
    "min_comfyui_version": "0.3.49",
    "requires_custom_nodes": false,
    "size": 32427003085,
-   "usage": 40,
+   "usage": 58,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -5037,7 +5124,7 @@
    "min_comfyui_version": "0.37.0",
    "requires_custom_nodes": false,
    "size": 21367462298,
-   "usage": 239,
+   "usage": 247,
    "files": [
     {
      "name": "qwen_image_2.1_int8_convrot.safetensors",
@@ -5072,10 +5159,10 @@
     "Qwen Image 2.1"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.37.0",
+   "min_comfyui_version": "0.37.2",
    "requires_custom_nodes": false,
    "size": 26736171418,
-   "usage": 15631,
+   "usage": 16593,
    "files": [
     {
      "name": "qwen_image_2.1_int8_convrot.safetensors",
@@ -5119,7 +5206,7 @@
    "min_comfyui_version": "0.37.2",
    "requires_custom_nodes": false,
    "size": 26736171418,
-   "usage": 2457,
+   "usage": 2694,
    "files": [
     {
      "name": "qwen_image_2.1_int8_convrot.safetensors",
@@ -5162,7 +5249,7 @@
    "min_comfyui_version": "0.39.0",
    "requires_custom_nodes": false,
    "size": 41016937677,
-   "usage": 2986,
+   "usage": 3161,
    "files": [
     {
      "name": "qwen_image_2.1_turbo_int8_convrot.safetensors",
@@ -5207,7 +5294,7 @@
    "min_comfyui_version": "0.39.0",
    "requires_custom_nodes": false,
    "size": 40984448745,
-   "usage": 1167,
+   "usage": 922,
    "files": [
     {
      "name": "qwen_image_2.1_turbo_int8_convrot.safetensors",
@@ -5252,7 +5339,7 @@
    "min_comfyui_version": "0.3.52",
    "requires_custom_nodes": false,
    "size": 34037615821,
-   "usage": 28,
+   "usage": 57,
    "files": [
     {
      "name": "qwen_image_canny_diffsynth_controlnet.safetensors",
@@ -5301,7 +5388,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31782757990,
-   "usage": 68,
+   "usage": 34,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5345,7 +5432,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 31782757990,
-   "usage": 3470,
+   "usage": 3057,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5389,7 +5476,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 31772020572,
-   "usage": 44,
+   "usage": 35,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5435,10 +5522,10 @@
     "Qwen-Image-Edit"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.4.0",
+   "min_comfyui_version": "0.5.0",
    "requires_custom_nodes": false,
    "size": 51324859187,
-   "usage": 432,
+   "usage": 394,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5482,7 +5569,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 31031138714,
-   "usage": 1097,
+   "usage": 1035,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5523,10 +5610,10 @@
     "Qwen-Image"
    ],
    "open_source": false,
-   "min_comfyui_version": "0.3.42",
+   "min_comfyui_version": "0.3.49",
    "requires_custom_nodes": false,
    "size": 35304631173,
-   "usage": 45,
+   "usage": 28,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -5589,7 +5676,7 @@
    "min_comfyui_version": "0.3.57",
    "requires_custom_nodes": false,
    "size": 36013300777,
-   "usage": 185,
+   "usage": 168,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -5638,7 +5725,7 @@
    "min_comfyui_version": "0.6.0",
    "requires_custom_nodes": false,
    "size": 50465865728,
-   "usage": 70,
+   "usage": 72,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -5675,7 +5762,7 @@
    "min_comfyui_version": "0.6.0",
    "requires_custom_nodes": false,
    "size": 0,
-   "usage": 27,
+   "usage": 38,
    "files": [
     {
      "name": "qwen_image_layered_control_bf16.safetensors",
@@ -5714,7 +5801,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 32749125632,
-   "usage": 18,
+   "usage": 17,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -5764,7 +5851,7 @@
    "min_comfyui_version": "0.0.1",
    "requires_custom_nodes": false,
    "size": 6979321856,
-   "usage": 456,
+   "usage": 391,
    "files": [
     {
      "name": "sd_xl_base_1.0.safetensors",
@@ -5791,7 +5878,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 41049149932,
-   "usage": 100,
+   "usage": 69,
    "files": [
     {
      "name": "wan2.1_i2v_480p_14B_fp16.safetensors",
@@ -5835,7 +5922,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 20830591386,
-   "usage": 318,
+   "usage": 357,
    "files": [
     {
      "name": "ae.safetensors",
@@ -5873,7 +5960,7 @@
    "min_comfyui_version": "0.23.0",
    "requires_custom_nodes": false,
    "size": 14602888806,
-   "usage": 29,
+   "usage": 66,
    "files": [
     {
      "name": "ae.safetensors",
@@ -5911,7 +5998,7 @@
    "min_comfyui_version": "0.11.0",
    "requires_custom_nodes": false,
    "size": 20830591386,
-   "usage": 14712,
+   "usage": 14882,
    "files": [
     {
      "name": "qwen_3_4b.safetensors",
@@ -5946,10 +6033,10 @@
     "Z-Image-Turbo"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.3.57",
+   "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 23837068493,
-   "usage": 356,
+   "usage": 319,
    "files": [
     {
      "name": "qwen_3_4b.safetensors",
@@ -5993,7 +6080,7 @@
    "min_comfyui_version": "0.11.0",
    "requires_custom_nodes": false,
    "size": 12133282611,
-   "usage": 90,
+   "usage": 144,
    "files": [
     {
      "name": "qwen_3_4b_fp8_mixed.safetensors",
@@ -6027,7 +6114,7 @@
     "Gemma 4"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.15.0",
+   "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 9019431322,
    "usage": 73,
@@ -6052,10 +6139,10 @@
     "Qwen3.5"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.15.0",
+   "min_comfyui_version": "0.19.0",
    "requires_custom_nodes": false,
    "size": 9341553869,
-   "usage": 118,
+   "usage": 198,
    "files": [
     {
      "name": "qwen3.5_4b_bf16.safetensors",
@@ -6080,7 +6167,7 @@
    "min_comfyui_version": "0.15.0",
    "requires_custom_nodes": false,
    "size": 8053063680,
-   "usage": 25,
+   "usage": 31,
    "files": [
     {
      "name": "qwen_3_4b.safetensors",
@@ -6102,7 +6189,7 @@
     "Qwen 3.0"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.15.0",
+   "min_comfyui_version": "0.44.0",
    "requires_custom_nodes": false,
    "size": 5261334938,
    "usage": 129,
@@ -6229,7 +6316,7 @@
    "min_comfyui_version": "0.3.5",
    "requires_custom_nodes": false,
    "size": 23590107873,
-   "usage": 209,
+   "usage": 193,
    "files": [
     {
      "name": "sd3.5_large_fp8_scaled.safetensors",
@@ -6262,7 +6349,7 @@
    "min_comfyui_version": "0.3.42",
    "requires_custom_nodes": false,
    "size": 23590107873,
-   "usage": 38,
+   "usage": 27,
    "files": [
     {
      "name": "sd3.5_large_controlnet_depth.safetensors",
@@ -6307,7 +6394,7 @@
    "min_comfyui_version": "0.3.5",
    "requires_custom_nodes": false,
    "size": 14935748772,
-   "usage": 29,
+   "usage": 19,
    "files": [
     {
      "name": "sd3.5_large_fp8_scaled.safetensors",
@@ -6334,7 +6421,7 @@
    "min_comfyui_version": "0.0.1",
    "requires_custom_nodes": false,
    "size": 13013750907,
-   "usage": 49,
+   "usage": 52,
    "files": [
     {
      "name": "sd_xl_refiner_1.0.safetensors",
@@ -6367,7 +6454,7 @@
    "min_comfyui_version": "0.0.1",
    "requires_custom_nodes": false,
    "size": 10630044058,
-   "usage": 19,
+   "usage": 38,
    "files": [
     {
      "name": "clip_vision_g.safetensors",
@@ -6400,7 +6487,7 @@
    "min_comfyui_version": "0.0.1",
    "requires_custom_nodes": false,
    "size": 13013750907,
-   "usage": 77,
+   "usage": 156,
    "files": [
     {
      "name": "sd_xl_base_1.0.safetensors",
@@ -6433,7 +6520,7 @@
    "min_comfyui_version": "0.0.1",
    "requires_custom_nodes": false,
    "size": 6936372183,
-   "usage": 117,
+   "usage": 54,
    "files": [
     {
      "name": "sd_xl_turbo_1.0_fp16.safetensors",
@@ -6460,7 +6547,7 @@
    "min_comfyui_version": "0.35.2",
    "requires_custom_nodes": false,
    "size": 48962627174,
-   "usage": 31,
+   "usage": 22,
    "files": [
     {
      "name": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
@@ -6515,7 +6602,7 @@
    "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 39621073306,
-   "usage": 72,
+   "usage": 112,
    "files": [
     {
      "name": "ltx-2.3-22b-distilled-fp8.safetensors",
@@ -6598,7 +6685,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 32534377267,
-   "usage": 25,
+   "usage": 22,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -6645,7 +6732,7 @@
     "Qwen Image Edit 2511"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.4.0",
+   "min_comfyui_version": "0.5.0",
    "requires_custom_nodes": false,
    "size": 51646981734,
    "usage": 0,
@@ -6698,7 +6785,7 @@
    "min_comfyui_version": "0.3.49",
    "requires_custom_nodes": false,
    "size": 30816390349,
-   "usage": 50,
+   "usage": 71,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6741,7 +6828,7 @@
    "min_comfyui_version": "0.40.0",
    "requires_custom_nodes": false,
    "size": 31245887078,
-   "usage": 928,
+   "usage": 877,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6790,10 +6877,10 @@
     "Z-Image-Turbo"
    ],
    "open_source": false,
-   "min_comfyui_version": "0.11.1",
+   "min_comfyui_version": "0.16.1",
    "requires_custom_nodes": false,
    "size": 20723217203,
-   "usage": 36,
+   "usage": 35,
    "files": [
     {
      "name": "z_image_turbo_bf16.safetensors",
@@ -6835,7 +6922,7 @@
     "Qwen-Image"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.3.42",
+   "min_comfyui_version": "0.3.49",
    "requires_custom_nodes": false,
    "size": 30709016166,
    "usage": 12,
@@ -6878,10 +6965,10 @@
     "Qwen-Image-Edit"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.4.0",
+   "min_comfyui_version": "0.5.0",
    "requires_custom_nodes": false,
    "size": 31245887078,
-   "usage": 249,
+   "usage": 230,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6930,7 +7017,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 31198642438,
-   "usage": 75,
+   "usage": 57,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -6980,7 +7067,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 0,
-   "usage": 44,
+   "usage": 63,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -7109,7 +7196,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 0,
-   "usage": 52,
+   "usage": 31,
    "files": [
     {
      "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -7212,7 +7299,7 @@
     "Wan2.2"
    ],
    "open_source": false,
-   "min_comfyui_version": "0.3.53",
+   "min_comfyui_version": "0.35.2",
    "requires_custom_nodes": false,
    "size": 38010460570,
    "usage": 6,
@@ -7314,7 +7401,7 @@
    "min_comfyui_version": "0.4.0",
    "requires_custom_nodes": false,
    "size": 31138512896,
-   "usage": 42,
+   "usage": 45,
    "files": [
     {
      "name": "qwen_image_vae.safetensors",
@@ -7363,10 +7450,10 @@
     "Z-Image-Turbo"
    ],
    "open_source": false,
-   "min_comfyui_version": "0.11.1",
+   "min_comfyui_version": "0.16.1",
    "requires_custom_nodes": false,
    "size": 20723217203,
-   "usage": 28,
+   "usage": 18,
    "files": [
     {
      "name": "z_image_turbo_bf16.safetensors",
@@ -7411,7 +7498,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 9824737690,
-   "usage": 52,
+   "usage": 64,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -7450,7 +7537,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 16492674417,
-   "usage": 9,
+   "usage": 17,
    "files": [
     {
      "name": "sd_xl_base_1.0.safetensors",
@@ -7482,7 +7569,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 0,
-   "usage": 40,
+   "usage": 31,
    "files": [
     {
      "name": "RealESRGAN_x4plus.safetensors",
@@ -7507,7 +7594,7 @@
    "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 429496730,
-   "usage": 107,
+   "usage": 111,
    "files": [
     {
      "name": "birefnet.safetensors",
@@ -7532,7 +7619,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 1288490189,
-   "usage": 20,
+   "usage": 27,
    "files": [
     {
      "name": "depth_anything_3_mono_large.safetensors",
@@ -7557,7 +7644,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 1288490189,
-   "usage": 207,
+   "usage": 230,
    "files": [
     {
      "name": "depth_anything_3_mono_large.safetensors",
@@ -7582,7 +7669,7 @@
    "min_comfyui_version": "0.20.0",
    "requires_custom_nodes": false,
    "size": 1717986918,
-   "usage": 127,
+   "usage": 120,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -7608,7 +7695,7 @@
    "min_comfyui_version": "0.37.0",
    "requires_custom_nodes": false,
    "size": 2469606195,
-   "usage": 76,
+   "usage": 47,
    "files": [
     {
      "name": "moge_3_vitg_fp16.safetensors",
@@ -7693,6 +7780,39 @@
    ]
   },
   {
+   "name": "utility_relayvsr_video_x2_upscale",
+   "title": "Video Upscale: RelayVSR 2x",
+   "description": "Upscale real footage 2x with RelayVSR: a large Wan-based model writes reference latents for sparse keyframes and a compact Flash decoder carries them across every frame, so a long clip is restored in one streaming pass at one sampling step. Output is exactly 2x the input at the source frame rate, with the audio track kept. Ideal as the finishing pass after a 480p-768p generation.",
+   "kind": "video",
+   "tags": [
+    "Video Upscale",
+    "2x",
+    "Restoration"
+   ],
+   "models": [
+    "RelayVSR"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.45.0",
+   "requires_custom_nodes": false,
+   "size": 5153960755,
+   "usage": 55,
+   "files": [
+    {
+     "name": "relayvsr_x2_lightx2v_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/RelayVSR/resolve/main/diffusion_models/relayvsr_x2_lightx2v_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "240e75e0c17cf2845d559b25254a230ff7458f81449d7a8c5e7e3fb8275c7b3c"
+    },
+    {
+     "name": "relayvsr_flash_vae_x2_fp32.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/RelayVSR/resolve/main/vae/relayvsr_flash_vae_x2_fp32.safetensors",
+     "directory": "vae",
+     "sha256": "b5bb0339acb5b52545911ea29a51b4c5b805776a779222b5a14591571f42e21c"
+    }
+   ]
+  },
+  {
    "name": "utility_sam3d_body",
    "title": "SAM 3D Body: 3D Human Mesh Extraction From Video",
    "description": "Extract a full-body 3D human mesh from a single video frame using SAM 3D Body, guided by a text prompt to refine pose and shape estimation. The workflow loads one video and one text prompt, then outputs a reconstructed video showing the recovered human rig. Ideal for motion capture prototyping, biomechanics analysis, and character animation previsualization.",
@@ -7707,7 +7827,7 @@
    "min_comfyui_version": "0.34.0",
    "requires_custom_nodes": false,
    "size": 5476083302,
-   "usage": 153,
+   "usage": 169,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -7750,7 +7870,7 @@
    "min_comfyui_version": "0.19.0",
    "requires_custom_nodes": false,
    "size": 2040109466,
-   "usage": 26,
+   "usage": 22,
    "files": [
     {
      "name": "sdpose_wholebody_fp16.safetensors",
@@ -7812,7 +7932,7 @@
    "min_comfyui_version": "0.16.0",
    "requires_custom_nodes": false,
    "size": 1932735283,
-   "usage": 71,
+   "usage": 73,
    "files": [
     {
      "name": "sdpose_wholebody_fp16.safetensors",
@@ -7837,7 +7957,7 @@
    "min_comfyui_version": "0.16.0",
    "requires_custom_nodes": false,
    "size": 1932735283,
-   "usage": 13,
+   "usage": 19,
    "files": [
     {
      "name": "sdpose_wholebody_fp16.safetensors",
@@ -7863,7 +7983,7 @@
    "min_comfyui_version": "0.28.0",
    "requires_custom_nodes": false,
    "size": 3972844749,
-   "usage": 247,
+   "usage": 127,
    "files": [
     {
      "name": "seedvr2_ema_vae_fp16.safetensors",
@@ -7895,7 +8015,7 @@
    "min_comfyui_version": "0.28.0",
    "requires_custom_nodes": false,
    "size": 3972844749,
-   "usage": 624,
+   "usage": 550,
    "files": [
     {
      "name": "seedvr2_ema_vae_fp16.safetensors",
@@ -7927,7 +8047,7 @@
    "min_comfyui_version": "0.28.0",
    "requires_custom_nodes": false,
    "size": 8804682957,
-   "usage": 646,
+   "usage": 704,
    "files": [
     {
      "name": "seedvr2_ema_vae_fp16.safetensors",
@@ -7959,7 +8079,7 @@
    "min_comfyui_version": "0.20.0",
    "requires_custom_nodes": false,
    "size": 107374182,
-   "usage": 59,
+   "usage": 45,
    "files": [
     {
      "name": "film_net_fp16.safetensors",
@@ -7984,7 +8104,7 @@
    "min_comfyui_version": "0.20.0",
    "requires_custom_nodes": false,
    "size": 1717986918,
-   "usage": 141,
+   "usage": 127,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -8010,7 +8130,7 @@
    "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 34252364186,
-   "usage": 108,
+   "usage": 156,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -8065,7 +8185,7 @@
    "min_comfyui_version": "0.9.0",
    "requires_custom_nodes": false,
    "size": 20723217203,
-   "usage": 308,
+   "usage": 318,
    "files": [
     {
      "name": "z_image_turbo_bf16.safetensors",
@@ -8108,7 +8228,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 38762079846,
-   "usage": 48,
+   "usage": 70,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -8157,7 +8277,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 38762079846,
-   "usage": 287,
+   "usage": 298,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -8207,7 +8327,7 @@
    "min_comfyui_version": "0.3.71",
    "requires_custom_nodes": false,
    "size": 37044092928,
-   "usage": 32,
+   "usage": 25,
    "files": [
     {
      "name": "capybara_v0.1.safetensors",
@@ -8256,7 +8376,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 37044092928,
-   "usage": 19,
+   "usage": 16,
    "files": [
     {
      "name": "capybara_v0.1.safetensors",
@@ -8305,7 +8425,7 @@
    "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 12670153523,
-   "usage": 52,
+   "usage": 70,
    "files": [
     {
      "name": "causal_forcing-framewise.safetensors",
@@ -8343,7 +8463,7 @@
    "min_comfyui_version": "0.43.0",
    "requires_custom_nodes": false,
    "size": 42949672960,
-   "usage": 2141,
+   "usage": 1606,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -8387,7 +8507,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 45097156608,
-   "usage": 1657,
+   "usage": 2067,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -8431,7 +8551,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 42949672960,
-   "usage": 464,
+   "usage": 423,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -8475,7 +8595,7 @@
    "min_comfyui_version": "0.3.60",
    "requires_custom_nodes": false,
    "size": 27895812588,
-   "usage": 17,
+   "usage": 25,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -8525,7 +8645,7 @@
    "min_comfyui_version": "0.3.71",
    "requires_custom_nodes": false,
    "size": 45384919416,
-   "usage": 114,
+   "usage": 86,
    "files": [
     {
      "name": "sigclip_vision_patch14_384.safetensors",
@@ -8731,7 +8851,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 38976828211,
-   "usage": 150,
+   "usage": 142,
    "files": [
     {
      "name": "ltx-2.3-22b-distilled-fp8.safetensors",
@@ -8761,10 +8881,10 @@
     "Lightricks"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.16.4",
+   "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 47244640256,
-   "usage": 18605,
+   "usage": 17756,
    "files": [
     {
      "name": "ltx-2.3-22b-dev-fp8.safetensors",
@@ -8812,10 +8932,10 @@
     "LTX-2.3"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.16.4",
+   "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 42949672960,
-   "usage": 1274,
+   "usage": 1159,
    "files": [
     {
      "name": "ltx-2.3-22b-dev-fp8.safetensors",
@@ -8865,7 +8985,7 @@
    "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 40909563494,
-   "usage": 85,
+   "usage": 81,
    "files": [
     {
      "name": "ltx-2.3-22b-distilled-fp8.safetensors",
@@ -8916,7 +9036,7 @@
    "min_comfyui_version": "0.19.0",
    "requires_custom_nodes": false,
    "size": 43486543872,
-   "usage": 117,
+   "usage": 152,
    "files": [
     {
      "name": "ltx-2.3-22b-dev-fp8.safetensors",
@@ -8964,10 +9084,10 @@
     "Lightricks"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.16.4",
+   "min_comfyui_version": "0.21.0",
    "requires_custom_nodes": false,
    "size": 47244640256,
-   "usage": 697,
+   "usage": 425,
    "files": [
     {
      "name": "ltx-2.3-22b-dev-fp8.safetensors",
@@ -9018,7 +9138,7 @@
    "min_comfyui_version": "0.32.0",
    "requires_custom_nodes": false,
    "size": 56908316672,
-   "usage": 939,
+   "usage": 937,
    "files": [
     {
      "name": "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
@@ -9065,7 +9185,7 @@
    "min_comfyui_version": "0.32.0",
    "requires_custom_nodes": false,
    "size": 56908316672,
-   "usage": 4490,
+   "usage": 4495,
    "files": [
     {
      "name": "gemma4_e2b_it_int8_convrot.safetensors",
@@ -9117,7 +9237,7 @@
    "min_comfyui_version": "0.32.0",
    "requires_custom_nodes": false,
    "size": 53150220288,
-   "usage": 1545,
+   "usage": 1310,
    "files": [
     {
      "name": "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
@@ -9166,7 +9286,7 @@
     "Lightricks"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.8.0",
+   "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 38010460570,
    "usage": 14,
@@ -9223,7 +9343,7 @@
     "Lightricks"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.8.0",
+   "min_comfyui_version": "0.22.0",
    "requires_custom_nodes": false,
    "size": 38010460570,
    "usage": 11,
@@ -9295,7 +9415,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 38010460570,
-   "usage": 106,
+   "usage": 95,
    "files": [
     {
      "name": "ltx-2-19b-dev-fp8.safetensors",
@@ -9346,7 +9466,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 38010460570,
-   "usage": 23,
+   "usage": 20,
    "files": [
     {
      "name": "ltx-2-19b-distilled.safetensors",
@@ -9440,7 +9560,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 45526653338,
-   "usage": 20,
+   "usage": 21,
    "files": [
     {
      "name": "ltx-2-19b-dev-fp8.safetensors",
@@ -9535,7 +9655,7 @@
    "min_comfyui_version": "0.35.0",
    "requires_custom_nodes": false,
    "size": 48747878810,
-   "usage": 154,
+   "usage": 111,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9604,7 +9724,7 @@
    "min_comfyui_version": "0.30.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 19644,
+   "usage": 19812,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9655,7 +9775,7 @@
    "min_comfyui_version": "0.30.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 398,
+   "usage": 403,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9702,10 +9822,10 @@
     "MiniMax H3"
    ],
    "open_source": true,
-   "min_comfyui_version": "0.34.0",
+   "min_comfyui_version": "0.35.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 296,
+   "usage": 270,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9756,7 +9876,7 @@
    "min_comfyui_version": "0.30.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 6777,
+   "usage": 6575,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9807,7 +9927,7 @@
    "min_comfyui_version": "0.30.0",
    "requires_custom_nodes": false,
    "size": 56908316672,
-   "usage": 4356,
+   "usage": 4297,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9858,7 +9978,7 @@
    "min_comfyui_version": "0.44.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 411,
+   "usage": 769,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9909,7 +10029,7 @@
    "min_comfyui_version": "0.44.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 1822,
+   "usage": 3324,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -9959,7 +10079,7 @@
    "min_comfyui_version": "0.44.0",
    "requires_custom_nodes": false,
    "size": 44452911514,
-   "usage": 873,
+   "usage": 1491,
    "files": [
     {
      "name": "minimax_h3_video_vae_int8_convrot.safetensors",
@@ -10007,7 +10127,7 @@
     "Wan"
    ],
    "open_source": false,
-   "min_comfyui_version": "0.3.8",
+   "min_comfyui_version": "0.3.16",
    "requires_custom_nodes": false,
    "size": 22494891213,
    "usage": 18,
@@ -10112,7 +10232,7 @@
    "min_comfyui_version": "0.3.35",
    "requires_custom_nodes": false,
    "size": 42047729828,
-   "usage": 16,
+   "usage": 17,
    "files": [
     {
      "name": "wan2.1_fun_camera_v1.1_14B_bf16.safetensors",
@@ -10155,7 +10275,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 44775034061,
-   "usage": 882,
+   "usage": 866,
    "files": [
     {
      "name": "lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors",
@@ -10217,7 +10337,7 @@
    "min_comfyui_version": "0.25.0",
    "requires_custom_nodes": false,
    "size": 28668906701,
-   "usage": 615,
+   "usage": 552,
    "files": [
     {
      "name": "lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors",
@@ -10280,7 +10400,7 @@
    "min_comfyui_version": "0.17.0",
    "requires_custom_nodes": false,
    "size": 29635274342,
-   "usage": 73,
+   "usage": 78,
    "files": [
     {
      "name": "Wan2_1-I2V-14B-480p_fp8_e4m3fn_scaled_KJ.safetensors",
@@ -10334,10 +10454,10 @@
     "Wan"
    ],
    "open_source": false,
-   "min_comfyui_version": "0.3.31",
+   "min_comfyui_version": "0.3.46",
    "requires_custom_nodes": false,
    "size": 38031935406,
-   "usage": 347,
+   "usage": 375,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -10391,10 +10511,10 @@
     "Wan"
    ],
    "open_source": false,
-   "min_comfyui_version": "0.3.35",
+   "min_comfyui_version": "0.3.51",
    "requires_custom_nodes": false,
    "size": 40050570035,
-   "usage": 20,
+   "usage": 17,
    "files": [
     {
      "name": "wan2.2_fun_camera_high_noise_14B_fp8_scaled.safetensors",
@@ -10452,7 +10572,7 @@
    "min_comfyui_version": "0.3.50",
    "requires_custom_nodes": false,
    "size": 38031935406,
-   "usage": 41,
+   "usage": 62,
    "files": [
     {
      "name": "wan2.2_fun_control_high_noise_14B_fp8_scaled.safetensors",
@@ -10506,7 +10626,7 @@
     "Wan"
    ],
    "open_source": false,
-   "min_comfyui_version": "0.3.31",
+   "min_comfyui_version": "0.3.46",
    "requires_custom_nodes": false,
    "size": 38031935406,
    "usage": 14,
@@ -10566,7 +10686,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 38010460570,
-   "usage": 9549,
+   "usage": 8824,
    "files": [
     {
      "name": "wan_2.1_vae.safetensors",
@@ -10623,7 +10743,7 @@
    "min_comfyui_version": "0.3.55",
    "requires_custom_nodes": false,
    "size": 25254407700,
-   "usage": 98,
+   "usage": 92,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -10674,7 +10794,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 38031935406,
-   "usage": 291,
+   "usage": 323,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -10732,7 +10852,7 @@
    "min_comfyui_version": "0.3.50",
    "requires_custom_nodes": false,
    "size": 18146236826,
-   "usage": 14,
+   "usage": 37,
    "files": [
     {
      "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -10768,7 +10888,7 @@
     "Wan"
    ],
    "open_source": false,
-   "min_comfyui_version": "0.3.31",
+   "min_comfyui_version": "0.3.46",
    "requires_custom_nodes": false,
    "size": 18146236826,
    "usage": 2,
@@ -10810,7 +10930,7 @@
    "min_comfyui_version": "0.3.46",
    "requires_custom_nodes": false,
    "size": 18146236826,
-   "usage": 334,
+   "usage": 333,
    "files": [
     {
      "name": "wan2.2_ti2v_5B_fp16.safetensors",
@@ -10848,7 +10968,7 @@
    "min_comfyui_version": "0.36.0",
    "requires_custom_nodes": false,
    "size": 25662429594,
-   "usage": 1757,
+   "usage": 1630,
    "files": [
     {
      "name": "wan_animate_2_int8_convrot.safetensors",
@@ -10898,7 +11018,7 @@
    "min_comfyui_version": "0.31.0",
    "requires_custom_nodes": false,
    "size": 24910810317,
-   "usage": 191,
+   "usage": 132,
    "files": [
     {
      "name": "wan_animate_2_distill_int8_convrot.safetensors",
@@ -11043,7 +11163,7 @@
    "min_comfyui_version": "0.8.0",
    "requires_custom_nodes": false,
    "size": 57756572713,
-   "usage": 36,
+   "usage": 37,
    "files": [
     {
      "name": "wan2.1_vace_1.3B_fp16.safetensors",
@@ -11169,7 +11289,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 57756572713,
-   "usage": 156,
+   "usage": 148,
    "files": [
     {
      "name": "wan2.1_vace_14B_fp16.safetensors",
@@ -11232,7 +11352,7 @@
    "min_comfyui_version": "0.16.4",
    "requires_custom_nodes": false,
    "size": 57767310131,
-   "usage": 15,
+   "usage": 18,
    "files": [
     {
      "name": "wan_2.1_vae.safetensors",
@@ -11277,7 +11397,7 @@
    "min_comfyui_version": "0.20.0",
    "requires_custom_nodes": false,
    "size": 57767310131,
-   "usage": 206,
+   "usage": 188,
    "files": [
     {
      "name": "sam3.1_multiplex_fp16.safetensors",
@@ -11328,7 +11448,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 57756572713,
-   "usage": 40,
+   "usage": 23,
    "files": [
     {
      "name": "wan2.1_vace_1.3B_fp16.safetensors",
@@ -11488,7 +11608,7 @@
    "min_comfyui_version": "0.3.31",
    "requires_custom_nodes": false,
    "size": 11381663334,
-   "usage": 17,
+   "usage": 15,
    "files": [
     {
      "name": "wan2.1_fun_control_1.3B_bf16.safetensors",

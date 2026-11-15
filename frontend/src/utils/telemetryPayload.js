@@ -82,7 +82,7 @@ export function buildVersionCheckRequest(version, installType) {
  *
  * Exactly the three keys the ingestion Worker accepts; it rejects anything
  * else outright rather than storing it. Keep this in step with
- * ``website/telemetry-worker/src/validate.js``.
+ * ``telemetry-worker/src/validate.js`` in the pixlstash-website repository.
  *
  * @param {{installId: string, isNewInstall: boolean, installType: string}} args
  * @returns {{method: string, url: string, body: Object}}

@@ -78,7 +78,6 @@ PRIVILEGED_WORKFLOW_PATHS = tuple(
         "certum-signer-image.yml",
         "docker-publish.yml",
         "electron.yml",
-        "pages.yml",
         "publish-pypi.yml",
         "rebuild-release.yml",
         "record-test-durations.yml",
@@ -754,53 +753,6 @@ def test_cheap_electron_tests_are_in_the_stable_checks(workflow):
     assert "npm test" in commands
     assert "electron-builder" not in commands
     assert "npm run dist" not in commands
-
-
-def test_telemetry_worker_config_and_d1_contract_are_validated(workflow):
-    """CI checks both Worker behavior and Wrangler's deploy-time config."""
-    steps = workflow["jobs"]["checks"].get("steps", [])
-    telemetry = [
-        step
-        for step in steps
-        if step.get("working-directory") == "website/telemetry-worker"
-    ]
-    commands = "\n".join(step.get("run", "") for step in telemetry)
-    for required in ("npm ci", "npm test", "npm run check:config"):
-        assert required in commands, f"Telemetry CI is missing {required!r}"
-
-    worker_root = REPO_ROOT / "website/telemetry-worker"
-    package = json.loads((worker_root / "package.json").read_text(encoding="utf-8"))
-    config_text = (REPO_ROOT / "website/telemetry-worker/wrangler.jsonc").read_text(
-        encoding="utf-8"
-    )
-    config = json.loads(
-        "\n".join(line.split("//", 1)[0] for line in config_text.splitlines())
-    )
-    scripts = package.get("scripts", {})
-    assert scripts.get("test") == "npm run test:unit && npm run test:d1"
-    assert scripts.get("test:d1") == "node --test test/d1-integration.test.js"
-    assert (worker_root / "test/d1-integration.test.js").is_file()
-    assert scripts.get("check:config", "").startswith(
-        "WRANGLER_LOG_PATH=.wrangler/logs wrangler deploy --dry-run"
-    )
-    # The deploy runs through a script that injects the database id, so the
-    # no-provisioning flags live there: every `wrangler deploy` it makes must
-    # carry them.
-    assert scripts.get("deploy") == "node scripts/deploy.mjs"
-    deploy_script = (worker_root / "scripts/deploy.mjs").read_text(encoding="utf-8")
-    assert (
-        'export const DEPLOY_FLAGS = ["--no-x-provision", "--no-x-auto-create"];'
-        in deploy_script
-    )
-    deploy_calls = re.findall(r'wrangler\(\["deploy",[^\]]*\]', deploy_script)
-    assert deploy_calls, "deploy.mjs no longer runs wrangler deploy"
-    assert all("...DEPLOY_FLAGS" in call for call in deploy_calls)
-    d1_bindings = config.get("d1_databases", [])
-    assert any(binding.get("binding") == "DB" for binding in d1_bindings)
-    assert all("database_id" not in binding for binding in d1_bindings)
-    assert config.get("triggers", {}).get("crons") == ["*/5 * * * *"]
-    assert config.get("limits", {}).get("cpu_ms") == 30000
-    assert config.get("observability", {}).get("enabled") is True
 
 
 def test_deferred_files_still_run_in_the_informational_sweep(workflow):

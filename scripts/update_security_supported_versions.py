@@ -4,7 +4,7 @@ PixlStash supports exactly one minor series: the latest. The table therefore
 always has three rows - the supported minor, the one it just demoted, and a
 catch-all ``< previous`` row - and it was maintained by hand at release time.
 ``.github/workflows/release-version.yml`` runs this script against the ``main``
-checkout so the table lands in the same bot PR as the other website updates.
+checkout and opens a bot PR with the result.
 
 The demoted minor is read back out of the existing table rather than computed
 by subtracting one, because ``2.0.0`` follows ``1.9.x`` and arithmetic would

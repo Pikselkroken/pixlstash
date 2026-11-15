@@ -161,18 +161,6 @@ jobs:
           path: ~/.cache/electron
           key: ${{ steps.electron-cache.outputs.cache-primary-key }}
 
-      - name: Install telemetry Worker dependencies
-        working-directory: website/telemetry-worker
-        run: npm ci
-
-      - name: Test telemetry Worker
-        working-directory: website/telemetry-worker
-        run: npm test
-
-      - name: Validate telemetry Worker config and D1 binding
-        working-directory: website/telemetry-worker
-        run: npm run check:config
-
   # ---------------------------------------------------------------------------
   # The single writer of the HuggingFace model cache. Every other job restores
   # it read-only (see .github/actions/setup-backend).
@@ -521,9 +509,9 @@ jobs:
           tests/test_authz_library_pin.py
           tests/test_backend_order_stability.py
           tests/test_batch_character_likeness_scope.py
-          tests/test_build_prerelease_site.py
           tests/test_builtin_models.py
           tests/test_character_face_assignment.py
+          tests/test_character_sheet.py
           tests/test_characters_api.py
           tests/test_checkpoint_hash_finder.py
           tests/test_child_sets.py

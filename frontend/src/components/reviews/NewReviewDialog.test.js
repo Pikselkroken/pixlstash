@@ -23,6 +23,7 @@ vi.mock("../../utils/apiClient", () => ({
 }));
 
 import NewReviewDialog from "./NewReviewDialog.vue";
+import { apiClient } from "../../utils/apiClient";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 
@@ -261,5 +262,38 @@ describe("NewReviewDialog locked prefilled set scope", () => {
     expect(w.find(".rs-listbox-menu").attributes("aria-activedescendant")).toBe(
       "rs-set-opt-2",
     );
+  });
+});
+
+describe("NewReviewDialog candidate source", () => {
+  const mountWith = (props = {}) => {
+    seedStore();
+    apiClient.post.mockClear();
+    return mount(NewReviewDialog, {
+      props: { preset: "shirt", ...props },
+      global: globalOpts,
+    });
+  };
+
+  it("asks for label disagreements by default, with no source in the request", async () => {
+    const w = mountWith();
+    expect(w.find(".rs-dialog-limit").exists()).toBe(false);
+    await w.find(".rs-dialog-btn--go").trigger("click");
+    expect(apiClient.post).toHaveBeenCalledWith("/reviews", { tag: "shirt" });
+  });
+
+  it("opened on the unsure pictures, sends the source and the chosen count", async () => {
+    const w = mountWith({ presetSource: "model" });
+    // Earlier verdicts take a picture out of this pool, so the toggle is gone.
+    expect(w.find('.rs-dialog-include input[type="checkbox"]').exists()).toBe(
+      false,
+    );
+    await w.find(".rs-dialog-limit select").setValue(100);
+    await w.find(".rs-dialog-btn--go").trigger("click");
+    expect(apiClient.post).toHaveBeenCalledWith("/reviews", {
+      tag: "shirt",
+      source: "model",
+      limit: 100,
+    });
   });
 });

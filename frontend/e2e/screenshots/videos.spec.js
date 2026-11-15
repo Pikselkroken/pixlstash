@@ -1,4 +1,4 @@
-// Records Getting started videos 02, 03 and 06 (website/introduction.html) from
+// Records Getting started videos 02, 03 and 06 (the website's introduction.html) from
 // the real desktop app, the same way capture.spec.js takes the stills: one
 // Electron app off screen, the demo-data library (electronApp.js).
 //
@@ -9,21 +9,18 @@
 // gets a drawn one that follows the real mouse events, and every move glides
 // rather than jumps: the viewer has to see where the click lands.
 //
-// Each video writes website/screenshots/output/<name>.mp4. They change the
+// Each video writes <name>.mp4 beside the stills (websiteDir.js). They change the
 // library (a new person, a tag), so they run after the stills. 01 (a drag in
 // from the desktop), 04 and 05 (which need the owner's tags and embeddings to
 // mean anything) and 07 are recorded by hand.
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { test, expect, freshUiState } from './electronApp.js'
 import { WORK_INFO } from './electron-setup.js'
 import { GridPage } from '../pages/GridPage.js'
 import { SideBar } from '../pages/SideBar.js'
-
-const here = dirname(fileURLToPath(import.meta.url))
-const OUT_DIR = join(here, '..', '..', '..', 'website', 'screenshots', 'output')
+import { OUT_DIR } from './websiteDir.js'
 
 // The site's videos are 1080 tall; the window is 1600x1000 CSS px at 2x.
 const VIDEO_SIZE = '1728:1080'

@@ -5,11 +5,48 @@
     :subtitle="subtitle"
     size="2xl"
     :pad-body="false"
-    :persistent="busy"
+    :persistent="busy || !!sheetStep?.working || !!sheetStep?.zooming"
     @close="close"
     @accept="onAccept"
   >
-    <div class="cts-pane" data-testid="cts-picks">
+    <div class="cts-frame">
+    <nav v-if="stepped" class="cts-stp" aria-label="Steps" data-testid="cts-steps">
+      <button
+        type="button"
+        class="cts-stp__s"
+        :class="mode === 'generate' ? 'cts-stp__s--on' : 'cts-stp__s--done'"
+        :aria-current="mode === 'generate' ? 'step' : undefined"
+        :disabled="mode === 'generate' || busy || !!created"
+        @click="mode = 'generate'"
+      >
+        <span class="cts-stp__n"
+          ><v-icon v-if="mode !== 'generate'" size="12">mdi-check</v-icon
+          ><template v-else>1</template></span
+        >Sheets
+      </button>
+      <span class="cts-stp__sep" aria-hidden="true" />
+      <span
+        class="cts-stp__s"
+        :class="{ 'cts-stp__s--on': mode === 'pick' }"
+        :aria-current="mode === 'pick' ? 'step' : undefined"
+      >
+        <span class="cts-stp__n">2</span>Pick the set
+      </span>
+      <span v-if="sheetStep?.loraName" class="cts-stp__lora"
+        ><v-icon size="12">mdi-puzzle-outline</v-icon>with
+        {{ sheetStep.loraName }}</span
+      >
+    </nav>
+    <CharacterSheetStep
+      v-if="stepped && character"
+      v-show="mode === 'generate'"
+      ref="sheetStep"
+      :character="character"
+      :picture-count="data?.stills?.candidates ?? 0"
+      @done="onGenerated"
+    />
+    <div v-show="mode === 'pick'" class="cts-split">
+    <div class="cts-pane cts-pane--picks" data-testid="cts-picks">
       <p v-if="loadError" class="cts-notice cts-notice--bad" role="alert">
         <v-icon size="16">mdi-alert-circle-outline</v-icon>
         <span>{{ loadError }}</span>
@@ -25,7 +62,26 @@
         >
           <div class="cts-grp-h">
             <h3 class="cts-secl">{{ g.title }}</h3>
-            <span class="cts-note">{{ g.note }}</span>
+            <span
+              v-if="g.capped && g.reachable"
+              class="cts-note cts-note--warn"
+              :data-testid="`cts-capped-${g.key}`"
+              >{{ g.cappedShort
+              }}<Tooltip :text="g.cappedText" activator="parent"
+            /></span>
+            <span v-else class="cts-note">{{ g.note }}</span>
+            <Segmented
+              v-if="g.key === 'stills' && generated.length"
+              v-model="newOnly"
+              class="cts-newonly"
+              aria-label="Show"
+              :options="[
+                { id: false, label: 'All' },
+                { id: true, label: 'New only' },
+              ]"
+              data-testid="cts-new-only"
+              @update:model-value="onNewOnly"
+            />
           </div>
           <p
             v-if="!g.reachable"
@@ -38,7 +94,14 @@
           <template v-else>
             <div class="cts-slw">
               <div class="cts-sl">
-                <div class="cts-range">
+                <div class="cts-range cts-range--kept" :style="{ '--cts-at': g.at }">
+                  <span class="cts-range__fill" aria-hidden="true" />
+                  <span
+                    v-if="g.capPercent > 0"
+                    class="cts-range__cap"
+                    :style="{ width: `${g.capPercent}%` }"
+                    aria-hidden="true"
+                  />
                   <input
                     :id="`${uid}-${g.key}`"
                     class="cts-range__input"
@@ -54,32 +117,11 @@
                     @input="onSlide(g.key, $event)"
                     @keydown.enter.prevent
                   />
-                  <span
-                    v-if="g.capPercent > 0"
-                    class="cts-range__cap"
-                    :style="{ width: `${g.capPercent}%` }"
-                    aria-hidden="true"
-                  />
                 </div>
                 <span class="cts-val">{{ g.size }}</span>
                 <span class="cts-note">of {{ g.passing }}</span>
               </div>
-              <div v-if="g.mark" class="cts-marks" aria-hidden="true">
-                <span
-                  class="cts-mk"
-                  :style="{ left: `${g.mark.percent}%` }"
-                  >{{ g.mark.at }} · {{ g.mark.label }}</span
-                >
-              </div>
             </div>
-            <p
-              v-if="g.capped"
-              class="cts-notice"
-              :data-testid="`cts-capped-${g.key}`"
-            >
-              <v-icon size="16">mdi-information-outline</v-icon>
-              <span>{{ g.cappedText }}</span>
-            </p>
             <ul class="cts-sheet">
               <li
                 v-for="p in tilesOf(g)"
@@ -119,15 +161,27 @@
                     loading="lazy"
                   />
                   <span class="cts-tile__rk">{{ p.rank }}</span>
+                  <span
+                    v-if="generatedSet.has(p.picture_id)"
+                    class="cts-tile__new"
+                    data-testid="cts-new"
+                    ><i aria-hidden="true" />new</span
+                  >
                   <span v-if="g.key === 'clips'" class="cts-tile__clip">
                     <v-icon size="12">mdi-video-outline</v-icon>
                   </span>
-                </div>
-                <div class="cts-cap" aria-hidden="true">
-                  <span>{{ labelsLine(p) }}</span>
-                  <span v-if="p.likeness != null" class="cts-cap__lk">{{
+                  <span v-if="p.likeness != null" class="cts-tile__lk">{{
                     p.likeness
                   }}</span>
+                </div>
+                <div class="cts-cap" aria-hidden="true">
+                  <span
+                    v-for="c in chipsOf(p)"
+                    :key="c.label"
+                    class="cts-chip"
+                    :class="c.hue"
+                    >{{ c.label }}</span
+                  >
                 </div>
               </li>
             </ul>
@@ -139,6 +193,10 @@
     <aside class="cts-pane cts-pane--side" data-testid="cts-coverage">
       <div class="cts-side-h">
         <h3 class="cts-secl">Coverage</h3>
+        <div v-if="coverage" class="cts-legend">
+          <u />picked <i />target for {{ coverage.size }}
+          {{ coverage.unit }}
+        </div>
         <Segmented
           v-if="data?.has_clips"
           v-model="coverageKey"
@@ -150,10 +208,6 @@
         />
       </div>
       <template v-if="coverage">
-        <div class="cts-legend">
-          <u />picked <i />target for {{ coverage.size }}
-          {{ coverage.unit }}
-        </div>
         <div
           v-for="axis in coverage.axes"
           :key="axis.name"
@@ -165,19 +219,26 @@
             v-for="row in axis.rows"
             :key="row.label"
             class="cts-bar"
-            :class="{ 'cts-bar--zero': !row.count }"
+            :class="{ 'cts-bar--zero': !row.count, 'cts-bar--none': row.none }"
             :data-testid="`cts-bar-${row.label}`"
           >
             <span>{{ row.label }}</span>
             <span class="cts-bar__track">
               <span
                 class="cts-bar__fill"
+                :class="hueOf(axis.name, row.label)"
                 :style="{ width: `${row.fillPercent}%` }"
               />
               <span
                 class="cts-bar__tgt"
                 :style="{ left: `${row.targetPercent}%` }"
               />
+              <span
+                v-if="row.none"
+                class="cts-bar__none"
+                :style="noneStyle(row)"
+                >not in the library</span
+              >
             </span>
             <span class="cts-bar__v">{{ row.count }}</span>
             <span class="cts-bar__of" :class="{ 'cts-bar__of--short': row.short }"
@@ -185,62 +246,6 @@
               >{{ row.status }}</span
             >
           </div>
-        </div>
-
-        <div class="cts-gapbox">
-          <template v-if="coverage.closable.length">
-            <h4 class="cts-gk">The slider can close</h4>
-            <div
-              v-for="gap in coverage.closable"
-              :key="gap.label"
-              class="cts-g"
-              data-testid="cts-gap-closable"
-            >
-              <v-icon size="16">mdi-arrow-right</v-icon>
-              <span class="cts-g__t"
-                >{{ capital(gap.label) }} {{ gap.short }} short · at
-                {{ gap.at }}</span
-              >
-              <AppButton
-                size="sm"
-                :disabled="busy || !!created"
-                @click="setSize(coverageKey, gap.at)"
-              >
-                Show {{ gap.at }}
-              </AppButton>
-            </div>
-          </template>
-          <template v-if="coverage.outside.length">
-            <h4 class="cts-gk">Past the top 50</h4>
-            <div
-              v-for="gap in coverage.outside"
-              :key="gap.label"
-              class="cts-g"
-              data-testid="cts-gap-outside"
-            >
-              <v-icon size="16">mdi-dots-horizontal</v-icon>
-              <span class="cts-g__t"
-                >{{ capital(gap.label) }}: {{ gap.available }} in the pool,
-                {{ gap.inTop ? `only ${gap.inTop}` : "none" }} in the top
-                {{ gap.top }}</span
-              >
-            </div>
-          </template>
-          <template v-if="coverage.missing.length">
-            <h4 class="cts-gk">Not in the library</h4>
-            <div
-              v-for="gap in coverage.missing"
-              :key="gap.label"
-              class="cts-g"
-              data-testid="cts-gap-missing"
-            >
-              <v-icon size="16">mdi-minus-circle-outline</v-icon>
-              <span class="cts-g__t"
-                >No {{ gap.label.replace(/ /g, "-") }} {{ coverage.unit }} of
-                {{ characterName }}</span
-              >
-            </div>
-          </template>
         </div>
       </template>
 
@@ -263,7 +268,11 @@
               <label :for="`${uid}-${f.key}`">{{ f.title }}</label>
               <span class="cts-val">{{ f.shown }}</span>
             </div>
-            <div class="cts-range">
+            <div
+              class="cts-range cts-range--kept"
+              :style="{ '--cts-kept': f.shade, '--cts-at': f.at }"
+            >
+              <span class="cts-range__fill" aria-hidden="true" />
               <input
                 :id="`${uid}-${f.key}`"
                 class="cts-range__input"
@@ -273,42 +282,38 @@
                 :step="f.step"
                 :value="choosing[f.key]"
                 :disabled="busy || !!created"
-                :aria-valuetext="`${f.shown}, ${f.count} set aside`"
+                :aria-valuetext="`${f.shown}, ${f.count} excluded`"
                 :data-testid="`cts-slider-${f.key}`"
                 @input="onFloor(f, $event)"
                 @change="load"
                 @keydown.enter.prevent
               />
-              <span
-                v-if="f.capPercent > 0"
-                class="cts-range__cap"
-                :style="{ width: `${f.capPercent}%` }"
-                aria-hidden="true"
-              />
             </div>
-            <small class="cts-note"><b>{{ f.count }}</b> set aside</small>
+            <small class="cts-note"><b>{{ f.count }}</b> excluded</small>
           </div>
         </div>
         <div
           v-for="v in varietyRows"
           :key="v.key"
-          class="cts-ctl"
+          class="cts-ctl cts-var"
           :data-testid="`cts-variety-${v.key}`"
           @keydown.enter.prevent
         >
-          <div class="cts-ctl__h">
-            <span>{{ v.title }}</span>
-            <small class="cts-note">{{ v.hint }}</small>
+          <div class="cts-var__row">
+            <span class="cts-var__l">{{ v.short }}</span>
+            <Segmented
+              full
+              :model-value="choosing[v.key]"
+              :aria-label="v.ariaLabel"
+              :options="VARIETY_STEPS"
+              @update:model-value="(id) => setVariety(v.key, id)"
+            />
           </div>
-          <Segmented
-            full
-            :model-value="choosing[v.key]"
-            :aria-label="v.ariaLabel"
-            :options="VARIETY_STEPS"
-            @update:model-value="(id) => setVariety(v.key, id)"
-          />
+          <small class="cts-note cts-var__hint">{{ v.hint }}</small>
         </div>
-        <div class="cts-two">
+        <div class="cts-aside">
+        <span class="cts-note">Exclude</span>
+        <div class="cts-two cts-two--tight">
         <div
           v-for="r in reasonRows"
           :key="r.key"
@@ -316,24 +321,75 @@
           :data-testid="`cts-reason-${r.key}`"
           @keydown.enter.prevent
         >
-          <span class="cts-ex__t">Set aside {{ r.title.toLowerCase() }}</span>
+          <span class="cts-ex__t">{{ r.title }}</span>
           <span class="cts-badge">{{ r.count }}</span>
           <v-switch
             :model-value="setAside[r.key]"
             color="primary"
             density="compact"
             hide-details
-            :aria-label="`Set aside: ${r.title}`"
+            :aria-label="`Exclude: ${r.title}`"
             :disabled="busy || loading || !!created"
             :data-testid="`cts-switch-${r.key}`"
             @update:model-value="(v) => toggle(r.key, !!v)"
           />
         </div>
         </div>
+        </div>
       </div>
     </aside>
+    </div>
+    </div>
 
-    <template #footer>
+    <template v-if="mode === 'generate'" #footer>
+      <span
+        class="cts-lead cts-lead--one"
+        :class="{ 'cts-lead--warn': sheetStep?.footer?.warn }"
+        :title="sheetStep?.footer?.lead"
+        :role="sheetStep?.footer?.warn ? 'status' : undefined"
+        data-testid="cts-generate-lead"
+        ><v-icon v-if="sheetStep?.footer?.warn" size="16"
+          >mdi-alert-outline</v-icon
+        >
+        {{ sheetStep?.footer?.lead }}</span
+      >
+      <p v-if="sheetStep?.error" class="cts-bad" role="alert">
+        {{ sheetStep.error }}
+      </p>
+      <AppButton
+        v-if="sheetStep?.footer?.back"
+        :disabled="!!sheetStep?.working"
+        @click="sheetStep.footer.back.run()"
+      >
+        {{ sheetStep.footer.back.label }}
+      </AppButton>
+      <AppButton
+        key-hint="esc"
+        :disabled="!!sheetStep?.working"
+        data-testid="cts-generate-cancel"
+        @click="leaveGenerate"
+      >
+        {{ hasPictures ? "Back to the picker" : "Cancel" }}
+      </AppButton>
+      <AppButton
+        v-if="sheetStep?.footer?.secondary"
+        :disabled="!sheetStep.footer.secondary.enabled"
+        @click="sheetStep.footer.secondary.run()"
+      >
+        {{ sheetStep.footer.secondary.label }}
+      </AppButton>
+      <AppButton
+        variant="primary"
+        key-hint="enter"
+        :loading="!!sheetStep?.working"
+        :disabled="!sheetStep?.footer?.primary?.enabled"
+        data-testid="cts-generate-primary"
+        @click="sheetStep.footer.primary.run()"
+      >
+        {{ sheetStep?.footer?.primary?.label || "Draw sheets" }}
+      </AppButton>
+    </template>
+    <template v-else #footer>
       <span v-if="created" class="cts-lead" data-testid="cts-created">
         <v-icon size="16" class="cts-ok">mdi-check-circle-outline</v-icon>
         Created <b>{{ created.name }}</b> · {{ created.members }}
@@ -356,6 +412,14 @@
         </AppButton>
       </template>
       <template v-else>
+        <AppButton
+          icon-left="draw"
+          :disabled="busy || !data"
+          data-testid="cts-generate"
+          @click="startGenerate"
+        >
+          {{ hasPictures ? "Generate more…" : "Generate pictures…" }}
+        </AppButton>
         <AppButton key-hint="esc" :disabled="busy" @click="close">
           Cancel
         </AppButton>
@@ -386,6 +450,10 @@
  * its picture at full size; its corner button leaves it out of the set, and
  * the next pick in the ranking takes its place. "Create" makes an ordinary child set under the
  * character; the user edits it like any other and trains on it.
+ *
+ * "Generate pictures…" draws the set instead (CharacterSheetStep): character
+ * sheets, one chosen and cut into six pictures, which then join this ranking
+ * marked new. A character with no pictures opens straight on that step.
  */
 import { computed, nextTick, ref, useId, watch } from "vue";
 import { VIcon, VSwitch } from "vuetify/components";
@@ -399,8 +467,10 @@ import {
 import { fetchCharacterSetSuggestion } from "../../api/training";
 import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
+import CharacterSheetStep from "./CharacterSheetStep.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import TrainingPickPreview from "./TrainingPickPreview.vue";
 
 const props = defineProps({
@@ -453,10 +523,16 @@ const VARIETY_STEPS = [
   { id: "important", label: "Important" },
 ];
 const VARIETIES = [
-  { key: "framing_variety", title: "Different framings", word: "framing" },
+  {
+    key: "framing_variety",
+    title: "Different framings",
+    short: "Framings",
+    word: "framing",
+  },
   {
     key: "expression_variety",
     title: "Different expressions",
+    short: "Expressions",
     word: "expression",
   },
 ];
@@ -485,15 +561,37 @@ const loading = ref(false);
 const created = ref(null);
 const createError = ref("");
 let fetchSeq = 0;
+// "generate" draws sheets (step 1), "pick" is the ranking (step 2, or the
+// whole dialog when nothing is generated).
+const mode = ref("pick");
+const stepped = ref(false);
+const sheetStep = ref(null);
+// Pictures made in this dialog, marked new in the ranking.
+const generated = ref([]);
+const generatedSet = computed(() => new Set(generated.value));
+const newOnly = ref(false);
 
 const characterName = computed(
   () => data.value?.character_name || props.character?.name || "",
 );
 
+const hasPictures = computed(
+  () =>
+    !!data.value &&
+    (data.value.stills.candidates > 0 ||
+      (data.value.has_clips && data.value.clips.candidates > 0)),
+);
+
 const subtitle = computed(() => {
   if (!data.value) return characterName.value;
   const s = data.value.stills.candidates;
-  const parts = [characterName.value, `${s} ${s === 1 ? "picture" : "pictures"}`];
+  const fresh = generated.value.length;
+  const parts = [
+    characterName.value,
+    s ? `${s} ${s === 1 ? "picture" : "pictures"}` : "no pictures yet",
+  ];
+  // Made here: a panel whose face was never found is made but not filed.
+  if (fresh) parts.push(`${fresh} new`);
   if (data.value.has_clips) {
     const c = data.value.clips.candidates;
     parts.push(`${c} ${c === 1 ? "clip" : "clips"}`);
@@ -505,8 +603,29 @@ function reachableOf(group) {
   return Math.min(group.passing, group.picks.length);
 }
 
+/**
+ * The ranking of *key* as shown: with "New only", just the pictures made here,
+ * re-ranked from 1 and counted afresh, so the slider, the coverage and the set
+ * all read the same list.
+ */
+function groupOf(key) {
+  const group = data.value[key];
+  if (!newOnly.value || key !== "stills") return group;
+  const picks = group.picks
+    .filter((p) => generatedSet.value.has(p.picture_id))
+    .map((p, index) => ({ ...p, rank: index + 1 }));
+  const available = {};
+  for (const [axis, labels] of Object.entries(data.value.targets)) {
+    available[axis] = {};
+    for (const label of Object.keys(labels)) {
+      available[axis][label] = countIn(picks, axis, label);
+    }
+  }
+  return { ...group, picks, passing: picks.length, available };
+}
+
 function clampSize(key, value) {
-  const reachable = reachableOf(data.value[key]);
+  const reachable = reachableOf(groupOf(key));
   return Math.max(Math.min(value, reachable), Math.min(minOf(key), reachable));
 }
 
@@ -523,45 +642,22 @@ function countIn(picks, axis, label) {
   return picks.filter((p) => (p.buckets[axis] || []).includes(label)).length;
 }
 
-/** Every label short of its target at the group's size, sorted into kinds. */
-function gapsOf(key) {
-  const group = data.value[key];
+/** Each label's count against its target at the group's size, per axis. */
+function coverageRows(key) {
+  const group = groupOf(key);
   const size = sizes.value[key];
-  const reachable = reachableOf(group);
   const top = group.picks.slice(0, size);
-  const out = { rows: {}, closable: [], outside: [], missing: [] };
+  const out = {};
   for (const axis of Object.keys(data.value.targets)) {
-    out.rows[axis] = [];
+    out[axis] = [];
     for (const label of Object.keys(data.value.targets[axis])) {
       const count = countIn(top, axis, label);
       const want = target(axis, label, size);
       const short = Math.max(0, want - count);
       const available = group.available[axis]?.[label] ?? 0;
-      out.rows[axis].push({ label, count, want, short, none: !available });
-      if (!short) continue;
-      if (!available) {
-        out.missing.push({ label });
-        continue;
-      }
-      let at = null;
-      for (let k = size + 1; k <= reachable; k++) {
-        const picksK = group.picks.slice(0, k);
-        if (countIn(picksK, axis, label) >= target(axis, label, k)) {
-          at = k;
-          break;
-        }
-      }
-      if (at) out.closable.push({ label, short, at });
-      else
-        out.outside.push({
-          label,
-          available,
-          inTop: countIn(group.picks, axis, label),
-          top: group.picks.length,
-        });
+      out[axis].push({ label, count, want, short, none: !available });
     }
   }
-  out.closable.sort((a, b) => a.at - b.at);
   return out;
 }
 
@@ -586,41 +682,42 @@ const visibleGroups = computed(() => {
   if (!data.value) return [];
   const keys = data.value.has_clips ? ["stills", "clips"] : ["stills"];
   return keys.map((key) => {
-    const group = data.value[key];
+    const group = groupOf(key);
     const reachable = reachableOf(group);
     const size = sizes.value[key];
     const unit = key === "stills" ? "pictures" : "clips";
     const min = Math.min(minOf(key), Math.max(reachable, 1));
     const trackMax = key === "stills" ? TRACK_MAX : Math.max(reachable, min);
     const span = Math.max(trackMax - min, 1);
-    const firstGap = key === coverageKey.value ? gapsOf(key).closable[0] : null;
     return {
       key,
       title: key === "stills" ? "Pictures" : "Video clips",
       note:
         key === "stills"
-          ? "Used by every model."
+          ? // Only worth saying beside the clips, which are not.
+            data.value.has_clips
+            ? "Used whichever model you train, picture or video."
+            : ""
           : "Used only when you train a video model. Still-picture models skip them, so it is safe to include both.",
       passing: group.passing,
       reachable,
       size,
       min,
       trackMax,
+      at: (size - min) / span,
       capPercent:
         key === "stills" ? ((trackMax - Math.max(reachable, min)) / span) * 100 : 0,
       capped: reachable < TRACK_MAX && size >= reachable && key === "stills",
+      // In the heading, where it moves nothing; the long form is its tooltip.
+      cappedShort:
+        group.passing > reachable
+          ? `Only ${reachable} left: put one back for more`
+          : `Only ${reachable} ${unit} pass`,
       cappedText:
         group.passing > reachable
           ? `Only ${reachable} of the ranked ${unit} are left: the rest were left out by hand. Put one back to go higher.`
           : `Only ${reachable} ${unit} pass.${wouldAddText(group, unit)}`,
       noneText: `0 ${unit} pass.${wouldAddText(group, unit)}`,
-      mark: firstGap
-        ? {
-            at: firstGap.at,
-            label: firstGap.label,
-            percent: ((firstGap.at - min) / span) * 100,
-          }
-        : null,
       shown: group.picks.slice(0, size),
     };
   });
@@ -629,9 +726,8 @@ const visibleGroups = computed(() => {
 const coverage = computed(() => {
   if (!data.value) return null;
   const key = data.value.has_clips ? coverageKey.value : "stills";
-  if (!reachableOf(data.value[key])) return null;
-  const gaps = gapsOf(key);
-  const axes = Object.entries(gaps.rows).map(([name, rows]) => {
+  if (!reachableOf(groupOf(key))) return null;
+  const axes = Object.entries(coverageRows(key)).map(([name, rows]) => {
     const scale = Math.max(1, ...rows.map((r) => Math.max(r.count, r.want)));
     return {
       name,
@@ -648,9 +744,6 @@ const coverage = computed(() => {
     size: sizes.value[key],
     unit: key === "stills" ? "pictures" : "clips",
     axes,
-    closable: gaps.closable,
-    outside: gaps.outside,
-    missing: gaps.missing,
   };
 });
 
@@ -716,9 +809,30 @@ const floorRows = computed(() =>
         ? `★ ${choosing.value.min_score.toFixed(1)}`
         : String(choosing.value[f.key]),
     count: setAsideCount(f.reason),
-    capPercent: ((f.max - floorCap(f)) / (f.max - f.min)) * 100,
+    at: (choosing.value[f.key] - f.min) / (f.max - f.min),
+    shade: keptShade(data.value?.kept?.[f.key]),
   })),
 );
+
+/**
+ * A floor's track, shaded by how many pictures each position would leave
+ * (`kept`, one count per step): light where all remain, black where none do.
+ */
+function keptShade(counts) {
+  if (!counts?.[0]) return undefined;
+  const last = counts.length - 1;
+  // ponytail: at most ~25 stops; the likeness floor has 101 steps.
+  const every = Math.ceil(counts.length / 25);
+  const stops = [];
+  for (let i = 0; i <= last; i += every) stops.push(i);
+  if (stops.at(-1) !== last) stops.push(last);
+  return `linear-gradient(90deg, ${stops
+    .map(
+      (i) =>
+        `color-mix(in srgb, var(--cts-kept-all) ${Math.round((counts[i] / counts[0]) * 100)}%, var(--cts-kept-none)) ${Math.round((i / last) * 100)}%`,
+    )
+    .join(", ")})`;
+}
 
 const varietyRows = computed(() =>
   VARIETIES.map((v) => ({
@@ -734,8 +848,8 @@ const varietyRows = computed(() =>
 
 const pickedIds = computed(() => {
   if (!data.value) return [];
-  const ids = data.value.stills.picks
-    .slice(0, sizes.value.stills)
+  const ids = groupOf("stills")
+    .picks.slice(0, sizes.value.stills)
     .map((p) => p.picture_id);
   if (data.value.has_clips) {
     ids.push(
@@ -749,6 +863,26 @@ const pickedIds = computed(() => {
 
 const total = computed(() => pickedIds.value.length);
 
+/** The colour of *label* on *axis*: the same on its bar and on its chips. */
+function hueOf(axis, label) {
+  const at = Object.keys(data.value?.targets?.[axis] || {}).indexOf(label);
+  return at < 0 ? "" : `cts-hue--${axis}-${at % 4}`;
+}
+
+/** A pick's chips: its framings, then its expressions. */
+function chipsOf(p) {
+  return ["framing", "expression"].flatMap((axis) =>
+    (p.buckets[axis] || []).map((label) => ({ label, hue: hueOf(axis, label) })),
+  );
+}
+
+/** "not in the library" sits beside the target mark, on whichever side has room. */
+function noneStyle(row) {
+  return row.targetPercent > 50
+    ? { right: `calc(${100 - row.targetPercent}% + var(--space-3))` }
+    : { left: `calc(${row.targetPercent}% + var(--space-3))` };
+}
+
 function labelsLine(p) {
   return [...(p.buckets.framing || []), ...(p.buckets.expression || [])].join(
     " · ",
@@ -759,10 +893,6 @@ function chipLine(p) {
   const labels = labelsLine(p);
   const likeness = p.likeness != null ? `likeness ${p.likeness}` : "";
   return [labels, likeness].filter(Boolean).join(" · ");
-}
-
-function capital(text) {
-  return text ? text[0].toUpperCase() + text.slice(1) : text;
 }
 
 async function load() {
@@ -783,6 +913,8 @@ async function load() {
     if (!reachableOf(result.stills) && reachableOf(result.clips)) {
       coverageKey.value = "clips";
     }
+    // Nothing to pick from: drawing is the only way to a set.
+    if (!hasPictures.value && !generated.value.length) startGenerate();
   } catch (e) {
     if (seq !== fetchSeq) return;
     loadError.value = `Couldn't rank the pictures. ${errorDetail(e) || "Please try again."}`;
@@ -804,6 +936,10 @@ watch(
     coverageKey.value = "stills";
     sizes.value = { ...DEFAULT_SIZE };
     setAside.value = allSetAside();
+    mode.value = "pick";
+    stepped.value = false;
+    generated.value = [];
+    newOnly.value = false;
     if (props.character?.id != null) load();
   },
   { immediate: true },
@@ -823,7 +959,7 @@ function floorCap(f) {
 function onFloor(f, event) {
   const value = Math.min(Number(event.target.value), floorCap(f));
   choosing.value[f.key] = value;
-  // The track keeps its whole scale (hatched past the cap); the thumb stops.
+  // The track keeps its whole scale (black where nothing is left); the thumb stops.
   if (String(value) !== event.target.value) event.target.value = String(value);
 }
 
@@ -840,7 +976,7 @@ function setSize(key, value) {
 function onSlide(key, event) {
   const value = Number(event.target.value);
   setSize(key, value);
-  // The track runs past what passes (hatched); the thumb stops at the cap.
+  // The track runs past what passes (greyed); the thumb stops at the cap.
   if (sizes.value[key] !== value) event.target.value = String(sizes.value[key]);
 }
 
@@ -888,7 +1024,34 @@ async function create() {
   busy.value = false;
 }
 
+function startGenerate() {
+  stepped.value = true;
+  mode.value = "generate";
+}
+
+function leaveGenerate() {
+  if (hasPictures.value || generated.value.length) mode.value = "pick";
+  else close();
+}
+
+function onGenerated(ids) {
+  generated.value = [...new Set([...generated.value, ...ids])];
+  mode.value = "pick";
+  load();
+}
+
+function onNewOnly() {
+  for (const key of ["stills", "clips"]) {
+    sizes.value[key] = clampSize(key, sizes.value[key]);
+  }
+}
+
 function onAccept() {
+  if (mode.value === "generate") {
+    const primary = sheetStep.value?.footer?.primary;
+    if (primary?.enabled) primary.run();
+    return;
+  }
   if (created.value) train();
   else create();
 }
@@ -900,7 +1063,7 @@ function train() {
 }
 
 function close() {
-  if (busy.value) return;
+  if (busy.value || sheetStep.value?.working) return;
   emit("close");
   // Opened from a context menu, so Vuetify has no activator to hand focus
   // back to: the character's sidebar row takes it.
@@ -912,6 +1075,159 @@ function close() {
 </script>
 
 <style scoped>
+.cts-frame {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* One height for every step and state, so the dialog never resizes as
+     sheets arrive, notices show or sheets are ticked: the panes scroll
+     instead. About 768px with the title and footer, less on a short window. */
+  height: min(652px, calc(100vh - 160px));
+  /* One colour per coverage bar and its chips, from four hues, each deep and
+     light. The same eight in both themes: the light ones are mixed toward the
+     dark-surface text colour and carry a dark label, at 6.9:1 or better. */
+  --cts-light: rgb(var(--v-theme-on-dark-surface));
+  --cts-kept-all: rgb(var(--v-theme-on-dark-surface));
+  --cts-kept-none: rgb(var(--v-theme-scrim));
+}
+
+.cts-hue--framing-0 {
+  background: color-mix(in srgb, rgb(var(--v-theme-tertiary)) 40%, var(--cts-light));
+  color: rgb(var(--v-theme-dark-surface));
+}
+
+.cts-hue--framing-1 {
+  background: rgb(var(--v-theme-tertiary));
+  color: rgb(var(--v-theme-on-tertiary));
+}
+
+.cts-hue--framing-2 {
+  background: color-mix(
+    in srgb,
+    rgb(var(--v-theme-dark-surface-primary)) 70%,
+    var(--cts-light)
+  );
+  color: rgb(var(--v-theme-dark-surface));
+}
+
+.cts-hue--framing-3 {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+
+.cts-hue--expression-0 {
+  background: color-mix(in srgb, rgb(var(--v-theme-secondary)) 40%, var(--cts-light));
+  color: rgb(var(--v-theme-dark-surface));
+}
+
+.cts-hue--expression-1 {
+  background: rgb(var(--v-theme-secondary));
+  color: rgb(var(--v-theme-on-secondary));
+}
+
+.cts-hue--expression-2 {
+  background: color-mix(in srgb, rgb(var(--v-theme-quaternary)) 40%, var(--cts-light));
+  color: rgb(var(--v-theme-dark-surface));
+}
+
+.cts-hue--expression-3 {
+  background: rgb(var(--v-theme-quaternary));
+  color: rgb(var(--v-theme-on-quaternary));
+}
+
+.cts-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* The wizard's steps: a numbered row under the title. Not a DS component yet
+   (the design draws it new); built from the selection tokens. */
+.cts-stp {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.cts-stp__s {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  border: 1px solid transparent;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+}
+
+button.cts-stp__s:not(:disabled) {
+  cursor: pointer;
+}
+
+.cts-stp__s--on {
+  color: rgb(var(--v-theme-on-surface));
+  font-weight: var(--weight-medium);
+}
+
+.cts-stp__s--done {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.cts-stp__n {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid rgb(var(--v-theme-border));
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.cts-stp__s--on .cts-stp__n {
+  background: var(--active-wash);
+  border-color: var(--active-bar);
+}
+
+.cts-stp__s--done .cts-stp__n {
+  background: rgb(var(--v-theme-primary));
+  border-color: transparent;
+  color: rgb(var(--v-theme-on-primary));
+}
+
+.cts-stp__sep {
+  flex: 1;
+  min-width: 12px;
+  max-width: 40px;
+  height: 1px;
+  background: rgb(var(--v-theme-border));
+}
+
+/* Names the LoRA in use: it identifies, it does not select, so neutral. */
+.cts-stp__lora {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 20px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-cancel-button));
+  font-size: var(--text-2xs);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.cts-newonly {
+  margin-left: auto;
+}
+
 .cts-pane {
   flex: 1;
   min-width: 0;
@@ -924,7 +1240,7 @@ function close() {
 
 /* The coverage column stays in view while the picks scroll. */
 .cts-pane--side {
-  flex: 0 0 404px;
+  flex: 0 0 410px;
   gap: var(--space-4);
   border-left: 1px solid rgb(var(--v-theme-divider));
 }
@@ -935,10 +1251,34 @@ function close() {
   gap: var(--space-3);
 }
 
+/* Only the tiles scroll: a group's heading and count slider stay above them.
+   Two groups (pictures and clips) share the height evenly. */
+.cts-pane--picks {
+  overflow: hidden;
+}
+
+.cts-pane--picks .cts-grp {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.cts-pane--picks .cts-sheet {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  /* The scrollbar sits at the pane's edge, not inside its padding. */
+  margin-right: calc(-1 * var(--space-5));
+  padding-right: var(--space-5);
+}
+
 .cts-grp-h {
   display: flex;
   align-items: baseline;
   gap: var(--space-3);
+  /* As tall with the heading alone as with a note or the New only switch
+     beside it, so the slider below never moves when one appears. */
+  min-height: var(--control-h);
 }
 
 .cts-secl {
@@ -955,6 +1295,10 @@ function close() {
   margin: 0;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.cts-note--warn {
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .cts-slw {
@@ -983,23 +1327,89 @@ function close() {
   cursor: pointer;
 }
 
-/* The part of the track no position can reach, hatched so the scale stays
-   5-50 between visits and the reason the thumb stops is visible. */
+/* The part of the track no position can reach, one flat grey, so the scale
+   stays 5-50 between visits and the reason the thumb stops is visible. It
+   comes before the input, so the thumb is drawn over it. */
 .cts-range__cap {
   position: absolute;
   right: 0;
-  height: var(--space-3);
+  top: var(--space-2);
+  bottom: var(--space-2);
   pointer-events: none;
   border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-  /* Opaque under the hatch: the browser draws the track itself, light or
-     dark as it likes, and a hatch alone vanished on a light one. */
-  background:
-    repeating-linear-gradient(
-      90deg,
-      rgba(var(--v-theme-on-surface), 0.45) 0 3px,
-      transparent 3px 6px
-    ),
-    rgb(var(--v-theme-surface));
+  background: var(--track-ring);
+}
+
+/* A drawn slider (the floors, and the count): the track is shaded by how many pictures each position
+   would leave (--cts-kept), under a translucent fill up to the thumb. Not a
+   DS slider variant yet; the native track is cleared and drawn here. */
+.cts-range--kept {
+  height: var(--space-5);
+}
+
+.cts-range--kept::before {
+  content: "";
+  position: absolute;
+  inset: var(--space-2) 0;
+  border-radius: var(--radius-pill);
+  background: var(--cts-kept, var(--track-trough));
+  box-shadow: inset 0 0 0 1px var(--track-ring);
+}
+
+/* Ends under the thumb's centre, which travels the track less its own width. */
+.cts-range__fill {
+  position: absolute;
+  left: 0;
+  top: var(--space-2);
+  bottom: var(--space-2);
+  width: calc(7px + (100% - 14px) * var(--cts-at, 0));
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+  background: rgba(var(--v-theme-primary), 0.4);
+  pointer-events: none;
+}
+
+.cts-range--kept .cts-range__input {
+  position: relative;
+  height: var(--space-5);
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+}
+
+.cts-range--kept .cts-range__input::-webkit-slider-runnable-track {
+  height: 14px;
+  background: transparent;
+}
+
+.cts-range--kept .cts-range__input::-moz-range-track {
+  background: transparent;
+}
+
+.cts-range--kept .cts-range__input::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgb(var(--v-theme-primary));
+  box-shadow: 0 0 0 2px rgb(var(--v-theme-surface));
+}
+
+.cts-range--kept .cts-range__input::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: rgb(var(--v-theme-primary));
+  box-shadow: 0 0 0 2px rgb(var(--v-theme-surface));
+}
+
+.cts-range--kept .cts-range__input:disabled {
+  cursor: not-allowed;
+}
+
+.cts-range--kept:has(:disabled) {
+  opacity: var(--opacity-disabled);
 }
 
 .cts-val {
@@ -1010,39 +1420,17 @@ function close() {
   font-variant-numeric: tabular-nums;
 }
 
-.cts-marks {
-  position: relative;
-  height: 16px;
-  margin-right: 84px;
-}
-
-.cts-mk {
-  position: absolute;
-  transform: translateX(-50%);
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  white-space: nowrap;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  line-height: 1;
-}
-
-.cts-mk::before {
-  content: "";
-  width: 1px;
-  height: 5px;
-  margin-bottom: var(--space-1);
-  background: currentColor;
-}
-
 .cts-sheet {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  /* Six across at the dialog's full width, fewer in a narrow window. */
-  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  /* Four across at most, fewer in a narrow window: a pick can carry two
+     expressions beside its framing, and three chips need the wider tile. */
+  grid-template-columns: repeat(
+    auto-fill,
+    minmax(max(144px, calc((100% - 3 * var(--space-3)) / 4)), 1fr)
+  );
   gap: var(--space-4) var(--space-3);
 }
 
@@ -1113,6 +1501,7 @@ function close() {
 }
 
 .cts-tile__rk,
+.cts-tile__lk,
 .cts-tile__clip {
   position: absolute;
   min-width: 18px;
@@ -1139,30 +1528,57 @@ function close() {
   left: var(--space-2);
 }
 
+.cts-tile__lk {
+  bottom: var(--space-2);
+  right: var(--space-2);
+  font-family: var(--font-mono);
+  font-weight: var(--weight-regular);
+}
+
+.cts-tile__new {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  height: 18px;
+  padding: 0 var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xs);
+}
+
+.cts-tile__new i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--active-bar);
+}
+
 .cts-cap {
   display: flex;
-  justify-content: space-between;
   gap: var(--space-2);
-  font-size: var(--text-xs);
-}
-
-.cts-cap span:first-child {
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.cts-cap__lk {
-  font-family: var(--font-mono);
+.cts-chip {
+  flex: none;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  font-weight: var(--weight-medium);
+  line-height: var(--space-5);
+  white-space: nowrap;
 }
 
 .cts-side-h {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: var(--space-2) var(--space-3);
 }
 
 .cts-legend {
@@ -1178,7 +1594,7 @@ function close() {
   width: 12px;
   height: 8px;
   border-radius: var(--radius-sm);
-  background: rgb(var(--v-theme-tertiary));
+  background: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .cts-legend i {
@@ -1201,25 +1617,33 @@ function close() {
   align-items: center;
   gap: var(--space-3);
   font-size: var(--text-xs);
+  line-height: var(--space-5);
 }
 
 .cts-bar__track {
   position: relative;
-  height: 18px;
+  height: var(--space-5);
   overflow: hidden;
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.07);
 }
 
-/* One identity hue per chart: framing teal, expression raspberry. */
+/* Each bar takes its own colour (.cts-hue--*), shared with its chips. */
 .cts-bar__fill {
   position: absolute;
   inset: 0 auto 0 0;
-  background: rgb(var(--v-theme-tertiary));
 }
 
-.cts-axis--expression .cts-bar__fill {
-  background: rgb(var(--v-theme-secondary));
+.cts-bar__none {
+  position: absolute;
+  top: 0;
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.cts-bar--none .cts-bar__tgt {
+  opacity: 0.55;
 }
 
 .cts-bar__tgt {
@@ -1267,29 +1691,6 @@ function close() {
   border-top: 1px solid rgb(var(--v-theme-divider));
 }
 
-.cts-gk {
-  margin: 0 0 calc(-1 * var(--space-2));
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-regular);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-.cts-g {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-size: var(--text-sm);
-}
-
-.cts-g .v-icon {
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-.cts-g__t {
-  flex: 1;
-  min-width: 0;
-}
-
 .cts-ex {
   display: flex;
   align-items: center;
@@ -1300,6 +1701,45 @@ function close() {
 .cts-ex__t {
   flex: 1;
   min-width: 0;
+  white-space: nowrap;
+}
+
+/* A variety control on one line: its short label beside the steps, the hint
+   under them. */
+.cts-var {
+  gap: var(--space-1);
+}
+
+.cts-var__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.cts-var__l {
+  flex: 0 0 88px;
+}
+
+/* Three long words in the width left: tighter sides than a segment's own. */
+.cts-var :deep(.seg__opt) {
+  padding: 0 var(--space-2);
+}
+
+.cts-var__hint {
+  text-align: right;
+  font-size: var(--text-2xs);
+}
+
+.cts-aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-4);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+.cts-two--tight {
+  gap: var(--space-4);
 }
 
 /* The two floors side by side, each with its own count under its slider. */
@@ -1332,6 +1772,16 @@ function close() {
 
 .cts-ex .v-switch {
   flex: 0 0 auto;
+}
+
+/* Vuetify's compact switch is still 40px tall: the row takes the small
+   control height instead. */
+.cts-ex :deep(.v-selection-control) {
+  min-height: var(--control-h-sm);
+}
+
+.cts-ex :deep(.v-selection-control__wrapper) {
+  height: var(--control-h-sm);
 }
 
 .cts-badge {
@@ -1376,6 +1826,25 @@ function close() {
   gap: var(--space-2);
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The sheet step's lead stays one line, so the footer keeps its height. */
+.cts-lead--one {
+  display: block;
+  min-width: 0;
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cts-lead--warn {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.cts-lead--warn .v-icon {
+  color: rgb(var(--v-theme-surface-warning));
+  vertical-align: -3px;
 }
 
 .cts-lead b {

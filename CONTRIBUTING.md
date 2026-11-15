@@ -225,8 +225,8 @@ fix forces user action (reissued tokens, invalidated share links).
 
 ### What the tag does
 
-The CI build reads this tag from the changelog and publishes it in
-`latest-version.json` so that running instances can warn users when they need to
+The website's release update (in the pixlstash-website repository) reads this
+tag from the changelog and publishes it in `latest-version.json` so that running instances can warn users when they need to
 upgrade for security reasons. Two thresholds matter in
 `frontend/src/composables/useVersionCheck.js`:
 

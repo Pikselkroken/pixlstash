@@ -166,7 +166,7 @@
         </div>
       </template>
     </div>
-    <div class="tbm-footer">{{ footer }}</div>
+    <div v-if="footer" class="tbm-footer">{{ footer }}</div>
   </div>
 </template>
 
@@ -442,10 +442,10 @@ onMounted(() => nextTick(() => fieldRef.value?.focus()));
 </script>
 
 <style scoped>
-/* The design's submenu for this direction is the root menu's width: the hint
-   and a long chip need the extra 40px over --filter-submenu-w. */
+/* Wider than the root menu: a group's name, its count and a long chip all
+   show whole here more often than not. */
 .ftf {
-  width: var(--filter-menu-w);
+  width: var(--filter-tag-menu-w);
 }
 .ftf-input {
   padding-right: 9rem;
@@ -487,11 +487,17 @@ onMounted(() => nextTick(() => fieldRef.value?.focus()));
   margin-top: var(--space-3);
 }
 /* Every library has its default groups, more than a menu can show at once:
-   the BY GROUP list is a box of about six rows that scrolls, so the Has and
-   Lacks rows under it stay on screen. */
+   the BY GROUP list is a box of about ten rows that scrolls, so the Has and
+   Lacks rows under it stay on screen. The rows bleed --space-3 sideways
+   (.fm-check), so the list bleeds with them, as the checklists' does: left at
+   the column's width it scrolled sideways by the overhang. Names ellipsise.
+   40vh: in a short window the list gives up height before the submenu's slot
+   has to scroll around it. */
 .ftf-list--browse {
-  max-height: calc(6 * var(--control-h-bar));
-  overflow-y: auto;
+  max-height: min(calc(10 * var(--control-h-bar)), 40vh);
+  margin-inline: calc(var(--space-3) * -1);
+  padding-inline: var(--space-3);
+  overflow: hidden auto;
   overscroll-behavior: contain;
 }
 .ftf-list .fm-check {

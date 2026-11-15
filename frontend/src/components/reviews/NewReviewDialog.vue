@@ -191,11 +191,31 @@
           <v-icon size="16" class="rs-dialog-preview-icon">mdi-radar</v-icon>
           Scan preview
         </div>
-        <div class="rs-dialog-preview-body">
+        <Segmented
+          v-model="source"
+          class="rs-dialog-order rs-dialog-source"
+          :options="SOURCE_OPTIONS"
+          aria-label="What to review"
+        />
+        <template v-if="source === 'model'">
+          <div class="rs-dialog-preview-body">
+            Queues the pictures nobody has judged for this tag whose tagger
+            confidence is closest to the tag’s threshold, nearest first.
+          </div>
+          <label class="rs-dialog-include rs-dialog-limit">
+            <span>How many</span>
+            <select v-model.number="limit">
+              <option v-for="n in LIMIT_OPTIONS" :key="n" :value="n">
+                {{ n }}
+              </option>
+            </select>
+          </label>
+        </template>
+        <div v-if="source !== 'model'" class="rs-dialog-preview-body">
           The near-neighbour scan runs once, on create; its report becomes this
           review’s cover sheet.
         </div>
-        <label class="rs-dialog-include">
+        <label v-if="source !== 'model'" class="rs-dialog-include">
           <input v-model="includeReviewed" type="checkbox" />
           <span
             >Include suspects handled in earlier reviews
@@ -252,6 +272,8 @@ const props = defineProps({
     type: Object,
     default: () => ({ projectId: null, setId: null, characterId: null }),
   },
+  // "model" when opened from the board's Unsure figure.
+  presetSource: { type: String, default: "near_neighbor" },
 });
 const emit = defineEmits(["close"]);
 
@@ -265,6 +287,15 @@ const ORDER_OPTIONS = [
   { id: "alpha", label: "Alphabetical" },
 ];
 const includeReviewed = ref(false);
+// What fills the queue: label disagreements between near-identical pictures,
+// or the pictures the tagger is least sure about (capped at `limit`).
+const source = ref(props.presetSource);
+const SOURCE_OPTIONS = [
+  { id: "near_neighbor", label: "Label disagreements" },
+  { id: "model", label: "Unsure pictures" },
+];
+const limit = ref(50);
+const LIMIT_OPTIONS = [25, 50, 100, 200];
 const projectId = ref(props.initialScope.projectId ?? null);
 const setId = ref(props.initialScope.setId ?? null);
 const characterId = ref(props.initialScope.characterId ?? null);
@@ -417,6 +448,8 @@ async function create() {
     setId: setId.value,
     characterId: characterId.value,
     includeReviewed: includeReviewed.value,
+    source: source.value,
+    limit: limit.value,
   });
   if (review) emit("close");
 }
@@ -709,6 +742,21 @@ async function create() {
   gap: var(--space-3);
   margin-top: var(--space-3);
   cursor: pointer;
+}
+.rs-dialog-source {
+  margin-bottom: var(--space-3);
+}
+.rs-dialog-limit {
+  cursor: default;
+}
+.rs-dialog-limit select {
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
+  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-sm);
 }
 .rs-dialog-include input {
   accent-color: rgb(var(--v-theme-primary));

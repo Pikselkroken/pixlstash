@@ -855,6 +855,8 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     setId = null,
     characterId = null,
     includeReviewed = false,
+    source = "near_neighbor",
+    limit = null,
   }) {
     const t = (tag || "").trim();
     if (!t || creating.value) return null;
@@ -866,7 +868,12 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       if (setId != null) body.set_id = setId;
       if (characterId != null && characterId !== "")
         body.character_id = String(characterId);
-      if (includeReviewed) body.include_reviewed = true;
+      if (source === "model") {
+        // The pictures the tagger is least sure about; earlier verdicts take a
+        // picture out of that pool, so "include reviewed" has no meaning here.
+        body.source = "model";
+        if (limit != null) body.limit = limit;
+      } else if (includeReviewed) body.include_reviewed = true;
       const review = await postReview(body);
       await fetchSessions();
       if (review?.id != null) {

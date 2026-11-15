@@ -84,7 +84,9 @@ _FACE_ROOM_FRAMING = (
 
 _EXPRESSION_TAGS = (
     ("smile", ("smile", "grin")),
-    ("open mouth", ("open mouth",)),
+    # The tagger gives "open mouth" to few of the mouths that are open; a
+    # picture showing teeth has one too, and may be a smile as well.
+    ("open mouth", ("open mouth", "teeth")),
     ("closed eyes", ("closed eyes",)),
 )
 
@@ -337,6 +339,23 @@ def floor_limits(candidates: list[Candidate]) -> dict[str, float]:
     return {
         "min_likeness": step,
         "min_score": max(1.0, min(5.0, int(max(scores, default=5.0) * 2) / 2)),
+    }
+
+
+def floor_kept(candidates: list[Candidate]) -> dict[str, list[int]]:
+    """How many pictures each position of a floor would leave, by itself.
+
+    One count per step the dialog's slider has: ``min_likeness`` 0 to 100,
+    ``min_score`` 1 to 5 in halves. The same tests as ``_intrinsic_reasons``:
+    no likeness counts as 0, and a picture with no score has none to fail.
+    """
+    likeness = [c.likeness or 0.0 for c in candidates]
+    scores = [c.rating or c.smart_score for c in candidates]
+    return {
+        "min_likeness": [sum(v >= step / 100 for v in likeness) for step in range(101)],
+        "min_score": [
+            sum(s is None or s >= half / 2 for s in scores) for half in range(2, 11)
+        ],
     }
 
 

@@ -62,7 +62,7 @@ function healthRow(overrides = {}) {
     est_missing: 1,
     mismatch: 0,
     verified_pct: 40,
-    boundary_pct: 10,
+    boundary_pct: 0.1,
     overturn_rate: null,
     model_disputes: 0,
     has_model: true,
@@ -151,10 +151,47 @@ describe("TagHealthBoard: Verified column removed (Spec E 7a)", () => {
     const html = wrapper.html();
     expect(html).not.toMatch(/Verified/);
     expect(html).not.toContain("77%");
-    // 8 data columns now (Verified cut per Spec E, Accuracy scrapped along
-    // with the scoring subsystem) - spot check via the header row cell count.
+    // 9 columns now (Verified cut per Spec E, Accuracy scrapped along with
+    // the scoring subsystem, Unsure added) - spot check via the header row.
     const headerCells = wrapper.findAll(".rs-board-row--head .rs-board-hdr");
-    expect(headerCells.length).toBe(8);
+    expect(headerCells.length).toBe(9);
+  });
+});
+
+describe("TagHealthBoard: Unsure figure", () => {
+  const link = (w) => w.find(".rs-board-num--link");
+
+  function mountRow(overrides) {
+    store.healthRows = [healthRow(overrides)];
+    return mount(TagHealthBoard, { global: globalOpts });
+  }
+
+  it("is a link that starts a review of the unsure pictures", async () => {
+    const w = mountRow({ boundary_pct: 0.124 });
+    expect(link(w).text()).toBe("12%");
+    await link(w).trigger("click");
+    expect(w.emitted("start-review")[0]).toEqual(["shirt", "model"]);
+  });
+
+  it("never labels a non-zero share 0%", () => {
+    expect(link(mountRow({ boundary_pct: 0.002 })).text()).toBe("<1%");
+  });
+
+  it("is plain text when there is nothing unsure to review", () => {
+    const w = mountRow({ boundary_pct: 0 });
+    expect(link(w).exists()).toBe(false);
+    expect(w.find(".rs-board-row:not(.rs-board-row--head)").text()).toContain(
+      "0%",
+    );
+  });
+
+  it("is plain text for a tag outside the tagger's vocabulary", () => {
+    expect(link(mountRow({ has_model: false })).exists()).toBe(false);
+  });
+
+  it("is plain text while the tag has an open review", () => {
+    store.sessions = [{ id: 11, tag: "shirt" }];
+    expect(link(mountRow({})).exists()).toBe(false);
   });
 });
 

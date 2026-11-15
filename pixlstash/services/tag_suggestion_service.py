@@ -334,7 +334,11 @@ def accept_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         # dismiss-then-accept (status != PENDING) and re-review of a re-parented
         # row (prior_status set) legitimately carry a contradicting label from
         # their OWN history and must stay acceptable.
-        if suggestion.status == "PENDING" and suggestion.prior_status is None:
+        if (
+            suggestion.status == "PENDING"
+            and suggestion.prior_status is None
+            and suggestion.control_state is None
+        ):
             human = session.exec(
                 select(TagPrediction).where(
                     TagPrediction.picture_id == suggestion.picture_id,
@@ -393,7 +397,10 @@ def accept_suggestion(vault: "Vault", suggestion_id: int) -> dict:
                             f"was raised; refusing to reverse it"
                         )
 
-        _apply_writeback(session, suggestion)
+        # A known-answer control measures the reviewer, not the picture: its
+        # verdict lives on the row and the review's receipt, and no label moves.
+        if suggestion.control_state is None:
+            _apply_writeback(session, suggestion)
         suggestion.status = "ACCEPTED"
         suggestion.reviewed_at = datetime.now(timezone.utc)
         result = {
@@ -426,7 +433,12 @@ def _reverse_review(session: Session, suggestion: TagSuggestion) -> None:
     ``prior_*`` intact for a second reopen to peel.)
     """
     tag_value = suggestion.tag
-    if suggestion.status == "ACCEPTED":
+    if suggestion.control_state is not None:
+        # A control's verdict wrote no label (see accept/dismiss), so there is
+        # nothing to reverse - and clearing the ledger here would destroy the
+        # earlier human verdict the control was drawn for.
+        pass
+    elif suggestion.status == "ACCEPTED":
         pic_id = suggestion.picture_id
         existing = session.exec(
             select(Tag).where(Tag.picture_id == pic_id, Tag.tag == tag_value)
@@ -1008,12 +1020,14 @@ def dismiss_suggestion(vault: "Vault", suggestion_id: int) -> dict:
             [suggestion.picture_id],
             "dismiss a suggestion on a locked picture",
         )
-        record_human_label(
-            session,
-            suggestion.picture_id,
-            suggestion.tag,
-            NEG if suggestion.direction == "add" else POS,
-        )
+        # A control's verdict is only recorded on the row (see accept_suggestion).
+        if suggestion.control_state is None:
+            record_human_label(
+                session,
+                suggestion.picture_id,
+                suggestion.tag,
+                NEG if suggestion.direction == "add" else POS,
+            )
         suggestion.status = "DISMISSED"
         suggestion.reviewed_at = datetime.now(timezone.utc)
         result = {

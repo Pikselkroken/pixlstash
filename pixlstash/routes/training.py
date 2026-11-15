@@ -1222,6 +1222,14 @@ def create_router(server) -> APIRouter:
                 "the character's pictures through."
             ),
         )
+        kept: dict[str, list[int]] = Field(
+            ...,
+            description=(
+                "How many of the character's pictures each floor would leave "
+                "at each of its steps, by itself: min_likeness 0 to 100, "
+                "min_score 1 to 5 in halves."
+            ),
+        )
 
     class ResolveResponse(BaseModel):
         """What a run would use on this machine, before it is queued."""
@@ -3295,6 +3303,7 @@ def create_router(server) -> APIRouter:
             "clips": group("clips", True),
             "targets": dataset_picker.TARGET_SHARE,
             "limits": dataset_picker.floor_limits(candidates),
+            "kept": dataset_picker.floor_kept(candidates),
         }
 
     @router.post(

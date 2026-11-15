@@ -1,6 +1,6 @@
 # Demo holiday mode
 
-Swap the live `pixlstash-demo` Fly app for the static `website/demo-holiday.html`
+Swap the live `pixlstash-demo` Fly app for the static `holiday/index.html`
 while nobody's watching it, then restore. Holiday mode deploys an image containing
 **only nginx + that one HTML file**, so the PixlStash app (upload/parse, API, the
 whole kill chain) isn't running at all. It also closes the current
@@ -21,7 +21,7 @@ fly tokens create deploy -a pixlstash-demo   # store as FLY_API_TOKEN
 
 ## Files (commit these)
 
-The served page is the existing **`website/demo-holiday.html`**. It pulls its logo
+The served page is the existing **`holiday/index.html`**. It pulls its logo
 and fonts from absolute URLs (pixlstash.dev, Google Fonts), so the single file is
 all the image needs. (It renders only while pixlstash.dev is up, which it is, since
 that's a separate site from this demo.)
@@ -43,16 +43,7 @@ context, which is the repo root (the `.` in the deploy command):
 ```dockerfile
 FROM nginx:1.27-alpine
 COPY holiday/nginx.conf /etc/nginx/conf.d/default.conf
-COPY website/demo-holiday.html /usr/share/nginx/html/index.html
-```
-
-The repo-root `.dockerignore` excludes `website/`, so the build context will not
-contain `website/demo-holiday.html` unless it is re-included. Add this line to
-`.dockerignore` (after the `website/` exclude) or the build fails with
-"`/website/demo-holiday.html`: not found":
-
-```gitignore
-!website/demo-holiday.html
+COPY holiday/index.html /usr/share/nginx/html/index.html
 ```
 
 `holiday/fly.holiday.toml` — single web process, no volume, no secrets, no wake:
@@ -85,7 +76,7 @@ primary_region = 'arn'
 #!/usr/bin/env bash
 set -euo pipefail
 APP=pixlstash-demo
-# Run from repo root so the build context includes website/ and holiday/.
+# Run from repo root so the build context includes holiday/.
 fly deploy . -a "$APP" -c holiday/fly.holiday.toml --yes
 # Verify the app is genuinely gone: running image must be the nginx build,
 # nothing else left up.

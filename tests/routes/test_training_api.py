@@ -2138,6 +2138,10 @@ def test_character_set_suggestion_ranks_stills_and_clips_apart():
         best = max(p["likeness"] for p in stills["picks"] + clips["picks"])
         assert best - 1 <= out["limits"]["min_likeness"] <= best
         assert 1 <= out["limits"]["min_score"] <= 5
+        kept = out["kept"]
+        assert len(kept["min_likeness"]) == 101 and len(kept["min_score"]) == 9
+        assert kept["min_likeness"][0] == 6
+        assert kept["min_likeness"][int(out["limits"]["min_likeness"])] >= 1
 
         r = owner.get(
             url, params={"character_id": char_id, "include_other_people": True}

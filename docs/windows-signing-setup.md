@@ -114,8 +114,8 @@ the Windows exes get an explicit `-unsigned` suffix and a workflow warning
    artifact and check Properties → Digital Signatures on a Windows machine.
 4. Rehearse with a prerelease tag (`vX.Y.Z-rc1`) before the next real
    release: both Windows exes should attach to the (pre)release with clean
-   names, and `release-version.yml` should run but skip its website update
-   (only a plain `vX.Y.Z` tag updates the website).
+   names, and `release-version.yml` should run but skip its `SECURITY.md`
+   update (only a plain `vX.Y.Z` tag changes it, or the website).
 
 ## Operations
 

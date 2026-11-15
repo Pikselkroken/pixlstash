@@ -232,7 +232,7 @@ def test_a_cached_description_follows_the_version(folders, hub):
     first = workflow_card_reads._manual_facts_of(workflow_id, json.dumps(PLAIN), 1)
     assert workflow_card_reads._manual_facts_of(workflow_id, "{", 1) == first
     assert workflow_card_reads._manual_facts_of(workflow_id, "{", 2) == (None, None)
-    assert workflow_card_reads._MANUAL_FACTS[workflow_id] == (2, (None, None))
+    assert workflow_card_reads._MANUAL_FACTS[workflow_id] == (2, (None, None), 0)
 
 
 def test_a_description_reads_the_stored_conversion_once_it_lands(folders, hub):

@@ -788,7 +788,7 @@ Responsibilities:
 #### Toolbar menu panels (`panels/`)
 The individual toolbar menu bodies, extracted from `Toolbar.vue` so each dropdown owns its own markup and state:
 - `TbExportPanel.vue` (213 lines) — the export options menu body (type, caption, resolution, tag format, bbox sidecar).
-- `FilterMenu.vue` — the funnel's menu, whose only job is to add filters to the filter strip. A root menu of kinds (Picture: Media, Faces, Stacks, Sharing, and Imported from once an import folder exists, which narrows any view to everything one import folder brought in, `filterStore.importedFromFilter` sent as `import_source_folder`; Content: Score, Tags, Tag confidence, Checkpoint, LoRA; then Problems), each a 32px menu row with a 16px leading glyph, opening its own `.tbm` menu beside it and aligned to its row only as far as keeps the cascade no taller than the root (`FilterChecklistMenu.vue` for Checkpoint / LoRA / Workflow, `FilterTagField.vue` for Tags and Tag confidence, the rest inline). Tags and Tag confidence have no list at rest: a typeahead shows the four best matches with their `/tags` counts, Enter or Tab adds the highlighted tag to the first chip row (Has tag / Missing), Shift+Enter or Shift+Tab to the second (Lacks tag / Doubtful), Tab with no suggestion showing moves focus as usual, Backspace in an empty field removes the last chip of the lower row. Clicking a chip's body moves it to the other row, which is the mouse path to the second one (has: olive wash + check; lacks: red wash + ⊘ + struck name). A confidence chip carries its threshold as a native select (`CONFIDENCE_THRESHOLDS` for missing, default 80%; `DOUBTFUL_THRESHOLDS` for doubtful, default 40%); its select and × act on that one entry, so the stats sidebar's several per-bucket entries for a tag survive an edit. Adding a tag gives it one rule per menu: it leaves the other row. Nothing closes it but Esc, a click outside or the funnel: every change lands on the strip at once. Every choice shows a count from `useFilterCounts` (Tag confidence thresholds show none): a `GET /pictures/count` over the grid's view (`buildFilterCountBaseQuery` in `useGridFetch`, stack leaders only, no filters) plus that one filter. The cache is module-level and keyed by the full query, so the strip's "of N" and the menu header's are one request; it empties when the menu opens (so edits made while it was closed show), at most six requests are in flight, a failed count is asked again on the next render, and under a Character-likeness sort only the total is counted (those counts queue on the one DB worker). During a search the base query is `null` and nothing is counted, because `/pictures/count` cannot count search hits. Tag counts are the one exception: they come from `GET /tags` and span the whole library. Every pick-one list keeps the radiogroup contract (one tab stop, ↑/↓/→ select) except for ←, which the cascade catches in the capture phase to return from any submenu to its row, as the Workflows filter menu does (both menus take the cascade from `composables/useCascadeMenu.js`); a search field lets ← through only while its caret can still move left, and a threshold `<select>` always keeps it. Each list leads with its off row, `All` or `Any` by what reads better, carrying the unfiltered count; that row or the chip's × turns the filter off, never clicking the chosen option again, so a radio submenu has no Clear of its own (the checklists and Tag confidence keep theirs). A click, Enter or Space on a Media, Faces, Stacks or Sharing option closes that submenu and returns focus to its row (`OptionRows`' `pick`); arrows only browse, and Score stays open because it has two groups to set. No submenu previews its chip in a footer. The panels are `role="group"`, not dialogs: nothing traps focus. Widths are `--filter-menu-w` / `--filter-submenu-w`; the tag field and the checklists take the root's width for their longer rows. A checklist's scrolling list bleeds by the same `--space-3` its rows do, so the highlight ring is drawn whole and the list never scrolls sideways: a long name ellipsises and its row's `title` carries it. Shared rows and checkboxes are the global `.fm-*` classes in `App.css`.
+- `FilterMenu.vue` — the funnel's menu, whose only job is to add filters to the filter strip. A root menu of kinds (Picture: Media, Faces, Stacks, Sharing, and Imported from once an import folder exists, which narrows any view to everything one import folder brought in, `filterStore.importedFromFilter` sent as `import_source_folder`; Content: Score, Tags, Tag confidence, Checkpoint, LoRA; then Problems), each a 32px menu row with a 16px leading glyph, opening its own `.tbm` menu beside it and aligned to its row only as far as keeps the cascade no taller than the root (`FilterChecklistMenu.vue` for Checkpoint / LoRA / Workflow, `FilterTagField.vue` for Tags and Tag confidence, the rest inline). Tags and Tag confidence have no list at rest: a typeahead shows the four best matches with their `/tags` counts, Enter or Tab adds the highlighted tag to the first chip row (Has tag / Missing), Shift+Enter or Shift+Tab to the second (Lacks tag / Doubtful), Tab with no suggestion showing moves focus as usual, Backspace in an empty field removes the last chip of the lower row. Clicking a chip's body moves it to the other row, which is the mouse path to the second one (has: olive wash + check; lacks: red wash + ⊘ + struck name). A confidence chip carries its threshold as a native select (`CONFIDENCE_THRESHOLDS` for missing, default 80%; `DOUBTFUL_THRESHOLDS` for doubtful, default 40%); its select and × act on that one entry, so the stats sidebar's several per-bucket entries for a tag survive an edit. Adding a tag gives it one rule per menu: it leaves the other row. Nothing closes it but Esc, a click outside or the funnel: every change lands on the strip at once. Every choice shows a count from `useFilterCounts` (Tag confidence thresholds show none): a `GET /pictures/count` over the grid's view (`buildFilterCountBaseQuery` in `useGridFetch`, stack leaders only, no filters) plus that one filter. The cache is module-level and keyed by the full query, so the strip's "of N" and the menu header's are one request; it empties when the menu opens (so edits made while it was closed show), at most six requests are in flight, a failed count is asked again on the next render, and under a Character-likeness sort only the total is counted (those counts queue on the one DB worker). During a search the base query is `null` and nothing is counted, because `/pictures/count` cannot count search hits. Tag counts are the one exception: they come from `GET /tags` and span the whole library. Every pick-one list keeps the radiogroup contract (one tab stop, ↑/↓/→ select) except for ←, which the cascade catches in the capture phase to return from any submenu to its row, as the Workflows filter menu does (both menus take the cascade from `composables/useCascadeMenu.js`); a search field lets ← through only while its caret can still move left, and a threshold `<select>` always keeps it. Each list leads with its off row, `All` or `Any` by what reads better, carrying the unfiltered count; that row or the chip's × turns the filter off, never clicking the chosen option again, so a radio submenu has no Clear of its own (the checklists and Tag confidence keep theirs). A click, Enter or Space on a Media, Faces, Stacks or Sharing option closes that submenu and returns focus to its row (`OptionRows`' `pick`); arrows only browse, and Score stays open because it has two groups to set. No submenu previews its chip in a footer. The panels are `role="group"`, not dialogs: nothing traps focus. Widths are `--filter-menu-w` / `--filter-submenu-w`; the checklists take the root's width for their longer rows and the tag field the wider `--filter-tag-menu-w`. The Tags menu has no footer: the field's keycaps say what Enter and Shift+Enter do, and Tag confidence keeps its one line about the chip's %. The tag field's BY GROUP list shows ten rows before it scrolls. A checklist's or the tag field's scrolling list bleeds by the same `--space-3` its rows do, so the highlight ring is drawn whole and the list never scrolls sideways: a long name ellipsises and its row's `title` carries it. Shared rows and checkboxes are the global `.fm-*` classes in `App.css`.
 - `FilterStrip.vue` — the row under the toolbar with one chip per active filter, each with its own ×, the "N of M" count and Clear all. Chips come from `utils/filterChips.js`, which is also where the menu's choice labels live, so a row and the chip it makes cannot spell a filter two ways. It exists only while a chip does, and the toolbar funnel is lit on the same test (chip count, not a store flag), so the two cannot disagree; `ImageGrid` sets `--filter-strip-h` on the grid area so whatever hangs off `--selbar-height` moves down under it. **Two screens use it.** Given no `chips` prop it draws the picture grid's, off `useFilterStore`; `WorkflowsView` (F7) hands its own `chips` and `of-label` from `useWorkflowsStore` plus `inline`, which drops the absolute placement, because that screen's toolbar is in the normal flow and has no selection bar to hang from. Everything a chip needs travels in the chip — a `kind`, a `value` and its own `remove` — so the component knows nothing about which screen it is on. **`onClearAll` is the one thing an owner can override**: the default Clear all removes the chips one at a time, which is right for the picture grid (each removal is a store write) and wrong for Workflows, where two filters are the server's and each removal would cost a grid read.
 
 #### `SelectionBar.vue` (`panels/`)
@@ -856,7 +856,7 @@ Thin multi-pane settings shell. It owns only the rail and routing; every pane's 
 
 Everything but Appearance is `!isReadOnly`.
 
-**The rail ends in `<NeedsYouBox>`** (owner sessions only), a single link, the "PixlStash needs you!" poster and *Report a bug or an idea*, to the report wizard at `https://pixlstash.dev/report.html` (`website/report.html`), with `version` and `install` (`defaultInstallType()`) in the query so the wizard can prefill them. It sits in `.settings-nav-foot`, sticky at the bottom of the rail: with it there the twelve items no longer quite fit the 600px rail, so the last one or two scroll under the card rather than the card being pushed out of sight, and `scroll-padding-bottom` keeps an item scrolled into view clear of the card. At phone width it is static and ends the list. The page itself sends nothing: it builds the report and hands it to a prefilled GitHub issue, a `mailto:`, or the clipboard; a security report never gets the public issue, only a private GitHub security advisory, the `mailto:` or the clipboard.
+**The rail ends in `<NeedsYouBox>`** (owner sessions only), a single link, the "PixlStash needs you!" poster and *Report a bug or an idea*, to the report wizard at `https://pixlstash.dev/report.html` (`report.html` in the pixlstash-website repository), with `version` and `install` (`defaultInstallType()`) in the query so the wizard can prefill them. It sits in `.settings-nav-foot`, sticky at the bottom of the rail: with it there the twelve items no longer quite fit the 600px rail, so the last one or two scroll under the card rather than the card being pushed out of sight, and `scroll-padding-bottom` keeps an item scrolled into view clear of the card. At phone width it is static and ends the list. The page itself sends nothing: it builds the report and hands it to a prefilled GitHub issue, a `mailto:`, or the clipboard; a security report never gets the public issue, only a private GitHub security advisory, the `mailto:` or the clipboard.
 
 **Old ids still deep-link** (`MERGED_TABS`): `import-folders` → `libraries`, `scrapheap` and `snapshots` → `recovery`, `sharing` → `privacy`. The dialog lands on the merged pane and scrolls the `#settings-anchor-<old id>` wrapper into view, which is how the Inbox's *Manage import folders…* and the scrapheap header's *change* link still arrive at their section.
 
@@ -1600,21 +1600,24 @@ Load-bearing behaviours:
 #### `CreateTrainingSetDialog.vue` (`io/`)
 
 The character sidebar menu's *Create a training set…*, `AppDialog size="2xl"`
-with a flush body split in two: the picks on the left, a 404px coverage column
-on the right that stays in view. Mounted in **`App.vue`**, opened by the
+with a flush body split in two: the picks on the left, a 410px coverage column
+on the right that stays in view and is laid out to fit without scrolling
+(the frame is 652px, less on a short window; two gap lines still fit). Mounted in **`App.vue`**, opened by the
 sidebar's `create-training-set` event (the character's id, name, projects and
 the row element to hand focus back to on close).
 
 - **One request per filter state.** `fetchCharacterSetSuggestion` on open and on
   every change under *Choosing*: two floor sliders (minimum likeness 0-100,
-  minimum score 1-5 in half steps, each with its count set aside; they refetch
+  minimum score 1-5 in half steps, each with its count excluded; they refetch
   on `change`: when the thumb is let go, or on each keyboard step; the track
-  keeps its full scale and the thumb stops at the response's `limits`, the
-  part past it hatched), a three-step `Segmented` each for
-  different framings and different expressions, and two *Set aside* switches,
+  keeps its full scale and the thumb stops at the response's `limits`; the
+  track is shaded from the response's `kept`, light where every picture
+  remains and black where none does, under a translucent fill), a three-step
+  `Segmented` each for framings and expressions, on one line with its hint
+  under it, and two *Exclude* switches side by side,
   on by default (on = those pictures stay out). The size sliders take a prefix
   of each group's `picks` and never refetch: Pictures runs 5-50 with the part
-  past what passes hatched, Video clips (shown only with `has_clips`) runs 1
+  past what passes greyed, Video clips (shown only with `has_clips`) runs 1
   to what passes. A tile's corner button leaves that pick out by hand
   (`removed`, kept across refetches, cleared on open): `data` is the response
   (`ranked`) without those picks, so the next pick takes the place and every
@@ -1624,13 +1627,86 @@ the row element to hand focus back to on close).
   `getPictureMetadata` gives the format for `pictureMediaUrl`, a clip playing,
   a click for full size, and the same leave-out button.
 - **Coverage** draws one bar per framing and expression label over the current
-  picks, against `target = max(1, round(share * N))` from the response. A short
-  label is sorted into *The slider can close* (with a *Show N* that moves the
-  slider), *Past the top 50*, or *Not in the library* (`available` is 0).
+  picks, against `target = max(1, round(share * N))` from the response. Each
+  bar has its own colour (`hueOf`: teal and olive for framing, raspberry and
+  violet for expression, each deep and light), and a tile's chips wear the
+  colours of its bars; the sheet is four tiles across at most, so a pick with
+  two expressions has room for its three chips. A short label says so on its
+  own bar (*N short*), and nothing is added under the bars. A label with
+  `available` 0 has its bar drawn empty, saying *not in the library*.
 - **Create** posts the set with `parent_character_id` and the character's
   projects, then bulk-adds the picks; if the add fails it deletes the empty set
   and says so. After it, *Train a LoRA on it* emits `train`, which App routes
   to `handleTrainLora` on the new set.
+- **Drawing the pictures instead** (`CharacterSheetStep.vue`, backend §25.29).
+  *Generate pictures…* (*Generate more…* once there are pictures) puts a
+  two-step row under the title, *Sheets* then *Pick the set*, and a character
+  with no pictures opens on *Sheets*. The step is mounted once and kept with
+  `v-show`, so drawn sheets survive going back and forth; the dialog draws its
+  footer from the step's exposed `footer` (`lead`; `back`, a label and a
+  `run`; `secondary` and `primary`, each with an `enabled` too). The step reads the
+  character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
+  model is listed disabled, the newest MOSS-Image one preselected, and its name
+  rides in the step row as a neutral pill) and the MOSS-Image `txt2img`
+  workflows; *Draw* saves the typed description on a character that had none,
+  then runs the workflow (`runWorkflowCard`, the canvas as `values` at the
+  card's own width/height addresses) and polls each run's outcome and
+  `POST /characters/{id}/sheets/rank` every 2.5 s until every sheet's faces are
+  read, or two minutes after the last run ended: a sheet still unread then (no
+  face model, a deleted picture) can be chosen unscored and polling stops.
+  Drawing waits for the character to load, so a typed description never
+  overwrites a stored one. Each run keeps its place in the grid from the moment
+  it is started, in run order: its sheet lands where it was drawing and nothing
+  moves as others arrive, so a sheet's number is its place; the run on the GPU
+  shows its percent from the Tasks store's `comfyuiRuns`. A draw with a
+  different prompt, workflow or LoRA starts a new pick; *Draw N more* with the
+  same adds to it. Sheets are drawn with `hold` (backend §25.29) and are
+  ticked to keep, several at once; the best holding one is ticked for the
+  user where it sits until they tick or untick one; a broken one says so in
+  its caption. *Use N sheets* cuts the kept ones into pictures. **Every sheet
+  stays where it was drawn, in the Scrapheap**: the ones used, the ones
+  dropped, those of an earlier prompt, everything left when the dialog closes,
+  and a run still drawing then. A sheet can be a nice picture in its own right,
+  so nothing here destroys one; it is restorable until the Scrapheap's
+  retention purges it, and the intro and the footer say so. After a use the step starts again from the
+  form. The magnifier on a sheet (or a double-click, `Z`, or a wheel-up over
+  it) opens the sheet's own file in `ZoomPopout` over the dialog, the dialog
+  persistent meanwhile; its *Keep* / *Drop* control is a `Segmented`, so it
+  keeps one size in both states, and focus goes back to the sheet's
+  magnifier. Kept sheets the ranking names in each other's `different_from`
+  turn the footer lead into a warning (`footer.warn`: icon, `role="status"`)
+  naming the pair; *Use* stays enabled, since with a LoRA several sheets can
+  be one person and the owner decides. *Keep* cuts the ticked sheets, waits (90 s at most)
+  for their pictures' faces, then hands their ids back: the picker reloads, marks them
+  *new*, and offers *All / New only*, which re-ranks the stills from 1 over the
+  new pictures so the slider, coverage and Create all read that one list.
+- **Drawn from a reference picture** (#2679, backend §25.29; design
+  "Reference pinned beside the sheets"). Where the library has a
+  Qwen-Image-Edit card with `reference_inputs > 0`, the step's rail (320px
+  then, 280px otherwise) opens with a *Draw from* `Segmented`: *Text* /
+  *Reference and text*. Without such a card the control is not shown; if an
+  edit card exists that a sheet copy could be made from, the rail offers
+  *Make a sheet workflow from …* (`sheetCopyWorkflow`). The mode defaults to
+  the reference when the character has reference faces. In it the rail holds
+  the chosen picture large, the character's reference faces as a strip to
+  swap with one click, a dashed tile that opens `PicturePicker`, and the
+  likeness warning (the form's own likeness notice is not shown beside it).
+  The form does not change, but each mode has its own workflow list and its
+  own model, so the LoRA field offers that model's LoRAs, and a description
+  is required only in text mode. The workflow check also needs an open
+  picture input and a settable prompt from the pre-flight, and ignores
+  `picture_input_unfilled`, which the draw fills. *Draw* sends
+  `reference: true, layout: "prose"` to the prompt route and the picture as
+  `inputs` on the run, one entry per open picture input (a pinned one keeps
+  its pin); the reference joins what a draw is compared by, so another
+  picture starts a new pick. While sheets are on show the rail keeps the
+  picture they were drawn from under *Drawn from*, in place of the
+  description block; ranking sends it as `reference_picture_ids`; each
+  caption leads with closeness as a bar and its number; the zoom shows the
+  picture beside the sheet (`ZoomPopout`'s `aside` slot). Closeness sorts
+  first, then agreement, and only a sheet that is `close` is kept for the
+  user: when none is, none is ticked and a notice says so. Sheets still keep
+  their run's place in the grid.
 
 #### `TrainLoraDialog.vue` (`io/`, #2119)
 **Outcome choices, numbers derived** (design artifact "Outcome choices, numbers derived"). The Train a LoRA dialog, `AppDialog size="lg"`, mounted in **`App.vue`** and opened by `useTrainingStore.openForScope({type, id, name})` from the toolbar's Train button, its overflow row and the sidebar's *Train LoRA…*. It replaced the toolbar popover `TbTrainPanel`.
@@ -3628,7 +3704,7 @@ The accept / dismiss / fix / undo action bar shared by the decision cards.
 Session-complete celebration screen.
 
 #### `ReviewArchivedReceipt.vue` (`reviews/`, ~135 lines)
-Summary receipt shown for an archived session (what was decided).
+Summary receipt shown for an archived session (what was decided). For a review of a supplied list (`source === "supplied_list"`) it and `ReviewSessionView`'s completion state also print how the known-answer controls scored (`controlScores.js`, from the server's `receipt.controls`); the session view reads the server receipt there instead of the local tally, because a control's answer changes no tag, and no card ever says it is a control.
 
 #### `ReviewSticker.vue` (`reviews/`, ~85 lines)
 Die-cut sticker award. The sticker vocabulary is imported from the Picture Set palette (`utils/setAppearance.js`) so sets and stickers never drift.
@@ -3835,11 +3911,25 @@ keys' path; the sum resets after a `ZOOM_EXIT_GESTURE_GAP_MS` pause, so a mouse
 notch is one picture and a trackpad swipe does not race. Review Sessions and
 Compare do not dispatch this way.
 
+**`widgets/ZoomPopout.vue` — the family's pop-out frame.** A large panel over
+whatever opened it, for looking closely at one picture from a dialog or list:
+a `StackLayer` (so it clears a modal with no z-index), a bar with caption,
+optional prev/next, an `actions` slot, zoom −/readout/+ and fit ↔ 100%, an
+`aside` slot beside the stage for something to compare the picture with, and a
+dark stage on the transform transport with floor policy `rest`. It owns its
+keys (Escape closes only the pop-out, arrows step, `Z`, `+`/`-`) and stops them
+there. An `entry` wheel (`{deltaY, deltaMode, fx, fy}`, the cursor as a
+fraction of the thumbnail) is applied once the picture is measured, anchored
+at that point, so a wheel-up over a thumbnail carries on as one zoom gesture:
+the character-sheet pick (`CharacterSheetStep.vue`) opens it that way. The
+caller restores focus on `close`.
+
 Named follow-ups (recorded, not yet done):
 
 1. **`ReviewSessionsOverlay` migration onto `useWheelZoom`.** Its `.rs-zoom`
    full-screen zoom still carries its own scroll-to-magnify implementation;
-   it should become the third consumer of the shared core.
+   it should become the third consumer of the shared core, likely through
+   `ZoomPopout`, as should the `CharacterEditor` reference preview.
 2. **Pinch support.** The anchor equation takes any `{x, y}` in container
    space, so a pinch centroid drives `wheelZoom`/`snapTo` unchanged — the
    composable is pinch-ready; only the gesture recognition is missing.

@@ -14,21 +14,6 @@ import pytest
 
 from pixlstash.training import preset_updates, presets
 
-SITE_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "..", "website", "training-presets", "v1"
-)
-
-
-def test_published_site_matches_the_shipped_recipes():
-    """The guardrail: run scripts/build_training_presets_site.py after editing
-    a recipe, or the site serves an older one than the app ships."""
-    expected = preset_updates.site_files()
-    on_disk = sorted(os.listdir(SITE_DIR))
-    assert on_disk == sorted(expected), "website/training-presets/v1 has drifted"
-    for name, raw in expected.items():
-        with open(os.path.join(SITE_DIR, name), "rb") as handle:
-            assert handle.read() == raw, f"website/training-presets/v1/{name} drifted"
-
 
 def test_every_shipped_recipe_passes_as_its_own_update():
     """A recipe published unchanged must be accepted by every client."""

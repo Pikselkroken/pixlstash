@@ -4,9 +4,10 @@ Extracted from pixlstash/routes/tag_predictions.py to keep route handlers thin.
 Provides vault-level functions so route handlers need not call vault.db directly.
 """
 
-from typing import TYPE_CHECKING
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import delete
+from sqlalchemy import delete, func
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Face, Picture, Tag
@@ -62,6 +63,97 @@ def get_predictions(
         return list(session.exec(q).all())
 
     return vault.db.run_immediate_read_task(_fetch)
+
+
+def list_labels(
+    vault: "Vault",
+    *,
+    tag: str | None = None,
+    label_source: str = HUMAN,
+    label_state: str | None = None,
+    labeled_since: datetime | None = None,
+    offset: int = 0,
+    limit: int = 1000,
+) -> dict[str, Any]:
+    """Return one page of the label ledger across the whole library.
+
+    Only real verdicts are returned (``label_state`` POS or NEG), and only for
+    pictures that are not on the Scrapheap. Rows are ordered by prediction id,
+    so re-recording a verdict does not move it; a verdict cleared between two
+    page reads does shift the rows after it by one.
+
+    Args:
+        vault: Application vault, used for DB task dispatch.
+        tag: Exact tag name to keep, or ``None`` for every tag.
+        label_source: ``human``, ``propagated`` or ``model``.
+        label_state: ``POS`` or ``NEG``, or ``None`` for both.
+        labeled_since: Keep verdicts recorded at or after this time. A naive
+            value is read as UTC, which is how ``labeled_at`` is stored.
+        offset: Rows to skip.
+        limit: Page size.
+
+    Returns:
+        ``{"total": int, "labels": [row, ...]}`` where ``total`` counts every
+        match, not the page.
+
+    Raises:
+        OverflowError: ``labeled_since`` has no UTC equivalent.
+    """
+    conditions = [
+        Picture.deleted.is_(False),
+        TagPrediction.label_source == label_source,
+        TagPrediction.label_state.in_([label_state] if label_state else [POS, NEG]),
+    ]
+    if tag is not None:
+        conditions.append(TagPrediction.tag == tag)
+    if labeled_since is not None:
+        # Bound as aware UTC: that is the instant stored, whichever way the
+        # column type writes it.
+        if labeled_since.tzinfo is None:
+            labeled_since = labeled_since.replace(tzinfo=timezone.utc)
+        labeled_since = labeled_since.astimezone(timezone.utc)
+        conditions.append(TagPrediction.labeled_at >= labeled_since)
+
+    def _fetch(session: Session) -> dict[str, Any]:
+        total = session.exec(
+            select(func.count(TagPrediction.id))
+            .join(Picture, Picture.id == TagPrediction.picture_id)
+            .where(*conditions)
+        ).one()
+        rows = session.exec(
+            select(TagPrediction)
+            .join(Picture, Picture.id == TagPrediction.picture_id)
+            .where(*conditions)
+            .order_by(TagPrediction.id)
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        return {
+            "total": total,
+            "labels": [
+                {
+                    "picture_id": p.picture_id,
+                    "tag": p.tag,
+                    "label_state": p.label_state,
+                    "label_source": p.label_source,
+                    "labeled_at": _utc_iso(p.labeled_at),
+                    "label_model_version": p.label_model_version,
+                    "label_confidence": p.label_confidence,
+                }
+                for p in rows
+            ],
+        }
+
+    return vault.db.run_immediate_read_task(_fetch)
+
+
+def _utc_iso(value: datetime | None) -> str | None:
+    """ISO 8601 with an explicit UTC offset; SQLite hands the value back naive."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
 
 
 def confirm_tag_prediction_in_session(

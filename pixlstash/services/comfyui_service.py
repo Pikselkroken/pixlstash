@@ -30,7 +30,7 @@ from urllib3.util import parse_url
 import requests
 from fastapi import HTTPException
 from websockets.sync.client import connect as ws_connect
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from pixlstash.db_models import (
     Character,
@@ -44,6 +44,7 @@ from pixlstash.db_models import (
     TAG_PENDING_SENTINEL,
 )
 from pixlstash.event_types import EventType
+from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.resources import comfyui_tenant
 from pixlstash.resources.arbiter import arbiter
 from pixlstash.resources.comfyui_tenant import PeakSampler
@@ -161,6 +162,29 @@ def on_run_ended(listener) -> None:
     whatever was told before: ``listener(outcome)``, outside the lock."""
     global _ending_listener
     _ending_listener = listener
+
+
+def _hold_in_session(session: Session, picture_ids: list[int]) -> set[int]:
+    """Soft-delete a held run's new pictures, as the Scrapheap holds them.
+
+    Returns the ones held. One a locked set already
+    froze (a run's destination can be such a set) is left live, as the bulk
+    delete leaves it, and is not held.
+    """
+    now = datetime.now(timezone.utc)
+    locked = locked_picture_ids(session, picture_ids)
+    held = set()
+    for picture in session.exec(
+        select(Picture).where(Picture.id.in_(picture_ids))
+    ).all():
+        if picture.id in locked:
+            continue
+        picture.deleted = True
+        picture.deleted_at = now
+        session.add(picture)
+        held.add(picture.id)
+    session.commit()
+    return held
 
 
 def new_run_id() -> str:
@@ -2066,8 +2090,12 @@ def _process_comfyui_outputs(
     vram_model_set: str | None = None,
     vram_pixels: int | None = None,
     label: str | None = None,
+    hold: bool = False,
 ) -> None:
     """Poll ComfyUI for a prompt's outputs, import them, and say how it ended.
+
+    *hold* imports them held: soft-deleted at once and announced to nobody,
+    left in the Scrapheap for the caller to cut from or the owner to restore.
 
     *vram_lease* is the run's lease from the VRAM arbiter. It is released the
     moment ComfyUI's history gives the run's final status - not after the
@@ -2351,6 +2379,9 @@ def _process_comfyui_outputs(
             reference_folder_id=ref_folder_id,
             source_file_stem=source_file_stem,
         )
+        # Only what this run itself imported new may be held: a saver-reported
+        # id, or a duplicate, can be a picture the library already had.
+        imported_ids = list(new_ids)
         if pixlstash_ids:
             # A PixlStash saver node uploaded these itself, so there is nothing
             # left to import - but everything below (stacking, source lineage,
@@ -2395,7 +2426,20 @@ def _process_comfyui_outputs(
                 character_id=view_context.get("character_id"),
             )
 
-        if new_ids:
+        announced = new_ids
+        if new_ids and hold:
+            held_now = (
+                pinned_server.vault.db.run_task(_hold_in_session, imported_ids)
+                if imported_ids
+                else set()
+            )
+            logger.info(
+                "Prompt %s imported pictures %s held", prompt_id, sorted(held_now)
+            )
+            # What a locked set kept live, and a saver's own ids, are ordinary
+            # pictures: they still get their import event.
+            announced = [pid for pid in new_ids if pid not in held_now]
+        if announced:
             # In-app ComfyUI generation is UI-initiated, but async: there is no
             # optimistic client-side copy to suppress. Emit `picture_imported`
             # with source "ui" and NO origin echo so every owner tab (including
@@ -2405,14 +2449,16 @@ def _process_comfyui_outputs(
             pinned_server.vault.notify(
                 EventType.PICTURE_IMPORTED,
                 {
-                    "ids": new_ids,
+                    "ids": announced,
                     "source": "ui",
                     "change_kind": "added",
                 },
             )
         # After the event: a failure here must not cost the pictures their
         # import event. Before the ending, so a run has one.
-        _assign_outputs_to_lora_people(pinned_server, lora_character_ids, new_ids)
+        # A held picture is nobody's until it is kept.
+        if not hold:
+            _assign_outputs_to_lora_people(pinned_server, lora_character_ids, new_ids)
         held = []
         if duplicate_ids:
             try:

@@ -10,10 +10,11 @@ import { defineConfig } from '@playwright/test'
 // density to match the originals. capture.spec.js takes the stills;
 // videos.spec.js records Getting started videos 02, 03, 06 (needs ffmpeg) and runs
 // second, since it changes the library. Everything lands in the gitignored
-// website/screenshots/output/; copying into website/assets/ is by hand.
+// screenshots/output/ of a checkout of the pixlstash-website repository, named
+// by PIXLSTASH_WEBSITE; copying into its site/assets/ is by hand.
 //
-// Run:  npm run screenshots          (from frontend/)
-//       npm run screenshots 2.0.0    (stamp the captures with a version)
+// Run:  PIXLSTASH_WEBSITE=<checkout> npm run screenshots          (from frontend/)
+//       PIXLSTASH_WEBSITE=<checkout> npm run screenshots 2.0.0    (stamp a version)
 //
 // Nothing opens on the desktop: on Linux the app renders through Chromium's
 // headless Ozone backend (electronApp.js). Set PIXLSTASH_PYTHON to a venv

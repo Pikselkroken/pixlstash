@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 APP=pixlstash-demo
-# Run from repo root so the build context includes website/ and holiday/.
+# Run from repo root so the build context includes holiday/.
 fly deploy . -a "$APP" -c holiday/fly.holiday.toml --yes
 # Verify the app is genuinely gone: running image must be the nginx build,
 # nothing else left up.

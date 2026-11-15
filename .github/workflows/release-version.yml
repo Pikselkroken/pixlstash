@@ -1,4 +1,4 @@
-name: Update latest-version.json on release
+name: Update SECURITY.md on release
 
 on:
   release:
@@ -17,9 +17,10 @@ env:
   PIXLSTASH_TELEMETRY_DEV: '1'
 
 jobs:
-  # Release candidates and dev releases publish nothing to the website: no API
-  # docs, no latest-version.json, no SECURITY.md, and so no bot PR to close by
-  # hand. Only a plain vX.Y.Z tag goes on to the update job.
+  # Release candidates and dev releases change nothing: no SECURITY.md, and so
+  # no bot PR to close by hand. Only a plain vX.Y.Z tag goes on to the update
+  # job. The website's half of a release (API reference, latest-version.json,
+  # training recipes) is pixlstash-website's release-update.yml.
   resolve:
     runs-on: ubuntu-latest
     outputs:
@@ -44,7 +45,7 @@ jobs:
           if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "final=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::$TAG is a pre-release; the website is not updated."
+            echo "::notice::$TAG is a pre-release; SECURITY.md is not updated."
           fi
 
   update:
@@ -54,13 +55,6 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Check out release tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.resolve.outputs.tag }}
-          path: release
-          persist-credentials: false
-
       - name: Check out main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -73,113 +67,9 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Cache pip packages
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-py3.12-${{ hashFiles('release/setup.py', 'release/requirements.txt') }}
-          restore-keys: pip-${{ runner.os }}-py3.12-
+      - name: Install the script's one dependency
+        run: python -m pip install packaging
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip packaging
-          pip install ./release
-
-      - name: Generate versioned OpenAPI docs
-        run: |
-          python release/scripts/generate_openapi_docs.py --output-dir main/website/api
-
-      - name: Compute and maybe update latest-version.json
-        id: update
-        env:
-          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
-        run: |
-          python - <<'EOF'
-          import json, os, re, sys
-          from pathlib import Path
-          from packaging.version import Version, InvalidVersion
-
-          tag = os.environ["RELEASE_TAG"]
-          new_version_str = tag.lstrip("v")
-          try:
-              new_version = Version(new_version_str)
-          except InvalidVersion:
-              print(f"Release tag '{tag}' is not a valid version; skipping.")
-              sys.exit(0)
-
-          if new_version.is_prerelease:
-              print(f"Release {new_version} is a pre-release (dev/rc); skipping latest-version.json update.")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write("changed=false\n")
-              sys.exit(0)
-
-          # Read the released branch's CHANGELOG.md for [Security: LEVEL] on the
-          # top heading. This means each release's security level is decided by
-          # the changelog that ships with the release itself, not by main.
-          security_level = None
-          changelog = Path("release/CHANGELOG.md")
-          if changelog.exists():
-              with changelog.open(encoding="utf-8") as f:
-                  for line in f:
-                      stripped = line.strip()
-                      if not stripped.startswith("#"):
-                          continue
-                      m = re.search(
-                          r"\[Security:\s*(Critical|High|Moderate|Low)\]",
-                          stripped,
-                          re.IGNORECASE,
-                      )
-                      if m:
-                          security_level = m.group(1).capitalize()
-                      break  # only inspect the first (latest) version heading
-
-          # Compare against main's existing latest-version.json. We only update
-          # if this release is strictly newer than what's currently published.
-          current_path = Path("main/website/latest-version.json")
-          current_version = None
-          if current_path.exists():
-              try:
-                  current = json.loads(current_path.read_text())
-                  current_version = Version(str(current.get("version", "")))
-              except (InvalidVersion, json.JSONDecodeError, ValueError):
-                  current_version = None
-
-          if current_version is not None and new_version <= current_version:
-              print(
-                  f"Release {new_version} is not newer than currently published "
-                  f"{current_version}; skipping update."
-              )
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write("changed=false\n")
-              sys.exit(0)
-
-          payload = {"version": str(new_version)}
-          if security_level:
-              payload["security"] = security_level
-          payload_text = json.dumps(payload) + "\n"
-          current_path.parent.mkdir(parents=True, exist_ok=True)
-          current_path.write_text(payload_text)
-          print(f"Updated latest-version.json: {payload}")
-
-          # Mirror the identical payload to the per-install-type manifests.
-          # `dev` is one of them: a machine that declares
-          # PIXLSTASH_INSTALL_TYPE=dev requests dev.json, and a 404 there would
-          # leave the client's 24h throttle unstamped and re-checking on every
-          # page load, so the file has to exist and answer valid JSON.
-          per_type_dir = Path("main/website/latest-version")
-          per_type_dir.mkdir(parents=True, exist_ok=True)
-          for install_type in ("docker", "pip", "electron", "other", "dev"):
-              per_type_path = per_type_dir / f"{install_type}.json"
-              per_type_path.write_text(payload_text)
-              print(f"Updated {per_type_path}: {payload}")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write("changed=true\n")
-          EOF
-
-      # Run from main's checkout, not release/. Unlike the OpenAPI docs, the
-      # table is a property of main's security policy rather than of the
-      # release's own code, so main always has the current script and a
-      # manual re-run on a tag cut before this landed still works.
       - name: Update SECURITY.md supported versions
         env:
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
@@ -187,43 +77,26 @@ jobs:
           python main/scripts/update_security_supported_versions.py \
             main/SECURITY.md "$RELEASE_TAG"
 
-      - name: Open pull request with updated website files
+      - name: Open pull request with the updated table
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           path: main
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
           base: main
-          branch: bot/update-latest-version-${{ needs.resolve.outputs.tag }}
-          commit-message: "chore: release ${{ needs.resolve.outputs.tag }} website update"
-          title: "chore: release ${{ needs.resolve.outputs.tag }} website update"
+          branch: bot/update-security-policy-${{ needs.resolve.outputs.tag }}
+          commit-message: "chore: release ${{ needs.resolve.outputs.tag }} supported versions"
+          title: "chore: release ${{ needs.resolve.outputs.tag }} supported versions"
           body: |
-            Automated website update triggered by release **${{ needs.resolve.outputs.tag }}**.
+            Automated update triggered by release **${{ needs.resolve.outputs.tag }}**.
 
-            Changes included:
-            - `website/api/v{major}.{minor}/` — versioned OpenAPI docs (Scalar UI)
-              generated from the release tag's own backend code. The generator
-              also heals any older version pages still on ReDoc and drops the
-              legacy top-level `openapi.json`.
-            - `website/latest-version.json` — updated to this release (if it is
-              strictly newer than the currently published version; skipped otherwise).
-              The `[Security: ...]` tag was taken from the release tag's own `CHANGELOG.md`.
-            - `website/latest-version/{docker,pip,electron,other,dev}.json` — per-install-type
-              manifests carrying the **identical** payload as the legacy file. These
-              back the PATH-encoded version-check URLs so Cloudflare zone analytics can
-              bucket active installs by type, and separate our own declared `dev`
-              machines from real installs.
-              Updated/skipped in lock-step with the legacy `latest-version.json` above.
-            - `SECURITY.md` — the supported-versions table, rewritten so the new
-              minor is the only supported one and the minor it replaces is demoted.
-              Skipped for pre-releases and for anything that is not a newer minor
-              than the table already names.
+            `SECURITY.md` — the supported-versions table, rewritten so the new
+            minor is the only supported one and the minor it replaces is demoted.
+            No pull request is opened for anything that is not a newer minor
+            than the table already names.
+
+            The website's half of a release (API reference, `latest-version.json`,
+            training recipes) is a pull request in
+            [pixlstash-website](https://github.com/Pikselkroken/pixlstash-website).
           add-paths: |
             SECURITY.md
-            website/latest-version.json
-            website/latest-version/docker.json
-            website/latest-version/pip.json
-            website/latest-version/electron.json
-            website/latest-version/other.json
-            website/latest-version/dev.json
-            website/api
           delete-branch: true
