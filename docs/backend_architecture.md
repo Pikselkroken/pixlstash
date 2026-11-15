@@ -12957,6 +12957,30 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 - The character's reference faces that ranking and the step's reference strip
   use come from `select_reference_faces_for_character`, so a reference cluster
   (§25.30) steers both.
+- **The set is made first and holds its own build** (migration
+  `0147_add_picture_set_building`). "Create a training set…" creates the
+  child set under the person at once, with `PictureSet.building`, a JSON
+  object (null for every finished set) that the build screen writes through
+  `POST`/`PATCH /picture_sets` (`building`; an object or null, at most
+  `MAX_BUILDING_BYTES`, 256 KB; anything else is 400). It is the screen's state
+  (its step, the sheet draws and their runs, the picker's choices) and opaque
+  to the backend except `run_keys`, the sheet runs still going. *Create set*
+  fills the set and PATCHes `building: null`. The set lists, single reads and
+  the by-name read return `building` to the owner; `narrow_project_fields`
+  blanks it for a scoped token, as it does the parent ids, since it names
+  pictures and runs outside the set.
+- **Deleting a set stops its sheet runs.** `DELETE /picture_sets/{id}` reads
+  `building.run_keys` in the same transaction as the delete and, after it,
+  `comfyui_service.cancel_runs` stops exactly those (by run id or prompt id):
+  a held run is cancelled before it reaches ComfyUI, a queued one is taken off
+  ComfyUI's queue (`POST /queue {"delete": [...]}`), the running one is
+  interrupted by its prompt id (`POST /interrupt {"prompt_id": ...}`; a ComfyUI
+  that predates per-prompt interrupts stops whatever runs, which by the
+  listener's account is this run), and the pollers are told to look now. The
+  answer's `stopped_runs` says how many were still going. The drawn sheets
+  stay in the Scrapheap, and pictures already cut stay on the person. Every
+  delete path (the set's menu, a multi-select delete, the build screen's
+  *Cancel set*) goes through it.
 
 ### 25.30 Face clusters and the reference cluster
 
