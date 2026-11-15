@@ -2030,7 +2030,7 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     gen.listWorkflowCards.mockResolvedValue({
       cards: [
         MOSS_CARD,
-        { id: "manual:krea", name: "Krea sheet", type: "txt2img", last_used: "2026-11-01T20:00:00Z", models: [{ base_model_family: "krea2" }] },
+        { id: "manual:krea", name: "Krea sheet", type: "txt2img", last_used: "2026-11-01T20:00:00Z", models: [{ kind: "unet", base_model_family: "krea2" }] },
       ],
     });
     const wrapper = mountDialog({
