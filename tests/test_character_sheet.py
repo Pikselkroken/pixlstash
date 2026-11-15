@@ -979,6 +979,11 @@ def test_a_reference_cluster_chooses_the_reference_faces(client):
         sorted(m["picture_id"] for m in c["members"]) for c in body["clusters"]
     ) == sorted([sorted(a_ids), sorted(b_ids)])
     assert [u["picture_id"] for u in body["unclustered"]] == [plain]
+    # The picker keeps videos out of "Matched no one" by this.
+    plain_format = client.server.vault.db.run_task(
+        lambda session: session.get(Picture, plain).format
+    )
+    assert plain_format and body["unclustered"][0]["format"] == plain_format
     assert not any(c["is_reference"] for c in body["clusters"])
 
     cluster_url = f"{API_PREFIX}/characters/{character_id}/reference-cluster"

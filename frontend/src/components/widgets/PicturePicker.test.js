@@ -42,8 +42,10 @@ vi.mock("../../api/pictures", () => ({
 const listCharacters = vi.fn();
 const listPictureSets = vi.fn();
 const listProjects = vi.fn();
+const getFaceClusters = vi.fn();
 vi.mock("../../api/characters", () => ({
   listCharacters: (...a) => listCharacters(...a),
+  getFaceClusters: (...a) => getFaceClusters(...a),
 }));
 vi.mock("../../api/pictureSets", () => ({
   listPictureSets: (...a) => listPictureSets(...a),
@@ -101,7 +103,39 @@ beforeEach(() => {
   listProjects
     .mockReset()
     .mockResolvedValue([{ id: 2, name: "Personal", image_count: 9118 }]);
+  // No faces grouped: a person lands on all of their pictures.
+  getFaceClusters.mockReset().mockResolvedValue(groups([], { reference: false }));
 });
+
+function member(id, format = "PNG") {
+  return { picture_id: id, centrality: 0.9, score: null, format };
+}
+
+/** A `GET /face-clusters` answer; the first cluster is the reference one. */
+function groups(clusters, { reference = true, unclustered = [] } = {}) {
+  return {
+    threshold: 0.45,
+    faces: 0,
+    reference_cluster: reference ? clusters[0].map((m) => m.picture_id) : null,
+    clusters: clusters.map((members, i) => ({
+      members,
+      size: members.length,
+      cohesion: 0.6,
+      reference_share: reference && i === 0 ? 1 : 0,
+      is_reference: reference && i === 0,
+      similarity_to_reference: 0.5,
+      from_sheets: false,
+    })),
+    unclustered: unclustered.map((m) => ({ ...m, similarity_to_reference: 0.2 })),
+  };
+}
+
+function facetRow(w, text) {
+  return w.findAll(".pp-facet").find((b) => b.text().includes(text));
+}
+
+const tileIds = (w) =>
+  w.findAll(".pp-cell img").map((img) => Number(img.attributes("src").match(/(\d+)\.webp/)[1]));
 
 describe("the facets", () => {
   it("are the vault's own groupings, and the reference set is not one", async () => {
@@ -451,5 +485,137 @@ describe("the grid's keyboard", () => {
     await cells()[2].trigger("keydown", { key: "Enter" });
     expect(w.emitted("pick")).toHaveLength(1);
     expect(w.emitted("pick")[0][0].id).toBe(3);
+  });
+});
+
+describe("a person's face clusters", () => {
+  it("unfold under the person and land on the reference cluster, most typical first", async () => {
+    getFaceClusters.mockResolvedValue(
+      groups([[member(31), member(32), member(33)], [member(41), member(42)]], {
+        unclustered: [member(51)],
+      }),
+    );
+    const w = await mountPicker();
+    const reads = streamPictures.mock.calls.length;
+
+    await facetRow(w, "Clementine").trigger("click");
+    await flush(w);
+
+    expect(getFaceClusters).toHaveBeenCalledWith(7, 0.45);
+    expect(facetRow(w, "Clementine").attributes("aria-expanded")).toBe("true");
+    const subRows = w
+      .findAll(".pp-facet--sub")
+      .map((b) => b.text().replace(/\s+/g, " "));
+    expect(subRows).toEqual([
+      "Reference3",
+      "Cluster 22",
+      "Matched no one1",
+      "All of Clementine1 029",
+    ]);
+    // The reference cluster is the one on, and its tiles are its members in
+    // the answer's order - no listing read for a cluster already in hand.
+    expect(w.find(".pp-facet--sub.pp-facet--on").text()).toContain("Reference");
+    expect(tileIds(w)).toEqual([31, 32, 33]);
+    expect(streamPictures.mock.calls.length).toBe(reads);
+    expect(w.find(".pp-scope").text()).toContain("Clementine · Reference");
+
+    await w.findAll(".pp-cell")[0].trigger("click");
+    expect(w.find(".pp-chosen").text()).toBe(
+      "1 chosen · from Clementine's reference cluster",
+    );
+
+    await facetRow(w, "Cluster 2").trigger("click");
+    await flush(w);
+    expect(tileIds(w)).toEqual([41, 42]);
+    expect(w.find(".pp-scope").text()).not.toContain("Reference cluster");
+
+    await facetRow(w, "Matched no one").trigger("click");
+    await flush(w);
+    expect(tileIds(w)).toEqual([51]);
+  });
+
+  it("lands on all of the person when no reference cluster is picked", async () => {
+    getFaceClusters.mockResolvedValue(
+      groups([[member(31), member(32)]], { reference: false }),
+    );
+    const w = await mountPicker();
+    await facetRow(w, "Clementine").trigger("click");
+    await flush(w);
+
+    expect(facetRow(w, "All of Clementine").classes()).toContain("pp-facet--on");
+    expect(facetRow(w, "Cluster 1")).toBeTruthy();
+    expect(lastStreamQuery().get("character_id")).toBe("7");
+  });
+
+  it("keeps videos out of a cluster unless they were asked for", async () => {
+    getFaceClusters.mockResolvedValue(
+      groups([[member(31), member(32, "MP4")]], { unclustered: [member(51, "MP4")] }),
+    );
+    const w = await mountPicker();
+    await facetRow(w, "Clementine").trigger("click");
+    await flush(w);
+    expect(tileIds(w)).toEqual([31]);
+
+    await facetRow(w, "Matched no one").trigger("click");
+    await flush(w);
+    expect(tileIds(w)).toEqual([]);
+  });
+
+  it("folds when another grouping is chosen, and a late answer moves no one", async () => {
+    let answer;
+    getFaceClusters.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    const w = await mountPicker();
+    await facetRow(w, "Clementine").trigger("click");
+    await flush(w);
+    expect(w.find(".pp-rail-note").text()).toBe("Grouping faces…");
+
+    await facetRow(w, "Personal").trigger("click");
+    await flush(w);
+    answer(groups([[member(31)]]));
+    await flush(w);
+
+    expect(w.findAll(".pp-facet--sub")).toHaveLength(0);
+    expect(facetRow(w, "Personal").classes()).toContain("pp-facet--on");
+    expect(lastStreamQuery().get("project_id")).toBe("2");
+  });
+
+  it("unfolds one person at a time, and a late answer for the last one is dropped", async () => {
+    let clementine;
+    getFaceClusters.mockImplementation((id) =>
+      id === 7
+        ? new Promise((resolve) => (clementine = resolve))
+        : Promise.resolve(groups([[member(81), member(82)]])),
+    );
+    const w = await mountPicker();
+    await facetRow(w, "Clementine").trigger("click");
+    await flush(w);
+    await facetRow(w, "Sarah").trigger("click");
+    await flush(w);
+    clementine(groups([[member(31)], [member(41)]]));
+    await flush(w);
+
+    expect(facetRow(w, "Clementine").attributes("aria-expanded")).toBe("false");
+    expect(w.findAll(".pp-facet--sub")).toHaveLength(2);
+    expect(w.find(".pp-scope").text()).toContain("Sarah · Reference");
+    expect(tileIds(w)).toEqual([81, 82]);
+  });
+
+  it("cuts a search inside a cluster to its members", async () => {
+    getFaceClusters.mockResolvedValue(groups([[member(31), member(32)]]));
+    searchPictures.mockResolvedValue([{ id: 32 }, { id: 99 }, { id: 31 }]);
+    const w = await mountPicker();
+    await facetRow(w, "Clementine").trigger("click");
+    await flush(w);
+    expect(w.find(".pp-search input").attributes("placeholder")).toBe(
+      "Search Clementine's reference faces",
+    );
+
+    await w.find(".pp-search input").setValue("smile");
+    await w.find(".pp-search input").trigger("keydown", { key: "Enter" });
+    await flush(w);
+
+    const [, { query }] = searchPictures.mock.calls.at(-1);
+    expect(new URLSearchParams(query).get("character_id")).toBe("7");
+    expect(tileIds(w)).toEqual([32, 31]);
   });
 });

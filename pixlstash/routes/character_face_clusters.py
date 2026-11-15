@@ -59,6 +59,9 @@ class UnclusteredFace(BaseModel):
     picture_id: int
     score: int | None
     similarity_to_reference: float | None
+    format: str | None = Field(
+        default=None, description="The file's format, as on a cluster member."
+    )
 
 
 class FaceClusters(BaseModel):
@@ -174,6 +177,7 @@ def create_router(server) -> APIRouter:
                     picture_id=pid,
                     score=by_id[pid].score,
                     similarity_to_reference=to_target(by_id[pid].vector),
+                    format=by_id[pid].format,
                 )
                 for pid in unclustered
             ],
