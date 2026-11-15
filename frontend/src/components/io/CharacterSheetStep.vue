@@ -533,6 +533,7 @@
  */
 import {
   computed,
+  nextTick,
   onBeforeUnmount,
   onMounted,
   reactive,
