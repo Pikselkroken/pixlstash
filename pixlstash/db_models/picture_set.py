@@ -1,4 +1,4 @@
-from sqlmodel import Column, ForeignKey, Integer, Relationship, SQLModel, Field
+from sqlmodel import JSON, Column, ForeignKey, Integer, Relationship, SQLModel, Field
 
 from typing import List, Optional, TYPE_CHECKING
 
@@ -59,6 +59,12 @@ class PictureSet(SQLModel, table=True):
     # delete handlers lift a deleted parent's children themselves.
     parent_set_id: Optional[int] = Field(default=None, index=True)
     parent_character_id: Optional[int] = Field(default=None, index=True)
+    # A training set still being built under its person: what the build screen
+    # holds (its step, the sheet draws and their runs, the picker's choices),
+    # written by that screen and read back when it opens again. Null for every
+    # finished set; "Create set" clears it. Opaque to the backend except for
+    # ``run_keys``, the sheet runs a delete of the set stops.
+    building: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
     # Relationships
     members: List["Picture"] = Relationship(

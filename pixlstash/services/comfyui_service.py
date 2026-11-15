@@ -367,6 +367,58 @@ def cancel_held_runs(run_id: str | None = None) -> list[str]:
     return cancelled
 
 
+def cancel_runs(run_ids: list[str]) -> int:
+    """Stop the runs *run_ids* name and no others; how many were still going.
+
+    By run id or prompt id. A held run is cancelled before it reaches ComfyUI;
+    a queued one is taken off ComfyUI's queue; the running one is interrupted
+    by its prompt id, which a ComfyUI that predates per-prompt interrupts reads
+    as "interrupt whatever runs" (it is this run, by the listener's account).
+    Each run's poller then ends it as stopped. An id that names no run in
+    flight is skipped: it ended already.
+    """
+    global _queue_cleared
+    stopped = 0
+    in_flight = []
+    for rid in dict.fromkeys(str(r) for r in run_ids if r):
+        if cancel_held_runs(rid):
+            stopped += 1
+            continue
+        with _run_outcomes_lock:
+            run = _live_runs.get(_run_ids.get(rid, rid))
+            if run is not None and run.get("prompt_id"):
+                in_flight.append(dict(run))
+    for run in in_flight:
+        base_url, prompt_id = run["base_url"], run["prompt_id"]
+        try:
+            calls = [("/queue", {"delete": [prompt_id]})]
+            if run["status"] == "running":
+                calls.insert(0, ("/interrupt", {"prompt_id": prompt_id}))
+            for path, body in calls:
+                resp = requests.post(f"{base_url}{path}", json=body, timeout=10)
+                if resp.status_code >= 300:
+                    logger.warning(
+                        "ComfyUI %s for prompt %s returned %s: %s",
+                        path,
+                        prompt_id,
+                        resp.status_code,
+                        (resp.text or "").strip()[:200],
+                    )
+            stopped += 1
+        except requests.RequestException as exc:
+            logger.warning(
+                "Could not stop ComfyUI prompt %s (run %s) at %s: %s",
+                prompt_id,
+                run.get("run_id"),
+                base_url,
+                exc,
+            )
+    if in_flight:
+        # Its poller asks the queue now rather than at its next check.
+        _queue_cleared += 1
+    return stopped
+
+
 def follow_run(
     prompt_id: str,
     base_url: str,

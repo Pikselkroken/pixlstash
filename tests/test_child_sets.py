@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pixlstash.server import Server
+from pixlstash.services import comfyui_service
 from pixlstash.utils.service.filter_helpers import narrow_project_fields
 
 
@@ -156,6 +157,10 @@ def test_a_scoped_reader_does_not_learn_a_parent():
     owner = {"id": 1, "parent_set_id": 7, "parent_character_id": 3}
     narrow_project_fields(owner, [], None)
     assert (owner["parent_set_id"], owner["parent_character_id"]) == (7, 3)
+    # Nor what a training set being built holds: it names other pictures.
+    building = {"id": 1, "building": {"run_keys": ["run-x"]}}
+    narrow_project_fields(building, [], {5})
+    assert building["building"] is None
     # Rows that are not sets gain no parent keys.
     character = {"id": 2}
     narrow_project_fields(character, [], {5})
@@ -193,3 +198,106 @@ def test_sets_nest_three_levels_at_most(client):
     _set(client, "R", parent_set_id=q)
     r = client.patch(f"/picture_sets/{p}", json={"parent_character_id": ash})
     assert r.status_code == 400, r.text
+
+
+def test_a_training_set_keeps_its_build_until_it_is_finished(client):
+    mira = _person(client, "Mira")
+    build = {"v": 1, "stage": "generate", "run_keys": []}
+    set_id = _set(client, "Mira training set", parent_character_id=mira, building=build)
+    assert _row(client, set_id)["building"] == build
+
+    later = {**build, "stage": "pick", "line": {"picked": 40, "passing": 52}}
+    r = client.patch(f"/picture_sets/{set_id}", json={"building": later})
+    assert r.status_code == 200, r.text
+    assert _row(client, set_id)["building"] == later
+    # A PATCH that does not name it leaves it alone.
+    client.patch(f"/picture_sets/{set_id}", json={"description": "x"})
+    assert _row(client, set_id)["building"] == later
+
+    for bad in ([1], "pick", 3):
+        r = client.patch(f"/picture_sets/{set_id}", json={"building": bad})
+        assert r.status_code == 400, (bad, r.text)
+    too_big = {"blob": "x" * (300 * 1024)}
+    r = client.patch(f"/picture_sets/{set_id}", json={"building": too_big})
+    assert r.status_code == 400, r.text
+    assert _row(client, set_id)["building"] == later
+
+    assert (
+        client.patch(f"/picture_sets/{set_id}", json={"building": None}).status_code
+        == 200
+    )
+    assert _row(client, set_id)["building"] is None
+    # Every other set is finished from the start.
+    assert _row(client, _set(client, "Plain"))["building"] is None
+
+
+def test_deleting_a_set_being_built_stops_its_sheet_runs_and_no_others(client):
+    noor = _person(client, "Noor")
+    ours = comfyui_service.new_run_id()
+    theirs = comfyui_service.new_run_id()
+    comfyui_service.hold_run(ours, "http://comfy.invalid", label="Character sheet")
+    comfyui_service.hold_run(theirs, "http://comfy.invalid", label="Something else")
+    try:
+        building = {"v": 1, "stage": "generate", "run_keys": [ours]}
+        set_id = _set(
+            client, "Noor training set", parent_character_id=noor, building=building
+        )
+        # A finished set names no runs: deleting it stops nothing.
+        plain = _set(client, "Noor finished")
+        r = client.delete(f"/picture_sets/{plain}")
+        assert r.status_code == 200, r.text
+        assert r.json()["stopped_runs"] == 0
+        assert comfyui_service.run_outcome(ours)["status"] == "waiting"
+
+        r = client.delete(f"/picture_sets/{set_id}")
+        assert r.status_code == 200, r.text
+        assert r.json()["stopped_runs"] == 1
+        assert _row(client, set_id) is None
+        outcome = comfyui_service.run_outcome(ours)
+        assert (outcome["status"], outcome["stopped"]) == ("failed", True)
+        assert comfyui_service.run_outcome(theirs)["status"] == "waiting"
+    finally:
+        comfyui_service.cancel_held_runs(ours)
+        comfyui_service.cancel_held_runs(theirs)
+
+
+def test_cancel_runs_takes_only_its_prompts_off_comfyui(monkeypatch):
+    calls = []
+
+    class Answer:
+        status_code = 200
+        text = ""
+
+    def post(url, json=None, timeout=None):
+        calls.append((url, json))
+        return Answer()
+
+    monkeypatch.setattr(comfyui_service.requests, "post", post)
+    base = "http://comfy.invalid"
+    live = {
+        "p-running": {"status": "running"},
+        "p-queued": {"status": "queued"},
+        "p-other": {"status": "queued"},
+    }
+    with comfyui_service._run_outcomes_lock:
+        for pid, extra in live.items():
+            comfyui_service._live_runs[pid] = {
+                "run_id": f"run-{pid}",
+                "prompt_id": pid,
+                "base_url": base,
+                **extra,
+            }
+            comfyui_service._run_ids[f"run-{pid}"] = pid
+    try:
+        stopped = comfyui_service.cancel_runs(["run-p-running", "p-queued", "run-gone"])
+    finally:
+        with comfyui_service._run_outcomes_lock:
+            for pid in live:
+                comfyui_service._live_runs.pop(pid, None)
+                comfyui_service._run_ids.pop(f"run-{pid}", None)
+    assert stopped == 2
+    assert calls == [
+        (f"{base}/interrupt", {"prompt_id": "p-running"}),
+        (f"{base}/queue", {"delete": ["p-running"]}),
+        (f"{base}/queue", {"delete": ["p-queued"]}),
+    ]

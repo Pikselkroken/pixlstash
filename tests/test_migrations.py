@@ -1707,6 +1707,39 @@ def test_0145_adds_control_state_to_a_populated_vault():
         assert again.returncode == 0, again.stderr
 
 
+def test_0147_adds_building_to_a_populated_vault_as_finished_sets():
+    """The column arrives, an existing set reads as finished (null), and a
+    re-run is a no-op."""
+    previous = "0146_add_character_reference_cluster"
+
+    def columns(conn, table):
+        return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        down = _run_alembic(["downgrade", previous], db_url, _MIGRATIONS_DIR)
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert "building" not in columns(conn, "pictureset")
+            _insert_minimal_row(conn, "pictureset", id=1, name="Old set")
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert conn.execute("SELECT building FROM pictureset").fetchall() == [
+                (None,)
+            ]
+            conn.execute("UPDATE alembic_version SET version_num = ?", (previous,))
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
 def test_0128_adds_prompt_match_once_on_a_fresh_and_a_populated_vault():
     """Column and probe index arrive either way, existing pictures read NULL
     (not scored), and a second upgrade over a vault that has both is a no-op."""
