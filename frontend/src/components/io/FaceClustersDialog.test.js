@@ -79,7 +79,7 @@ describe("FaceClustersDialog", () => {
     expect(rows[1].text()).toContain("New · from sheets");
     // Saved 1-3; face 4 sits under the cut, so 3 of 4 count and nothing to save.
     expect(wrapper.find('[data-testid="fc-count"]').text()).toContain("3 of 4");
-    expect(wrapper.find('[data-testid="fc-save"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="fc-save"]').attributes("disabled")).toBeDefined();
     const faces = wrapper.findAll('[data-testid="fc-face"]');
     expect(faces[3].classes()).toContain("fc-face--out");
     expect(faces[0].attributes("aria-label")).toBe(
