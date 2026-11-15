@@ -1,0 +1,138 @@
+{
+  "3": {
+    "inputs": {
+      "unet_name": "flux-2-klein-9b-fp8.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader"
+  },
+  "4": {
+    "inputs": {
+      "clip_sha256": "abad16806e0cbabc54e0325d6565847443fe396d5f0be38bb3cd3fe75a1201d6",
+      "type": "flux2"
+    },
+    "class_type": "PixlStashCLIPLoader"
+  },
+  "5": {
+    "inputs": {
+      "vae_sha256": "d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5"
+    },
+    "class_type": "PixlStashVAELoader"
+  },
+  "6": {
+    "inputs": {
+      "clip": [
+        "4",
+        0
+      ],
+      "text": "Character reference sheet of one person."
+    },
+    "class_type": "CLIPTextEncode"
+  },
+  "7": {
+    "inputs": {
+      "conditioning": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut"
+  },
+  "11": {
+    "inputs": {
+      "model": [
+        "3",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "cfg": 1.0
+    },
+    "class_type": "CFGGuider"
+  },
+  "12": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect"
+  },
+  "13": {
+    "inputs": {
+      "steps": 4,
+      "width": 2560,
+      "height": 1536
+    },
+    "class_type": "Flux2Scheduler"
+  },
+  "14": {
+    "inputs": {
+      "noise_seed": 1
+    },
+    "class_type": "RandomNoise"
+  },
+  "15": {
+    "inputs": {
+      "width": 2560,
+      "height": 1536,
+      "batch_size": 1
+    },
+    "class_type": "EmptyFlux2LatentImage",
+    "_meta": {
+      "title": "Sheet canvas"
+    }
+  },
+  "16": {
+    "inputs": {
+      "noise": [
+        "14",
+        0
+      ],
+      "guider": [
+        "11",
+        0
+      ],
+      "sampler": [
+        "12",
+        0
+      ],
+      "sigmas": [
+        "13",
+        0
+      ],
+      "latent_image": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced"
+  },
+  "17": {
+    "inputs": {
+      "samples": [
+        "16",
+        0
+      ],
+      "vae": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "VAEDecode"
+  },
+  "18": {
+    "inputs": {
+      "images": [
+        "17",
+        0
+      ],
+      "filename_prefix": "Sheet-Flux2Klein9B"
+    },
+    "class_type": "SaveImage"
+  }
+}

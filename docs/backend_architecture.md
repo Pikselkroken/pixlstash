@@ -12865,7 +12865,12 @@ one or more sheets and their panels become the character's pictures. **A sheet
 is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 
 - **A sheet is an ordinary run.** The dialog runs a MOSS-Image, Krea 2,
-  Qwen-Image or FLUX.2 Klein `txt2img` workflow through `POST /workflows/run` with the prompt, negative and canvas
+  Qwen-Image or FLUX.2 Klein `txt2img` workflow (PixlStash ships four, #2700:
+  `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
+  `Sheet-Flux2-Klein-9B*.json`, a text and a `-Reference` one of each, every
+  size a literal 2560×1536 and the encoder and VAE loaded by digest; the step
+  files their cards through `POST /comfyui/workflows/{name}/card` before it
+  lists the cards) through `POST /workflows/run` with the prompt, negative and canvas
   `POST /character-sheets/prompt` hands it (the width and height go in as
   `values` at the workflow's own size addresses), an optional character LoRA in
   `add_loras`, and `character_ids: []`: a sheet shows one person six times and

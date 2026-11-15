@@ -98,6 +98,11 @@ def _t2i_graph() -> dict:
         ("Inpaint-Flux2-Klein-9B.json", (("16",), ("1",), ("9",), ())),
         ("Inpaint-Qwen-Image-2.1.json", (("16",), ("1",), ("9",), ())),
         ("Inpaint-Qwen-Image-Edit-2511.json", (("16",), ("1",), ("9",), ())),
+        # The character sheet workflows (#2700); a zeroed negative again.
+        ("Sheet-Flux2-Klein-9B.json", (("18",), (), ("6",), ())),
+        ("Sheet-Flux2-Klein-9B-Reference.json", (("18",), ("1",), ("6",), ())),
+        ("Sheet-Qwen-Image-2.1.json", (("18",), (), ("9",), ())),
+        ("Sheet-Qwen-Image-2.1-Reference.json", (("18",), ("1",), ("9",), ())),
         ("Upscale-2x-RealESRGAN.json", (("4",), ("3",), (), ())),
     ],
 )
@@ -714,6 +719,18 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
         ),
         (
             "Inpaint-Qwen-Image-Edit-2511.json",
+            [["1", "inputs", "image"]],
+            [["9", "inputs", "prompt"]],
+        ),
+        ("Sheet-Flux2-Klein-9B.json", [], [["6", "inputs", "text"]]),
+        (
+            "Sheet-Flux2-Klein-9B-Reference.json",
+            [["1", "inputs", "image"]],
+            [["6", "inputs", "text"]],
+        ),
+        ("Sheet-Qwen-Image-2.1.json", [], [["9", "inputs", "prompt"]]),
+        (
+            "Sheet-Qwen-Image-2.1-Reference.json",
             [["1", "inputs", "image"]],
             [["9", "inputs", "prompt"]],
         ),

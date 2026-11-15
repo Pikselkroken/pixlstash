@@ -562,6 +562,7 @@ import {
   getReferencePictures,
   patchCharacter,
 } from "../../api/characters";
+import { cardForWorkflow } from "../../api/comfyui";
 import { listAdapters } from "../../api/modelShelf";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import {
@@ -650,6 +651,14 @@ const ENGINES = {
       KLEIN.test(lora.base_model_canonical || lora.base_model || ""),
   },
 };
+// The sheet workflows PixlStash ships (#2700): a built-in has no card until
+// something asks for one, so the step asks before it lists the cards.
+const SHEET_BUILT_INS = [
+  "Sheet-Qwen-Image-2.1.json",
+  "Sheet-Qwen-Image-2.1-Reference.json",
+  "Sheet-Flux2-Klein-9B.json",
+  "Sheet-Flux2-Klein-9B-Reference.json",
+];
 const MODES = [
   { id: "text", label: "Text" },
   { id: "reference", label: "Reference and text" },
@@ -1670,12 +1679,26 @@ function sortCards(cards) {
         .sort(recent)[0] || null;
 }
 
+/** Give each shipped sheet workflow its card. Idempotent; one that fails is
+ * logged and left out, and the owner's own workflows are still listed. */
+async function fileBuiltIns() {
+  const filed = await Promise.allSettled(SHEET_BUILT_INS.map(cardForWorkflow));
+  filed.forEach((result, i) => {
+    if (result.status === "rejected") {
+      console.warn(
+        `Couldn't add the built-in sheet workflow ${SHEET_BUILT_INS[i]}; the sheet step lists the owner's own workflows only`,
+        result.reason,
+      );
+    }
+  });
+}
+
 async function load() {
   const id = props.character.id;
   const [character, adapters, cards, references] = await Promise.allSettled([
     getCharacter(id),
     listAdapters({ characterId: id }),
-    listWorkflowCards(),
+    fileBuiltIns().then(listWorkflowCards),
     getReferencePictures(id),
   ]);
   if (!alive) return;

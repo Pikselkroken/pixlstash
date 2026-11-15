@@ -1717,7 +1717,9 @@ Escape and Enter do nothing here: cancelling deletes a set.
   model is listed disabled, the newest MOSS-Image one preselected, and its name
   rides in the step row as a neutral pill) and the MOSS-Image, Krea 2,
   Qwen-Image or FLUX.2 Klein `txt2img` workflows with no reference input
-  (`cardEngine`: the diffusion model's family, #2700); *Draw* saves the typed description on a character that had none,
+  (`cardEngine`: the diffusion model's family, #2700), after asking for the
+  four shipped sheet workflows' cards (`SHEET_BUILT_INS` through
+  `cardForWorkflow`; one that fails is logged and left out); *Draw* saves the typed description on a character that had none,
   then runs the workflow (`runWorkflowCard`, the canvas as `values` at the
   card's own width/height addresses) and polls each run's outcome and
   `POST /characters/{id}/sheets/rank` every 2.5 s until every sheet's faces are

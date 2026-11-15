@@ -1,0 +1,159 @@
+{
+  "3": {
+    "inputs": {
+      "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader"
+  },
+  "4": {
+    "inputs": {
+      "model": [
+        "3",
+        0
+      ],
+      "device": "auto",
+      "dtype": "default"
+    },
+    "class_type": "QwenImage21Cache"
+  },
+  "7": {
+    "inputs": {
+      "clip_sha256": "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f",
+      "type": "qwen_image"
+    },
+    "class_type": "PixlStashCLIPLoader"
+  },
+  "8": {
+    "inputs": {
+      "vae_sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9"
+    },
+    "class_type": "PixlStashVAELoader"
+  },
+  "9": {
+    "inputs": {
+      "clip": [
+        "7",
+        0
+      ],
+      "prompt": "Character reference sheet of one person.",
+      "negative_prompt": "",
+      "resolution": 1024,
+      "vae": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImage21"
+  },
+  "10": {
+    "inputs": {
+      "conditioning": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut"
+  },
+  "11": {
+    "inputs": {
+      "width": 2560,
+      "height": 1536,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Sheet canvas"
+    }
+  },
+  "12": {
+    "inputs": {
+      "model": [
+        "4",
+        0
+      ],
+      "positive": [
+        "9",
+        0
+      ],
+      "negative": [
+        "10",
+        0
+      ],
+      "cfg": 1.0
+    },
+    "class_type": "CFGGuider"
+  },
+  "13": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect"
+  },
+  "14": {
+    "inputs": {
+      "model": [
+        "4",
+        0
+      ],
+      "scheduler": "simple",
+      "steps": 25,
+      "denoise": 1.0
+    },
+    "class_type": "BasicScheduler"
+  },
+  "15": {
+    "inputs": {
+      "noise_seed": 1
+    },
+    "class_type": "RandomNoise"
+  },
+  "16": {
+    "inputs": {
+      "noise": [
+        "15",
+        0
+      ],
+      "guider": [
+        "12",
+        0
+      ],
+      "sampler": [
+        "13",
+        0
+      ],
+      "sigmas": [
+        "14",
+        0
+      ],
+      "latent_image": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced"
+  },
+  "17": {
+    "inputs": {
+      "samples": [
+        "16",
+        0
+      ],
+      "vae": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "VAEDecode"
+  },
+  "18": {
+    "inputs": {
+      "images": [
+        "17",
+        0
+      ],
+      "filename_prefix": "Sheet-QwenImage21"
+    },
+    "class_type": "SaveImage"
+  }
+}

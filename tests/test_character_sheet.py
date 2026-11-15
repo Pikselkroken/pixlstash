@@ -2,6 +2,7 @@
 
 import io
 import json
+import pathlib
 import tempfile
 import time
 
@@ -14,6 +15,7 @@ from sqlmodel import select
 from pixlstash.db_models import CharacterReferenceMember, Face, Picture
 from pixlstash.server import Server
 from pixlstash.event_types import EventType
+from pixlstash.routes.comfyui import WORKFLOW_BUILTIN_DIR
 from pixlstash.services import character_sheet, comfyui_service, scrapheap_service
 from pixlstash.services.workflow_hash import reduce_api_graph
 from pixlstash.services.workflow_identity import reference_input_count
@@ -367,6 +369,28 @@ def test_a_klein_edit_sized_from_its_picture_sizes_its_scheduler_too():
         assert sheet[node]["inputs"]["width"] == SHEET_WIDTH
         assert sheet[node]["inputs"]["height"] == SHEET_HEIGHT
     assert reference_input_count(reduce_api_graph(sheet)) == 1
+
+
+@pytest.mark.parametrize(
+    ("name", "references"),
+    [
+        ("Sheet-Flux2-Klein-9B.json", 0),
+        ("Sheet-Flux2-Klein-9B-Reference.json", 1),
+        ("Sheet-Qwen-Image-2.1.json", 0),
+        ("Sheet-Qwen-Image-2.1-Reference.json", 1),
+    ],
+)
+def test_the_shipped_sheet_workflows_draw_at_the_sheet_size(name, references):
+    """The step lists a workflow from a reference only with a reference input,
+    and draws only one with a size to set: every size is the sheet's (#2700)."""
+    graph = json.loads((pathlib.Path(WORKFLOW_BUILTIN_DIR) / name).read_text())
+    assert reference_input_count(reduce_api_graph(graph)) == references
+    sizes = {
+        (node["inputs"]["width"], node["inputs"]["height"])
+        for node in graph.values()
+        if "width" in node["inputs"]
+    }
+    assert sizes == {(SHEET_WIDTH, SHEET_HEIGHT)}
 
 
 @pytest.mark.parametrize(

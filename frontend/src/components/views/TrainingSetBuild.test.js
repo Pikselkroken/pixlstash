@@ -54,6 +54,7 @@ const gen = vi.hoisted(() => ({
   preflightWorkflowRun: vi.fn(),
   runWorkflowCard: vi.fn(),
   sheetCopyWorkflow: vi.fn(),
+  cardForWorkflow: vi.fn(async () => ({})),
 }));
 vi.mock("../../api/characterSheets", () => ({
   buildSheetPrompt: gen.buildSheetPrompt,
@@ -68,6 +69,7 @@ vi.mock("../../api/characters", () => ({
   setReferenceCluster: gen.setReferenceCluster,
 }));
 vi.mock("../../api/modelShelf", () => ({ listAdapters: gen.listAdapters }));
+vi.mock("../../api/comfyui", () => ({ cardForWorkflow: gen.cardForWorkflow }));
 vi.mock("../../api/workflows", () => ({
   getRunOutcome: gen.getRunOutcome,
   getWorkflowCard: gen.getWorkflowCard,
@@ -1637,8 +1639,23 @@ describe("TrainingSetBuild: generating the pictures", () => {
       { sha256: "klein", display_name: "Anna Klein", base_model_family: "flux2", base_model_canonical: "FLUX.2 Klein", added_at: "2026-11-08" },
       { sha256: "qwen", display_name: "Anna Qwen", base_model_family: "qwen", added_at: "2026-11-07" },
     ]);
+    // One shipped sheet workflow cannot be filed: the others still are, and
+    // the owner's own workflows are listed after them.
+    gen.cardForWorkflow.mockImplementation(async (name) => {
+      if (name === "Sheet-Flux2-Klein-9B.json") throw new Error("no hub");
+      return {};
+    });
     const wrapper = mountDialog();
     await flushPromises();
+    expect(gen.cardForWorkflow.mock.calls.map(([name]) => name)).toEqual([
+      "Sheet-Qwen-Image-2.1.json",
+      "Sheet-Qwen-Image-2.1-Reference.json",
+      "Sheet-Flux2-Klein-9B.json",
+      "Sheet-Flux2-Klein-9B-Reference.json",
+    ]);
+    expect(
+      Math.max(...gen.cardForWorkflow.mock.invocationCallOrder),
+    ).toBeLessThan(gen.listWorkflowCards.mock.invocationCallOrder[0]);
     const select = (label) =>
       wrapper.findAllComponents({ name: "AppSelect" }).find((c) => c.props("label") === label);
     const workflow = select("Sheet workflow");
