@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, SQLModel, create_engine, select
 
 from pixlstash.db_models import Character, Face, Picture
 from pixlstash.services.face_clusters import (
@@ -121,3 +121,14 @@ def test_a_face_without_an_embedding_does_not_carry_the_person():
             for f in reference_cluster_faces(session, person.id, 10)
         }
         assert chosen == {both: 0, plain: 0}
+        # A first face whose embedding has no direction gives way to the next.
+        first_face = session.exec(
+            select(Face).where(Face.picture_id == both, Face.face_index == 0)
+        ).one()
+        first_face.features = np.zeros(64, dtype=np.float32).tobytes()
+        session.commit()
+        chosen = {
+            f.picture_id: f.face_index
+            for f in reference_cluster_faces(session, person.id, 10)
+        }
+        assert chosen == {both: 1, plain: 0}

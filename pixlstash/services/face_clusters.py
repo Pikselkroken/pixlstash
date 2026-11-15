@@ -344,10 +344,11 @@ def reference_cluster_faces(
         )
         .order_by(Face.picture_id, Face.id)
     ).all()
-    # The first face of each picture, as person_faces takes it.
+    # The first usable face of each picture, as person_faces takes it.
     first = {}
     for face in faces:
-        first.setdefault(face.picture_id, face)
+        if vector(face.features) is not None:
+            first.setdefault(face.picture_id, face)
     return most_central(list(first.values()), lambda face: vector(face.features))[
         :max_refs
     ]

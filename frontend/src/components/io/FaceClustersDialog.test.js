@@ -139,6 +139,22 @@ describe("FaceClustersDialog", () => {
     wrapper.unmount();
   });
 
+  it("lets the slider reach every face of a cluster longer than the field shows", async () => {
+    const many = clusters({ reference: false });
+    // 70 faces, 0.90 down to 0.21: only 60 are drawn, the last ten below them.
+    many.clusters[0].members = Array.from({ length: 70 }, (_, i) =>
+      member(100 + i, Number((0.9 - i * 0.01).toFixed(2))),
+    );
+    many.clusters[0].size = 70;
+    api.getFaceClusters.mockResolvedValue(many);
+    const wrapper = mountDialog();
+    await flushPromises();
+    const slider = wrapper.find('[data-testid="fc-cut"]');
+    expect(Number(slider.attributes("min"))).toBeLessThanOrEqual(0.21);
+    expect(wrapper.find('[data-testid="fc-count"]').text()).toContain("70 of 70");
+    wrapper.unmount();
+  });
+
   it("asks again at another strictness", async () => {
     api.getFaceClusters.mockResolvedValue(clusters({ reference: false }));
     const wrapper = mountDialog();

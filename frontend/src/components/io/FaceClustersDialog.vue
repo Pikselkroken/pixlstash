@@ -414,9 +414,10 @@ function fixed(v, digits = 2) {
   return v == null ? "" : Number(v).toFixed(digits);
 }
 
-/** The likeness axis: tenths around the cluster's spread, at least 0.1 wide. */
+/** The likeness axis: tenths around the whole cluster's spread (not only the
+ * faces shown), at least 0.1 wide, so the slider reaches every face. */
 const axis = computed(() => {
-  const c = shown.value.map((m) => m.centrality);
+  const c = (current.value?.members || []).map((m) => m.centrality);
   if (!c.length) return { min: 0, max: 1 };
   const min = Math.max(0, Math.floor(Math.min(...c) * 10) / 10);
   const max = Math.min(1, Math.max(min + 0.1, Math.ceil(Math.max(...c) * 10) / 10));
