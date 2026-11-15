@@ -487,6 +487,8 @@ def _text_to_sheet(out: dict, nodes: dict, inputs: dict) -> dict:
         )
     encoder["class_type"] = SHEET_LAYOUT_ENCODER
     encoder.setdefault("inputs", {})["region_strength"] = 1.0
+    # As the edit path's copy: a sheet PixlStash cannot collect is lost.
+    _save_with_save_image(nodes)
     return out
 
 

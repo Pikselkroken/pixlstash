@@ -495,6 +495,21 @@ def test_a_text_to_image_copy_reads_its_prompt_as_the_sheets_layout(sized):
     assert not draws_sheet_layout(reduce_api_graph(graph))
 
 
+def test_a_text_to_image_copy_saves_with_save_image():
+    """The advanced saver is not one PixlStash collects from: a sheet drawn
+    through it would never reach the library."""
+    graph = _t2i_graph()
+    graph["8"] = {
+        "class_type": "SaveImageAdvanced",
+        "inputs": {"images": ["7", 0], "filename_prefix": "sheet", "format": "exr"},
+    }
+    sheet = character_sheet.convert_to_sheet(graph)
+    assert sheet["8"] == {
+        "class_type": "SaveImage",
+        "inputs": {"images": ["7", 0], "filename_prefix": "sheet"},
+    }
+
+
 @pytest.mark.parametrize(
     ("change", "words"),
     [
