@@ -12915,8 +12915,9 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 - **Using sheets** (`POST /characters/{id}/sheets/use`, `picture_ids`; a held
   sheet counts, and every sheet is read before anything is imported) cuts each
   with `split_sheet`: the grid's cells scaled to the picture, each cut moved
-  to the strongest full-length luminance edge within ±50 px (MOSS draws its
-  dividers off the layout), 8 px of gutter trimmed, then the white frame MOSS
+  to the nearest full-length luminance edge within ±200 px (MOSS draws its
+  dividers up to ~50 px off the layout, an edit model drawing from a reference
+  picture up to ~190 px), 8 px of gutter trimmed, then the white frame MOSS
   draws round each photo (lines that are almost all over grey 244, from each
   edge, then as far as the white runs in diagonally from each rounded corner;
   an overcast sky, ~237, is not frame). The six panels are

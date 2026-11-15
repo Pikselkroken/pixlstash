@@ -569,16 +569,19 @@ def _save_with_save_image(nodes: dict) -> None:
                     other_inputs[name] = images
 
 
-def _strongest_cut(
+def _nearest_cut(
     gray: np.ndarray, nominal: int, across: slice, window: int, vertical: bool
 ) -> int:
-    """The line near *nominal* that a full-length luminance step runs along.
+    """The line nearest *nominal* that a full-length luminance step runs along.
 
     A divider between panels is an edge that runs the whole length of the cut;
     a person's outline is not. Each candidate line scores the share of its
     pixels (over *across*) whose step to the previous line is over 4 grey
-    levels. The outer border is never a candidate. With no candidate scoring
-    over 0.6 (a seamless studio grey), the nominal line stands.
+    levels, and counts as a divider over 0.6. The nearest divider wins, not the
+    strongest, so a seam further off (a sheet that broke its layout) cannot
+    pull the cut away from the gutter it belongs in. The outer border is never
+    a candidate. With no divider (a seamless studio grey), the nominal line
+    stands.
     """
     plane = gray if vertical else gray.T
     size = plane.shape[1]
@@ -587,29 +590,32 @@ def _strongest_cut(
     if hi <= lo:
         return nominal
     steps = np.abs(np.diff(plane[across, lo - 1 : hi + 1], axis=1)) > 4
-    share = steps.mean(axis=0)
-    best = int(np.argmax(share))
-    return lo + best if share[best] > 0.6 else nominal
+    lines = lo + np.flatnonzero(steps.mean(axis=0) > 0.6)
+    if not lines.size:
+        return nominal
+    return int(lines[np.argmin(np.abs(lines - nominal))])
 
 
 def sheet_cells(image: Image.Image) -> list[tuple[int, int, int, int]]:
     """The six panels' ``(left, top, right, bottom)`` boxes on *image*, in order.
 
     The grid's own geometry (passport cells 600×768, body cells 680×1536 at
-    2560×1536), scaled to the picture, each cut then moved to the strongest
-    full-length edge within ±50 px: MOSS draws its dividers up to ~50 px off
-    the layout. A gutter of 8 px either side of a cut is trimmed off, and then
-    whatever is left of the white frame round each photo.
+    2560×1536), scaled to the picture, each cut then moved to the nearest
+    full-length edge within ±200 px: MOSS draws its dividers up to ~50 px off
+    the layout, and an edit model drawing from a reference picture (Qwen-Image,
+    FLUX.2 Klein) up to ~190 px; the four windows stay clear of each other. A
+    gutter of 8 px either side of a cut is trimmed off, and then whatever is
+    left of the white frame round each photo.
     """
     width, height = image.size
     sx, sy = width / SHEET_WIDTH, height / SHEET_HEIGHT
     gray = np.asarray(image.convert("L"), dtype=np.int16)
-    window = max(1, round(50 * sx))
+    window = max(1, round(200 * sx))
     gutter = round(8 * sx)
-    half = _strongest_cut(gray, round(1200 * sx), slice(0, height), window, True)
-    bodies = _strongest_cut(gray, round(1880 * sx), slice(0, height), window, True)
-    column = _strongest_cut(gray, round(600 * sx), slice(0, height), window, True)
-    row = _strongest_cut(gray, round(768 * sy), slice(0, half), window, False)
+    half = _nearest_cut(gray, round(1200 * sx), slice(0, height), window, True)
+    bodies = _nearest_cut(gray, round(1880 * sx), slice(0, height), window, True)
+    column = _nearest_cut(gray, round(600 * sx), slice(0, height), window, True)
+    row = _nearest_cut(gray, round(768 * sy), slice(0, half), window, False)
     left = (0, column - gutter, column + gutter, half - gutter)
     top = (0, row - gutter, row + gutter, height)
     cells = [
@@ -658,12 +664,23 @@ def _inside_frame(
         for ys in (1, -1)
         for xs in (1, -1)
     }
-    return (
+    inside = (
         left + trimmed(max(corner[1, 1], corner[-1, 1])),
         top + trimmed(max(corner[1, 1], corner[1, -1])),
         right - trimmed(max(corner[1, -1], corner[-1, -1])),
         bottom - trimmed(max(corner[-1, 1], corner[-1, -1])),
     )
+    if inside[0] < inside[2] and inside[1] < inside[3]:
+        return inside
+    # A cell narrower than two frames' worth of white (two dividers close
+    # together on a sheet that broke its layout) would trim past itself, and
+    # cropping an inverted box raises. The cell stays as cut instead.
+    logger.warning(
+        "Sheet cell %s is all frame (trimmed to %s); keeping it untrimmed.",
+        cell,
+        inside,
+    )
+    return cell
 
 
 def split_sheet(image: Image.Image) -> list[Image.Image]:
