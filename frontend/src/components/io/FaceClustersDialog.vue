@@ -117,9 +117,9 @@
                 >Clear</AppButton
               >
               <AppButton
-                v-if="changed && kept.length"
                 variant="primary"
                 :loading="saving"
+                :disabled="!changed || !kept.length"
                 data-testid="fc-save"
                 @click="save(kept)"
                 >Save {{ kept.length }} faces as the reference</AppButton

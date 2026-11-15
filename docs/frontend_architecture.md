@@ -1760,8 +1760,9 @@ up).
   the *Accept down to* slider (faces under it fade and shrink in place), the
   median, and the faces left out. The copy keeps this likeness apart from the
   training set's `min_likeness`.
-- **Saving**: on the reference cluster, *Clear* (`[]`) and, once the slider
-  differs from what is saved, the amber *Save N faces as the reference*; on
+- **Saving**: on the reference cluster, *Clear* (`[]`) and the amber *Save N
+  faces as the reference*, disabled (never hidden) until the slider differs
+  from what is saved; on
   another, the amber *Make this {name}'s reference cluster*. Both send only
   the faces above the cut (`PUT /characters/{id}/reference-cluster`) and
   reload. On open the slider sits at the lowest saved face of the reference
