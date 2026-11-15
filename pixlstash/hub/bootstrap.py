@@ -1182,28 +1182,29 @@ def _stamp_back_newer_library(library: Library) -> None:
     row changes; no table, column or row the newer build wrote is removed.
     """
     head = max(known_vault_revisions())
-    guard = TrustedSQLiteLocation.open(library.vault_path)
     try:
-        conn = sqlite3.connect(guard.path, timeout=5)
-        try:
-            guard.verify_after_open()
-            with conn:
-                before = [
-                    row[0]
-                    for row in conn.execute("SELECT version_num FROM alembic_version")
-                ]
-                conn.execute("DELETE FROM alembic_version")
-                conn.execute(
-                    "INSERT INTO alembic_version (version_num) VALUES (?)", (head,)
-                )
-        finally:
-            conn.close()
+        with TrustedSQLiteLocation.open(library.vault_path) as guard:
+            conn = sqlite3.connect(guard.path, timeout=5)
+            try:
+                guard.verify_after_open()
+                with conn:
+                    before = [
+                        row[0]
+                        for row in conn.execute(
+                            "SELECT version_num FROM alembic_version"
+                        )
+                    ]
+                    conn.execute("DELETE FROM alembic_version")
+                    conn.execute(
+                        "INSERT INTO alembic_version (version_num) VALUES (?)",
+                        (head,),
+                    )
+            finally:
+                conn.close()
     except sqlite3.Error as exc:
         raise HubBootstrapError(
             f"Could not stamp {library.vault_path} back to {head}: {exc}"
         ) from exc
-    finally:
-        guard.close()
     logger.warning(
         "Stamped the library %s (%s) back from %s to %s, as asked on the "
         "recovery screen. What the newer PixlStash added is still in the vault.",
