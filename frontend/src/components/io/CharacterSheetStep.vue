@@ -30,7 +30,7 @@
           <span
             >{{
               fromReference
-                ? "Sheets from a reference need a Qwen-Image-Edit sheet workflow, and the library has none."
+                ? "Sheets from a reference need a Qwen-Image-Edit or FLUX.2 Klein sheet workflow, and the library has none."
                 : "Sheets need a MOSS-Image text-to-image workflow, and the library has none. Import one from Workflows, then come back."
             }}</span
           >
@@ -168,7 +168,19 @@
             data-testid="cs-workflow-problem"
           >
             <v-icon size="16">mdi-alert-circle-outline</v-icon>
-            <span>{{ workflowProblem }}</span>
+            <span
+              >{{ workflowProblem
+              }}<button
+                v-if="sizeless"
+                type="button"
+                class="cs-link cs-link--inline"
+                :disabled="working"
+                data-testid="cs-convert-chosen"
+                @click="makeSheetWorkflow(sizeless)"
+              >
+                Make a sheet copy that can
+              </button></span
+            >
           </p>
         </div>
       </template>
@@ -359,13 +371,14 @@
       >
         <span
           >Sheets can also be drawn from a reference picture, with a copy of a
-          Qwen-Image-Edit workflow that draws at the sheet's size.</span
+          Qwen-Image-Edit or FLUX.2 Klein workflow that draws at the sheet's
+          size.</span
         >
         <button
           type="button"
           class="cs-link cs-link--start"
           :disabled="working"
-          @click="makeSheetWorkflow"
+          @click="makeSheetWorkflow()"
         >
           Make a sheet workflow from {{ convertible.name }}
         </button>
@@ -524,7 +537,8 @@
  * `POST /workflows/run`, so it queues and shows in Tasks like any run), ranks
  * them by how alike each sheet's own faces are, and cuts the one the user picks
  * into six pictures on the character. Where the library has a Qwen-Image-Edit
- * sheet workflow (a card with `reference_inputs`), the rail offers a second
+ * or FLUX.2 Klein sheet workflow (a card with `reference_inputs`, #2700),
+ * the rail offers a second
  * way to draw: from a reference picture plus the words (#2679). The picture
  * goes in through the run's own `inputs`, the sheets are ranked by closeness
  * to it, and it stays in the rail beside them. Emits `done` with their ids, and the
@@ -604,9 +618,29 @@ const SUBJECTS = [
   { id: "man", label: "Man" },
 ];
 const MOSS = "moss_image";
-// What draws a sheet from a reference picture (#2679).
-// ponytail: one engine, the owner's pick; no probe has measured it yet.
+// What draws a sheet from a reference picture (#2679, #2700): the edit
+// models that keep the person in the picture, and the LoRAs each loads.
+// ponytail: no probe has measured either engine's sheets yet.
 const QWEN = "qwen";
+const KLEIN = /klein/i;
+const ENGINES = {
+  moss: {
+    name: "MOSS-Image",
+    fits: (lora) => lora.base_model_family === MOSS,
+  },
+  qwen: {
+    name: "Qwen-Image",
+    fits: (lora) => lora.base_model_family === QWEN,
+  },
+  // A FLUX.2 dev LoRA does not load into Klein. ponytail: 4B and 9B Klein
+  // LoRAs are not told apart; the shelf files both as FLUX.2 Klein.
+  klein: {
+    name: "FLUX.2 Klein",
+    fits: (lora) =>
+      lora.base_model_family === "flux2" &&
+      KLEIN.test(lora.base_model_canonical || lora.base_model || ""),
+  },
+};
 const MODES = [
   { id: "text", label: "Text" },
   { id: "reference", label: "Reference and text" },
@@ -663,6 +697,9 @@ const workflowId = ref("");
 // draw a sheet ("" while it can, null while still checking).
 const workflowSizes = ref([]);
 const workflowProblem = ref(null);
+// The chosen reference card when all it lacks is a size of its own: an edit
+// workflow drawing at its picture's size, which a sheet copy fixes (#2700).
+const sizeless = ref(null);
 const referenceIds = ref([]);
 const runs = ref([]); // { key, status, pictureIds, message }
 const ranking = ref({}); // picture id -> RankedSheet
@@ -687,11 +724,13 @@ let alive = true;
 let drawnWith = "";
 
 const fromReference = computed(() => mode.value === "reference");
-const engine = computed(() =>
-  fromReference.value
-    ? { family: QWEN, name: "Qwen-Image" }
-    : { family: MOSS, name: "MOSS-Image" },
-);
+const engine = computed(() => {
+  if (!fromReference.value) return ENGINES.moss;
+  const card =
+    referenceCards.value.find((c) => c.id === workflowId.value) ||
+    referenceCards.value[0];
+  return referenceEngine(card) || ENGINES.qwen;
+});
 /** The rail is the reference's: its control before drawing, the picture after. */
 const railIsReference = computed(() =>
   phase.value === "describe" ? fromReference.value : !!drawnFrom.value,
@@ -713,7 +752,7 @@ const loraName = computed(() =>
 const loraOptions = computed(() => [
   { value: "", label: "No LoRA" },
   ...loras.value.map((lora) => {
-    const fits = lora.base_model_family === engine.value.family;
+    const fits = engine.value.fits(lora);
     return {
       value: lora.sha256,
       label: lora.display_name || lora.filename,
@@ -738,15 +777,18 @@ const workflowOptions = computed(() =>
 /** The newest LoRA that loads into the mode's sheet workflow. */
 function fittingLora() {
   return (
-    loras.value.find((l) => l.base_model_family === engine.value.family)
-      ?.sha256 || ""
+    loras.value.find((l) => engine.value.fits(l))?.sha256 || ""
   );
 }
 
-// Each mode has its own workflows and its own model, so its own LoRAs.
+// Each mode has its own workflows.
 watch(mode, () => {
   workflowId.value = modeCards.value[0]?.id || "";
-  if (chosenLora.value?.base_model_family !== engine.value.family) {
+});
+
+// Each model has its own LoRAs: Qwen and Klein share the reference mode.
+watch(engine, () => {
+  if (!chosenLora.value || !engine.value.fits(chosenLora.value)) {
     loraSha.value = fittingLora();
   }
 });
@@ -1025,6 +1067,7 @@ function sheetUrl(sheet) {
 watch(workflowId, async (id) => {
   workflowSizes.value = [];
   workflowInputs.value = [];
+  sizeless.value = null;
   workflowProblem.value = id ? null : "";
   if (!id) return;
   const reference = fromReference.value;
@@ -1050,6 +1093,10 @@ watch(workflowId, async (id) => {
     );
     workflowSizes.value = sizes;
     workflowInputs.value = inputs;
+    sizeless.value =
+      reference && !sizes.length && !refused
+        ? referenceCards.value.find((c) => c.id === id) || null
+        : null;
     workflowProblem.value = !sizes.length
       ? `${name} has no picture size to set, so it can't draw a sheet.`
       : refused
@@ -1285,17 +1332,25 @@ function startOver() {
   rankedAgainst.value = 0;
 }
 
-/** Store a copy of the library's Qwen edit workflow that draws at the sheet's
- * size, and offer the mode it makes possible. */
-async function makeSheetWorkflow() {
-  if (working.value || !convertible.value) return;
+/** Store a copy of *card*, an edit workflow, that draws at the sheet's size,
+ * and offer the mode it makes possible: the library's convertible card, or
+ * the chosen reference card that draws at its picture's size. */
+async function makeSheetWorkflow(card = convertible.value) {
+  if (working.value || !card) return;
   working.value = true;
   error.value = "";
   try {
-    await sheetCopyWorkflow(convertible.value.id);
+    const copy = await sheetCopyWorkflow(card.id);
     const { cards } = await listWorkflowCards();
     if (!alive) return;
     sortCards(cards);
+    // Converted from the chosen card: the copy is chosen in its place.
+    if (
+      fromReference.value &&
+      referenceCards.value.some((c) => c.id === copy?.workflow_id)
+    ) {
+      workflowId.value = copy.workflow_id;
+    }
     // With no text workflow the new mode is the only one: go to it, as load() does.
     if (!modeCards.value.length && referenceCards.value.length) {
       mode.value = "reference";
@@ -1443,6 +1498,23 @@ const footer = computed(() => {
   };
 });
 
+/** The reference engine *card* draws with, or null. Read off its diffusion
+ * model only: a Krea 2 or MOSS-Image graph loads a Qwen text encoder, and
+ * matching that listed Krea 2's style reference, which draws somebody else. */
+function referenceEngine(card) {
+  const model = (card?.models || []).find((m) =>
+    ["unet", "checkpoint"].includes(m.kind),
+  );
+  if (model?.base_model_family === QWEN) return ENGINES.qwen;
+  if (
+    model?.base_model_family === "flux2" &&
+    KLEIN.test(`${model.base_model || ""} ${model.filename || ""}`)
+  ) {
+    return ENGINES.klein;
+  }
+  return null;
+}
+
 /** The cards each mode can draw with, most recently used first. */
 function sortCards(cards) {
   const recent = (a, b) =>
@@ -1453,14 +1525,14 @@ function sortCards(cards) {
     .filter((card) => card.type === "txt2img" && of(card, MOSS))
     .sort(recent);
   referenceCards.value = cards
-    .filter((card) => card.reference_inputs > 0 && of(card, QWEN))
+    .filter((card) => card.reference_inputs > 0 && referenceEngine(card))
     .sort(recent);
   // An edit workflow that draws on its picture's own canvas: a sheet copy of
   // it is what the reference mode runs.
   convertible.value = referenceCards.value.length
     ? null
     : cards
-        .filter((card) => card.type === "img2img" && of(card, QWEN))
+        .filter((card) => card.type === "img2img" && referenceEngine(card))
         .sort(recent)[0] || null;
 }
 

@@ -12918,15 +12918,15 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   existing rule; a character with rated pictures keeps those.
 - **From a reference picture plus the words (#2679).** Text pins down a type,
   so a character that already has a face is matched only by luck. The second
-  way to draw runs an **image-edit** workflow (Qwen-Image-Edit, the owner's
-  pick; no probe has measured it yet) that reads the picture for the face and
+  way to draw runs an **image-edit** workflow (Qwen-Image-Edit or FLUX.2
+  Klein, #2700; no probe has measured either yet) that reads the picture for the face and
   draws on an empty canvas of the sheet's size. Nothing about the run is
   particular to sheets: the picture goes in through `RunRequest.inputs` at the
   address the pre-flight's `picture_inputs` names. Four pieces serve it:
   - `workflow_identity.reference_input_count(nodes)` says which graphs can:
     the picture loaders feeding an edit model's reference input
-    (`ReferenceLatent`, `TextEncode…ImageEdit…`; a ControlNet's pose is not
-    one) in a `txt2img` / `img2img` graph whose every sampler
+    (`ReferenceLatent`, `TextEncode…ImageEdit…`, Qwen-Image 2.1's
+    `TextEncodeQwenImage21`; a ControlNet's pose is not one) in a `txt2img` / `img2img` graph whose every sampler
     starts from an empty latent (followed through `latent_image` only, an
     empty latent ending the walk, so one sized from the picture still counts)
     and never from the picture's own. The type cannot say this: an edit graph
@@ -12938,9 +12938,13 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
     copy stored through `_store_copy` as `<stem> (sheet)`, owner only as
     `inpaint-copy` is) makes such a graph from an edit workflow, which draws
     at its picture's size: an empty latent whose size is wired from the
-    picture gets a literal `width` and `height`; a Qwen edit graph whose
+    picture gets a literal `width` and `height`, and so does every other input
+    wired to the same size (FLUX.2's `Flux2Scheduler`); a Qwen edit graph whose
     sampler starts from the picture's own `VAEEncode` gets a new
-    `EmptySD3LatentImage`; either way `denoise` becomes 1.0. Anything else is a 422 with the
+    `EmptySD3LatentImage`; a sampler fed by a switch between the picture's
+    latent and an empty one (Qwen-Image 2.1's template) is wired to the empty
+    one; either way `denoise` becomes 1.0, and a `SaveImageAdvanced` becomes a
+    `SaveImage`, the saver PixlStash collects from. Anything else is a 422 with the
     reason (no picture read, more than one pass, already sized, or a start it
     has no canvas class for).
   - `sheet_prompt(reference=True)` names "the same {subject} as in the

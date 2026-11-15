@@ -294,6 +294,68 @@ def test_converting_to_a_sheet_workflow_gives_the_canvas_a_size_of_its_own(laten
     assert sheet["3"]["inputs"]["denoise"] == 1.0
 
 
+def test_a_qwen_image_2_1_edit_takes_the_canvas_side_of_its_switch():
+    """Qwen-Image 2.1's template switches between the picture's own latent
+    and an empty canvas, and saves through ``SaveImageAdvanced``, which
+    PixlStash collects nothing from (#2700)."""
+    graph = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "a.png"}},
+        "2": {
+            "class_type": "TextEncodeQwenImage21",
+            "inputs": {"prompt": "x", "images.image_1": ["1", 0]},
+        },
+        "3": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
+        },
+        "4": {
+            "class_type": "ComfySwitchNode",
+            "inputs": {"switch": False, "on_false": ["2", 2], "on_true": ["3", 0]},
+        },
+        "5": {
+            "class_type": "KSampler",
+            "inputs": {"positive": ["2", 0], "latent_image": ["4", 0]},
+        },
+        "6": {"class_type": "VAEDecode", "inputs": {"samples": ["5", 0]}},
+        "7": {
+            "class_type": "SaveImageAdvanced",
+            "inputs": {"images": ["6", 0], "filename_prefix": "q", "format": "exr"},
+        },
+        "8": {
+            "class_type": "ImageCompare",
+            "inputs": {"image_a": ["1", 0], "image_b": ["7", 0]},
+        },
+    }
+    assert reference_input_count(reduce_api_graph(graph)) == 0
+    sheet = character_sheet.convert_to_sheet(graph)
+    assert sheet["5"]["inputs"]["latent_image"] == ["3", 0]
+    assert sheet["3"]["inputs"]["width"] == SHEET_WIDTH
+    assert sheet["3"]["inputs"]["height"] == SHEET_HEIGHT
+    assert sheet["7"] == {
+        "class_type": "SaveImage",
+        "inputs": {"images": ["6", 0], "filename_prefix": "q"},
+    }
+    assert sheet["8"]["inputs"]["image_b"] == ["6", 0]
+    assert reference_input_count(reduce_api_graph(sheet)) == 1
+
+
+def test_a_klein_edit_sized_from_its_picture_sizes_its_scheduler_too():
+    """FLUX.2 Klein's edit template sizes its canvas and its scheduler from
+    the picture: both take the sheet's size (#2700)."""
+    graph = _klein_graph()
+    graph["7"] = {"class_type": "GetImageSize", "inputs": {"image": ["1", 0]}}
+    graph["5"]["inputs"].update(width=["7", 0], height=["7", 1])
+    graph["8"] = {
+        "class_type": "Flux2Scheduler",
+        "inputs": {"steps": 4, "width": ["7", 0], "height": ["7", 1]},
+    }
+    sheet = character_sheet.convert_to_sheet(graph)
+    for node in ("5", "8"):
+        assert sheet[node]["inputs"]["width"] == SHEET_WIDTH
+        assert sheet[node]["inputs"]["height"] == SHEET_HEIGHT
+    assert reference_input_count(reduce_api_graph(sheet)) == 1
+
+
 @pytest.mark.parametrize(
     ("graph", "words"),
     [

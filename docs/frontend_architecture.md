@@ -1683,7 +1683,10 @@ the row element to hand focus back to on close).
   new pictures so the slider, coverage and Create all read that one list.
 - **Drawn from a reference picture** (#2679, backend §25.29; design
   "Reference pinned beside the sheets"). Where the library has a
-  Qwen-Image-Edit card with `reference_inputs > 0`, the step's rail (320px
+  Qwen-Image-Edit or FLUX.2 Klein card with `reference_inputs > 0` (#2700;
+  `referenceEngine` reads the card's diffusion model, `unet` or `checkpoint`,
+  never its text encoder or VAE: Krea 2 and MOSS-Image load a Qwen encoder,
+  and matching that listed Krea 2's style reference), the step's rail (320px
   then, 280px otherwise) opens with a *Draw from* `Segmented`: *Text* /
   *Reference and text*. Without such a card the control is not shown; if an
   edit card exists that a sheet copy could be made from, the rail offers
@@ -1692,8 +1695,10 @@ the row element to hand focus back to on close).
   the chosen picture large, the character's reference faces as a strip to
   swap with one click, a dashed tile that opens `PicturePicker`, and the
   likeness warning (the form's own likeness notice is not shown beside it).
-  The form does not change, but each mode has its own workflow list and its
-  own model, so the LoRA field offers that model's LoRAs, and a description
+  The form does not change, but each mode has its own workflow list, and each
+  model its own LoRAs (`ENGINES[…].fits`: a Klein workflow takes only LoRAs
+  the shelf files as FLUX.2 Klein, not FLUX.2 dev's), so the LoRA field
+  follows the chosen workflow's model, and a description
   is required only in text mode. The workflow check also needs an open
   picture input and a settable prompt from the pre-flight, and ignores
   `picture_input_unfilled`, which the draw fills. *Draw* sends

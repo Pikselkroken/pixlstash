@@ -1216,14 +1216,38 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     name: "Qwen edit (sheet)",
     type: "img2img",
     reference_inputs: 1,
-    models: [{ base_model_family: "qwen" }],
+    models: [{ kind: "unet", base_model_family: "qwen" }],
   };
   const QWEN_EDIT = {
     id: "auto:qwen-edit",
     name: "Qwen edit",
     type: "img2img",
     reference_inputs: 0,
-    models: [{ base_model_family: "qwen" }],
+    models: [{ kind: "unet", base_model_family: "qwen" }],
+  };
+  // Both load a Qwen text encoder; only the diffusion model says what draws.
+  const KLEIN_SHEET = {
+    id: "manual:klein-sheet",
+    name: "Klein edit (sheet)",
+    type: "img2img",
+    reference_inputs: 1,
+    last_used: "2026-11-10T20:00:00Z",
+    models: [
+      { kind: "clip", base_model_family: "qwen" },
+      { kind: "unet", base_model_family: "flux2", base_model: "FLUX.2 Klein 9B" },
+    ],
+  };
+  const KREA_REFERENCE = {
+    id: "manual:krea-style",
+    name: "Krea 2: style reference",
+    type: "txt2img",
+    reference_inputs: 1,
+    last_used: "2026-11-11T20:00:00Z",
+    models: [
+      { kind: "clip", base_model_family: "qwen" },
+      { kind: "unet", base_model_family: "krea2" },
+      { kind: "vae", base_model_family: "qwen" },
+    ],
   };
 
   /** sheetsWorld plus reference faces and what the library's cards are. */
@@ -1447,6 +1471,71 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     expect(
       wrapper.find('[data-testid="cts-generate-primary"]').attributes("disabled"),
     ).toBeDefined();
+    wrapper.unmount();
+  });
+
+  it("lists Qwen and Klein sheet workflows, never Krea 2's style reference (#2700)", async () => {
+    referenceWorld({ cards: [MOSS_CARD, QWEN_SHEET, KREA_REFERENCE, KLEIN_SHEET] });
+    gen.listAdapters.mockResolvedValue([
+      { sha256: "dev", display_name: "Anna FLUX.2 dev", base_model_family: "flux2", base_model_canonical: "FLUX.2", added_at: "2026-11-09" },
+      { sha256: "klein", display_name: "Anna Klein", base_model_family: "flux2", base_model_canonical: "FLUX.2 Klein", added_at: "2026-11-08" },
+      { sha256: "qwen", display_name: "Anna Qwen", base_model_family: "qwen", added_at: "2026-11-07" },
+    ]);
+    const wrapper = mountDialog();
+    await flushPromises();
+    const select = (label) =>
+      wrapper.findAllComponents({ name: "AppSelect" }).find((c) => c.props("label") === label);
+    const workflow = select("Sheet workflow");
+    expect(workflow.props("options").map((o) => o.value)).toEqual([
+      KLEIN_SHEET.id,
+      QWEN_SHEET.id,
+    ]);
+    // Klein takes Klein LoRAs only: not FLUX.2 dev's, not Qwen's.
+    const usable = () =>
+      select("Character LoRA · optional")
+        .props("options")
+        .filter((o) => o.value && !o.disabled)
+        .map((o) => o.value);
+    expect(workflow.props("modelValue")).toBe(KLEIN_SHEET.id);
+    expect(usable()).toEqual(["klein"]);
+    expect(select("Character LoRA · optional").props("modelValue")).toBe("klein");
+    // Another engine's workflow swaps the LoRA for one that loads into it.
+    workflow.vm.$emit("update:modelValue", QWEN_SHEET.id);
+    await flushPromises();
+    expect(usable()).toEqual(["qwen"]);
+    expect(select("Character LoRA · optional").props("modelValue")).toBe("qwen");
+    wrapper.unmount();
+  });
+
+  it("offers a sheet copy of a reference workflow that draws at its picture's size", async () => {
+    const copy = { ...KLEIN_SHEET, id: "manual:klein-copy", name: "Klein edit (sheet) (sheet)" };
+    referenceWorld({ cards: [MOSS_CARD, KLEIN_SHEET] });
+    // Its canvas is sized from the picture: no width or height to set.
+    gen.getWorkflowCard.mockImplementation(async (id) => ({
+      card: {
+        name: id === copy.id ? copy.name : KLEIN_SHEET.name,
+        defaults:
+          id === copy.id
+            ? [
+                { slot_label: "lat", input_name: "width", value: 2560 },
+                { slot_label: "lat", input_name: "height", value: 1536 },
+              ]
+            : [],
+      },
+    }));
+    gen.sheetCopyWorkflow.mockResolvedValue({ workflow_id: copy.id });
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cs-workflow-problem"]').text()).toContain(
+      "no picture size to set",
+    );
+    gen.listWorkflowCards.mockResolvedValue({ cards: [MOSS_CARD, KLEIN_SHEET, copy] });
+    await wrapper.find('[data-testid="cs-convert-chosen"]').trigger("click");
+    await flushPromises();
+    expect(gen.sheetCopyWorkflow).toHaveBeenCalledWith(KLEIN_SHEET.id);
+    // The copy is chosen in its place, and it can draw.
+    expect(gen.getWorkflowCard).toHaveBeenLastCalledWith(copy.id);
+    expect(wrapper.find('[data-testid="cs-workflow-problem"]').exists()).toBe(false);
     wrapper.unmount();
   });
 
