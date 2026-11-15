@@ -1,25 +1,19 @@
 <template>
-  <AppDialog
-    :open="open"
-    title="Create a training set"
-    :subtitle="subtitle"
-    size="2xl"
-    :pad-body="false"
-    :persistent="
-      busy || !!sheetStep?.working || !!sheetStep?.zooming || facesOpen
-    "
-    @close="close"
-    @accept="onAccept"
-  >
-    <div class="cts-frame">
+  <section class="tsb" :aria-label="set.name" data-testid="tsb">
+    <!-- The set's own toolbar: its name, where it stands, and the build's
+         two steps, which used to sit under the dialog's title. -->
+    <header class="tsb-bar">
+      <v-icon size="18" class="tsb-bar__icon">mdi-image-album</v-icon>
+      <h2 class="tsb-bar__title">{{ set.name }}</h2>
+      <span class="tsb-bar__sub" data-testid="tsb-sub">{{ subtitle }}</span>
     <nav v-if="stepped" class="cts-stp" aria-label="Steps" data-testid="cts-steps">
       <button
         type="button"
         class="cts-stp__s"
         :class="mode === 'generate' ? 'cts-stp__s--on' : 'cts-stp__s--done'"
         :aria-current="mode === 'generate' ? 'step' : undefined"
-        :disabled="mode === 'generate' || busy || !!created"
-        @click="mode = 'generate'"
+        :aria-disabled="mode === 'generate' || busy || !!created ? 'true' : undefined"
+        @click="backToSheets"
       >
         <span class="cts-stp__n"
           ><v-icon v-if="mode !== 'generate'" size="12">mdi-check</v-icon
@@ -39,12 +33,31 @@
         {{ sheetStep.loraName }}</span
       >
     </nav>
+      <!-- What draws the sheets: chosen up here, above the form, while the
+           Sheets step is on. -->
+      <div
+        v-if="mode === 'generate' && sheetStep?.workflowOptions?.length"
+        class="tsb-bar__wf"
+      >
+        <span class="tsb-bar__sub">Sheet workflow</span>
+        <AppSelect
+          v-model="sheetStep.workflowId"
+          label="Sheet workflow"
+          hide-label
+          compact
+          :options="sheetStep.workflowOptions"
+        />
+      </div>
+    </header>
+    <div class="cts-frame">
     <CharacterSheetStep
       v-if="stepped && character"
       v-show="mode === 'generate'"
       ref="sheetStep"
       :character="character"
       :picture-count="data?.stills?.candidates ?? 0"
+      :saved="saved.sheets"
+      @cut="onCut"
       @done="onGenerated"
       @faces="openFaces"
     />
@@ -367,7 +380,11 @@
     </div>
     </div>
 
-    <template v-if="mode === 'generate'" #footer>
+    <!-- The dialog's footer, kept whole as a bar at the foot of the screen:
+         the lead line says what the amber action does. Escape and Enter do
+         nothing here: Cancel set deletes a set, so it is a click. -->
+    <footer class="tsb-foot" data-testid="tsb-foot">
+    <template v-if="mode === 'generate'">
       <span
         class="cts-lead cts-lead--one"
         :class="{ 'cts-lead--warn': sheetStep?.footer?.warn }"
@@ -379,8 +396,8 @@
         >
         {{ sheetStep?.footer?.lead }}</span
       >
-      <p v-if="sheetStep?.error" class="cts-bad" role="alert">
-        {{ sheetStep.error }}
+      <p v-if="sheetStep?.error || cancelError" class="cts-bad" role="alert">
+        {{ sheetStep?.error || cancelError }}
       </p>
       <AppButton
         v-if="sheetStep?.footer?.back"
@@ -390,12 +407,19 @@
         {{ sheetStep.footer.back.label }}
       </AppButton>
       <AppButton
-        key-hint="esc"
+        v-if="hasPictures || generated.length"
         :disabled="!!sheetStep?.working"
         data-testid="cts-generate-cancel"
         @click="leaveGenerate"
       >
-        {{ hasPictures ? "Back to the picker" : "Cancel" }}
+        Back to the picker
+      </AppButton>
+      <AppButton
+        :disabled="busy || !!sheetStep?.working"
+        data-testid="tsb-cancel"
+        @click="cancelSet"
+      >
+        Cancel set
       </AppButton>
       <AppButton
         v-if="sheetStep?.footer?.secondary"
@@ -406,7 +430,6 @@
       </AppButton>
       <AppButton
         variant="primary"
-        key-hint="enter"
         :loading="!!sheetStep?.working"
         :disabled="!sheetStep?.footer?.primary?.enabled"
         data-testid="cts-generate-primary"
@@ -415,64 +438,52 @@
         {{ sheetStep?.footer?.primary?.label || "Draw sheets" }}
       </AppButton>
     </template>
-    <template v-else #footer>
-      <span v-if="created" class="cts-lead" data-testid="cts-created">
-        <v-icon size="16" class="cts-ok">mdi-check-circle-outline</v-icon>
-        Created <b>{{ created.name }}</b> · {{ created.members }}
-        {{ created.members === 1 ? "member" : "members" }}
+    <template v-else>
+      <span v-if="data" class="cts-lead">
+        New set <b>{{ set.name }}</b> under {{ characterName }}
       </span>
-      <span v-else-if="data" class="cts-lead">
-        New set <b>{{ data.set_name }}</b> under {{ characterName }}
-      </span>
-      <p v-if="createError" class="cts-bad" role="alert">{{ createError }}</p>
-      <template v-if="created">
-        <AppButton key-hint="esc" @click="close">Close</AppButton>
-        <AppButton
-          variant="primary"
-          key-hint="enter"
-          icon-left="school-outline"
-          data-testid="cts-train"
-          @click="train"
-        >
-          Train a LoRA on it
-        </AppButton>
-      </template>
-      <template v-else>
-        <AppButton
-          icon-left="draw"
-          :disabled="busy || !data"
-          data-testid="cts-generate"
-          @click="startGenerate"
-        >
-          {{ hasPictures ? "Generate more…" : "Generate pictures…" }}
-        </AppButton>
-        <AppButton key-hint="esc" :disabled="busy" @click="close">
-          Cancel
-        </AppButton>
-        <AppButton
-          variant="primary"
-          key-hint="enter"
-          :loading="busy"
-          :disabled="!total || loading || !!loadError"
-          data-testid="cts-create"
-          @click="create"
-        >
-          Create set of {{ total }}
-        </AppButton>
-      </template>
+      <p v-if="createError || cancelError" class="cts-bad" role="alert">
+        {{ createError || cancelError }}
+      </p>
+      <AppButton
+        icon-left="draw"
+        :disabled="busy || !data"
+        data-testid="cts-generate"
+        @click="startGenerate"
+      >
+        {{ hasPictures ? "Generate more…" : "Generate pictures…" }}
+      </AppButton>
+      <AppButton :disabled="busy" data-testid="tsb-cancel" @click="cancelSet">
+        Cancel set
+      </AppButton>
+      <AppButton
+        variant="primary"
+        :loading="busy"
+        :disabled="!total || loading || !!loadError"
+        data-testid="cts-create"
+        @click="create"
+      >
+        Create set of {{ total }}
+      </AppButton>
     </template>
+    </footer>
     <FaceClustersDialog
       :open="facesOpen"
       :character="{ id: character?.id, name: characterName }"
       :return-focus-to="facesOpener"
       @close="onFacesClosed"
     />
-  </AppDialog>
+  </section>
 </template>
 
 <script setup>
 /**
- * "Create a training set…" on a character's sidebar menu.
+ * The screen of a training set still being built: "Create a training set…" on
+ * a character's sidebar menu makes the set at once, under the character, and
+ * opens this in the centre column. It is what the dialog of that name was,
+ * laid out as a screen, and it keeps what it holds on the set itself
+ * (`building`, PATCHed as it changes), so leaving the screen loses nothing:
+ * opening the set's row again comes back to it as it was.
  *
  * Ranks the character's stills and clips (GET /training/character_set_suggestion)
  * and takes a prefix of each ranking with a slider, so a bigger set only adds
@@ -480,42 +491,50 @@
  * framing and expression; under it, Choosing sets the two floors, how much
  * each kind of variety matters and the two set-aside switches. A tile opens
  * its picture at full size; its corner button leaves it out of the set, and
- * the next pick in the ranking takes its place. "Create" makes an ordinary child set under the
- * character; the user edits it like any other and trains on it.
+ * the next pick in the ranking takes its place. "Create set" fills the set
+ * with the picks and clears `building`: it is an ordinary child set of the
+ * character from then on. "Cancel set" deletes it, which stops its sheet runs.
  *
  * "Generate pictures…" draws the set instead (CharacterSheetStep): character
  * sheets, one chosen and cut into six pictures, which then join this ranking
  * marked new. A character with no pictures opens straight on that step.
  */
-import { computed, nextTick, ref, useId, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
 import { VIcon, VSwitch } from "vuetify/components";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
 import {
   bulkAddPicturesToSet,
-  createPictureSet,
   deletePictureSet,
+  patchPictureSet,
 } from "../../api/pictureSets";
 import { fetchCharacterSetSuggestion } from "../../api/training";
 import { getFaceClusters } from "../../api/characters";
+import { useConfirm } from "../../composables/useConfirm";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { errorDetail } from "../../utils/apiError";
+import { liveBuildRuns } from "../../utils/trainingSetBuild";
 import AppButton from "../widgets/AppButton.vue";
-import CharacterSheetStep from "./CharacterSheetStep.vue";
-import FaceClustersDialog from "./FaceClustersDialog.vue";
-import AppDialog from "../widgets/AppDialog.vue";
+import AppSelect from "../widgets/AppSelect.vue";
+import CharacterSheetStep from "../io/CharacterSheetStep.vue";
+import FaceClustersDialog from "../io/FaceClustersDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
-import TrainingPickPreview from "./TrainingPickPreview.vue";
+import TrainingPickPreview from "../io/TrainingPickPreview.vue";
 
 const props = defineProps({
-  open: { type: Boolean, default: false },
-  /** { id, name, project_ids } of the character. */
-  character: { type: Object, default: null },
-  /** The sidebar row to hand focus back to on close. */
-  returnFocusTo: { type: Object, default: null },
+  /** The set's row: { id, name, building }. Read once, when the screen opens. */
+  set: { type: Object, required: true },
+  /** { id, name } of the character the set is under. */
+  character: { type: Object, required: true },
 });
 
-const emit = defineEmits(["close", "created", "train"]);
+// `changed`: the set's build was saved (the sidebar row reads it). `finished`:
+// the set was filled and is an ordinary set now. `cancelled`: it was deleted.
+const emit = defineEmits(["changed", "finished", "cancelled"]);
+
+// How long the build waits after a change before saving it.
+const SAVE_MS = 600;
 
 const TRACK_MAX = 50;
 const DEFAULT_SIZE = { stills: 15, clips: 5 };
@@ -617,11 +636,12 @@ const hasPictures = computed(
 );
 
 const subtitle = computed(() => {
-  if (!data.value) return characterName.value;
+  const under = `being built · under ${characterName.value}`;
+  if (!data.value) return under;
   const s = data.value.stills.candidates;
   const fresh = generated.value.length;
   const parts = [
-    characterName.value,
+    under,
     s ? `${s} ${s === 1 ? "picture" : "pictures"}` : "no pictures yet",
   ];
   // Made here: a panel whose face was never found is made but not filed.
@@ -991,30 +1011,112 @@ async function load() {
   }
 }
 
-watch(
-  () => props.open,
-  (open) => {
-    if (!open) return;
-    choosing.value = { ...CHOOSING };
-    removed.value = new Set();
-    previewId.value = null;
-    data.value = null;
-    created.value = null;
-    createError.value = "";
-    coverageKey.value = "stills";
-    sizes.value = { ...DEFAULT_SIZE };
-    setAside.value = allSetAside();
-    mode.value = "pick";
-    stepped.value = false;
-    generated.value = [];
-    newOnly.value = false;
-    if (props.character?.id != null) {
-      load();
-      loadFaces();
+// What the set's `building` held when the screen opened: the screen starts
+// where it was left. The Sheets step restores its own part (`sheets`).
+const saved = props.set.building || {};
+{
+  const picker = saved.picker || {};
+  choosing.value = { ...CHOOSING, ...picker.choosing };
+  sizes.value = { ...DEFAULT_SIZE, ...picker.sizes };
+  setAside.value = { ...allSetAside(), ...picker.set_aside };
+  removed.value = new Set(picker.removed || []);
+  generated.value = [...(picker.generated || [])];
+  newOnly.value = !!picker.new_only;
+  coverageKey.value = picker.coverage_key || "stills";
+  stepped.value = !!saved.stepped || saved.stage === "generate";
+  mode.value = saved.stage === "generate" ? "generate" : "pick";
+}
+
+onMounted(() => {
+  load();
+  loadFaces();
+});
+
+// A cut sheet whose pictures are being filed: the build is past the Sheets
+// step even while the step still waits for their faces.
+const cutPending = ref(false);
+
+/** The build as the set stores it. */
+const snapshot = computed(() => {
+  const sheets = sheetStep.value?.snapshot ?? saved.sheets ?? null;
+  const group = data.value ? groupOf("stills") : null;
+  return {
+    v: 1,
+    stage: mode.value === "generate" && !cutPending.value ? "generate" : "pick",
+    stepped: stepped.value,
+    // The sheet runs still going, which deleting the set stops.
+    run_keys: sheets?.run_keys ?? [],
+    // What the sidebar row says while picking.
+    line: group
+      ? { picked: total.value, passing: group.passing }
+      : (saved.line ?? null),
+    picker: {
+      choosing: choosing.value,
+      sizes: sizes.value,
+      set_aside: setAside.value,
+      removed: [...removed.value],
+      generated: generated.value,
+      new_only: newOnly.value,
+      coverage_key: coverageKey.value,
+    },
+    sheets,
+  };
+});
+
+let lastSaved = JSON.stringify(props.set.building ?? null);
+let saveTimer = null;
+// Once the set is finished or deleted, nothing writes a build to it again.
+let over = false;
+
+// The saves on their way to the server: Create and Cancel wait for every one,
+// so none can land after the set is finished or deleted.
+const saving = new Set();
+
+async function save() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  const body = JSON.stringify(snapshot.value);
+  if (over || body === lastSaved) return;
+  lastSaved = body;
+  const run = (async () => {
+    try {
+      await patchPictureSet(props.set.id, { building: JSON.parse(body) });
+      emit("changed");
+    } catch (e) {
+      // The next change tries again; the screen itself still holds it all.
+      lastSaved = "";
+      console.warn("Couldn't save the training set's build", props.set.id, e);
     }
+  })();
+  saving.add(run);
+  try {
+    await run;
+  } finally {
+    saving.delete(run);
+  }
+}
+
+/** Stop saving: no timer left, and every save in flight landed. */
+async function stopSaving() {
+  over = true;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  await Promise.all([...saving]);
+}
+
+watch(
+  () => JSON.stringify(snapshot.value),
+  () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(save, SAVE_MS);
   },
-  { immediate: true },
 );
+
+// Leaving the screen saves what was not saved yet, a failed save included;
+// the draw goes on. save() does nothing when nothing changed or the set is over.
+onBeforeUnmount(() => {
+  save();
+});
 
 function toggle(key, on) {
   setAside.value = { ...setAside.value, [key]: on };
@@ -1056,43 +1158,65 @@ async function create() {
   if (created.value || !total.value) return;
   busy.value = true;
   createError.value = "";
-  const name = data.value.set_name;
+  const { id, name } = props.set;
   // What the user submitted, taken before the first await.
   const ids = pickedIds.value;
-  let setId = null;
+  // No save of the build may land after the set is finished: none is
+  // written while the set is filled, and a failure lets them go again.
   let why;
   try {
-    const response = await createPictureSet({
-      name,
-      parent_character_id: props.character.id,
-      ...(props.character.project_ids?.length
-        ? { project_ids: props.character.project_ids }
-        : {}),
-    });
-    setId = response.picture_set.id;
-    const added = await bulkAddPicturesToSet(setId, ids);
+    await stopSaving();
+    const added = await bulkAddPicturesToSet(id, ids);
     if (added.added === 0) {
       why = "None of the picked pictures could be added; they may have been deleted.";
     } else {
-      created.value = { id: setId, name, members: added.added ?? ids.length };
+      // Filled: the set is finished, and its build goes. A failure here
+      // leaves the picks in the set and the build to finish again.
+      await patchPictureSet(id, { building: null });
+      created.value = { id, name, members: added.added ?? ids.length };
       busy.value = false;
-      emit("created", created.value);
+      emit("finished", created.value);
       return;
     }
   } catch (e) {
     why = errorDetail(e) || "Please try again.";
   }
-  // The set was made but holds nothing: remove it rather than leave an empty
-  // set behind, then say what failed.
-  if (setId != null) {
-    try {
-      await deletePictureSet(setId);
-    } catch (cleanup) {
-      console.error("Couldn't remove the empty training set", setId, cleanup);
-    }
-  }
+  over = false;
   createError.value = `Couldn't create the set. ${why}`;
   busy.value = false;
+}
+
+const tasks = useTasksStore();
+const { confirm } = useConfirm();
+const cancelError = ref("");
+
+/** Cancel set: delete the set, which stops its sheet runs. Asks once. */
+async function cancelSet() {
+  if (busy.value) return;
+  const running = liveBuildRuns(snapshot.value, tasks.comfyuiRuns).length;
+  const stops = running
+    ? ` It stops ${running} sheet ${running === 1 ? "run" : "runs"}.`
+    : "";
+  const ok = await confirm({
+    title: `Cancel ${props.set.name}?`,
+    message: `The set is deleted.${stops} Drawn sheets stay in the Scrapheap, and pictures already cut from a sheet stay on ${characterName.value}.`,
+    confirmLabel: "Cancel set",
+    cancelLabel: "Keep building",
+    danger: true,
+  });
+  if (!ok) return;
+  busy.value = true;
+  cancelError.value = "";
+  try {
+    await stopSaving();
+    await deletePictureSet(props.set.id);
+  } catch (e) {
+    over = false;
+    cancelError.value = `Couldn't cancel the set. ${errorDetail(e) || "Please try again."}`;
+    busy.value = false;
+    return;
+  }
+  emit("cancelled", { id: props.set.id, characterId: props.character.id });
 }
 
 function startGenerate() {
@@ -1100,13 +1224,27 @@ function startGenerate() {
   mode.value = "generate";
 }
 
+/** The Sheets step in the strip: back to drawing, unless it is the step on
+ * screen (marked aria-disabled, not disabled, so it does not fade). */
+function backToSheets() {
+  if (mode.value === "generate" || busy.value || created.value) return;
+  mode.value = "generate";
+}
+
 function leaveGenerate() {
   if (hasPictures.value || generated.value.length) mode.value = "pick";
-  else close();
+}
+
+/** A sheet was cut: its pictures are the character's now, and the build
+ * stores them as new before their faces are read. */
+function onCut(ids) {
+  generated.value = [...new Set([...generated.value, ...ids])];
+  cutPending.value = true;
 }
 
 function onGenerated(ids) {
   generated.value = [...new Set([...generated.value, ...ids])];
+  cutPending.value = false;
   mode.value = "pick";
   load();
 }
@@ -1117,45 +1255,90 @@ function onNewOnly() {
   }
 }
 
-function onAccept() {
-  if (mode.value === "generate") {
-    const primary = sheetStep.value?.footer?.primary;
-    if (primary?.enabled) primary.run();
-    return;
-  }
-  if (created.value) train();
-  else create();
-}
-
-function train() {
-  const set = created.value;
-  close();
-  emit("train", { type: "set", id: set.id, name: set.name });
-}
-
-function close() {
-  if (busy.value || sheetStep.value?.working) return;
-  emit("close");
-  // Opened from a context menu, so Vuetify has no activator to hand focus
-  // back to: the character's sidebar row takes it.
-  const row = props.returnFocusTo;
-  nextTick(() => {
-    if (row?.isConnected) row.focus();
-  });
-}
 </script>
 
 <style scoped>
+/* The screen fills the centre column: toolbar, content, footer bar. */
+.tsb {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: rgb(var(--v-theme-background));
+  color: rgb(var(--v-theme-on-background));
+}
+
+/* The set's toolbar, the band and ink the other screens' toolbars use. */
+.tsb-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: var(--toolbar-height);
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 0 var(--space-3) 0 var(--space-5);
+  background: rgb(var(--v-theme-toolbar));
+  color: rgb(var(--v-theme-toolbar-text));
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+
+.tsb-bar__icon {
+  color: rgba(var(--v-theme-toolbar-text), 0.6);
+}
+
+.tsb-bar__title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  min-width: 0;
+  flex-shrink: 6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tsb-bar__sub {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-toolbar-text), 0.6);
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tsb-bar__wf {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 320px;
+}
+
+.tsb-bar__wf .app-select {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The dialog's footer as a band at the foot of the screen. */
+.tsb-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  min-height: 52px;
+  box-sizing: border-box;
+  padding: var(--space-2) var(--space-5);
+  background: rgb(var(--v-theme-toolbar));
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
 .cts-frame {
   flex: 1;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  /* One height for every step and state, so the dialog never resizes as
-     sheets arrive, notices show or sheets are ticked: the panes scroll
-     instead. About 768px with the title and footer, less on a short window. */
-  height: min(652px, calc(100vh - 160px));
   /* One colour per coverage bar and its chips, from four hues, each deep and
      light. The same eight in both themes: the light ones are mixed toward the
      dark-surface text colour and carry a dark label, at 6.9:1 or better. */
@@ -1214,16 +1397,17 @@ function close() {
   display: flex;
 }
 
-/* The wizard's steps: a numbered row under the title. Not a DS component yet
-   (the design draws it new); built from the selection tokens. */
+/* The build's steps, in the set's toolbar. Not a DS component yet (the
+   design draws it new); built from the selection tokens. */
 .cts-stp {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-5);
-  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  margin-left: var(--space-4);
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  color: rgba(var(--v-theme-toolbar-text), 0.6);
 }
 
 .cts-stp__s {
@@ -1238,17 +1422,17 @@ function close() {
   white-space: nowrap;
 }
 
-button.cts-stp__s:not(:disabled) {
+button.cts-stp__s:not([aria-disabled="true"]) {
   cursor: pointer;
 }
 
 .cts-stp__s--on {
-  color: rgb(var(--v-theme-on-surface));
+  color: rgb(var(--v-theme-toolbar-text));
   font-weight: var(--weight-medium);
 }
 
 .cts-stp__s--done {
-  color: rgb(var(--v-theme-on-surface));
+  color: rgb(var(--v-theme-toolbar-text));
 }
 
 .cts-stp__n {

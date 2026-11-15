@@ -48,6 +48,7 @@ import TasksPanel from "./TasksPanel.vue";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { abortRun } from "../../api/comfyui";
 import RunAnywayDialog from "./RunAnywayDialog.vue";
@@ -242,6 +243,41 @@ describe("what the task manager shows", () => {
     expect(row.find(".tm-name").text()).toBe("Night market");
     expect(row.find(".tm-mark").classes("tm-mark--running")).toBe(false);
     expect(row.find(".tm-fig-text").text()).toBe("");
+  });
+
+  it("links every Character sheet row to the set it is building, running or finished", async () => {
+    const tasksStore = useTasksStore();
+    useEntityListsStore().lists.sets = [
+      { id: 9, name: "Plain set", building: null },
+      {
+        id: 12,
+        name: "Mira training set",
+        building: {
+          stage: "pick",
+          // Sheet 1's run was used and cleared; its history keeps it.
+          sheets: { runs: [{ key: "run-2" }], run_history: ["run-1", "run-2"], drawn_ids: [501] },
+        },
+      },
+    ];
+    tasksStore.comfyuiRuns = [
+      { run_id: "run-1", label: "Character sheet · Mira", status: "running", percent: 40 },
+      { run_id: "run-x", label: "Night market", status: "queued", percent: 0 },
+    ];
+    tasksStore.noteFinished([
+      { id: "b-1", label: "Character sheet · Mira", status: "completed", made: 1, picture_ids: [501], ended_at: "2026-11-15T10:00:00Z" },
+      { id: "b-2", label: "Other", status: "completed", made: 1, picture_ids: [777], ended_at: "2026-11-15T10:00:00Z" },
+    ]);
+    const wrapper = mount(TasksPanel, globalOpts);
+    await flushPromises();
+    const rows = wrapper.findAll('[data-testid="tm-comfy-row"]');
+    expect(rows[0].find('[data-testid="tm-open-set"]').exists()).toBe(true);
+    expect(rows[1].find('[data-testid="tm-open-set"]').exists()).toBe(false);
+    const done = wrapper.findAll('[data-testid="tm-finished-run"]');
+    expect(done[0].find('[data-testid="tm-open-set"]').exists()).toBe(true);
+    expect(done[1].find('[data-testid="tm-open-set"]').exists()).toBe(false);
+
+    await rows[0].find('[data-testid="tm-open-set"]').trigger("click");
+    expect(nav.push).toHaveBeenCalledWith({ name: "set", params: { id: 12 } });
   });
 
   it("gives an import row the FLIP target the import dialog flies into", () => {

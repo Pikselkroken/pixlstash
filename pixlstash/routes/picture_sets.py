@@ -30,6 +30,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.services import operation_log_service
+from pixlstash.services.comfyui_service import cancel_runs
 from pixlstash.services.layout_move_service import rename_entity_folders
 from pixlstash.services.picture_set_tree import lift_children, validate_parent
 from pixlstash.services.project_membership_service import (
@@ -67,6 +68,10 @@ logger = get_logger(__name__)
 
 _UNSET = object()
 
+# The most a training set's ``building`` state may hold, serialised: the build
+# screen's form, a few sheet runs and the picker's choices fit in a few KB.
+MAX_BUILDING_BYTES = 256 * 1024
+
 
 class PictureSetResponse(BaseModel):
     """Picture set metadata as returned by set listing and lookup endpoints."""
@@ -99,6 +104,13 @@ class PictureSetResponse(BaseModel):
     )
     parent_character_id: Optional[int] = PydanticField(
         default=None, description="The person this set sits under, if any."
+    )
+    building: Optional[dict] = PydanticField(
+        default=None,
+        description=(
+            "A training set still being built: what its build screen holds. "
+            "Null once the set is finished, and for every other set."
+        ),
     )
     picture_count: Optional[int] = None
     top_picture_ids: Optional[list[int]] = None
@@ -150,6 +162,7 @@ class PictureSetDeleteResponse(BaseModel):
 
     status: str
     deleted_id: int
+    stopped_runs: int = 0
 
 
 class PictureSetMembersResponse(BaseModel):
@@ -205,6 +218,34 @@ class LockedSetMembersResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     sets: list[LockedSetSummary] = []
+
+
+def _building_from(payload: dict):
+    """The ``building`` a create or update sends: a JSON object, null, or
+    ``_UNSET`` when the key is absent. Anything else, or an object past
+    ``MAX_BUILDING_BYTES``, is refused with 400."""
+    if "building" not in payload:
+        return _UNSET
+    building = payload["building"]
+    if building is None:
+        return None
+    if not isinstance(building, dict):
+        raise HTTPException(
+            status_code=400, detail="building must be an object or null"
+        )
+    if len(json.dumps(building)) > MAX_BUILDING_BYTES:
+        raise HTTPException(status_code=400, detail="building is too large")
+    return building
+
+
+def _building_run_keys(building) -> list[str]:
+    """The sheet runs a set's build names in ``run_keys``: what a delete stops."""
+    keys = (building or {}).get("run_keys") if isinstance(building, dict) else None
+    return (
+        [str(k) for k in keys if isinstance(k, str) and k]
+        if isinstance(keys, list)
+        else []
+    )
 
 
 def create_router(server) -> APIRouter:
@@ -927,7 +968,8 @@ def create_router(server) -> APIRouter:
             "Creates a new picture set with name and optional description. Accepts "
             "``project_ids`` (a list of projects the set joins) or the legacy "
             "single ``project_id``, and at most one of ``parent_set_id`` and "
-            "``parent_character_id`` to create it as a child set."
+            "``parent_character_id`` to create it as a child set. ``building`` "
+            "creates it as a training set still being built."
         ),
         response_model=PictureSetCreateResponse,
     )
@@ -939,6 +981,7 @@ def create_router(server) -> APIRouter:
         set_color = payload.get("set_color", _UNSET)
         parent_set_id = payload.get("parent_set_id")
         parent_character_id = payload.get("parent_character_id")
+        building = _building_from(payload)
         if not name:
             raise HTTPException(status_code=400, detail="name is required")
 
@@ -953,6 +996,7 @@ def create_router(server) -> APIRouter:
                 set_color=set_color if set_color is not _UNSET else auto_color,
                 parent_set_id=parent_set_id,
                 parent_character_id=parent_character_id,
+                building=None if building is _UNSET else building,
             )
             session.add(picture_set)
             session.commit()
@@ -1541,7 +1585,9 @@ def create_router(server) -> APIRouter:
             "**Parent.** Sending either ``parent_set_id`` or ``parent_character_id`` "
             "replaces the set's parent with the pair given (a missing key is null), "
             "so both null moves it to the top level. A set cannot sit under itself "
-            "or one of its own child sets (400)."
+            "or one of its own child sets (400).\n\n"
+            "**Building.** ``building`` replaces a training set's build state (a "
+            "JSON object, at most 256 KB); ``null`` marks the set finished."
         ),
         response_model=PictureSetUpdateResponse,
     )
@@ -1557,6 +1603,7 @@ def create_router(server) -> APIRouter:
         parent_provided = "parent_set_id" in payload or "parent_character_id" in payload
         parent_set_id = payload.get("parent_set_id")
         parent_character_id = payload.get("parent_character_id")
+        building = _building_from(payload)
 
         def update_set(session, id, name, description, set_icon, set_color, locked):
             picture_set = session.get(PictureSet, id)
@@ -1585,6 +1632,9 @@ def create_router(server) -> APIRouter:
                 parent_set_id != picture_set.parent_set_id
                 or parent_character_id != picture_set.parent_character_id
             )
+            building_changing = (
+                building is not _UNSET and building != picture_set.building
+            )
             name_effective_change = name is not None and name != picture_set.name
             project_effective_change = project_provided and sorted(
                 target_project_ids
@@ -1596,6 +1646,7 @@ def create_router(server) -> APIRouter:
                 or icon_changing
                 or color_changing
                 or parent_changing
+                or building_changing
             )
             if other_effective_change:
                 # Raises 423 iff the set is currently locked; passes through for an
@@ -1633,6 +1684,8 @@ def create_router(server) -> APIRouter:
                 picture_set.set_icon = set_icon
             if set_color is not _UNSET:
                 picture_set.set_color = set_color
+            if building_changing:
+                picture_set.building = building
             if parent_changing:
                 validate_parent(session, id, parent_set_id, parent_character_id)
                 picture_set.parent_set_id = parent_set_id
@@ -1750,7 +1803,9 @@ def create_router(server) -> APIRouter:
         summary="Delete picture set",
         description=(
             "Deletes a picture set and all its membership links. Its child sets "
-            "move to the top level with their pictures."
+            "move to the top level with their pictures. A training set still "
+            "being built also stops the sheet runs its ``building.run_keys`` "
+            "names; ``stopped_runs`` says how many were still going."
         ),
         response_model=PictureSetDeleteResponse,
     )
@@ -1758,21 +1813,27 @@ def create_router(server) -> APIRouter:
         def delete_set(session, id):
             picture_set = session.get(PictureSet, id)
             if not picture_set:
-                return False
+                return None
             # A locked set must be unlocked before it can be deleted (deliberate
             # friction so a misclick can't destroy a frozen eval set).
             enforce_set_not_locked(session, picture_set, "delete a locked set")
+            run_keys = _building_run_keys(picture_set.building)
             lift_children(session, set_id=id)
             session.delete(picture_set)
             session.commit()
-            return True
+            return run_keys
 
-        success = server.vault.db.run_task(
+        run_keys = server.vault.db.run_task(
             delete_set, id, priority=DBPriority.IMMEDIATE
         )
-        if not success:
+        if run_keys is None:
             raise HTTPException(status_code=404, detail="Picture set not found")
-        return {"status": "success", "deleted_id": id}
+        # A training set still being built takes its sheet runs with it. The
+        # sheets they already drew stay in the Scrapheap, where they were filed.
+        stopped = cancel_runs(run_keys) if run_keys else 0
+        if stopped:
+            logger.info("Deleting set %s stopped %d sheet runs", id, stopped)
+        return {"status": "success", "deleted_id": id, "stopped_runs": stopped}
 
     @router.get(
         "/picture_sets/{id}/members",

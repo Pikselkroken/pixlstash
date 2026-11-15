@@ -447,6 +447,10 @@ button:focus:not(:focus-visible) {
 .shortcuts-fab--above-bar {
   bottom: 44px;
 }
+/* Clear of a training set build's footer bar (52px tall). */
+.shortcuts-fab--above-foot {
+  bottom: calc(52px + var(--space-2));
+}
 /* Shift left of the stats rail so the FAB stays over the grid. */
 .shortcuts-fab--stats-open {
   right: calc(var(--stats-panel-w) + var(--space-3));

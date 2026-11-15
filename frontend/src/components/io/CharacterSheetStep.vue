@@ -22,7 +22,7 @@
           <span>{{ likenessNotice }}</span>
         </p>
         <p
-          v-if="workflowsLoaded && !workflowOptions.length"
+          v-if="workflowsLoaded && !modeCards.length"
           class="cs-notice cs-notice--bad"
           data-testid="cs-no-workflow"
         >
@@ -34,6 +34,15 @@
                 : "Sheets need a MOSS-Image or Krea 2 text-to-image workflow, and the library has none. Import one from Workflows, then come back."
             }}</span
           >
+        </p>
+        <!-- The workflow itself is chosen in the screen's toolbar. -->
+        <p
+          v-if="workflowProblem"
+          class="cs-notice cs-notice--bad"
+          data-testid="cs-workflow-problem"
+        >
+          <v-icon size="16">mdi-alert-circle-outline</v-icon>
+          <span>{{ workflowProblem }}</span>
         </p>
 
         <div class="cs-lora">
@@ -74,26 +83,16 @@
           >
         </div>
 
-        <div class="cs-fld">
+        <!-- The description takes whatever height the form leaves. -->
+        <div class="cs-fld cs-fld--grow">
           <AppTextarea
             v-model="form.description"
             label="Description"
             :rows="2"
-            placeholder="Adult, hair, eyes, anything that makes the face theirs"
+            placeholder="Adult woman, dark hair in a low bun, brown eyes, freckles, slim build"
             data-testid="cs-description"
           />
           <span class="cs-hint">{{ descriptionHint }}</span>
-        </div>
-        <div class="cs-fld">
-          <AppInput
-            v-model="form.body"
-            label="Body"
-            placeholder="slim build · curvy with full hips · tall and athletic"
-          />
-          <span class="cs-hint"
-            >Goes into every photo, the passport photos too: a different build
-            draws a different face. Empty is an average build.</span
-          >
         </div>
         <div class="cs-grid2">
           <AppInput
@@ -101,10 +100,11 @@
             label="Top"
             placeholder="a plain oatmeal crew-neck sweater"
           />
+          <!-- `trousers` in the prompt: whatever covers the hips and thighs. -->
           <AppInput
             v-model="form.trousers"
-            label="Trousers"
-            placeholder="dark straight jeans"
+            label="Bottoms"
+            placeholder="dark straight jeans · a pleated midi skirt"
           />
         </div>
         <AppInput
@@ -113,63 +113,55 @@
           label="Shoes"
           placeholder="white sneakers"
         />
+        <!-- The four choices of how a sheet is drawn: toggles side by side,
+             wrapping only on a narrow window, with one line of hints under
+             them. -->
         <div class="cs-fld">
-          <FieldLabel>Body photos</FieldLabel>
-          <Segmented
-            v-model="form.framing"
-            aria-label="Body photos"
-            :options="FRAMINGS"
-            data-testid="cs-framing"
-            @pick="framingTouched = true"
-          />
+          <div class="cs-opts">
+            <div class="cs-opt">
+              <FieldLabel>Body photos</FieldLabel>
+              <Segmented
+                v-model="form.framing"
+                aria-label="Body photos"
+                :options="FRAMINGS"
+                data-testid="cs-framing"
+                @pick="framingTouched = true"
+              />
+            </div>
+            <div class="cs-opt">
+              <FieldLabel>Sheets to draw</FieldLabel>
+              <Segmented
+                v-model="form.count"
+                aria-label="Sheets to draw"
+                :options="COUNTS"
+              />
+            </div>
+            <div class="cs-opt">
+              <FieldLabel>Sheet size</FieldLabel>
+              <Segmented
+                v-model="form.size"
+                aria-label="Sheet size"
+                :options="SIZES"
+                data-testid="cs-size"
+              />
+            </div>
+            <div class="cs-opt">
+              <FieldLabel>Draw a</FieldLabel>
+              <Segmented
+                v-model="form.subject"
+                aria-label="Draw a"
+                :options="SUBJECTS"
+                data-testid="cs-subject"
+                @pick="subjectTouched = true"
+              />
+            </div>
+          </div>
           <span class="cs-hint" data-testid="cs-framing-hint">{{
             framingHint
           }}</span>
-        </div>
-        <div class="cs-grid2">
-          <div class="cs-fld">
-            <FieldLabel>Sheets to draw</FieldLabel>
-            <Segmented
-              v-model="form.count"
-              aria-label="Sheets to draw"
-              :options="COUNTS"
-            />
-            <span class="cs-hint">About a minute each.</span>
-          </div>
-          <div class="cs-fld">
-            <FieldLabel>Sheet size</FieldLabel>
-            <Segmented
-              v-model="form.size"
-              aria-label="Sheet size"
-              :options="SIZES"
-              data-testid="cs-size"
-            />
-            <span class="cs-hint">{{ sizeHint }}</span>
-          </div>
-        </div>
-        <div class="cs-fld">
-          <FieldLabel>Draw a</FieldLabel>
-          <Segmented
-            v-model="form.subject"
-            aria-label="Draw a"
-            :options="SUBJECTS"
-          />
-        </div>
-        <div v-if="workflowOptions.length" class="cs-wfline">
-          <AppSelect
-            v-model="workflowId"
-            label="Sheet workflow"
-            :options="workflowOptions"
-            compact
-          />
-          <p
-            v-if="workflowProblem"
-            class="cs-notice cs-notice--bad"
-            data-testid="cs-workflow-problem"
+          <span class="cs-hint"
+            >About a minute a sheet. {{ sizeHint }}</span
           >
-            <v-icon size="16">mdi-alert-circle-outline</v-icon>
-            <span>{{ workflowProblem }}</span>
-          </p>
         </div>
       </template>
 
@@ -530,6 +522,12 @@
  * to it, and it stays in the rail beside them. Emits `done` with their ids, and the
  * dialog's picker takes over. The dialog owns the footer: it reads `footer`
  * and calls the actions this component exposes.
+ *
+ * On a training set's build screen (views/TrainingSetBuild.vue) the "dialog"
+ * is that screen. The step also emits `cut` with the new pictures' ids as soon
+ * as a sheet is cut, before `done`, and stores `snapshot` on the set, handed
+ * back as `saved`, so it comes back as it was left: the sheets and their
+ * ranking at once, the choices that name what it reads once it has read them.
  */
 import {
   computed,
@@ -563,6 +561,7 @@ import {
   sheetCopyWorkflow,
 } from "../../api/workflows";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { subjectFromDescription } from "../../utils/trainingSetBuild";
 import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import { errorMessage } from "../../utils/apiError";
 import { runKey } from "../../utils/gpuMemory";
@@ -581,9 +580,11 @@ const props = defineProps({
   character: { type: Object, required: true },
   /** How many pictures the character already has. */
   pictureCount: { type: Number, default: 0 },
+  /** The step as `snapshot` last stored it, or null for a fresh one. */
+  saved: { type: Object, default: null },
 });
 
-const emit = defineEmits(["done", "faces"]);
+const emit = defineEmits(["cut", "done", "faces"]);
 
 const FRAMINGS = [
   { id: "waist_up", label: "Waist-up" },
@@ -630,7 +631,6 @@ const name = computed(() => props.character?.name || "");
 const phase = ref("describe"); // describe | drawing | pick | filing
 const form = reactive({
   description: "",
-  body: "",
   top: "",
   trousers: "",
   shoes: "",
@@ -640,6 +640,8 @@ const form = reactive({
   subject: "woman",
 });
 const framingTouched = ref(false);
+// Picked by hand: the description no longer decides who is drawn.
+const subjectTouched = ref(false);
 const savedDescription = ref("");
 const loras = ref([]);
 const loraSha = ref("");
@@ -656,16 +658,15 @@ const referenceId = ref(null);
 const drawnFrom = ref(null);
 const pickerOpen = ref(false);
 const pickButton = ref(null);
-// The chosen workflow's picture inputs, as the pre-flight names them.
-const workflowInputs = ref([]);
 // How many faces the last ranking measured closeness against.
 const rankedAgainst = ref(0);
 const workflowsLoaded = ref(false);
 const workflowId = ref("");
-// The chosen workflow's pre-flight: its width/height inputs, and why it can't
-// draw a sheet ("" while it can, null while still checking).
-const workflowSizes = ref([]);
-const workflowProblem = ref(null);
+// Every candidate workflow's pre-flight, by id: its width/height inputs, its
+// picture inputs, and why it can't draw a sheet ("" when it can). Only the
+// ones that can are offered.
+const checks = ref({});
+const checksDone = ref(false);
 const referenceIds = ref([]);
 const runs = ref([]); // { key, status, pictureIds, message }
 const ranking = ref({}); // picture id -> RankedSheet
@@ -673,7 +674,7 @@ const order = ref([]); // sheet picture ids in the order they arrived
 // The sheets to keep, in the order ticked. The best is ticked for the user
 // until they tick or untick one themselves.
 const kept = ref([]);
-let keptTouched = false;
+const keptTouched = ref(false);
 const mainPane = ref(null);
 const working = ref(false);
 const error = ref("");
@@ -687,7 +688,20 @@ let runsEndedAt = 0;
 let alive = true;
 // What the sheets on show were drawn with. A draw with anything else starts a
 // new pick: the earlier sheets are of another prompt, not more of this one.
-let drawnWith = "";
+const drawnWith = ref("");
+// The step has read its choices and restored `saved`: until then its
+// snapshot would store the defaults over what was saved.
+const restored = ref(false);
+// The kept sheets were cut and their pictures filed; their faces are still
+// being read.
+const cutDone = ref(false);
+// Every run this build started and every sheet it drew, never cleared: how
+// Tasks finds the set a Character sheet row belongs to.
+const runHistory = ref([]);
+const drawnIds = ref([]);
+// Runs still going when a new draw or a cut started over: no longer on show,
+// but still the build's, so deleting the set stops them too.
+const strayKeys = ref([]);
 
 const fromReference = computed(() => mode.value === "reference");
 const engine = computed(() => {
@@ -736,9 +750,32 @@ const modeCards = computed(() =>
   fromReference.value ? referenceCards.value : workflows.value,
 );
 
-const workflowOptions = computed(() =>
-  modeCards.value.map((card) => ({ value: card.id, label: card.name })),
+/** The mode's workflows that pass their pre-flight: the only ones offered. */
+const usableCards = computed(() =>
+  modeCards.value.filter((card) => checks.value[card.id]?.problem === ""),
 );
+
+const workflowOptions = computed(() =>
+  usableCards.value.map((card) => ({ value: card.id, label: card.name })),
+);
+
+// The chosen workflow's sizes and picture inputs, as its pre-flight named them.
+const workflowSizes = computed(() => checks.value[workflowId.value]?.sizes || []);
+const workflowInputs = computed(
+  () => checks.value[workflowId.value]?.inputs || [],
+);
+
+/** Why no sheet can be drawn with the workflows there are ("" when one can,
+ * null while they are still being checked, and while there are none: the
+ * no-workflow notice says that). */
+const workflowProblem = computed(() => {
+  if (!checksDone.value || !modeCards.value.length) return null;
+  if (usableCards.value.length) return workflowId.value ? "" : null;
+  const first = checks.value[modeCards.value[0].id]?.problem || "";
+  return modeCards.value.length === 1
+    ? first
+    : `None of the ${modeCards.value.length} sheet workflows can draw a sheet. ${first}`;
+});
 
 /** The newest LoRA that loads into the mode's sheet workflow. */
 function fittingLora() {
@@ -750,7 +787,7 @@ function fittingLora() {
 
 // Each mode has its own workflows and its own model, so its own LoRAs.
 watch(mode, () => {
-  workflowId.value = modeCards.value[0]?.id || "";
+  workflowId.value = usableCards.value[0]?.id || "";
   if (chosenLora.value?.base_model_family !== engine.value.family) {
     loraSha.value = fittingLora();
   }
@@ -801,12 +838,23 @@ watch(suggestedFraming, (framing) => {
   if (!framingTouched.value) form.framing = framing;
 });
 
+// "Adult man, …" draws a man: the description decides until a toggle is
+// picked by hand.
+watch(
+  () => form.description,
+  (text) => {
+    const subject = subjectFromDescription(text);
+    if (subject && !subjectTouched.value) form.subject = subject;
+  },
+);
+
+
 const framingHint = computed(() => {
   const reason = chosenLora.value
     ? "Suggested: full body. The LoRA holds the face, so the photos can show the whole body."
     : "Suggested: mid-thigh, the framing that held its layout best. With no LoRA the sheet alone carries the face; waist-up gives the faces the most pixels.";
   const height =
-    form.framing !== "full_body" && HEIGHT_WORDS.test(form.body)
+    form.framing !== "full_body" && HEIGHT_WORDS.test(form.description)
       ? " This framing won't show height."
       : "";
   return reason + height;
@@ -822,10 +870,12 @@ const descriptionHint = computed(() => {
     const from = savedDescription.value ? `From ${name.value}. ` : "";
     return `${from}In this mode the picture sets the face; these words are sent with it.`;
   }
+  // The build used to be a field of its own; it belongs in the words now.
+  const build = " Say the build too: it is in every photo, and a different build draws a different face.";
   if (savedDescription.value) {
-    return `From ${name.value}. Changes here apply to these sheets only.`;
+    return `From ${name.value}. Changes here apply to these sheets only.${build}`;
   }
-  return `${name.value} has no description yet. This one is saved as theirs when the first sheets are drawn.`;
+  return `${name.value} has no description yet. This one is saved as theirs when the first sheets are drawn.${build}`;
 });
 
 const likenessNotice = computed(() => {
@@ -927,15 +977,44 @@ const slots = computed(() => {
     }
     if (drawn.length) continue;
     const progress = live.get(run.key);
-    const drawing = !runEnded(run) && progress?.status === "running";
+    // ComfyUI drawing it; done there and being imported (or gone from the
+    // runs in flight once seen, until its outcome is read); not started.
+    const generating =
+      progress?.status === "running" && !progress.generated;
+    const displaying =
+      progress?.status === "running" ||
+      (!progress && seenLive.value.has(run.key));
     out.push({
       key: run.key,
-      label: runEnded(run) ? "didn't draw" : drawing ? "drawing" : "queued",
-      percent: drawing ? Math.round(Number(progress.percent) || 0) : null,
+      label: runEnded(run)
+        ? "didn't draw"
+        : generating
+          ? "generating"
+          : displaying
+            ? "displaying"
+            : "queued",
+      percent: generating ? Math.round(Number(progress.percent) || 0) : null,
     });
   }
   return out.map((slot, index) => ({ ...slot, n: index + 1 }));
 });
+
+// The runs the Tasks store has listed as in flight at least once: one gone
+// from that list since has finished on ComfyUI, not still waiting to start.
+const seenLive = ref(new Set());
+watch(
+  [() => tasks.comfyuiRuns, () => runs.value.length],
+  ([live]) => {
+    const listed = new Set(live.map((run) => runKey(run)));
+    const seen = runs.value.filter(
+      (run) => listed.has(run.key) && !seenLive.value.has(run.key),
+    );
+    if (seen.length) {
+      seenLive.value = new Set([...seenLive.value, ...seen.map((r) => r.key)]);
+    }
+  },
+  { immediate: true },
+);
 
 const sheetNumber = computed(
   () =>
@@ -975,7 +1054,7 @@ function keepOptions(sheet) {
 }
 
 function toggleKeep(id) {
-  keptTouched = true;
+  keptTouched.value = true;
   kept.value = kept.value.includes(id)
     ? kept.value.filter((k) => k !== id)
     : [...kept.value, id];
@@ -1036,22 +1115,19 @@ function sheetUrl(sheet) {
   );
 }
 
-// Pre-flight: a sheet is drawn at a size of its own, so the workflow must have
-// one to set, and it must be able to run at all.
-watch(workflowId, async (id) => {
-  workflowSizes.value = [];
-  workflowInputs.value = [];
-  workflowProblem.value = id ? null : "";
-  if (!id) return;
-  const reference = fromReference.value;
+/**
+ * Pre-flight one card: a sheet is drawn at a size of its own, so the workflow
+ * must have one to set, and it must be able to run at all; from a reference it
+ * also needs a picture input and a prompt PixlStash can write.
+ */
+async function checkCard(card, reference) {
   try {
-    const [{ card }, check] = await Promise.all([
-      getWorkflowCard(id),
-      preflightWorkflowRun({ workflow_id: id, count: 1 }, { cached: true }),
+    const [{ card: full }, check] = await Promise.all([
+      getWorkflowCard(card.id),
+      preflightWorkflowRun({ workflow_id: card.id, count: 1 }, { cached: true }),
     ]);
-    if (id !== workflowId.value) return;
-    const name = card?.name || "This workflow";
-    const sizes = (card?.defaults || []).filter((d) =>
+    const name = full?.name || card.name || "This workflow";
+    const sizes = (full?.defaults || []).filter((d) =>
       ["width", "height"].includes(d.input_name),
     );
     const groups = check?.groups || [];
@@ -1064,9 +1140,7 @@ watch(workflowId, async (id) => {
         (r) => !(reference && r.code === "picture_input_unfilled"),
       ),
     );
-    workflowSizes.value = sizes;
-    workflowInputs.value = inputs;
-    workflowProblem.value = !sizes.length
+    const problem = !sizes.length
       ? `${name} has no picture size to set, so it can't draw a sheet.`
       : refused
         ? `${name} can't run as it is. Open it from Workflows to see why.`
@@ -1075,12 +1149,32 @@ watch(workflowId, async (id) => {
           : reference && !groups.some((g) => g.prompt?.positive_settable)
             ? `${name} has no prompt PixlStash can write the sheet into.`
             : "";
+    return { sizes, inputs, problem };
   } catch (e) {
-    if (id !== workflowId.value) return;
-    console.warn("Couldn't check the sheet workflow", id, e);
-    workflowProblem.value = `Couldn't check this workflow: ${errorMessage(e)}`;
+    console.warn("Couldn't check the sheet workflow", card.id, e);
+    return {
+      sizes: [],
+      inputs: [],
+      problem: `Couldn't check ${card.name || "this workflow"}: ${errorMessage(e)}`,
+    };
   }
-});
+}
+
+/** Pre-flight every candidate card of both modes, then keep the chosen one
+ * only while it passes. */
+async function checkCards() {
+  const all = [
+    ...workflows.value.map((card) => [card, false]),
+    ...referenceCards.value.map((card) => [card, true]),
+  ];
+  const results = await Promise.all(all.map(([card, ref]) => checkCard(card, ref)));
+  if (!alive) return;
+  checks.value = Object.fromEntries(all.map(([card], i) => [card.id, results[i]]));
+  checksDone.value = true;
+  if (!usableCards.value.some((card) => card.id === workflowId.value)) {
+    workflowId.value = usableCards.value[0]?.id || "";
+  }
+}
 
 // The pop-out steps through the sheets on show, in their places.
 const zoomList = computed(() =>
@@ -1130,6 +1224,7 @@ async function followRuns() {
       run.pictureIds = outcome.picture_ids || [];
       for (const id of outcome.picture_ids || []) {
         if (!order.value.includes(id)) order.value.push(id);
+        if (!drawnIds.value.includes(id)) drawnIds.value.push(id);
       }
     } catch (e) {
       if (e?.response?.status === 404) {
@@ -1172,7 +1267,7 @@ async function tick() {
   const best = drawnFrom.value
     ? holding.value.find((sheet) => sheet.close)
     : holding.value[0];
-  if (!keptTouched && !kept.value.length && best) {
+  if (!keptTouched.value && !kept.value.length && best) {
     kept.value = [best.picture_id];
   }
   if (allEnded.value) {
@@ -1206,7 +1301,6 @@ async function draw() {
     }
     const sheet = await buildSheetPrompt({
       description,
-      body: form.body,
       top: form.top,
       trousers: form.trousers,
       shoes: form.shoes,
@@ -1267,10 +1361,10 @@ async function draw() {
           "The workflow can't run as it is. Open it from Workflows to see why.",
       );
     }
-    if (drawing !== drawnWith) {
+    if (drawing !== drawnWith.value) {
       // The sheets on show are of another prompt: they stay in the Scrapheap.
       startOver();
-      drawnWith = drawing;
+      drawnWith.value = drawing;
       drawnFrom.value = reference;
     }
     runs.value.push(
@@ -1280,6 +1374,7 @@ async function draw() {
         message: "",
       })),
     );
+    runHistory.value.push(...started.map((p) => runKey(p)));
     phase.value = "drawing";
     gaveUpOnFaces.value = false;
     schedule();
@@ -1292,13 +1387,17 @@ async function draw() {
 
 /** Forget every sheet and run: a new pick starts empty. */
 function startOver() {
+  strayKeys.value = [
+    ...new Set([...strayKeys.value, ...waitingRuns.value.map((run) => run.key)]),
+  ];
   runs.value = [];
   order.value = [];
   ranking.value = {};
   kept.value = [];
-  keptTouched = false;
+  keptTouched.value = false;
   runsEndedAt = 0;
-  drawnWith = "";
+  drawnWith.value = "";
+  cutDone.value = false;
   drawnFrom.value = null;
   rankedAgainst.value = 0;
 }
@@ -1314,6 +1413,7 @@ async function makeSheetWorkflow() {
     const { cards } = await listWorkflowCards();
     if (!alive) return;
     sortCards(cards);
+    await checkCards();
     // With no text workflow the new mode is the only one: go to it, as load() does.
     if (!modeCards.value.length && referenceCards.value.length) {
       mode.value = "reference";
@@ -1340,6 +1440,10 @@ async function use() {
     working.value = false;
     return;
   }
+  // Cut: the build stores the new pictures now, and never offers this cut
+  // again, even if the screen goes before their faces are read.
+  cutDone.value = true;
+  emit("cut", ids);
   // Only the panels' faces may still be unread. A failure from here on is no
   // reason to offer the cut again.
   const deadline = Date.now() + FACE_WAIT_MS;
@@ -1520,19 +1624,125 @@ async function load() {
     ) {
       mode.value = "reference";
     }
-    workflowId.value = modeCards.value[0]?.id || "";
+    await checkCards();
   }
   workflowsLoaded.value = true;
   loaded.value = character.status === "fulfilled";
   if (!loaded.value) {
-    error.value = `Couldn't read ${name.value}. Close and open the dialog to try again.`;
+    error.value = `Couldn't read ${name.value}. Open the set again to try again.`;
   }
+  await restore(props.saved);
   for (const result of [character, adapters, cards, references]) {
     if (result.status === "rejected") {
       console.warn("Couldn't load part of the sheet form", result.reason);
     }
   }
 }
+
+/** Put back what `snapshot` stored, over the choices `load` defaulted. */
+/** Put back the sheets, the form and where the step was, as soon as the
+ * screen opens: none of it waits for the step's own reads. */
+function restoreState(saved) {
+  if (!saved) return;
+  framingTouched.value = !!saved.framing_touched;
+  subjectTouched.value = !!saved.subject_touched;
+  // A build saved when the build had a field of its own joins the description.
+  const { body = "", ...fields } = saved.form || {};
+  Object.assign(form, fields);
+  if (body.trim()) {
+    form.description = [form.description.trim(), body.trim()]
+      .filter(Boolean)
+      .join(", ");
+  }
+  runs.value = (saved.runs || []).map((run) => ({
+    key: run.key,
+    status: run.status,
+    message: run.message || "",
+    pictureIds: run.picture_ids || [],
+  }));
+  order.value = [...(saved.order || [])];
+  ranking.value = { ...(saved.ranking || {}) };
+  kept.value = [...(saved.kept || [])];
+  keptTouched.value = !!saved.kept_touched;
+  drawnWith.value = saved.drawn_with || "";
+  drawnFrom.value = saved.drawn_from ?? null;
+  runHistory.value = [...(saved.run_history || [])];
+  drawnIds.value = [...(saved.drawn_ids || [])];
+  strayKeys.value = [...(saved.stray_run_keys || [])];
+  phase.value = ["drawing", "pick"].includes(saved.phase) ? saved.phase : "describe";
+}
+
+/** Put back the choices that name what `load` read (the mode, workflow,
+ * LoRA and reference picture) over the defaults it picked. */
+async function restore(saved) {
+  if (saved && alive) {
+    if (saved.mode && saved.mode !== mode.value) {
+      mode.value = saved.mode;
+      // The mode's own watcher picks its first workflow and a fitting LoRA;
+      // the saved ones go over those.
+      await nextTick();
+    }
+    if (usableCards.value.some((card) => card.id === saved.workflow_id)) {
+      workflowId.value = saved.workflow_id;
+    }
+    if (
+      saved.lora_sha === "" ||
+      loras.value.some((lora) => lora.sha256 === saved.lora_sha)
+    ) {
+      loraSha.value = saved.lora_sha;
+    }
+    if (saved.strength != null) strength.value = saved.strength;
+    if (saved.reference_id != null) referenceId.value = saved.reference_id;
+  }
+  restored.value = true;
+}
+
+/** What the set stores of this step. A cut whose faces are still being read
+ * stores as done (no runs, no sheets), so the cut is never offered twice. */
+const snapshot = computed(() => {
+  if (!restored.value) return null;
+  const cut = phase.value === "filing" && cutDone.value;
+  return {
+    phase: cut
+      ? "describe"
+      : phase.value === "filing"
+        ? "pick"
+        : phase.value,
+    form: { ...form },
+    framing_touched: framingTouched.value,
+    subject_touched: subjectTouched.value,
+    mode: mode.value,
+    workflow_id: workflowId.value,
+    lora_sha: loraSha.value,
+    strength: strength.value,
+    reference_id: referenceId.value,
+    runs: cut
+      ? []
+      : runs.value.map((run) => ({
+          key: run.key,
+          status: run.status,
+          message: run.message || "",
+          picture_ids: run.pictureIds || [],
+        })),
+    order: cut ? [] : order.value,
+    // The sheets' scores, so they show at once when the screen opens again;
+    // they are ranked afresh behind them.
+    ranking: cut ? {} : ranking.value,
+    kept: cut ? [] : kept.value,
+    kept_touched: cut ? false : keptTouched.value,
+    drawn_with: cut ? "" : drawnWith.value,
+    drawn_from: cut ? null : drawnFrom.value,
+    // The runs still going, which deleting the set stops; one that ended is
+    // skipped there.
+    run_keys: [
+      ...strayKeys.value,
+      ...(cut ? [] : waitingRuns.value.map((run) => run.key)),
+    ],
+    stray_run_keys: strayKeys.value,
+    run_history: runHistory.value,
+    drawn_ids: drawnIds.value,
+  };
+});
 
 function showReferences(body) {
   referenceIds.value = (body?.reference_picture_ids || []).slice(0, 4);
@@ -1548,7 +1758,12 @@ async function reloadReferences() {
   }
 }
 
-onMounted(load);
+restoreState(props.saved);
+onMounted(() => {
+  load();
+  // Runs may have ended while the screen was away: read them and rank again.
+  if (runs.value.length || order.value.length) tick();
+});
 onBeforeUnmount(() => {
   alive = false;
   stopPolling();
@@ -1559,6 +1774,8 @@ onBeforeUnmount(() => {
 const zooming = computed(() => !!zoomed.value || pickerOpen.value);
 
 defineExpose({
+  workflowId,
+  workflowOptions,
   footer,
   error,
   working,
@@ -1566,6 +1783,7 @@ defineExpose({
   phase,
   zooming,
   reloadReferences,
+  snapshot,
 });
 </script>
 
@@ -1637,6 +1855,35 @@ defineExpose({
   gap: var(--space-4);
 }
 
+.cs-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+}
+
+.cs-opt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cs-fld--grow {
+  flex: 1 1 auto;
+}
+
+.cs-fld--grow :deep(.app-textarea),
+.cs-fld--grow :deep(.app-textarea__box) {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.cs-fld--grow :deep(.app-textarea__field) {
+  flex: 1 1 auto;
+  resize: none;
+}
+
 .cs-lora {
   display: flex;
   flex-direction: column;
@@ -1671,10 +1918,6 @@ defineExpose({
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
-}
-
-.cs-wfline {
-  max-width: 360px;
 }
 
 .cs-notice {

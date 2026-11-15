@@ -192,6 +192,12 @@
   );
 }
 
+/* A training set being built whose sheet run failed: the sub-line says so
+   in the error hue. */
+.sidebar-tree-sub--bad {
+  color: rgb(var(--v-theme-surface-error));
+}
+
 /* An open parent and its children: one block. Rows inside take the group's
    inset off their padding, so every mark, name and count stays on the column
    of the rows outside it. Scoped under the section so it outranks the later
