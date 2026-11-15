@@ -27,6 +27,7 @@ and ``dataset_picker.pick_references`` (the training-set picker).
 from __future__ import annotations
 
 import hashlib
+import threading
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -47,6 +48,7 @@ STRICTNESS = {"loose": 0.35, "normal": SAME_PERSON, "strict": 0.55}
 
 # person_cluster_ids' last answers, keyed on everything they are computed from.
 _PERSON_CLUSTERS: dict[tuple, list[list[int]]] = {}
+_PERSON_CLUSTERS_LOCK = threading.Lock()
 
 # A sheet cuts into six panels sharing one source picture; four of a person's
 # pictures from one source is a sheet, not an edit or two.
@@ -344,20 +346,22 @@ def person_cluster_ids(
         digest.update(face.picture_id.to_bytes(8, "little"))
         digest.update(face.vector.tobytes())
     key = (character_id, threshold, tuple(reference), digest.digest())
-    cached = _PERSON_CLUSTERS.get(key)
+    with _PERSON_CLUSTERS_LOCK:
+        cached = _PERSON_CLUSTERS.get(key)
     if cached is not None:
-        return cached
+        return [list(ids) for ids in cached]
     clusters, _ = cluster_faces(
         [(face.picture_id, face.vector) for face in faces], threshold
     )
     order, _, _ = reference_first(clusters, reference)
     result = [[pid for pid, _ in clusters[i].members] for i in order]
-    # ponytail: keeps the last few keys only; an LRU if several people's
-    # grids are filtered at once.
-    if len(_PERSON_CLUSTERS) >= 4:
-        _PERSON_CLUSTERS.pop(next(iter(_PERSON_CLUSTERS)))
-    _PERSON_CLUSTERS[key] = result
-    return result
+    # ponytail: keeps the last four keys, oldest out first; an LRU if several
+    # people's grids are filtered at once.
+    with _PERSON_CLUSTERS_LOCK:
+        while len(_PERSON_CLUSTERS) >= 4:
+            _PERSON_CLUSTERS.pop(next(iter(_PERSON_CLUSTERS)))
+        _PERSON_CLUSTERS[key] = result
+    return [list(ids) for ids in result]
 
 
 def _save_in_session(session: Session, character_id: int, picture_ids: list[int]):

@@ -1153,7 +1153,7 @@ def test_face_cluster_filter_lists_the_cluster_views_clusters(set_env):
     """``face_cluster=N`` narrows a person's grid to the cluster view's
     "Cluster N", in the view's order (reference first), on both the plain and
     the likeness-sorted path, and the count agrees."""
-    client, server, ids, _sets = set_env
+    client, server, ids, sets = set_env
     resp = client.post(f"{API_PREFIX}/characters", json={"name": "Ida"})
     assert resp.status_code == 200, resp.text
     ida = resp.json()["character"]["id"]
@@ -1181,8 +1181,11 @@ def test_face_cluster_filter_lists_the_cluster_views_clusters(set_env):
             assert resp.status_code == 200, resp.text
             return sorted(row["id"] for row in resp.json())
 
-        def view_clusters():
-            resp = client.get(f"{API_PREFIX}/face-clusters?character_id={ida}")
+        def view_clusters(threshold=0.45):
+            resp = client.get(
+                f"{API_PREFIX}/face-clusters",
+                params={"character_id": ida, "threshold": threshold},
+            )
             assert resp.status_code == 200, resp.text
             return [
                 sorted(m["picture_id"] for m in c["members"])
@@ -1197,6 +1200,64 @@ def test_face_cluster_filter_lists_the_cluster_views_clusters(set_env):
         assert listed(face_cluster=2) == sorted(ids[k] for k in small)
         assert listed(face_cluster=3) == []
         assert ids["bare"] in listed()
+
+        # At another strictness the numbering is that strictness's, as in the
+        # view. Strict 0.95 splits the big cluster, so the default would differ.
+        strict = view_clusters(0.95)
+        assert strict != view_clusters()
+        for n, members in enumerate(strict, start=1):
+            assert listed(face_cluster=n, face_cluster_threshold=0.95) == members
+        resp = client.get(
+            f"{API_PREFIX}/pictures",
+            params={
+                "character_id": ida,
+                "face_cluster": 1,
+                "face_cluster_threshold": 2,
+            },
+        )
+        assert resp.status_code == 422, resp.text
+
+        # The stream, a text search and the likeness groups narrow too.
+        resp = client.get(
+            f"{API_PREFIX}/pictures/stream",
+            params={"character_id": ida, "face_cluster": 2, "fields": "grid"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert sorted(p["id"] for p in resp.json()["pictures"]) == sorted(
+            ids[k] for k in small
+        )
+        # Search and the likeness groups read it too: without a person they
+        # refuse it rather than ignore it. (The fixture's embeddings are not
+        # CLIP's, so a text search finds nothing to narrow.)
+        for path, extra in (("search", {"query": "picture"}), ("likeness-groups", {})):
+            resp = client.get(
+                f"{API_PREFIX}/pictures/{path}", params={"face_cluster": 1, **extra}
+            )
+            assert resp.status_code == 422, (path, resp.text)
+        resp = client.get(
+            f"{API_PREFIX}/pictures/likeness-groups",
+            params={"character_id": ida, "face_cluster": 2},
+        )
+        assert resp.status_code == 200, resp.text
+        # Rows only where likeness edges exist, which the background work
+        # decides; whatever comes back is in the cluster.
+        assert {row["id"] for row in resp.json()} <= {ids[k] for k in small}
+
+        # A share token sees its own pictures but never the owner's grouping.
+        # A fresh client, so no owner session rides along with the token.
+        token = _set_share_token(client, sets["main"])
+        shared = {"Authorization": f"Bearer {token}"}
+        anon = TestClient(server.api)
+        person = {"character_id": ida, "fields": "id"}
+        resp = anon.get(f"{API_PREFIX}/pictures", params=person, headers=shared)
+        assert resp.status_code == 200, resp.text
+        assert {row["id"] for row in resp.json()} == {ids[k] for k in big}
+        resp = anon.get(
+            f"{API_PREFIX}/pictures",
+            params={**person, "face_cluster": 1},
+            headers=shared,
+        )
+        assert resp.status_code == 403, resp.text
 
         # Picking the small cluster as the reference moves it to Cluster 1.
         resp = client.put(

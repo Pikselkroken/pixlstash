@@ -715,13 +715,20 @@ describe("FilterMenu: Likeness, a person's face clusters", () => {
     await loose.trigger("click");
     await flushPromises();
     expect(getFaceClusters).toHaveBeenLastCalledWith(7, 0.35);
-    const checked = wrapper.find('.fm-sub .optrow[aria-checked="true"]');
-    expect(checked.find(".optrow__label").text()).toBe("Any");
+    // No row is marked, not even Any: the grid is still on the pick.
+    expect(wrapper.findAll('.fm-sub .optrow[aria-checked="true"]')).toHaveLength(0);
+    expect(wrapper.text()).toContain("Showing cluster 2 · normal");
     expect(store.faceClusterFilter.cluster).toBe(2);
 
-    // Leaving the person drops the pick.
+    // The same person by another spelling keeps it; another person, or
+    // several, drops it.
+    selection.selectedCharacter = 7;
+    expect(store.faceClusterFilter).not.toBeNull();
+    selection.selectedCharacterIds = ["7", "8"];
+    expect(store.faceClusterFilter).toBeNull();
+    selection.selectedCharacterIds = [];
+    store.faceClusterFilter = { cluster: 1, strictness: "normal" };
     selection.selectedCharacter = "8";
-    await flushPromises();
     expect(store.faceClusterFilter).toBeNull();
   });
 });

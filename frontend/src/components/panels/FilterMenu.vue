@@ -182,6 +182,10 @@
             <p v-if="!clusterData.clusters.length" class="fm-hint">
               No two faces look alike at {{ clusterStrictnessLabel }}.
             </p>
+            <p v-if="clusterValue === 'elsewhere'" class="fm-hint">
+              Showing {{ store.faceClusterFilter.label }}; pick a row to change
+              it.
+            </p>
           </template>
         </div>
         <div class="tbm-footer">
@@ -740,12 +744,12 @@ const clusterOptions = computed(() => [
 ]);
 
 // The pick shows only at the strictness it was made at: Cluster 2 at Loose is
-// another group than Cluster 2 at Strict.
+// another group than Cluster 2 at Strict. At another, no row is marked (not
+// Any, which would say the grid is unfiltered) and a line names the pick.
 const clusterValue = computed(() => {
   const pick = store.faceClusterFilter;
-  return pick && pick.strictness === clusterStrictness.value
-    ? pick.cluster
-    : null;
+  if (!pick) return null;
+  return pick.strictness === clusterStrictness.value ? pick.cluster : "elsewhere";
 });
 
 function setCluster(n) {

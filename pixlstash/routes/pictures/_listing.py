@@ -31,7 +31,6 @@ from pixlstash.db_models import (
 from pixlstash.db_models.guest_score import GuestScore
 from pixlstash.db_models.user_token import UserToken
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services import face_clusters
 from pixlstash.scoring import (
     count_pictures_by_character_likeness,
     find_pictures_by_character_likeness_sql,
@@ -57,6 +56,7 @@ from pixlstash.utils.query.predicate_filter import (
 from ._helpers import (
     _enrich_scrapheap_retention,
     _enrich_stack_counts,
+    _face_cluster_ids,
     _get_hidden_tags_from_request,
 )
 
@@ -575,37 +575,6 @@ def _variants_run_by(server, workflow_id: str) -> list[str]:
     )
 
 
-def _face_cluster_ids(server, character_id, cluster_raw, threshold_raw):
-    """The picture ids of the person's "Cluster N", or ``None`` with no
-    ``face_cluster`` param. A cluster past the last is an empty set."""
-    if cluster_raw is None:
-        return None
-    if not isinstance(character_id, int):
-        raise HTTPException(
-            status_code=422, detail="face_cluster needs one person's character_id"
-        )
-    try:
-        number = int(cluster_raw)
-        threshold = (
-            face_clusters.SAME_PERSON if threshold_raw is None else float(threshold_raw)
-        )
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid face_cluster {cluster_raw!r} or "
-            f"face_cluster_threshold {threshold_raw!r}",
-        ) from exc
-    if number < 1 or not 0.05 <= threshold <= 0.95:
-        raise HTTPException(
-            status_code=422,
-            detail="face_cluster counts from 1; face_cluster_threshold is 0.05-0.95",
-        )
-    clusters = face_clusters.person_cluster_ids(server.vault, character_id, threshold)
-    if clusters is None or number > len(clusters):
-        return set()
-    return set(clusters[number - 1])
-
-
 def select_pictures_for_listing(
     *,
     server,
@@ -869,6 +838,7 @@ def select_pictures_for_listing(
     # intersects ``face_cluster_ids`` itself.
     face_cluster_ids = _face_cluster_ids(
         server,
+        request,
         character_id,
         query_params.pop("face_cluster", None),
         query_params.pop("face_cluster_threshold", None),

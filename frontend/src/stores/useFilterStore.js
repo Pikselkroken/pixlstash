@@ -75,7 +75,12 @@ export const useFilterStore = defineStore("filter", () => {
   const faceClusterFilter = ref(null);
   const selection = useSelectionStore();
   watch(
-    () => selection.selectedCharacter,
+    // By value ("7" and 7 are one person), and a multi-person selection is
+    // no one person's view.
+    () =>
+      (selection.selectedCharacterIds || []).length > 1
+        ? "many"
+        : String(selection.selectedCharacter ?? ""),
     () => {
       faceClusterFilter.value = null;
     },
