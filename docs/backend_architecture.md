@@ -2492,8 +2492,10 @@ read from the filesystem as it is now — `folder_missing`, `vault_missing`,
 or `newer` (`_refuse_newer_library` reads `alembic_version` read-only and raises
 `NewerLibraryError` for a revision this build lacks, before the vault opens) —
 the reason, and the attached libraries that pass the same read-only check. A
-`newer` library is never offered start-over or relocate: its way out is an
-update, so the screen shows **Get the latest PixlStash** instead of **Find it**.
+`newer` library is never offered the recreate-the-vault question or relocate:
+its way out is an update, so the screen shows **Get the latest PixlStash**
+instead of **Find it**. Create-a-new-library is still offered; it only detaches
+the registration and never touches the vault.
 `app.main` prints what is missing, the likely cause and every way out as
 copy-pasteable commands (`cli_hint`), and for Electron a final
 `PIXLSTASH_LIBRARY_UNAVAILABLE=` JSON line the shell turns into its recovery

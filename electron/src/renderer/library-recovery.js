@@ -57,7 +57,7 @@ const COPY = {
     intro: (library) =>
       `“${library.name}” in ${library.path} was last opened by a newer version of PixlStash, and this version cannot read it.`,
     cause:
-      'The newer version updated the library in a way this one does not understand yet, so PixlStash left it closed and nothing in it changed. Update PixlStash and it opens as it was.',
+      'The newer version updated the library in a way this one does not understand yet, so PixlStash left it closed and nothing in it changed. A PixlStash at least as new as that one opens it as it was.',
     retryNote: 'After updating PixlStash.',
   },
 };
