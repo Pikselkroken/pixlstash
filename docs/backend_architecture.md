@@ -12868,8 +12868,9 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   Qwen-Image, FLUX.2 Klein or MiniMax H3 `txt2img` workflow (PixlStash ships
   five, #2700: `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
   `Sheet-Flux2-Klein-9B*.json`, a text and a `-Reference` one of each, and
-  `Sheet-MiniMax-H3-Reference.json`, a reference one only: ComfyUI's H3
-  text-to-image template already takes a run's size, its wired one included; every
+  `Sheet-MiniMax-H3-Reference.json`, a reference one only, since ComfyUI's
+  own H3 text-to-image template can draw sheets: its size is wired from a
+  `ResolutionSelector`, and the card offers that as a size a run sets; every
   size a literal 2560×1536 and the encoder and VAE loaded by digest; the step
   files their cards through `POST /comfyui/workflows/{name}/card` before it
   lists the cards) through `POST /workflows/run` with the prompt, negative and canvas
