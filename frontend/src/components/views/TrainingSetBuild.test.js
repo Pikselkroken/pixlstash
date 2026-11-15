@@ -186,6 +186,8 @@ function button(wrapper, text) {
 beforeEach(() => {
   vi.clearAllMocks();
   setActivePinia(createPinia());
+  // The sheet step remembers its last choices here.
+  localStorage.clear();
 });
 
 describe("TrainingSetBuild", () => {
@@ -1692,6 +1694,92 @@ describe("TrainingSetBuild: generating the pictures", () => {
     expect(wrapper.findAll('[data-testid="cs-closeness"]')[0].text()).toContain(
       "drifts from the reference",
     );
+    wrapper.unmount();
+  });
+
+  it("starts a fresh step from the choices last made; a saved build keeps its own", async () => {
+    const KREA = {
+      id: "manual:krea",
+      name: "Krea sheet",
+      type: "txt2img",
+      last_used: "2026-11-10T20:00:00Z",
+      models: [{ kind: "checkpoint", base_model_family: "krea2" }],
+    };
+    const open = async (building, faces) => {
+      referenceWorld({ cards: [MOSS_CARD, KREA, QWEN_SHEET], faces });
+      // The text cards run as they are; only the sheet card waits for its picture.
+      const reference = gen.preflightWorkflowRun.getMockImplementation();
+      gen.preflightWorkflowRun.mockImplementation(async (body, ...rest) =>
+        body.workflow_id === QWEN_SHEET.id
+          ? reference(body, ...rest)
+          : { ok: true, groups: [{ reasons: [] }] },
+      );
+      gen.listAdapters.mockResolvedValue([
+        { sha256: "moss1", display_name: "Anna v1", base_model_family: "moss_image", added_at: "2026-11-08" },
+      ]);
+      const wrapper = mountDialog(building);
+      await flushPromises();
+      return wrapper;
+    };
+    const select = (wrapper, label) =>
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === label);
+    const on = (wrapper, group) =>
+      wrapper.find(`[aria-label="${group}"] [aria-checked="true"]`).text();
+    const click = (wrapper, group, text) =>
+      wrapper
+        .findAll(`[aria-label="${group}"] button`)
+        .find((b) => b.text() === text)
+        .trigger("click");
+
+    // The defaults: a face draws from the reference, with the newest card.
+    let wrapper = await open();
+    expect(mode(wrapper).text()).toBe("Reference and text");
+    wrapper.unmount();
+    // A default is not a choice: a character with no face still draws from words.
+    wrapper = await open(undefined, []);
+    expect(mode(wrapper).text()).toBe("Text");
+    wrapper.unmount();
+
+    wrapper = await open();
+    await click(wrapper, "Draw from", "Text");
+    await flushPromises();
+    expect(select(wrapper, "Sheet workflow").props("modelValue")).toBe("manual:krea");
+    select(wrapper, "Sheet workflow").vm.$emit("update:modelValue", "manual:moss");
+    await flushPromises();
+    expect(select(wrapper, "Character LoRA · optional").props("modelValue")).toBe("moss1");
+    select(wrapper, "Character LoRA · optional").vm.$emit("update:modelValue", "");
+    await click(wrapper, "Sheet size", "Small");
+    await click(wrapper, "Sheets to draw", "2");
+    await flushPromises();
+    wrapper.unmount();
+
+    // A new set: the same mode, workflow, LoRA, size and count.
+    wrapper = await open();
+    expect(mode(wrapper).text()).toBe("Text");
+    expect(select(wrapper, "Sheet workflow").props("modelValue")).toBe("manual:moss");
+    expect(select(wrapper, "Character LoRA · optional").props("modelValue")).toBe("");
+    expect(on(wrapper, "Sheet size")).toBe("Small");
+    expect(on(wrapper, "Sheets to draw")).toBe("2");
+    wrapper.unmount();
+
+    // A set with a build of its own opens as it was left, not as last chosen.
+    wrapper = await open({
+      v: 1,
+      stage: "generate",
+      stepped: true,
+      sheets: {
+        phase: "describe",
+        form: { description: "Adult woman", size: "large", count: 4 },
+        mode: "reference",
+        workflow_id: QWEN_SHEET.id,
+      },
+    });
+    expect(mode(wrapper).text()).toBe("Reference and text");
+    expect(select(wrapper, "Sheet workflow").props("modelValue")).toBe(QWEN_SHEET.id);
+    expect(on(wrapper, "Sheet size")).toBe("Large");
+    expect(on(wrapper, "Sheets to draw")).toBe("4");
     wrapper.unmount();
   });
 
