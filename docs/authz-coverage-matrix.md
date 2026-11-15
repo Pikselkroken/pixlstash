@@ -372,6 +372,11 @@ listing to suppress.
 | POST | `/api/v1/character-sheets/prompt` | owner_only |  | Build a sheet prompt; POST blocked for READ tokens; owner only |
 | POST | `/api/v1/characters/{character_id}/sheets/rank` | owner_only |  | Rank drawn sheets; POST blocked for READ tokens; owner only |
 | POST | `/api/v1/characters/{character_id}/sheets/use` | owner_only |  | Cut sheets into pictures; POST blocked for READ tokens; owner only |
+| GET | `/api/v1/characters/{character_id}/sheets/draws` | owner_only |  | A character's sheet draws, with their run state; owner only |
+| POST | `/api/v1/characters/{character_id}/sheets/draws` | owner_only |  | Record a sheet draw; POST blocked for READ tokens; owner only |
+| PATCH | `/api/v1/characters/{character_id}/sheets/draws/{draw_id}` | owner_only |  | Change a sheet draw; PATCH blocked for READ tokens; owner only |
+| DELETE | `/api/v1/characters/{character_id}/sheets/draws/{draw_id}` | owner_only |  | Delete a sheet draw; DELETE blocked for READ tokens; owner only |
+| GET | `/api/v1/character-sheets/draws` | owner_only |  | Every character's sheet draws and run keys; owner only |
 | GET | `/api/v1/characters/{id}` | character_scoped | id=id |  |
 | PATCH | `/api/v1/characters/{id}` | owner_only |  | Update character; PATCH blocked for READ tokens; owner only |
 | DELETE | `/api/v1/characters/{id}` | owner_only |  | Delete character; DELETE blocked for READ tokens; owner only |

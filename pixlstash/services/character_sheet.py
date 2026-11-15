@@ -37,18 +37,22 @@ import io
 import json
 import os
 import re
+from datetime import timezone
 from itertools import combinations
 from typing import Literal
 
 import numpy as np
 from PIL import Image
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Character, Face, Picture
+from pixlstash.db_models import Character, CharacterSheetDraw, Face, Picture
 from pixlstash.image_plugins.service import import_derived_outputs
 from pixlstash.pixl_logging import get_logger
 from pixlstash.scoring import select_reference_faces_for_character
+from pixlstash.services import comfyui_service
 from pixlstash.services.move_reconciliation_service import add_person
+from pixlstash.services.run_log import LOST_MESSAGE
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     is_link,
@@ -789,15 +793,26 @@ def _cut(server, sheet: Picture) -> list[tuple[bytes, str]]:
     return entries
 
 
-def use_sheets(server, character_id: int, picture_ids: list[int]) -> list[int]:
+def use_sheets(
+    server,
+    character_id: int,
+    picture_ids: list[int],
+    draw_id: int | None = None,
+) -> list[int]:
     """Cut each sheet into its six panels and file them on the character.
 
     Passport photos first, sheet by sheet. Every sheet is read before anything
     is imported, so an unreadable one imports nothing. Returns the panels'
-    picture ids. Raises :class:`SheetNotFound` and :class:`SheetUnreadable`.
+    picture ids. With *draw_id*, the panels and the sheets cut are recorded on
+    that draw once the cut succeeds. Raises :class:`SheetNotFound` (also for a
+    *draw_id* that is not this character's) and :class:`SheetUnreadable`.
     The sheets themselves stay in the Scrapheap.
     """
     ids = list(dict.fromkeys(picture_ids))
+    if draw_id is not None and not server.vault.db.run_immediate_read_task(
+        draw_exists_in_session, character_id, draw_id
+    ):
+        raise SheetNotFound(f"No draw {draw_id} on character {character_id}.")
     sheets = server.vault.db.run_immediate_read_task(
         sheets_in_session, character_id, ids
     )
@@ -819,4 +834,403 @@ def use_sheets(server, character_id: int, picture_ids: list[int]) -> list[int]:
         panel_ids,
         character_id,
     )
+    if draw_id is not None and not server.vault.db.run_task(
+        record_used_in_session, character_id, draw_id, panel_ids, ids
+    ):
+        logger.warning(
+            "Draw %s on character %s was deleted while sheets %s were cut; "
+            "panels %s are filed but not recorded on it.",
+            draw_id,
+            character_id,
+            ids,
+            panel_ids,
+        )
     return panel_ids
+
+
+# --- Character sheet draws: the dialog's state, kept on the character ---------
+#
+# A draw is one run of "Draw" on a character (``db_models/character_sheet_draw``):
+# its settings (opaque here), its runs (ComfyUI runs keyed by run id or prompt
+# id, each settled to queued/running/completed/failed), the sheets they made,
+# the sheets kept, the panels filed from them, and whether it was seen. A run
+# is settled from ``comfyui_service.run_outcome`` when the draws are read, and
+# from ``comfyui_service``'s ending listener (``settle_run``) when it ends with
+# nobody reading. Both go through ``_settle_runs`` / ``_take``.
+
+# A draw's settings, serialised: more is refused before it is stored.
+DRAW_SETTINGS_MAX = 20_000
+DRAW_RUN_KEY_MAX = 64
+_RUN_STATUSES = ("queued", "running", "completed", "failed")
+_RUN_TERMINAL = ("completed", "failed")
+
+
+def _ints(values) -> list[int]:
+    """The integers in *values*: booleans and anything else are dropped."""
+    return [v for v in values or [] if isinstance(v, int) and not isinstance(v, bool)]
+
+
+def _json_list(text: str | None, column: str, draw_id: int) -> list:
+    """A stored JSON list, read tolerantly: unreadable is logged and empty."""
+    try:
+        value = json.loads(text or "[]")
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "Character sheet draw %s has an unreadable %s column (%s); reading "
+            "it as empty.",
+            draw_id,
+            column,
+            exc,
+        )
+        return []
+    if not isinstance(value, list):
+        logger.warning(
+            "Character sheet draw %s has a %s column that is not a list; reading "
+            "it as empty.",
+            draw_id,
+            column,
+        )
+        return []
+    return value
+
+
+def _settings_of(text: str | None, draw_id: int) -> dict:
+    """The stored settings object, read tolerantly: unreadable is logged and empty."""
+    try:
+        value = json.loads(text or "{}")
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "Character sheet draw %s has unreadable settings (%s); reading them "
+            "as empty.",
+            draw_id,
+            exc,
+        )
+        return {}
+    if not isinstance(value, dict):
+        logger.warning(
+            "Character sheet draw %s has settings that are not an object; "
+            "reading them as empty.",
+            draw_id,
+        )
+        return {}
+    return value
+
+
+def _runs_of(text: str | None, draw_id: int) -> list[dict]:
+    """The stored runs, each checked: a malformed one is logged and dropped."""
+    runs = []
+    for item in _json_list(text, "runs", draw_id):
+        if (
+            isinstance(item, dict)
+            and isinstance(item.get("key"), str)
+            and item.get("status") in _RUN_STATUSES
+        ):
+            runs.append(
+                {
+                    "key": item["key"],
+                    "status": item["status"],
+                    "message": str(item.get("message") or ""),
+                    "picture_ids": _ints(item.get("picture_ids")),
+                }
+            )
+        else:
+            logger.warning(
+                "Character sheet draw %s has a malformed run %r; dropping it.",
+                draw_id,
+                item,
+            )
+    return runs
+
+
+def _new_run(key: str) -> dict:
+    return {"key": key, "status": "queued", "message": "", "picture_ids": []}
+
+
+def _take(run: dict, outcome: dict) -> bool:
+    """Copy what *outcome* says of *run* onto it. True when something changed."""
+    status = outcome.get("status")
+    if status in _RUN_TERMINAL:
+        new = {
+            "status": status,
+            "message": str(outcome.get("message") or ""),
+            "picture_ids": _ints(outcome.get("picture_ids")),
+        }
+    elif status == "running" and run["status"] != "running":
+        new = {"status": "running"}
+    else:
+        return False
+    if all(run.get(field) == value for field, value in new.items()):
+        return False
+    run.update(new)
+    return True
+
+
+def _settle_runs(runs: list[dict], lost_when_unknown: bool) -> bool:
+    """Settle *runs* from ``comfyui_service.run_outcome``; True when any changed.
+
+    A run with no recorded outcome is lost (PixlStash restarted before it
+    ended) when *lost_when_unknown*; otherwise it is left as it is, for a run
+    just handed in whose ending may not be recorded yet.
+    """
+    changed = False
+    for run in runs:
+        if run["status"] in _RUN_TERMINAL:
+            continue
+        outcome = comfyui_service.run_outcome(run["key"])
+        if outcome is None:
+            if lost_when_unknown:
+                run.update(status="failed", message=LOST_MESSAGE, picture_ids=[])
+                changed = True
+            continue
+        changed = _take(run, outcome) or changed
+    return changed
+
+
+def _draw_out(row: CharacterSheetDraw, runs: list[dict]) -> dict:
+    """A draw as the API returns it."""
+    created = row.created_at
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return {
+        "id": row.id,
+        "character_id": row.character_id,
+        "created_at": created.isoformat(),
+        "settings": _settings_of(row.settings, row.id),
+        "drawn_from": row.drawn_from,
+        "runs": runs,
+        "kept": _ints(_json_list(row.kept, "kept", row.id)),
+        "used": _ints(_json_list(row.used, "used", row.id)),
+        "used_sheets": _ints(_json_list(row.used_sheets, "used_sheets", row.id)),
+        "seen": bool(row.seen),
+    }
+
+
+def _settle_row(session: Session, row: CharacterSheetDraw, lost: bool) -> dict:
+    """Settle one draw's runs, persist what changed, and return it as a dict."""
+    runs = _runs_of(row.runs, row.id)
+    if _settle_runs(runs, lost):
+        row.runs = json.dumps(runs)
+        session.add(row)
+    return _draw_out(row, runs)
+
+
+def _draw_of(session: Session, character_id: int, draw_id: int):
+    """The draw row, when it exists and is *character_id*'s; else ``None``."""
+    row = session.get(CharacterSheetDraw, draw_id)
+    return row if row is not None and row.character_id == character_id else None
+
+
+def _newest_first():
+    return (CharacterSheetDraw.created_at.desc(), CharacterSheetDraw.id.desc())
+
+
+def draw_exists_in_session(session: Session, character_id: int, draw_id: int) -> bool:
+    """Whether *draw_id* is a draw of *character_id*."""
+    return _draw_of(session, character_id, draw_id) is not None
+
+
+def list_draws_in_session(session: Session, character_id: int) -> list[dict] | None:
+    """A character's draws, newest first, settled; ``None`` for an unknown character."""
+    if session.get(Character, character_id) is None:
+        return None
+    rows = session.exec(
+        select(CharacterSheetDraw)
+        .where(CharacterSheetDraw.character_id == character_id)
+        .order_by(*_newest_first())
+    ).all()
+    draws = [_settle_row(session, row, lost=True) for row in rows]
+    session.commit()
+    return draws
+
+
+def summaries_in_session(session: Session) -> list[dict]:
+    """Every character with a draw: its draw count, newest draw, and run keys."""
+    rows = session.exec(select(CharacterSheetDraw).order_by(*_newest_first())).all()
+    by_character: dict[int, list[dict]] = {}
+    for row in rows:
+        by_character.setdefault(row.character_id, []).append(
+            _settle_row(session, row, lost=True)
+        )
+    session.commit()
+    return [
+        {
+            "character_id": character_id,
+            "draws": len(draws),
+            "newest": draws[0],
+            "run_keys": [run["key"] for draw in draws for run in draw["runs"]],
+        }
+        for character_id, draws in by_character.items()
+    ]
+
+
+def create_draw_in_session(
+    session: Session,
+    character_id: int,
+    settings: dict,
+    drawn_from: int | None,
+    run_keys: list[str],
+) -> dict | None:
+    """Store a draw of *run_keys* on *character_id*; ``None`` for an unknown character."""
+    if session.get(Character, character_id) is None:
+        return None
+    runs = [_new_run(key) for key in dict.fromkeys(run_keys)]
+    row = CharacterSheetDraw(
+        character_id=character_id,
+        settings=json.dumps(settings),
+        drawn_from=drawn_from,
+        runs=json.dumps(runs),
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    # A run that has already ended is settled now; one still going stays queued.
+    if _settle_runs(runs, lost_when_unknown=False):
+        row.runs = json.dumps(runs)
+        session.add(row)
+        session.commit()
+    return _draw_out(row, runs)
+
+
+def update_draw_in_session(
+    session: Session,
+    character_id: int,
+    draw_id: int,
+    add_run_keys: list[str] | None,
+    kept: list[int] | None,
+    seen: bool | None,
+) -> dict | None:
+    """Change a draw; ``None`` when it is not *character_id*'s."""
+    row = _draw_of(session, character_id, draw_id)
+    if row is None:
+        return None
+    runs = _runs_of(row.runs, row.id)
+    _settle_runs(runs, lost_when_unknown=True)
+    known = {run["key"] for run in runs}
+    fresh = [
+        _new_run(key) for key in dict.fromkeys(add_run_keys or []) if key not in known
+    ]
+    _settle_runs(fresh, lost_when_unknown=False)
+    runs.extend(fresh)
+    row.runs = json.dumps(runs)
+    if kept is not None:
+        row.kept = json.dumps(list(dict.fromkeys(kept)))
+    if seen is not None:
+        row.seen = seen
+    session.add(row)
+    session.commit()
+    return _draw_out(row, runs)
+
+
+def delete_draw_in_session(session: Session, character_id: int, draw_id: int) -> bool:
+    """Delete a draw of *character_id*. The sheets it made stay where they are."""
+    row = _draw_of(session, character_id, draw_id)
+    if row is None:
+        return False
+    session.delete(row)
+    session.commit()
+    return True
+
+
+def record_used_in_session(
+    session: Session,
+    character_id: int,
+    draw_id: int,
+    panel_ids: list[int],
+    sheet_ids: list[int],
+) -> bool:
+    """Record the panels filed and the sheets cut on a draw; False when it is gone."""
+    row = _draw_of(session, character_id, draw_id)
+    if row is None:
+        return False
+    # Panels are appended as the cut returned them; the sheets cut once each.
+    used = _ints(_json_list(row.used, "used", row.id)) + panel_ids
+    used_sheets = _ints(_json_list(row.used_sheets, "used_sheets", row.id)) + sheet_ids
+    row.used = json.dumps(used)
+    row.used_sheets = json.dumps(list(dict.fromkeys(used_sheets)))
+    session.add(row)
+    session.commit()
+    return True
+
+
+def settle_run_in_session(session: Session, keys: set[str], outcome: dict) -> int:
+    """Write an ending onto the draws that hold one of *keys*; how many changed.
+
+    Only a completed or failed ending is written: a run that is still going,
+    or is waiting for the GPU, changes nothing here.
+    """
+    if outcome.get("status") not in _RUN_TERMINAL:
+        return 0
+    rows = session.exec(
+        select(CharacterSheetDraw).where(
+            or_(*[CharacterSheetDraw.runs.contains(key) for key in keys])
+        )
+    ).all()
+    changed = 0
+    for row in rows:
+        runs = _runs_of(row.runs, row.id)
+        hit = False
+        for run in runs:
+            if run["key"] in keys and run["status"] not in _RUN_TERMINAL:
+                hit = _take(run, outcome) or hit
+        if hit:
+            row.runs = json.dumps(runs)
+            session.add(row)
+            changed += 1
+    session.commit()
+    return changed
+
+
+def list_draws(vault, character_id: int) -> list[dict] | None:
+    """Vault wrapper: :func:`list_draws_in_session`."""
+    return vault.db.run_task(list_draws_in_session, character_id)
+
+
+def draw_summaries(vault) -> list[dict]:
+    """Vault wrapper: :func:`summaries_in_session`."""
+    return vault.db.run_task(summaries_in_session)
+
+
+def create_draw(
+    vault,
+    character_id: int,
+    settings: dict,
+    drawn_from: int | None,
+    run_keys: list[str],
+) -> dict | None:
+    """Vault wrapper: :func:`create_draw_in_session`."""
+    return vault.db.run_task(
+        create_draw_in_session, character_id, settings, drawn_from, run_keys
+    )
+
+
+def update_draw(
+    vault,
+    character_id: int,
+    draw_id: int,
+    add_run_keys: list[str] | None,
+    kept: list[int] | None,
+    seen: bool | None,
+) -> dict | None:
+    """Vault wrapper: :func:`update_draw_in_session`."""
+    return vault.db.run_task(
+        update_draw_in_session, character_id, draw_id, add_run_keys, kept, seen
+    )
+
+
+def delete_draw(vault, character_id: int, draw_id: int) -> bool:
+    """Vault wrapper: :func:`delete_draw_in_session`."""
+    return vault.db.run_task(delete_draw_in_session, character_id, draw_id)
+
+
+def settle_run(vault, outcome: dict) -> None:
+    """Write a run's ending onto its draw, whoever is reading. No library, no-op.
+
+    The run is found by its run id and by its prompt id: the frontend keys a
+    run by the first and falls back to the second.
+    """
+    if vault is None:
+        return
+    keys = {key for key in (outcome.get("run_id"), outcome.get("prompt_id")) if key}
+    if not keys:
+        return
+    vault.db.run_task(settle_run_in_session, keys, outcome)

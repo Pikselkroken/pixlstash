@@ -37,6 +37,7 @@ from starlette.testclient import TestClient
 from pixlstash.auth import (
     READ_BLOCKED_GET_PATHS,
     READ_BLOCKED_GET_PREFIXES,
+    READ_BLOCKED_GET_TEMPLATES,
     is_local_ip,
     is_local_or_tailscale_ip,
     is_loopback_ip,
@@ -1080,6 +1081,7 @@ def test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt():
         path
         for path in must_be_prefixed
         if not path.startswith(READ_BLOCKED_GET_PREFIXES)
+        and path not in READ_BLOCKED_GET_TEMPLATES
     )
     assert uncovered == [], (
         f"templated owner-class GETs no READ_BLOCKED_GET_PREFIXES entry covers: "

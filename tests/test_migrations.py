@@ -1707,6 +1707,55 @@ def test_0145_adds_control_state_to_a_populated_vault():
         assert again.returncode == 0, again.stderr
 
 
+def test_0146_adds_character_sheet_draw_and_a_rerun_is_a_no_op():
+    """The table arrives, it is empty and its character reference cascades, a
+    downgrade removes it, and a re-run after a fresh upgrade is a no-op."""
+    previous = "0145_add_tag_suggestion_control_state"
+
+    def has_table(conn):
+        return "character_sheet_draw" in {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert has_table(conn), "the baseline's create_all() or migration 0146"
+
+        down = _run_alembic(["downgrade", previous], db_url, _MIGRATIONS_DIR)
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert not has_table(conn)
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert has_table(conn), "migration 0146"
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(character_sheet_draw)")
+            }
+            assert {
+                "settings",
+                "runs",
+                "kept",
+                "used",
+                "used_sheets",
+                "seen",
+            } <= columns
+            assert conn.execute(
+                "SELECT COUNT(*) FROM character_sheet_draw"
+            ).fetchone() == (0,)
+            conn.execute("UPDATE alembic_version SET version_num = ?", (previous,))
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
 def test_0128_adds_prompt_match_once_on_a_fresh_and_a_populated_vault():
     """Column and probe index arrive either way, existing pictures read NULL
     (not scored), and a second upgrade over a vault that has both is a no-op."""

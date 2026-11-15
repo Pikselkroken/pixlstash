@@ -21,14 +21,19 @@ The work is in ``services/character_sheet.py``; this module translates.
 
 from __future__ import annotations
 
+import json
+from typing import Any, Literal
+
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from pixlstash.event_types import EventType
 from pixlstash.services import character_sheet
 
 # A run draws at most a handful of sheets; "Draw more" adds to them.
 MAX_SHEETS = 32
+# A draw starts at most this many runs at once.
+MAX_RUN_KEYS = 32
 _TEXT = 2000
 
 
@@ -112,12 +117,116 @@ class SheetRanking(BaseModel):
 
 class SheetIds(BaseModel):
     picture_ids: list[int] = Field(min_length=1, max_length=MAX_SHEETS)
+    draw_id: int | None = Field(
+        None,
+        description="The draw these sheets belong to. The panels and the sheets "
+        "cut are recorded on it; another character's draw is a 404.",
+    )
 
 
 class UsedSheets(BaseModel):
     """The panels the chosen sheets became: six a sheet, passport photos first."""
 
     picture_ids: list[int]
+
+
+def _run_key(key: str) -> str:
+    if not key or len(key) > character_sheet.DRAW_RUN_KEY_MAX:
+        raise ValueError(
+            f"a run key is 1 to {character_sheet.DRAW_RUN_KEY_MAX} characters"
+        )
+    return key
+
+
+class DrawRun(BaseModel):
+    """One run of a draw. `status` is settled from how the run ended."""
+
+    key: str = Field(description="The run id, or the prompt id it fell back to.")
+    status: Literal["queued", "running", "completed", "failed"]
+    message: str
+    picture_ids: list[int]
+
+
+class Draw(BaseModel):
+    """One draw of character sheets on a character."""
+
+    id: int
+    character_id: int
+    created_at: str = Field(description="ISO 8601, UTC.")
+    settings: dict[str, Any] = Field(
+        description="What the dialog drew with. Opaque to the backend."
+    )
+    drawn_from: int | None = Field(
+        description="A picture the draw was drawn from; not a foreign key."
+    )
+    runs: list[DrawRun]
+    kept: list[int] = Field(description="The sheets the owner ticked.")
+    used: list[int] = Field(description="The panels filed on the character by use.")
+    used_sheets: list[int] = Field(
+        description="The sheets cut by use, so the dialog knows which are done."
+    )
+    seen: bool
+
+
+class DrawList(BaseModel):
+    draws: list[Draw]
+
+
+class DrawCreate(BaseModel):
+    settings: dict[str, Any]
+    drawn_from: int | None = None
+    run_keys: list[str] = Field(
+        min_length=1,
+        max_length=MAX_RUN_KEYS,
+        description="The runs the draw started, by run id (or prompt id).",
+    )
+
+    @field_validator("settings")
+    @classmethod
+    def _settings_size(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(value)) > character_sheet.DRAW_SETTINGS_MAX:
+            raise ValueError(
+                f"settings serialise to more than "
+                f"{character_sheet.DRAW_SETTINGS_MAX} characters"
+            )
+        return value
+
+    @field_validator("run_keys")
+    @classmethod
+    def _keys(cls, value: list[str]) -> list[str]:
+        return [_run_key(key) for key in value]
+
+
+class DrawUpdate(BaseModel):
+    """Every field optional. `add_run_keys` appends; `kept` replaces."""
+
+    add_run_keys: list[str] | None = Field(None, max_length=MAX_RUN_KEYS)
+    kept: list[int] | None = Field(None, max_length=MAX_SHEETS)
+    seen: bool | None = None
+
+    @field_validator("add_run_keys")
+    @classmethod
+    def _keys(cls, value: list[str] | None) -> list[str] | None:
+        return None if value is None else [_run_key(key) for key in value]
+
+
+class DrawDeleted(BaseModel):
+    deleted: bool
+
+
+class DrawCharacter(BaseModel):
+    """A character with at least one draw, for the sidebar and the Tasks panel."""
+
+    character_id: int
+    draws: int = Field(description="How many draws the character has.")
+    newest: Draw
+    run_keys: list[str] = Field(
+        description="Every run key of every draw of the character."
+    )
+
+
+class DrawCharacters(BaseModel):
+    characters: list[DrawCharacter]
 
 
 def create_router(server) -> APIRouter:
@@ -180,7 +289,7 @@ def create_router(server) -> APIRouter:
     def use_sheets(request: Request, character_id: int, payload: SheetIds):
         try:
             panel_ids = character_sheet.use_sheets(
-                server, character_id, payload.picture_ids
+                server, character_id, payload.picture_ids, payload.draw_id
             )
         except character_sheet.SheetNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -200,5 +309,94 @@ def create_router(server) -> APIRouter:
             EventType.CHANGED_CHARACTERS, {"origin_client_id": origin_client_id}
         )
         return UsedSheets(picture_ids=panel_ids)
+
+    @router.get(
+        "/characters/{character_id}/sheets/draws",
+        summary="List character sheet draws",
+        description=(
+            "The character's draws of sheets, newest first. Every run not yet "
+            "ended is settled first from how it ended, and a run PixlStash no "
+            "longer knows of (it restarted) is marked failed."
+        ),
+        response_model=DrawList,
+    )
+    def list_draws(character_id: int):
+        draws = character_sheet.list_draws(server.vault, character_id)
+        if draws is None:
+            raise HTTPException(status_code=404, detail="Not found.")
+        return DrawList(draws=draws)
+
+    @router.post(
+        "/characters/{character_id}/sheets/draws",
+        summary="Record a character sheet draw",
+        description=(
+            "Stores one draw of sheets on the character: its settings, the "
+            "picture it was drawn from, and the runs it started, each queued "
+            "until it ends. Returns the draw as settled so far."
+        ),
+        response_model=Draw,
+    )
+    def create_draw(character_id: int, payload: DrawCreate):
+        draw = character_sheet.create_draw(
+            server.vault,
+            character_id,
+            payload.settings,
+            payload.drawn_from,
+            payload.run_keys,
+        )
+        if draw is None:
+            raise HTTPException(status_code=404, detail="Not found.")
+        return draw
+
+    @router.patch(
+        "/characters/{character_id}/sheets/draws/{draw_id}",
+        summary="Change a character sheet draw",
+        description=(
+            "Appends run keys (`add_run_keys`, skipping those already on the "
+            "draw), replaces the kept sheets (`kept`), and sets `seen`. Returns "
+            "the draw as settled so far."
+        ),
+        response_model=Draw,
+    )
+    def update_draw(character_id: int, draw_id: int, payload: DrawUpdate):
+        draw = character_sheet.update_draw(
+            server.vault,
+            character_id,
+            draw_id,
+            payload.add_run_keys,
+            payload.kept,
+            payload.seen,
+        )
+        if draw is None:
+            raise HTTPException(status_code=404, detail="Not found.")
+        return draw
+
+    @router.delete(
+        "/characters/{character_id}/sheets/draws/{draw_id}",
+        summary="Delete a character sheet draw",
+        description=(
+            "Deletes the draw's record only. The sheets it made stay in the "
+            "Scrapheap, where retention purges them."
+        ),
+        response_model=DrawDeleted,
+    )
+    def delete_draw(character_id: int, draw_id: int):
+        if not character_sheet.delete_draw(server.vault, character_id, draw_id):
+            raise HTTPException(status_code=404, detail="Not found.")
+        return DrawDeleted(deleted=True)
+
+    @router.get(
+        "/character-sheets/draws",
+        summary="List characters with sheet draws",
+        description=(
+            "Every character with at least one draw: how many, its newest draw, "
+            "and every run key across them. Settles the runs first, as the "
+            "per-character list does. Feeds the sidebar row and the Tasks panel's "
+            "Open sheets link."
+        ),
+        response_model=DrawCharacters,
+    )
+    def list_draw_characters():
+        return DrawCharacters(characters=character_sheet.draw_summaries(server.vault))
 
     return router

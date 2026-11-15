@@ -601,6 +601,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/adapters/{sha256}                                                     | model_shelf     | One adapter by hash                                           |
 | PUT    | /api/v1/adapters/{sha256}/attachments                                         | model_shelf     | Set which characters and sets use an adapter                  |
 | GET    | /api/v1/adapters/{sha256}/file                                                | model_shelf     | Download one adapter's bytes                                  |
+| GET    | /api/v1/character-sheets/draws                                                | characters      | List characters with sheet draws                              |
 | POST   | /api/v1/character-sheets/prompt                                               | characters      | Build a character sheet prompt                                |
 | GET    | /api/v1/characters                                                            | characters      | List characters                                               |
 | POST   | /api/v1/characters                                                            | characters      | Create character                                              |
@@ -608,6 +609,10 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/characters/membership                                                 | characters      | Batch character membership lookup                             |
 | POST   | /api/v1/characters/{character_id}/faces                                       | characters      | Assign faces to character                                     |
 | DELETE | /api/v1/characters/{character_id}/faces                                       | characters      | Unassign faces from character                                 |
+| GET    | /api/v1/characters/{character_id}/sheets/draws                                | characters      | List character sheet draws                                    |
+| POST   | /api/v1/characters/{character_id}/sheets/draws                                | characters      | Record a character sheet draw                                 |
+| PATCH  | /api/v1/characters/{character_id}/sheets/draws/{draw_id}                      | characters      | Change a character sheet draw                                 |
+| DELETE | /api/v1/characters/{character_id}/sheets/draws/{draw_id}                      | characters      | Delete a character sheet draw                                 |
 | POST   | /api/v1/characters/{character_id}/sheets/rank                                 | characters      | Rank drawn character sheets                                   |
 | POST   | /api/v1/characters/{character_id}/sheets/use                                  | characters      | Use character sheets                                          |
 | PATCH  | /api/v1/characters/{id}                                                       | characters      | Update character                                              |
@@ -12951,6 +12956,29 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
     faces: a picked picture need not be one of those.
 - The prompt route is pure; the other two are a `*_in_session` read or write
   behind a thin vault wrapper in `services/character_sheet.py` (§10.1).
+- **Draws are stored on the character** (`character_sheet_draw`, table
+  `db_models/character_sheet_draw.py`, migration 0146), so the dialog's state
+  survives closing it or a reload. A draw is one run of "Draw": its opaque
+  `settings`, `drawn_from` (a picture id, a plain column because purges
+  hard-delete pictures), its `runs` (`{key, status, message, picture_ids}`,
+  the key being the run id or the prompt id), the `kept` sheets, the `used`
+  panels and `used_sheets` (the sheets cut), and `seen`. The routes are
+  `GET|POST /characters/{id}/sheets/draws`,
+  `PATCH|DELETE /characters/{id}/sheets/draws/{draw_id}` and
+  `GET /character-sheets/draws` (every character with a draw, with the run
+  keys the Tasks panel links by). A run's ending reaches its draw two ways:
+  every read settles the unfinished runs from `comfyui_service.run_outcome`
+  (a run it no longer knows is `failed`, with the restart message), and the
+  ending listener (`routes/workflows.py`, `character_sheet.settle_run`) writes
+  a completed or failed ending onto the draw that holds the run, even with no
+  one looking. `use` with `draw_id` records the panels and the sheets cut on
+  that draw. The JSON columns are read tolerantly: unreadable is logged and
+  read as empty. Deleting a character cascades to its draws.
+- Authz: every draw route is owner-only (§16). The untemplated
+  `GET /character-sheets/draws` is on `READ_BLOCKED_GET_PATHS`; the templated
+  `GET /characters/{character_id}/sheets/draws` is on
+  `READ_BLOCKED_GET_TEMPLATES`, an exact match, because a prefix over
+  `/api/v1/characters/` would also swallow the character's scoped reads.
 
 ## 26. Prompt match
 

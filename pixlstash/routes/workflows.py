@@ -197,6 +197,7 @@ from pixlstash.services.comfyui_service import (
     unfed_picture_loaders,
 )
 from pixlstash.services import (
+    character_sheet,
     comfyui_pack_service,
     run_log,
     vram_history,
@@ -4492,8 +4493,29 @@ def create_router(server) -> APIRouter:
 
     _hub = functools.partial(require_hub, server)
 
-    # Every run's ending, into this server's run log (`services/run_log.py`).
-    on_run_ended(lambda outcome: run_log.ended(_hub(), outcome))
+    def _run_ended(outcome: dict) -> None:
+        # Every run's ending, into this server's run log (`services/run_log.py`),
+        # and onto the character sheet draw it belongs to. Each on its own: a
+        # failure in one must not skip the other.
+        try:
+            run_log.ended(_hub(), outcome)
+        except Exception:
+            logger.exception(
+                "Run %s ended %s, but the run log could not record it.",
+                outcome.get("run_id") or outcome.get("prompt_id"),
+                outcome.get("status"),
+            )
+        try:
+            character_sheet.settle_run(server.vault, outcome)
+        except Exception:
+            logger.exception(
+                "Run %s ended %s, but its character sheet draw could not be "
+                "settled, so its sheets may not show as made.",
+                outcome.get("run_id") or outcome.get("prompt_id"),
+                outcome.get("status"),
+            )
+
+    on_run_ended(_run_ended)
 
     # ── The workflows (#1623) ───────────────────────────────────────────────
     # The grid is `/workflows` itself, one entry per workflow. The payload is

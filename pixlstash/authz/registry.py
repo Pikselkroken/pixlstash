@@ -1533,6 +1533,26 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Cut sheets into pictures; POST blocked for READ tokens; owner only",
     ),
+    ("GET", "/api/v1/characters/{character_id}/sheets/draws"): RoutePolicy(
+        _OWNER,
+        justification="A character's sheet draws, with their run state; owner only",
+    ),
+    ("POST", "/api/v1/characters/{character_id}/sheets/draws"): RoutePolicy(
+        _OWNER,
+        justification="Record a sheet draw; POST blocked for READ tokens; owner only",
+    ),
+    ("PATCH", "/api/v1/characters/{character_id}/sheets/draws/{draw_id}"): RoutePolicy(
+        _OWNER,
+        justification="Change a sheet draw; PATCH blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/characters/{character_id}/sheets/draws/{draw_id}"): RoutePolicy(
+        _OWNER,
+        justification="Delete a sheet draw; DELETE blocked for READ tokens; owner only",
+    ),
+    ("GET", "/api/v1/character-sheets/draws"): RoutePolicy(
+        _OWNER,
+        justification="Every character's sheet draws and run keys; owner only",
+    ),
     # ── picture_sets.py ─────────────────────────────────────────────────────
     ("GET", "/api/v1/picture_sets"): _LIST_AWARE,
     ("GET", "/api/v1/picture_sets/locked-members"): _LIST_AWARE,

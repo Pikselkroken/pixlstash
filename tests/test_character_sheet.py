@@ -4,6 +4,7 @@ import io
 import json
 import tempfile
 import time
+import uuid
 
 import numpy as np
 import pytest
@@ -11,10 +12,11 @@ from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 from sqlmodel import select
 
-from pixlstash.db_models import Face, Picture
+from pixlstash.db_models import CharacterSheetDraw, Face, Picture
 from pixlstash.server import Server
 from pixlstash.event_types import EventType
 from pixlstash.services import character_sheet, comfyui_service, scrapheap_service
+from pixlstash.services.run_log import LOST_MESSAGE
 from pixlstash.services.workflow_hash import reduce_api_graph
 from pixlstash.services.workflow_identity import reference_input_count
 from pixlstash.utils.insightface_model_utils import DEFAULT_MODEL_PACK
@@ -808,3 +810,335 @@ def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
         url, json={"picture_ids": [sheet_id], "reference_picture_ids": [1, 2, 3, 4, 5]}
     )
     assert too_many.status_code == 422
+
+
+# --- Character sheet draws: the dialog's state, kept on the character --------
+
+
+def _key() -> str:
+    return f"run-{uuid.uuid4().hex[:16]}"
+
+
+def _running(key: str) -> dict:
+    return {"status": "running", "message": None, "picture_ids": []}
+
+
+def _fake_outcomes(monkeypatch, outcomes: dict) -> None:
+    """Point the settle at *outcomes*: a key not in it has no recorded ending."""
+    monkeypatch.setattr(comfyui_service, "run_outcome", lambda key: outcomes.get(key))
+
+
+def _post_draw(client, character_id, run_keys, drawn_from=None):
+    response = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/draws",
+        json={
+            "settings": {"workflow_id": "wf-1", "lora": "kai", "signature": "sig"},
+            "drawn_from": drawn_from,
+            "run_keys": run_keys,
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _list_draws(client, character_id):
+    response = client.get(f"{API_PREFIX}/characters/{character_id}/sheets/draws")
+    assert response.status_code == 200, response.text
+    return response.json()["draws"]
+
+
+def _stored_runs(server, draw_id):
+    """The runs as the database holds them, read without settling anything."""
+
+    def read(session):
+        return json.loads(session.get(CharacterSheetDraw, draw_id).runs)
+
+    return server.vault.db.run_task(read)
+
+
+def test_draws_round_trip_newest_first(client, monkeypatch):
+    outcomes: dict = {}
+    _fake_outcomes(monkeypatch, outcomes)
+    character_id = _new_character(client, "Draw Round Trip")
+    keys_a = [_key(), _key()]
+    keys_b = [_key()]
+    first = _post_draw(client, character_id, keys_a, drawn_from=None)
+    # Nothing has ended yet, so the new runs wait as queued.
+    assert [run["status"] for run in first["runs"]] == ["queued", "queued"]
+    assert first["runs"][0] == {
+        "key": keys_a[0],
+        "status": "queued",
+        "message": "",
+        "picture_ids": [],
+    }
+    second = _post_draw(client, character_id, keys_b, drawn_from=42)
+    outcomes.update({key: _running(key) for key in keys_a + keys_b})
+
+    draws = _list_draws(client, character_id)
+    assert [draw["id"] for draw in draws] == [second["id"], first["id"]]
+    newest = draws[0]
+    assert newest["settings"] == {
+        "workflow_id": "wf-1",
+        "lora": "kai",
+        "signature": "sig",
+    }
+    assert newest["drawn_from"] == 42
+    assert newest["character_id"] == character_id
+    assert newest["created_at"].endswith("+00:00")
+    assert newest["kept"] == [] and newest["used"] == [] and newest["used_sheets"] == []
+    assert newest["seen"] is False
+    assert [run["status"] for run in newest["runs"]] == ["running"]
+    assert [run["key"] for run in draws[1]["runs"]] == keys_a
+
+
+def test_a_draw_settles_from_how_each_run_ended(client, monkeypatch):
+    done, live, lost = _key(), _key(), _key()
+    outcomes = {
+        done: {"status": "completed", "message": "made", "picture_ids": [11, 12]},
+        live: _running(live),
+    }
+    _fake_outcomes(monkeypatch, outcomes)
+    character_id = _new_character(client, "Settle Each")
+    draw = _post_draw(client, character_id, [done, live, lost])
+
+    (settled,) = _list_draws(client, character_id)
+    assert settled["id"] == draw["id"]
+    runs = {run["key"]: run for run in settled["runs"]}
+    assert runs[done] == {
+        "key": done,
+        "status": "completed",
+        "message": "made",
+        "picture_ids": [11, 12],
+    }
+    assert runs[live]["status"] == "running"
+    # No recorded ending any more: a restart lost it, so it is failed, not queued.
+    assert runs[lost]["status"] == "failed"
+    assert (
+        runs[lost]["message"]
+        == LOST_MESSAGE
+        == ("PixlStash restarted before this run ended, so what it made is not known.")
+    )
+
+    # Persisted: a run that ended stays as it ended, even when nothing records it now.
+    outcomes.clear()
+    (again,) = _list_draws(client, character_id)
+    again_runs = {run["key"]: run for run in again["runs"]}
+    assert again_runs[done]["status"] == "completed"
+    assert again_runs[done]["picture_ids"] == [11, 12]
+    assert _stored_runs(client.server, draw["id"])[1]["status"] == "failed"
+
+
+def test_an_ending_recorded_with_nobody_looking_lands_in_its_draw(client, monkeypatch):
+    _fake_outcomes(monkeypatch, {})
+    character_id = _new_character(client, "Hook Lands")
+    by_run_id, by_prompt_id, still_going = _key(), _key(), _key()
+    first = _post_draw(client, character_id, [by_run_id])
+    second = _post_draw(client, character_id, [by_prompt_id, still_going])
+
+    # The run is keyed by its run id here; its prompt id is another name for it.
+    character_sheet.settle_run(
+        client.server.vault,
+        {
+            "run_id": by_run_id,
+            "prompt_id": None,
+            "status": "completed",
+            "message": "",
+            "picture_ids": [21],
+        },
+    )
+    # Keyed by its prompt id: the run id is the other name.
+    character_sheet.settle_run(
+        client.server.vault,
+        {
+            "run_id": "run-not-in-any-draw",
+            "prompt_id": by_prompt_id,
+            "status": "failed",
+            "message": "boom",
+            "picture_ids": [],
+        },
+    )
+    # A run still going writes nothing.
+    character_sheet.settle_run(
+        client.server.vault,
+        {
+            "run_id": still_going,
+            "prompt_id": None,
+            "status": "running",
+            "message": "",
+            "picture_ids": [],
+        },
+    )
+    character_sheet.settle_run(None, {"run_id": by_run_id, "status": "completed"})
+
+    (run,) = _stored_runs(client.server, first["id"])
+    assert (run["status"], run["picture_ids"]) == ("completed", [21])
+    prompted, going = _stored_runs(client.server, second["id"])
+    assert (prompted["status"], prompted["message"]) == ("failed", "boom")
+    assert going["status"] == "queued"
+
+
+def test_patch_appends_runs_keeps_and_sees(client, monkeypatch):
+    known, fresh = _key(), _key()
+    _fake_outcomes(monkeypatch, {known: _running(known)})
+    character_id = _new_character(client, "Patch Draw")
+    draw = _post_draw(client, character_id, [known])
+    url = f"{API_PREFIX}/characters/{character_id}/sheets/draws/{draw['id']}"
+
+    response = client.patch(
+        url, json={"add_run_keys": [known, fresh], "kept": [7, 8, 7], "seen": True}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # The known run is not added twice; the new one waits as queued.
+    assert [(run["key"], run["status"]) for run in body["runs"]] == [
+        (known, "running"),
+        (fresh, "queued"),
+    ]
+    assert body["kept"] == [7, 8] and body["seen"] is True
+
+    response = client.patch(url, json={"kept": [9]})
+    assert response.json()["kept"] == [9]
+    assert response.json()["seen"] is True
+
+    missing = client.patch(
+        f"{API_PREFIX}/characters/{character_id}/sheets/draws/999999",
+        json={"seen": True},
+    )
+    assert missing.status_code == 404
+
+
+def test_another_characters_draw_is_not_found(client, monkeypatch):
+    _fake_outcomes(monkeypatch, {})
+    owner = _new_character(client, "Draw Owner")
+    other = _new_character(client, "Draw Stranger")
+    key = _key()
+    draw = _post_draw(client, owner, [key])
+    url = f"{API_PREFIX}/characters/{other}/sheets/draws/{draw['id']}"
+
+    assert client.patch(url, json={"seen": True}).status_code == 404
+    assert client.delete(url).status_code == 404
+    # Refused both ways: the owner's draw is untouched, and the stranger has none.
+    (kept_draw,) = _list_draws(client, owner)
+    assert kept_draw["seen"] is False and kept_draw["id"] == draw["id"]
+    assert _list_draws(client, other) == []
+    assert client.get(f"{API_PREFIX}/characters/999999/sheets/draws").status_code == 404
+    assert (
+        client.post(
+            f"{API_PREFIX}/characters/999999/sheets/draws",
+            json={"settings": {}, "run_keys": [key]},
+        ).status_code
+        == 404
+    )
+
+
+def test_summary_lists_each_character_with_draws_and_its_run_keys(client, monkeypatch):
+    first, second, third = _key(), _key(), _key()
+    _fake_outcomes(
+        monkeypatch,
+        {key: _running(key) for key in (first, second, third)},
+    )
+    character_id = _new_character(client, "Summary Draws")
+    _new_character(client, "Summary Without Draws")
+    older = _post_draw(client, character_id, [first])
+    newer = _post_draw(client, character_id, [second, third])
+
+    response = client.get(f"{API_PREFIX}/character-sheets/draws")
+    assert response.status_code == 200, response.text
+    entries = {c["character_id"]: c for c in response.json()["characters"]}
+    entry = entries[character_id]
+    assert entry["draws"] == 2
+    assert entry["newest"]["id"] == newer["id"] != older["id"]
+    assert entry["run_keys"] == [second, third, first]
+    # Only characters with a draw are listed.
+    assert all(c["draws"] >= 1 for c in entries.values())
+
+
+def test_use_with_a_draw_records_the_panels_and_the_sheets_cut(
+    client, sheet_id, monkeypatch
+):
+    _fake_outcomes(monkeypatch, {})
+    character_id = _new_character(client, "Used Draw")
+    draw = _post_draw(client, character_id, [_key()])
+    response = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        json={"picture_ids": [sheet_id, sheet_id], "draw_id": draw["id"]},
+    )
+    assert response.status_code == 200, response.text
+    panel_ids = response.json()["picture_ids"]
+    assert len(panel_ids) == 6
+
+    (recorded,) = _list_draws(client, character_id)
+    assert recorded["used"] == panel_ids
+    # The sheet cut is listed once, however many times the request names it.
+    assert recorded["used_sheets"] == [sheet_id]
+
+    # Another character's draw is a 404, and nothing is cut for it.
+    stranger = _new_character(client, "Used Stranger")
+    refused = client.post(
+        f"{API_PREFIX}/characters/{stranger}/sheets/use",
+        json={"picture_ids": [sheet_id], "draw_id": draw["id"]},
+    )
+    assert refused.status_code == 404
+    unknown = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        json={"picture_ids": [sheet_id], "draw_id": 999999},
+    )
+    assert unknown.status_code == 404
+    assert _list_draws(client, stranger) == []
+
+
+def test_deleting_a_draw_keeps_nothing_of_it(client, monkeypatch):
+    _fake_outcomes(monkeypatch, {})
+    character_id = _new_character(client, "Delete Draw")
+    draw = _post_draw(client, character_id, [_key()])
+    url = f"{API_PREFIX}/characters/{character_id}/sheets/draws/{draw['id']}"
+    response = client.delete(url)
+    assert response.status_code == 200 and response.json() == {"deleted": True}
+    assert _list_draws(client, character_id) == []
+    assert client.delete(url).status_code == 404
+
+
+def test_deleting_a_character_deletes_its_draws(client, monkeypatch):
+    _fake_outcomes(monkeypatch, {})
+    character_id = _new_character(client, "Delete With Draws")
+    draw = _post_draw(client, character_id, [_key()])
+    assert client.delete(f"{API_PREFIX}/characters/{character_id}").status_code == 200
+
+    def remaining(session):
+        return session.exec(
+            select(CharacterSheetDraw).where(CharacterSheetDraw.id == draw["id"])
+        ).all()
+
+    assert client.server.vault.db.run_task(remaining) == []
+
+
+def test_settings_past_the_size_cap_are_refused(client, monkeypatch):
+    _fake_outcomes(monkeypatch, {})
+    character_id = _new_character(client, "Settings Cap")
+    url = f"{API_PREFIX}/characters/{character_id}/sheets/draws"
+    fits = client.post(
+        url, json={"settings": {"text": "a" * 19_000}, "run_keys": [_key()]}
+    )
+    assert fits.status_code == 200, fits.text
+    too_big = client.post(
+        url, json={"settings": {"text": "a" * 20_000}, "run_keys": [_key()]}
+    )
+    assert too_big.status_code == 422
+
+
+def test_unreadable_stored_columns_are_read_as_empty(client, monkeypatch):
+    _fake_outcomes(monkeypatch, {})
+    character_id = _new_character(client, "Unreadable Draw")
+    draw = _post_draw(client, character_id, [_key()])
+
+    def corrupt(session):
+        row = session.get(CharacterSheetDraw, draw["id"])
+        row.runs = "not json"
+        row.settings = "[1]"
+        row.kept = '{"a": 1}'
+        session.add(row)
+        session.commit()
+
+    client.server.vault.db.run_task(corrupt)
+    (read,) = _list_draws(client, character_id)
+    assert read["runs"] == [] and read["settings"] == {} and read["kept"] == []

@@ -387,6 +387,9 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # folder are on this machine, and the discovery that finds them.
         "/api/v1/training/ai-toolkit/discover",
         "/api/v1/training/ai-toolkit/status",
+        # Every character's sheet draws and their run keys: the owner's
+        # character sheet work; owner only at the gate.
+        "/api/v1/character-sheets/draws",
     }
 )
 
@@ -421,6 +424,23 @@ READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
     "/api/v1/training/jobs/",
     "/api/v1/workflows/",
 )
+
+# Templated owner-class GETs that no prefix can hold: a prefix over
+# ``/api/v1/characters/`` would also swallow the character's scoped reads, which
+# share tokens must keep. Each entry is a route template; ``{name}`` matches one
+# path segment. Checked exactly, so an entry covers only that route.
+READ_BLOCKED_GET_TEMPLATES: tuple[str, ...] = (
+    "/api/v1/characters/{character_id}/sheets/draws",
+)
+_READ_BLOCKED_GET_TEMPLATE_RES = tuple(
+    re.compile("^" + re.sub(r"\{[^}]+\}", "[^/]+", template) + "$")
+    for template in READ_BLOCKED_GET_TEMPLATES
+)
+
+
+def is_read_blocked_get_template(path: str) -> bool:
+    """Whether *path* is one of the templated owner-class GETs on the belt."""
+    return any(pattern.match(path) for pattern in _READ_BLOCKED_GET_TEMPLATE_RES)
 
 
 def is_auth_excluded_path(path: str) -> bool:
@@ -3245,6 +3265,7 @@ class AuthService:
                 if request.method == "GET" and (
                     request.url.path in READ_BLOCKED_GET_PATHS
                     or request.url.path.startswith(READ_BLOCKED_GET_PREFIXES)
+                    or is_read_blocked_get_template(request.url.path)
                 ):
                     return JSONResponse(
                         status_code=403,

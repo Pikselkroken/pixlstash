@@ -34,6 +34,7 @@ from .operation import (  # noqa: F401
 )
 from .picture import Picture, SortMechanism  # noqa: F401
 from .picture_pending_person import PicturePendingPerson  # noqa: F401
+from .character_sheet_draw import CharacterSheetDraw  # noqa: F401
 from .picture_project import PictureProjectMember  # noqa: F401
 from .picture_set import PictureSet, PictureSetMember  # noqa: F401
 from .picture_stack import PictureStack  # noqa: F401
