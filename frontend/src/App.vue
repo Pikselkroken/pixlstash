@@ -32,6 +32,10 @@ import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useOperationStore } from "./stores/useOperationStore";
+import { useEntityListsStore } from "./stores/useEntityListsStore";
+import { createPictureSet } from "./api/pictureSets";
+import { errorDetail } from "./utils/apiError";
+import { freeTrainingSetName } from "./utils/trainingSetBuild";
 import { DEFAULT_TIMEOUTS, useNoticeStore } from "./stores/useNoticeStore";
 import { useWhatsChangedStore } from "./stores/useWhatsChangedStore";
 import {
@@ -74,7 +78,7 @@ import ShortcutsDialog from "./components/widgets/ShortcutsDialog.vue";
 import ConfirmDialog from "./components/widgets/ConfirmDialog.vue";
 import ModelDropFolderDialog from "./components/dialogs/ModelDropFolderDialog.vue";
 import TrainLoraDialog from "./components/io/TrainLoraDialog.vue";
-import CreateTrainingSetDialog from "./components/io/CreateTrainingSetDialog.vue";
+import TrainingSetBuild from "./components/views/TrainingSetBuild.vue";
 import FaceClustersDialog from "./components/io/FaceClustersDialog.vue";
 import LibrarySwitchOverlay from "./components/settings/LibrarySwitchOverlay.vue";
 import Tooltip from "./components/widgets/Tooltip.vue";
@@ -154,6 +158,7 @@ const wsStore = useWsStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
+const entityLists = useEntityListsStore();
 const operationStore = useOperationStore();
 const librariesStore = useLibrariesStore();
 const librarySwitchStore = useLibrarySwitchStore();
@@ -571,16 +576,72 @@ async function handleTrainLora(scope) {
   });
 }
 
-// SideBar context-menu "Create a training set…": the character it was opened
-// on, or null while the dialog is closed.
-const trainingSetCharacter = ref(null);
-
 // SideBar context-menu "Faces and reference cluster…".
 const faceClustersCharacter = ref(null);
 
-function handleCreateTrainingSet(character) {
+/**
+ * SideBar context-menu "Create a training set…": makes the set at once, under
+ * the character and marked as being built, and opens it. Its screen
+ * (TrainingSetBuild) is what the dialog of that name was.
+ */
+async function handleCreateTrainingSet(character) {
   if (!character || character.id == null) return;
-  trainingSetCharacter.value = character;
+  const name = freeTrainingSetName(character.name, entityLists.pictureSets);
+  let set;
+  try {
+    ({ picture_set: set } = await createPictureSet({
+      name,
+      parent_character_id: character.id,
+      ...(character.project_ids?.length
+        ? { project_ids: character.project_ids }
+        : {}),
+      building: { v: 1, stage: "pick" },
+    }));
+  } catch (e) {
+    console.error("Couldn't start a training set", character.id, e);
+    noticeStore.error(
+      `Couldn't start a training set for ${character.name}. ${errorDetail(e) || "Please try again."}`,
+      { key: "training-set-start" },
+    );
+    return;
+  }
+  await entityLists.invalidate(["sets"]);
+  await handleSelectSet({ id: set.id, label: set.name });
+}
+
+// The set selected in the sidebar when it is a training set still being
+// built, with the person it is under: the centre column is its build screen
+// instead of its grid.
+const buildingSet = computed(() => {
+  if (selectionStore.selectedSetIds.length > 1) return null;
+  const set = entityLists.pictureSets.find(
+    (s) => s.id === selectionStore.selectedSet && s.building,
+  );
+  if (!set) return null;
+  const person = entityLists.characters.find(
+    (c) => c.id === set.parent_character_id,
+  );
+  return person ? { set, character: { id: person.id, name: person.name } } : null;
+});
+
+function onTrainingSetFinished(set) {
+  entityLists.invalidate(["sets"]);
+  refreshSidebar();
+  noticeStore.push({
+    level: "success",
+    text: `Created ${set.name} · ${set.members} ${set.members === 1 ? "member" : "members"}.`,
+    action: {
+      label: "Train a LoRA on it",
+      handler: () => handleTrainLora({ type: "set", id: set.id, name: set.name }),
+    },
+    key: `training-set-created-${set.id}`,
+  });
+}
+
+async function onTrainingSetCancelled({ characterId }) {
+  await entityLists.invalidate(["sets"]);
+  const person = entityLists.characters.find((c) => c.id === characterId);
+  await handleSelectCharacter({ id: characterId, label: person?.name });
 }
 
 /** The empty library's "Choose a folder…" / "Import them…".
@@ -700,7 +761,8 @@ const isGridView = computed(
     !isModelsView.value &&
     !isInsightsView.value &&
     !isMovesView.value &&
-    !isWorkflowsView.value,
+    !isWorkflowsView.value &&
+    !buildingSet.value,
 );
 watch(
   () => selectionStore.selectedImageIds,
@@ -1104,6 +1166,17 @@ defineExpose({
                 v-else-if="isWorkflowsView"
                 @open-settings="openSettingsDialog"
               />
+              <!-- A training set still being built shows its build, not its
+                   grid; created, it is an ordinary set and the grid returns. -->
+              <TrainingSetBuild
+                v-else-if="buildingSet"
+                :key="buildingSet.set.id"
+                :set="buildingSet.set"
+                :character="buildingSet.character"
+                @changed="entityLists.invalidate(['sets'])"
+                @finished="onTrainingSetFinished"
+                @cancelled="onTrainingSetCancelled"
+              />
               <ImageGrid
                 v-else
                 ref="gridContainer"
@@ -1187,6 +1260,7 @@ defineExpose({
         <ModelsRail v-else-if="isModelsView" />
         <WhatsChangedRail v-else-if="whatsChanged.railShown" />
         <StatsSidebar v-else
+          v-show="!buildingSet"
           ref="statsSidebarRef"
           :view-name="activeCategoryLabel"
           :pictures="railPictures"
@@ -1239,6 +1313,7 @@ defineExpose({
       class="shortcuts-fab"
       :class="{
         'shortcuts-fab--above-bar': multiSelectBarShown,
+        'shortcuts-fab--above-foot': !!buildingSet,
         'shortcuts-fab--stats-open': lightboxOpen
           ? sidebarStore.lightboxRailOpen
           : isWorkflowsView
@@ -1258,14 +1333,6 @@ defineExpose({
     <ConfirmDialog />
     <ModelDropFolderDialog />
     <TrainLoraDialog />
-    <CreateTrainingSetDialog
-      :open="!!trainingSetCharacter"
-      :character="trainingSetCharacter"
-      :return-focus-to="trainingSetCharacter?.returnFocusTo ?? null"
-      @close="trainingSetCharacter = null"
-      @created="sidebarRef?.refreshSidebar?.()"
-      @train="handleTrainLora"
-    />
     <FaceClustersDialog
       :open="!!faceClustersCharacter"
       :character="faceClustersCharacter"

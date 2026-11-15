@@ -127,7 +127,18 @@
               aria-hidden="true"
             ></span>
             <ComfyuiIcon :size="18" class="tm-app" aria-hidden="true" />
-            <span class="tm-name">{{ entry.run.label }}</span>
+            <span class="tm-name tm-name--pill">
+              <span class="tm-name-text">{{ entry.run.label }}</span>
+              <button
+                v-if="sheetSetOf(entry)"
+                type="button"
+                class="tm-open-set"
+                data-testid="tm-open-set"
+                @click="openSet(sheetSetOf(entry))"
+              >
+                Open set
+              </button>
+            </span>
             <!-- The run's percent as a hairline under its name, sharing the
                  name's grid cell so the row keeps its height. -->
             <span
@@ -559,6 +570,15 @@
                  says the changes are still unsaved. -->
             <span class="tm-name tm-name--pill">
               <span class="tm-name-text">{{ run.label }}</span>
+              <button
+                v-if="run.sheetSet"
+                type="button"
+                class="tm-open-set"
+                data-testid="tm-open-set"
+                @click="openSet(run.sheetSet)"
+              >
+                Open set
+              </button>
               <span v-if="run.offer" class="tm-pill" data-testid="tm-finished-pill">{{
                 changesWord(run.offer.count)
               }}</span>
@@ -784,6 +804,8 @@ import {
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
+import { setOfSheetRun } from "../../utils/trainingSetBuild";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { isReadOnly } from "../../utils/apiClient";
 import {
@@ -860,6 +882,19 @@ function togglePixl() {
       err,
     );
   }
+}
+
+// A Character sheet run belongs to a training set still being built; its row
+// links there, always shown, so the build can always be found again.
+const entityLists = useEntityListsStore();
+
+/** The set being built that a running sheet run's row belongs to, or null. */
+function sheetSetOf(entry) {
+  return setOfSheetRun(entityLists.pictureSets, { runKeys: [entry.runId] });
+}
+
+function openSet(set) {
+  router.push({ name: "set", params: { id: set.id } });
 }
 
 /** Open an AI Toolkit run's page in the shelf's Training runs tab (#2118). */
@@ -1297,6 +1332,10 @@ const finished = computed(() =>
     return {
       id: run.id,
       label: run.label,
+      // A finished batch names no run ids; the sheets it drew find the set.
+      sheetSet: setOfSheetRun(entityLists.pictureSets, {
+        pictureIds: run.picture_ids || [],
+      }),
       failed,
       made,
       message: run.message || "",
@@ -2521,6 +2560,25 @@ const tmSystemItems = computed(() => {
 .tm-name--pill {
   display: flex;
   align-items: center;
+}
+
+/* "Open set" on a Character sheet row: a link, shown at rest, not on hover. */
+.tm-open-set {
+  flex: none;
+  margin-left: var(--space-2);
+  padding: 0 var(--space-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: rgb(var(--v-theme-on-surface));
+  font: inherit;
+  font-weight: var(--weight-regular);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.tm-open-set:hover {
+  background: var(--hover-wash);
 }
 
 .tm-name-text {

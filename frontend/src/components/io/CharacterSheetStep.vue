@@ -22,7 +22,7 @@
           <span>{{ likenessNotice }}</span>
         </p>
         <p
-          v-if="workflowsLoaded && !workflowOptions.length"
+          v-if="workflowsLoaded && !modeCards.length"
           class="cs-notice cs-notice--bad"
           data-testid="cs-no-workflow"
         >
@@ -34,6 +34,15 @@
                 : "Sheets need a MOSS-Image text-to-image workflow, and the library has none. Import one from Workflows, then come back."
             }}</span
           >
+        </p>
+        <!-- The workflow itself is chosen in the screen's toolbar. -->
+        <p
+          v-if="workflowProblem"
+          class="cs-notice cs-notice--bad"
+          data-testid="cs-workflow-problem"
+        >
+          <v-icon size="16">mdi-alert-circle-outline</v-icon>
+          <span>{{ workflowProblem }}</span>
         </p>
 
         <div class="cs-lora">
@@ -101,10 +110,11 @@
             label="Top"
             placeholder="a plain oatmeal crew-neck sweater"
           />
+          <!-- `trousers` in the prompt: whatever covers the hips and thighs. -->
           <AppInput
             v-model="form.trousers"
-            label="Trousers"
-            placeholder="dark straight jeans"
+            label="Bottoms"
+            placeholder="dark straight jeans · a pleated midi skirt"
           />
         </div>
         <AppInput
@@ -113,63 +123,45 @@
           label="Shoes"
           placeholder="white sneakers"
         />
+        <!-- The four choices of how a sheet is drawn, side by side as compact
+             selects, with one line of hints under them. -->
         <div class="cs-fld">
-          <FieldLabel>Body photos</FieldLabel>
-          <Segmented
-            v-model="form.framing"
-            aria-label="Body photos"
-            :options="FRAMINGS"
-            data-testid="cs-framing"
-            @pick="framingTouched = true"
-          />
+          <div class="cs-grid4">
+            <AppSelect
+              :model-value="form.framing"
+              label="Body photos"
+              :options="FRAMINGS"
+              compact
+              data-testid="cs-framing"
+              @update:model-value="pickFraming"
+            />
+            <AppSelect
+              :model-value="form.count"
+              label="Sheets to draw"
+              :options="COUNTS"
+              compact
+              @update:model-value="(n) => (form.count = Number(n))"
+            />
+            <AppSelect
+              v-model="form.size"
+              label="Sheet size"
+              :options="SIZES"
+              compact
+              data-testid="cs-size"
+            />
+            <AppSelect
+              v-model="form.subject"
+              label="Draw a"
+              :options="SUBJECTS"
+              compact
+            />
+          </div>
           <span class="cs-hint" data-testid="cs-framing-hint">{{
             framingHint
           }}</span>
-        </div>
-        <div class="cs-grid2">
-          <div class="cs-fld">
-            <FieldLabel>Sheets to draw</FieldLabel>
-            <Segmented
-              v-model="form.count"
-              aria-label="Sheets to draw"
-              :options="COUNTS"
-            />
-            <span class="cs-hint">About a minute each.</span>
-          </div>
-          <div class="cs-fld">
-            <FieldLabel>Sheet size</FieldLabel>
-            <Segmented
-              v-model="form.size"
-              aria-label="Sheet size"
-              :options="SIZES"
-              data-testid="cs-size"
-            />
-            <span class="cs-hint">{{ sizeHint }}</span>
-          </div>
-        </div>
-        <div class="cs-fld">
-          <FieldLabel>Draw a</FieldLabel>
-          <Segmented
-            v-model="form.subject"
-            aria-label="Draw a"
-            :options="SUBJECTS"
-          />
-        </div>
-        <div v-if="workflowOptions.length" class="cs-wfline">
-          <AppSelect
-            v-model="workflowId"
-            label="Sheet workflow"
-            :options="workflowOptions"
-            compact
-          />
-          <p
-            v-if="workflowProblem"
-            class="cs-notice cs-notice--bad"
-            data-testid="cs-workflow-problem"
+          <span class="cs-hint"
+            >About a minute a sheet. {{ sizeHint }}</span
           >
-            <v-icon size="16">mdi-alert-circle-outline</v-icon>
-            <span>{{ workflowProblem }}</span>
-          </p>
         </div>
       </template>
 
@@ -527,9 +519,12 @@
  * sheet workflow (a card with `reference_inputs`), the rail offers a second
  * way to draw: from a reference picture plus the words (#2679). The picture
  * goes in through the run's own `inputs`, the sheets are ranked by closeness
- * to it, and it stays in the rail beside them. Emits `done` with their ids, and the
- * dialog's picker takes over. The dialog owns the footer: it reads `footer`
- * and calls the actions this component exposes.
+ * to it, and it stays in the rail beside them. Emits `cut` with the new
+ * pictures' ids as soon as a sheet is cut, then `done` once their faces are
+ * read, and the build's picker takes over. The build screen owns the footer:
+ * it reads `footer` and calls the actions this component exposes. It also
+ * stores `snapshot` on the set and hands it back as `saved`, so the step comes
+ * back as it was left; the ranking is not stored, it is read again.
  */
 import {
   computed,
@@ -581,27 +576,30 @@ const props = defineProps({
   character: { type: Object, required: true },
   /** How many pictures the character already has. */
   pictureCount: { type: Number, default: 0 },
+  /** The step as `snapshot` last stored it, or null for a fresh one. */
+  saved: { type: Object, default: null },
 });
 
-const emit = defineEmits(["done", "faces"]);
+const emit = defineEmits(["cut", "done", "faces"]);
 
+// Options for compact selects: { value, label }.
 const FRAMINGS = [
-  { id: "waist_up", label: "Waist-up" },
-  { id: "mid_thigh", label: "Mid-thigh" },
-  { id: "knees_up", label: "Knees-up" },
-  { id: "full_body", label: "Full body" },
+  { value: "waist_up", label: "Waist-up" },
+  { value: "mid_thigh", label: "Mid-thigh" },
+  { value: "knees_up", label: "Knees-up" },
+  { value: "full_body", label: "Full body" },
 ];
-const COUNTS = [2, 3, 4].map((n) => ({ id: n, label: String(n) }));
+const COUNTS = [2, 3, 4].map((n) => ({ value: n, label: String(n) }));
 // The canvas sizes `POST /character-sheets/prompt` draws at, and the passport
 // photo each cuts to (a 600×768 cell of the large sheet, scaled).
 const SIZES = [
-  { id: "small", label: "Small", passport: "300×384" },
-  { id: "medium", label: "Medium", passport: "431×552" },
-  { id: "large", label: "Large", passport: "600×768" },
+  { value: "small", label: "Small", passport: "300×384" },
+  { value: "medium", label: "Medium", passport: "431×552" },
+  { value: "large", label: "Large", passport: "600×768" },
 ];
 const SUBJECTS = [
-  { id: "woman", label: "Woman" },
-  { id: "man", label: "Man" },
+  { value: "woman", label: "Woman" },
+  { value: "man", label: "Man" },
 ];
 const MOSS = "moss_image";
 // What draws a sheet from a reference picture (#2679).
@@ -653,16 +651,15 @@ const referenceId = ref(null);
 const drawnFrom = ref(null);
 const pickerOpen = ref(false);
 const pickButton = ref(null);
-// The chosen workflow's picture inputs, as the pre-flight names them.
-const workflowInputs = ref([]);
 // How many faces the last ranking measured closeness against.
 const rankedAgainst = ref(0);
 const workflowsLoaded = ref(false);
 const workflowId = ref("");
-// The chosen workflow's pre-flight: its width/height inputs, and why it can't
-// draw a sheet ("" while it can, null while still checking).
-const workflowSizes = ref([]);
-const workflowProblem = ref(null);
+// Every candidate workflow's pre-flight, by id: its width/height inputs, its
+// picture inputs, and why it can't draw a sheet ("" when it can). Only the
+// ones that can are offered.
+const checks = ref({});
+const checksDone = ref(false);
 const referenceIds = ref([]);
 const runs = ref([]); // { key, status, pictureIds, message }
 const ranking = ref({}); // picture id -> RankedSheet
@@ -670,7 +667,7 @@ const order = ref([]); // sheet picture ids in the order they arrived
 // The sheets to keep, in the order ticked. The best is ticked for the user
 // until they tick or untick one themselves.
 const kept = ref([]);
-let keptTouched = false;
+const keptTouched = ref(false);
 const mainPane = ref(null);
 const working = ref(false);
 const error = ref("");
@@ -684,7 +681,17 @@ let runsEndedAt = 0;
 let alive = true;
 // What the sheets on show were drawn with. A draw with anything else starts a
 // new pick: the earlier sheets are of another prompt, not more of this one.
-let drawnWith = "";
+const drawnWith = ref("");
+// The step has read its choices and restored `saved`: until then its
+// snapshot would store the defaults over what was saved.
+const restored = ref(false);
+// The kept sheets were cut and their pictures filed; their faces are still
+// being read.
+const cutDone = ref(false);
+// Every run this build started and every sheet it drew, never cleared: how
+// Tasks finds the set a Character sheet row belongs to.
+const runHistory = ref([]);
+const drawnIds = ref([]);
 
 const fromReference = computed(() => mode.value === "reference");
 const engine = computed(() =>
@@ -731,9 +738,32 @@ const modeCards = computed(() =>
   fromReference.value ? referenceCards.value : workflows.value,
 );
 
-const workflowOptions = computed(() =>
-  modeCards.value.map((card) => ({ value: card.id, label: card.name })),
+/** The mode's workflows that pass their pre-flight: the only ones offered. */
+const usableCards = computed(() =>
+  modeCards.value.filter((card) => checks.value[card.id]?.problem === ""),
 );
+
+const workflowOptions = computed(() =>
+  usableCards.value.map((card) => ({ value: card.id, label: card.name })),
+);
+
+// The chosen workflow's sizes and picture inputs, as its pre-flight named them.
+const workflowSizes = computed(() => checks.value[workflowId.value]?.sizes || []);
+const workflowInputs = computed(
+  () => checks.value[workflowId.value]?.inputs || [],
+);
+
+/** Why no sheet can be drawn with the workflows there are ("" when one can,
+ * null while they are still being checked, and while there are none: the
+ * no-workflow notice says that). */
+const workflowProblem = computed(() => {
+  if (!checksDone.value || !modeCards.value.length) return null;
+  if (usableCards.value.length) return workflowId.value ? "" : null;
+  const first = checks.value[modeCards.value[0].id]?.problem || "";
+  return modeCards.value.length === 1
+    ? first
+    : `None of the ${modeCards.value.length} sheet workflows can draw a sheet. ${first}`;
+});
 
 /** The newest LoRA that loads into the mode's sheet workflow. */
 function fittingLora() {
@@ -745,7 +775,7 @@ function fittingLora() {
 
 // Each mode has its own workflows and its own model, so its own LoRAs.
 watch(mode, () => {
-  workflowId.value = modeCards.value[0]?.id || "";
+  workflowId.value = usableCards.value[0]?.id || "";
   if (chosenLora.value?.base_model_family !== engine.value.family) {
     loraSha.value = fittingLora();
   }
@@ -785,6 +815,12 @@ watch(suggestedFraming, (framing) => {
   if (!framingTouched.value) form.framing = framing;
 });
 
+/** A framing the user picked: no longer the suggested one. */
+function pickFraming(framing) {
+  framingTouched.value = true;
+  form.framing = framing;
+}
+
 const framingHint = computed(() => {
   const reason = chosenLora.value
     ? "Suggested: full body. The LoRA holds the face, so the photos can show the whole body."
@@ -797,7 +833,7 @@ const framingHint = computed(() => {
 });
 
 const sizeHint = computed(() => {
-  const size = SIZES.find((s) => s.id === form.size);
+  const size = SIZES.find((s) => s.value === form.size);
   return `Passport photos come out ${size.passport}. Larger is slower to draw.`;
 });
 
@@ -959,7 +995,7 @@ function keepOptions(sheet) {
 }
 
 function toggleKeep(id) {
-  keptTouched = true;
+  keptTouched.value = true;
   kept.value = kept.value.includes(id)
     ? kept.value.filter((k) => k !== id)
     : [...kept.value, id];
@@ -1020,22 +1056,19 @@ function sheetUrl(sheet) {
   );
 }
 
-// Pre-flight: a sheet is drawn at a size of its own, so the workflow must have
-// one to set, and it must be able to run at all.
-watch(workflowId, async (id) => {
-  workflowSizes.value = [];
-  workflowInputs.value = [];
-  workflowProblem.value = id ? null : "";
-  if (!id) return;
-  const reference = fromReference.value;
+/**
+ * Pre-flight one card: a sheet is drawn at a size of its own, so the workflow
+ * must have one to set, and it must be able to run at all; from a reference it
+ * also needs a picture input and a prompt PixlStash can write.
+ */
+async function checkCard(card, reference) {
   try {
-    const [{ card }, check] = await Promise.all([
-      getWorkflowCard(id),
-      preflightWorkflowRun({ workflow_id: id, count: 1 }, { cached: true }),
+    const [{ card: full }, check] = await Promise.all([
+      getWorkflowCard(card.id),
+      preflightWorkflowRun({ workflow_id: card.id, count: 1 }, { cached: true }),
     ]);
-    if (id !== workflowId.value) return;
-    const name = card?.name || "This workflow";
-    const sizes = (card?.defaults || []).filter((d) =>
+    const name = full?.name || card.name || "This workflow";
+    const sizes = (full?.defaults || []).filter((d) =>
       ["width", "height"].includes(d.input_name),
     );
     const groups = check?.groups || [];
@@ -1048,9 +1081,7 @@ watch(workflowId, async (id) => {
         (r) => !(reference && r.code === "picture_input_unfilled"),
       ),
     );
-    workflowSizes.value = sizes;
-    workflowInputs.value = inputs;
-    workflowProblem.value = !sizes.length
+    const problem = !sizes.length
       ? `${name} has no picture size to set, so it can't draw a sheet.`
       : refused
         ? `${name} can't run as it is. Open it from Workflows to see why.`
@@ -1059,12 +1090,32 @@ watch(workflowId, async (id) => {
           : reference && !groups.some((g) => g.prompt?.positive_settable)
             ? `${name} has no prompt PixlStash can write the sheet into.`
             : "";
+    return { sizes, inputs, problem };
   } catch (e) {
-    if (id !== workflowId.value) return;
-    console.warn("Couldn't check the sheet workflow", id, e);
-    workflowProblem.value = `Couldn't check this workflow: ${errorMessage(e)}`;
+    console.warn("Couldn't check the sheet workflow", card.id, e);
+    return {
+      sizes: [],
+      inputs: [],
+      problem: `Couldn't check ${card.name || "this workflow"}: ${errorMessage(e)}`,
+    };
   }
-});
+}
+
+/** Pre-flight every candidate card of both modes, then keep the chosen one
+ * only while it passes. */
+async function checkCards() {
+  const all = [
+    ...workflows.value.map((card) => [card, false]),
+    ...referenceCards.value.map((card) => [card, true]),
+  ];
+  const results = await Promise.all(all.map(([card, ref]) => checkCard(card, ref)));
+  if (!alive) return;
+  checks.value = Object.fromEntries(all.map(([card], i) => [card.id, results[i]]));
+  checksDone.value = true;
+  if (!usableCards.value.some((card) => card.id === workflowId.value)) {
+    workflowId.value = usableCards.value[0]?.id || "";
+  }
+}
 
 // The pop-out steps through the sheets on show, in their places.
 const zoomList = computed(() =>
@@ -1114,6 +1165,7 @@ async function followRuns() {
       run.pictureIds = outcome.picture_ids || [];
       for (const id of outcome.picture_ids || []) {
         if (!order.value.includes(id)) order.value.push(id);
+        if (!drawnIds.value.includes(id)) drawnIds.value.push(id);
       }
     } catch (e) {
       if (e?.response?.status === 404) {
@@ -1156,7 +1208,7 @@ async function tick() {
   const best = drawnFrom.value
     ? holding.value.find((sheet) => sheet.close)
     : holding.value[0];
-  if (!keptTouched && !kept.value.length && best) {
+  if (!keptTouched.value && !kept.value.length && best) {
     kept.value = [best.picture_id];
   }
   if (allEnded.value) {
@@ -1249,10 +1301,10 @@ async function draw() {
           "The workflow can't run as it is. Open it from Workflows to see why.",
       );
     }
-    if (drawing !== drawnWith) {
+    if (drawing !== drawnWith.value) {
       // The sheets on show are of another prompt: they stay in the Scrapheap.
       startOver();
-      drawnWith = drawing;
+      drawnWith.value = drawing;
       drawnFrom.value = reference;
     }
     runs.value.push(
@@ -1262,6 +1314,7 @@ async function draw() {
         message: "",
       })),
     );
+    runHistory.value.push(...started.map((p) => runKey(p)));
     phase.value = "drawing";
     gaveUpOnFaces.value = false;
     schedule();
@@ -1278,9 +1331,10 @@ function startOver() {
   order.value = [];
   ranking.value = {};
   kept.value = [];
-  keptTouched = false;
+  keptTouched.value = false;
   runsEndedAt = 0;
-  drawnWith = "";
+  drawnWith.value = "";
+  cutDone.value = false;
   drawnFrom.value = null;
   rankedAgainst.value = 0;
 }
@@ -1296,6 +1350,7 @@ async function makeSheetWorkflow() {
     const { cards } = await listWorkflowCards();
     if (!alive) return;
     sortCards(cards);
+    await checkCards();
     // With no text workflow the new mode is the only one: go to it, as load() does.
     if (!modeCards.value.length && referenceCards.value.length) {
       mode.value = "reference";
@@ -1322,6 +1377,10 @@ async function use() {
     working.value = false;
     return;
   }
+  // Cut: the build stores the new pictures now, and never offers this cut
+  // again, even if the screen goes before their faces are read.
+  cutDone.value = true;
+  emit("cut", ids);
   // Only the panels' faces may still be unread. A failure from here on is no
   // reason to offer the cut again.
   const deadline = Date.now() + FACE_WAIT_MS;
@@ -1495,19 +1554,102 @@ async function load() {
     ) {
       mode.value = "reference";
     }
-    workflowId.value = modeCards.value[0]?.id || "";
+    await checkCards();
   }
   workflowsLoaded.value = true;
   loaded.value = character.status === "fulfilled";
   if (!loaded.value) {
-    error.value = `Couldn't read ${name.value}. Close and open the dialog to try again.`;
+    error.value = `Couldn't read ${name.value}. Open the set again to try again.`;
   }
+  await restore(props.saved);
   for (const result of [character, adapters, cards, references]) {
     if (result.status === "rejected") {
       console.warn("Couldn't load part of the sheet form", result.reason);
     }
   }
 }
+
+/** Put back what `snapshot` stored, over the choices `load` defaulted. */
+async function restore(saved) {
+  if (saved && alive) {
+    Object.assign(form, saved.form || {});
+    framingTouched.value = !!saved.framing_touched;
+    if (saved.mode && saved.mode !== mode.value) {
+      mode.value = saved.mode;
+      // The mode's own watcher picks its first workflow and a fitting LoRA;
+      // the saved ones go over those.
+      await nextTick();
+    }
+    if (usableCards.value.some((card) => card.id === saved.workflow_id)) {
+      workflowId.value = saved.workflow_id;
+    }
+    if (
+      saved.lora_sha === "" ||
+      loras.value.some((lora) => lora.sha256 === saved.lora_sha)
+    ) {
+      loraSha.value = saved.lora_sha;
+    }
+    if (saved.strength != null) strength.value = saved.strength;
+    if (saved.reference_id != null) referenceId.value = saved.reference_id;
+    runs.value = (saved.runs || []).map((run) => ({
+      key: run.key,
+      status: run.status,
+      message: run.message || "",
+      pictureIds: run.picture_ids || [],
+    }));
+    order.value = [...(saved.order || [])];
+    kept.value = [...(saved.kept || [])];
+    keptTouched.value = !!saved.kept_touched;
+    drawnWith.value = saved.drawn_with || "";
+    drawnFrom.value = saved.drawn_from ?? null;
+    runHistory.value = [...(saved.run_history || [])];
+    drawnIds.value = [...(saved.drawn_ids || [])];
+    phase.value = ["drawing", "pick"].includes(saved.phase)
+      ? saved.phase
+      : "describe";
+  }
+  restored.value = true;
+  // Runs may have ended while the screen was away: read them and rank again.
+  if (alive && runs.value.length) tick();
+}
+
+/** What the set stores of this step. A cut whose faces are still being read
+ * stores as done (no runs, no sheets), so the cut is never offered twice. */
+const snapshot = computed(() => {
+  if (!restored.value) return null;
+  const cut = phase.value === "filing" && cutDone.value;
+  return {
+    phase: cut
+      ? "describe"
+      : phase.value === "filing"
+        ? "pick"
+        : phase.value,
+    form: { ...form },
+    framing_touched: framingTouched.value,
+    mode: mode.value,
+    workflow_id: workflowId.value,
+    lora_sha: loraSha.value,
+    strength: strength.value,
+    reference_id: referenceId.value,
+    runs: cut
+      ? []
+      : runs.value.map((run) => ({
+          key: run.key,
+          status: run.status,
+          message: run.message || "",
+          picture_ids: run.pictureIds || [],
+        })),
+    order: cut ? [] : order.value,
+    kept: cut ? [] : kept.value,
+    kept_touched: cut ? false : keptTouched.value,
+    drawn_with: cut ? "" : drawnWith.value,
+    drawn_from: cut ? null : drawnFrom.value,
+    // The runs still going, which deleting the set stops.
+    run_keys: cut ? [] : waitingRuns.value.map((run) => run.key),
+    run_history: runHistory.value,
+    drawn_ids: drawnIds.value,
+  };
+});
 
 function showReferences(body) {
   referenceIds.value = (body?.reference_picture_ids || []).slice(0, 4);
@@ -1534,6 +1676,8 @@ onBeforeUnmount(() => {
 const zooming = computed(() => !!zoomed.value || pickerOpen.value);
 
 defineExpose({
+  workflowId,
+  workflowOptions,
   footer,
   error,
   working,
@@ -1541,6 +1685,7 @@ defineExpose({
   phase,
   zooming,
   reloadReferences,
+  snapshot,
 });
 </script>
 
@@ -1612,6 +1757,12 @@ defineExpose({
   gap: var(--space-4);
 }
 
+.cs-grid4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
 .cs-lora {
   display: flex;
   flex-direction: column;
@@ -1646,10 +1797,6 @@ defineExpose({
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
-}
-
-.cs-wfline {
-  max-width: 360px;
 }
 
 .cs-notice {
