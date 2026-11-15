@@ -799,7 +799,11 @@ const engine = computed(() => {
     const card = workflows.value.find((c) => c.id === workflowId.value);
     if (card?.sheet_layout) {
       // A sheet copy draws the layout as regions on whatever model it runs.
-      const model = (card.models || []).find((m) => m.base_model_family) || {};
+      // Its diffusion model's, never a text encoder's, as referenceEngine.
+      const model =
+        (card.models || []).find((m) =>
+          ["unet", "checkpoint"].includes(m.kind),
+        ) || {};
       const family = model.base_model_family || "";
       return {
         family,

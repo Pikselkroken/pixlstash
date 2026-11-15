@@ -955,7 +955,12 @@ describe("TrainingSetBuild: generating the pictures", () => {
       name: "SDXL (sheet)",
       type: "txt2img",
       sheet_layout: true,
-      models: [{ base_model_family: "sdxl", base_model: "SDXL" }],
+      // The text encoder comes first and is of another family: the LoRAs
+      // still follow the checkpoint.
+      models: [
+        { kind: "clip", base_model_family: "qwen", base_model: "Qwen" },
+        { kind: "checkpoint", base_model_family: "sdxl", base_model: "SDXL" },
+      ],
     };
     gen.listWorkflowCards
       .mockResolvedValueOnce({ cards: [MOSS_CARD, sdxl, flux] })
