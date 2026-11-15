@@ -30,8 +30,8 @@
           <span
             >{{
               fromReference
-                ? "Sheets from a reference need a Qwen-Image-Edit or FLUX.2 Klein sheet workflow, and the library has none."
-                : "Sheets need a MOSS-Image, Krea 2, Qwen-Image or FLUX.2 Klein text-to-image workflow, and the library has none. Import one from Workflows, then come back."
+                ? "Sheets from a reference need a Qwen-Image-Edit, FLUX.2 Klein or MiniMax H3 sheet workflow, and the library has none."
+                : "Sheets need a MOSS-Image, Krea 2, Qwen-Image, FLUX.2 Klein or MiniMax H3 text-to-image workflow, and the library has none. Import one from Workflows, then come back."
             }}</span
           >
         </p>
@@ -525,12 +525,13 @@
 /**
  * Step 1 of "Create a training set…" when the set is drawn rather than picked.
  *
- * Draws 2-4 character sheets with a MOSS-Image, Krea 2, Qwen-Image or FLUX.2
- * Klein text-to-image workflow (#2700; an ordinary
+ * Draws 2-4 character sheets with a MOSS-Image, Krea 2, Qwen-Image, FLUX.2
+ * Klein or MiniMax H3 text-to-image workflow (#2700; an ordinary
  * `POST /workflows/run`, so it queues and shows in Tasks like any run), ranks
  * them by how alike each sheet's own faces are, and cuts the one the user picks
- * into six pictures on the character. Where the library has a Qwen-Image-Edit
- * or FLUX.2 Klein sheet workflow (a card with `reference_inputs`, #2700),
+ * into six pictures on the character. Where the library has a Qwen-Image-Edit,
+ * FLUX.2 Klein or MiniMax H3 sheet workflow (a card with `reference_inputs`,
+ * #2700),
  * the rail offers a second way to draw: from a reference picture plus the
  * words (#2679). The picture
  * goes in through the run's own `inputs`, the sheets are ranked by closeness
@@ -622,9 +623,9 @@ const SUBJECTS = [
 ];
 const MOSS = "moss_image";
 // Only MOSS-Image reads the layout JSON; every other engine's sheet is the
-// prose prompt. Qwen-Image and FLUX.2 Klein also draw from a reference
-// picture (#2679, #2700). Each engine loads its own LoRAs.
-// ponytail: no probe has measured Krea 2's, Qwen's or Klein's sheets yet.
+// prose prompt. Qwen-Image, FLUX.2 Klein and MiniMax H3 also draw from a
+// reference picture (#2679, #2700). Each engine loads its own LoRAs.
+// ponytail: no probe has measured Krea 2's, Qwen's, Klein's or H3's sheets yet.
 const KREA = "krea2";
 const QWEN = "qwen";
 const KLEIN = /klein/i;
@@ -653,6 +654,11 @@ const ENGINES = {
       lora.base_model_family === "flux2" &&
       KLEIN.test(lora.base_model_canonical || lora.base_model || ""),
   },
+  minimax: {
+    family: "minimax_h3",
+    name: "MiniMax H3",
+    fits: (lora) => lora.base_model_family === "minimax_h3",
+  },
 };
 // The sheet workflows PixlStash ships (#2700): a built-in has no card until
 // something asks for one, so the step asks before it lists the cards.
@@ -661,6 +667,7 @@ const SHEET_BUILT_INS = [
   "Sheet-Qwen-Image-2.1-Reference.json",
   "Sheet-Flux2-Klein-9B.json",
   "Sheet-Flux2-Klein-9B-Reference.json",
+  "Sheet-MiniMax-H3-Reference.json",
 ];
 const MODES = [
   { id: "text", label: "Text" },
@@ -1654,10 +1661,12 @@ function cardEngine(card) {
 }
 
 /** The engine *card* draws a sheet from a reference picture with, or null:
- * the edit models that keep the person in the picture. */
+ * the models that keep the person in the picture. */
 function referenceEngine(card) {
   const engine = cardEngine(card);
-  return [ENGINES.qwen, ENGINES.klein].includes(engine) ? engine : null;
+  return [ENGINES.qwen, ENGINES.klein, ENGINES.minimax].includes(engine)
+    ? engine
+    : null;
 }
 
 /** The cards each mode can draw with, most recently used first. */

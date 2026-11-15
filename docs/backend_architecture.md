@@ -12853,7 +12853,7 @@ the count the server added. Owner-only
 
 "Create a training set…" can draw the pictures instead of picking them, for a
 character with none or with too few. A **character sheet** is one MOSS-Image
-(or Krea 2, Qwen-Image or FLUX.2 Klein) picture at 5:3: four passport photos on the left half (front neutral,
+(or Krea 2, Qwen-Image, FLUX.2 Klein or MiniMax H3) picture at 5:3: four passport photos on the left half (front neutral,
 three-quarter smiling, profile neutral, other three-quarter laughing) and two
 tall body photos on the right at a framing the user picks (waist-up,
 mid-thigh, knees-up or full body). The canvas is one of three sizes
@@ -12865,9 +12865,11 @@ one or more sheets and their panels become the character's pictures. **A sheet
 is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 
 - **A sheet is an ordinary run.** The dialog runs a MOSS-Image, Krea 2,
-  Qwen-Image or FLUX.2 Klein `txt2img` workflow (PixlStash ships four, #2700:
-  `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
-  `Sheet-Flux2-Klein-9B*.json`, a text and a `-Reference` one of each, every
+  Qwen-Image, FLUX.2 Klein or MiniMax H3 `txt2img` workflow (PixlStash ships
+  five, #2700: `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
+  `Sheet-Flux2-Klein-9B*.json`, a text and a `-Reference` one of each, and
+  `Sheet-MiniMax-H3-Reference.json`, a reference one only: ComfyUI's H3
+  text-to-image template already takes a run's size, its wired one included; every
   size a literal 2560×1536 and the encoder and VAE loaded by digest; the step
   files their cards through `POST /comfyui/workflows/{name}/card` before it
   lists the cards) through `POST /workflows/run` with the prompt, negative and canvas
@@ -12890,7 +12892,7 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   item per panel part with a `yxyx` box in `abs_centralized` coordinates. The
   boxes are the ones that held their layout on 16 of 16 probe sheets; the test
   pins the mid-thigh set. Only MOSS-Image reads the layout JSON, so a Krea 2,
-  Qwen-Image or FLUX.2 Klein workflow is sent `layout: "prose"`, the summary
+  Qwen-Image, FLUX.2 Klein or MiniMax H3 workflow is sent `layout: "prose"`, the summary
   caption alone; no probe has measured how their sheets hold the grid or cut. Every panel's caption carries the whole character,
   build included (a different build draws a different face). Trousers are
   always named, shoes only at full body. A LoRA's first trigger word leads.
@@ -12926,14 +12928,16 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 - **From a reference picture plus the words (#2679).** Text pins down a type,
   so a character that already has a face is matched only by luck. The second
   way to draw runs an **image-edit** workflow (Qwen-Image-Edit or FLUX.2
-  Klein, #2700; no probe has measured either yet) that reads the picture for the face and
+  Klein, #2700, or MiniMax H3's reference-to-video model drawing one frame on
+  an empty image latent; no probe has measured any yet) that reads the picture for the face and
   draws on an empty canvas of the sheet's size. Nothing about the run is
   particular to sheets: the picture goes in through `RunRequest.inputs` at the
   address the pre-flight's `picture_inputs` names. Four pieces serve it:
   - `workflow_identity.reference_input_count(nodes)` says which graphs can:
     the picture loaders feeding an edit model's reference input
     (`ReferenceLatent`, `TextEncode…ImageEdit…`, Qwen-Image 2.1's
-    `TextEncodeQwenImage21`; a ControlNet's pose is not one) in a `txt2img` / `img2img` graph whose every sampler
+    `TextEncodeQwenImage21`, MiniMax H3's `MiniMaxH3ReferenceToVideo`; a
+    ControlNet's pose is not one) in a `txt2img` / `img2img` graph whose every sampler
     starts from an empty latent (followed through `latent_image` only, an
     empty latent ending the walk, so one sized from the picture still counts)
     and never from the picture's own. The type cannot say this: an edit graph

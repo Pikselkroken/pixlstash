@@ -101,6 +101,8 @@ def _t2i_graph() -> dict:
         # The character sheet workflows (#2700); a zeroed negative again.
         ("Sheet-Flux2-Klein-9B.json", (("18",), (), ("6",), ())),
         ("Sheet-Flux2-Klein-9B-Reference.json", (("18",), ("1",), ("6",), ())),
+        # MiniMax H3 guides with BasicGuider: no negative at all.
+        ("Sheet-MiniMax-H3-Reference.json", (("19",), ("1",), ("6",), ())),
         ("Sheet-Qwen-Image-2.1.json", (("18",), (), ("9",), ())),
         ("Sheet-Qwen-Image-2.1-Reference.json", (("18",), ("1",), ("9",), ())),
         ("Upscale-2x-RealESRGAN.json", (("4",), ("3",), (), ())),
@@ -727,6 +729,11 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
             "Sheet-Flux2-Klein-9B-Reference.json",
             [["1", "inputs", "image"]],
             [["6", "inputs", "text"]],
+        ),
+        (
+            "Sheet-MiniMax-H3-Reference.json",
+            [["1", "inputs", "image"]],
+            [["6", "inputs", "prompt"]],
         ),
         ("Sheet-Qwen-Image-2.1.json", [], [["9", "inputs", "prompt"]]),
         (

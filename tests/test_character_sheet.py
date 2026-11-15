@@ -376,6 +376,7 @@ def test_a_klein_edit_sized_from_its_picture_sizes_its_scheduler_too():
     [
         ("Sheet-Flux2-Klein-9B.json", 0),
         ("Sheet-Flux2-Klein-9B-Reference.json", 1),
+        ("Sheet-MiniMax-H3-Reference.json", 1),
         ("Sheet-Qwen-Image-2.1.json", 0),
         ("Sheet-Qwen-Image-2.1-Reference.json", 1),
     ],

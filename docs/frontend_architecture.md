@@ -1716,9 +1716,9 @@ Escape and Enter do nothing here: cancelling deletes a set.
   character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
   model is listed disabled, the newest MOSS-Image one preselected, and its name
   rides in the step row as a neutral pill) and the MOSS-Image, Krea 2,
-  Qwen-Image or FLUX.2 Klein `txt2img` workflows with no reference input
-  (`cardEngine`: the diffusion model's family, #2700), after asking for the
-  four shipped sheet workflows' cards (`SHEET_BUILT_INS` through
+  Qwen-Image, FLUX.2 Klein or MiniMax H3 `txt2img` workflows with no reference
+  input (`cardEngine`: the diffusion model's family, #2700), after asking for
+  the five shipped sheet workflows' cards (`SHEET_BUILT_INS` through
   `cardForWorkflow`; one that fails is logged and left out); *Draw* saves the typed description on a character that had none,
   then runs the workflow (`runWorkflowCard`, the canvas as `values` at the
   card's own width/height addresses) and polls each run's outcome and
@@ -1754,7 +1754,7 @@ Escape and Enter do nothing here: cancelling deletes a set.
   new pictures so the slider, coverage and Create all read that one list.
 - **Drawn from a reference picture** (#2679, backend §25.29; design
   "Reference pinned beside the sheets"). Where the library has a
-  Qwen-Image-Edit or FLUX.2 Klein card with `reference_inputs > 0` (#2700;
+  Qwen-Image-Edit, FLUX.2 Klein or MiniMax H3 card with `reference_inputs > 0` (#2700;
   `referenceEngine` reads the card's diffusion model, `unet` or `checkpoint`,
   never its text encoder or VAE: Krea 2 and MOSS-Image load a Qwen encoder,
   and matching on that is how Krea 2's style reference got listed), the

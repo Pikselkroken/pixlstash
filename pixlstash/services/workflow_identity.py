@@ -1387,9 +1387,11 @@ def reduced_workflow_type(nodes: dict[str, ReducedNode]) -> Optional[str]:
 
 # Where an edit model takes the picture it is to keep: Flux's
 # ``ReferenceLatent``, the Qwen and MOSS edit encoders' image inputs, and
-# Qwen-Image 2.1's encoder, which edits without "Edit" in its name.
+# Qwen-Image 2.1's encoder, which edits without "Edit" in its name, and
+# MiniMax H3's reference encoder, whose conditioning a still is drawn from too.
 _REFERENCE_INPUT_RE = re.compile(
     r"^ReferenceLatent$|^TextEncode.*ImageEdit|^TextEncodeQwenImage21$"
+    r"|^MiniMaxH3ReferenceToVideo$"
 )
 
 
