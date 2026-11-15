@@ -75,6 +75,7 @@ import ConfirmDialog from "./components/widgets/ConfirmDialog.vue";
 import ModelDropFolderDialog from "./components/dialogs/ModelDropFolderDialog.vue";
 import TrainLoraDialog from "./components/io/TrainLoraDialog.vue";
 import CreateTrainingSetDialog from "./components/io/CreateTrainingSetDialog.vue";
+import FaceClustersDialog from "./components/io/FaceClustersDialog.vue";
 import LibrarySwitchOverlay from "./components/settings/LibrarySwitchOverlay.vue";
 import Tooltip from "./components/widgets/Tooltip.vue";
 import { useFloatingBottomInset } from "./composables/useBottomAnchor";
@@ -574,6 +575,9 @@ async function handleTrainLora(scope) {
 // on, or null while the dialog is closed.
 const trainingSetCharacter = ref(null);
 
+// SideBar context-menu "Faces and reference cluster…".
+const faceClustersCharacter = ref(null);
+
 function handleCreateTrainingSet(character) {
   if (!character || character.id == null) return;
   trainingSetCharacter.value = character;
@@ -998,6 +1002,7 @@ defineExpose({
             @open-tag-review="reviewSessionsStore.overlayOpen = true"
             @train-lora="handleTrainLora"
             @create-training-set="handleCreateTrainingSet"
+            @face-clusters="faceClustersCharacter = $event"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMoved"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
@@ -1260,6 +1265,12 @@ defineExpose({
       @close="trainingSetCharacter = null"
       @created="sidebarRef?.refreshSidebar?.()"
       @train="handleTrainLora"
+    />
+    <FaceClustersDialog
+      :open="!!faceClustersCharacter"
+      :character="faceClustersCharacter"
+      :return-focus-to="faceClustersCharacter?.returnFocusTo ?? null"
+      @close="faceClustersCharacter = null"
     />
     <LibrarySwitchOverlay />
     <WhatsChangedTour v-if="whatsChanged.tourStep" :actions="tourActions" />

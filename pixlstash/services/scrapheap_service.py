@@ -112,7 +112,13 @@ from sqlalchemy import and_, delete, or_, update
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Character, DeletedFileLog, Picture, ReferenceFolder
+from pixlstash.db_models import (
+    Character,
+    CharacterReferenceMember,
+    DeletedFileLog,
+    Picture,
+    ReferenceFolder,
+)
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import operation_log_service
@@ -758,6 +764,14 @@ def purge_rows_in_session(
         update(Character)
         .where(Character.thumbnail_picture_id.in_(purge_scope))
         .values(thumbnail_picture_id=None)
+    )
+    # The same for a reference cluster (``character_reference_member``): a
+    # plain picture id, frozen at the pick, which must not take in a new
+    # picture that reuses the id.
+    session.exec(
+        delete(CharacterReferenceMember).where(
+            CharacterReferenceMember.picture_id.in_(purge_scope)
+        )
     )
     session.exec(
         delete(Picture).where(Picture.id.in_(purge_scope), Picture.deleted.is_(True))

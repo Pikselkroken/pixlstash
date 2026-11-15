@@ -546,6 +546,7 @@ jobs:
           tests/test_edit_selection.py
           tests/test_except_hygiene_guardrail.py
           tests/test_export_api.py
+          tests/test_face_clusters.py
           tests/test_face_score_aggregation.py
           tests/test_facial_features_worker.py
           tests/test_find_orphaned_files.py

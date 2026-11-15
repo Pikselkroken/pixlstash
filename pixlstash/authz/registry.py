@@ -1520,6 +1520,22 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("DELETE", "/api/v1/characters/{character_id}/faces"): RoutePolicy(
         _OWNER, justification="Remove faces; DELETE blocked for READ tokens; owner only"
     ),
+    # ── character_face_clusters.py ──────────────────────────────────────────
+    ("GET", "/api/v1/face-clusters"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "A person's faces grouped by identity, across every picture of "
+            "theirs in the vault and with the owner's ratings; owner only. "
+            "Untemplated so it is on READ_BLOCKED_GET_PATHS too"
+        ),
+    ),
+    ("PUT", "/api/v1/characters/{id}/reference-cluster"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Sets which pictures define a person; PUT blocked for READ tokens; "
+            "owner only"
+        ),
+    ),
     # ── character_sheets.py ─────────────────────────────────────────────────
     ("POST", "/api/v1/character-sheets/prompt"): RoutePolicy(
         _OWNER,

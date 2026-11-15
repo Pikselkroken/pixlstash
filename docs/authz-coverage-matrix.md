@@ -375,6 +375,8 @@ listing to suppress.
 | GET | `/api/v1/characters/{id}` | character_scoped | id=id |  |
 | PATCH | `/api/v1/characters/{id}` | owner_only |  | Update character; PATCH blocked for READ tokens; owner only |
 | DELETE | `/api/v1/characters/{id}` | owner_only |  | Delete character; DELETE blocked for READ tokens; owner only |
+| GET | `/api/v1/face-clusters` | owner_only |  | A person's faces grouped by identity (`?character_id=`), across every picture of theirs in the vault and with the owner's ratings; owner only. Untemplated so it is on READ_BLOCKED_GET_PATHS too |
+| PUT | `/api/v1/characters/{id}/reference-cluster` | owner_only |  | Sets which pictures define a person; PUT blocked for READ tokens; owner only |
 | GET | `/api/v1/characters/{id}/faces` | character_scoped | id=id | Projected face list; replaced serving the `faces` relationship through `/{id}/{field}` (#721) |
 | GET | `/api/v1/characters/{id}/reference_pictures` | character_scoped | id=id |  |
 | GET | `/api/v1/characters/{id}/summary` | character_scoped | id=id |  |

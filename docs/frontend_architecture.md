@@ -1670,8 +1670,9 @@ the row element to hand focus back to on close).
   so nothing here destroys one; it is restorable until the Scrapheap's
   retention purges it, and the intro and the footer say so. After a use the step starts again from the
   form. The magnifier on a sheet (or a double-click, `Z`, or a wheel-up over
-  it) opens the sheet's own file in `ZoomPopout` over the dialog, the dialog
-  persistent meanwhile; its *Keep* / *Drop* control is a `Segmented`, so it
+  it) opens the sheet's own file in `ZoomPopout` over the dialog (the opening,
+  stepping and closing are `composables/useZoomPopout.js`, shared with
+  `FaceClustersDialog`), the dialog persistent meanwhile; its *Keep* / *Drop* control is a `Segmented`, so it
   keeps one size in both states, and focus goes back to the sheet's
   magnifier. Kept sheets the ranking names in each other's `different_from`
   turn the footer lead into a warning (`footer.warn`: icon, `role="status"`)
@@ -1707,6 +1708,64 @@ the row element to hand focus back to on close).
   first, then agreement, and only a sheet that is `close` is kept for the
   user: when none is, none is ticked and a notice says so. Sheets still keep
   their run's place in the grid.
+- **The reference cluster** (backend §25.30). On open the dialog also reads
+  `GET /face-clusters?character_id=` at Normal. When the faces form more
+  than one cluster of three or more and no reference cluster is chosen, a
+  notice over the picks says "{name}'s faces look like N people" with *Choose a
+  reference cluster…*; once one is chosen it becomes a quiet line, "Steered by
+  {name}'s reference cluster (N pictures)", with *Change…*. The Sheets step has
+  the same *Change…* beside its reference faces (it emits `faces`). Both open
+  `FaceClustersDialog` over this one, which stays persistent meanwhile; on
+  close the picks are ranked again and the step reloads its reference faces
+  (`reloadReferences`).
+
+#### `FaceClustersDialog.vue` (`io/`)
+
+*Faces and reference cluster…*: a person's faces grouped by identity, and the
+one group the owner picks as who the person is (design "Cluster Inspector").
+`AppDialog size="2xl"`, flush body, *Loose / Normal / Strict* `Segmented` in
+the header (0.35 / 0.45 / 0.55, refetched on change, not remembered). Opened
+from the person's sidebar menu (`face-clusters` event, mounted in `App.vue`),
+from *Create a training set…* and from *Edit person*'s *Faces…* button in the
+Reference Images header (each mounting its own); focus goes back to the opener
+on close. *Edit person* also has a *Reference cluster* drop-down under that
+header: *None* or a whole cluster at Normal, set at once (`CharacterEditor.vue`;
+its document Escape/Ctrl+Enter listener stands aside while the faces dialog is
+up).
+
+- **Rail** (304px): a `listbox` of the clusters, reference first, Up/Down to
+  move. Each row: the most typical face, *Cluster N* with an olive
+  *Reference* badge (with a check) and a teal-outlined *New · from sheets*
+  badge (`from_sheets`), size and cohesion, and a teal meter of
+  `similarity_to_reference`. *Matched no one* is a 24px strip at the foot.
+- **The pane** shows the selected cluster packed round its most typical face
+  (`utils/clusterLayout.js`: each face in rank order takes the free spot beside
+  a placed face nearest the centre) in four size bands by rank, top 10% / 30% /
+  35% / 25%; at most 60 faces, *+n more*. **It never scrolls**: the layout is
+  fitted to the measured stage, trying `STEP_LADDER` (96/64/48/32, then
+  64/48/32/24, then 48/32/24/16: `--face-thumb-xl`, `--space-9` … `-5`) and at
+  each size first a 2px gap, then none, so the spacing goes before the faces
+  shrink; past the smallest the field is scaled down whole. Each face carries
+  its centrality as a chip on `--scrim-photo-strong`, and its score (`N★`) in
+  the other corner when rated. **A click selects** a face (olive ring,
+  `aria-pressed`) and shows it at the top of the side panel; **a double-click,
+  wheel up, `Z` or Enter zooms** in `ZoomPopout` (`useZoomPopout`, which also
+  closes it on Escape wherever focus is), whose `aside` holds the cluster's
+  centre face (and the reference's on another cluster). The face field is one
+  tab stop with a roving focus; arrows walk the faces by rank.
+- **Side panel**: on a cluster that is not the reference, *Against the
+  reference*: both centre faces, their likeness, the strictness it would join
+  at, and what picking would do to the old reference. On every cluster,
+  *Likeness to the centre*: one gradient bar brighter where more faces sit,
+  the *Accept down to* slider (faces under it fade and shrink in place), the
+  median, and the faces left out. The copy keeps this likeness apart from the
+  training set's `min_likeness`.
+- **Saving**: on the reference cluster, *Clear* (`[]`) and, once the slider
+  differs from what is saved, the amber *Save N faces as the reference*; on
+  another, the amber *Make this {name}'s reference cluster*. Both send only
+  the faces above the cut (`PUT /characters/{id}/reference-cluster`) and
+  reload. On open the slider sits at the lowest saved face of the reference
+  cluster.
 
 #### `TrainLoraDialog.vue` (`io/`, #2119)
 **Outcome choices, numbers derived** (design artifact "Outcome choices, numbers derived"). The Train a LoRA dialog, `AppDialog size="lg"`, mounted in **`App.vue`** and opened by `useTrainingStore.openForScope({type, id, name})` from the toolbar's Train button, its overflow row and the sidebar's *Train LoRA…*. It replaced the toolbar popover `TbTrainPanel`.
@@ -6969,6 +7028,24 @@ hand the choice is kept in `localStorage` and the rule stops applying. Opened
 on a short window, the page scrolls down rather than squeezing the board. A run
 read from its folder has no tips. While the run sets up, the toolbar says
 "Setting up" and the board's corner names the step.
+
+**Before it has data, the tips are on the board** (design "Tips on the
+board"). A last `1fr` track takes the width the checkpoint columns leave, so a
+board of one column still spans the window. While a live run is before step 1,
+the loss chart's place holds an annotated sketch of a loss curve, drawn in ink
+and never the chart's teal so it cannot read as this run's data, beside the
+loss tip; a run with a character that has reference faces gets the same for
+its likeness lines. Each prompt group whose later columns have not started drawing
+keeps its step 0 "before picture" cell and covers the rest with one dashed
+card holding that group's tip (`groupTips`); a group's card goes once any of
+its later columns draws. These notes span to the board's edge (`2 / -1`); the
+loss note keeps at least the chart's height, so the rows under it do not move
+when the curve lands, and the folded *Tips* section is not drawn meanwhile. A run that stopped or failed
+before step 1 instead frames one sentence in the chart's place ("Stopped
+before the first step, so nothing was measured."), drops an unscored likeness
+row, and, with no picture drawn, says "Previews · none were drawn" in place of
+its prompt rows. `fit()` measures the chart's place as drawn, not as sized,
+since a note there may be taller or shorter than the chart.
 
 **A click opens a picture** (Enter or Space does too, on a focused one). A sample
 is a file in the run folder, not a library picture, so it opens full size in

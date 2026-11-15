@@ -25,6 +25,7 @@ from pixlstash.db_models import (
     PictureSetMember,
     Tag,
 )
+from pixlstash.services.face_clusters import reference_cluster_faces
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
 from pixlstash.utils.service.filter_helpers import combine_likeness_scores
 from pixlstash.utils.serialization_utils import safe_model_dict
@@ -40,6 +41,10 @@ def select_reference_faces_for_character(
 ) -> list[Face]:
     """Select reference faces for a character using simple, deterministic rules.
 
+    With a reference cluster (``services/face_clusters.py``) the references
+    are the person's faces on it, most central first. Without one: 5-star
+    pictures, then 4-star, then the rest, oldest first.
+
     Args:
         session: Database session to query faces and pictures.
         character_id: Character id to select reference faces for.
@@ -48,6 +53,10 @@ def select_reference_faces_for_character(
     Returns:
         A list of Face objects to use as reference faces.
     """
+
+    chosen = reference_cluster_faces(session, character_id, max_refs)
+    if chosen:
+        return chosen
 
     min_refs = min(5, max_refs)
 
