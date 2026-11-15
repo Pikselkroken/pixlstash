@@ -301,3 +301,31 @@ def test_cancel_runs_takes_only_its_prompts_off_comfyui(monkeypatch):
         (f"{base}/queue", {"delete": ["p-running"]}),
         (f"{base}/queue", {"delete": ["p-queued"]}),
     ]
+
+
+def test_cancel_runs_does_not_count_a_run_comfyui_refused(monkeypatch):
+    class Answer:
+        def __init__(self, code):
+            self.status_code = code
+            self.text = "nope"
+
+    codes = {"p-ok": 200, "p-refused": 500}
+
+    def post(url, json=None, timeout=None):
+        return Answer(codes[json["delete"][0]])
+
+    monkeypatch.setattr(comfyui_service.requests, "post", post)
+    with comfyui_service._run_outcomes_lock:
+        for pid in codes:
+            comfyui_service._live_runs[pid] = {
+                "run_id": None,
+                "prompt_id": pid,
+                "base_url": "http://comfy.invalid",
+                "status": "queued",
+            }
+    try:
+        assert comfyui_service.cancel_runs(["p-ok", "p-refused"]) == 1
+    finally:
+        with comfyui_service._run_outcomes_lock:
+            for pid in codes:
+                comfyui_service._live_runs.pop(pid, None)

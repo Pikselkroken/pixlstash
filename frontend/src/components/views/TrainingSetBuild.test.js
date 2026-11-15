@@ -1587,6 +1587,39 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     wrapper.unmount();
   });
 
+  it("lets a save already on its way land before Create finishes the set", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
+    api.bulkAddPicturesToSet.mockResolvedValue({ added: 20 });
+    const order = [];
+    let landSave;
+    api.patchPictureSet.mockImplementation((_id, body) => {
+      if (body.building === null) {
+        order.push("finish");
+        return Promise.resolve({ status: "success" });
+      }
+      order.push("save sent");
+      return new Promise((resolve) => {
+        landSave = () => {
+          order.push("save landed");
+          resolve({ status: "success" });
+        };
+      });
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cts-slider-stills"]').setValue("20");
+    await vi.advanceTimersByTimeAsync(700);
+    expect(order).toEqual(["save sent"]);
+    await wrapper.find('[data-testid="cts-create"]').trigger("click");
+    await flushPromises();
+    expect(order).toEqual(["save sent"]);
+    landSave();
+    await flushPromises();
+    expect(order).toEqual(["save sent", "save landed", "finish"]);
+    expect(wrapper.emitted("finished")).toHaveLength(1);
+    wrapper.unmount();
+  });
+
   it("stores a cut sheet as used before its faces are read", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

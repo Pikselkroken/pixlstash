@@ -375,7 +375,8 @@ def cancel_runs(run_ids: list[str]) -> int:
     by its prompt id, which a ComfyUI that predates per-prompt interrupts reads
     as "interrupt whatever runs" (it is this run, by the listener's account).
     Each run's poller then ends it as stopped. An id that names no run in
-    flight is skipped: it ended already.
+    flight is skipped: it ended already. A run ComfyUI refused or could not be
+    asked about is logged and not counted.
     """
     global _queue_cleared
     stopped = 0
@@ -394,17 +395,21 @@ def cancel_runs(run_ids: list[str]) -> int:
             calls = [("/queue", {"delete": [prompt_id]})]
             if run["status"] == "running":
                 calls.insert(0, ("/interrupt", {"prompt_id": prompt_id}))
+            refused = False
             for path, body in calls:
                 resp = requests.post(f"{base_url}{path}", json=body, timeout=10)
                 if resp.status_code >= 300:
+                    refused = True
                     logger.warning(
-                        "ComfyUI %s for prompt %s returned %s: %s",
+                        "ComfyUI %s for prompt %s returned %s: %s, so the run "
+                        "may still be drawing",
                         path,
                         prompt_id,
                         resp.status_code,
                         (resp.text or "").strip()[:200],
                     )
-            stopped += 1
+            if not refused:
+                stopped += 1
         except requests.RequestException as exc:
             logger.warning(
                 "Could not stop ComfyUI prompt %s (run %s) at %s: %s",

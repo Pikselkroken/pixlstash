@@ -1068,20 +1068,37 @@ let saveTimer = null;
 // Once the set is finished or deleted, nothing writes a build to it again.
 let over = false;
 
+// The save on its way to the server, if one is: Create and Cancel wait for
+// it, so it cannot land after the set is finished or deleted.
+let saving = null;
+
 async function save() {
   clearTimeout(saveTimer);
   saveTimer = null;
   const body = JSON.stringify(snapshot.value);
   if (over || body === lastSaved) return;
   lastSaved = body;
-  try {
-    await patchPictureSet(props.set.id, { building: JSON.parse(body) });
-    emit("changed");
-  } catch (e) {
-    // The next change tries again; the screen itself still holds it all.
-    lastSaved = "";
-    console.warn("Couldn't save the training set's build", props.set.id, e);
-  }
+  const run = (async () => {
+    try {
+      await patchPictureSet(props.set.id, { building: JSON.parse(body) });
+      emit("changed");
+    } catch (e) {
+      // The next change tries again; the screen itself still holds it all.
+      lastSaved = "";
+      console.warn("Couldn't save the training set's build", props.set.id, e);
+    }
+  })();
+  saving = run;
+  await run;
+  if (saving === run) saving = null;
+}
+
+/** Stop saving: no timer left, and the save in flight, if any, landed. */
+async function stopSaving() {
+  over = true;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  await saving;
 }
 
 watch(
@@ -1142,11 +1159,9 @@ async function create() {
   const ids = pickedIds.value;
   // No save of the build may land after the set is finished: none is
   // written while the set is filled, and a failure lets them go again.
-  over = true;
-  clearTimeout(saveTimer);
-  saveTimer = null;
   let why;
   try {
+    await stopSaving();
     const added = await bulkAddPicturesToSet(id, ids);
     if (added.added === 0) {
       why = "None of the picked pictures could be added; they may have been deleted.";
@@ -1189,14 +1204,14 @@ async function cancelSet() {
   busy.value = true;
   cancelError.value = "";
   try {
+    await stopSaving();
     await deletePictureSet(props.set.id);
   } catch (e) {
+    over = false;
     cancelError.value = `Couldn't cancel the set. ${errorDetail(e) || "Please try again."}`;
     busy.value = false;
     return;
   }
-  over = true;
-  clearTimeout(saveTimer);
   emit("cancelled", { id: props.set.id, characterId: props.character.id });
 }
 
