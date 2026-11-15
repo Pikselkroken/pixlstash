@@ -42,7 +42,7 @@
 
         <template v-for="group in ['character', 'set']" :key="group">
           <div class="pp-sec">
-            {{ group === "character" ? "Character" : "Picture set" }}
+            {{ group === "character" ? "Person" : "Picture set" }}
           </div>
           <button
             v-for="row in shown(group)"
