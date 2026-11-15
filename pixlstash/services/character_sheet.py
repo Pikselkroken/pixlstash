@@ -809,8 +809,10 @@ def use_sheets(server, character_id: int, picture_ids: list[int]) -> list[int]:
         _new, _duplicates, made = import_derived_outputs(
             server, [sheet] * len(entries), entries, stack=False
         )
+        # Filed sheet by sheet: a later sheet failing to import must not leave
+        # these on no character, still linked to a sheet the purge removes.
+        server.vault.db.run_task(file_on_character_in_session, made, character_id)
         panel_ids.extend(made)
-    server.vault.db.run_task(file_on_character_in_session, panel_ids, character_id)
     logger.info(
         "Character sheets %s cut into pictures %s, filed on character %s",
         ids,
