@@ -293,8 +293,8 @@ def sheet_prompt(
     """The prompt for one grid sheet of the character described.
 
     The MOSS layout prompt by default; with *layout* ``prose``, the same
-    sheet as one plain sentence, for a model that takes no layout (an edit
-    model drawing from a reference picture). With *reference*, every photo
+    sheet as one plain sentence, for a model that takes no layout (Krea 2,
+    or an edit model drawing from a reference picture). With *reference*, every photo
     names the person in the reference picture ahead of the description: the
     picture sets the face, the words the build and the clothes.
 

@@ -789,6 +789,65 @@ describe("CreateTrainingSetDialog: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("draws with a Krea 2 workflow in prose, with a Krea 2 LoRA", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({
+      description: "Adult woman, copper bob",
+      loras: [
+        { sha256: "krea1", display_name: "Anna Krea", base_model_family: "krea2", added_at: "2026-11-09" },
+        { sha256: "moss1", display_name: "Anna v1", base_model_family: "moss_image", added_at: "2026-11-08" },
+      ],
+    });
+    gen.listWorkflowCards.mockResolvedValue({
+      cards: [
+        MOSS_CARD,
+        {
+          id: "manual:krea",
+          name: "Krea sheet",
+          type: "txt2img",
+          last_used: "2026-11-10T20:00:00Z",
+          models: [{ base_model_family: "krea2" }],
+        },
+      ],
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    const select = (label) =>
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === label);
+    // Both models are offered; the most recently used, Krea 2, is chosen and
+    // its LoRA follows it.
+    expect(select("Sheet workflow").props("options").map((o) => o.value)).toEqual([
+      "manual:krea",
+      "manual:moss",
+    ]);
+    expect(select("Character LoRA · optional").props("modelValue")).toBe("krea1");
+    // The LoRA follows a workflow of the other model, there and back.
+    const pick = async (id) => {
+      select("Sheet workflow").vm.$emit("update:modelValue", id);
+      await flushPromises();
+      return select("Character LoRA · optional").props("modelValue");
+    };
+    expect(await pick("manual:moss")).toBe("moss1");
+    expect(await pick("manual:krea")).toBe("krea1");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    expect(gen.buildSheetPrompt).toHaveBeenLastCalledWith(
+      expect.objectContaining({ layout: "prose" }),
+    );
+    expect(gen.buildSheetPrompt.mock.lastCall[0]).not.toHaveProperty("reference");
+    expect(gen.runWorkflowCard).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        workflow_id: "manual:krea",
+        add_loras: [expect.objectContaining({ sha256: "krea1" })],
+      }),
+    );
+    wrapper.unmount();
+  });
+
   it("draws, ranks, and files the chosen sheet as new pictures in the ranking", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

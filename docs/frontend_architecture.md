@@ -1647,7 +1647,7 @@ the row element to hand focus back to on close).
   `run`; `secondary` and `primary`, each with an `enabled` too). The step reads the
   character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
   model is listed disabled, the newest MOSS-Image one preselected, and its name
-  rides in the step row as a neutral pill) and the MOSS-Image `txt2img`
+  rides in the step row as a neutral pill) and the MOSS-Image or Krea 2 `txt2img`
   workflows; *Draw* saves the typed description on a character that had none,
   then runs the workflow (`runWorkflowCard`, the canvas as `values` at the
   card's own width/height addresses) and polls each run's outcome and

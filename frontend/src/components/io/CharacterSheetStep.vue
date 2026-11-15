@@ -31,7 +31,7 @@
             >{{
               fromReference
                 ? "Sheets from a reference need a Qwen-Image-Edit sheet workflow, and the library has none."
-                : "Sheets need a MOSS-Image text-to-image workflow, and the library has none. Import one from Workflows, then come back."
+                : "Sheets need a MOSS-Image or Krea 2 text-to-image workflow, and the library has none. Import one from Workflows, then come back."
             }}</span
           >
         </p>
@@ -520,7 +520,7 @@
 /**
  * Step 1 of "Create a training set…" when the set is drawn rather than picked.
  *
- * Draws 2-4 character sheets with a MOSS-Image workflow (an ordinary
+ * Draws 2-4 character sheets with a MOSS-Image or Krea 2 workflow (an ordinary
  * `POST /workflows/run`, so it queues and shows in Tasks like any run), ranks
  * them by how alike each sheet's own faces are, and cuts the one the user picks
  * into six pictures on the character. Where the library has a Qwen-Image-Edit
@@ -604,6 +604,9 @@ const SUBJECTS = [
   { id: "man", label: "Man" },
 ];
 const MOSS = "moss_image";
+// Krea 2 reads no layout JSON: its sheet is the prose prompt.
+// ponytail: no probe has measured Krea 2's sheets or how they cut.
+const KREA = "krea2";
 // What draws a sheet from a reference picture (#2679).
 // ponytail: one engine, the owner's pick; no probe has measured it yet.
 const QWEN = "qwen";
@@ -687,11 +690,13 @@ let alive = true;
 let drawnWith = "";
 
 const fromReference = computed(() => mode.value === "reference");
-const engine = computed(() =>
-  fromReference.value
-    ? { family: QWEN, name: "Qwen-Image" }
-    : { family: MOSS, name: "MOSS-Image" },
-);
+const engine = computed(() => {
+  if (fromReference.value) return { family: QWEN, name: "Qwen-Image" };
+  const card = workflows.value.find((c) => c.id === workflowId.value);
+  return card && usesFamily(card, KREA)
+    ? { family: KREA, name: "Krea 2" }
+    : { family: MOSS, name: "MOSS-Image" };
+});
 /** The rail is the reference's: its control before drawing, the picture after. */
 const railIsReference = computed(() =>
   phase.value === "describe" ? fromReference.value : !!drawnFrom.value,
@@ -750,6 +755,17 @@ watch(mode, () => {
     loraSha.value = fittingLora();
   }
 });
+
+// MOSS-Image and Krea 2 workflows share the text mode: a LoRA follows the
+// chosen workflow's model.
+watch(
+  () => engine.value.family,
+  (family) => {
+    if (chosenLora.value?.base_model_family !== family) {
+      loraSha.value = fittingLora();
+    }
+  },
+);
 
 const referenceHint = computed(() => {
   const faces = referenceIds.value.length
@@ -1180,6 +1196,8 @@ async function draw() {
   const count = form.count;
   const reference = fromReference.value ? referenceId.value : null;
   const inputs = workflowInputs.value;
+  // An edit model and Krea 2 take no layout: the sheet in one sentence.
+  const prose = !!reference || engine.value.family === KREA;
   try {
     const description = form.description.trim();
     if (!savedDescription.value && description) {
@@ -1196,9 +1214,9 @@ async function draw() {
       size: form.size,
       subject: form.subject,
       trigger: trigger.value,
-      // An edit model takes no layout: the sheet in one sentence, naming
-      // the person in the picture.
-      ...(reference ? { reference: true, layout: "prose" } : {}),
+      // From a reference, the sentence names the person in the picture.
+      ...(reference ? { reference: true } : {}),
+      ...(prose ? { layout: "prose" } : {}),
     });
     const drawing = JSON.stringify([
       sheet.prompt,
@@ -1443,24 +1461,31 @@ const footer = computed(() => {
   };
 });
 
+/** Whether *card* runs a model of *family*. */
+function usesFamily(card, family) {
+  return (card.models || []).some((m) => m.base_model_family === family);
+}
+
 /** The cards each mode can draw with, most recently used first. */
 function sortCards(cards) {
   const recent = (a, b) =>
     String(b.last_used || "").localeCompare(String(a.last_used || ""));
-  const of = (card, family) =>
-    (card.models || []).some((m) => m.base_model_family === family);
   workflows.value = cards
-    .filter((card) => card.type === "txt2img" && of(card, MOSS))
+    .filter(
+      (card) =>
+        card.type === "txt2img" &&
+        (usesFamily(card, MOSS) || usesFamily(card, KREA)),
+    )
     .sort(recent);
   referenceCards.value = cards
-    .filter((card) => card.reference_inputs > 0 && of(card, QWEN))
+    .filter((card) => card.reference_inputs > 0 && usesFamily(card, QWEN))
     .sort(recent);
   // An edit workflow that draws on its picture's own canvas: a sheet copy of
   // it is what the reference mode runs.
   convertible.value = referenceCards.value.length
     ? null
     : cards
-        .filter((card) => card.type === "img2img" && of(card, QWEN))
+        .filter((card) => card.type === "img2img" && usesFamily(card, QWEN))
         .sort(recent)[0] || null;
 }
 

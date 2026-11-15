@@ -12864,8 +12864,8 @@ different person, but the six faces within one sheet agree: the user keeps
 one or more sheets and their panels become the character's pictures. **A sheet
 is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 
-- **A sheet is an ordinary run.** The dialog runs a MOSS-Image `txt2img`
-  workflow through `POST /workflows/run` with the prompt, negative and canvas
+- **A sheet is an ordinary run.** The dialog runs a MOSS-Image or Krea 2
+  `txt2img` workflow through `POST /workflows/run` with the prompt, negative and canvas
   `POST /character-sheets/prompt` hands it (the width and height go in as
   `values` at the workflow's own size addresses), an optional character LoRA in
   `add_loras`, and `character_ids: []`: a sheet shows one person six times and
@@ -12884,7 +12884,9 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   prompt, the JSON `MOSSImageLayoutPrompt` emits: a summary caption and one
   item per panel part with a `yxyx` box in `abs_centralized` coordinates. The
   boxes are the ones that held their layout on 16 of 16 probe sheets; the test
-  pins the mid-thigh set. Every panel's caption carries the whole character,
+  pins the mid-thigh set. Krea 2 reads no layout JSON, so a Krea 2 workflow
+  is sent `layout: "prose"`, the summary caption alone; no probe has measured
+  how its sheets hold the grid or cut. Every panel's caption carries the whole character,
   build included (a different build draws a different face). Trousers are
   always named, shoes only at full body. A LoRA's first trigger word leads.
 - **Ranking** (`POST /characters/{id}/sheets/rank`) reads the faces face
