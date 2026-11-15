@@ -1072,6 +1072,16 @@ def test_use_with_a_draw_records_the_panels_and_the_sheets_cut(
     # The sheet cut is listed once, however many times the request names it.
     assert recorded["used_sheets"] == [sheet_id]
 
+    # Cut again through the same draw (a second tab, a repeated request): refused
+    # before anything is filed, and the record is unchanged.
+    again = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        json={"picture_ids": [sheet_id], "draw_id": draw["id"]},
+    )
+    assert again.status_code == 409, again.text
+    (unchanged,) = _list_draws(client, character_id)
+    assert unchanged["used"] == panel_ids
+
     # Another character's draw is a 404, and nothing is cut for it.
     stranger = _new_character(client, "Used Stranger")
     refused = client.post(
@@ -1085,6 +1095,25 @@ def test_use_with_a_draw_records_the_panels_and_the_sheets_cut(
     )
     assert unknown.status_code == 404
     assert _list_draws(client, stranger) == []
+
+
+def test_a_purged_sheet_drops_out_of_the_draw_shown(client, sheet_id, monkeypatch):
+    key = _key()
+    gone = 987_654_321
+    _fake_outcomes(
+        monkeypatch,
+        {key: {"status": "completed", "message": "", "picture_ids": [sheet_id, gone]}},
+    )
+    character_id = _new_character(client, "Purged Sheet")
+    draw = _post_draw(client, character_id, [key])
+    response = client.patch(
+        f"{API_PREFIX}/characters/{character_id}/sheets/draws/{draw['id']}",
+        json={"kept": [sheet_id, gone]},
+    )
+    assert response.status_code == 200, response.text
+    (shown,) = _list_draws(client, character_id)
+    assert shown["runs"][0]["picture_ids"] == [sheet_id]
+    assert shown["kept"] == [sheet_id]
 
 
 def test_deleting_a_draw_keeps_nothing_of_it(client, monkeypatch):

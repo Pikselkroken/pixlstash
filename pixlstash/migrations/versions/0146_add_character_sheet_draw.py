@@ -38,7 +38,7 @@ def upgrade() -> None:
             sa.ForeignKey("character.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column("created_at", sa.DateTime(), nullable=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("settings", sa.Text(), nullable=False, server_default="{}"),
         sa.Column("drawn_from", sa.Integer(), nullable=True),
         sa.Column("runs", sa.Text(), nullable=False, server_default="[]"),

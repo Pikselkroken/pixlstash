@@ -293,7 +293,7 @@ def create_router(server) -> APIRouter:
             )
         except character_sheet.SheetNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except character_sheet.SheetUnreadable as exc:
+        except (character_sheet.SheetUnreadable, character_sheet.SheetUsed) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         origin_client_id = getattr(request.state, "origin_client_id", None)
         server.vault.notify(

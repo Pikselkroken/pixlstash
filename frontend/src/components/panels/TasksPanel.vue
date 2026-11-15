@@ -431,16 +431,16 @@
           <span v-else class="tm-app-gap" aria-hidden="true"></span>
           <span class="tm-name">{{ entry.label }}</span>
           <button
-              v-if="sheetsCharacter(entry.runId) != null"
-              class="tm-sheet-link"
-              type="button"
-              data-testid="tm-open-sheets"
-              :aria-label="`Open the sheets of ${entry.label}`"
-              @click="openSheets(entry.runId)"
-            >
-              <v-icon size="14">mdi-view-grid-outline</v-icon>Open sheets
-            </button>
-            <span class="tm-figure">
+            v-if="sheetsCharacter(entry.runId) != null"
+            class="tm-sheet-link"
+            type="button"
+            data-testid="tm-open-sheets"
+            :aria-label="`Open the sheets of ${entry.label}`"
+            @click="openSheets(entry.runId)"
+          >
+            <v-icon size="14">mdi-view-grid-outline</v-icon>Open sheets
+          </button>
+          <span class="tm-figure">
             <span class="tm-fig-text">{{ needText(entry) }}</span>
             <span v-if="actionsOf(entry).length" class="tm-acts">
               <button

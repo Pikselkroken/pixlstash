@@ -1230,9 +1230,16 @@ async function rankPending() {
   for (const draw of draws.value) {
     const ids = draw.runs.flatMap((run) => run.picture_ids || []);
     if (!ids.length || ids.every((id) => ranking.value[id]?.faces_read)) continue;
-    const answer = draw.drawn_from
-      ? await rankSheets(props.characterId, ids, [draw.drawn_from])
-      : await rankSheets(props.characterId, ids);
+    let answer;
+    try {
+      answer = draw.drawn_from
+        ? await rankSheets(props.characterId, ids, [draw.drawn_from])
+        : await rankSheets(props.characterId, ids);
+    } catch (e) {
+      // One draw that can't be ranked must not hold up the others.
+      console.warn("Couldn't rank the sheets of a draw", draw.id, ids, e);
+      continue;
+    }
     if (!alive) return;
     rankedAgainst.value = { ...rankedAgainst.value, [draw.id]: answer.references || 0 };
     ranking.value = {

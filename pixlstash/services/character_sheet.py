@@ -636,6 +636,10 @@ class SheetUnreadable(ValueError):
     """The sheet's file is missing or is not an image."""
 
 
+class SheetUsed(ValueError):
+    """The sheet was cut into pictures already, in the draw named."""
+
+
 def _vectors(rows: list) -> list[np.ndarray]:
     return [np.frombuffer(features, dtype=np.float32) for features in rows if features]
 
@@ -805,14 +809,22 @@ def use_sheets(
     is imported, so an unreadable one imports nothing. Returns the panels'
     picture ids. With *draw_id*, the panels and the sheets cut are recorded on
     that draw once the cut succeeds. Raises :class:`SheetNotFound` (also for a
-    *draw_id* that is not this character's) and :class:`SheetUnreadable`.
+    *draw_id* that is not this character's), :class:`SheetUsed` for a sheet
+    that draw has cut already, and :class:`SheetUnreadable`.
     The sheets themselves stay in the Scrapheap.
     """
     ids = list(dict.fromkeys(picture_ids))
-    if draw_id is not None and not server.vault.db.run_immediate_read_task(
-        draw_exists_in_session, character_id, draw_id
-    ):
-        raise SheetNotFound(f"No draw {draw_id} on character {character_id}.")
+    if draw_id is not None:
+        used = server.vault.db.run_immediate_read_task(
+            used_sheets_in_session, character_id, draw_id
+        )
+        if used is None:
+            raise SheetNotFound(f"No draw {draw_id} on character {character_id}.")
+        # The screen offers a cut sheet no more; a second tab or a repeated
+        # request must not file its panels twice either.
+        again = [sheet_id for sheet_id in ids if sheet_id in used]
+        if again:
+            raise SheetUsed(f"Sheets {again} were cut already.")
     sheets = server.vault.db.run_immediate_read_task(
         sheets_in_session, character_id, ids
     )
@@ -1024,9 +1036,36 @@ def _newest_first():
     return (CharacterSheetDraw.created_at.desc(), CharacterSheetDraw.id.desc())
 
 
-def draw_exists_in_session(session: Session, character_id: int, draw_id: int) -> bool:
-    """Whether *draw_id* is a draw of *character_id*."""
-    return _draw_of(session, character_id, draw_id) is not None
+def used_sheets_in_session(
+    session: Session, character_id: int, draw_id: int
+) -> set[int] | None:
+    """The sheets of *draw_id* cut already; ``None`` when it is not *character_id*'s."""
+    row = _draw_of(session, character_id, draw_id)
+    if row is None:
+        return None
+    return set(_ints(_json_list(row.used_sheets, "used_sheets", row.id)))
+
+
+def _without_purged(session: Session, draws: list[dict]) -> list[dict]:
+    """The draws as shown: a sheet the Scrapheap's purge removed is left out
+    of its run and its kept marks, so nothing waits on faces it will never
+    have. The stored row keeps it."""
+    named = {
+        picture_id
+        for draw in draws
+        for run in draw["runs"]
+        for picture_id in run["picture_ids"]
+    }
+    if not named:
+        return draws
+    alive = set(session.exec(select(Picture.id).where(Picture.id.in_(named))).all())
+    if alive == named:
+        return draws
+    for draw in draws:
+        for run in draw["runs"]:
+            run["picture_ids"] = [i for i in run["picture_ids"] if i in alive]
+        draw["kept"] = [i for i in draw["kept"] if i in alive]
+    return draws
 
 
 def list_draws_in_session(session: Session, character_id: int) -> list[dict] | None:
@@ -1040,7 +1079,7 @@ def list_draws_in_session(session: Session, character_id: int) -> list[dict] | N
     ).all()
     draws = [_settle_row(session, row, lost=True) for row in rows]
     session.commit()
-    return draws
+    return _without_purged(session, draws)
 
 
 def summaries_in_session(session: Session) -> list[dict]:

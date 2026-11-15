@@ -38,6 +38,7 @@ from pixlstash.auth import (
     READ_BLOCKED_GET_PATHS,
     READ_BLOCKED_GET_PREFIXES,
     READ_BLOCKED_GET_TEMPLATES,
+    is_read_blocked_get_template,
     is_local_ip,
     is_local_or_tailscale_ip,
     is_loopback_ip,
@@ -1087,6 +1088,23 @@ def test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt():
         f"templated owner-class GETs no READ_BLOCKED_GET_PREFIXES entry covers: "
         f"{uncovered}"
     )
+
+
+def test_a_read_blocked_template_matches_its_route_and_nothing_beside_it():
+    """The membership check above passes with the matcher gone; this is the
+    belt itself. A template blocks its own route, every id, and nothing that
+    merely shares its prefix: the person's own scoped reads stay open."""
+    for template in READ_BLOCKED_GET_TEMPLATES:
+        assert is_read_blocked_get_template(template.replace("{character_id}", "7"))
+    assert is_read_blocked_get_template("/api/v1/characters/7/sheets/draws")
+    for path in (
+        "/api/v1/characters/7",
+        "/api/v1/characters/7/sheets",
+        "/api/v1/characters/7/sheets/draws/3",
+        "/api/v1/characters/7/8/sheets/draws",
+        "/api/v1/characters//sheets/draws",
+    ):
+        assert not is_read_blocked_get_template(path), path
 
 
 # ---- LOOPBACK_OWNER_ONLY (7) - the flag-immune red line --------------------
