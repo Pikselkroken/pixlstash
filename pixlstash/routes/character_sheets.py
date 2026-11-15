@@ -92,11 +92,17 @@ class PanelScore(BaseModel):
         description="Mean similarity to the other panels' faces; null when "
         "no other panel has one."
     )
-    agrees: bool | None
+    agrees: bool | None = Field(
+        description="The agreement clears the bar a sheet's faces must hold to; "
+        "null with no agreement."
+    )
     closeness: float | None = Field(
         description="Mean similarity to the reference faces; null when there are none."
     )
-    close: bool | None
+    close: bool | None = Field(
+        description="The closeness clears the bar for close to the references; "
+        "null with no closeness."
+    )
 
 
 class RankedSheet(BaseModel):
