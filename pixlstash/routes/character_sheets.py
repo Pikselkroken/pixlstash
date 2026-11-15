@@ -77,6 +77,28 @@ class SheetRankRequest(BaseModel):
     )
 
 
+class PanelScore(BaseModel):
+    """One panel's face, scored on its own."""
+
+    panel: int = Field(
+        description="Which panel: 0-3 the passport photos, 4-5 the body photos, "
+        "in the order the sheet is cut."
+    )
+    box: list[float] = Field(
+        description="The face's box, `[left, top, right, bottom]` as fractions "
+        "of the sheet's width and height."
+    )
+    agreement: float | None = Field(
+        description="Mean similarity to the other panels' faces; null when "
+        "no other panel has one."
+    )
+    agrees: bool | None
+    closeness: float | None = Field(
+        description="Mean similarity to the reference faces; null when there are none."
+    )
+    close: bool | None
+
+
 class RankedSheet(BaseModel):
     """One drawn sheet, scored by its own faces."""
 
@@ -98,6 +120,11 @@ class RankedSheet(BaseModel):
     close: bool | None
     broken: bool = Field(
         description="More faces than panels: a panel holds more than one person."
+    )
+    panels: list[PanelScore] = Field(
+        default_factory=list,
+        description="Each panel's face scored on its own, in panel order; a "
+        "panel with no face is left out.",
     )
     different_from: list[int] = Field(
         default_factory=list,

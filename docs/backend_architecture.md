@@ -12912,6 +12912,13 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   cross-sheet cosine): keeping both would mix two people in one set, which
   the dialog warns about but allows. The thresholds behind the
   words are read off the probes and are placeholders until validation.
+  `panels` scores each photo on its own: a face goes to the panel its box's
+  centre falls in on the grid's own lines (`panel_of`, sheet-relative so any
+  size works), the largest face wins a panel, and each carries its `box` as
+  fractions of the sheet, `agreement` (mean similarity to the other panels'
+  faces, `agrees` at `SOME_AGREEMENT`) and `closeness` (to the same
+  references, `close` at `CLOSE_TO_REFERENCES`). A panel with no face is left
+  out; a picture with no stored size gets none.
 - **Using sheets** (`POST /characters/{id}/sheets/use`, `picture_ids`; a held
   sheet counts, and every sheet is read before anything is imported) cuts each
   with `split_sheet`: the grid's cells scaled to the picture, each cut moved

@@ -1748,7 +1748,12 @@ Escape and Enter do nothing here: cancelling deletes a set.
   stepping and closing are `composables/useZoomPopout.js`, shared with
   `FaceClustersDialog`), the dialog persistent meanwhile; its *Keep* / *Drop* control is a `Segmented`, so it
   keeps one size in both states, and focus goes back to the sheet's
-  magnifier. Kept sheets the ranking names in each other's `different_from`
+  magnifier. Each sheet tile also carries one chip per photo under its face,
+  placed from the ranking's `panels[].box`: the photo's closeness when the
+  ranking had references (`closeness` not null), else its agreement with the
+  sheet's other photos; one that drifts (`close` / `agrees` false) takes the
+  warning colour on `--scrim-photo-strong`, and the tile's label and the zoom
+  caption name it (*photo 4 drifts*). Kept sheets the ranking names in each other's `different_from`
   turn the footer lead into a warning (`footer.warn`: icon, `role="status"`)
   naming the pair; *Use* stays enabled, since with a LoRA several sheets can
   be one person and the owner decides. *Keep* cuts the ticked sheets, waits (90 s at most)
