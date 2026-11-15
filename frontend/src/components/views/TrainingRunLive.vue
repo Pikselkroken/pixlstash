@@ -218,6 +218,7 @@
                   <v-icon size="14">mdi-alert</v-icon>
                   Stopped at {{ PHASE_LABELS[lastPhase] || "setup" }}
                 </span>
+                <span v-else-if="ended" class="trl-setup">Stopped during set-up</span>
               </div>
               <!-- Where the track ends: the final save and the import. A run
                    that failed or was stopped never gets there, and one read
@@ -303,18 +304,64 @@
                 <Provenance :kind="live.loss_curve.length ? 'measured' : 'none'" />
               </span>
             </div>
+            <!-- Before step 1 the chart's place holds what to read in it; a run
+                 that ended there says so instead of promising a curve. Either
+                 spans the board's width, however few columns it has. -->
             <div
               ref="chartRowRef"
               class="trl-chart"
-              :style="{ gridRow: 2, gridColumn: `2 / span ${columns.length}` }"
+              :class="lossNote && `trl-chart--${lossNote}`"
+              :style="{
+                gridRow: 2,
+                gridColumn: lossNote ? '2 / -1' : `2 / span ${columns.length}`,
+              }"
             >
+              <div v-if="lossNote === 'tip'" class="trl-tipcard" data-testid="trl-loss-tip">
+                <!-- A diagram, not data: drawn in ink, never the chart's teal. -->
+                <svg
+                  class="trl-sketch"
+                  width="300"
+                  height="112"
+                  viewBox="0 0 300 112"
+                  aria-hidden="true"
+                >
+                  <polyline
+                    class="trl-sketch-raw"
+                    points="20,35 30,45 37,38 46,48 54,46 61,56 69,52 77,62 85,58 94,68 102,63 110,73 118,68 127,74 135,70 143,78 152,72 160,80 168,74 177,82 186,76 194,83 203,77 212,84 221,78 230,85 240,79 250,84 260,80 270,86 280,81"
+                  />
+                  <path class="trl-sketch-trend" d="M20 35C60 54 100 66 140 71S230 80 280 82" />
+                  <line class="trl-sketch-lead" x1="200" y1="34" x2="236" y2="70" />
+                  <text x="174" y="28">noisy is normal</text>
+                  <line class="trl-sketch-lead" x1="120" y1="90" x2="104" y2="66" />
+                  <text x="96" y="104">read this trend</text>
+                </svg>
+                <div class="trl-tiptext">
+                  <span class="section-label trl-tiphead">
+                    <v-icon size="14">mdi-lightbulb-outline</v-icon>What to read here
+                  </span>
+                  <p>{{ TIP_TEXT.Loss }}</p>
+                  <p class="trl-muted">The curve starts with the first training step.</p>
+                </div>
+              </div>
+              <div
+                v-else-if="lossNote === 'ended'"
+                class="trl-tipcard trl-tipcard--ended"
+                data-testid="trl-loss-ended"
+              >
+                <p>
+                  <b>Stopped before the first step, so nothing was measured.</b>
+                  <span v-if="live.status === 'error'" class="trl-muted">
+                    The notice above says why. Retry it from Training runs once it is fixed.
+                  </span>
+                </p>
+              </div>
               <LoraLossChart
+                v-else
                 ref="chartRef"
                 :curve="live.loss_curve"
                 :x-scale="stepFraction"
                 :markers="markers"
                 :height="chartHeight"
-                :empty-text="chartEmptyText"
                 smooth
                 compact
               />
@@ -322,7 +369,7 @@
             <!-- How much the previews look like the run's character (#2522),
                  on the same step axis: evidence beside the pictures, never a
                  choice made for the owner. -->
-            <template v-if="likeness">
+            <template v-if="showLikeness">
               <div class="trl-lab" :style="{ gridRow: 3 }" data-testid="trl-likeness">
                 <span class="section-label">Likeness to {{ likeness.character_name }}</span>
                 <span class="trl-loss">
@@ -345,9 +392,30 @@
               </div>
               <div
                 class="trl-likeness"
-                :style="{ gridRow: 3, gridColumn: `2 / span ${columns.length}` }"
+                :style="{
+                  gridRow: 3,
+                  gridColumn: likenessTip ? '2 / -1' : `2 / span ${columns.length}`,
+                }"
               >
+                <div v-if="likenessTip" class="trl-tipcard" data-testid="trl-likeness-tip">
+                  <svg
+                    class="trl-sketch"
+                    width="120"
+                    height="44"
+                    viewBox="0 0 120 44"
+                    aria-hidden="true"
+                  >
+                    <path class="trl-sketch-trend" d="M0 40C30 38 40 10 120 8" />
+                    <path class="trl-sketch-flat" d="M0 40L120 36" />
+                  </svg>
+                  <p>
+                    The solid line should climb as the subject comes in. The dashed line
+                    should stay low; if it climbs too, the LoRA is leaking.
+                    <span class="trl-muted">Scored as the previews land.</span>
+                  </p>
+                </div>
                 <TrainingLikenessChart
+                  v-else
                   :with-trigger="likeness.with_trigger"
                   :without-trigger="likeness.without_trigger"
                   :best-index="bestIndex"
@@ -389,8 +457,10 @@
                     <span class="trl-muted">{{ roleOf(row).detail }}</span>
                   </span>
                 </div>
+                <!-- While the group's tip card covers the columns to come, only
+                     step 0, the before picture, keeps its cell. -->
                 <div
-                  v-for="(cell, i) in row.cells"
+                  v-for="(cell, i) in groupTips[group.key] ? row.cells.slice(0, 1) : row.cells"
                   :key="`c${row.index}-${i}`"
                   class="trl-cellwrap"
                   :style="{ gridRow: group.row + 1 + r, gridColumn: i + 2 }"
@@ -430,6 +500,9 @@
                   <span v-else-if="cell.state === 'deferred'" class="trl-cell trl-cell--deferred"
                     >after training</span
                   >
+                  <span v-else-if="groupTips[group.key]" class="trl-cell trl-cell--future">
+                    <v-icon size="16">mdi-image-outline</v-icon>before picture
+                  </span>
                   <!-- A step the run never reached stays a quiet empty cell; only
                        one it passed without a picture says so. -->
                   <span v-else class="trl-cell trl-cell--future">{{
@@ -441,6 +514,23 @@
                   }}</span>
                 </div>
               </template>
+              <!-- What these rows should show, across the columns still to come:
+                   dashed like the cells it stands in for. -->
+              <div
+                v-if="groupTips[group.key]"
+                class="trl-tipcard trl-tipcard--rows"
+                data-testid="trl-group-tip"
+                :style="{
+                  gridRow: `${group.row + 1} / span ${group.rows.length}`,
+                  gridColumn: '3 / -1',
+                }"
+              >
+                <v-icon size="20" class="trl-tipglyph">mdi-lightbulb-outline</v-icon>
+                <div class="trl-tiptext">
+                  <p>{{ groupTips[group.key].text }}</p>
+                  <p class="trl-muted">{{ groupTips[group.key].next }}</p>
+                </div>
+              </div>
             </template>
           </div>
         </div>
@@ -448,8 +538,15 @@
         <!-- What to look for: open by itself when it fits under the board,
              folded to its header when it does not, and left as the owner
              left it once they have toggled it. A run read from its folder
-             was not watched and has no step to pick. -->
-        <section v-if="!fromFolder" ref="tipsRef" class="trl-tips" aria-label="Tips">
+             was not watched and has no step to pick. Before step 1 the tips
+             are on the board, each where its data will land, and a run that
+             ended there has nothing left to look for. -->
+        <section
+          v-if="!fromFolder && !lossNote"
+          ref="tipsRef"
+          class="trl-tips"
+          aria-label="Tips"
+        >
           <SectionHeader
             label="Tips"
             :count="tipsOpen ? 'what to look for while it runs' : `${TIPS.length} tips on what to look for while it runs`"
@@ -714,6 +811,25 @@ const canTrainLonger = computed(() => {
     (run.status === "completed" && Boolean(run.completed_at));
   return ended && (run.coverable?.length ?? 0) > 0;
 });
+// Stopped or failed: nothing more will arrive. A run read from its folder
+// was not watched here, so it never says so.
+const ended = computed(
+  () => !fromFolder.value && ["stopped", "error"].includes(live.value?.status),
+);
+// Ended before step 1: the board says that once instead of drawing places for
+// data that will never come.
+const endedEarly = computed(() => ended.value && !live.value.step);
+
+/**
+ * What the loss chart's place holds instead of the chart: "tip" (what to read
+ * in it, while a run waits for step 1) or "ended" (it never got there).
+ */
+const lossNote = computed(() => {
+  if (!live.value || live.value.step) return null;
+  if (isLive.value) return "tip";
+  return endedEarly.value ? "ended" : null;
+});
+
 // Before training starts: the corner names the step, step 0 says it comes next.
 const settingUp = computed(
   () =>
@@ -795,6 +911,22 @@ const markers = computed(() =>
 
 // A run filed under a character scores its previews against it (#2522).
 const likeness = computed(() => live.value?.likeness ?? null);
+const likenessEmpty = computed(
+  () =>
+    ![...(likeness.value?.with_trigger ?? []), ...(likeness.value?.without_trigger ?? [])].some(
+      (value) => value != null,
+    ),
+);
+// Before step 1 the chart's place says what to read in it, when there are
+// reference faces to score against; a run that ended before any score has no
+// likeness row at all.
+const likenessTip = computed(
+  () =>
+    isLive.value && !live.value.step && likenessEmpty.value && Boolean(likeness.value?.references),
+);
+const showLikeness = computed(
+  () => Boolean(likeness.value) && !(endedEarly.value && likenessEmpty.value),
+);
 const bestIndex = computed(() =>
   likeness.value?.best_step == null ? -1 : columns.value.indexOf(likeness.value.best_step),
 );
@@ -827,7 +959,11 @@ const groups = computed(() => {
   // Grid rows: 1 timeline, 2 loss, 3 likeness when the run has a character,
   // then each group's heading and its prompts.
   const out = [];
-  let next = likeness.value ? 4 : 3;
+  let next = showLikeness.value ? 4 : 3;
+  // Ended before step 1 with no picture: one line says so, no empty rows.
+  if (endedEarly.value && !rows.some((row) => row.cells.some((c) => c.state === "sample"))) {
+    return [{ key: "none", title: "Previews", hint: "none were drawn", rows: [], row: next }];
+  }
   if (withWord.length) {
     out.push({
       key: "with",
@@ -871,6 +1007,39 @@ const groups = computed(() => {
   return out;
 });
 
+/**
+ * Each prompt group's tip, keyed by group, while a live run has drawn nothing
+ * past step 0 in it: what the rows should show, and what comes next. The
+ * card goes once any later column starts drawing.
+ */
+const groupTips = computed(() => {
+  const out = {};
+  const run = live.value;
+  const cols = columns.value;
+  if (!isLive.value || cols.length < 2) return out;
+  for (const group of groups.value) {
+    const waiting = group.rows.every((row) =>
+      row.cells.every(
+        (cell, i) => i === 0 || (["future", "missing"].includes(cell.state) && cols[i] > run.step),
+      ),
+    );
+    if (!waiting) continue;
+    if (group.key === "with") {
+      const due = dueMinutes(cols[1]);
+      out.with = {
+        text: "Step 0 is the base model on its own: the before picture. Over the next checkpoints the subject should show up in these rows.",
+        next: `The first previews land at step ${cols[1].toLocaleString()}${due ? `, in about ${due}` : ""}.`,
+      };
+    } else if (group.key === "without") {
+      out.without = {
+        text: TIP_TEXT["Without it"],
+        next: "Pick the step with Use this step under its column; with none picked, it is the last.",
+      };
+    }
+  }
+  return out;
+});
+
 /** A control row's label and what it should do; null for any other row. */
 function roleOf(row) {
   const kept = live.value?.preservation;
@@ -880,7 +1049,7 @@ function roleOf(row) {
 
 /** Every grid row: the timeline, the loss, each group's heading and prompts. */
 const rowCount = computed(() =>
-  groups.value.reduce((n, group) => n + 1 + group.rows.length, likeness.value ? 3 : 2),
+  groups.value.reduce((n, group) => n + 1 + group.rows.length, showLikeness.value ? 3 : 2),
 );
 
 const phaseLog = computed(() => live.value?.phases ?? []);
@@ -1102,24 +1271,23 @@ async function quitComfy() {
   }
 }
 
-// Undefined keeps the chart's own sentence for a run with no curve to show.
-const chartEmptyText = computed(() =>
-  isLive.value && !live.value?.step
-    ? "The curve starts with the first training step."
-    : undefined,
-);
-
 /**
  * When a future column is due, from the same estimate as the status bar's
  * "left", spread over the steps still to train: "~6 min".
  */
 function dueIn(column) {
+  const due = dueMinutes(column);
+  return due ? `~${due}` : "";
+}
+
+/** The same estimate as a bare duration, "6 min", or "" when unknown. */
+function dueMinutes(column) {
   const run = live.value;
   const { remaining_low_s: low, remaining_high_s: high } = run?.speed ?? {};
   if (!run || !isLive.value || low == null || high == null) return "";
   const left = (run.total_steps ?? 0) - run.step;
   if (column <= run.step || left <= 0) return "";
-  return `~${minutes(((low + high) / 2) * ((column - run.step) / left))}`;
+  return minutes(((low + high) / 2) * ((column - run.step) / left));
 }
 
 const lossValue = computed(() => {
@@ -1325,6 +1493,8 @@ const TIPS = [
     text: "The Use this step button under a column makes that step the cover: the checkpoint the set or character uses. With none picked, it is the last step.",
   },
 ];
+// The same words on the board while it waits for its data.
+const TIP_TEXT = Object.fromEntries(TIPS.map((tip) => [tip.title, tip.text]));
 
 // "open" or "shut" once toggled by hand; until then, whether they fit.
 const TIPS_KEY = "pixlstash.trainingRunTips";
@@ -1375,9 +1545,12 @@ function fit() {
     scroll.clientHeight +
     parseFloat(pad.paddingTop) +
     parseFloat(pad.paddingBottom);
-  // Everything in the page but the chart, with the tips folded.
-  const rest =
-    board.offsetHeight - chartHeight.value + frame + tipsHead;
+  // Everything in the page but the chart, with the tips folded. The chart's
+  // place as drawn: a note there may be taller or shorter than the chart.
+  const rowPad = getComputedStyle(row);
+  const chartNow =
+    row.clientHeight - parseFloat(rowPad.paddingTop) - parseFloat(rowPad.paddingBottom);
+  const rest = board.offsetHeight - chartNow + frame + tipsHead;
 
   const width =
     scroll.clientWidth -
@@ -1772,16 +1945,20 @@ onBeforeUnmount(() => {
 
 /* The pitch is set on the board from the window (fit()); the samples grow
    with it at today's 104 x 76 shape, keeping the same gutter between columns.
-   Declared here, not on .trl, so they read the board's pitch. */
+   Declared here, not on .trl, so they read the board's pitch. A last 1fr
+   track takes whatever width the columns leave, so a board of one column
+   still spans the window: the zebra rows and anything spanning to -1 reach
+   its edge. */
 .trl-board {
   --trl-cell-w: calc(var(--trl-pitch) - var(--space-4) - var(--space-3));
   --trl-cell-h: calc(var(--trl-cell-w) * 76 / 104);
   position: relative;
   display: grid;
-  grid-template-columns: var(--trl-label-w) repeat(var(--trl-cols), var(--trl-pitch));
+  grid-template-columns: var(--trl-label-w) repeat(var(--trl-cols), var(--trl-pitch)) 1fr;
   grid-auto-rows: auto;
   row-gap: var(--space-1);
   width: max-content;
+  min-width: 100%;
   padding-bottom: var(--space-5);
 }
 
@@ -2052,6 +2229,112 @@ onBeforeUnmount(() => {
 
 .trl-chart :deep(.lora-loss-empty) {
   text-align: center;
+}
+
+/* The tips keep at least the chart's height, so the rows under them do not
+   move when the curve lands, and grow when the window leaves the chart less
+   room than their words. A run that ended there gets no chart: its sentence
+   takes only its own height. */
+.trl-chart--tip,
+.trl-chart--ended {
+  height: auto;
+}
+
+.trl-chart--tip {
+  min-height: var(--trl-chart-h);
+}
+
+/* The board's own advice, where its data will land. Framed like the chart
+   it stands in for, or dashed like the cells it stands in for. */
+.trl-tipcard {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-3) var(--space-5);
+  border: 1px solid rgb(var(--v-theme-divider));
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-surface));
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+.trl-tipcard p {
+  margin: 0;
+  max-width: 60ch;
+}
+
+.trl-tipcard--ended {
+  align-items: flex-start;
+}
+
+.trl-tipcard--ended .trl-muted {
+  display: block;
+  margin-top: var(--space-1);
+}
+
+.trl-tipcard--rows {
+  align-self: stretch;
+  margin: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-6);
+  border-style: dashed;
+  border-color: rgb(var(--v-theme-border));
+  background: rgb(var(--v-theme-background));
+}
+
+.trl-tiptext {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.trl-tiphead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.trl-tipglyph {
+  flex: none;
+  color: rgba(var(--v-theme-on-background), var(--opacity-text-secondary));
+}
+
+/* Ink, not the chart's hue: a diagram of a curve, never this run's data. */
+.trl-sketch {
+  flex: none;
+  overflow: visible;
+}
+
+.trl-sketch polyline,
+.trl-sketch path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.trl-sketch-raw {
+  stroke: rgba(var(--v-theme-on-surface), 0.22);
+  stroke-width: 1;
+}
+
+.trl-sketch-trend {
+  stroke: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  stroke-width: 2;
+}
+
+.trl-sketch-flat {
+  stroke: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  stroke-width: 2;
+  stroke-dasharray: 4 4;
+}
+
+.trl-sketch-lead {
+  stroke: rgba(var(--v-theme-on-surface), 0.4);
+}
+
+.trl-sketch text {
+  fill: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  font-size: var(--text-2xs);
 }
 
 .trl-likeness {
