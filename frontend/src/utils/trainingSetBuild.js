@@ -117,3 +117,27 @@ export function subjectFromDescription(text) {
   if (men === women) return null;
   return men > women ? "man" : "woman";
 }
+
+/**
+ * The set *selectedId* names when it is a training set still being built,
+ * with the person it is under: what the centre column shows as a build
+ * screen. Null for any other set, and for one with no person (a deleted
+ * person's sets are lifted to the top level, so a set that still names one
+ * has one). A person not in *characters* yet (the list still loading, or a
+ * failed read) still opens the build, with the name filled in once it is.
+ *
+ * @param {Array<object>} sets - every picture set
+ * @param {Array<object>} characters - every person known so far
+ * @param {number|string|null} selectedId - the selected set's id
+ * @returns {{set: object, character: {id: number, name: string}}|null}
+ */
+export function buildingSetOf(sets, characters, selectedId) {
+  if (selectedId == null) return null;
+  const set = (sets || []).find(
+    (s) => Number(s.id) === Number(selectedId) && s.building,
+  );
+  if (!set || set.parent_character_id == null) return null;
+  const id = Number(set.parent_character_id);
+  const person = (characters || []).find((c) => Number(c.id) === id);
+  return { set, character: { id, name: person?.name || "" } };
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildingSetOf,
   buildLine,
   freeTrainingSetName,
   liveBuildRuns,
@@ -58,5 +59,23 @@ describe("trainingSetBuild", () => {
     expect(subjectFromDescription("A human woman")).toBe("woman");
     expect(subjectFromDescription("Freckles, green eyes")).toBeNull();
     expect(subjectFromDescription("")).toBeNull();
+  });
+
+  it("opens the build of the selected set, before the people have loaded", () => {
+    const sets = [
+      { id: 4, name: "Done", building: null, parent_character_id: 7 },
+      { id: 5, name: "Mira training set", building: { v: 1 }, parent_character_id: 7 },
+      { id: 6, name: "Lifted", building: { v: 1 }, parent_character_id: null },
+    ];
+    const people = [{ id: 7, name: "Mira" }];
+    expect(buildingSetOf(sets, people, "5")).toEqual({
+      set: sets[1],
+      character: { id: 7, name: "Mira" },
+    });
+    // People not read yet: the build still opens, the name comes later.
+    expect(buildingSetOf(sets, [], 5).character).toEqual({ id: 7, name: "" });
+    expect(buildingSetOf(sets, people, 4)).toBeNull();
+    expect(buildingSetOf(sets, people, 6)).toBeNull();
+    expect(buildingSetOf(sets, people, null)).toBeNull();
   });
 });

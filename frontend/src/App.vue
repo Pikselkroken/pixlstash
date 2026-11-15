@@ -35,7 +35,7 @@ import { useOperationStore } from "./stores/useOperationStore";
 import { useEntityListsStore } from "./stores/useEntityListsStore";
 import { createPictureSet } from "./api/pictureSets";
 import { errorDetail } from "./utils/apiError";
-import { freeTrainingSetName } from "./utils/trainingSetBuild";
+import { buildingSetOf, freeTrainingSetName } from "./utils/trainingSetBuild";
 import { DEFAULT_TIMEOUTS, useNoticeStore } from "./stores/useNoticeStore";
 import { useWhatsChangedStore } from "./stores/useWhatsChangedStore";
 import {
@@ -612,17 +612,15 @@ async function handleCreateTrainingSet(character) {
 // The set selected in the sidebar when it is a training set still being
 // built, with the person it is under: the centre column is its build screen
 // instead of its grid.
-const buildingSet = computed(() => {
-  if (selectionStore.selectedSetIds.length > 1) return null;
-  const set = entityLists.pictureSets.find(
-    (s) => Number(s.id) === Number(selectionStore.selectedSet) && s.building,
-  );
-  if (!set) return null;
-  const person = entityLists.characters.find(
-    (c) => c.id === set.parent_character_id,
-  );
-  return person ? { set, character: { id: person.id, name: person.name } } : null;
-});
+const buildingSet = computed(() =>
+  selectionStore.selectedSetIds.length > 1
+    ? null
+    : buildingSetOf(
+        entityLists.pictureSets,
+        entityLists.characters,
+        selectionStore.selectedSet,
+      ),
+);
 
 function onTrainingSetFinished(set) {
   entityLists.invalidate(["sets"]);
