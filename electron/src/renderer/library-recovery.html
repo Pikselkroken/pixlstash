@@ -51,11 +51,15 @@
       <div id="error" class="error hidden" role="alert"></div>
 
       <ul class="recovery-actions" aria-label="Ways to carry on">
-        <li class="recovery-action">
-          <button id="retry" type="button">Try again</button>
-          <span class="sub">Reconnect the drive or put the folder back first.</span>
+        <li id="update-row" class="recovery-action hidden">
+          <button id="update" type="button">Get the latest PixlStash</button>
+          <span class="sub">Opens the download page in your browser.</span>
         </li>
         <li class="recovery-action">
+          <button id="retry" type="button">Try again</button>
+          <span id="retry-note" class="sub">Reconnect the drive or put the folder back first.</span>
+        </li>
+        <li id="find-row" class="recovery-action">
           <button id="find" type="button" class="secondary">Find it…</button>
           <span class="sub">
             Choose the folder where it is now. Its share links keep working.

@@ -15,13 +15,19 @@ import { promisify } from 'node:util';
 
 export const LIBRARY_UNAVAILABLE_PREFIX = 'PIXLSTASH_LIBRARY_UNAVAILABLE=';
 
-export type LibraryUnavailableKind = 'folder_missing' | 'vault_missing' | 'unreadable' | 'foreign';
+export type LibraryUnavailableKind =
+  | 'folder_missing'
+  | 'vault_missing'
+  | 'unreadable'
+  | 'foreign'
+  | 'newer';
 
 const KINDS: readonly LibraryUnavailableKind[] = [
   'folder_missing',
   'vault_missing',
   'unreadable',
   'foreign',
+  'newer',
 ];
 
 /** One registered library, as the backend names it. */

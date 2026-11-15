@@ -24,6 +24,7 @@ from pixlstash.telemetry import ensure_install_identity  # noqa: E402
 from pixlstash.hub.bootstrap import (  # noqa: E402
     HubBootstrapError,
     LibraryUnavailableError,
+    RELEASES_URL,
     UnusableVaultError,
     VAULT_RECREATE_ENV,
 )
@@ -303,6 +304,10 @@ def _format_library_unavailable(exc: LibraryUnavailableError) -> str:
             f"{library.vault_path} belongs to a different library, so it was "
             "not opened."
         ),
+        LibraryUnavailableError.NEWER: (
+            "A newer PixlStash has opened this library and updated it, and this "
+            "version cannot read it until it is updated too."
+        ),
     }.get(exc.kind, "")
     hub = exc.hub_path
     lines = [
@@ -313,10 +318,17 @@ def _format_library_unavailable(exc: LibraryUnavailableError) -> str:
         "Nothing was created or changed, and no pictures were touched.",
         "",
         "To carry on, do one of these and start PixlStash again:",
-        "- Reconnect the drive, or put the folder back where it was.",
-        "- If the library moved, point PixlStash at where it lives now:",
-        f"    {cli_hint(f'libraries relocate {library.id} <folder> --same-library', hub)}",
     ]
+    if exc.kind == LibraryUnavailableError.NEWER:
+        lines.append(f"- Update PixlStash: {RELEASES_URL}")
+    else:
+        lines.extend(
+            [
+                "- Reconnect the drive, or put the folder back where it was.",
+                "- If the library moved, point PixlStash at where it lives now:",
+                f"    {cli_hint(f'libraries relocate {library.id} <folder> --same-library', hub)}",
+            ]
+        )
     if exc.alternatives:
         lines.append("- Open another library instead:")
         lines.extend(

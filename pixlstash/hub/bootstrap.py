@@ -17,7 +17,6 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from importlib.metadata import PackageNotFoundError, version as package_version
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -38,6 +37,7 @@ from pixlstash.hub.registry import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
+from pixlstash.utils.app_version import app_version
 from pixlstash.services.portable_identity import sanitize_vault_connection
 
 logger = get_logger(__name__)
@@ -88,6 +88,10 @@ class LibraryFingerprintConflictError(HubBootstrapError):
     """The registered folder holds a readable vault that is another library."""
 
 
+class NewerLibraryError(HubBootstrapError):
+    """The vault names an Alembic revision this build does not have."""
+
+
 class LibraryUnavailableError(HubBootstrapError):
     """The active library cannot be opened, and nothing was done about it.
 
@@ -100,14 +104,16 @@ class LibraryUnavailableError(HubBootstrapError):
 
     ``kind`` is one of :attr:`FOLDER_MISSING` (no folder at the path),
     :attr:`VAULT_MISSING` (the folder is there, its ``vault.db`` is not),
-    :attr:`UNREADABLE` (the file is there and could not be read) and
-    :attr:`FOREIGN` (the file is a different library).
+    :attr:`UNREADABLE` (the file is there and could not be read),
+    :attr:`FOREIGN` (the file is a different library) and :attr:`NEWER` (a
+    later PixlStash has migrated it past what this build knows).
     """
 
     FOLDER_MISSING = "folder_missing"
     VAULT_MISSING = "vault_missing"
     UNREADABLE = "unreadable"
     FOREIGN = "foreign"
+    NEWER = "newer"
 
     def __init__(
         self,
@@ -771,6 +777,7 @@ def _library_opens(library: Library) -> bool:
         return False
     try:
         prevalidate_library_fingerprint(library)
+        _refuse_newer_library(library)
     except HubBootstrapError as exc:
         logger.warning(
             "Library %s at %s would not open (%s); not offering it.",
@@ -816,6 +823,8 @@ def _unavailable_kind(library: Library, failure: HubBootstrapError) -> str:
     """
     if isinstance(failure, LibraryFingerprintConflictError):
         return LibraryUnavailableError.FOREIGN
+    if isinstance(failure, NewerLibraryError):
+        return LibraryUnavailableError.NEWER
     if not os.path.isdir(library.path):
         return LibraryUnavailableError.FOLDER_MISSING
     if not os.path.isfile(library.vault_path):
@@ -998,6 +1007,7 @@ def _offer_a_usable_library(
     """
     try:
         prevalidate_library_fingerprint(library)
+        _refuse_newer_library(library)
         return library
     except HubBootstrapError as exc:
         failure = exc
@@ -1026,7 +1036,13 @@ def _offer_a_usable_library(
         # opened yesterday is exactly where an unreadable vault shows up.
         # A fingerprint conflict is not this case - that vault loads fine, and
         # the answer is to put the right one back, not to start over.
-        if os.path.isfile(library.vault_path) and not _vault_is_loadable(library):
+        # A newer vault is a whole library this build cannot read yet, never
+        # one to start over: updating PixlStash opens it as it is.
+        if (
+            not isinstance(failure, NewerLibraryError)
+            and os.path.isfile(library.vault_path)
+            and not _vault_is_loadable(library)
+        ):
             if os.environ.get(VAULT_RECREATE_ENV) == "1":
                 set_aside_unusable_vault(library.vault_path)
                 return registry.forget_vault_fingerprint(library)
@@ -1092,10 +1108,8 @@ def newer_library_message(unknown: list[str], *, library: str) -> str:
     *library* names the vault as the reader knows it. The revision ids stay
     in, last, because a bug report needs them.
     """
-    try:
-        this = f"This version ({package_version('pixlstash')})"
-    except PackageNotFoundError:
-        this = "This version"
+    running = app_version()
+    this = "This version" if running == "unknown" else f"This version ({running})"
 
     def number(rev: str) -> str:
         return rev.split("_", 1)[0]  # "0113_reset_..." -> "0113"
@@ -1108,6 +1122,43 @@ def newer_library_message(unknown: list[str], *, library: str) -> str:
         f"  (Library revision {', '.join(map(number, unknown))}; this version "
         f"knows up to {latest}.)"
     )
+
+
+def _refuse_newer_library(library: Library) -> None:
+    """Raise :class:`NewerLibraryError` before a later build's vault is opened.
+
+    The same check :func:`prevalidate_opened_library` makes on Alembic's own
+    connection, made read-only and early so the refusal reaches the recovery
+    path with its ways out, rather than ending start-up after the server has
+    begun. A vault that cannot be read here is left to that later check and to
+    the fingerprint check, which already own the unreadable case.
+    """
+    if not os.path.isfile(library.vault_path):
+        return
+    try:
+        conn = sqlite3.connect(
+            sqlite_file_uri(library.vault_path, read_only=True), uri=True, timeout=5
+        )
+        try:
+            revisions = _opened_revision_rows(conn)
+        finally:
+            conn.close()
+    except (sqlite3.Error, HubBootstrapError) as exc:
+        logger.warning(
+            "Could not read the schema revision of %s before opening it (%s); "
+            "the check runs again when the vault opens.",
+            library.vault_path,
+            exc,
+        )
+        return
+    known = known_vault_revisions()
+    unknown = [rev for rev in revisions if rev not in known]
+    if unknown:
+        raise NewerLibraryError(
+            newer_library_message(
+                unknown, library=f'The library "{library.name}" ({library.path})'
+            )
+        )
 
 
 def _opened_revision_rows(connection) -> list[str]:

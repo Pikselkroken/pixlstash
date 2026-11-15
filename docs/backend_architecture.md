@@ -2487,9 +2487,13 @@ that changes the active library needs the server the refusal stops, so the
 refusal itself carries the way out. `_offer_a_usable_library` raises
 `LibraryUnavailableError` (a `HubBootstrapError`) naming the library, a `kind`
 read from the filesystem as it is now — `folder_missing`, `vault_missing`,
-`unreadable`, or `foreign` (`prevalidate_library_fingerprint` raises
-`LibraryFingerprintConflictError` for a readable vault that is another library)
-— the reason, and the attached libraries that pass the same read-only check.
+`unreadable`, `foreign` (`prevalidate_library_fingerprint` raises
+`LibraryFingerprintConflictError` for a readable vault that is another library),
+or `newer` (`_refuse_newer_library` reads `alembic_version` read-only and raises
+`NewerLibraryError` for a revision this build lacks, before the vault opens) —
+the reason, and the attached libraries that pass the same read-only check. A
+`newer` library is never offered start-over or relocate: its way out is an
+update, so the screen shows **Get the latest PixlStash** instead of **Find it**.
 `app.main` prints what is missing, the likely cause and every way out as
 copy-pasteable commands (`cli_hint`), and for Electron a final
 `PIXLSTASH_LIBRARY_UNAVAILABLE=` JSON line the shell turns into its recovery

@@ -14,8 +14,12 @@ const els = {
   reason: document.getElementById('reason'),
   notice: document.getElementById('notice'),
   error: document.getElementById('error'),
+  update: document.getElementById('update'),
+  updateRow: document.getElementById('update-row'),
   retry: document.getElementById('retry'),
+  retryNote: document.getElementById('retry-note'),
   find: document.getElementById('find'),
+  findRow: document.getElementById('find-row'),
   others: document.getElementById('others'),
   alternatives: document.getElementById('alternatives'),
   create: document.getElementById('create'),
@@ -46,7 +50,21 @@ const COPY = {
     cause:
       'The folder holds a library, but not this one. It may have been replaced or copied over. PixlStash did not open it, so nothing in it changed.',
   },
+  // The library is fine; this PixlStash is the one out of date. Updating is
+  // the answer, so there is nothing to find and nothing to start over.
+  newer: {
+    title: 'Your library needs a newer PixlStash',
+    intro: (library) =>
+      `“${library.name}” in ${library.path} was last opened by a newer version of PixlStash, and this version cannot read it.`,
+    cause:
+      'The newer version updated the library in a way this one does not understand yet, so PixlStash left it closed and nothing in it changed. Update PixlStash and it opens as it was.',
+    retryNote: 'After updating PixlStash.',
+  },
 };
+
+// The backend's RELEASES_URL. Opened through main's window-open handler, which
+// hands https links to the system browser.
+const RELEASES_URL = 'https://github.com/pikselkroken/pixlstash/releases/latest';
 
 let busy = false;
 
@@ -123,8 +141,16 @@ async function render() {
   const copy = COPY[report.kind] || COPY.folder_missing;
   els.title.textContent = copy.title;
   document.title = `PixlStash: ${copy.title}`;
-  els.intro.textContent = `PixlStash could not open “${report.library.name}”. It was expected in ${report.library.path}.`;
+  els.intro.textContent = copy.intro
+    ? copy.intro(report.library)
+    : `PixlStash could not open “${report.library.name}”. It was expected in ${report.library.path}.`;
   els.cause.textContent = copy.cause;
+  if (report.kind === 'newer') {
+    els.updateRow.classList.remove('hidden');
+    els.findRow.classList.add('hidden');
+    els.retry.classList.add('secondary');
+    els.retryNote.textContent = copy.retryNote;
+  }
   els.reason.textContent = report.reason || report.vault_path;
   els.createNote.textContent = `Start an empty library in another folder. “${report.library.name}” is set aside, not deleted, and can be added back later.`;
   show(els.notice, request.notice);
@@ -134,6 +160,7 @@ async function render() {
   els.others.classList.toggle('hidden', alternatives.length === 0);
 }
 
+els.update.addEventListener('click', () => window.open(RELEASES_URL, '_blank'));
 els.retry.addEventListener('click', () => act(() => api.retryLibrary()));
 els.find.addEventListener('click', () => act(() => api.findMissingLibrary()));
 els.create.addEventListener('click', () => act(() => api.createReplacementLibrary()));

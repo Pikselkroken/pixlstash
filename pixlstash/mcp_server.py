@@ -44,12 +44,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from importlib.metadata import PackageNotFoundError, version as package_version
 from typing import Callable
 
 from platformdirs import user_cache_dir, user_config_dir
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.app_version import app_version
 from pixlstash.utils.workflow_ids import WORKFLOW_ID_PATTERN
 
 logger = get_logger(__name__)
@@ -1052,7 +1052,7 @@ def handle_message(
             if requested in SUPPORTED_PROTOCOL_VERSIONS
             else PROTOCOL_VERSION,
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": SERVER_NAME, "version": _version()},
+            "serverInfo": {"name": SERVER_NAME, "version": app_version()},
             "instructions": INSTRUCTIONS
             + "\n\n"
             + (WRITE_INSTRUCTIONS if allow_write else READ_ONLY_ENDING),
@@ -1113,14 +1113,6 @@ def serve(fetch: Fetch, stdin=None, stdout=None, allow_write: bool = False) -> N
         if reply is not None:
             stdout.write(json.dumps(reply) + "\n")
             stdout.flush()
-
-
-def _version() -> str:
-    try:
-        return package_version("pixlstash")
-    except PackageNotFoundError:
-        logger.warning("[mcp] pixlstash is not installed; reporting version unknown")
-        return "unknown"
 
 
 def read_server_config(path: str | None = None) -> dict:

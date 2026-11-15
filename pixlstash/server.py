@@ -11,7 +11,6 @@ import threading
 import time
 from functools import lru_cache
 from pathlib import Path
-from importlib.metadata import PackageNotFoundError, version as package_version
 from alembic.util.exc import CommandError as AlembicCommandError
 from platformdirs import user_config_dir, user_data_dir
 from sqlalchemy.exc import SQLAlchemyError
@@ -38,6 +37,7 @@ from pixlstash.db_models import (
 )
 
 from pixlstash.auth import AuthService, LoginRequest
+from pixlstash.utils.app_version import app_version
 from pixlstash.authz import AUTHZ_GATE_ENFORCING, AuthzGate
 from pixlstash.listeners import ListenersMixin, _get_lan_ip
 from pixlstash.maintenance import MaintenanceMixin
@@ -1724,29 +1724,7 @@ class Server(
             )
 
     def _get_version(self):
-        # Prefer pyproject.toml when running from the repo so that the version
-        # is always authoritative and never stale from an old editable install.
-        try:
-            import tomllib
-        except ImportError:
-            import tomli as tomllib
-        pyproject_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "pyproject.toml"
-        )
-        try:
-            with open(pyproject_path, "rb") as f:
-                data = tomllib.load(f)
-            ver = data.get("project", {}).get("version")
-            if ver:
-                return ver
-        except OSError as exc:
-            logger.debug("Could not read version from pyproject.toml: %s", exc)
-
-        # Fall back to installed package metadata (pip install / wheel deployment).
-        try:
-            return package_version("pixlstash")
-        except PackageNotFoundError:
-            return "unknown"
+        return app_version()
 
     def _get_frontend_dist_dir(self):
         package_dir = os.path.abspath(os.path.dirname(__file__))

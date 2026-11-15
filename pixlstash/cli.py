@@ -38,6 +38,7 @@ from pixlstash.hub.registry import (
 )
 from pixlstash.hub.schema import HubSchemaTooNewError
 from pixlstash import plugin_create, plugin_install
+from pixlstash.utils.app_version import app_version
 from pixlstash.plugin_install import PluginError
 
 # Exit codes. 0 success, 1 a refusal the user can act on (not a vault, already
@@ -996,7 +997,7 @@ def _cmd_backup(registry: LibraryRegistry, args: argparse.Namespace) -> int:
             registry.hub_path,
             metadata_only=args.metadata_only,
             compress=not args.no_compress,
-            tool_version=_tool_version(),
+            tool_version=app_version(),
             # Only ever called when the destination looks too small. --yes is
             # the scripted answer; without it a cron job would hang on a
             # question nobody is there to read.
@@ -1182,16 +1183,6 @@ def _cmd_prepare_legacy_identity(
     print(f"Prepared legacy identity migration for {library.uuid} at {library.path}")
     print("Start PixlStash to copy, verify, and blank the approved legacy identity.")
     return EXIT_OK
-
-
-def _tool_version() -> str:
-    """Return the installed PixlStash version, or 'unknown'."""
-    from importlib.metadata import PackageNotFoundError, version
-
-    try:
-        return version("pixlstash")
-    except PackageNotFoundError:
-        return "unknown"
 
 
 def _cmd_rename(registry: LibraryRegistry, args: argparse.Namespace) -> int:

@@ -72,6 +72,13 @@ describe('the missing-library startup protocol', () => {
     assert.equal(parseLibraryUnavailableReport('The PixlStash backend exited with code 1'), null);
   });
 
+  it('reaches the screen for a library a newer build has opened, not the splash', () => {
+    const newer = { ...report, kind: 'newer' as const };
+    const output = `log line\n${LIBRARY_UNAVAILABLE_PREFIX}${JSON.stringify(newer)}\n`;
+    assert.equal(parseLibraryUnavailableReport(output)?.kind, 'newer');
+    assert.ok(startupFailureError(1, null, output) instanceof LibraryUnavailableError);
+  });
+
   it('takes the last record, so a retry describes the retry', () => {
     const older = { ...report, kind: 'vault_missing' };
     const output = [
@@ -190,9 +197,13 @@ describe('the recovery screen assets', () => {
     assert.match(script, /button\.dataset\.wasDisabled/);
     assert.doesNotMatch(script, /button\.disabled = value;/);
     // One wording per kind the backend reports.
-    for (const kind of ['folder_missing', 'vault_missing', 'unreadable', 'foreign']) {
+    for (const kind of ['folder_missing', 'vault_missing', 'unreadable', 'foreign', 'newer']) {
       assert.match(script, new RegExp(`${kind}:`));
     }
+    // A newer library is not lost: no Find it, and a way to the update.
+    assert.match(html, /id="update"/);
+    assert.match(script, /report\.kind === 'newer'[\s\S]*?els\.findRow\.classList\.add\('hidden'\)/);
+    assert.match(script, /releases\/latest/);
   });
 
   it('is exposed through the preload bridge on the channels main serves', () => {

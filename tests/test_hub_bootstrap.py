@@ -12,6 +12,7 @@ import sqlite3
 import stat
 import threading
 import time
+import tomllib
 from types import SimpleNamespace
 
 import pytest
@@ -27,6 +28,7 @@ from pixlstash.hub.bootstrap import (
     UnusableVaultError,
     bootstrap_hub,
     finalize_opened_library,
+    newer_library_message,
     prepare_legacy_identity,
     prevalidate_library_fingerprint,
     registered_vault_path,
@@ -36,6 +38,7 @@ from pixlstash.hub.db import HubDatabase
 from pixlstash.server import Server
 from pixlstash.hub.registry import LibraryError, LibraryRegistry, read_vault_uuid
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
+from pixlstash.utils import app_version as app_version_module
 from pixlstash.vault import Vault
 
 
@@ -1557,6 +1560,45 @@ class TestTheRecoveryReport:
         with open(os.path.join(gone, "vault.db"), "rb") as handle:
             assert handle.read().startswith(b"this is not a database")
 
+    def test_a_vault_a_newer_build_opened(self, hub_with_two, monkeypatch):
+        """Reaches the recovery screen with an update to offer, before the
+        vault is opened, and is never offered "start over" or "find it"."""
+        hub_path, kept, gone, _uuid = hub_with_two
+        conn = sqlite3.connect(os.path.join(gone, "vault.db"))
+        conn.execute("UPDATE alembic_version SET version_num = '9999_from_the_future'")
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr(bootstrap_module, "app_version", lambda: "2.0.1")
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(kept, hub_path)
+
+        report = raised.value
+        assert report.kind == LibraryUnavailableError.NEWER
+        assert "This version (2.0.1) cannot read it" in report.reason
+        assert "Library revision 9999" in report.reason
+        assert [lib.name for lib in report.alternatives] == ["Kept"]
+        assert vault_query(gone, "SELECT version_num FROM alembic_version") == [
+            ("9999_from_the_future",)
+        ]
+        text = app_module._format_library_unavailable(report)
+        assert "Update PixlStash: https://" in text
+        assert "relocate" not in text
+
+    def test_a_vault_a_newer_build_opened_is_not_offered_as_another(self, hub_with_two):
+        hub_path, kept, gone, _uuid = hub_with_two
+        conn = sqlite3.connect(os.path.join(kept, "vault.db"))
+        conn.execute("UPDATE alembic_version SET version_num = '9999_from_the_future'")
+        conn.commit()
+        conn.close()
+        shutil.rmtree(gone)
+
+        with pytest.raises(LibraryUnavailableError) as raised:
+            bootstrap_hub(kept, hub_path)
+
+        assert raised.value.kind == LibraryUnavailableError.FOLDER_MISSING
+        assert raised.value.alternatives == []
+
     def test_starting_a_new_library_detaches_the_missing_one(
         self, hub_with_two, tmp_path, monkeypatch
     ):
@@ -2558,3 +2600,16 @@ class TestOpeningTheRegisteredVault:
         assert not os.path.exists(vault_path), "the replacement is made by the open"
         # Without this the new vault would be refused for carrying no fingerprint.
         assert double._hub_bootstrap.library.vault_uuid is None
+
+
+def test_a_source_checkout_reports_its_own_version_not_a_stale_install(monkeypatch):
+    """A checkout's old ``pixlstash.egg-info`` called 2.0.1 "1.9.0rc1" on the
+    newer-library screen; pyproject.toml is the version that is running."""
+    with open(app_version_module._PYPROJECT, "rb") as handle:
+        expected = tomllib.load(handle)["project"]["version"]
+    monkeypatch.setattr(app_version_module, "package_version", lambda _: "1.9.0rc1")
+
+    assert app_version_module.app_version() == expected
+    assert f"This version ({expected})" in newer_library_message(
+        ["9999_x"], library="The library"
+    )
