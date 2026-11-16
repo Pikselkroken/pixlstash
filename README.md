@@ -173,7 +173,8 @@ a local one, installs the PixlStash nodes into it and links the two apps.
 - **LoRA training** from a person or a set with AI-toolkit, on your own GPU.
   The Train dialog fits the run to your GPU, measures your machine on the first
   run and gives a time estimate. *Create a training set…* on a person picks
-  the pictures for you.
+  the pictures for you, or draws them as
+  [character sheets](#character-sheet-workflows).
 - **Training runs** have their own page: a loss curve with each checkpoint's
   previews under it, and the time left. For a person, every
   preview is rated for likeness. The finished LoRA goes on the shelf, attached
@@ -1087,6 +1088,92 @@ from these tools, it is almost always one of two things:
   from an unrelated folder tells you which you have.
 - **Nothing is listening.** `pixlstash-mcp` writes a line to stderr at
   start-up in that case, which most clients show in their MCP server log.
+
+## Character sheet workflows
+
+*Create a training set…* on a person can draw the pictures instead of picking
+them: a ComfyUI workflow draws **character sheets**, one picture with four
+passport photos and two body photos of the same person, and the sheets you keep
+are cut into six pictures each. The Sheets step has two modes, **Text** and
+**Reference and text**, and each lists only the workflows that can draw a sheet
+in it. PixlStash ships five that can: `Sheet-Qwen-Image-2.1` and
+`Sheet-Flux2-Klein-9B`, each with a `-Reference` twin, and
+`Sheet-MiniMax-H3-Reference`. Your own workflow is listed too once it meets the
+rules below. Add it from Workflows (drop the `.json` on the screen) first.
+Only MOSS-Image's text sheets have been probed for how well they hold the
+layout; the other models' sheets, and every sheet drawn from a reference, have
+not.
+
+Both modes need:
+
+- **A supported model.** The workflow's diffusion model (its checkpoint or
+  UNet loader) must be one the model shelf recognises as one of the models
+  below. FLUX.2 counts only as Klein (Klein in its base model or file name);
+  FLUX.2 dev does not.
+- **A size PixlStash can set.** Every sheet is drawn at 5:3 (1280×768,
+  1840×1104 or 2560×1536, and 5280×3168 for MiniMax H3), so the workflow's
+  empty latent needs a `width` and `height` that are plain numbers, or are
+  wired from a `ResolutionSelector` or a `PrimitiveInt`. A workflow whose size
+  comes from its input picture cannot be listed as it is.
+- **A clean pre-flight.** It must be able to run: ComfyUI reachable, every
+  model present, nothing the Run popup would refuse.
+- **A saver PixlStash collects from**: ComfyUI's `Save Image` or a PixlStash
+  saver node. Sheets are drawn straight into the Scrapheap and stay there; only
+  the six cut pictures join the library.
+
+A LoRA is optional. LoRAs made for another model than the workflow's are
+greyed out.
+
+### Text
+
+Draws a sheet from your description alone, so each sheet is a slightly
+different person.
+
+- **Models:** MOSS-Image, Krea 2, Qwen-Image, FLUX.2 Klein or MiniMax H3.
+- **A text-to-image graph:** every sampler starts from an empty latent, and no
+  picture feeds the model's reference input. A workflow that reads a picture
+  as a reference is not listed here.
+- **Sizes:** MiniMax H3 draws at Large or 4K and the other models at Small,
+  Medium or Large; the rest are greyed out.
+- **Prompt:** MOSS-Image is sent a layout prompt (the JSON
+  `MOSSImageLayoutPrompt` emits, with a box per photo). Every other model is
+  sent the sheet in plain sentences. The workflow needs a positive prompt
+  PixlStash can write into. The step does not check this in Text mode: a
+  workflow without one is listed, but draws from its own saved prompt.
+
+### Reference and text
+
+Draws a sheet of the person in a picture you pick, plus your description, and
+ranks the sheets by how close their faces are to that picture.
+
+- **Models:** an image-edit model that keeps the person in the picture:
+  Qwen-Image (Qwen-Image-Edit or Qwen-Image 2.1), FLUX.2 Klein, or MiniMax H3.
+- **A manual workflow**, one you imported or that ships with PixlStash, not
+  one only known from your pictures' metadata: PixlStash reads its graph to
+  find the reference input.
+- **A picture loader feeding the model's reference input**: a
+  `ReferenceLatent`, a Qwen `TextEncodeQwenImageEdit…` or
+  `TextEncodeQwenImage21` node, or MiniMax H3's
+  `MiniMaxH3ReferenceToVideo`. A ControlNet's pose picture does not count.
+- **Every sampler starts from an empty latent**, never from the picture's own,
+  so the sheet is drawn at its own size rather than the picture's.
+- **A picture input that is not pinned** to a fixed picture: the reference
+  you pick goes in there.
+- **A positive prompt PixlStash can write into**: the sheet's description goes
+  there.
+
+Most image-edit workflows draw on their input picture's canvas: their sampler
+starts from the picture, or their size is read off it, so there is no size to
+set. The step then offers **Make a sheet workflow from
+\<name\>** (or **Make a sheet copy that can** under the workflow's warning). It
+stores a copy named `<name> (sheet)` that draws at a size of its own: the
+empty latent gets a literal width and height, a Qwen-Image-Edit sampler that
+started from the picture gets an empty latent instead (any other model's is
+refused), denoise becomes 1.0, and a
+`SaveImageAdvanced` becomes a `Save Image`. The copy is refused, with the
+reason, for a graph with no picture to read, more than one sampler pass, a
+size already set, a sampler start it cannot swap for an empty latent, or a
+picture that never reaches the model's reference input.
 
 ## Troubleshooting
 
