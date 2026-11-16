@@ -1835,6 +1835,42 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("compares the sheets with the reference cluster when switched", async () => {
+    referenceWorld();
+    gen.rankSheets.mockImplementation(async (_id, ids, refs) => ({
+      // Against the picture neither sheet is close; against the cluster both.
+      sheets: ids.map((id) =>
+        sheet(id, 0.7, { closeness: refs ? 0.3 : 0.6, close: !refs }),
+      ),
+      references: refs ? 1 : 2,
+    }));
+    const wrapper = mountDialog();
+    await flushPromises();
+    await draw(wrapper);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(gen.rankSheets).toHaveBeenLastCalledWith(7, [501, 502], [31]);
+    const compare = () =>
+      wrapper.find('[data-testid="cs-compare-to"] [aria-checked="true"]');
+    expect(compare().text()).toBe("This picture");
+    expect(wrapper.find('[data-testid="cs-none-close"]').text()).toContain(
+      "came close to the reference",
+    );
+
+    const cluster = wrapper
+      .findAll('[data-testid="cs-compare-to"] [role="radio"]')
+      .find((b) => b.text() === "Reference cluster");
+    await cluster.trigger("click");
+    await flushPromises();
+    expect(compare().text()).toBe("Reference cluster");
+    // Ranked again without the picture: the server takes the cluster.
+    expect(gen.rankSheets).toHaveBeenLastCalledWith(7, [501, 502]);
+    expect(wrapper.findAll('[data-testid="cs-sheet"]')[0].attributes("aria-label")).toBe(
+      "Sheet 1: 0.60 close to Anna · faces agree strongly",
+    );
+    expect(wrapper.find('[data-testid="cs-none-close"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("scores each photo of a sheet on its own, under its face", async () => {
     const photo = (panel, closeness, agreement) => ({
       panel,

@@ -12905,9 +12905,11 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   always named, shoes only at full body. A LoRA's first trigger word leads.
 - **Ranking** (`POST /characters/{id}/sheets/rank`) reads the faces face
   extraction stored on each sheet: `agreement` is their mean pairwise cosine
-  similarity, `closeness` the mean similarity to the character's reference
-  faces (`select_reference_faces_for_character`, the sheets' own faces left
-  out), and more faces than panels marks a sheet `broken`. A sheet with no
+  similarity, `closeness` each face's best match among every face of the
+  character's reference cluster (`reference_cluster_faces` up to
+  `CLUSTER_FACES`; without a cluster `select_reference_faces_for_character`;
+  the sheets' own faces left out), averaged over the sheet's faces: against
+  a cluster a face need only look like one look of the person. More faces than panels marks a sheet `broken`. A sheet with no
   `Face` row yet is `faces_read: false` and unscored. Each sheet also carries
   its `format`, so the dialog can show the file itself full size at
   `/pictures/{id}.{format}`. `different_from` lists the other sheets asked
@@ -13008,7 +13010,10 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   - `rank_sheets(..., reference_picture_ids)` measures closeness against the
     faces of the pictures the sheets were drawn from (at most 4, every face of
     each, an id with no faces ignored) instead of the character's reference
-    faces: a picked picture need not be one of those.
+    cluster, as the mean similarity rather than the best match: a picked
+    picture need not be one of those. Without the ids the same sheets are
+    compared with the cluster, which is how the dialog's *Compare with*
+    toggle switches.
 - **The build is in the description.** `body` is still taken, said after the
   description and as a "body shape" sentence on the body photos' torso, but
   only when given: nothing stands in for it (no "average build"), since a

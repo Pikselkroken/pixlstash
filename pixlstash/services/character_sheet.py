@@ -54,6 +54,7 @@ from pixlstash.db_models import Character, Face, Picture
 from pixlstash.image_plugins.service import import_derived_outputs
 from pixlstash.pixl_logging import get_logger
 from pixlstash.scoring import select_reference_faces_for_character
+from pixlstash.services.face_clusters import reference_cluster_faces
 from pixlstash.services.move_reconciliation_service import add_person
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
@@ -101,6 +102,9 @@ Size = Literal[Size, "4k"]
 STRONG_AGREEMENT = 0.55
 SOME_AGREEMENT = 0.45
 CLOSE_TO_REFERENCES = 0.45
+# Every face of a reference cluster counts against a sheet: the route caps a
+# cluster at this many pictures.
+CLUSTER_FACES = 5000
 # Grey level over which a line of the sheet counts as its white frame: the
 # frame is ~250, an overcast sky in a photo ~237.
 FRAME_LEVEL = 244
@@ -901,7 +905,10 @@ def split_sheet(
     return [image.crop(box) for box in sheet_cells(image, faces)[0]]
 
 
-def _unit(vectors: list[np.ndarray]) -> np.ndarray:
+def _unit(vectors: list[np.ndarray] | np.ndarray) -> np.ndarray:
+    """*vectors* as rows of unit length; a 2-D array is taken as that already."""
+    if isinstance(vectors, np.ndarray) and vectors.ndim == 2:
+        return vectors
     matrix = np.stack(vectors).astype(np.float32)
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     return matrix / np.where(norms == 0, 1, norms)
@@ -921,12 +928,17 @@ def agreement(embeddings: list[np.ndarray]) -> float | None:
 
 
 def closeness(
-    embeddings: list[np.ndarray], references: list[np.ndarray]
+    embeddings: list[np.ndarray], references: list[np.ndarray], best: bool = False
 ) -> float | None:
-    """How close a sheet's faces come to the character's: the mean cosine similarity."""
-    if not embeddings or not references:
+    """How close a sheet's faces come to the references, averaged over its faces.
+
+    Each face counts its mean cosine similarity to the references, or with
+    *best* its highest: against a cluster, a face need only match one of them.
+    """
+    if not len(embeddings) or not len(references):
         return None
-    return float(np.mean(_unit(embeddings) @ _unit(references).T))
+    similarity = _unit(embeddings) @ _unit(references).T
+    return float(np.mean(similarity.max(axis=1) if best else similarity))
 
 
 def panel_of(bbox: list[int], width: int, height: int) -> int:
@@ -951,13 +963,14 @@ def panel_scores(
     width: int | None,
     height: int | None,
     references: list[np.ndarray],
+    best: bool = False,
 ) -> list[dict]:
     """Each panel's face scored on its own, in panel order.
 
     *faces* are a sheet's ``(embedding, box)`` pairs, *width* and *height* its
     picture's. A panel's face is its largest; a panel with none is left out.
     Its ``agreement`` is its mean similarity to the other panels' faces, its
-    ``closeness`` to *references*, and its ``box`` the face's box as fractions
+    ``closeness`` to *references* (with *best*, its best match among them), and its ``box`` the face's box as fractions
     of the sheet, for marking it on the picture.
     """
     if not width or not height:
@@ -974,7 +987,7 @@ def panel_scores(
         vector, box = largest[panel]
         others = [other for p, (other, _) in largest.items() if p != panel]
         agrees = closeness([vector], others)
-        near = closeness([vector], references)
+        near = closeness([vector], references, best)
         out.append(
             {
                 "panel": panel,
@@ -1030,8 +1043,9 @@ def sheet_faces_in_session(
     ``None`` when the character does not exist. A sheet's list holds a
     ``(features, bbox)`` row per face, *features* ``None`` on the row face
     extraction leaves on a picture with no face, so an empty list means its
-    faces are not read yet. The references are the character's
-    reference faces, or, given *reference_picture_ids*, the faces of those
+    faces are not read yet. The references are every face of the character's
+    reference cluster (without one, its reference faces), or, given
+    *reference_picture_ids*, the faces of those
     pictures: what the sheets were drawn from. The sheets' own faces are never
     their own references. Each sheet's ``(format, width, height, file_path)``:
     the format is what the picture's file is served as.
@@ -1046,11 +1060,10 @@ def sheet_faces_in_session(
     ).all():
         faces[picture_id].append((features, bbox))
     if reference_picture_ids is None:
-        references = [
-            face.features
-            for face in select_reference_faces_for_character(session, character_id)
-            if face.picture_id not in faces
-        ]
+        cluster = reference_cluster_faces(
+            session, character_id, CLUSTER_FACES
+        ) or select_reference_faces_for_character(session, character_id)
+        references = [face.features for face in cluster if face.picture_id not in faces]
     else:
         # ponytail: every face of a picked picture counts; a group photo as
         # the reference measures against everyone in it.
@@ -1126,9 +1139,11 @@ def rank_sheets(
 
     The references are the character's, or the faces of
     *reference_picture_ids* when given (an unknown id has no faces and is
-    ignored). Returns one dict per sheet, in the order asked, and how many
-    reference faces closeness was measured against. Raises
-    :class:`SheetNotFound` for an unknown character.
+    ignored). Against the character's, a face's closeness is its best match
+    among them, so a sheet like any one look of the person is close; against
+    pictures, its mean similarity to their faces. Returns one dict per sheet,
+    in the order asked, and how many reference faces closeness was measured
+    against. Raises :class:`SheetNotFound` for an unknown character.
     """
     ids = list(dict.fromkeys(picture_ids))
     found = vault.db.run_immediate_read_task(
@@ -1138,13 +1153,16 @@ def rank_sheets(
         raise SheetNotFound(f"No character {character_id}.")
     faces, reference_rows, pictures = found
     references = _vectors(reference_rows)
+    # Normalised once: a cluster's thousands of faces meet every sheet and panel.
+    references = _unit(references) if references else []
+    best = reference_picture_ids is None
     vectors_of = {pid: _vectors([row[0] for row in faces[pid]]) for pid in ids}
     out = []
     for picture_id in ids:
         rows = faces[picture_id]
         vectors = vectors_of[picture_id]
         score = agreement(vectors)
-        near = closeness(vectors, references)
+        near = closeness(vectors, references, best)
         format_, width, height, file_path = pictures.get(picture_id, (None,) * 4)
         boxed = [
             (
@@ -1177,7 +1195,7 @@ def rank_sheets(
                 "closeness": near,
                 "close": None if near is None else near >= CLOSE_TO_REFERENCES,
                 "broken": len(vectors) > MAX_FACES,
-                "panels": panel_scores(boxed, width, height, references),
+                "panels": panel_scores(boxed, width, height, references, best),
                 "cuts_cleanly": None if cut is None else cut[1],
                 "cells": [] if cut is None else [list(cell) for cell in cut[0]],
                 # Kept together, these would mix two people into one set: their
