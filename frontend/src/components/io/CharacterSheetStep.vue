@@ -1119,8 +1119,10 @@ const slots = computed(() => {
                 ? "displaying"
                 : "queued",
       percent: generating ? Math.round(Number(progress.percent) || 0) : null,
-      // Done drawing and being imported, there is nothing left to stop.
-      stoppable: !runEnded(run) && !run.stopping && !displaying,
+      // Done drawing and being imported, there is nothing left to stop; while
+      // it draws (`displaying` holds then too) it can still be stopped.
+      stoppable:
+        !runEnded(run) && !run.stopping && (generating || !displaying),
     });
   }
   return out.map((slot, index) => ({ ...slot, n: index + 1 }));
@@ -1477,6 +1479,17 @@ async function stopSheetRun(run) {
   // Nothing stopped (it ended, or ComfyUI refused): the place is as it was.
   run.stopping = (await tasks.stopComfyuiRun(run.key)) > 0;
   schedule();
+}
+
+/** Stop every run of this draw still going, and those a new draw set aside
+ * that Tasks still lists; the sheets already drawn stay in the Scrapheap. */
+function stopAll() {
+  const live = new Set(tasks.comfyuiRuns.map((run) => runKey(run)));
+  const keys = new Set([
+    ...waitingRuns.value.map((run) => run.key),
+    ...strayKeys.value.filter((key) => live.has(key)),
+  ]);
+  for (const key of keys) tasks.stopComfyuiRun(key);
 }
 
 async function draw() {
@@ -2036,6 +2049,7 @@ defineExpose({
   zooming,
   reloadReferences,
   snapshot,
+  stopAll,
 });
 </script>
 

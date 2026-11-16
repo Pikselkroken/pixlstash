@@ -82,6 +82,7 @@ vi.mock("../../api/workflows", () => ({
 }));
 
 import TrainingSetBuild from "./TrainingSetBuild.vue";
+import CharacterSheetStep from "../io/CharacterSheetStep.vue";
 import PicturePicker from "../widgets/PicturePicker.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
@@ -1512,6 +1513,22 @@ describe("TrainingSetBuild: generating the pictures", () => {
     expect(stops()).toEqual(["Stop generation of sheet 3"]);
     // Stopped on purpose is not a failure to warn about.
     expect(wrapper.find('[data-testid="cs-failed"]').exists()).toBe(false);
+
+    // Drawing on ComfyUI, a run can still be stopped from its place (the
+    // trailing "" is its progress bar).
+    tasks.comfyuiRuns = [
+      { run_id: "r1", status: "running", percent: 100, generated: true },
+      { run_id: "r3", status: "running", percent: 40 },
+    ];
+    await flushPromises();
+    expect(labels()).toEqual(["displaying", "stopped", "generating", ""]);
+    expect(stops()).toEqual(["Stop generation of sheet 3"]);
+
+    // The dialog's Cancel: every run not ended, and not the stopped one again.
+    gen.stopRun.mockClear();
+    wrapper.findComponent(CharacterSheetStep).vm.stopAll();
+    await flushPromises();
+    expect(gen.stopRun.mock.calls.flat().sort()).toEqual(["r1", "r3"]);
     wrapper.unmount();
   });
 
