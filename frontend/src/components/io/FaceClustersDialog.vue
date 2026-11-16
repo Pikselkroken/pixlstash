@@ -742,11 +742,14 @@ function close() {
   width: 3px;
   background: var(--active-bar);
 }
+/* The fixed-box thumbnails (rail, strip, picked, pair, rim, zoom aside) show
+   the whole frame, letterboxed: a square crop cut a full-body picture down to
+   its torso. The field's tiles are sized to the picture instead. */
 .fc-row__face {
   width: var(--space-8);
   height: var(--space-8);
   flex: none;
-  object-fit: cover;
+  object-fit: contain;
   border-radius: var(--radius-md);
 }
 .fc-row__text {
@@ -793,7 +796,7 @@ function close() {
 .fc-strip img {
   width: var(--space-6);
   height: var(--space-6);
-  object-fit: cover;
+  object-fit: contain;
   border-radius: var(--radius-sm);
 }
 .fc-badge {
@@ -945,7 +948,7 @@ function close() {
   width: var(--space-9);
   height: var(--space-9);
   flex: none;
-  object-fit: cover;
+  object-fit: contain;
   border-radius: var(--radius-md);
 }
 .fc-link {
@@ -1009,7 +1012,7 @@ function close() {
 .fc-pair img {
   width: var(--face-thumb-xl);
   height: var(--face-thumb-xl);
-  object-fit: cover;
+  object-fit: contain;
   border-radius: var(--radius-md);
 }
 .fc-num {
@@ -1122,7 +1125,7 @@ function close() {
 .fc-rim img {
   width: var(--space-8);
   height: var(--space-8);
-  object-fit: cover;
+  object-fit: contain;
   border-radius: var(--radius-md);
 }
 .fc-more {
@@ -1142,7 +1145,7 @@ function close() {
 .fc-zoomref img {
   width: var(--face-thumb-xl);
   height: var(--face-thumb-xl);
-  object-fit: cover;
+  object-fit: contain;
   border-radius: var(--radius-md);
 }
 
