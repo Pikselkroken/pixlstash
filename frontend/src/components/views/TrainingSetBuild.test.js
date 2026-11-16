@@ -2413,6 +2413,24 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     wrapper.unmount();
   });
 
+  it("draws a little person when the description says so, and asks for one", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult man with dwarfism, short beard" });
+    const wrapper = mountDialog();
+    await flushPromises();
+    const picked = () =>
+      wrapper.find('[data-testid="cs-proportions"] [aria-checked="true"]').text();
+    expect(picked()).toBe("Little person");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    expect(gen.buildSheetPrompt).toHaveBeenLastCalledWith(
+      expect.objectContaining({ proportions: "little_person" }),
+    );
+    wrapper.unmount();
+  });
+
   it("saves on leaving after a save failed, though nothing was pending", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(suggestion());
     api.patchPictureSet.mockRejectedValueOnce(new Error("offline"));

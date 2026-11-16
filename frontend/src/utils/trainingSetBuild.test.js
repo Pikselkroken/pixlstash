@@ -5,6 +5,7 @@ import {
   buildLine,
   freeTrainingSetName,
   liveBuildRuns,
+  proportionsFromDescription,
   subjectFromDescription,
 } from "./trainingSetBuild";
 
@@ -59,6 +60,16 @@ describe("trainingSetBuild", () => {
     expect(subjectFromDescription("A human woman")).toBe("woman");
     expect(subjectFromDescription("Freckles, green eyes")).toBeNull();
     expect(subjectFromDescription("")).toBeNull();
+  });
+
+  it("reads a little person or a cartoon figure from the description", () => {
+    expect(proportionsFromDescription("Adult woman with dwarfism")).toBe("little_person");
+    expect(proportionsFromDescription("A Little Person, red hair")).toBe("little_person");
+    expect(proportionsFromDescription("Chibi girl, pink hair")).toBe("cartoon");
+    // A cartoon style is not a cartoon figure.
+    expect(proportionsFromDescription("Cartoon style, tall and slim")).toBeNull();
+    expect(proportionsFromDescription("Adult man, short beard")).toBeNull();
+    expect(proportionsFromDescription("")).toBeNull();
   });
 
   it("opens the build of the selected set, before the people have loaded", () => {

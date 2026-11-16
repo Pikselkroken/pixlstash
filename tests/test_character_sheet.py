@@ -53,9 +53,14 @@ def _panel_of(caption: str) -> int:
     return int(caption.split(":", 1)[0].removeprefix("Panel "))
 
 
+@pytest.mark.parametrize("proportions", ["typical", "little_person", "cartoon"])
 @pytest.mark.parametrize("framing", ["waist_up", "mid_thigh", "knees_up", "full_body"])
-def test_every_box_lands_inside_its_own_panel(framing):
-    layout = json.loads(sheet_prompt(description="an adult woman", framing=framing))
+def test_every_box_lands_inside_its_own_panel(framing, proportions):
+    layout = json.loads(
+        sheet_prompt(
+            description="an adult woman", framing=framing, proportions=proportions
+        )
+    )
     items = layout["items"]
     assert layout["bbox_format"] == "yxyx"
     assert {_panel_of(i["caption"]) for i in items} == set(range(1, 7))
@@ -109,6 +114,41 @@ def test_the_mid_thigh_boxes_are_the_probed_ones():
         [-410, 605, 330, 1275],
         [330, 625, 748, 1255],
     ]
+
+
+@pytest.mark.parametrize("framing", ["waist_up", "mid_thigh", "knees_up", "full_body"])
+def test_other_proportions_give_the_head_more_of_the_body_photo(framing):
+    """A little person or a cartoon is drawn with a bigger head and shorter
+    legs than an adult (#1079): the boxes say so as well as the words, and a
+    typical figure keeps the probed boxes."""
+
+    def shares(proportions):
+        layout = json.loads(
+            sheet_prompt(description="x", framing=framing, proportions=proportions)
+        )
+        body = [i for i in layout["items"] if _panel_of(i["caption"]) == 5]
+        (top, _, bottom, _), (h1, _, h2, _) = body[0]["bbox"], body[1]["bbox"]
+        return layout, (h2 - h1) / (bottom - top)
+
+    plain = sheet_prompt(description="x", framing=framing)
+    typical, head = shares("typical")
+    assert json.dumps(typical) == plain
+    little, little_head = shares("little_person")
+    cartoon, cartoon_head = shares("cartoon")
+    assert head < little_head < cartoon_head
+    for layout, words in (
+        (little, "a little person with achondroplasia"),
+        (cartoon, "about three heads tall"),
+    ):
+        captions = [i["caption"] for i in layout["items"] if i["label"] == "character"]
+        assert len(captions) == 6 and all(words in c for c in captions)
+        assert words in layout["summary"]["caption"]
+    assert "three heads" not in plain and "little person" not in plain
+
+
+def test_a_prose_prompt_names_the_proportions():
+    prose = sheet_prompt(description="x", proportions="cartoon", layout="prose")
+    assert "about three heads tall" in prose
 
 
 def test_trousers_are_always_named_and_shoes_only_at_full_body():
@@ -782,6 +822,16 @@ def test_prompt_route_hands_out_the_canvas(client):
     ).json()["prompt"]
     assert "the same woman as in the reference picture, x" in prose
     assert not prose.startswith("{")
+    little = client.post(
+        f"{API_PREFIX}/character-sheets/prompt",
+        json={"description": "x", "proportions": "little_person", "layout": "prose"},
+    ).json()["prompt"]
+    assert "a little person with achondroplasia" in little
+    giant = client.post(
+        f"{API_PREFIX}/character-sheets/prompt",
+        json={"description": "x", "proportions": "giant"},
+    )
+    assert giant.status_code == 422
 
 
 def test_using_a_sheet_files_six_panels_on_the_character(client, sheet_id):

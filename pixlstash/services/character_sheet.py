@@ -74,6 +74,9 @@ MAX_FACES = PANEL_COUNT
 
 Framing = Literal["waist_up", "mid_thigh", "knees_up", "full_body"]
 Subject = Literal["woman", "man"]
+# The figure's proportions: a typical adult's, a little person's (#1079) or a
+# cartoon's. The probed boxes are a typical adult's, about seven heads tall.
+Proportions = Literal["typical", "little_person", "cartoon"]
 Size = Literal["small", "medium", "large"]
 # How the prompt is written: MOSS's layout JSON, or the sheet in one sentence.
 Layout = Literal["moss", "prose"]
@@ -258,6 +261,30 @@ _FRAMING_SUMMARY = {
     "full_body": "full-body photos side by side, each spanning the full height",
 }
 
+# How far down the standing figure each landmark sits, as a fraction of its
+# height from the top of the head: chin, waist, hip, mid-thigh, knee. A body
+# photo's boxes are reshaped by moving these (`_reshape`); the typical ones
+# leave the probed boxes as they are.
+# ponytail: textbook proportions, no probe has drawn a little person's or a
+# cartoon's sheet yet (#1079); adjust the fractions from probes.
+_LANDMARKS = {
+    "typical": (0.13, 0.38, 0.5, 0.62, 0.72),
+    # Short arms and legs, an average-length torso, a head large for the body.
+    "little_person": (0.2, 0.47, 0.6, 0.7, 0.79),
+    # About three heads tall.
+    "cartoon": (0.33, 0.6, 0.7, 0.79, 0.86),
+}
+# Where each framing's photo ends, as an index into a landmark tuple; full
+# body ends at the soles.
+_CROP = {"waist_up": 1, "mid_thigh": 3, "knees_up": 4, "full_body": None}
+_PROPORTION_WORDS = {
+    "typical": "",
+    "little_person": "a little person with achondroplasia: short stature, "
+    "short arms and legs, an average-length torso and a head large for the body",
+    "cartoon": "an adult drawn with stylised cartoon proportions, about three "
+    "heads tall: an oversized head, a small compact body and short arms and legs",
+}
+
 NEGATIVE_PROMPT = "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
 
 
@@ -270,19 +297,55 @@ def _phrase(text: str) -> str:
     return text
 
 
-def _body_items(framing: Framing) -> list[tuple[tuple[int, ...], str]]:
+def _reshape(
+    items: tuple, framing: Framing, proportions: Proportions
+) -> list[tuple[tuple[int, ...], str]]:
+    """One body photo's *items* redrawn for a figure of *proportions*.
+
+    The first item is the whole photo, from the top of the head to where
+    *framing* crops it; the second is the head. Every box's top and bottom
+    move with the landmarks between them, and the head box widens or narrows
+    as much as it grew or shrank, kept inside the photo.
+    """
+    if proportions == "typical":
+        return list(items)
+    old = (0.0, *_LANDMARKS["typical"], 1.0)
+    new = (0.0, *_LANDMARKS[proportions], 1.0)
+    crop = _CROP[framing]
+    old_end, new_end = (1.0, 1.0) if crop is None else (old[crop + 1], new[crop + 1])
+    (top, left, bottom, right), _ = items[0]
+
+    def move(y: int) -> int:
+        t = (y - top) / (bottom - top) * old_end
+        return round(top + (bottom - top) * float(np.interp(t, old, new)) / new_end)
+
+    out = []
+    for index, ((y1, x1, y2, x2), caption) in enumerate(items):
+        n1, n2 = move(y1), move(y2)
+        if index == 1:
+            half = (x2 - x1) * (n2 - n1) / (y2 - y1) / 2
+            middle = (x1 + x2) / 2
+            x1, x2 = max(left, round(middle - half)), min(right, round(middle + half))
+        out.append(((n1, x1, n2, x2), caption))
+    return out
+
+
+def _body_items(
+    framing: Framing, proportions: Proportions = "typical"
+) -> list[tuple[tuple[int, ...], str]]:
     """Panel 5 and 6's boxes and captions for *framing*, in panel order."""
     if framing == "full_body":
         return [
             (box, f"Panel {n}: {cap}")
             for n, items in ((5, _FULL_BODY[0]), (6, _FULL_BODY[1]))
-            for box, cap in items
+            for box, cap in _reshape(items, framing, proportions)
         ]
     p5 = {
         "waist_up": _WAIST_UP_P5,
         "mid_thigh": _MID_THIGH_P5,
         "knees_up": _KNEES_UP_P5,
     }[framing]
+    p5 = _reshape(p5, framing, proportions)
     out = [(box, f"Panel 5: {cap}") for box, cap in p5]
     for (y1, x1, y2, x2), cap in p5:
         for front, turned in _TURNED.items():
@@ -300,6 +363,7 @@ def sheet_prompt(
     shoes: str = "",
     framing: Framing = "mid_thigh",
     subject: Subject = "woman",
+    proportions: Proportions = "typical",
     trigger: str = "",
     size: Size = "large",
     reference: bool = False,
@@ -323,6 +387,9 @@ def sheet_prompt(
     Trousers are always named (left out, MOSS improvises bare legs); shoes only
     at full body, where they belong, since naming them pulls a cropped framing
     to full length. *trigger* is a character LoRA's trigger word, put first.
+    *proportions* other than ``typical`` (#1079) is said with the character
+    and reshapes the body photos' boxes to that figure; the words alone lose
+    to boxes laid out for a seven-heads-tall adult.
     The boxes are laid out on the large canvas and scaled to *size*'s.
     """
     scale = SIZES[size][0] / SHEET_WIDTH
@@ -341,6 +408,8 @@ def sheet_prompt(
     who = f"{lead}{described or f'an adult {subject}'}"
     if body:
         who = f"{who}, {body}"
+    if _PROPORTION_WORDS[proportions]:
+        who = f"{who}, {_PROPORTION_WORDS[proportions]}"
     character = f"{who}, wearing {full_outfit}"
     # A passport photo shows only the top; at full body the trousers and shoes
     # would pull those panels to full length too.
@@ -378,7 +447,7 @@ def sheet_prompt(
                     "bbox": [round(v * scale) for v in box],
                 }
             )
-    body_items = _body_items(framing)
+    body_items = _body_items(framing, proportions)
     per_panel = len(body_items) // 2
     for index, (box, caption) in enumerate(body_items):
         first = index % per_panel == 0

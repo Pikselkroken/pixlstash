@@ -13,7 +13,8 @@ import { unwrap } from "../utils/unwrap";
  * The layout prompt, negative and canvas for one sheet of the character.
  *
  * @param {{description: string, body?: string, top?: string, trousers?: string,
- *   shoes?: string, framing?: string, subject?: string, trigger?: string,
+ *   shoes?: string, framing?: string, subject?: string,
+ *   proportions?: "typical"|"little_person"|"cartoon", trigger?: string,
  *   reference?: boolean, layout?: "moss"|"prose"}} body `reference` names
  *   the person in the run's reference picture; `prose` is the sheet as one
  *   sentence, for an edit model.

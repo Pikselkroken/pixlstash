@@ -125,7 +125,7 @@
           label="Shoes"
           placeholder="white sneakers"
         />
-        <!-- The four choices of how a sheet is drawn: toggles side by side,
+        <!-- The choices of how a sheet is drawn: toggles side by side,
              wrapping only on a narrow window, with one line of hints under
              them. -->
         <div class="cs-fld">
@@ -165,6 +165,16 @@
                 :options="SUBJECTS"
                 data-testid="cs-subject"
                 @pick="subjectTouched = true"
+              />
+            </div>
+            <div class="cs-opt">
+              <FieldLabel>Proportions</FieldLabel>
+              <Segmented
+                v-model="form.proportions"
+                aria-label="Proportions"
+                :options="PROPORTIONS"
+                data-testid="cs-proportions"
+                @pick="proportionsTouched = true"
               />
             </div>
           </div>
@@ -602,7 +612,10 @@ import {
   sheetCopyWorkflow,
 } from "../../api/workflows";
 import { useTasksStore } from "../../stores/useTasksStore";
-import { subjectFromDescription } from "../../utils/trainingSetBuild";
+import {
+  proportionsFromDescription,
+  subjectFromDescription,
+} from "../../utils/trainingSetBuild";
 import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import { errorMessage } from "../../utils/apiError";
 import { runKey } from "../../utils/gpuMemory";
@@ -650,6 +663,13 @@ const SIZES_DRAWN_WELL = ["small", "medium", "large"];
 const SUBJECTS = [
   { id: "woman", label: "Woman" },
   { id: "man", label: "Man" },
+];
+// The figure the sheet draws (#1079): the words alone lose to a layout made
+// for a typical adult, so the layout changes with it.
+const PROPORTIONS = [
+  { id: "typical", label: "Typical" },
+  { id: "little_person", label: "Little person" },
+  { id: "cartoon", label: "Cartoon" },
 ];
 const MOSS = "moss_image";
 // Only MOSS-Image reads the layout JSON; every other engine's sheet is the
@@ -743,6 +763,7 @@ const form = reactive({
   size: "large",
   count: 4,
   subject: "woman",
+  proportions: "typical",
 });
 // A step with nothing saved starts from the choices last made.
 const remembered = props.saved ? null : readChoices();
@@ -751,6 +772,7 @@ if (COUNTS.some((c) => c.id === remembered?.count)) form.count = remembered.coun
 const framingTouched = ref(false);
 // Picked by hand: the description no longer decides who is drawn.
 const subjectTouched = ref(false);
+const proportionsTouched = ref(false);
 const savedDescription = ref("");
 const loras = ref([]);
 const loraSha = ref("");
@@ -985,6 +1007,8 @@ watch(
   (text) => {
     const subject = subjectFromDescription(text);
     if (subject && !subjectTouched.value) form.subject = subject;
+    const proportions = proportionsFromDescription(text);
+    if (proportions && !proportionsTouched.value) form.proportions = proportions;
   },
 );
 
@@ -1584,6 +1608,7 @@ async function draw() {
       framing: form.framing,
       size: form.size,
       subject: form.subject,
+      proportions: form.proportions,
       trigger: trigger.value,
       // From a reference, the sentence names the person in the picture.
       ...(reference ? { reference: true } : {}),
@@ -1975,6 +2000,7 @@ function restoreState(saved) {
   if (!saved) return;
   framingTouched.value = !!saved.framing_touched;
   subjectTouched.value = !!saved.subject_touched;
+  proportionsTouched.value = !!saved.proportions_touched;
   // A build saved when the build had a field of its own joins the description.
   const { body = "", ...fields } = saved.form || {};
   Object.assign(form, fields);
@@ -2120,6 +2146,7 @@ const snapshot = computed(() => {
     form: { ...form },
     framing_touched: framingTouched.value,
     subject_touched: subjectTouched.value,
+    proportions_touched: proportionsTouched.value,
     mode: mode.value,
     workflow_id: workflowId.value,
     lora_sha: loraSha.value,
