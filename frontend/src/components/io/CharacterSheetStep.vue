@@ -221,7 +221,7 @@
                   class="cs-sheetimg"
                   :class="{ 'cs-sheetimg--on': isKept(slot.sheet) }"
                   :aria-pressed="isKept(slot.sheet)"
-                  :aria-label="`Sheet ${slot.n}: ${sheetWords(slot.sheet)}`"
+                  :aria-label="`Sheet ${slot.n}: ${sheetWords(slot.sheet)}${photoWords(slot.sheet)}`"
                   :aria-keyshortcuts="'Z'"
                   :disabled="sheetLocked(slot.sheet)"
                   data-testid="cs-sheet"
@@ -236,6 +236,17 @@
                     loading="lazy"
                   />
                   <span class="cs-sheetimg__rk">{{ slot.n }}</span>
+                  <!-- Each photo's own score, under its face. -->
+                  <span
+                    v-for="photo in photoScores(slot.sheet)"
+                    :key="photo.panel"
+                    class="cs-pscore"
+                    :class="{ 'cs-pscore--off': !photo.ok }"
+                    :style="photo.style"
+                    aria-hidden="true"
+                    data-testid="cs-photo-score"
+                    >{{ photo.value.toFixed(2) }}</span
+                  >
                   <span
                     v-if="isKept(slot.sheet)"
                     class="cs-sheetimg__ck"
@@ -488,7 +499,9 @@
       :open="!!zoomed"
       :src="zoomed ? sheetUrl(zoomed) : ''"
       :alt="zoomed ? `Sheet ${zoomed.n}` : ''"
-      :caption="zoomed ? `Sheet ${zoomed.n} · ${sheetWords(zoomed)}` : ''"
+      :caption="
+        zoomed ? `Sheet ${zoomed.n} · ${sheetWords(zoomed)}${photoWords(zoomed)}` : ''
+      "
       :has-prev="hasPrev"
       :has-next="hasNext"
       :entry="zoomEntry"
@@ -1203,12 +1216,50 @@ function toggleKeep(id) {
 const pickIntro = computed(() => {
   if (drawnFrom.value) {
     // Sheets keep their run's place, so the closest is kept, not moved first.
-    return `Each sheet says how close it comes to the picture on the right. The closest is kept for you if it comes close enough. Keep the ones to use: the six photos of each become pictures of ${name.value}. Every sheet stays in the Scrapheap, used or not.`;
+    return `Each sheet says how close it comes to the picture on the right, and each photo on it says the same for itself. The closest is kept for you if it comes close enough. Keep the ones to use: the six photos of each become pictures of ${name.value}. Every sheet stays in the Scrapheap, used or not.`;
   }
   const base = `Each sheet says how well its own faces agree. Keep the ones to use: the six photos of each become pictures of ${name.value}. Every sheet stays in the Scrapheap, used or not, where you can restore any you like.`;
-  if (!referenceIds.value.length) return base;
-  return `${base} Each is also compared with ${name.value}'s reference faces: a sheet that agrees with itself but drifts from them is a different person drawn well.`;
+  if (!referenceIds.value.length) {
+    return `${base} Each photo's number is how well its face agrees with the other five.`;
+  }
+  return `${base} Each is also compared with ${name.value}'s reference faces, and each photo's number is how close it comes to them: a sheet that agrees with itself but drifts from them is a different person drawn well.`;
 });
+
+/**
+ * Each photo's own likeness, to show under its face: to the reference faces
+ * when the ranking had any, else to the sheet's other photos. A photo that
+ * drifts is marked.
+ */
+function photoScores(sheet) {
+  const toReferences = sheet.closeness != null;
+  return (sheet.panels || []).flatMap((photo) => {
+    const value = toReferences ? photo.closeness : photo.agreement;
+    if (value == null) return [];
+    const [left, , right, bottom] = photo.box;
+    return [
+      {
+        panel: photo.panel,
+        value,
+        ok: toReferences ? photo.close : photo.agrees,
+        style: {
+          left: `${((left + right) / 2) * 100}%`,
+          top: `min(${bottom * 100}%, calc(100% - 22px))`,
+        },
+      },
+    ];
+  });
+}
+
+/** The photos that drift, for the sheet's label: "" when none does. */
+function photoWords(sheet) {
+  const off = photoScores(sheet)
+    .filter((photo) => !photo.ok)
+    .map((photo) => photo.panel + 1);
+  if (!off.length) return "";
+  return off.length === 1
+    ? ` · photo ${off[0]} drifts`
+    : ` · photos ${off.join(", ")} drift`;
+}
 
 function sheetWords(sheet) {
   if (!sheet.faces_read) {
@@ -2425,6 +2476,30 @@ defineExpose({
   border-radius: var(--radius-sm);
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
+}
+
+/* A photo's own score under its face: the rank badge's chip, in mono. One
+   that drifts takes the warning colour, on the deeper scrim a chromatic glyph
+   needs. */
+.cs-pscore {
+  position: absolute;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  transform: translateX(-50%);
+  border-radius: var(--radius-pill);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.cs-pscore--off {
+  background: var(--scrim-photo-strong);
+  color: rgb(var(--v-theme-dark-surface-warning));
 }
 
 .cs-cap {

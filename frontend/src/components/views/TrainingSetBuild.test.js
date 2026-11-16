@@ -1762,6 +1762,81 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("scores each photo of a sheet on its own, under its face", async () => {
+    const photo = (panel, closeness, agreement) => ({
+      panel,
+      box: [0.25, 0.2, 0.75, 0.4],
+      agreement,
+      agrees: agreement == null ? null : agreement >= 0.45,
+      closeness,
+      close: closeness == null ? null : closeness >= 0.45,
+    });
+    referenceWorld();
+    gen.rankSheets.mockResolvedValue({
+      sheets: [
+        sheet(501, 0.6, {
+          closeness: 0.5,
+          close: true,
+          panels: [photo(0, 0.62, 0.3), photo(3, 0.31, 0.7), photo(4, null, 0.6)],
+        }),
+      ],
+      references: 1,
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await draw(wrapper);
+    await vi.advanceTimersByTimeAsync(3000);
+    // Against the reference: each photo's closeness, the one that drifts
+    // marked; a photo with no closeness shows nothing.
+    const scores = wrapper.findAll('[data-testid="cs-photo-score"]');
+    expect(scores.map((s) => s.text())).toEqual(["0.62", "0.31"]);
+    expect(scores.map((s) => s.classes().includes("cs-pscore--off"))).toEqual([
+      false,
+      true,
+    ]);
+    // Under the face: its centre, its bottom edge.
+    expect(scores[0].attributes("style")).toContain("left: 50%");
+    expect(wrapper.find('[data-testid="cs-sheet"]').attributes("aria-label")).toBe(
+      "Sheet 1: 0.50 close to the reference · faces agree strongly · photo 4 drifts",
+    );
+    wrapper.unmount();
+  });
+
+  it("scores each photo against the sheet's others with nothing to compare it to", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    gen.runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: [{ run_id: "r1", status: "queued" }],
+    });
+    gen.getRunOutcome.mockResolvedValue({ status: "completed", picture_ids: [501] });
+    gen.rankSheets.mockResolvedValue({
+      sheets: [
+        sheet(501, 0.6, {
+          panels: [
+            { panel: 1, box: [0, 0, 1, 1], agreement: 0.7, agrees: true, closeness: null, close: null },
+            { panel: 5, box: [0, 0, 1, 1], agreement: 0.2, agrees: false, closeness: null, close: null },
+          ],
+        }),
+      ],
+      references: 0,
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(3000);
+    const scores = wrapper.findAll('[data-testid="cs-photo-score"]');
+    expect(scores.map((s) => s.text())).toEqual(["0.70", "0.20"]);
+    expect(scores[1].classes()).toContain("cs-pscore--off");
+    expect(wrapper.find('[data-testid="cs-sheet"]').attributes("aria-label")).toBe(
+      "Sheet 1: faces agree strongly · photo 6 drifts",
+    );
+    wrapper.unmount();
+  });
+
   it("keeps no sheet for the user when none comes close to the reference", async () => {
     referenceWorld();
     gen.rankSheets.mockResolvedValue({

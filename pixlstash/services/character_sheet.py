@@ -27,7 +27,8 @@ Four pure pieces live here, the routes in ``routes/character_sheets.py``:
   sheet's size (``POST /workflows/{workflow_id}/sheet-copy``).
 * :func:`split_sheet` cuts a drawn sheet into its six panels.
 * :func:`agreement` / :func:`closeness` score a sheet's faces, against each
-  other and against the character's reference faces.
+  other and against the character's reference faces, and
+  :func:`panel_scores` scores each panel's face on its own.
 
 And two that touch the library, each a ``*_in_session`` function behind a thin
 vault wrapper (backend architecture §10.1): :func:`rank_sheets` and
@@ -716,6 +717,68 @@ def closeness(
     return float(np.mean(_unit(embeddings) @ _unit(references).T))
 
 
+def panel_of(bbox: list[int], width: int, height: int) -> int:
+    """Which of the six panels (in :func:`sheet_cells` order) a face box sits in."""
+    # ponytail: the grid's own lines, not the dividers as drawn (up to ~190 px
+    # off); a face centred in its photo is further than that from any cut.
+    x = (bbox[0] + bbox[2]) / 2 / width * SHEET_WIDTH
+    y = (bbox[1] + bbox[3]) / 2 / height * SHEET_HEIGHT
+    if x >= 1880:
+        return 5
+    if x >= 1200:
+        return 4
+    return (2 if y >= 768 else 0) + (1 if x >= 600 else 0)
+
+
+def _area(box: list[int]) -> int:
+    return (box[2] - box[0]) * (box[3] - box[1])
+
+
+def panel_scores(
+    faces: list[tuple[np.ndarray, list[int] | None]],
+    width: int | None,
+    height: int | None,
+    references: list[np.ndarray],
+) -> list[dict]:
+    """Each panel's face scored on its own, in panel order.
+
+    *faces* are a sheet's ``(embedding, box)`` pairs, *width* and *height* its
+    picture's. A panel's face is its largest; a panel with none is left out.
+    Its ``agreement`` is its mean similarity to the other panels' faces, its
+    ``closeness`` to *references*, and its ``box`` the face's box as fractions
+    of the sheet, for marking it on the picture.
+    """
+    if not width or not height:
+        return []
+    largest: dict[int, tuple[np.ndarray, list[int]]] = {}
+    for vector, box in faces:
+        if not box or len(box) != 4:
+            continue
+        panel = panel_of(box, width, height)
+        if panel not in largest or _area(box) > _area(largest[panel][1]):
+            largest[panel] = (vector, box)
+    out = []
+    for panel in sorted(largest):
+        vector, box = largest[panel]
+        others = [other for p, (other, _) in largest.items() if p != panel]
+        agrees = closeness([vector], others)
+        near = closeness([vector], references)
+        out.append(
+            {
+                "panel": panel,
+                "box": [
+                    min(1.0, max(0.0, edge / side))
+                    for edge, side in zip(box, (width, height, width, height))
+                ],
+                "agreement": agrees,
+                "agrees": None if agrees is None else agrees >= SOME_AGREEMENT,
+                "closeness": near,
+                "close": None if near is None else near >= CLOSE_TO_REFERENCES,
+            }
+        )
+    return out
+
+
 def agreement_words(score: float | None) -> str:
     """A sheet's agreement as the dialog says it."""
     if score is None or score < SOME_AGREEMENT:
@@ -742,23 +805,27 @@ def sheet_faces_in_session(
     character_id: int,
     picture_ids: list[int],
     reference_picture_ids: list[int] | None = None,
-) -> tuple[dict[int, list], list, dict[int, str]] | None:
-    """Each sheet's face embeddings, the reference embeddings, each sheet's format.
+) -> tuple[dict[int, list], list, dict[int, tuple]] | None:
+    """Each sheet's faces, the reference embeddings, each sheet's format and size.
 
-    ``None`` when the character does not exist. A sheet's list holds a ``None``
-    for the row face extraction leaves on a picture with no face, so an empty
-    list means its faces are not read yet. The references are the character's
+    ``None`` when the character does not exist. A sheet's list holds a
+    ``(features, bbox)`` row per face, *features* ``None`` on the row face
+    extraction leaves on a picture with no face, so an empty list means its
+    faces are not read yet. The references are the character's
     reference faces, or, given *reference_picture_ids*, the faces of those
     pictures: what the sheets were drawn from. The sheets' own faces are never
-    their own references. The format is what the picture's file is served as.
+    their own references. Each sheet's ``(format, width, height)``: the format
+    is what the picture's file is served as.
     """
     if session.get(Character, character_id) is None:
         return None
     faces: dict[int, list] = {pid: [] for pid in picture_ids}
-    for picture_id, features in session.exec(
-        select(Face.picture_id, Face.features).where(Face.picture_id.in_(picture_ids))
+    for picture_id, features, bbox in session.exec(
+        select(Face.picture_id, Face.features, Face.bbox_).where(
+            Face.picture_id.in_(picture_ids)
+        )
     ).all():
-        faces[picture_id].append(features)
+        faces[picture_id].append((features, bbox))
     if reference_picture_ids is None:
         references = [
             face.features
@@ -773,12 +840,15 @@ def sheet_faces_in_session(
                 Face.picture_id.in_(set(reference_picture_ids) - set(faces))
             )
         ).all()
-    formats = dict(
-        session.exec(
-            select(Picture.id, Picture.format).where(Picture.id.in_(picture_ids))
+    pictures = {
+        picture_id: (format_, width, height)
+        for picture_id, format_, width, height in session.exec(
+            select(Picture.id, Picture.format, Picture.width, Picture.height).where(
+                Picture.id.in_(picture_ids)
+            )
         ).all()
-    )
-    return faces, references, formats
+    }
+    return faces, references, pictures
 
 
 def rank_sheets(
@@ -801,19 +871,28 @@ def rank_sheets(
     )
     if found is None:
         raise SheetNotFound(f"No character {character_id}.")
-    faces, reference_rows, formats = found
+    faces, reference_rows, pictures = found
     references = _vectors(reference_rows)
-    vectors_of = {pid: _vectors(faces[pid]) for pid in ids}
+    vectors_of = {pid: _vectors([row[0] for row in faces[pid]]) for pid in ids}
     out = []
     for picture_id in ids:
         rows = faces[picture_id]
         vectors = vectors_of[picture_id]
         score = agreement(vectors)
         near = closeness(vectors, references)
+        format_, width, height = pictures.get(picture_id, (None, None, None))
+        boxed = [
+            (
+                np.frombuffer(features, dtype=np.float32),
+                json.loads(bbox) if bbox else None,
+            )
+            for features, bbox in rows
+            if features
+        ]
         out.append(
             {
                 "picture_id": picture_id,
-                "format": (formats.get(picture_id) or "").lower() or None,
+                "format": (format_ or "").lower() or None,
                 "faces_read": bool(rows),
                 "faces": len(vectors),
                 "agreement": score,
@@ -821,6 +900,7 @@ def rank_sheets(
                 "closeness": near,
                 "close": None if near is None else near >= CLOSE_TO_REFERENCES,
                 "broken": len(vectors) > MAX_FACES,
+                "panels": panel_scores(boxed, width, height, references),
                 # Kept together, these would mix two people into one set: their
                 # faces agree across sheets less than one sheet's need to hold.
                 "different_from": [

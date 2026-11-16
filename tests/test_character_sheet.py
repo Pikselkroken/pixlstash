@@ -26,6 +26,8 @@ from pixlstash.services.character_sheet import (
     agreement,
     agreement_words,
     closeness,
+    panel_of,
+    panel_scores,
     sheet_cells,
     sheet_prompt,
 )
@@ -582,6 +584,57 @@ def test_agreement_and_closeness():
     assert agreement_words(0.7) == "faces agree strongly"
 
 
+# One face box per panel at 2560×1536, centred in its photo.
+PANEL_BOXES = [
+    [200, 250, 400, 500],
+    [800, 250, 1000, 500],
+    [200, 1000, 400, 1250],
+    [800, 1000, 1000, 1250],
+    [1440, 100, 1640, 350],
+    [2120, 100, 2320, 350],
+]
+
+
+def test_each_face_box_lands_in_its_own_panel():
+    assert [panel_of(box, SHEET_WIDTH, SHEET_HEIGHT) for box in PANEL_BOXES] == list(
+        range(6)
+    )
+    # The same grid at another size.
+    half = [[edge // 2 for edge in box] for box in PANEL_BOXES]
+    assert [panel_of(box, 1280, 768) for box in half] == list(range(6))
+
+
+def test_each_panel_is_scored_on_its_own():
+    """The panel that drifts reads low on both counts; the rest read high."""
+    person = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    stranger = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    faces = [(person, box) for box in PANEL_BOXES]
+    faces[3] = (stranger, PANEL_BOXES[3])
+    # A smaller second face in panel 0 is not the panel's face; a face with
+    # no box is on no panel.
+    faces.append((stranger, [250, 300, 300, 350]))
+    faces.append((stranger, None))
+    panels = panel_scores(faces, SHEET_WIDTH, SHEET_HEIGHT, [person])
+    assert [p["panel"] for p in panels] == list(range(6))
+    assert [p["close"] for p in panels] == [True, True, True, False, True, True]
+    assert [p["agrees"] for p in panels] == [True, True, True, False, True, True]
+    assert panels[0]["closeness"] == pytest.approx(1.0)
+    assert panels[3]["closeness"] == pytest.approx(0.0)
+    # Four of the five others are the same person.
+    assert panels[0]["agreement"] == pytest.approx(0.8)
+    assert panels[0]["box"] == pytest.approx(
+        [200 / 2560, 250 / 1536, 400 / 2560, 500 / 1536]
+    )
+    # No references: agreement only. No size: nothing to place.
+    alone = panel_scores(faces, SHEET_WIDTH, SHEET_HEIGHT, [])
+    assert {p["closeness"] for p in alone} == {None}
+    assert {p["close"] for p in alone} == {None}
+    assert panel_scores(faces, None, None, [person]) == []
+    # One face has no other panel to agree with.
+    (only,) = panel_scores(faces[:1], SHEET_WIDTH, SHEET_HEIGHT, [])
+    assert only["agreement"] is None and only["agrees"] is None
+
+
 def test_ranking_measures_closeness_against_references_never_the_sheet_itself():
     """A reference face on the sheet itself is left out; close follows the threshold."""
     person = np.array([1.0, 0.0, 0.0], dtype=np.float32)
@@ -592,9 +645,13 @@ def test_ranking_measures_closeness_against_references_never_the_sheet_itself():
         def run_immediate_read_task(self, fn, *args):
             seen["args"] = args
             return (
-                {5: [person.tobytes()] * 6, 6: [other.tobytes()] * 6, 7: []},
+                {
+                    5: [(person.tobytes(), None)] * 6,
+                    6: [(other.tobytes(), None)] * 6,
+                    7: [],
+                },
                 [person.tobytes()],
-                {5: "PNG", 6: "WEBP"},
+                {5: ("PNG", None, None), 6: ("WEBP", None, None)},
             )
 
     vault = type("Vault", (), {"db": Db()})()
@@ -610,6 +667,8 @@ def test_ranking_measures_closeness_against_references_never_the_sheet_itself():
     # Two people: each names the other; an unread sheet is compared with none.
     assert (near["different_from"], far["different_from"]) == ([6], [5])
     assert unread["different_from"] == []
+    # No boxes and no size: no panel is placed.
+    assert near["panels"] == [] and unread["panels"] == []
 
 
 def test_ranking_names_no_difference_between_sheets_of_one_person():
@@ -619,7 +678,14 @@ def test_ranking_names_no_difference_between_sheets_of_one_person():
 
     class Db:
         def run_immediate_read_task(self, fn, *args):
-            return ({5: [person.tobytes()] * 6, 6: [near_person.tobytes()] * 6}, [], {})
+            return (
+                {
+                    5: [(person.tobytes(), None)] * 6,
+                    6: [(near_person.tobytes(), None)] * 6,
+                },
+                [],
+                {},
+            )
 
     vault = type("Vault", (), {"db": Db()})()
     sheets, _ = character_sheet.rank_sheets(vault, 1, [5, 6])
@@ -900,6 +966,7 @@ def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
                     face_index=100 + index,
                     features=vector.astype(np.float32).tobytes(),
                     model_pack=DEFAULT_MODEL_PACK,
+                    bbox=PANEL_BOXES[index % 6],
                 )
             )
         session.commit()
@@ -917,6 +984,12 @@ def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
     assert sheet["closeness"] is None and sheet["close"] is None
     # Seven faces on a six-panel sheet: one panel holds two people.
     assert sheet["broken"] is True
+    # Each panel scored on its own, placed where its face is.
+    assert [p["panel"] for p in sheet["panels"]] == list(range(6))
+    assert all(p["agrees"] for p in sheet["panels"])
+    assert sheet["panels"][4]["box"] == pytest.approx(
+        [1440 / 2560, 100 / 1536, 1640 / 2560, 350 / 1536]
+    )
 
     missing = client.post(
         f"{API_PREFIX}/characters/999999/sheets/rank", json={"picture_ids": [sheet_id]}
@@ -957,6 +1030,7 @@ def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
     assert body["references"] == 1
     assert body["sheets"][0]["closeness"] > 0.8
     assert body["sheets"][0]["close"] is True
+    assert all(p["close"] for p in body["sheets"][0]["panels"])
     # The sheet is never its own reference, named or not.
     own = client.post(
         url, json={"picture_ids": [sheet_id], "reference_picture_ids": [sheet_id]}
