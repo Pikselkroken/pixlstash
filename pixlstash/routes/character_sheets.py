@@ -41,6 +41,12 @@ class SheetPromptRequest(BaseModel):
     top: str = Field("", max_length=_TEXT)
     trousers: str = Field("", max_length=_TEXT)
     shoes: str = Field("", max_length=_TEXT)
+    background: str = Field(
+        "",
+        max_length=_TEXT,
+        description="What every photo stands in front of; empty is a plain "
+        "light-grey studio.",
+    )
     framing: character_sheet.Framing = "mid_thigh"
     subject: character_sheet.Subject = "woman"
     proportions: character_sheet.Proportions = Field(

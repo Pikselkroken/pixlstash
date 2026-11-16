@@ -365,6 +365,7 @@ def sheet_prompt(
     top: str = "",
     trousers: str = "",
     shoes: str = "",
+    background: str = "",
     framing: Framing = "mid_thigh",
     subject: Subject = "woman",
     proportions: Proportions = "typical",
@@ -388,6 +389,8 @@ def sheet_prompt(
     well, and on the torso of the body photos ("body shape"), only when given.
     Without it nothing stands in for it: an "average build" default would
     contradict a build the description states.
+    *background* is what every photo stands in front of; without it, a plain
+    light-grey studio, the backdrop the probes drew.
     Trousers are always named (left out, MOSS improvises bare legs); shoes only
     at full body, where they belong, since naming them pulls a cropped framing
     to full length. *trigger* is a character LoRA's trigger word, put first.
@@ -467,10 +470,17 @@ def sheet_prompt(
     views = ", ".join(
         f"({n}) {fill(view)}" for n, (view, _) in enumerate(_PASSPORT_VIEWS, start=1)
     )
+    backdrop = _phrase(background)
+    setting = (
+        # Said as a label, so "a sunlit park", "in a kitchen" and "white" all read.
+        f"with the background: {backdrop}"
+        if backdrop
+        else "on a plain light-grey studio background, soft even studio lighting"
+    )
     summary = (
-        f"Character reference sheet of one and the same {subject} on a plain "
-        "light-grey studio background, soft even studio lighting, photorealistic "
-        "photographs. On the left half, four passport-style head-and-shoulders "
+        f"Character reference sheet of one and the same {subject} {setting}, "
+        "photorealistic photographs. On the left half, four passport-style "
+        "head-and-shoulders "
         f"photos in two rows of two: {views}. On the right half, two tall "
         f"{_FRAMING_SUMMARY[framing]}: (5) standing, front view at eye level, "
         f"(6) standing, three-quarter view. The {subject} is {character}. "

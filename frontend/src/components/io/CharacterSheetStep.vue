@@ -120,6 +120,12 @@
           />
         </div>
         <AppInput
+          v-model="form.background"
+          label="Background"
+          placeholder="a plain light-grey studio · a sunlit park"
+          data-testid="cs-background"
+        />
+        <AppInput
           v-if="form.framing === 'full_body'"
           v-model="form.shoes"
           label="Shoes"
@@ -759,6 +765,7 @@ const form = reactive({
   top: "",
   trousers: "",
   shoes: "",
+  background: "",
   framing: "mid_thigh",
   size: "large",
   count: 4,
@@ -1605,6 +1612,7 @@ async function draw() {
       top: form.top,
       trousers: form.trousers,
       shoes: form.shoes,
+      background: form.background,
       framing: form.framing,
       size: form.size,
       subject: form.subject,
