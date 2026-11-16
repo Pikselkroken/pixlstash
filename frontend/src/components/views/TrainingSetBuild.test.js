@@ -1989,6 +1989,57 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("starts the clothes and background from the last draw and offers the earlier ones", async () => {
+    localStorage.setItem(
+      "pixlstash:characterSheetChoices",
+      JSON.stringify({
+        recent: {
+          top: ["a red coat", "a grey hoodie"],
+          trousers: [""],
+          background: ["a sunlit park", "a beach"],
+        },
+      }),
+    );
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ loras: [] });
+    const wrapper = mountDialog();
+    await flushPromises();
+    const input = (testid) => wrapper.find(`[data-testid="${testid}"] input`);
+    expect(input("cs-top").element.value).toBe("a red coat");
+    // The last draw left Bottoms empty, and an empty choice is kept as one.
+    expect(wrapper.find('input[placeholder^="dark straight jeans"]').element.value).toBe("");
+    expect(input("cs-background").element.value).toBe("a sunlit park");
+
+    // Typing offers the earlier values that match, never the empty one.
+    await input("cs-top").setValue("gr");
+    await flushPromises();
+    const items = () =>
+      [...document.querySelectorAll(".bmi-item")].map((el) =>
+        el.firstChild.textContent.trim(),
+      );
+    expect(items()).toEqual(["a grey hoodie"]);
+    await input("cs-top").setValue("a blue blazer");
+
+    await wrapper
+      .find('[data-testid="cs-description"] textarea')
+      .setValue("Adult woman, copper bob");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    expect(gen.buildSheetPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ top: "a blue blazer", background: "a sunlit park" }),
+    );
+    // What was drawn with goes first, once; the rest keep their order.
+    const { recent } = JSON.parse(
+      localStorage.getItem("pixlstash:characterSheetChoices"),
+    );
+    expect(recent.top).toEqual(["a blue blazer", "a red coat", "a grey hoodie"]);
+    expect(recent.background).toEqual(["a sunlit park", "a beach"]);
+    expect(recent.trousers).toEqual([""]);
+    wrapper.unmount();
+  });
+
   it("starts a new pick when the reference picture is changed", async () => {
     referenceWorld();
     gen.rankSheets.mockImplementation(async (_id, ids) => ({

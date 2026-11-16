@@ -1905,6 +1905,14 @@ face drawing from its reference) never is, though a mode switch remembers the
 workflow it lands on; a remembered reference mode applies only to a person with
 a face. A saved `snapshot` stands over all of it.
 
+The same entry keeps, under `recent`, the last twenty values each of Top,
+Bottoms, Shoes and Background was drawn with, newest first, recorded at draw
+(Shoes only at full body, the one framing that sends them). A fresh step fills
+each field with the newest, `""` included, so a field left empty stays empty.
+The fields are `RecentInput` (`widgets/`): AppInput's look over a
+`BaseModelInput` given the list as `options`, its value selected on entering
+it so the first key typed replaces it.
+
 #### `TrainLoraDialog.vue` (`io/`, #2119)
 **Outcome choices, numbers derived** (design artifact "Outcome choices, numbers derived"). The Train a LoRA dialog, `AppDialog size="lg"`, mounted in **`App.vue`** and opened by `useTrainingStore.openForScope({type, id, name})` from the toolbar's Train button, its overflow row and the sidebar's *Train LoRA…*. It replaced the toolbar popover `TbTrainPanel`.
 

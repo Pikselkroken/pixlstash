@@ -106,30 +106,37 @@
           />
           <span class="cs-hint">{{ descriptionHint }}</span>
         </div>
+        <!-- Each offers what earlier sheets were drawn with, the last one
+             filled in. -->
         <div class="cs-grid2">
-          <AppInput
+          <RecentInput
             v-model="form.top"
             label="Top"
             placeholder="a plain oatmeal crew-neck sweater"
+            :options="offered.top"
+            data-testid="cs-top"
           />
           <!-- `trousers` in the prompt: whatever covers the hips and thighs. -->
-          <AppInput
+          <RecentInput
             v-model="form.trousers"
             label="Bottoms"
             placeholder="dark straight jeans · a pleated midi skirt"
+            :options="offered.trousers"
           />
         </div>
-        <AppInput
+        <RecentInput
           v-model="form.background"
           label="Background"
           placeholder="a plain light-grey studio · a sunlit park"
+          :options="offered.background"
           data-testid="cs-background"
         />
-        <AppInput
+        <RecentInput
           v-if="form.framing === 'full_body'"
           v-model="form.shoes"
           label="Shoes"
           placeholder="white sneakers"
+          :options="offered.shoes"
         />
         <!-- The four choices of how a sheet is drawn: toggles side by side,
              wrapping only on a narrow window, with one line of hints under
@@ -614,11 +621,11 @@ import { errorMessage } from "../../utils/apiError";
 import { runKey } from "../../utils/gpuMemory";
 import { UNCHECKED_CODES } from "../../utils/runReasons";
 import { buildMediaUrl } from "../../utils/media";
-import AppInput from "../widgets/AppInput.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
 import PicturePicker from "../widgets/PicturePicker.vue";
+import RecentInput from "../widgets/RecentInput.vue";
 import Segmented from "../widgets/Segmented.vue";
 import ZoomPopout from "../widgets/ZoomPopout.vue";
 import { useZoomPopout } from "../../composables/useZoomPopout.js";
@@ -736,6 +743,9 @@ const HEIGHT_WORDS = /\b(tall|short|petite|height|legs?|leggy|long-legged)\b/i;
 // The last choices made on this machine, which a fresh step starts from: the
 // mode, each mode's workflow, the size, the count, and each person's LoRA.
 const CHOICES_KEY = "pixlstash:characterSheetChoices";
+// The fields whose last values a fresh step starts from and offers as typed.
+const RECENT_FIELDS = ["top", "trousers", "shoes", "background"];
+const RECENT_KEPT = 20;
 
 const tasks = useTasksStore();
 const name = computed(() => props.character?.name || "");
@@ -755,6 +765,17 @@ const form = reactive({
 const remembered = props.saved ? null : readChoices();
 if (SIZES.some((s) => s.id === remembered?.size)) form.size = remembered.size;
 if (COUNTS.some((c) => c.id === remembered?.count)) form.count = remembered.count;
+// Per field, the values sheets were drawn with, newest first; "" where the
+// last draw left the field empty, so an empty field stays empty.
+const recent = ref(readRecent(remembered || readChoices()));
+if (!props.saved) {
+  for (const field of RECENT_FIELDS) form[field] = recent.value[field][0] || "";
+}
+const offered = computed(() =>
+  Object.fromEntries(
+    RECENT_FIELDS.map((field) => [field, recent.value[field].filter(Boolean)]),
+  ),
+);
 const framingTouched = ref(false);
 // Picked by hand: the description no longer decides who is drawn.
 const subjectTouched = ref(false);
@@ -1577,6 +1598,7 @@ async function draw() {
   const inputs = workflowInputs.value;
   // Only MOSS-Image takes a layout: the others get the sheet in one sentence.
   const prose = !!reference || engine.value !== ENGINES.moss;
+  rememberRecent();
   try {
     const description = form.description.trim();
     if (!savedDescription.value && description) {
@@ -2063,6 +2085,40 @@ function recalled() {
     lora_sha: lora?.sha,
     strength: lora?.strength,
   };
+}
+
+function readRecent(choices) {
+  return Object.fromEntries(
+    RECENT_FIELDS.map((field) => {
+      const values = choices.recent?.[field];
+      return [
+        field,
+        Array.isArray(values)
+          ? values.filter((v) => typeof v === "string")
+          : [],
+      ];
+    }),
+  );
+}
+
+/** Put what this draw wears and stands in front of first in each field's
+ * list. Shoes only at full body, the one framing that shows them. */
+function rememberRecent() {
+  const fields = RECENT_FIELDS.filter(
+    (field) => field !== "shoes" || form.framing === "full_body",
+  );
+  remember((all) => {
+    const lists = readRecent(all);
+    for (const field of fields) {
+      const value = String(form[field] || "").trim();
+      lists[field] = [value, ...lists[field].filter((v) => v !== value)].slice(
+        0,
+        RECENT_KEPT,
+      );
+    }
+    all.recent = lists;
+    recent.value = lists;
+  });
 }
 
 /** Remember one choice for the next fresh step: only one made once the
