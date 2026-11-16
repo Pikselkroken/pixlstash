@@ -12900,13 +12900,6 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   caption alone; no probe has measured how their sheets hold the grid or cut. Every panel's caption carries the whole character,
   build included (a different build draws a different face). Trousers are
   always named, shoes only at full body. A LoRA's first trigger word leads.
-  `proportions` (`typical`, `little_person`, `cartoon`; #1079) names the
-  figure in every caption and reshapes the body photos' boxes: `_reshape`
-  moves each box edge with the landmarks in `_LANDMARKS` (chin, waist, hip,
-  mid-thigh, knee as fractions of the standing height) and widens the head box
-  with it, so the layout stops insisting on a seven-heads-tall adult. `typical`
-  leaves the probed boxes untouched; the other two fractions are textbook
-  figures no probe has measured.
 - **Ranking** (`POST /characters/{id}/sheets/rank`) reads the faces face
   extraction stored on each sheet: `agreement` is their mean pairwise cosine
   similarity, `closeness` the mean similarity to the character's reference
@@ -13020,6 +13013,13 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   stay in the Scrapheap, and pictures already cut stay on the person. Every
   delete path (the set's menu, a multi-select delete, the build screen's
   *Cancel set*) goes through it.
+- **Proportions.** The prompt's `proportions` (`typical`, `little_person`,
+  `cartoon`; #1079) names the figure in every caption and reshapes the body
+  photos' boxes: `_reshape` moves each box edge with the landmarks in
+  `_LANDMARKS` (chin, waist, hip, mid-thigh, knee as fractions of the standing
+  height) and widens the head box with it, so the layout stops insisting on a
+  seven-heads-tall adult. `typical` leaves the probed boxes untouched; the
+  other two fractions are textbook figures no probe has measured.
 
 ### 25.30 Face clusters and the reference cluster
 
