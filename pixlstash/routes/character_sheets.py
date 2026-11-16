@@ -43,6 +43,11 @@ class SheetPromptRequest(BaseModel):
     shoes: str = Field("", max_length=_TEXT)
     framing: character_sheet.Framing = "mid_thigh"
     subject: character_sheet.Subject = "woman"
+    proportions: character_sheet.Proportions = Field(
+        "typical",
+        description="The figure: a typical adult's, a little person's, or a "
+        "cartoon's, about three heads tall.",
+    )
     trigger: str = Field("", max_length=200)
     size: character_sheet.Size = "large"
     reference: bool = Field(

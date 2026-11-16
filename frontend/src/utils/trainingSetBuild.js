@@ -123,6 +123,24 @@ export function subjectFromDescription(text) {
   return men > women ? "man" : "woman";
 }
 
+const LITTLE_PERSON_WORDS =
+  /\b(dwarf|dwarfs|dwarves|dwarfism|little person|little people|achondroplasia)\b/i;
+const CARTOON_WORDS = /\b(chibi|super[- ]deformed|cartoon proportions)\b/i;
+
+/**
+ * The proportions a character sheet draws, read from the description:
+ * "little_person" or "cartoon" when its words say so, null otherwise. A bare
+ * "cartoon" is a style, not a size, so it does not count.
+ *
+ * @param {string} text - the description
+ * @returns {"little_person"|"cartoon"|null}
+ */
+export function proportionsFromDescription(text) {
+  if (LITTLE_PERSON_WORDS.test(String(text || ""))) return "little_person";
+  if (CARTOON_WORDS.test(String(text || ""))) return "cartoon";
+  return null;
+}
+
 /**
  * The set *selectedId* names when it is a training set still being built,
  * with the person it is under: what the centre column shows as a build
