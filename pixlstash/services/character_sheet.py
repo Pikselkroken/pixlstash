@@ -279,10 +279,12 @@ _LANDMARKS = {
 _CROP = {"waist_up": 1, "mid_thigh": 3, "knees_up": 4, "full_body": None}
 _PROPORTION_WORDS = {
     "typical": "",
-    "little_person": "a little person with achondroplasia: short stature, "
-    "short arms and legs, an average-length torso and a head large for the body",
-    "cartoon": "an adult drawn with stylised cartoon proportions, about three "
-    "heads tall: an oversized head, a small compact body and short arms and legs",
+    "little_person": "a little person of short stature: short arms and legs, "
+    "an average-length torso and a head large for the body",
+    # Said adult twice over: big-headed proportions otherwise drift young.
+    "cartoon": "a grown adult with an adult face, drawn with stylised cartoon "
+    "proportions about three heads tall: an oversized head, a small compact "
+    "body and short arms and legs",
 }
 
 NEGATIVE_PROMPT = "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
