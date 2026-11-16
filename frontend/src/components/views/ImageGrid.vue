@@ -500,7 +500,7 @@
         @add-files="importChosenFiles"
       />
       <div v-else-if="showEmptyState" class="empty-state">
-        <div class="empty-state-card">
+        <div class="empty-state-card" role="status" aria-live="polite">
           <div class="empty-state-illustration" aria-hidden="true">
             <img
               :src="emptyStateImage"
@@ -511,13 +511,13 @@
           <div class="empty-state-title">
             {{ emptyStateTitle }}
           </div>
-          <div class="empty-state-subtitle">
+          <div v-if="emptyStateSubtitle" class="empty-state-subtitle">
             {{ emptyStateSubtitle }}
           </div>
           <!-- An empty Inbox offers the next period that holds anything, so a
                narrow period never hides an older pile of unfiled work. -->
           <AppButton
-            v-if="inboxWiderPeriod"
+            v-if="inboxWiderPeriod && !emptyStateLoading"
             class="empty-state-action"
             variant="primary"
             data-testid="inbox-widen"
@@ -526,7 +526,11 @@
             Show {{ inboxWiderPeriod.label.toLowerCase() }}
           </AppButton>
           <AppButton
-            v-else-if="canShowAllPicturesButton && !inboxEmptyUnfiltered"
+            v-else-if="
+              canShowAllPicturesButton &&
+              !inboxEmptyUnfiltered &&
+              !emptyStateLoading
+            "
             class="empty-state-action"
             variant="primary"
             @click.stop="handleEmptyStateReset"
@@ -6665,6 +6669,7 @@ const {
 // ============================================================
 const {
   imagesLoading,
+  imagesError,
   totalAllPicturesCount,
   totalAllPicturesCountLoaded,
   totalCurrentCategoryCount,
@@ -7693,15 +7698,19 @@ const EMPTY_STATE_DELAY_MS = 350;
 const emptyStateDelayPassed = ref(false);
 let emptyStateDelayTimer = null;
 
+// The grid holds nothing and has held nothing for the delay. Whether that is a
+// fact about the view or only a fetch that has not answered yet (or failed) is
+// `emptyStateLoading`: until the latest fetch has succeeded, the card says
+// "Loading…" and offers no way out, because "no pictures match" is a claim
+// about results nobody has seen.
 const showEmptyState = computed(() => {
   if (sidebarStore.folderScanning) return false;
-  return (
-    gridReady.value &&
-    !imagesLoading.value &&
-    filteredGridCount.value === 0 &&
-    emptyStateDelayPassed.value
-  );
+  return filteredGridCount.value === 0 && emptyStateDelayPassed.value;
 });
+
+const emptyStateLoading = computed(
+  () => !gridReady.value || imagesLoading.value || !!imagesError.value,
+);
 
 const showFolderScanningState = computed(() => {
   return (
@@ -7734,6 +7743,7 @@ const canShowAllPicturesButton = computed(() => {
 const showLibraryEmptyState = computed(
   () =>
     showEmptyState.value &&
+    !emptyStateLoading.value &&
     totalAllPicturesCountLoaded.value &&
     totalAllPicturesCount.value === 0 &&
     !isReadOnly.value &&
@@ -7808,13 +7818,17 @@ const inboxEmpty = computed(() =>
 );
 const inboxWiderPeriod = computed(() => inboxEmpty.value?.wider ?? null);
 watch(
-  () => showEmptyState.value && inboxEmptyUnfiltered.value,
+  () =>
+    showEmptyState.value &&
+    !emptyStateLoading.value &&
+    inboxEmptyUnfiltered.value,
   (empty) => {
     if (empty) void inboxStore.refreshAllCounts();
   },
 );
 
 const emptyStateTitle = computed(() => {
+  if (emptyStateLoading.value) return "Loading…";
   if (isSetOverlapView.value) {
     return "No overlap";
   }
@@ -7829,6 +7843,7 @@ const emptyStateTitle = computed(() => {
 });
 
 const emptyStateSubtitle = computed(() => {
+  if (emptyStateLoading.value) return "";
   if (isSetOverlapView.value) {
     return "The picture sets have no overlap.";
   }
@@ -7864,24 +7879,22 @@ const emptyStateImageStyle = computed(() => {
   };
 });
 
-watch([imagesLoading, filteredGridCount], ([loading, count]) => {
-  if (emptyStateDelayTimer) {
-    clearTimeout(emptyStateDelayTimer);
-    emptyStateDelayTimer = null;
-  }
-
-  if (loading || count > 0 || sidebarStore.folderScanning) {
+// Armed while loading too, so a slow fetch shows "Loading…" rather than a
+// blank grid. A load finishing does not re-arm a card already showing: it only
+// swaps "Loading…" for the answer instead of blinking out and back.
+watch([imagesLoading, filteredGridCount], ([, count]) => {
+  if (count > 0 || sidebarStore.folderScanning) {
+    if (emptyStateDelayTimer) {
+      clearTimeout(emptyStateDelayTimer);
+      emptyStateDelayTimer = null;
+    }
     emptyStateDelayPassed.value = false;
     return;
   }
-
-  emptyStateDelayPassed.value = false;
+  if (emptyStateDelayPassed.value || emptyStateDelayTimer) return;
   emptyStateDelayTimer = setTimeout(() => {
-    if (
-      !imagesLoading.value &&
-      filteredGridCount.value === 0 &&
-      !sidebarStore.folderScanning
-    ) {
+    emptyStateDelayTimer = null;
+    if (filteredGridCount.value === 0 && !sidebarStore.folderScanning) {
       emptyStateDelayPassed.value = true;
     }
   }, EMPTY_STATE_DELAY_MS);
