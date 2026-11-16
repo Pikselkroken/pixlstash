@@ -1774,7 +1774,13 @@ Escape and Enter do nothing here: cancelling deletes a set.
   ranking had references (`closeness` not null), else its agreement with the
   sheet's other photos; one that drifts (`close` / `agrees` false) takes the
   warning colour on `--scrim-photo-strong`, and the tile's label and the zoom
-  caption name it (*photo 4 drifts*). Kept sheets the ranking names in each other's `different_from`
+  caption name it (*photo 4 drifts*). The zoomed sheet draws the six photos
+  *Keep* will cut (the ranking's `cells`, in `ZoomPopout`'s `over` slot) as
+  outlines inside each box, `on-dark-surface` on a `--scrim-photo-strong`
+  halo, so the cut is seen before it is made; a sheet with
+  `cuts_cleanly: false` draws them dashed in the warning colour, says *may not cut cleanly* last in its words, and sorts
+  after the clean sheets (after `broken`). It is a warning, not a refusal:
+  *Keep* still cuts it. Kept sheets the ranking names in each other's `different_from`
   turn the footer lead into a warning (`footer.warn`: icon, `role="status"`)
   naming the pair; *Use* stays enabled, since with a LoRA several sheets can
   be one person and the owner decides. *Keep* cuts the ticked sheets, waits (90 s at most)
@@ -4119,8 +4125,10 @@ Compare do not dispatch this way.
 whatever opened it, for looking closely at one picture from a dialog or list:
 a `StackLayer` (so it clears a modal with no z-index), a bar with caption,
 optional prev/next, an `actions` slot, zoom −/readout/+ and fit ↔ 100%, an
-`aside` slot beside the stage for something to compare the picture with, and a
-dark stage on the transform transport with floor policy `rest`. It owns its
+`aside` slot beside the stage for something to compare the picture with, an
+`over` slot laid over the picture (it takes the picture's own size and
+transform, so marks placed in percent zoom and pan with it, and takes no
+pointer), and a dark stage on the transform transport with floor policy `rest`. It owns its
 keys (Escape closes only the pop-out, arrows step, `Z`, `+`/`-`) and stops them
 there. An `entry` wheel (`{deltaY, deltaMode, fx, fy}`, the cursor as a
 fraction of the thumbnail) is applied once the picture is measured, anchored

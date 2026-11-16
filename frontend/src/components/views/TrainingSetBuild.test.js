@@ -1349,6 +1349,71 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("says a sheet may not cut cleanly, keeps a clean one first, and draws its cut", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    gen.runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: [{ run_id: "r1", status: "queued" }],
+    });
+    gen.getRunOutcome.mockResolvedValue({ status: "completed", picture_ids: [501, 502] });
+    const cells = [
+      [0, 0, 0.25, 0.5],
+      [0.25, 0, 0.5, 0.5],
+      [0, 0.5, 0.25, 1],
+      [0.25, 0.5, 0.5, 1],
+      [0.5, 0, 0.75, 1],
+      [0.75, 0, 1, 1],
+    ];
+    gen.rankSheets.mockResolvedValue({
+      sheets: [
+        // The better faces, but no clean line between two of its photos.
+        sheet(501, 0.7, { format: "png", cuts_cleanly: false, cells }),
+        sheet(502, 0.5, { format: "png", cuts_cleanly: true, cells }),
+      ],
+      references: 0,
+    });
+    const popout = () => document.querySelector('[data-testid="zoom-popout"]');
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(3000);
+
+    const tiles = wrapper.findAll('[data-testid="cs-sheet"]');
+    expect(tiles.map((t) => t.attributes("aria-label"))).toEqual([
+      "Sheet 1: faces agree strongly · may not cut cleanly",
+      "Sheet 2: faces agree somewhat",
+    ]);
+    // The sheet kept for the user is the clean one, though the other's faces
+    // agree better.
+    expect(tiles.map((t) => t.attributes("aria-pressed"))).toEqual(["false", "true"]);
+    // Still a sheet to keep: a warning, not a refusal.
+    await tiles[0].trigger("click");
+    expect(wrapper.find('[data-testid="cts-generate-primary"]').text()).toContain(
+      "Use 2 sheets",
+    );
+
+    // Zoomed, the six photos it cuts are drawn on it, in the warning colour.
+    await wrapper.findAll('[data-testid="cs-zoom-open"]')[0].trigger("click");
+    await flushPromises();
+    const marks = [...popout().querySelectorAll('[data-testid="cs-cell"]')];
+    expect(marks).toHaveLength(6);
+    expect(marks[4].style.left).toBe("50%");
+    expect(marks[4].style.width).toBe("25%");
+    expect(marks.every((m) => m.classList.contains("cs-cell--unclean"))).toBe(true);
+    popout().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    await flushPromises();
+    const clean = [...popout().querySelectorAll('[data-testid="cs-cell"]')];
+    expect(clean).toHaveLength(6);
+    expect(clean.some((m) => m.classList.contains("cs-cell--unclean"))).toBe(false);
+    popout().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushPromises();
+    wrapper.unmount();
+  });
+
   it("warns, without refusing, when the sheets kept look like different people", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
