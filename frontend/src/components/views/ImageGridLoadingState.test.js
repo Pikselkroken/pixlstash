@@ -1,6 +1,6 @@
 // The grid must not say "No pictures match the current filters" until a
 // fetch has actually answered with nothing. A fetch still in flight, or one
-// that failed, says "Loading…" and offers no "Show all pictures".
+// that failed, says so and offers no "Show all pictures".
 //
 // Mounts the real ImageGrid, following ImageGridLibraryEmptyState.test.js.
 
@@ -71,6 +71,7 @@ vi.mock("vue-router", () => ({
 }));
 
 import ImageGrid from "./ImageGrid.vue";
+import LibraryEmptyState from "./LibraryEmptyState.vue";
 
 function mountGrid() {
   const selectionStore = useSelectionStore();
@@ -97,10 +98,12 @@ function mountGrid() {
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const never = () => new Promise(() => {});
 
-function answer({ count, stream }) {
+function answer({ count, stream, library = 5 }) {
   apiGet.mockImplementation((url) => {
     const u = String(url);
-    if (u.includes("/summary")) return Promise.resolve({ data: { image_count: 5 } });
+    if (u.includes("/summary")) {
+      return Promise.resolve({ data: { image_count: library } });
+    }
     if (u.includes("/pictures/count")) return count();
     if (u.includes("/pictures/stream")) return stream();
     return Promise.resolve({ data: [] });
@@ -115,6 +118,8 @@ beforeEach(() => {
 });
 
 const COUNT_FIVE = () => Promise.resolve({ data: { count: 5 } });
+const COUNT_ZERO = () => Promise.resolve({ data: { count: 0 } });
+const DOWN = () => Promise.reject(new Error("Request failed with status code 503"));
 
 /** Mount, let the 80 ms first-fetch timer and the 350 ms card delay pass. */
 async function settle() {
@@ -125,44 +130,88 @@ async function settle() {
 }
 
 const cardText = (wrapper) => wrapper.find(".empty-state").text();
-const showAllButton = (wrapper) => wrapper.find(".empty-state-action");
+const showAll = (wrapper) => wrapper.find('[data-testid="show-all-pictures"]');
+const retry = (wrapper) => wrapper.find('[data-testid="grid-fetch-retry"]');
 
-describe("before the grid's fetch has answered", () => {
-  it("says Loading while the count is still in flight", async () => {
+describe("while the grid's fetch is in flight", () => {
+  it("says Loading and offers nothing", async () => {
     answer({ count: never, stream: never });
     const wrapper = await settle();
 
     expect(cardText(wrapper)).toContain("Loading…");
     expect(cardText(wrapper)).not.toContain("No pictures match");
-    expect(showAllButton(wrapper).exists()).toBe(false);
+    expect(showAll(wrapper).exists()).toBe(false);
+    expect(retry(wrapper).exists()).toBe(false);
   });
 
-  it("says Loading, not no-match, when the count request fails", async () => {
-    answer({ count: () => Promise.reject(new Error("down")), stream: never });
+  it("comes back after a reset clears the card mid-fetch", async () => {
+    // `_resetGridState` and friends clear the delay flag while the fetch is
+    // still out, so neither `imagesLoading` nor the count moves to re-arm it.
+    answer({ count: never, stream: never });
     const wrapper = await settle();
+    wrapper.vm.emptyStateDelayPassed = false;
+    await wait(500);
+    await nextTick();
 
     expect(cardText(wrapper)).toContain("Loading…");
-    expect(cardText(wrapper)).not.toContain("No pictures match");
-    expect(showAllButton(wrapper).exists()).toBe(false);
   });
 
-  it("says Loading, not no-match, when the stream request fails", async () => {
-    answer({ count: COUNT_FIVE, stream: () => Promise.reject(new Error("down")) });
+  it("does not call an empty library empty yet", async () => {
+    answer({ count: never, stream: never, library: 0 });
     const wrapper = await settle();
 
+    expect(wrapper.findComponent(LibraryEmptyState).exists()).toBe(false);
     expect(cardText(wrapper)).toContain("Loading…");
-    expect(cardText(wrapper)).not.toContain("No pictures match");
-    expect(showAllButton(wrapper).exists()).toBe(false);
+  });
+});
+
+describe("when the grid's fetch failed", () => {
+  for (const [what, spec] of [
+    ["count", { count: DOWN, stream: never }],
+    ["stream", { count: COUNT_FIVE, stream: DOWN }],
+  ]) {
+    it(`says it could not load, not no-match, when the ${what} fails`, async () => {
+      answer(spec);
+      const wrapper = await settle();
+
+      expect(cardText(wrapper)).toContain("Couldn't load pictures");
+      expect(cardText(wrapper)).toContain("503");
+      expect(cardText(wrapper)).not.toContain("No pictures match");
+      expect(showAll(wrapper).exists()).toBe(false);
+      expect(retry(wrapper).exists()).toBe(true);
+    });
+  }
+
+  it("Try again fetches and then gives the real answer", async () => {
+    answer({ count: DOWN, stream: never });
+    const wrapper = await settle();
+    answer({ count: COUNT_ZERO, stream: never });
+
+    await retry(wrapper).trigger("click");
+    await wait(50);
+    await nextTick();
+
+    expect(cardText(wrapper)).toContain("No pictures match the current filters");
+    expect(showAll(wrapper).exists()).toBe(true);
+  });
+
+  it("still shows an empty library its way in", async () => {
+    // The library-empty claim rests on the summary count, which answered.
+    answer({ count: DOWN, stream: never, library: 0 });
+    const wrapper = await settle();
+
+    expect(wrapper.findComponent(LibraryEmptyState).exists()).toBe(true);
   });
 });
 
 describe("once the fetch has answered with nothing", () => {
   it("says no pictures match and offers Show all pictures", async () => {
-    answer({ count: () => Promise.resolve({ data: { count: 0 } }), stream: never });
+    answer({ count: COUNT_ZERO, stream: never });
     const wrapper = await settle();
 
     expect(cardText(wrapper)).toContain("No pictures match the current filters");
     expect(cardText(wrapper)).not.toContain("Loading");
-    expect(showAllButton(wrapper).exists()).toBe(true);
+    expect(showAll(wrapper).exists()).toBe(true);
+    expect(retry(wrapper).exists()).toBe(false);
   });
 });

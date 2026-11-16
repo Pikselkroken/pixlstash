@@ -526,6 +526,15 @@
             Show {{ inboxWiderPeriod.label.toLowerCase() }}
           </AppButton>
           <AppButton
+            v-else-if="imagesError"
+            class="empty-state-action"
+            variant="primary"
+            data-testid="grid-fetch-retry"
+            @click.stop="retryGridFetch"
+          >
+            Try again
+          </AppButton>
+          <AppButton
             v-else-if="
               canShowAllPicturesButton &&
               !inboxEmptyUnfiltered &&
@@ -533,6 +542,7 @@
             "
             class="empty-state-action"
             variant="primary"
+            data-testid="show-all-pictures"
             @click.stop="handleEmptyStateReset"
           >
             Show all pictures
@@ -7699,18 +7709,25 @@ const emptyStateDelayPassed = ref(false);
 let emptyStateDelayTimer = null;
 
 // The grid holds nothing and has held nothing for the delay. Whether that is a
-// fact about the view or only a fetch that has not answered yet (or failed) is
-// `emptyStateLoading`: until the latest fetch has succeeded, the card says
-// "Loading…" and offers no way out, because "no pictures match" is a claim
-// about results nobody has seen.
+// fact about the view is a separate question: until the latest fetch has
+// succeeded the card says "Loading…" (`gridFetchPending`) or "Couldn't load
+// pictures" (`imagesError`), never "no pictures match", which is a claim about
+// results nobody has seen.
 const showEmptyState = computed(() => {
   if (sidebarStore.folderScanning) return false;
   return filteredGridCount.value === 0 && emptyStateDelayPassed.value;
 });
 
-const emptyStateLoading = computed(
-  () => !gridReady.value || imagesLoading.value || !!imagesError.value,
+const gridFetchPending = computed(
+  () => !gridReady.value || imagesLoading.value,
 );
+const emptyStateLoading = computed(
+  () => gridFetchPending.value || !!imagesError.value,
+);
+
+function retryGridFetch() {
+  fetchAllGridImages({ force: true }).then(() => updateVisibleThumbnails());
+}
 
 const showFolderScanningState = computed(() => {
   return (
@@ -7743,7 +7760,7 @@ const canShowAllPicturesButton = computed(() => {
 const showLibraryEmptyState = computed(
   () =>
     showEmptyState.value &&
-    !emptyStateLoading.value &&
+    !gridFetchPending.value &&
     totalAllPicturesCountLoaded.value &&
     totalAllPicturesCount.value === 0 &&
     !isReadOnly.value &&
@@ -7828,7 +7845,8 @@ watch(
 );
 
 const emptyStateTitle = computed(() => {
-  if (emptyStateLoading.value) return "Loading…";
+  if (gridFetchPending.value) return "Loading…";
+  if (imagesError.value) return "Couldn't load pictures";
   if (isSetOverlapView.value) {
     return "No overlap";
   }
@@ -7843,7 +7861,8 @@ const emptyStateTitle = computed(() => {
 });
 
 const emptyStateSubtitle = computed(() => {
-  if (emptyStateLoading.value) return "";
+  if (gridFetchPending.value) return "";
+  if (imagesError.value) return imagesError.value;
   if (isSetOverlapView.value) {
     return "The picture sets have no overlap.";
   }
@@ -7881,8 +7900,9 @@ const emptyStateImageStyle = computed(() => {
 
 // Armed while loading too, so a slow fetch shows "Loading…" rather than a
 // blank grid. A load finishing does not re-arm a card already showing: it only
-// swaps "Loading…" for the answer instead of blinking out and back.
-watch([imagesLoading, filteredGridCount], ([, count]) => {
+// swaps "Loading…" for the answer instead of blinking out and back. Watching
+// the flag itself re-arms after the reset sites clear it mid-fetch.
+watch([imagesLoading, filteredGridCount, emptyStateDelayPassed], ([, count]) => {
   if (count > 0 || sidebarStore.folderScanning) {
     if (emptyStateDelayTimer) {
       clearTimeout(emptyStateDelayTimer);
