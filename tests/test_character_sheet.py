@@ -137,7 +137,7 @@ def test_a_background_replaces_the_studio_and_none_keeps_it(layout):
     assert studio in summary()
     assert studio in summary(background="  ")
     park = summary(background="A sunlit park with tall trees.")
-    assert "same woman in front of a sunlit park with tall trees, photo" in park
+    assert "same woman with the background: a sunlit park with tall trees, ph" in park
     assert "studio" not in park
 
 
@@ -770,7 +770,7 @@ def test_prompt_route_takes_a_background(client):
         json={"description": "x", "background": "a brick wall", "layout": "prose"},
     )
     assert response.status_code == 200, response.text
-    assert "in front of a brick wall" in response.json()["prompt"]
+    assert "with the background: a brick wall" in response.json()["prompt"]
 
 
 def test_prompt_route_hands_out_the_canvas(client):

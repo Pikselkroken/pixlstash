@@ -399,7 +399,8 @@ def sheet_prompt(
     )
     backdrop = _phrase(background)
     setting = (
-        f"in front of {backdrop}"
+        # Said as a label, so "a sunlit park", "in a kitchen" and "white" all read.
+        f"with the background: {backdrop}"
         if backdrop
         else "on a plain light-grey studio background, soft even studio lighting"
     )
