@@ -12898,10 +12898,10 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   pins the mid-thigh set. Only MOSS-Image reads the layout JSON, so a Krea 2,
   Qwen-Image, FLUX.2 Klein or MiniMax H3 workflow is sent `layout: "prose"`, the summary
   caption alone; no probe has measured how their sheets hold the grid or cut. Every panel's caption carries the whole character,
-  build included (a different build draws a different face). Trousers are
+  build included (a different build draws a different face), and the summary
+  sets the photos in front of the `background` asked for, a plain light-grey
+  studio by default. Trousers are
   always named, shoes only at full body. A LoRA's first trigger word leads.
-  The summary sets every photo in front of the `background` asked for, a
-  plain light-grey studio when none is.
 - **Ranking** (`POST /characters/{id}/sheets/rank`) reads the faces face
   extraction stored on each sheet: `agreement` is their mean pairwise cosine
   similarity, `closeness` the mean similarity to the character's reference

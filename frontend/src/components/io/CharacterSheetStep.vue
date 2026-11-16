@@ -119,20 +119,18 @@
             placeholder="dark straight jeans · a pleated midi skirt"
           />
         </div>
-        <div class="cs-grid2">
-          <AppInput
-            v-model="form.background"
-            label="Background"
-            placeholder="a plain light-grey studio"
-            data-testid="cs-background"
-          />
-          <AppInput
-            v-if="form.framing === 'full_body'"
-            v-model="form.shoes"
-            label="Shoes"
-            placeholder="white sneakers"
-          />
-        </div>
+        <AppInput
+          v-model="form.background"
+          label="Background"
+          placeholder="a plain light-grey studio · a sunlit park"
+          data-testid="cs-background"
+        />
+        <AppInput
+          v-if="form.framing === 'full_body'"
+          v-model="form.shoes"
+          label="Shoes"
+          placeholder="white sneakers"
+        />
         <!-- The four choices of how a sheet is drawn: toggles side by side,
              wrapping only on a narrow window, with one line of hints under
              them. -->
@@ -2275,11 +2273,6 @@ defineExpose({
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--space-4);
-}
-
-/* Background alone (no shoes below full body) takes the whole row. */
-.cs-grid2 > :only-child {
-  grid-column: 1 / -1;
 }
 
 .cs-opts {
