@@ -1720,7 +1720,12 @@ Escape and Enter do nothing here: cancelling deletes a set.
   pre-flights every candidate card of both modes (`checkCards`), and one with
   no size to set, one that cannot run, or (from a reference) one with no
   picture input or no settable prompt is left out; with none left the form
-  says why, naming the first one's problem. The four draw choices (*Body
+  says why, naming the first one's problem. A check ComfyUI never answered
+  (`UNCHECKED_CODES`) blames no workflow: the form says ComfyUI is down or
+  has no address, and while it is unreachable the step asks again every 15 s
+  (the server keeps the failure up to a minute), then checks every card
+  afresh. The mode on show is checked first and each answer lands as it
+  comes, so its select fills before the other mode is done. The four draw choices (*Body
   photos*, *Sheets to draw*, *Sheet size*, *Draw a*) are `Segmented` toggles
   side by side (*Sheet size* greys out what the chosen model does not draw
   well, `ENGINES[…].sizes`: 4K for all but MiniMax H3, Small and Medium for

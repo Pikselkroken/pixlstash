@@ -750,6 +750,58 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("says ComfyUI is down rather than blaming the workflows, and checks again", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    // Unchecked, so no size is known either: the size must not be blamed.
+    gen.getWorkflowCard.mockResolvedValue({ card: { name: "MOSS sheet", defaults: [] } });
+    gen.preflightWorkflowRun.mockResolvedValue({
+      ok: false,
+      groups: [{ reasons: [{ code: "comfyui_unreachable" }] }],
+    });
+    let wrapper = mountDialog();
+    await flushPromises();
+    const problem = () => wrapper.find('[data-testid="cs-workflow-problem"]');
+    expect(problem().text()).toContain("ComfyUI isn't answering");
+    expect(problem().text()).not.toContain("picture size");
+    expect(problem().text()).not.toContain("None of");
+
+    // Its address is taken away meanwhile: Settings is named, and the step
+    // stops asking.
+    gen.preflightWorkflowRun.mockResolvedValue({
+      ok: false,
+      groups: [{ reasons: [{ code: "comfyui_not_configured" }] }],
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flushPromises();
+    expect(problem().text()).toContain("Add one in Settings");
+    const asked = gen.preflightWorkflowRun.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(gen.preflightWorkflowRun.mock.calls.length).toBe(asked);
+
+    // Back to unreachable, as a fresh open would find it, then ComfyUI answers.
+    gen.preflightWorkflowRun.mockResolvedValue({
+      ok: false,
+      groups: [{ reasons: [{ code: "comfyui_unreachable" }] }],
+    });
+    wrapper.unmount();
+    wrapper = mountDialog();
+    await flushPromises();
+    expect(problem().text()).toContain("ComfyUI isn't answering");
+
+    // ComfyUI comes back: the step finds out by itself.
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flushPromises();
+    expect(problem().exists()).toBe(false);
+    expect(
+      wrapper.find('[data-testid="cts-generate-primary"]').attributes("disabled"),
+    ).toBeUndefined();
+    wrapper.unmount();
+  });
+
   it("draws with the workflow chosen when Draw was pressed, not one picked meanwhile", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
@@ -1628,6 +1680,27 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("offers the mode's workflows without waiting for the other mode's checks", async () => {
+    referenceWorld();
+    const answer = await gen.preflightWorkflowRun();
+    gen.preflightWorkflowRun.mockClear();
+    // The text card's check never comes back.
+    gen.preflightWorkflowRun.mockImplementation(async (body) =>
+      body.workflow_id === MOSS_CARD.id ? new Promise(() => {}) : answer,
+    );
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(mode(wrapper).text()).toBe("Reference and text");
+    // The mode on show is asked first.
+    expect(gen.preflightWorkflowRun.mock.calls[0][0].workflow_id).toBe(QWEN_SHEET.id);
+    const select = wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .find((c) => c.props("label") === "Sheet workflow");
+    expect(select.props("options").map((o) => o.value)).toEqual([QWEN_SHEET.id]);
+    expect(select.props("modelValue")).toBe(QWEN_SHEET.id);
+    wrapper.unmount();
+  });
+
   it("feeds the reference through the run's inputs and ranks against it", async () => {
     referenceWorld();
     gen.rankSheets.mockResolvedValue({
@@ -1910,7 +1983,13 @@ describe("TrainingSetBuild: generating the pictures", () => {
     await flushPromises();
     expect(gen.sheetCopyWorkflow).toHaveBeenCalledWith(KLEIN_SHEET.id);
     // The copy is chosen in its place, and it can draw.
-    expect(gen.getWorkflowCard).toHaveBeenLastCalledWith(copy.id);
+    expect(gen.getWorkflowCard).toHaveBeenCalledWith(copy.id);
+    expect(
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === "Sheet workflow")
+        .props("modelValue"),
+    ).toBe(copy.id);
     expect(wrapper.find('[data-testid="cs-workflow-problem"]').exists()).toBe(false);
     wrapper.unmount();
   });
