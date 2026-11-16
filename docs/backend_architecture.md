@@ -12922,15 +12922,42 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   faces, `agrees` at `SOME_AGREEMENT`) and `closeness` (to the same
   references, `close` at `CLOSE_TO_REFERENCES`). A panel with no face is left
   out; a picture with no stored size gets none.
+  Once a sheet's faces are read it also carries the cut using it would make:
+  `cells`, the six panels as `[left, top, right, bottom]` fractions, and
+  `cuts_cleanly` (below); both stay empty / null while faces are unread, so the
+  polling while sheets draw reads no files. The cut is cached per file path,
+  mtime and face boxes (`_cut_of_file`, an `lru_cache`): the step re-ranks
+  every few seconds, and a 2560 sheet costs ~85 ms to decode and cut, a
+  MiniMax 4k one ~350 ms.
 - **Using sheets** (`POST /characters/{id}/sheets/use`, `picture_ids`; a held
   sheet counts, and every sheet is read before anything is imported) cuts each
-  with `split_sheet`: the grid's cells scaled to the picture, each cut moved
-  to the nearest full-length luminance edge within ±200 px (MOSS draws its
-  dividers up to ~50 px off the layout, an edit model drawing from a reference
-  picture up to ~190 px), 8 px of gutter trimmed, then the white frame MOSS
-  draws round each photo (lines that are almost all over grey 244, from each
-  edge, then as far as the white runs in diagonally from each rounded corner;
-  an overcast sky, ~237, is not frame). The six panels are
+  with `split_sheet`, round its stored face boxes as ranking cuts it (faces
+  read since the last rank count too). `sheet_cells` holds no constant for any model's drift. Each cut starts
+  from the grid's own line, scaled to the picture, and searches halfway to
+  the neighbouring line on either side (the passport row once per passport
+  column, over that column's span). A line is *uniform* when over
+  `UNIFORM_SHARE` (0.8) of it lies within `UNIFORM_LEVELS` (12) grey levels of
+  its own median: a gutter, a drawn line or plain studio background is, a
+  line through a photo is not, even one along a door frame. Uniform lines of
+  one level form bands. The cut takes, in order: the band nearest the grid
+  line that is at most `MAX_GUTTER` (64 px at 2560) wide and lighter or darker
+  than both sides (a gutter, trimmed to its edges plus 2 px of seam; a band
+  that only climbs from one level to the next is the seam between a photo and
+  its frame); else the grid line moved into the nearest wider or step-less
+  band, background the photos share, nothing trimmed; else the most uniform
+  line, *unsure*. A line within `FACE_FENCE` (0.2) of a stored face box's
+  shorter side from its centre is never a candidate (stored boxes are widened
+  and rounded up, so only the centre is the face's). The sheet `cuts_cleanly`
+  when no cut is unsure, no background cut is pressed against its window's
+  edge away from the grid line (a sheet drawn at another scale), and no panel
+  holds two face centres; one that does not is still cut when kept. Then the
+  white frame MOSS draws round each photo is trimmed (lines that are almost
+  all over grey 244, from each edge, then as far as the white runs in
+  diagonally from each rounded corner; an overcast sky, ~237, is not frame).
+  Measured on the library's 130 sheets (2026-11): the old step-edge cut ran
+  through picture content on 56 and through a face on 16, none flagged; this
+  one through content on 3 and a face on none, all 3 flagged. Most real
+  sheets are seamless studio grey, with people well off the grid. The six panels are
   imported with `import_derived_outputs` (source picture = the sheet, no
   stack) and filed with `add_person`, which links the largest face once face
   extraction has read it. Filing clears each panel's `source_picture_id`: the

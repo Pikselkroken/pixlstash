@@ -42,6 +42,7 @@ import io
 import json
 import os
 import re
+from functools import lru_cache
 from itertools import combinations
 from typing import Literal
 
@@ -103,6 +104,25 @@ CLOSE_TO_REFERENCES = 0.45
 # Grey level over which a line of the sheet counts as its white frame: the
 # frame is ~250, an overcast sky in a photo ~237.
 FRAME_LEVEL = 244
+# A gutter is a band of lines each the same all along: within UNIFORM_LEVELS
+# grey levels of its own median over UNIFORM_SHARE of its length. A line through
+# a photo is not, even one running along a door frame, and a gutter stopping
+# short of the edge (85 % of the height) still is.
+# ponytail: read off the 130 sheets in the library on 2026-11-16 (MOSS, Krea 2,
+# Qwen-Image, FLUX.2 Klein, MiniMax H3); re-read them when a model draws a
+# gutter these miss.
+UNIFORM_LEVELS = 12
+UNIFORM_SHARE = 0.8
+# A uniform band at most this wide (at 2560) with a step at its edges is a
+# gutter or a drawn line; a wider one is background the photos share.
+MAX_GUTTER = 64
+# A cut never runs closer to a face's centre than this share of its stored
+# box's shorter side. Stored boxes are widened and rounded up to 64 px at the
+# 512 px working size, so only the centre is the face's own.
+FACE_FENCE = 0.2
+
+# (left, top, right, bottom) on the sheet; a face is its stored box.
+Box = tuple[int, int, int, int]
 
 _PRONOUN = {"woman": ("her", "Her"), "man": ("his", "His")}
 
@@ -653,65 +673,172 @@ def _save_with_save_image(nodes: dict) -> None:
                     other_inputs[name] = images
 
 
-def _nearest_cut(
-    gray: np.ndarray, nominal: int, across: slice, window: int, vertical: bool
-) -> int:
-    """The line nearest *nominal* that a full-length luminance step runs along.
+def _find_cut(
+    gray: np.ndarray,
+    nominal: int,
+    window: tuple[int, int],
+    across: tuple[int, int],
+    vertical: bool,
+    fences: list[tuple[float, float, float]],
+    scale: float,
+) -> tuple[int, int, bool]:
+    """Where to cut near *nominal*: ``(end, start, sure)``.
 
-    A divider between panels is an edge that runs the whole length of the cut;
-    a person's outline is not. Each candidate line scores the share of its
-    pixels (over *across*) whose step to the previous line is over 4 grey
-    levels, and counts as a divider over 0.6. The nearest divider wins, not the
-    strongest, so a seam further off (a sheet that broke its layout) cannot
-    pull the cut away from the gutter it belongs in. The outer border is never
-    a candidate. With no divider (a seamless studio grey), the nominal line
-    stands.
+    The panel before the cut ends at *end* and the one after starts at
+    *start*. Lines are searched over *window* and read over *across* (the span
+    the cut runs). A line within a fence ``(along, across, reach)`` (a face's
+    centre on the cut's axis, across it, and how near a cut may come) whose
+    centre lies in *across* is never a candidate. *scale* is the sheet's
+    size against 2560×1536 across the cut: its width for a column cut, its
+    height for a row cut.
+
+    The cut lands, in order of preference, in the uniform band nearest
+    *nominal* that has a step at its edges (a gutter or a drawn line, trimmed
+    to its edges plus a soft seam's width); at *nominal* moved into the nearest wider
+    or step-less band (background the photos share, nothing trimmed); or, with
+    neither, on the most uniform line, which is not ``sure``.
     """
     plane = gray if vertical else gray.T
     size = plane.shape[1]
-    lo = max(1, nominal - window)
-    hi = min(size - 1, nominal + window)
+    lo, hi = max(1, window[0]), min(size - 1, window[1])
     if hi <= lo:
-        return nominal
-    steps = np.abs(np.diff(plane[across, lo - 1 : hi + 1], axis=1)) > 4
-    lines = lo + np.flatnonzero(steps.mean(axis=0) > 0.6)
-    if not lines.size:
-        return nominal
-    return int(lines[np.argmin(np.abs(lines - nominal))])
+        return nominal, nominal, False
+    strip = plane[across[0] : across[1], lo - 1 : hi + 1]
+    median = np.median(strip, axis=0)
+    share = (np.abs(strip - median) <= UNIFORM_LEVELS).mean(axis=0)
+    lines = np.arange(lo, hi)
+    # How far each line keeps from the nearest fence; inside one, negative.
+    clearance = np.full(hi - lo, np.inf)
+    for along, at, reach in fences:
+        if across[0] <= at < across[1]:
+            clearance = np.minimum(clearance, np.abs(lines - along) - reach)
+    fenced = clearance < 0
+    open_ = share[1:-1] >= UNIFORM_SHARE
+    open_ &= ~fenced
+    # A band holds one level: measured from its first line, since a gutter's
+    # soft edge climbs to its own level in steps each too small to split on.
+    runs: list[tuple[int, int]] = []
+    for index in np.flatnonzero(open_):
+        line = lo + int(index)
+        if (
+            runs
+            and runs[-1][1] == line
+            and abs(median[index + 1] - median[runs[-1][0] - lo + 1]) <= UNIFORM_LEVELS
+        ):
+            runs[-1] = (runs[-1][0], line + 1)
+        else:
+            runs.append((line, line + 1))
+    if not runs:
+        # ponytail: no clear line anywhere in the window (two photos drawn
+        # touching, an arm across the gutter); the least busy line is a guess.
+        if fenced.all():
+            # Faces across the whole window: the line furthest from them.
+            line = lo + int(np.argmax(clearance))
+        else:
+            line = lo + int(np.argmax(np.where(fenced, -1.0, share[1:-1])))
+        return line, line, False
+    gutter = max(1, round(MAX_GUTTER * scale))
+    bleed = max(1, round(2 * scale))
+
+    def level(line: int) -> float:
+        return float(np.median(plane[across[0] : across[1], line]))
+
+    def stepped(start: int, end: int) -> bool:
+        # Lighter or darker than both sides, read a soft seam's width out past
+        # its blurred edge: a band that only climbs from one level to the
+        # next is the seam between a photo and its frame, not a gutter.
+        inside = level((start + end - 1) // 2)
+        steps = [
+            level(edge) - inside
+            for edge in (start - 1 - bleed, end + bleed)
+            if 0 <= edge < size
+        ]
+        return all(abs(step) > UNIFORM_LEVELS for step in steps) and (
+            all(step > 0 for step in steps) or all(step < 0 for step in steps)
+        )
+
+    def distance(run: tuple[int, int]) -> int:
+        start, end = run
+        return (
+            0
+            if start <= nominal < end
+            else min(abs(start - nominal), abs(end - 1 - nominal))
+        )
+
+    dividers = [r for r in runs if r[1] - r[0] <= gutter and stepped(*r)]
+    if dividers:
+        start, end = min(dividers, key=distance)
+        return start - bleed, end + bleed, True
+    start, end = min(runs, key=distance)
+    margin = gutter // 4
+    line = min(max(nominal, start + margin), end - 1 - margin)
+    if line < start:
+        line = (start + end) // 2
+    # Background pressed against the window's edge, away from the grid line,
+    # most likely goes on past it: the sheet is drawn at another scale.
+    sure = start <= nominal < end or lo + margin <= line < hi - margin
+    return line, line, sure
 
 
-def sheet_cells(image: Image.Image) -> list[tuple[int, int, int, int]]:
-    """The six panels' ``(left, top, right, bottom)`` boxes on *image*, in order.
+def sheet_cells(
+    image: Image.Image, faces: list[list[int]] | None = None
+) -> tuple[list[Box], bool]:
+    """The six panels' boxes on *image*, in order, and whether the cut is clean.
 
-    The grid's own geometry (passport cells 600×768, body cells 680×1536 at
-    2560×1536), scaled to the picture, each cut then moved to the nearest
-    full-length edge within ±200 px: MOSS draws its dividers up to ~50 px off
-    the layout, and an edit model drawing from a reference picture (Qwen-Image,
-    FLUX.2 Klein) up to ~190 px; the four windows stay clear of each other. A
-    gutter of 8 px either side of a cut is trimmed off, and then whatever is
-    left of the white frame round each photo.
+    Each cut starts from the grid's own line (passport cells 600×768, body
+    cells 680×1536 at 2560×1536, scaled to the picture) and searches halfway to
+    the next line on either side, so no model's drift is a constant here: see
+    :func:`_find_cut` for where in that window it lands. The passport row is
+    cut once per passport column, each over its own span. Whatever is left of
+    the white frame round each photo is then trimmed.
+
+    *faces* are the sheet's stored face boxes. A cut never runs through a
+    face's centre, and the cut is clean only when every cut found a clear line
+    and no panel holds two faces' centres. A cut that is not clean still cuts:
+    it is for the person to judge, from the cells drawn on the sheet.
     """
     width, height = image.size
     sx, sy = width / SHEET_WIDTH, height / SHEET_HEIGHT
     gray = np.asarray(image.convert("L"), dtype=np.int16)
-    window = max(1, round(200 * sx))
-    gutter = round(8 * sx)
-    half = _nearest_cut(gray, round(1200 * sx), slice(0, height), window, True)
-    bodies = _nearest_cut(gray, round(1880 * sx), slice(0, height), window, True)
-    column = _nearest_cut(gray, round(600 * sx), slice(0, height), window, True)
-    row = _nearest_cut(gray, round(768 * sy), slice(0, half), window, False)
-    left = (0, column - gutter, column + gutter, half - gutter)
-    top = (0, row - gutter, row + gutter, height)
+    centres = [
+        (
+            (b[0] + b[2]) / 2,
+            (b[1] + b[3]) / 2,
+            FACE_FENCE * min(b[2] - b[0], b[3] - b[1]),
+        )
+        for b in faces or ()
+        if b and len(b) == 4
+    ]
+    across_x = [(x, y, reach) for x, y, reach in centres]
+    across_y = [(y, x, reach) for x, y, reach in centres]
+    grid = [round(x * sx) for x in (0, 600, 1200, 1880)] + [width]
+
+    def column_cut(i: int) -> tuple[int, int, bool]:
+        window = ((grid[i - 1] + grid[i]) // 2, (grid[i] + grid[i + 1]) // 2)
+        return _find_cut(gray, grid[i], window, (0, height), True, across_x, sx)
+
+    column, half, bodies = column_cut(1), column_cut(2), column_cut(3)
+    row = round(768 * sy)
+    window = (row // 2, (row + height) // 2)
+    rows = [
+        _find_cut(gray, row, window, span, False, across_y, sy)
+        for span in ((0, column[0]), (column[1], half[0]))
+    ]
     cells = [
-        (left[0], top[0], left[1], top[1]),
-        (left[2], top[0], left[3], top[1]),
-        (left[0], top[2], left[1], top[3]),
-        (left[2], top[2], left[3], top[3]),
-        (half + gutter, 0, bodies - gutter, height),
-        (bodies + gutter, 0, width, height),
+        (0, 0, column[0], rows[0][0]),
+        (column[1], 0, half[0], rows[1][0]),
+        (0, rows[0][1], column[0], height),
+        (column[1], rows[1][1], half[0], height),
+        (half[1], 0, bodies[0], height),
+        (bodies[1], 0, width, height),
     ]
     limit, bleed = round(64 * sx), max(1, round(2 * sx))
-    return [_inside_frame(gray, cell, limit, bleed) for cell in cells]
+    cells = [_inside_frame(gray, cell, limit, bleed) for cell in cells]
+    clean = all(cut[2] for cut in (column, half, bodies, *rows)) and all(
+        sum(left <= x < right and top <= y < bottom for x, y, _ in centres) <= 1
+        for left, top, right, bottom in cells
+    )
+    return cells, clean
 
 
 def _inside_frame(
@@ -767,9 +894,11 @@ def _inside_frame(
     return cell
 
 
-def split_sheet(image: Image.Image) -> list[Image.Image]:
+def split_sheet(
+    image: Image.Image, faces: list[list[int]] | None = None
+) -> list[Image.Image]:
     """The sheet's six panels as pictures: four passport photos, then two bodies."""
-    return [image.crop(box) for box in sheet_cells(image)]
+    return [image.crop(box) for box in sheet_cells(image, faces)[0]]
 
 
 def _unit(vectors: list[np.ndarray]) -> np.ndarray:
@@ -883,6 +1012,13 @@ def _vectors(rows: list) -> list[np.ndarray]:
     return [np.frombuffer(features, dtype=np.float32) for features in rows if features]
 
 
+def _face_boxes(bboxes: list[str | None]) -> list[list[int]]:
+    """The stored face boxes among *bboxes* (``Face.bbox_`` JSON); the row
+    face extraction leaves on a picture with no face has none."""
+    boxes = [json.loads(bbox) for bbox in bboxes if bbox]
+    return [box for box in boxes if box and len(box) == 4]
+
+
 def sheet_faces_in_session(
     session: Session,
     character_id: int,
@@ -897,8 +1033,8 @@ def sheet_faces_in_session(
     faces are not read yet. The references are the character's
     reference faces, or, given *reference_picture_ids*, the faces of those
     pictures: what the sheets were drawn from. The sheets' own faces are never
-    their own references. Each sheet's ``(format, width, height)``: the format
-    is what the picture's file is served as.
+    their own references. Each sheet's ``(format, width, height, file_path)``:
+    the format is what the picture's file is served as.
     """
     if session.get(Character, character_id) is None:
         return None
@@ -924,14 +1060,60 @@ def sheet_faces_in_session(
             )
         ).all()
     pictures = {
-        picture_id: (format_, width, height)
-        for picture_id, format_, width, height in session.exec(
-            select(Picture.id, Picture.format, Picture.width, Picture.height).where(
-                Picture.id.in_(picture_ids)
-            )
+        picture_id: (format_, width, height, file_path)
+        for picture_id, format_, width, height, file_path in session.exec(
+            select(
+                Picture.id,
+                Picture.format,
+                Picture.width,
+                Picture.height,
+                Picture.file_path,
+            ).where(Picture.id.in_(picture_ids))
         ).all()
     }
     return faces, references, pictures
+
+
+@lru_cache(maxsize=64)
+def _cut_of_file(
+    path: str, stamp: int, faces: tuple[tuple[int, ...], ...]
+) -> tuple[tuple[tuple[float, ...], ...], bool]:
+    """:func:`sheet_cells` of the file at *path*, the boxes as fractions.
+
+    The step ranks its sheets every few seconds while it draws, and a sheet's
+    file never changes: *stamp* (its mtime) keys the cache so one that did is
+    cut again.
+    """
+    with Image.open(path) as image:
+        image = image.convert("RGB")
+    cells, clean = sheet_cells(image, [list(box) for box in faces])
+    width, height = image.size
+    fractions = tuple(
+        (left / width, top / height, right / width, bottom / height)
+        for left, top, right, bottom in cells
+    )
+    return fractions, clean
+
+
+def _sheet_cut(
+    image_root: str, picture_id: int, file_path: str, faces: list[list[int]]
+) -> tuple[tuple[tuple[float, ...], ...], bool] | None:
+    """The sheet's cells as fractions and whether it cuts cleanly; ``None``
+    when its file cannot be read, which leaves the cut unshown, not wrong."""
+    path = ImageUtils.resolve_picture_path(image_root, file_path)
+    try:
+        if not path:
+            raise FileNotFoundError(file_path)
+        stamp = os.stat(path).st_mtime_ns
+        return _cut_of_file(path, stamp, tuple(tuple(box) for box in faces))
+    except (OSError, Image.DecompressionBombError) as exc:
+        logger.warning(
+            "Couldn't read character sheet %s at %s to show its cut: %s",
+            picture_id,
+            path,
+            exc,
+        )
+        return None
 
 
 def rank_sheets(
@@ -963,7 +1145,7 @@ def rank_sheets(
         vectors = vectors_of[picture_id]
         score = agreement(vectors)
         near = closeness(vectors, references)
-        format_, width, height = pictures.get(picture_id, (None, None, None))
+        format_, width, height, file_path = pictures.get(picture_id, (None,) * 4)
         boxed = [
             (
                 np.frombuffer(features, dtype=np.float32),
@@ -972,6 +1154,18 @@ def rank_sheets(
             for features, bbox in rows
             if features
         ]
+        # Cut only once the faces are read, so the polling while a sheet is
+        # drawn reads no files, and with them, as using it will cut.
+        cut = (
+            _sheet_cut(
+                vault.image_root,
+                picture_id,
+                file_path,
+                _face_boxes([bbox for _, bbox in rows]),
+            )
+            if rows and file_path
+            else None
+        )
         out.append(
             {
                 "picture_id": picture_id,
@@ -984,6 +1178,8 @@ def rank_sheets(
                 "close": None if near is None else near >= CLOSE_TO_REFERENCES,
                 "broken": len(vectors) > MAX_FACES,
                 "panels": panel_scores(boxed, width, height, references),
+                "cuts_cleanly": None if cut is None else cut[1],
+                "cells": [] if cut is None else [list(cell) for cell in cut[0]],
                 # Kept together, these would mix two people into one set: their
                 # faces agree across sheets less than one sheet's need to hold.
                 "different_from": [
@@ -1011,6 +1207,18 @@ def sheets_in_session(
     return None if any(sheet is None for sheet in sheets) else sheets
 
 
+def sheet_face_boxes_in_session(
+    session: Session, picture_ids: list[int]
+) -> dict[int, list[list[int]]]:
+    """Each picture's stored face boxes, for cutting it as it was ranked."""
+    boxes: dict[int, list] = {pid: [] for pid in picture_ids}
+    for picture_id, bbox in session.exec(
+        select(Face.picture_id, Face.bbox_).where(Face.picture_id.in_(picture_ids))
+    ).all():
+        boxes[picture_id].extend(_face_boxes([bbox]))
+    return boxes
+
+
 def file_on_character_in_session(
     session: Session, picture_ids: list[int], character_id: int
 ) -> None:
@@ -1030,8 +1238,8 @@ def file_on_character_in_session(
     session.commit()
 
 
-def _cut(server, sheet: Picture) -> list[tuple[bytes, str]]:
-    """The sheet's six panels as PNG bytes, ready to import."""
+def _cut(server, sheet: Picture, faces: list[list[int]]) -> list[tuple[bytes, str]]:
+    """The sheet's six panels as PNG bytes, ready to import, cut round *faces*."""
     path = ImageUtils.resolve_picture_path(server.vault.image_root, sheet.file_path)
     if not path or not os.path.isfile(path):
         raise SheetUnreadable(
@@ -1039,7 +1247,7 @@ def _cut(server, sheet: Picture) -> list[tuple[bytes, str]]:
         )
     try:
         with Image.open(path) as image:
-            panels = split_sheet(image.convert("RGB"))
+            panels = split_sheet(image.convert("RGB"), faces)
     except OSError as exc:
         logger.warning(
             "Couldn't read character sheet %s at %s to cut it: %s", sheet.id, path, exc
@@ -1056,10 +1264,12 @@ def _cut(server, sheet: Picture) -> list[tuple[bytes, str]]:
 def use_sheets(server, character_id: int, picture_ids: list[int]) -> list[int]:
     """Cut each sheet into its six panels and file them on the character.
 
-    Passport photos first, sheet by sheet. Every sheet is read before anything
-    is imported, so an unreadable one imports nothing. Returns the panels'
-    picture ids. Raises :class:`SheetNotFound` and :class:`SheetUnreadable`.
-    The sheets themselves stay in the Scrapheap.
+    Passport photos first, sheet by sheet, each cut round its stored faces
+    as :func:`rank_sheets` cuts it (faces read since the last rank count
+    too); one that does not cut cleanly is cut all the same. Every sheet is
+    read before anything is imported, so an unreadable one imports nothing.
+    Returns the panels' picture ids. Raises :class:`SheetNotFound` and
+    :class:`SheetUnreadable`. The sheets themselves stay in the Scrapheap.
     """
     ids = list(dict.fromkeys(picture_ids))
     sheets = server.vault.db.run_immediate_read_task(
@@ -1067,7 +1277,8 @@ def use_sheets(server, character_id: int, picture_ids: list[int]) -> list[int]:
     )
     if sheets is None:
         raise SheetNotFound(f"No character {character_id} or no picture among {ids}.")
-    cuts = [(sheet, _cut(server, sheet)) for sheet in sheets]
+    faces = server.vault.db.run_immediate_read_task(sheet_face_boxes_in_session, ids)
+    cuts = [(sheet, _cut(server, sheet, faces.get(sheet.id, []))) for sheet in sheets]
     panel_ids: list[int] = []
     for sheet, entries in cuts:
         _new, _duplicates, made = import_derived_outputs(

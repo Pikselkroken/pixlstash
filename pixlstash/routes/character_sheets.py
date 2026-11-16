@@ -148,6 +148,18 @@ class RankedSheet(BaseModel):
         description="The other sheets asked about whose faces look like a "
         "different person: keeping both mixes two people in one set.",
     )
+    cuts_cleanly: bool | None = Field(
+        default=None,
+        description="Every cut found a clear line between the photos, through "
+        "no face, and no panel holds two faces; null until the faces are read. "
+        "A sheet that does not is still cut when used.",
+    )
+    cells: list[list[float]] = Field(
+        default_factory=list,
+        description="The six panels using it cuts, in panel order, as "
+        "`[left, top, right, bottom]` fractions of the sheet; empty until the "
+        "faces are read.",
+    )
 
 
 class SheetRanking(BaseModel):
