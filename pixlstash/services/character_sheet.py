@@ -597,7 +597,7 @@ def _find_cut(
     across: tuple[int, int],
     vertical: bool,
     fences: list[tuple[float, float, float]],
-    sx: float,
+    scale: float,
 ) -> tuple[int, int, bool]:
     """Where to cut near *nominal*: ``(end, start, sure)``.
 
@@ -605,7 +605,9 @@ def _find_cut(
     *start*. Lines are searched over *window* and read over *across* (the span
     the cut runs). A line within a fence ``(along, across, reach)`` (a face's
     centre on the cut's axis, across it, and how near a cut may come) whose
-    centre lies in *across* is never a candidate.
+    centre lies in *across* is never a candidate. *scale* is the sheet's
+    size against 2560×1536 across the cut: its width for a column cut, its
+    height for a row cut.
 
     The cut lands, in order of preference, in the uniform band nearest
     *nominal* that has a step at its edges (a gutter or a drawn line, trimmed
@@ -621,11 +623,13 @@ def _find_cut(
     strip = plane[across[0] : across[1], lo - 1 : hi + 1]
     median = np.median(strip, axis=0)
     share = (np.abs(strip - median) <= UNIFORM_LEVELS).mean(axis=0)
-    fenced = np.zeros(hi - lo, dtype=bool)
     lines = np.arange(lo, hi)
+    # How far each line keeps from the nearest fence; inside one, negative.
+    clearance = np.full(hi - lo, np.inf)
     for along, at, reach in fences:
         if across[0] <= at < across[1]:
-            fenced |= np.abs(lines - along) < reach
+            clearance = np.minimum(clearance, np.abs(lines - along) - reach)
+    fenced = clearance < 0
     open_ = share[1:-1] >= UNIFORM_SHARE
     open_ &= ~fenced
     # A band holds one level: measured from its first line, since a gutter's
@@ -644,11 +648,14 @@ def _find_cut(
     if not runs:
         # ponytail: no clear line anywhere in the window (two photos drawn
         # touching, an arm across the gutter); the least busy line is a guess.
-        scores = np.where(fenced, -1.0, share[1:-1])
-        line = lo + int(np.argmax(scores))
+        if fenced.all():
+            # Faces across the whole window: the line furthest from them.
+            line = lo + int(np.argmax(clearance))
+        else:
+            line = lo + int(np.argmax(np.where(fenced, -1.0, share[1:-1])))
         return line, line, False
-    gutter = max(1, round(MAX_GUTTER * sx))
-    bleed = max(1, round(2 * sx))
+    gutter = max(1, round(MAX_GUTTER * scale))
+    bleed = max(1, round(2 * scale))
 
     def level(line: int) -> float:
         return float(np.median(plane[across[0] : across[1], line]))
@@ -731,7 +738,7 @@ def sheet_cells(
     row = round(768 * sy)
     window = (row // 2, (row + height) // 2)
     rows = [
-        _find_cut(gray, row, window, span, False, across_y, sx)
+        _find_cut(gray, row, window, span, False, across_y, sy)
         for span in ((0, column[0]), (column[1], half[0]))
     ]
     cells = [

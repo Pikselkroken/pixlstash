@@ -678,6 +678,22 @@ def test_a_face_fences_the_cut_and_says_when_nothing_else_is_clear():
     assert clean is False
 
 
+def test_faces_across_a_whole_window_keep_the_guess_off_them():
+    """Two faces fence every line the passport | body cut may take: the guess
+    is the line furthest from both, not the window's first, and is unsure."""
+    faces = [[1050 - 768, 0, 1050 + 768, 1536], [1400 - 768, 0, 1400 + 768, 1536]]
+    cells, clean = sheet_cells(_sheet(), faces)
+    assert cells[1][2] == cells[4][0] == 1225
+    assert clean is False
+
+
+def test_a_row_cut_is_scaled_by_the_sheet_height():
+    """A sheet of another shape: the row's seam is measured in its height."""
+    image = _sheet([("y", 380, 0, 1200)], size=(2560, 768))
+    cells, _clean = sheet_cells(image)
+    assert (cells[0][3], cells[2][1]) == (380 - 1, 384 + 1)
+
+
 def test_two_faces_in_one_panel_is_not_a_clean_cut():
     """The positive control holds, and a third person in a body photo fails it."""
     image = _studio([(1500, 200), (2100, 230)])
