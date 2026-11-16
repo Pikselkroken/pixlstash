@@ -12928,8 +12928,8 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   MiniMax 4k one ~350 ms.
 - **Using sheets** (`POST /characters/{id}/sheets/use`, `picture_ids`; a held
   sheet counts, and every sheet is read before anything is imported) cuts each
-  with `split_sheet`, round its stored face boxes, exactly as ranking showed
-  it. `sheet_cells` holds no constant for any model's drift. Each cut starts
+  with `split_sheet`, round its stored face boxes as ranking cuts it (faces
+  read since the last rank count too). `sheet_cells` holds no constant for any model's drift. Each cut starts
   from the grid's own line, scaled to the picture, and searches halfway to
   the neighbouring line on either side (the passport row once per passport
   column, over that column's span). A line is *uniform* when over

@@ -609,7 +609,7 @@ def _find_cut(
 
     The cut lands, in order of preference, in the uniform band nearest
     *nominal* that has a step at its edges (a gutter or a drawn line, trimmed
-    to its edges and the soft seam more); at *nominal* moved into the nearest wider
+    to its edges plus a soft seam's width); at *nominal* moved into the nearest wider
     or step-less band (background the photos share, nothing trimmed); or, with
     neither, on the most uniform line, which is not ``sure``.
     """
@@ -1016,7 +1016,7 @@ def _sheet_cut(
             raise FileNotFoundError(file_path)
         stamp = os.stat(path).st_mtime_ns
         return _cut_of_file(path, stamp, tuple(tuple(box) for box in faces))
-    except OSError as exc:
+    except (OSError, Image.DecompressionBombError) as exc:
         logger.warning(
             "Couldn't read character sheet %s at %s to show its cut: %s",
             picture_id,
@@ -1174,12 +1174,12 @@ def _cut(server, sheet: Picture, faces: list[list[int]]) -> list[tuple[bytes, st
 def use_sheets(server, character_id: int, picture_ids: list[int]) -> list[int]:
     """Cut each sheet into its six panels and file them on the character.
 
-    Passport photos first, sheet by sheet, each cut round its faces as
-    :func:`rank_sheets` showed it; one that does not cut cleanly is cut all
-    the same. Every sheet is read before anything is imported, so an
-    unreadable one imports nothing. Returns the panels' picture ids. Raises
-    :class:`SheetNotFound` and :class:`SheetUnreadable`. The sheets themselves
-    stay in the Scrapheap.
+    Passport photos first, sheet by sheet, each cut round its stored faces
+    as :func:`rank_sheets` cuts it (faces read since the last rank count
+    too); one that does not cut cleanly is cut all the same. Every sheet is
+    read before anything is imported, so an unreadable one imports nothing.
+    Returns the panels' picture ids. Raises :class:`SheetNotFound` and
+    :class:`SheetUnreadable`. The sheets themselves stay in the Scrapheap.
     """
     ids = list(dict.fromkeys(picture_ids))
     sheets = server.vault.db.run_immediate_read_task(
