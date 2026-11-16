@@ -416,6 +416,17 @@
             Draw from another
           </button></span
         >
+        <!-- One picture is one look; the cluster is every look of them. -->
+        <div v-if="referenceIds.length" class="cs-fld">
+          <FieldLabel>Compare with</FieldLabel>
+          <Segmented
+            v-model="compareTo"
+            aria-label="Compare the sheets with"
+            :options="COMPARE_WITH"
+            full
+            data-testid="cs-compare-to"
+          />
+        </div>
       </template>
       <h3 v-if="!railIsReference" class="cs-secl">{{ name }} so far</h3>
       <h3 v-else-if="keptSheets.length" class="cs-secl">Kept</h3>
@@ -705,6 +716,12 @@ const MODES = [
   { id: "text", label: "Text" },
   { id: "reference", label: "Reference and text" },
 ];
+// Drawn from a picture, what the sheets are compared with: that picture, or
+// the character's reference cluster, where each face counts its best match.
+const COMPARE_WITH = [
+  { id: "picture", label: "This picture" },
+  { id: "cluster", label: "Reference cluster" },
+];
 const ORDINALS = ["first", "second", "third", "fourth"];
 const POLL_MS = 2500;
 // A ComfyUI that did not answer is asked again this often. The server keeps a
@@ -765,6 +782,7 @@ const mode = ref("text"); // text | reference
 // were: the rail and the ranking follow the second.
 const referenceId = ref(null);
 const drawnFrom = ref(null);
+const compareTo = ref("picture"); // picture | cluster
 const pickerOpen = ref(false);
 const pickButton = ref(null);
 // How many faces the last ranking measured closeness against.
@@ -817,6 +835,10 @@ const drawnIds = ref([]);
 const strayKeys = ref([]);
 
 const fromReference = computed(() => mode.value === "reference");
+/** The sheets are measured against the picture they were drawn from. */
+const toPicture = computed(
+  () => !!drawnFrom.value && compareTo.value === "picture",
+);
 const engine = computed(() => {
   if (!fromReference.value) {
     const card = workflows.value.find((c) => c.id === workflowId.value);
@@ -1091,9 +1113,13 @@ const noneClose = computed(() => {
   if (!drawnFrom.value || !allEnded.value || !holding.value.length) return "";
   if (holding.value.some((sheet) => sheet.close)) return "";
   if (!rankedAgainst.value) {
+    if (!toPicture.value) return "";
     return "No face was read in the reference picture, so the sheets can't be compared with it and none is kept for you. A reference with the face to the camera works best.";
   }
   const n = ended.value.length;
+  if (!toPicture.value) {
+    return `None of the ${n} sheets came close to ${name.value}'s reference cluster, so none is kept for you. Drawing more usually finds one.`;
+  }
   return `None of the ${n} sheets came close to the reference, so none is kept for you. Drawing more usually finds one. A different reference picture, face to the camera, helps too.`;
 });
 
@@ -1216,7 +1242,10 @@ function toggleKeep(id) {
 const pickIntro = computed(() => {
   if (drawnFrom.value) {
     // Sheets keep their run's place, so the closest is kept, not moved first.
-    return `Each sheet says how close it comes to the picture on the right, and each photo on it says the same for itself. The closest is kept for you if it comes close enough. Keep the ones to use: the six photos of each become pictures of ${name.value}. Every sheet stays in the Scrapheap, used or not.`;
+    const against = toPicture.value
+      ? "the picture on the right"
+      : `${name.value}'s reference cluster, each face by its best match there`;
+    return `Each sheet says how close it comes to ${against}, and each photo on it says the same for itself. The closest is kept for you if it comes close enough. Keep the ones to use: the six photos of each become pictures of ${name.value}. Every sheet stays in the Scrapheap, used or not.`;
   }
   const base = `Each sheet says how well its own faces agree. Keep the ones to use: the six photos of each become pictures of ${name.value}. Every sheet stays in the Scrapheap, used or not, where you can restore any you like.`;
   if (!referenceIds.value.length) {
@@ -1278,7 +1307,7 @@ function sheetWords(sheet) {
 
 /** Closeness in words: to the picture drawn from, else to the character. */
 function closeWords(sheet) {
-  const whom = drawnFrom.value ? "the reference" : name.value;
+  const whom = toPicture.value ? "the reference" : name.value;
   return sheet.close ? `close to ${whom}` : `drifts from ${whom}`;
 }
 
@@ -1495,21 +1524,36 @@ async function followRuns() {
   }
 }
 
+// Bumped by each ranking: an answer from an earlier one is dropped, so the
+// scores on show are always against what the sheets are compared with now.
+let rankRun = 0;
+
+async function rank() {
+  const run = ++rankRun;
+  // Drawn from a picture, the sheets are measured against that picture
+  // unless compared with the character's reference cluster.
+  const answer = toPicture.value
+    ? await rankSheets(props.character.id, order.value, [drawnFrom.value])
+    : await rankSheets(props.character.id, order.value);
+  if (run !== rankRun) return;
+  rankedAgainst.value = answer.references || 0;
+  ranking.value = Object.fromEntries(
+    answer.sheets.map((sheet) => [sheet.picture_id, sheet]),
+  );
+}
+
+// The polling stops once every sheet is read: a switch scores them again.
+watch(compareTo, () => {
+  if (!order.value.length) return;
+  rank().catch((e) => console.warn("Couldn't rank the character sheets", e));
+});
+
 async function tick() {
   timer = null;
   ticking = true;
   try {
     await followRuns();
-    if (order.value.length) {
-      // Drawn from a picture, the sheets are measured against that picture.
-      const answer = drawnFrom.value
-        ? await rankSheets(props.character.id, order.value, [drawnFrom.value])
-        : await rankSheets(props.character.id, order.value);
-      rankedAgainst.value = answer.references || 0;
-      ranking.value = Object.fromEntries(
-        answer.sheets.map((sheet) => [sheet.picture_id, sheet]),
-      );
-    }
+    if (order.value.length) await rank();
   } catch (e) {
     console.warn("Couldn't rank the character sheets", e);
   } finally {
@@ -1996,6 +2040,7 @@ function restoreState(saved) {
   keptTouched.value = !!saved.kept_touched;
   drawnWith.value = saved.drawn_with || "";
   drawnFrom.value = saved.drawn_from ?? null;
+  compareTo.value = saved.compare_to === "cluster" ? "cluster" : "picture";
   runHistory.value = [...(saved.run_history || [])];
   drawnIds.value = [...(saved.drawn_ids || [])];
   strayKeys.value = [...(saved.stray_run_keys || [])];
@@ -2142,6 +2187,7 @@ const snapshot = computed(() => {
     kept_touched: cut ? false : keptTouched.value,
     drawn_with: cut ? "" : drawnWith.value,
     drawn_from: cut ? null : drawnFrom.value,
+    compare_to: compareTo.value,
     // The runs still going, which deleting the set stops; one that ended is
     // skipped there.
     run_keys: [

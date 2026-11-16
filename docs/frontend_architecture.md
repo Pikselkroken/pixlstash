@@ -1811,7 +1811,14 @@ Escape and Enter do nothing here: cancelling deletes a set.
   its pin); the reference joins what a draw is compared by, so another
   picture starts a new pick. While sheets are on show the rail keeps the
   picture they were drawn from under *Drawn from*, in place of the
-  description block; ranking sends it as `reference_picture_ids`; each
+  description block; ranking sends it as `reference_picture_ids`. When the
+  character has reference faces, a *Compare with* `Segmented` under it
+  switches between *This picture* and *Reference cluster*: the latter ranks
+  without the ids, so the server scores each face by its best match in the
+  cluster, and the captions say "close to {name}". A switch ranks again at
+  once (the polling has stopped by then); a ranking answered after a newer
+  one is dropped, and the choice is kept in the step's snapshot
+  (`compare_to`); each
   caption leads with closeness as a bar and its number; the zoom shows the
   picture beside the sheet (`ZoomPopout`'s `aside` slot). Closeness sorts
   first, then agreement, and only a sheet that is `close` is kept for the

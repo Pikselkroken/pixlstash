@@ -72,8 +72,9 @@ class SheetRankRequest(BaseModel):
         None,
         max_length=4,
         description="The pictures the sheets were drawn from: closeness is "
-        "measured against their faces instead of the character's reference "
-        "faces. An id with no faces counts for nothing.",
+        "the mean similarity to their faces instead of the best match among "
+        "the character's reference cluster. An id with no faces counts for "
+        "nothing.",
     )
 
 
@@ -97,7 +98,9 @@ class PanelScore(BaseModel):
         "null with no agreement."
     )
     closeness: float | None = Field(
-        description="Mean similarity to the reference faces; null when there are none."
+        description="Similarity to the reference faces: the best match among "
+        "the character's, the mean over `reference_picture_ids`; null when "
+        "there are none."
     )
     close: bool | None = Field(
         description="The closeness clears the bar for close to the references; "
@@ -120,8 +123,10 @@ class RankedSheet(BaseModel):
     agreement: float | None
     agreement_words: str
     closeness: float | None = Field(
-        description="Mean similarity to the reference faces (the character's, "
-        "or the request's `reference_picture_ids`); null when there are none."
+        description="Each face's best match among the character's reference "
+        "cluster, or its mean similarity to the request's "
+        "`reference_picture_ids`, averaged over the faces; null when there "
+        "are none."
     )
     close: bool | None
     broken: bool = Field(
@@ -182,8 +187,9 @@ def create_router(server) -> APIRouter:
         summary="Rank drawn character sheets",
         description=(
             "Scores each sheet by how alike its own faces are and by how close "
-            "they come to the character's reference faces, or to the faces of "
-            "`reference_picture_ids` when the sheets were drawn from pictures. "
+            "they come to the character's reference cluster (each face's best "
+            "match in it), or to the faces of `reference_picture_ids` when the "
+            "sheets are compared with the pictures they were drawn from. "
             "A sheet whose faces are not read yet comes back unscored."
         ),
         response_model=SheetRanking,

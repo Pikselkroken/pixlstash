@@ -578,6 +578,10 @@ def test_agreement_and_closeness():
     assert agreement([a, b]) == pytest.approx(0.0)
     assert closeness([a, a], [a]) == pytest.approx(1.0)
     assert closeness([a], []) is None
+    # Against a cluster each face counts its best match, not the mean.
+    assert closeness([a], [a, b]) == pytest.approx(0.5)
+    assert closeness([a], [a, b], best=True) == pytest.approx(1.0)
+    assert closeness([a, b], [a, b], best=True) == pytest.approx(1.0)
     assert agreement_words(None) == "faces don't hold"
     assert agreement_words(0.3) == "faces don't hold"
     assert agreement_words(0.5) == "faces agree somewhat"
@@ -669,6 +673,29 @@ def test_ranking_measures_closeness_against_references_never_the_sheet_itself():
     assert unread["different_from"] == []
     # No boxes and no size: no panel is placed.
     assert near["panels"] == [] and unread["panels"] == []
+
+
+def test_ranking_takes_the_best_match_in_the_cluster_and_the_mean_over_pictures():
+    """The character's reference cluster holds two looks; a sheet like either
+    is close. Against a picture, closeness stays the mean over its faces."""
+    person = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    other_look = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+
+    class Db:
+        def run_immediate_read_task(self, fn, *args):
+            return (
+                {5: [(person.tobytes(), json.dumps(PANEL_BOXES[0]))]},
+                [person.tobytes(), other_look.tobytes()],
+                {5: ("PNG", SHEET_WIDTH, SHEET_HEIGHT)},
+            )
+
+    vault = type("Vault", (), {"db": Db()})()
+    (cluster,), _ = character_sheet.rank_sheets(vault, 1, [5])
+    assert cluster["closeness"] == pytest.approx(1.0) and cluster["close"] is True
+    assert cluster["panels"][0]["closeness"] == pytest.approx(1.0)
+    (picture,), _ = character_sheet.rank_sheets(vault, 1, [5], [9])
+    assert picture["closeness"] == pytest.approx(0.5)
+    assert picture["panels"][0]["closeness"] == pytest.approx(0.5)
 
 
 def test_ranking_names_no_difference_between_sheets_of_one_person():
