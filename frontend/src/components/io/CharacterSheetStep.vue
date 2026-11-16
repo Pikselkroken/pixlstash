@@ -520,7 +520,7 @@
         </div>
       </template>
       <!-- The six photos using the sheet cuts, so the cut is seen before
-           it is made; amber when it found no clean line somewhere. -->
+           it is made; dashed amber when it found no clean line somewhere. -->
       <template v-if="zoomed?.cells?.length" #over>
         <span
           v-for="(cell, i) in zoomed.cells"
@@ -528,6 +528,7 @@
           class="cs-cell"
           :class="{ 'cs-cell--unclean': zoomed.cuts_cleanly === false }"
           :style="cellStyle(cell)"
+          aria-hidden="true"
           data-testid="cs-cell"
         />
       </template>
@@ -1288,7 +1289,7 @@ function sheetWords(sheet) {
     else words.push(near);
   }
   // A warning, not a refusal: the zoom shows where it cuts.
-  if (sheet.cuts_cleanly === false) words.push("won't cut cleanly");
+  if (sheet.cuts_cleanly === false) words.push("may not cut cleanly");
   return words.join(" · ");
 }
 
@@ -2530,19 +2531,19 @@ defineExpose({
 
 /* A photo the sheet cuts into, on the zoomed sheet: a light line on the
    photo scrim's halo reads over a white gutter and a dark photo alike. One
-   that won't cut cleanly takes the warning colour, as a drifting photo's
-   score does. Inset, so two photos cut with no gutter keep both lines. */
+   that may not cut cleanly is dashed, in the warning colour a drifting
+   photo's score takes, so the state is not colour alone. Inside the box, so
+   two photos cut with no gutter keep both lines. */
 .cs-cell {
   position: absolute;
-  box-shadow:
-    inset 0 0 0 2px rgb(var(--v-theme-on-dark-surface)),
-    inset 0 0 0 3px var(--scrim-photo-strong);
+  box-sizing: border-box;
+  border: 2px solid rgb(var(--v-theme-on-dark-surface));
+  box-shadow: inset 0 0 0 1px var(--scrim-photo-strong);
 }
 
 .cs-cell--unclean {
-  box-shadow:
-    inset 0 0 0 2px rgb(var(--v-theme-dark-surface-warning)),
-    inset 0 0 0 3px var(--scrim-photo-strong);
+  border-style: dashed;
+  border-color: rgb(var(--v-theme-dark-surface-warning));
 }
 
 .cs-cap {

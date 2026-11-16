@@ -12897,7 +12897,7 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   boxes are the ones that held their layout on 16 of 16 probe sheets; the test
   pins the mid-thigh set. Only MOSS-Image reads the layout JSON, so a Krea 2,
   Qwen-Image, FLUX.2 Klein or MiniMax H3 workflow is sent `layout: "prose"`, the summary
-  caption alone; no probe has measured how their sheets hold the grid. Every panel's caption carries the whole character,
+  caption alone; no probe has measured how their sheets hold the grid or cut. Every panel's caption carries the whole character,
   build included (a different build draws a different face). Trousers are
   always named, shoes only at full body. A LoRA's first trigger word leads.
 - **Ranking** (`POST /characters/{id}/sheets/rank`) reads the faces face

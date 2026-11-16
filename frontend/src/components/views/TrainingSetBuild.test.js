@@ -1349,7 +1349,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
-  it("says a sheet won't cut cleanly, keeps a clean one first, and draws its cut", async () => {
+  it("says a sheet may not cut cleanly, keeps a clean one first, and draws its cut", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
     );
@@ -1384,7 +1384,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
 
     const tiles = wrapper.findAll('[data-testid="cs-sheet"]');
     expect(tiles.map((t) => t.attributes("aria-label"))).toEqual([
-      "Sheet 1: faces agree strongly · won't cut cleanly",
+      "Sheet 1: faces agree strongly · may not cut cleanly",
       "Sheet 2: faces agree somewhat",
     ]);
     // The sheet kept for the user is the clean one, though the other's faces

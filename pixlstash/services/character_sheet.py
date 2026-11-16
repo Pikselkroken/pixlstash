@@ -25,8 +25,7 @@ Four pure pieces live here, the routes in ``routes/character_sheets.py``:
   With ``layout="prose"`` it is the same sheet in one sentence.
 * :func:`convert_to_sheet` rewrites an edit workflow's graph to draw at the
   sheet's size (``POST /workflows/{workflow_id}/sheet-copy``).
-* :func:`sheet_cells` finds the six panels on a drawn sheet, and says whether
-  it cuts cleanly; :func:`split_sheet` cuts them out.
+* :func:`split_sheet` cuts a drawn sheet into its six panels.
 * :func:`agreement` / :func:`closeness` score a sheet's faces, against each
   other and against the character's reference faces, and
   :func:`panel_scores` scores each panel's face on its own.

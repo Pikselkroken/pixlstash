@@ -1776,9 +1776,9 @@ Escape and Enter do nothing here: cancelling deletes a set.
   warning colour on `--scrim-photo-strong`, and the tile's label and the zoom
   caption name it (*photo 4 drifts*). The zoomed sheet draws the six photos
   *Keep* will cut (the ranking's `cells`, in `ZoomPopout`'s `over` slot) as
-  inset outlines, `on-dark-surface` on a `--scrim-photo-strong` halo, so the
-  cut is seen before it is made; a sheet with `cuts_cleanly: false` draws them
-  in the warning colour, says *won't cut cleanly* last in its words, and sorts
+  outlines inside each box, `on-dark-surface` on a `--scrim-photo-strong`
+  halo, so the cut is seen before it is made; a sheet with
+  `cuts_cleanly: false` draws them dashed in the warning colour, says *may not cut cleanly* last in its words, and sorts
   after the clean sheets (after `broken`). It is a warning, not a refusal:
   *Keep* still cuts it. Kept sheets the ranking names in each other's `different_from`
   turn the footer lead into a warning (`footer.warn`: icon, `role="status"`)
