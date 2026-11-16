@@ -40,9 +40,11 @@
             tabindex="0"
             :aria-labelledby="`${uid}-rail`"
             :aria-activedescendant="`${uid}-row-${selected}`"
+            aria-keyshortcuts="Z"
             data-testid="fc-rail"
             @keydown.down.prevent="select(Math.min(selected + 1, clusters.length - 1))"
             @keydown.up.prevent="select(Math.max(selected - 1, 0))"
+            @keydown="onRailKey"
           >
             <div
               v-for="(c, i) in clusters"
@@ -59,6 +61,9 @@
                 class="fc-row__face"
                 :src="pictureThumbnailUrl(c.members[0].picture_id)"
                 alt=""
+                data-testid="fc-row-face"
+                @dblclick="zoomIn('clusters', c.members[0].picture_id)"
+                @wheel="zoomIn('clusters', c.members[0].picture_id, $event)"
               />
               <span class="fc-row__text">
                 <span class="fc-row__name"
@@ -91,6 +96,9 @@
                 :key="u.picture_id"
                 :src="pictureThumbnailUrl(u.picture_id)"
                 alt=""
+                data-testid="fc-strip-face"
+                @dblclick="zoomIn('unclustered', u.picture_id)"
+                @wheel="zoomIn('unclustered', u.picture_id, $event)"
               />
             </span>
           </div>
@@ -171,8 +179,8 @@
                   data-testid="fc-face"
                   @focus="focusRank = rank"
                   @click="focusFace(rank)"
-                  @dblclick="openZoom(f.picture_id)"
-                  @wheel="onTileWheel($event, f.picture_id)"
+                  @dblclick="zoomIn('field', f.picture_id)"
+                  @wheel="zoomIn('field', f.picture_id, $event)"
                 >
                   <img :src="pictureThumbnailUrl(f.picture_id)" alt="" loading="lazy" />
                   <span class="fc-chip fc-chip--lk">{{ fixed(shown[rank].centrality) }}</span>
@@ -187,7 +195,12 @@
 
             <aside class="fc-side">
               <div v-if="picked" class="fc-picked" data-testid="fc-picked">
-                <img :src="pictureThumbnailUrl(picked.picture_id)" alt="" />
+                <img
+                  :src="pictureThumbnailUrl(picked.picture_id)"
+                  alt=""
+                  @dblclick="zoomIn('field', picked.picture_id)"
+                  @wheel="zoomIn('field', picked.picture_id, $event)"
+                />
                 <span>
                   <b>Face {{ focusRank + 1 }} of {{ current.size }}</b><br />
                   {{ fixed(picked.centrality) }} to the centre<template
@@ -201,7 +214,7 @@
                   <button
                     type="button"
                     class="fc-link"
-                    @click="openZoom(picked.picture_id)"
+                    @click="zoomIn('field', picked.picture_id)"
                   >
                     Zoom (Z)
                   </button>
@@ -211,11 +224,21 @@
                 <h4 class="fc-lbl">Against the reference</h4>
                 <div class="fc-pair">
                   <figure>
-                    <img :src="pictureThumbnailUrl(comparison.reference)" alt="" />
+                    <img
+                      :src="pictureThumbnailUrl(comparison.reference)"
+                      alt=""
+                      @dblclick="zoomIn('compare', comparison.reference)"
+                      @wheel="zoomIn('compare', comparison.reference, $event)"
+                    />
                     <figcaption>Cluster {{ comparison.referenceN }}, centre</figcaption>
                   </figure>
                   <figure>
-                    <img :src="pictureThumbnailUrl(current.members[0].picture_id)" alt="" />
+                    <img
+                      :src="pictureThumbnailUrl(current.members[0].picture_id)"
+                      alt=""
+                      @dblclick="zoomIn('compare', current.members[0].picture_id)"
+                      @wheel="zoomIn('compare', current.members[0].picture_id, $event)"
+                    />
                     <figcaption>Cluster {{ selected + 1 }}, centre</figcaption>
                   </figure>
                 </div>
@@ -264,12 +287,27 @@
                 <h4 class="fc-lbl">Left out · {{ leftOut.length }}</h4>
                 <div v-if="leftOut.length" class="fc-rim">
                   <figure v-for="m in leftOut.slice(0, 4)" :key="m.picture_id">
-                    <img :src="pictureThumbnailUrl(m.picture_id)" alt="" />
+                    <img
+                      :src="pictureThumbnailUrl(m.picture_id)"
+                      alt=""
+                      data-testid="fc-rim-face"
+                      @dblclick="zoomIn('leftOut', m.picture_id)"
+                      @wheel="zoomIn('leftOut', m.picture_id, $event)"
+                    />
                     <figcaption>
                       {{ fixed(m.centrality) }}<template v-if="m.score"> · {{ m.score }}★</template>
                     </figcaption>
                   </figure>
-                  <span v-if="leftOut.length > 4" class="fc-more">+{{ leftOut.length - 4 }}</span>
+                  <button
+                    v-if="leftOut.length > 4"
+                    type="button"
+                    class="fc-more fc-more--zoom"
+                    :aria-label="`Zoom the ${leftOut.length - 4} more left out`"
+                    data-testid="fc-more"
+                    @click="zoomIn('leftOut', leftOut[4].picture_id)"
+                  >
+                    +{{ leftOut.length - 4 }}
+                  </button>
                 </div>
                 <p v-else class="fc-note">Nothing left out.</p>
               </div>
@@ -277,7 +315,7 @@
           </div>
           <p class="fc-note fc-scale">
             Size: four bands of how typical a face is. Click a face to see it
-            here; double-click, Ctrl+wheel or Z to zoom.
+            here; double-click any face, Ctrl+wheel or Z to zoom.
           </p>
         </section>
       </div>
@@ -286,7 +324,7 @@
     <ZoomPopout
       :open="zoomedId != null"
       :src="zoomedFace ? faceUrl(zoomedFace) : ''"
-      :alt="zoomedFace ? faceName(zoomRank) : ''"
+      :alt="zoomedFace ? zoomCaption : ''"
       :caption="zoomedFace ? zoomCaption : ''"
       :has-prev="hasPrev"
       :has-next="hasNext"
@@ -547,21 +585,69 @@ function setStrictness(id) {
 }
 
 // ── Zoom ───────────────────────────────────────────────────────────────────
-const zoomList = computed(() => shown.value.map((m) => m.picture_id));
+// Every thumbnail opens the same pop-out, stepping through the list it sits
+// in: the field, the rail's cluster centres, "Matched no one", "Left out", or
+// the two centres being compared.
+const zoomFrom = ref("field");
+const zoomItems = computed(() => {
+  switch (zoomFrom.value) {
+    case "clusters":
+      return clusters.value.map((c) => c.members[0]);
+    case "unclustered":
+      return unclustered.value;
+    case "leftOut":
+      return leftOut.value;
+    case "compare":
+      return comparison.value
+        ? [clusters.value[referenceIndex.value].members[0], current.value.members[0]]
+        : [];
+    default:
+      return shown.value;
+  }
+});
+const zoomList = computed(() => zoomItems.value.map((m) => m.picture_id));
+let zoomOpener = null;
 const { zoomedId, zoomEntry, zoomPos, hasPrev, hasNext, openZoom, onTileWheel, stepZoom, closeZoom } =
   useZoomPopout(zoomList, (id) => {
-    const rank = zoomList.value.indexOf(id);
+    const rank = zoomFrom.value === "field" ? zoomList.value.indexOf(id) : -1;
     if (rank >= 0) focusFace(rank);
+    // A sidebar picture takes no focus itself: back to the rail or the field.
+    else if (zoomOpener?.isConnected && zoomOpener !== document.body) zoomOpener.focus();
+    else focusFace(focusRank.value);
   });
-const zoomRank = computed(() => zoomPos.value);
-const zoomedFace = computed(() => shown.value[zoomRank.value] || null);
+
+/** Open *id* from the list *from*; with a wheel *event*, only on Ctrl+wheel up. */
+function zoomIn(from, id, event = null) {
+  if (zoomedId.value != null) return;
+  if (event && !(event.ctrlKey || event.metaKey)) return; // a plain wheel scrolls
+  zoomFrom.value = from;
+  zoomOpener = document.activeElement;
+  if (event) onTileWheel(event, id);
+  else openZoom(id);
+}
+
+const zoomedFace = computed(() => zoomItems.value[zoomPos.value] || null);
 const zoomCaption = computed(() => {
   const m = zoomedFace.value;
-  const rank = zoomRank.value;
-  const where = rank === 0 ? ", most typical" : rank === current.value.size - 1 ? ", least typical" : "";
-  const role = current.value.is_reference ? " (reference)" : "";
-  return `Cluster ${selected.value + 1}${role} · face ${rank + 1} of ${current.value.size}${where} · ${fixed(m.centrality)} to the centre · ${m.score ? `${m.score}★` : "unrated"}`;
+  if (!m) return "";
+  const score = m.score ? `${m.score}★` : "unrated";
+  if (zoomFrom.value === "unclustered") {
+    return `Matched no one · face ${zoomPos.value + 1} of ${unclustered.value.length} · ${score}`;
+  }
+  const i = clusters.value.findIndex((c) => c.members.includes(m));
+  const c = clusters.value[i];
+  const rank = c.members.indexOf(m);
+  const where = rank === 0 ? ", most typical" : rank === c.size - 1 ? ", least typical" : "";
+  const role = c.is_reference ? " (reference)" : "";
+  return `Cluster ${i + 1}${role} · face ${rank + 1} of ${c.size}${where} · ${fixed(m.centrality)} to the centre · ${score}`;
 });
+
+/** Z zooms the selected cluster's centre from the rail. */
+function onRailKey(event) {
+  if ((event.key !== "z" && event.key !== "Z") || event.ctrlKey || event.metaKey) return;
+  event.preventDefault();
+  zoomIn("clusters", current.value.members[0].picture_id);
+}
 
 function faceUrl(m) {
   if (!m.format) return pictureThumbnailUrl(m.picture_id);
@@ -591,7 +677,7 @@ function onFieldKey(event) {
     !event.metaKey
   ) {
     event.preventDefault();
-    openZoom(shown.value[focusRank.value].picture_id);
+    zoomIn("field", shown.value[focusRank.value].picture_id);
   }
 }
 
@@ -966,6 +1052,27 @@ function close() {
   cursor: pointer;
 }
 .fc-link:focus-visible {
+  outline: none;
+  border-color: var(--focus-stroke);
+  box-shadow: var(--focus-glow);
+}
+/* Every sidebar thumbnail zooms like the field's faces. */
+.fc-row__face,
+.fc-strip img,
+.fc-picked img,
+.fc-pair img,
+.fc-rim img,
+.fc-more--zoom {
+  cursor: zoom-in;
+}
+.fc-more--zoom {
+  padding: 0;
+  border: 1px solid transparent;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-on-surface));
+}
+.fc-more--zoom:focus-visible {
   outline: none;
   border-color: var(--focus-stroke);
   box-shadow: var(--focus-glow);

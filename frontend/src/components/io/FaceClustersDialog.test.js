@@ -139,6 +139,92 @@ describe("FaceClustersDialog", () => {
     wrapper.unmount();
   });
 
+  it("zooms the sidebar thumbnails, stepping through the list each sits in", async () => {
+    api.getFaceClusters.mockResolvedValue(clusters({ reference: true }));
+    const wrapper = mountDialog();
+    await flushPromises();
+    const popout = () => document.querySelector('[data-testid="zoom-popout"]');
+    const caption = () => popout()?.querySelector(".zp-cap")?.textContent.trim();
+    const key = async (k) => {
+      popout().dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+      await flushPromises();
+    };
+
+    // The rail: cluster centres, in rail order.
+    await wrapper.findAll('[data-testid="fc-row-face"]')[0].trigger("dblclick");
+    await flushPromises();
+    expect(caption()).toBe(
+      "Cluster 1 (reference) · face 1 of 4, most typical · 0.88 to the centre · 2★",
+    );
+    await key("ArrowRight");
+    expect(caption()).toBe("Cluster 2 · face 1 of 3, most typical · 0.84 to the centre · unrated");
+    await key("Escape");
+    expect(popout()).toBeNull();
+
+    // Matched no one. A plain wheel scrolls; Ctrl+wheel up zooms.
+    const strip = wrapper.find('[data-testid="fc-strip-face"]');
+    const wheel = async (init) => {
+      strip.element.dispatchEvent(
+        new WheelEvent("wheel", { deltaY: -100, bubbles: true, cancelable: true, ...init }),
+      );
+      await flushPromises();
+    };
+    await wheel({});
+    expect(popout()).toBeNull();
+    await wheel({ ctrlKey: true });
+    expect(caption()).toBe("Matched no one · face 1 of 1 · unrated");
+    // The picture takes no focus, so closing lands on the field, not <body>.
+    await key("Escape");
+    expect(document.activeElement.dataset.testid).toBe("fc-face");
+
+    // Left out: face 4 sits under the saved cut.
+    await wrapper.find('[data-testid="fc-rim-face"]').trigger("dblclick");
+    await flushPromises();
+    expect(caption()).toBe(
+      "Cluster 1 (reference) · face 4 of 4, least typical · 0.52 to the centre · 5★",
+    );
+    await key("Escape");
+
+    // Z on the rail zooms the selected cluster's centre.
+    await wrapper.findAll('[data-testid="fc-row"]')[1].trigger("click");
+    await wrapper.find('[data-testid="fc-rail"]').trigger("keydown", { key: "z" });
+    await flushPromises();
+    expect(caption()).toBe("Cluster 2 · face 1 of 3, most typical · 0.84 to the centre · unrated");
+    await key("Escape");
+    expect(wrapper.emitted("close")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("zooms the left-out faces behind +n, from the fifth one", async () => {
+    const many = clusters({ reference: false });
+    many.clusters[0].members = Array.from({ length: 10 }, (_, i) =>
+      member(100 + i, Number((0.9 - i * 0.02).toFixed(2))),
+    );
+    many.clusters[0].size = 10;
+    api.getFaceClusters.mockResolvedValue(many);
+    const wrapper = mountDialog();
+    await flushPromises();
+    // Below 0.85, faces 4-10 are left out: four shown, +3.
+    await wrapper.find('[data-testid="fc-cut"]').setValue("0.85");
+    const more = wrapper.find('[data-testid="fc-more"]');
+    expect(more.text()).toBe("+3");
+    await more.trigger("click");
+    await flushPromises();
+    const caption = () =>
+      document.querySelector('[data-testid="zoom-popout"] .zp-cap').textContent.trim();
+    expect(caption()).toBe("Cluster 1 · face 8 of 10 · 0.76 to the centre · unrated");
+    // Stepping back stops at the first face left out, not the field's faces.
+    const popout = document.querySelector('[data-testid="zoom-popout"]');
+    for (let i = 0; i < 6; i++) {
+      popout.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+      await flushPromises();
+    }
+    expect(caption()).toBe("Cluster 1 · face 4 of 10 · 0.84 to the centre · unrated");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flushPromises();
+    wrapper.unmount();
+  });
+
   it("lets the slider reach every face of a cluster longer than the field shows", async () => {
     const many = clusters({ reference: false });
     // 70 faces, 0.90 down to 0.21: only 60 are drawn, the last ten below them.

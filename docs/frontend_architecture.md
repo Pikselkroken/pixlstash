@@ -1863,7 +1863,12 @@ up).
   Ctrl+wheel up, `Z` or Enter zooms** in `ZoomPopout` (`useZoomPopout`, which also
   closes it on Escape wherever focus is), whose `aside` holds the cluster's
   centre face (and the reference's on another cluster). The face field is one
-  tab stop with a roving focus; arrows walk the faces by rank.
+  tab stop with a roving focus; arrows walk the faces by rank. **Every other
+  thumbnail zooms the same way** (double-click, Ctrl+wheel up), stepping through
+  the list it sits in: the rail's cluster centres (`Z` on the rail too), *Matched
+  no one*, *Left out* (its *+n* is a button opening the fifth), the picked face
+  and the two centres *Against the reference*. Closing returns focus to the
+  rail or the field, never to `<body>`.
 - **Side panel**: on a cluster that is not the reference, *Against the
   reference*: both centre faces, their likeness, the strictness it would join
   at, and what picking would do to the old reference. On every cluster,
