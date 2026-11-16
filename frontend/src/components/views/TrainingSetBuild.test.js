@@ -1070,6 +1070,81 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("makes a sheet workflow from another text-to-image one and draws regions with it", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({
+      description: "Adult woman, copper bob",
+      loras: [
+        { sha256: "sdxl1", display_name: "Anna SDXL", base_model_family: "sdxl", added_at: "2026-11-09" },
+        { sha256: "moss1", display_name: "Anna v1", base_model_family: "moss_image", added_at: "2026-11-08" },
+      ],
+    });
+    const sdxl = {
+      id: "auto:sdxl",
+      name: "SDXL",
+      type: "txt2img",
+      models: [{ base_model_family: "sdxl", base_model: "SDXL" }],
+    };
+    const flux = {
+      id: "auto:flux",
+      name: "Flux",
+      type: "txt2img",
+      last_used: "2026-11-01T20:00:00Z",
+      models: [{ base_model_family: "flux" }],
+    };
+    const copy = {
+      id: "manual:sdxl-sheet",
+      name: "SDXL (sheet)",
+      type: "txt2img",
+      sheet_layout: true,
+      // The text encoder comes first and is of another family: the LoRAs
+      // still follow the checkpoint.
+      models: [
+        { kind: "clip", base_model_family: "qwen", base_model: "Qwen" },
+        { kind: "checkpoint", base_model_family: "sdxl", base_model: "SDXL" },
+      ],
+    };
+    gen.listWorkflowCards
+      .mockResolvedValueOnce({ cards: [MOSS_CARD, sdxl, flux] })
+      .mockResolvedValue({ cards: [MOSS_CARD, sdxl, flux, copy] });
+    gen.sheetCopyWorkflow.mockResolvedValue({ workflow_id: copy.id });
+    const wrapper = mountDialog();
+    await flushPromises();
+    const select = (label) =>
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === label);
+    // MOSS reads the layout itself; every other text-to-image card can be copied.
+    expect(select("Copy").props("options").map((o) => o.value)).toEqual([
+      "auto:flux",
+      "auto:sdxl",
+    ]);
+    select("Copy").vm.$emit("update:modelValue", "auto:sdxl");
+    await flushPromises();
+    const offer = wrapper.find('[data-testid="cs-convert-text"]');
+    expect(offer.text()).toContain("Make a sheet workflow from SDXL");
+    await offer.find("button").trigger("click");
+    await flushPromises();
+    expect(gen.sheetCopyWorkflow).toHaveBeenCalledWith("auto:sdxl");
+    // The copy is chosen, and the LoRA follows its model.
+    expect(select("Sheet workflow").props("modelValue")).toBe(copy.id);
+    expect(select("Character LoRA · optional").props("modelValue")).toBe("sdxl1");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    expect(gen.buildSheetPrompt).toHaveBeenLastCalledWith(
+      expect.objectContaining({ layout: "regions" }),
+    );
+    expect(gen.runWorkflowCard).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        workflow_id: copy.id,
+        add_loras: [expect.objectContaining({ sha256: "sdxl1" })],
+      }),
+    );
+    wrapper.unmount();
+  });
+
   it("draws, ranks, and files the chosen sheet as new pictures in the ranking", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

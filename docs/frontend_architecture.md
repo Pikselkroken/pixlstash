@@ -1830,6 +1830,14 @@ Escape and Enter do nothing here: cancelling deletes a set.
   first, then agreement, and only a sheet that is `close` is kept for the
   user: when none is, none is ticked and a notice says so. Sheets still keep
   their run's place in the grid.
+- **A sheet workflow from any text-to-image one** (backend §25.29). In text
+  mode the rail offers *Make a sheet workflow from …* for every `txt2img`
+  card not on MOSS-Image and not already a copy, Krea 2 included (its copy
+  draws regions where the card itself draws prose); a *Copy* select when
+  there are several, most recently used first. The copy (`sheetCopyWorkflow`,
+  card `sheet_layout`) joins the text mode's workflows and is chosen; its
+  engine is its own model's family, so the LoRA field follows it, and *Draw*
+  sends `layout: "regions"`.
 - **The reference cluster** (backend §25.30). On open the dialog also reads
   `GET /face-clusters?character_id=` at Normal. When the faces form more
   than one cluster of three or more and no reference cluster is chosen, a

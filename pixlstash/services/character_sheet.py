@@ -22,9 +22,12 @@ Four pure pieces live here, the routes in ``routes/character_sheets.py``:
 * :func:`sheet_prompt` builds the MOSS layout prompt (the JSON
   ``MOSSImageLayoutPrompt`` emits). The boxes and captions are the ones that
   held their layout on 16 of 16 probe sheets; change them only with new probes.
-  With ``layout="prose"`` it is the same sheet in one sentence.
+  With ``layout="prose"`` it is the same sheet in one sentence; with
+  ``layout="regions"`` the layout for ComfyUI-PixlStash's Layout Text Encode,
+  which draws it on any model as regional conditioning.
 * :func:`convert_to_sheet` rewrites an edit workflow's graph to draw at the
-  sheet's size (``POST /workflows/{workflow_id}/sheet-copy``).
+  sheet's size, and a text-to-image workflow's to encode its prompt with
+  Layout Text Encode (``POST /workflows/{workflow_id}/sheet-copy``).
 * :func:`split_sheet` cuts a drawn sheet into its six panels.
 * :func:`agreement` / :func:`closeness` score a sheet's faces, against each
   other and against the character's reference faces, and
@@ -61,8 +64,11 @@ from pixlstash.services.workflow_hash import (
     is_link,
     reduce_api_graph,
 )
-from pixlstash.services.workflow_identity import reference_input_count
-from pixlstash.services.workflow_io import is_picture_loader
+from pixlstash.services.workflow_identity import (
+    SHEET_LAYOUT_ENCODER,
+    reference_input_count,
+)
+from pixlstash.services.workflow_io import detect_workflow_io, is_picture_loader
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 logger = get_logger(__name__)
@@ -80,8 +86,10 @@ Subject = Literal["woman", "man"]
 # cartoon's. The probed boxes are a typical adult's, about seven heads tall.
 Proportions = Literal["typical", "little_person", "cartoon"]
 Size = Literal["small", "medium", "large"]
-# How the prompt is written: MOSS's layout JSON, or the sheet in one sentence.
-Layout = Literal["moss", "prose"]
+# How the prompt is written: MOSS's layout JSON, the sheet in one sentence, or
+# the layout JSON for ComfyUI-PixlStash's Layout Text Encode (the canvas size
+# added, every caption standing alone).
+Layout = Literal["moss", "prose", "regions"]
 # The sheet's canvas at each size, all 5:3 so the layout only scales, and every
 # side a multiple of 16 as MOSS needs: ~1, ~2 and ~4 megapixels, MOSS's own
 # range (it is trained at 1-2 MP and stretches to about 4), and ~17 for
@@ -512,14 +520,22 @@ def sheet_prompt(
     )
     if layout == "prose":
         return summary
-    return json.dumps(
-        {
-            "summary": {"caption": summary},
-            "items": items,
-            "bbox_coord_space": "abs_centralized",
-            "bbox_format": "yxyx",
-        }
-    )
+    document = {
+        "summary": {"caption": summary},
+        "items": items,
+        "bbox_coord_space": "abs_centralized",
+        "bbox_format": "yxyx",
+    }
+    if layout == "regions":
+        # Each caption is encoded over its box alone, so it has to say who it
+        # is of: "Panel 3" means nothing there, and a head with no character
+        # beside it is anybody's.
+        for item in items:
+            _panel, _, text = item["caption"].partition(": ")
+            item["caption"] = text if item["label"] == "character" else f"{who}. {text}"
+        # Centred pixel boxes need the canvas they were laid out on.
+        document["canvas"] = list(SIZES[size])
+    return json.dumps(document)
 
 
 class SheetConversionRefused(ValueError):
@@ -528,6 +544,71 @@ class SheetConversionRefused(ValueError):
     def __init__(self, reason: str):
         super().__init__(reason)
         self.reason = reason
+
+
+def _text_to_sheet(out: dict, nodes: dict, inputs: dict) -> dict:
+    """*out*, a text-to-image graph, with its prompt read as a sheet's layout.
+
+    MOSS-Image reads a sheet's layout prompt and puts each photo in its box;
+    any other model reads the JSON as words and draws the grid as it likes,
+    which the cut into panels cannot follow. The copy's prompt encoder becomes
+    ComfyUI-PixlStash's Layout Text Encode, which encodes the summary over the
+    whole canvas and each caption over its own box (regional conditioning),
+    so the photos should land where the cut expects them whatever the model
+    (no probe has measured it yet). Its ``clip``
+    and ``text`` are the encoder's own, so the run's prompt goes where it
+    went. The canvas gets the large sheet's literal size, which a run then
+    sets: the layout is 5:3, and on a canvas of another shape the regions
+    would stretch. *inputs* are the one sampler's.
+
+    Raises:
+        SheetConversionRefused: The sampler does not start from an empty
+            latent, the prompt is not read from one ``CLIPTextEncode`` of its
+            own (the negative's too would be read as regions), or the graph
+            already encodes it as a layout.
+    """
+    source = nodes.get(str(inputs["latent_image"][0])) or {}
+    source_class = source.get("class_type", "")
+    if not re.search(r"Empty.*Latent", source_class):
+        raise SheetConversionRefused(
+            f"Its sampler starts from {source_class or 'nothing'}, not an "
+            "empty canvas, so it cannot draw a sheet."
+        )
+    size = source.setdefault("inputs", {})
+    size["width"], size["height"] = SIZES["large"]
+    try:
+        detected = detect_workflow_io(out)
+        positive, negative = detected.positive_prompts, detected.negative_prompts
+    except WorkflowGraphError as exc:
+        logger.warning("A text sheet copy's prompts could not be read: %s", exc)
+        positive, negative = (), ()
+    if len(positive) != 1:
+        raise SheetConversionRefused(
+            f"PixlStash finds {len(positive)} prompts in this workflow. Only "
+            "a workflow with one prompt can be made into a sheet workflow."
+        )
+    if positive[0] in negative:
+        raise SheetConversionRefused(
+            "Its prompt and negative prompt are one node, so the negative "
+            "would be drawn as the sheet's layout too."
+        )
+    encoder = out[positive[0]]
+    if encoder["class_type"] == SHEET_LAYOUT_ENCODER:
+        raise SheetConversionRefused("This workflow already draws sheets.")
+    # ponytail: CLIPTextEncode only, the encoder of nearly every text-to-image
+    # template. One with fields of its own (SDXL's text_g / text_l, Flux 1's
+    # clip_l / t5xxl) needs a layout encoder that takes them.
+    if encoder["class_type"] != "CLIPTextEncode":
+        raise SheetConversionRefused(
+            f"Its prompt is encoded by {encoder['class_type']}. Only a "
+            "workflow whose prompt goes through CLIP Text Encode can be made "
+            "into a sheet workflow."
+        )
+    encoder["class_type"] = SHEET_LAYOUT_ENCODER
+    encoder.setdefault("inputs", {})["region_strength"] = 1.0
+    # As the edit path's copy: a sheet PixlStash cannot collect is lost.
+    _save_with_save_image(nodes)
+    return out
 
 
 def convert_to_sheet(graph: dict) -> dict:
@@ -543,10 +624,11 @@ def convert_to_sheet(graph: dict) -> dict:
     saves with ``SaveImage``. *graph* is not modified.
 
     Raises:
-        SheetConversionRefused: No picture is read, there is not exactly one
-            sampler, the canvas already has a size of its own, the sampler
-            starts from something this cannot replace, or the picture does
-            not reach a reference input.
+        SheetConversionRefused: There is not exactly one sampler, the canvas
+            already has a size of its own, the sampler starts from something
+            this cannot replace, or the picture does not reach a reference
+            input. A graph that reads no picture is text to image, made over
+            by :func:`_text_to_sheet` instead and refused as it refuses.
     """
     out = copy.deepcopy(graph)
     nodes = {
@@ -555,10 +637,6 @@ def convert_to_sheet(graph: dict) -> dict:
         if isinstance(node, dict) and isinstance(node.get("class_type"), str)
     }
     classes = [node["class_type"] for node in nodes.values()]
-    if not any(is_picture_loader(cls) for cls in classes):
-        raise SheetConversionRefused(
-            "This workflow reads no picture, so it has nowhere to take a reference."
-        )
     samplers = [
         node
         for node in nodes.values()
@@ -571,6 +649,8 @@ def convert_to_sheet(graph: dict) -> dict:
             "single-pass workflow can be made into a sheet workflow."
         )
     inputs = samplers[0]["inputs"]
+    if not any(is_picture_loader(cls) for cls in classes):
+        return _text_to_sheet(out, nodes, inputs)
     source = nodes.get(str(inputs["latent_image"][0])) or {}
     source_class = source.get("class_type", "")
     switched = False

@@ -14,9 +14,10 @@ import { unwrap } from "../utils/unwrap";
  *
  * @param {{description: string, body?: string, top?: string, trousers?: string,
  *   shoes?: string, framing?: string, subject?: string, trigger?: string,
- *   reference?: boolean, layout?: "moss"|"prose"}} body `reference` names
- *   the person in the run's reference picture; `prose` is the sheet as one
- *   sentence, for an edit model.
+ *   reference?: boolean, layout?: "moss"|"prose"|"regions"}} body `reference`
+ *   names the person in the run's reference picture; `prose` is the sheet as
+ *   one sentence, for an edit model or Krea 2; `regions` is the layout for a
+ *   sheet copy of another text-to-image workflow.
  * @returns {Promise<{prompt: string, negative: string, width: number, height: number}>}
  */
 export async function buildSheetPrompt(body) {

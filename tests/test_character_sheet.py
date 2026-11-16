@@ -18,7 +18,12 @@ from pixlstash.event_types import EventType
 from pixlstash.routes.comfyui import WORKFLOW_BUILTIN_DIR
 from pixlstash.services import character_sheet, comfyui_service, scrapheap_service
 from pixlstash.services.workflow_hash import reduce_api_graph
-from pixlstash.services.workflow_identity import reference_input_count
+from pixlstash.services.workflow_identity import (
+    SHEET_LAYOUT_ENCODER,
+    draws_sheet_layout,
+    reference_input_count,
+)
+from pixlstash.services.workflow_io import detect_workflow_io
 from pixlstash.utils.insightface_model_utils import DEFAULT_MODEL_PACK
 from pixlstash.services.character_sheet import (
     SHEET_HEIGHT,
@@ -455,9 +460,11 @@ def test_the_shipped_sheet_workflows_draw_at_the_sheet_size(name, references):
     ("graph", "words"),
     [
         (_edit_graph("literal"), "already draws at a size of its own"),
+        # With no picture it is text to image, and the Qwen edit encoder is
+        # no CLIP Text Encode.
         (
             {k: v for k, v in _edit_graph("literal").items() if k != "1"},
-            "reads no picture",
+            "encoded by TextEncodeQwenImageEditPlus",
         ),
         (
             {
@@ -489,6 +496,126 @@ def test_a_graph_that_cannot_draw_a_sheet_is_refused_with_its_reason(graph, word
     with pytest.raises(character_sheet.SheetConversionRefused) as refused:
         character_sheet.convert_to_sheet(graph)
     assert words in refused.value.reason
+
+
+def _t2i_graph(sized: bool = False) -> dict:
+    """Flux-style text to image: the prompt reaches the sampler through
+    FluxGuidance, the negative is a second encoder."""
+    graph = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "a"}},
+        "2": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"clip": ["1", 1], "text": "x"},
+        },
+        "3": {"class_type": "FluxGuidance", "inputs": {"conditioning": ["2", 0]}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["1", 1], "text": ""}},
+        "5": {
+            "class_type": "EmptySD3LatentImage",
+            "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
+        },
+        "6": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["1", 0],
+                "positive": ["3", 0],
+                "negative": ["4", 0],
+                "latent_image": ["5", 0],
+            },
+        },
+        "7": {"class_type": "VAEDecode", "inputs": {"samples": ["6", 0]}},
+        "8": {"class_type": "SaveImage", "inputs": {"images": ["7", 0]}},
+    }
+    if sized:
+        graph["9"] = {"class_type": "ResolutionSelector", "inputs": {}}
+        graph["5"]["inputs"].update(width=["9", 0], height=["9", 1])
+    return graph
+
+
+@pytest.mark.parametrize("sized", [False, True])
+def test_a_text_to_image_copy_reads_its_prompt_as_the_sheets_layout(sized):
+    """The positive encoder becomes Layout Text Encode with its own wiring, so
+    the run's prompt lands where it did; the negative is left alone."""
+    graph = _t2i_graph(sized)
+    before = json.dumps(graph)
+    sheet = character_sheet.convert_to_sheet(graph)
+    assert json.dumps(graph) == before
+    assert sheet["2"] == {
+        "class_type": SHEET_LAYOUT_ENCODER,
+        "inputs": {"clip": ["1", 1], "text": "x", "region_strength": 1.0},
+    }
+    assert sheet["4"]["class_type"] == "CLIPTextEncode"
+    canvas = sheet["5"]["inputs"]
+    # The layout's 5:3, wired or square before: a run sets its own size.
+    assert (canvas["width"], canvas["height"]) == (SHEET_WIDTH, SHEET_HEIGHT)
+    detected = detect_workflow_io(sheet)
+    assert (detected.positive_prompts, detected.negative_prompts) == (("2",), ("4",))
+    assert draws_sheet_layout(reduce_api_graph(sheet))
+    assert not draws_sheet_layout(reduce_api_graph(graph))
+
+
+def test_a_text_to_image_copy_saves_with_save_image():
+    """The advanced saver is not one PixlStash collects from: a sheet drawn
+    through it would never reach the library."""
+    graph = _t2i_graph()
+    graph["8"] = {
+        "class_type": "SaveImageAdvanced",
+        "inputs": {"images": ["7", 0], "filename_prefix": "sheet", "format": "exr"},
+    }
+    sheet = character_sheet.convert_to_sheet(graph)
+    assert sheet["8"] == {
+        "class_type": "SaveImage",
+        "inputs": {"images": ["7", 0], "filename_prefix": "sheet"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("change", "words"),
+    [
+        (
+            lambda g: g["2"].update(class_type="CLIPTextEncodeSDXL"),
+            "encoded by CLIPTextEncodeSDXL",
+        ),
+        (lambda g: g["2"].update(class_type=SHEET_LAYOUT_ENCODER), "already draws"),
+        # One encoder for both sides: the negative would become regions too.
+        (lambda g: g["6"]["inputs"].update(negative=["2", 0]), "are one node"),
+        (
+            lambda g: g["5"].update(class_type="LoadLatent", inputs={}),
+            "starts from LoadLatent",
+        ),
+        # Two prompts merged into one conditioning: which is the sheet's?
+        (
+            lambda g: g["3"].update(
+                class_type="ConditioningCombine",
+                inputs={"conditioning_1": ["2", 0], "conditioning_2": ["4", 0]},
+            ),
+            "finds 2 prompts",
+        ),
+    ],
+)
+def test_a_text_to_image_graph_that_cannot_draw_a_sheet_says_why(change, words):
+    graph = _t2i_graph()
+    change(graph)
+    with pytest.raises(character_sheet.SheetConversionRefused) as refused:
+        character_sheet.convert_to_sheet(graph)
+    assert words in refused.value.reason
+
+
+@pytest.mark.parametrize("size", ["small", "large"])
+def test_a_regions_prompt_is_the_moss_layout_with_its_canvas_and_standalone_captions(
+    size,
+):
+    """Each caption is encoded over its own box, so none says "Panel n" and
+    every one names who it is of; the boxes are MOSS's own."""
+    kwargs = dict(description="Adult woman, copper bob", trigger="anna", size=size)
+    moss = json.loads(sheet_prompt(**kwargs))
+    regions = json.loads(sheet_prompt(layout="regions", **kwargs))
+    assert regions["canvas"] == list(character_sheet.SIZES[size])
+    assert "canvas" not in moss
+    assert [i["bbox"] for i in regions["items"]] == [i["bbox"] for i in moss["items"]]
+    assert regions["summary"] == moss["summary"]
+    for item in regions["items"]:
+        assert not item["caption"].startswith("Panel")
+        assert item["caption"].startswith("anna, adult woman, copper bob")
 
 
 def _sheet(lines=(), size=(SHEET_WIDTH, SHEET_HEIGHT)) -> Image.Image:

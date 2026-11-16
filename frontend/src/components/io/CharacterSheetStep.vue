@@ -420,6 +420,32 @@
           Make a sheet workflow from {{ convertible.name }}
         </button>
       </div>
+      <div
+        v-if="phase === 'describe' && !fromReference && textSource"
+        class="cs-item"
+        data-testid="cs-convert-text"
+      >
+        <span
+          >Any other text-to-image workflow can draw sheets too, through a copy
+          that keeps each photo in its place on the sheet. The copy needs an
+          up-to-date ComfyUI-PixlStash in ComfyUI.</span
+        >
+        <AppSelect
+          v-if="textConvertibles.length > 1"
+          v-model="textSourceId"
+          label="Copy"
+          :options="textConvertibleOptions"
+          compact
+        />
+        <button
+          type="button"
+          class="cs-link cs-link--start"
+          :disabled="working"
+          @click="makeTextSheetWorkflow(textSource)"
+        >
+          Make a sheet workflow from {{ textSource.name }}
+        </button>
+      </div>
       <template v-if="phase !== 'describe' && drawnFrom">
         <h3 class="cs-secl">Drawn from</h3>
         <img
@@ -840,6 +866,19 @@ const workflows = ref([]);
 // edit card one could be made from when there is none.
 const referenceCards = ref([]);
 const convertible = ref(null);
+// Text-to-image cards a sheet copy can be made from (any model but MOSS's,
+// which reads the layout itself), and the one picked to copy.
+const textConvertibles = ref([]);
+const textSourceId = ref("");
+const textSource = computed(
+  () =>
+    textConvertibles.value.find((card) => card.id === textSourceId.value) ||
+    textConvertibles.value[0] ||
+    null,
+);
+const textConvertibleOptions = computed(() =>
+  textConvertibles.value.map((card) => ({ value: card.id, label: card.name })),
+);
 const mode = ref("text"); // text | reference
 // The picture the next sheets are drawn from, and the one the sheets on show
 // were: the rail and the ranking follow the second.
@@ -905,6 +944,21 @@ const toPicture = computed(
 const engine = computed(() => {
   if (!fromReference.value) {
     const card = workflows.value.find((c) => c.id === workflowId.value);
+    if (card?.sheet_layout) {
+      // A sheet copy draws the layout as regions on whatever model it runs.
+      // Its diffusion model's, never a text encoder's, as referenceEngine.
+      const model =
+        (card.models || []).find((m) =>
+          ["unet", "checkpoint"].includes(m.kind),
+        ) || {};
+      const family = model.base_model_family || "";
+      return {
+        family,
+        name: model.base_model || "its model",
+        fits: (lora) => !!family && lora.base_model_family === family,
+        regions: true,
+      };
+    }
     return cardEngine(card) || ENGINES.moss;
   }
   const card =
@@ -1694,6 +1748,8 @@ async function draw() {
   rememberRecent();
   // Only MOSS-Image takes a layout: the others get the sheet in one sentence.
   const prose = !!reference || engine.value !== ENGINES.moss;
+  // A sheet copy of another text-to-image workflow takes it as regions.
+  const regions = !reference && !!engine.value.regions;
   try {
     const description = form.description.trim();
     if (!savedDescription.value && description) {
@@ -1714,6 +1770,7 @@ async function draw() {
       // From a reference, the sentence names the person in the picture.
       ...(reference ? { reference: true } : {}),
       ...(prose ? { layout: "prose" } : {}),
+      ...(regions ? { layout: "regions" } : {}),
     });
     const drawing = JSON.stringify([
       sheet.prompt,
@@ -1836,6 +1893,28 @@ async function makeSheetWorkflow(card = convertible.value) {
     if (!modeCards.value.length && referenceCards.value.length) {
       mode.value = "reference";
     }
+  } catch (e) {
+    error.value = `Couldn't make the sheet workflow. ${errorMessage(e, "Please try again.")}`;
+  } finally {
+    working.value = false;
+  }
+}
+
+/** Store a sheet copy of *card*, a text-to-image workflow, that draws the
+ * sheet's layout as regions on its own model, and choose it. Offered in the
+ * text mode only, so the mode stands. */
+async function makeTextSheetWorkflow(card) {
+  if (working.value || !card) return;
+  working.value = true;
+  error.value = "";
+  try {
+    const copy = await sheetCopyWorkflow(card.id);
+    const { cards } = await listWorkflowCards();
+    if (!alive) return;
+    sortCards(cards);
+    if (copy?.workflow_id) workflowId.value = copy.workflow_id;
+    // Chosen only once its pre-flight passes, as every card is.
+    await checkCards();
   } catch (e) {
     error.value = `Couldn't make the sheet workflow. ${errorMessage(e, "Please try again.")}`;
   } finally {
@@ -2014,7 +2093,18 @@ function sortCards(cards) {
   workflows.value = cards
     .filter(
       (card) =>
-        card.type === "txt2img" && !card.reference_inputs && cardEngine(card),
+        card.type === "txt2img" &&
+        !card.reference_inputs &&
+        (card.sheet_layout || cardEngine(card)),
+    )
+    .sort(recent);
+  textConvertibles.value = cards
+    .filter(
+      (card) =>
+        card.type === "txt2img" &&
+        !card.reference_inputs &&
+        !card.sheet_layout &&
+        cardEngine(card) !== ENGINES.moss,
     )
     .sort(recent);
   referenceCards.value = cards

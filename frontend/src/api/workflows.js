@@ -415,7 +415,9 @@ export async function inpaintCopyWorkflow(workflowId) {
 /**
  * Store a copy of an image-edit workflow that draws on a canvas of its own
  * size, its picture a reference only: what a character sheet drawn from a
- * reference runs. A graph it cannot convert is a 422 whose detail says why.
+ * reference runs. Of a text-to-image workflow, a copy that reads the sheet's
+ * layout prompt as regions on its own model (its card's `sheet_layout`). A
+ * graph it cannot convert is a 422 whose detail says why.
  *
  * @param {string} workflowId
  * @returns {Promise<{name: string, workflow_id: string}>}

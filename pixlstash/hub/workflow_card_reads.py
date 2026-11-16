@@ -51,6 +51,7 @@ from pixlstash.services.workflow_identity import (
     model_fix_kind,
     reduced_traits,
     reduced_workflow_type,
+    draws_sheet_layout,
     reference_input_count,
     slots,
 )
@@ -95,6 +96,9 @@ class Card:
     # manual workflow's own graph only: an automatic card stores its type and
     # not its graph's edges, so it says 0.
     reference_inputs: int = 0
+    # Whether the graph encodes its prompt as a character sheet's regions
+    # (``workflow_identity.draws_sheet_layout``); a manual workflow's only.
+    sheet_layout: bool = False
     specials: Optional[tuple[str, ...]] = None
     # What the core does beyond its type (``workflow_identity.graph_traits``),
     # with the same ``None`` rule as ``specials``.
@@ -255,6 +259,7 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
             workflow_type=facts[0],
             traits=facts[1],
             reference_inputs=_MANUAL_FACTS[row["workflow_id"]][2],
+            sheet_layout=_MANUAL_FACTS[row["workflow_id"]][3],
             imported=True,
             manual=True,
             from_name=row["from_name"],
@@ -276,11 +281,12 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
     ]
 
 
-# ``{workflow id: (version, (workflow_type, traits), reference_inputs)}``: one entry per manual
+# ``{workflow id: (version, (workflow_type, traits), reference_inputs,
+# sheet_layout)}``: one entry per manual
 # workflow, replaced when a save makes a new version (`hub/workflow_versions.py`)
 # and dropped when the workflow is (`_manual_cards`), so no document is held
 # and an old version is never described.
-_MANUAL_FACTS: dict[str, tuple[object, tuple, int]] = {}
+_MANUAL_FACTS: dict[str, tuple[object, tuple, int, bool]] = {}
 
 
 def _manual_facts_of(
@@ -300,7 +306,12 @@ def _manual_facts_of(
         return cached[1]
     nodes = _manual_reduction(workflow_id, document)
     facts = (None, None) if nodes is None else _manual_facts(workflow_id, nodes)
-    _MANUAL_FACTS[workflow_id] = (version, facts, _reference_inputs(workflow_id, nodes))
+    _MANUAL_FACTS[workflow_id] = (
+        version,
+        facts,
+        _reference_inputs(workflow_id, nodes),
+        nodes is not None and draws_sheet_layout(nodes),
+    )
     return facts
 
 
