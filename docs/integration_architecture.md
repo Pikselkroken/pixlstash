@@ -2055,7 +2055,7 @@ score, format, width, height, thumbnail_width, thumbnail_height, orientation}],
 size, cohesion, reference_share, is_reference,
 similarity_to_reference, from_sheets}`, members most typical first, the
 reference cluster first and then largest first. `unclustered` is
-`[{picture_id, score, similarity_to_reference}]`.
+`[{picture_id, score, similarity_to_reference, format}]`.
 
 `PUT /characters/{id}/reference-cluster` with `{picture_ids}` stores the
 reference cluster and answers `{picture_ids}`; `[]` clears it, and an id

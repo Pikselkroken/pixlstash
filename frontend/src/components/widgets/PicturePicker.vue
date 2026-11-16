@@ -44,18 +44,74 @@
           <div class="pp-sec">
             {{ group === "character" ? "Person" : "Picture set" }}
           </div>
-          <button
-            v-for="row in shown(group)"
-            :key="`${group}-${row.id}`"
-            type="button"
-            class="pp-facet"
-            :class="{ 'pp-facet--on': isOn(group, row.id) }"
-            :aria-pressed="isOn(group, row.id)"
-            @click="choose(group, row.id)"
-          >
-            <span class="pp-facet__label">{{ row.name }}</span>
-            <span class="pp-facet__count">{{ groupedNumber(row.count) }}</span>
-          </button>
+          <template v-for="row in shown(group)" :key="`${group}-${row.id}`">
+            <!-- A person unfolds into their face clusters rather than being a
+                 scope of its own, so the row is a disclosure, not a toggle. -->
+            <button
+              v-if="group === 'character'"
+              type="button"
+              class="pp-facet"
+              :aria-expanded="unfolded === row.id"
+              @click="openCharacter(row)"
+            >
+              <v-icon size="16" class="pp-facet__chevron">{{
+                unfolded === row.id ? "mdi-chevron-down" : "mdi-chevron-right"
+              }}</v-icon>
+              <span class="pp-facet__label">{{ row.name }}</span>
+              <span class="pp-facet__count">{{ groupedNumber(row.count) }}</span>
+            </button>
+            <button
+              v-else
+              type="button"
+              class="pp-facet"
+              :class="{ 'pp-facet--on': isOn(group, row.id) }"
+              :aria-pressed="isOn(group, row.id)"
+              @click="choose(group, row.id)"
+            >
+              <span class="pp-facet__label">{{ row.name }}</span>
+              <span class="pp-facet__count">{{ groupedNumber(row.count) }}</span>
+            </button>
+            <template v-if="group === 'character' && unfolded === row.id">
+              <!-- Not a live region: the grid's note announces the grouping. -->
+              <p v-if="grouping || groupingFailed" class="pp-rail-note">
+                {{ grouping ? "Grouping faces…" : "Could not group the faces." }}
+              </p>
+              <button
+                v-for="c in clusterRows"
+                :key="`cluster-${c.key}`"
+                type="button"
+                class="pp-facet pp-facet--sub"
+                :class="{ 'pp-facet--on': isCluster(c.key) }"
+                :aria-pressed="isCluster(c.key)"
+                @click="chooseCluster(c.key)"
+              >
+                <img
+                  v-if="c.face != null"
+                  class="pp-facet__face"
+                  :src="pictureThumbnailUrl(c.face)"
+                  alt=""
+                />
+                <span
+                  class="pp-facet__label"
+                  :class="{ 'pp-facet__label--quiet': c.key === UNMATCHED }"
+                  >{{ c.label }}</span
+                >
+                <span class="pp-facet__count">{{ groupedNumber(c.count) }}</span>
+              </button>
+              <button
+                type="button"
+                class="pp-facet pp-facet--sub"
+                :class="{ 'pp-facet--on': isOn('character', row.id) }"
+                :aria-pressed="isOn('character', row.id)"
+                @click="choose('character', row.id)"
+              >
+                <span class="pp-facet__label pp-facet__label--quiet"
+                  >All of {{ row.name }}</span
+                >
+                <span class="pp-facet__count">{{ groupedNumber(row.count) }}</span>
+              </button>
+            </template>
+          </template>
           <button
             v-if="facets[group].length > shown(group).length"
             type="button"
@@ -74,7 +130,9 @@
             v-model="search"
             class="pp-search"
             icon="magnify"
-            placeholder="Search this library"
+            :placeholder="
+              scope ? `Search ${scope.name}'s ${scope.noun}` : 'Search this library'
+            "
             @enter="reload"
           />
           <!-- Paste is a real route in, and it IMPORTS: a screenshot that was
@@ -102,16 +160,28 @@
         </div>
 
         <div class="pp-scroll">
+          <!-- Which cluster the grid shows, so a face from Cluster 2 is never
+               mistaken for a reference face. -->
+          <p v-if="scope" class="pp-scope">
+            <b>{{ scope.name }} · {{ scope.label }}</b>
+            <span v-if="scope.isReference" class="pp-badge"
+              ><v-icon size="12">mdi-check</v-icon>Reference cluster</span
+            >
+            <span>{{ scope.detail }}</span>
+          </p>
           <!-- One live region for all three, so a reader who cannot see the
                grid fill is told that it did, that it did not, or that it
                failed. -->
           <p
-            v-if="error || loading || !pictures.length"
+            v-if="error || grouping || loading || !pictures.length"
             class="pp-note"
             :class="{ 'pp-note--error': error }"
             role="status"
           >
-            {{ error || (loading ? "Loading pictures…" : emptyNote) }}
+            {{
+              error ||
+              (grouping ? "Grouping faces…" : loading ? "Loading pictures…" : emptyNote)
+            }}
           </p>
           <div v-if="pictures.length" class="pp-grid">
             <button
@@ -189,7 +259,12 @@
         </div>
 
         <div class="pp-foot">
-          <span class="pp-chosen">{{ chosen ? "1 chosen" : "None chosen" }}</span>
+          <span class="pp-chosen"
+            >{{ chosen ? "1 chosen" : "None chosen"
+            }}<template v-if="chosen && scope">
+              · from {{ scope.name }}'s {{ scope.from }}</template
+            ></span
+          >
           <span class="pp-spacer"></span>
           <!-- Where a caller puts the route this picker deliberately does not
                replace. The model shelf keeps "Choose a file…" here: removing a
@@ -227,6 +302,7 @@ import AppButton from "./AppButton.vue";
 import AppDialog from "./AppDialog.vue";
 import AppInput from "./AppInput.vue";
 import Tooltip from "./Tooltip.vue";
+import { getFaceClusters } from "../../api/characters";
 import {
   getPictureCount,
   pictureThumbnailUrl,
@@ -269,12 +345,19 @@ const FACET_PREVIEW = 3;
 // and `auto-fill` will not tell them, so the grid is held at a fixed count and
 // the tiles flex instead - which is also what the artboard draws.
 const COLUMNS = 5;
+// The face clusters' cut: Normal, the Character editor's (services/face_clusters.py
+// SAME_PERSON). A reader who wants another strictness has the Faces dialog.
+const SAME_PERSON = 0.45;
+// The cluster key of the faces that grouped with nobody.
+const UNMATCHED = "unmatched";
 
 const entityLists = useEntityListsStore();
 const tasks = useTasksStore();
 
 const searchRef = ref(null);
-const facet = reactive({ kind: "", id: null });
+// `kind` "cluster" is a face cluster of the unfolded character `id`; `cluster`
+// is its index in the answer, or `UNMATCHED`.
+const facet = reactive({ kind: "", id: null, cluster: null });
 const expanded = reactive({ character: false, set: false });
 const search = ref("");
 const includeVideos = ref(false);
@@ -299,6 +382,71 @@ const unavailable = ref(new Set());
 let loadSeq = 0;
 // The same guard for the Everything count, which the checkbox re-reads.
 let countSeq = 0;
+
+// ── Face clusters ───────────────────────────────────────────────────────────
+//
+// Choosing a person unfolds their face clusters (`GET /face-clusters`, computed
+// on each call) under their row, one person at a time, and lands on the
+// reference cluster: who the owner said the person is. A person without one
+// lands on all their pictures.
+const unfolded = ref(null);
+const faceGroups = ref(null);
+const grouping = ref(false);
+const groupingFailed = ref(false);
+let clusterSeq = 0;
+// The person still waiting to land on their reference cluster. Any choice the
+// reader makes meanwhile clears it, so the answer never moves them.
+let landOn = null;
+
+const clusterRows = computed(() => {
+  const body = faceGroups.value;
+  if (!body) return [];
+  const rows = (body.clusters || []).map((c, i) => ({
+    key: i,
+    label: c.is_reference ? "Reference" : `Cluster ${i + 1}`,
+    isReference: c.is_reference,
+    count: c.size,
+    face: c.members[0]?.picture_id,
+    members: c.members,
+  }));
+  if (body.unclustered?.length) {
+    rows.push({
+      key: UNMATCHED,
+      label: "Matched no one",
+      isReference: false,
+      count: body.unclustered.length,
+      face: null,
+      members: body.unclustered,
+    });
+  }
+  return rows;
+});
+
+// What the grid, the search field and the receipt say about a cluster.
+const scope = computed(() => {
+  if (facet.kind !== "cluster") return null;
+  const row = clusterRows.value.find((r) => r.key === facet.cluster);
+  if (!row) return null;
+  const name = facets.value.character.find((c) => c.id === facet.id)?.name ?? "";
+  if (row.key === UNMATCHED) {
+    return {
+      name,
+      label: row.label,
+      isReference: false,
+      noun: "unmatched faces",
+      from: "unmatched faces",
+      detail: `${row.count} faces that grouped with no one`,
+    };
+  }
+  return {
+    name,
+    label: row.label,
+    isReference: row.isReference,
+    noun: row.isReference ? "reference faces" : `${row.label} faces`,
+    from: row.isReference ? "reference cluster" : row.label,
+    detail: `${row.count} faces, most typical first`,
+  };
+});
 
 const facets = computed(() => ({
   character: entityLists.characters
@@ -337,6 +485,10 @@ function isOn(kind, id) {
   return facet.kind === kind && facet.id === id;
 }
 
+function isCluster(key) {
+  return facet.kind === "cluster" && facet.cluster === key;
+}
+
 /** A facet count, grouped the way every other count in the app is. */
 function groupedNumber(n) {
   return Number(n || 0).toLocaleString("en-GB").replace(/,/g, " ");
@@ -361,9 +513,87 @@ function tileTitle(pic) {
 }
 
 function choose(kind, id) {
+  landOn = null;
+  if (kind !== "character") fold();
   facet.kind = kind;
   facet.id = id;
+  facet.cluster = null;
   reload();
+}
+
+function fold() {
+  clusterSeq += 1;
+  unfolded.value = null;
+  faceGroups.value = null;
+  grouping.value = false;
+  groupingFailed.value = false;
+}
+
+function chooseCluster(key) {
+  landOn = null;
+  facet.kind = "cluster";
+  facet.id = unfolded.value;
+  facet.cluster = key;
+  reload();
+}
+
+/** The reference cluster when there is one, else all of the person. */
+function landOnReference(id) {
+  const at = (faceGroups.value?.clusters || []).findIndex((c) => c.is_reference);
+  if (at >= 0) chooseCluster(at);
+  else choose("character", id);
+}
+
+async function openCharacter(row) {
+  if (unfolded.value === row.id && grouping.value) return;
+  if (unfolded.value === row.id && faceGroups.value) {
+    landOnReference(row.id);
+    return;
+  }
+  fold();
+  const seq = clusterSeq;
+  unfolded.value = row.id;
+  grouping.value = true;
+  landOn = row.id;
+  // Nothing in the grid until the person's clusters say where to land: a
+  // flash of all their pictures first would be a list the reader never chose.
+  loadSeq += 1;
+  loading.value = false;
+  error.value = "";
+  pictures.value = [];
+  chosen.value = null;
+  done.value = true;
+  capped.value = false;
+  facet.kind = "character";
+  facet.id = row.id;
+  facet.cluster = null;
+  try {
+    const body = await getFaceClusters(row.id, SAME_PERSON);
+    // Another person, a project or a set chosen meanwhile folded this one.
+    if (seq !== clusterSeq) return;
+    faceGroups.value = body;
+  } catch (err) {
+    if (seq !== clusterSeq) return;
+    // The person's pictures are still all there under "All of"; only the
+    // grouping is missing, and the rail says so.
+    console.warn("[PicturePicker] could not group the faces of character", row.id, err);
+    groupingFailed.value = true;
+  }
+  if (seq !== clusterSeq) return;
+  grouping.value = false;
+  if (landOn === row.id) landOnReference(row.id);
+}
+
+/** A cluster's members, as tiles, in the answer's most-typical-first order. */
+function clusterTiles() {
+  const row = clusterRows.value.find((r) => r.key === facet.cluster);
+  return (row?.members || [])
+    .filter(
+      (m) =>
+        includeVideos.value ||
+        PIL_IMAGE_EXTENSIONS.includes(String(m.format || "").toLowerCase()),
+    )
+    .map((m) => ({ id: m.picture_id, format: m.format }));
 }
 
 /** Restrict a query to still images, unless videos were asked for. */
@@ -379,7 +609,9 @@ function mediaParams() {
 function scopeParams() {
   const params = mediaParams();
   if (facet.kind === "project") params.set("project_id", String(facet.id));
-  if (facet.kind === "character") params.set("character_id", String(facet.id));
+  if (facet.kind === "character" || facet.kind === "cluster") {
+    params.set("character_id", String(facet.id));
+  }
   if (facet.kind === "set") params.set("set_id", String(facet.id));
   return params;
 }
@@ -390,12 +622,26 @@ async function load({ append = false } = {}) {
   error.value = "";
   try {
     const text = search.value.trim();
+    // A cluster is already in hand: its tiles need no read, and a search inside
+    // it is the person's search cut to its members.
+    const tiles = facet.kind === "cluster" ? clusterTiles() : null;
+    if (tiles && !text) {
+      pictures.value = tiles;
+      capped.value = false;
+      done.value = true;
+      nextOffset.value = 0;
+      return;
+    }
     if (text) {
       // Search answers in one shot, so there is nothing to page through - and
       // no ceiling on the way back either, so one is applied here.
       const rows = await searchPictures(text, { query: scopeParams().toString() });
       if (seq !== loadSeq) return;
-      const all = Array.isArray(rows) ? rows : [];
+      let all = Array.isArray(rows) ? rows : [];
+      if (tiles) {
+        const members = new Set(tiles.map((t) => t.id));
+        all = all.filter((r) => members.has(r.id));
+      }
       capped.value = all.length > SEARCH_CAP;
       pictures.value = all.slice(0, SEARCH_CAP);
       done.value = true;
@@ -557,7 +803,9 @@ watch(includeVideos, () => {
 const importsRunning = computed(() => Object.keys(tasks.importRuns).length);
 
 watch(importsRunning, (now, before) => {
-  if (!props.open || now !== 0 || !before) return;
+  // Mid-grouping the landing reads the list itself; a read now would flash
+  // all of the person first.
+  if (!props.open || now !== 0 || !before || grouping.value) return;
   load();
 });
 
@@ -572,6 +820,9 @@ watch(
     }
     facet.kind = "";
     facet.id = null;
+    facet.cluster = null;
+    landOn = null;
+    fold();
     search.value = "";
     chosen.value = null;
     capped.value = false;
@@ -651,6 +902,30 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.pp-facet--sub {
+  padding-left: var(--space-6);
+}
+.pp-facet__chevron {
+  flex: none;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+/* The cluster's most typical face, so "Cluster 2" is a face and not a number. */
+.pp-facet__face {
+  flex: none;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+}
+.pp-facet__label--quiet {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+.pp-rail-note {
+  margin: 0;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-6);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 .pp-facet__count {
   font-size: var(--text-xs);
@@ -793,6 +1068,34 @@ watch(
 }
 .pp-gone {
   display: inline-flex;
+}
+.pp-scope {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+.pp-scope b {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-on-surface));
+}
+/* The Faces dialog's own reference badge (FaceClustersDialog `.fc-badge--ref`). */
+.pp-badge {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: var(--space-1);
+  height: var(--badge-size);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--active-bar);
+  color: rgb(var(--v-theme-on-primary));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
 }
 .pp-note {
   margin: 0;

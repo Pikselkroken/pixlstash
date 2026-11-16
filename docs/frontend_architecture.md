@@ -1382,6 +1382,22 @@ One facet is active at a time and it becomes `project_id` / `character_id` /
 `set_id` on `GET /pictures/stream`. Free search is the **escape hatch, not the
 primary route**: it swaps to `GET /pictures/search` and carries the same scope.
 
+**A person unfolds into their face clusters.** Choosing a person in the rail
+reads `GET /face-clusters` at Normal (0.45, the Character editor's cut) and
+nests the clusters under the row, one person at a time: each with its most
+typical face as a 24px avatar, then *Matched no one*, then *All of {name}*. It
+lands on the reference cluster, or on *All of* when none is picked; the grid
+holds "Grouping faces…" until the answer says where. A cluster's tiles are its
+members in the answer's order, most typical first, with no listing read; a
+search inside one is the person's search cut to its members. A line above the
+grid and the footer receipt name the cluster. Choosing a project or set folds
+the person; a late answer for a folded person is dropped. A failed read (a
+scoped token is refused this owner-only route) says "Could not group the faces."
+in the rail and lands on *All of*. The clusters are read once per unfold, so a
+picture imported meanwhile shows under *All of* until the person is unfolded
+again. Cluster tiles carry no file name (the tooltip reads "Picture N"), and the
+row counts stay all-media like every facet count.
+
 **Single-select on purpose.** Every caller needs exactly one picture — a model's
 thumbnail, a workflow's Fixed input, a run-time answer — and multi-select would
 be built on the argument that something might want it one day.
