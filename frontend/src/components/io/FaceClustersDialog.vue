@@ -611,12 +611,15 @@ const { zoomedId, zoomEntry, zoomPos, hasPrev, hasNext, openZoom, onTileWheel, s
   useZoomPopout(zoomList, (id) => {
     const rank = zoomFrom.value === "field" ? zoomList.value.indexOf(id) : -1;
     if (rank >= 0) focusFace(rank);
-    else if (zoomOpener?.isConnected) zoomOpener.focus();
+    // A sidebar picture takes no focus itself: back to the rail or the field.
+    else if (zoomOpener?.isConnected && zoomOpener !== document.body) zoomOpener.focus();
+    else focusFace(focusRank.value);
   });
 
 /** Open *id* from the list *from*; with a wheel *event*, only on Ctrl+wheel up. */
 function zoomIn(from, id, event = null) {
   if (zoomedId.value != null) return;
+  if (event && !(event.ctrlKey || event.metaKey)) return; // a plain wheel scrolls
   zoomFrom.value = from;
   zoomOpener = document.activeElement;
   if (event) onTileWheel(event, id);

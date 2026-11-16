@@ -161,11 +161,21 @@ describe("FaceClustersDialog", () => {
     await key("Escape");
     expect(popout()).toBeNull();
 
-    // Matched no one.
-    await wrapper.find('[data-testid="fc-strip-face"]').trigger("dblclick");
-    await flushPromises();
+    // Matched no one. A plain wheel scrolls; Ctrl+wheel up zooms.
+    const strip = wrapper.find('[data-testid="fc-strip-face"]');
+    const wheel = async (init) => {
+      strip.element.dispatchEvent(
+        new WheelEvent("wheel", { deltaY: -100, bubbles: true, cancelable: true, ...init }),
+      );
+      await flushPromises();
+    };
+    await wheel({});
+    expect(popout()).toBeNull();
+    await wheel({ ctrlKey: true });
     expect(caption()).toBe("Matched no one · face 1 of 1 · unrated");
+    // The picture takes no focus, so closing lands on the field, not <body>.
     await key("Escape");
+    expect(document.activeElement.dataset.testid).toBe("fc-face");
 
     // Left out: face 4 sits under the saved cut.
     await wrapper.find('[data-testid="fc-rim-face"]').trigger("dblclick");
