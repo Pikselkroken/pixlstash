@@ -119,12 +119,20 @@
             placeholder="dark straight jeans · a pleated midi skirt"
           />
         </div>
-        <AppInput
-          v-if="form.framing === 'full_body'"
-          v-model="form.shoes"
-          label="Shoes"
-          placeholder="white sneakers"
-        />
+        <div class="cs-grid2">
+          <AppInput
+            v-model="form.background"
+            label="Background"
+            placeholder="a plain light-grey studio"
+            data-testid="cs-background"
+          />
+          <AppInput
+            v-if="form.framing === 'full_body'"
+            v-model="form.shoes"
+            label="Shoes"
+            placeholder="white sneakers"
+          />
+        </div>
         <!-- The four choices of how a sheet is drawn: toggles side by side,
              wrapping only on a narrow window, with one line of hints under
              them. -->
@@ -739,6 +747,7 @@ const form = reactive({
   top: "",
   trousers: "",
   shoes: "",
+  background: "",
   framing: "mid_thigh",
   size: "large",
   count: 4,
@@ -1581,6 +1590,7 @@ async function draw() {
       top: form.top,
       trousers: form.trousers,
       shoes: form.shoes,
+      background: form.background,
       framing: form.framing,
       size: form.size,
       subject: form.subject,
@@ -2265,6 +2275,11 @@ defineExpose({
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--space-4);
+}
+
+/* Background alone (no shoes below full body) takes the whole row. */
+.cs-grid2 > :only-child {
+  grid-column: 1 / -1;
 }
 
 .cs-opts {

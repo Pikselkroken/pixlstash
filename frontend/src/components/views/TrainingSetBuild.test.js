@@ -1086,6 +1086,9 @@ describe("TrainingSetBuild: generating the pictures", () => {
     await wrapper
       .find('[data-testid="cs-description"] textarea')
       .setValue("Adult woman, copper bob");
+    await wrapper
+      .find('[data-testid="cs-background"] input')
+      .setValue("a sunlit park");
     await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
     await flushPromises();
 
@@ -1094,7 +1097,12 @@ describe("TrainingSetBuild: generating the pictures", () => {
       description: "Adult woman, copper bob",
     });
     expect(gen.buildSheetPrompt).toHaveBeenCalledWith(
-      expect.objectContaining({ trigger: "anna", framing: "full_body", size: "large" }),
+      expect.objectContaining({
+        trigger: "anna",
+        framing: "full_body",
+        size: "large",
+        background: "a sunlit park",
+      }),
     );
     expect(gen.runWorkflowCard).toHaveBeenCalledWith(
       expect.objectContaining({

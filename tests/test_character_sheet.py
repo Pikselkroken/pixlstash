@@ -127,6 +127,20 @@ def test_trousers_are_always_named_and_shoes_only_at_full_body():
     assert "white sneakers" in text("full_body")
 
 
+@pytest.mark.parametrize("layout", ["moss", "prose"])
+def test_a_background_replaces_the_studio_and_none_keeps_it(layout):
+    def summary(**kwargs):
+        text = sheet_prompt(description="x", layout=layout, **kwargs)
+        return text if layout == "prose" else json.loads(text)["summary"]["caption"]
+
+    studio = "same woman on a plain light-grey studio background, soft even "
+    assert studio in summary()
+    assert studio in summary(background="  ")
+    park = summary(background="A sunlit park with tall trees.")
+    assert "same woman in front of a sunlit park with tall trees, photo" in park
+    assert "studio" not in park
+
+
 def test_build_trigger_and_subject_reach_every_panel():
     layout = json.loads(
         sheet_prompt(
@@ -748,6 +762,15 @@ def _new_character(client, name):
     response = client.post(f"{API_PREFIX}/characters", json={"name": name})
     assert response.status_code == 200, response.text
     return response.json()["character"]["id"]
+
+
+def test_prompt_route_takes_a_background(client):
+    response = client.post(
+        f"{API_PREFIX}/character-sheets/prompt",
+        json={"description": "x", "background": "a brick wall", "layout": "prose"},
+    )
+    assert response.status_code == 200, response.text
+    assert "in front of a brick wall" in response.json()["prompt"]
 
 
 def test_prompt_route_hands_out_the_canvas(client):
