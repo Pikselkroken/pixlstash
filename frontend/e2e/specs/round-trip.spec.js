@@ -338,15 +338,17 @@ test.describe('the round-trip', () => {
     jobId = started.id
     await expect(training.dialog).toBeHidden()
     let job
+    // Finished means imported too: the trainer's own "completed" lands on the
+    // row before the LoRA is on the shelf, and completed_at only after.
     await expect
       .poll(
         async () => {
           job = await ok(await apiContext.get(`${API}/training/jobs/${jobId}`), 'training run')
-          return job.status
+          return `${job.status}:${Boolean(job.completed_at)}`
         },
         { timeout: 90_000 },
       )
-      .toBe('completed')
+      .toBe('completed:true')
     expect(job).toMatchObject({ character_id: person.id, set_id: set.id })
 
     // 3. The LoRA is on the shelf, attached to the person.
