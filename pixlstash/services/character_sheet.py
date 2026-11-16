@@ -270,7 +270,8 @@ _FRAMING_SUMMARY = {
 _LANDMARKS = {
     "typical": (0.13, 0.38, 0.5, 0.62, 0.72),
     # Short arms and legs, an average-length torso, a head large for the body.
-    "little_person": (0.2, 0.47, 0.6, 0.7, 0.79),
+    # About four heads tall, the legs a third of the height.
+    "little_person": (0.24, 0.53, 0.66, 0.75, 0.83),
     # About three heads tall.
     "cartoon": (0.33, 0.6, 0.7, 0.79, 0.86),
 }
@@ -279,8 +280,9 @@ _LANDMARKS = {
 _CROP = {"waist_up": 1, "mid_thigh": 3, "knees_up": 4, "full_body": None}
 _PROPORTION_WORDS = {
     "typical": "",
-    "little_person": "a little person of short stature: short arms and legs, "
-    "an average-length torso and a head large for the body",
+    "little_person": "a little person with dwarfism, very short stature, about "
+    "four heads tall: very short arms and legs, the hands reaching only to "
+    "the hips, an average-length torso and a head large for the body",
     # Said adult twice over: big-headed proportions otherwise drift young.
     "cartoon": "a grown adult with an adult face, drawn with stylised cartoon "
     "proportions about three heads tall: an oversized head, a small compact "

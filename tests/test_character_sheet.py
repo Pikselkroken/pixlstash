@@ -137,7 +137,7 @@ def test_other_proportions_give_the_head_more_of_the_body_photo(framing):
     cartoon, cartoon_head = shares("cartoon")
     assert head < little_head < cartoon_head
     for layout, words in (
-        (little, "a little person of short stature"),
+        (little, "a little person with dwarfism"),
         (cartoon, "about three heads tall"),
     ):
         captions = [i["caption"] for i in layout["items"] if i["label"] == "character"]
@@ -827,7 +827,7 @@ def test_prompt_route_hands_out_the_canvas(client):
         f"{API_PREFIX}/character-sheets/prompt",
         json={"description": "x", "proportions": "little_person", "layout": "prose"},
     ).json()["prompt"]
-    assert "a little person of short stature" in little
+    assert "a little person with dwarfism" in little
     giant = client.post(
         f"{API_PREFIX}/character-sheets/prompt",
         json={"description": "x", "proportions": "giant"},
