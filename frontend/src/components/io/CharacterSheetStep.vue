@@ -714,6 +714,9 @@ const FACE_WAIT_MS = 90_000;
 // can be chosen unscored, and the polling stops.
 const SHEET_FACE_WAIT_MS = 120_000;
 const HEIGHT_WORDS = /\b(tall|short|petite|height|legs?|leggy|long-legged)\b/i;
+// The last choices made on this machine, which a fresh step starts from: the
+// mode, each mode's workflow, the size, the count, and each person's LoRA.
+const CHOICES_KEY = "pixlstash:characterSheetChoices";
 
 const tasks = useTasksStore();
 const name = computed(() => props.character?.name || "");
@@ -728,6 +731,10 @@ const form = reactive({
   count: 4,
   subject: "woman",
 });
+// A step with nothing saved starts from the choices last made.
+const remembered = props.saved ? null : readChoices();
+if (SIZES.some((s) => s.id === remembered?.size)) form.size = remembered.size;
+if (COUNTS.some((c) => c.id === remembered?.count)) form.count = remembered.count;
 const framingTouched = ref(false);
 // Picked by hand: the description no longer decides who is drawn.
 const subjectTouched = ref(false);
@@ -778,6 +785,7 @@ let checkRun = 0;
 let ticking = false;
 let runsEndedAt = 0;
 let alive = true;
+let restoring = false;
 // What the sheets on show were drawn with. A draw with anything else starts a
 // new pick: the earlier sheets are of another prompt, not more of this one.
 const drawnWith = ref("");
@@ -891,9 +899,12 @@ function fittingLora() {
   );
 }
 
-// Each mode has its own workflows.
-watch(mode, () => {
-  workflowId.value = usableCards.value[0]?.id || "";
+// Each mode has its own workflows: the one last chosen in it, or its first.
+watch(mode, (now) => {
+  const last = readChoices().workflows?.[now];
+  workflowId.value = usableCards.value.some((card) => card.id === last)
+    ? last
+    : usableCards.value[0]?.id || "";
 });
 
 // Each model has its own LoRAs, and a mode can hold two (MOSS-Image and
@@ -914,7 +925,7 @@ const sizeOptions = computed(() =>
 );
 watch([engine, restored], ([now, done], [, wasDone]) => {
   if (!done) return;
-  const saved = !wasDone && !!props.saved?.form?.size;
+  const saved = !wasDone && !!(props.saved?.form?.size || remembered?.size);
   const keep =
     sizesDrawnWell.value.includes(form.size) && (!now.size || saved);
   if (!keep) form.size = now.size || "large";
@@ -1893,7 +1904,12 @@ async function load() {
   if (!loaded.value) {
     error.value = `Couldn't read ${name.value}. Open the set again to try again.`;
   }
-  await restore(props.saved);
+  // What `restore` puts back is not a choice made: its watchers run after it
+  // has set `restored`, so they are let run before choices are remembered.
+  restoring = true;
+  await restore(props.saved || recalled());
+  await nextTick();
+  restoring = false;
   for (const result of [character, adapters, cards, references]) {
     if (result.status === "rejected") {
       console.warn("Couldn't load part of the sheet form", result.reason);
@@ -1959,6 +1975,85 @@ async function restore(saved) {
   }
   restored.value = true;
 }
+
+function readChoices() {
+  try {
+    return JSON.parse(localStorage.getItem(CHOICES_KEY) || "{}") || {};
+  } catch (e) {
+    console.warn("Couldn't read the remembered sheet choices", e);
+    return {};
+  }
+}
+
+/** The remembered choices as `restore` reads them, or null: a mode only where
+ * it can draw (from a reference only for a person with a face, as `load`
+ * decides), and this person's own LoRA. */
+function recalled() {
+  if (!remembered) return null;
+  const usable = {
+    text: workflows.value.length,
+    reference:
+      referenceCards.value.length &&
+      (referenceIds.value.length || !workflows.value.length),
+  };
+  const pick = usable[remembered.mode] ? remembered.mode : mode.value;
+  const lora = remembered.loras?.[props.character.id];
+  return {
+    mode: pick,
+    workflow_id: remembered.workflows?.[pick],
+    lora_sha: lora?.sha,
+    strength: lora?.strength,
+  };
+}
+
+/** Remember one choice for the next fresh step: only one made once the
+ * step is restored, so a default is never remembered as a choice. */
+function remember(update) {
+  if (!restored.value || restoring) return;
+  try {
+    const all = readChoices();
+    update(all);
+    localStorage.setItem(CHOICES_KEY, JSON.stringify(all));
+  } catch (e) {
+    console.warn("Couldn't remember the sheet choices", e);
+  }
+}
+
+watch(mode, (now) =>
+  remember((all) => {
+    all.mode = now;
+  }),
+);
+watch(workflowId, (id) => {
+  if (!id) return;
+  remember((all) => {
+    all.workflows = { ...all.workflows, [mode.value]: id };
+  });
+});
+watch(
+  () => form.size,
+  (size) =>
+    remember((all) => {
+      all.size = size;
+    }),
+);
+watch(
+  () => form.count,
+  (count) =>
+    remember((all) => {
+      all.count = count;
+    }),
+);
+// Per person. A LoRA left at the default is forgotten, so a newer LoRA of the
+// person is still the one taken.
+watch([loraSha, strength], ([sha, value]) =>
+  remember((all) => {
+    const loras = { ...all.loras };
+    if (sha === fittingLora() && value === 0.8) delete loras[props.character.id];
+    else loras[props.character.id] = { sha, strength: value };
+    all.loras = loras;
+  }),
+);
 
 /** What the set stores of this step. A cut whose faces are still being read
  * stores as done (no runs, no sheets), so the cut is never offered twice. */
