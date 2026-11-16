@@ -1596,9 +1596,9 @@ async function draw() {
   const count = form.count;
   const reference = fromReference.value ? referenceId.value : null;
   const inputs = workflowInputs.value;
+  rememberRecent();
   // Only MOSS-Image takes a layout: the others get the sheet in one sentence.
   const prose = !!reference || engine.value !== ENGINES.moss;
-  rememberRecent();
   try {
     const description = form.description.trim();
     if (!savedDescription.value && description) {
@@ -2111,7 +2111,9 @@ function rememberRecent() {
     const lists = readRecent(all);
     for (const field of fields) {
       const value = String(form[field] || "").trim();
-      lists[field] = [value, ...lists[field].filter((v) => v !== value)].slice(
+      // Case folded, as the menu matches: "A red coat" replaces "a red coat".
+      const same = (v) => v.toLowerCase() === value.toLowerCase();
+      lists[field] = [value, ...lists[field].filter((v) => !same(v))].slice(
         0,
         RECENT_KEPT,
       );

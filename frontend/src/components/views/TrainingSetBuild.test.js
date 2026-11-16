@@ -1995,7 +1995,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
       JSON.stringify({
         recent: {
           top: ["a red coat", "a grey hoodie"],
-          trousers: [""],
+          trousers: ["", "dark jeans"],
           background: ["a sunlit park", "a beach"],
         },
       }),
@@ -2020,7 +2020,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
         el.firstChild.textContent.trim(),
       );
     expect(items()).toEqual(["a grey hoodie"]);
-    await input("cs-top").setValue("a blue blazer");
+    await input("cs-top").setValue("A Red Coat");
 
     await wrapper
       .find('[data-testid="cs-description"] textarea')
@@ -2028,15 +2028,15 @@ describe("TrainingSetBuild: generating the pictures", () => {
     await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
     await flushPromises();
     expect(gen.buildSheetPrompt).toHaveBeenCalledWith(
-      expect.objectContaining({ top: "a blue blazer", background: "a sunlit park" }),
+      expect.objectContaining({ top: "A Red Coat", background: "a sunlit park" }),
     );
-    // What was drawn with goes first, once; the rest keep their order.
+    // What was drawn with goes first, once (case aside); the rest keep their order.
     const { recent } = JSON.parse(
       localStorage.getItem("pixlstash:characterSheetChoices"),
     );
-    expect(recent.top).toEqual(["a blue blazer", "a red coat", "a grey hoodie"]);
+    expect(recent.top).toEqual(["A Red Coat", "a grey hoodie"]);
     expect(recent.background).toEqual(["a sunlit park", "a beach"]);
-    expect(recent.trousers).toEqual([""]);
+    expect(recent.trousers).toEqual(["", "dark jeans"]);
     wrapper.unmount();
   });
 
