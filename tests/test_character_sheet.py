@@ -449,14 +449,18 @@ def _sheet(lines=(), size=(SHEET_WIDTH, SHEET_HEIGHT)) -> Image.Image:
 
 
 def test_a_seamless_sheet_is_cut_on_the_grid():
-    assert sheet_cells(_sheet()) == [
-        (0, 0, 592, 760),
-        (608, 0, 1192, 760),
-        (0, 776, 592, 1536),
-        (608, 776, 1192, 1536),
-        (1208, 0, 1872, 1536),
-        (1888, 0, 2560, 1536),
-    ]
+    """Background the photos share is theirs: cut on the grid, nothing trimmed."""
+    assert sheet_cells(_sheet()) == (
+        [
+            (0, 0, 600, 768),
+            (600, 0, 1200, 768),
+            (0, 768, 600, 1536),
+            (600, 768, 1200, 1536),
+            (1200, 0, 1880, 1536),
+            (1880, 0, 2560, 1536),
+        ],
+        True,
+    )
 
 
 def test_cuts_follow_dividers_drawn_off_the_grid():
@@ -469,14 +473,14 @@ def test_cuts_follow_dividers_drawn_off_the_grid():
             ("y", 790, 0, 1180),  # passport row, 22 px down
         ]
     )
-    cells = sheet_cells(image)
-    assert abs(cells[0][2] - (630 - 8)) <= 4
-    assert abs(cells[1][0] - (630 + 8)) <= 4
-    assert abs(cells[0][3] - (790 - 8)) <= 4
-    assert abs(cells[1][2] - (1180 - 8)) <= 4
-    assert abs(cells[4][0] - (1180 + 8)) <= 4
-    assert abs(cells[4][2] - (1900 - 8)) <= 4
-    assert abs(cells[5][0] - (1900 + 8)) <= 4
+    cells, clean = sheet_cells(image)
+    # Trimmed to the 4 px line's own edges and 2 px of seam, no more.
+    assert (cells[0][2], cells[1][0]) == (630 - 2, 634 + 2)
+    assert (cells[0][3], cells[2][1]) == (790 - 2, 794 + 2)
+    assert (cells[1][3], cells[3][1]) == (790 - 2, 794 + 2)
+    assert (cells[1][2], cells[4][0]) == (1180 - 2, 1184 + 2)
+    assert (cells[4][2], cells[5][0]) == (1900 - 2, 1904 + 2)
+    assert clean
     # No panel keeps a sliver of a divider.
     for left, top, right, bottom in cells:
         assert np.asarray(image.crop((left, top, right, bottom))).min() > 100
@@ -494,14 +498,12 @@ def test_cuts_follow_an_edit_model_s_dividers_further_off_the_grid():
             ("y", 700, 0, 1064),  # passport row, 68 px up
         ]
     )
-    cells = sheet_cells(image)
-    assert abs(cells[0][2] - (523 - 8)) <= 4
-    assert abs(cells[1][0] - (523 + 8)) <= 4
-    assert abs(cells[0][3] - (700 - 8)) <= 4
-    assert abs(cells[1][2] - (1064 - 8)) <= 4
-    assert abs(cells[4][0] - (1064 + 8)) <= 4
-    assert abs(cells[4][2] - (1689 - 8)) <= 4
-    assert abs(cells[5][0] - (1689 + 8)) <= 4
+    cells, clean = sheet_cells(image)
+    assert (cells[0][2], cells[1][0]) == (523 - 2, 527 + 2)
+    assert (cells[0][3], cells[2][1]) == (700 - 2, 704 + 2)
+    assert (cells[1][2], cells[4][0]) == (1064 - 2, 1068 + 2)
+    assert (cells[4][2], cells[5][0]) == (1689 - 2, 1693 + 2)
+    assert clean
 
 
 def test_the_nearest_divider_wins_over_a_stronger_one_further_off():
@@ -513,7 +515,7 @@ def test_the_nearest_divider_wins_over_a_stronger_one_further_off():
             ("x", 1350, 0, 1536),  # a full-height seam 150 px off
         ]
     )
-    assert abs(sheet_cells(image)[4][0] - (1180 + 8)) <= 4
+    assert sheet_cells(image)[0][4][0] == 1184 + 2
 
 
 def test_a_cell_that_is_all_frame_is_kept_rather_than_inverted():
@@ -523,7 +525,7 @@ def test_a_cell_that_is_all_frame_is_kept_rather_than_inverted():
     draw = ImageDraw.Draw(image)
     for at in (800, 1000):
         draw.rectangle([at, 0, at + 3, SHEET_HEIGHT - 1], fill=(40, 40, 40))
-    for left, top, right, bottom in sheet_cells(image):
+    for left, top, right, bottom in sheet_cells(image)[0]:
         assert left < right and top < bottom
     assert len(character_sheet.split_sheet(image)) == 6
 
@@ -531,7 +533,7 @@ def test_a_cell_that_is_all_frame_is_kept_rather_than_inverted():
 def test_a_person_s_outline_is_not_a_divider():
     """An edge that does not run the cut's whole length leaves the cut where it is."""
     image = _sheet([("x", 1220, 300, 900)])
-    assert sheet_cells(image)[4][0] == 1200 + 8
+    assert sheet_cells(image)[0][4][0] == 1200
 
 
 def test_the_white_frame_and_rounded_corners_are_cut_away():
@@ -551,7 +553,7 @@ def test_the_white_frame_and_rounded_corners_are_cut_away():
         draw.rounded_rectangle([left, top, right - 1, bottom - 1], 40, (90, 90, 90))
     # Panel 4 (the beach) has an overcast sky along its top.
     draw.rectangle([640, 784, 1160, 900], fill=(237, 237, 237))
-    cells = sheet_cells(image)
+    cells, _clean = sheet_cells(image)
     gray = np.asarray(image.convert("L"))
     for (left, top, right, bottom), photo in zip(cells, photos):
         panel = gray[top:bottom, left:right]
@@ -565,9 +567,155 @@ def test_the_white_frame_and_rounded_corners_are_cut_away():
 
 
 def test_a_smaller_sheet_is_cut_in_proportion():
-    cells = sheet_cells(_sheet(size=(1280, 768)))
-    assert cells[4] == (604, 0, 936, 768)
+    cells, _clean = sheet_cells(_sheet(size=(1280, 768)))
+    assert cells[4] == (600, 0, 940, 768)
     assert len(character_sheet.split_sheet(_sheet(size=(1280, 768)))) == 6
+
+
+def _photos(bands=(), seed=0) -> Image.Image:
+    """A sheet of "photos": smooth seeded texture, where no line is the same
+    all along, with flat *bands* over it: ("x", start, end, level) a column
+    band, ("y", start, end, level, left, right) a row band over left..right."""
+    rng = np.random.default_rng(seed)
+    coarse = rng.integers(40, 220, (SHEET_HEIGHT // 24 + 1, SHEET_WIDTH // 24 + 1))
+    texture = Image.fromarray(coarse.astype(np.uint8)).resize(
+        (SHEET_WIDTH, SHEET_HEIGHT), Image.BICUBIC
+    )
+    pixels = np.asarray(texture.convert("RGB")).copy()
+    for band in bands:
+        if band[0] == "x":
+            _, start, end, level = band
+            pixels[:, start:end] = level
+        else:
+            _, start, end, level, left, right = band
+            pixels[start:end, left:right] = level
+    return Image.fromarray(pixels)
+
+
+def _uneven(pixels: np.ndarray) -> bool:
+    """A strip of the sheet is photo, not a flat band."""
+    return np.abs(pixels - np.median(pixels)).mean() > 12
+
+
+def test_a_straight_edge_inside_a_photo_is_not_the_gutter():
+    """A door frame runs the full height of a body photo: a step across it,
+    nearer the grid line than the gutter, but no line along it is even."""
+    image = _photos([("x", 1260, 1290, 250)])
+    pixels = np.asarray(image).copy()
+    pixels[:, 1215:1260] = np.clip(pixels[:, 1215:1260].astype(int) + 90, 0, 255)
+    cells, _clean = sheet_cells(Image.fromarray(pixels.astype(np.uint8)))
+    assert (cells[1][2], cells[4][0]) == (1260 - 2, 1290 + 2)
+
+
+def test_a_dark_gutter_off_the_grid_leaves_no_sliver_on_either_photo():
+    """A 30 px gutter 150 px off the grid is trimmed to its own edges: a
+    fixed trim leaves a strip of it on one photo, and only white is frame."""
+    image = _photos([("x", 1050, 1080, 30)])
+    cells, _clean = sheet_cells(image)
+    gray = np.asarray(image.convert("L"), dtype=np.int16)
+    passport, body = cells[1], cells[4]
+    assert (passport[2], body[0]) == (1050 - 2, 1080 + 2)
+    for left, top, right, bottom in (passport, body):
+        for edge in (gray[top:bottom, left], gray[top:bottom, right - 1]):
+            assert _uneven(edge)
+
+
+def test_a_gutter_far_off_the_grid_is_still_found():
+    """No model's drift is a constant: a gutter 260 px off the grid line is
+    found anywhere up to halfway to the next one."""
+    image = _photos([("x", 940, 960, 250)])
+    cells, _clean = sheet_cells(image)
+    assert (cells[1][2], cells[4][0]) == (940 - 2, 960 + 2)
+
+
+def test_each_passport_column_is_cut_on_its_own_row_gutter():
+    """A model can draw the two passport columns' rows 120 px apart; one row
+    cut shared by both cuts one column through a head."""
+    image = _photos(
+        [
+            ("x", 590, 610, 250),
+            ("x", 1190, 1210, 250),
+            ("x", 1870, 1890, 250),
+            ("y", 700, 720, 250, 0, 590),
+            ("y", 820, 840, 250, 610, 1190),
+        ]
+    )
+    cells, clean = sheet_cells(image)
+    assert (cells[0][3], cells[2][1]) == (700 - 2, 720 + 2)
+    assert (cells[1][3], cells[3][1]) == (820 - 2, 840 + 2)
+    assert clean
+
+
+def _studio(people) -> Image.Image:
+    """A seamless studio grey with a textured ellipse per person, (cx, rx)."""
+    image = Image.new("RGB", (SHEET_WIDTH, SHEET_HEIGHT), (200, 200, 200))
+    texture = _photos()
+    mask = Image.new("L", image.size, 0)
+    draw = ImageDraw.Draw(mask)
+    for cx, rx in people:
+        draw.ellipse([cx - rx, 150, cx + rx, 1450], fill=255)
+    image.paste(texture, (0, 0), mask)
+    return image
+
+
+def test_on_a_seamless_sheet_the_cut_lands_in_the_background_between_people():
+    """No gutter at all, and the grid line 1880 grazes the second person: the
+    cut moves into the grey between them, and none of it is trimmed."""
+    cells, clean = sheet_cells(_studio([(1500, 200), (2100, 230)]))
+    assert cells[4][2] == cells[5][0]
+    assert 1700 < cells[4][2] < 2100 - 230
+    assert clean
+
+
+def test_a_face_fences_the_cut_and_says_when_nothing_else_is_clear():
+    """A dark line through a face looks like a divider; with the faces given
+    it is never the cut, and with nothing else clear the sheet is not clean."""
+    image = _photos([("x", 1180, 1184, 40)])
+    assert sheet_cells(image)[0][4][0] == 1184 + 2
+    face = [1080, 300, 1280, 500]
+    cells, clean = sheet_cells(image, [face])
+    assert abs(cells[4][0] - 1180) > 0.2 * 200
+    assert clean is False
+
+
+def test_two_faces_in_one_panel_is_not_a_clean_cut():
+    """The positive control holds, and a third person in a body photo fails it."""
+    image = _studio([(1500, 200), (2100, 230)])
+    heads = [[1450, 200, 1550, 300], [2050, 200, 2150, 300]]
+    assert sheet_cells(image, heads)[1] is True
+    assert sheet_cells(image, heads + [[2250, 200, 2300, 260]])[1] is False
+
+
+def test_the_seam_between_a_photo_and_its_frame_is_not_a_gutter():
+    """FLUX.2 Klein frames white-backed passport photos in a wide grey border:
+    the soft line where white meets grey climbs from one to the other, and
+    the cut belongs in the grey, not on that line."""
+    image = _photos(
+        [
+            ("y", 590, 700, 254, 0, SHEET_WIDTH),
+            ("y", 700, 701, 222, 0, SHEET_WIDTH),
+            ("y", 701, 790, 200, 0, SHEET_WIDTH),
+            ("y", 790, 791, 222, 0, SHEET_WIDTH),
+            ("y", 791, 900, 254, 0, SHEET_WIDTH),
+        ]
+    )
+    cells, _clean = sheet_cells(image)
+    assert cells[0][3] == cells[2][1] == 768
+
+
+def test_a_band_pressed_against_the_window_edge_is_not_a_sure_cut():
+    """A sheet drawn at another scale puts its gutter past the window; the
+    clear sliver inside the window's edge is a guess, and says so."""
+    bands = [
+        ("x", 590, 610, 250),
+        ("x", 1870, 1890, 250),
+        ("y", 760, 776, 250, 0, 1530),
+    ]
+    _cells, clean = sheet_cells(_photos(bands + [("x", 1190, 1210, 250)]))
+    assert clean
+    cells, clean = sheet_cells(_photos(bands + [("x", 1530, 1560, 120)]))
+    assert 1530 <= cells[1][2] < 1540
+    assert clean is False
 
 
 def test_agreement_and_closeness():
@@ -651,7 +799,7 @@ def test_ranking_measures_closeness_against_references_never_the_sheet_itself():
                     7: [],
                 },
                 [person.tobytes()],
-                {5: ("PNG", None, None), 6: ("WEBP", None, None)},
+                {5: ("PNG", None, None, None), 6: ("WEBP", None, None, None)},
             )
 
     vault = type("Vault", (), {"db": Db()})()
@@ -669,6 +817,8 @@ def test_ranking_measures_closeness_against_references_never_the_sheet_itself():
     assert unread["different_from"] == []
     # No boxes and no size: no panel is placed.
     assert near["panels"] == [] and unread["panels"] == []
+    # No file to read: the cut is not shown, rather than guessed.
+    assert (near["cuts_cleanly"], near["cells"]) == (None, [])
 
 
 def test_ranking_names_no_difference_between_sheets_of_one_person():
@@ -698,6 +848,8 @@ def test_a_sheet_that_fails_to_import_leaves_the_earlier_panels_filed(monkeypatc
 
     class Db:
         def run_immediate_read_task(self, fn, *args):
+            if fn is character_sheet.sheet_face_boxes_in_session:
+                return {}
             return [Picture(id=1), Picture(id=2)]
 
         def run_task(self, fn, picture_ids, character_id):
@@ -708,7 +860,7 @@ def test_a_sheet_that_fails_to_import_leaves_the_earlier_panels_filed(monkeypatc
             raise OSError("disk full")
         return [], [], [10, 11]
 
-    monkeypatch.setattr(character_sheet, "_cut", lambda server, sheet: [b""] * 2)
+    monkeypatch.setattr(character_sheet, "_cut", lambda server, sheet, faces: [b""] * 2)
     monkeypatch.setattr(character_sheet, "import_derived_outputs", import_panels)
     server = type("Server", (), {"vault": type("Vault", (), {"db": Db()})()})()
     with pytest.raises(OSError):
@@ -805,9 +957,10 @@ def test_using_a_sheet_files_six_panels_on_the_character(client, sheet_id):
 
     pictures, with_face = client.server.vault.db.run_task(read)
     sizes = [(pictures[i].width, pictures[i].height) for i in panel_ids]
-    # The body | body divider drawn at 1900 moved that cut 20 px right.
-    assert sizes[:4] == [(592, 760), (584, 760), (592, 760), (584, 760)]
-    assert sizes[4:] == [(684, 1536), (652, 1536)]
+    # The body | body divider drawn at 1900 moved that cut 20 px right, and
+    # only it was trimmed: the 4 px line and 2 px of seam either side.
+    assert sizes[:4] == [(600, 768)] * 4
+    assert sizes[4:] == [(698, 1536), (654, 1536)]
     for picture_id in panel_ids:
         picture = pictures[picture_id]
         # No link back to the sheet, which stays in the Scrapheap to be purged.
@@ -950,6 +1103,21 @@ def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
             break
         time.sleep(0.5)
     assert response.json()["sheets"][0]["faces_read"]
+    # Read, the sheet shows the cut using it makes: the 1900 divider trimmed.
+    read = response.json()["sheets"][0]
+    assert read["cuts_cleanly"] is True
+    expected = [
+        (0, 0, 600, 768),
+        (600, 0, 1200, 768),
+        (0, 768, 600, 1536),
+        (600, 768, 1200, 1536),
+        (1200, 0, 1898, 1536),
+        (1906, 0, 2560, 1536),
+    ]
+    assert read["cells"] == [
+        pytest.approx([left / 2560, top / 1536, right / 2560, bottom / 1536])
+        for left, top, right, bottom in expected
+    ]
 
     rng = np.random.default_rng(7)
     person = rng.normal(size=512).astype(np.float32)
@@ -984,6 +1152,8 @@ def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
     assert sheet["closeness"] is None and sheet["close"] is None
     # Seven faces on a six-panel sheet: one panel holds two people.
     assert sheet["broken"] is True
+    # ...so its cut is not clean either, though it is still drawn.
+    assert sheet["cuts_cleanly"] is False and len(sheet["cells"]) == 6
     # Each panel scored on its own, placed where its face is.
     assert [p["panel"] for p in sheet["panels"]] == list(range(6))
     assert all(p["agrees"] for p in sheet["panels"])

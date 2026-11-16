@@ -519,6 +519,18 @@
           />
         </div>
       </template>
+      <!-- The six photos using the sheet cuts, so the cut is seen before
+           it is made; amber when it found no clean line somewhere. -->
+      <template v-if="zoomed?.cells?.length" #over>
+        <span
+          v-for="(cell, i) in zoomed.cells"
+          :key="i"
+          class="cs-cell"
+          :class="{ 'cs-cell--unclean': zoomed.cuts_cleanly === false }"
+          :style="cellStyle(cell)"
+          data-testid="cs-cell"
+        />
+      </template>
       <template #actions>
         <!-- Both choices always shown, so the control never changes size and
              says which one the sheet is on. -->
@@ -1049,7 +1061,8 @@ function better(a, b) {
   );
 }
 
-/** Every sheet, best first; broken ones last. */
+/** Every sheet, best first; broken ones last, then those that won't cut
+ * cleanly. */
 const sheets = computed(() => {
   const scored = order.value.map((id) => ({
     picture_id: id,
@@ -1059,6 +1072,7 @@ const sheets = computed(() => {
   return scored.sort(
     (a, b) =>
       Number(!!a.broken) - Number(!!b.broken) ||
+      Number(a.cuts_cleanly === false) - Number(b.cuts_cleanly === false) ||
       Number(b.faces_read) - Number(a.faces_read) ||
       better(a, b),
   );
@@ -1273,7 +1287,19 @@ function sheetWords(sheet) {
     if (drawnFrom.value) words.unshift(`${sheet.closeness.toFixed(2)} ${near}`);
     else words.push(near);
   }
+  // A warning, not a refusal: the zoom shows where it cuts.
+  if (sheet.cuts_cleanly === false) words.push("won't cut cleanly");
   return words.join(" · ");
+}
+
+/** A cell, `[left, top, right, bottom]` fractions, placed on the zoomed sheet. */
+function cellStyle([left, top, right, bottom]) {
+  return {
+    left: `${left * 100}%`,
+    top: `${top * 100}%`,
+    width: `${(right - left) * 100}%`,
+    height: `${(bottom - top) * 100}%`,
+  };
 }
 
 /** Closeness in words: to the picture drawn from, else to the character. */
@@ -2500,6 +2526,23 @@ defineExpose({
 .cs-pscore--off {
   background: var(--scrim-photo-strong);
   color: rgb(var(--v-theme-dark-surface-warning));
+}
+
+/* A photo the sheet cuts into, on the zoomed sheet: a light line on the
+   photo scrim's halo reads over a white gutter and a dark photo alike. One
+   that won't cut cleanly takes the warning colour, as a drifting photo's
+   score does. Inset, so two photos cut with no gutter keep both lines. */
+.cs-cell {
+  position: absolute;
+  box-shadow:
+    inset 0 0 0 2px rgb(var(--v-theme-on-dark-surface)),
+    inset 0 0 0 3px var(--scrim-photo-strong);
+}
+
+.cs-cell--unclean {
+  box-shadow:
+    inset 0 0 0 2px rgb(var(--v-theme-dark-surface-warning)),
+    inset 0 0 0 3px var(--scrim-photo-strong);
 }
 
 .cs-cap {

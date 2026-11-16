@@ -68,6 +68,11 @@
               draggable="false"
               @load="onLoad"
             />
+            <!-- Marks on the picture: laid out over it, and zoomed and
+                 panned with it. -->
+            <div v-if="$slots.over" class="zp-over" :style="imgStyle">
+              <slot name="over" />
+            </div>
           </div>
         </div>
         <span class="zp-sr" role="status">{{ zoom.announcement.value }}</span>
@@ -301,6 +306,14 @@ function onKey(event) {
   top: 50%;
   display: block;
   max-width: none;
+}
+
+/* The pan and zoom stay the stage's: the marks take no pointer. */
+.zp-over {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  pointer-events: none;
 }
 
 .zp-sr {
