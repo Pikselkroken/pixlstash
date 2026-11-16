@@ -31,7 +31,7 @@
         minWidth: `${Math.max(rect.width, 160)}px`,
       }"
       role="listbox"
-      aria-label="Base model suggestions"
+      :aria-label="listLabel"
     >
       <button
         v-for="(item, idx) in matches"
@@ -106,6 +106,10 @@
  * neither, and a plain `.my-class` rule in the caller's scoped style never
  * matches. The class still lands on the input through `$attrs`; write
  * `.wrapper :deep(.my-class)`, or use a global class like `tbm-input`.
+ *
+ * **`options` makes it any completing field.** Given a list, it completes
+ * against that instead of the base models (the sheet step's recent clothes and
+ * backgrounds, through `RecentInput`); `listLabel` names the menu for it.
  */
 import {
   computed,
@@ -124,6 +128,9 @@ defineOptions({ inheritAttrs: false });
 
 const props = defineProps({
   modelValue: { type: String, default: "" },
+  // What to complete against; null is this machine's base models.
+  options: { type: Array, default: null },
+  listLabel: { type: String, default: "Base model suggestions" },
 });
 const emit = defineEmits(["update:modelValue", "confirm", "cancel"]);
 
@@ -148,7 +155,7 @@ const rect = ref(null);
 
 const matches = computed(() => {
   const key = norm(props.modelValue);
-  const options = store.baseModelCompletions;
+  const options = props.options ?? store.baseModelCompletions;
   // Prefix matches ahead of substring ones, each already sorted by the server,
   // so typing narrows predictably instead of reshuffling.
   const starts = options.filter((o) => norm(o).startsWith(key));
@@ -203,7 +210,7 @@ onBeforeUnmount(() => {
 });
 
 function open() {
-  store.loadBaseModelCompletions();
+  if (!props.options) store.loadBaseModelCompletions();
   isOpen.value = true;
 }
 
