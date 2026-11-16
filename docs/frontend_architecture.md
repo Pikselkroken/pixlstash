@@ -1812,7 +1812,7 @@ Escape and Enter do nothing here: cancelling deletes a set.
   picture starts a new pick. While sheets are on show the rail keeps the
   picture they were drawn from under *Drawn from*, in place of the
   description block; ranking sends it as `reference_picture_ids`. When the
-  character has reference faces, a *Compare with* `Segmented` under it
+  character has reference pictures, a *Compare with* `Segmented` under it
   switches between *This picture* and *Reference cluster*: the latter ranks
   without the ids, so the server scores each face by its best match in the
   cluster, and the captions say "close to {name}". A switch ranks again at

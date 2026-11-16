@@ -693,7 +693,10 @@ def split_sheet(image: Image.Image) -> list[Image.Image]:
     return [image.crop(box) for box in sheet_cells(image)]
 
 
-def _unit(vectors: list[np.ndarray]) -> np.ndarray:
+def _unit(vectors: list[np.ndarray] | np.ndarray) -> np.ndarray:
+    """*vectors* as rows of unit length; a 2-D array is taken as that already."""
+    if isinstance(vectors, np.ndarray) and vectors.ndim == 2:
+        return vectors
     matrix = np.stack(vectors).astype(np.float32)
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     return matrix / np.where(norms == 0, 1, norms)
@@ -720,7 +723,7 @@ def closeness(
     Each face counts its mean cosine similarity to the references, or with
     *best* its highest: against a cluster, a face need only match one of them.
     """
-    if not embeddings or not references:
+    if not len(embeddings) or not len(references):
         return None
     similarity = _unit(embeddings) @ _unit(references).T
     return float(np.mean(similarity.max(axis=1) if best else similarity))
@@ -885,6 +888,8 @@ def rank_sheets(
         raise SheetNotFound(f"No character {character_id}.")
     faces, reference_rows, pictures = found
     references = _vectors(reference_rows)
+    # Normalised once: a cluster's thousands of faces meet every sheet and panel.
+    references = _unit(references) if references else []
     best = reference_picture_ids is None
     vectors_of = {pid: _vectors([row[0] for row in faces[pid]]) for pid in ids}
     out = []
