@@ -1913,6 +1913,16 @@ up).
   does; Undo takes the pictures out, the set stays. The ids are taken when the
   name is asked for; the reference is untouched. A failed create stays open
   with the reason under the field; a failed add says the set is empty.
+- **Centring on a face**: *Centre on this face (C)* under the picked face, or
+  `C` on the field (a click still only selects), asks `getFaceClusters` again
+  with `centre` and shows `centred`, every face of the person ranked against
+  that face, in place of the cluster: *Centred on face* and its thumbnail, *k
+  of n of {name}'s faces count*, *Make these k faces {name}'s reference* and
+  *Back to Cluster N's centre*; no *Against the reference*, and every likeness
+  reads "to the chosen face". The slider starts at the strictness threshold,
+  not at every face. Back, any rail row, a strictness change or a save leave
+  it; the cluster's own slider value is kept. Nothing about the centre is
+  stored.
 
 #### `CharacterSheetsDialog.vue` (`io/`)
 

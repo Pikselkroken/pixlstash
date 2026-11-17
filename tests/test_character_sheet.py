@@ -1522,6 +1522,21 @@ def test_a_reference_cluster_chooses_the_reference_faces(client):
     # Each member carries its shape, so the view can keep its aspect ratio.
     member = body["clusters"][0]["members"][0]
     assert (member["width"], member["height"]) == (640, 384)
+    assert body["centred"] is None
+
+    # Centred on one face of B: every face, ranked by likeness to it.
+    centred = client.get(f"{clusters_url}&centre={b_centre}").json()["centred"]
+    assert sorted(m["picture_id"] for m in centred) == sorted(ids)
+    assert centred[0]["picture_id"] == b_centre and centred[0]["centrality"] == 1.0
+    values = [m["centrality"] for m in centred]
+    assert values == sorted(values, reverse=True)
+    order = [m["picture_id"] for m in centred]
+    assert max(order.index(pid) for pid in b_ids) < min(
+        order.index(pid) for pid in a_ids
+    )
+    assert centred[0]["width"] == 640
+    missing = client.get(f"{clusters_url}&centre=999999")
+    assert missing.status_code == 422, missing.text
 
     cluster_url = f"{API_PREFIX}/characters/{character_id}/reference-cluster"
     put = client.put(cluster_url, json={"picture_ids": b_ids})
@@ -1555,6 +1570,9 @@ def test_a_reference_cluster_chooses_the_reference_faces(client):
     set_deleted(True)
     try:
         assert client.get(clusters_url).json()["reference_cluster"] is None
+        # A picture on the Scrapheap is no centre: the same 422.
+        scrapped = client.get(f"{clusters_url}&centre={b_centre}")
+        assert scrapped.status_code == 422, scrapped.text
         refs = client.get(refs_url).json()["reference_picture_ids"]
         assert set(refs[:4]) == set(a_ids)
     finally:

@@ -82,6 +82,11 @@ class FaceClusters(BaseModel):
         description="The reference cluster's first, then largest first."
     )
     unclustered: list[UnclusteredFace]
+    centred: list[ClusterMember] | None = Field(
+        None,
+        description="With `centre`: every face of the person, its `centrality` "
+        "the likeness to the centre face, most alike first; null without.",
+    )
 
 
 class ReferenceClusterRequest(BaseModel):
@@ -103,7 +108,9 @@ def create_router(server) -> APIRouter:
             "average-linkage on cosine distance: groups merge while the mean "
             "likeness between their faces clears `threshold`. Each member "
             "carries its likeness to its cluster's centre. A face that matches "
-            "no one is listed under `unclustered`. Computed on each call; "
+            "no one is listed under `unclustered`. With `centre`, `centred` "
+            "also ranks every face by likeness to that picture's face (422 "
+            "when it is not one of the person's faces). Computed on each call; "
             "nothing is stored. Not to be confused with "
             "`/pictures/likeness-groups`, which joins near-duplicate pictures."
         ),
@@ -117,6 +124,11 @@ def create_router(server) -> APIRouter:
             le=0.95,
             description="The mean likeness two groups need to count as one person.",
         ),
+        centre: int | None = Query(
+            None,
+            description="A picture of this person's: also rank every face by "
+            "likeness to its face.",
+        ),
     ):
         found = face_clusters.read_person(
             server.vault, character_id, face_clusters.model_pack_of(server.vault)
@@ -125,6 +137,15 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail=f"No character {character_id}.")
         faces, reference = found
         by_id = {face.picture_id: face for face in faces}
+        # One answer whether the picture is missing, scrapheaped, someone
+        # else's or of another pack: it reveals no more than the face list.
+        if centre is not None and centre not in by_id:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Picture {centre} is not one of this person's faces.",
+            )
+        # ponytail: a re-centre re-runs the clustering below (about 1 s at 5k
+        # faces); cache it keyed like person_cluster_ids if that is felt.
         clusters, unclustered = face_clusters.cluster_faces(
             [(face.picture_id, face.vector) for face in faces], threshold
         )
@@ -142,6 +163,29 @@ def create_router(server) -> APIRouter:
                 return None
             return round(face_clusters.likeness(vec, target), 4)
 
+        def member(pid, value):
+            face = by_id[pid]
+            return ClusterMember(
+                picture_id=pid,
+                centrality=round(value, 4),
+                score=face.score,
+                format=face.format,
+                width=face.width,
+                height=face.height,
+                thumbnail_width=face.thumbnail_width,
+                thumbnail_height=face.thumbnail_height,
+                orientation=face.orientation,
+            )
+
+        centred = None
+        if centre is not None:
+            centred = [
+                member(pid, value)
+                for pid, value in face_clusters.ranked_by_likeness(
+                    [(face.picture_id, face.vector) for face in faces],
+                    by_id[centre].vector,
+                )
+            ]
         panels = face_clusters.sheet_panels(faces)
         return FaceClusters(
             threshold=threshold,
@@ -149,20 +193,7 @@ def create_router(server) -> APIRouter:
             reference_cluster=reference or None,
             clusters=[
                 FaceCluster(
-                    members=[
-                        ClusterMember(
-                            picture_id=pid,
-                            centrality=round(c, 4),
-                            score=by_id[pid].score,
-                            format=by_id[pid].format,
-                            width=by_id[pid].width,
-                            height=by_id[pid].height,
-                            thumbnail_width=by_id[pid].thumbnail_width,
-                            thumbnail_height=by_id[pid].thumbnail_height,
-                            orientation=by_id[pid].orientation,
-                        )
-                        for pid, c in clusters[i].members
-                    ],
+                    members=[member(pid, c) for pid, c in clusters[i].members],
                     size=len(clusters[i].members),
                     cohesion=round(clusters[i].cohesion, 4),
                     reference_share=round(shares[i], 4),
@@ -182,6 +213,7 @@ def create_router(server) -> APIRouter:
                 )
                 for pid in unclustered
             ],
+            centred=centred,
         )
 
     @router.put(

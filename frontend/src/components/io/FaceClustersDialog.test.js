@@ -55,6 +55,35 @@ function clusters({ reference }) {
   };
 }
 
+// Every face of Wren against face 12 (Cluster 2): face 2 of Cluster 1 sits
+// above the 0.45 cut, face 3 below it.
+const CENTRED_ON_12 = [
+  member(12, 1),
+  member(11, 0.8),
+  member(2, 0.6),
+  member(13, 0.5),
+  member(3, 0.4),
+  member(1, 0.35, 2),
+  member(4, 0.2, 5),
+  member(99, 0.1),
+];
+
+/** The clusters, plus `centred` when a centre is asked for. */
+function answer(reference, centre) {
+  const body = clusters({ reference });
+  body.centred = centre == null ? null : CENTRED_ON_12;
+  return body;
+}
+
+/** Cluster 2, face 12 picked in the field, then "Centre on this face". */
+async function centreOn12(wrapper) {
+  await wrapper.findAll('[data-testid="fc-row"]')[1].trigger("click");
+  await wrapper.findAll('[data-testid="fc-face"]')[1].trigger("click");
+  expect(wrapper.find('[data-testid="fc-picked"]').text()).toContain("0.70 to the centre");
+  await wrapper.find('[data-testid="fc-centre"]').trigger("click");
+  await flushPromises();
+}
+
 function mountDialog() {
   return mount(FaceClustersDialog, {
     props: { open: true, character: { id: 7, name: "Wren" } },
@@ -254,6 +283,119 @@ describe("FaceClustersDialog", () => {
     await strict.trigger("click");
     await flushPromises();
     expect(api.getFaceClusters).toHaveBeenLastCalledWith(7, 0.55);
+    wrapper.unmount();
+  });
+
+  it("centres on a face: every face of the person, ranked against it", async () => {
+    api.getFaceClusters.mockImplementation(async (_id, _t, centre) => answer(true, centre));
+    const wrapper = mountDialog();
+    await flushPromises();
+    await centreOn12(wrapper);
+    expect(api.getFaceClusters).toHaveBeenLastCalledWith(7, 0.45, 12);
+    const faces = wrapper.findAll('[data-testid="fc-face"]');
+    expect(faces).toHaveLength(8);
+    expect(faces[0].attributes("aria-label")).toBe("Face 1 of 8 · 1.00 to the chosen face");
+    expect(wrapper.find('[data-testid="fc-centred-title"]').text()).toContain("Centred on face");
+    expect(wrapper.find('[data-testid="fc-uncentre"]').text()).toBe("Back to Cluster 2's centre");
+    expect(wrapper.find('[data-testid="fc-compare"]').exists()).toBe(false);
+    // The chosen face offers no centring on itself; the others do.
+    expect(wrapper.find('[data-testid="fc-centre"]').exists()).toBe(false);
+    await faces[2].trigger("click");
+    expect(wrapper.find('[data-testid="fc-centre"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("starts the centred slider at the strictness and saves the faces above it", async () => {
+    api.getFaceClusters.mockImplementation(async (_id, _t, centre) => answer(true, centre));
+    const wrapper = mountDialog();
+    await flushPromises();
+    await centreOn12(wrapper);
+    expect(Number(wrapper.find('[data-testid="fc-cut"]').element.value)).toBe(0.45);
+    expect(wrapper.find('[data-testid="fc-count"]').text()).toContain("4 of 8 of Wren's faces");
+    const pick = wrapper.find('[data-testid="fc-save-centred"]');
+    expect(pick.text()).toBe("Make these 4 faces Wren's reference");
+    await pick.trigger("click");
+    await flushPromises();
+    // Face 2 is Cluster 1's: the centred view reaches across clusters.
+    expect(api.setReferenceCluster).toHaveBeenLastCalledWith(7, [12, 11, 2, 13]);
+    // Saving reloads: back on the clusters.
+    expect(wrapper.find('[data-testid="fc-uncentre"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("goes back to the cluster by Back, the selected rail row, or strictness", async () => {
+    api.getFaceClusters.mockImplementation(async (_id, _t, centre) => answer(true, centre));
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.findAll('[data-testid="fc-row"]')[1].trigger("click");
+    await wrapper.find('[data-testid="fc-cut"]').setValue("0.65");
+    const count = () => wrapper.find('[data-testid="fc-count"]').text();
+    expect(count()).toContain("2 of 3 pictures count");
+
+    const centred = async () => {
+      await centreOn12(wrapper);
+      await wrapper.find('[data-testid="fc-cut"]').setValue("0.15");
+      expect(count()).toContain("7 of 8");
+    };
+    await centred();
+    await wrapper.find('[data-testid="fc-uncentre"]').trigger("click");
+    expect(count()).toContain("2 of 3 pictures count");
+    expect(wrapper.find('[data-testid="fc-cut"]').element.value).toBe("0.65");
+
+    await centred();
+    await wrapper.findAll('[data-testid="fc-row"]')[1].trigger("click");
+    expect(count()).toContain("2 of 3 pictures count");
+    expect(wrapper.find('[data-testid="fc-cut"]').element.value).toBe("0.65");
+
+    await centred();
+    const loose = wrapper
+      .find('[data-testid="fc-strictness"]')
+      .findAll("button")
+      .find((b) => b.text() === "Loose");
+    await loose.trigger("click");
+    await flushPromises();
+    expect(api.getFaceClusters).toHaveBeenLastCalledWith(7, 0.35);
+    expect(wrapper.find('[data-testid="fc-uncentre"]').exists()).toBe(false);
+    expect(count()).toContain("3 of 4 pictures count"); // a reload: Cluster 1 at its saved cut
+    wrapper.unmount();
+  });
+
+  it("centres on the focused face with C, and drops an answer a strictness change outran", async () => {
+    let release;
+    api.getFaceClusters.mockImplementation((_id, _t, centre) =>
+      centre == null
+        ? Promise.resolve(answer(true, null))
+        : new Promise((resolve) => (release = () => resolve(answer(true, centre)))),
+    );
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.findAll('[data-testid="fc-row"]')[1].trigger("click");
+    const faces = () => wrapper.findAll('[data-testid="fc-face"]');
+    expect(faces()[0].attributes("aria-keyshortcuts")).toBe("Z Enter C");
+    await faces()[1].trigger("click");
+    faces()[1].element.focus();
+    await faces()[1].trigger("keydown", { key: "c" });
+    expect(api.getFaceClusters).toHaveBeenLastCalledWith(7, 0.45, 12);
+    release();
+    await flushPromises();
+    expect(faces()).toHaveLength(8);
+    // Focus was in the field, so it follows the new centre.
+    expect(document.activeElement).toBe(faces()[0].element);
+
+    // Back, centre again, and change strictness before the answer lands.
+    await wrapper.find('[data-testid="fc-uncentre"]').trigger("click");
+    await faces()[1].trigger("click");
+    await faces()[1].trigger("keydown", { key: "C" });
+    const strict = wrapper
+      .find('[data-testid="fc-strictness"]')
+      .findAll("button")
+      .find((b) => b.text() === "Strict");
+    await strict.trigger("click");
+    await flushPromises();
+    release();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="fc-uncentre"]').exists()).toBe(false);
+    expect(faces()).toHaveLength(4);
     wrapper.unmount();
   });
 });

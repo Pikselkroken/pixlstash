@@ -104,19 +104,49 @@
           </div>
         </div>
 
-        <section class="fc-pane" :aria-label="`Cluster ${selected + 1}`">
+        <section class="fc-pane" :aria-label="paneName">
           <div class="fc-head">
-            <h3 class="fc-title">
+            <h3 v-if="centred" class="fc-title" data-testid="fc-centred-title">
+              Centred on face
+              <img
+                class="fc-row__face"
+                :src="pictureThumbnailUrl(centred.picture_id)"
+                alt=""
+                @dblclick="zoomIn('field', centred.picture_id)"
+              />
+            </h3>
+            <h3 v-else class="fc-title">
               Cluster {{ selected + 1 }}
               <span v-if="current.is_reference" class="fc-badge fc-badge--ref"
                 ><v-icon size="12">mdi-check</v-icon>Reference</span
               >
             </h3>
-            <span class="fc-meta" data-testid="fc-count"
+            <span v-if="centred" class="fc-meta" data-testid="fc-count"
+              ><b>{{ kept.length }}</b> of {{ current.size }} of {{ name }}'s faces
+              count</span
+            >
+            <span v-else class="fc-meta" data-testid="fc-count"
               ><b>{{ kept.length }}</b> of {{ current.size }} pictures count ·
               holds together at {{ fixed(current.cohesion) }}</span
             >
-            <template v-if="current.is_reference">
+            <template v-if="centred">
+              <AppButton
+                variant="secondary"
+                :disabled="saving"
+                data-testid="fc-uncentre"
+                @click="uncentre"
+                >Back to Cluster {{ selected + 1 }}'s centre</AppButton
+              >
+              <AppButton
+                variant="primary"
+                :loading="saving"
+                :disabled="!kept.length"
+                data-testid="fc-save-centred"
+                @click="save(kept)"
+                >Make these {{ kept.length }} faces {{ name }}'s reference</AppButton
+              >
+            </template>
+            <template v-else-if="current.is_reference">
               <AppButton
                 variant="secondary"
                 :disabled="saving"
@@ -158,7 +188,11 @@
                 ref="fieldEl"
                 class="fc-field"
                 role="group"
-                :aria-label="`Faces of cluster ${selected + 1}, most typical first`"
+                :aria-label="
+                  centred
+                    ? 'Faces most like the chosen face first'
+                    : `Faces of cluster ${selected + 1}, most typical first`
+                "
                 :style="fieldStyle"
                 data-testid="fc-field"
                 @keydown="onFieldKey"
@@ -181,7 +215,7 @@
                   :tabindex="rank === focusRank ? 0 : -1"
                   :aria-label="faceName(rank)"
                   :aria-pressed="rank === focusRank"
-                  :aria-keyshortcuts="'Z Enter'"
+                  :aria-keyshortcuts="'Z Enter C'"
                   :data-rank="rank"
                   data-testid="fc-face"
                   @focus="focusRank = rank"
@@ -197,7 +231,9 @@
                 </button>
               </div>
               </div>
-              <span v-if="hidden" class="fc-note">+{{ hidden }} more, less typical</span>
+              <span v-if="hidden" class="fc-note"
+                >+{{ hidden }} more, {{ centred ? "less alike" : "less typical" }}</span
+              >
             </div>
 
             <aside class="fc-side">
@@ -210,7 +246,7 @@
                 />
                 <span>
                   <b>Face {{ focusRank + 1 }} of {{ current.size }}</b><br />
-                  {{ fixed(picked.centrality) }} to the centre<template
+                  {{ fixed(picked.centrality) }} {{ toWhat }}<template
                     v-if="picked.score"
                   >
                     · {{ picked.score }}★</template
@@ -224,6 +260,17 @@
                     @click="zoomIn('field', picked.picture_id)"
                   >
                     Zoom (Z)
+                  </button>
+                  <button
+                    v-if="picked.picture_id !== centred?.picture_id"
+                    type="button"
+                    class="fc-link"
+                    :disabled="centring"
+                    :aria-busy="centring"
+                    data-testid="fc-centre"
+                    @click="centreOn(picked.picture_id)"
+                  >
+                    Centre on this face (C)
                   </button>
                 </span>
               </div>
@@ -253,14 +300,16 @@
                 <p>{{ comparison.words }}</p>
                 <p>{{ comparison.consequence }}</p>
               </div>
-              <p v-else-if="!data.reference_cluster" class="fc-note">
+              <p v-else-if="!centred && !data.reference_cluster" class="fc-note">
                 Nobody is {{ name }}'s reference yet. Picking a cluster makes its
                 faces the ones {{ name }} is measured against, in sheets and
                 training sets.
               </p>
 
               <div class="fc-dist">
-                <h4 class="fc-lbl">Likeness to the centre</h4>
+                <h4 class="fc-lbl">
+                  {{ centred ? "Likeness to the chosen face" : "Likeness to the centre" }}
+                </h4>
                 <div class="fc-gradwrap" :style="{ '--fc-cut': `${cutPercent}%` }">
                   <div class="fc-grad" :style="{ background: gradient }" />
                   <div class="fc-grad-out" aria-hidden="true" />
@@ -288,8 +337,9 @@
                 <p>
                   <b>{{ kept.length }}</b> of {{ current.size }} faces count as
                   {{ name }}. Brighter where more faces sit; median
-                  <b>{{ fixed(median) }}</b>. This is likeness to this cluster's
-                  centre, not the training set's minimum likeness.
+                  <b>{{ fixed(median) }}</b>. This is likeness to
+                  {{ centred ? "the face you chose" : "this cluster's centre" }}, not
+                  the training set's minimum likeness.
                 </p>
                 <h4 class="fc-lbl">Left out · {{ leftOut.length }}</h4>
                 <div v-if="leftOut.length" class="fc-rim">
@@ -322,7 +372,8 @@
           </div>
           <p class="fc-note fc-scale">
             Size: four bands of how typical a face is. Click a face to see it
-            here; double-click any face, Ctrl+wheel or Z to zoom.
+            here; double-click any face, Ctrl+wheel or Z to zoom; C or
+            <i>Centre on this face</i> to rank every face against it.
           </p>
         </section>
       </div>
@@ -342,7 +393,9 @@
     >
       <template #aside>
         <div class="fc-zoomref">
-          <span class="fc-lbl">Centre of Cluster {{ selected + 1 }}</span>
+          <span class="fc-lbl">{{
+            centred ? "The chosen face" : `Centre of Cluster ${selected + 1}`
+          }}</span>
           <img :src="pictureThumbnailUrl(current.members[0].picture_id)" alt="" />
           <span class="fc-note">{{ faceName(0) }}</span>
           <template v-if="comparison">
@@ -358,7 +411,7 @@
       v-if="setName != null"
       open
       title="Save as set"
-      :subtitle="`${setIds.length} pictures from Cluster ${selected + 1}`"
+      :subtitle="`${setIds.length} pictures from ${centred ? 'the centred faces' : `Cluster ${selected + 1}`}`"
       size="sm"
       :persistent="savingSet"
       @close="setName = null"
@@ -400,6 +453,12 @@
  * trims the rim before saving; what is saved is a frozen list of picture ids
  * (`PUT /characters/{id}/reference-cluster`). Any face opens in the zoom
  * pop-out, beside the cluster's centre face.
+ *
+ * "Centre on this face" (or C) ranks every face of the person, not only the
+ * cluster's, by likeness to the chosen face (`centre` on the same GET) and
+ * shows that ranking as the pane, slider and saves included. Nothing is
+ * re-clustered or stored; the rail, "Back to …'s centre" or a strictness
+ * change returns to the cluster.
  */
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -449,6 +508,11 @@ const fieldEl = ref(null);
 const stageEl = ref(null);
 const box = ref({ width: 0, height: 0 });
 let seq = 0;
+// The centred ranking: `{ picture_id, members }`, or null for the cluster's own.
+const centred = ref(null);
+const centreCut = ref(null);
+const centring = ref(false);
+let centreSeq = 0; // apart from `seq`: a re-centre never cancels a load, nor the reverse
 
 // The room the faces have: they are laid out to fit it, never to scroll.
 let observer = null;
@@ -469,7 +533,16 @@ const strictnessLabel = computed(
 );
 const clusters = computed(() => data.value?.clusters || []);
 const unclustered = computed(() => data.value?.unclustered || []);
-const current = computed(() => clusters.value[selected.value] || null);
+const current = computed(() =>
+  centred.value
+    ? { members: centred.value.members, size: centred.value.members.length, centred: true }
+    : clusters.value[selected.value] || null,
+);
+const threshold = computed(() => STRICTNESS.find((s) => s.id === strictness.value).threshold);
+const toWhat = computed(() => (centred.value ? "to the chosen face" : "to the centre"));
+const paneName = computed(() =>
+  centred.value ? "Faces ranked against the chosen face" : `Cluster ${selected.value + 1}`,
+);
 const shown = computed(() => current.value?.members.slice(0, MAX_SHOWN) || []);
 const hidden = computed(() => (current.value?.size || 0) - shown.value.length);
 const layout = computed(() =>
@@ -524,7 +597,15 @@ function defaultCut(c) {
   return Math.min(...counted.map((m) => m.centrality));
 }
 
-const cut = computed(() => cuts.value[selected.value] ?? (current.value ? defaultCut(current.value) : 0));
+// Centred, the slider starts at the strictness: every face counting would
+// count every other person too.
+const cut = computed(() => {
+  if (centred.value) {
+    const { min, max } = axis.value;
+    return centreCut.value ?? Math.min(max, Math.max(min, threshold.value));
+  }
+  return cuts.value[selected.value] ?? (current.value ? defaultCut(current.value) : 0);
+});
 const cutPercent = computed(
   () => ((cut.value - axis.value.min) / (axis.value.max - axis.value.min)) * 100,
 );
@@ -612,17 +693,53 @@ function faceName(rank) {
   const m = shown.value[rank];
   if (!m) return "";
   const score = m.score ? ` · ${m.score}★` : "";
-  return `Face ${rank + 1} of ${current.value.size} · ${fixed(m.centrality)} to the centre${score}`;
+  return `Face ${rank + 1} of ${current.value.size} · ${fixed(m.centrality)} ${toWhat.value}${score}`;
 }
 
 function select(i) {
+  uncentre(); // before the early return: the selected row goes back too
   if (i === selected.value) return;
   selected.value = i;
   focusRank.value = 0;
 }
 
 function setCut(v) {
-  cuts.value = { ...cuts.value, [selected.value]: v };
+  if (centred.value) centreCut.value = v;
+  else cuts.value = { ...cuts.value, [selected.value]: v };
+}
+
+/** Rank every face of the person by likeness to *pictureId*'s face. */
+async function centreOn(pictureId) {
+  const id = props.character?.id;
+  if (id == null) return;
+  const mine = ++centreSeq;
+  centring.value = true;
+  error.value = "";
+  try {
+    const result = await getFaceClusters(id, threshold.value, pictureId);
+    if (mine !== centreSeq) return;
+    // `data` is kept: the answer's clusters are the same ones.
+    centred.value = { picture_id: pictureId, members: result.centred || [] };
+    centreCut.value = null;
+    // Into the field only if focus was there; a side-panel button keeps it.
+    if (fieldEl.value?.contains(document.activeElement)) focusFace(0);
+    else focusRank.value = 0;
+  } catch (e) {
+    if (mine !== centreSeq) return;
+    console.error("Couldn't re-centre face clusters", id, pictureId, e);
+    error.value = `Couldn't re-centre on that face. ${errorDetail(e) || "Please try again."}`;
+  } finally {
+    if (mine === centreSeq) centring.value = false;
+  }
+}
+
+function uncentre() {
+  if (!centred.value && !centring.value) return;
+  centreSeq++; // an answer still in flight no longer applies
+  centring.value = false;
+  centred.value = null;
+  centreCut.value = null;
+  focusRank.value = 0;
 }
 
 function setStrictness(id) {
@@ -681,6 +798,12 @@ const zoomCaption = computed(() => {
   if (zoomFrom.value === "unclustered") {
     return `Matched no one · face ${zoomPos.value + 1} of ${unclustered.value.length} · ${score}`;
   }
+  const at = centred.value?.members.indexOf(m) ?? -1;
+  if (at >= 0) {
+    const n = centred.value.members.length;
+    const where = at === 0 ? ", the chosen face" : at === n - 1 ? ", least alike" : "";
+    return `Centred · face ${at + 1} of ${n}${where} · ${fixed(m.centrality)} to the chosen face · ${score}`;
+  }
   const i = clusters.value.findIndex((c) => c.members.includes(m));
   const c = clusters.value[i];
   const rank = c.members.indexOf(m);
@@ -725,6 +848,10 @@ function onFieldKey(event) {
   ) {
     event.preventDefault();
     zoomIn("field", shown.value[focusRank.value].picture_id);
+  } else if ((event.key === "c" || event.key === "C") && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault();
+    const m = shown.value[focusRank.value];
+    if (m && m.picture_id !== centred.value?.picture_id) centreOn(m.picture_id);
   }
 }
 
@@ -734,9 +861,9 @@ async function load() {
   if (id == null) return;
   const mine = ++seq;
   error.value = "";
-  const threshold = STRICTNESS.find((s) => s.id === strictness.value).threshold;
+  uncentre();
   try {
-    const result = await getFaceClusters(id, threshold);
+    const result = await getFaceClusters(id, threshold.value);
     if (mine !== seq) return;
     data.value = result;
     cuts.value = {};
@@ -773,7 +900,9 @@ const savingSet = ref(false);
 function openSetName() {
   setIds.value = kept.value;
   setError.value = "";
-  setName.value = `${name.value}, cluster ${selected.value + 1}`;
+  setName.value = centred.value
+    ? `${name.value}, like one face`
+    : `${name.value}, cluster ${selected.value + 1}`;
 }
 
 async function saveAsSet() {

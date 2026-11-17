@@ -2055,7 +2055,11 @@ score, format, width, height, thumbnail_width, thumbnail_height, orientation}],
 size, cohesion, reference_share, is_reference,
 similarity_to_reference, from_sheets}`, members most typical first, the
 reference cluster first and then largest first. `unclustered` is
-`[{picture_id, score, similarity_to_reference, format}]`.
+`[{picture_id, score, similarity_to_reference, format}]`. With
+`centre=<picture_id>` it also answers `centred`: every face of the person as a
+member row, `centrality` being the likeness to that picture's face, most alike
+first (null without `centre`); a picture that is not one of the person's faces
+is a 422.
 
 `PUT /characters/{id}/reference-cluster` with `{picture_ids}` stores the
 reference cluster and answers `{picture_ids}`; `[]` clears it, and an id

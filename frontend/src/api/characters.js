@@ -271,13 +271,16 @@ export async function getReferencePictures(id) {
  * A person's faces grouped by identity, at a strictness.
  * @param {number|string} id
  * @param {number} threshold - the mean likeness two groups need to merge.
+ * @param {number|null} [centre] - a picture of the person's: also rank every
+ *   face by likeness to its face.
  * @returns {Promise<Object>} `{threshold, faces, reference_cluster, clusters,
- *   unclustered}`; clusters carry their members most typical first.
+ *   unclustered, centred}`; clusters carry their members most typical first;
+ *   `centred` (null without `centre`) is every face, most like the centre first.
  */
-export async function getFaceClusters(id, threshold) {
+export async function getFaceClusters(id, threshold, centre = null) {
   return unwrap(
     apiClient.get("/face-clusters", {
-      params: { character_id: id, threshold },
+      params: { character_id: id, threshold, ...(centre != null ? { centre } : {}) },
     }),
   );
 }

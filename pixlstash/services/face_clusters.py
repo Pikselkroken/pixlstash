@@ -13,6 +13,8 @@ picked as who the person *is*.
   (the mean of the unit embeddings). The cluster view sizes faces by it and
   the reference selectors take the most central first, so both agree on what
   "typical" means.
+* :func:`ranked_by_likeness` ranks every face against one chosen face: the
+  cluster view's centred ranking. Nothing is stored.
 * The **reference cluster** is stored as picture ids at the moment of the pick
   (``CharacterReferenceMember``) and frozen: a picture added later never
   joins it. An id whose picture is deleted or no longer carries the person's
@@ -104,6 +106,19 @@ def centrality(vectors) -> list[float]:
 def likeness(a: np.ndarray, b: np.ndarray) -> float:
     """Cosine similarity of two centroids."""
     return float(np.clip(_unit(a) @ _unit(b), -1.0, 1.0))
+
+
+def ranked_by_likeness(
+    faces: list[tuple[int, np.ndarray]], centre: np.ndarray
+) -> list[tuple[int, float]]:
+    """``(picture_id, likeness to centre)``, most alike first."""
+    if not faces:
+        return []
+    sims = np.clip(_unit([vec for _, vec in faces]) @ _unit(centre), -1.0, 1.0)
+    return sorted(
+        ((pid, float(s)) for (pid, _), s in zip(faces, sims, strict=True)),
+        key=lambda m: (-m[1], m[0]),
+    )
 
 
 def cluster_faces(
