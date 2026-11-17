@@ -1,0 +1,6 @@
+tag,arm,served,skipped,judged,hits,rate_of_judged,ci_lo,ci_hi,rate_of_served
+bad anatomy,ranked,10,1,9,1,0.111,0.02,0.435,0.1
+bad anatomy,random,10,0,10,1,0.1,0.018,0.404,0.1
+bad anatomy,salt,10,1,9,8,0.889,0.565,0.98,0.8
+malformed eyes,ranked,60,13,47,8,0.17,0.089,0.301,0.133
+malformed eyes,random,58,17,41,7,0.171,0.085,0.313,0.121
