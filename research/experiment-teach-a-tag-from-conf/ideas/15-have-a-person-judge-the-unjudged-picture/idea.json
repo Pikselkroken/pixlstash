@@ -1,0 +1,10 @@
+{
+  "id": "15-have-a-person-judge-the-unjudged-picture",
+  "number": 15,
+  "title": "Have a person judge the unjudged pictures that land in the classifier's top 100",
+  "body": "When the classifier fitted on 100 yes/no answers ranks the whole library, about two thirds of its top 100 are pictures nobody has ever answered on, even for tags that only a few percent of pictures carry. No test that reuses old answers can say whether those pictures are right. In the person-judged top-100 test (idea 5), record separately how many of the never-judged pictures in the top 100 the person confirms. Optionally do this for the classifier with and without 300 background pictures, on two or three rare tags. If the never-judged pictures are mostly wrong, background negatives (or something like them) are still worth another look. If they are mostly right, the old-answer tests understate the classifier.",
+  "origin": "session",
+  "parent": "6-add-random-unjudged-pictures-as-backgrou",
+  "createdAt": "2026-11-17T18:20:39.347Z",
+  "reopenings": []
+}
