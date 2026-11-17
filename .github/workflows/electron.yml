@@ -147,9 +147,8 @@ jobs:
           name: wheel
           path: dist/*.whl
 
-  # Linux and Windows. macOS is its own job (build-electron-mac, below) running
-  # the same steps: it takes ~50 min, and while it sat in this matrix the
-  # Windows signing job could not start until it finished.
+  # Linux and Windows. macOS (~50 min) is its own job, build-electron-mac below,
+  # running the same steps, so the Windows signing jobs never wait for it.
   build-electron:
     needs: build-wheel
     permissions:
@@ -316,8 +315,8 @@ jobs:
           files: ${{ matrix.release_files }}
           prerelease: ${{ needs.build-wheel.outputs.is_prerelease == 'true' }}
           # The release notes ("which download do I want?"), set here because
-          # this step always runs on a tag — the linux and mac legs both attach,
-          # whatever the Windows signing state is. The other attach steps
+          # this step always runs on a tag — the linux leg and build-electron-mac
+          # both attach, whatever the Windows signing state is. The other attach steps
           # deliberately omit body_path: the action resolves the body as
           # `new || existing`, so they preserve these notes instead of clearing
           # them, and two of them have no checkout to read the file from.
@@ -365,10 +364,10 @@ jobs:
     concurrency:
       group: certum-simplysign-session
       cancel-in-progress: false
-    # Depends on the Windows installer artifact, not on the whole matrix: the
-    # default success() gate would skip this job whenever the Linux leg failed
-    # or was cancelled. macOS is not a dependency at all (build-electron-mac),
-    # so its ~50 min build no longer delays signing. !cancelled() keeps a
+    # Gated on the Windows installer artifact, not on the whole matrix
+    # succeeding: the default success() gate would skip this job whenever the
+    # Linux leg failed or was cancelled. macOS is not a dependency at all
+    # (build-electron-mac), so its ~50 min build no longer delays signing. !cancelled() keeps a
     # cancelled run from signing; a missing Windows artifact fails the download
     # step below, loudly.
     needs: [build-wheel, build-electron]

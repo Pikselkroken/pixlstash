@@ -404,11 +404,7 @@ def test_electron_apple_signing_requires_validated_release_tag():
         )
     # Both jobs run one step list (a YAML anchor), so the checks on
     # electron_job's steps below hold for the mac job too.
-    assert mac_job["steps"] == electron_job["steps"]
-    assert [leg["os"] for leg in mac_job["strategy"]["matrix"]["include"]] == ["mac"]
-    assert "mac" not in [
-        leg["os"] for leg in electron_job["strategy"]["matrix"]["include"]
-    ]
+    assert mac_job["steps"] is electron_job["steps"]
     assert wheel_job["outputs"]["validated_release_tag"] == (
         "${{ steps.release-ref.outputs.validated_release_tag }}"
     )
@@ -489,6 +485,11 @@ def test_windows_desktop_signing_does_not_wait_for_macos():
     """
     path = REPO_ROOT / ".github" / "workflows" / "electron.yml"
     jobs = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]
+    legs = {
+        job: [leg["os"] for leg in jobs[job]["strategy"]["matrix"]["include"]]
+        for job in ("build-electron", "build-electron-mac")
+    }
+    assert legs == {"build-electron": ["linux", "win"], "build-electron-mac": ["mac"]}
     for name in ("sign-windows-desktop", "attach-windows-desktop-unsigned"):
         assert "build-electron" in jobs[name]["needs"]
         assert "build-electron-mac" not in jobs[name]["needs"], (
