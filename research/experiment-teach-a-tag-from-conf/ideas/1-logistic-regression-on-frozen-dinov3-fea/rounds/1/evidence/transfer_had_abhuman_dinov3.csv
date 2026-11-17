@@ -1,0 +1,8 @@
+source,tag,src pos/neg,held-out src AUC,our eval pos,our eval AUC [95% CI],P@10,P@25,P@50,pos in top-100,verdict
+had,extra limb,1738/5000,0.800,54,"0.732 [0.662, 0.793]",0.50,0.24,0.20,11/54,fine-tune head only
+had,malformed hand,4524/2214,0.807,367,"0.677 [0.648, 0.703]",0.40,0.44,0.38,37/367,fine-tune head only
+had,malformed foot,1363/5375,0.865,132,"0.852 [0.822, 0.879]",0.40,0.40,0.42,37/132,aux run worth it
+had,bad anatomy,2067/4671,0.811,137,"0.809 [0.777, 0.839]",0.20,0.16,0.24,31/137,aux run worth it
+abhuman,malformed hand,4266/1734,0.856,367,"0.696 [0.667, 0.722]",0.20,0.32,0.40,40/367,fine-tune head only
+abhuman,malformed foot,696/5304,0.785,132,"0.900 [0.876, 0.923]",0.50,0.64,0.58,51/132,aux run worth it
+abhuman,bad anatomy,827/5173,0.754,137,"0.705 [0.660, 0.748]",0.00,0.28,0.30,28/137,fine-tune head only
