@@ -25,6 +25,6 @@
     ],
     "showed": "Given about twelve hundred marked pictures, the rule's best guesses were mostly right for malformed hands, feet and general anatomy errors, far better than a random pick. But it was never tried with as few examples as PixlStash users would give, never on the picture summaries PixlStash keeps, and never against PixlStash's current method. So it does not yet say whether the feature would help."
   },
-  "status": "provisional",
-  "concludedAt": null
+  "status": "concluded",
+  "concludedAt": "2026-11-17T07:36:08.343Z"
 }
