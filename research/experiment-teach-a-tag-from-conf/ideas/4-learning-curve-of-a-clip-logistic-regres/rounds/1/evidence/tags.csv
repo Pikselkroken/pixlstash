@@ -1,0 +1,21 @@
+tag,verdicts,pos,neg
+malformed hand,3691,1329,2362
+malformed teeth,1951,1095,856
+blocky,1746,1683,63
+waxy skin,1710,1344,366
+flux chin,1587,1100,487
+malformed foot,1485,488,997
+bad anatomy,1144,656,488
+watermark,901,824,77
+hand,817,255,562
+smile,759,130,629
+looking at the camera,752,115,637
+solo focus,744,33,711
+close-up view,718,393,325
+brown eyes,677,155,522
+face,677,98,579
+incorrect reflection,674,279,395
+teeth,650,223,427
+nose,611,175,436
+jewelry,590,177,413
+compression artifacts,570,544,26
