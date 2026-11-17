@@ -1,0 +1,9 @@
+claim,value,source
+library size of the permutation test,"36,318 embeddings","pixlstash/services/tag_scan_service.py comment above BASE_RATE_THRESHOLD_MARGIN; commit 6c79e6de5 (2026-07-16)"
+legacy remove:add skew with zero real signal,up to 58x at a 20% base rate,"commit 6c79e6de5 message; tag_scan_service.py Fix 2 comment"
+legacy add eligibility at low base rates,"""effectively unreachable"" / ratio undefined (no adds)",tag_scan_service.py Fix 2 comment
+remove:add skew after p+/-0.15 (uncapped) across base rates 5%-48%,0.2-1.3x,tag_scan_service.py Fix 2 comment
+margin,0.15 chosen empirically,tag_scan_service.py Fix 2 comment
+real tags with genuine separation still off 1.0,"""malformed hand"", ""waxy skin"" (numbers not recorded)","tag_scan_service.py Fix 2 comment, which points to PR/session notes that were not found"
+majority-tag regression of the uncapped formula,"""man"" p=68/111=0.6126: legacy finds 1 add suspect, uncapped (add 0.7626) finds 0","commit 02fe21c2f message; tag_scan_service.py CORRECTED comment; tests/test_tag_suggestions_api.py::test_scan_tag_base_rate_default_thresholds_majority_tag_regression"
+brand-new tag with 0 positives,"pos_frac == 0.0 vault-wide for ""compression artifacts"" (544 confident predictions, 0 suspects)","commit 6c79e6de5 message; tag_scan_service.py Fix 1 comment"
