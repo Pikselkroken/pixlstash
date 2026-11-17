@@ -32,6 +32,7 @@ from enum import Enum
 from typing import Callable, Optional, Protocol
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.resources import cuda_checkpoint
 from pixlstash.resources.ledger import (
     DeviceReading,
     Ledger,
@@ -242,6 +243,8 @@ class ResourceArbiter:
         usage: PixlStash's own resident memory, MB, or None. Injectable.
         ram_reader: ``() -> {total_mb, available_mb}``. Injectable.
         enforcing: Overrides ``VRAM_ORCHESTRATION_ENFORCING``; tests only.
+        checkpoint: What suspends PixlStash's CUDA context
+            (:mod:`~pixlstash.resources.cuda_checkpoint`). Injectable.
     """
 
     def __init__(
@@ -250,6 +253,7 @@ class ResourceArbiter:
         usage: Callable[[], int | None] = pixlstash_usage_mb,
         ram_reader: Callable[[], dict] = ram,
         enforcing: bool | None = None,
+        checkpoint=cuda_checkpoint,
     ) -> None:
         self._ledger = ledger_
         self._usage = usage
@@ -278,6 +282,15 @@ class ResourceArbiter:
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._reclaiming = False
+        self._checkpoint = checkpoint
+        # Asks for PixlStash's CUDA context to be suspended (the Vault queues
+        # the unload and suspend_pixlstash on the GPU worker).
+        self._suspender: Callable[[], None] | None = None
+        # What suspending took off the card, MB, while it is suspended: the
+        # room a restore needs.
+        self._suspended_mb: int | None = None
+        # The lease a suspend failed for: not asked again while it holds.
+        self._suspend_failed_for: str | None = None
 
     # ── configuration ────────────────────────────────────────────────────
 
@@ -309,6 +322,16 @@ class ResourceArbiter:
         with self._lock:
             if yielder in self._yielders:
                 self._yielders.remove(yielder)
+
+    def set_suspender(self, suspender: Callable[[], None] | None) -> None:
+        """Register (None: drop) how PixlStash asks for its CUDA context to be
+        suspended while a training run has the card (#2557).
+
+        Called on the poll thread; it must only queue the work, which ends in
+        :meth:`suspend_pixlstash` on the GPU worker.
+        """
+        with self._lock:
+            self._suspender = suspender
 
     def add_listener(self, listener: Callable[[dict], None]) -> None:
         """Register a ``resource_lease`` event sink."""
@@ -375,7 +398,9 @@ class ResourceArbiter:
             else:
                 changes = self._evaluate_locked()
         self._announce(changes)
-        if lease.state is LeaseState.WAITING:
+        # Granted exclusive, the poll thread is what suspends PixlStash's CUDA
+        # context for it (_suspend_step).
+        if lease.state is LeaseState.WAITING or lease.kind is LeaseKind.EXCLUSIVE:
             self._ensure_thread()
         return lease
 
@@ -412,6 +437,11 @@ class ResourceArbiter:
             if lease.device is None:
                 lease.on_cpu = True
                 return self._admit_light(lease, "no GPU")
+            if self._checkpoint.suspended():
+                # Enforcing or not: a CUDA call now blocks for the whole
+                # training run, or kills the process (cuda_checkpoint).
+                logger.debug("Refused GPU memory to %s: CUDA is suspended", label)
+                return None
             refusal = self._light_refusal_locked(lease)
             if refusal is not None and self.enforcing:
                 logger.debug("Refused GPU memory to %s: %s", label, refusal)
@@ -475,6 +505,7 @@ class ResourceArbiter:
                 # Everything it holds was there before the grant.
                 self._baseline[(tenant, device)] = 0
         self._announce(changes)
+        self._ensure_thread()
         return lease
 
     def _admit_light(self, lease: Lease, why: str) -> Lease:
@@ -887,7 +918,8 @@ class ResourceArbiter:
         with self._lock:
             read = next(self._reads)
         devices = self._ledger.devices(max_age_s=1.0 if cached else 0.0)
-        usage = self._usage()
+        # Suspended, torch's counters still show what it had reserved.
+        usage = 0 if self._suspended_mb is not None else self._usage()
         try:
             ram_now = self._ram()
         except Exception as exc:
@@ -1522,6 +1554,149 @@ class ResourceArbiter:
             return True
         return False
 
+    # ── suspending PixlStash's CUDA context (#2557) ──────────────────────
+
+    def wants_suspend(self) -> bool:
+        """Whether PixlStash's CUDA context should be off its card now."""
+        with self._lock:
+            return self._suspend_lease_locked() is not None
+
+    def _suspend_lease_locked(self) -> Lease | None:
+        """The other tenant's exclusive lease holding PixlStash's card, if any.
+
+        Only on a card that can be measured: a restore needs the room checked.
+        """
+        if not self.enforcing or not self._pixlstash_on_gpu:
+            return None
+        device = self._tenant_device(Tenant.PIXLSTASH)
+        reading = next((d for d in self._devices if d.uuid == device), None)
+        if reading is None or not reading.measurable:
+            return None
+        return next(
+            (
+                lease
+                for lease in self._leases.values()
+                if lease.kind is LeaseKind.EXCLUSIVE
+                and lease.state is LeaseState.GRANTED
+                and lease.tenant is not Tenant.PIXLSTASH
+                and lease.device == device
+            ),
+            None,
+        )
+
+    def suspend_pixlstash(self, worker_type: str | None = None) -> bool:
+        """Take PixlStash's CUDA context off the card for the exclusive lease
+        holding it, so the training run gets the ~700 MB it costs.
+
+        Runs on the GPU worker, once the models are unloaded, as the task
+        *worker_type*: its own lease is the one PixlStash GPU lease that may
+        be live. From the moment it starts every GPU lease is refused, until
+        the poll thread restores the context (:meth:`_suspend_step`).
+
+        Returns:
+            True when the context is off the card.
+        """
+        if not self._checkpoint.available():
+            return False
+        device = self._tenant_device(Tenant.PIXLSTASH)
+
+        def used_now() -> DeviceReading | None:
+            fresh = self._ledger.devices(max_age_s=0.0)
+            return next((d for d in fresh if d.uuid == device), None)
+
+        # Read before it begins, on the card as it is with the context on it.
+        before = used_now()
+        with self._lock:
+            holder = self._suspend_lease_locked()
+            busy = [
+                lease.label
+                for lease in self._granted_locked(Tenant.PIXLSTASH, device)
+                if lease.worker_type != worker_type
+            ]
+            if holder is None or busy or self._checkpoint.suspended():
+                if busy:
+                    logger.info(
+                        "Not suspending PixlStash's CUDA context yet: %s is on the GPU",
+                        ", ".join(busy),
+                    )
+                return False
+            self._checkpoint.begin()
+        started = time.monotonic()
+        if not self._checkpoint.suspend():
+            with self._lock:
+                self._suspend_failed_for = holder.id
+            return False
+        after = used_now()
+        saved = (
+            max(0, before.used_mb - after.used_mb)
+            if before is not None and after is not None
+            else 0
+        )
+        with self._lock:
+            self._suspended_mb = saved
+        logger.info(
+            "Suspended PixlStash's CUDA context for %s (%s): %s MB off the card "
+            "in %.2fs",
+            holder.id,
+            holder.label,
+            saved,
+            time.monotonic() - started,
+        )
+        self._ensure_thread()
+        return True
+
+    def _suspend_step(self) -> None:
+        """Ask for a suspend while an exclusive lease holds PixlStash's card,
+        and restore once none does and the card has room for what was saved.
+        """
+        with self._lock:
+            holder = self._suspend_lease_locked()
+            wanted = holder is not None
+            saved = self._suspended_mb
+            suspender = self._suspender
+            room = None
+            if saved is not None and not wanted:
+                device = self._tenant_device(Tenant.PIXLSTASH)
+                reading = next((d for d in self._devices if d.uuid == device), None)
+                if reading is not None and reading.measurable:
+                    room = self._budget_locked(reading)
+        if saved is None:
+            if (
+                wanted
+                and holder.id != self._suspend_failed_for
+                and suspender is not None
+                and not self._checkpoint.suspended()
+                and self._checkpoint.available()
+            ):
+                suspender()
+            return
+        if room is None or room < saved:
+            # A restore into a full card fails, and that failure is final.
+            logger.debug(
+                "PixlStash's CUDA context stays suspended: it needs %s MB, %s MB "
+                "is free",
+                saved,
+                room,
+            )
+            return
+        started = time.monotonic()
+        restored = self._checkpoint.resume()
+        with self._lock:
+            self._suspended_mb = None
+        if restored:
+            logger.info(
+                "Restored PixlStash's CUDA context (%s MB) in %.2fs",
+                saved,
+                time.monotonic() - started,
+            )
+        else:
+            self.warn(
+                None,
+                "cuda_restore_failed",
+                "PixlStash could not get its GPU back after the training run. "
+                "Its work runs on the CPU until PixlStash is restarted.",
+            )
+
     def _ensure_thread(self) -> None:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
@@ -1554,6 +1729,7 @@ class ResourceArbiter:
                     with self._lock:
                         changes = self._evaluate_locked()
                     self._announce(changes)
+                self._suspend_step()
             except Exception as exc:
                 # The one thread every waiting lease is granted by: a failed
                 # pass is logged and tried again, never the end of it.
@@ -1572,7 +1748,8 @@ class ResourceArbiter:
                     if lease.state is LeaseState.WAITING
                     or (lease.heavy and lease.state is LeaseState.GRANTED)
                 ]
-                if not live:
+                # Suspended, it polls on until the context is restored.
+                if not live and self._suspended_mb is None:
                     self._thread = None
                     return
                 devices = {d.uuid: d.used_mb for d in self._devices}

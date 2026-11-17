@@ -35,6 +35,7 @@ import sys
 from typing import Any
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.resources import cuda_checkpoint
 
 logger = get_logger(__name__)
 
@@ -329,7 +330,9 @@ def empty_accelerator_cache(device=None) -> bool:
         bookkeeping).
     """
     torch = sys.modules.get("torch")
-    if torch is None:
+    if torch is None or cuda_checkpoint.suspended():
+        # Suspended for a training run (#2557), the flush would block the
+        # caller until the run ends; nothing of ours is on the card anyway.
         return False
     name = normalise_device(device) if device is not None else None
     flushed = False

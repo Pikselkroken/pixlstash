@@ -48,6 +48,7 @@ from .utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from .tasks.base_task import TaskStatus
 from .tasks.device_release_task import DeviceReleaseTask
 from .task_runner import TaskRunner
+from .resources import cuda_checkpoint
 from .resources.aitoolkit_tenant import AiToolkitProbe
 from .resources.arbiter import Lease, LeaseKind, Tenant, arbiter
 from .resources.comfyui_tenant import probe as comfyui_probe
@@ -104,6 +105,10 @@ logger = get_logger(__name__)
 #: flight to end and the models to unload; past it they unload when the batch
 #: ends, without the arbiter waiting.
 YIELD_WAIT_S = 2.0
+
+#: The GPU worker task that unloads the models and suspends the CUDA context
+#: while a training run has the card (#2557).
+CUDA_SUSPEND_TASK = "SuspendCuda"
 
 
 def _move_trained_attachment(
@@ -339,6 +344,7 @@ class Vault:
         self._arbiter.set_pixlstash_on_gpu(not force_cpu)
         # Lease ids PixlStash made room for, each holding the planner.
         self._yield_holds: set[str] = set()
+        self._cuda_suspend_task: Optional[DeviceReleaseTask] = None
         self._task_runner = TaskRunner(
             name="vault-task-runner",
             num_workers=worker_config.NUM_WORKERS,
@@ -550,6 +556,7 @@ class Vault:
         self._work_planner.start()
         self._arbiter.add_yielder(self._yield_gpu)
         self._arbiter.add_listener(self._on_resource_lease)
+        self._arbiter.set_suspender(self._queue_cuda_suspend)
         self._ref_folder_watcher.start()
         self._start_existing_folder_watches()
         if self._model_folder_watcher is not None:
@@ -941,6 +948,7 @@ class Vault:
             if self._task_runner is not None:
                 self._arbiter.remove_yielder(self._yield_gpu)
                 self._arbiter.remove_listener(self._on_resource_lease)
+                self._arbiter.set_suspender(None)
             if self._work_planner is not None:
                 self._work_planner.stop()
             if self._task_runner is not None:
@@ -957,11 +965,14 @@ class Vault:
                 "leaving the models loaded rather than flushing the device under "
                 "it. They stay resident until the process exits."
             )
-        if not self._disable_background_workers and not worker_alive:
+        # Suspended for a training run, releasing a model is a CUDA call that
+        # blocks until the run ends; they were unloaded before the suspend.
+        keep_off_device = worker_alive or cuda_checkpoint.suspended()
+        if not self._disable_background_workers and not keep_off_device:
             FaceExtractionTask.release_detection_models()
             ImageEmbeddingTask.release_models()
         if self._engine:
-            if not worker_alive:
+            if not keep_off_device:
                 self._engine.close()
             del self._engine
             self._engine = None
@@ -2905,7 +2916,9 @@ class Vault:
         batch makes it return nothing for every picture in it, and on Metal
         the flush at the end kills the process beside a running model.
         """
-        if not self._engine:
+        if not self._engine or cuda_checkpoint.suspended():
+            # Suspended (#2557), they were unloaded before it and a CUDA call
+            # would block until the training run ends.
             return
         try:
             self._engine.aggressive_unload()
@@ -2981,6 +2994,41 @@ class Vault:
                 lease.label,
             )
         return stopped
+
+    def _queue_cuda_suspend(self) -> None:
+        """Have the GPU worker unload the models and suspend the CUDA context.
+
+        Called by the arbiter's poll thread while a training run has the card
+        to itself (#2557). On the GPU worker, nothing of PixlStash's is using
+        the device when the context goes; one request at a time.
+        """
+        runner = self._task_runner
+        pending = self._cuda_suspend_task
+        if (
+            self._closed
+            or runner is None
+            or not runner.gpu_worker_alive()
+            or (pending is not None and not pending.wait(0))
+        ):
+            return
+        task = DeviceReleaseTask(
+            CUDA_SUSPEND_TASK,
+            self._unload_and_suspend,
+            when=self._arbiter.wants_suspend,
+        )
+        try:
+            runner.submit(task)
+        except RuntimeError as exc:
+            logger.warning(
+                "Could not queue the CUDA suspend, the task runner is stopped: %s",
+                exc,
+            )
+            return
+        self._cuda_suspend_task = task
+
+    def _unload_and_suspend(self) -> None:
+        self.unload_models()
+        self._arbiter.suspend_pixlstash(CUDA_SUSPEND_TASK)
 
     def _release_yield_hold(self, lease_id: str) -> None:
         if lease_id in self._yield_holds:

@@ -19,6 +19,7 @@ from pixlstash import gpu_select
 from pixlstash.pixl_logging import get_logger
 from pixlstash.resources.arbiter import LeaseState, Tenant, arbiter
 from pixlstash.resources.comfyui_tenant import probe as comfyui_probe
+from pixlstash.resources.ledger import ledger
 from pixlstash.server_config_io import persist_server_config
 from pixlstash.services.comfyui_service import (
     RUN_CLIENT_ID,
@@ -206,7 +207,7 @@ def create_router(server) -> APIRouter:
             persist_server_config(server.server_config_path, config)
         comfy_uuid = comfy_uuid or config.get(gpu_select.COMFYUI_GPU)
         selected = config.get(gpu_select.SETTING) or gpu_select.AUTO
-        gpus = gpu_select.inventory()
+        gpus = gpu_select.inventory(ledger().nvml())
         auto_uuid, auto_reason = gpu_select.choose(gpus, gpu_select.AUTO, comfy_uuid)
         running_on = os.environ.get(gpu_select.RESOLVED_ENV)
         if running_on is None and gpus:
@@ -243,7 +244,7 @@ def create_router(server) -> APIRouter:
     def choose_gpu(request: Request, body: GpuChoice):
         server.auth.ensure_secure_when_required(request)
         if body.gpu != gpu_select.AUTO:
-            known = {gpu["uuid"] for gpu in gpu_select.inventory()}
+            known = {gpu["uuid"] for gpu in gpu_select.inventory(ledger().nvml())}
             if body.gpu not in known:
                 raise HTTPException(status_code=422, detail="No such GPU here.")
         server._server_config[gpu_select.SETTING] = body.gpu

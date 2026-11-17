@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.resources import cuda_checkpoint
 from pixlstash.task_runner import TaskCancelledError
 
 if TYPE_CHECKING:
@@ -688,7 +689,9 @@ class WorkPlanner:
         """
         with self._lock:
             active = list(self._pass_stats.values())
-        if not active or self._gpu_util_unavailable:
+        if not active or self._gpu_util_unavailable or cuda_checkpoint.suspended():
+            # Suspended for a training run, the utilisation read blocks until
+            # the run ends: those bursts simply get fewer samples.
             return
         torch = sys.modules.get("torch")
         if torch is None:
