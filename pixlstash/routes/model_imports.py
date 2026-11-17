@@ -504,16 +504,31 @@ def create_router(server) -> APIRouter:
         for job in busy_runs(server.hub):
             if not job.get("training_folder"):
                 continue
-            save_root = (
-                registry.for_run(job)
-                .handle_for(
-                    "",
+            try:
+                trainer = registry.for_run(job)
+            except registry.TrainerNotInstalled as exc:
+                # Its folder cannot be told, so it may be this one: refuse
+                # rather than trash a folder a run may still be writing.
+                logger.warning(
+                    "Refusing to trash %s: busy run %s has no folder to compare (%s).",
+                    run_dir,
                     job["uuid"],
-                    job["name"],
-                    training_folder=job["training_folder"],
+                    exc,
                 )
-                .save_root
-            )
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{job['name']!r} is still {job['status']}, and its "
+                        f"{exc}, so PixlStash cannot tell whether it uses "
+                        "that folder."
+                    ),
+                ) from exc
+            save_root = trainer.handle_for(
+                "",
+                job["uuid"],
+                job["name"],
+                training_folder=job["training_folder"],
+            ).save_root
             # normcase: a case-insensitive drive spells one folder two ways.
             if os.path.normcase(os.path.realpath(save_root)) == os.path.normcase(
                 run_dir

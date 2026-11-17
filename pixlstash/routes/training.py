@@ -1604,9 +1604,22 @@ def create_router(server) -> APIRouter:
             else (total if has_final else None),
         }
 
+    def _trainer_of(job: dict):
+        """The run's training plugin; a 409 naming it when it is not installed."""
+        try:
+            return registry.for_run(job)
+        except registry.TrainerNotInstalled as exc:
+            raise HTTPException(
+                status_code=409, detail=f"{job['name']} cannot be shown: its {exc}."
+            ) from exc
+
     def _run_dir(job: dict):
-        """The run's paths, and its folder as read from disk (None before it exists)."""
-        handle = handle_for_run(_training_root(), job)
+        """The run's paths, and its folder as read from disk (None before it exists).
+
+        Raises:
+            HTTPException: 409 when the run's training plugin is not installed.
+        """
+        handle = handle_for_run(_training_root(), job, _trainer_of(job))
         on_disk = None
         if os.path.isdir(handle.save_root):
             try:
@@ -1656,7 +1669,7 @@ def create_router(server) -> APIRouter:
             _parse_json_field(job["resolved_profile"], "resolved_profile", job["uuid"])
             or {}
         )
-        trainer = registry.for_run(job)
+        trainer = _trainer_of(job)
         settings = trainer.sample_settings(config)
         handle, on_disk = _run_dir(job)
         samples = on_disk.samples if on_disk is not None else []
@@ -2301,8 +2314,20 @@ def create_router(server) -> APIRouter:
         config = _parse_json_field(
             job["rendered_config"], "rendered_config", job["uuid"]
         )
+        if options["reason"] and not options["steps"]:
+            try:
+                registry.for_run(job)
+            except registry.TrainerNotInstalled:
+                # The service's reason names the missing plugin; nothing to read.
+                return {
+                    **options,
+                    "status": job["status"],
+                    "total_steps": job["total_steps"],
+                    "save_every": None,
+                    "seconds_per_step": None,
+                }
         handle, _ = _run_dir(job)
-        trainer = registry.for_run(job)
+        trainer = _trainer_of(job)
         step_times = trainer.step_times(handle)
         return {
             **options,

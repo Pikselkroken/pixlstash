@@ -2958,8 +2958,6 @@ def test_ai_toolkit_check_with_no_python_finds_the_checkouts_own_and_reports_fol
 ):
     """Omitted python: the checkout's .venv is used, the probe and the trial run
     through it, and the response carries the folders /status would report."""
-    from pixlstash.training_plugins.ai_toolkit import install as ai_toolkit_install
-
     monkeypatch.setattr(ai_toolkit_install, "run_host_process", _probe_ok_runner)
     # No checkout linked yet, so the shelf has no ai-toolkit folder: linking one
     # would put its output folder there, and runs would land in that instead.
@@ -2991,8 +2989,6 @@ def test_ai_toolkit_check_with_no_python_finds_the_checkouts_own_and_reports_fol
 
 
 def test_ai_toolkit_check_folders_match_status_for_the_same_checkout(monkeypatch):
-    from pixlstash.training_plugins.ai_toolkit import install as ai_toolkit_install
-
     monkeypatch.setattr(ai_toolkit_install, "run_host_process", _probe_ok_runner)
     temp_dir, owner, server, read_token = _setup()
     try:
@@ -3015,8 +3011,6 @@ def test_ai_toolkit_check_folders_match_status_for_the_same_checkout(monkeypatch
 
 
 def test_ai_toolkit_check_says_when_no_python_can_be_found(monkeypatch):
-    from pixlstash.training_plugins.ai_toolkit import install as ai_toolkit_install
-
     monkeypatch.setattr(ai_toolkit_install, "run_host_process", _probe_ok_runner)
     monkeypatch.setattr(ai_toolkit_install, "find_python", lambda repo: None)
     temp_dir, owner, server, read_token = _setup()
@@ -3031,8 +3025,6 @@ def test_ai_toolkit_check_says_when_no_python_can_be_found(monkeypatch):
 
 def test_ai_toolkit_check_refuses_paths_that_are_not_real(monkeypatch):
     """Each bad value is a 422 with a message and no process is started."""
-    from pixlstash.training_plugins.ai_toolkit import install as ai_toolkit_install
-
     started = []
 
     def runner(argv, cwd, timeout):
@@ -3062,8 +3054,6 @@ def test_ai_toolkit_check_refuses_paths_that_are_not_real(monkeypatch):
 def test_ai_toolkit_check_runs_one_at_a_time(monkeypatch):
     """#2295: a check can hold a worker thread for minutes, so a second one while
     it runs is a 409 and starts nothing; once it ends, the next one runs."""
-    from pixlstash.training_plugins.ai_toolkit import install as ai_toolkit_install
-
     started = []
     release = threading.Event()
 

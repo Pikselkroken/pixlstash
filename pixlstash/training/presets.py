@@ -356,13 +356,35 @@ def shipped_presets() -> dict[str, dict]:
         if not folder or os.path.normcase(os.path.abspath(folder)) in read:
             continue
         read.add(os.path.normcase(os.path.abspath(folder)))
-        for filename in sorted(os.listdir(folder)):
+        try:
+            filenames = sorted(os.listdir(folder))
+        except OSError as exc:
+            # One plugin's missing folder must not take every recipe with it.
+            logger.warning(
+                "Skipping the recipes of training plugin '%s' in %s: %s",
+                plugin.name,
+                folder,
+                exc,
+            )
+            continue
+        for filename in filenames:
             if not filename.endswith(".json"):
                 continue
             path = os.path.join(folder, filename)
             with open(path, encoding="utf-8") as handle:
                 preset = validate_preset(json.load(handle))
             preset.setdefault("trainer", plugin.name)
+            kept = presets.get(preset["id"])
+            if kept is not None:
+                logger.warning(
+                    "Recipe '%s' ships with training plugins '%s' and '%s'; "
+                    "keeping the first, '%s'.",
+                    preset["id"],
+                    kept["trainer"],
+                    preset["trainer"],
+                    kept["trainer"],
+                )
+                continue
             presets[preset["id"]] = preset
     return presets
 

@@ -182,6 +182,74 @@ def test_a_running_fake_run_is_cancelled_through_the_route(env):
         FakeTrainer.run_seconds = 0.3
 
 
+def test_a_run_whose_trainer_is_gone_is_refused_not_a_500(env):
+    """The runs list still lists it; its own views say the plugin is missing."""
+    hub = env["server"].vault.hub
+    job_uuid = "beef000000000000"
+    run_id = training_runs.create_run(
+        hub,
+        library_uuid=env["server"].vault.library_uuid,
+        uuid=job_uuid,
+        name="orphaned run",
+        set_id=env["set_id"],
+        character_id=None,
+        base_model="m",
+        trigger_word="t",
+        trainer="gone-trainer",
+    )
+    training_runs.update_run(
+        hub,
+        job_uuid,
+        status="completed",
+        completed_at="2026-11-18T09:00:00+00:00",
+        training_folder=os.path.join(tempfile.gettempdir(), "no-such-runs"),
+    )
+    client = env["client"]
+
+    r = client.get("/training/jobs")
+    assert r.status_code == 200, r.text
+    assert run_id in {job["id"] for job in r.json()}
+
+    r = client.get(f"/training/jobs/{run_id}/live")
+    assert r.status_code == 409, r.text
+    assert "training plugin 'gone-trainer' is not installed" in r.json()["detail"]
+
+    r = client.get(f"/training/jobs/{run_id}/train-longer")
+    assert r.status_code == 200, r.text
+    assert r.json()["steps"] == []
+    assert "training plugin 'gone-trainer' is not installed" in r.json()["reason"]
+
+
+def test_a_plugin_without_its_recipe_folder_leaves_the_others(tmp_path):
+    class Missing(FakeTrainer):
+        name = "missing-folder"
+        presets_dir = str(tmp_path / "not-there")
+
+    registry.register(Missing)
+    try:
+        ids = {preset["id"] for preset in presets.list_presets()}
+    finally:
+        registry.unregister(Missing.name)
+    assert "zimage-turbo" in ids
+
+
+def test_a_recipe_id_shipped_twice_keeps_the_first_plugins(tmp_path):
+    shipped = presets.get_preset("zimage-turbo")
+
+    class Twin(FakeTrainer):
+        name = "twin-trainer"
+        presets_dir = str(tmp_path / "presets")
+
+    os.makedirs(Twin.presets_dir)
+    with open(os.path.join(Twin.presets_dir, "zimage-turbo.json"), "w") as fh:
+        json.dump({k: v for k, v in shipped.items() if k != "trainer"}, fh)
+    registry.register(Twin)
+    try:
+        assert presets.get_preset("zimage-turbo")["trainer"] == "ai-toolkit"
+    finally:
+        registry.unregister(Twin.name)
+
+
 # ---------------------------------------------------------------------------
 # Restart paths, without a server
 # ---------------------------------------------------------------------------
