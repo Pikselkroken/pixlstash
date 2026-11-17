@@ -1,0 +1,45 @@
+{
+  "idea": "4-learning-curve-of-a-clip-logistic-regres",
+  "round": 1,
+  "questionRev": 1,
+  "verdict": "positive",
+  "finding": "Fitted on 100 human verdicts, the CLIP logistic regression put clearly more confirmed pictures in its top 50 held-out pictures than the shipped near-neighbour vote on 7 of 20 tags (for example jewelry 65% against 34%), and was never clearly behind; but a neighbour vote restricted to the judged pictures matched it on every tag, so the gain comes from using the rejects, not from the linear boundary.",
+  "wouldSettle": null,
+  "evidence": [
+    "evidence/gap_at_100.png",
+    "evidence/learning_curve_prec_top.png",
+    "evidence/learning_curve_ap.png",
+    "evidence/summary.csv",
+    "evidence/runs.csv",
+    "evidence/tags.csv"
+  ],
+  "followUps": [
+    {
+      "title": "Put a neighbour vote over judged pictures beside the classifier when a person judges the top 100",
+      "body": "In this round, two rankers tied on every tag. One is a logistic regression, a simple classifier that draws a straight dividing line through the picture embeddings (the 512 numbers PixlStash stores per picture). The other is a near-neighbour vote that only looks at pictures a person has already confirmed or rejected. But that test only ranked pictures that had already been judged. On the rest of the library they may behave differently: the vote can only reach pictures that sit close to a judged one, while the dividing line can reach pictures unlike anything judged so far. When a person judges top-100 lists (idea 5), add the judged-only vote as a third list. Count how many of each list's 100 pictures the person confirms, and how much the lists overlap. If the vote confirms as many, it is the simpler thing to ship.",
+      "importance": "do"
+    },
+    {
+      "title": "Break the shipped neighbour vote's ties when a tag has few confirmed pictures",
+      "body": "The shipped near-neighbour vote scores each picture by how many of its 12 most similar pictures carry the tag. With about 30 confirmed pictures in a library of 20,000, it gave a score of zero to 95-98% of the held-out pictures on content tags like face or smile. Its ranking was then mostly a coin toss, which is why it lost by 20-30 points. A cheap fix is to rank those tied pictures by how similar each one is to its nearest confirmed picture, or to count rejected pictures as known negatives instead of treating every unjudged picture as one. The same offline test from this round (held-out verdicts, precision in the top 50) would show whether the gap closes.",
+      "importance": "maybe"
+    },
+    {
+      "title": "Fit on more than 200 verdicts",
+      "body": "The learning curves rose only slowly between 50 and 200 verdicts and never changed which method was ahead. Fitting on 500 or 1,000 verdicts, for the few tags that have that many, would show where the curve flattens. It would not change the decision this test was for.",
+      "importance": "skip"
+    }
+  ],
+  "plain": {
+    "idea": "Teach the library a new tag from a few of a person's yes/no answers by drawing a simple dividing line through the pictures' stored descriptions, and see whether it finds the right pictures better than the current method, which looks for pictures that resemble ones already tagged.",
+    "settles": [
+      "Hide some of the person's past yes/no answers and train on the rest, using 50, 100 or 200 answers.",
+      "Each method ranks the hidden pictures; count how many of its top 50 the person had said yes to.",
+      "Repeat 20 times on each of 20 tags and call it a win only where the gap is bigger than the run-to-run wobble.",
+      "It passes if the new method clearly wins on at least three tags at 100 answers."
+    ],
+    "showed": "The new method clearly won on 7 of 20 tags, mostly visible things like teeth, smiles and jewelry, and never clearly lost. But a version of the current method that only compares against pictures the person already answered on did just as well, so the real gain is from learning from the person's 'no' answers, not from the new method itself. On flaw tags like malformed hands, all the methods came out close together, with only small gains over guessing."
+  },
+  "status": "provisional",
+  "concludedAt": null
+}
