@@ -1904,6 +1904,15 @@ up).
   the faces above the cut (`PUT /characters/{id}/reference-cluster`) and
   reload. On open the slider sits at the lowest saved face of the reference
   cluster.
+- **Save as set…** (secondary, beside the reference buttons on every cluster,
+  disabled when no face counts): asks for a name in an `AppDialog size="sm"`
+  (mounted per opening so the field takes focus), then creates a set under the
+  person in the person's projects (`createPictureSet` with
+  `parent_character_id`) and adds the faces above the cut in one
+  `bulkAddPicturesToSet` call, which brings in their stack-mates as every add
+  does; Undo takes the pictures out, the set stays. The ids are taken when the
+  name is asked for; the reference is untouched. A failed create stays open
+  with the reason under the field; a failed add says the set is empty.
 
 #### `CharacterSheetsDialog.vue` (`io/`)
 
