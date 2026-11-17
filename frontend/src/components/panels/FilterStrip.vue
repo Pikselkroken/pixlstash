@@ -24,6 +24,20 @@
     </div>
     <span class="filter-strip-tail">
       <span class="filter-strip-count">{{ ofLabel }}</span>
+      <!-- Save these filters as a set that fills itself (#2148). -->
+      <button
+        v-if="onSaveSmartSet"
+        class="filter-strip-clear"
+        type="button"
+        data-testid="save-smart-set"
+        @click="onSaveSmartSet()"
+      >
+        Save as smart set…
+        <Tooltip
+          text="A set that fills itself with every picture these filters match, now and as the library changes"
+          activator="parent"
+        />
+      </button>
       <button
         class="filter-strip-clear"
         type="button"
@@ -79,6 +93,9 @@ const props = defineProps({
   onClearAll: { type: Function, default: null },
   // Esc reaches Clear all: nothing selected and no search left to clear.
   ownsEscape: { type: Boolean, default: false },
+  // Save the view as a smart set (#2148). Null draws no button: the
+  // Workflows screen, a search, the Scrapheap, a share link.
+  onSaveSmartSet: { type: Function, default: null },
 });
 
 const store = useFilterStore();

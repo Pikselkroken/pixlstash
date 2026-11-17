@@ -68,6 +68,9 @@ class WsBroadcasterMixin:
             EventType.QUALITY_UPDATED,
         ):
             clear_stats_cache()
+        refresher = getattr(self, "smart_set_refresher", None)
+        if refresher is not None:
+            refresher.on_event(event_type, data)
         if not self._ws_loop:
             return
         coro = self._broadcast_ws_event(event_type, data)

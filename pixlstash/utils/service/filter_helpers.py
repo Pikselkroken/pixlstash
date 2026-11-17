@@ -528,14 +528,15 @@ def narrow_project_fields(
         set to the first narrowed id (the primary project when the caller may
         see it) or ``None`` when none are visible. A scoped caller also loses a
         picture set's parent ids: the parent can lie outside the grant (#2124);
-        and a training set's ``building`` state, which names pictures and runs
-        outside the set.
+        a training set's ``building`` state, which names pictures and runs
+        outside the set; and a smart set's rule, which names other sets,
+        people and tags.
     """
     narrowed = filter_visible_project_ids(project_ids, visible)
     payload["project_ids"] = narrowed
     payload["project_id"] = narrowed[0] if narrowed else None
     if visible is not None:
-        for key in ("parent_set_id", "parent_character_id", "building"):
+        for key in ("parent_set_id", "parent_character_id", "building", "smart"):
             if key in payload:
                 payload[key] = None
     return payload

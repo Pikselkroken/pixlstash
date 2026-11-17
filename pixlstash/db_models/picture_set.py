@@ -1,3 +1,4 @@
+from sqlalchemy import Boolean
 from sqlmodel import JSON, Column, ForeignKey, Integer, Relationship, SQLModel, Field
 
 from typing import List, Optional, TYPE_CHECKING
@@ -33,6 +34,13 @@ class PictureSetMember(SQLModel, table=True):
             index=True,
         ),
     )
+    # The row is a smart set's filter's own (#2148): the refresh added it and
+    # may take it away. Every other path that adds a picture to a set leaves it
+    # False, so the owner's additions are never undone by the filter.
+    smart_auto: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="0"),
+    )
 
 
 class PictureSet(SQLModel, table=True):
@@ -65,6 +73,14 @@ class PictureSet(SQLModel, table=True):
     # finished set; "Create set" clears it. Opaque to the backend except for
     # ``run_keys``, the sheet runs a delete of the set stops.
     building: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    # A smart set (#2148): its members come from a saved picture filter.
+    # ``{"filter": <GET /pictures query string>, "removed": [ids]}``, the ids
+    # being pictures the owner took out, which the filter does not put back.
+    # Null for every ordinary set. The members are still ``PictureSetMember``
+    # rows (services/smart_sets.py), so everything that reads a set reads a
+    # smart one unchanged. Replace the dict, never mutate it: a JSON column
+    # does not see an in-place change.
+    smart: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
     # Relationships
     members: List["Picture"] = Relationship(

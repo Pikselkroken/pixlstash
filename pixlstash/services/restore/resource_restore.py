@@ -974,7 +974,15 @@ class ResourceRestoreMixin:
             session.add(Tag(picture_id=tag.picture_id, tag=tag.tag))
             count += 1
         for psm in snap_rows.get("picture_set_members", []):
-            session.add(PictureSetMember(set_id=psm.set_id, picture_id=psm.picture_id))
+            session.add(
+                PictureSetMember(
+                    set_id=psm.set_id,
+                    picture_id=psm.picture_id,
+                    # A smart set's rule row stays the rule's (#2148); a snapshot
+                    # from before the flag has none, and its rows are the owner's.
+                    smart_auto=bool(getattr(psm, "smart_auto", False)),
+                )
+            )
             count += 1
         for ppm in snap_rows.get("picture_project_members", []):
             session.add(

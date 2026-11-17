@@ -67,6 +67,16 @@
           </template>
         </Tooltip>
 
+        <!-- A smart set (#2148) says what fills it, and whether the owner has
+             edited it by hand. Read-only: the rule is saved from the grid. -->
+        <div v-if="smartLine" class="lock-row smart-row" data-testid="smart-set-line">
+          <v-icon class="smart-row__icon" size="18">mdi-filter-variant</v-icon>
+          <span class="lock-row__body">
+            <span class="lock-row__title">Smart set</span>
+            <span class="lock-row__help">{{ smartLine }}</span>
+          </span>
+        </div>
+
         <!-- Locked toggle: the only control that stays active while the set is
              locked, so unticking + Save is the unlock path. -->
         <label class="lock-row">
@@ -80,7 +90,9 @@
             <span class="lock-row__title">Locked</span>
             <span class="lock-row__help">
               Locked sets are read-only: no edits to the set, its pictures'
-              tags, or descriptions until unlocked.
+              tags, or descriptions until unlocked.<template v-if="smartLine">
+                A locked smart set keeps the pictures it has.</template
+              >
             </span>
           </span>
         </label>
@@ -240,6 +252,7 @@ import Tooltip from "../widgets/Tooltip.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
 import AdapterTray from "../widgets/AdapterTray.vue";
 import { errorDetail } from "../../utils/apiError";
+import { smartSetDescription } from "../../utils/smartSets";
 
 import { API_BASE_URL } from "../../utils/apiClient";
 // Failures report through the notice surface instead of a blocking native
@@ -299,8 +312,13 @@ const isLockedSet = ref(false);
 // columns are populated on create, so it is only the title here.
 const isExistingSet = ref(false);
 
+// What a smart set's line says (#2148); null for an ordinary set. Latched by
+// the open watcher, like the title, so it does not vanish on the way out.
+const smartLine = ref(null);
+
 const dialogTitle = computed(() => {
   if (isExistingSet.value) return "Edit picture set";
+  if (smartLine.value) return "New smart set";
   const parentName = props.set?.parent_name;
   return parentName ? `New set in ${parentName}` : "New picture set";
 });
@@ -347,6 +365,11 @@ watch(
     openCount.value += 1;
     isExistingSet.value = !!newSet?.id;
     isLockedSet.value = !!newSet?.locked;
+    smartLine.value = newSet?.id
+      ? smartSetDescription(newSet)?.replace(/^Smart set: /, "") || null
+      : newSet?.smart_filter
+        ? `Fills itself with ${newSet.smart_summary || "the current filters"}: every picture they match, now and as the library changes.`
+        : null;
     if (newSet) {
       localSet.value = {
         id: newSet.id,
@@ -363,6 +386,12 @@ watch(
           : {
               parent_set_id: newSet.parent_set_id ?? null,
               parent_character_id: newSet.parent_character_id ?? null,
+              ...(newSet.smart_filter
+                ? {
+                    smart_filter: newSet.smart_filter,
+                    smart_summary: newSet.smart_summary ?? null,
+                  }
+                : {}),
             }),
       };
     } else {
@@ -551,6 +580,16 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
   line-height: var(--leading-body);
+}
+
+.smart-row {
+  cursor: default;
+}
+
+.smart-row__icon {
+  flex-shrink: 0;
+  margin-top: var(--space-1);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 /* Appearance pickers */

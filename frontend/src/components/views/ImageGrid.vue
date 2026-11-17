@@ -69,6 +69,7 @@
       :count-base-query="filterCountBaseQuery"
       :all-pictures-view="isAllPicturesFilterView"
       :owns-escape="escapeClearsFilters"
+      :on-save-smart-set="canSaveSmartSet ? handleSaveSmartSet : null"
     />
     <!-- ── Visible range pill ── -->
     <transition name="grid-range-fade">
@@ -1450,6 +1451,7 @@ import {
 import CharacterEditor from "../editors/CharacterEditor.vue";
 import PictureSetEditor from "../editors/PictureSetEditor.vue";
 import { nextSetAppearance } from "../../utils/setAppearance.js";
+import { smartSetSummary } from "../../utils/smartSets.js";
 import { getEntityProjectIds } from "../../utils/projectMembership.js";
 import {
   getPictureSet,
@@ -3995,8 +3997,13 @@ let pendingCreateSetPictureIds = [];
  * The Set picker's create row: name a new set (under the person it was asked
  * for, if any) in the set editor, then file the captured selection into it.
  */
-async function handleCreateSetFromMenu({ characterId = null, name = "" } = {}) {
-  pendingCreateSetPictureIds = selectedImageIds.value.slice();
+async function handleCreateSetFromMenu({
+  characterId = null,
+  name = "",
+  smart = null,
+} = {}) {
+  // A smart set fills itself from its filter, not from the selection.
+  pendingCreateSetPictureIds = smart ? [] : selectedImageIds.value.slice();
   const [projects, sets, person] = await Promise.all([
     listProjects().catch((e) => {
       console.warn("Couldn't list projects for the set editor", e);
@@ -4033,8 +4040,38 @@ async function handleCreateSetFromMenu({ characterId = null, name = "" } = {}) {
         : {}),
     parent_character_id: characterId,
     parent_name: name,
+    ...(smart || {}),
   };
   createSetOpen.value = true;
+}
+
+// ── Save the view as a smart set (#2148) ─────────────────────────────────────
+// Not while searching (a search is not a filter the set can keep), in the
+// Scrapheap, or for a share link, which cannot make sets.
+const canSaveSmartSet = computed(
+  () =>
+    !isReadOnly.value &&
+    !isScrapheapView.value &&
+    !(searchStore.searchQuery || "").trim(),
+);
+
+/**
+ * The filter strip's "Save as smart set…": the set editor, filled in with the
+ * grid's own query (captured now, as the grid shows it) and its words.
+ */
+function handleSaveSmartSet() {
+  const crumbs = breadcrumb.value || [];
+  handleCreateSetFromMenu({
+    smart: {
+      smart_filter: buildPictureIdsQueryParams(),
+      smart_summary: smartSetSummary({
+        view: isAllPicturesFilterView.value
+          ? null
+          : (crumbs[crumbs.length - 1]?.label ?? null),
+        chips: activeFilterChips.value,
+      }),
+    },
+  });
 }
 
 // The ids stay as captured at the click: the row promised those N pictures.
