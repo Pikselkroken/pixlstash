@@ -15,13 +15,7 @@
     "evidence/bakeoff_probe_auc.csv",
     "evidence/transfer_had_abhuman_dinov3.csv"
   ],
-  "followUps": [
-    {
-      "title": "Shrink the already-saved DINOv3 probe to 50, 100 and 200 labels",
-      "body": "pixltagger already keeps DINOv3 picture features and labels for its 1,707-picture evaluation set on disk, and this round showed that a simple classifier fitted on about 1,365 of those labels ranks anomaly tags well. Nobody knows how much of that survives with the 50 to 200 labels a PixlStash user would actually give. Refit the same classifier on random draws of 50, 100 and 200 labels from those saved features, repeat each draw several times, and count how many true positives land in its top 100 of the remaining pictures. It needs no new picture processing. If the count holds up at 100 labels, that supports computing a stronger embedding in PixlStash (notebook idea 9); if it collapses, the label count rather than the embedding is the limit.",
-      "importance": "maybe"
-    }
-  ],
+  "followUps": [],
   "plain": {
     "idea": "Teach the computer a picture label, such as 'malformed hand', by showing it examples a person has already marked yes or no, and let it fit a simple rule over a summary of each picture. Here the summary came from a strong image model and the examples came from a separate tagging project.",
     "settles": [
