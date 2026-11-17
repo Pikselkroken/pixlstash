@@ -1613,7 +1613,8 @@ export function useGridFetch(
         return;
       }
       fetchError = e;
-      imagesError.value = e.message;
+      console.warn("[useGridFetch] Grid fetch failed", { fetchKey, fetchMode }, e);
+      imagesError.value = e.message || String(e);
       // Don't wipe the grid on a transient error while the lightbox is open -
       // the user would see the grid flash empty behind the lightbox.
       if (!lightboxOpen.value) {

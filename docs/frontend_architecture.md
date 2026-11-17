@@ -442,6 +442,14 @@ A filter that matched nothing and an empty scrap heap keep the card they had —
 "No pictures match the current filters", "Are all your pictures that good?" —
 because those are questions with their own answers.
 
+None of them is said before the grid's fetch has answered: "no pictures match"
+is a claim about results, and a backend that has not replied has given none.
+While the fetch is in flight (`gridFetchPending`) the card reads "Loading…" and
+offers nothing, and the library-empty screen waits too. A failed fetch
+(`imagesError`) reads "Couldn't load pictures" with the error and a *Try again*
+that refetches; the library-empty screen still shows then, because its claim
+rests on the summary count, not on the grid.
+
 The third, `totalAllPicturesCount === 0`, is **the first screen of every
 install**, and it gets `LibraryEmptyState.vue`. It used to read *"No pictures in
 the database. Add pictures by dragging them here."* Two things were wrong with
