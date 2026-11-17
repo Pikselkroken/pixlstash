@@ -1636,6 +1636,13 @@ class ResourceArbiter:
                 return False
             self._checkpoint.begin()
         started = time.monotonic()
+        # Sized again once the calls in flight have ended: a search encoding
+        # on the GPU meanwhile grows what the restore needs. NVML is turned
+        # away by now, so this one comes from nvidia-smi.
+        if not self._checkpoint.drain():
+            self._checkpoint.abandon()
+            return False
+        held = max(held, self._ledger.own_mb(device) or 0)
         suspended = self._checkpoint.suspend()
         if not suspended:
             if suspended is False:

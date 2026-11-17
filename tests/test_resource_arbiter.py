@@ -136,6 +136,9 @@ class FakeCheckpoint:
         self.is_available = True
         self.resume_works = True
         self.on_suspend = None
+        # What happens while the calls in flight end, and whether they do.
+        self.on_drain = None
+        self.drains = True
         # True, or None for "not now" (a call in flight), or False: failed.
         self.suspend_result = True
         self.suspends = 0
@@ -149,6 +152,14 @@ class FakeCheckpoint:
 
     def begin(self):
         self.is_suspended = True
+
+    def drain(self):
+        if self.on_drain is not None:
+            self.on_drain()
+        return self.drains
+
+    def abandon(self):
+        self.is_suspended = False
 
     def suspend(self):
         self.suspends += 1
@@ -1758,6 +1769,28 @@ def test_a_strict_ledger_read_raises_where_a_plain_one_keeps_the_last():
     assert ledger.devices(max_age_s=0.0)[0].uuid == CARD, "the last one stands"
     with pytest.raises(RuntimeError):
         ledger.devices(max_age_s=0.0, strict=True)
+
+
+def test_the_restore_is_sized_after_the_calls_in_flight_have_ended():
+    arb, fake, ckpt, _asked = _suspend_scene()
+    lease = _train(arb)
+    # A search encoding on the GPU grew the context before the drain ended.
+    ckpt.on_drain = lambda: setattr(fake, "own", CONTEXT_MB + 300)
+    assert arb.suspend_pixlstash("SuspendCuda") is True
+    assert arb._suspended_mb == CONTEXT_MB + 300
+    lease.release()
+
+
+def test_a_drain_that_does_not_end_leaves_the_context_and_asks_again():
+    arb, _fake, ckpt, asked = _suspend_scene()
+    ckpt.drains = False
+    lease = _train(arb)
+    arb._suspend_step()
+    assert arb.suspend_pixlstash("SuspendCuda") is False
+    assert ckpt.suspends == 0 and not ckpt.suspended()
+    arb._suspend_step()
+    assert asked == [True, True]
+    lease.release()
 
 
 def test_a_restore_that_cannot_be_sized_is_never_risked():

@@ -151,6 +151,16 @@ def leave_device_call() -> None:
         _calls.notify_all()
 
 
+def drain() -> bool:
+    """Wait for the device calls in flight to end. Call after :func:`begin`.
+
+    Returns:
+        False when one did not end within :data:`LOCK_TIMEOUT_MS`.
+    """
+    with _calls:
+        return _calls.wait_for(lambda: _in_flight == 0, timeout=LOCK_TIMEOUT_MS / 1000)
+
+
 def suspend() -> bool | None:
     """Lock and checkpoint this process's CUDA context. Call after :func:`begin`.
 
@@ -164,11 +174,7 @@ def suspend() -> bool | None:
     if cuda is None:
         abandon()
         return False
-    with _calls:
-        drained = _calls.wait_for(
-            lambda: _in_flight == 0, timeout=LOCK_TIMEOUT_MS / 1000
-        )
-    if not drained:
+    if not drain():
         logger.info(
             "A device call did not finish in %ss; PixlStash keeps its CUDA "
             "context for now",
