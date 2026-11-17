@@ -2065,6 +2065,22 @@ clients see the effect, through `GET /characters/{id}/reference_pictures` and
 the training-set suggestion's likeness. Backend: §25.30 of the backend
 document.
 
+### 2.10 Smart picture sets (#2148)
+
+`POST /picture_sets` with `smart_filter` (the query string the grid sends to
+`GET /pictures`, as `useGridFetch.buildPictureIdsQueryParams` builds it) and an
+optional `smart_summary` (the chips in words, at most 500 characters) creates a
+smart set; a filter with nothing that narrows the library is a 400. The server
+keeps only the filter keys that say which pictures and never `project_id`: the
+set's own `project_ids` scope the rule. Set reads carry `smart: {filter,
+summary, removed}` (null for an ordinary set and for a scoped token), and the
+set list adds `smart.custom`. `PATCH /picture_sets/{id}` with
+`{"smart_reset": true}` is *Reset to automatic* (423 while locked). Members are
+ordinary members, so every other set route is unchanged; membership changes
+made by the refresh arrive as `CHANGED_PICTURES` with `source: "smart_set"` and
+no `origin_client_id`, which refreshes the sidebar like another tab's edit.
+Backend: the *Smart sets* paragraph in §5 of the backend document.
+
 ---
 
 

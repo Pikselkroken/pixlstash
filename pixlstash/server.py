@@ -188,6 +188,7 @@ from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 from pixlstash.utils.request_origin import OriginClientMiddleware
 from pixlstash.utils.service.share_copies import share_copies_root, sweep_share_copies
+from pixlstash.utils.service.smart_set_refresher import SmartSetRefresher
 from pixlstash.services.edit_copies import (
     EditCopyWatcher,
     edit_copies_root,
@@ -808,6 +809,9 @@ class Server(
         self._ws_clients = []
         self._ws_clients_lock = threading.Lock()
         self._ws_loop = None
+        # Smart sets (#2148) refresh after library events; handle_vault_event
+        # feeds it, for this vault and every one a switch opens.
+        self.smart_set_refresher = SmartSetRefresher(self)
         self.vault.add_event_listener(self.handle_vault_event)
 
         # Identity comes from the hub, never from the active vault. Pointing this
@@ -1047,6 +1051,9 @@ class Server(
         if watcher is not None:
             self._workflow_inbox_watcher = None
             watcher.stop()
+        refresher = getattr(self, "smart_set_refresher", None)
+        if refresher is not None:
+            refresher.close()
         # Before the vault closes, so a late debounce cannot write into it.
         watcher = getattr(self, "_edit_copy_watcher", None)
         if watcher is not None:

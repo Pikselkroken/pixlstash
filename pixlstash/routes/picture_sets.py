@@ -41,6 +41,13 @@ from pixlstash.services.project_membership_service import (
 from pixlstash.services.set_lock_service import (
     enforce_set_not_locked,
 )
+from pixlstash.services.smart_sets import (
+    SmartFilterError,
+    custom_smart_set_ids_in_session,
+    new_smart,
+    record_hand_edit,
+    reset_to_automatic_in_session,
+)
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.utils.library_layout import Facet
 from pixlstash.pixl_logging import get_logger
@@ -59,6 +66,7 @@ from pixlstash.scoring import (
 from pixlstash.utils.http_cache import conditional_file_response
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import normalize_hidden_tags
+from pixlstash.utils.service.smart_set_refresher import refresh_smart_sets
 from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.serialization_utils import safe_model_dict
 from pixlstash.utils.stack.stack_utils import deduplicate_by_stack
@@ -110,6 +118,17 @@ class PictureSetResponse(BaseModel):
         description=(
             "A training set still being built: what its build screen holds. "
             "Null once the set is finished, and for every other set."
+        ),
+    )
+    smart: Optional[dict] = PydanticField(
+        default=None,
+        description=(
+            "A smart set's rule: ``filter`` (the ``GET /pictures`` query string "
+            "its members come from), ``summary`` (that filter in words), "
+            "``removed`` (pictures the owner took out, "
+            "which the filter does not put back) and, on the set list, "
+            "``custom`` (the owner has edited its members by hand). Null for "
+            "an ordinary set, and for a scoped caller."
         ),
     )
     picture_count: Optional[int] = None
@@ -638,9 +657,15 @@ def create_router(server) -> APIRouter:
                         continue
                     top_ids_by_set.setdefault(int(set_id), []).append(int(picture_id))
 
+            custom_ids = custom_smart_set_ids_in_session(
+                session, [int(s.id) for s in sets if s.smart]
+            )
             result = []
             for s in sets:
                 set_dict = safe_model_dict(s)
+                if s.smart:
+                    # Custom: the owner's own rows or removals (#2148).
+                    set_dict["smart"] = {**s.smart, "custom": s.id in custom_ids}
                 narrow_project_fields(
                     set_dict, project_ids_by_set.get(int(s.id), []), visible_projects
                 )
@@ -969,7 +994,10 @@ def create_router(server) -> APIRouter:
             "``project_ids`` (a list of projects the set joins) or the legacy "
             "single ``project_id``, and at most one of ``parent_set_id`` and "
             "``parent_character_id`` to create it as a child set. ``building`` "
-            "creates it as a training set still being built."
+            "creates it as a training set still being built. ``smart_filter`` "
+            "(a ``GET /pictures`` query string) creates a smart set, whose "
+            "members come from that filter and follow the library; "
+            "``smart_summary`` is that filter in words, for display."
         ),
         response_model=PictureSetCreateResponse,
     )
@@ -984,6 +1012,12 @@ def create_router(server) -> APIRouter:
         building = _building_from(payload)
         if not name:
             raise HTTPException(status_code=400, detail="name is required")
+        smart = None
+        if payload.get("smart_filter") is not None:
+            try:
+                smart = new_smart(payload["smart_filter"], payload.get("smart_summary"))
+            except SmartFilterError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
 
         def create_set(session, name, description, project_ids, set_icon, set_color):
             _ensure_unique_set_name(session, name, project_ids)
@@ -997,6 +1031,7 @@ def create_router(server) -> APIRouter:
                 parent_set_id=parent_set_id,
                 parent_character_id=parent_character_id,
                 building=None if building is _UNSET else building,
+                smart=smart,
             )
             session.add(picture_set)
             session.commit()
@@ -1021,6 +1056,8 @@ def create_router(server) -> APIRouter:
             set_color,
             priority=DBPriority.IMMEDIATE,
         )
+        if smart is not None:
+            refresh_smart_sets(server, [set_dict["id"]])
         return {"status": "success", "picture_set": set_dict}
 
     @router.post(
@@ -1587,7 +1624,11 @@ def create_router(server) -> APIRouter:
             "so both null moves it to the top level. A set cannot sit under itself "
             "or one of its own child sets (400).\n\n"
             "**Building.** ``building`` replaces a training set's build state (a "
-            "JSON object, at most 256 KB); ``null`` marks the set finished."
+            "JSON object, at most 256 KB); ``null`` marks the set finished.\n\n"
+            "**Smart sets.** ``smart_reset: true`` forgets the owner's own "
+            "additions and removals on a smart set (Reset to automatic); a locked "
+            "set refuses it (423). A smart set's members are brought up to date "
+            "after every update, so an unlock or a project change shows at once."
         ),
         response_model=PictureSetUpdateResponse,
     )
@@ -1604,6 +1645,7 @@ def create_router(server) -> APIRouter:
         parent_set_id = payload.get("parent_set_id")
         parent_character_id = payload.get("parent_character_id")
         building = _building_from(payload)
+        smart_reset = payload.get("smart_reset") is True
 
         def update_set(session, id, name, description, set_icon, set_color, locked):
             picture_set = session.get(PictureSet, id)
@@ -1635,6 +1677,9 @@ def create_router(server) -> APIRouter:
             building_changing = (
                 building is not _UNSET and building != picture_set.building
             )
+            reset_changing = smart_reset and id in custom_smart_set_ids_in_session(
+                session, [id]
+            )
             name_effective_change = name is not None and name != picture_set.name
             project_effective_change = project_provided and sorted(
                 target_project_ids
@@ -1647,6 +1692,7 @@ def create_router(server) -> APIRouter:
                 or color_changing
                 or parent_changing
                 or building_changing
+                or reset_changing
             )
             if other_effective_change:
                 # Raises 423 iff the set is currently locked; passes through for an
@@ -1686,6 +1732,8 @@ def create_router(server) -> APIRouter:
                 picture_set.set_color = set_color
             if building_changing:
                 picture_set.building = building
+            if reset_changing:
+                reset_to_automatic_in_session(session, picture_set)
             if parent_changing:
                 validate_parent(session, id, parent_set_id, parent_character_id)
                 picture_set.parent_set_id = parent_set_id
@@ -1776,6 +1824,9 @@ def create_router(server) -> APIRouter:
         )
         if not success:
             raise HTTPException(status_code=404, detail="Picture set not found")
+        # A smart set's members follow its rule, edits, lock and projects; an
+        # ordinary set is not selected, so this is one cheap read for it.
+        refresh_smart_sets(server, [id])
         if project_changed:
             server.vault.notify(
                 EventType.CHANGED_PICTURES,
@@ -1943,6 +1994,8 @@ def create_router(server) -> APIRouter:
                 if exists is None:
                     session.add(PictureSetMember(set_id=id, picture_id=picture.id))
                     added_any = True
+            # A smart set keeps the owner's add over its filter (#2148).
+            record_hand_edit(picture_set, added=[picture.id for picture in pictures])
             # Issue #125: the set may belong to several projects, so the picture
             # joins *all* of them. Reading the primary FK here would leave the
             # picture out of every secondary project the set is shared with.
@@ -2027,6 +2080,10 @@ def create_router(server) -> APIRouter:
                 return False
             for m in members:
                 session.delete(m)
+            if picture_set is not None:
+                # A smart set keeps the owner's removal over its filter (#2148).
+                record_hand_edit(picture_set, removed=[m.picture_id for m in members])
+                session.add(picture_set)
             session.flush()
             return True
 
@@ -2104,6 +2161,9 @@ def create_router(server) -> APIRouter:
                 added_ids.append(pic_id)
                 existing.add(pic_id)
                 added += 1
+            # A smart set keeps the owner's adds over its filter (#2148).
+            record_hand_edit(picture_set, added=added_ids)
+            session.add(picture_set)
             # Issue #125: propagate to every project the set belongs to, not just
             # the primary FK.
             reconcile_entity_projects_change(
@@ -2212,7 +2272,15 @@ def create_router(server) -> APIRouter:
                 session.delete(m)
             for pic_id in member_ids:
                 session.add(PictureSetMember(set_id=set_id, picture_id=pic_id))
-            removed = len({m.picture_id for m in existing_members} - set(member_ids))
+            old_ids = {m.picture_id for m in existing_members}
+            removed = len(old_ids - set(member_ids))
+            # A smart set keeps the owner's edits over its filter (#2148).
+            record_hand_edit(
+                picture_set,
+                added=set(member_ids) - old_ids,
+                removed=old_ids - set(member_ids),
+            )
+            session.add(picture_set)
             # Issue #125: propagate to every project the set belongs to, not just
             # the primary FK.
             reconcile_entity_projects_change(

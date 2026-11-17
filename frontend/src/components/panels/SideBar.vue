@@ -131,6 +131,7 @@ import { useFilterStore } from "../../stores/useFilterStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorDetail } from "../../utils/apiError";
 import { buildLine, liveBuildRuns } from "../../utils/trainingSetBuild";
+import { smartSetDescription } from "../../utils/smartSets";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { activateOnEnterOrSpace } from "../../utils/keyboardActivation.js";
 import {
@@ -2524,6 +2525,22 @@ async function toggleSetLock(set) {
     lockedSetsStore.fetch();
   } catch (e) {
     console.error("Failed to toggle set lock", e);
+  }
+}
+
+// Reset to automatic (#2148): a smart set drops the owner's own additions and
+// removals and holds what its filter matches again.
+async function resetSmartSet(set) {
+  closeSidebarCtxMenu();
+  if (!set?.id) return;
+  try {
+    await patchPictureSet(set.id, { smart_reset: true });
+    refreshSidebar();
+  } catch (e) {
+    console.error("Failed to reset smart set", set.id, e);
+    noticeStore.error(`Couldn't reset ${set.name}. ${noticeDetail(e)}`, {
+      key: "smart-set-reset",
+    });
   }
 }
 
@@ -5767,6 +5784,20 @@ defineExpose({
                           >{{ setBuildLine(row.set).text }}</span
                         >
                       </span>
+                      <Tooltip
+                        v-if="row.set.smart"
+                        :text="smartSetDescription(row.set)"
+                      >
+                        <template #activator="{ props: tipProps }">
+                          <v-icon
+                            v-bind="tipProps"
+                            class="sidebar-lock-icon"
+                            size="11"
+                            data-testid="set-smart-icon"
+                            >mdi-filter-variant</v-icon
+                          >
+                        </template>
+                      </Tooltip>
                       <Tooltip v-if="row.set.locked" :text="SET_LOCKED_ROW_TITLE">
                         <template #activator="{ props: tipProps }">
                           <v-icon
@@ -6035,6 +6066,20 @@ defineExpose({
                           >{{ setBuildLine(row.set).text }}</span
                         >
                       </span>
+                      <Tooltip
+                        v-if="row.set.smart"
+                        :text="smartSetDescription(row.set)"
+                      >
+                        <template #activator="{ props: tipProps }">
+                          <v-icon
+                            v-bind="tipProps"
+                            class="sidebar-lock-icon"
+                            size="11"
+                            data-testid="set-smart-icon"
+                            >mdi-filter-variant</v-icon
+                          >
+                        </template>
+                      </Tooltip>
                       <Tooltip v-if="row.set.locked" :text="SET_LOCKED_ROW_TITLE">
                         <template #activator="{ props: tipProps }">
                           <v-icon
@@ -7101,6 +7146,27 @@ defineExpose({
               ? `Move out of "${setParentName(sidebarCtxSet)}"`
               : "Move to the top level"
           }}</span>
+        </button>
+        <!-- A smart set the owner edited by hand (#2148). Greyed while locked:
+             a locked set keeps the pictures it has. -->
+        <button
+          v-if="sidebarCtxSet.smart?.custom"
+          class="ctx-item"
+          :disabled="isReadOnly || sidebarCtxSet.locked"
+          :class="{ 'ctx-item--disabled': sidebarCtxSet.locked }"
+          data-testid="smart-set-reset"
+          @click="resetSmartSet(sidebarCtxSet)"
+        >
+          <Tooltip
+            :text="
+              sidebarCtxSet.locked
+                ? SET_LOCK_REASON
+                : 'Hold what its filter matches again: drops the pictures you added or took out by hand'
+            "
+            activator="parent"
+          />
+          <v-icon class="ctx-icon">mdi-filter-variant</v-icon>
+          <span class="ctx-label-text">Reset to automatic</span>
         </button>
         <!-- A set still being built saves its build as it goes: locked, it
              could neither save nor be cancelled. -->

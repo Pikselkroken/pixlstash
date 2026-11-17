@@ -251,3 +251,62 @@ describe("PictureSetEditor - adapter tray", () => {
     ).toBe(false);
   });
 });
+
+describe("PictureSetEditor - smart sets (#2148)", () => {
+  const saveButton = (wrapper) =>
+    wrapper
+      .findAll("button.app-button-stub")
+      .find((b) => b.text().includes("Save"));
+
+  it("creates a smart set with the filter it was opened with", async () => {
+    apiClient.post.mockResolvedValueOnce({
+      data: { status: "success", picture_set: { id: 9, name: "Best" } },
+    });
+    const wrapper = mountEditor({
+      name: "Best",
+      smart_filter: "tag=portrait&min_score=4",
+      smart_summary: "Tag portrait · Score 4+",
+    });
+    expect(wrapper.findComponent({ name: "AppDialog" }).props("title")).toBe(
+      "New smart set",
+    );
+    expect(wrapper.find("[data-testid=smart-set-line]").text()).toContain(
+      "Fills itself with Tag portrait · Score 4+",
+    );
+
+    await saveButton(wrapper).trigger("click");
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+    const [, body] = apiClient.post.mock.calls[0];
+    expect(body).toMatchObject({
+      name: "Best",
+      smart_filter: "tag=portrait&min_score=4",
+      smart_summary: "Tag portrait · Score 4+",
+    });
+  });
+
+  it("says a hand-edited smart set is custom, and never resends its filter", async () => {
+    const wrapper = mountEditor({
+      ...lockedSet,
+      locked: false,
+      smart: { filter: "tag=cat", summary: "Tag cat", removed: [3], custom: true },
+    });
+    expect(wrapper.findComponent({ name: "AppDialog" }).props("title")).toBe(
+      "Edit picture set",
+    );
+    expect(wrapper.find("[data-testid=smart-set-line]").text()).toContain(
+      "Custom: you added or took out pictures by hand.",
+    );
+    await saveButton(wrapper).trigger("click");
+    const [, body] = apiClient.patch.mock.calls[0];
+    expect(body).not.toHaveProperty("smart_filter");
+    expect(body).not.toHaveProperty("smart");
+  });
+
+  it("draws no smart line for an ordinary set", () => {
+    const wrapper = mountEditor({ ...lockedSet, locked: false });
+    expect(wrapper.find("[data-testid=smart-set-line]").exists()).toBe(false);
+    expect(wrapper.findComponent({ name: "AppDialog" }).props("title")).toBe(
+      "Edit picture set",
+    );
+  });
+});
