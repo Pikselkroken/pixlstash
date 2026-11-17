@@ -154,11 +154,20 @@ def leave_device_call() -> None:
 def drain() -> bool:
     """Wait for the device calls in flight to end. Call after :func:`begin`.
 
+    The generation changes once they have: a reading cached while they ran
+    may be smaller than what the restore is sized for after them.
+
     Returns:
         False when one did not end within :data:`LOCK_TIMEOUT_MS`.
     """
+    global _generation
     with _calls:
-        return _calls.wait_for(lambda: _in_flight == 0, timeout=LOCK_TIMEOUT_MS / 1000)
+        drained = _calls.wait_for(
+            lambda: _in_flight == 0, timeout=LOCK_TIMEOUT_MS / 1000
+        )
+        if drained:
+            _generation += 1
+        return drained
 
 
 def suspend() -> bool | None:

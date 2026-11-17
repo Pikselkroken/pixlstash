@@ -1974,6 +1974,11 @@ def test_the_smi_reading_is_read_again_once_the_context_moves(monkeypatch):
     monkeypatch.setattr(cuda_checkpoint, "_generation", cuda_checkpoint._generation + 1)
     smi.nvmlDeviceGetCount()
     assert len(runs) == 4, "a reading from before the checkpoint is not reused"
+    # One taken while the calls in flight ran would size the restore too small.
+    monkeypatch.setattr(cuda_checkpoint, "_in_flight", 0)
+    assert cuda_checkpoint.drain()
+    smi.nvmlDeviceGetCount()
+    assert len(runs) == 6, "a reading from before the drain ended is not reused"
 
 
 def test_a_suspend_waits_for_the_device_calls_in_flight(monkeypatch):
