@@ -714,12 +714,11 @@ async function centreOn(pictureId) {
   if (id == null) return;
   const mine = ++centreSeq;
   centring.value = true;
-  error.value = "";
   try {
     const result = await getFaceClusters(id, threshold.value, pictureId);
     if (mine !== centreSeq) return;
     // `data` is kept: the answer's clusters are the same ones.
-    centred.value = { picture_id: pictureId, members: result.centred || [] };
+    centred.value = { picture_id: pictureId, members: result.centred };
     centreCut.value = null;
     // Into the field only if focus was there; a side-panel button keeps it.
     if (fieldEl.value?.contains(document.activeElement)) focusFace(0);
@@ -727,7 +726,10 @@ async function centreOn(pictureId) {
   } catch (e) {
     if (mine !== centreSeq) return;
     console.error("Couldn't re-centre face clusters", id, pictureId, e);
-    error.value = `Couldn't re-centre on that face. ${errorDetail(e) || "Please try again."}`;
+    // A notice, not `error`: that would hide the whole pane, the way back with it.
+    useNoticeStore().error(`Couldn't re-centre on that face. ${errorDetail(e) || "Please try again."}`, {
+      key: "face-cluster-centre",
+    });
   } finally {
     if (mine === centreSeq) centring.value = false;
   }
@@ -816,7 +818,7 @@ const zoomCaption = computed(() => {
 function onRailKey(event) {
   if ((event.key !== "z" && event.key !== "Z") || event.ctrlKey || event.metaKey) return;
   event.preventDefault();
-  zoomIn("clusters", current.value.members[0].picture_id);
+  zoomIn("clusters", clusters.value[selected.value].members[0].picture_id);
 }
 
 function faceUrl(m) {

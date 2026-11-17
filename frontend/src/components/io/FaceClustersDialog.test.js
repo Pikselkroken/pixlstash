@@ -302,6 +302,23 @@ describe("FaceClustersDialog", () => {
     expect(wrapper.find('[data-testid="fc-centre"]').exists()).toBe(false);
     await faces[2].trigger("click");
     expect(wrapper.find('[data-testid="fc-centre"]').exists()).toBe(true);
+    // Zooming a centred face names its place in the centred ranking.
+    await faces[2].trigger("dblclick");
+    await flushPromises();
+    const popout = () => document.querySelector('[data-testid="zoom-popout"]');
+    expect(popout().querySelector(".zp-cap").textContent.trim()).toBe(
+      "Centred · face 3 of 8 · 0.60 to the chosen face · unrated",
+    );
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flushPromises();
+    // Z on the rail still zooms the selected cluster's own centre.
+    await wrapper.find('[data-testid="fc-rail"]').trigger("keydown", { key: "z" });
+    await flushPromises();
+    expect(popout().querySelector(".zp-cap").textContent.trim()).toBe(
+      "Cluster 2 · face 1 of 3, most typical · 0.84 to the centre · unrated",
+    );
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flushPromises();
     wrapper.unmount();
   });
 
