@@ -1,10 +1,11 @@
 {
-  "at": "2026-11-17T07:25:34.983Z",
-  "cause": "after the question was approved and its first ideas filed",
+  "at": "2026-11-17T07:37:14.285Z",
+  "cause": "after 2 was concluded negative and 10 filed under it",
   "order": [
     "4-learning-curve-of-a-clip-logistic-regres",
     "6-add-random-unjudged-pictures-as-backgrou",
     "7-combine-the-classifier-and-the-near-neig",
+    "10-add-a-random-batch-to-the-person-judged",
     "5-a-person-judges-the-classifier-s-top-100",
     "9-a-stronger-picture-embedding-for-tags-cl",
     "8-pick-the-next-pictures-to-judge-by-the-c"
@@ -13,21 +14,21 @@
     "4-learning-curve-of-a-clip-logistic-regres": {
       "impact": 3,
       "odds": 2,
-      "line": "The free offline test that says whether CLIP embeddings separate tags at all; every other idea leans on it.",
+      "line": "Still the free first gate: a loss here ends the question cheaply, though idea 2 shows a win on held-out verdicts does not prove new finds.",
       "why": {
-        "impact": "A clear win or loss here decides most of the question without anyone judging a picture.",
-        "odds": "Linear probes worked in pixltagger, but on a stronger backbone with thousands of labels, not CLIP ViT-B/32 with 100.",
-        "path": "Ideas 5 to 9 all need its harness and its answer first."
+        "impact": "A clear loss settles #2678 without anyone judging; a win only earns the human test.",
+        "odds": "Linear probes worked in pixltagger with about 1,200 labels on DINOv3 (idea 1); CLIP ViT-B/32 with 100 verdicts is untested.",
+        "path": "Ideas 5 to 10 all need its harness and its answer first."
       }
     },
     "6-add-random-unjudged-pictures-as-backgrou": {
       "impact": 2,
       "odds": 2,
-      "line": "A cheap offline fix for the review-picked negatives, worth settling before a person judges anything.",
+      "line": "A cheap offline fix for review-picked negatives, settled before a person judges anything.",
       "why": {
         "impact": "It changes which classifier goes in front of the person in idea 5.",
         "odds": "Review rejects are near-misses, so background negatives plausibly help the top of the ranking, but it may change little.",
-        "path": "Waits for idea 4's harness; idea 5 should use whichever variant wins."
+        "path": "Waits for idea 4; idea 5 should use whichever variant wins."
       }
     },
     "7-combine-the-classifier-and-the-near-neig": {
@@ -40,14 +41,24 @@
         "path": "Waits for idea 4; feeds the choice of what idea 5 tests."
       }
     },
+    "10-add-a-random-batch-to-the-person-judged": {
+      "impact": 3,
+      "odds": 3,
+      "line": "Run as part of idea 5's blind review: without a random batch, idea 5 cannot tell a working source from chance.",
+      "why": {
+        "impact": "Idea 2 found a strong model confirming new pictures at exactly the random rate, so this control decides whether idea 5's numbers mean anything.",
+        "odds": "Adding a random batch to a review is easy and almost certain to give a usable baseline.",
+        "path": "Waits for idea 4; shares idea 5's review, so it sits just before it."
+      }
+    },
     "5-a-person-judges-the-classifier-s-top-100": {
       "impact": 3,
-      "odds": 2,
-      "line": "The go/no-go test #2678 names, but it costs a person's time, so it runs once the offline ideas pick the variant.",
+      "odds": 1,
+      "line": "The go/no-go test #2678 names, now with lower odds: idea 2's much stronger model found new positives no better than random.",
       "why": {
         "impact": "Confirms on unjudged pictures are the issue's own success measure.",
-        "odds": "Depends on idea 4; held-out verdicts can flatter a ranker that only finds twins.",
-        "path": "Waits for idea 4, and should use the winners of ideas 6 and 7."
+        "odds": "In idea 2 the top-ranked new pictures were confirmed at the random rate (17% vs 17% for eyes), with a model far stronger than a 100-verdict CLIP classifier.",
+        "path": "Waits for idea 4, should use the winners of ideas 6 and 7, and should carry idea 10's random batch."
       }
     },
     "9-a-stronger-picture-embedding-for-tags-cl": {
@@ -56,21 +67,26 @@
       "line": "Only worth running if idea 4 fails on detail tags but works on broad ones.",
       "why": {
         "impact": "A larger embedding costs storage and a library pass, so a win is useful but expensive to ship.",
-        "odds": "DINOv3 probes did well in pixltagger, so the odds are fair if CLIP is the bottleneck.",
+        "odds": "Idea 1's DINOv3 probe put 56 to 74 true positives in its top 100, but with about 1,200 labels.",
         "path": "Waits for idea 4 to show which tags CLIP cannot separate."
       }
     },
     "8-pick-the-next-pictures-to-judge-by-the-c": {
       "impact": 1,
       "odds": 1,
-      "line": "Last: a similar out-of-fold ranking did no better than random in pixltagger, and it only speeds up a classifier that must work first.",
+      "line": "Last: idea 2 found a held-out model's ranking no better than random, and this only speeds up a classifier that must work first.",
       "why": {
         "impact": "It saves verdicts but does not answer whether the classifier works.",
-        "odds": "Idea 2 found out-of-fold surfacing at 11% against 10% random. Not yet judged.",
-        "path": "Waits for idea 4's harness."
+        "odds": "Idea 2 concluded negative: ranked batches confirmed at the random rate, and the score did not order positives (AUC 0.49).",
+        "path": "Waits for idea 4."
       }
     }
   },
   "pinned": {},
-  "moved": {}
+  "moved": {
+    "10-add-a-random-batch-to-the-person-judged": 3,
+    "5-a-person-judges-the-classifier-s-top-100": -1,
+    "9-a-stronger-picture-embedding-for-tags-cl": -1,
+    "8-pick-the-next-pictures-to-judge-by-the-c": -1
+  }
 }
