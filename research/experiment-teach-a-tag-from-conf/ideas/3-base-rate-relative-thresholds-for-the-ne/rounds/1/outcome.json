@@ -28,6 +28,11 @@
       "title": "Measure the base-rate thresholds on base rates 40-48% with the cap that shipped",
       "body": "After the July measurement a cap was added that keeps the add cut-off at no more than 55%. That changes the thresholds for every tag carried by more than 40% of pictures, so part of the tested range ships thresholds that were never measured. The model in this round says the balance there stays below 1x, so this is unlikely to change anything that matters for teaching a new, usually rare, tag.",
       "importance": "skip"
+    },
+    {
+      "title": "Have a person judge the vote's top 100 under the old and the new cut-offs",
+      "body": "The near-neighbour vote suggests adding a tag to a picture when enough of its 12 most similar pictures carry it. In July its fixed cut-offs (55% to add, 45% to remove) were replaced by cut-offs that move with how common the tag is. That change was only checked for balance, meaning roughly as many add suggestions as remove suggestions when labels are shuffled. Nobody checked whether people accept more of the suggestions. On three or four rare tags (carried by 5-25% of pictures), take the vote's top 100 add suggestions under each set of cut-offs, mix them, have a person judge them without knowing which list each came from, and count the confirmations per list. The ranking itself is the same under both, so the two lists can differ only where the old 55% bar lets fewer than 100 pictures through. Expect a difference on the rarest tags and none on the common ones. This settles round 1's open verdict, but only matters for the main question in that it fixes which version of the vote the classifier has to beat.",
+      "importance": "maybe"
     }
   ],
   "plain": {
