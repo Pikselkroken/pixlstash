@@ -1,6 +1,6 @@
 {
-  "at": "2026-11-17T18:20:08.373Z",
-  "cause": "after 5 came back negative",
+  "at": "2026-11-17T18:20:27.831Z",
+  "cause": "after 5 was concluded negative",
   "order": [
     "10-add-a-random-batch-to-the-person-judged",
     "14-break-the-shipped-neighbour-vote-s-ties",
@@ -15,7 +15,7 @@
     "10-add-a-random-batch-to-the-person-judged": {
       "impact": 3,
       "odds": 3,
-      "line": "Still first: idea 5 judged no random batch, so nobody knows how far any method sits above chance. Not yet judged.",
+      "line": "Still first: idea 5 judged no random batch, so nobody knows how far any method sits above chance.",
       "why": {
         "impact": "Without a chance rate, idea 5's 83% against 96% on hand cannot say whether either source finds anything a random pick would not.",
         "odds": "Adding a random batch to a review is easy and almost certain to give a usable baseline.",
@@ -25,7 +25,7 @@
     "14-break-the-shipped-neighbour-vote-s-ties": {
       "impact": 1,
       "odds": 2,
-      "line": "Lower: its premise came from idea 4's held-out test, and on the open library the shipped vote beat the classifier on hand. Not yet judged.",
+      "line": "Lower: its premise came from idea 4's held-out test, and on the open library the shipped vote beat the classifier on hand.",
       "why": {
         "impact": "Idea 5 found held-out rankings did not predict library rankings, so an offline gain here would need a person to confirm it.",
         "odds": "Ties are real when a tag has few yes pictures, but the shipped vote already confirmed 94 of 98 on hand.",
@@ -35,7 +35,7 @@
     "9-a-stronger-picture-embedding-for-tags-cl": {
       "impact": 1,
       "odds": 2,
-      "line": "Lower: it would be measured on held-out verdicts, which idea 5 showed do not predict what a person confirms in the library. Not yet judged.",
+      "line": "Lower: it would be measured on held-out verdicts, which idea 5 showed do not predict what a person confirms in the library.",
       "why": {
         "impact": "It would open fine-grained tags, but those are mostly the anomaly tagger's own, and any offline win now needs a human check.",
         "odds": "Idea 1's DINOv3 probe did well on defect tags, but with about 1,200 labels rather than 100.",
@@ -55,7 +55,7 @@
     "13-put-a-neighbour-vote-over-judged-picture": {
       "impact": 1,
       "odds": 3,
-      "line": "Largely done inside idea 5, which judged the judged-only vote's top 100 too: it sat between the other two on both tags. Not yet judged.",
+      "line": "Largely done inside idea 5, which judged the judged-only vote's top 100 too: it sat between the other two on both tags.",
       "why": {
         "impact": "Idea 5 already reports its confirm rates and overlap, so a separate session adds little.",
         "odds": "The list exists and was judged.",
@@ -65,7 +65,7 @@
     "7-combine-the-classifier-and-the-near-neig": {
       "impact": 1,
       "odds": 1,
-      "line": "Weak: the lists barely overlap (2 to 20 shared pictures), but combining a weaker classifier with a stronger vote is unlikely to beat the vote. Not yet judged.",
+      "line": "Weak: the lists barely overlap (2 to 20 shared pictures), but combining a weaker classifier with a stronger vote is unlikely to beat the vote.",
       "why": {
         "impact": "If the classifier does not beat the vote, a combination is unlikely to ship.",
         "odds": "Idea 5 found the classifier clearly behind on hand and not clearly ahead on jewelry.",
@@ -85,20 +85,14 @@
     "8-pick-the-next-pictures-to-judge-by-the-c": {
       "impact": 1,
       "odds": 1,
-      "line": "Last: it speeds up a classifier that idea 5 found no better than the shipped vote, and idea 2 found such rankings no better than random. Not yet judged.",
+      "line": "Last: it speeds up a classifier that idea 5 found no better than the shipped vote, and idea 2 found such rankings no better than random.",
       "why": {
         "impact": "It saves verdicts but does not answer whether the classifier works.",
         "odds": "Idea 2 concluded negative, and idea 5 came back negative.",
-        "path": "Waits for idea 5."
+        "path": "Idea 5 is concluded negative, so nothing it could speed up has been shown to work."
       }
     }
   },
   "pinned": {},
-  "moved": {
-    "9-a-stronger-picture-embedding-for-tags-cl": 1,
-    "12-have-a-person-judge-the-vote-s-top-100-u": 3,
-    "13-put-a-neighbour-vote-over-judged-picture": -2,
-    "7-combine-the-classifier-and-the-near-neig": -1,
-    "11-use-the-base-rate-thresholds-as-the-near": -1
-  }
+  "moved": {}
 }
