@@ -40,8 +40,17 @@ class FakeLedger:
     def __init__(self, used_mb=0, measurable=True):
         self.used_mb = used_mb
         self.measurable = measurable
+        # What this process holds on the card; None: NVML does not say.
+        self.own = None
+        self.unreadable = False
+        # Runs during a strict read: what another thread did meanwhile.
+        self.while_reading = None
 
-    def devices(self, max_age_s=1.0):
+    def devices(self, max_age_s=1.0, strict=False):
+        if strict and self.unreadable:
+            raise RuntimeError("nvidia-smi timed out")
+        if strict and self.while_reading is not None:
+            self.while_reading()
         return [
             DeviceReading(
                 uuid=CARD,
@@ -55,6 +64,9 @@ class FakeLedger:
 
     def device(self, uuid):
         return next((d for d in self.devices() if d.uuid == uuid), None)
+
+    def own_mb(self, uuid):
+        return self.own if uuid == CARD else None
 
     def pixlstash_device(self):
         return CARD
@@ -124,6 +136,8 @@ class FakeCheckpoint:
         self.is_available = True
         self.resume_works = True
         self.on_suspend = None
+        # True, or None for "not now" (a call in flight), or False: failed.
+        self.suspend_result = True
         self.suspends = 0
         self.resumes = 0
 
@@ -138,6 +152,9 @@ class FakeCheckpoint:
 
     def suspend(self):
         self.suspends += 1
+        if self.suspend_result is not True:
+            self.is_suspended = False
+            return self.suspend_result
         if self.on_suspend is not None:
             self.on_suspend()
         return True
@@ -1384,6 +1401,8 @@ def test_the_ledger_lists_one_cards_processes_without_its_own():
     assert ledger.processes("GPU-0") == {4242: 13254}
     assert ledger.processes("GPU-1") == {5151: 800}, "not available is no figure"
     assert ledger.processes() == {4242: 13254, 5151: 800}
+    assert ledger.own_mb("GPU-0") == 900, "its own figure, only for itself"
+    assert ledger.own_mb("GPU-1") is None
 
 
 def test_a_local_comfyui_loading_a_model_is_still_on_this_card(monkeypatch):
@@ -1534,6 +1553,8 @@ def _suspend_scene(used_mb=4000, enforcing=True, measurable=True):
         checkpoint=ckpt,
     )
 
+    fake.own = CONTEXT_MB
+
     def leave_the_card():
         fake.used_mb -= CONTEXT_MB
 
@@ -1661,7 +1682,7 @@ def test_a_failed_restore_keeps_pixlstash_off_the_gpu_and_says_so():
 
 def test_a_failed_suspend_is_not_asked_again_for_the_same_lease():
     arb, _fake, ckpt, asked = _suspend_scene()
-    ckpt.suspend = lambda: setattr(ckpt, "is_suspended", False) or False
+    ckpt.suspend_result = False
     lease = _train(arb)
     arb._suspend_step()
     assert arb.suspend_pixlstash("SuspendCuda") is False
@@ -1684,6 +1705,99 @@ def test_never_suspends_when_not_enforcing_or_the_card_cannot_be_measured(scene)
     assert asked == [] and arb.suspend_pixlstash("SuspendCuda") is False
     assert ckpt.suspends == 0
     lease.release()
+
+
+def test_a_restore_needs_a_fresh_reading_of_the_card():
+    arb, fake, ckpt, _asked = _suspend_scene()
+    lease = _train(arb)
+    assert arb.suspend_pixlstash("SuspendCuda") is True
+    lease.release()
+    fake.unreadable = True
+    arb._refresh()
+    arb._suspend_step()
+    assert ckpt.resumes == 0, "the last reading may be from before a fill"
+    fake.unreadable = False
+    arb._suspend_step()
+    assert ckpt.resumes == 1
+
+
+def test_a_lease_granted_while_the_card_is_read_keeps_it_suspended():
+    arb, fake, ckpt, _asked = _suspend_scene()
+    lease = _train(arb)
+    assert arb.suspend_pixlstash("SuspendCuda") is True
+    lease.release()
+    later = []
+    fake.while_reading = lambda: later.append(_train(arb))
+    arb._refresh()
+    arb._suspend_step()
+    assert later and ckpt.resumes == 0
+    later[0].release()
+
+
+def test_a_strict_ledger_read_raises_where_a_plain_one_keeps_the_last():
+    failing = {"now": False}
+
+    def count():
+        if failing["now"]:
+            raise RuntimeError("NVML went away")
+        return 1
+
+    nvml = SimpleNamespace(
+        nvmlInit=lambda: None,
+        nvmlDeviceGetCount=count,
+        nvmlDeviceGetHandleByIndex=lambda index: index,
+        nvmlDeviceGetMemoryInfo=lambda handle: SimpleNamespace(
+            total=TOTAL * 1024 * 1024, used=0
+        ),
+        nvmlDeviceGetUUID=lambda handle: CARD,
+        nvmlDeviceGetName=lambda handle: "Test GPU",
+    )
+    ledger = Ledger(nvml)
+    assert ledger.devices(max_age_s=0.0)[0].uuid == CARD
+    failing["now"] = True
+    assert ledger.devices(max_age_s=0.0)[0].uuid == CARD, "the last one stands"
+    with pytest.raises(RuntimeError):
+        ledger.devices(max_age_s=0.0, strict=True)
+
+
+def test_a_restore_that_cannot_be_sized_is_never_risked():
+    arb, fake, ckpt, asked = _suspend_scene()
+    fake.own = None
+    lease = _train(arb)
+    arb._suspend_step()
+    assert arb.suspend_pixlstash("SuspendCuda") is False
+    assert ckpt.suspends == 0 and not ckpt.suspended()
+    arb._suspend_step()
+    assert asked == [True], "not asked again for the same lease"
+    lease.release()
+
+
+def test_a_suspend_not_possible_now_is_asked_again():
+    arb, _fake, ckpt, asked = _suspend_scene()
+    ckpt.suspend_result = None
+    lease = _train(arb)
+    arb._suspend_step()
+    assert arb.suspend_pixlstash("SuspendCuda") is False
+    assert not ckpt.suspended()
+    arb._suspend_step()
+    assert asked == [True, True]
+    ckpt.suspend_result = True
+    assert arb.suspend_pixlstash("SuspendCuda") is True
+    lease.release()
+
+
+def test_the_unload_before_a_suspend_waits_for_pixlstash_gpu_work():
+    arb, _fake, _ckpt, _asked = _suspend_scene()
+    lease = _train(arb)
+    search = arb.try_light("Search", need_mb=0, urgent=True)
+    own = arb.try_light("SuspendCuda", worker_type="SuspendCuda", urgent=True)
+    assert not arb.wants_suspend("SuspendCuda")
+    search.release()
+    assert arb.wants_suspend("SuspendCuda")
+    assert not arb.wants_suspend(), "its own lease counts for anyone else"
+    own.release()
+    lease.release()
+    assert not arb.wants_suspend("SuspendCuda")
 
 
 def test_pixlstashs_own_exclusive_work_never_suspends_it():
@@ -1738,8 +1852,11 @@ def test_a_search_encodes_on_cpu_copies_while_suspended(monkeypatch):
             assert services == ("cpu-clip", "cpu-sbert")
     assert built == [1]
     monkeypatch.setattr(cuda_checkpoint, "_suspended", False)
+    monkeypatch.setattr(cuda_checkpoint, "_in_flight", 0)
     with InferenceEngine.query_services(engine) as services:
         assert services == ("cuda-clip", "cuda-sbert")
+        assert cuda_checkpoint._in_flight == 1, "a suspend waits for this encode"
+    assert cuda_checkpoint._in_flight == 0
     assert engine._suspended_query_encoders is None
 
 
@@ -1826,7 +1943,7 @@ def test_the_smi_reading_is_read_again_once_the_context_moves(monkeypatch):
     assert len(runs) == 4, "a reading from before the checkpoint is not reused"
 
 
-def test_a_suspend_waits_for_the_nvml_calls_in_flight(monkeypatch):
+def test_a_suspend_waits_for_the_device_calls_in_flight(monkeypatch):
     order = []
 
     def driver_call(name):
@@ -1840,19 +1957,19 @@ def test_a_suspend_waits_for_the_nvml_calls_in_flight(monkeypatch):
     )
     monkeypatch.setattr(cuda_checkpoint, "_cuda", lambda: lib)
     monkeypatch.setattr(cuda_checkpoint, "_suspended", False)
-    monkeypatch.setattr(cuda_checkpoint, "_nvml_calls", 0)
-    assert cuda_checkpoint.enter_nvml()
+    monkeypatch.setattr(cuda_checkpoint, "_in_flight", 0)
+    assert cuda_checkpoint.enter_device_call()
 
     def finish():
         time.sleep(0.3)
-        order.append("nvml done")
-        cuda_checkpoint.leave_nvml()
+        order.append("call done")
+        cuda_checkpoint.leave_device_call()
 
     threading.Thread(target=finish).start()
     cuda_checkpoint.begin()
-    assert not cuda_checkpoint.enter_nvml(), "no new NVML call once it began"
+    assert not cuda_checkpoint.enter_device_call(), "none starts once it began"
     assert cuda_checkpoint.suspend()
-    assert order == ["nvml done", "lock", "checkpoint"]
+    assert order == ["call done", "lock", "checkpoint"]
     assert cuda_checkpoint.resume()
     assert not cuda_checkpoint.suspended()
     assert order[-2:] == ["restore", "unlock"]
@@ -1869,7 +1986,7 @@ def test_the_vault_queues_one_unload_and_suspend_on_the_gpu_worker():
         _task_runner=runner,
         _cuda_suspend_task=None,
         _arbiter=SimpleNamespace(
-            wants_suspend=lambda: True,
+            wants_suspend=lambda worker_type=None: worker_type == CUDA_SUSPEND_TASK,
             suspend_pixlstash=lambda worker_type: steps.append(
                 ("suspend", worker_type)
             ),

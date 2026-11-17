@@ -430,14 +430,18 @@ class InferenceEngine:
         with self._query_lock:
             if self.query_encoders is not None:
                 yield self.query_encoders.services()
-            elif cuda_checkpoint.suspended():
+            elif cuda_checkpoint.enter_device_call():
+                # Counted in flight: a suspend waits for this encode to end.
+                try:
+                    self._suspended_query_encoders = None
+                    yield self.clip_service, self.sbert_service
+                finally:
+                    cuda_checkpoint.leave_device_call()
+            else:
                 if self._suspended_query_encoders is None:
                     self._suspended_query_encoders = cpu_query_encoders()
                     self._suspended_query_encoders.load()
                 yield self._suspended_query_encoders.services()
-            else:
-                self._suspended_query_encoders = None
-                yield self.clip_service, self.sbert_service
 
     def safe_idle_unload(self) -> None:
         """Release non-captioning models during idle periods."""

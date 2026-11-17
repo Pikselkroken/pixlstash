@@ -11,10 +11,12 @@ RTX 5090 (driver 615, torch 2.13): an allocation, a kernel, ``empty_cache``
 and ``torch.cuda.utilization`` block until :func:`resume`, ``mem_get_info``
 raises, and ``torch.cuda.synchronize`` **kills the process**. Every NVML call
 made in this process blocks as well, so the ledger answers from
-``nvidia-smi`` meanwhile (``ledger.SmiNvml``), and a suspend waits for the
-NVML calls in flight (:func:`enter_nvml`). Every CUDA path checks
-:func:`suspended` first; the arbiter refuses PixlStash's GPU leases and
-``empty_accelerator_cache`` does nothing.
+``nvidia-smi`` meanwhile (``ledger.SmiNvml``). So nothing PixlStash runs makes
+one: the arbiter refuses PixlStash's GPU leases, ``empty_accelerator_cache``
+does nothing, and the device calls made outside a lease (NVML through the
+ledger, a search's query encode, the tag model preload, the planner's
+utilisation sample) are counted in flight with :func:`enter_device_call`,
+which a suspend waits to drain and which turns them away once it has begun.
 
 A failed restore cannot be retried: a restore into a full card fails out of
 memory, the next attempt fails with an OS error and the context never comes
@@ -40,9 +42,9 @@ CUDA_SUSPEND_ENABLED = True
 LOCK_TIMEOUT_MS = 10_000
 
 _lock = threading.Lock()
-# Guards _suspended against the count of NVML calls in flight.
+# Guards _suspended against the count of device calls in flight.
 _calls = threading.Condition()
-_nvml_calls = 0
+_in_flight = 0
 _suspended = False
 # Counts the context leaving and returning to the card: a reading taken in
 # another generation describes a different card.
@@ -126,34 +128,36 @@ def abandon() -> None:
             _suspended = False
 
 
-def enter_nvml() -> bool:
-    """Register an NVML call about to be made in this process.
+def enter_device_call() -> bool:
+    """Register a CUDA or NVML call about to be made outside a GPU lease.
 
     Returns:
-        False while suspended, when the call must not be made here (it would
-        block until the restore); otherwise True, and :func:`leave_nvml` must
-        follow the call.
+        False while suspended, or being suspended, when the call must not be
+        made here (it would block until the restore); otherwise True, and
+        :func:`leave_device_call` must follow the call.
     """
-    global _nvml_calls
+    global _in_flight
     with _calls:
         if _suspended:
             return False
-        _nvml_calls += 1
+        _in_flight += 1
         return True
 
 
-def leave_nvml() -> None:
-    global _nvml_calls
+def leave_device_call() -> None:
+    global _in_flight
     with _calls:
-        _nvml_calls -= 1
+        _in_flight -= 1
         _calls.notify_all()
 
 
-def suspend() -> bool:
+def suspend() -> bool | None:
     """Lock and checkpoint this process's CUDA context. Call after :func:`begin`.
 
     Returns:
-        True when the context is off the card. False leaves it as it was.
+        True when the context is off the card. None when it could not be done
+        now (a device call or CUDA work in flight did not finish in time) and
+        may be tried again; False when it failed. Either leaves it as it was.
     """
     global _failed, _generation
     cuda = _cuda()
@@ -162,28 +166,29 @@ def suspend() -> bool:
         return False
     with _calls:
         drained = _calls.wait_for(
-            lambda: _nvml_calls == 0, timeout=LOCK_TIMEOUT_MS / 1000
+            lambda: _in_flight == 0, timeout=LOCK_TIMEOUT_MS / 1000
         )
     if not drained:
-        logger.warning(
-            "An NVML read did not finish in %ss; PixlStash keeps its CUDA context",
+        logger.info(
+            "A device call did not finish in %ss; PixlStash keeps its CUDA "
+            "context for now",
             LOCK_TIMEOUT_MS / 1000,
         )
         abandon()
-        return False
+        return None
     pid = os.getpid()
     with _lock:
         code = cuda.cuCheckpointProcessLock(
             pid, ctypes.byref(_LockArgs(LOCK_TIMEOUT_MS))
         )
         if code != 0:
-            logger.warning(
+            logger.info(
                 "Could not lock PixlStash's CUDA work to suspend it (CUresult %s); "
-                "it keeps its context",
+                "it keeps its context for now",
                 code,
             )
             abandon()
-            return False
+            return None
         code = cuda.cuCheckpointProcessCheckpoint(pid, None)
         if code == 0:
             _generation += 1

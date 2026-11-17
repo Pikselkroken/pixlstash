@@ -689,9 +689,7 @@ class WorkPlanner:
         """
         with self._lock:
             active = list(self._pass_stats.values())
-        if not active or self._gpu_util_unavailable or cuda_checkpoint.suspended():
-            # Suspended for a training run, the utilisation read blocks until
-            # the run ends: those bursts simply get fewer samples.
+        if not active or self._gpu_util_unavailable:
             return
         torch = sys.modules.get("torch")
         if torch is None:
@@ -718,7 +716,14 @@ class WorkPlanner:
                     "device (any other accelerator is unaffected and still used)"
                 )
                 return
-            utilization = float(torch.cuda.utilization())
+            # torch reads NVML itself, which blocks until the training run
+            # ends while the CUDA context is suspended: no sample then.
+            if not cuda_checkpoint.enter_device_call():
+                return
+            try:
+                utilization = float(torch.cuda.utilization())
+            finally:
+                cuda_checkpoint.leave_device_call()
         except Exception as exc:
             # ModuleNotFoundError when pynvml is not installed, or an NVML
             # error; either way the fraction is reported as n/a for the run.

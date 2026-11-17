@@ -3014,7 +3014,8 @@ class Vault:
         task = DeviceReleaseTask(
             CUDA_SUSPEND_TASK,
             self._unload_and_suspend,
-            when=self._arbiter.wants_suspend,
+            # Checked on the worker: no unload under PixlStash's own GPU work.
+            when=lambda: self._arbiter.wants_suspend(CUDA_SUSPEND_TASK),
         )
         try:
             runner.submit(task)
