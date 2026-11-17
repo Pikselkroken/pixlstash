@@ -14,7 +14,7 @@ from pixlstash.services.training_service import handle_for_run
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
 from pixlstash.tasks.training_preview_faces_task import TrainingPreviewFacesTask
 from pixlstash.training import preview_likeness
-from pixlstash.utils.aitoolkit_run import read_run
+from pixlstash.utils.training_run_folder import read_run
 from pixlstash.utils.insightface_model_utils import DEFAULT_MODEL_PACK
 
 logger = get_logger(__name__)

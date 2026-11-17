@@ -6,7 +6,7 @@ import re
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import comfyui_connections
-from pixlstash.training import ai_toolkit_install
+from pixlstash.training_plugins.ai_toolkit import install as ai_toolkit_install
 
 from pixlstash.utils.system_utils import (  # noqa: F401
     MAX_VRAM_BUDGET_GB,

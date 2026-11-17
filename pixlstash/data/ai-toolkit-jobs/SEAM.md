@@ -1,6 +1,6 @@
 # ai-toolkit integration seam (the firewall contract)
 
-This documents **everything PixlStash's `LocalAiToolkit` adapter relies on** about ai-toolkit, so a
+This documents **everything PixlStash's `AiToolkitPlugin` adapter relies on** about ai-toolkit, so a
 version bump is a single-file change. Verified against the local clone
 `~/ai-toolkit` @ commit `9490f03` (v0.10.11). Re-verify on every bump.
 

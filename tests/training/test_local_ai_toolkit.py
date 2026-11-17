@@ -1,4 +1,4 @@
-"""Integration tests for the LocalAiToolkit adapter, driven by fake_run.py.
+"""Integration tests for the AiToolkitPlugin adapter, driven by fake_run.py.
 
 These exercise the full prepare → submit → poll → (cancel) lifecycle against a
 faithful CPU-only stub of ai-toolkit's ``run.py`` (``fake_run.py`` in this
@@ -21,9 +21,9 @@ from types import SimpleNamespace
 import psutil
 import pytest
 
-from pixlstash.training import local_ai_toolkit as local_ai_toolkit_module
+from pixlstash.training_plugins.ai_toolkit import adapter as local_ai_toolkit_module
 from pixlstash.training.backend import TrainingHandle, TrainingSpec
-from pixlstash.training.local_ai_toolkit import LocalAiToolkit, safe_job_stem
+from pixlstash.training_plugins.ai_toolkit.adapter import AiToolkitPlugin, safe_job_stem
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 # A trimmed, fast template (12 steps, save_every 4) used to drive the stub.
@@ -34,9 +34,9 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _FAST_TEMPLATE_PATH = os.path.join(_THIS_DIR, "fast_template.json")
 
 
-def _make_backend() -> LocalAiToolkit:
-    """Construct a LocalAiToolkit pointed at the in-tree fake run script."""
-    return LocalAiToolkit(
+def _make_backend() -> AiToolkitPlugin:
+    """Construct a AiToolkitPlugin pointed at the in-tree fake run script."""
+    return AiToolkitPlugin(
         ai_toolkit_repo_path=_THIS_DIR,
         ai_toolkit_python=sys.executable,
         run_script="fake_run.py",
@@ -263,8 +263,8 @@ def test_full_run_progresses_to_completed(tmp_path):
 _LAUNCH_AND_EXIT = """
 import dataclasses, json, sys
 from pixlstash.training.backend import TrainingHandle, TrainingSpec
-from pixlstash.training.local_ai_toolkit import LocalAiToolkit
-backend = LocalAiToolkit(*sys.argv[1:4])
+from pixlstash.training_plugins.ai_toolkit.adapter import AiToolkitPlugin
+backend = AiToolkitPlugin(*sys.argv[1:4])
 spec = TrainingSpec(**json.loads(sys.argv[4]))
 handle = backend.prepare(spec)
 backend.submit(handle, spec)
@@ -368,7 +368,7 @@ def test_cancel_never_signals_a_pid_that_is_not_the_trainer(tmp_path):
     backend = _make_backend()
     spec = _make_spec(tmp_path)
     handle = backend.prepare(spec)
-    LocalAiToolkit._set_job_status(handle.sqlite_db_path, handle.job_id, "running")
+    AiToolkitPlugin._set_job_status(handle.sqlite_db_path, handle.job_id, "running")
     sleeper = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True
     )
@@ -392,8 +392,8 @@ def test_an_unverifiable_inherited_pid_stays_alive_but_is_never_signalled(
     backend = _make_backend()
     spec = _make_spec(tmp_path)
     handle = backend.prepare(spec)
-    LocalAiToolkit._set_job_status(handle.sqlite_db_path, handle.job_id, "running")
-    monkeypatch.setattr(LocalAiToolkit, "_is_our_trainer", lambda self, h: None)
+    AiToolkitPlugin._set_job_status(handle.sqlite_db_path, handle.job_id, "running")
+    monkeypatch.setattr(AiToolkitPlugin, "_is_our_trainer", lambda self, h: None)
     sleeper = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True
     )
@@ -446,12 +446,12 @@ def test_cancel_still_signals_an_inherited_trainer_it_can_verify(tmp_path, monke
     cmdline names this backend's run script and the job's config is our trainer,
     so cancel escalates to SIGTERM and stops it."""
     monkeypatch.setattr(
-        "pixlstash.training.local_ai_toolkit._CANCEL_GRACE_SECONDS", 0.2
+        "pixlstash.training_plugins.ai_toolkit.adapter._CANCEL_GRACE_SECONDS", 0.2
     )
     backend = _make_backend()
     spec = _make_spec(tmp_path)
     handle = backend.prepare(spec)
-    LocalAiToolkit._set_job_status(handle.sqlite_db_path, handle.job_id, "running")
+    AiToolkitPlugin._set_job_status(handle.sqlite_db_path, handle.job_id, "running")
     trainer = subprocess.Popen(
         [
             sys.executable,
@@ -476,7 +476,7 @@ def test_cancel_still_signals_an_inherited_trainer_it_can_verify(tmp_path, monke
 def _submit_loading(tmp_path, monkeypatch):
     """A trainer spending a while loading its model, deaf to ``stop`` meanwhile."""
     monkeypatch.setattr(
-        "pixlstash.training.local_ai_toolkit._CANCEL_GRACE_SECONDS", 0.2
+        "pixlstash.training_plugins.ai_toolkit.adapter._CANCEL_GRACE_SECONDS", 0.2
     )
     monkeypatch.setenv("FAKE_RUN_LOAD_SECONDS", "15")
     backend = _make_backend()
@@ -536,7 +536,7 @@ def test_ending_the_trainer_tree_ends_the_processes_it_started():
         workers = _poll_until(lambda: trainer.children(recursive=True))
         assert workers, "the trainer never started its worker"
 
-        LocalAiToolkit._end_process_tree(parent.pid, force=False)
+        AiToolkitPlugin._end_process_tree(parent.pid, force=False)
 
         parent.wait(timeout=10)
         _, alive = psutil.wait_procs(workers, timeout=10)
@@ -783,7 +783,7 @@ def test_a_windows_device_name_never_becomes_the_run_folder(
     """Windows cannot make a folder named for a device, so the uuid stands in."""
     folder = training_folder and str(tmp_path / training_folder)
     job_id = "0123456789abcdef"
-    handle = LocalAiToolkit.handle_for(
+    handle = AiToolkitPlugin.handle_for(
         str(tmp_path / "work"), job_id, name, None, folder
     )
     stem = os.path.basename(handle.save_root)
@@ -799,10 +799,10 @@ def test_a_run_already_in_a_device_named_folder_keeps_it(tmp_path):
     """Made where the name is allowed; renaming it would lose the run."""
     work = str(tmp_path / "work")
     os.makedirs(os.path.join(work, "output", "aux.v2"))
-    handle = LocalAiToolkit.handle_for(work, "0123456789abcdef", "aux.v2")
+    handle = AiToolkitPlugin.handle_for(work, "0123456789abcdef", "aux.v2")
     assert os.path.basename(handle.save_root) == "aux.v2"
     # A name that only starts like a device is not one.
-    handle = LocalAiToolkit.handle_for(work, "0123456789abcdef", "console")
+    handle = AiToolkitPlugin.handle_for(work, "0123456789abcdef", "console")
     assert os.path.basename(handle.save_root) == "console"
 
 
@@ -861,7 +861,7 @@ def test_malicious_name_run_completes_and_handle_round_trips(tmp_path):
 
     # Reconstruct the handle from the stored DISPLAY name (as cancel/reattach do
     # via TrainingService._handle_for_job); it must resolve the identical paths.
-    rebuilt = LocalAiToolkit.handle_for(
+    rebuilt = AiToolkitPlugin.handle_for(
         handle.work_dir, spec.job_id, display_name, handle.pid
     )
     assert rebuilt.save_root == handle.save_root
@@ -884,14 +884,14 @@ def test_pid_alive_never_signals_the_probed_process(monkeypatch):
         raise AssertionError(f"liveness probe sent signal {sig} to {pid}")
 
     monkeypatch.setattr(os, "kill", no_signals)
-    assert LocalAiToolkit._pid_alive(os.getpid()) is True
+    assert AiToolkitPlugin._pid_alive(os.getpid()) is True
 
 
 def test_pid_alive_reports_a_reaped_child_as_dead():
     """A child that has exited and been reaped is not alive."""
     child = subprocess.Popen([sys.executable, "-c", "pass"])
     child.wait()
-    assert LocalAiToolkit._pid_alive(child.pid) is False
+    assert AiToolkitPlugin._pid_alive(child.pid) is False
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="waitid is POSIX-only")
@@ -901,7 +901,7 @@ def test_pid_alive_reports_an_unreaped_zombie_as_dead():
     try:
         # WNOWAIT leaves the child a zombie: it has exited but is not reaped.
         os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
-        assert LocalAiToolkit._pid_alive(child.pid) is False
+        assert AiToolkitPlugin._pid_alive(child.pid) is False
     finally:
         child.wait()
 

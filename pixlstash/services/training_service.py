@@ -1,7 +1,7 @@
 """Durable single-worker orchestrator that turns queued jobs into LoRAs.
 
 The :class:`TrainingService` is the layer between PixlStash's data model and the
-trainer adapter (:class:`~pixlstash.training.local_ai_toolkit.LocalAiToolkit`).
+trainer adapter (:class:`~pixlstash.training_plugins.ai_toolkit.adapter.AiToolkitPlugin`).
 It owns the job lifecycle: pick the oldest queued training run, snapshot
 its dataset, wait for the VRAM arbiter's lease, drive the adapter (``prepare`` → ``submit`` →
 poll → finalize), and hand the finished run to the model shelf when it completes.
@@ -11,7 +11,7 @@ It is built with **dependency injection** so the whole thing is testable without
 a GPU (or even a full Vault): every external collaborator is a callable handed
 to the constructor: the VRAM lease request, the run importer, the event emitter,
 the owner-config reader, the dataset builder, and the trainer-backend factory. The default backend
-factory builds a real :class:`LocalAiToolkit`; tests pass one pointed at a CPU
+factory builds a real :class:`AiToolkitPlugin`; tests pass one pointed at a CPU
 stub.
 
 Shutdown policy (important): :meth:`stop` does **not** terminate a running
@@ -45,10 +45,11 @@ from pixlstash.resources.ledger import ledger
 from pixlstash.resources.ledger import ram as read_ram
 from pixlstash.services.downloads_intake import safetensors_complete
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
-from pixlstash.training import ai_toolkit_install, live_view, measurements, presets
+from pixlstash.training import live_view, measurements, presets
 from pixlstash.training.backend import TrainerBackend, TrainingProgress, TrainingSpec
 from pixlstash.training.config_render import deep_merge
-from pixlstash.training.local_ai_toolkit import LocalAiToolkit
+from pixlstash.training_plugins.ai_toolkit import install as ai_toolkit_install
+from pixlstash.training_plugins.ai_toolkit.adapter import AiToolkitPlugin
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
@@ -136,7 +137,7 @@ def handle_for_run(training_root: str, info: dict, backend=None):
         training_root: ``<image_root>/training``.
         info: Persisted job fields (uuid, name, pid, training_folder).
         backend: A backend whose ``handle_for`` to use; None uses
-            :class:`LocalAiToolkit`'s.
+            :class:`AiToolkitPlugin`'s.
 
     Returns:
         A reconstructed :class:`TrainingHandle`.
@@ -150,7 +151,7 @@ def handle_for_run(training_root: str, info: dict, backend=None):
         shared = stored
     handle_for = getattr(backend, "handle_for", None)
     if not callable(handle_for):
-        handle_for = LocalAiToolkit.handle_for
+        handle_for = AiToolkitPlugin.handle_for
     return handle_for(
         work_dir,
         info["uuid"],
@@ -218,7 +219,7 @@ class TrainingService:
                 and ``picture_ids``.
             backend_factory: Builds a :class:`TrainerBackend` from
                 ``(repo_path, python)``. Defaults to constructing a real
-                :class:`LocalAiToolkit`.
+                :class:`AiToolkitPlugin`.
             poll_interval_s: Seconds between progress polls of a running job.
             disable_background_workers: When True, :meth:`start` is a no-op
                 (mirrors the Vault flag for read-only deployments).
@@ -245,7 +246,7 @@ class TrainingService:
         self._config_provider = config_provider
         self._dataset_builder = dataset_builder
         self._backend_factory = backend_factory or (
-            lambda repo_path, python: LocalAiToolkit(repo_path, python)
+            lambda repo_path, python: AiToolkitPlugin(repo_path, python)
         )
         self.poll_interval_s = poll_interval_s
         self._disable_background_workers = disable_background_workers
@@ -450,7 +451,7 @@ class TrainingService:
             ``reason`` says why the run cannot be trained on, or is None.
         """
         handle = handle_for_run(self._training_root, run)
-        kept = LocalAiToolkit.kept_checkpoints(handle, run.get("total_steps"))
+        kept = AiToolkitPlugin.kept_checkpoints(handle, run.get("total_steps"))
         final = os.path.join(
             handle.save_root, f"{os.path.basename(handle.save_root)}.safetensors"
         )
@@ -494,7 +495,7 @@ class TrainingService:
         The same run, in the same folder, with the same pictures and settings:
         ai-toolkit resumes from the newest checkpoint it finds, so the run
         folder is left with *from_step* as that (see
-        :meth:`LocalAiToolkit.carry_on_from`), and the config the run trained
+        :meth:`AiToolkitPlugin.carry_on_from`), and the config the run trained
         with is rendered again with only ``train.steps`` raised and the
         first-step preview skipped. The worker then skips the dataset build
         and the memory check: both are the run's own already.
@@ -534,7 +535,7 @@ class TrainingService:
             final_step = next((o["step"] for o in options["steps"] if o["final"]), None)
             template_path = os.path.join(work_dir, "trained_on_template.json")
             write_json_atomic(
-                template_path, LocalAiToolkit.template_from_rendered(config)
+                template_path, AiToolkitPlugin.template_from_rendered(config)
             )
             total = from_step + more_steps
             pending = {
@@ -556,7 +557,7 @@ class TrainingService:
                 self._pending_specs[run["uuid"]] = pending
             self._write_pending_sidecar(run["uuid"], pending)
             try:
-                take = LocalAiToolkit.carry_on_from(
+                take = AiToolkitPlugin.carry_on_from(
                     handle, from_step, run.get("total_steps")
                 )
             except OSError:
@@ -865,7 +866,7 @@ class TrainingService:
         watch = _Watch(
             from_start=False,
             offsets=measurements.peaks_read_to_end(
-                LocalAiToolkit.peaks_folder(handle.work_dir)
+                AiToolkitPlugin.peaks_folder(handle.work_dir)
             ),
         )
         try:
@@ -1231,7 +1232,7 @@ class TrainingService:
         usage = measurements.trainer_usage(
             handle.pid,
             lease.device,
-            LocalAiToolkit.peaks_folder(handle.work_dir),
+            AiToolkitPlugin.peaks_folder(handle.work_dir),
             watch.offsets,
         )
         watch.see(phase, usage, time.monotonic())
@@ -1537,7 +1538,7 @@ class TrainingService:
         pass_dirs = [os.path.join(work_dir, "probe")]
         pass_dirs += [os.path.join(after, step) for step in steps]
         for pass_dir in pass_dirs:
-            handle = LocalAiToolkit.handle_for(pass_dir, job_uuid, name, pid)
+            handle = AiToolkitPlugin.handle_for(pass_dir, job_uuid, name, pid)
             if backend.is_alive(handle):
                 logger.warning(
                     "Job %s: stopping pid %s, a pass of it left running in %s.",

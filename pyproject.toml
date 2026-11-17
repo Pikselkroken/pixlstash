@@ -131,6 +131,7 @@ pixlstash = [
     "migrations/*.mako",
     "migrations/versions/*.py",
     "image_plugins/built-in/*.py",
+    "training_plugins/ai_toolkit/trainer_hook/*.py",
     "data/anchors/*.npy",
     "data/comfyui-workflows/built-in/*.json",
     "data/tag_groups/*.json",

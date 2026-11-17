@@ -1,4 +1,4 @@
-"""ai-toolkit adapter: the only module that knows ai-toolkit specifics.
+"""The ai-toolkit training plugin: the only module that knows ai-toolkit specifics.
 
 This is the "firewall" described in
 ``pixlstash/data/ai-toolkit-jobs/SEAM.md``. Every ai-toolkit fact PixlStash
@@ -27,7 +27,7 @@ import time
 import psutil
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.training.ai_toolkit_install import trainer_env
+from pixlstash.training_plugins.ai_toolkit.install import trainer_env
 from pixlstash.training.backend import (
     TrainerBackend,
     TrainingHandle,
@@ -171,7 +171,7 @@ def safe_job_stem(name: str, job_id: str) -> str:
     return stem
 
 
-class LocalAiToolkit(TrainerBackend):
+class AiToolkitPlugin(TrainerBackend):
     """Drive a local ai-toolkit checkout to train a LoRA.
 
     Spawns ``run.py`` from the ai-toolkit repo as a subprocess in its own
@@ -327,7 +327,7 @@ class LocalAiToolkit(TrainerBackend):
                 kept[int(match.group(1))] = os.path.join(handle.save_root, name)
         final = os.path.join(handle.save_root, f"{stem}.safetensors")
         if os.path.isfile(final):
-            step = LocalAiToolkit._recorded_step(final) or final_step
+            step = AiToolkitPlugin._recorded_step(final) or final_step
             if step:
                 kept[step] = final
         return kept
@@ -376,7 +376,7 @@ class LocalAiToolkit(TrainerBackend):
             FileNotFoundError: The run kept no checkpoint at *step*.
             FileExistsError: The stamped name for the final is taken.
         """
-        kept = LocalAiToolkit.kept_checkpoints(handle, final_step)
+        kept = AiToolkitPlugin.kept_checkpoints(handle, final_step)
         if step not in kept:
             raise FileNotFoundError(f"The run kept no checkpoint at step {step}.")
         root = handle.save_root
@@ -458,7 +458,7 @@ class LocalAiToolkit(TrainerBackend):
                     logger.warning("Could not remove empty %s: %s", empty, exc)
             raise
         if folder:
-            LocalAiToolkit._set_loss_log_aside(handle.loss_db_path, folder, step)
+            AiToolkitPlugin._set_loss_log_aside(handle.loss_db_path, folder, step)
         return take_name
 
     @staticmethod

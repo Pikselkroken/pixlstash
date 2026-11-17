@@ -80,7 +80,7 @@ from pixlstash.services.stack_detector import set_cover
 from pixlstash.hub import training_runs
 from pixlstash.services.run_importer import STATUS_IMPORTED, RunImporter
 from pixlstash.services.model_mover import SHELF_IO_LOCK, publish_no_clobber
-from pixlstash.utils.aitoolkit_run import read_run
+from pixlstash.utils.training_run_folder import read_run
 from pixlstash.services.managed_model_store import find_download_folder
 from pixlstash.services.model_shelf_service import (
     fetch_attachments,

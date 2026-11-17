@@ -37,7 +37,7 @@ to a subdirectory inside one we can - a NAS mounted under a registered folder
 must not read as a deletion the moment it drops.
 
 ``kind = 'source'`` folders are skipped entirely. They are ai-toolkit output
-roots, scanned for importable *runs* by :mod:`pixlstash.utils.aitoolkit_run` and
+roots, scanned for importable *runs* by :mod:`pixlstash.utils.training_run_folder` and
 never catalogued in place - the same distinction the product already makes
 between a reference folder and an import folder. ``kind = 'downloads'`` is
 skipped for the same reason: its models are moved out by

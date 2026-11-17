@@ -4,7 +4,7 @@ This is the acceptance test for ``scripts/generate_model_shelf_fixtures.py``.
 The fixtures exist so B4's scanner and the F1+ shelf UI are built against
 realistic data instead of invented data, and that is only true while the two
 readers that will consume them -
-:mod:`pixlstash.utils.adapter_header` and :mod:`pixlstash.utils.aitoolkit_run` -
+:mod:`pixlstash.utils.adapter_header` and :mod:`pixlstash.utils.training_run_folder` -
 read the generated tree exactly as they read the real thing. So every assertion
 below goes through those readers rather than re-parsing the fixtures here.
 
@@ -26,7 +26,7 @@ from pixlstash.utils.adapter_header import (
     FILE_UNKNOWN,
     describe_adapter,
 )
-from pixlstash.utils.aitoolkit_run import read_output_root, read_run
+from pixlstash.utils.training_run_folder import read_output_root, read_run
 
 _SCRIPT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

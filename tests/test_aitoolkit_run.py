@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from pixlstash.utils.aitoolkit_run import (
+from pixlstash.utils.training_run_folder import (
     Checkpoint,
     TrainingRun,
     is_sample_filename,

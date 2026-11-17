@@ -60,7 +60,6 @@ from pixlstash.services.picture_set_tree import owning_character_id
 from pixlstash.services.comfyui_service import RUN_CLIENT_ID
 from pixlstash.services.training_service import handle_for_run
 from pixlstash.training import (
-    ai_toolkit_install,
     dataset_picker,
     live_view,
     measurements,
@@ -74,8 +73,9 @@ from pixlstash.training.config_render import (
     TunableOverrideError,
     normalise_trigger_word,
 )
-from pixlstash.training.local_ai_toolkit import LocalAiToolkit
-from pixlstash.utils.aitoolkit_run import read_output_root, read_run
+from pixlstash.training_plugins.ai_toolkit import install as ai_toolkit_install
+from pixlstash.training_plugins.ai_toolkit.adapter import AiToolkitPlugin
+from pixlstash.utils.training_run_folder import read_output_root, read_run
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.known_base_models import training_base_tile
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
@@ -1683,7 +1683,7 @@ def create_router(server) -> APIRouter:
         if phase in ("checking", "loading"):
             log_path = handle.log_path
             if phase == "checking":
-                log_path = LocalAiToolkit.handle_for(
+                log_path = AiToolkitPlugin.handle_for(
                     os.path.join(handle.work_dir, "probe"),
                     job["uuid"],
                     job["name"],
