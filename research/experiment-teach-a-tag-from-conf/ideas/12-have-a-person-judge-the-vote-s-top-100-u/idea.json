@@ -1,0 +1,10 @@
+{
+  "id": "12-have-a-person-judge-the-vote-s-top-100-u",
+  "number": 12,
+  "title": "Have a person judge the vote's top 100 under the old and the new cut-offs",
+  "body": "The near-neighbour vote suggests adding a tag to a picture when enough of its 12 most similar pictures carry it. In July its fixed cut-offs (55% to add, 45% to remove) were replaced by cut-offs that move with how common the tag is. That change was only checked for balance, meaning roughly as many add suggestions as remove suggestions when labels are shuffled. Nobody checked whether people accept more of the suggestions. On three or four rare tags (carried by 5-25% of pictures), take the vote's top 100 add suggestions under each set of cut-offs, mix them, have a person judge them without knowing which list each came from, and count the confirmations per list. The ranking itself is the same under both, so the two lists can differ only where the old 55% bar lets fewer than 100 pictures through. Expect a difference on the rarest tags and none on the common ones. This settles round 1's open verdict, but only matters for the main question in that it fixes which version of the vote the classifier has to beat.",
+  "origin": "session",
+  "parent": "3-base-rate-relative-thresholds-for-the-ne",
+  "createdAt": "2026-11-17T07:38:46.752Z",
+  "reopenings": []
+}

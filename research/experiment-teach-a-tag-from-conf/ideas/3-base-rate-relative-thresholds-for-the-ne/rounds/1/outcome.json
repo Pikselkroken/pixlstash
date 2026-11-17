@@ -44,6 +44,6 @@
     ],
     "showed": "For rare tags the old rule suggested dozens of removals for every addition, up to 58 to 1, and the new rule brought that roughly even. A simple model made now gives the same picture. Nobody recorded whether people accepted more of the suggestions afterwards, and a brand-new tag with no tagged pictures still gets no suggestions from this vote."
   },
-  "status": "provisional",
-  "concludedAt": null
+  "status": "concluded",
+  "concludedAt": "2026-11-17T07:38:46.752Z"
 }

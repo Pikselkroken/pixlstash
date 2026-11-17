@@ -1,0 +1,10 @@
+{
+  "id": "11-use-the-base-rate-thresholds-as-the-near",
+  "number": 11,
+  "title": "Use the base-rate thresholds as the near-neighbour baseline in the classifier comparison",
+  "body": "The near-neighbour vote is the existing tag suggester: it flags a picture when enough of its 12 most similar pictures carry the tag. Since July its cut-offs move with how common the tag is (its base rate) instead of sitting at a fixed 55%/45%. The learning-curve and person-judges ideas (4 and 5) compare a small classifier against this vote, and they should run it with the shipped thresholds rather than the old fixed pair, or the classifier would be beating a baseline that no longer exists. Report how many add candidates the vote yields per tag, because where it yields fewer than 100 the top-100 comparison is uneven by construction.",
+  "origin": "session",
+  "parent": "3-base-rate-relative-thresholds-for-the-ne",
+  "createdAt": "2026-11-17T07:38:46.752Z",
+  "reopenings": []
+}
