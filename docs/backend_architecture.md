@@ -13157,6 +13157,22 @@ translates.
   matrix-vector product), the same member rows; 422 when the picture is not
   one of the person's faces. Nothing is stored. The route still clusters on
   such a call, so a re-centre costs a full clustering (about 1 s at 5k faces).
+- **Seeded from picked pictures** (#2738). `seed=<picture id>`, repeated (at
+  most `MAX_SEEDS` = 500), answers `seeded`: a `FaceCluster` whose members are
+  every face of the person ranked by likeness to the centroid of the seeds'
+  faces (`seeded_cluster`, pure), the seeds `pinned`, `cohesion` how well the
+  seeds hold together; plus `seeds_ignored`, the seeds with no face of the
+  person (all of them is a 422). Ranking by the centroid is ranking by mean
+  likeness to each seed: that mean is `|m|` times the centroid likeness, `m`
+  the seeds' mean, so the order is the same and only the scale differs.
+  Unassigned faces near the centre join the members as `probable`, with their
+  `face_id` (`probable_faces`: read on the reader, scored outside it, the best
+  face a picture, never a picture already carrying the person, at or above
+  Loose 0.35, at most 200; placeholders like `STRICTNESS`; `# ponytail:` a full
+  scan of unassigned faces, a vector index past ~100k). `size` counts only the
+  person's own. `seeded` is top level and **never in `clusters`**: "Cluster N"
+  is the grid filter's numbering (`person_cluster_ids`), which a leading
+  seeded entry would shift. Nothing is stored.
 - **The grid filter.** `/pictures`, `/pictures/stream`, `/pictures/count`,
   `/pictures/search` and `/pictures/likeness-groups` take `face_cluster=N`
   (+ `face_cluster_threshold`, default `SAME_PERSON`) beside one

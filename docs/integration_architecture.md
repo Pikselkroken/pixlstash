@@ -2059,7 +2059,14 @@ reference cluster first and then largest first. `unclustered` is
 `centre=<picture_id>` it also answers `centred`: every face of the person as a
 member row, `centrality` being the likeness to that picture's face, most alike
 first (null without `centre`); a picture that is not one of the person's faces
-is a 422.
+is a 422. With `seed=<picture_id>` repeated (at most 500) it also answers
+`seeded`, a cluster of every face of the person ranked by likeness to the
+centre of the seeds' faces, and `seeds_ignored`, the seeds with no face of the
+person (none with one is a 422). Its members carry `pinned` (a seed) and, for
+unassigned look-alikes merged into the order, `probable` with their `face_id`;
+`size` counts the person's own. Every member row has `pinned` / `probable`
+false and `face_id` null otherwise. `seeded` is never in `clusters`, so
+"Cluster N" keeps the grid filter's numbering.
 
 `PUT /characters/{id}/reference-cluster` with `{picture_ids}` stores the
 reference cluster and answers `{picture_ids}`; `[]` clears it, and an id

@@ -1223,6 +1223,7 @@ defineExpose({
                 @update:match-count="gridStore.matchCount = $event"
                 @update:lightbox-open="lightboxOpen = $event"
                 @open-duplicates="handleSelectDuplicates({})"
+                @face-clusters="faceClustersCharacter = $event"
                 @open-settings="openSettingsDialog"
                 @open-import="openImportDialog"
                 @local-import="handleLocalImport"
@@ -1361,6 +1362,7 @@ defineExpose({
       :open="!!faceClustersCharacter"
       :character="faceClustersCharacter"
       :return-focus-to="faceClustersCharacter?.returnFocusTo ?? null"
+      :seeds="faceClustersCharacter?.seeds ?? null"
       @close="faceClustersCharacter = null"
     />
     <LibrarySwitchOverlay />

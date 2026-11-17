@@ -123,6 +123,8 @@
       :grouping-lock-reason="partialStackGroupingReason"
       :rotate-block-reason="selectionRotateBlockReason"
       :compare-block-reason="selectionCompareBlockReason"
+      :seed-cluster-reason="seedClusterReason"
+      :seed-person-name="seedPerson?.name ?? null"
       :lock-reason="selectionLockReason"
       :locked-set-ids="lockedSetsStore.lockedSetIds"
       :available-plugins="availablePlugins"
@@ -156,6 +158,7 @@
       @run-workflow="runWorkflowOnSelection"
       @edit-pictures="editSelection"
       @compare-pictures="compareSelection"
+      @start-cluster="startClusterFromSelection"
       @segment="openSegmentDialog"
       @detect-faces="detectFacesOnSelection"
       @auto-tag="handleAutoTag"
@@ -1219,6 +1222,8 @@
           :grouping-lock-reason="partialStackGroupingReason"
           :rotate-block-reason="selectionRotateBlockReason"
           :compare-block-reason="selectionCompareBlockReason"
+          :seed-cluster-reason="seedClusterReason"
+          :seed-person-name="seedPerson?.name ?? null"
           :available-plugins="availablePlugins"
           :tagger-plugins="taggerPlugins"
           :captioner-plugins="captionerPlugins"
@@ -1257,6 +1262,7 @@
           @run-workflow="runWorkflowOnSelection"
           @edit-pictures="editSelection"
           @compare-pictures="compareSelection"
+          @start-cluster="startClusterFromSelection"
           @confirm-export-zip="emit('confirm-export-zip')"
           @confirm-export-folder="emit('confirm-export-folder', $event)"
         />
@@ -1433,6 +1439,10 @@ import {
   rotateSkipNote,
 } from "../../utils/rotate";
 import { compareBlockReason } from "../../utils/compare";
+import {
+  seedClusterReason as seedClusterBlockReason,
+  seedPersonId,
+} from "../../utils/seedCluster";
 import { isApplePlatform } from "../../utils/shortcutHints.js";
 import {
   getCharacter,
@@ -1504,6 +1514,7 @@ import { useGridScoring } from "../../composables/useGridScoring.js";
 import { useGridKeyboardNav } from "../../composables/useGridKeyboardNav.js";
 import { debounce } from "../../utils/utils";
 import { useSelectionStore } from "../../stores/useSelectionStore";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useWsStore } from "../../stores/useWsStore";
@@ -1557,6 +1568,9 @@ const emit = defineEmits([
   // folder holds pictures nothing has indexed and offers to bring them in.
   "library-empty",
   "library-loaded",
+  // `{ id, name, seeds, returnFocusTo }`: the person's face clusters, seeded
+  // from the selection (App.vue's FaceClustersDialog).
+  "face-clusters",
 ]);
 
 // Props
@@ -5218,6 +5232,35 @@ function compareSelection() {
   const [before, after] = pictures;
   lightboxCompareRequest.value = { beforeId: before.id, afterId: after.id };
   openLightbox({ id: after.id });
+}
+
+// "Start a cluster from these…": the person whose view this is, by name.
+const seedPerson = computed(() => {
+  const id = seedPersonId(selectionStore.selectedCharacter);
+  if (id == null) return null;
+  const row = useEntityListsStore().characters.find((c) => Number(c.id) === id);
+  return { id, name: row?.name || "This person" };
+});
+const seedClusterReason = computed(() =>
+  seedClusterBlockReason({
+    personId: seedPerson.value?.id ?? null,
+    readOnly: isReadOnly.value,
+    count: selectedImageIds.value.length,
+  }),
+);
+
+/** Open the person's face clusters, seeded from the selected pictures. */
+function startClusterFromSelection() {
+  if (seedClusterReason.value) return;
+  const active = document.activeElement;
+  emit("face-clusters", {
+    ...seedPerson.value,
+    seeds: [...selectedImageIds.value],
+    // Overlays drop focus to <body> unless told where to go back to.
+    returnFocusTo: gridContainer.value?.contains(active)
+      ? active
+      : gridContainer.value,
+  });
 }
 
 const scrapheapEmptying = ref(false);

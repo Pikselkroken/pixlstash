@@ -1927,6 +1927,25 @@ up).
   not at every face. Back, any rail row, a strictness change or a save leave
   it; the cluster's own slider value is kept. Nothing about the centre is
   stored.
+- **Seeded from picked pictures** (#2738): *Start a cluster from these…* in
+  *Find & compare ▸* of both grid selection menus (`SelectionMenu.vue`, via
+  `SelectionBar.vue`, and `ImageGridContextMenu.vue`), greyed with its reason
+  outside one person's view, with nothing selected or read-only
+  (`utils/seedCluster.js`). `ImageGrid.vue` emits `face-clusters` with
+  `seeds`, and `App.vue` passes them as the dialog's `seeds` prop, sent as
+  `seed` on every load. The rail gains a *Your cluster* section above
+  *Clusters*: one *From your picks* row (a stack of the picks, a pin count, how
+  well they hold together), selected on open and after a reload; the clusters
+  below keep their *Cluster N* numbers (`rowLabel`). The picks lead the field,
+  so the layout puts them at its centre, with a hue-free ring, lift and pin
+  mark; the slider never cuts them and opens at the farthest pick. Unassigned
+  look-alikes sit in the same ranking with a dashed `--track-ring` outline and
+  an italic *Probably* chip; the slider cuts them, but they are never kept:
+  *Make these {name}'s reference* saves only the person's own faces, and
+  *Add K to {name}* assigns the look-alikes above the cut
+  (`addCharacterFacesByFaceId`) and reloads, when they come back as the
+  person's. A note names the picks with no face of the person; none at all is
+  the dialog's error.
 
 #### `CharacterSheetsDialog.vue` (`io/`)
 
