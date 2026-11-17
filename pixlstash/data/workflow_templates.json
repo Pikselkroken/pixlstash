@@ -1,6 +1,6 @@
 {
  "source": "comfyui-workflow-templates-json",
- "version": "0.1.133",
+ "version": "0.1.135",
  "templates": [
   {
    "name": "3d_hunyuan3d-v2.1",
@@ -7680,6 +7680,32 @@
    ]
   },
   {
+   "name": "utility_image_segment_wevisone_vl",
+   "title": "Image Segmentation: WeVisOne-VL",
+   "description": "Segment whatever a text query names in an image with WeVisOne-VL: hand it a short phrase such as human and it returns per-instance alpha mattes, boxes and points, previews the matte over the picture and gives you foreground and background cutouts. Drop the matte into a background-removal, masking or compositing chain.",
+   "kind": "image",
+   "tags": [
+    "Element Segmentation",
+    "Remove Background"
+   ],
+   "models": [
+    "WeVisOne-VL"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.45.0",
+   "requires_custom_nodes": false,
+   "size": 2899102925,
+   "usage": 0,
+   "files": [
+    {
+     "name": "wevisone_vl_2b_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/WeVisOne-VL/resolve/main/text_encoders/wevisone_vl_2b_int8_convrot.safetensors",
+     "directory": "text_encoders",
+     "sha256": "88f3b1be21ff0828f20f0a711a14e00c55f401bceafad3c8943b7ce2c577a03e"
+    }
+   ]
+  },
+  {
    "name": "utility_moge3_geometry_estimation",
    "title": "Geometry Estimation: MoGe 3",
    "description": "Estimate fine-detailed geometry from a single image with MoGe 3, the sparse-volumetric refinement version of MoGe. It lifts a coarse point map onto a sparse voxel shell and refines depth with lightweight sparse 3D convolutions, keeping thin structures and depth discontinuities that image-space decoders blur. Ships with the ViT-L checkpoint; the ViT-G file is selectable in the same Load MoGe Model dropdown for higher fine-detail accuracy. Takes 1 image input and outputs 1 depth map and 1 normal map.",
@@ -7809,6 +7835,39 @@
      "url": "https://huggingface.co/Comfy-Org/RelayVSR/resolve/main/vae/relayvsr_flash_vae_x2_fp32.safetensors",
      "directory": "vae",
      "sha256": "b5bb0339acb5b52545911ea29a51b4c5b805776a779222b5a14591571f42e21c"
+    }
+   ]
+  },
+  {
+   "name": "utility_relayvsr_video_x4_upscale",
+   "title": "Video Upscale: RelayVSR 4x",
+   "description": "Upscale real footage 4x with RelayVSR: a large Wan-based model writes reference latents for sparse keyframes and a compact Flash decoder carries them across every frame, so a long clip is restored in one streaming pass at one sampling step. Output is exactly 4x the input at the source frame rate, with the audio track kept. Aimed at finishing 480p-768p generations and re-mastering older footage.",
+   "kind": "video",
+   "tags": [
+    "Video Upscale",
+    "4x",
+    "Restoration"
+   ],
+   "models": [
+    "RelayVSR"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.45.0",
+   "requires_custom_nodes": false,
+   "size": 5261334938,
+   "usage": 0,
+   "files": [
+    {
+     "name": "relayvsr_x4_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/RelayVSR/resolve/main/diffusion_models/relayvsr_x4_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "21303b3c5f9ab4e1fd3fe00df5dd2e0b343f0cf2e3d269e03a9872000a313a2e"
+    },
+    {
+     "name": "relayvsr_flash_vae_x4_fp32.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/RelayVSR/resolve/main/vae/relayvsr_flash_vae_x4_fp32.safetensors",
+     "directory": "vae",
+     "sha256": "7b8b8c99275fd5c4501b0589cc7b4c4506456a5df83160ef4e207e147b30f714"
     }
    ]
   },
