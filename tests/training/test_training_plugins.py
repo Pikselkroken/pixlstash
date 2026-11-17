@@ -272,6 +272,28 @@ def test_a_run_whose_trainer_is_not_installed_ends_as_error(tmp_path, monkeypatc
     assert "training plugin 'gone-trainer' is not installed" in row["error"]
 
 
+def test_a_queued_run_whose_trainer_is_not_installed_fails_and_frees_the_queue(
+    tmp_path, monkeypatch
+):
+    """Left queued, it would be claimed first on every poll, ahead of the rest."""
+    row = {
+        "id": 1,
+        "uuid": "cafe000000000000",
+        "name": "queued orphan",
+        "status": "queued",
+        "pid": None,
+        "training_folder": None,
+        "resolved_profile": json.dumps({"vram_mb": 1, "ram_mb": 1}),
+        "trainer": "gone-trainer",
+    }
+    service = _service(tmp_path, monkeypatch, row, [])
+
+    service._run_job(row)
+
+    assert row["status"] == "error"
+    assert row["error"] == "training plugin 'gone-trainer' is not installed"
+
+
 def test_a_run_from_before_trainers_keeps_its_ai_toolkit_paths():
     """A live run started before the trainer column (trainer NULL) is found
     again at the paths ai-toolkit gave it, or a restart marks it interrupted.

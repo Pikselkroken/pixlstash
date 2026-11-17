@@ -1519,7 +1519,12 @@ def create_router(server) -> APIRouter:
         """
         if not job["training_folder"]:
             return None
-        handle = handle_for_run(_training_root(), job)
+        try:
+            handle = handle_for_run(_training_root(), job)
+        except registry.TrainerNotInstalled as exc:
+            # One such row must not take the whole runs list down with it.
+            logger.warning("Run %s has no folder to name: %s", job["uuid"], exc)
+            return None
         if handle.training_folder != job["training_folder"]:
             return None
         return os.path.basename(handle.save_root)

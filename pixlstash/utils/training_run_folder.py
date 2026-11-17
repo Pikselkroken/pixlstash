@@ -9,7 +9,7 @@ against a folder the user has merely pointed at.
 
 **This layout is the output-folder contract every training plugin's output
 must meet** (:class:`pixlstash.training.backend.TrainerBackend`,
-``docs/backend_architecture.md`` §25.31). It is ai-toolkit's, which is the
+``docs/backend_architecture.md`` §25.14). It is ai-toolkit's, which is the
 trainer PixlStash ships; a trainer that cannot write it needs its own reader
 first::
 

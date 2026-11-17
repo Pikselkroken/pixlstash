@@ -14,6 +14,7 @@ from pixlstash.services.training_service import handle_for_run
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
 from pixlstash.tasks.training_preview_faces_task import TrainingPreviewFacesTask
 from pixlstash.training import preview_likeness
+from pixlstash.training.registry import TrainerNotInstalled
 from pixlstash.utils.training_run_folder import read_run
 from pixlstash.utils.insightface_model_utils import DEFAULT_MODEL_PACK
 
@@ -100,7 +101,13 @@ class TrainingPreviewFacesFinder(BaseTaskFinder):
             with self._lock:
                 if run["uuid"] in self._settled or run["uuid"] in self._claimed:
                     continue
-            handle = handle_for_run(self._training_root, run)
+            try:
+                handle = handle_for_run(self._training_root, run)
+            except TrainerNotInstalled as exc:
+                logger.warning(
+                    "Skipping the previews of training run %s: %s", run["uuid"], exc
+                )
+                continue
             if not os.path.isdir(handle.save_root):
                 continue
             try:

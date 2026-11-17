@@ -11841,7 +11841,10 @@ ai-toolkit, `{}` for anything else.
 **A run whose trainer is not installed** never stays `running`: a queued run
 fails with the message naming the plugin, and a run met at start-up
 (`adopt_live_runs`, `_reconcile_one`) or cancelled from another cycle is set to
-`error` by `_unreachable`, which says the trainer may still be running.
+`error` by `_unreachable`, which says the trainer may still be running. The
+runs list and the preview-faces finder skip such a row with a warning. A trainer
+that is installed but not configured is handled as before plugins: a queued run
+fails, and a live run met at start-up is left `running` for the next start.
 
 **The interface.** The service calls lifecycle methods on the instance the
 factory builds and every other hook on the run's plugin class, so a hook never

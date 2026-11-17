@@ -58,7 +58,12 @@ def site_files() -> dict[str, bytes]:
         name = f"{pid}.json"
         path = os.path.join(presets.PRESET_DIR, name)
         if not os.path.isfile(path):
-            continue  # another training plugin's recipe; the site publishes these
+            logger.info(
+                "Recipe %s is %s's, not in the published folder; not listed.",
+                pid,
+                preset.get("trainer"),
+            )
+            continue
         with open(path, "rb") as handle:
             raw = handle.read()
         files[name] = raw

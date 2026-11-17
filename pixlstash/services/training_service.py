@@ -724,7 +724,7 @@ class TrainingService:
             # cycle): build a transient backend to deliver the cooperative stop.
             try:
                 transient = self._make_backend(info)
-            except (KeyError, ValueError) as exc:
+            except registry.TrainerNotInstalled as exc:
                 self._unreachable(info, exc)
                 return True
             handle = self._handle_for_job(transient, info)
@@ -753,7 +753,7 @@ class TrainingService:
             try:
                 try:
                     backend = self._make_backend(info)
-                except (KeyError, ValueError) as exc:
+                except registry.TrainerNotInstalled as exc:
                     self._unreachable(info, exc)
                     continue
                 if not backend.is_alive(self._handle_for_job(backend, info)):
@@ -834,7 +834,7 @@ class TrainingService:
 
         try:
             backend = self._make_backend(info)
-        except (KeyError, ValueError) as exc:
+        except registry.TrainerNotInstalled as exc:
             self._unreachable(info, exc)
             return
         handle = self._handle_for_job(backend, info)
@@ -978,6 +978,13 @@ class TrainingService:
             self._update_job(job_uuid, status="error", error=msg)
             self._emit_progress(job_uuid, status="error", message=msg)
             return
+        try:
+            registry.for_run(info)
+        except registry.TrainerNotInstalled as exc:
+            # Failed, not left queued: the oldest queued run is claimed first,
+            # so one that stays queued would hold up every run behind it.
+            self._fail(job_uuid, str(exc))
+            return
 
         if continuing:
             training_folder = handle_for_run(self._training_root, info).training_folder
@@ -995,9 +1002,6 @@ class TrainingService:
             # 0. Where the run lands and where its dataset is written.
             try:
                 training_folder, dataset_dir = self._run_folders(info)
-            except registry.TrainerNotInstalled as exc:
-                self._fail(job_uuid, str(exc))
-                return
             except RuntimeError as exc:
                 logger.error("Job %s: %s", job_uuid, exc)
                 self._update_job(job_uuid, status="error", error=str(exc))
@@ -1055,7 +1059,7 @@ class TrainingService:
                 return  # on shutdown it stays queued for the next start
             try:
                 backend = self._make_backend(info)
-            except (KeyError, ValueError) as exc:
+            except ValueError as exc:
                 self._fail(job_uuid, str(exc))
                 return
             if not continuing and not self._check_memory_and_speed(
@@ -2437,10 +2441,12 @@ class TrainingService:
         return registry.for_run(run)
 
     def _unreachable(self, info: dict, exc: Exception) -> None:
-        """End a started run whose trainer cannot be built, naming why.
+        """End a started run whose training plugin is not installed, naming why.
 
         Its process cannot be watched, cancelled or re-attached without the
-        trainer, so it is never left ``running``.
+        plugin, so it is never left ``running``. A trainer that is installed
+        but not configured raises instead, as before plugins, and the run is
+        left for the next start.
         """
         message = (
             f"Training run {info['name']} cannot be reached: {exc}. Its trainer "
