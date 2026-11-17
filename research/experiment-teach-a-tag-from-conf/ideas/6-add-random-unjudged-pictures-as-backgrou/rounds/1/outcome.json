@@ -1,0 +1,43 @@
+{
+  "idea": "6-add-random-unjudged-pictures-as-backgrou",
+  "round": 1,
+  "questionRev": 1,
+  "verdict": "negative",
+  "finding": "Adding 300 random unjudged pictures as down-weighted 'no' examples to a classifier fitted on 100 human verdicts raised precision in the top 100 held-out verdicts on only 3 of 19 rare tags (by 1 to 2 points), lowered top-100 precision or average precision on 9, and every heavier mix did worse, so background negatives do not help on the verdicts a person has given.",
+  "wouldSettle": null,
+  "evidence": [
+    "evidence/change_at_100.png",
+    "evidence/by_variant.csv",
+    "evidence/summary.csv",
+    "evidence/tag_prevalence.csv"
+  ],
+  "followUps": [
+    {
+      "title": "Have a person judge the unjudged pictures that land in the classifier's top 100",
+      "body": "When the classifier fitted on 100 yes/no answers ranks the whole library, about two thirds of its top 100 are pictures nobody has ever answered on, even for tags that only a few percent of pictures carry. No test that reuses old answers can say whether those pictures are right. In the person-judged top-100 test (idea 5), record separately how many of the never-judged pictures in the top 100 the person confirms. Optionally do this for the classifier with and without 300 background pictures, on two or three rare tags. If the never-judged pictures are mostly wrong, background negatives (or something like them) are still worth another look. If they are mostly right, the old-answer tests understate the classifier.",
+      "importance": "do"
+    },
+    {
+      "title": "Use the library's existing machine tags as a rough check on never-judged pictures",
+      "body": "Most pictures already carry tags written by an automatic tagger. They are not checked by a person, but they could act as a rough answer key for pictures nobody has judged. That would show whether the pictures that background training pushes out of the top 100 mostly lack the tag (the push helped) or mostly carry it (the push threw away good candidates). It needs a per-picture tag export through the PixlStash API, which the owner would have to approve, and the tagger's mistakes overlap with the near-misses people rejected.",
+      "importance": "maybe"
+    },
+    {
+      "title": "Try other weights or amounts of background pictures",
+      "body": "This round tried 300 or 1,000 background pictures at weights 0.1, 0.3 and 1.0 against the person's answers at weight 1. Every step towards more background did worse, and the lightest setting was only roughly break-even. An even lighter mix can at best approach the classifier without background, so it is not worth a test.",
+      "importance": "skip"
+    }
+  ],
+  "plain": {
+    "idea": "When teaching the library a tag from a person's yes/no answers, also show it a few hundred random pictures nobody has looked at and tell it, softly, that these probably do not have the tag. The hope is that it learns what an ordinary picture looks like and stops ranking unrelated pictures high.",
+    "settles": [
+      "Hide some of the person's past answers and train with and without the random pictures.",
+      "Count how many of each version's top 100 hidden pictures the person had said yes to, and how well it orders all of them.",
+      "It counts only if the top 100 gets better without the overall ordering getting worse, judged over 20 repeats per tag.",
+      "Tags most pictures carry are reported apart, since the idea assumes the tag is uncommon."
+    ],
+    "showed": "The random pictures did push never-judged pictures down the ranking, but they also pushed down real matches. On uncommon tags the top 100 improved on only 3 of 19, by a hair, and got worse on several. Adding more random pictures, or trusting them more, made it worse everywhere."
+  },
+  "status": "provisional",
+  "concludedAt": null
+}
