@@ -1,0 +1,10 @@
+{
+  "id": "10-add-a-random-batch-to-the-person-judged",
+  "number": 10,
+  "title": "Add a random batch to the person-judged top-100 test",
+  "body": "Idea 5 plans to have a person judge the classifier's top 100 against the near-neighbour vote's top 100. Both lists could beat each other and still be no better than picking pictures at random, which is exactly what happened here: a model that ranked well on pictures people had already judged found new positives at the random rate. Mixing in a third batch of randomly drawn unjudged pictures, shuffled blind with the other two, and recording each method's score for every picture in all three batches, would show whether either method beats chance and would allow a fair ranking-quality number on an unbiased sample. It worked if the random batch's confirm rate is clearly below the better method's.",
+  "origin": "session",
+  "parent": "2-out-of-fold-probe-ranking-to-surface-pic",
+  "createdAt": "2026-11-17T07:36:43.522Z",
+  "reopenings": []
+}

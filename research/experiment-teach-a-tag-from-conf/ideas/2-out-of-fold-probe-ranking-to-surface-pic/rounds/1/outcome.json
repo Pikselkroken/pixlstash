@@ -29,6 +29,6 @@
     ],
     "showed": "For both defects tried, the model's top picks held about the same share of real defects as random pictures, roughly one in six for eyes. Even within its own top picks, a higher model score did not mean a likelier defect. That model was stronger and trained on far more examples than the one the question proposes."
   },
-  "status": "provisional",
-  "concludedAt": null
+  "status": "concluded",
+  "concludedAt": "2026-11-17T07:36:43.522Z"
 }
