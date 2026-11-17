@@ -1,0 +1,49 @@
+{
+  "idea": "3-base-rate-relative-thresholds-for-the-ne",
+  "round": 1,
+  "questionRev": 1,
+  "verdict": "inconclusive",
+  "finding": "Thresholds set relative to each tag's base rate cut the near-neighbour vote's remove-to-add skew with no real signal from 58x to 0.2-1.3x (a binomial model made now gives 63x and 0.24-1.45x), but no surviving number says whether a person confirms more of the vote's top 100, and pixltagger holds no trace of the experiment.",
+  "wouldSettle": "On three or four minority tags (base rate 5-25%), take the near-neighbour vote's top 100 add candidates under the legacy 0.55/0.45 pair and under the shipped base-rate thresholds, have a person judge the union blind, and compare how many each list gets confirmed; the change can only matter where the legacy bar lets fewer than 100 candidates through.",
+  "evidence": [
+    "evidence/recorded_claims.csv",
+    "evidence/thresholds_vs_base_rate.png",
+    "evidence/thresholds_vs_base_rate.csv",
+    "evidence/zero_signal_skew.png",
+    "evidence/zero_signal_skew_model.csv",
+    "evidence/zero_signal_skew_summary.csv"
+  ],
+  "followUps": [
+    {
+      "title": "Use the base-rate thresholds as the near-neighbour baseline in the classifier comparison",
+      "body": "The near-neighbour vote is the existing tag suggester: it flags a picture when enough of its 12 most similar pictures carry the tag. Since July its cut-offs move with how common the tag is (its base rate) instead of sitting at a fixed 55%/45%. The learning-curve and person-judges ideas (4 and 5) compare a small classifier against this vote, and they should run it with the shipped thresholds rather than the old fixed pair, or the classifier would be beating a baseline that no longer exists. Report how many add candidates the vote yields per tag, because where it yields fewer than 100 the top-100 comparison is uneven by construction.",
+      "importance": "do"
+    },
+    {
+      "title": "Check the vote's behaviour on very rare tags, below 5% of pictures",
+      "body": "The base rate is clamped at 5%, so for rarer tags the add cut-off stays at 20%. A simple model made in this round says that, with no real signal, such a tag gets about 44 remove suggestions for every add suggestion at a 1% base rate, the same kind of imbalance the change was meant to remove. The July test only covered 5% to 48%. One could rerun the shuffled-label check on the library at 1-4% base rates and, if the imbalance is real, lower the clamp.",
+      "importance": "maybe"
+    },
+    {
+      "title": "Measure the base-rate thresholds on base rates 40-48% with the cap that shipped",
+      "body": "After the July measurement a cap was added that keeps the add cut-off at no more than 55%. That changes the thresholds for every tag carried by more than 40% of pictures, so part of the tested range ships thresholds that were never measured. The model in this round says the balance there stays below 1x, so this is unlikely to change anything that matters for teaching a new, usually rare, tag.",
+      "importance": "skip"
+    },
+    {
+      "title": "Have a person judge the vote's top 100 under the old and the new cut-offs",
+      "body": "The near-neighbour vote suggests adding a tag to a picture when enough of its 12 most similar pictures carry it. In July its fixed cut-offs (55% to add, 45% to remove) were replaced by cut-offs that move with how common the tag is. That change was only checked for balance, meaning roughly as many add suggestions as remove suggestions when labels are shuffled. Nobody checked whether people accept more of the suggestions. On three or four rare tags (carried by 5-25% of pictures), take the vote's top 100 add suggestions under each set of cut-offs, mix them, have a person judge them without knowing which list each came from, and count the confirmations per list. The ranking itself is the same under both, so the two lists can differ only where the old 55% bar lets fewer than 100 pictures through. Expect a difference on the rarest tags and none on the common ones. This settles round 1's open verdict, but only matters for the main question in that it fixes which version of the vote the classifier has to beat.",
+      "importance": "maybe"
+    }
+  ],
+  "plain": {
+    "idea": "PixlStash suggests adding or removing a tag on a picture when most of its look-alike pictures disagree with it. The cut-off for 'most' used to be fixed near half; the idea was to set it relative to how common the tag is, because rare tags can almost never reach a half-way bar.",
+    "settles": [
+      "With labels shuffled at random, a fair rule should suggest about as many removals as additions.",
+      "The real goal, though, is whether a person accepts more of the top suggestions.",
+      "Only the first was measured; the second never was."
+    ],
+    "showed": "For rare tags the old rule suggested dozens of removals for every addition, up to 58 to 1, and the new rule brought that roughly even. A simple model made now gives the same picture. Nobody recorded whether people accepted more of the suggestions afterwards, and a brand-new tag with no tagged pictures still gets no suggestions from this vote."
+  },
+  "status": "provisional",
+  "concludedAt": null
+}
