@@ -1,9 +1,8 @@
 {
-  "at": "2026-11-17T18:44:16.446Z",
-  "cause": "after 13 came back positive",
+  "at": "2026-11-17T18:49:10.799Z",
+  "cause": "after 14 came back positive",
   "order": [
     "10-add-a-random-batch-to-the-person-judged",
-    "14-break-the-shipped-neighbour-vote-s-ties",
     "9-a-stronger-picture-embedding-for-tags-cl",
     "12-have-a-person-judge-the-vote-s-top-100-u",
     "15-have-a-person-judge-the-unjudged-picture",
@@ -20,16 +19,6 @@
         "impact": "Without a chance rate, idea 5's 83% against 96% on hand cannot say whether either source finds anything a random pick would not.",
         "odds": "Adding a random batch to a review is easy and almost certain to give a usable baseline.",
         "path": "Nothing waits on it now; it is the missing control for idea 5's result."
-      }
-    },
-    "14-break-the-shipped-neighbour-vote-s-ties": {
-      "impact": 1,
-      "odds": 2,
-      "line": "Lower: its premise came from idea 4's held-out test, and on the open library the shipped vote beat the classifier on hand.",
-      "why": {
-        "impact": "Idea 5 found held-out rankings did not predict library rankings, so an offline gain here would need a person to confirm it.",
-        "odds": "Ties are real when a tag has few yes pictures, but the shipped vote already confirmed 94 of 98 on hand.",
-        "path": "Nothing waits on it."
       }
     },
     "9-a-stronger-picture-embedding-for-tags-cl": {
