@@ -11795,7 +11795,7 @@ keeps the run that first made it. A run trained elsewhere names no run.
 `GET` beside it) queues the *same* row again rather than a new one: the run
 trains on in its own folder from a step it kept, with the same dataset folder
 and rendered config, `train.steps` raised. `TrainingService.train_longer`
-leaves that step as the trainer's resume point (`LocalAiToolkit.carry_on_from`,
+leaves that step as the trainer's resume point (`AiToolkitPlugin.carry_on_from`,
 SEAM.md "Training on"), writes the run's rendered config back into a template
 (`template_from_rendered`) as its pending spec with `continuation`, and records
 `continued_from_step`, `continued_at` and `set_aside_take` on the row. The
@@ -11814,11 +11814,75 @@ library's run answers as one that does not exist. The worker claims and
 reconciles only its own library's runs, so a queued or unfinished run of another
 library waits for that library's service.
 
+#### Training plugins: the trainer seam (#2453)
+
+The service and the training routes drive a trainer only through
+`TrainerBackend` (`pixlstash/training/backend.py`). A trainer is a *training
+plugin*: a `TrainerBackend` subclass listed in `pixlstash/training/registry.py`.
+ai-toolkit is the one PixlStash ships, `AiToolkitPlugin` in
+`pixlstash/training_plugins/ai_toolkit/` (`adapter.py` the trainer, `install.py`
+finding and checking a checkout, `live.py` its live-view reads,
+`trainer_hook/` its allocator hook). It is in `_FIRST_PARTY_PLUGINS` and always
+registered, so it needs no setting. There is no loading of user plugins: a
+trainer starts host processes (§16.3), so admitting third-party code is a
+decision of its own. `registry.register` / `unregister` are the seam it would
+use and the one the tests use (`tests/training/fake_trainer_plugin.py`). Both
+re-read the recipes.
+
+**Which trainer.** A recipe may carry `"trainer"`; one without is stamped with
+the plugin whose `presets_dir` it was read from, and a downloaded update keeps
+its shipped recipe's trainer. Enqueue records the recipe's trainer on the run's
+`trainer` column; NULL (every run from before the column) reads as
+`registry.DEFAULT_TRAINER`, `"ai-toolkit"`. A recipe's `template` resolves in
+its trainer's `template_dir`. The owner's settings for a trainer come from
+`Vault.training_config(trainer_name)`: the `ai_toolkit_*` owner columns for
+ai-toolkit, `{}` for anything else.
+
+**A run whose trainer is not installed** never stays `running`: a queued run
+fails with the message naming the plugin, and a run met at start-up
+(`adopt_live_runs`, `_reconcile_one`) or cancelled from another cycle is set to
+`error` by `_unreachable`, which says the trainer may still be running.
+
+**The interface.** The service calls lifecycle methods on the instance the
+factory builds and every other hook on the run's plugin class, so a hook never
+depends on an instance being at hand (a re-attached run, a route).
+
+| Member | Default | What core does with the default |
+|---|---|---|
+| `prepare` / `submit` / `progress` / `cancel` / `reconcile` / `is_alive`, `handle_for` | abstract | the seven a plugin must implement |
+| `from_owner_config(cfg)` | `cls()` | ai-toolkit raises `ValueError` when it is not configured |
+| `version_stamp(cfg)` | None | stored in `ai_toolkit_commit`; measurements are tied to it |
+| `version(cfg)` | None | the recipe's minimum-version gate |
+| `run_folders(cfg, work_dir, uuid, ensure_source_folder)` | run under `<work_dir>/output`, dataset in `<work_dir>/dataset` | ai-toolkit: the shelf's `source` folder and `<repo>/datasets/` (§25.15) |
+| `offer_refusal(preset, cfg)` | None (offered) | the reason `/training/jobs` 422s and `offered` is false |
+| `peaks_folder(work_dir)` | None | memory from polls only, no "unhooked" warning |
+| `kept_checkpoints`, `carry_on_from`, `template_from_rendered` | none | Train longer refuses unless `supports_train_longer` |
+| `status_line(handle)`, `step_times(handle)` | `""`, `[]` | the live view has no info line or speed |
+| `running_phase(info, step)` | `training` past step 0, else `loading` | `live_view.phase_of` keeps queued, completed and importing |
+| `preview_progress`, `downloading`, `sample_settings` | None, False, all None | no "drawing n of m", no download notice, no preview columns |
+| `failure_summary(info, step)`, `is_oom(text)` | first line, False | an OOM probe is a failure, not a step to the next profile |
+| `probe_overrides(steps, values)` | None | the memory check is skipped; the run trains with its recipe's resolved profile |
+| `preview_pass_overrides(step, path)` | None | deferred previews are skipped and the run is imported without them |
+
+**The output-folder contract.** A run's `save_root` must hold what
+`pixlstash/utils/training_run_folder.py` reads: `<name>_<step:09d>.safetensors`
+per kept step, the bare final `<name>.safetensors`, `config.yaml`, and
+`samples/<timestamp>__<step:09d>_<prompt index>.<ext>`. The run importer and
+the live view's prompt rows depend on it, so a trainer that cannot write it
+needs a reader of its own first.
+
+**Still ai-toolkit by name in core.** The arbiter's tenant `AiToolkitProbe`
+(it tracks the trainer's pids and memory), the owner columns and
+`training_run.ai_toolkit_commit`, the progress event's `"plugin": "ai-toolkit"`
+tag (the image grid skips training events by it), and the
+`/training/ai-toolkit/{discover,check,status,config}` setup routes, which are
+still in `routes/training.py` and import the plugin's `install` module.
+
 ---
 
 ### 25.15 The ai-toolkit install: find, check, and where runs land
 
-`pixlstash/training/ai_toolkit_install.py` finds a local ai-toolkit checkout and
+`pixlstash/training_plugins/ai_toolkit/install.py` finds a local ai-toolkit checkout and
 checks it can train; the routes in `routes/training.py` are thin wrappers.
 `GET /training/ai-toolkit/discover` looks in the parent of each registered
 `source` folder, then the saved `ai_toolkit_repo_path`, then `~/ai-toolkit` and
@@ -11847,9 +11911,10 @@ is owner-only, so it gives the two paths only to the §16.3 local tier that
 whether an install is saved. `/training/resolve` reuses the checkout's commit
 for 30 s (`_COMMIT_TTL_S`), so the dialog does not start `git` on every change.
 
-A run lands in the shelf's `source` folder. `TrainingService._run_folders`
-takes the first `model_folder` row of kind `source`. When there is none, it
-registers `<repo>/output` (creating it first) through `register_model_folder`,
+A run lands in the shelf's `source` folder. The plugin's `run_folders`
+(through `TrainingService.ensure_source_folder`) takes the first `model_folder`
+row of kind `source`. When there is none, it registers `<repo>/output`
+(creating it first) through `register_model_folder`,
 the same function the folder routes call. `Server.build_vault` binds that
 registrar with `set_source_folder_registrar`, so a vault opened by a library
 switch has it too. Linking a checkout (`PUT /training/ai-toolkit/config` with
@@ -11883,7 +11948,7 @@ this change keeps its work-dir `output/` save root, because only a
 The check response also lists the training recipes (§25.16) with `offered`: a
 recipe is offered only when the checkout ships its model code,
 `extensions_built_in/diffusion_models/<requires_arch>/`
-(`presets.checkout_architectures`). `GET /training/presets` answers the same for
+(`install.checkout_architectures`, behind the plugin's `offer_refusal`). `GET /training/presets` answers the same for
 the saved checkout, and `POST /training/jobs` refuses, with a 422, a job when no
 checkout is saved and a recipe the saved checkout cannot run (naming the
 missing folder, or the ai-toolkit version the recipe needs).
@@ -11908,7 +11973,7 @@ missed. The probe (§25.20) measures each setup on the owner's machine before
 its first run. Chroma has no profile below 8-bit: ai-toolkit's Chroma cannot
 offload layers and quantises on the GPU. MOSS needs ai-toolkit 0.13.28 or later
 (Base support and the fresh-cache tokenizer fix), which its optional
-`min_ai_toolkit` says: `presets.not_offered_because` refuses a checkout without
+`min_ai_toolkit` says: `install.not_offered_because` refuses a checkout without
 the recipe's model folder, and, for a recipe with a minimum, one whose
 `version.py` is older or unreadable (#2295). Its 9B text encoder is larger than its transformer,
 so its offload profile offloads the text encoder too. MiniMax H3 is
@@ -12124,11 +12189,13 @@ settings.
 
 `GET /training/jobs/{id}/live` is everything the Training runs view's run page
 draws, read fresh on each call by `pixlstash/training/live_view.py` (pure
-functions) over what the run already leaves behind. Nothing is cached between
+functions) over what the run already leaves behind, and what its training
+plugin reads of the trainer (`status_line`, `step_times`, `sample_settings`;
+ai-toolkit's are in `pixlstash/training_plugins/ai_toolkit/live.py`). Nothing is cached between
 calls except each run's last swap counters.
 
-- **Phase.** `live_view.phase_of` maps the row's status and ai-toolkit's own
-  info line (the per-job `Job` table, read read-only: "Loading model",
+- **Phase.** `live_view.phase_of` maps the row's status and, through the
+  plugin's `running_phase`, ai-toolkit's own info line (the per-job `Job` table, read read-only: "Loading model",
   "Loading dataset", "Training", "Generating images - n/m", "Saving model") to
   one of eight phases. A `completed` row with no `completed_at` is
   `importing`, because the worker writes `completed_at` once the import is
@@ -12137,13 +12204,13 @@ calls except each run's last swap counters.
   (`progress.shown_as`, §25.20), since the trainer's info line cannot tell
   those passes from training. While `checking` or `loading`, `downloading` is
   true when the trainer's log (the probe's, while checking) ends on a
-  huggingface_hub progress line (`live_view.downloading`): a model the trainer
+  huggingface_hub progress line (the plugin's `downloading`): a model the trainer
   has not loaded before is fetched inside that phase, which on a first run is
   most of the wait, and the view says so rather than looking stuck.
   `GET /training/jobs` carries a lighter `phase` for the runs grid's card:
   `checking` for a probed queued run, and a running run's last `phase_log`
   entry, so a run still loading or caching reads as that, not "Training 0 / N".
-- **Why it failed.** A failed run's `error` is `live_view.failure_summary` of
+- **Why it failed.** A failed run's `error` is the plugin's `failure_summary` of
   the trainer's info line, the sentence every surface shows: torch's CUDA OOM
   paragraph becomes the step, what it asked for, what was free and what other
   processes held; anything else is its first line, cut at 200 characters. The
@@ -12268,13 +12335,15 @@ decode that ai-toolkit frees at once, and Krea 2's 1024 decode takes 5 GB for
 less than a second. A probe that polled alone measured previews 7 GB below what
 they took, a run admitted on it drew previews while training, and a later app
 on the card left too little for the decode. So the trainer is launched with
-`training/trainer_hook/` on its `PYTHONPATH` (`sitecustomize.py`, SEAM.md),
+`training_plugins/ai_toolkit/trainer_hook/` on its `PYTHONPATH` (`sitecustomize.py`, SEAM.md),
 which appends the CUDA allocator's own peak since the last line and what it
 reserves now to `<work dir>/allocator_peaks/<pid>.log` four times a second.
 Each poll adds how far the new lines rose above the latest figure to NVML's
 reading (`measurements.allocator_overshoot_mb`, `peak_vram_mb`), so every
 phase peak includes what was freed between polls. A run re-attached after a
-restart starts at the end of those files (`peaks_read_to_end`). A trainer that
+restart starts at the end of those files (`peaks_read_to_end`). The folder is
+the plugin's `peaks_folder`; a trainer without one (None) is measured by polls
+alone. A trainer that
 holds GPU memory for three polls with no peaks file is logged once as measured
 by polls alone. The fingerprint carries `MEASURED_BY`, so a setup measured by
 polls alone is probed again.

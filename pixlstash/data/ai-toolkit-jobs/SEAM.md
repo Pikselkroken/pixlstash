@@ -1,11 +1,17 @@
 # ai-toolkit integration seam (the firewall contract)
 
-This documents **everything PixlStash's `AiToolkitPlugin` adapter relies on** about ai-toolkit, so a
-version bump is a single-file change. Verified against the local clone
+This documents **everything PixlStash's ai-toolkit training plugin (`AiToolkitPlugin`) relies on**
+about ai-toolkit, so a version bump is a change inside the plugin. Verified against the local clone
 `~/ai-toolkit` @ commit `9490f03` (v0.10.11). Re-verify on every bump.
 
-> **Maintenance rule:** no ai-toolkit-specific knowledge lives outside the adapter module. If a fact
-> below changes, change the adapter, never the data model, API, or UI.
+This file is the ai-toolkit half of the contract. Its generic half is
+`pixlstash.training.backend.TrainerBackend`, which every training plugin implements
+(`docs/backend_architecture.md` §25.14, "Training plugins: the trainer seam").
+
+> **Maintenance rule:** no ai-toolkit-specific knowledge lives outside the plugin package,
+> `pixlstash/training_plugins/ai_toolkit/` (`adapter.py`, with `live.py` for what the live view
+> reads and `install.py` for the checkout). If a fact below changes, change the plugin, never the
+> data model, API, or UI.
 
 ## Launch
 
@@ -19,7 +25,7 @@ version bump is a single-file change. Verified against the local clone
            CUDA_DEVICE_ORDER  = PCI_BUS_ID
            PYTORCH_CUDA_ALLOC_CONF = expandable_segments:True  # unless the owner set it (or PYTORCH_ALLOC_CONF)
            HF_TOKEN           = <secret, only if set> # NEVER logged
-           PYTHONPATH         = <pixlstash>/training/trainer_hook   # holds only sitecustomize.py
+           PYTHONPATH         = <pixlstash>/training_plugins/ai_toolkit/trainer_hook   # holds only sitecustomize.py
            TRAINER_PEAKS_DIR  = <work_dir>/allocator_peaks         # where it writes <pid>.log
          }
 ```
