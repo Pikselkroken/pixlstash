@@ -1,8 +1,7 @@
 {
-  "at": "2026-11-17T17:31:13.718Z",
-  "cause": "after 4 was concluded positive and 13, 14 filed under it",
+  "at": "2026-11-17T17:47:33.364Z",
+  "cause": "after 6 came back negative",
   "order": [
-    "6-add-random-unjudged-pictures-as-backgrou",
     "14-break-the-shipped-neighbour-vote-s-ties",
     "10-add-a-random-batch-to-the-person-judged",
     "13-put-a-neighbour-vote-over-judged-picture",
@@ -14,23 +13,13 @@
     "8-pick-the-next-pictures-to-judge-by-the-c"
   ],
   "notes": {
-    "6-add-random-unjudged-pictures-as-backgrou": {
-      "impact": 2,
-      "odds": 2,
-      "line": "Cheap and offline on idea 4's harness, and it picks which classifier idea 5 puts in front of a person.",
-      "why": {
-        "impact": "Idea 4 found the gain comes from using the rejects; plain background negatives are the next step in the same direction and change what idea 5 tests.",
-        "odds": "Review rejects are near-misses, so background negatives plausibly help the library-wide top 100, but a held-out test alone may not show it.",
-        "path": "Idea 4's harness and exported data are ready; idea 5 should use whichever variant wins."
-      }
-    },
     "14-break-the-shipped-neighbour-vote-s-ties": {
       "impact": 2,
       "odds": 3,
-      "line": "Cheap and offline: if the shipped vote just needs its ties broken or rejects counted, that may be the whole fix #2678 needs.",
+      "line": "Now first: cheap and offline, and if the shipped vote only needs its ties broken or rejects counted, that may be the whole fix #2678 needs.",
       "why": {
-        "impact": "A small change to the shipped source is easier to ship than a new classifier, and it sets the baseline idea 5 compares against.",
-        "odds": "Idea 4's judged-only vote, which counts rejects as negatives, already tied the classifier on every tag, so this is very likely to close the gap.",
+        "impact": "A small change to the shipped source is easier to ship than a new classifier, and it sets the vote list idea 5 compares against.",
+        "odds": "Idea 4's judged-only vote, which counts rejects as negatives, already tied the classifier on every tag.",
         "path": "Runs on idea 4's harness now; its winner should be the vote list in idea 5."
       }
     },
@@ -57,11 +46,11 @@
     "5-a-person-judges-the-classifier-s-top-100": {
       "impact": 3,
       "odds": 2,
-      "line": "The deciding test, with a random batch (10) and the judged-only vote (13) in the same blind review.",
+      "line": "The deciding test, with the plain classifier: idea 6 found background negatives did not help, and it should count the never-judged pictures in each top 100 separately. Not yet judged.",
       "why": {
-        "impact": "Confirms on unjudged pictures are the issue's own success measure.",
-        "odds": "Idea 4 beat the shipped vote by 20-30 points in the top 50 on content tags like jewelry and teeth, but only among reviewed pictures, and idea 2 warns such wins can vanish on new ones.",
-        "path": "Should use the winners of ideas 6 and 14 and carry ideas 10 and 13."
+        "impact": "Confirms on unjudged pictures are the issue's own success measure, and idea 6 showed about two thirds of the classifier's top 100 are pictures no test so far could score.",
+        "odds": "Idea 4 beat the shipped vote by 20-30 points in the top 50 on content tags, but only among reviewed pictures, and idea 2 warns such wins can vanish on new ones.",
+        "path": "Should carry ideas 10 and 13 and use idea 14's vote if it wins."
       }
     },
     "9-a-stronger-picture-embedding-for-tags-cl": {
@@ -116,13 +105,5 @@
     }
   },
   "pinned": {},
-  "moved": {
-    "14-break-the-shipped-neighbour-vote-s-ties": 6,
-    "13-put-a-neighbour-vote-over-judged-picture": 4,
-    "9-a-stronger-picture-embedding-for-tags-cl": -2,
-    "7-combine-the-classifier-and-the-near-neig": -2,
-    "11-use-the-base-rate-thresholds-as-the-near": -2,
-    "12-have-a-person-judge-the-vote-s-top-100-u": -2,
-    "8-pick-the-next-pictures-to-judge-by-the-c": -2
-  }
+  "moved": {}
 }
