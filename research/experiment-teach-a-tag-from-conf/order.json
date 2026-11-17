@@ -1,13 +1,15 @@
 {
-  "at": "2026-11-17T07:37:14.285Z",
-  "cause": "after 2 was concluded negative and 10 filed under it",
+  "at": "2026-11-17T07:39:19.701Z",
+  "cause": "after 3 was concluded inconclusive and 11, 12 filed under it",
   "order": [
     "4-learning-curve-of-a-clip-logistic-regres",
+    "11-use-the-base-rate-thresholds-as-the-near",
     "6-add-random-unjudged-pictures-as-backgrou",
     "7-combine-the-classifier-and-the-near-neig",
     "10-add-a-random-batch-to-the-person-judged",
     "5-a-person-judges-the-classifier-s-top-100",
     "9-a-stronger-picture-embedding-for-tags-cl",
+    "12-have-a-person-judge-the-vote-s-top-100-u",
     "8-pick-the-next-pictures-to-judge-by-the-c"
   ],
   "notes": {
@@ -18,7 +20,17 @@
       "why": {
         "impact": "A clear loss settles #2678 without anyone judging; a win only earns the human test.",
         "odds": "Linear probes worked in pixltagger with about 1,200 labels on DINOv3 (idea 1); CLIP ViT-B/32 with 100 verdicts is untested.",
-        "path": "Ideas 5 to 10 all need its harness and its answer first."
+        "path": "Ideas 5 to 11 all need its harness and its answer first."
+      }
+    },
+    "11-use-the-base-rate-thresholds-as-the-near": {
+      "impact": 2,
+      "odds": 3,
+      "line": "Probably answered inside idea 4 if it ran the shipped vote; read 4's report before starting this one.",
+      "why": {
+        "impact": "It keeps the classifier from beating a baseline that no longer ships, and its candidate counts show where a top-100 comparison is uneven.",
+        "odds": "Using the shipped thresholds is a matter of calling the shipped code, so it almost certainly works.",
+        "path": "Waits for idea 4; ideas 5, 7 and 10 should use whichever baseline it fixes."
       }
     },
     "6-add-random-unjudged-pictures-as-backgrou": {
@@ -58,7 +70,7 @@
       "why": {
         "impact": "Confirms on unjudged pictures are the issue's own success measure.",
         "odds": "In idea 2 the top-ranked new pictures were confirmed at the random rate (17% vs 17% for eyes), with a model far stronger than a 100-verdict CLIP classifier.",
-        "path": "Waits for idea 4, should use the winners of ideas 6 and 7, and should carry idea 10's random batch."
+        "path": "Waits for idea 4, should use the winners of ideas 6, 7 and 11, and should carry idea 10's random batch."
       }
     },
     "9-a-stronger-picture-embedding-for-tags-cl": {
@@ -69,6 +81,16 @@
         "impact": "A larger embedding costs storage and a library pass, so a win is useful but expensive to ship.",
         "odds": "Idea 1's DINOv3 probe put 56 to 74 true positives in its top 100, but with about 1,200 labels.",
         "path": "Waits for idea 4 to show which tags CLIP cannot separate."
+      }
+    },
+    "12-have-a-person-judge-the-vote-s-top-100-u": {
+      "impact": 1,
+      "odds": 2,
+      "line": "Settles idea 3's open verdict but barely touches the main question, and costs a person's judging; could ride along in idea 5's review.",
+      "why": {
+        "impact": "It only decides which version of the vote the classifier must beat, and idea 11 already fixes that to the shipped one.",
+        "odds": "The two lists differ only where the old 55% bar lets fewer than 100 through, so a difference is likely on the rarest tags and nowhere else.",
+        "path": "Nothing waits on it; sharing idea 5's review would save a separate judging session."
       }
     },
     "8-pick-the-next-pictures-to-judge-by-the-c": {
@@ -84,9 +106,13 @@
   },
   "pinned": {},
   "moved": {
-    "10-add-a-random-batch-to-the-person-judged": 3,
+    "11-use-the-base-rate-thresholds-as-the-near": 6,
+    "6-add-random-unjudged-pictures-as-backgrou": -1,
+    "7-combine-the-classifier-and-the-near-neig": -1,
+    "10-add-a-random-batch-to-the-person-judged": -1,
     "5-a-person-judges-the-classifier-s-top-100": -1,
     "9-a-stronger-picture-embedding-for-tags-cl": -1,
-    "8-pick-the-next-pictures-to-judge-by-the-c": -1
+    "12-have-a-person-judge-the-vote-s-top-100-u": 1,
+    "8-pick-the-next-pictures-to-judge-by-the-c": -2
   }
 }
