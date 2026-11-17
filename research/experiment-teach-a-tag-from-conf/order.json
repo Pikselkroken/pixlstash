@@ -1,12 +1,11 @@
 {
-  "at": "2026-11-17T18:38:51.165Z",
-  "cause": "after 6 was concluded negative and 15 filed under it",
+  "at": "2026-11-17T18:44:16.446Z",
+  "cause": "after 13 came back positive",
   "order": [
     "10-add-a-random-batch-to-the-person-judged",
     "14-break-the-shipped-neighbour-vote-s-ties",
     "9-a-stronger-picture-embedding-for-tags-cl",
     "12-have-a-person-judge-the-vote-s-top-100-u",
-    "13-put-a-neighbour-vote-over-judged-picture",
     "15-have-a-person-judge-the-unjudged-picture",
     "7-combine-the-classifier-and-the-near-neig",
     "11-use-the-base-rate-thresholds-as-the-near",
@@ -51,16 +50,6 @@
         "impact": "It decides which version of the shipped vote is the baseline, which matters more now that the vote held its own in idea 5.",
         "odds": "The two lists differ only where the old 55% bar lets fewer than 100 through, so a difference is likely only on the rarest tags.",
         "path": "Nothing waits on it; could share a short judging game with idea 10."
-      }
-    },
-    "13-put-a-neighbour-vote-over-judged-picture": {
-      "impact": 1,
-      "odds": 3,
-      "line": "Largely done inside idea 5, which judged the judged-only vote's top 100 too: it sat between the other two on both tags.",
-      "why": {
-        "impact": "Idea 5 already reports its confirm rates and overlap, so a separate session adds little.",
-        "odds": "The list exists and was judged.",
-        "path": "Nothing waits on it; a candidate for closing from idea 5's report."
       }
     },
     "15-have-a-person-judge-the-unjudged-picture": {
