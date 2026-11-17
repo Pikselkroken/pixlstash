@@ -1,0 +1,10 @@
+{
+  "id": "13-put-a-neighbour-vote-over-judged-picture",
+  "number": 13,
+  "title": "Put a neighbour vote over judged pictures beside the classifier when a person judges the top 100",
+  "body": "In this round, two rankers tied on every tag. One is a logistic regression, a simple classifier that draws a straight dividing line through the picture embeddings (the 512 numbers PixlStash stores per picture). The other is a near-neighbour vote that only looks at pictures a person has already confirmed or rejected. But that test only ranked pictures that had already been judged. On the rest of the library they may behave differently: the vote can only reach pictures that sit close to a judged one, while the dividing line can reach pictures unlike anything judged so far. When a person judges top-100 lists (idea 5), add the judged-only vote as a third list. Count how many of each list's 100 pictures the person confirms, and how much the lists overlap. If the vote confirms as many, it is the simpler thing to ship.",
+  "origin": "session",
+  "parent": "4-learning-curve-of-a-clip-logistic-regres",
+  "createdAt": "2026-11-17T17:30:41.458Z",
+  "reopenings": []
+}

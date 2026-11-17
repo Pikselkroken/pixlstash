@@ -1,0 +1,10 @@
+{
+  "id": "14-break-the-shipped-neighbour-vote-s-ties",
+  "number": 14,
+  "title": "Break the shipped neighbour vote's ties when a tag has few confirmed pictures",
+  "body": "The shipped near-neighbour vote scores each picture by how many of its 12 most similar pictures carry the tag. With about 30 confirmed pictures in a library of 20,000, it gave a score of zero to 95-98% of the held-out pictures on content tags like face or smile. Its ranking was then mostly a coin toss, which is why it lost by 20-30 points. A cheap fix is to rank those tied pictures by how similar each one is to its nearest confirmed picture, or to count rejected pictures as known negatives instead of treating every unjudged picture as one. The same offline test from this round (held-out verdicts, precision in the top 50) would show whether the gap closes.",
+  "origin": "session",
+  "parent": "4-learning-curve-of-a-clip-logistic-regres",
+  "createdAt": "2026-11-17T17:30:41.458Z",
+  "reopenings": []
+}
