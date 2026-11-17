@@ -571,6 +571,22 @@ describe("FaceClustersDialog", () => {
       wrapper.unmount();
     });
 
+    it("shows the picks even when no two faces form a cluster", async () => {
+      const body = seededAnswer();
+      body.clusters = [];
+      api.getFaceClusters.mockResolvedValue(body);
+      const wrapper = mountSeeded();
+      await flushPromises();
+      expect(wrapper.find('[data-testid="fc-none"]').exists()).toBe(false);
+      const rows = wrapper.findAll('[data-testid="fc-row"]');
+      expect(rows).toHaveLength(1);
+      expect(wrapper.find(".fc-title").text()).toBe("Your cluster");
+      // The rail cannot step past its one row.
+      await wrapper.find('[data-testid="fc-rail"]').trigger("keydown", { key: "ArrowDown" });
+      expect(rows[0].attributes("aria-selected")).toBe("true");
+      wrapper.unmount();
+    });
+
     it("says so when none of the picks has the person's face", async () => {
       api.getFaceClusters.mockRejectedValue({ response: { status: 422, data: { detail: "x" } } });
       const wrapper = mountSeeded();

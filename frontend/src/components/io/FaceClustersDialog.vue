@@ -23,7 +23,8 @@
         <v-icon size="16">mdi-alert-circle-outline</v-icon><span>{{ error }}</span>
       </p>
       <p v-else-if="!data" class="fc-note fc-pad">Grouping the faces…</p>
-      <p v-else-if="!clusters.length" class="fc-note fc-pad" data-testid="fc-none">
+      <!-- `rows`, not `clusters`: picks with no two faces alike still rank. -->
+      <p v-else-if="!rows.length" class="fc-note fc-pad" data-testid="fc-none">
         {{
           data.faces
             ? `No two of ${name}'s faces look alike at ${strictnessLabel}. Try Loose.`
@@ -90,7 +91,10 @@
                   /></span>
                 </span>
               </div>
-              <span class="fc-lbl fc-lbl--rail fc-lbl--sub" aria-hidden="true"
+              <span
+                v-if="clusters.length"
+                class="fc-lbl fc-lbl--rail fc-lbl--sub"
+                aria-hidden="true"
                 >Clusters</span
               >
             </template>
