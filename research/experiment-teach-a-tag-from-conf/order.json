@@ -1,9 +1,11 @@
 {
-  "at": "2026-11-17T07:57:10.897Z",
-  "cause": "after 4 came back positive",
+  "at": "2026-11-17T17:31:13.718Z",
+  "cause": "after 4 was concluded positive and 13, 14 filed under it",
   "order": [
     "6-add-random-unjudged-pictures-as-backgrou",
+    "14-break-the-shipped-neighbour-vote-s-ties",
     "10-add-a-random-batch-to-the-person-judged",
+    "13-put-a-neighbour-vote-over-judged-picture",
     "5-a-person-judges-the-classifier-s-top-100",
     "9-a-stronger-picture-embedding-for-tags-cl",
     "7-combine-the-classifier-and-the-near-neig",
@@ -15,39 +17,59 @@
     "6-add-random-unjudged-pictures-as-backgrou": {
       "impact": 2,
       "odds": 2,
-      "line": "Cheap and offline on idea 4's harness, and it picks which classifier idea 5 puts in front of a person. Not yet judged.",
+      "line": "Cheap and offline on idea 4's harness, and it picks which classifier idea 5 puts in front of a person.",
       "why": {
-        "impact": "Idea 4 found the gain comes from using the rejects; adding plain background negatives is the next step in the same direction and changes what idea 5 tests.",
-        "odds": "Review rejects are near-misses, so background negatives plausibly help the library-wide top 100, but idea 4's held-out test cannot show that by itself.",
+        "impact": "Idea 4 found the gain comes from using the rejects; plain background negatives are the next step in the same direction and change what idea 5 tests.",
+        "odds": "Review rejects are near-misses, so background negatives plausibly help the library-wide top 100, but a held-out test alone may not show it.",
         "path": "Idea 4's harness and exported data are ready; idea 5 should use whichever variant wins."
+      }
+    },
+    "14-break-the-shipped-neighbour-vote-s-ties": {
+      "impact": 2,
+      "odds": 3,
+      "line": "Cheap and offline: if the shipped vote just needs its ties broken or rejects counted, that may be the whole fix #2678 needs.",
+      "why": {
+        "impact": "A small change to the shipped source is easier to ship than a new classifier, and it sets the baseline idea 5 compares against.",
+        "odds": "Idea 4's judged-only vote, which counts rejects as negatives, already tied the classifier on every tag, so this is very likely to close the gap.",
+        "path": "Runs on idea 4's harness now; its winner should be the vote list in idea 5."
       }
     },
     "10-add-a-random-batch-to-the-person-judged": {
       "impact": 3,
       "odds": 3,
-      "line": "Run inside idea 5's blind review: idea 4's win is on hand-picked pictures, and only a random batch shows whether that holds on the open library.",
+      "line": "Run inside idea 5's blind review: idea 4's win is on hand-picked pictures, and only a random batch shows whether it holds on the open library.",
       "why": {
         "impact": "Idea 2 found a strong model confirming new pictures at the random rate, so this control decides whether idea 5's numbers mean anything.",
         "odds": "Adding a random batch to a review is easy and almost certain to give a usable baseline.",
         "path": "Shares idea 5's review, so it sits just before it."
       }
     },
+    "13-put-a-neighbour-vote-over-judged-picture": {
+      "impact": 3,
+      "odds": 3,
+      "line": "Run inside idea 5's blind review: the judged-only vote tied the classifier in idea 4, and only new pictures can tell which one to ship.",
+      "why": {
+        "impact": "It decides whether #2678 ships a classifier or a simpler vote.",
+        "odds": "Adding a third list to the same review is easy and gives an answer either way.",
+        "path": "Shares idea 5's review; should use idea 14's version of the vote if that wins."
+      }
+    },
     "5-a-person-judges-the-classifier-s-top-100": {
       "impact": 3,
       "odds": 2,
-      "line": "Now the deciding test: idea 4 won clearly on 7 of 20 tags held out, but a vote over judged pictures tied it, so the person should judge that vote's list too. Not yet judged.",
+      "line": "The deciding test, with a random batch (10) and the judged-only vote (13) in the same blind review.",
       "why": {
-        "impact": "Confirms on unjudged pictures are the issue's own success measure, and it decides whether to ship the classifier or the simpler judged-only vote.",
-        "odds": "Raised from low: idea 4 beat the shipped vote by 20-30 points in the top 50 on content tags like jewelry and teeth, though only among pictures someone chose to review, and idea 2 warns that such wins can vanish on new pictures.",
-        "path": "Should use idea 6's winner and carry idea 10's random batch."
+        "impact": "Confirms on unjudged pictures are the issue's own success measure.",
+        "odds": "Idea 4 beat the shipped vote by 20-30 points in the top 50 on content tags like jewelry and teeth, but only among reviewed pictures, and idea 2 warns such wins can vanish on new ones.",
+        "path": "Should use the winners of ideas 6 and 14 and carry ideas 10 and 13."
       }
     },
     "9-a-stronger-picture-embedding-for-tags-cl": {
       "impact": 2,
       "odds": 2,
-      "line": "Its trigger has happened: in idea 4 every method sat close to chance on defect tags while content tags worked. Not yet judged.",
+      "line": "Its trigger has happened: in idea 4 every method sat near chance on defect tags while content tags worked.",
       "why": {
-        "impact": "It would open the fine-grained tags, but those are mostly the anomaly tagger's own, and a larger embedding costs storage and a library pass.",
+        "impact": "It would open fine-grained tags, but those are mostly the anomaly tagger's own, and a larger embedding costs storage and a library pass.",
         "odds": "Idea 1's DINOv3 probe put 56 to 74 true positives in its top 100 for defect tags, but with about 1,200 labels rather than 100.",
         "path": "Can run now on idea 4's harness; nothing waits on it."
       }
@@ -55,51 +77,52 @@
     "7-combine-the-classifier-and-the-near-neig": {
       "impact": 1,
       "odds": 1,
-      "line": "Weakened by idea 4: the judged-only vote tied the classifier on every tag, so combining them likely adds little. Not yet judged.",
+      "line": "Weakened by idea 4: the judged-only vote tied the classifier on every tag, and idea 13's overlap count answers it for free.",
       "why": {
         "impact": "If the two rankers agree, a combination ships no better than either alone.",
         "odds": "Idea 4 found the classifier and the judged-only vote within each other's spread on every tag.",
-        "path": "Nothing waits on it; idea 5's overlap count between lists would show the same thing for free."
+        "path": "Nothing waits on it; idea 13 reports how much the lists overlap."
       }
     },
     "11-use-the-base-rate-thresholds-as-the-near": {
       "impact": 1,
       "odds": 3,
-      "line": "Probably already answered: idea 4 ran the shipped near-neighbour kernel copied unchanged. Not yet judged.",
+      "line": "Already answered in practice: idea 4 ran the shipped near-neighbour kernel copied unchanged.",
       "why": {
-        "impact": "Only a methodological check; idea 4's report already lists the vote's coverage per tag (the share scoring above zero).",
-        "odds": "Using the shipped code is what idea 4 did, so it holds.",
-        "path": "Nothing waits on it; read idea 4's report before spending a session on it."
+        "impact": "Only a methodological check, and idea 4's report already lists the vote's coverage per tag.",
+        "odds": "Using the shipped code is what idea 4 did.",
+        "path": "Nothing waits on it; a candidate for closing from idea 4's report rather than a new session."
       }
     },
     "12-have-a-person-judge-the-vote-s-top-100-u": {
       "impact": 1,
       "odds": 2,
-      "line": "Settles idea 3's open verdict but barely touches the main question, and costs a person's judging; could ride along in idea 5's review.",
+      "line": "Settles idea 3's open verdict but barely touches the main question; could ride along in idea 5's review.",
       "why": {
         "impact": "It only decides which version of the shipped vote is the baseline, and idea 4 shows the bigger issue is that vote ignoring rejects.",
-        "odds": "The two lists differ only where the old 55% bar lets fewer than 100 through, so a difference is likely on the rarest tags and nowhere else.",
-        "path": "Nothing waits on it; sharing idea 5's review would save a separate judging session."
+        "odds": "The two lists differ only where the old 55% bar lets fewer than 100 through, so a difference is likely only on the rarest tags.",
+        "path": "Nothing waits on it."
       }
     },
     "8-pick-the-next-pictures-to-judge-by-the-c": {
       "impact": 1,
       "odds": 1,
-      "line": "Last: idea 2 found a held-out model's ranking no better than random, and this only speeds up a classifier that must work first.",
+      "line": "Last: idea 2 found a held-out model's ranking no better than random, and this only speeds up a source that must work first.",
       "why": {
         "impact": "It saves verdicts but does not answer whether the classifier works.",
         "odds": "Idea 2 concluded negative: ranked batches confirmed at the random rate, and the score did not order positives (AUC 0.49).",
-        "path": "Should wait for idea 5 to show the classifier finds new examples at all."
+        "path": "Waits for idea 5."
       }
     }
   },
   "pinned": {},
   "moved": {
-    "6-add-random-unjudged-pictures-as-backgrou": 1,
-    "10-add-a-random-batch-to-the-person-judged": 2,
-    "5-a-person-judges-the-classifier-s-top-100": 2,
-    "9-a-stronger-picture-embedding-for-tags-cl": 2,
+    "14-break-the-shipped-neighbour-vote-s-ties": 6,
+    "13-put-a-neighbour-vote-over-judged-picture": 4,
+    "9-a-stronger-picture-embedding-for-tags-cl": -2,
     "7-combine-the-classifier-and-the-near-neig": -2,
-    "11-use-the-base-rate-thresholds-as-the-near": -5
+    "11-use-the-base-rate-thresholds-as-the-near": -2,
+    "12-have-a-person-judge-the-vote-s-top-100-u": -2,
+    "8-pick-the-next-pictures-to-judge-by-the-c": -2
   }
 }
