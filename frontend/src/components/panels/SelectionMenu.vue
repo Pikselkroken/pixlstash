@@ -457,6 +457,9 @@
             />
             <v-icon class="ctx-icon">mdi-account-search-outline</v-icon>
             Start a cluster from these…
+            <span v-if="seedClusterReason" class="ctx-meta">{{
+              SEED_NOTES[seedClusterReason]
+            }}</span>
           </button>
         </div>
       </div>
@@ -547,6 +550,7 @@ import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { COMPARE_NOTES } from "../../utils/compare";
+import { SEED_NOTES } from "../../utils/seedCluster";
 import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
 import { vSubmenuFit } from "../../utils/submenuFit";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";

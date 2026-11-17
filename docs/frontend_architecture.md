@@ -1938,14 +1938,17 @@ up).
   well they hold together), selected on open and after a reload; the clusters
   below keep their *Cluster N* numbers (`rowLabel`). The picks lead the field,
   so the layout puts them at its centre, with a hue-free ring, lift and pin
-  mark; the slider never cuts them and opens at the farthest pick. Unassigned
+  mark; the slider never cuts them and opens at the farthest pick, and they
+  stay pinned when the row is centred on a face (`centreOn` marks them). Unassigned
   look-alikes sit in the same ranking with a dashed `--track-ring` outline and
   an italic *Probably* chip; the slider cuts them, but they are never kept:
   *Make these {name}'s reference* saves only the person's own faces, and
   *Add K to {name}* assigns the look-alikes above the cut
   (`addCharacterFacesByFaceId`) and reloads, when they come back as the
-  person's. A note names the picks with no face of the person; none at all is
-  the dialog's error.
+  person's; a probable face offers no *Centre on this face*, having none of
+  the person's. A note names the picks with no face of the person; none at
+  all is the dialog's error. The menus show a short note beside a greyed row,
+  as *Compare* does (`SEED_NOTES`).
 
 #### `CharacterSheetsDialog.vue` (`io/`)
 

@@ -532,6 +532,42 @@ describe("FaceClustersDialog", () => {
       expect(wrapper.emitted("changed")).toHaveLength(1);
       expect(api.getFaceClusters).toHaveBeenCalledTimes(2);
       expect(api.getFaceClusters).toHaveBeenLastCalledWith(7, 0.45, null, SEEDS);
+      // The button went with its faces' reload: focus is on the rail, not <body>.
+      await flushPromises();
+      expect(document.activeElement).toBe(wrapper.find('[data-testid="fc-rail"]').element);
+      wrapper.unmount();
+    });
+
+    it("keeps the picks pinned when centred, and offers no centre on a probable face", async () => {
+      api.getFaceClusters.mockImplementation(async (_id, _t, centre) => {
+        const body = seededAnswer();
+        // Against face 3, pick 11 falls far under the 0.45 cut.
+        body.centred =
+          centre == null
+            ? null
+            : [member(3, 1), member(1, 0.7), member(2, 0.6), member(12, 0.5), member(11, 0.1)];
+        return body;
+      });
+      const wrapper = mountSeeded();
+      await flushPromises();
+      const faces = () => wrapper.findAll('[data-testid="fc-face"]');
+      // Rank 4 is probable face 50: picked, it has nothing to centre on.
+      await faces()[4].trigger("click");
+      expect(faces()[4].classes("fc-face--prob")).toBe(true);
+      expect(wrapper.find('[data-testid="fc-centre"]').exists()).toBe(false);
+      await faces()[4].trigger("keydown", { key: "c" });
+      expect(api.getFaceClusters).toHaveBeenCalledTimes(1);
+      // Centre on face 3 (rank 3, after the three picks).
+      await faces()[3].trigger("click");
+      await wrapper.find('[data-testid="fc-centre"]').trigger("click");
+      await flushPromises();
+      const pick11 = faces().find((f) => f.attributes("aria-label").includes("0.10"));
+      expect(pick11.classes("fc-face--out")).toBe(false);
+      expect(pick11.classes("fc-face--pin")).toBe(true);
+      await wrapper.find('[data-testid="fc-save-centred"]').trigger("click");
+      await flushPromises();
+      const [, ids] = api.setReferenceCluster.mock.calls[0];
+      expect([...ids].sort((a, b) => a - b)).toEqual([1, 2, 3, 11, 12]);
       wrapper.unmount();
     });
 

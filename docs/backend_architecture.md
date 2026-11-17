@@ -13167,8 +13167,9 @@ translates.
   the seeds' mean, so the order is the same and only the scale differs.
   Unassigned faces near the centre join the members as `probable`, with their
   `face_id` (`probable_faces`: read on the reader, scored outside it, the best
-  face a picture, never a picture already carrying the person, at or above
-  Loose 0.35, at most 200; placeholders like `STRICTNESS`; `# ponytail:` a full
+  face a picture, never a picture already carrying the person nor an ignored
+  seed, at or above Loose 0.35, at most 200; both uncalibrated, as
+  `STRICTNESS` is; `# ponytail:` a full
   scan of unassigned faces, a vector index past ~100k). `size` counts only the
   person's own. `seeded` is top level and **never in `clusters`**: "Cluster N"
   is the grid filter's numbering (`person_cluster_ids`), which a leading

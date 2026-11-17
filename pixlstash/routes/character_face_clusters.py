@@ -253,15 +253,17 @@ def create_router(server) -> APIRouter:
                     face_clusters.model_pack_of(server.vault),
                     picks.centroid,
                 )
+                # A pick without the person's face is "left out", not "probably".
+                if face.picture_id not in pinned
             ]
             ranked.sort(key=lambda m: (-m[0], m[1]))
-            in_reference = set(reference)
+            reference_ids = set(reference)
             seeded = FaceCluster(
                 members=[m for _, _, m in ranked],
                 size=len(own),
                 cohesion=round(picks.cohesion, 4),
                 reference_share=round(
-                    sum(pid in in_reference for pid in own) / len(own), 4
+                    sum(pid in reference_ids for pid in own) / len(own), 4
                 ),
                 is_reference=False,
                 similarity_to_reference=to_target(picks.centroid),

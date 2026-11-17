@@ -5253,13 +5253,15 @@ const seedClusterReason = computed(() =>
 function startClusterFromSelection() {
   if (seedClusterReason.value) return;
   const active = document.activeElement;
+  const grid = gridContainer.value;
   emit("face-clusters", {
     ...seedPerson.value,
     seeds: [...selectedImageIds.value],
-    // Overlays drop focus to <body> unless told where to go back to.
-    returnFocusTo: gridContainer.value?.contains(active)
+    // Overlays drop focus to <body> unless told where to go back to. From the
+    // context menu focus is already on <body>: back to the grid's tab stop.
+    returnFocusTo: grid?.contains(active)
       ? active
-      : gridContainer.value,
+      : (grid?.querySelector('[tabindex="0"]') ?? null),
   });
 }
 

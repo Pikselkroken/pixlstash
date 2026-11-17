@@ -1577,13 +1577,13 @@ def test_a_reference_cluster_chooses_the_reference_faces(client):
         session.commit()
 
     client.server.vault.db.run_task(add_look_alikes)
-    seeds = [b_ids[0], b_ids[1], look_alike]
+    seeds = [b_ids[0], b_ids[1], others]
     seeded_body = client.get(
         clusters_url + "".join(f"&seed={pid}" for pid in seeds)
     ).json()
     # The automatic clusters keep their order: "Cluster N" is still the filter's.
     assert seeded_body["clusters"] == client.get(clusters_url).json()["clusters"]
-    assert seeded_body["seeds_ignored"] == [look_alike]
+    assert seeded_body["seeds_ignored"] == [others]
     seeded = seeded_body["seeded"]
     assert seeded["is_reference"] is False and seeded["size"] == 9
     by_pid = {m["picture_id"]: m for m in seeded["members"]}
@@ -1607,6 +1607,10 @@ def test_a_reference_cluster_chooses_the_reference_faces(client):
     assert all(
         m["probable"] is False for m in by_pid.values() if m["picture_id"] in ids
     )
+    # A picked look-alike is left out, never also "probably" theirs.
+    picked = client.get(f"{clusters_url}&seed={b_ids[0]}&seed={look_alike}").json()
+    assert picked["seeds_ignored"] == [look_alike]
+    assert look_alike not in {m["picture_id"] for m in picked["seeded"]["members"]}
     assert client.get(clusters_url).json()["seeded"] is None
     nobody = client.get(f"{clusters_url}&seed={look_alike}&seed=999999")
     assert nobody.status_code == 422, nobody.text

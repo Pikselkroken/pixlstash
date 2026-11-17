@@ -39,9 +39,11 @@
           <span v-else class="fc-lbl fc-lbl--rail" :id="`${uid}-rail`">Clusters</span>
           <div
             class="fc-rows"
+            ref="railEl"
             role="listbox"
             tabindex="0"
-            :aria-labelledby="`${uid}-rail`"
+            :aria-labelledby="data.seeded ? null : `${uid}-rail`"
+            :aria-label="data.seeded ? 'Your cluster and clusters' : null"
             :aria-activedescendant="`${uid}-row-${selected}`"
             aria-keyshortcuts="Z"
             data-testid="fc-rail"
@@ -88,10 +90,7 @@
                   /></span>
                 </span>
               </div>
-              <span
-                class="fc-lbl fc-lbl--rail fc-lbl--sub"
-                role="presentation"
-                :id="`${uid}-rail`"
+              <span class="fc-lbl fc-lbl--rail fc-lbl--sub" aria-hidden="true"
                 >Clusters</span
               >
             </template>
@@ -366,7 +365,7 @@
                     Zoom (Z)
                   </button>
                   <button
-                    v-if="picked.picture_id !== centred?.picture_id"
+                    v-if="picked.picture_id !== centred?.picture_id && !picked.probable"
                     type="button"
                     class="fc-link"
                     :disabled="centring"
@@ -635,6 +634,7 @@ const cuts = ref({}); // cluster index -> the slider's value
 const saving = ref(false);
 const focusRank = ref(0);
 const fieldEl = ref(null);
+const railEl = ref(null);
 const stageEl = ref(null);
 const box = ref({ width: 0, height: 0 });
 let seq = 0;
@@ -895,8 +895,13 @@ async function centreOn(pictureId) {
   try {
     const result = await getFaceClusters(id, threshold.value, pictureId);
     if (mine !== centreSeq) return;
-    // `data` is kept: the answer's clusters are the same ones.
-    centred.value = { picture_id: pictureId, members: result.centred };
+    // `data` is kept: the answer's clusters are the same ones. Centred from
+    // the seeded row, the picks stay pinned.
+    const pinned = new Set(onSeeded.value ? pins.value.map((m) => m.picture_id) : []);
+    const members = result.centred.map((m) =>
+      pinned.has(m.picture_id) ? { ...m, pinned: true } : m,
+    );
+    centred.value = { picture_id: pictureId, members };
     centreCut.value = null;
     // Into the field only if focus was there; a side-panel button keeps it.
     if (fieldEl.value?.contains(document.activeElement)) focusFace(0);
@@ -988,7 +993,14 @@ const zoomCaption = computed(() => {
   const c = rows.value[i];
   const rank = c.members.indexOf(m);
   const n = c.members.length;
-  const where = rank === 0 ? ", most typical" : rank === n - 1 ? ", least typical" : "";
+  const where =
+    c === seededRow.value
+      ? ""
+      : rank === 0
+        ? ", most typical"
+        : rank === n - 1
+          ? ", least typical"
+          : "";
   const role = c.is_reference
     ? " (reference)"
     : m.pinned
@@ -1038,7 +1050,8 @@ function onFieldKey(event) {
   } else if ((event.key === "c" || event.key === "C") && !event.ctrlKey && !event.metaKey) {
     event.preventDefault();
     const m = shown.value[focusRank.value];
-    if (m && m.picture_id !== centred.value?.picture_id) centreOn(m.picture_id);
+    // A probable face is not the person's: there is nothing of theirs to centre on.
+    if (m && !m.probable && m.picture_id !== centred.value?.picture_id) centreOn(m.picture_id);
   }
 }
 
@@ -1092,6 +1105,8 @@ async function addProbable() {
     await addCharacterFacesByFaceId(props.character.id, faceIds);
     emit("changed");
     await load();
+    // The button left with the faces it added: focus back to the rail.
+    nextTick(() => railEl.value?.focus());
   } catch (e) {
     console.error("Couldn't add probable faces", props.character.id, faceIds, e);
     error.value = `Couldn't add the faces to ${name.value}. ${errorDetail(e) || "Please try again."}`;

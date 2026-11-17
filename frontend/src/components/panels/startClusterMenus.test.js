@@ -71,6 +71,7 @@ describe.each(MENUS)("$name", ({ mountMenu }) => {
     expect(row.text()).toContain("Start a cluster from these…");
     expect(row.find(".tip").text()).toBe("Group Wren's faces that look like these");
     expect(row.attributes("disabled")).toBeUndefined();
+    expect(row.find(".ctx-meta").exists()).toBe(false);
     await row.trigger("click");
     await wrapper.vm.$nextTick();
     expect(wrapper.emitted("start-cluster")).toHaveLength(1);
@@ -82,6 +83,7 @@ describe.each(MENUS)("$name", ({ mountMenu }) => {
     const row = await entry(mountMenu({ seedClusterReason: reason }));
     expect(row.attributes("disabled")).toBeDefined();
     expect(row.find(".tip").text()).toBe(reason);
+    expect(row.find(".ctx-meta").text()).toBe("In a person");
   });
 });
 

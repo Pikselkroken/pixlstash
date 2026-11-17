@@ -13,6 +13,19 @@ export function seedPersonId(selectedCharacter) {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+export const SEED_REASONS = {
+  readOnly: "Face clusters need owner access",
+  noPerson: "Open a person to start a cluster from these",
+  noSelection: "Select pictures first",
+};
+
+/** The few words a greyed menu row shows for each reason; the tip says it all. */
+export const SEED_NOTES = {
+  [SEED_REASONS.readOnly]: "Owner only",
+  [SEED_REASONS.noPerson]: "In a person",
+  [SEED_REASONS.noSelection]: "Select first",
+};
+
 /**
  * Why both grid menus grey "Start a cluster from these…", or null.
  *
@@ -21,8 +34,8 @@ export function seedPersonId(selectedCharacter) {
  */
 export function seedClusterReason({ personId, readOnly, count }) {
   // The face-clusters route is owner-only.
-  if (readOnly) return "Face clusters need owner access";
-  if (personId == null) return "Open a person to start a cluster from these";
-  if (!count) return "Select pictures first";
+  if (readOnly) return SEED_REASONS.readOnly;
+  if (personId == null) return SEED_REASONS.noPerson;
+  if (!count) return SEED_REASONS.noSelection;
   return null;
 }
