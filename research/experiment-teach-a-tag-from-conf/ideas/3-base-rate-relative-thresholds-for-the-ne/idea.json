@@ -1,0 +1,10 @@
+{
+  "id": "3-base-rate-relative-thresholds-for-the-ne",
+  "number": 3,
+  "title": "Base-rate-relative thresholds for the near-neighbour vote",
+  "body": "The near-neighbour scan's fixed 0.55/0.45 vote thresholds were replaced by thresholds relative to each tag's base rate (margin 0.15), checked with a permutation test on a 36,318-embedding library.",
+  "origin": "history",
+  "parent": null,
+  "createdAt": "2026-11-17T07:25:01.270Z",
+  "reopenings": []
+}

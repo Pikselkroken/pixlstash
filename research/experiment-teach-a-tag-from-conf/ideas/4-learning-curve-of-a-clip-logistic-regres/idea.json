@@ -1,0 +1,10 @@
+{
+  "id": "4-learning-curve-of-a-clip-logistic-regres",
+  "number": 4,
+  "title": "Learning curve of a CLIP logistic regression against the near-neighbour vote on held-out verdicts",
+  "body": "Take the tags in the library that already carry the most human verdicts (confirm = POS, reject = NEG in the label ledger, read through GET /tag_predictions/labels). For each tag, fit a logistic regression on the stored 512-number CLIP picture embeddings using 50, 100 and 200 randomly drawn verdicts, and also run the existing near-neighbour vote from the same verdicts. Score both on the verdicts that were held back, repeating the draw several times. The belief is that a linear boundary uses every verdict, including rejects, while the near-neighbour vote mostly finds close copies of known positives, so the classifier should rank unseen positives higher. Measure precision among each method's top-ranked held-out pictures and average precision, with the spread over repeats. It counts as a success if the classifier is clearly ahead (outside the spread) on at least three tags at 100 verdicts. It is free and needs no new judging, so it decides whether the human test below is worth anyone's time.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T07:25:01.270Z",
+  "reopenings": []
+}

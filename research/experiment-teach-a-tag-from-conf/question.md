@@ -1,0 +1,1 @@
+Can a small per-tag classifier (logistic regression on the 512-number CLIP ViT-B/32 picture embeddings PixlStash already stores), fitted on 50, 100 or 200 human confirm/reject verdicts, rank pictures so that clearly more of its top 100 candidates are confirmed by a person than the existing near-neighbour vote finds, on at least a few tags (issue #2678)?

@@ -1,0 +1,12 @@
+{
+  "idea": "1-logistic-regression-on-frozen-dinov3-fea",
+  "round": 0,
+  "questionRev": 1,
+  "verdict": "positive",
+  "finding": "The frozen-feature probe reached AUC 0.82 / 0.82 / 0.97 / 0.94 and on clean foot beat the fine-tuned model (F1 0.815 vs 0.679), but with a different backbone and far more labels than #2678 has.",
+  "wouldSettle": null,
+  "evidence": [],
+  "followUps": [],
+  "status": "provisional",
+  "concludedAt": null
+}

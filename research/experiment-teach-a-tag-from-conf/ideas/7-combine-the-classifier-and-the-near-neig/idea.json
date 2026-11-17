@@ -1,0 +1,10 @@
+{
+  "id": "7-combine-the-classifier-and-the-near-neig",
+  "number": 7,
+  "title": "Combine the classifier and the near-neighbour vote",
+  "body": "In the tagger repo two different rankers for extra limb shared only 6 of their top 50 and were each useful, so the classifier and the near-neighbour vote may find different positives. Rank by the average of the two methods' ranks, or take the union of each top 50, and compare with each alone on the same held-out verdicts or human-judged lists. It counts if the combination finds more confirmed positives in a top 100 than the better single method.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T07:25:01.270Z",
+  "reopenings": []
+}

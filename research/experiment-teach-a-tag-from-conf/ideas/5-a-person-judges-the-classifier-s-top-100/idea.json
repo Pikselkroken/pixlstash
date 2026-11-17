@@ -1,0 +1,10 @@
+{
+  "id": "5-a-person-judges-the-classifier-s-top-100",
+  "number": 5,
+  "title": "A person judges the classifier's top 100 against the near-neighbour's top 100",
+  "body": "This is the test #2678 names. For a few tags, fit the classifier on 100 verdicts, take its top 100 unjudged pictures and the near-neighbour scan's top 100, and put both, shuffled together, into one list review (#2676) with some known-answer control pictures mixed in so careless judging shows. Held-out verdicts only say how the classifier ranks pictures someone already looked at; this asks the real question of whether it finds new examples across the whole library. Count how many of each method's 100 the person confirms, and how many confirmed pictures are near-twins of a training picture. Go if the classifier's confirm count is clearly higher on at least a few tags; otherwise close the issue with the numbers.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T07:25:01.270Z",
+  "reopenings": []
+}

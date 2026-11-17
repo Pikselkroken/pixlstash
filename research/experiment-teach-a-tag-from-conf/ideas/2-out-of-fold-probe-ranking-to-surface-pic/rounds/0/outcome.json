@@ -1,0 +1,12 @@
+{
+  "idea": "2-out-of-fold-probe-ranking-to-surface-pic",
+  "round": 0,
+  "questionRev": 1,
+  "verdict": "negative",
+  "finding": "For bad anatomy the ranked batch held 11% positives against 10% for random, and for eyes the ranking did not enrich at all.",
+  "wouldSettle": null,
+  "evidence": [],
+  "followUps": [],
+  "status": "provisional",
+  "concludedAt": null
+}

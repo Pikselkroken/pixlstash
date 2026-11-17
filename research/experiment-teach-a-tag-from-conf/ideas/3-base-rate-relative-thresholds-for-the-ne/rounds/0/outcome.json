@@ -1,0 +1,12 @@
+{
+  "idea": "3-base-rate-relative-thresholds-for-the-ne",
+  "round": 0,
+  "questionRev": 1,
+  "verdict": "positive",
+  "finding": "The remove-to-add skew fell from up to 58x to 0.2-1.3x, but a brand-new tag with no positives still gets no candidates, which is the gap #2678 targets.",
+  "wouldSettle": null,
+  "evidence": [],
+  "followUps": [],
+  "status": "provisional",
+  "concludedAt": null
+}

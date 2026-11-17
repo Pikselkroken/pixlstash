@@ -1,0 +1,10 @@
+{
+  "id": "1-logistic-regression-on-frozen-dinov3-fea",
+  "number": 1,
+  "title": "Logistic regression on frozen DINOv3 features for anomaly tags (pixltagger)",
+  "body": "In the separate tagger-training repo, a class-balanced logistic regression (StandardScaler, C = 0.1) was fitted on frozen DINOv3 ViT-B/16 features using thousands of in-house labels for extra limb, malformed hand, malformed foot and bad anatomy, and compared with fine-tuned models.",
+  "origin": "history",
+  "parent": null,
+  "createdAt": "2026-11-17T07:25:01.269Z",
+  "reopenings": []
+}

@@ -1,0 +1,10 @@
+{
+  "id": "2-out-of-fold-probe-ranking-to-surface-pic",
+  "number": 2,
+  "title": "Out-of-fold probe ranking to surface pictures worth judging (pixltagger)",
+  "body": "Pictures were ranked by an out-of-fold classifier's score so a person would judge the likeliest positives first, and the hit rate was compared with a random batch of the same size.",
+  "origin": "history",
+  "parent": null,
+  "createdAt": "2026-11-17T07:25:01.270Z",
+  "reopenings": []
+}

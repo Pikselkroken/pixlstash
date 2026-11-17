@@ -1,0 +1,10 @@
+{
+  "id": "9-a-stronger-picture-embedding-for-tags-cl",
+  "number": 9,
+  "title": "A stronger picture embedding for tags CLIP ViT-B/32 cannot separate",
+  "body": "CLIP ViT-B/32 is small and sees a 224-pixel picture, so fine detail such as a malformed hand may not be in the vector at all. If the first idea fails on detail tags but works on broad ones (a setting, a clothing item), compute a larger embedding, such as CLIP ViT-L/14 or the DINOv3 features the anomaly tagger already runs, for the same pictures and repeat the held-out test. It counts if the larger embedding lifts average precision on the detail tags clearly, and the cost (extra storage and an embedding pass over the library) is then weighed separately.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T07:25:01.270Z",
+  "reopenings": []
+}

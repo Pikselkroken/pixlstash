@@ -1,0 +1,10 @@
+{
+  "id": "8-pick-the-next-pictures-to-judge-by-the-c",
+  "number": 8,
+  "title": "Pick the next pictures to judge by the classifier's uncertainty",
+  "body": "Once a tag has a classifier, the next review could show the pictures it is least sure about rather than its top candidates, so each verdict teaches it the most. Simulate this on tags with many verdicts: grow from 20 to 200 verdicts choosing either by uncertainty or at random, and plot held-out average precision against verdict count. Odds are low: out-of-fold ranking in the tagger repo did no better than random for bad anatomy. It counts if uncertainty reaches the random curve's 200-verdict quality with clearly fewer verdicts.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T07:25:01.270Z",
+  "reopenings": []
+}

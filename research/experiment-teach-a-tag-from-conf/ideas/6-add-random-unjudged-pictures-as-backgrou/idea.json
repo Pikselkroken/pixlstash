@@ -1,0 +1,10 @@
+{
+  "id": "6-add-random-unjudged-pictures-as-backgrou",
+  "number": 6,
+  "title": "Add random unjudged pictures as background negatives",
+  "body": "Verdicts from reviews are not a random sample: rejects are near-misses that some source already thought looked like the tag. A classifier fitted only on them learns the fine line between near-misses and positives but may never see an ordinary picture, and then score unrelated pictures highly. Add a few hundred random unjudged pictures as weak negatives (most pictures do not carry a rare tag), down-weighted, and compare with verdicts-only. Measure the share of the top 100 that a person or the held-out verdicts confirm. It counts if top-100 precision rises without held-out average precision falling.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T07:25:01.270Z",
+  "reopenings": []
+}
