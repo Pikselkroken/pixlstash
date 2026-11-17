@@ -1,0 +1,10 @@
+{
+  "id": "10-vary-the-outfit-across-the-dataset-inste",
+  "number": 10,
+  "title": "Vary the outfit across the dataset instead of keeping one outfit",
+  "body": "A sheet-drawn character usually wears one outfit in every panel (today's default is a crew-neck sweater and dark jeans), and a LoRA trained on that may bind the sweater into the person. Build one dataset with a single outfit and one where outfits vary and are named in the captions, train both, and generate the suite's four-outfit prompts. Measure how often the requested outfit appears and whether face agreement holds. Varying wins if outfits follow the prompt clearly more often with face agreement no lower.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.784Z",
+  "reopenings": []
+}

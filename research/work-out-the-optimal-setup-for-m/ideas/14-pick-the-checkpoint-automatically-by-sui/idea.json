@@ -1,0 +1,10 @@
+{
+  "id": "14-pick-the-checkpoint-automatically-by-sui",
+  "number": 14,
+  "title": "Pick the checkpoint automatically by suite agreement",
+  "body": "A run saves a checkpoint every 250 steps; too early the face is not learned, too late the LoRA overfits. Today the owner picks by eye, helped by a likeness score on two preview scenes. Instead, generate the suite with each saved checkpoint and pick the one with the highest face agreement, minus a penalty for leakage, among those above the likeness floor. It works if the automatic choice comes within 0.01 agreement of the best checkpoint picked by hand in most runs.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.785Z",
+  "reopenings": []
+}

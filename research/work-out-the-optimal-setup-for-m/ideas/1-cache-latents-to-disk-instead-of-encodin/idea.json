@@ -1,0 +1,10 @@
+{
+  "id": "1-cache-latents-to-disk-instead-of-encodin",
+  "number": 1,
+  "title": "Cache latents to disk instead of encoding images with the VAE every step",
+  "body": "For Krea 2, training was measured with the image encoder (VAE) running on every step versus latents encoded once and cached to disk. Every shipped recipe now locks caching on.",
+  "origin": "history",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.784Z",
+  "reopenings": []
+}

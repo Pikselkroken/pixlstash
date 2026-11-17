@@ -1,0 +1,10 @@
+{
+  "id": "7-include-the-reference-image-itself-in-th",
+  "number": 7,
+  "title": "Include the reference image itself in the training set",
+  "body": "In the reference route, the training set can be only the drawn panels, or the panels plus the original reference picture (perhaps repeated). The real picture carries the true face, which should anchor likeness, but it is one picture with its own lighting and pose, so it may also be memorised and pull every generation towards that one shot. Train with and without it and compare likeness to the reference, face agreement, and how often the reference's pose or background leaks into suite images. Including it wins if likeness rises without agreement or variety falling.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.784Z",
+  "reopenings": []
+}

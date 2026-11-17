@@ -1,0 +1,10 @@
+{
+  "id": "4-which-model-draws-the-most-consistent-te",
+  "number": 4,
+  "title": "Which model draws the most consistent text-route sheets",
+  "body": "In the text route, a model draws a dozen or so character sheets (one large image holding several panels of the same imagined person) from the prompt, and the LoRA is trained on panels from them. The drawing model does not have to be the one the LoRA is trained for, so the question is which drawer gives the best training material: MOSS-Image (the only one that reads the panel layout exactly), Krea 2, Qwen-Image, FLUX.2 Klein or MiniMax H3. A model that keeps one face across panels and angles should give a LoRA that does too. Draw sheets with each for the same test characters, train Krea 2 and MOSS LoRAs on the best identity from each, and compare face agreement on the evaluation suite. The best drawer is the one whose LoRAs agree most while still averaging 4 stars.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.784Z",
+  "reopenings": []
+}

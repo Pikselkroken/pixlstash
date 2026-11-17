@@ -1,0 +1,10 @@
+{
+  "id": "8-fill-missing-head-angles-with-an-edit-mo",
+  "number": 8,
+  "title": "Fill missing head angles with an edit model instead of drawing more sheets",
+  "body": "Sheets often lack a good profile or three-quarter view, and nothing today checks which angle a panel really shows. Missing angles can be drawn by an image edit model (Qwen-Image-Edit-2511) given the chosen identity's panels, or by drawing more sheets. Editing may keep the face better, or may drift the person towards the edit model's idea of them. Train a LoRA from each dataset and compare face agreement across angles on the suite, especially front against profile, and closeness to the starting images. Filling wins only if agreement rises without closeness falling below its floor.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.784Z",
+  "reopenings": []
+}

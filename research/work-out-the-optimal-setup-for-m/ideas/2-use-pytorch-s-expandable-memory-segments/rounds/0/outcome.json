@@ -1,0 +1,12 @@
+{
+  "idea": "2-use-pytorch-s-expandable-memory-segments",
+  "round": 0,
+  "questionRev": 1,
+  "verdict": "positive",
+  "finding": "Without it every step failed for lack of 5 GB while 5 GB sat reserved but fragmented; with it the run trained, so the trainer now launches with it by default.",
+  "wouldSettle": null,
+  "evidence": [],
+  "followUps": [],
+  "status": "provisional",
+  "concludedAt": null
+}

@@ -1,0 +1,12 @@
+{
+  "idea": "1-cache-latents-to-disk-instead-of-encodin",
+  "round": 0,
+  "questionRev": 1,
+  "verdict": "positive",
+  "finding": "Encoding every step cost about 5 GB of GPU memory above training itself, so caching latents was made mandatory for every recipe.",
+  "wouldSettle": null,
+  "evidence": [],
+  "followUps": [],
+  "status": "provisional",
+  "concludedAt": null
+}

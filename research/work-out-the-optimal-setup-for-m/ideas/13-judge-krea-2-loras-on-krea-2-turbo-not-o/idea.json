@@ -1,0 +1,10 @@
+{
+  "id": "13-judge-krea-2-loras-on-krea-2-turbo-not-o",
+  "number": 13,
+  "title": "Judge Krea 2 LoRAs on Krea 2 Turbo, not on Raw",
+  "body": "Krea 2 LoRAs are trained on Krea 2 Raw and today's previews are drawn on Raw, but Krea's model card says Raw is a base for training and its LoRAs are meant to run on Krea 2 Turbo, the faster model people actually generate with. If the LoRA behaves differently on Turbo, every measurement made on Raw may mislead. Generate the evaluation suite with the same checkpoints on Raw and on Turbo and compare face agreement, likeness and quality. If the rankings of checkpoints or settings differ between the two, all Krea 2 measurements in this research should be made on Turbo.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.785Z",
+  "reopenings": []
+}

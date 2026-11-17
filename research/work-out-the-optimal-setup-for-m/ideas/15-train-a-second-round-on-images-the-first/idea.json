@@ -1,0 +1,10 @@
+{
+  "id": "15-train-a-second-round-on-images-the-first",
+  "number": 15,
+  "title": "Train a second round on images the first LoRA made",
+  "body": "In 'The Chosen One', the LoRA generates 64 to 128 new images, the most consistent group is kept, and training continues from the current weights; identities usually settled in one or two rounds. A second round might tighten consistency, but self-training is known to push images towards simple centred scenes and to drift small details like colours and accessories, and in the reference route to drift away from the reference. Compare one round against two on face agreement, likeness, scene variety and GPU minutes. A second round is worth it only if agreement rises clearly without likeness or variety falling.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.785Z",
+  "reopenings": []
+}

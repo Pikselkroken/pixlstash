@@ -1,0 +1,10 @@
+{
+  "id": "9-upscale-sheet-panels-to-1024-pixels-befo",
+  "number": 9,
+  "title": "Upscale sheet panels to 1024 pixels before training",
+  "body": "A sheet panel is about 600×768 pixels while training buckets go up to 1024, so panels train small and the LoRA may learn soft, low-detail faces. Upscaling each panel to 1024 on its long side might give sharper detail to learn from, or might teach the upscaler's artefacts. Train with and without upscaling on the same panels and compare the owner's blind quality rating and face agreement. Upscaling wins if quality rises without agreement falling.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.784Z",
+  "reopenings": []
+}

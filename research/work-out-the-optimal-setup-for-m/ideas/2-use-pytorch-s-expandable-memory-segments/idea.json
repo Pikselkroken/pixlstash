@@ -1,0 +1,10 @@
+{
+  "id": "2-use-pytorch-s-expandable-memory-segments",
+  "number": 2,
+  "title": "Use PyTorch's expandable memory segments for training runs",
+  "body": "Krea 2 training on a 32 GB card was run with and without PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True.",
+  "origin": "history",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.784Z",
+  "reopenings": []
+}

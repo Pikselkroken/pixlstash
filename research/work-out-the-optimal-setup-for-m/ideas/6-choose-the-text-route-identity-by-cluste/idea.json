@@ -1,0 +1,10 @@
+{
+  "id": "6-choose-the-text-route-identity-by-cluste",
+  "number": 6,
+  "title": "Choose the text-route identity by clustering whole sheets versus single panels",
+  "body": "After drawing many sheets from a prompt, the pipeline keeps the group whose faces agree most, as in the paper 'The Chosen One'. Panels on one sheet share lighting and rendering, so a sheet may look more consistent than its person really is, and clustering whole sheets could pick a weaker identity than clustering panels one by one. Choose the identity both ways, train a LoRA from each with everything else fixed, and compare face agreement on the suite. Sheet clustering is worth keeping only if its LoRAs agree at least as well.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.784Z",
+  "reopenings": []
+}

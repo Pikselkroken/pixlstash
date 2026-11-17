@@ -1,0 +1,10 @@
+{
+  "id": "3-check-that-face-embedding-agreement-pred",
+  "number": 3,
+  "title": "Check that face-embedding agreement predicts the owner's 'same person' judgement",
+  "body": "Every other idea is judged by one number: how similar the faces in a LoRA's generated images are, as the cosine similarity between face embeddings (a face recognition model turns each face into a list of numbers, and two faces of the same person should point the same way). Before trusting it, check it against the owner's eye, separately for Krea 2 and MOSS-Image images since thresholds differ by model and style. Draw pairs known to be the same person and pairs known to be different, have the owner mark about 100 pairs 'same person' or 'not', and see whether a cosine threshold separates them. It worked if a threshold agrees with the owner on the large majority of pairs; if not, the metric must be redesigned before any pipeline can be compared.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.784Z",
+  "reopenings": []
+}

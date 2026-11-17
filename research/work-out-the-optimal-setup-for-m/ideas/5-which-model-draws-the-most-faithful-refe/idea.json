@@ -1,0 +1,10 @@
+{
+  "id": "5-which-model-draws-the-most-faithful-refe",
+  "number": 5,
+  "title": "Which model draws the most faithful reference-route sheets",
+  "body": "In the reference route, an edit or reference model draws sheets of the person in one reference image: Qwen-Image-Edit, FLUX.2 Klein or MiniMax H3. Here likeness to the reference matters more than in the text route, so a drawer that is consistent but slowly turns the person into someone else loses. Draw sheets from the same set of reference images with each model, train LoRAs, and measure both face agreement across the suite and face similarity to the reference. The winner has the highest agreement among the drawers whose likeness to the reference stays above the stricter reference-route floor set during calibration.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.784Z",
+  "reopenings": []
+}

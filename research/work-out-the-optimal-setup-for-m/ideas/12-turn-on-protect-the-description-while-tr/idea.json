@@ -1,0 +1,10 @@
+{
+  "id": "12-turn-on-protect-the-description-while-tr",
+  "number": 12,
+  "title": "Turn on 'Protect the description' while training",
+  "body": "'Protect the description' is ai-toolkit's differential output preservation: during training it also keeps the model's output for the plain class word, such as 'woman', unchanged, so the LoRA learns the character under its trigger word without overwriting what 'woman' means. It is off by default. It could cut leakage and keep scenes and outfits more flexible, at some cost in speed and possibly in likeness. Train with it on and off and compare face agreement, likeness, and leakage into trigger-free images. It earns a place in the recipe if leakage drops clearly with agreement and likeness no worse.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.785Z",
+  "reopenings": []
+}

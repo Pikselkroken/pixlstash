@@ -1,0 +1,10 @@
+{
+  "id": "11-rank-16-versus-rank-32-for-krea-2-and-fo",
+  "number": 11,
+  "title": "Rank 16 versus rank 32, for Krea 2 and for MOSS-Image",
+  "body": "Rank is the size of the LoRA's adjustment to the base model. Rank 32 (today's standard) can learn more than 16 but may memorise the training pictures, which shows as poses and backgrounds leaking into every generation, and the plan's research pass suggested 16. MOSS's settings are borrowed from other models, so it may behave differently from Krea 2. Train both ranks on the same dataset for each target and compare face agreement, quality rating, and leakage (how far plain 'person' images without the trigger word drift towards the character). Rank 16 should be the default for a target if it matches 32 on agreement with less leakage.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-17T22:42:20.785Z",
+  "reopenings": []
+}
