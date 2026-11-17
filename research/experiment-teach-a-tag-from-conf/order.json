@@ -1,12 +1,13 @@
 {
-  "at": "2026-11-17T18:20:27.831Z",
-  "cause": "after 5 was concluded negative",
+  "at": "2026-11-17T18:20:57.414Z",
+  "cause": "after 6 was concluded negative and 15 filed under it",
   "order": [
     "10-add-a-random-batch-to-the-person-judged",
     "14-break-the-shipped-neighbour-vote-s-ties",
     "9-a-stronger-picture-embedding-for-tags-cl",
     "12-have-a-person-judge-the-vote-s-top-100-u",
     "13-put-a-neighbour-vote-over-judged-picture",
+    "15-have-a-person-judge-the-unjudged-picture",
     "7-combine-the-classifier-and-the-near-neig",
     "11-use-the-base-rate-thresholds-as-the-near",
     "8-pick-the-next-pictures-to-judge-by-the-c"
@@ -62,6 +63,16 @@
         "path": "Nothing waits on it; a candidate for closing from idea 5's report."
       }
     },
+    "15-have-a-person-judge-the-unjudged-picture": {
+      "impact": 1,
+      "odds": 3,
+      "line": "Largely answered by idea 5, which judged only never-judged pictures: the classifier's top 100 was 83% right on hand and 53% on jewelry.",
+      "why": {
+        "impact": "Idea 5 already shows the never-judged picks are mostly right on hand, so held-out tests did not understate the classifier against the shipped vote; only the optional with-and-without-background comparison is new.",
+        "odds": "Counting confirms in a judged list is straightforward.",
+        "path": "Nothing waits on it; a candidate for closing from idea 5's report, or for riding along in idea 10's judging."
+      }
+    },
     "7-combine-the-classifier-and-the-near-neig": {
       "impact": 1,
       "odds": 1,
@@ -94,5 +105,10 @@
     }
   },
   "pinned": {},
-  "moved": {}
+  "moved": {
+    "15-have-a-person-judge-the-unjudged-picture": 3,
+    "7-combine-the-classifier-and-the-near-neig": -1,
+    "11-use-the-base-rate-thresholds-as-the-near": -1,
+    "8-pick-the-next-pictures-to-judge-by-the-c": -1
+  }
 }
