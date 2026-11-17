@@ -155,15 +155,22 @@ def record_hand_edit(
 def custom_smart_set_ids_in_session(
     session: Session, set_ids: Iterable[int]
 ) -> set[int]:
-    """The smart sets among ``set_ids`` the owner has edited by hand."""
-    ids = list(set_ids)
-    if not ids:
-        return set()
-    custom = {
-        int(s.id)
-        for s in session.exec(select(PictureSet).where(PictureSet.id.in_(ids))).all()
-        if (s.smart or {}).get("removed")
+    """The smart sets among ``set_ids`` the owner has edited by hand.
+
+    An ordinary set is never one: every row of it is the owner's.
+    """
+    smart = {
+        int(s.id): s.smart
+        for s in session.exec(
+            select(PictureSet).where(
+                PictureSet.id.in_(list(set_ids)), PictureSet.smart.is_not(None)
+            )
+        ).all()
     }
+    if not smart:
+        return set()
+    ids = list(smart)
+    custom = {sid for sid, value in smart.items() if (value or {}).get("removed")}
     custom.update(
         int(sid)
         for sid in session.exec(
@@ -182,8 +189,11 @@ def reset_to_automatic_in_session(session: Session, picture_set: PictureSet) -> 
     """Drop the owner's own edits; True when there were any.
 
     The owner's rows go and nothing stays taken out; the refresh that follows
-    puts back what the rule matches. Does not commit.
+    puts back what the rule matches. Does not commit. An ordinary set is left
+    alone: all its rows are the owner's.
     """
+    if not picture_set.smart:
+        return False
     changed = bool((picture_set.smart or {}).get("removed"))
     if changed:
         picture_set.smart = {**picture_set.smart, "removed": []}
@@ -196,6 +206,28 @@ def reset_to_automatic_in_session(session: Session, picture_set: PictureSet) -> 
         session.delete(member)
         changed = True
     return changed
+
+
+def claim_rows_in_session(
+    session: Session, picture_set: PictureSet, picture_ids: Iterable[int]
+) -> None:
+    """Make the owner's own any rule rows among ``picture_ids`` (a hand add).
+
+    A picture added by hand stays when the rule stops matching it, also when
+    the rule had already put it in. A no-op for an ordinary set.
+    """
+    if not picture_set.smart:
+        return
+    ids = {int(i) for i in picture_ids}
+    for member in session.exec(
+        select(PictureSetMember).where(
+            PictureSetMember.set_id == picture_set.id,
+            PictureSetMember.smart_auto.is_(True),
+        )
+    ).all():
+        if int(member.picture_id) in ids:
+            member.smart_auto = False
+            session.add(member)
 
 
 def smart_sets_to_refresh_in_session(

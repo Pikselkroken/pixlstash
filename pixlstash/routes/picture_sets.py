@@ -43,6 +43,7 @@ from pixlstash.services.set_lock_service import (
 )
 from pixlstash.services.smart_sets import (
     SmartFilterError,
+    claim_rows_in_session,
     custom_smart_set_ids_in_session,
     new_smart,
     record_hand_edit,
@@ -1996,6 +1997,9 @@ def create_router(server) -> APIRouter:
                     added_any = True
             # A smart set keeps the owner's add over its filter (#2148).
             record_hand_edit(picture_set, added=[picture.id for picture in pictures])
+            claim_rows_in_session(
+                session, picture_set, [picture.id for picture in pictures]
+            )
             # Issue #125: the set may belong to several projects, so the picture
             # joins *all* of them. Reading the primary FK here would leave the
             # picture out of every secondary project the set is shared with.
@@ -2161,8 +2165,10 @@ def create_router(server) -> APIRouter:
                 added_ids.append(pic_id)
                 existing.add(pic_id)
                 added += 1
-            # A smart set keeps the owner's adds over its filter (#2148).
+            # A smart set keeps the owner's adds over its filter (#2148),
+            # also of pictures its filter had already put in.
             record_hand_edit(picture_set, added=added_ids)
+            claim_rows_in_session(session, picture_set, picture_ids)
             session.add(picture_set)
             # Issue #125: propagate to every project the set belongs to, not just
             # the primary FK.
@@ -2268,10 +2274,19 @@ def create_router(server) -> APIRouter:
                         "single pictures."
                     ),
                 )
+            # A smart set's rule rows that stay keep their flag (#2148): a
+            # replace that keeps a picture does not make it the owner's.
+            rule_rows = {m.picture_id for m in existing_members if m.smart_auto}
             for m in existing_members:
                 session.delete(m)
             for pic_id in member_ids:
-                session.add(PictureSetMember(set_id=set_id, picture_id=pic_id))
+                session.add(
+                    PictureSetMember(
+                        set_id=set_id,
+                        picture_id=pic_id,
+                        smart_auto=pic_id in rule_rows,
+                    )
+                )
             old_ids = {m.picture_id for m in existing_members}
             removed = len(old_ids - set(member_ids))
             # A smart set keeps the owner's edits over its filter (#2148).

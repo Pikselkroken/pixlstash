@@ -48,6 +48,10 @@ SMART_SET_SOURCE = "smart_set"
 # refresh runs. Fixed, not trailing: steady background work still refreshes.
 REFRESH_WINDOW_S = 2.0
 
+# How many times one refresh re-runs while a pass still changes something: a
+# smart set whose rule names another smart set sees that set's new members.
+MAX_PASSES = 3
+
 
 def rule_picture_ids(server, query: str, project_ids: Iterable[int]) -> set[int]:
     """The pictures a rule matches, as the owner's grid would list them.
@@ -85,32 +89,44 @@ def rule_picture_ids(server, query: str, project_ids: Iterable[int]) -> set[int]
 def refresh_smart_sets(server, set_ids: Iterable[int] | None = None) -> list[int]:
     """Bring smart sets' members up to date now; returns the ids that changed.
 
-    Every unlocked smart set, or only ``set_ids``. One set's failure is logged
-    and leaves the others to run.
+    Every unlocked smart set, or only ``set_ids`` (and then every set, if they
+    changed, for the rules that name them). One set's failure is logged and
+    leaves the others to run.
     """
     vault = server.vault
-    rows = vault.db.run_immediate_read_task(
-        smart_sets_to_refresh_in_session,
-        list(set_ids) if set_ids is not None else None,
-    )
     changed: list[int] = []
-    for set_id, query, project_ids in rows:
-        try:
-            ids = rule_picture_ids(server, query, project_ids)
-            changed += vault.db.run_task(
-                apply_members_in_session,
-                set_id,
-                ids,
-                priority=DBPriority.IMMEDIATE,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Smart set %s was not refreshed (filter %r): %s",
-                set_id,
-                query,
-                exc,
-                exc_info=True,
-            )
+    # A rule may name another smart set (`set_id`), and the refresher ignores
+    # its own change events, so a pass that changed something runs again here.
+    # ponytail: a fixed pass count, so sets naming each other cannot loop; a
+    # chain deeper than this catches up on the next library event.
+    targets = list(set_ids) if set_ids is not None else None
+    for _ in range(MAX_PASSES):
+        rows = vault.db.run_immediate_read_task(
+            smart_sets_to_refresh_in_session, targets
+        )
+        changed_this_pass: list[int] = []
+        for set_id, query, project_ids in rows:
+            try:
+                ids = rule_picture_ids(server, query, project_ids)
+                changed_this_pass += vault.db.run_task(
+                    apply_members_in_session,
+                    set_id,
+                    ids,
+                    priority=DBPriority.IMMEDIATE,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Smart set %s was not refreshed (filter %r): %s",
+                    set_id,
+                    query,
+                    exc,
+                    exc_info=True,
+                )
+        changed += changed_this_pass
+        if not changed_this_pass:
+            break
+        # The sets that name a changed set may be any of them.
+        targets = None
     if changed:
         vault.notify(
             EventType.CHANGED_PICTURES,

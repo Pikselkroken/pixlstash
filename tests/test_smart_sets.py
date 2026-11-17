@@ -147,8 +147,8 @@ def test_the_owners_edits_win_until_reset(env):
     assert _members(client, set_id) == {b, outsider}
     assert _row(client, set_id)["smart"]["custom"] is True
 
-    # The owner's add is theirs even when the filter stops matching a picture
-    # it also matched.
+    # A rule row (b, never touched by hand) leaves when the filter stops
+    # matching it.
     _set_score(server, b, 1)
     refresh_smart_sets(server)
     assert _members(client, set_id) == {outsider}
@@ -157,6 +157,55 @@ def test_the_owners_edits_win_until_reset(env):
     assert r.status_code == 200, r.text
     assert _members(client, set_id) == {a}
     assert _row(client, set_id)["smart"]["custom"] is False
+
+
+def test_adding_a_picture_the_filter_holds_makes_it_the_owners(env):
+    server, client = env
+    a, b = _pictures(server, "smart-claim", [5, 5])
+    set_id = _smart(client, "Claimed", "tag=smart-claim&min_score=4")
+    r = client.post(f"/picture_sets/{set_id}/members", json={"picture_ids": [a]})
+    assert r.status_code == 200, r.text
+    _set_score(server, a, 1)
+    _set_score(server, b, 1)
+    refresh_smart_sets(server)
+    assert _members(client, set_id) == {a}
+
+
+def test_replacing_members_keeps_the_filters_rows_the_filters(env):
+    server, client = env
+    a, b = _pictures(server, "smart-replace", [5, 5])
+    set_id = _smart(client, "Replaced", "tag=smart-replace&min_score=4")
+    r = client.put(f"/picture_sets/{set_id}/members", json={"picture_ids": [a, b]})
+    assert r.status_code == 200, r.text
+    assert _row(client, set_id)["smart"]["custom"] is False
+    _set_score(server, a, 1)
+    refresh_smart_sets(server)
+    assert _members(client, set_id) == {b}
+
+
+def test_reset_leaves_an_ordinary_set_alone(env):
+    server, client = env
+    (a,) = _pictures(server, "smart-ordinary", [5])
+    r = client.post("/picture_sets", json={"name": "Ordinary"})
+    set_id = r.json()["picture_set"]["id"]
+    client.post(f"/picture_sets/{set_id}/members", json={"picture_ids": [a]})
+    r = client.patch(f"/picture_sets/{set_id}", json={"smart_reset": True})
+    assert r.status_code == 200, r.text
+    assert _members(client, set_id) == {a}
+
+
+def test_a_smart_set_follows_a_smart_set_its_filter_names(env):
+    server, client = env
+    a, b = _pictures(server, "smart-chain", [5, 1])
+    inner = _smart(client, "Inner", "tag=smart-chain&min_score=4")
+    outer = _smart(client, "Outer", f"set_id={inner}")
+    assert _members(client, outer) == {a}
+    _set_score(server, b, 5)
+    # Refreshing the inner set alone (what a PATCH of it does) reaches the
+    # outer one too, on a second pass.
+    refresh_smart_sets(server, [inner])
+    assert _members(client, inner) == {a, b}
+    assert _members(client, outer) == {a, b}
 
 
 def test_putting_back_a_removed_picture_lets_the_filter_keep_it(env):
