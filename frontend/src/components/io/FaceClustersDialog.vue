@@ -5,7 +5,7 @@
     :subtitle="subtitle"
     size="2xl"
     :pad-body="false"
-    :persistent="saving || zoomedId != null"
+    :persistent="saving || zoomedId != null || setName != null"
     @close="close"
   >
     <template #header-right>
@@ -141,6 +141,13 @@
               data-testid="fc-pick"
               @click="save(kept)"
               >Make this {{ name }}'s reference cluster</AppButton
+            >
+            <AppButton
+              variant="secondary"
+              :disabled="saving || !kept.length"
+              data-testid="fc-save-set"
+              @click="openSetName"
+              >Save as set…</AppButton
             >
           </div>
 
@@ -345,6 +352,40 @@
         </div>
       </template>
     </ZoomPopout>
+
+    <!-- Mounted per opening, so the name field takes focus every time. -->
+    <AppDialog
+      v-if="setName != null"
+      open
+      title="Save as set"
+      :subtitle="`${setIds.length} pictures from Cluster ${selected + 1}`"
+      size="sm"
+      :persistent="savingSet"
+      @close="setName = null"
+      @accept="saveAsSet"
+    >
+      <AppInput
+        v-model="setName"
+        label="Set name"
+        autofocus
+        autoselect
+        :error="setError"
+        data-testid="fc-set-name"
+      />
+      <template #footer>
+        <AppButton variant="secondary" :disabled="savingSet" @click="setName = null"
+          >Cancel</AppButton
+        >
+        <AppButton
+          variant="primary"
+          :loading="savingSet"
+          :disabled="!setName?.trim()"
+          data-testid="fc-set-create"
+          @click="saveAsSet"
+          >Create set</AppButton
+        >
+      </template>
+    </AppDialog>
   </AppDialog>
 </template>
 
@@ -363,10 +404,16 @@
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
+import AppInput from "../widgets/AppInput.vue";
 import Segmented from "../widgets/Segmented.vue";
 import ZoomPopout from "../widgets/ZoomPopout.vue";
 import { getFaceClusters, setReferenceCluster } from "../../api/characters";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { bulkAddPicturesToSet, createPictureSet } from "../../api/pictureSets";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useOperationStore } from "../../stores/useOperationStore";
+import { getEntityProjectIds } from "../../utils/projectMembership";
 import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import { buildMediaUrl, displayedAspectRatio } from "../../utils/media";
 import { errorDetail } from "../../utils/apiError";
@@ -715,12 +762,71 @@ async function save(ids) {
   }
 }
 
+// ── Save as set ────────────────────────────────────────────────────────────
+// The faces that count, as a picture set under the person: a dataset to export
+// and train elsewhere. The ids are taken when the name is asked for.
+const setName = ref(null); // null: the name dialog is shut
+const setIds = ref([]);
+const setError = ref("");
+const savingSet = ref(false);
+
+function openSetName() {
+  setIds.value = kept.value;
+  setError.value = "";
+  setName.value = `${name.value}, cluster ${selected.value + 1}`;
+}
+
+async function saveAsSet() {
+  const title = setName.value?.trim();
+  if (!title || savingSet.value) return;
+  savingSet.value = true;
+  setError.value = "";
+  // The stores are looked up here, not at setup: every host mounts this dialog.
+  const entityLists = useEntityListsStore();
+  const noticeStore = useNoticeStore();
+  const id = props.character.id;
+  // A set under a person joins the person's projects (as SideBar does).
+  const projectIds = getEntityProjectIds(entityLists.characters.find((c) => c.id === id));
+  let set;
+  try {
+    ({ picture_set: set } = await createPictureSet({
+      name: title,
+      parent_character_id: id,
+      ...(projectIds.length ? { project_ids: projectIds } : {}),
+    }));
+  } catch (e) {
+    console.error("Couldn't create a set from face cluster", id, title, e);
+    setError.value = `Couldn't create the set. ${errorDetail(e) || "Please try again."}`;
+    savingSet.value = false;
+    return;
+  }
+  try {
+    // One bulk call: one operation-log entry and one Undo. The server's count,
+    // not ours: it skips deleted pictures and brings in stack-mates.
+    const n = (await bulkAddPicturesToSet(set.id, setIds.value))?.added ?? setIds.value.length;
+    noticeStore.success(`Created ${set.name}, added ${n} picture${n === 1 ? "" : "s"}.`, {
+      key: "face-cluster-set",
+    });
+    useOperationStore().refresh();
+  } catch (e) {
+    console.error("Couldn't add face-cluster pictures to set", set.id, e);
+    noticeStore.error(`Created ${set.name}, but it is empty: couldn't add the pictures. ${errorDetail(e)}`, {
+      key: "face-cluster-set",
+    });
+  } finally {
+    savingSet.value = false;
+    setName.value = null;
+    entityLists.invalidate(["sets"]);
+  }
+}
+
 watch(
   () => props.open,
   (open) => {
     if (!open) return;
     strictness.value = "normal";
     data.value = null;
+    setName.value = null;
     load();
   },
   { immediate: true },
