@@ -1,0 +1,4 @@
+tag,method,listed,confirmed,rejected,no_verdict,confirmed_near_twins,controls
+hand,logreg,100,83,17,0,0,"{""pos_confirmed"": 14, ""pos_overturned"": 2, ""neg_confirmed"": 10, ""neg_overturned"": 4, ""skipped"": 2, ""pending"": 0}"
+hand,vote,100,94,4,2,1,"{""pos_confirmed"": 14, ""pos_overturned"": 2, ""neg_confirmed"": 10, ""neg_overturned"": 4, ""skipped"": 2, ""pending"": 0}"
+hand,vote_judged,100,89,10,1,0,"{""pos_confirmed"": 14, ""pos_overturned"": 2, ""neg_confirmed"": 10, ""neg_overturned"": 4, ""skipped"": 2, ""pending"": 0}"

@@ -1,0 +1,4 @@
+tag,method,listed,confirmed,rejected,no_verdict,confirmed_near_twins,controls
+jewelry,logreg,100,39,35,26,0,"{""pos_confirmed"": 6, ""pos_overturned"": 5, ""neg_confirmed"": 5, ""neg_overturned"": 2, ""skipped"": 2, ""pending"": 9}"
+jewelry,vote,100,28,48,24,0,"{""pos_confirmed"": 6, ""pos_overturned"": 5, ""neg_confirmed"": 5, ""neg_overturned"": 2, ""skipped"": 2, ""pending"": 9}"
+jewelry,vote_judged,100,32,35,33,0,"{""pos_confirmed"": 6, ""pos_overturned"": 5, ""neg_confirmed"": 5, ""neg_overturned"": 2, ""skipped"": 2, ""pending"": 9}"

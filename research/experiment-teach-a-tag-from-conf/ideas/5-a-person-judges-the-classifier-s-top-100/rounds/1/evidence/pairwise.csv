@@ -1,0 +1,7 @@
+tag,a,b,a_confirmed,b_confirmed,a_rate,b_rate,fisher_p
+hand,logreg,vote,83/100,94/98,0.83,0.959,0.0046
+hand,logreg,vote_judged,83/100,89/99,0.83,0.899,0.2139
+hand,vote,vote_judged,94/98,89/99,0.959,0.899,0.1638
+jewelry,logreg,vote,39/74,28/76,0.527,0.368,0.0705
+jewelry,logreg,vote_judged,39/74,32/67,0.527,0.478,0.6145
+jewelry,vote,vote_judged,28/76,32/67,0.368,0.478,0.2348
