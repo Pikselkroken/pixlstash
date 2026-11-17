@@ -1,0 +1,6 @@
+tag,verdicts,train_pos,train_neg,logreg_C,candidates,vote_scored_above_0,vote_judged_scored_above_0,vote_top100_with_score_0,logreg_near_twins_in_top100,logreg_median_cos_to_train,vote_near_twins_in_top100,vote_median_cos_to_train,vote_judged_near_twins_in_top100,vote_judged_median_cos_to_train,overlap_logreg_vote,overlap_logreg_vote_judged,overlap_vote_vote_judged,distinct_pictures_to_judge
+jewelry,590,28,72,0.01,20394,242,20193,0,0,0.649,1,0.77,0,0.606,20,19,6,260
+teeth,650,28,72,0.001,20334,194,19139,0,0,0.657,1,0.759,0,0.615,1,23,2,274
+smile,759,14,86,0.01,20225,71,14201,29,0,0.605,0,0.674,0,0.514,17,16,2,266
+hand,817,30,70,0.1,20167,228,19636,0,0,0.563,1,0.798,0,0.537,2,5,2,291
+malformed hand,3691,46,54,1.0,17293,377,17196,0,0,0.591,4,0.818,0,0.555,1,4,1,294

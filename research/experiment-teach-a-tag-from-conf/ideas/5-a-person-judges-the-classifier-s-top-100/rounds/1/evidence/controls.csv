@@ -1,0 +1,3 @@
+tag,pos_confirmed,pos_overturned,neg_confirmed,neg_overturned,skipped,pending,earlier_yes_repeated,earlier_no_repeated
+hand,14,2,10,4,2,0,14/16,10/14
+jewelry,6,5,5,2,2,9,6/11,5/7
