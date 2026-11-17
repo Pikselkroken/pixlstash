@@ -147,6 +147,8 @@ jobs:
           name: wheel
           path: dist/*.whl
 
+  # Linux and Windows. macOS (~50 min) is its own job, build-electron-mac below,
+  # running the same steps, so the Windows signing jobs never wait for it.
   build-electron:
     needs: build-wheel
     permissions:
@@ -171,20 +173,10 @@ jobs:
             arch: x64
             accel: cpu
             release_files: ""
-          # macOS (Apple Silicon, Metal). Branch dispatches are always unsigned;
-          # only an exact validated release tag can reach the Apple signing step.
-          # If the tag is valid but signing secrets are absent, the artifact still
-          # receives the explicit "-unsigned" suffix.
-          # macos-15, not macos-14: GitHub retired the macos-14 image on
-          # 2026-11-02, and its brownouts cancelled this leg before it started.
-          - runner: macos-15
-            os: mac
-            arch: arm64
-            accel: metal
-            release_files: |
-              electron/release/*.dmg
     runs-on: ${{ matrix.runner }}
-    steps:
+    # Shared with build-electron-mac through this anchor, so the two jobs cannot
+    # drift. The mac-only signing steps are skipped here by their matrix.os gate.
+    steps: &build-electron-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
@@ -323,12 +315,35 @@ jobs:
           files: ${{ matrix.release_files }}
           prerelease: ${{ needs.build-wheel.outputs.is_prerelease == 'true' }}
           # The release notes ("which download do I want?"), set here because
-          # this step always runs on a tag — the linux and mac legs both attach,
-          # whatever the Windows signing state is. The other attach steps
+          # this step always runs on a tag — the linux leg and build-electron-mac
+          # both attach, whatever the Windows signing state is. The other attach steps
           # deliberately omit body_path: the action resolves the body as
           # `new || existing`, so they preserve these notes instead of clearing
           # them, and two of them have no checkout to read the file from.
           body_path: .github/release-assets.md
+
+  # macOS (Apple Silicon, Metal): build-electron's steps, in a job of its own so
+  # the Windows signing and attach jobs never wait on it. Branch dispatches are
+  # always unsigned; only an exact validated release tag can reach the Apple
+  # signing step. If the tag is valid but signing secrets are absent, the
+  # artifact still receives the explicit "-unsigned" suffix.
+  build-electron-mac:
+    needs: build-wheel
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          # macos-15, not macos-14: GitHub retired the macos-14 image on
+          # 2026-11-02, and its brownouts cancelled this leg before it started.
+          - runner: macos-15
+            os: mac
+            arch: arm64
+            accel: metal
+            release_files: |
+              electron/release/*.dmg
+    runs-on: ${{ matrix.runner }}
+    steps: *build-electron-steps
 
   # Windows Authenticode signing (Certum SimplySign). The cloud key is only
   # reachable through Certum's SimplySign Desktop GUI, so signing runs on Linux
@@ -349,11 +364,12 @@ jobs:
     concurrency:
       group: certum-simplysign-session
       cancel-in-progress: false
-    # Depends on the Windows installer artifact, not on the whole matrix: the
-    # default success() gate skipped this job whenever the macOS leg failed or
-    # was cancelled, so a mac-only problem cost the release its Windows exe.
-    # !cancelled() keeps a cancelled run from signing; a missing Windows
-    # artifact fails the download step below, loudly.
+    # Gated on the Windows installer artifact, not on the whole matrix
+    # succeeding: the default success() gate would skip this job whenever the
+    # Linux leg failed or was cancelled. macOS is not a dependency at all
+    # (build-electron-mac), so its ~50 min build no longer delays signing. !cancelled() keeps a
+    # cancelled run from signing; a missing Windows artifact fails the download
+    # step below, loudly.
     needs: [build-wheel, build-electron]
     if: >-
       !cancelled() && needs.build-wheel.result == 'success'
@@ -414,7 +430,7 @@ jobs:
   # '1') then attaches no Windows exe at all — loud — instead of silently
   # shipping unsigned while the operator believes signing is on.
   attach-windows-desktop-unsigned:
-    # Same independence from the macOS leg as sign-windows-desktop above.
+    # Same independence from the other legs as sign-windows-desktop above.
     needs: [build-wheel, build-electron]
     if: >-
       !cancelled() && needs.build-wheel.result == 'success'

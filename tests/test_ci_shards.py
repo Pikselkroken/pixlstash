@@ -395,11 +395,16 @@ def test_electron_apple_signing_requires_validated_release_tag():
     workflow_data = yaml.safe_load(path.read_text(encoding="utf-8"))
     wheel_job = workflow_data["jobs"]["build-wheel"]
     electron_job = workflow_data["jobs"]["build-electron"]
+    mac_job = workflow_data["jobs"]["build-electron-mac"]
 
-    assert electron_job["needs"] == "build-wheel"
-    assert "environment" not in electron_job, (
-        "Branch/dispatch matrix builds must not enter a signing environment"
-    )
+    for job in (electron_job, mac_job):
+        assert job["needs"] == "build-wheel"
+        assert "environment" not in job, (
+            "Branch/dispatch matrix builds must not enter a signing environment"
+        )
+    # Both jobs run one step list (a YAML anchor), so the checks on
+    # electron_job's steps below hold for the mac job too.
+    assert mac_job["steps"] is electron_job["steps"]
     assert wheel_job["outputs"]["validated_release_tag"] == (
         "${{ steps.release-ref.outputs.validated_release_tag }}"
     )
@@ -470,6 +475,26 @@ def test_electron_apple_signing_requires_validated_release_tag():
     assert secret_steps == [signed], (
         "Apple credentials must exist only in the validated tag-only signing step"
     )
+
+
+def test_windows_desktop_signing_does_not_wait_for_macos():
+    """The ~50 min macOS build must not hold up Windows signing (#2732).
+
+    The mac leg used to sit in build-electron's matrix, and the sign/attach
+    jobs need build-electron, so they started only once macOS had finished.
+    """
+    path = REPO_ROOT / ".github" / "workflows" / "electron.yml"
+    jobs = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]
+    legs = {
+        job: [leg["os"] for leg in jobs[job]["strategy"]["matrix"]["include"]]
+        for job in ("build-electron", "build-electron-mac")
+    }
+    assert legs == {"build-electron": ["linux", "win"], "build-electron-mac": ["mac"]}
+    for name in ("sign-windows-desktop", "attach-windows-desktop-unsigned"):
+        assert "build-electron" in jobs[name]["needs"]
+        assert "build-electron-mac" not in jobs[name]["needs"], (
+            f"{name} must not wait for the macOS build"
+        )
 
 
 def test_model_cache_saves_every_path_it_restores():
