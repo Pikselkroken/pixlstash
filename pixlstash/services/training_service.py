@@ -1,7 +1,8 @@
 """Durable single-worker orchestrator that turns queued jobs into LoRAs.
 
 The :class:`TrainingService` is the layer between PixlStash's data model and the
-trainer adapter (:class:`~pixlstash.training_plugins.ai_toolkit.adapter.AiToolkitPlugin`).
+training plugins (:class:`~pixlstash.training.backend.TrainerBackend`, listed in
+:mod:`pixlstash.training.registry`). A run's ``trainer`` column names its plugin.
 It owns the job lifecycle: pick the oldest queued training run, snapshot
 its dataset, wait for the VRAM arbiter's lease, drive the adapter (``prepare`` → ``submit`` →
 poll → finalize), and hand the finished run to the model shelf when it completes.
@@ -11,8 +12,8 @@ It is built with **dependency injection** so the whole thing is testable without
 a GPU (or even a full Vault): every external collaborator is a callable handed
 to the constructor: the VRAM lease request, the run importer, the event emitter,
 the owner-config reader, the dataset builder, and the trainer-backend factory. The default backend
-factory builds a real :class:`AiToolkitPlugin`; tests pass one pointed at a CPU
-stub.
+factory builds the run's registered plugin from the owner's settings for it;
+tests pass one pointed at a CPU stub.
 
 Shutdown policy (important): :meth:`stop` does **not** terminate a running
 external trainer. The trainer runs in its own process group and is expected to
@@ -45,11 +46,9 @@ from pixlstash.resources.ledger import ledger
 from pixlstash.resources.ledger import ram as read_ram
 from pixlstash.services.downloads_intake import safetensors_complete
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
-from pixlstash.training import live_view, measurements, presets
+from pixlstash.training import live_view, measurements, presets, registry
 from pixlstash.training.backend import TrainerBackend, TrainingProgress, TrainingSpec
 from pixlstash.training.config_render import deep_merge
-from pixlstash.training_plugins.ai_toolkit import install as ai_toolkit_install
-from pixlstash.training_plugins.ai_toolkit.adapter import AiToolkitPlugin
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
@@ -131,16 +130,21 @@ def handle_for_run(training_root: str, info: dict, backend=None):
     ``training_folder`` is the shelf source folder for a run started since the
     shelf took runs, or the legacy ``<work_dir>/output`` for an older one; only
     the former is passed on, so an older run keeps the save root it was started
-    with. The adapter's ``handle_for`` is the source of truth for the paths.
+    with. The run's training plugin's ``handle_for`` is the source of truth
+    for the paths.
 
     Args:
         training_root: ``<image_root>/training``.
-        info: Persisted job fields (uuid, name, pid, training_folder).
-        backend: A backend whose ``handle_for`` to use; None uses
-            :class:`AiToolkitPlugin`'s.
+        info: Persisted job fields (uuid, name, pid, training_folder, trainer).
+        backend: A backend whose ``handle_for`` to use; None uses the run's
+            training plugin's.
 
     Returns:
         A reconstructed :class:`TrainingHandle`.
+
+    Raises:
+        TrainerNotInstalled: *backend* is None and the run's trainer is not
+            registered.
     """
     work_dir = os.path.join(training_root, info["uuid"])
     stored = info.get("training_folder")
@@ -151,7 +155,7 @@ def handle_for_run(training_root: str, info: dict, backend=None):
         shared = stored
     handle_for = getattr(backend, "handle_for", None)
     if not callable(handle_for):
-        handle_for = AiToolkitPlugin.handle_for
+        handle_for = registry.for_run(info).handle_for
     return handle_for(
         work_dir,
         info["uuid"],
@@ -181,9 +185,9 @@ class TrainingService:
         request_gpu: Callable[[str, str, int, int], Lease],
         import_run: Callable[[str, dict], dict],
         notify: Callable[[EventType, dict], None],
-        config_provider: Callable[[], dict],
+        config_provider: Callable[[str], dict],
         dataset_builder: Callable[..., dict],
-        backend_factory: Callable[[str, str], TrainerBackend] | None = None,
+        backend_factory: Callable[[str, dict], TrainerBackend] | None = None,
         poll_interval_s: float = 5.0,
         disable_background_workers: bool = False,
         register_source_folder: Callable[[str], None] | None = None,
@@ -211,15 +215,15 @@ class TrainingService:
                 ai-toolkit run folder holding the checkpoints. Returns a dict
                 describing what landed. Raising marks the job ``error``.
             notify: Emits an event (``event_type, data``) to the UI/listeners.
-            config_provider: Returns the owner's ai-toolkit config as
-                ``{"repo_path", "python"}``.
+            config_provider: Returns the owner's settings for a training
+                plugin, called as ``config_provider(trainer_name)``.
             dataset_builder: Builds the dataset snapshot; called as
                 ``dataset_builder(dest_dir=..., set_id=..., character_id=...,
                 trigger_word=...)`` and returns a manifest with ``image_count``
                 and ``picture_ids``.
             backend_factory: Builds a :class:`TrainerBackend` from
-                ``(repo_path, python)``. Defaults to constructing a real
-                :class:`AiToolkitPlugin`.
+                ``(trainer_name, owner_config)``. Defaults to the registered
+                plugin's :meth:`~TrainerBackend.from_owner_config`.
             poll_interval_s: Seconds between progress polls of a running job.
             disable_background_workers: When True, :meth:`start` is a no-op
                 (mirrors the Vault flag for read-only deployments).
@@ -246,7 +250,7 @@ class TrainingService:
         self._config_provider = config_provider
         self._dataset_builder = dataset_builder
         self._backend_factory = backend_factory or (
-            lambda repo_path, python: AiToolkitPlugin(repo_path, python)
+            lambda name, cfg: registry.get(name).from_owner_config(cfg)
         )
         self.poll_interval_s = poll_interval_s
         self._disable_background_workers = disable_background_workers
@@ -338,6 +342,10 @@ class TrainingService:
     # Public API
     # ------------------------------------------------------------------
 
+    def owner_config(self, trainer_name: str) -> dict:
+        """The owner's settings for the training plugin *trainer_name*; {} if none."""
+        return self._config_provider(trainer_name) or {}
+
     def enqueue(
         self,
         *,
@@ -395,6 +403,9 @@ class TrainingService:
             raise ValueError("A training run needs a set_id or a character_id.")
         hub, library_uuid = self._store()
 
+        # The recipe names the run's trainer; a run without one is ai-toolkit's.
+        preset_id = str((resolution or {}).get("preset") or "").split("@")[0]
+        trainer = registry.name_of(presets.get_preset(preset_id) if preset_id else None)
         job_uuid = uuid.uuid4().hex
         run_id = training_runs.create_run(
             hub,
@@ -408,6 +419,7 @@ class TrainingService:
             preset=(resolution or {}).get("preset"),
             resolved_profile=json.dumps(resolution) if resolution else None,
             advanced_pins=json.dumps(pins or {}),
+            trainer=trainer,
         )
         if quit_comfyui:
             # Before the worker can claim it: its lease reads the answer.
@@ -450,8 +462,18 @@ class TrainingService:
             ``{"steps": [{"step", "final", "keeps_optimizer"}], "reason"}``.
             ``reason`` says why the run cannot be trained on, or is None.
         """
+        try:
+            trainer = registry.for_run(run)
+        except registry.TrainerNotInstalled as exc:
+            return {"steps": [], "reason": f"Its {exc}."}
+        if not trainer.supports_train_longer:
+            return {
+                "steps": [],
+                "reason": f"{trainer.display_name or trainer.name} cannot train "
+                "a run on.",
+            }
         handle = handle_for_run(self._training_root, run)
-        kept = AiToolkitPlugin.kept_checkpoints(handle, run.get("total_steps"))
+        kept = trainer.kept_checkpoints(handle, run.get("total_steps"))
         final = os.path.join(
             handle.save_root, f"{os.path.basename(handle.save_root)}.safetensors"
         )
@@ -494,8 +516,8 @@ class TrainingService:
 
         The same run, in the same folder, with the same pictures and settings:
         ai-toolkit resumes from the newest checkpoint it finds, so the run
-        folder is left with *from_step* as that (see
-        :meth:`AiToolkitPlugin.carry_on_from`), and the config the run trained
+        folder is left with *from_step* as that (see the plugin's
+        :meth:`~TrainerBackend.carry_on_from`), and the config the run trained
         with is rendered again with only ``train.steps`` raised and the
         first-step preview skipped. The worker then skips the dataset build
         and the memory check: both are the run's own already.
@@ -534,9 +556,9 @@ class TrainingService:
             handle = handle_for_run(self._training_root, run)
             final_step = next((o["step"] for o in options["steps"] if o["final"]), None)
             template_path = os.path.join(work_dir, "trained_on_template.json")
-            write_json_atomic(
-                template_path, AiToolkitPlugin.template_from_rendered(config)
-            )
+            # train_longer_options refused a trainer that cannot.
+            trainer = registry.for_run(run)
+            write_json_atomic(template_path, trainer.template_from_rendered(config))
             total = from_step + more_steps
             pending = {
                 "template_path": template_path,
@@ -557,9 +579,7 @@ class TrainingService:
                 self._pending_specs[run["uuid"]] = pending
             self._write_pending_sidecar(run["uuid"], pending)
             try:
-                take = AiToolkitPlugin.carry_on_from(
-                    handle, from_step, run.get("total_steps")
-                )
+                take = trainer.carry_on_from(handle, from_step, run.get("total_steps"))
             except OSError:
                 with self._pending_specs_lock:
                     self._pending_specs.pop(run["uuid"], None)
@@ -702,7 +722,11 @@ class TrainingService:
         else:
             # Not the active job (e.g. a re-attached run polled by another
             # cycle): build a transient backend to deliver the cooperative stop.
-            transient = self._make_backend()
+            try:
+                transient = self._make_backend(info)
+            except (KeyError, ValueError) as exc:
+                self._unreachable(info, exc)
+                return True
             handle = self._handle_for_job(transient, info)
             transient.cancel(handle)
 
@@ -727,7 +751,11 @@ class TrainingService:
             if not info.get("training_folder"):
                 continue
             try:
-                backend = self._make_backend()
+                try:
+                    backend = self._make_backend(info)
+                except (KeyError, ValueError) as exc:
+                    self._unreachable(info, exc)
+                    continue
                 if not backend.is_alive(self._handle_for_job(backend, info)):
                     continue
                 vram_mb, ram_mb = self._lease_need(info) or (0, 0)
@@ -804,7 +832,11 @@ class TrainingService:
             )
             return
 
-        backend = self._make_backend()
+        try:
+            backend = self._make_backend(info)
+        except (KeyError, ValueError) as exc:
+            self._unreachable(info, exc)
+            return
         handle = self._handle_for_job(backend, info)
         if backend.is_alive(handle):
             logger.info(
@@ -866,7 +898,7 @@ class TrainingService:
         watch = _Watch(
             from_start=False,
             offsets=measurements.peaks_read_to_end(
-                AiToolkitPlugin.peaks_folder(handle.work_dir)
+                self._trainer(info["uuid"]).peaks_folder(handle.work_dir)
             ),
         )
         try:
@@ -962,7 +994,10 @@ class TrainingService:
         else:
             # 0. Where the run lands and where its dataset is written.
             try:
-                training_folder, dataset_dir = self._run_folders(job_uuid)
+                training_folder, dataset_dir = self._run_folders(info)
+            except registry.TrainerNotInstalled as exc:
+                self._fail(job_uuid, str(exc))
+                return
             except RuntimeError as exc:
                 logger.error("Job %s: %s", job_uuid, exc)
                 self._update_job(job_uuid, status="error", error=str(exc))
@@ -1018,7 +1053,11 @@ class TrainingService:
                     self._update_job(job_uuid, status="stopped", error=msg)
                     self._emit_progress(job_uuid, status="stopped", message=msg)
                 return  # on shutdown it stays queued for the next start
-            backend = self._make_backend()
+            try:
+                backend = self._make_backend(info)
+            except (KeyError, ValueError) as exc:
+                self._fail(job_uuid, str(exc))
+                return
             if not continuing and not self._check_memory_and_speed(
                 backend, info, work_dir, manifest, lease
             ):
@@ -1108,14 +1147,11 @@ class TrainingService:
             gpu_ids=gpu_ids,
             training_folder=training_folder,
         )
-        # The commit is what the checkout holds when the job starts, read from
-        # git and never from the owner's config (review F6).
-        cfg = self._config_provider() or {}
-        commit = (
-            ai_toolkit_install.read_commit(cfg["repo_path"])
-            if cfg.get("repo_path")
-            else None
-        )
+        # The trainer's version when the job starts: for ai-toolkit the
+        # checkout's commit, read from git and never from the owner's config
+        # (review F6).
+        trainer = registry.for_run(info)
+        commit = trainer.version_stamp(self.owner_config(trainer.name))
         with self._active_lock:
             if self._job_status(job_uuid) != "queued":
                 logger.info("Job %s was cancelled before launch.", job_uuid)
@@ -1172,13 +1208,18 @@ class TrainingService:
         """
         watch = watch if watch is not None else _Watch()
         deferred = bool(self._resolution(job_uuid).get("previews_deferred"))
+        trainer = self._trainer(job_uuid)
         progress = backend.progress(handle)
         while not self._stop.is_set():
             self._persist_progress(job_uuid, progress, handle)
             phase = live_view.phase_of(
-                progress.status, progress.info, progress.step, None
+                progress.status,
+                progress.info,
+                progress.step,
+                None,
+                trainer.running_phase,
             )
-            self._observe(handle, progress, lease, watch, phase)
+            self._observe(trainer, handle, progress, lease, watch, phase)
             self._maybe_shrink(job_uuid, lease, watch, progress, deferred)
             self._emit_progress(
                 job_uuid,
@@ -1217,6 +1258,7 @@ class TrainingService:
 
     def _observe(
         self,
+        trainer: type[TrainerBackend],
         handle,
         progress: TrainingProgress,
         lease: Lease,
@@ -1228,11 +1270,12 @@ class TrainingService:
 
         The lease's progress is the worker's phase telemetry: the Tasks tab
         and the live view read the phase and the trainer's memory from it.
+        *trainer* is the run's training plugin, which says where its peaks are.
         """
         usage = measurements.trainer_usage(
             handle.pid,
             lease.device,
-            AiToolkitPlugin.peaks_folder(handle.work_dir),
+            trainer.peaks_folder(handle.work_dir),
             watch.offsets,
         )
         watch.see(phase, usage, time.monotonic())
@@ -1356,12 +1399,17 @@ class TrainingService:
                 resolution.get("preset"),
             )
             return True
-        cfg = self._config_provider() or {}
-        commit = (
-            ai_toolkit_install.read_commit(cfg["repo_path"])
-            if cfg.get("repo_path")
-            else None
-        )
+        trainer = registry.for_run(info)
+        if trainer.probe_overrides(PROBE_STEPS, {}) is None:
+            logger.info(
+                "Job %s: %s cannot check memory and speed; training with the "
+                "recipe's %s.",
+                job_uuid,
+                trainer.name,
+                resolution.get("profile"),
+            )
+            return True
+        commit = trainer.version_stamp(self.owner_config(trainer.name))
         lookup = measurements.make_lookup(
             self._hub, preset, commit=commit, device=self._device_name(lease.device)
         )
@@ -1537,8 +1585,9 @@ class TrainingService:
         steps = sorted(os.listdir(after)) if os.path.isdir(after) else []
         pass_dirs = [os.path.join(work_dir, "probe")]
         pass_dirs += [os.path.join(after, step) for step in steps]
+        trainer = self._trainer(job_uuid)
         for pass_dir in pass_dirs:
-            handle = AiToolkitPlugin.handle_for(pass_dir, job_uuid, name, pid)
+            handle = trainer.handle_for(pass_dir, job_uuid, name, pid)
             if backend.is_alive(handle):
                 logger.warning(
                     "Job %s: stopping pid %s, a pass of it left running in %s.",
@@ -1574,19 +1623,8 @@ class TrainingService:
         # costs a whole preview (a minute on a large model) before the run.
         if values.get(presets.PROMPTS_KEY):
             values[presets.PROMPTS_KEY] = values[presets.PROMPTS_KEY][:1]
-        process: dict = {
-            "train": {
-                "steps": PROBE_STEPS,
-                "skip_first_sample": True,
-                "disable_sampling": False,
-            },
-            "save": {"save_every": PROBE_STEPS},
-            "sample": {"sample_every": PROBE_STEPS},
-        }
-        sizes = values.get("datasets[*].resolution") or []
-        if sizes:
-            # The worst bucket only, so the peak is the largest a step makes.
-            process["datasets"] = [{"resolution": [max(sizes)]}]
+        trainer = self._trainer(job_uuid)
+        probe = trainer.probe_overrides(PROBE_STEPS, values)
         probe_dir = os.path.join(work_dir, "probe")
         self._stop_orphaned_pass(backend, job_uuid, info["name"], work_dir)
         self._remove_tree(probe_dir)
@@ -1599,9 +1637,7 @@ class TrainingService:
             work_dir=probe_dir,
             hf_token=os.environ.get("HF_TOKEN") or None,
             config_overrides=presets.to_patch(values),
-            locked=deep_merge(
-                pending.get("locked") or {}, {"config": {"process": [process]}}
-            ),
+            locked=deep_merge(pending.get("locked") or {}, probe),
             gpu_ids=lease.device or "0",
         )
         handle = backend.prepare(spec)
@@ -1619,7 +1655,7 @@ class TrainingService:
             return "shutdown" if self._stop.is_set() else None
 
         progress, guard = self._watch_pass(
-            backend, handle, lease, watch, "checking", stop_probe
+            backend, trainer, handle, lease, watch, "checking", stop_probe
         )
         self._check_released(job_uuid, lease, watch)
         if guard == "stopped":
@@ -1635,19 +1671,19 @@ class TrainingService:
                 "a fit that offloads less."
             )
         text = f"{progress.info or ''}\n{self._read_log_tail(handle.log_path) or ''}"
-        if live_view.OOM_RE.search(text):
+        if trainer.is_oom(text):
             return "oom", settled["profile_label"]
         if progress.status != "completed" or not progress.final_checkpoint:
             return "failed", (
                 "Checking memory and speed failed: "
                 + (
-                    live_view.failure_summary(progress.info, progress.step)
+                    trainer.failure_summary(progress.info, progress.step)
                     if progress.info
                     else "the trainer stopped with an error"
                 ).rstrip(".")
                 + ". See the trainer log."
             )
-        step_times = live_view.read_step_times(handle.loss_db_path)
+        step_times = trainer.step_times(handle)
         images = len(progress.samples)
         try:
             measurements.record(
@@ -1678,6 +1714,7 @@ class TrainingService:
     def _watch_pass(
         self,
         backend: TrainerBackend,
+        trainer: type[TrainerBackend],
         handle,
         lease: Lease,
         watch: _Watch,
@@ -1693,9 +1730,15 @@ class TrainingService:
         while True:
             progress = backend.progress(handle)
             phase = live_view.phase_of(
-                progress.status, progress.info, progress.step, None
+                progress.status,
+                progress.info,
+                progress.step,
+                None,
+                trainer.running_phase,
             )
-            self._observe(handle, progress, lease, watch, phase, shown_as=shown_as)
+            self._observe(
+                trainer, handle, progress, lease, watch, phase, shown_as=shown_as
+            )
             stop = should_stop()
             if stop is not None:
                 backend.cancel(handle)
@@ -1754,7 +1797,7 @@ class TrainingService:
         key = resolution.get("fingerprint")
         if not key or not watch.peaks:
             return
-        step_times = live_view.read_step_times(handle.loss_db_path)
+        step_times = self._trainer(job_uuid).step_times(handle)
         setup = None
         if watch.from_start and "loading" in watch.seconds:
             setup = watch.seconds["loading"] + watch.seconds.get("caching", 0.0)
@@ -1802,6 +1845,16 @@ class TrainingService:
         job_uuid = info["uuid"]
         pending = self._load_pending_spec(job_uuid)
         run = training_runs.get_run_by_uuid(self._hub, job_uuid) or {}
+        trainer = self._trainer(job_uuid)
+        if trainer.preview_pass_overrides(0, "") is None:
+            logger.info(
+                "Job %s: %s cannot draw previews after training; importing the "
+                "run without them.",
+                job_uuid,
+                trainer.name,
+            )
+            self._note_phase(job_uuid, "importing")
+            return True
         self._note_phase(job_uuid, "previews")
 
         def stop() -> str | None:
@@ -1830,15 +1883,6 @@ class TrainingService:
             pass_dir = os.path.join(handle.work_dir, "after", str(step))
             self._stop_orphaned_pass(backend, job_uuid, info["name"], handle.work_dir)
             self._remove_tree(pass_dir)
-            process = {
-                "train": {
-                    "steps": step,
-                    "start_step": step,
-                    "skip_first_sample": True,
-                    "disable_sampling": False,
-                },
-                "network": {"pretrained_lora_path": path},
-            }
             spec = TrainingSpec(
                 job_id=job_uuid,
                 job_name=info["name"],
@@ -1849,7 +1893,8 @@ class TrainingService:
                 hf_token=os.environ.get("HF_TOKEN") or None,
                 config_overrides=pending.get("config_overrides"),
                 locked=deep_merge(
-                    pending.get("locked") or {}, {"config": {"process": [process]}}
+                    pending.get("locked") or {},
+                    trainer.preview_pass_overrides(step, path),
                 ),
                 gpu_ids=lease.device or "0",
             )
@@ -1858,7 +1903,7 @@ class TrainingService:
                 backend.submit(pass_handle, spec)
                 self._update_job(job_uuid, pid=pass_handle.pid)
                 ended, stopped = self._watch_pass(
-                    backend, pass_handle, lease, _Watch(), "previews", stop
+                    backend, trainer, pass_handle, lease, _Watch(), "previews", stop
                 )
                 if stopped is not None:
                     break
@@ -2016,7 +2061,7 @@ class TrainingService:
         error_msg = (
             None
             if final_status == "stopped"
-            else live_view.failure_summary(progress.info, progress.step)
+            else self._trainer(job_uuid).failure_summary(progress.info, progress.step)
         )
         self._update_job(
             job_uuid,
@@ -2122,7 +2167,14 @@ class TrainingService:
             )
         # A completed trainer is imported next: `_finalize` writes completed_at.
         self._note_phase(
-            job_uuid, live_view.phase_of(status, progress.info, progress.step, None)
+            job_uuid,
+            live_view.phase_of(
+                status,
+                progress.info,
+                progress.step,
+                None,
+                self._trainer(job_uuid).running_phase,
+            ),
         )
 
     def _note_phase(self, job_uuid: str, phase: str | None) -> None:
@@ -2187,41 +2239,41 @@ class TrainingService:
     # Dataset / backend / handle helpers
     # ------------------------------------------------------------------
 
-    def _run_folders(self, job_uuid: str) -> tuple[str, str]:
-        """Resolve where a job's run and its dataset go.
+    def _run_folders(self, info: dict) -> tuple[str | None, str]:
+        """Resolve where a job's run and its dataset go: its trainer's choice.
 
-        The run goes in the model shelf's ``source`` folder. When the shelf has
-        none, ``<repo>/output`` is registered as one, the first time a job
-        needs it. The dataset goes in ``<repo>/datasets/pixlstash-<uuid>``.
+        See :meth:`TrainerBackend.run_folders`; for ai-toolkit the run goes in
+        the model shelf's ``source`` folder and the dataset in the checkout.
 
         Args:
-            job_uuid: The job's uuid.
+            info: The queued job's row.
 
         Returns:
-            ``(training_folder, dataset_dir)``.
+            ``(training_folder, dataset_dir)``; a None training folder keeps
+            the run under its work dir.
 
         Raises:
-            RuntimeError: ai-toolkit is not configured, or no shelf folder could
-                be found or registered. The message names no host path; the
-                detail is logged.
+            TrainerNotInstalled: The run's trainer is not registered.
+            RuntimeError: The trainer is not configured, or no shelf folder
+                could be found or registered. The message names no host path;
+                the detail is logged.
         """
-        cfg = self._config_provider() or {}
-        repo_path = cfg.get("repo_path")
-        if not repo_path:
-            raise RuntimeError("ai-toolkit is not configured; cannot run training.")
+        trainer = registry.for_run(info)
+        return trainer.run_folders(
+            self.owner_config(trainer.name),
+            os.path.join(self._training_root, info["uuid"]),
+            info["uuid"],
+            self.ensure_source_folder,
+        )
 
-        training_folder = self.ensure_source_folder(repo_path)
-        dataset_dir = os.path.join(repo_path, "datasets", f"pixlstash-{job_uuid}")
-        return training_folder, dataset_dir
+    def ensure_source_folder(self, folder: str) -> str:
+        """The shelf's ``source`` folder, registering *folder* as one if none.
 
-    def ensure_source_folder(self, repo_path: str) -> str:
-        """The shelf's ``source`` folder, registering ``<repo>/output`` if none.
-
-        A fresh checkout may not have ``output`` yet, and the registration
+        A trainer's output folder may not exist yet, and the registration
         refuses a folder that does not exist, so it is created first.
 
         Args:
-            repo_path: The ai-toolkit checkout.
+            folder: The folder to register when the shelf has none.
 
         Returns:
             The stored path of the shelf's first ``source`` folder.
@@ -2235,10 +2287,9 @@ class TrainingService:
             return training_folder
         if self._register_source_folder is None:
             raise RuntimeError("No model shelf folder is set up for ai-toolkit runs.")
-        output = os.path.join(repo_path, "output")
         try:
-            os.makedirs(output, exist_ok=True)
-            self._register_source_folder(output)
+            os.makedirs(folder, exist_ok=True)
+            self._register_source_folder(folder)
         except Exception as exc:
             # A registration that lost a race to another one is fine: the
             # folder is on the shelf either way, and is read back below.
@@ -2247,7 +2298,7 @@ class TrainingService:
                 return training_folder
             logger.exception(
                 "Could not register %s as the shelf's ai-toolkit folder: %s",
-                output,
+                folder,
                 exc,
             )
             raise RuntimeError(
@@ -2358,24 +2409,48 @@ class TrainingService:
             self._emit_progress(info["uuid"], status="error", message=msg)
             return False
 
-    def _make_backend(self) -> TrainerBackend:
-        """Construct a trainer backend from the owner's ai-toolkit config.
+    def _make_backend(self, info: dict | None = None) -> TrainerBackend:
+        """Construct the trainer backend for *info*'s run.
+
+        Args:
+            info: The run's row; None (or no ``trainer``) is the default
+                trainer.
 
         Returns:
-            A :class:`TrainerBackend` from the injected factory.
+            A :class:`TrainerBackend` from the injected factory, built from the
+            owner's settings for the run's trainer.
 
         Raises:
-            ValueError: If the owner config is missing the repo path / python.
+            TrainerNotInstalled: The run's trainer is not registered.
+            ValueError: The trainer is not configured.
         """
-        cfg = self._config_provider() or {}
-        repo_path = cfg.get("repo_path")
-        python = cfg.get("python")
-        if not repo_path or not python:
-            raise ValueError(
-                "ai-toolkit is not configured (missing repo_path/python in owner "
-                "config); cannot run training."
-            )
-        return self._backend_factory(repo_path, python)
+        trainer = registry.for_run(info)
+        return self._backend_factory(trainer.name, self.owner_config(trainer.name))
+
+    def _trainer(self, job_uuid: str) -> type[TrainerBackend]:
+        """The training plugin of the run *job_uuid*, from its row.
+
+        Raises:
+            TrainerNotInstalled: The run's trainer is not registered.
+        """
+        run = training_runs.get_run_by_uuid(self._hub, job_uuid) if self._hub else None
+        return registry.for_run(run)
+
+    def _unreachable(self, info: dict, exc: Exception) -> None:
+        """End a started run whose trainer cannot be built, naming why.
+
+        Its process cannot be watched, cancelled or re-attached without the
+        trainer, so it is never left ``running``.
+        """
+        message = (
+            f"Training run {info['name']} cannot be reached: {exc}. Its trainer "
+            "may still be running; check it before training again."
+        )
+        logger.error("Job %s: %s", info["uuid"], message)
+        self._update_job(
+            info["uuid"], status="error", error=message, completed_at=now_iso()
+        )
+        self._emit_progress(info["uuid"], status="error", message=message)
 
     def _handle_for_job(self, backend: TrainerBackend, info: dict):
         """Reconstruct a :class:`TrainingHandle` from persisted job fields.

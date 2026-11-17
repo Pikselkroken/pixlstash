@@ -21,6 +21,7 @@ import subprocess
 from typing import Callable, Iterable
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.training.presets import version_tuple
 
 logger = get_logger(__name__)
 
@@ -141,6 +142,56 @@ def read_commit(repo_path: str) -> str | None:
         stderr.strip() or "no output",
     )
     return None
+
+
+def checkout_architectures(repo_path: str | None) -> list[str]:
+    """The model code a checkout ships: ``extensions_built_in/diffusion_models/<arch>/``."""
+    if not repo_path:
+        return []
+    root = os.path.join(repo_path, "extensions_built_in", "diffusion_models")
+    try:
+        names = os.listdir(root)
+    except OSError as exc:
+        logger.info("No diffusion model code under %s: %s", root, exc)
+        return []
+    return sorted(
+        name
+        for name in names
+        if not name.startswith(("_", ".")) and os.path.isdir(os.path.join(root, name))
+    )
+
+
+def not_offered_because(
+    preset: dict, architectures: list[str], version: str | None = None
+) -> str | None:
+    """Why a checkout with *architectures* at *version* cannot train *preset*.
+
+    A recipe's ``requires_arch`` must be model code the checkout ships, and its
+    ``min_ai_toolkit`` (when it has one) at most the checkout's version.
+
+    Returns:
+        One sentence naming what the checkout lacks, or None when it can train.
+    """
+    if preset["requires_arch"] not in architectures:
+        return (
+            f"This ai-toolkit checkout has no {preset['requires_arch']} model "
+            f"code, so it cannot train {preset['label']}. Update the checkout."
+        )
+    needed = preset.get("min_ai_toolkit")
+    if needed:
+        have = version_tuple(version)
+        if have is None or have < version_tuple(needed):
+            return (
+                f"{preset['label']} needs ai-toolkit {needed} or newer; this "
+                f"checkout is {version or 'of an unknown version'}. Update the "
+                "checkout."
+            )
+    return None
+
+
+def offered(preset: dict, architectures: list[str], version: str | None = None) -> bool:
+    """Whether a checkout with *architectures* at *version* can train *preset*."""
+    return not_offered_because(preset, architectures, version) is None
 
 
 def _same_path(a: str, b: str) -> bool:

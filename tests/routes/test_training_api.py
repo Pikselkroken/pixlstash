@@ -39,6 +39,7 @@ from pixlstash.resources.arbiter import Tenant, arbiter
 from pixlstash.routes import training as training_routes
 from pixlstash.routes.training import _redact_host_paths
 from pixlstash.training import preset_updates, presets
+from pixlstash.training_plugins.ai_toolkit import install as ai_toolkit_install
 from pixlstash.server import Server
 from pixlstash.services.training_service import TrainingService
 from pixlstash.training_plugins.ai_toolkit.adapter import AiToolkitPlugin
@@ -1778,7 +1779,7 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
     """The preview resolves exactly as a job would, gives the pin-free value
     a reset returns to, each value's rule, and a fit verdict per recipe; it
     queues nothing and a run that fits nowhere answers 200 with the reason."""
-    from pixlstash.training import measurements, presets
+    from pixlstash.training import measurements
 
     temp_dir, owner, server, read_token = _setup()
     try:
@@ -1868,12 +1869,12 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
         assert r.json()["steps_clamp"] == "floor"
 
         # A checkout without the model code cannot train the recipe.
-        archs = presets.checkout_architectures
-        presets.checkout_architectures = lambda repo: []
+        archs = ai_toolkit_install.checkout_architectures
+        ai_toolkit_install.checkout_architectures = lambda repo: []
         try:
             r = owner.post("/training/resolve", json=body)
         finally:
-            presets.checkout_architectures = archs
+            ai_toolkit_install.checkout_architectures = archs
         assert r.json()["presets"][0]["verdict"] == "needs_checkout"
         assert r.json()["presets"][0]["offered"] is False
 
@@ -3307,7 +3308,7 @@ def test_a_stopped_run_is_offered_its_kept_steps_and_trained_longer():
             request_gpu=None,
             import_run=None,
             notify=lambda *args: None,
-            config_provider=dict,
+            config_provider=lambda *_: {},
             dataset_builder=None,
             disable_background_workers=True,
         )

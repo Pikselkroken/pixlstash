@@ -66,6 +66,7 @@ from pixlstash.training import (
     preset_updates,
     presets,
     preview_likeness,
+    registry,
     sample_prompts,
 )
 from pixlstash.training.config_render import (
@@ -1405,12 +1406,22 @@ def create_router(server) -> APIRouter:
 
     # ── Serialisation helpers ─────────────────────────────────────────────
 
-    def _checkout_version(repo_path: str | None) -> str | None:
-        return ai_toolkit_install.read_version(repo_path) if repo_path else None
+    def _refusal(preset: dict, configs: dict | None = None) -> str | None:
+        """Why *preset*'s trainer cannot train it as set up; None: it can.
 
-    def _preset_items(repo_path: str | None) -> list[dict]:
-        architectures = presets.checkout_architectures(repo_path)
-        version = _checkout_version(repo_path)
+        *configs* maps a trainer's name to the settings to check with instead
+        of the owner's saved ones.
+        """
+        try:
+            trainer = registry.get(registry.name_of(preset))
+        except registry.TrainerNotInstalled as exc:
+            return f"{preset['label']} cannot be trained here: its {exc}."
+        cfg = (configs or {}).get(trainer.name)
+        if cfg is None:
+            cfg = server.vault.training_config(trainer.name)
+        return trainer.offer_refusal(preset, cfg)
+
+    def _preset_items(configs: dict | None = None) -> list[dict]:
         return [
             {
                 "id": preset["id"],
@@ -1418,7 +1429,7 @@ def create_router(server) -> APIRouter:
                 "label": preset["label"],
                 "base_model": preset["locked"]["model.name_or_path"],
                 "requires_arch": preset["requires_arch"],
-                "offered": presets.offered(preset, architectures, version),
+                "offered": _refusal(preset, configs) is None,
                 "clips": presets.trains_clips(preset),
                 "captions": presets.caption_mode(preset),
             }
@@ -1640,18 +1651,17 @@ def create_router(server) -> APIRouter:
             _parse_json_field(job["resolved_profile"], "resolved_profile", job["uuid"])
             or {}
         )
-        settings = live_view.sample_settings(config)
+        trainer = registry.for_run(job)
+        settings = trainer.sample_settings(config)
         handle, on_disk = _run_dir(job)
         samples = on_disk.samples if on_disk is not None else []
         live = job["status"] in ("queued", "running", "stopping")
-        info = (
-            live_view.read_trainer_info(handle.sqlite_db_path, job["uuid"])
-            if live and os.path.exists(handle.sqlite_db_path)
-            else ""
-        )
+        info = trainer.status_line(handle) if live else ""
         step = int(job["step"] or 0)
         total = job["total_steps"]
-        phase = live_view.phase_of(job["status"], info, step, job["completed_at"])
+        phase = live_view.phase_of(
+            job["status"], info, step, job["completed_at"], trainer.running_phase
+        )
         lease = None
         try:
             lease = next(
@@ -1676,20 +1686,20 @@ def create_router(server) -> APIRouter:
             and not job["completed_at"]
         ):
             phase = shown
-        previews = live_view.preview_progress(info) if phase == "previews" else None
+        previews = trainer.preview_progress(info) if phase == "previews" else None
         # A model the trainer has not loaded before is fetched while it loads,
         # by the probe while checking or by the run itself.
         downloading = False
         if phase in ("checking", "loading"):
             log_path = handle.log_path
             if phase == "checking":
-                log_path = AiToolkitPlugin.handle_for(
+                log_path = trainer.handle_for(
                     os.path.join(handle.work_dir, "probe"),
                     job["uuid"],
                     job["name"],
                     job.get("pid"),
                 ).log_path
-            downloading = live_view.downloading(log_path)
+            downloading = trainer.downloading(log_path)
         deferred = bool(resolution.get("previews_deferred"))
 
         columns = live_view.checkpoint_columns(
@@ -1759,11 +1769,7 @@ def create_router(server) -> APIRouter:
                 "comfyui": reason.get("comfyui_closing"),
             }
 
-        step_times = (
-            live_view.read_step_times(handle.loss_db_path)
-            if os.path.exists(handle.loss_db_path)
-            else []
-        )
+        step_times = trainer.step_times(handle)
         pace = live_view.speed(step_times, total)
         if not live:
             pace["remaining_low_s"] = pace["remaining_high_s"] = None
@@ -1879,23 +1885,32 @@ def create_router(server) -> APIRouter:
             )
         return set_id, owner
 
-    # repo path -> (read at, commit): /resolve runs on every change in the Train
-    # dialog, and must not start a git process each time.
-    commits: dict[str, tuple[float, str | None]] = {}
+    # (trainer, its settings) -> (read at, version stamp): /resolve runs on
+    # every change in the Train dialog, and must not start a git process each
+    # time.
+    commits: dict[tuple[str, str], tuple[float, str | None]] = {}
 
-    def _commit(repo_path: str) -> str | None:
-        read_at, commit = commits.get(repo_path, (None, None))
+    def _commit(preset: dict) -> str | None:
+        trainer = registry.get(registry.name_of(preset))
+        cfg = server.vault.training_config(trainer.name)
+        key = (trainer.name, json.dumps(cfg, sort_keys=True, default=str))
+        read_at, commit = commits.get(key, (None, None))
         if read_at is None or time.monotonic() - read_at > _COMMIT_TTL_S:
-            commit = ai_toolkit_install.read_commit(repo_path)
-            commits[repo_path] = (time.monotonic(), commit)
+            commit = trainer.version_stamp(cfg)
+            commits[key] = (time.monotonic(), commit)
         return commit
 
-    def _measured(repo_path: str | None) -> dict:
-        """The checkout's commit and the card's name, which measurements are
-        tied to (§25.20)."""
+    def _measured(preset: dict) -> dict:
+        """The trainer's version stamp (ai-toolkit: the checkout's commit) and
+        the card's name, which measurements are tied to (§25.20)."""
         reading = ledger().device(ledger().pixlstash_device())
+        try:
+            commit = _commit(preset)
+        except registry.TrainerNotInstalled as exc:
+            logger.info("No version stamp for %s: %s", preset["id"], exc)
+            commit = None
         return {
-            "commit": _commit(repo_path) if repo_path else None,
+            "commit": commit,
             "device": reading.name if reading is not None else None,
         }
 
@@ -1950,21 +1965,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=404, detail=f"No training recipe '{payload.preset}'."
             )
-        user = server.auth.get_user()
-        repo_path = user.ai_toolkit_repo_path if user is not None else None
-        if not repo_path:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "AI-toolkit is not set up. Connect it in Settings › "
-                    "AI-toolkit before training."
-                ),
-            )
-        refusal = presets.not_offered_because(
-            preset,
-            presets.checkout_architectures(repo_path),
-            _checkout_version(repo_path),
-        )
+        refusal = _refusal(preset)
         if refusal:
             raise HTTPException(status_code=422, detail=refusal)
         if presets.trains_clips(preset):
@@ -2028,7 +2029,7 @@ def create_router(server) -> APIRouter:
                 pins=pins,
                 prompts=prompts,
                 preservation=sample_prompts.preservation(written),
-                lookup=_lookup(preset, _measured(repo_path)),
+                lookup=_lookup(preset, _measured(preset)),
             )
         except presets.NoProfileFits as exc:
             raise HTTPException(
@@ -2296,16 +2297,13 @@ def create_router(server) -> APIRouter:
             job["rendered_config"], "rendered_config", job["uuid"]
         )
         handle, _ = _run_dir(job)
-        step_times = (
-            live_view.read_step_times(handle.loss_db_path)
-            if os.path.exists(handle.loss_db_path)
-            else []
-        )
+        trainer = registry.for_run(job)
+        step_times = trainer.step_times(handle)
         return {
             **options,
             "status": job["status"],
             "total_steps": job["total_steps"],
-            "save_every": live_view.sample_settings(config)["save_every"],
+            "save_every": trainer.sample_settings(config)["save_every"],
             "seconds_per_step": live_view.speed(step_times, None)["seconds_per_step"],
         }
 
@@ -2730,7 +2728,9 @@ def create_router(server) -> APIRouter:
             check_lock.release()
         result["python"] = python
         result.update(_ai_toolkit_folders(payload.repo_path))
-        result["presets"] = _preset_items(payload.repo_path)
+        result["presets"] = _preset_items(
+            {AiToolkitPlugin.name: {"repo_path": payload.repo_path, "python": python}}
+        )
         return result
 
     @router.get(
@@ -2887,8 +2887,7 @@ def create_router(server) -> APIRouter:
     )
     def list_training_presets(request: Request):
         _ensure_secure(request)
-        user = server.auth.get_user()
-        return _preset_items(user.ai_toolkit_repo_path if user is not None else None)
+        return _preset_items()
 
     @router.post(
         "/training/presets/check",
@@ -3364,25 +3363,17 @@ def create_router(server) -> APIRouter:
             "prompts": prompts,
             "preservation": sample_prompts.preservation(written),
         }
-        user = server.auth.get_user()
-        repo_path = user.ai_toolkit_repo_path if user is not None else None
-        architectures = presets.checkout_architectures(repo_path)
-        version = _checkout_version(repo_path)
-        context = _measured(repo_path)
-        offers = {
-            p["id"]: presets.offered(p, architectures, version)
-            for p in presets.list_presets()
-        }
+        offers = {p["id"]: _refusal(p) is None for p in presets.list_presets()}
         out["presets"] = [
             {
                 "id": p["id"],
                 "label": p["label"],
                 "offered": offers[p["id"]],
-                "verdict": _verdict(p, offers[p["id"]], context, **choices),
+                "verdict": _verdict(p, offers[p["id"]], _measured(p), **choices),
             }
             for p in presets.list_presets()
         ]
-        choices["lookup"] = _lookup(preset, context)
+        choices["lookup"] = _lookup(preset, _measured(preset))
         keys = set()
 
         def closest(exc, pins=None):

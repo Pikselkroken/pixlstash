@@ -56,7 +56,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_folder_scanner import STATE_PRESENT
 from pixlstash.services.model_mover import SHELF_IO_LOCK, MoveRefused, samples_relpath
 from pixlstash.services.run_importer import RunImporter
-from pixlstash.training_plugins.ai_toolkit.adapter import AiToolkitPlugin
+from pixlstash.training import registry
 from pixlstash.utils.training_run_folder import (
     SAMPLES_DIRNAME,
     is_sample_filename,
@@ -504,12 +504,16 @@ def create_router(server) -> APIRouter:
         for job in busy_runs(server.hub):
             if not job.get("training_folder"):
                 continue
-            save_root = AiToolkitPlugin.handle_for(
-                "",
-                job["uuid"],
-                job["name"],
-                training_folder=job["training_folder"],
-            ).save_root
+            save_root = (
+                registry.for_run(job)
+                .handle_for(
+                    "",
+                    job["uuid"],
+                    job["name"],
+                    training_folder=job["training_folder"],
+                )
+                .save_root
+            )
             # normcase: a case-insensitive drive spells one folder two ways.
             if os.path.normcase(os.path.realpath(save_root)) == os.path.normcase(
                 run_dir

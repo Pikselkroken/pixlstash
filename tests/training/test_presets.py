@@ -8,6 +8,7 @@ import os
 import pytest
 
 from pixlstash.training import presets
+from pixlstash.training_plugins.ai_toolkit import install
 from pixlstash.training.config_render import TUNABLE_KEYS, TunableOverrideError
 
 _ZIT = presets.get_preset("zimage-turbo")
@@ -150,11 +151,11 @@ def test_moss_is_offered_only_by_a_checkout_with_its_model_code(tmp_path):
     moss = presets.get_preset("moss-image-base")
     root = tmp_path / "extensions_built_in" / "diffusion_models"
     (root / "z_image").mkdir(parents=True)
-    archs = presets.checkout_architectures(str(tmp_path))
-    assert not presets.offered(moss, archs, "0.13.28")
+    archs = install.checkout_architectures(str(tmp_path))
+    assert not install.offered(moss, archs, "0.13.28")
     (root / "moss_image").mkdir()
-    archs = presets.checkout_architectures(str(tmp_path))
-    assert presets.offered(moss, archs, "0.13.28")
+    archs = install.checkout_architectures(str(tmp_path))
+    assert install.offered(moss, archs, "0.13.28")
 
 
 def test_moss_needs_the_ai_toolkit_that_trains_its_base_model():
@@ -162,16 +163,16 @@ def test_moss_needs_the_ai_toolkit_that_trains_its_base_model():
     fresh-cache tokenizer fix in 0.13.28, so the folder alone is not enough."""
     moss = presets.get_preset("moss-image-base")
     archs = ["moss_image"]
-    assert presets.offered(moss, archs, "0.13.28")
-    assert presets.offered(moss, archs, "0.14.0")
-    assert presets.offered(moss, archs, "1.0")
+    assert install.offered(moss, archs, "0.13.28")
+    assert install.offered(moss, archs, "0.14.0")
+    assert install.offered(moss, archs, "1.0")
     for older in ("0.13.27", "0.12.99", None, "dev"):
-        assert not presets.offered(moss, archs, older), older
-    reason = presets.not_offered_because(moss, archs, "0.13.27")
+        assert not install.offered(moss, archs, older), older
+    reason = install.not_offered_because(moss, archs, "0.13.27")
     assert "0.13.28" in reason and "0.13.27" in reason
     # A recipe with no minimum still asks only for its model folder.
     zimage = presets.get_preset("zimage-turbo")
-    assert presets.offered(zimage, ["z_image"], None)
+    assert install.offered(zimage, ["z_image"], None)
 
 
 def test_a_recipe_minimum_must_be_a_version():
@@ -463,12 +464,12 @@ def test_checkout_architectures_reads_the_model_code_folders(tmp_path):
     for name in ("z_image", "flux2", "__pycache__"):
         (root / name).mkdir(parents=True)
     (root / "__init__.py").write_text("")
-    archs = presets.checkout_architectures(str(tmp_path))
+    archs = install.checkout_architectures(str(tmp_path))
     assert archs == ["flux2", "z_image"]
-    assert presets.offered(_ZIT, archs)
-    assert not presets.offered(_ZIT, ["flux2"])
-    assert presets.checkout_architectures(str(tmp_path / "missing")) == []
-    assert presets.checkout_architectures(None) == []
+    assert install.offered(_ZIT, archs)
+    assert not install.offered(_ZIT, ["flux2"])
+    assert install.checkout_architectures(str(tmp_path / "missing")) == []
+    assert install.checkout_architectures(None) == []
 
 
 # ---------------------------------------------------------------------------

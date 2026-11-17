@@ -81,6 +81,7 @@ from pixlstash.hub import training_runs
 from pixlstash.services.run_importer import STATUS_IMPORTED, RunImporter
 from pixlstash.services.model_mover import SHELF_IO_LOCK, publish_no_clobber
 from pixlstash.utils.training_run_folder import read_run
+from pixlstash.training.registry import DEFAULT_TRAINER
 from pixlstash.services.managed_model_store import find_download_folder
 from pixlstash.services.model_shelf_service import (
     fetch_attachments,
@@ -1143,24 +1144,30 @@ class Vault:
             request_gpu=self._request_training_gpu,
             import_run=self._import_training_run,
             notify=self.notify,
-            config_provider=self._training_config_provider,
+            config_provider=self.training_config,
             dataset_builder=dataset_builder,
             disable_background_workers=disable_background_workers,
             adopt_gpu=self._adopt_training_gpu,
             tenant=tenant,
         )
 
-    def _training_config_provider(self) -> dict:
-        """Read the owner's ai-toolkit config from the hub-backed owner row.
+    def training_config(self, trainer_name: str = DEFAULT_TRAINER) -> dict:
+        """Read the owner's settings for a training plugin from the owner row.
 
-        The ai-toolkit paths and pinned commit are owner-level machine settings,
-        so they live on the hub's ``user`` row (the AuthService reads it), not
-        on this vault's legacy ``user`` table.
+        The ai-toolkit paths are owner-level machine settings, so they live on
+        the hub's ``user`` row (the AuthService reads it), not on this vault's
+        legacy ``user`` table. No other plugin has settings yet.
+
+        Args:
+            trainer_name: The training plugin's registry name.
 
         Returns:
-            ``{"repo_path", "python"}`` (empty values if unset, or
-            ``{}`` when no owner row or AuthService is attached yet).
+            For ai-toolkit ``{"repo_path", "python"}`` (empty values if unset,
+            or ``{}`` when no owner row or AuthService is attached yet); ``{}``
+            for any other plugin.
         """
+        if trainer_name != DEFAULT_TRAINER:
+            return {}
         auth = self.auth_service
         if auth is None:
             return {}

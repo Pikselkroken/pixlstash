@@ -245,7 +245,7 @@ def _make_service(
         request_gpu=lease.request,
         import_run=importer or _RecordingImport(),
         notify=notify,
-        config_provider=lambda: {
+        config_provider=lambda *_: {
             "repo_path": repo_dir,
             "python": sys.executable,
             "models_dir": "",
@@ -2097,7 +2097,7 @@ def test_memory_a_dead_trainer_kept_is_named_not_released(hub, repo_dir, monkeyp
         request_gpu=_StubLease().request,
         import_run=_RecordingImport(),
         notify=_CapturingNotify(),
-        config_provider=lambda: {},
+        config_provider=lambda *_: {},
         dataset_builder=_make_dataset_builder(),
         tenant=tenant,
     )
@@ -2153,7 +2153,7 @@ def test_a_live_run_is_adopted_at_start_up_and_reconciled_on_that_lease(hub, rep
         adopt_gpu=adopted.request,
         import_run=_RecordingImport(),
         notify=_CapturingNotify(),
-        config_provider=lambda: {"repo_path": repo_dir, "python": sys.executable},
+        config_provider=lambda *_: {"repo_path": repo_dir, "python": sys.executable},
         dataset_builder=_make_dataset_builder(),
         backend_factory=lambda repo_path, python: _Backend(),
         poll_interval_s=0.02,
@@ -2214,7 +2214,7 @@ def test_a_run_trained_but_not_imported_before_a_restart_is_imported(hub, repo_d
         request_gpu=_StubLease().request,
         import_run=importer,
         notify=_CapturingNotify(),
-        config_provider=lambda: {"repo_path": repo_dir, "python": sys.executable},
+        config_provider=lambda *_: {"repo_path": repo_dir, "python": sys.executable},
         dataset_builder=_make_dataset_builder(),
         backend_factory=lambda repo_path, python: _Backend(),
     )

@@ -15,6 +15,9 @@ reads an ai-toolkit config:
 - ``captions`` (optional): how the dataset's captions are written, as the
   model's own prompts read: ``description`` (prose, for a model prompted in
   sentences) or ``tags`` (the default).
+- ``trainer`` (optional): the training plugin that trains it
+  (:mod:`pixlstash.training.registry`). A recipe that names none is stamped
+  with the plugin whose ``presets_dir`` it was read from.
 - ``hardware_profiles``: memory tiers, each with a VRAM and RAM need, the
   largest bucket, rank and batch the need holds for, the settings it writes and
   the evidence behind its figures. A tier with evidence ``none`` is never
@@ -44,7 +47,7 @@ from functools import lru_cache
 from typing import Callable
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.training import measurements
+from pixlstash.training import measurements, registry
 from pixlstash.training.config_render import (
     TUNABLE_KEYS,
     TunableOverrideError,
@@ -53,6 +56,8 @@ from pixlstash.training.config_render import (
 
 logger = get_logger(__name__)
 
+# ai-toolkit's recipes and templates. They stay with the package data (the
+# pixlstash.dev feed publishes this folder); the plugin points at them.
 PRESET_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "data", "training-presets")
 )
@@ -114,7 +119,8 @@ FIELDS = (
 # Keys a recipe may leave out. ``min_ai_toolkit``: the oldest ai-toolkit version
 # (``version.py``) that can train it, when its model folder alone does not say.
 # ``captions``: the caption form the model is prompted in (:func:`caption_mode`).
-OPTIONAL_FIELDS = ("min_ai_toolkit", "captions")
+# ``trainer``: the training plugin that trains it.
+OPTIONAL_FIELDS = ("min_ai_toolkit", "captions", "trainer")
 CAPTION_MODES = ("description", "tags")
 PROFILE_FIELDS = (
     "label",
@@ -195,7 +201,7 @@ def validate_preset(preset: dict) -> dict:
             raise PresetError(f"{pid}: missing '{field}'.")
     if not isinstance(preset["version"], int) or isinstance(preset["version"], bool):
         raise PresetError(f"{pid}: version must be a whole number.")
-    if "min_ai_toolkit" in preset and _version_tuple(preset["min_ai_toolkit"]) is None:
+    if "min_ai_toolkit" in preset and version_tuple(preset["min_ai_toolkit"]) is None:
         raise PresetError(f"{pid}: min_ai_toolkit must be a version like 0.13.28.")
     if preset.get("captions", "tags") not in CAPTION_MODES:
         raise PresetError(f"{pid}: captions must be one of {', '.join(CAPTION_MODES)}.")
@@ -331,21 +337,33 @@ def cache_dir() -> str | None:
 
 
 def reload() -> None:
-    """Forget what was read, so the next read sees the cache as it is now."""
+    """Forget what was read, so the next read sees the cache and plugins as now."""
+    shipped_presets.cache_clear()
     _load_all.cache_clear()
 
 
 @lru_cache(maxsize=None)
 def shipped_presets() -> dict[str, dict]:
-    """The recipes that ship in ``pixlstash/data/training-presets/``, by id."""
+    """The recipes in every training plugin's ``presets_dir``, by id.
+
+    Each is stamped with its ``trainer``: the one it names, else the plugin
+    whose folder holds it. A folder two plugins share is read once.
+    """
     presets = {}
-    for filename in sorted(os.listdir(PRESET_DIR)):
-        if not filename.endswith(".json"):
+    read: set[str] = set()
+    for plugin in registry.installed():
+        folder = plugin.presets_dir
+        if not folder or os.path.normcase(os.path.abspath(folder)) in read:
             continue
-        path = os.path.join(PRESET_DIR, filename)
-        with open(path, encoding="utf-8") as handle:
-            preset = validate_preset(json.load(handle))
-        presets[preset["id"]] = preset
+        read.add(os.path.normcase(os.path.abspath(folder)))
+        for filename in sorted(os.listdir(folder)):
+            if not filename.endswith(".json"):
+                continue
+            path = os.path.join(folder, filename)
+            with open(path, encoding="utf-8") as handle:
+                preset = validate_preset(json.load(handle))
+            preset.setdefault("trainer", plugin.name)
+            presets[preset["id"]] = preset
     return presets
 
 
@@ -381,8 +399,10 @@ def _cached(shipped: dict) -> dict | None:
 
 @lru_cache(maxsize=None)
 def _load_all() -> dict[str, dict]:
+    # A downloaded update cannot move a recipe to another trainer.
     return {
-        pid: _cached(shipped) or shipped for pid, shipped in shipped_presets().items()
+        pid: {**(_cached(shipped) or shipped), "trainer": shipped["trainer"]}
+        for pid, shipped in shipped_presets().items()
     }
 
 
@@ -406,62 +426,25 @@ def preset_ref(preset: dict) -> str:
 
 
 def template_path(preset: dict) -> str:
-    """The passthrough job-config skeleton the preset renders over."""
-    return os.path.join(TEMPLATE_DIR, f"{preset['template']}.json")
+    """The passthrough job-config skeleton the preset renders over.
+
+    Resolved in its trainer's ``template_dir``.
+
+    Raises:
+        TrainerNotInstalled: The recipe's trainer is not registered.
+        ValueError: Its trainer has no template folder.
+    """
+    plugin = registry.get(registry.name_of(preset))
+    if not plugin.template_dir:
+        raise ValueError(f"Training plugin '{plugin.name}' has no template folder.")
+    return os.path.join(plugin.template_dir, f"{preset['template']}.json")
 
 
-def checkout_architectures(repo_path: str | None) -> list[str]:
-    """The model code a checkout ships: ``extensions_built_in/diffusion_models/<arch>/``."""
-    if not repo_path:
-        return []
-    root = os.path.join(repo_path, "extensions_built_in", "diffusion_models")
-    try:
-        names = os.listdir(root)
-    except OSError as exc:
-        logger.info("No diffusion model code under %s: %s", root, exc)
-        return []
-    return sorted(
-        name
-        for name in names
-        if not name.startswith(("_", ".")) and os.path.isdir(os.path.join(root, name))
-    )
-
-
-def _version_tuple(value) -> tuple[int, ...] | None:
+def version_tuple(value) -> tuple[int, ...] | None:
     """``"0.13.28"`` as ``(0, 13, 28)``; None for anything that is not one."""
     if not isinstance(value, str) or not re.fullmatch(r"\d+(\.\d+)*", value.strip()):
         return None
     return tuple(int(part) for part in value.strip().split("."))
-
-
-def not_offered_because(
-    preset: dict, architectures: list[str], version: str | None = None
-) -> str | None:
-    """Why a checkout with *architectures* at *version* cannot train *preset*.
-
-    Returns:
-        One sentence naming what the checkout lacks, or None when it can train.
-    """
-    if preset["requires_arch"] not in architectures:
-        return (
-            f"This ai-toolkit checkout has no {preset['requires_arch']} model "
-            f"code, so it cannot train {preset['label']}. Update the checkout."
-        )
-    needed = preset.get("min_ai_toolkit")
-    if needed:
-        have = _version_tuple(version)
-        if have is None or have < _version_tuple(needed):
-            return (
-                f"{preset['label']} needs ai-toolkit {needed} or newer; this "
-                f"checkout is {version or 'of an unknown version'}. Update the "
-                "checkout."
-            )
-    return None
-
-
-def offered(preset: dict, architectures: list[str], version: str | None = None) -> bool:
-    """Whether a checkout with *architectures* at *version* can train *preset*."""
-    return not_offered_because(preset, architectures, version) is None
 
 
 def caption_mode(preset: dict) -> str:

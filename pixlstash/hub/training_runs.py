@@ -75,6 +75,7 @@ def create_run(
     preset: Optional[str] = None,
     resolved_profile: Optional[str] = None,
     advanced_pins: Optional[str] = None,
+    trainer: Optional[str] = None,
 ) -> int:
     """Insert a queued run and return its id.
 
@@ -90,6 +91,7 @@ def create_run(
         preset: The recipe as ``id@version``.
         resolved_profile: The resolver's result, as JSON.
         advanced_pins: The owner's Advanced values, as JSON.
+        trainer: The training plugin that trains it; None is ai-toolkit.
 
     Returns:
         The new ``training_run.id``.
@@ -98,8 +100,8 @@ def create_run(
         cursor = conn.execute(
             "INSERT INTO training_run (uuid, library_uuid, name, status, set_id, "
             "character_id, base_model, trigger_word, preset, resolved_profile, "
-            "advanced_pins, created_at) "
-            "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)",
+            "advanced_pins, trainer, created_at) "
+            "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 uuid,
                 library_uuid,
@@ -111,6 +113,7 @@ def create_run(
                 preset,
                 resolved_profile,
                 advanced_pins,
+                trainer,
                 now_iso(),
             ),
         )
