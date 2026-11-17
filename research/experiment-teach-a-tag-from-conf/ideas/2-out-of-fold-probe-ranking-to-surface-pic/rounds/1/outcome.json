@@ -1,0 +1,34 @@
+{
+  "idea": "2-out-of-fold-probe-ranking-to-surface-pic",
+  "round": 1,
+  "questionRev": 1,
+  "verdict": "negative",
+  "finding": "In two blind games in the tagger repo, the pictures a held-out model ranked highest were confirmed no more often than a random batch (bad anatomy 1 of 9 vs 1 of 10; malformed eyes 8 of 47 = 17% vs 7 of 41 = 17%), and inside the ranked eyes batch the score did not order the positives (AUC 0.49), even though this model was much stronger than the classifier #2678 proposes.",
+  "wouldSettle": null,
+  "evidence": [
+    "evidence/surfacing_games.png",
+    "evidence/surfacing_games.csv",
+    "evidence/ranked_vs_random.csv",
+    "evidence/eyes_ranked_by_score.png",
+    "evidence/eyes_ranked_thirds.csv",
+    "evidence/eyes_ranked_by_score.csv"
+  ],
+  "followUps": [
+    {
+      "title": "Add a random batch to the person-judged top-100 test",
+      "body": "Idea 5 plans to have a person judge the classifier's top 100 against the near-neighbour vote's top 100. Both lists could beat each other and still be no better than picking pictures at random, which is exactly what happened here: a model that ranked well on pictures people had already judged found new positives at the random rate. Mixing in a third batch of randomly drawn unjudged pictures, shuffled blind with the other two, and recording each method's score for every picture in all three batches, would show whether either method beats chance and would allow a fair ranking-quality number on an unbiased sample. It worked if the random batch's confirm rate is clearly below the better method's.",
+      "importance": "do"
+    }
+  ],
+  "plain": {
+    "idea": "Use a computer model that never saw a picture's label to guess which unlabelled pictures most likely show a defect, and show those to a person first, hoping more of them turn out to be real defects than in a random handful.",
+    "settles": [
+      "A person judged the model's top picks and a random batch side by side, without knowing which was which.",
+      "If the model's picks held clearly more real defects, the idea helps.",
+      "Equal shares mean the ranking saves the person no time."
+    ],
+    "showed": "For both defects tried, the model's top picks held about the same share of real defects as random pictures, roughly one in six for eyes. Even within its own top picks, a higher model score did not mean a likelier defect. That model was stronger and trained on far more examples than the one the question proposes."
+  },
+  "status": "provisional",
+  "concludedAt": null
+}
