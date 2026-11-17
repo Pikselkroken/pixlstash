@@ -1,0 +1,5 @@
+tag,eval_positives_of_1516,cv_auc_dinov3_vitb16,cv_auc_dinov2_base
+extra limb,43,0.823,0.856
+malformed hand,321,0.824,0.803
+malformed foot,105,0.967,0.954
+bad anatomy,108,0.942,0.945
