@@ -1,0 +1,153 @@
+{
+  "at": "2026-11-17T22:43:00.415Z",
+  "cause": "after the question was approved and the first ideas filed",
+  "order": [
+    "3-check-that-face-embedding-agreement-pred",
+    "13-judge-krea-2-loras-on-krea-2-turbo-not-o",
+    "14-pick-the-checkpoint-automatically-by-sui",
+    "4-which-model-draws-the-most-consistent-te",
+    "5-which-model-draws-the-most-faithful-refe",
+    "10-vary-the-outfit-across-the-dataset-inste",
+    "7-include-the-reference-image-itself-in-th",
+    "9-upscale-sheet-panels-to-1024-pixels-befo",
+    "6-choose-the-text-route-identity-by-cluste",
+    "12-turn-on-protect-the-description-while-tr",
+    "11-rank-16-versus-rank-32-for-krea-2-and-fo",
+    "8-fill-missing-head-angles-with-an-edit-mo",
+    "15-train-a-second-round-on-images-the-first"
+  ],
+  "notes": {
+    "3-check-that-face-embedding-agreement-pred": {
+      "impact": 3,
+      "odds": 2,
+      "line": "Every other idea is judged by this number, so it must be shown to match the owner's eye first.",
+      "why": {
+        "impact": "If agreement does not predict 'same person', no comparison in the notebook means anything.",
+        "odds": "Face cosine usually separates same from different people, but thresholds shift with model and style.",
+        "path": "Ideas 4 to 15 all wait for it."
+      }
+    },
+    "13-judge-krea-2-loras-on-krea-2-turbo-not-o": {
+      "impact": 2,
+      "odds": 2,
+      "line": "Settles which Krea 2 model every Krea measurement is made on before many are made.",
+      "why": {
+        "impact": "If Raw and Turbo rank settings differently, Krea results measured on Raw would mislead.",
+        "odds": "Krea's card says Raw LoRAs are meant for Turbo, so a difference is plausible but unmeasured.",
+        "path": "Sets the measuring model for every later Krea 2 comparison."
+      }
+    },
+    "14-pick-the-checkpoint-automatically-by-sui": {
+      "impact": 3,
+      "odds": 2,
+      "line": "Every training comparison needs a fair rule for which checkpoint stands for a run.",
+      "why": {
+        "impact": "Without it, comparisons between setups depend on hand-picked steps, and the shipped recipe needs it anyway.",
+        "odds": "Suite agreement should track the best step, though leakage penalties are untuned.",
+        "path": "Second round (15) and every training-setting comparison lean on it."
+      }
+    },
+    "4-which-model-draws-the-most-consistent-te": {
+      "impact": 3,
+      "odds": 2,
+      "line": "The training pictures are the biggest lever on text-route consistency.",
+      "why": {
+        "impact": "A drawer that keeps one face across angles likely sets the ceiling for the LoRA.",
+        "odds": "Models differ a lot in sheet consistency; one should clearly lead.",
+        "path": "Its winner becomes the starting point for 6, 8 and 9."
+      }
+    },
+    "5-which-model-draws-the-most-faithful-refe": {
+      "impact": 3,
+      "odds": 2,
+      "line": "The same lever for the reference route, where likeness counts more.",
+      "why": {
+        "impact": "Decides the reference route's whole dataset source.",
+        "odds": "Edit models vary in identity drift; at least one should hold the reference.",
+        "path": "Its winner is the base for 7."
+      }
+    },
+    "10-vary-the-outfit-across-the-dataset-inste": {
+      "impact": 2,
+      "odds": 3,
+      "line": "A well-known failure with a cheap fix, likely to come out positive.",
+      "why": {
+        "impact": "Fixes outfit binding, which shows in every generation that asks for other clothes.",
+        "odds": "Spurious attribute binding is well documented and the default sheets wear one outfit.",
+        "path": "Independent of the others once the metric exists."
+      }
+    },
+    "7-include-the-reference-image-itself-in-th": {
+      "impact": 2,
+      "odds": 2,
+      "line": "A cheap test of whether the real face anchors reference-route likeness.",
+      "why": {
+        "impact": "Could raise likeness, which the reference route weighs most.",
+        "odds": "One real picture may anchor the face or be memorised; either is plausible.",
+        "path": "Best run on the drawer chosen in 5."
+      }
+    },
+    "9-upscale-sheet-panels-to-1024-pixels-befo": {
+      "impact": 2,
+      "odds": 2,
+      "line": "Panels train small today; upscaling may lift quality cheaply.",
+      "why": {
+        "impact": "Mainly affects the quality constraint rather than consistency.",
+        "odds": "Sharper input usually helps, but upscaler artefacts can be learned too.",
+        "path": "Applies to every panel-based dataset."
+      }
+    },
+    "6-choose-the-text-route-identity-by-cluste": {
+      "impact": 2,
+      "odds": 2,
+      "line": "Tests whether sheet-level clustering overrates shared rendering.",
+      "why": {
+        "impact": "Changes how the text-route identity is chosen, not the whole pipeline.",
+        "odds": "The shared-render worry is real but its size is unknown.",
+        "path": "Best run on the drawer chosen in 4."
+      }
+    },
+    "12-turn-on-protect-the-description-while-tr": {
+      "impact": 2,
+      "odds": 2,
+      "line": "May cut leakage into plain 'person' images at some cost in speed.",
+      "why": {
+        "impact": "Helps flexibility and leakage more than core consistency.",
+        "odds": "Preservation methods often reduce leakage but can weaken likeness.",
+        "path": "Independent; a training setting."
+      }
+    },
+    "11-rank-16-versus-rank-32-for-krea-2-and-fo": {
+      "impact": 1,
+      "odds": 2,
+      "line": "A tuning knob; likely a small difference either way.",
+      "why": {
+        "impact": "Rank rarely makes or breaks a character LoRA.",
+        "odds": "16 matching 32 is plausible, but MOSS's settings are borrowed and untested.",
+        "path": "Independent; a training setting."
+      }
+    },
+    "8-fill-missing-head-angles-with-an-edit-mo": {
+      "impact": 2,
+      "odds": 1,
+      "line": "Edit-model filling risks drifting the face, and angle checking does not exist yet.",
+      "why": {
+        "impact": "Better angle coverage could help the hard front-to-profile case.",
+        "odds": "Edit models tend to pull faces toward their own idea of a person.",
+        "path": "Needs the drawer from 4 and a way to check panel angles."
+      }
+    },
+    "15-train-a-second-round-on-images-the-first": {
+      "impact": 2,
+      "odds": 2,
+      "line": "The final refinement; only meaningful once the rest of the pipeline is set.",
+      "why": {
+        "impact": "Could tighten consistency, but costs a full extra training run.",
+        "odds": "The paper found it helps, though self-training drifts details and scenes.",
+        "path": "Needs the checkpoint rule (14) and a settled pipeline."
+      }
+    }
+  },
+  "pinned": {},
+  "moved": {}
+}
