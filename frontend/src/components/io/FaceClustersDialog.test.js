@@ -483,6 +483,10 @@ describe("FaceClustersDialog", () => {
       await wrapper.findAll(".fc-row__stack img")[1].trigger("dblclick");
       await flushPromises();
       expect(document.querySelector(".zp-cap").textContent.trim()).toMatch(/^Your cluster · picked by you · face 2 of/);
+      // The picks lead the row, so its first face is a pick, not its centre.
+      expect(document.querySelector(".fc-zoomref .fc-lbl").textContent.trim()).toBe(
+        "Your first pick",
+      );
       document
         .querySelector('[data-testid="zoom-popout"]')
         .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

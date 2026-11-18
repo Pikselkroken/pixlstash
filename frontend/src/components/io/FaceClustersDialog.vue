@@ -521,7 +521,11 @@
       <template #aside>
         <div class="fc-zoomref">
           <span class="fc-lbl">{{
-            centred ? "The chosen face" : `Centre of ${rowLabel(selected, true)}`
+            centred
+              ? "The chosen face"
+              : onSeeded
+                ? "Your first pick"
+                : `Centre of ${rowLabel(selected, true)}`
           }}</span>
           <img :src="pictureThumbnailUrl(current.members[0].picture_id)" alt="" />
           <span class="fc-note">{{ faceName(0) }}</span>
