@@ -159,6 +159,10 @@ class ClipService:
         tensor is the one the original gives. Works before the model is
         loaded, which is when a preload most often runs.
 
+        An image the resize would enlarge (a short side under 224 px, such as
+        a thin strip) is returned as it is: the preprocessing gives the same
+        tensor from either, and the original is the smaller of the two.
+
         Args:
             images: List of RGB ``PIL.Image`` objects.
 
@@ -171,7 +175,12 @@ class ClipService:
             if preprocess is not None
             else _unloaded_first_resize()
         )
-        return [resize(img) for img in images]
+        reduced = []
+        for img in images:
+            small = resize(img)
+            larger = small.width * small.height >= img.width * img.height
+            reduced.append(img if larger else small)
+        return reduced
 
     def encode_image_batch(
         self, images: list, tensors: "Optional[list]" = None

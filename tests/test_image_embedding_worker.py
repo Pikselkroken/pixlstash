@@ -223,8 +223,9 @@ def test_the_embedding_preload_keeps_only_what_clip_reads(tmp_path, clip_loaded)
     is given is bit-identical to the one the original produces, whether or
     not CLIP was loaded when the preload ran (the first batches after start-up).
 
-    Holding the originals beside their tensors kept 6.3 GB for a batch of
-    64 large photos, three batches preloading at once.
+    Holding the originals beside their tensors kept 6.6 GB for a batch of
+    64 large photos, three batches preloading at once. An image CLIP would
+    enlarge is held as it is, never upscaled.
     """
     from types import SimpleNamespace
 
@@ -253,8 +254,9 @@ def test_the_embedding_preload_keeps_only_what_clip_reads(tmp_path, clip_loaded)
     workflow = ClipEmbeddingWorkflow(SimpleNamespace(clip_service=service))
 
     rng = np.random.default_rng(2748)
-    # Landscape, portrait, one smaller than CLIP's input, one very thin.
-    sizes = [(2400, 1600), (333, 1001), (100, 50), (1201, 77)]
+    # Landscape, portrait, one smaller than CLIP's input, two thin strips:
+    # the last two would be enlarged by the resize, and are held as they are.
+    sizes = [(2400, 1600), (333, 1001), (100, 50), (1201, 77), (2000, 20)]
     names = [f"p{i}.png" for i in range(len(sizes))]
     for (w, h), name in zip(sizes, names):
         array = rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
@@ -268,10 +270,14 @@ def test_the_embedding_preload_keeps_only_what_clip_reads(tmp_path, clip_loaded)
         task._preload_images_task()
         preloaded = task._preloaded_images
 
-    assert [entry[0] for entry in preloaded] == [1, 2, 3, 4]
+    assert [entry[0] for entry in preloaded] == [1, 2, 3, 4, 5]
     for (_pid, name, held, dhash, tensor), size in zip(preloaded, sizes):
         original = PILImage.open(tmp_path / name).convert("RGB")
-        assert min(held.size) == 224, f"{name} {size} held at {held.size}"
+        expected = size if min(size) < 224 else None
+        if expected is None:
+            assert min(held.size) == 224, f"{name} {size} held at {held.size}"
+        else:
+            assert held.size == expected, f"{name} {size} upscaled to {held.size}"
         assert torch.equal(preprocess(held), preprocess(original)), name
         assert dhash == ImageEmbeddingTask._compute_dhash(original), name
         if clip_loaded:

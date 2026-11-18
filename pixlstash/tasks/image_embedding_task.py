@@ -144,7 +144,7 @@ class ImageEmbeddingTask(BaseTask):
                 return [(pid, file_path, None, None, None)]
             # Hashed from the full frame, then dropped (#2748): the original
             # held to the end of the batch, beside its tensor, is what kept
-            # 6.3 GB per batch of 64 large photos.
+            # 6.6 GB per batch of 64 24 MP photos.
             hashes = [self._compute_dhash(img) for img in images]
             tensors = None
             if self._clip_workflow is not None:
