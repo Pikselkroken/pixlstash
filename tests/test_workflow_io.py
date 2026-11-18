@@ -597,10 +597,20 @@ def test_server_start_up_runs_the_migration_on_the_user_folder(tmp_path, monkeyp
     (inbox / "dropped.json").write_text(json.dumps(_t2i_graph()), encoding="utf-8")
     monkeypatch.setattr(server_module, "workflow_inbox_dir", lambda: str(inbox))
     monkeypatch.setattr(comfyui_module, "workflow_user_dir", lambda: str(user_dir))
+    # Every built-in is listed on the Workflows page at start-up.
+    builtin = tmp_path / "built-in"
+    builtin.mkdir()
+    shipped = _t2i_graph()
+    shipped["2"]["inputs"]["text"] = "a dog"
+    (builtin / "Shipped.json").write_text(json.dumps(shipped), encoding="utf-8")
+    monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
     monkeypatch.setattr(
-        comfyui_module, "_workflow_dirs", lambda: [("user", str(user_dir))]
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(user_dir)), ("built-in", str(builtin))],
     )
     monkeypatch.setattr(server_module.Server, "DEFAULT_WATCH_WORKFLOW_INBOX", True)
+    monkeypatch.setattr(server_module.Server, "DEFAULT_LIST_BUILTIN_WORKFLOWS", True)
     config_path = tmp_path / "config" / "server-config.json"
     config_path.parent.mkdir()
     config_path.write_text(json.dumps({"port": 8000}), encoding="utf-8")
@@ -609,8 +619,10 @@ def test_server_start_up_runs_the_migration_on_the_user_folder(tmp_path, monkeyp
     try:
         assert workflow_bindings.BINDINGS_KEY in _load(user_dir / "old.json")
         assert (user_dir / workflow_bindings.MIGRATION_MARKER).exists()
-        (stored,) = server.hub.fetchall("SELECT document FROM workflow_document")
-        assert json.loads(stored["document"]) == _t2i_graph()
+        # The dropped file, and the built-in listed on the Workflows page.
+        stored = server.hub.fetchall("SELECT document FROM workflow_document")
+        documents = sorted((json.loads(row["document"]) for row in stored), key=str)
+        assert documents == sorted([_t2i_graph(), shipped], key=str)
         assert server._workflow_inbox_watcher is not None
     finally:
         server.__exit__(None, None, None)

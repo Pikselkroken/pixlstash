@@ -1474,7 +1474,6 @@ import {
 import { getSharedPictureIds, revokeTokensByResource } from "../../api/users";
 import { listTaggers } from "../../api/taggers";
 import { preflightWorkflowRun } from "../../api/workflows";
-import { cardForWorkflow } from "../../api/comfyui";
 import {
   faceBoxColor,
   formatUserDate,
@@ -2307,9 +2306,6 @@ function runWorkflowOnSelection() {
   openRunWithWorkflowPicker(selectedPictureIds());
 }
 
-/** The built-in edit workflow, filed so the Edit tab can list it. */
-const EDIT_WORKFLOW = "Flux2-Klein-Image-Edit.json";
-
 /** The grid's *Edit…*, as the lightbox reads it: `{pictureIds}` per gesture. */
 const lightboxEditRequest = ref(null);
 
@@ -2317,29 +2313,13 @@ const lightboxEditRequest = ref(null);
  * "Edit…", from either grid menu: the lightbox on the first selected picture,
  * on its Edit tab, where the Paint tools mark where and the instruction says
  * what. With several pictures *Apply to* offers them all, which is the batch
- * edit this row used to open the Run popup for.
- *
- * The built-in edit workflow has no card until it is asked for, so it is asked
- * for first and the Edit tab lists it beside the owner's own. A failure there
- * still opens the tab, which lists whatever edit workflows the owner has.
+ * edit this row used to open the Run popup for. The built-in edit workflows
+ * are cards already (start-up lists every built-in the owner has not removed),
+ * so the tab lists them beside the owner's own.
  */
-async function editSelection() {
+function editSelection() {
   const ids = selectedPictureIds();
   if (isReadOnly.value || !ids.length) return;
-  try {
-    await cardForWorkflow(EDIT_WORKFLOW);
-  } catch (err) {
-    console.warn(
-      `Could not file the ${EDIT_WORKFLOW} workflow for the Edit tab; it lists the owner's own edit workflows only:`,
-      err,
-    );
-    // The tab still opens, on the owner's own edit workflows: say why the
-    // built-in is not among them.
-    noticeStore.warning(
-      `Could not add the built-in image edit workflow. ${errorDetail(err)}`,
-      { key: "edit-pictures" },
-    );
-  }
   lightboxEditRequest.value = { pictureIds: ids };
   openLightbox({ id: ids[0] });
 }

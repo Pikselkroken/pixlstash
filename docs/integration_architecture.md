@@ -1427,9 +1427,9 @@ the two sides have agreed:
    deduplicates on `workflow_origin` only, so a restart
    re-imports nothing. `POST /api/v1/comfyui/workflows/{workflow_name}/card`
    (`OWNER_ONLY`) makes a **built-in** workflow file a manual workflow once
-   (`origin: builtin`) and answers `{name, workflow_id}`: Edit with ComfyUI
-   asks it for the Flux.2 Klein edit workflow and opens the Run popup on the
-   id. 404 for an unknown name or a user file (data step 7 made that a
+   (`origin: builtin`) and answers `{name, workflow_id}`. Start-up does the
+   same for every built-in never listed (`list_builtin_workflows`), so this is
+   only the explicit way back for one the owner removed. 404 for an unknown name or a user file (data step 7 made that a
    workflow already, and one deleted must not come back), 409 when it is not
    a workflow. A document past `MAX_WORKFLOW_FILE_BYTES` serialised is a 413
    on every route that stores one.

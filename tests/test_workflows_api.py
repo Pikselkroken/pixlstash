@@ -6093,6 +6093,42 @@ def test_a_built_in_workflow_is_put_on_a_card_that_runs_its_file(
     assert owner.post(f"{API}/comfyui/workflows/nope.json/card").status_code == 404
 
 
+def test_built_ins_are_listed_once_and_a_removed_one_stays_off(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Every built-in is on the Workflows page until the owner removes it:
+    start-up lists one never listed, never one taken off, and the card route
+    is the explicit way back."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    builtin = tmp_path / "built-in"
+    builtin.mkdir()
+    for name in ("Flux2-Klein-Image-Edit.json", "MiniMax-H3-Image-t2i.json"):
+        shutil.copy(os.path.join(comfyui_module.WORKFLOW_BUILTIN_DIR, name), builtin)
+    monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", str(builtin))],
+    )
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+
+    klein, h3 = comfyui_module.list_builtin_workflows(hub)
+    cards = _by_key(_cards(owner))
+    assert cards[klein]["name"] == "Flux2-Klein-Image-Edit"
+    assert cards[h3]["name"] == "MiniMax-H3-Image-t2i"
+    assert comfyui_module.list_builtin_workflows(hub) == []
+
+    assert owner.delete(f"{API}/workflows/{h3}").status_code == 200
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert h3 not in _by_key(_cards(owner))
+
+    r = owner.post(f"{API}/comfyui/workflows/MiniMax-H3-Image-t2i.json/card")
+    assert r.status_code == 200, r.text
+    back = r.json()["workflow_id"]
+    assert _by_key(_cards(owner))[back]["name"] == "MiniMax-H3-Image-t2i"
+    assert comfyui_module.list_builtin_workflows(hub) == []
+
+
 def _builtin_edit_graph(steps: int) -> dict:
     """The built-in edit workflow with its own step count: not a copy of it."""
     path = os.path.join(
