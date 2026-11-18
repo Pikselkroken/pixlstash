@@ -18,20 +18,27 @@
       :tabindex="o.id === tabStop ? 0 : -1"
       :disabled="o.disabled"
       :data-testid="o.testid"
+      :aria-label="variant === 'icon' ? o.label : undefined"
       @click="select(o)"
     >
+      <Tooltip
+        v-if="variant === 'icon'"
+        :text="o.label"
+        activator="parent"
+        :describe="false"
+      />
       <span v-if="variant === 'stacked'" class="seg__media">
         <slot name="media" :option="o">
           <v-icon v-if="o.icon" size="24">{{ iconName(o.icon) }}</v-icon>
         </slot>
       </span>
       <v-icon
-        v-else-if="variant === 'icon-label' && o.icon"
+        v-else-if="(variant === 'icon-label' || variant === 'icon') && o.icon"
         size="16"
         class="seg__icon"
         >{{ iconName(o.icon) }}</v-icon
       >
-      <span class="seg__label">{{ o.label }}</span>
+      <span v-if="variant !== 'icon'" class="seg__label">{{ o.label }}</span>
     </button>
   </div>
 </template>
@@ -50,13 +57,15 @@
  */
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
+import Tooltip from "./Tooltip.vue";
 import { arrowStep, tabStopId } from "../../utils/radioGroup.js";
 
 const props = defineProps({
   // [{ id, label, icon?, disabled?, testid? }]
   options: { type: Array, required: true },
   modelValue: { type: [String, Number, Boolean, null], default: null },
-  // label | icon-label | stacked
+  // label | icon-label | icon | stacked. `icon` shows the label as the
+  // segment's accessible name and tooltip only.
   variant: { type: String, default: "label" },
   // Segments share the track's width equally.
   full: { type: Boolean, default: false },
@@ -164,6 +173,11 @@ function onKeydown(event) {
 
 .seg__opt--on:not(:disabled):hover {
   background-image: var(--hover-shade);
+}
+
+.seg--icon .seg__opt {
+  min-width: var(--control-h-bar);
+  padding: 0;
 }
 
 .seg--stacked .seg__opt {

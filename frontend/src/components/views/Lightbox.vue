@@ -372,6 +372,7 @@
                     :draggable="!isZoomed"
                     @dragstart="handleMediaDragStart"
                     @loadedmetadata="updateLightboxDims"
+                    @timeupdate="videoCurrentTime = $event.target.currentTime"
                     @error="handleVideoError"
                   ></video>
                   <div v-else class="lightbox-video-error">
@@ -825,7 +826,26 @@
         @prefetch="prefetchFilmstripStackMembers"
         @visible-range="filmstripVisible = $event"
         @stack-move="(item, where) => moveStackMember(item.id, where)"
-      />
+      >
+        <template v-if="storyboardShown" #lead>
+          <Segmented
+            v-model="bandShows"
+            variant="icon"
+            orientation="horizontal"
+            aria-label="Band shows"
+            :options="BAND_OPTIONS"
+          />
+        </template>
+        <template v-if="storyboardShown && bandShows === 'clip'" #clip>
+          <VideoStoryboard
+            :src="storyboardSrc"
+            :duration="videoMeta.duration"
+            :current-time="videoCurrentTime"
+            @seek="seekVideo"
+            @unavailable="storyboardMissingId = image?.id"
+          />
+        </template>
+      </LightboxFilmstrip>
       </div>
       <!-- The shared inspector (shell contract rule 8), in its lightbox
            variant: dark in both themes. It stands where the right rail stands,
@@ -1182,6 +1202,7 @@ import {
   addPictureFace,
   downloadPicture,
   rotatePictures,
+  pictureStoryboardUrl,
 } from "../../api/pictures";
 import {
   listCharacters,
@@ -1234,6 +1255,8 @@ import LightboxActionReceipt from "../widgets/LightboxActionReceipt.vue";
 import LightboxSaveAsDialog from "../widgets/LightboxSaveAsDialog.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import RailPicture from "../panels/RailPicture.vue";
+import Segmented from "../widgets/Segmented.vue";
+import VideoStoryboard from "../widgets/VideoStoryboard.vue";
 import { isDescriptionSentinel } from "../../utils/descriptions";
 import { FAVOURITE_KEY } from "../../stores/useFavouritesStore";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -4353,6 +4376,48 @@ const lightboxCanvasRef = ref(null);
 const mediaInnerRef = ref(null);
 const videoMeta = ref({ duration: null });
 const videoError = ref(null); // set to MediaError when browser can't play the video
+const videoCurrentTime = ref(0);
+
+// On a video the filmstrip's band shows the clip's frames instead (#2147),
+// one switch away from the set's pictures. The choice holds while the
+// lightbox steps: pictures always show the filmstrip, videos what was last
+// chosen. A clip whose storyboard cannot be made keeps the filmstrip.
+const BAND_OPTIONS = [
+  { id: "pictures", label: "Pictures in this view", icon: "image-multiple" },
+  { id: "clip", label: "Frames of this clip", icon: "movie" },
+];
+const bandShows = ref("clip");
+const storyboardMissingId = ref(null);
+const storyboardShown = computed(
+  () =>
+    Boolean(image.value?.id) &&
+    isSupportedVideoFile(getLightboxFormat(image.value)) &&
+    storyboardMissingId.value !== image.value.id,
+);
+// The thumbnail's cache-buster, so a rewritten file's frames are fetched anew.
+const storyboardSrc = computed(() => {
+  const version = String(image.value?.thumbnail || "").match(/[?&]v=([^&]+)/);
+  return pictureStoryboardUrl(image.value?.id, {
+    version: version ? decodeURIComponent(version[1]) : undefined,
+  });
+});
+
+function seekVideo(seconds) {
+  if (videoRef.value) videoRef.value.currentTime = seconds;
+}
+
+// Back on the pictures, show where this one sits: the strip was hidden, so
+// nothing revealed it while the lightbox stepped.
+watch(
+  () => storyboardShown.value && bandShows.value === "clip",
+  (clip) => {
+    if (clip) return;
+    nextTick(() => {
+      const idx = filmstripCurrentIndex.value;
+      if (idx !== undefined) filmstripRef.value?.reveal?.(idx, { centre: true });
+    });
+  },
+);
 // Derive the video src from id + format only - deliberately excludes pixel_sha
 // so the URL stays stable across metadata merges (which would otherwise abort
 // the in-progress download). Returns '' while format is not yet known, which
@@ -5598,6 +5663,7 @@ watch(
         offsetY: 0,
       };
       videoError.value = null;
+      videoCurrentTime.value = 0;
       fullImageErrorSrc.value = "";
       scheduleLightboxDimsUpdate();
       fetchFaceBboxes(newId);
