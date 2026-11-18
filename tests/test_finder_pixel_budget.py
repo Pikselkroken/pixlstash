@@ -2,9 +2,10 @@
 
 from types import SimpleNamespace
 
+from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
 from pixlstash.tasks.missing_image_embedding_finder import MissingImageEmbeddingFinder
 from pixlstash.tasks.missing_tag_finder import MissingTagFinder
-from pixlstash.worker_config import IMAGE_TASK_PIXEL_BUDGET, UNKNOWN_PICTURE_PIXELS
+from pixlstash.worker_config import IMAGE_TASK_PIXEL_BUDGET
 
 MP = 1_000_000
 
@@ -23,6 +24,9 @@ def test_budget_stops_before_the_picture_that_would_pass_it():
     assert _claim(pictures, 10, pixel_budget=12 * MP) == [1, 2, 3]
     assert _claim(pictures, 10) == [1, 2, 3, 4, 5]
     assert _claim(pictures, 2, pixel_budget=12 * MP) == [1, 2]
+    # Stops, rather than skipping to a smaller picture that would still fit.
+    sizes = [_pic(1, 4 * MP, 1), _pic(2, 4 * MP, 1), _pic(3, 6 * MP, 1)]
+    assert _claim([*sizes, _pic(4, 1, 1)], 10, pixel_budget=12 * MP) == [1, 2]
 
 
 def test_an_oversized_first_picture_still_runs_alone():
@@ -33,9 +37,25 @@ def test_an_oversized_first_picture_still_runs_alone():
 
 
 def test_unrecorded_dimensions_count_as_a_large_photo():
-    pictures = [_pic(i, 0 if i % 2 else None, 100) for i in range(1, 10)]
-    budget = 3 * UNKNOWN_PICTURE_PIXELS
-    assert _claim(pictures, 10, pixel_budget=budget) == [1, 2, 3]
+    pictures = [_pic(1, None, 100), _pic(2, 100, 0), _pic(3, 0, None), _pic(4, 1, 1)]
+    # Each unrecorded picture counts as 24 MP.
+    assert _claim(pictures, 10, pixel_budget=72 * MP + 1) == [1, 2, 3, 4]
+    assert _claim(pictures, 10, pixel_budget=72 * MP) == [1, 2, 3]
+    assert _claim(pictures, 10, pixel_budget=72 * MP - 1) == [1, 2]
+    assert _claim(pictures, 10, pixel_budget=24 * MP) == [1]
+
+
+def test_embedding_fetch_work_selects_the_dimensions():
+    seen = []
+
+    class _Session:
+        def exec(self, stmt):
+            seen.append(stmt)
+            return SimpleNamespace(all=lambda: [])
+
+    ImageEmbeddingTask.fetch_work(_Session(), aesthetic_disabled=True)
+    names = [column.name for column in seen[0].selected_columns]
+    assert names == ["id", "file_path", "width", "height"]
 
 
 class _Db:
@@ -76,3 +96,4 @@ def test_embedding_finder_cuts_by_size_and_hands_the_task_pairs():
     count = IMAGE_TASK_PIXEL_BUDGET // per
     assert task.params["picture_ids"] == list(range(1, count + 1))
     assert task._batch == [(i, f"p{i}.jpg") for i in range(1, count + 1)]
+    assert count < 128
