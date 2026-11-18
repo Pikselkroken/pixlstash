@@ -38,52 +38,16 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Upgrade pip/wheel
 RUN pip install --no-cache-dir --upgrade pip wheel setuptools
 
-# PyTorch CPU-only — much smaller than the CUDA build
-RUN pip install --no-cache-dir \
-    torch \
-    torchvision \
-    --index-url https://download.pytorch.org/whl/cpu
-
-# CPU onnxruntime
-RUN pip install --no-cache-dir onnxruntime
-
-# All other dependencies
-RUN pip install --no-cache-dir \
-    open_clip_torch \
-    fastapi \
-    "uvicorn[standard]" \
-    websockets \
-    numpy \
-    pillow \
-    opencv-python-headless \
-    scipy \
-    platformdirs \
-    tomli \
-    colorlog \
-    httpx \
-    python-multipart \
-    requests \
-    transformers \
-    insightface \
-    rapidfuzz \
-    tqdm \
-    sentence_transformers \
-    pillow-heif \
-    "sqlmodel>=0.0.45" \
-    alembic \
-    cryptography \
-    passlib \
-    "bcrypt<4.0.0" \
-    nvidia-ml-py \
-    psutil \
-    piexif \
-    "watchdog<7" \
-    python-dotenv \
-    click \
-    accelerate \
-    bitsandbytes \
-    zstandard \
-    send2trash
+# Dependencies: pyproject.toml's, installed the way CI installs them
+# (.github/actions/setup-backend): torch and torchvision first, at pyproject's
+# specifiers, from the CPU wheel index (much smaller than the CUDA build), so
+# the rest finds them satisfied.
+COPY pyproject.toml /tmp/pyproject.toml
+RUN python -c "import tomllib; print('\\n'.join(tomllib.load(open('/tmp/pyproject.toml', 'rb'))['project']['dependencies']))" > /tmp/deps.txt \
+    && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
+        $(grep -E '^torch(vision)?[~=<>]' /tmp/deps.txt) \
+    && pip install --no-cache-dir -r /tmp/deps.txt \
+    && rm /tmp/pyproject.toml /tmp/deps.txt
 
 # Remove build tools — not needed at runtime
 RUN apt-get purge -y --auto-remove build-essential && rm -rf /var/lib/apt/lists/*

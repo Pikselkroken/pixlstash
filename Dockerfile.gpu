@@ -40,53 +40,30 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 RUN pip install --no-cache-dir --upgrade pip wheel setuptools
 
-# PyTorch with CUDA 12.8 — required for Blackwell (RTX 5xxx / sm_120) support.
-# Must be installed before open_clip_torch pulls in a CPU-only torch.
+# PyTorch with CUDA 12.8, required for Blackwell (RTX 5xxx / sm_120) support.
+# Installed before the rest so nothing pulls in a CPU-only torch. Not
+# pyproject's torch specifier: the cu128 index stops at 2.11 (#2755).
 RUN pip install --no-cache-dir \
     torch \
     torchvision \
     --index-url https://download.pytorch.org/whl/cu128
 
-# onnxruntime-gpu replaces plain onnxruntime for CUDA inference
-RUN pip install --no-cache-dir onnxruntime-gpu
+# Everything else: pyproject.toml's dependencies, less torch, torchvision and
+# onnxruntime.
+COPY pyproject.toml /tmp/pyproject.toml
+RUN python -c "import tomllib; print('\\n'.join(tomllib.load(open('/tmp/pyproject.toml', 'rb'))['project']['dependencies']))" \
+        | grep -v -E '^(torch|torchvision|onnxruntime)([~=<>! ]|$)' > /tmp/deps.txt \
+    && pip install --no-cache-dir -r /tmp/deps.txt \
+    && rm /tmp/pyproject.toml /tmp/deps.txt
 
-# All other dependencies (onnxruntime already satisfied by onnxruntime-gpu above)
-RUN pip install --no-cache-dir \
-    open_clip_torch \
-    fastapi \
-    "uvicorn[standard]" \
-    websockets \
-    numpy \
-    pillow \
-    opencv-python-headless \
-    scipy \
-    platformdirs \
-    tomli \
-    colorlog \
-    httpx \
-    python-multipart \
-    requests \
-    transformers \
-    insightface \
-    rapidfuzz \
-    tqdm \
-    sentence_transformers \
-    pillow-heif \
-    "sqlmodel>=0.0.45" \
-    alembic \
-    cryptography \
-    passlib \
-    "bcrypt<4.0.0" \
-    nvidia-ml-py \
-    piexif \
-    "watchdog<7" \
-    psutil \
-    python-dotenv \
-    click \
-    accelerate \
-    bitsandbytes \
-    zstandard \
-    send2trash
+# onnxruntime-gpu for CUDA inference, at the last CUDA 12 release: 1.27+ links
+# libcudart.so.13 (the desktop pins the same, ORT_GPU_PIN in
+# electron/src/config.ts). It goes in last, after removing plain onnxruntime:
+# insightface depends on that, and both install the same `onnxruntime` module,
+# so whichever lands second wins. The check fails the build if CPU won.
+RUN pip uninstall -y onnxruntime \
+    && pip install --no-cache-dir onnxruntime-gpu==1.26.0 \
+    && python -c "import onnxruntime as o; p = o.get_available_providers(); assert 'CUDAExecutionProvider' in p, p"
 
 
 
