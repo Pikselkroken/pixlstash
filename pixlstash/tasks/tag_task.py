@@ -1054,8 +1054,7 @@ class TagTask(BaseTask):
             )
             active_workflow = cpu_spillover_engine.tagging_workflow
         if preload_key != self._crop_settings(active_workflow):
-            # Made for other settings: the CPU spillover engine is built with
-            # default tagger settings, or the settings changed while queued.
+            # Made for other settings: they changed while the task was queued.
             # Redone for the workflow that runs, so this path also holds only
             # reduced images rather than every original.
             logger.debug(

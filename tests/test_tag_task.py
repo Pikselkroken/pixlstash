@@ -951,9 +951,9 @@ def test_the_preload_keeps_only_what_the_taggers_read(tmp_path, plugin):
 
 
 def test_a_preload_made_for_other_settings_is_redone_reduced(tmp_path):
-    """The CPU spillover engine is built with default tagger settings, so its
-    batch can find a preload made for another plugin. It is made again for the
-    workflow that runs, never replaced by a native load of every picture."""
+    """A batch can find a preload made for another plugin, when the settings
+    changed while it was queued. It is made again for the workflow that runs,
+    never replaced by a native load of every picture."""
     from PIL import Image as PILImage
 
     from pixlstash.tagger_plugins.pixlstash_tagger import (
