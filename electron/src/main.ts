@@ -3,6 +3,7 @@ import {
   BrowserWindow,
   net,
   clipboard,
+  ClipboardItem,
   ipcMain,
   Menu,
   nativeImage,
@@ -2093,11 +2094,11 @@ function registerIpc(): void {
     pendingMediaSaves.delete(saveId);
     clearTimeout(pending.timeout);
   });
-  ipcMain.handle('media:copyPng', (event, data: unknown) => {
+  ipcMain.handle('media:copyPng', async (event, data: unknown) => {
     requireAppRenderer(event, 'media:copyPng');
     const image = nativeImage.createFromBuffer(pngClipboardPayload(data));
     if (image.isEmpty()) throw new Error('The PNG image could not be decoded.');
-    clipboard.writeImage(image);
+    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([image.toPNG()]) })]);
     return { copied: true };
   });
   // Copy a grid selection as files (#2419): the share copies the backend just
@@ -2123,7 +2124,12 @@ function registerIpc(): void {
         process.platform,
         process.env.XDG_CURRENT_DESKTOP,
       );
-      clipboard.writeBuffer(format, data);
+      // A raw OS format, written verbatim (Electron 45's writeBuffer).
+      await clipboard.write([
+        new ClipboardItem({
+          [`electron application/osclipboard;format="${format}"`]: new Blob([data]),
+        }),
+      ]);
     }
     return { copied: files.length };
   });
