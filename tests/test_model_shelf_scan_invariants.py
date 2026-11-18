@@ -17,6 +17,7 @@ pinned here as an accepted blind spot and has since been closed by comparing
 import hashlib
 import json
 import os
+from pathlib import Path
 import sqlite3
 import struct
 import threading
@@ -426,7 +427,7 @@ class TestScanCostAndIdentity:
             (first_id, "a.safetensors"),
             (second_id, "a.safetensors"),
         }
-        expected = hashlib.sha256(open(path, "rb").read()).hexdigest()
+        expected = hashlib.sha256(Path(path).read_bytes()).hexdigest()
         assert digest_at(hub, second_id, "a.safetensors") == expected
 
     def test_a_size_preserving_edit_is_caught_by_the_mtime(
@@ -454,7 +455,7 @@ class TestScanCostAndIdentity:
         )
         scanner.scan_folder(folder_id, str(folder), "user")
 
-        on_disk = hashlib.sha256(open(path, "rb").read()).hexdigest()
+        on_disk = hashlib.sha256(Path(path).read_bytes()).hexdigest()
         assert on_disk != stale
         assert digest_at(hub, folder_id, "a.safetensors") == on_disk
 

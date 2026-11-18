@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 import sqlite3
 import stat
 import threading
@@ -961,7 +962,7 @@ def test_restore_schema_scratch_removes_portable_identity(server):
                 assert connection.execute(
                     f"SELECT COUNT(*) FROM {table}"
                 ).fetchone() == (0,)
-        assert marker.encode() not in open(upgraded, "rb").read()
+        assert marker.encode() not in Path(upgraded).read_bytes()
     finally:
         shutil.rmtree(os.path.dirname(upgraded), ignore_errors=True)
         shutil.rmtree(work_dir, ignore_errors=True)

@@ -244,9 +244,7 @@ class TrainingService:
         self._notify = notify
         self._config_provider = config_provider
         self._dataset_builder = dataset_builder
-        self._backend_factory = backend_factory or (
-            lambda repo_path, python: LocalAiToolkit(repo_path, python)
-        )
+        self._backend_factory = backend_factory or LocalAiToolkit
         self.poll_interval_s = poll_interval_s
         self._disable_background_workers = disable_background_workers
         self._register_source_folder = register_source_folder

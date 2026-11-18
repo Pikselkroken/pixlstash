@@ -8,6 +8,7 @@ would otherwise discover only when restoring.
 
 import json
 import os
+from pathlib import Path
 import sqlite3
 import tarfile
 
@@ -106,7 +107,7 @@ class TestWhatIsInTheArchive:
         self, registry, library, tmp_path, caplog
     ):
         """A loose-mode sidecar is warned about; the backup still runs."""
-        open(os.path.join(library.path, "vault.db-wal"), "wb").write(b"junk")
+        Path(os.path.join(library.path, "vault.db-wal")).write_bytes(b"junk")
         os.chmod(os.path.join(library.path, "vault.db-wal"), 0o666)
         destination = tmp_path / "out.tar.zst"
 
@@ -400,11 +401,11 @@ class TestConsistencyAndSafety:
 
     def test_backing_up_does_not_modify_the_library(self, registry, library, tmp_path):
         vault = os.path.join(library.path, "vault.db")
-        before = open(vault, "rb").read()
+        before = Path(vault).read_bytes()
 
         create_backup(library, str(tmp_path / "out.tar.zst"), registry.hub_path)
 
-        assert open(vault, "rb").read() == before
+        assert Path(vault).read_bytes() == before
 
     def test_the_archive_is_owner_readable_only(self, registry, library, tmp_path):
         """It contains the hub, so it contains the password and token hashes."""

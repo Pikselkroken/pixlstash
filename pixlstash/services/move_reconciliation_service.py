@@ -568,18 +568,14 @@ def apply_reviews(vault: "Vault", review_ids: list[int], **request_context) -> d
             session, ids, apply_changes=True, image_root=vault.image_root
         )
 
-    (changed_ids, skipped_ids), _operation = (
-        operation_log_service.run_recorded_metadata_task(
-            vault,
-            work,
-            op_type=OP_EXTERNAL_MOVE_RECONCILE,
-            picture_ids=[],
-            resolve_picture_ids=lambda session: _resolve_review_picture_ids(
-                session, ids
-            ),
-            summary=f"Reconciled {len(ids)} move(s) made outside PixlStash",
-            **request_context,
-        )
+    (changed_ids, skipped_ids), _ = operation_log_service.run_recorded_metadata_task(
+        vault,
+        work,
+        op_type=OP_EXTERNAL_MOVE_RECONCILE,
+        picture_ids=[],
+        resolve_picture_ids=lambda session: _resolve_review_picture_ids(session, ids),
+        summary=f"Reconciled {len(ids)} move(s) made outside PixlStash",
+        **request_context,
     )
     if skipped_ids:
         logger.warning(

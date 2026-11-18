@@ -1357,7 +1357,7 @@ def test_stacking_still_works_when_no_locked_set_would_grow():
 def test_comfyui_output_propagation_skips_locked_set():
     """A ComfyUI generation from a source picture in a locked set must not add
     its outputs to that set - but must still propagate the unlocked ones."""
-    from pixlstash.routes.comfyui import _copy_set_and_project_assignments
+    from pixlstash.services.comfyui_service import _copy_set_and_project_assignments
 
     temp_dir, client, server = _setup()
     try:
@@ -1381,7 +1381,7 @@ def test_comfyui_output_propagation_skips_locked_set():
 
 def test_comfyui_view_context_assignment_skips_locked_set():
     """Generating while viewing a locked set must not drop the outputs into it."""
-    from pixlstash.routes.comfyui import _assign_pictures_to_view_context
+    from pixlstash.services.comfyui_service import _assign_pictures_to_view_context
 
     temp_dir, client, server = _setup()
     try:

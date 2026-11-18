@@ -264,10 +264,9 @@ def _strip_webp(data: bytes) -> bytes:
         raise ValueError("WebP ended before its image data")
 
     vp8x = next((c for c in chunks if c[0] == b"VP8X"), None)
-    if vp8x is None:
-        # A simple WebP cannot carry EXIF, so the orientation is lost with it.
-        exif = None
-    else:
+    # A simple WebP cannot carry EXIF, so the orientation is lost with it: no
+    # VP8X chunk means no EXIF chunk is written.
+    if vp8x is not None:
         vp8x[1][0] &= ~(_VP8X_EXIF | _VP8X_XMP) & 0xFF
         if exif is not None:
             vp8x[1][0] |= _VP8X_EXIF

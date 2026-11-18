@@ -2733,7 +2733,7 @@ def _set_link_key(server, **values) -> None:
         session.add(row)
         session.commit()
 
-    (_only,) = _link_tokens(server)
+    (_,) = _link_tokens(server)
     server.auth._db.run_task(write, priority=DBPriority.IMMEDIATE)
     server.auth._flush_token_cache()
 
