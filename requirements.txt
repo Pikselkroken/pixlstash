@@ -21,7 +21,7 @@ tomli==2.4.0
 colorlog==6.10.1
 onnxruntime==1.24.3
 requests==2.33.0
-accelerate==1.13.0
+accelerate==1.16.0
 transformers==5.12.1
 torch==2.13.0
 torchvision==0.27.1
