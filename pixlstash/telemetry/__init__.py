@@ -16,6 +16,7 @@ from pixlstash.telemetry.install_id import (
 from pixlstash.telemetry.sender import (
     maybe_send_in_background,
     run_periodic_sender,
+    send_if_due,
     send_install_ping,
     start_periodic_sender,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "InstallIdentity",
     "maybe_send_in_background",
     "run_periodic_sender",
+    "send_if_due",
     "send_install_ping",
     "start_periodic_sender",
     "ensure_install_identity",

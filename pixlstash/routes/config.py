@@ -768,7 +768,10 @@ def create_router(server) -> APIRouter:
                 session.add(user)
                 session.commit()
                 session.refresh(user)
-            return user, updated
+            install_id_turned_on = (
+                updated and not install_id_was_enabled and install_id_is_enabled
+            )
+            return user, updated, install_id_turned_on
 
         changed_tags = server.hub_engine.run_immediate_read_task(preview_patch, user_id)
 
@@ -811,9 +814,13 @@ def create_router(server) -> APIRouter:
         # The hub owns the user row. The five library-scoped fields (§5) still
         # ride along here rather than in the vault's library_settings row; see
         # the note in pixlstash/hub/schema.py.
-        user, updated = server.hub_engine.run_task(
+        user, updated, install_id_turned_on = server.hub_engine.run_task(
             update_user, user_id, priority=DBPriority.IMMEDIATE
         )
+        if install_id_turned_on:
+            # After the commit, so the ping goes out with consent persisted
+            # and the cohort classification above already on disk.
+            server.send_telemetry_ping_after_opt_in()
         if chip_size is not None:
             tag_preferences.write(server.hub, user_id, chip_size)
         # Keep the process-local owner cache coherent with its new hub home.

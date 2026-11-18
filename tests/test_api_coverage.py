@@ -245,6 +245,62 @@ def test_decline_then_delayed_opt_in_stays_out_of_new_cohort(monkeypatch):
         gc.collect()
 
 
+def test_opting_in_to_the_install_id_pings_without_waiting_for_the_loop(
+    monkeypatch,
+):
+    # The loop read consent at startup, before the dialog was answered, and
+    # then slept an hour: a short first session never pinged.
+    sends = []
+    monkeypatch.setattr(
+        "pixlstash.server.maybe_send_in_background",
+        lambda path, install_type, consent_enabled: sends.append(
+            (path, install_type, consent_enabled)
+        ),
+    )
+    temp_dir, client, server = _setup()
+    try:
+        first_choice = client.patch(
+            "/users/me/config",
+            json={
+                "check_for_updates": True,
+                "telemetry_send_install_id": True,
+                "telemetry_consent_prompted": True,
+            },
+        )
+        assert first_choice.status_code == 200
+        assert len(sends) == 1
+        path, install_type, consent_enabled = sends[0]
+        assert path == server.server_config_path
+        assert install_type in Server.INSTALL_TYPES
+        assert consent_enabled is True
+
+        # Only the off-to-on change sends: saving it again, or anything else,
+        # leaves the day to the loop.
+        sends.clear()
+        again = client.patch(
+            "/users/me/config", json={"telemetry_send_install_id": True}
+        )
+        assert again.status_code == 200
+        unrelated = client.patch("/users/me/config", json={"max_vram_gb": 3.0})
+        assert unrelated.status_code == 200
+        opt_out = client.patch(
+            "/users/me/config", json={"telemetry_send_install_id": False}
+        )
+        assert opt_out.status_code == 200
+        assert sends == []
+
+        # A later opt-in from Settings is also an off-to-on change.
+        later = client.patch(
+            "/users/me/config", json={"telemetry_send_install_id": True}
+        )
+        assert later.status_code == 200
+        assert len(sends) == 1
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_patch_user_config_penalised_tags_wakes_workers_without_error():
     temp_dir, client, server = _setup()
     try:

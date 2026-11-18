@@ -7,6 +7,7 @@ a day, and must never raise into the caller no matter what the network does.
 
 import json
 import os
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -424,3 +425,33 @@ def test_the_loop_is_not_started_in_a_suppressed_environment(config_path, monkey
     monkeypatch.setattr(sender.os, "environ", {"PIXLSTASH_DEMO_MODE": "1"})
 
     assert sender.start_periodic_sender(config_path, "pip", lambda: True) is None
+
+
+def test_loop_and_opt_in_send_cannot_both_claim_the_day(config_path, monkeypatch):
+    # The hourly loop and the immediate opt-in send run in one process. Both
+    # must not see the day as unsent and ping twice.
+    monkeypatch.setattr(sender.os, "environ", {})
+    sent = []
+
+    def _slow_send(path, install_type):
+        # The real sender reserves the day only after reading the identity;
+        # widen that window so an unserialised pair reliably overlaps.
+        time.sleep(0.2)
+        sender._write_last_attempt(path, time.time())
+        sent.append(install_type)
+        return True
+
+    monkeypatch.setattr(sender, "send_install_ping", _slow_send)
+    barrier = threading.Barrier(2)
+
+    def _race():
+        barrier.wait()
+        sender.send_if_due(config_path, "electron")
+
+    threads = [threading.Thread(target=_race) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert sent == ["electron"]

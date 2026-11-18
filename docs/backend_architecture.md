@@ -7821,6 +7821,15 @@ desktop users were undercounted on roughly a tenth to a third of their days.
 Do not go back to an interval: two pings minutes apart across UTC midnight are
 two days, and each is counted once.
 
+**Opting in sends at once.** On a fresh install the start-up check runs before
+the consent dialog is answered, so the loop sees consent off and sleeps an hour.
+A first session shorter than that sent nothing, which hid most new installs from
+`new_installs_last_7d`. `PATCH /users/me/config` therefore calls
+`Server.send_telemetry_ping_after_opt_in()` when `telemetry_send_install_id`
+goes from off to on, after the commit (and after any cohort demotion above).
+Both paths go through `send_if_due`, which holds one lock across the due check
+and the attempt, so the loop and the opt-in send cannot both claim a day.
+
 ---
 
 ## 24. Folder structure: read, commit, layout and moves
