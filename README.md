@@ -1129,11 +1129,12 @@ greyed out.
 Draws a sheet from your description alone, so each sheet is a slightly
 different person.
 
-- **Models:** MOSS-Image, Krea 2, Qwen-Image, FLUX.2 Klein or MiniMax H3.
+- **Models:** MOSS-Image, Krea 2, Qwen-Image, FLUX.2 Klein, MiniMax H3 or
+  MiniMax H3 Image.
 - **A text-to-image graph:** every sampler starts from an empty latent, and no
   picture feeds the model's reference input. A workflow that reads a picture
   as a reference is not listed here.
-- **Sizes:** MiniMax H3 draws at Large or 4K and the other models at Small,
+- **Sizes:** MiniMax H3 and H3 Image draw at Large or 4K and the other models at Small,
   Medium or Large; the rest are greyed out.
 - **Prompt:** MOSS-Image is sent a layout prompt (the JSON
   `MOSSImageLayoutPrompt` emits, with a box per photo). Every other model is
@@ -1147,14 +1148,15 @@ Draws a sheet of the person in a picture you pick, plus your description, and
 ranks the sheets by how close their faces are to that picture.
 
 - **Models:** an image-edit model that keeps the person in the picture:
-  Qwen-Image (Qwen-Image-Edit or Qwen-Image 2.1), FLUX.2 Klein, or MiniMax H3.
+  Qwen-Image (Qwen-Image-Edit or Qwen-Image 2.1), FLUX.2 Klein, MiniMax H3 or
+  MiniMax H3 Image.
 - **A manual workflow**, one you imported or that ships with PixlStash, not
   one only known from your pictures' metadata: PixlStash reads its graph to
   find the reference input.
 - **A picture loader feeding the model's reference input**: a
   `ReferenceLatent`, a Qwen `TextEncodeQwenImageEdit…` or
-  `TextEncodeQwenImage21` node, or MiniMax H3's
-  `MiniMaxH3ReferenceToVideo`. A ControlNet's pose picture does not count.
+  `TextEncodeQwenImage21` node, MiniMax H3's `MiniMaxH3ReferenceToVideo`, or
+  MiniMax H3 Image's `MiniMaxH3ImageConditioning`. A ControlNet's pose picture does not count.
 - **Every sampler starts from an empty latent**, never from the picture's own,
   so the sheet is drawn at its own size rather than the picture's.
 - **A picture input that is not pinned** to a fixed picture: the reference

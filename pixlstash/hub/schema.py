@@ -2760,7 +2760,8 @@ def _reidentify_filename_guesses(conn: sqlite3.Connection) -> int:
     left alone. Written, not cleared, so an offline file keeps an answer.
     ``user`` and ``declared`` rows are never touched.
 
-    Runs exactly once per hub (see :data:`CURRENT_DATA_VERSION`).
+    Runs once per hub at data step 22, and again at 26 for a base model that
+    joined the table (see :data:`CURRENT_DATA_VERSION`).
 
     Args:
         conn: An open hub connection, inside the caller's transaction.

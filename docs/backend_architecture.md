@@ -12886,8 +12886,8 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   `ResolutionSelector`, and the card offers that as a size a run sets; and
   `Sheet-MiniMax-H3-Image*.json`, a text and a reference one for MiniMax H3
   Image, whose `MiniMaxH3ImageConditioning` takes the picture as
-  `<Picture 1>`; every
-  size a literal 2560×1536 and the encoder and VAE loaded by digest; the step
+  `<Picture 1>`. In every shipped sheet workflow each
+  size is a literal 2560×1536 and the encoder and VAE loaded by digest; the step
   files their cards through `POST /comfyui/workflows/{name}/card` before it
   lists the cards) through `POST /workflows/run` with the prompt, negative and canvas
   `POST /character-sheets/prompt` hands it (the width and height go in as

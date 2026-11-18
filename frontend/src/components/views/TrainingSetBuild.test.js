@@ -991,6 +991,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
       loras: [
         { sha256: "h3", display_name: "Anna H3", base_model_family: "minimax_h3", added_at: "2026-11-09" },
         { sha256: "h3i", display_name: "Anna H3 Image", base_model_family: "minimax_h3_image", added_at: "2026-11-08" },
+        { sha256: "qwen", display_name: "Anna Qwen", base_model_family: "qwen", added_at: "2026-11-07" },
       ],
     });
     gen.listWorkflowCards.mockResolvedValue({

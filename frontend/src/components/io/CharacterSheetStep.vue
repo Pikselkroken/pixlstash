@@ -775,7 +775,7 @@ const ENGINES = {
     size: "4k",
   },
   // MiniMax's still-image model, another architecture than H3 video: an H3
-  // video LoRA is no LoRA for it. Best at ~16 MP, poor under 4 MP.
+  // video LoRA is no LoRA for it. Best at ~16 MP, weak much under 4 MP.
   minimaxImage: {
     family: "minimax_h3_image",
     name: "MiniMax H3 Image",
