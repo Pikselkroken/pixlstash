@@ -9009,7 +9009,7 @@ function gridItemTopOffset(index) {
     const layout = justifiedLayout.value;
     if (!layout || !layout.rowOffsets?.length) return null;
     const row = rowOfIndex(layout.rowStarts, index);
-    if (row == null || row < 0) return null;
+    if (row < 0) return null;
     const top = layout.rowOffsets[row];
     return typeof top === "number" ? top : null;
   }

@@ -429,7 +429,7 @@ def create_router(server) -> APIRouter:
         # id does not name its pictures, so resolve them on the mutation's own
         # session before the write - otherwise the operation would record a
         # half-change that undo could not reverse.
-        (faces, existing_face_ids), _operation = (
+        (faces, existing_face_ids), _ = (
             operation_log_service.run_recorded_metadata_task(
                 server.vault,
                 assign_faces,

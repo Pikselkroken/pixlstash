@@ -217,7 +217,7 @@ def create_router(server) -> APIRouter:
         # token may reach this route, but /operations* is OWNER_ONLY, so only the
         # owner can ever see or undo the row (precedent N2, v1.9 authz sign-off).
         try:
-            _result, _operation = operation_log_service.run_recorded_metadata_task(
+            _, _ = operation_log_service.run_recorded_metadata_task(
                 server.vault,
                 _confirm,
                 op_type=operation_log_service.OP_TAGS_CONFIRM,
