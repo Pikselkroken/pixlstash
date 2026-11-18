@@ -879,7 +879,7 @@ def test_a_face_too_small_to_judge_loses_face_tags_when_its_crop_finds_nothing(
 @pytest.mark.parametrize("plugin", ["pixlstash_tagger", "wd14", "acme_tagger"])
 def test_the_preload_keeps_only_what_the_taggers_read(tmp_path, plugin):
     """No decoded original survives the preload, and every tagger input is
-    bit-identical to the one the original would have produced.
+    bit-identical to the one the preloaded original used to produce.
 
     Holding the originals for the whole batch, three batches at once, is what
     filled 30 GB on a photo library.
@@ -930,7 +930,7 @@ def test_the_preload_keeps_only_what_the_taggers_read(tmp_path, plugin):
     target = workflow.pixlstash_tagger_image_size_quality_crop()
     crop_transform = tagger._build_transform(target)
     native = task._build_quality_crop(picture, faces, target, {}, 1.4)
-    key, crop, _path, kind = task._preloaded_crops[1]
+    (key, crop, _path, kind), _faces = task._preloaded_crops[1]
     assert (key, kind) == (native[0], native[3])
     assert crop.size == (target, target)
     assert torch.equal(crop_transform(crop), crop_transform(native[1]))
@@ -987,6 +987,34 @@ def test_a_preload_made_for_other_settings_is_redone_reduced(tmp_path):
     assert workflow.full_sizes == [(size, size)]
     target = workflow.pixlstash_tagger_image_size_quality_crop()
     assert workflow.crop_sizes == [(target, target)]
+
+
+def test_a_face_found_after_the_preload_gets_a_crop_of_its_own(tmp_path):
+    """The preload reads faces when the task is queued; one written or moved
+    before the batch runs must not be judged from the stale crop."""
+    from PIL import Image as PILImage
+
+    PILImage.new("RGB", (800, 600), "blue").save(tmp_path / "late.png")
+    picture = Picture(id=1, file_path=str(tmp_path / "late.png"))
+    faces_now = []
+
+    class _FacesDb(_PredictionDb):
+        def run_immediate_read_task(self, fn, *args, **kwargs):
+            return {1: list(faces_now)}
+
+    class _CropWorkflow(_PluginWorkflow):
+        def tag_quality_crops(self, items, out_raw_scores=None, **_kwargs):
+            self.crop_keys = [key for key, _crop in items]
+            return {}
+
+    workflow = _CropWorkflow()
+    task = _prediction_task(_FacesDb(str(tmp_path), [1]), workflow, [picture])
+    task._preload_images()  # no face yet: a centre crop
+    faces_now.append(_FakeFace(9, [300, 200, 400, 300]))
+
+    task._tag_pictures_batch()
+
+    assert workflow.crop_keys == [f"{picture.file_path}#face9"]
 
 
 def test_a_picture_that_will_not_reduce_costs_only_its_own_preload(tmp_path, caplog):

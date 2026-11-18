@@ -121,6 +121,21 @@ def _file_is_readable(file_path: str) -> bool:
         return False
 
 
+def _faces_signature(faces) -> tuple:
+    """What a quality crop depends on in *faces*, to tell a stale crop."""
+    return tuple(
+        sorted(
+            (
+                getattr(face, "id", None) or 0,
+                str(face.bbox),
+                getattr(face, "face_index", 0),
+                getattr(face, "frame_index", 0),
+            )
+            for face in faces
+        )
+    )
+
+
 def taggable_picture_clauses() -> tuple:
     """The picture rows tagging may touch: not soft-deleted, and with a file.
 
@@ -184,7 +199,8 @@ class TagTask(BaseTask):
         # reduced to it, and each picture's quality crop, already cut from the
         # original. The original itself is dropped once both are made.
         self._preloaded_images: dict[str, PILImage.Image] = {}
-        self._preloaded_crops: dict[int, tuple | None] = {}
+        # Picture id -> (crop or None, `_faces_signature` it was cut for).
+        self._preloaded_crops: dict[int, tuple] = {}
         self._preload_key: tuple | None = None
         self._preload_lock = threading.Lock()
         self._preload_thread: threading.Thread | None = None
@@ -604,7 +620,10 @@ class TagTask(BaseTask):
                 # undecoded picture gets no entry, so the batch loads it and
                 # decides whether to mark it.
                 if decoded and faces_by_pic is not None:
-                    crops[pic.id] = built
+                    crops[pic.id] = (
+                        built,
+                        _faces_signature(faces_by_pic.get(pic.id, [])),
+                    )
         with self._preload_lock:
             self._preloaded_images = preloaded
             self._preloaded_crops = crops
@@ -1124,17 +1143,17 @@ class TagTask(BaseTask):
                     # preload missed.
                     crop_build_start = time.perf_counter()
                     for pic in batch:
-                        if pic.id in preloaded_crops:
-                            built = preloaded_crops[pic.id]
+                        faces = faces_by_pic.get(pic.id, [])
+                        entry = preloaded_crops.get(pic.id)
+                        # The preload read faces when the task was queued; a
+                        # face added or moved since gets a crop of its own.
+                        if entry is not None and entry[1] == _faces_signature(faces):
+                            built = entry[0]
                         else:
                             # Never the preloaded image: that is reduced for
                             # the full pass, and the crop is cut at full size.
                             built = self._build_quality_crop(
-                                pic,
-                                faces_by_pic.get(pic.id, []),
-                                target,
-                                {},
-                                face_scale,
+                                pic, faces, target, {}, face_scale
                             )
                         if built is None:
                             continue
