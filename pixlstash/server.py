@@ -93,7 +93,11 @@ from pixlstash.services.builtin_models import (
     declare_builtin_models,
 )
 from pixlstash.services.managed_model_store import ensure_managed_folder
-from pixlstash.telemetry import ensure_install_identity, start_periodic_sender
+from pixlstash.telemetry import (
+    ensure_install_identity,
+    maybe_send_in_background,
+    start_periodic_sender,
+)
 from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
 from pixlstash.routes.character_face_clusters import (
@@ -1001,6 +1005,30 @@ class Server(
             logger.warning(
                 "Could not dispatch the telemetry ping (%s); continuing. This "
                 "affects reporting only, never the running server.",
+                exc,
+            )
+
+    def send_telemetry_ping_after_opt_in(self) -> None:
+        """Send today's install ping now that the owner has just opted in.
+
+        The periodic loop checks consent at startup, when a fresh install has
+        not answered the consent dialog yet, and then sleeps an hour. A desktop
+        session shorter than that closed before it woke, so a new user who
+        opted in went unseen until a later launch, and a one-off trial not at
+        all. ``send_if_due`` shares the loop's lock, so this cannot add a
+        second ping for the day.
+        """
+        try:
+            maybe_send_in_background(
+                self._server_config_path,
+                Server.detect_install_type(),
+                consent_enabled=True,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            # Narrow on purpose, as in _maybe_send_telemetry_ping.
+            logger.warning(
+                "Could not send the telemetry ping after opt-in (%s); the daily "
+                "loop will send it instead.",
                 exc,
             )
 
