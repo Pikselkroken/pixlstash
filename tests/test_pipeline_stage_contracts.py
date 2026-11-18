@@ -679,6 +679,9 @@ class _StubWorkflow:
     def active_plugin_name(self, engine_override=None):
         return engine_override or "wd14"
 
+    def full_pass_input(self, image, engine_override=None):
+        return None
+
     def active_model_version(self, engine_override=None):
         return "wd14:v3"
 

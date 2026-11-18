@@ -1734,6 +1734,8 @@ All taggers and captioners are implemented as `TaggerPlugin` subclasses ([pixlst
 | `florence2` | `Florence2Plugin` | `tagger_plugins/florence2.py` | Descriptions | Florence-2 captions **and** the Segment action's detector — see the variant note below |
 | `joycaption` | `JoyCaptionPlugin` | `tagger_plugins/joycaption.py` | Tags + Descriptions | LLaVA-style LLM; `bitsandbytes` optional dep |
 
+**A tag task's preload holds no decoded original (#2745).** It decodes each picture once, cuts the quality crop from the full-resolution image and resizes it to the crop size, reduces the image to what the full pass reads (`TaggingWorkflow.full_pass_input`: the PixlStash tagger's 576 px bilinear square, or WD14's padded 448 px area resize), and drops the original. Each reduction is the model's own first resize, so the tensors are bit-identical to those the preloaded originals produced. The crop is cut for the faces read at queue time, stored with their signature, and cut again from disk when the batch reads different faces. Holding the originals, three tasks of 64 at a time, filled 30 GB on a photo library: 64 × 24 MP held 5.9 GB per task, now 0.1 GB of images. A third-party plugin reads its own files and gets no preloaded image. A batch whose workflow differs from the one the preload was made for (CPU spillover builds its engine with default tagger settings) preloads again rather than loading originals. Image embeddings still hold originals (#2748).
+
 #### User-supplied plugins (issue #326)
 
 Beyond the four built-ins above, `TaggerPluginManager` scans
