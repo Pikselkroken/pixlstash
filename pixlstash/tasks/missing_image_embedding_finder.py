@@ -2,7 +2,10 @@ from typing import Callable
 
 from .base_task_finder import BaseTaskFinder
 from .image_embedding_task import ImageEmbeddingTask
-from pixlstash.worker_config import IMAGE_EMBEDDING_MAX_INFLIGHT
+from pixlstash.worker_config import (
+    IMAGE_EMBEDDING_MAX_INFLIGHT,
+    IMAGE_TASK_PIXEL_BUDGET,
+)
 
 from pixlstash.pixl_logging import get_logger
 
@@ -53,12 +56,14 @@ class MissingImageEmbeddingFinder(BaseTaskFinder):
         if not candidates:
             return None
 
-        selected = self._filter_and_claim(candidates, batch_size)
+        selected = self._filter_and_claim(
+            candidates, batch_size, pixel_budget=IMAGE_TASK_PIXEL_BUDGET
+        )
         if not selected:
             return None
 
         return ImageEmbeddingTask(
             database=self._db,
             clip_workflow=engine.clip_embedding_workflow,
-            batch=selected,
+            batch=[(row.id, row.file_path) for row in selected],
         )

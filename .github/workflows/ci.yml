@@ -550,6 +550,7 @@ jobs:
           tests/test_face_score_aggregation.py
           tests/test_facial_features_worker.py
           tests/test_find_orphaned_files.py
+          tests/test_finder_pixel_budget.py
           tests/test_finder_query_cost.py
           tests/test_florence.py
           tests/test_florence_model_variant.py

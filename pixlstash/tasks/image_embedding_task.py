@@ -308,7 +308,11 @@ class ImageEmbeddingTask(BaseTask):
                 Picture.aesthetic_score.is_(None),
             )
 
-        stmt = select(Picture.id, Picture.file_path).where(condition)
+        # width and height size the batch (#2750); the finder hands the task
+        # (id, file_path) pairs.
+        stmt = select(
+            Picture.id, Picture.file_path, Picture.width, Picture.height
+        ).where(condition)
         if suppressed_ids:
             stmt = stmt.where(Picture.id.notin_(tuple(suppressed_ids)))
         stmt = stmt.limit(int(limit or cls.BATCH_SIZE))

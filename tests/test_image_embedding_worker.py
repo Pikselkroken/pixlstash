@@ -75,7 +75,7 @@ def test_empty_embedding_blob_is_work_again_after_the_0112_reset(tmp_path):
             remaining = ImageEmbeddingTask.count_remaining(
                 session, aesthetic_disabled=True
             )
-            return {pid for pid, _ in work}, int(remaining or 0)
+            return {row.id for row in work}, int(remaining or 0)
 
         assert vault.db.run_task(fetch) == ({missing_id}, 1)
 
