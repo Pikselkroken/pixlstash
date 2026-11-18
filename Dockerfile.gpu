@@ -47,10 +47,7 @@ RUN pip install --no-cache-dir \
     torchvision \
     --index-url https://download.pytorch.org/whl/cu128
 
-# onnxruntime-gpu replaces plain onnxruntime for CUDA inference
-RUN pip install --no-cache-dir onnxruntime-gpu
-
-# All other dependencies (onnxruntime already satisfied by onnxruntime-gpu above)
+# All other dependencies
 RUN pip install --no-cache-dir \
     open_clip_torch \
     fastapi \
@@ -87,6 +84,15 @@ RUN pip install --no-cache-dir \
     bitsandbytes \
     zstandard \
     send2trash
+
+# onnxruntime-gpu for CUDA inference, at the last CUDA 12 release: 1.27+ links
+# libcudart.so.13 (the desktop pins the same, ORT_GPU_PIN in
+# electron/src/config.ts). It goes in last, after removing plain onnxruntime:
+# insightface depends on that, and both install the same `onnxruntime` module,
+# so whichever lands second wins. The check fails the build if CPU won.
+RUN pip uninstall -y onnxruntime \
+    && pip install --no-cache-dir onnxruntime-gpu==1.26.0 \
+    && python -c "import onnxruntime as o; p = o.get_available_providers(); assert 'CUDAExecutionProvider' in p, p"
 
 
 
