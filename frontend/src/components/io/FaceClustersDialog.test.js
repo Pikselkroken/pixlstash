@@ -600,11 +600,21 @@ describe("FaceClustersDialog", () => {
     });
 
     it("says so when none of the picks has the person's face", async () => {
-      api.getFaceClusters.mockRejectedValue({ response: { status: 422, data: { detail: "x" } } });
-      const wrapper = mountSeeded();
+      const refuse = (detail) =>
+        api.getFaceClusters.mockRejectedValue({ response: { status: 422, data: { detail } } });
+      refuse("None of these pictures has this person's face.");
+      let wrapper = mountSeeded();
       await flushPromises();
       expect(wrapper.find(".fc-notice").text()).toContain(
         "None of the pictures you picked has Wren's face.",
+      );
+      wrapper.unmount();
+      // Any other refusal says its own reason.
+      refuse("At most 500 seeds, not 612.");
+      wrapper = mountSeeded();
+      await flushPromises();
+      expect(wrapper.find(".fc-notice").text()).toContain(
+        "Couldn't group Wren's faces. At most 500 seeds, not 612.",
       );
       wrapper.unmount();
     });

@@ -1082,10 +1082,12 @@ async function load() {
     focusRank.value = 0;
   } catch (e) {
     if (mine !== seq) return;
+    const detail = errorDetail(e);
+    // The route's no-face refusal; a 422 for too many seeds keeps its own reason.
     error.value =
-      props.seeds?.length && e?.response?.status === 422
+      props.seeds?.length && e?.response?.status === 422 && detail.startsWith("None of these pictures")
         ? `None of the pictures you picked has ${name.value}'s face.`
-        : `Couldn't group ${name.value}'s faces. ${errorDetail(e) || "Please try again."}`;
+        : `Couldn't group ${name.value}'s faces. ${detail || "Please try again."}`;
   }
 }
 
