@@ -62,7 +62,7 @@ class _Db:
     def __init__(self, rows):
         self._rows = rows
         self.unprocessable_images = SimpleNamespace(
-            active_suppressed_ids=lambda: set(), is_suppressed=lambda _pid: False
+            active_suppressed_ids=set, is_suppressed=lambda _pid: False
         )
         self.tag_resets = SimpleNamespace(current=lambda: 0)
 
