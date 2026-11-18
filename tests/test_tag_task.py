@@ -930,7 +930,7 @@ def test_the_preload_keeps_only_what_the_taggers_read(tmp_path, plugin):
     target = workflow.pixlstash_tagger_image_size_quality_crop()
     crop_transform = tagger._build_transform(target)
     native = task._build_quality_crop(picture, faces, target, {}, 1.4)
-    (key, crop, _path, kind), _faces = task._preloaded_crops[1]
+    (key, crop, _path, kind), _ = task._preloaded_crops[1]
     assert (key, kind) == (native[0], native[3])
     assert crop.size == (target, target)
     assert torch.equal(crop_transform(crop), crop_transform(native[1]))
