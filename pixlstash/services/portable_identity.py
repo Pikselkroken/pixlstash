@@ -260,8 +260,12 @@ def sanitize_vault_connection(
     except sqlite3.Error as exc:
         try:
             raw.rollback()
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as rollback_exc:
+            logger.warning(
+                "Could not roll back failed identity scrub of %s: %s",
+                path,
+                rollback_exc,
+            )
         raise PortableIdentityScrubError(
             f"Could not sanitize portable identity in {path}: {exc}"
         ) from exc
