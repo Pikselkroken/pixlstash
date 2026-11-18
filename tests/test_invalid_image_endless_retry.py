@@ -78,7 +78,7 @@ def _fetch_work_ids(vault, suppressed_ids=None) -> set:
             suppressed_ids=suppressed_ids,
         )
     )
-    return {pid for pid, _ in work}
+    return {row.id for row in work}
 
 
 def _count_remaining(vault, suppressed_ids=None) -> int:

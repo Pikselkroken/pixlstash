@@ -11,7 +11,7 @@ from pixlstash.db_models import (
     parse_tag_engine_from_sentinel,
 )
 from pixlstash.services.set_lock_service import locked_picture_id_subquery
-from pixlstash.worker_config import TAGGER_MAX_INFLIGHT
+from pixlstash.worker_config import IMAGE_TASK_PIXEL_BUDGET, TAGGER_MAX_INFLIGHT
 from .base_task_finder import BaseTaskFinder
 from .tag_task import TagTask, taggable_picture_clauses
 
@@ -100,7 +100,9 @@ class MissingTagFinder(BaseTaskFinder):
 
         # Process the first group only (subsequent calls will handle the rest).
         first_engine, first_pics = next(iter(groups.items()))
-        selected = self._filter_and_claim(first_pics, batch_limit)
+        selected = self._filter_and_claim(
+            first_pics, batch_limit, pixel_budget=IMAGE_TASK_PIXEL_BUDGET
+        )
         if not selected:
             return None
 
