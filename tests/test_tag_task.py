@@ -301,6 +301,9 @@ def _prediction_task(db, workflow, pictures):
     task._preload_finished_at = None
     task._preload_lock = threading.Lock()
     task._preloaded_images = {}
+    task._preloaded_crops = {}
+    task._preload_key = None
+    task._preload_cancel = threading.Event()
     task.on_queued = lambda: None
     return task
 
@@ -322,6 +325,9 @@ class _PluginWorkflow:
 
     def active_plugin_name(self, engine_override=None):
         return engine_override or "acme_tagger"
+
+    def full_pass_input(self, image, engine_override=None):
+        return None
 
     def active_model_version(self, engine_override=None):
         return "acme_tagger:v1"
@@ -677,11 +683,16 @@ def test_whole_face_crop_is_a_user_setting_that_defaults_off():
     assert schema["whole_face_crop"]["default"] is False
 
 
-@pytest.mark.parametrize("whole_face, expected_side", [(True, 70), (False, 32)])
+@pytest.mark.parametrize("whole_face, expected_box", [(True, 70), (False, 32)])
 def test_the_tagging_pass_honours_the_whole_face_crop_setting(
-    tmp_path, whole_face, expected_side
+    tmp_path, whole_face, expected_box
 ):
-    """A 50px face: 1.4 x 50 = 70 with the setting on, the 32px target off."""
+    """A 50px face: 1.4 x 50 = 70 with the setting on, the 32px target off.
+
+    The crop reaches the tagger at the target size either way (#2745), so the
+    window is read from what it covers: a strip only the 70px one reaches.
+    """
+    from PIL import Image as PILImage
 
     class _FaceDb(_PredictionDb):
         def run_immediate_read_task(self, fn, *args, **kwargs):
@@ -692,19 +703,24 @@ def test_the_tagging_pass_honours_the_whole_face_crop_setting(
             return whole_face
 
         def tag_quality_crops(self, items, out_raw_scores=None, **_kwargs):
-            self.crop_sizes = [crop.size for _key, crop in items]
+            self.crops = [crop for _key, crop in items]
             return {}
 
-    picture = Picture(
-        id=1, file_path=str(_png(tmp_path, "setting.png", size=(128, 96)))
-    )
+    # Red above y=10: the 70px window spans 0..70, the 32px one 19..51.
+    image = PILImage.new("RGB", (128, 96), "blue")
+    image.paste("red", (0, 0, 128, 10))
+    image.save(tmp_path / "setting.png")
+    picture = Picture(id=1, file_path=str(tmp_path / "setting.png"))
     workflow = _CropWorkflow()
 
     _prediction_task(
         _FaceDb(str(tmp_path), [1]), workflow, [picture]
     )._tag_pictures_batch()
 
-    assert workflow.crop_sizes == [(expected_side, expected_side)]
+    [crop] = workflow.crops
+    assert crop.size == (32, 32)
+    red, _green, blue = crop.getpixel((16, 0))
+    assert (red > blue) is (expected_box == 70), (red, blue)
 
 
 # --- Upscaled and too-small faces (#1747) ----------------------------------
@@ -855,3 +871,151 @@ def test_a_face_too_small_to_judge_loses_face_tags_when_its_crop_finds_nothing(
         {"blocky": 0.1},
     )
     assert applied == {"person"}, applied
+
+
+# --- The preload keeps only what the taggers read (#2745) -------------------
+
+
+@pytest.mark.parametrize("plugin", ["pixlstash_tagger", "wd14", "acme_tagger"])
+def test_the_preload_keeps_only_what_the_taggers_read(tmp_path, plugin):
+    """No decoded original survives the preload, and every tagger input is
+    bit-identical to the one the original would have produced.
+
+    Holding the originals for the whole batch, three batches at once, is what
+    filled 30 GB on a photo library.
+    """
+    import numpy as np
+    import torch
+    from PIL import Image as PILImage
+
+    from pixlstash.image_loading_dataset_prepper import ImageLoadingDatasetPrepper
+    from pixlstash.tagger_plugins.pixlstash_tagger import (
+        PIXLSTASH_TAGGER_IMAGE_SIZE_FULL,
+        PixlStashTaggerService,
+    )
+
+    rng = np.random.default_rng(2745)
+    path = tmp_path / "big.png"
+    PILImage.fromarray(rng.integers(0, 256, (1600, 2400, 3), dtype=np.uint8)).save(path)
+    original = PILImage.open(path).convert("RGB")
+    picture = Picture(id=1, file_path=str(path))
+    faces = [_FakeFace(7, [900, 500, 1500, 1100])]  # 1.4 x 600 = 840 > 512
+
+    class _FacesDb(_FakeDb):
+        def run_immediate_read_task(self, fn, *args, **kwargs):
+            return {1: faces}
+
+    workflow = TaggingWorkflow(
+        engine=None,
+        use_wd14=plugin == "wd14",
+        use_pixlstash_tagger=True,
+        tagger_settings={
+            "active_tag_plugin": plugin,
+            "plugins": {"pixlstash_tagger": {"params": {"whole_face_crop": True}}},
+        },
+    )
+    task = _task_for(_FacesDb(str(tmp_path)))
+    task.id = "test-preload"
+    task._pictures = [picture]
+    task._tagging_workflow = workflow
+    task._engine_override = None
+    task._preload_cancel = threading.Event()
+    task._preload_lock = threading.Lock()
+    task._preload_started_at = None
+
+    task._preload_images()
+
+    # The transform the tagger really runs; building it reads nothing on self.
+    tagger = PixlStashTaggerService.__new__(PixlStashTaggerService)
+    target = workflow.pixlstash_tagger_image_size_quality_crop()
+    crop_transform = tagger._build_transform(target)
+    native = task._build_quality_crop(picture, faces, target, {}, 1.4)
+    key, crop, _path, kind = task._preloaded_crops[1]
+    assert (key, kind) == (native[0], native[3])
+    assert crop.size == (target, target)
+    assert torch.equal(crop_transform(crop), crop_transform(native[1]))
+
+    held = list(task._preloaded_images.values())
+    if plugin == "pixlstash_tagger":
+        size = PIXLSTASH_TAGGER_IMAGE_SIZE_FULL
+        full_transform = tagger._build_transform(size)
+        assert [im.size for im in held] == [(size, size)]
+        assert torch.equal(full_transform(held[0]), full_transform(original))
+    elif plugin == "wd14":
+        prep = ImageLoadingDatasetPrepper.preprocess_image
+        assert [im.size for im in held] == [(448, 448)]
+        assert np.array_equal(prep(held[0]), prep(original))
+    else:
+        assert held == [], "a plugin that reads its own files gets no image"
+    assert task._preload_key == task._crop_settings(workflow)
+
+
+def test_a_preload_made_for_other_settings_is_redone_reduced(tmp_path):
+    """The CPU spillover engine is built with default tagger settings, so its
+    batch can find a preload made for another plugin. It is made again for the
+    workflow that runs, never replaced by a native load of every picture."""
+    from PIL import Image as PILImage
+
+    from pixlstash.tagger_plugins.pixlstash_tagger import (
+        PIXLSTASH_TAGGER_IMAGE_SIZE_FULL,
+    )
+
+    PILImage.new("RGB", (1200, 900), "blue").save(tmp_path / "spill.png")
+    picture = Picture(id=1, file_path=str(tmp_path / "spill.png"))
+
+    class _Recording(TaggingWorkflow):
+        def tag_images(self, image_paths, preloaded_images=None, **_kwargs):
+            self.full_sizes = [im.size for im in (preloaded_images or {}).values()]
+            return {str(p): [] for p in image_paths}
+
+        def tag_quality_crops(self, items, **_kwargs):
+            self.crop_sizes = [crop.size for _key, crop in items]
+            return {}
+
+    workflow = _Recording(
+        engine=None,
+        use_wd14=False,
+        use_pixlstash_tagger=True,
+        tagger_settings={"active_tag_plugin": "pixlstash_tagger"},
+    )
+    task = _prediction_task(_PredictionDb(str(tmp_path), [1]), workflow, [picture])
+    task._preload_key = ("wd14", 320, None)  # made for another plugin
+
+    task._tag_pictures_batch()
+
+    size = PIXLSTASH_TAGGER_IMAGE_SIZE_FULL
+    assert workflow.full_sizes == [(size, size)]
+    target = workflow.pixlstash_tagger_image_size_quality_crop()
+    assert workflow.crop_sizes == [(target, target)]
+
+
+def test_a_picture_that_will_not_reduce_costs_only_its_own_preload(tmp_path, caplog):
+    """A reduction that raises is logged, and that picture's full pass loads
+    it from disk; its crop and its neighbour's image are still preloaded."""
+    from PIL import Image as PILImage
+
+    pictures = []
+    for index, colour in ((1, "red"), (2, "blue")):
+        PILImage.new("RGB", (800, 600), colour).save(tmp_path / f"{colour}.png")
+        pictures.append(Picture(id=index, file_path=str(tmp_path / f"{colour}.png")))
+
+    class _RefusesRed(TaggingWorkflow):
+        def full_pass_input(self, image, engine_override=None):
+            if image.getpixel((0, 0)) == (255, 0, 0):
+                raise ValueError("not a picture this plugin can reduce")
+            return super().full_pass_input(image, engine_override)
+
+    workflow = _RefusesRed(
+        engine=None,
+        use_wd14=False,
+        use_pixlstash_tagger=True,
+        tagger_settings={"active_tag_plugin": "pixlstash_tagger"},
+    )
+    task = _prediction_task(_PredictionDb(str(tmp_path), [1, 2]), workflow, pictures)
+
+    with caplog.at_level("WARNING"):
+        task._preload_images()
+
+    assert list(task._preloaded_images) == [pictures[1].file_path]
+    assert set(task._preloaded_crops) == {1, 2}
+    assert "could not reduce" in caplog.text

@@ -180,7 +180,12 @@ class TagTask(BaseTask):
         if reset_generation is None and self._tag_resets is not None:
             reset_generation = self._tag_resets.current()
         self._reset_generation = reset_generation
+        # What the preload keeps (#2745): the image the full pass reads, already
+        # reduced to it, and each picture's quality crop, already cut from the
+        # original. The original itself is dropped once both are made.
         self._preloaded_images: dict[str, PILImage.Image] = {}
+        self._preloaded_crops: dict[int, tuple | None] = {}
+        self._preload_key: tuple | None = None
         self._preload_lock = threading.Lock()
         self._preload_thread: threading.Thread | None = None
         self._preload_cancel = threading.Event()
@@ -503,12 +508,42 @@ class TagTask(BaseTask):
                 str(file_path),
             )
 
-    def _preload_images(self) -> None:
-        preloaded = {}
+    def _crop_settings(self, workflow: TaggingWorkflow) -> tuple:
+        """``(full-pass plugin, crop target, face scale)`` for *workflow*.
 
-        def _load_one(pic) -> "tuple[str | None, PILImage.Image | None]":
+        The preload's output is only valid for the settings it was made with;
+        the batch compares this against its own active workflow.
+        """
+        return (
+            workflow.active_plugin_name(self._engine_override),
+            workflow.pixlstash_tagger_image_size_quality_crop(),
+            FACE_CROP_SCALE if workflow.whole_face_crop() else None,
+        )
+
+    def _preload_images(self, workflow: TaggingWorkflow | None = None) -> None:
+        workflow = workflow or self._tagging_workflow
+        preloaded = {}
+        crops = {}
+        key = self._crop_settings(workflow)
+        _plugin, target, face_scale = key
+        try:
+            pic_ids = [p.id for p in self._pictures]
+            faces_by_pic = self._db.run_immediate_read_task(
+                lambda session: self._fetch_faces_for_pictures(session, pic_ids)
+            )
+        except Exception as exc:
+            # The batch builds the crops itself, reloading each original.
+            logger.warning(
+                "TagTask %s: could not read faces for the preload; the quality "
+                "crops will be built from a second decode: %s",
+                self.id,
+                exc,
+            )
+            faces_by_pic = None
+
+        def _load_one(pic):
             if self._preload_cancel.is_set():
-                return None, None
+                return pic, False, None, None, None
             # The preload never marks: it is best-effort warming, and the batch
             # path re-loads and decides. Marking here would also race the cancel.
             file_path, img, _undecodable = self._load_pic(pic)
@@ -518,7 +553,42 @@ class TagTask(BaseTask):
                     getattr(pic, "id", None),
                     str(file_path),
                 )
-            return file_path, img
+                return pic, False, file_path, None, None
+            built = None
+            if faces_by_pic is not None:
+                built = self._build_quality_crop(
+                    pic,
+                    faces_by_pic.get(pic.id, []),
+                    target,
+                    {file_path: img},
+                    face_scale,
+                )
+                if built is not None:
+                    # The crop pass resizes to `target` with the same bilinear
+                    # PIL resize, which on an image already that size is a
+                    # copy: the tagger sees the same pixels.
+                    crop_key, crop, crop_path, kind = built
+                    crop = crop.resize((target, target), PILImage.Resampling.BILINEAR)
+                    built = (crop_key, crop, crop_path, kind)
+            try:
+                full = workflow.full_pass_input(img, self._engine_override)
+            except Exception as exc:
+                # The full pass loads this one from disk instead, and its
+                # plugin reports what it makes of it.
+                logger.warning(
+                    "TagTask %s: could not reduce %s (%s, mode %s) for the full "
+                    "pass; it is loaded again there: %s",
+                    self.id,
+                    file_path,
+                    img.size,
+                    img.mode,
+                    exc,
+                )
+                full = None
+            # Only the reduced image and the crop leave this function: a future
+            # keeps its result until the pool closes, so returning the
+            # original would hold every one of them for the whole batch.
+            return pic, True, file_path, full, built
 
         n_workers = min(self._PRELOAD_WORKERS, max(1, len(self._pictures)))
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
@@ -526,11 +596,19 @@ class TagTask(BaseTask):
             for future in as_completed(futures):
                 if self._preload_cancel.is_set():
                     break
-                file_path, img = future.result()
-                if file_path is not None and img is not None:
-                    preloaded[file_path] = img
+                pic, decoded, file_path, full, built = future.result()
+                if full is not None:
+                    preloaded[file_path] = full
+                # Recorded even when None: the crop was attempted on a decoded
+                # image, and `_build_quality_crop` has already logged why. An
+                # undecoded picture gets no entry, so the batch loads it and
+                # decides whether to mark it.
+                if decoded and faces_by_pic is not None:
+                    crops[pic.id] = built
         with self._preload_lock:
             self._preloaded_images = preloaded
+            self._preloaded_crops = crops
+            self._preload_key = key
         self._preload_finished_at = time.perf_counter()
         started_at = self._preload_started_at
         if started_at is not None:
@@ -550,6 +628,7 @@ class TagTask(BaseTask):
         # this the images stay alive until the task object is garbage collected
         # (one full task cycle later), which can hold several hundred MB of RAM.
         self._preloaded_images = {}
+        self._preloaded_crops = {}
         return {
             "changed_count": len(changed),
             "changed": changed,
@@ -918,6 +997,8 @@ class TagTask(BaseTask):
 
         with self._preload_lock:
             preloaded_images = dict(self._preloaded_images)
+            preloaded_crops = dict(self._preloaded_crops)
+            preload_key = self._preload_key
 
         logger.debug(
             "[TAG_PRELOAD] task_id=%s headstart_s=%.3f wait_block_s=%.3f "
@@ -949,6 +1030,21 @@ class TagTask(BaseTask):
                 self._db.image_root
             )
             active_workflow = cpu_spillover_engine.tagging_workflow
+        if preload_key != self._crop_settings(active_workflow):
+            # Made for other settings: the CPU spillover engine is built with
+            # default tagger settings, or the settings changed while queued.
+            # Redone for the workflow that runs, so this path also holds only
+            # reduced images rather than every original.
+            logger.debug(
+                "TagTask %s: preload made for %s, not %s; preloading again",
+                self.id,
+                preload_key,
+                self._crop_settings(active_workflow),
+            )
+            self._preload_images(active_workflow)
+            with self._preload_lock:
+                preloaded_images = dict(self._preloaded_images)
+                preloaded_crops = dict(self._preloaded_crops)
 
         try:
             if image_paths:
@@ -1028,13 +1124,18 @@ class TagTask(BaseTask):
                     # preload missed.
                     crop_build_start = time.perf_counter()
                     for pic in batch:
-                        built = self._build_quality_crop(
-                            pic,
-                            faces_by_pic.get(pic.id, []),
-                            target,
-                            preloaded_images,
-                            face_scale,
-                        )
+                        if pic.id in preloaded_crops:
+                            built = preloaded_crops[pic.id]
+                        else:
+                            # Never the preloaded image: that is reduced for
+                            # the full pass, and the crop is cut at full size.
+                            built = self._build_quality_crop(
+                                pic,
+                                faces_by_pic.get(pic.id, []),
+                                target,
+                                {},
+                                face_scale,
+                            )
                         if built is None:
                             continue
                         key, crop, file_path, kind = built

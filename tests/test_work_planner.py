@@ -1069,6 +1069,9 @@ class _FakeTaggingWorkflow:
     def ensure_active_plugin_ready(self, engine_override=None):
         return None
 
+    def full_pass_input(self, image, engine_override=None):
+        return None
+
     def tag_images(self, image_paths, **kwargs):
         return {path: ["tag"] for path in image_paths}
 
