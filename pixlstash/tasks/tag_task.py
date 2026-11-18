@@ -686,13 +686,17 @@ class TagTask(BaseTask):
         self._cpu_spillover_enabled = True
 
     @classmethod
-    def _acquire_cpu_spillover_engine(cls, image_root: str) -> InferenceEngine:
+    def _acquire_cpu_spillover_engine(
+        cls, image_root: str, tagger_settings: dict
+    ) -> InferenceEngine:
         with cls._cpu_spillover_lock:
             if cls._cpu_spillover_engine is None:
                 cls._cpu_spillover_engine = InferenceEngine.create(
                     device="cpu",
                     image_root=image_root,
                 )
+            # The configured plugin and crop settings, not the defaults (#2748).
+            cls._cpu_spillover_engine.set_tagger_settings(tagger_settings)
             cls._cpu_spillover_last_used_at = time.perf_counter()
             return cls._cpu_spillover_engine
 
@@ -1046,7 +1050,7 @@ class TagTask(BaseTask):
         if self._cpu_spillover_enabled:
             logger.debug("TagTask %s using CPU spillover mode", self.id)
             cpu_spillover_engine = self._acquire_cpu_spillover_engine(
-                self._db.image_root
+                self._db.image_root, self._tagging_workflow.tagger_settings
             )
             active_workflow = cpu_spillover_engine.tagging_workflow
         if preload_key != self._crop_settings(active_workflow):

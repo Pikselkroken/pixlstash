@@ -210,6 +210,53 @@ def test_closing_a_spillover_engine_does_not_touch_the_registry(install_plugins)
     )
 
 
+@pytest.mark.parametrize("task_name", ["TagTask", "DescriptionTask"])
+def test_a_spillover_engine_runs_the_configured_plugins(monkeypatch, task_name):
+    """The CPU spillover engine is built with no plugin settings, so a spilled
+    batch ran the default tagger and captioner: a WD14 owner got PixlStash
+    tagger tags (#2748). It runs the settings of the workflow that spilled,
+    on a reused engine too."""
+    from pixlstash.inference.engine import InferenceEngine
+    from pixlstash.tasks.description_task import DescriptionTask
+    from pixlstash.tasks.tag_task import TagTask
+
+    task_cls = {"TagTask": TagTask, "DescriptionTask": DescriptionTask}[task_name]
+
+    def _bare_engine(**_kwargs):
+        # What `create` builds without settings, minus the models.
+        return InferenceEngine(
+            "cpu", None, None, None, None, None, vram_budget=None, lifecycle=None
+        )
+
+    monkeypatch.setattr(InferenceEngine, "create", staticmethod(_bare_engine))
+    monkeypatch.setattr(task_cls, "_cpu_spillover_engine", None)
+
+    def _settings(tag_plugin, description_plugin):
+        return {
+            "active_tag_plugin": tag_plugin,
+            "active_description_plugin": description_plugin,
+            "plugins": {"pixlstash_tagger": {"params": {"whole_face_crop": True}}},
+        }
+
+    engine = task_cls._acquire_cpu_spillover_engine(
+        "/home/me", _settings("wd14", "joycaption")
+    )
+    assert engine.tagging_workflow.active_plugin_name() == "wd14"
+    assert engine.tagging_workflow.whole_face_crop()
+    assert engine.description_workflow.tagger_settings["active_description_plugin"] == (
+        "joycaption"
+    )
+
+    reused = task_cls._acquire_cpu_spillover_engine(
+        "/home/me", _settings("pixlstash_tagger", "florence2")
+    )
+    assert reused is engine
+    assert reused.tagging_workflow.active_plugin_name() == "pixlstash_tagger"
+    assert reused.description_workflow.tagger_settings["active_description_plugin"] == (
+        "florence2"
+    )
+
+
 # ----------------------------------------------------------------------
 # 2. estimated_vram_mb() is consulted
 # ----------------------------------------------------------------------

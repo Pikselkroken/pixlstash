@@ -74,7 +74,9 @@ class DescriptionTask(BaseTask):
         self._cpu_spillover_enabled = True
 
     @classmethod
-    def _acquire_cpu_spillover_engine(cls, image_root: str) -> "InferenceEngine":
+    def _acquire_cpu_spillover_engine(
+        cls, image_root: str, tagger_settings: dict
+    ) -> "InferenceEngine":
         with cls._cpu_spillover_lock:
             if cls._cpu_spillover_engine is None:
                 from pixlstash.inference.engine import InferenceEngine
@@ -84,6 +86,8 @@ class DescriptionTask(BaseTask):
                     device="cpu",
                     image_root=image_root,
                 )
+            # The configured captioner and its settings, not the defaults.
+            cls._cpu_spillover_engine.set_tagger_settings(tagger_settings)
             cls._cpu_spillover_last_used_at = time.perf_counter()
             return cls._cpu_spillover_engine
 
@@ -189,7 +193,7 @@ class DescriptionTask(BaseTask):
                 picture_ids,
             )
             cpu_spillover_engine = self._acquire_cpu_spillover_engine(
-                self._db.image_root
+                self._db.image_root, self._workflow.tagger_settings
             )
             active_workflow = cpu_spillover_engine.description_workflow
 

@@ -80,6 +80,11 @@ class TaggingWorkflow:
         """Whether the PixlStash tagger is active for this workflow instance."""
         return self._use_pixlstash_tagger
 
+    @property
+    def tagger_settings(self) -> dict:
+        """The tagger settings this workflow was built with."""
+        return self._tagger_settings
+
     def whole_face_crop(self) -> bool:
         """Whether the quality crop covers the whole face (the user setting)."""
         params = (
