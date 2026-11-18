@@ -71,7 +71,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 
 // The backend's STORYBOARD_FRAMES: tile i is i / (FRAMES - 1) of the clip.
 const FRAMES = 11;
@@ -82,10 +82,29 @@ const props = defineProps({
   // The video's length in seconds; null until it plays (or when it cannot),
   // and then the tiles show frames but do not seek.
   duration: { type: Number, default: null },
-  currentTime: { type: Number, default: 0 },
+  // The lightbox's <video>, or null while there is none. The strip follows
+  // its time itself, so playback re-renders only the strip.
+  media: { type: Object, default: null },
 });
 
-const emit = defineEmits(["seek", "unavailable"]);
+const emit = defineEmits(["unavailable"]);
+
+const currentTime = ref(0);
+function onTimeUpdate(event) {
+  currentTime.value = event.target.currentTime;
+}
+watch(
+  () => props.media,
+  (media, previous) => {
+    previous?.removeEventListener?.("timeupdate", onTimeUpdate);
+    media?.addEventListener?.("timeupdate", onTimeUpdate);
+    currentTime.value = media?.currentTime || 0;
+  },
+  { immediate: true },
+);
+onBeforeUnmount(() =>
+  props.media?.removeEventListener?.("timeupdate", onTimeUpdate),
+);
 
 const aspect = ref(null);
 const failed = ref(false);
@@ -97,6 +116,7 @@ watch(
     aspect.value = null;
     failed.value = false;
     previewIndex.value = null;
+    currentTime.value = 0;
   },
 );
 
@@ -127,18 +147,18 @@ function timeOf(index) {
 
 const currentIndex = computed(() => {
   if (!seekable.value) return null;
-  const at = Math.round((props.currentTime / props.duration) * (FRAMES - 1));
+  const at = Math.round((currentTime.value / props.duration) * (FRAMES - 1));
   return Math.min(FRAMES - 1, Math.max(0, at));
 });
 
 // 0..1 along the axis that runs from the first tile's centre to the last's.
 const playhead = computed(() => {
   if (!seekable.value) return null;
-  return Math.min(1, Math.max(0, props.currentTime / props.duration));
+  return Math.min(1, Math.max(0, currentTime.value / props.duration));
 });
 
 function onTileClick(index) {
-  if (seekable.value) emit("seek", timeOf(index));
+  if (seekable.value && props.media) props.media.currentTime = timeOf(index);
 }
 
 function clock(seconds) {

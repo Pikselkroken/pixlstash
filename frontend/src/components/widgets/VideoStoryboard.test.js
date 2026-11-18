@@ -9,8 +9,19 @@ const SRC = "/api/v1/pictures/storyboards/7.webp";
 
 function mountBoard(props = {}) {
   return mount(VideoStoryboard, {
-    props: { src: SRC, duration: 5, currentTime: 0, ...props },
+    props: { src: SRC, duration: 5, media: video(), ...props },
   });
+}
+
+function video() {
+  return document.createElement("video");
+}
+
+async function playTo(wrapper, seconds) {
+  const media = wrapper.props("media");
+  media.currentTime = seconds;
+  media.dispatchEvent(new Event("timeupdate"));
+  await wrapper.vm.$nextTick();
 }
 
 async function loadSprite(wrapper, width = 11 * 320, height = 180) {
@@ -21,27 +32,30 @@ async function loadSprite(wrapper, width = 11 * 320, height = 180) {
 }
 
 describe("VideoStoryboard", () => {
-  it("draws eleven tiles, and tile i seeks to duration * i / 10", async () => {
+  it("draws eleven tiles, and tile i seeks the video to duration * i / 10", async () => {
     const w = mountBoard({ duration: 5 });
+    const media = w.props("media");
     const tiles = w.findAll("button.storyboard-tile");
     expect(tiles).toHaveLength(11);
-    await tiles[0].trigger("click");
-    await tiles[6].trigger("click");
-    await tiles[10].trigger("click");
-    expect(w.emitted("seek").map(([s]) => s)).toEqual([0, 3, 5]);
+    const seeks = [];
+    for (const i of [0, 6, 10]) {
+      await tiles[i].trigger("click");
+      seeks.push(media.currentTime);
+    }
+    expect(seeks).toEqual([0, 3, 5]);
     expect(tiles[6].attributes("aria-label")).toBe("Seek to 0:03");
   });
 
   it("marks the tile nearest the playing time as current", async () => {
-    const w = mountBoard({ duration: 10, currentTime: 0 });
+    const w = mountBoard({ duration: 10 });
     const current = () =>
       w
         .findAll("button.storyboard-tile")
         .findIndex((t) => t.attributes("aria-current") === "true");
     expect(current()).toBe(0);
-    await w.setProps({ currentTime: 4.6 });
+    await playTo(w, 4.6);
     expect(current()).toBe(5);
-    await w.setProps({ currentTime: 10 });
+    await playTo(w, 10);
     expect(current()).toBe(10);
   });
 
@@ -49,7 +63,7 @@ describe("VideoStoryboard", () => {
     const w = mountBoard({ duration: null });
     const tiles = w.findAll("button.storyboard-tile");
     await tiles[4].trigger("click");
-    expect(w.emitted("seek")).toBeUndefined();
+    expect(w.props("media").currentTime).toBe(0);
     expect(tiles[4].attributes("tabindex")).toBe("-1");
     expect(tiles[4].attributes("aria-disabled")).toBe("true");
     expect(tiles.some((t) => t.attributes("aria-current"))).toBe(false);
@@ -82,5 +96,18 @@ describe("VideoStoryboard", () => {
     expect(preview.text()).toContain("9 / 11");
     await w.findAll("button.storyboard-tile")[8].trigger("mouseleave");
     expect(w.find(".storyboard-preview").exists()).toBe(false);
+  });
+
+  it("stops following a video it no longer has", async () => {
+    const w = mountBoard({ duration: 10 });
+    const old = w.props("media");
+    await w.setProps({ media: video() });
+    old.currentTime = 9;
+    old.dispatchEvent(new Event("timeupdate"));
+    await w.vm.$nextTick();
+    const current = w
+      .findAll("button.storyboard-tile")
+      .findIndex((t) => t.attributes("aria-current") === "true");
+    expect(current).toBe(0);
   });
 });

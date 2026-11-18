@@ -806,6 +806,7 @@ def create_router(server) -> APIRouter:
             refuse_overlapping_folder(candidate, server, server.vault, exclude=current)
 
         repointed_paths: list[tuple[str, str]] = []
+        dropped_paths: list[str] = []
 
         def update(session: Session):
             rf = session.get(ReferenceFolder, folder_id)
@@ -858,6 +859,7 @@ def create_router(server) -> APIRouter:
                                     )
                                     if not pic.pixel_sha or new_sha == pic.pixel_sha:
                                         repointed_paths.append((old_path, new_path))
+                                        old_path = None
                                     if pic.pixel_sha and new_sha != pic.pixel_sha:
                                         unmatched.append(
                                             {
@@ -884,6 +886,10 @@ def create_router(server) -> APIRouter:
                                         "path": new_path,
                                     }
                                 )
+                            if old_path:
+                                # Not the same picture there (or none): its
+                                # cached files describe the old one.
+                                dropped_paths.append(old_path)
                         if tags_rewritten:
                             pic.tags_file = new_tags
                             pic.tags_file_mtime = get_sidecar_mtime(new_tags)
@@ -1016,6 +1022,10 @@ def create_router(server) -> APIRouter:
             update, priority=DBPriority.IMMEDIATE
         )
         _carry_cached_files(repointed_paths)
+        for old_path in dropped_paths:
+            ImageUtils.remove_thumbnail(
+                getattr(server.vault, "image_root", None), old_path
+            )
         if relocation_report is not None:
             server.vault.unwatch_reference_folder(folder_id)
             server.vault.watch_reference_folder(folder_id, rf.folder)

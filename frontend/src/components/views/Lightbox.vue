@@ -372,7 +372,6 @@
                     :draggable="!isZoomed"
                     @dragstart="handleMediaDragStart"
                     @loadedmetadata="updateLightboxDims"
-                    @timeupdate="videoCurrentTime = $event.target.currentTime"
                     @error="handleVideoError"
                   ></video>
                   <div v-else class="lightbox-video-error">
@@ -840,8 +839,7 @@
           <VideoStoryboard
             :src="storyboardSrc"
             :duration="videoMeta.duration"
-            :current-time="videoCurrentTime"
-            @seek="seekVideo"
+            :media="videoRef"
             @unavailable="storyboardMissingId = image?.id"
           />
         </template>
@@ -4376,7 +4374,6 @@ const lightboxCanvasRef = ref(null);
 const mediaInnerRef = ref(null);
 const videoMeta = ref({ duration: null });
 const videoError = ref(null); // set to MediaError when browser can't play the video
-const videoCurrentTime = ref(0);
 
 // On a video the filmstrip's band shows the clip's frames instead (#2147),
 // one switch away from the set's pictures. The choice holds while the
@@ -4401,10 +4398,6 @@ const storyboardSrc = computed(() => {
     version: version ? decodeURIComponent(version[1]) : undefined,
   });
 });
-
-function seekVideo(seconds) {
-  if (videoRef.value) videoRef.value.currentTime = seconds;
-}
 
 // Back on the pictures, show where this one sits: the strip was hidden, so
 // nothing revealed it while the lightbox stepped.
@@ -5663,7 +5656,6 @@ watch(
         offsetY: 0,
       };
       videoError.value = null;
-      videoCurrentTime.value = 0;
       fullImageErrorSrc.value = "";
       scheduleLightboxDimsUpdate();
       fetchFaceBboxes(newId);

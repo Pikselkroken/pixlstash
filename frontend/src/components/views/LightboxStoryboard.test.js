@@ -128,9 +128,8 @@ describe("the clip in the filmstrip band", () => {
     expect(bandSwitch(w).exists()).toBe(false);
   });
 
-  it("seeks the video to a tile's moment", async () => {
+  it("hands the strip the lightbox's own video to follow and seek", async () => {
     const w = await openOn(9);
-    board(w).vm.$emit("seek", 3);
-    expect(w.find("video").element.currentTime).toBe(3);
+    expect(board(w).props("media")).toBe(w.find("video").element);
   });
 });

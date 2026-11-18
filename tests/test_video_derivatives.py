@@ -140,6 +140,12 @@ def test_render_storyboard_lays_equal_tiles_left_to_right(tmp_path):
     assert sheet.size == (STORYBOARD_FRAMES * 2 * STORYBOARD_TILE_HEIGHT, 160)
 
 
+def test_a_very_wide_clip_still_fits_one_webp():
+    frames = [Image.new("RGB", (4000, 10))] * STORYBOARD_FRAMES
+    sheet = Image.open(io.BytesIO(ImageUtils.render_storyboard(frames)))
+    assert sheet.width <= 16383
+
+
 # ---------------------------------------------------------------------------
 # Where derived files live, and how they follow a picture
 # ---------------------------------------------------------------------------
@@ -256,7 +262,9 @@ def _file_path(server, picture_id) -> str:
     )
 
 
-def test_storyboard_route_serves_and_caches_a_webp(server, owner, tmp_path):
+def test_storyboard_route_serves_and_caches_a_webp(
+    server, owner, tmp_path, monkeypatch
+):
     pic = _library_clip(server, tmp_path)
     path = STORYBOARD.format(id=pic)
     assert_real_route(server.api, "GET", path, template=STORYBOARD)
@@ -270,6 +278,11 @@ def test_storyboard_route_serves_and_caches_a_webp(server, owner, tmp_path):
         server.vault.image_root, _file_path(server, pic), "storyboard"
     )
     assert os.path.isfile(cached)
+
+    def no_more_decoding(*args):
+        raise AssertionError("the cached storyboard was not used")
+
+    monkeypatch.setattr(VideoUtils, "extract_storyboard_frames", no_more_decoding)
     again = owner.get(path)
     assert again.status_code == 200 and again.content == r.content
 
@@ -277,6 +290,7 @@ def test_storyboard_route_serves_and_caches_a_webp(server, owner, tmp_path):
 def test_storyboard_route_refuses_a_still(server, owner):
     r = owner.get(STORYBOARD.format(id=_still(server)))
     assert r.status_code == 404
+    assert r.json()["detail"] == "Picture is not a video"
 
 
 def test_library_switch_clears_the_storyboard_locks(server, owner, tmp_path):
@@ -407,3 +421,16 @@ def test_repointing_a_moved_reference_folder_carries_its_cached_files(
     new = _file_path(server, pic)
     assert new == os.path.join(new_root, "clip.mp4")
     _assert_carried(server, old, new)
+
+
+def test_repointing_onto_a_missing_file_drops_the_old_cached_files(
+    server, owner, tmp_path
+):
+    folder_id, pic, old = _reference_clip(server, os.path.realpath(str(tmp_path / "x")))
+    elsewhere = os.path.realpath(str(tmp_path / "empty"))
+    os.makedirs(elsewhere)
+    r = owner.patch(f"{API}/reference-folders/{folder_id}", json={"folder": elsewhere})
+    assert r.status_code == 200, r.text
+    root = server.vault.image_root
+    assert not os.path.exists(ImageUtils.get_thumbnail_path(root, old))
+    assert not os.path.exists(ImageUtils.derived_media_path(root, old, "storyboard"))

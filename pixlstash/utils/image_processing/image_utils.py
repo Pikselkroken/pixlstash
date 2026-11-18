@@ -885,7 +885,11 @@ class ImageUtils:
         if not frames:
             return None
         first = frames[0]
-        tile_w = max(1, round(first.width * tile_height / first.height))
+        # WebP holds at most 16383 px a side: a very wide clip gets lower tiles.
+        tile_height = max(
+            1, min(tile_height, (16383 * first.height) // (first.width * len(frames)))
+        )
+        tile_w = max(1, first.width * tile_height // first.height)
         sheet = Image.new("RGB", (tile_w * len(frames), tile_height))
         for i, frame in enumerate(frames):
             tile = frame.convert("RGB").resize(
