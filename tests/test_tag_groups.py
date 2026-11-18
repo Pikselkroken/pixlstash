@@ -370,9 +370,11 @@ def test_assign_files_reassigns_ungroups_and_refuses_bad_input(client, server):
     assert _map(server)["tags"] == {"film grain": meta, "bokeh": meta}
 
     resp = _assign(client, ["film grain"], general)
+    assert resp.status_code == 200, resp.text
     assert _map(server)["tags"] == {"film grain": general, "bokeh": meta}
 
     resp = _assign(client, ["bokeh"], None)
+    assert resp.status_code == 200, resp.text
     assert _map(server)["tags"] == {"film grain": general}
 
     # A group that does not exist, a pending-retag marker, and an over-long list.

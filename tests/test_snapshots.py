@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
@@ -116,7 +117,7 @@ def test_new_snapshot_contains_no_portable_identity_and_is_private(server):
                     f"SELECT COUNT(*) FROM {table}"
                 ).fetchone() == (0,)
             database_path = connection.execute("PRAGMA database_list").fetchone()[2]
-            assert marker.encode() not in open(database_path, "rb").read()
+            assert marker.encode() not in Path(database_path).read_bytes()
     finally:
         server.vault.db.run_task(
             lambda session: (

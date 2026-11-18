@@ -1528,7 +1528,7 @@ def reset(request):
     if "store" not in request.fixturenames:
         return
     shared = request.getfixturevalue("store")
-    shared.vault.run_task(lambda session: _wipe_pictures(session))
+    shared.vault.run_task(_wipe_pictures)
     with shared.hub.transaction() as conn:
         # Children first: every table here references the one above it.
         for table in WORKFLOW_WIPE_ORDER:
@@ -5494,7 +5494,6 @@ def test_a_digest_no_row_matches_yet_makes_the_whole_set_uncertain(store, set_sh
     hash, a recipe naming a digest may name THAT row, so every member of the
     combination is a guess about which files ran - including the ones matched by
     an exact filename."""
-    set_shelf
     graph = generation_graph(
         "ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
     )
@@ -5562,7 +5561,6 @@ def test_one_uncertain_witness_is_not_unmade_by_a_cleaner_one(store, set_shelf):
 def test_the_member_order_is_the_whole_ranking_not_only_its_head(store, set_shelf):
     """The card's title is the first THREE members joined, so the order past the
     head is on screen too: checkpoint, unclassified, VAE, text encoder, adapter."""
-    set_shelf
     mystery = shelf_file(store.hub, "mystery_x.safetensors", "unknown")
     assert mystery
     graph = generation_graph(

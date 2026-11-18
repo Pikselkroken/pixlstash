@@ -152,8 +152,8 @@ import {
 import DuplicateQueue from "./DuplicateQueue.vue";
 import { useDedupStore } from "../../stores/useDedupStore";
 
-/** A queue group in the backend's shape, with `n` candidates. */
-function group(signature, n = 2) {
+/** A queue group in the backend's shape, with `n` candidates. `over` is merged last. */
+function group(signature, n = 2, over = {}) {
   const base = Number(signature.replace(/\D/g, "")) * 100;
   return {
     signature,
@@ -168,6 +168,7 @@ function group(signature, n = 2) {
       height: 3000,
       megapixels: 12,
     })),
+    ...over,
   };
 }
 

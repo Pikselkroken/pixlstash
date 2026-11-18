@@ -291,7 +291,7 @@ def test_a_face_task_that_raises_leaves_its_pictures_to_the_face_stage(
         broken_a, broken_b, sibling = _seed_pending(
             vault, tmp_path, ["a.png", "b.png", "c.png"]
         )
-        finder = MissingFaceExtractionFinder(vault.db, lambda: _Engine())
+        finder = MissingFaceExtractionFinder(vault.db, _Engine)
 
         def boom(self):
             raise RuntimeError("model pack download failed")
@@ -326,7 +326,7 @@ def test_a_finished_face_batch_is_not_re_selected_while_its_rows_are_in_flight(
 ):
     with Vault(image_root=str(tmp_path)) as vault:
         ids = _seed_pending(vault, tmp_path, ["a.png", "b.png"])
-        finder = MissingFaceExtractionFinder(vault.db, lambda: _Engine())
+        finder = MissingFaceExtractionFinder(vault.db, _Engine)
         task = finder.find_task()
         assert task is not None and set(task.params["picture_ids"]) == set(ids)
 

@@ -410,7 +410,7 @@ def test_drop_to_set_and_character_together(owner_server):
 
 def test_project_id_still_associates(owner_server):
     srv, client = owner_server
-    project_id = srv.vault.db.run_task(lambda s: _make_project(s))
+    project_id = srv.vault.db.run_task(_make_project)
     _import_one(client, {"project_id": project_id})
     pic_id = _only_picture_id(srv)
     assert (

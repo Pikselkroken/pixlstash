@@ -497,7 +497,7 @@ describe("Create with LoRA… in a person's or a set's context menu", () => {
     // has made no read, so the row that then appears must not be live on the
     // last menu's answer, and must not sit at "Checking…" for good either.
     let answer = () => [LORA];
-    serveAdapters((params) => answer(params));
+    serveAdapters(() => answer());
     const wrapper = await mountSidebar({ teleport: true });
     expect((await loraItem(characterRow(wrapper, GRACE.name))).disabled).toBe(
       false,
