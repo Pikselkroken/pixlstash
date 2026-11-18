@@ -943,6 +943,7 @@ class _TwoTaskFinder(_OneShotFinder):
     """Two tasks of three pictures each, then dry."""
 
     def __init__(self):
+        super().__init__()
         self._tasks = [_CountedTask("t1", [1, 2, 3]), _CountedTask("t2", [4, 5, 6])]
 
     def find_task(self):

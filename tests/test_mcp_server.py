@@ -11,6 +11,7 @@ missing.
 import http.server
 import io
 import json
+from pathlib import Path
 import datetime
 import ipaddress
 import re
@@ -1300,7 +1301,7 @@ def test_the_default_export_goes_to_the_cache_under_a_safe_name(tmp_path, monkey
     path = json.loads(result["content"][0]["text"])["path"]
     # The id's colon is not a file-name character everywhere.
     assert path == str(tmp_path / "graphs" / ("auto_" + "a" * 64 + ".json"))
-    assert json.loads(open(path).read()) == {"1": {}}
+    assert json.loads(Path(path).read_text()) == {"1": {}}
 
 
 def test_main_probes_for_an_owner_token_only_with_allow_write(monkeypatch):

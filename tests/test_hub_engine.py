@@ -7,6 +7,7 @@ the claim the hub schema's shape exists to support.
 """
 
 import os
+from pathlib import Path
 import sqlite3
 import stat
 import threading
@@ -317,7 +318,7 @@ class TestHubFileSecurity:
         with pytest.raises(HubPermissionError, match="changed while"):
             HubDatabase(path)
 
-        assert open(path, "rb").read() == b"replacement"
+        assert Path(path).read_bytes() == b"replacement"
 
     def test_a_same_uid_swap_during_open_is_a_documented_non_goal(
         self, tmp_path, monkeypatch

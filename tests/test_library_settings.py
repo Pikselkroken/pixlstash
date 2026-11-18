@@ -12,6 +12,7 @@ outside: one flat config object, two databases behind it.
 
 import json
 import os
+from pathlib import Path
 import tempfile
 
 import pytest
@@ -229,17 +230,17 @@ class TestTheSettingsFingerprint:
             server.vault.db, library.settings_salt, {marker: 0.7}
         )
 
-        vault_bytes = open(
-            os.path.join(server.vault.image_root, "vault.db"), "rb"
-        ).read()
+        vault_bytes = Path(
+            os.path.join(server.vault.image_root, "vault.db")
+        ).read_bytes()
         assert marker.encode() not in vault_bytes
 
     def test_the_key_is_not_in_the_library(self, server):
         """Without the salt the hash is unguessable, so the salt must stay in the hub."""
         library = server.library_registry.active_library()
-        vault_bytes = open(
-            os.path.join(server.vault.image_root, "vault.db"), "rb"
-        ).read()
+        vault_bytes = Path(
+            os.path.join(server.vault.image_root, "vault.db")
+        ).read_bytes()
 
         assert library.settings_salt
         assert library.settings_salt.encode() not in vault_bytes

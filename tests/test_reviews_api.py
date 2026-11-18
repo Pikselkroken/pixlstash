@@ -1572,7 +1572,7 @@ def test_locking_a_set_after_the_scan_withdraws_its_cards(client, server):
     # The reported bug: the scan runs once at create time, so a set locked
     # afterwards left already-scanned rows being served as un-actionable cards.
     # Card serving must therefore filter at READ time, not rely on the scan.
-    a, b = _make_pair(client, server)
+    _, _ = _make_pair(client, server)
     rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
     rows = client.get(f"{API}/reviews/{rid}/suggestions").json()
     assert len(rows) == 1
@@ -1628,7 +1628,7 @@ def test_stack_sibling_of_a_locked_member_is_also_withheld(client, server):
     # Set membership is stack-atomic, so the write guards freeze a picture that
     # merely SHARES A STACK with a locked-set member. Candidate selection and
     # card serving must use the same rule or they hand out un-actionable cards.
-    a, b = _make_pair(client, server)
+    _, _ = _make_pair(client, server)
     rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
     suspect = client.get(f"{API}/reviews/{rid}/suggestions").json()[0]["picture_id"]
 
@@ -1660,8 +1660,8 @@ def test_stack_sibling_of_a_locked_member_is_also_withheld(client, server):
 def test_unlocked_picture_in_the_same_scope_is_still_served(client, server):
     # Over-blocking regression: locking ONE set must not withdraw cards for
     # pictures outside it. Two independent pairs, only one frozen.
-    a1, b1 = _make_pair(client, server, axis=0)
-    a2, b2 = _make_pair(client, server, axis=7)
+    _, _ = _make_pair(client, server, axis=0)
+    _, _ = _make_pair(client, server, axis=7)
     rid = client.post(f"{API}/reviews", json={"tag": TAG}).json()["id"]
     rows = client.get(f"{API}/reviews/{rid}/suggestions").json()
     assert len(rows) == 2

@@ -147,7 +147,8 @@ def _detach_volatile_finders(server):
     planner = server.vault._work_planner
     finders = server.vault._planner_work_finders
     for task_type in _VOLATILE_TASK_TYPES:
-        assert finders.pop(task_type, None) is not None, (
+        popped = finders.pop(task_type, None)
+        assert popped is not None, (
             f"{task_type} is not registered any more; this module's seeded rows "
             f"are only stable because it is detached - re-check the new finder set"
         )

@@ -456,7 +456,7 @@ def test_the_face_finder_can_fill_every_slot_it_says_it_has(tmp_path):
             count=FACE_EXTRACTION_BATCH_LIMIT + 5,
             with_faces=False,
         )
-        finder = MissingFaceExtractionFinder(vault.db, lambda: _StubEngine())
+        finder = MissingFaceExtractionFinder(vault.db, _StubEngine)
 
         first = finder.find_task()
         assert first is not None
@@ -498,7 +498,7 @@ def test_undecodable_pictures_cannot_wedge_the_face_finder(tmp_path):
                 str(tmp_path / f"p{picture_id}.png"),
                 reason="test: undecodable",
             )
-        finder = MissingFaceExtractionFinder(vault.db, lambda: _StubEngine())
+        finder = MissingFaceExtractionFinder(vault.db, _StubEngine)
 
         task = finder.find_task()
         assert task is not None, "the three good pictures behind the bad ones"
@@ -830,7 +830,7 @@ def test_a_failed_text_embedding_batch_is_not_handed_out_again(tmp_path):
 
     with Vault(image_root=str(tmp_path)) as vault:
         described, tags_pending, _, _ = _seed_text_stage(vault, tmp_path)
-        finder = MissingTextEmbeddingFinder(vault.db, lambda: _TextEngine())
+        finder = MissingTextEmbeddingFinder(vault.db, _TextEngine)
 
         def candidates():
             rows = vault.db.run_immediate_read_task(finder._fetch_candidates, 64)

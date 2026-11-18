@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import re
 
 from pixlstash.training import presets, sample_prompts
@@ -318,7 +319,9 @@ def test_locked_keys_are_merged_last():
     assert process["model"]["arch"] == "zimage:turbo"
     assert process["model"]["extras_name_or_path"] == "Tongyi-MAI/Z-Image-Turbo"
     assert process["train"]["noise_scheduler"] == "flowmatch"
-    template = json.load(open(presets.template_path(_PRESET), encoding="utf-8"))
+    template = json.loads(
+        Path(presets.template_path(_PRESET)).read_text(encoding="utf-8")
+    )
     assert "arch" not in template["config"]["process"][0]["model"]
 
 
