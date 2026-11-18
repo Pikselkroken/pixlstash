@@ -41,6 +41,7 @@ from pixlstash.tagger_plugins.pixlstash_tagger import (
     QUALITY_CROP_TAG_WHITELIST,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.resources import cuda_checkpoint
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
@@ -219,9 +220,21 @@ class TagTask(BaseTask):
     def _preload_model(self) -> None:
         t_start = time.perf_counter()
         try:
-            self._tagging_workflow.ensure_active_plugin_ready(
-                engine_override=self._engine_override,
-            )
+            if not cuda_checkpoint.enter_device_call():
+                # Loading onto the device would block until the training run
+                # ends, and the submitter waits on this. The task is refused
+                # the GPU and spills to the CPU, which loads its own models.
+                logger.debug(
+                    "[TAG_MODEL_PRELOAD] task_id=%s skipped: CUDA is suspended",
+                    self.id,
+                )
+                return
+            try:
+                self._tagging_workflow.ensure_active_plugin_ready(
+                    engine_override=self._engine_override,
+                )
+            finally:
+                cuda_checkpoint.leave_device_call()
             logger.debug(
                 "[TAG_MODEL_PRELOAD] task_id=%s done in %.1fs",
                 self.id,

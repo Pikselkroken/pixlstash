@@ -13,7 +13,11 @@ from PIL import Image
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
-from pixlstash.utils.accelerator import is_apple_silicon, physical_memory_mb
+from pixlstash.utils.accelerator import (
+    empty_accelerator_cache,
+    is_apple_silicon,
+    physical_memory_mb,
+)
 from pixlstash.utils.model_utils import from_pretrained_local_first
 from pixlstash.utils.service.caption_utils import sanitise_tag
 
@@ -98,7 +102,7 @@ class JoyCaptionService:
             self._model = None
             self._processor = None
             if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+                empty_accelerator_cache("cuda")
 
     def generate_caption(
         self,

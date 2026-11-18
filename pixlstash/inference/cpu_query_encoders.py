@@ -102,6 +102,15 @@ def build_cpu_query_encoders(device) -> Optional["CpuQueryEncoders"]:
     """
     if normalise_device(device) != MPS:
         return None
+    return cpu_query_encoders()
+
+
+def cpu_query_encoders() -> "CpuQueryEncoders":
+    """Unloaded CPU copies of the query encoders, whatever the device.
+
+    Also what a search encodes on while the CUDA context is suspended for a
+    training run (``InferenceEngine.query_services``, #2557).
+    """
     from pixlstash.tagger_plugins.clip_service import ClipService
     from pixlstash.tagger_plugins.sbert import SBertService
 

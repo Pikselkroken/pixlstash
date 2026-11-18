@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.resources import cuda_checkpoint
 from pixlstash.task_runner import TaskCancelledError
 
 if TYPE_CHECKING:
@@ -715,7 +716,14 @@ class WorkPlanner:
                     "device (any other accelerator is unaffected and still used)"
                 )
                 return
-            utilization = float(torch.cuda.utilization())
+            # torch reads NVML itself, which blocks until the training run
+            # ends while the CUDA context is suspended: no sample then.
+            if not cuda_checkpoint.enter_device_call():
+                return
+            try:
+                utilization = float(torch.cuda.utilization())
+            finally:
+                cuda_checkpoint.leave_device_call()
         except Exception as exc:
             # ModuleNotFoundError when pynvml is not installed, or an NVML
             # error; either way the fraction is reported as n/a for the run.

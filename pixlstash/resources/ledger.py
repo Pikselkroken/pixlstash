@@ -17,12 +17,15 @@ torch's allocator.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import threading
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.resources import cuda_checkpoint
 
 try:
     import psutil
@@ -62,6 +65,164 @@ def _text(value) -> str:
     return value.decode() if isinstance(value, bytes) else str(value)
 
 
+class SuspendedHandleError(RuntimeError):
+    """An NVML handle taken before a suspend, used after it began."""
+
+
+class _SmiHandle(int):
+    """A device index handed out by :class:`SmiNvml` as its handle."""
+
+
+class SmiNvml:
+    """The NVML calls PixlStash makes, answered by ``nvidia-smi`` (#2557).
+
+    While this process's CUDA context is suspended every NVML call made in it
+    blocks until the restore; ``nvidia-smi`` is another process. Handles are
+    indexes in NVML's order, which is ``nvidia-smi``'s. ``used`` is total less
+    free, as NVML counts it (``nvidia-smi``'s own ``used`` leaves out what the
+    driver reserves). Any other call raises, and its caller reads nothing.
+
+    Args:
+        not_available: The binding's ``NVML_VALUE_NOT_AVAILABLE``.
+    """
+
+    #: Readings are shared by the calls of one pass over the cards.
+    TTL_S = 0.5
+
+    def __init__(self, not_available: int = -1) -> None:
+        self.NVML_VALUE_NOT_AVAILABLE = not_available
+        self._lock = threading.Lock()
+        self._read_at = 0.0
+        self._generation = -1
+        self._gpus: list[dict] = []
+        self._apps: list[dict] = []
+
+    @staticmethod
+    def _query(*args: str) -> list[list[str]]:
+        done = subprocess.run(
+            ["nvidia-smi", *args, "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        return [
+            [field.strip() for field in line.split(",")]
+            for line in done.stdout.splitlines()
+            if line.strip()
+        ]
+
+    def _read(self) -> None:
+        with self._lock:
+            generation = cuda_checkpoint.generation()
+            if (
+                generation == self._generation
+                and time.monotonic() - self._read_at < self.TTL_S
+            ):
+                return
+            gpus = [
+                {
+                    "uuid": uuid,
+                    "name": name,
+                    "total": int(total) * _MB,
+                    "free": int(free) * _MB,
+                }
+                for uuid, name, total, free in self._query(
+                    "--query-gpu=uuid,name,memory.total,memory.free"
+                )
+            ]
+            apps = [
+                {
+                    "uuid": uuid,
+                    "pid": int(pid),
+                    "used": int(used) * _MB
+                    if used.isdigit()
+                    else self.NVML_VALUE_NOT_AVAILABLE,
+                }
+                for uuid, pid, used in self._query(
+                    "--query-compute-apps=gpu_uuid,pid,used_memory"
+                )
+            ]
+            self._gpus, self._apps = gpus, apps
+            self._read_at = time.monotonic()
+            self._generation = generation
+
+    def _gpu(self, handle) -> dict:
+        if not isinstance(handle, _SmiHandle):
+            raise SuspendedHandleError(
+                "an NVML handle cannot be read while CUDA is suspended"
+            )
+        self._read()
+        return self._gpus[handle]
+
+    def nvmlInit(self) -> None:
+        pass
+
+    def nvmlDeviceGetCount(self) -> int:
+        self._read()
+        return len(self._gpus)
+
+    def nvmlDeviceGetHandleByIndex(self, index: int) -> _SmiHandle:
+        self._read()
+        if not 0 <= index < len(self._gpus):
+            raise IndexError(f"no GPU {index}")
+        return _SmiHandle(index)
+
+    def nvmlDeviceGetMemoryInfo(self, handle) -> SimpleNamespace:
+        gpu = self._gpu(handle)
+        return SimpleNamespace(
+            total=gpu["total"], free=gpu["free"], used=gpu["total"] - gpu["free"]
+        )
+
+    def nvmlDeviceGetUUID(self, handle) -> str:
+        return self._gpu(handle)["uuid"]
+
+    def nvmlDeviceGetName(self, handle) -> str:
+        return self._gpu(handle)["name"]
+
+    def nvmlDeviceGetComputeRunningProcesses(self, handle) -> list:
+        uuid = self._gpu(handle)["uuid"]
+        return [
+            SimpleNamespace(pid=app["pid"], usedGpuMemory=app["used"])
+            for app in self._apps
+            if app["uuid"] == uuid
+        ]
+
+    def nvmlDeviceGetGraphicsRunningProcesses(self, handle) -> list:
+        self._gpu(handle)
+        return []
+
+
+class _GatedNvml:
+    """The NVML binding, kept off the driver while CUDA is suspended.
+
+    Each call is counted in flight (``cuda_checkpoint.enter_device_call``), so a
+    suspend never lands under one; once a suspend has begun the call goes to
+    :class:`SmiNvml` instead, as does any call on a handle it handed out.
+    """
+
+    def __init__(self, binding) -> None:
+        self._binding = binding
+        self._smi = SmiNvml(getattr(binding, "NVML_VALUE_NOT_AVAILABLE", -1))
+
+    def __getattr__(self, name: str):
+        value = getattr(self._binding, name)
+        if not callable(value) or isinstance(value, type):
+            return value
+
+        def call(*args, **kwargs):
+            if (
+                args and isinstance(args[0], _SmiHandle)
+            ) or not cuda_checkpoint.enter_device_call():
+                return getattr(self._smi, name)(*args, **kwargs)
+            try:
+                return value(*args, **kwargs)
+            finally:
+                cuda_checkpoint.leave_device_call()
+
+        return call
+
+
 class Ledger:
     """Device memory, read through one long-lived NVML handle.
 
@@ -91,7 +252,7 @@ class Ledger:
                 return None
             try:
                 self._nvml_module.nvmlInit()
-                self._nvml = self._nvml_module
+                self._nvml = _GatedNvml(self._nvml_module)
             except Exception as exc:
                 # No NVIDIA driver is the normal case on Apple, AMD and CPU
                 # hosts: the devices are then unmeasurable, said once.
@@ -99,11 +260,18 @@ class Ledger:
                 self._init_failed = True
             return self._nvml
 
-    def devices(self, max_age_s: float = READING_TTL_S) -> list[DeviceReading]:
+    def devices(
+        self, max_age_s: float = READING_TTL_S, strict: bool = False
+    ) -> list[DeviceReading]:
         """Every GPU, read at most *max_age_s* ago.
 
         With no NVML, one unmeasurable device when this process has an
         accelerator in use, else none.
+
+        Args:
+            strict: Raise when the cards cannot be read, rather than hand back
+                the last reading. For a decision a stale figure must not make,
+                such as restoring a suspended CUDA context.
         """
         now = time.monotonic()
         with self._lock:
@@ -128,7 +296,15 @@ class Ledger:
                         )
                     )
             except Exception as exc:
-                logger.warning(
+                if strict:
+                    raise
+                # A pass that straddled the suspend: the next one reads.
+                log = (
+                    logger.debug
+                    if isinstance(exc, SuspendedHandleError)
+                    else logger.warning
+                )
+                log(
                     "Reading GPU memory through NVML failed; the last reading "
                     "stands until it can be read again: %s",
                     exc,
@@ -176,6 +352,30 @@ class Ledger:
             return next((d.uuid for d in devices if d.uuid == first), first)
         index = int(first) if first.isdigit() else 0
         return devices[index].uuid if index < len(devices) else devices[0].uuid
+
+    def own_mb(self, uuid: str) -> int | None:
+        """What this process holds on the card *uuid*, MB, as NVML lists it.
+
+        None where NVML does not list it with a figure (no CUDA context there,
+        Windows WDDM, Docker) or cannot be read.
+        """
+        nvml = self.nvml()
+        if nvml is None:
+            return None
+        own = os.getpid()
+        try:
+            for index in range(nvml.nvmlDeviceGetCount()):
+                handle = nvml.nvmlDeviceGetHandleByIndex(index)
+                if _text(nvml.nvmlDeviceGetUUID(handle)) != uuid:
+                    continue
+                for entry in nvml.nvmlDeviceGetComputeRunningProcesses(handle):
+                    used = getattr(entry, "usedGpuMemory", None)
+                    if entry.pid == own and isinstance(used, int) and used > 0:
+                        if used != getattr(nvml, "NVML_VALUE_NOT_AVAILABLE", -1):
+                            return used // _MB
+        except Exception as exc:
+            logger.info("Could not read this process's GPU memory: %s", exc)
+        return None
 
     def processes(self, uuid: str | None = None) -> dict[int, int]:
         """Each process's memory on the cards, MB by pid; on *uuid* alone if given.

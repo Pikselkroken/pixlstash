@@ -7,10 +7,14 @@ import threading
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Iterator
 
-from pixlstash.inference.cpu_query_encoders import build_cpu_query_encoders
+from pixlstash.inference.cpu_query_encoders import (
+    build_cpu_query_encoders,
+    cpu_query_encoders,
+)
 from pixlstash.inference.vram_budget import VramBudget
 from pixlstash.inference.model_lifecycle import ModelLifecycleManager
 from pixlstash.pixl_logging import get_logger
+from pixlstash.resources import cuda_checkpoint
 from pixlstash.services.builtin_models import builtin_model_dir
 from pixlstash.utils.accelerator import (
     CUDA,
@@ -121,6 +125,8 @@ class InferenceEngine:
         self.query_encoders = None
         # One query encode at a time; see query_services.
         self._query_lock = threading.Lock()
+        # CPU copies for searches while the CUDA context is suspended (#2557).
+        self._suspended_query_encoders = None
         self.vram_budget = vram_budget
         self.lifecycle = lifecycle
         self.force_cpu = force_cpu
@@ -406,7 +412,10 @@ class InferenceEngine:
 
         On Metal these are the CPU copies (:mod:`.cpu_query_encoders`), because
         a query is encoded on a request thread while the GPU worker uses the
-        device; everywhere else they are the engine's own services.
+        device; everywhere else they are the engine's own services, except
+        while the CUDA context is suspended for a training run, when a CUDA
+        call would block until the run ends: CPU copies then, built on the
+        first search and dropped by the first one after the restore.
 
         One encode at a time, on every host: the query encodes run on request
         threads and share these service instances, which read their model and
@@ -419,10 +428,20 @@ class InferenceEngine:
                 reload after the idle sweep released them.
         """
         with self._query_lock:
-            if self.query_encoders is None:
-                yield self.clip_service, self.sbert_service
-            else:
+            if self.query_encoders is not None:
                 yield self.query_encoders.services()
+            elif cuda_checkpoint.enter_device_call():
+                # Counted in flight: a suspend waits for this encode to end.
+                try:
+                    self._suspended_query_encoders = None
+                    yield self.clip_service, self.sbert_service
+                finally:
+                    cuda_checkpoint.leave_device_call()
+            else:
+                if self._suspended_query_encoders is None:
+                    self._suspended_query_encoders = cpu_query_encoders()
+                    self._suspended_query_encoders.load()
+                yield self._suspended_query_encoders.services()
 
     def safe_idle_unload(self) -> None:
         """Release non-captioning models during idle periods."""
