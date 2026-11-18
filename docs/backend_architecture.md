@@ -13151,7 +13151,12 @@ translates.
   without the person's face, `[]` clears. Both are `OWNER_ONLY`; the GET is
   untemplated so it can also sit on `READ_BLOCKED_GET_PATHS`. The route only
   translates: `read_person` and `save_reference_cluster` are thin vault
-  wrappers (§10.1), and the clustering runs outside the reader.
+  wrappers (§10.1), and the clustering runs outside the reader. With
+  `centre=<picture id>` the GET also answers `centred`: every face of the
+  person ranked by likeness to that picture's face (`ranked_by_likeness`, one
+  matrix-vector product), the same member rows; 422 when the picture is not
+  one of the person's faces. Nothing is stored. The route still clusters on
+  such a call, so a re-centre costs a full clustering (about 1 s at 5k faces).
 - **The grid filter.** `/pictures`, `/pictures/stream`, `/pictures/count`,
   `/pictures/search` and `/pictures/likeness-groups` take `face_cluster=N`
   (+ `face_cluster_threshold`, default `SAME_PERSON`) beside one

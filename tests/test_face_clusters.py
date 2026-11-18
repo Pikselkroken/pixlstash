@@ -10,6 +10,7 @@ from pixlstash.services.face_clusters import (
     NotThePersonsFace,
     centrality,
     cluster_faces,
+    ranked_by_likeness,
     reference_cluster_faces,
     reference_cluster_ids,
     set_reference_cluster,
@@ -49,6 +50,23 @@ def test_the_planted_centre_is_the_most_central_member():
     scores = [c for _, c in cluster.members]
     assert scores == sorted(scores, reverse=True)
     assert np.allclose(centrality([person, person * 2]), [1.0, 1.0])
+
+
+def test_ranked_by_likeness_puts_the_centre_first_and_its_twin_above_others():
+    a, b = _person(), _person()
+    faces = _faces_of(a, range(1, 6)) + _faces_of(b, range(11, 16))
+    centre = faces[7][1]
+    faces.append((50, centre + RNG.standard_normal(DIM) * 0.05))
+    ranked = ranked_by_likeness(faces, centre)
+    assert ranked[0] == (13, pytest.approx(1.0))
+    assert ranked[1][0] == 50
+    values = [v for _, v in ranked]
+    assert values == sorted(values, reverse=True)
+    order = [pid for pid, _ in ranked]
+    assert max(order.index(p) for p in range(11, 16)) < min(
+        order.index(p) for p in range(1, 6)
+    )
+    assert ranked_by_likeness([], centre) == []
 
 
 def test_a_single_face_is_unclustered():
