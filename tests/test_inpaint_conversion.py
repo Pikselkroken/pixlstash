@@ -101,6 +101,20 @@ def test_the_klein_crop_node_takes_the_built_ins_settings():
     assert converted["9"]["inputs"]["filename_prefix"] == "Inpaint-Flux2-Klein"
 
 
+def test_the_minimax_h3_image_edit_converts_to_its_inpaint_built_in():
+    """MiniMax H3 Image's edit reads the picture twice, as its canvas's latent
+    and as <Picture 1>: both take the crop, and the built-in is exactly that."""
+    converted = convert_to_inpaint(_built_in("MiniMax-H3-Image-Edit.json"))
+    assert converted == _built_in("Inpaint-MiniMax-H3-Image.json")
+    crop = _one(converted, "InpaintCropImproved")
+    conditioning = converted[_one(converted, "MiniMaxH3ImageConditioning")]
+    assert conditioning["inputs"]["images.image_1"] == [crop, 1]
+    assert converted[_one(converted, "VAEEncode")]["inputs"]["pixels"] == [crop, 1]
+    # 4 MP at H3's multiple of 32, the edit's own working size.
+    size = converted[crop]["inputs"]
+    assert (size["output_target_width"], size["output_target_height"]) == (2048, 2048)
+
+
 def _moss_edit() -> dict:
     """MOSS-Image edit with an edit LoRA and skip-layer guidance."""
     return {

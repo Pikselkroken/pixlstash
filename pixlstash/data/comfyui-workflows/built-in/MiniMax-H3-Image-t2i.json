@@ -1,0 +1,104 @@
+{
+  "3": {
+    "inputs": {
+      "unet_name": "minimax_h3_image_pruned_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader"
+  },
+  "4": {
+    "inputs": {
+      "clip_sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+      "type": "minimax"
+    },
+    "class_type": "PixlStashCLIPLoader"
+  },
+  "5": {
+    "inputs": {
+      "vae_sha256": "d80e9c2e5cfc9844869961ff5a58c9a9e52182df6bfb30b26018dd7f348721af"
+    },
+    "class_type": "PixlStashVAELoader"
+  },
+  "6": {
+    "inputs": {
+      "clip": [
+        "4",
+        0
+      ],
+      "prompt": "A photograph of a red fox standing in fresh snow at dawn, soft warm light.",
+      "width": 2048,
+      "height": 2048
+    },
+    "class_type": "MiniMaxH3ImageConditioning"
+  },
+  "7": {
+    "inputs": {
+      "conditioning": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut"
+  },
+  "8": {
+    "inputs": {
+      "width": 2048,
+      "height": 2048,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Canvas"
+    }
+  },
+  "9": {
+    "inputs": {
+      "model": [
+        "3",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "8",
+        0
+      ],
+      "seed": 1,
+      "steps": 6,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "class_type": "KSampler"
+  },
+  "10": {
+    "inputs": {
+      "samples": [
+        "9",
+        0
+      ],
+      "vae": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "VAEDecode"
+  },
+  "11": {
+    "inputs": {
+      "images": [
+        "10",
+        0
+      ],
+      "filename_prefix": "MiniMax-H3-Image"
+    },
+    "class_type": "SaveImage"
+  }
+}

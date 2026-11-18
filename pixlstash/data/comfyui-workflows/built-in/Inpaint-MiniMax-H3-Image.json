@@ -1,0 +1,207 @@
+{
+  "1": {
+    "inputs": {
+      "image": "example.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Picture"
+    }
+  },
+  "3": {
+    "inputs": {
+      "unet_name": "minimax_h3_image_pruned_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader"
+  },
+  "4": {
+    "inputs": {
+      "clip_sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+      "type": "minimax"
+    },
+    "class_type": "PixlStashCLIPLoader"
+  },
+  "5": {
+    "inputs": {
+      "vae_sha256": "d80e9c2e5cfc9844869961ff5a58c9a9e52182df6bfb30b26018dd7f348721af"
+    },
+    "class_type": "PixlStashVAELoader"
+  },
+  "6": {
+    "inputs": {
+      "clip": [
+        "4",
+        0
+      ],
+      "vae": [
+        "5",
+        0
+      ],
+      "prompt": "Change <Picture 1> as described, and keep everything else exactly as it is.",
+      "width": 0,
+      "height": 0,
+      "images.image_1": [
+        "12",
+        1
+      ]
+    },
+    "class_type": "MiniMaxH3ImageConditioning"
+  },
+  "7": {
+    "inputs": {
+      "conditioning": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut"
+  },
+  "8": {
+    "inputs": {
+      "pixels": [
+        "12",
+        1
+      ],
+      "vae": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "VAEEncode"
+  },
+  "9": {
+    "inputs": {
+      "model": [
+        "14",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "13",
+        0
+      ],
+      "seed": 1,
+      "steps": 6,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "class_type": "KSampler"
+  },
+  "10": {
+    "inputs": {
+      "samples": [
+        "9",
+        0
+      ],
+      "vae": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "VAEDecode"
+  },
+  "11": {
+    "inputs": {
+      "images": [
+        "15",
+        0
+      ],
+      "filename_prefix": "Inpaint-MiniMax-H3-Image"
+    },
+    "class_type": "SaveImage"
+  },
+  "12": {
+    "class_type": "InpaintCropImproved",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "mask": [
+        "1",
+        1
+      ],
+      "downscale_algorithm": "bilinear",
+      "upscale_algorithm": "bicubic",
+      "preresize": false,
+      "preresize_mode": "ensure minimum resolution",
+      "preresize_min_width": 1024,
+      "preresize_min_height": 1024,
+      "preresize_max_width": 16384,
+      "preresize_max_height": 16384,
+      "mask_fill_holes": true,
+      "mask_expand_pixels": 8,
+      "mask_invert": false,
+      "mask_blend_pixels": 32,
+      "mask_hipass_filter": 0.1,
+      "extend_for_outpainting": false,
+      "extend_up_factor": 1.0,
+      "extend_down_factor": 1.0,
+      "extend_left_factor": 1.0,
+      "extend_right_factor": 1.0,
+      "context_from_mask_extend_factor": 1.6,
+      "output_resize_to_target_size": true,
+      "output_padding": "16",
+      "device_mode": "gpu (much faster)",
+      "output_target_width": 2048,
+      "output_target_height": 2048
+    },
+    "_meta": {
+      "title": "Crop to selection + context"
+    }
+  },
+  "13": {
+    "class_type": "SetLatentNoiseMask",
+    "inputs": {
+      "samples": [
+        "8",
+        0
+      ],
+      "mask": [
+        "12",
+        2
+      ]
+    },
+    "_meta": {
+      "title": "SetLatentNoiseMask"
+    }
+  },
+  "14": {
+    "class_type": "DifferentialDiffusion",
+    "inputs": {
+      "model": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Differential Diffusion"
+    }
+  },
+  "15": {
+    "class_type": "InpaintStitchImproved",
+    "inputs": {
+      "stitcher": [
+        "12",
+        0
+      ],
+      "inpainted_image": [
+        "10",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Stitch into the original"
+    }
+  }
+}

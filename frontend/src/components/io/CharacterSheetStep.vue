@@ -30,8 +30,8 @@
           <span
             >{{
               fromReference
-                ? "Sheets from a reference need a Qwen-Image-Edit, FLUX.2 Klein or MiniMax H3 sheet workflow, and the library has none."
-                : "Sheets need a MOSS-Image, Krea 2, Qwen-Image, FLUX.2 Klein or MiniMax H3 text-to-image workflow, and the library has none. Import one from Workflows, then come back."
+                ? "Sheets from a reference need a Qwen-Image-Edit, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image sheet workflow, and the library has none."
+                : "Sheets need a MOSS-Image, Krea 2, Qwen-Image, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image text-to-image workflow, and the library has none. Import one from Workflows, then come back."
             }}</span
           >
         </p>
@@ -721,7 +721,7 @@ const SIZES = [
 ];
 // The sizes a model draws well, and the one it starts at; the rest are greyed
 // out. MOSS-Image, Krea 2, Qwen and Klein are known good to ~4 MP; MiniMax H3
-// wants a large canvas (`ENGINES.minimax.sizes`).
+// and H3 Image want a large canvas (an engine's own `sizes`).
 const SIZES_DRAWN_WELL = ["small", "medium", "large"];
 const SUBJECTS = [
   { id: "woman", label: "Woman" },
@@ -774,6 +774,15 @@ const ENGINES = {
     sizes: ["large", "4k"],
     size: "4k",
   },
+  // MiniMax's still-image model, another architecture than H3 video: an H3
+  // video LoRA is no LoRA for it. Best at ~16 MP, poor under 4 MP.
+  minimaxImage: {
+    family: "minimax_h3_image",
+    name: "MiniMax H3 Image",
+    fits: (lora) => lora.base_model_family === "minimax_h3_image",
+    sizes: ["large", "4k"],
+    size: "4k",
+  },
 };
 // The sheet workflows PixlStash ships (#2700): a built-in has no card until
 // something asks for one, so the step asks before it lists the cards.
@@ -783,6 +792,8 @@ const SHEET_BUILT_INS = [
   "Sheet-Flux2-Klein-9B.json",
   "Sheet-Flux2-Klein-9B-Reference.json",
   "Sheet-MiniMax-H3-Reference.json",
+  "Sheet-MiniMax-H3-Image.json",
+  "Sheet-MiniMax-H3-Image-Reference.json",
 ];
 const MODES = [
   { id: "text", label: "Text" },
@@ -1144,9 +1155,9 @@ const framingHint = computed(() => {
 const sizeHint = computed(() => {
   const size = SIZES.find((s) => s.id === form.size);
   const why =
-    engine.value === ENGINES.minimax
-      ? " MiniMax H3 needs Large or 4K."
-      : " 4K is for MiniMax H3.";
+    engine.value.sizes
+      ? ` ${engine.value.name} needs Large or 4K.`
+      : " 4K is for MiniMax H3 and H3 Image.";
   return `Passport photos come out ${size.passport}. Larger is slower to draw.${why}`;
 });
 
@@ -2081,7 +2092,12 @@ function cardEngine(card) {
  * the models that keep the person in the picture. */
 function referenceEngine(card) {
   const engine = cardEngine(card);
-  return [ENGINES.qwen, ENGINES.klein, ENGINES.minimax].includes(engine)
+  return [
+    ENGINES.qwen,
+    ENGINES.klein,
+    ENGINES.minimax,
+    ENGINES.minimaxImage,
+  ].includes(engine)
     ? engine
     : null;
 }

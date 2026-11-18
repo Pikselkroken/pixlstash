@@ -135,6 +135,22 @@ def test_minimax_h3_has_a_family():
     assert modality_of("MiniMax H3") == "video"
 
 
+def test_minimax_h3_image_is_a_model_of_its_own():
+    """MiniMax's still-image model is not H3 video drawing one frame: its
+    files name it, and its family is not the video model's."""
+    assert family_of("MiniMax H3 Image") == "minimax_h3_image"
+    assert modality_of("MiniMax H3 Image") == "image"
+    for name in (
+        "minimax_h3_image_pruned_int8_convrot.safetensors",
+        "minimax_h3_image_vae_fp16.safetensors",
+    ):
+        assert identify((), (name,)) == ("MiniMax H3 Image", "filename")
+    assert identify((), ("minimax_h3_ref2va_pruned_int8_convrot.safetensors",)) == (
+        "MiniMax H3",
+        "filename",
+    )
+
+
 def test_moss_image_is_named_by_its_file_and_loads_its_encoder_as_itself():
     """A set onto MOSS-Image kept the old model's CLIP type: no family, no
     retype, and the sampler refused the prompt."""

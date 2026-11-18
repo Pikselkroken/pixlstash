@@ -11355,7 +11355,11 @@ answer:
   transformer-decoder video VAE), so one downloaded into a flat folder is a VAE
   rather than `unknown`; hub data version 19 re-files those, data version 24
   does it again for Wan's layout, and data version 25 for MiniMax's, from
-  `checkpoint` too, since its 2.6B parameters filed it as one. A `.safetensors`
+  `checkpoint` too, since its 2.6B parameters filed it as one. Data version 26
+  re-reads filename guesses once more (`_reidentify_filename_guesses`) when
+  MiniMax H3 Image (family `minimax_h3_image`, MiniMax's still-image model,
+  not H3 video drawing a frame) joined the base models: its
+  `minimax_h3_image_*` files had been guesses of MiniMax H3. A `.safetensors`
   text encoder is told by its top-level token table (`has_text_encoder_markers`):
   CLIP-L/H/G or XXL T5/UMT5, by the rule `family_from_header` names it by, or
   a language model's `model.embed_tokens.weight` (Qwen 2.5-VL, Gemma, Llama,
@@ -12874,12 +12878,15 @@ one or more sheets and their panels become the character's pictures. **A sheet
 is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 
 - **A sheet is an ordinary run.** The dialog runs a MOSS-Image, Krea 2,
-  Qwen-Image, FLUX.2 Klein or MiniMax H3 `txt2img` workflow (PixlStash ships
-  five, #2700: `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
+  Qwen-Image, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image `txt2img` workflow
+  (PixlStash ships seven, #2700: `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
   `Sheet-Flux2-Klein-9B*.json`, a text and a `-Reference` one of each, and
   `Sheet-MiniMax-H3-Reference.json`, a reference one only, since ComfyUI's
   own H3 text-to-image template can draw sheets: its size is wired from a
-  `ResolutionSelector`, and the card offers that as a size a run sets; every
+  `ResolutionSelector`, and the card offers that as a size a run sets; and
+  `Sheet-MiniMax-H3-Image*.json`, a text and a reference one for MiniMax H3
+  Image, whose `MiniMaxH3ImageConditioning` takes the picture as
+  `<Picture 1>`; every
   size a literal 2560×1536 and the encoder and VAE loaded by digest; the step
   files their cards through `POST /comfyui/workflows/{name}/card` before it
   lists the cards) through `POST /workflows/run` with the prompt, negative and canvas
@@ -13006,7 +13013,8 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   - `workflow_identity.reference_input_count(nodes)` says which graphs can:
     the picture loaders feeding an edit model's reference input
     (`ReferenceLatent`, `TextEncode…ImageEdit…`, Qwen-Image 2.1's
-    `TextEncodeQwenImage21`, MiniMax H3's `MiniMaxH3ReferenceToVideo`; a
+    `TextEncodeQwenImage21`, MiniMax H3's `MiniMaxH3ReferenceToVideo`,
+    MiniMax H3 Image's `MiniMaxH3ImageConditioning`; a
     ControlNet's pose is not one) in a `txt2img` / `img2img` graph whose every sampler
     starts from an empty latent (followed through `latent_image` only, an
     empty latent ending the walk, so one sized from the picture still counts)

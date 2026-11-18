@@ -96,11 +96,16 @@ def _t2i_graph() -> dict:
         ("Flux2-Klein-t2i.json", (("9",), (), ("75:74",), ("75:67",))),
         # The negative is ConditioningZeroOut of the positive: no prompt.
         ("Inpaint-Flux2-Klein-9B.json", (("16",), ("1",), ("9",), ())),
+        ("Inpaint-MiniMax-H3-Image.json", (("11",), ("1",), ("6",), ())),
         ("Inpaint-Qwen-Image-2.1.json", (("16",), ("1",), ("9",), ())),
         ("Inpaint-Qwen-Image-Edit-2511.json", (("16",), ("1",), ("9",), ())),
+        ("MiniMax-H3-Image-Edit.json", (("11",), ("1",), ("6",), ())),
+        ("MiniMax-H3-Image-t2i.json", (("11",), (), ("6",), ())),
         # The character sheet workflows (#2700); a zeroed negative again.
         ("Sheet-Flux2-Klein-9B.json", (("18",), (), ("6",), ())),
         ("Sheet-Flux2-Klein-9B-Reference.json", (("18",), ("1",), ("6",), ())),
+        ("Sheet-MiniMax-H3-Image.json", (("11",), (), ("6",), ())),
+        ("Sheet-MiniMax-H3-Image-Reference.json", (("11",), ("1",), ("6",), ())),
         # MiniMax H3 guides with BasicGuider: no negative at all.
         ("Sheet-MiniMax-H3-Reference.json", (("19",), ("1",), ("6",), ())),
         ("Sheet-Qwen-Image-2.1.json", (("18",), (), ("9",), ())),
@@ -715,6 +720,11 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
             [["9", "inputs", "text"]],
         ),
         (
+            "Inpaint-MiniMax-H3-Image.json",
+            [["1", "inputs", "image"]],
+            [["6", "inputs", "prompt"]],
+        ),
+        (
             "Inpaint-Qwen-Image-2.1.json",
             [["1", "inputs", "image"]],
             [["9", "inputs", "prompt"]],
@@ -729,6 +739,18 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
             "Sheet-Flux2-Klein-9B-Reference.json",
             [["1", "inputs", "image"]],
             [["6", "inputs", "text"]],
+        ),
+        (
+            "MiniMax-H3-Image-Edit.json",
+            [["1", "inputs", "image"]],
+            [["6", "inputs", "prompt"]],
+        ),
+        ("MiniMax-H3-Image-t2i.json", [], [["6", "inputs", "prompt"]]),
+        ("Sheet-MiniMax-H3-Image.json", [], [["6", "inputs", "prompt"]]),
+        (
+            "Sheet-MiniMax-H3-Image-Reference.json",
+            [["1", "inputs", "image"]],
+            [["6", "inputs", "prompt"]],
         ),
         (
             "Sheet-MiniMax-H3-Reference.json",

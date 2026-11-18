@@ -1736,8 +1736,8 @@ Escape and Enter do nothing here: cancelling deletes a set.
   comes, so its select fills before the other mode is done. The four draw choices (*Body
   photos*, *Sheets to draw*, *Sheet size*, *Draw a*) are `Segmented` toggles
   side by side (*Sheet size* greys out what the chosen model does not draw
-  well, `ENGINES[…].sizes`: 4K for all but MiniMax H3, Small and Medium for
-  H3, and choosing an H3 workflow picks 4K; a size saved with the set stands
+  well, `ENGINES[…].sizes`: 4K for all but MiniMax H3 and H3 Image, Small and
+  Medium for those two, and choosing one of their workflows picks 4K; a size saved with the set stands
   where the model draws it), wrapping only on a narrow window, with one line of hints; the
   description takes the height the form leaves. *Draw a* follows the
   description (`subjectFromDescription`: "man", "he", "his" against "woman",
@@ -1750,7 +1750,7 @@ Escape and Enter do nothing here: cancelling deletes a set.
   rides in the step row as a neutral pill) and the MOSS-Image, Krea 2,
   Qwen-Image, FLUX.2 Klein or MiniMax H3 `txt2img` workflows with no reference
   input (`cardEngine`: the diffusion model's family, #2700), after asking for
-  the five shipped sheet workflows' cards (`SHEET_BUILT_INS` through
+  the seven shipped sheet workflows' cards (`SHEET_BUILT_INS` through
   `cardForWorkflow`; one that fails is logged and left out); *Draw* saves the typed description on a character that had none,
   then runs the workflow (`runWorkflowCard`, the canvas as `values` at the
   card's own width/height addresses) and polls each run's outcome and
@@ -1797,7 +1797,7 @@ Escape and Enter do nothing here: cancelling deletes a set.
   new pictures so the slider, coverage and Create all read that one list.
 - **Drawn from a reference picture** (#2679, backend §25.29; design
   "Reference pinned beside the sheets"). Where the library has a
-  Qwen-Image-Edit, FLUX.2 Klein or MiniMax H3 card with `reference_inputs > 0` (#2700;
+  Qwen-Image-Edit, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image card with `reference_inputs > 0` (#2700;
   `referenceEngine` reads the card's diffusion model, `unet` or `checkpoint`,
   never its text encoder or VAE: Krea 2 and MOSS-Image load a Qwen encoder,
   and matching on that is how Krea 2's style reference got listed), the
