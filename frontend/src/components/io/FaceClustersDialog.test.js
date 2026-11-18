@@ -479,6 +479,14 @@ describe("FaceClustersDialog", () => {
       expect(wrapper.find('[data-testid="fc-seeds-ignored"]').text()).toContain(
         "1 of the 4 pictures you picked has no face of Wren, so it is left out.",
       );
+      // Each pick in the rail's stack zooms itself.
+      await wrapper.findAll(".fc-row__stack img")[1].trigger("dblclick");
+      await flushPromises();
+      expect(document.querySelector(".zp-cap").textContent.trim()).toMatch(/^Your cluster · picked by you · face 2 of/);
+      document
+        .querySelector('[data-testid="zoom-popout"]')
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await flushPromises();
       // Choosing Cluster 1 shows the first automatic cluster, unchanged.
       await rows[1].trigger("click");
       expect(wrapper.find(".fc-title").text()).toContain("Cluster 1");

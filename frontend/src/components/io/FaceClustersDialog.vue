@@ -69,7 +69,7 @@
                     :src="pictureThumbnailUrl(m.picture_id)"
                     :style="{ '--fc-stack': k }"
                     alt=""
-                    @dblclick="zoomIn('clusters', rows[0].members[0].picture_id)"
+                    @dblclick="zoomIn('field', m.picture_id)"
                   />
                 </span>
                 <span class="fc-row__text">
