@@ -233,6 +233,32 @@ def test_a_plugin_without_its_recipe_folder_leaves_the_others(tmp_path):
     assert "zimage-turbo" in ids
 
 
+def test_every_shipped_recipe_file_loads():
+    """A broken shipped recipe is skipped at run time, so it must fail here."""
+    files = {
+        name[: -len(".json")]
+        for name in os.listdir(presets.PRESET_DIR)
+        if name.endswith(".json")
+    }
+    assert files
+    assert files <= set(presets.shipped_presets())
+
+
+def test_one_broken_plugin_recipe_leaves_the_rest(tmp_path):
+    class Broken(FakeTrainer):
+        name = "broken-recipe"
+        presets_dir = str(tmp_path)
+
+    (tmp_path / "bad.json").write_text("{not json")
+    (tmp_path / "half.json").write_text('{"id": "half"}')
+    registry.register(Broken)
+    try:
+        ids = {preset["id"] for preset in presets.list_presets()}
+    finally:
+        registry.unregister(Broken.name)
+    assert "zimage-turbo" in ids and "half" not in ids
+
+
 def test_a_recipe_id_shipped_twice_keeps_the_first_plugins(tmp_path):
     shipped = presets.get_preset("zimage-turbo")
 

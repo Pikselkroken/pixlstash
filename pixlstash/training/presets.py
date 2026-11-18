@@ -371,8 +371,20 @@ def shipped_presets() -> dict[str, dict]:
             if not filename.endswith(".json"):
                 continue
             path = os.path.join(folder, filename)
-            with open(path, encoding="utf-8") as handle:
-                preset = validate_preset(json.load(handle))
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    preset = validate_preset(json.load(handle))
+            except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+                # One bad file must not take every recipe with it. A shipped
+                # one is caught by the tests, which load every file.
+                logger.warning(
+                    "Skipping recipe %s of training plugin '%s' in %s: %r",
+                    filename,
+                    plugin.name,
+                    folder,
+                    exc,
+                )
+                continue
             preset.setdefault("trainer", plugin.name)
             kept = presets.get(preset["id"])
             if kept is not None:
