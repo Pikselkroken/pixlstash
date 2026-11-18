@@ -857,7 +857,7 @@ def create_router(server) -> APIRouter:
                                     new_sha = ImageUtils.calculate_hash_from_file_path(
                                         new_path
                                     )
-                                    if not pic.pixel_sha or new_sha == pic.pixel_sha:
+                                    if pic.pixel_sha and new_sha == pic.pixel_sha:
                                         repointed_paths.append((old_path, new_path))
                                         old_path = None
                                     if pic.pixel_sha and new_sha != pic.pixel_sha:

@@ -140,8 +140,9 @@ def test_render_storyboard_lays_equal_tiles_left_to_right(tmp_path):
     assert sheet.size == (STORYBOARD_FRAMES * 2 * STORYBOARD_TILE_HEIGHT, 160)
 
 
-def test_a_very_wide_clip_still_fits_one_webp():
-    frames = [Image.new("RGB", (4000, 10))] * STORYBOARD_FRAMES
+@pytest.mark.parametrize("size", [(4000, 10), (20000, 2)])
+def test_a_very_wide_clip_still_fits_one_webp(size):
+    frames = [Image.new("RGB", size)] * STORYBOARD_FRAMES
     sheet = Image.open(io.BytesIO(ImageUtils.render_storyboard(frames)))
     assert sheet.width <= 16383
 
@@ -434,3 +435,27 @@ def test_repointing_onto_a_missing_file_drops_the_old_cached_files(
     root = server.vault.image_root
     assert not os.path.exists(ImageUtils.get_thumbnail_path(root, old))
     assert not os.path.exists(ImageUtils.derived_media_path(root, old, "storyboard"))
+
+
+def test_repointing_a_picture_with_no_hash_drops_its_cached_files(
+    server, owner, tmp_path
+):
+    old_root = os.path.realpath(str(tmp_path / "unhashed"))
+    folder_id, pic, old = _reference_clip(server, old_root)
+
+    def forget_hash(session: Session):
+        session.get(Picture, pic).pixel_sha = None
+        session.commit()
+
+    server.vault.db.run_task(forget_hash)
+    new_root = os.path.realpath(str(tmp_path / "unhashed-moved"))
+    os.rename(old_root, new_root)
+    r = owner.patch(f"{API}/reference-folders/{folder_id}", json={"folder": new_root})
+    assert r.status_code == 200, r.text
+    root = server.vault.image_root
+    new = _file_path(server, pic)
+    for path in (old, new):
+        assert not os.path.exists(ImageUtils.get_thumbnail_path(root, path))
+        assert not os.path.exists(
+            ImageUtils.derived_media_path(root, path, "storyboard")
+        )
