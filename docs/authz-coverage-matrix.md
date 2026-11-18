@@ -221,6 +221,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | GET | `/api/v1/pictures/stream` | scoped_list |  |  |
 | POST | `/api/v1/pictures/thumbnails` | scoped_list |  |  |
 | GET | `/api/v1/pictures/thumbnails/{id}.webp` | picture_scoped | id=id |  |
+| GET | `/api/v1/pictures/storyboards/{id}.webp` | picture_scoped | id=id | A video's frame strip; same scope as its thumbnail. Not a ComfyUI-pack route |
 | PATCH | `/api/v1/pictures/{id}` | picture_scoped | id=id |  |
 | DELETE | `/api/v1/pictures/{id}` | picture_scoped | id=id |  |
 | GET | `/api/v1/pictures/{id}.{ext}` | picture_scoped | id=id |  |
