@@ -84,7 +84,9 @@ class ImageEmbeddingTask(BaseTask):
 
         # Preloading state - images loaded from disk in on_queued() so I/O
         # overlaps with the previous task's GPU inference.
-        self._preloaded_images: list = []  # list of (pid, file_path, PIL.Image)
+        # (pid, file_path, image, dhash, tensor): the image is already reduced
+        # by CLIP's own first resize, never the decoded original (#2748).
+        self._preloaded_images: list = []
         self._preload_lock = threading.Lock()
         self._preload_thread: threading.Thread | None = None
         self._preload_cancel = threading.Event()
@@ -115,7 +117,8 @@ class ImageEmbeddingTask(BaseTask):
 
         Everything per-image that is CPU work happens here, in a small pool:
         the decode, the perceptual hash (a LANCZOS resample of the full
-        frame), and CLIP's own preprocessing when the model is already loaded.
+        frame), the reduction to CLIP's first resize, and CLIP's own
+        preprocessing when the model is already loaded.
         Measured on the GPU worker instead, those were 4 s of a 4.2 s batch of
         128 - the forward pass itself is a tenth of a second - and the single
         GPU worker sat on CPU work while every other stage waited for it.
@@ -139,8 +142,24 @@ class ImageEmbeddingTask(BaseTask):
             except Exception as exc:
                 logger.debug("EmbedPreload: failed to load %s: %s", file_path, exc)
                 return [(pid, file_path, None, None, None)]
+            # Hashed from the full frame, then dropped (#2748): the original
+            # held to the end of the batch, beside its tensor, is what kept
+            # 6.3 GB per batch of 64 large photos.
+            hashes = [self._compute_dhash(img) for img in images]
             tensors = None
             if self._clip_workflow is not None:
+                try:
+                    images = self._clip_workflow.reduce_for_preprocess(images)
+                except Exception as exc:
+                    # Embedded from the original instead; only the memory
+                    # is lost.
+                    logger.warning(
+                        "EmbedPreload: could not reduce %s (%s) for CLIP; "
+                        "holding the decoded original: %s",
+                        file_path,
+                        [img.size for img in images],
+                        exc,
+                    )
                 try:
                     tensors = self._clip_workflow.preprocess_images(images)
                 except Exception as exc:
@@ -157,7 +176,7 @@ class ImageEmbeddingTask(BaseTask):
                     pid,
                     file_path,
                     img,
-                    self._compute_dhash(img),
+                    hashes[i],
                     tensors[i] if tensors is not None else None,
                 )
                 for i, img in enumerate(images)
@@ -491,7 +510,9 @@ class ImageEmbeddingTask(BaseTask):
 
         Args:
             preloaded: One entry per picture (per frame for a video):
-                ``(pid, file_path, PIL.Image | None)``, optionally followed by
+                ``(pid, file_path, PIL.Image | None)``, the image reduced by
+                :meth:`ClipEmbeddingWorkflow.reduce_for_preprocess` (the hash
+                is of the original), optionally followed by
                 the perceptual hash and the CLIP-preprocessed tensor the
                 preload pool computed. Anything missing is computed here.
             started_at: ``time.perf_counter()`` when the task started running;
@@ -515,10 +536,12 @@ class ImageEmbeddingTask(BaseTask):
             if img is None:
                 decode_failed_pids.add(pid)
                 continue
-            dhash = entry[3] if len(entry) > 3 else None
+            # A preloaded image is reduced, so its hash comes from the preload
+            # (None when that failed); hashing it here would differ.
+            dhash = entry[3] if len(entry) > 3 else self._compute_dhash(img)
             tensor = entry[4] if len(entry) > 4 else None
             flat_images.append(img)
-            flat_hashes.append(dhash if dhash is not None else self._compute_dhash(img))
+            flat_hashes.append(dhash)
             flat_tensors.append(tensor)
             flat_pids.append(pid)
         # All or nothing: a batch is one forward pass, and the service

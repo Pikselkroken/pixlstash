@@ -39,6 +39,11 @@ class DescriptionWorkflow:
         self._engine = engine
         self._image_root = image_root
 
+    @property
+    def tagger_settings(self) -> dict:
+        """The plugin settings of the engine this workflow runs on."""
+        return self._engine.tagger_settings
+
     def generate_batch(
         self,
         pictures: list,

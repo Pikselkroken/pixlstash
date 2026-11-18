@@ -6,8 +6,10 @@ feature extraction from image crops.
 
 from __future__ import annotations
 
+import functools
 import logging
 import threading
+from dataclasses import asdict
 from typing import Optional
 
 import numpy as np
@@ -26,6 +28,33 @@ logger = logging.getLogger(__name__)
 
 CLIP_MODEL_NAME = "ViT-B-32"
 CLIP_MODEL_WEIGHTS = "laion2b_s34b_b79k"
+
+
+@functools.cache
+def _unloaded_first_resize():
+    """The first step of the preprocessing :meth:`ClipService._load` gets.
+
+    Built without the model, the way ``open_clip.create_model`` merges its
+    config: the defaults, then the pretrained tag's, then the vision tower's
+    image size. ``tests/test_image_embedding_worker.py`` holds it to the
+    transform a real load returns.
+    """
+    import open_clip
+    from open_clip.pretrained import get_pretrained_cfg
+    from open_clip.transform import (
+        PreprocessCfg,
+        image_transform_v2,
+        merge_preprocess_dict,
+    )
+
+    cfg = merge_preprocess_dict(
+        asdict(PreprocessCfg()),
+        get_pretrained_cfg(CLIP_MODEL_NAME, CLIP_MODEL_WEIGHTS),
+    )
+    cfg["size"] = open_clip.get_model_config(CLIP_MODEL_NAME)["vision_cfg"][
+        "image_size"
+    ]
+    return image_transform_v2(PreprocessCfg(**cfg), is_train=False).transforms[0]
 
 
 class ClipService:
@@ -120,6 +149,29 @@ class ClipService:
         if not self.is_loaded():
             return None
         return [self._preprocess(img) for img in images]
+
+    def reduce_for_preprocess(self, images: list) -> list:
+        """*images* put through the preprocessing's own first resize (#2748).
+
+        What a preload holds in place of the decoded original: a 24 MP photo
+        becomes a 224 px-short-side image, 0.2 MB against 72 MB. The resize
+        that follows in the preprocessing then leaves it as it is, so the
+        tensor is the one the original gives. Works before the model is
+        loaded, which is when a preload most often runs.
+
+        Args:
+            images: List of RGB ``PIL.Image`` objects.
+
+        Returns:
+            The reduced images, in order.
+        """
+        preprocess = self._preprocess
+        resize = (
+            preprocess.transforms[0]
+            if preprocess is not None
+            else _unloaded_first_resize()
+        )
+        return [resize(img) for img in images]
 
     def encode_image_batch(
         self, images: list, tensors: "Optional[list]" = None
