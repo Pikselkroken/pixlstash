@@ -2419,6 +2419,7 @@ Browser-native `<img>` tags **cannot** use the axios interceptor, so the integra
 |-----|---------|
 | `GET /api/v1/pictures/thumbnails/{id}.webp` | Cached WebP thumbnail. Backend uses an async lock + LRU memory cache + on-disk `.pixlstash/` cache. |
 | `POST /api/v1/pictures/thumbnails` | Batch thumbnail metadata (JSON). |
+| `GET /api/v1/pictures/storyboards/{id}.webp` | A video's 11 evenly spaced frames, first to last, left to right in one WebP (#2147). Made on demand and cached beside the thumbnail; picture-scoped; the thumbnail's cache headers; 404 for a still or a clip whose frames cannot all be read. |
 | `GET /api/v1/pictures/{id}.{ext}` | Original file (optionally watermarked). |
 
 ### Generated thumbnails: the URL is stable, so the *response* carries the freshness contract
