@@ -328,9 +328,9 @@ describe("FaceClustersDialog", () => {
     await flushPromises();
     await centreOn12(wrapper);
     expect(Number(wrapper.find('[data-testid="fc-cut"]').element.value)).toBe(0.45);
-    expect(wrapper.find('[data-testid="fc-count"]').text()).toContain("4 of 8 of Wren's faces");
+    expect(wrapper.find('[data-testid="fc-count"]').text()).toContain("4 of Wren's 8 faces");
     const pick = wrapper.find('[data-testid="fc-save-centred"]');
-    expect(pick.text()).toBe("Make these 4 faces Wren's reference");
+    expect(pick.text()).toBe("Make these Wren's reference");
     await pick.trigger("click");
     await flushPromises();
     // Face 2 is Cluster 1's: the centred view reaches across clusters.
@@ -352,7 +352,7 @@ describe("FaceClustersDialog", () => {
     const centred = async () => {
       await centreOn12(wrapper);
       await wrapper.find('[data-testid="fc-cut"]').setValue("0.15");
-      expect(count()).toContain("7 of 8");
+      expect(count()).toContain("7 of Wren's 8");
     };
     await centred();
     await wrapper.find('[data-testid="fc-uncentre"]').trigger("click");

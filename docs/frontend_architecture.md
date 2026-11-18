@@ -1917,9 +1917,11 @@ up).
   `C` on the field (a click still only selects), asks `getFaceClusters` again
   with `centre` and shows `centred`, every face of the person ranked against
   that face, in place of the cluster: *Centred on face* and its thumbnail, *k
-  of n of {name}'s faces count*, *Make these k faces {name}'s reference* and
-  *Back to Cluster N's centre*; no *Against the reference*, and every likeness
-  reads "to the chosen face". The slider starts at the strictness threshold,
+  of {name}'s n faces count*, *Make these {name}'s reference* and *Back to
+  Cluster N's centre*; no *Against the reference*, and every likeness
+  reads "to the chosen face". The pane header wraps, its count on a line of its
+  own under the title and buttons, so the labels never squeeze it into a
+  column. The slider starts at the strictness threshold,
   not at every face. Back, any rail row, a strictness change or a save leave
   it; the cluster's own slider value is kept. Nothing about the centre is
   stored.

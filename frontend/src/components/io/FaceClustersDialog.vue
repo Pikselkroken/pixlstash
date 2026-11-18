@@ -122,7 +122,7 @@
               >
             </h3>
             <span v-if="centred" class="fc-meta" data-testid="fc-count"
-              ><b>{{ kept.length }}</b> of {{ current.size }} of {{ name }}'s faces
+              ><b>{{ kept.length }}</b> of {{ name }}'s {{ current.size }} faces
               count</span
             >
             <span v-else class="fc-meta" data-testid="fc-count"
@@ -143,7 +143,7 @@
                 :disabled="!kept.length"
                 data-testid="fc-save-centred"
                 @click="save(kept)"
-                >Make these {{ kept.length }} faces {{ name }}'s reference</AppButton
+                >Make these {{ name }}'s reference</AppButton
               >
             </template>
             <template v-else-if="current.is_reference">
@@ -1154,19 +1154,24 @@ function close() {
 }
 .fc-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-2) var(--space-4);
 }
 .fc-title {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  margin: 0;
+  margin: 0 auto 0 0;
+  white-space: nowrap;
   font-size: var(--text-xl);
   font-weight: var(--weight-semibold);
 }
+/* Its own line under the title and the buttons, so long button labels
+   never squeeze it into a column. */
 .fc-meta {
-  flex: 1;
+  order: 1;
+  flex-basis: 100%;
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
