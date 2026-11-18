@@ -90,8 +90,8 @@ RUN pip install --no-cache-dir \
 # electron/src/config.ts). It goes in last, after removing plain onnxruntime:
 # insightface depends on that, and both install the same `onnxruntime` module,
 # so whichever lands second wins. The check fails the build if CPU won.
-RUN pip uninstall -y onnxruntime \
-    && pip install --no-cache-dir onnxruntime-gpu==1.26.0 \
+RUN pip uninstall -y onnxruntime
+RUN pip install --no-cache-dir onnxruntime-gpu==1.26.0 \
     && python -c "import onnxruntime as o; p = o.get_available_providers(); assert 'CUDAExecutionProvider' in p, p"
 
 
