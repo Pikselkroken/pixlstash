@@ -848,7 +848,7 @@ def list_builtin_workflows(hub) -> list[str]:
                 continue
             try:
                 filed.append(store_builtin_workflow(hub, entry, path))
-            except (NotAWorkflowError, RecursionError, ValueError) as exc:
+            except (NotAWorkflowError, RecursionError, ValueError, OSError) as exc:
                 logger.warning(
                     "Built-in workflow %s cannot be a manual workflow, so it "
                     "is not listed on the Workflows page: %s",

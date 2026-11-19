@@ -6143,6 +6143,38 @@ def test_built_ins_are_listed_once_and_a_removed_one_stays_off(
     assert comfyui_module.list_builtin_workflows(hub) == []
 
 
+def test_an_unreadable_built_in_is_skipped_and_the_rest_still_listed(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if one unreadable file stops start-up, or every built-in after it."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    builtin = tmp_path / "built-in"
+    builtin.mkdir()
+    shutil.copy(
+        os.path.join(comfyui_module.WORKFLOW_BUILTIN_DIR, "MiniMax-H3-Image-t2i.json"),
+        builtin,
+    )
+    (builtin / "A-unreadable.json").write_text("{}")
+    monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", str(builtin))],
+    )
+    real_load = comfyui_module._load_workflow_json
+
+    def load(path):
+        if path.endswith("A-unreadable.json"):
+            raise PermissionError(13, "Permission denied", path)
+        return real_load(path)
+
+    monkeypatch.setattr(comfyui_module, "_load_workflow_json", load)
+    hub = workflow_env.server.hub
+
+    (h3,) = comfyui_module.list_builtin_workflows(hub)
+    assert _by_key(_cards(workflow_env.owner))[h3]["name"] == "MiniMax-H3-Image-t2i"
+
+
 def _builtin_edit_graph(steps: int) -> dict:
     """The built-in edit workflow with its own step count: not a copy of it."""
     path = os.path.join(

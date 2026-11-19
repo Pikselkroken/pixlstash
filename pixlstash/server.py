@@ -803,7 +803,7 @@ class Server(
             # inbox, so a built-in dropped there too is already stored.
             try:
                 list_builtin_workflows(self.hub)
-            except sqlite3.Error as exc:
+            except (sqlite3.Error, OSError) as exc:
                 logger.error(
                     "Could not list the built-in workflows on the Workflows "
                     "page; they are listed at the next start: %s",
