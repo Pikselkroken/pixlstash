@@ -3041,7 +3041,7 @@ def create_router(server) -> APIRouter:
             if workflow_id is None:
                 try:
                     workflow_id = store_builtin_workflow(hub, name, path)
-                except (NotAWorkflowError, RecursionError, ValueError) as exc:
+                except (NotAWorkflowError, RecursionError, ValueError, OSError) as exc:
                     logger.warning(
                         "Stored workflow %s cannot be a manual workflow: %s",
                         name,

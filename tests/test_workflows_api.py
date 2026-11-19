@@ -6177,6 +6177,9 @@ def test_an_unreadable_built_in_is_skipped_and_the_rest_still_listed(
 
     (h3,) = comfyui_module.list_builtin_workflows(hub)
     assert _by_key(_cards(workflow_env.owner))[h3]["name"] == "MiniMax-H3-Image-t2i"
+    # The card route answers it as a file it could not store, not a 500.
+    card = workflow_env.owner.post(f"{API}/comfyui/workflows/A-unreadable.json/card")
+    assert card.status_code == 409, card.text
 
 
 def _builtin_edit_graph(steps: int) -> dict:
