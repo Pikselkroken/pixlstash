@@ -12,6 +12,7 @@ and the end-to-end scan/export/write-back behaviour through a real Server:
 import os
 import shutil
 import tempfile
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -275,11 +276,23 @@ def clean_folders(server):
 
 
 def _make_folder(server, folder_dir, **kwargs):
+    """Register a reference folder that the background scanner will leave alone.
+
+    A folder with ``last_scanned`` NULL is due for a scan at once, so the
+    module server's planner can import its files before ``_run_scan`` does,
+    which then reports ``new_count == 0``. Stamping it puts the folder outside
+    ``ReferenceFolderScanFinder``'s rescan interval from the moment it exists;
+    see ``tests/test_reference_folder_moves.py::_make_folder``.
+    """
     os.makedirs(folder_dir, exist_ok=True)
 
     def _insert(session: Session):
         folder = ReferenceFolder(
-            folder=folder_dir, label="refs", status="active", **kwargs
+            folder=folder_dir,
+            label="refs",
+            status="active",
+            last_scanned=time.time(),
+            **kwargs,
         )
         session.add(folder)
         session.commit()
