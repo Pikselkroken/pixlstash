@@ -1261,16 +1261,18 @@ describe("the browse toolbar", () => {
     expect(bar.find(".wfv-name-bar").exists()).toBe(false);
   });
 
-  it("keeps the active filters inside the bar, not on a row under it", async () => {
+  it("puts the active filters on their own row under the bar, not in it", async () => {
     const wrapper = await grid();
     useWorkflowsStore().setFilters({ type: "upscale" });
     await flush();
-    expect(wrapper.find(".wfv-toolbar .filter-chip").exists()).toBe(true);
-    expect(wrapper.find(".wfv-toolbar .filter-strip").exists()).toBe(true);
-    // No strip sits outside the bar any more.
-    expect(
-      wrapper.findAll(".filter-strip").filter((el) => !el.element.closest(".wfv-toolbar")),
-    ).toHaveLength(0);
+    expect(wrapper.find(".wfv-toolbar .filter-strip").exists()).toBe(false);
+    const strip = wrapper.find(".wfv > .filter-strip");
+    expect(strip.exists()).toBe(true);
+    expect(strip.find(".filter-chip").exists()).toBe(true);
+    // Straight after the bar, above the grid.
+    expect(strip.element.previousElementSibling.classList).toContain(
+      "wfv-toolbar",
+    );
   });
 
   it("Search is bound to the workflow name filter, and types into it", async () => {
@@ -1337,7 +1339,7 @@ describe("the browse toolbar", () => {
   });
 });
 
-// ── A narrow bar (#2629): the chips leave, Sort folds into the ⋯ ─────────
+// ── A narrow bar (#2629): Sort folds into the ⋯ ──────────────────────────
 describe("the browse toolbar when narrow", () => {
   const overflow = (wrapper) => wrapper.find('[data-testid="wfv-overflow"]');
   async function openOverflow(wrapper) {
@@ -1374,9 +1376,10 @@ describe("the browse toolbar when narrow", () => {
     // Above the fold the ⋯ is not drawn.
     expect(source).toMatch(/\.wfv-toolbar \.wfv-overflow \{\s*display: none;/);
 
-    const chips = rung(source, 960);
-    expect(chips).toMatch(/\.wfv-strip \{\s*display: none;/);
-    expect(chips).not.toContain(".wfv-sort");
+    // The chips are not a rung: they have their own row, so no width hides
+    // them.
+    expect(source).not.toContain("@container wfvbar (max-width: 960px)");
+    expect(source).not.toMatch(/\.wfv-strip \{\s*display: none;/);
 
     const sort = rung(source, 700);
     expect(sort).toMatch(/\.wfv-sort \{\s*display: none;/);
@@ -1385,7 +1388,7 @@ describe("the browse toolbar when narrow", () => {
     const filter = rung(source, 480);
     expect(filter).toMatch(/\.wfv-filter-label \{\s*display: none;/);
 
-    for (const block of [chips, sort, filter]) {
+    for (const block of [sort, filter]) {
       expect(block).not.toMatch(/wfv-bar-tail|tb-stats-btn|wfv-search/);
     }
   });

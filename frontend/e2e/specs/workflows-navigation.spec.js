@@ -515,7 +515,7 @@ test.describe("sort, filters and search", () => {
     await expect(search).toHaveValue("");
   });
 
-  test("a narrow bar leaves the chips to the Filter menu and folds Sort into the ⋯ (#2629)", async ({
+  test("a narrow bar folds Sort into the ⋯ and keeps the chips on their own row (#2629)", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1024, height: 800 });
@@ -528,11 +528,13 @@ test.describe("sort, filters and search", () => {
     const more = bar.getByRole("button", { name: "More actions" });
     await expect(more).toBeVisible();
 
-    // A filter in force: lit and counted on the button, no chip in the bar,
-    // and the menu's own header carries Clear all.
+    // A filter in force: lit and counted on the button, its chip on the row
+    // under the bar rather than squeezed out of it, and the menu's own header
+    // carries Clear all.
     await page.getByRole("textbox", { name: "Search workflows by name" }).fill("golden");
     await expect.poll(() => order(page)).toEqual([LANDSCAPE]);
-    await expect(strip(page)).toBeHidden();
+    await expect(strip(page).getByRole("button", { name: /^Remove filter:/ })).toBeVisible();
+    await expect(bar.locator(".filter-strip")).toHaveCount(0);
     await expect(filter).toHaveAccessibleName("1 Filter");
     await filter.click();
     await page.locator(".wff-root").getByRole("button", { name: "Clear all" }).click();
