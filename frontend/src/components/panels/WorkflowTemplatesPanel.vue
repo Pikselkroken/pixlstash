@@ -3,7 +3,7 @@
     <!-- Where the list comes from, first on the strip: none of it is the
          owner's own work until it is added. A ComfyUI mark with a connected
          dot (a red cross for the shipped copy); the filter chips are
-         the toolbar's (#2165). The address and the re-read are one hover and one
+         the view's own row above (#2165). The address and the re-read are one hover and one
          click away. -->
     <div v-if="listed && store.loaded" class="wtp-strip">
       <v-menu location="bottom start" :close-on-content-click="false">

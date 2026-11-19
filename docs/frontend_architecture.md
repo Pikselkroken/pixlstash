@@ -2572,8 +2572,8 @@ filtered by.
   screen opens the right rail, where `WorkflowTab` is drawn (#1415).
   **The active filters are a row under the bar**, as on the picture grid
   (`FilterStrip inline` over `store.filterChips`, or the templates store's
-  chips while Templates is shown), there only while a filter is on. They sat
-  in the bar once and crowded Search out of it.
+  chips while Templates is shown), there only while a filter is on, so the
+  bar keeps its room for Search.
   **A narrow bar folds in two rungs** (#2629), container queries on the
   bar's own `wfvbar` name (content box, so 24px under the outer width), with
   no measuring: at ≤700px Sort's split-button folds

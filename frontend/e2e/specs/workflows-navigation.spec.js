@@ -466,8 +466,7 @@ test.describe("sort, filters and search", () => {
   });
 
   test("a Filters menu row narrows the cards to a chip, and Clear all restores them", async ({ page }) => {
-    // Wide enough that the chips stay in the bar: below its 960px rung they
-    // are left to the Filter menu (#2629, "a narrow bar" below).
+    // Wide enough that Sort stays in the bar (#2629, "a narrow bar" below).
     await page.setViewportSize(WIDE);
     await openGrid(page);
     // Named "Filter", and "1 Filter" with its badge.
