@@ -982,6 +982,60 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("draws text sheets with MiniMax H3 Image on its own LoRAs, never H3 video's", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({
+      description: "Adult woman, copper bob",
+      loras: [
+        { sha256: "h3", display_name: "Anna H3", base_model_family: "minimax_h3", added_at: "2026-11-09" },
+        { sha256: "h3i", display_name: "Anna H3 Image", base_model_family: "minimax_h3_image", added_at: "2026-11-08" },
+        { sha256: "qwen", display_name: "Anna Qwen", base_model_family: "qwen", added_at: "2026-11-07" },
+      ],
+    });
+    gen.listWorkflowCards.mockResolvedValue({
+      cards: [
+        MOSS_CARD,
+        {
+          id: "manual:h3i",
+          name: "Sheet-MiniMax-H3-Image",
+          type: "txt2img",
+          last_used: "2026-11-12T20:00:00Z",
+          models: [
+            { kind: "clip", base_model_family: "minimax_h3" },
+            { kind: "unet", base_model_family: "minimax_h3_image" },
+          ],
+        },
+      ],
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    const select = (label) =>
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === label);
+    expect(select("Sheet workflow").props("modelValue")).toBe("manual:h3i");
+    expect(
+      select("Character LoRA · optional")
+        .props("options")
+        .filter((o) => o.value && !o.disabled)
+        .map((o) => o.value),
+    ).toEqual(["h3i"]);
+    const sizes = () =>
+      wrapper
+        .findAll('[data-testid="cs-size"] button')
+        .map((b) => [b.text(), b.attributes("disabled") !== undefined, b.attributes("aria-checked")]);
+    expect(sizes()).toEqual([
+      ["Small", true, "false"],
+      ["Medium", true, "false"],
+      ["Large", false, "false"],
+      ["4K", false, "true"],
+    ]);
+    expect(wrapper.text()).toContain("MiniMax H3 Image needs Large or 4K.");
+    wrapper.unmount();
+  });
+
   it("draws text sheets with Qwen-Image and FLUX.2 Klein, read off the diffusion model (#2700)", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
@@ -2316,24 +2370,10 @@ describe("TrainingSetBuild: generating the pictures", () => {
       { sha256: "klein", display_name: "Anna Klein", base_model_family: "flux2", base_model_canonical: "FLUX.2 Klein", added_at: "2026-11-08" },
       { sha256: "qwen", display_name: "Anna Qwen", base_model_family: "qwen", added_at: "2026-11-07" },
     ]);
-    // One shipped sheet workflow cannot be filed: the others still are, and
-    // the owner's own workflows are listed after them.
-    gen.cardForWorkflow.mockImplementation(async (name) => {
-      if (name === "Sheet-Flux2-Klein-9B.json") throw new Error("no hub");
-      return {};
-    });
     const wrapper = mountDialog();
     await flushPromises();
-    expect(gen.cardForWorkflow.mock.calls.map(([name]) => name)).toEqual([
-      "Sheet-Qwen-Image-2.1.json",
-      "Sheet-Qwen-Image-2.1-Reference.json",
-      "Sheet-Flux2-Klein-9B.json",
-      "Sheet-Flux2-Klein-9B-Reference.json",
-      "Sheet-MiniMax-H3-Reference.json",
-    ]);
-    expect(
-      Math.max(...gen.cardForWorkflow.mock.invocationCallOrder),
-    ).toBeLessThan(gen.listWorkflowCards.mock.invocationCallOrder[0]);
+    // The shipped sheet workflows are cards from start-up: the step files none.
+    expect(gen.cardForWorkflow).not.toHaveBeenCalled();
     const select = (label) =>
       wrapper.findAllComponents({ name: "AppSelect" }).find((c) => c.props("label") === label);
     const workflow = select("Sheet workflow");

@@ -1564,7 +1564,7 @@ What `ImageGrid` keeps of a ComfyUI run (#1862). A run belongs to the app: the b
 
 **Which popup opens is the server's answer, not a guess.** *Make more like these…* pre-flights the selection first; one group with a card is the single Run popup (over that group's pictures), anything else is `MakeMoreDialog`. A client cannot group pictures by card — that is what a card *is* — so deciding it here would be deciding it wrong.
 
-**Edit… opens the lightbox on its Edit tab** (it replaced *Edit with ComfyUI…*, which opened the Run popup). Both grid menus offer it as the third run entry (`ImageGrid.editSelection`, event `edit-pictures`). It first asks `POST /comfyui/workflows/Flux2-Klein-Image-Edit.json/card` so the built-in Flux.2 Klein edit workflow has a card the Edit tab can list (a built-in has no card until something asks; the route is idempotent, and a failure is logged and the tab opens anyway on the owner's own edit workflows), then sets `lightboxEditRequest = {pictureIds}` and opens the lightbox on the first selected picture. `Lightbox` reads the request (`editRequest` prop) by switching to the Edit tab and, with more than one picture, handing them to the tab as `applyToIds`, which offers *Apply to: This picture / N selected*: the batch edit the old row was for, running the instruction on every picture in one request. `RunDialog`'s `kind: "edit"` (reading none of the pictures' recipes) is still how the Edit tab opens the popup for a card that needs a reference picture.
+**Edit… opens the lightbox on its Edit tab** (it replaced *Edit with ComfyUI…*, which opened the Run popup). Both grid menus offer it as the third run entry (`ImageGrid.editSelection`, event `edit-pictures`). The built-in edit workflows are cards already (start-up lists every built-in the owner has not removed, backend §5), so it sets `lightboxEditRequest = {pictureIds}` and opens the lightbox on the first selected picture. `Lightbox` reads the request (`editRequest` prop) by switching to the Edit tab and, with more than one picture, handing them to the tab as `applyToIds`, which offers *Apply to: This picture / N selected*: the batch edit the old row was for, running the instruction on every picture in one request. `RunDialog`'s `kind: "edit"` (reading none of the pictures' recipes) is still how the Edit tab opens the popup for a card that needs a reference picture.
 
 Load-bearing behaviours:
 
@@ -1736,8 +1736,8 @@ Escape and Enter do nothing here: cancelling deletes a set.
   comes, so its select fills before the other mode is done. The four draw choices (*Body
   photos*, *Sheets to draw*, *Sheet size*, *Draw a*) are `Segmented` toggles
   side by side (*Sheet size* greys out what the chosen model does not draw
-  well, `ENGINES[…].sizes`: 4K for all but MiniMax H3, Small and Medium for
-  H3, and choosing an H3 workflow picks 4K; a size saved with the set stands
+  well, `ENGINES[…].sizes`: 4K for all but MiniMax H3 and H3 Image, Small and
+  Medium for those two, and choosing one of their workflows picks 4K; a size saved with the set stands
   where the model draws it), wrapping only on a narrow window, with one line of hints; the
   description takes the height the form leaves. *Draw a* follows the
   description (`subjectFromDescription`: "man", "he", "his" against "woman",
@@ -1749,9 +1749,9 @@ Escape and Enter do nothing here: cancelling deletes a set.
   model is listed disabled, the newest MOSS-Image one preselected, and its name
   rides in the step row as a neutral pill) and the MOSS-Image, Krea 2,
   Qwen-Image, FLUX.2 Klein or MiniMax H3 `txt2img` workflows with no reference
-  input (`cardEngine`: the diffusion model's family, #2700), after asking for
-  the five shipped sheet workflows' cards (`SHEET_BUILT_INS` through
-  `cardForWorkflow`; one that fails is logged and left out); *Draw* saves the typed description on a character that had none,
+  input (`cardEngine`: the diffusion model's family, #2700), the shipped sheet
+  workflows among them unless the owner removed one (start-up lists every
+  built-in); *Draw* saves the typed description on a character that had none,
   then runs the workflow (`runWorkflowCard`, the canvas as `values` at the
   card's own width/height addresses) and polls each run's outcome and
   `POST /characters/{id}/sheets/rank` every 2.5 s until every sheet's faces are
@@ -1797,7 +1797,7 @@ Escape and Enter do nothing here: cancelling deletes a set.
   new pictures so the slider, coverage and Create all read that one list.
 - **Drawn from a reference picture** (#2679, backend §25.29; design
   "Reference pinned beside the sheets"). Where the library has a
-  Qwen-Image-Edit, FLUX.2 Klein or MiniMax H3 card with `reference_inputs > 0` (#2700;
+  Qwen-Image-Edit, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image card with `reference_inputs > 0` (#2700;
   `referenceEngine` reads the card's diffusion model, `unet` or `checkpoint`,
   never its text encoder or VAE: Krea 2 and MOSS-Image load a Qwen encoder,
   and matching on that is how Krea 2's style reference got listed), the

@@ -773,6 +773,93 @@ def _builtin_path(name: str) -> str | None:
     return None
 
 
+def store_builtin_workflow(hub, name: str, path: str) -> str:
+    """Store the built-in file at *path* as a manual workflow; return its id.
+
+    The file as stored, not its runnable reading: the conversion rides along
+    as the row's API document. Its origin row is written in the same
+    transaction, with the content hash, so the inbox dedupes against it too.
+    Callers hold ``workflow_inbox.INBOX_LOCK``.
+
+    Raises:
+        NotAWorkflowError: The file is not shaped like a ComfyUI workflow.
+        RecursionError: The document nests too deeply to read.
+        ValueError: It will not read as JSON, or is past the size cap.
+    """
+    stored = _load_workflow_json(path)
+    workflow_id = store_manual_workflow(
+        hub,
+        _stem(name),
+        stored,
+        "builtin",
+        api_document=converted_graph(path, stored),
+        record=(
+            workflow_origin.BUILTIN_ORIGIN,
+            name,
+            None,
+            workflow_inbox.content_hash(stored),
+        ),
+    )
+    _keep_builtin_thumbnail(hub, path, workflow_id)
+    return workflow_id
+
+
+def _keep_builtin_thumbnail(hub, path: str, workflow_id: str) -> None:
+    """Make the ``.webp`` shipped beside built-in *path* its thumbnail, unpinned.
+
+    Unpinned, like a template's picture, so the workflow's own pictures take
+    over once there are any. A built-in shipped without one keeps the empty
+    cover.
+    """
+    picture = os.path.splitext(path)[0] + ".webp"
+    if not os.path.isfile(picture):
+        return
+    try:
+        with open(picture, "rb") as handle:
+            digest = store_icon(hub.path, handle.read())
+        workflow_thumbnails.set_thumbnail(hub, workflow_id, digest, pinned=False)
+    except (IconRefused, OSError, sqlite3.Error) as exc:
+        logger.warning(
+            "Built-in workflow %s is listed without its thumbnail %s: %s",
+            workflow_id,
+            picture,
+            exc,
+        )
+
+
+def list_builtin_workflows(hub) -> list[str]:
+    """Put every built-in never listed before on the Workflows page; return the ids.
+
+    A built-in is the owner's by default until they remove or hide it. One
+    with any ``builtin`` origin row was listed already: it is live, hidden, or
+    removed (deleting keeps the row, dismissed, as the record that the owner
+    took it off), and none of those is filed again. So this lists what a
+    release adds, once. A file that will not store is logged and skipped.
+    """
+    if not os.path.isdir(WORKFLOW_BUILTIN_DIR):
+        return []
+    filed = []
+    with workflow_inbox.INBOX_LOCK:
+        for entry in sorted(os.listdir(WORKFLOW_BUILTIN_DIR)):
+            path = _builtin_path(entry) if entry.lower().endswith(".json") else None
+            if path is None or workflow_origin.ever_stored(
+                hub, workflow_origin.BUILTIN_ORIGIN, entry
+            ):
+                continue
+            try:
+                filed.append(store_builtin_workflow(hub, entry, path))
+            except (NotAWorkflowError, RecursionError, ValueError, OSError) as exc:
+                logger.warning(
+                    "Built-in workflow %s cannot be a manual workflow, so it "
+                    "is not listed on the Workflows page: %s",
+                    entry,
+                    exc,
+                )
+    if filed:
+        logger.info("Listed %d built-in workflow(s) on the Workflows page.", len(filed))
+    return filed
+
+
 # ponytail: one request submits its runs one after another, uploads included;
 # a queue of its own (and a higher cap) if large batches become routine.
 MAX_RUNS_PER_REQUEST = 200
@@ -2924,9 +3011,9 @@ def create_router(server) -> APIRouter:
         summary="Make a built-in workflow a manual workflow",
         description=(
             "Stores a workflow PixlStash ships as a manual workflow "
-            "and returns its id so the Run popup can open on it. A built-in "
-            "becomes one only when something asks: Edit with ComfyUI asks for "
-            "the built-in image edit workflow. Idempotent: a file already made "
+            "and returns its id so the Run popup can open on it. Start-up "
+            "lists every built-in once by itself; this is the explicit way "
+            "back for one the owner removed. Idempotent: a file already made "
             "a workflow answers that workflow, while it lives. A user file "
             "is not a built-in (404): data step 7 already made it a workflow."
         ),
@@ -2953,26 +3040,8 @@ def create_router(server) -> APIRouter:
             )
             if workflow_id is None:
                 try:
-                    # The file as stored, not its runnable reading: the
-                    # conversion rides along as the row's API document.
-                    stored = _load_workflow_json(path)
-                    converted = converted_graph(path, stored)
-                    # Its origin row in the same transaction, with the content
-                    # hash, so the inbox dedupes against it too.
-                    workflow_id = store_manual_workflow(
-                        hub,
-                        _stem(name),
-                        stored,
-                        "builtin",
-                        api_document=converted,
-                        record=(
-                            workflow_origin.BUILTIN_ORIGIN,
-                            name,
-                            None,
-                            workflow_inbox.content_hash(stored),
-                        ),
-                    )
-                except (NotAWorkflowError, RecursionError, ValueError) as exc:
+                    workflow_id = store_builtin_workflow(hub, name, path)
+                except (NotAWorkflowError, RecursionError, ValueError, OSError) as exc:
                     logger.warning(
                         "Stored workflow %s cannot be a manual workflow: %s",
                         name,

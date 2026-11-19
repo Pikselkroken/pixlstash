@@ -133,6 +133,7 @@ pixlstash = [
     "image_plugins/built-in/*.py",
     "data/anchors/*.npy",
     "data/comfyui-workflows/built-in/*.json",
+    "data/comfyui-workflows/built-in/*.webp",
     "data/tag_groups/*.json",
     "data/tag_groups/*.txt",
     "data/scalar-assets/*",

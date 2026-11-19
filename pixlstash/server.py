@@ -120,6 +120,7 @@ from pixlstash.routes.pictures import (
 )
 from pixlstash.routes.comfyui import (
     create_router as create_comfyui_router,
+    list_builtin_workflows,
     store_inbox_workflow,
     workflow_user_dir,
 )
@@ -370,6 +371,10 @@ class Server(
         DEFAULT_WATCH_WORKFLOW_INBOX: Whether start-up imports the watched
             ``workflows/`` folder and keeps watching it. ``False`` in the test
             suite: that folder is machine-global too.
+        DEFAULT_LIST_BUILTIN_WORKFLOWS: Whether start-up puts each built-in
+            workflow never listed before on the Workflows page. ``False`` in
+            the test suite, whose workflow counts would otherwise all grow by
+            every built-in; the tests that need it turn it on.
         DEFAULT_WATCH_EDIT_COPIES: Whether start-up imports edits saved in an
             Open-with edit copy and keeps watching them. ``False`` in the test
             suite, which calls the import directly rather than waiting on a
@@ -385,6 +390,7 @@ class Server(
     DEFAULT_DECLARE_MODEL_ROOTS: bool = True
     DEFAULT_MIGRATE_WORKFLOW_TOKENS: bool = True
     DEFAULT_WATCH_WORKFLOW_INBOX: bool = True
+    DEFAULT_LIST_BUILTIN_WORKFLOWS: bool = True
     DEFAULT_WATCH_EDIT_COPIES: bool = True
 
     @staticmethod
@@ -796,6 +802,18 @@ class Server(
                     exc,
                 )
             _log_stage("workflow inbox reconcile")
+        if Server.DEFAULT_LIST_BUILTIN_WORKFLOWS:
+            # Every built-in is the owner's until removed or hidden. After the
+            # inbox, so a built-in dropped there too is already stored.
+            try:
+                list_builtin_workflows(self.hub)
+            except (sqlite3.Error, OSError) as exc:
+                logger.error(
+                    "Could not list the built-in workflows on the Workflows "
+                    "page; they are listed at the next start: %s",
+                    exc,
+                )
+            _log_stage("built-in workflows listed")
         if self._hub_bootstrap.migrated:
             logger.info(
                 "First run after the hub/vault split: identity now lives in %s",

@@ -580,6 +580,8 @@ def test_every_digest_a_built_in_names_can_be_downloaded():
     )
     seen = 0
     for name in sorted(os.listdir(folder)):
+        if not name.endswith(".json"):
+            continue  # a built-in's thumbnail
         with open(os.path.join(folder, name), encoding="utf-8") as handle:
             graph = json.load(handle)
         for model in missing_digest_models(graph, lambda _digest: False):

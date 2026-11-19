@@ -2713,7 +2713,7 @@ with `HubSchemaTooNewError`, locking the owner out of a downgrade.
 | `workflow_attr`, `workflow_default_override`, `workflow_key_pins` | The owner's name, notes, hidden flag, parameter overrides and pins per card, keyed by `workflow_key`, with parameters addressed by **(slot label, input name)**. **No route reads or writes them since #1623**: the cut-over's conversion reads them once into the `workflow_group*` tables below |
 | `workflow_key_picture_input`, `workflow_cover` | Input modes, Fixed pictures and the chosen cover per card, keyed by `(library_uuid, workflow_key)` and naming pictures by `pixel_sha`. Read once by the conversion (#1623), written by nothing; `workflow_cover` never had a production writer |
 | `workflow_stack`, `workflow_stack_member`, `workflow_unstacked` | Stacks of cards (`position` 0 is the cover) and the owner taking a card out of its automatic one. Their routes are gone (#1623): the conversion turns a manual stack into a manual workflow and reads these rows once |
-| `workflow_origin` (`hub/workflow_origin.py`) | Where a stored workflow came from: one row per `(origin, remote_path)`, with `workflow_name` naming the **manual workflow** the document is stored as (a file name before data step 7) and its `content_hash` (`workflow_inbox.content_hash`). Every way in that must not store a content twice records a row and deduplicates here (`stored_as` by content, `stored_at` by path; Manual workflows, below): the watched inbox (`INBOX_ORIGIN`, keyed by content hash), a user-folder file data step 7 adopted (`FILE_ORIGIN`, by file name) and a built-in (`BUILTIN_ORIGIN`, by file name). Callers hold `INBOX_LOCK` around a check and the write it decides. Deleting a manual workflow deletes the inbox, built-in and file rows naming it. **A row whose origin is a ComfyUI address is left over from the removed pull of ComfyUI's saved workflows**: since #1854 nothing writes one, marks one gone, or follows one to a file; it still says its content is stored as a live workflow, so an inbox drop of the same content matches it. Deleting its workflow marks it `dismissed` instead of removing it, which every reader passes over and which keeps an older build sharing the hub, one that still pulls, from bringing the workflow back. `remote_modified`, `dismissed` and `gone_at` are that pull's columns: nothing sets them now, and the readers still pass over a row left `dismissed` |
+| `workflow_origin` (`hub/workflow_origin.py`) | Where a stored workflow came from: one row per `(origin, remote_path)`, with `workflow_name` naming the **manual workflow** the document is stored as (a file name before data step 7) and its `content_hash` (`workflow_inbox.content_hash`). Every way in that must not store a content twice records a row and deduplicates here (`stored_as` by content, `stored_at` by path; Manual workflows, below): the watched inbox (`INBOX_ORIGIN`, keyed by content hash), a user-folder file data step 7 adopted (`FILE_ORIGIN`, by file name) and a built-in (`BUILTIN_ORIGIN`, by file name). Callers hold `INBOX_LOCK` around a check and the write it decides. Deleting a manual workflow deletes the inbox, file and template rows naming it and marks its built-in row `dismissed`, the record that keeps a removed built-in off the Workflows page. **A row whose origin is a ComfyUI address is left over from the removed pull of ComfyUI's saved workflows**: since #1854 nothing writes one, marks one gone, or follows one to a file; it still says its content is stored as a live workflow, so an inbox drop of the same content matches it. Deleting its workflow marks it `dismissed` instead of removing it, which every reader passes over and which keeps an older build sharing the hub, one that still pulls, from bringing the workflow back. `remote_modified`, `dismissed` and `gone_at` are that pull's columns: nothing sets them now, and the readers still pass over a row left `dismissed` |
 | `workflow_pulled_file` (legacy) | The stored files the removed pull of ComfyUI's saved workflows **wrote** before workflows became manual records, per file rather than per path. Nothing writes it: data step 7 reads it once, to give such a file's workflow `origin` `pull` |
 
 **Eight of those tables had no writer in B2**, and were created ahead of the
@@ -3174,14 +3174,22 @@ drop of that content matches it.
 **Delete** (`DELETE /workflows/{id}` on a manual id): the document is written
 to the inbox and sent to the trash from there (`workflow_inbox.trash_workflow`,
 under `INBOX_LOCK`), then one transaction
-(`workflow_group_writes.delete_manual_workflow`) deletes its inbox, built-in
-and file origin rows (handing the content over again stores it again), marks
-any row the removed pull left `dismissed`, and deletes its document and
+(`workflow_group_writes.delete_manual_workflow`) deletes its inbox, file and
+template origin rows (handing the content over again stores it again), marks
+its built-in row and any row the removed pull left `dismissed`, and deletes its document and
 `workflow_group_*` rows. The inbox is swept of the document's content only
 when the workflow owns its inbox row: an identical copy can be another live
 workflow's. A workflow data step 7 made of a user file (a `file` origin row)
 takes that file to the trash instead (`trash_user_workflow`), so it no longer
-lists; `POST /comfyui/workflows/{name}/card` takes built-ins only. A stored
+lists; `POST /comfyui/workflows/{name}/card` takes built-ins only. **Every
+built-in is on the Workflows page until the owner removes or hides it**:
+start-up (`routes.comfyui.list_builtin_workflows`, after the inbox reconcile;
+`Server.DEFAULT_LIST_BUILTIN_WORKFLOWS`, off in the test suite) stores each
+built-in with no `builtin` origin row at all, and deleting one keeps its row,
+`dismissed`, so it is never listed again; the card route is the explicit way
+back, and its upsert clears `dismissed`. A built-in deleted before this kept
+no row and is listed once more. A `.webp` shipped beside a built-in's
+file becomes its thumbnail, unpinned, whenever it is stored. A stored
 document is capped at `MAX_WORKFLOW_FILE_BYTES` serialised (413). Its saved recipes stay, unfiled. An automatic id
 is a 409: hide it instead.
 
@@ -11366,7 +11374,11 @@ answer:
   transformer-decoder video VAE), so one downloaded into a flat folder is a VAE
   rather than `unknown`; hub data version 19 re-files those, data version 24
   does it again for Wan's layout, and data version 25 for MiniMax's, from
-  `checkpoint` too, since its 2.6B parameters filed it as one. A `.safetensors`
+  `checkpoint` too, since its 2.6B parameters filed it as one. Data version 26
+  re-reads filename guesses once more (`_reidentify_filename_guesses`) when
+  MiniMax H3 Image (family `minimax_h3_image`, MiniMax's still-image model,
+  not H3 video drawing a frame) joined the base models: its
+  `minimax_h3_image_*` files had been guesses of MiniMax H3. A `.safetensors`
   text encoder is told by its top-level token table (`has_text_encoder_markers`):
   CLIP-L/H/G or XXL T5/UMT5, by the rule `family_from_header` names it by, or
   a language model's `model.embed_tokens.weight` (Qwen 2.5-VL, Gemma, Llama,
@@ -12885,15 +12897,17 @@ one or more sheets and their panels become the character's pictures. **A sheet
 is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 
 - **A sheet is an ordinary run.** The dialog runs a MOSS-Image, Krea 2,
-  Qwen-Image, FLUX.2 Klein or MiniMax H3 `txt2img` workflow (PixlStash ships
-  five, #2700: `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
+  Qwen-Image, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image `txt2img` workflow
+  (PixlStash ships seven, #2700: `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
   `Sheet-Flux2-Klein-9B*.json`, a text and a `-Reference` one of each, and
   `Sheet-MiniMax-H3-Reference.json`, a reference one only, since ComfyUI's
   own H3 text-to-image template can draw sheets: its size is wired from a
-  `ResolutionSelector`, and the card offers that as a size a run sets; every
-  size a literal 2560×1536 and the encoder and VAE loaded by digest; the step
-  files their cards through `POST /comfyui/workflows/{name}/card` before it
-  lists the cards) through `POST /workflows/run` with the prompt, negative and canvas
+  `ResolutionSelector`, and the card offers that as a size a run sets; and
+  `Sheet-MiniMax-H3-Image*.json`, a text and a reference one for MiniMax H3
+  Image, whose `MiniMaxH3ImageConditioning` takes the picture as
+  `<Picture 1>`. In every shipped sheet workflow each
+  size is a literal 2560×1536 and the encoder and VAE loaded by digest; they
+  are cards from start-up, like every built-in) through `POST /workflows/run` with the prompt, negative and canvas
   `POST /character-sheets/prompt` hands it (the width and height go in as
   `values` at the workflow's own size addresses), an optional character LoRA in
   `add_loras`, and `character_ids: []`: a sheet shows one person six times and
@@ -13017,7 +13031,8 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   - `workflow_identity.reference_input_count(nodes)` says which graphs can:
     the picture loaders feeding an edit model's reference input
     (`ReferenceLatent`, `TextEncode…ImageEdit…`, Qwen-Image 2.1's
-    `TextEncodeQwenImage21`, MiniMax H3's `MiniMaxH3ReferenceToVideo`; a
+    `TextEncodeQwenImage21`, MiniMax H3's `MiniMaxH3ReferenceToVideo`,
+    MiniMax H3 Image's `MiniMaxH3ImageConditioning`; a
     ControlNet's pose is not one) in a `txt2img` / `img2img` graph whose every sampler
     starts from an empty latent (followed through `latent_image` only, an
     empty latent ending the walk, so one sized from the picture still counts)

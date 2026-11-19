@@ -120,6 +120,7 @@ from pixlstash.services.workflow_hash import (
     topology_hash,
 )
 from pixlstash.hub import workflow_versions
+from pixlstash.hub import workflow_thumbnails
 from pixlstash.services import (
     comfyui_connections,
     comfyui_link_service,
@@ -6091,6 +6092,94 @@ def test_a_built_in_workflow_is_put_on_a_card_that_runs_its_file(
     assert r.json()["workflow"]["76"]["class_type"] == "LoadImage"
 
     assert owner.post(f"{API}/comfyui/workflows/nope.json/card").status_code == 404
+
+
+def test_built_ins_are_listed_once_and_a_removed_one_stays_off(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Every built-in is on the Workflows page until the owner removes it:
+    start-up lists one never listed, never one taken off, and the card route
+    is the explicit way back."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    builtin = tmp_path / "built-in"
+    builtin.mkdir()
+    for name in (
+        "Flux2-Klein-Image-Edit.json",
+        "MiniMax-H3-Image-t2i.json",
+        "MiniMax-H3-Image-t2i.webp",
+    ):
+        shutil.copy(os.path.join(comfyui_module.WORKFLOW_BUILTIN_DIR, name), builtin)
+    monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", str(builtin))],
+    )
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+
+    klein, h3 = comfyui_module.list_builtin_workflows(hub)
+    cards = _by_key(_cards(owner))
+    assert cards[klein]["name"] == "Flux2-Klein-Image-Edit"
+    assert cards[h3]["name"] == "MiniMax-H3-Image-t2i"
+    # The picture shipped beside a built-in is its thumbnail, unpinned.
+    shipped = workflow_thumbnails.thumbnails(hub)
+    assert klein not in shipped
+    assert shipped[h3] == workflow_thumbnails.Thumbnail(
+        hashlib.sha256(
+            (builtin / "MiniMax-H3-Image-t2i.webp").read_bytes()
+        ).hexdigest(),
+        False,
+    )
+    relisted = comfyui_module.list_builtin_workflows(hub)
+    assert relisted == []
+
+    deleted = owner.delete(f"{API}/workflows/{h3}")
+    assert deleted.status_code == 200
+    relisted = comfyui_module.list_builtin_workflows(hub)
+    assert relisted == []
+    assert h3 not in _by_key(_cards(owner))
+
+    r = owner.post(f"{API}/comfyui/workflows/MiniMax-H3-Image-t2i.json/card")
+    assert r.status_code == 200, r.text
+    back = r.json()["workflow_id"]
+    assert _by_key(_cards(owner))[back]["name"] == "MiniMax-H3-Image-t2i"
+    relisted = comfyui_module.list_builtin_workflows(hub)
+    assert relisted == []
+
+
+def test_an_unreadable_built_in_is_skipped_and_the_rest_still_listed(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if one unreadable file stops start-up, or every built-in after it."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    builtin = tmp_path / "built-in"
+    builtin.mkdir()
+    shutil.copy(
+        os.path.join(comfyui_module.WORKFLOW_BUILTIN_DIR, "MiniMax-H3-Image-t2i.json"),
+        builtin,
+    )
+    (builtin / "A-unreadable.json").write_text("{}")
+    monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", str(builtin))],
+    )
+    real_load = comfyui_module._load_workflow_json
+
+    def load(path):
+        if path.endswith("A-unreadable.json"):
+            raise PermissionError(13, "Permission denied", path)
+        return real_load(path)
+
+    monkeypatch.setattr(comfyui_module, "_load_workflow_json", load)
+    hub = workflow_env.server.hub
+
+    (h3,) = comfyui_module.list_builtin_workflows(hub)
+    assert _by_key(_cards(workflow_env.owner))[h3]["name"] == "MiniMax-H3-Image-t2i"
+    # The card route answers it as a file it could not store, not a 500.
+    card = workflow_env.owner.post(f"{API}/comfyui/workflows/A-unreadable.json/card")
+    assert card.status_code == 409, card.text
 
 
 def _builtin_edit_graph(steps: int) -> dict:

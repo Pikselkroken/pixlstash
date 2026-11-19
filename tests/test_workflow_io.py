@@ -96,11 +96,16 @@ def _t2i_graph() -> dict:
         ("Flux2-Klein-t2i.json", (("9",), (), ("75:74",), ("75:67",))),
         # The negative is ConditioningZeroOut of the positive: no prompt.
         ("Inpaint-Flux2-Klein-9B.json", (("16",), ("1",), ("9",), ())),
+        ("Inpaint-MiniMax-H3-Image.json", (("11",), ("1",), ("6",), ())),
         ("Inpaint-Qwen-Image-2.1.json", (("16",), ("1",), ("9",), ())),
         ("Inpaint-Qwen-Image-Edit-2511.json", (("16",), ("1",), ("9",), ())),
+        ("MiniMax-H3-Image-Edit.json", (("11",), ("1",), ("6",), ())),
+        ("MiniMax-H3-Image-t2i.json", (("11",), (), ("6",), ())),
         # The character sheet workflows (#2700); a zeroed negative again.
         ("Sheet-Flux2-Klein-9B.json", (("18",), (), ("6",), ())),
         ("Sheet-Flux2-Klein-9B-Reference.json", (("18",), ("1",), ("6",), ())),
+        ("Sheet-MiniMax-H3-Image.json", (("11",), (), ("6",), ())),
+        ("Sheet-MiniMax-H3-Image-Reference.json", (("11",), ("1",), ("6",), ())),
         # MiniMax H3 guides with BasicGuider: no negative at all.
         ("Sheet-MiniMax-H3-Reference.json", (("19",), ("1",), ("6",), ())),
         ("Sheet-Qwen-Image-2.1.json", (("18",), (), ("9",), ())),
@@ -592,10 +597,20 @@ def test_server_start_up_runs_the_migration_on_the_user_folder(tmp_path, monkeyp
     (inbox / "dropped.json").write_text(json.dumps(_t2i_graph()), encoding="utf-8")
     monkeypatch.setattr(server_module, "workflow_inbox_dir", lambda: str(inbox))
     monkeypatch.setattr(comfyui_module, "workflow_user_dir", lambda: str(user_dir))
+    # Every built-in is listed on the Workflows page at start-up.
+    builtin = tmp_path / "built-in"
+    builtin.mkdir()
+    shipped = _t2i_graph()
+    shipped["2"]["inputs"]["text"] = "a dog"
+    (builtin / "Shipped.json").write_text(json.dumps(shipped), encoding="utf-8")
+    monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
     monkeypatch.setattr(
-        comfyui_module, "_workflow_dirs", lambda: [("user", str(user_dir))]
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(user_dir)), ("built-in", str(builtin))],
     )
     monkeypatch.setattr(server_module.Server, "DEFAULT_WATCH_WORKFLOW_INBOX", True)
+    monkeypatch.setattr(server_module.Server, "DEFAULT_LIST_BUILTIN_WORKFLOWS", True)
     config_path = tmp_path / "config" / "server-config.json"
     config_path.parent.mkdir()
     config_path.write_text(json.dumps({"port": 8000}), encoding="utf-8")
@@ -604,8 +619,10 @@ def test_server_start_up_runs_the_migration_on_the_user_folder(tmp_path, monkeyp
     try:
         assert workflow_bindings.BINDINGS_KEY in _load(user_dir / "old.json")
         assert (user_dir / workflow_bindings.MIGRATION_MARKER).exists()
-        (stored,) = server.hub.fetchall("SELECT document FROM workflow_document")
-        assert json.loads(stored["document"]) == _t2i_graph()
+        # The dropped file, and the built-in listed on the Workflows page.
+        stored = server.hub.fetchall("SELECT document FROM workflow_document")
+        documents = sorted((json.loads(row["document"]) for row in stored), key=str)
+        assert documents == sorted([_t2i_graph(), shipped], key=str)
         assert server._workflow_inbox_watcher is not None
     finally:
         server.__exit__(None, None, None)
@@ -715,6 +732,11 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
             [["9", "inputs", "text"]],
         ),
         (
+            "Inpaint-MiniMax-H3-Image.json",
+            [["1", "inputs", "image"]],
+            [["6", "inputs", "prompt"]],
+        ),
+        (
             "Inpaint-Qwen-Image-2.1.json",
             [["1", "inputs", "image"]],
             [["9", "inputs", "prompt"]],
@@ -729,6 +751,18 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
             "Sheet-Flux2-Klein-9B-Reference.json",
             [["1", "inputs", "image"]],
             [["6", "inputs", "text"]],
+        ),
+        (
+            "MiniMax-H3-Image-Edit.json",
+            [["1", "inputs", "image"]],
+            [["6", "inputs", "prompt"]],
+        ),
+        ("MiniMax-H3-Image-t2i.json", [], [["6", "inputs", "prompt"]]),
+        ("Sheet-MiniMax-H3-Image.json", [], [["6", "inputs", "prompt"]]),
+        (
+            "Sheet-MiniMax-H3-Image-Reference.json",
+            [["1", "inputs", "image"]],
+            [["6", "inputs", "prompt"]],
         ),
         (
             "Sheet-MiniMax-H3-Reference.json",

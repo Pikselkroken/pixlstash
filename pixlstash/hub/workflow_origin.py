@@ -76,7 +76,7 @@ def upsert(
         "workflow_name = excluded.workflow_name, "
         "remote_modified = excluded.remote_modified, "
         "last_seen_at = excluded.last_seen_at, "
-        "content_hash = excluded.content_hash",
+        "content_hash = excluded.content_hash, dismissed = 0",
         (origin, remote_path, workflow_name, remote_modified, now, now, content_hash),
     )
 
@@ -108,3 +108,16 @@ def stored_at(hub: HubDatabase, origin: str, remote_path: str) -> Optional[str]:
         (origin, remote_path),
     )
     return row["workflow_name"] if row else None
+
+
+def ever_stored(hub: HubDatabase, origin: str, remote_path: str) -> bool:
+    """Whether one origin's path was ever stored, its workflow live or not.
+
+    A removed built-in keeps its row, dismissed, so this is how start-up
+    tells one the owner took off the Workflows page from one never listed.
+    """
+    row = hub.fetchone(
+        "SELECT 1 FROM workflow_origin WHERE origin = ? AND remote_path = ?",
+        (origin, remote_path),
+    )
+    return row is not None
