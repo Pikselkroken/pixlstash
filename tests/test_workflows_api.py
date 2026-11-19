@@ -120,6 +120,7 @@ from pixlstash.services.workflow_hash import (
     topology_hash,
 )
 from pixlstash.hub import workflow_versions
+from pixlstash.hub import workflow_thumbnails
 from pixlstash.services import (
     comfyui_connections,
     comfyui_link_service,
@@ -6102,7 +6103,11 @@ def test_built_ins_are_listed_once_and_a_removed_one_stays_off(
     _isolate_workflow_folders(tmp_path, monkeypatch)
     builtin = tmp_path / "built-in"
     builtin.mkdir()
-    for name in ("Flux2-Klein-Image-Edit.json", "MiniMax-H3-Image-t2i.json"):
+    for name in (
+        "Flux2-Klein-Image-Edit.json",
+        "MiniMax-H3-Image-t2i.json",
+        "MiniMax-H3-Image-t2i.webp",
+    ):
         shutil.copy(os.path.join(comfyui_module.WORKFLOW_BUILTIN_DIR, name), builtin)
     monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
     monkeypatch.setattr(
@@ -6116,6 +6121,15 @@ def test_built_ins_are_listed_once_and_a_removed_one_stays_off(
     cards = _by_key(_cards(owner))
     assert cards[klein]["name"] == "Flux2-Klein-Image-Edit"
     assert cards[h3]["name"] == "MiniMax-H3-Image-t2i"
+    # The picture shipped beside a built-in is its thumbnail, unpinned.
+    shipped = workflow_thumbnails.thumbnails(hub)
+    assert klein not in shipped
+    assert shipped[h3] == workflow_thumbnails.Thumbnail(
+        hashlib.sha256(
+            (builtin / "MiniMax-H3-Image-t2i.webp").read_bytes()
+        ).hexdigest(),
+        False,
+    )
     assert comfyui_module.list_builtin_workflows(hub) == []
 
     assert owner.delete(f"{API}/workflows/{h3}").status_code == 200

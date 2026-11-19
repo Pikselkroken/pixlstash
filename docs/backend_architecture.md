@@ -3186,7 +3186,8 @@ start-up (`routes.comfyui.list_builtin_workflows`, after the inbox reconcile;
 built-in with no `builtin` origin row at all, and deleting one keeps its row,
 `dismissed`, so it is never listed again; the card route is the explicit way
 back, and its upsert clears `dismissed`. A built-in deleted before this kept
-no row and is listed once more. A stored
+no row and is listed once more. A `.webp` shipped beside a built-in's
+file becomes its thumbnail, unpinned, whenever it is stored. A stored
 document is capped at `MAX_WORKFLOW_FILE_BYTES` serialised (413). Its saved recipes stay, unfiled. An automatic id
 is a 409: hide it instead.
 

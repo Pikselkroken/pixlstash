@@ -787,7 +787,7 @@ def store_builtin_workflow(hub, name: str, path: str) -> str:
         ValueError: It will not read as JSON, or is past the size cap.
     """
     stored = _load_workflow_json(path)
-    return store_manual_workflow(
+    workflow_id = store_manual_workflow(
         hub,
         _stem(name),
         stored,
@@ -800,6 +800,31 @@ def store_builtin_workflow(hub, name: str, path: str) -> str:
             workflow_inbox.content_hash(stored),
         ),
     )
+    _keep_builtin_thumbnail(hub, path, workflow_id)
+    return workflow_id
+
+
+def _keep_builtin_thumbnail(hub, path: str, workflow_id: str) -> None:
+    """Make the ``.webp`` shipped beside built-in *path* its thumbnail, unpinned.
+
+    Unpinned, like a template's picture, so the workflow's own pictures take
+    over once there are any. A built-in shipped without one keeps the empty
+    cover.
+    """
+    picture = os.path.splitext(path)[0] + ".webp"
+    if not os.path.isfile(picture):
+        return
+    try:
+        with open(picture, "rb") as handle:
+            digest = store_icon(hub.path, handle.read())
+        workflow_thumbnails.set_thumbnail(hub, workflow_id, digest, pinned=False)
+    except (IconRefused, OSError, sqlite3.Error) as exc:
+        logger.warning(
+            "Built-in workflow %s is listed without its thumbnail %s: %s",
+            workflow_id,
+            picture,
+            exc,
+        )
 
 
 def list_builtin_workflows(hub) -> list[str]:
