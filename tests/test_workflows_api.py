@@ -6130,17 +6130,21 @@ def test_built_ins_are_listed_once_and_a_removed_one_stays_off(
         ).hexdigest(),
         False,
     )
-    assert comfyui_module.list_builtin_workflows(hub) == []
+    relisted = comfyui_module.list_builtin_workflows(hub)
+    assert relisted == []
 
-    assert owner.delete(f"{API}/workflows/{h3}").status_code == 200
-    assert comfyui_module.list_builtin_workflows(hub) == []
+    deleted = owner.delete(f"{API}/workflows/{h3}")
+    assert deleted.status_code == 200
+    relisted = comfyui_module.list_builtin_workflows(hub)
+    assert relisted == []
     assert h3 not in _by_key(_cards(owner))
 
     r = owner.post(f"{API}/comfyui/workflows/MiniMax-H3-Image-t2i.json/card")
     assert r.status_code == 200, r.text
     back = r.json()["workflow_id"]
     assert _by_key(_cards(owner))[back]["name"] == "MiniMax-H3-Image-t2i"
-    assert comfyui_module.list_builtin_workflows(hub) == []
+    relisted = comfyui_module.list_builtin_workflows(hub)
+    assert relisted == []
 
 
 def test_an_unreadable_built_in_is_skipped_and_the_rest_still_listed(
