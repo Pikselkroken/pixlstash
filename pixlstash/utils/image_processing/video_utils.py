@@ -364,6 +364,63 @@ class VideoUtils:
         return frames
 
     @staticmethod
+    def storyboard_frame_indices(total_frames: int, count: int) -> List[int]:
+        """The frame each of *count* storyboard tiles shows, first to last.
+
+        Tile ``i`` is frame ``round(i * (total - 1) / (count - 1))``, so the
+        first tile is frame 0 and the last the clip's final frame, and tile
+        ``i`` sits at ``i / (count - 1)`` of the clip's length - the time the
+        lightbox seeks to when the tile is clicked. A clip shorter than
+        *count* repeats frames rather than giving fewer tiles.
+        """
+        if count <= 1:
+            return [0]
+        return [round(i * (total_frames - 1) / (count - 1)) for i in range(count)]
+
+    @staticmethod
+    def extract_storyboard_frames(file_path: str, count: int) -> List[Image.Image]:
+        """*count* evenly spaced frames of a video, as RGB images, or ``[]``.
+
+        All or nothing: a strip with one tile missing would put every later
+        tile at the wrong time, so if any needed frame cannot be read the
+        whole strip is refused, with a warning naming the file and the frame.
+        ``extract_video_frames`` is not reused because it drops failures
+        without saying which, so its frames cannot be mapped back to tiles.
+        """
+        cap = cv2.VideoCapture(file_path)
+        try:
+            if not cap.isOpened():
+                logger.warning("Storyboard: could not open video %s", file_path)
+                return []
+            # WebM and MKV may report an estimate here, 0 when there is none.
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if total <= 1:
+                logger.warning(
+                    "Storyboard: %s reports %d frame(s); no storyboard is made",
+                    file_path,
+                    total,
+                )
+                return []
+            tile_indices = VideoUtils.storyboard_frame_indices(total, count)
+            frames = {}
+            for idx in sorted(set(tile_indices)):
+                ok = cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                ret, frame = cap.read() if ok else (False, None)
+                if not ret or frame is None:
+                    logger.warning(
+                        "Storyboard: could not read frame %d of %d in %s; no "
+                        "storyboard is made",
+                        idx,
+                        total,
+                        file_path,
+                    )
+                    return []
+                frames[idx] = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            return [frames[idx] for idx in tile_indices]
+        finally:
+            cap.release()
+
+    @staticmethod
     def extract_representative_video_frames(
         file_path: str, count: int = 3
     ) -> List[Image.Image]:

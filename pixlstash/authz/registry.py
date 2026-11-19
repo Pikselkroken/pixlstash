@@ -1012,6 +1012,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # derived from the picture's own pixels, nothing is written.
     ("POST", "/api/v1/pictures/{id}/mask"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/thumbnails/{id}.webp"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/pictures/storyboards/{id}.webp"): RoutePolicy(_PIC, id_param="id"),
     ("PATCH", "/api/v1/pictures/{id}"): RoutePolicy(_PIC, id_param="id"),
     ("POST", "/api/v1/pictures/{id}/face"): RoutePolicy(_PIC, id_param="id"),
     ("DELETE", "/api/v1/pictures/{id}/face/{index}"): RoutePolicy(_PIC, id_param="id"),

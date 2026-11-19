@@ -5,6 +5,7 @@ import { mount } from "@vue/test-utils";
 
 vi.mock("vuetify/components", () => ({
   VIcon: { name: "v-icon", template: "<i><slot /></i>" },
+  VTooltip: { name: "v-tooltip", template: "<span><slot /></span>" },
 }));
 
 import Segmented from "./Segmented.vue";
@@ -116,6 +117,19 @@ describe("Segmented", () => {
     const radio = iconLabel.find('[role="radio"]');
     expect(radio.find("i").text()).toBe("mdi-view-grid");
     expect(radio.find(".seg__label").text()).toBe("Grid");
+  });
+
+  it("shows only the icon in the icon variant, the label naming the segment", () => {
+    const w = mount(Segmented, {
+      props: {
+        options: [{ id: "c", icon: "movie", label: "Frames of this clip" }],
+        variant: "icon",
+      },
+    });
+    const radio = w.find('[role="radio"]');
+    expect(radio.find("i").text()).toBe("mdi-movie");
+    expect(radio.find(".seg__label").exists()).toBe(false);
+    expect(radio.attributes("aria-label")).toBe("Frames of this clip");
   });
 
   it("picks on a click of the current value, so a snap stop can re-snap", async () => {
