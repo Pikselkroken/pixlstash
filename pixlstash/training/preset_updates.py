@@ -56,7 +56,15 @@ def site_files() -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     for pid, preset in sorted(presets.shipped_presets().items()):
         name = f"{pid}.json"
-        with open(os.path.join(presets.PRESET_DIR, name), "rb") as handle:
+        path = os.path.join(presets.PRESET_DIR, name)
+        if not os.path.isfile(path):
+            logger.info(
+                "Recipe %s is %s's, not in the published folder; not listed.",
+                pid,
+                preset.get("trainer"),
+            )
+            continue
+        with open(path, "rb") as handle:
             raw = handle.read()
         files[name] = raw
         entries.append(

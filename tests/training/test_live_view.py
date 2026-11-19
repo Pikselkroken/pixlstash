@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from pixlstash.training import live_view
+from pixlstash.training_plugins.ai_toolkit import live as toolkit_live
 
 
 @pytest.mark.parametrize(
@@ -31,15 +32,15 @@ from pixlstash.training import live_view
 def test_the_phase_follows_the_status_and_the_trainers_info_line(
     status, info, step, completed_at, phase
 ):
-    assert live_view.phase_of(status, info, step, completed_at) == phase
+    assert toolkit_live.phase_of(status, info, step, completed_at) == phase
 
 
 def test_preview_progress_reads_the_sample_being_drawn():
-    assert live_view.preview_progress("Generating images - 5/6") == {
+    assert toolkit_live.preview_progress("Generating images - 5/6") == {
         "drawing": 5,
         "total": 6,
     }
-    assert live_view.preview_progress("Training") is None
+    assert toolkit_live.preview_progress("Training") is None
 
 
 # torch's CUDA OOM paragraph, as ai-toolkit stores it in its job row.
@@ -96,7 +97,7 @@ _TORCH_OOM = (
     ],
 )
 def test_a_failure_reads_as_one_sentence(info, step, summary):
-    assert live_view.failure_summary(info, step) == summary
+    assert toolkit_live.failure_summary(info, step) == summary
 
 
 def test_the_phase_log_appends_only_a_new_phase():
@@ -208,7 +209,7 @@ def test_sample_settings_read_the_rendered_config():
             ]
         }
     }
-    settings = live_view.sample_settings(config)
+    settings = toolkit_live.sample_settings(config)
     assert settings == {
         "sample_every": 250,
         "save_every": 250,
@@ -216,7 +217,7 @@ def test_sample_settings_read_the_rendered_config():
         "layer_offloading": True,
         "offload_percent": 0.15,
     }
-    assert live_view.sample_settings(None)["prompts"] == []
+    assert toolkit_live.sample_settings(None)["prompts"] == []
 
 
 def _cell(**overrides):
@@ -266,7 +267,7 @@ def test_speed_is_the_median_step_and_the_range_includes_the_pauses(tmp_path):
     path = str(tmp_path / "loss_log.db")
     _loss_db(path, rows)
 
-    times = live_view.read_step_times(path)
+    times = toolkit_live.read_step_times(path)
     assert times[0] == (1, 1000.0)
     pace = live_view.speed(times, 21)
 
@@ -280,7 +281,7 @@ def test_speed_is_the_median_step_and_the_range_includes_the_pauses(tmp_path):
 def test_speed_is_unknown_before_two_steps_and_without_a_log(tmp_path):
     assert live_view.speed([], 100)["seconds_per_step"] is None
     assert live_view.speed([(1, 5.0)], 100)["remaining_low_s"] is None
-    assert live_view.read_step_times(str(tmp_path / "missing.db")) == []
+    assert toolkit_live.read_step_times(str(tmp_path / "missing.db")) == []
 
 
 def test_the_trainer_info_line_is_read_from_its_job_row(tmp_path):
@@ -290,15 +291,15 @@ def test_the_trainer_info_line_is_read_from_its_job_row(tmp_path):
     conn.execute("INSERT INTO Job VALUES ('job-1', 'Generating images - 2/4')")
     conn.commit()
     conn.close()
-    assert live_view.read_trainer_info(path, "job-1") == "Generating images - 2/4"
-    assert live_view.read_trainer_info(path, "job-2") == ""
-    assert live_view.read_trainer_info(str(tmp_path / "none.db"), "job-1") == ""
+    assert toolkit_live.read_trainer_info(path, "job-1") == "Generating images - 2/4"
+    assert toolkit_live.read_trainer_info(path, "job-2") == ""
+    assert toolkit_live.read_trainer_info(str(tmp_path / "none.db"), "job-1") == ""
 
 
 def test_a_malformed_step_time_is_skipped_not_fatal(tmp_path):
     path = str(tmp_path / "loss_log.db")
     _loss_db(path, [(1, 10.0), (2, "not a time"), (3, 14.0)])
-    assert live_view.read_step_times(path) == [(1, 10.0), (3, 14.0)]
+    assert toolkit_live.read_step_times(path) == [(1, 10.0), (3, 14.0)]
 
 
 @pytest.mark.parametrize(
@@ -327,8 +328,8 @@ def test_a_download_is_read_from_the_last_line_of_the_trainer_log(
 ):
     path = tmp_path / "log.txt"
     path.write_text(log, encoding="utf-8")
-    assert live_view.downloading(str(path)) is fetching
+    assert toolkit_live.downloading(str(path)) is fetching
 
 
 def test_a_missing_trainer_log_is_not_a_download(tmp_path):
-    assert live_view.downloading(str(tmp_path / "absent.txt")) is False
+    assert toolkit_live.downloading(str(tmp_path / "absent.txt")) is False

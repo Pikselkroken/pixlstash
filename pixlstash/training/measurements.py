@@ -399,13 +399,16 @@ def allocator_overshoot_mb(folder: str, pids: set[int], offsets: dict) -> int:
     return total
 
 
-def peaks_read_to_end(folder: str) -> dict:
+def peaks_read_to_end(folder: str | None) -> dict:
     """Offsets past every whole line already in *folder*'s peak files.
 
     A run watched from its middle (re-attached after a restart) starts here, so
-    the peaks it held before are not credited to the phase it is in now.
+    the peaks it held before are not credited to the phase it is in now. None
+    (a trainer that writes no peaks) has none.
     """
     offsets: dict = {}
+    if not folder:
+        return offsets
     try:
         entries = list(os.scandir(folder))
     except FileNotFoundError:

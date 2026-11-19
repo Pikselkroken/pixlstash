@@ -1,13 +1,17 @@
-"""Read an ai-toolkit training run off disk and describe it, without touching it.
+"""Read a training run's folder off disk and describe it, without touching it.
 
 The model shelf needs to show a user what a training run produced before they
 commit to importing any of it: which steps were saved, what each step looked
 like, and what the run was trained against. All of that is already on disk in
-ai-toolkit's output folder, so this module reads it and nothing else. It does
+the run's output folder, so this module reads it and nothing else. It does
 not hash, copy, move, or write anything, which is what makes it safe to run
 against a folder the user has merely pointed at.
 
-Layout it understands::
+**This layout is the output-folder contract every training plugin's output
+must meet** (:class:`pixlstash.training.backend.TrainerBackend`,
+``docs/backend_architecture.md`` §25.14). It is ai-toolkit's, which is the
+trainer PixlStash ships; a trainer that cannot write it needs its own reader
+first::
 
     output/
       MyCharacter/
@@ -19,9 +23,8 @@ Layout it understands::
           1712345678901__000000250_0.jpg
           1712345678901__000000250_1.jpg
 
-**Scoped to ai-toolkit deliberately.** Other trainers lay their output out
-differently, and a reader that tries to cover all of them ends up recognising
-none of them reliably. Other trainers get their own reader later, or not at all.
+A sample's ``_<index>`` is the index of the prompt it was drawn from, which is
+what the live view's prompt rows key on.
 """
 
 from __future__ import annotations

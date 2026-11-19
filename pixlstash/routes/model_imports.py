@@ -56,8 +56,8 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_folder_scanner import STATE_PRESENT
 from pixlstash.services.model_mover import SHELF_IO_LOCK, MoveRefused, samples_relpath
 from pixlstash.services.run_importer import RunImporter
-from pixlstash.training.local_ai_toolkit import LocalAiToolkit
-from pixlstash.utils.aitoolkit_run import (
+from pixlstash.training import registry
+from pixlstash.utils.training_run_folder import (
     SAMPLES_DIRNAME,
     is_sample_filename,
     read_output_root,
@@ -504,7 +504,26 @@ def create_router(server) -> APIRouter:
         for job in busy_runs(server.hub):
             if not job.get("training_folder"):
                 continue
-            save_root = LocalAiToolkit.handle_for(
+            try:
+                trainer = registry.for_run(job)
+            except registry.TrainerNotInstalled as exc:
+                # Its folder cannot be told, so it may be this one: refuse
+                # rather than trash a folder a run may still be writing.
+                logger.warning(
+                    "Refusing to trash %s: busy run %s has no folder to compare (%s).",
+                    run_dir,
+                    job["uuid"],
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{job['name']!r} is still {job['status']}, and its "
+                        f"{exc}, so PixlStash cannot tell whether it uses "
+                        "that folder."
+                    ),
+                ) from exc
+            save_root = trainer.handle_for(
                 "",
                 job["uuid"],
                 job["name"],

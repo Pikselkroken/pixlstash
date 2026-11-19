@@ -1,4 +1,4 @@
-"""ai-toolkit adapter: the only module that knows ai-toolkit specifics.
+"""The ai-toolkit training plugin: the only module that knows ai-toolkit specifics.
 
 This is the "firewall" described in
 ``pixlstash/data/ai-toolkit-jobs/SEAM.md``. Every ai-toolkit fact PixlStash
@@ -23,11 +23,12 @@ import signal
 import sqlite3
 import subprocess
 import time
+from typing import Callable
 
 import psutil
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.training.ai_toolkit_install import trainer_env
+from pixlstash.training import presets
 from pixlstash.training.backend import (
     TrainerBackend,
     TrainingHandle,
@@ -35,6 +36,8 @@ from pixlstash.training.backend import (
     TrainingSpec,
 )
 from pixlstash.training.config_render import render_job_config
+from pixlstash.training_plugins.ai_toolkit import install, live
+from pixlstash.training_plugins.ai_toolkit.install import trainer_env
 from pixlstash.utils.adapter_header import read_safetensors_header
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.sqlite_uri import sqlite_file_uri
@@ -171,7 +174,7 @@ def safe_job_stem(name: str, job_id: str) -> str:
     return stem
 
 
-class LocalAiToolkit(TrainerBackend):
+class AiToolkitPlugin(TrainerBackend):
     """Drive a local ai-toolkit checkout to train a LoRA.
 
     Spawns ``run.py`` from the ai-toolkit repo as a subprocess in its own
@@ -187,6 +190,12 @@ class LocalAiToolkit(TrainerBackend):
         run_script: Entry script run by that interpreter, relative to the repo
             (defaults to ``run.py``; overridable so tests can point at a stub).
     """
+
+    name = "ai-toolkit"
+    display_name = "AI Toolkit"
+    presets_dir = presets.PRESET_DIR
+    template_dir = presets.TEMPLATE_DIR
+    supports_train_longer = True
 
     def __init__(
         self,
@@ -327,7 +336,7 @@ class LocalAiToolkit(TrainerBackend):
                 kept[int(match.group(1))] = os.path.join(handle.save_root, name)
         final = os.path.join(handle.save_root, f"{stem}.safetensors")
         if os.path.isfile(final):
-            step = LocalAiToolkit._recorded_step(final) or final_step
+            step = AiToolkitPlugin._recorded_step(final) or final_step
             if step:
                 kept[step] = final
         return kept
@@ -376,7 +385,7 @@ class LocalAiToolkit(TrainerBackend):
             FileNotFoundError: The run kept no checkpoint at *step*.
             FileExistsError: The stamped name for the final is taken.
         """
-        kept = LocalAiToolkit.kept_checkpoints(handle, final_step)
+        kept = AiToolkitPlugin.kept_checkpoints(handle, final_step)
         if step not in kept:
             raise FileNotFoundError(f"The run kept no checkpoint at step {step}.")
         root = handle.save_root
@@ -458,7 +467,7 @@ class LocalAiToolkit(TrainerBackend):
                     logger.warning("Could not remove empty %s: %s", empty, exc)
             raise
         if folder:
-            LocalAiToolkit._set_loss_log_aside(handle.loss_db_path, folder, step)
+            AiToolkitPlugin._set_loss_log_aside(handle.loss_db_path, folder, step)
         return take_name
 
     @staticmethod
@@ -531,6 +540,133 @@ class LocalAiToolkit(TrainerBackend):
                 if "folder_path" in dataset:
                     dataset["folder_path"] = "{{DATASET_FOLDER}}"
         return template
+
+    # ------------------------------------------------------------------
+    # Training plugin hooks (TrainerBackend)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_owner_config(cls, cfg: dict) -> AiToolkitPlugin:
+        """The adapter for the owner's checkout (``{"repo_path", "python"}``).
+
+        Raises:
+            ValueError: The checkout or its Python is not set.
+        """
+        repo_path = (cfg or {}).get("repo_path")
+        python = (cfg or {}).get("python")
+        if not repo_path or not python:
+            raise ValueError(
+                "ai-toolkit is not configured (missing repo_path/python in owner "
+                "config); cannot run training."
+            )
+        return cls(repo_path, python)
+
+    @classmethod
+    def version_stamp(cls, cfg: dict) -> str | None:
+        """The checkout's commit, read from git and never from the owner's config."""
+        repo_path = (cfg or {}).get("repo_path")
+        return install.read_commit(repo_path) if repo_path else None
+
+    @classmethod
+    def version(cls, cfg: dict) -> str | None:
+        """The checkout's ``version.py``, which ``min_ai_toolkit`` is checked against."""
+        repo_path = (cfg or {}).get("repo_path")
+        return install.read_version(repo_path) if repo_path else None
+
+    @classmethod
+    def run_folders(
+        cls,
+        cfg: dict,
+        work_dir: str,
+        job_uuid: str,
+        ensure_source_folder: Callable[[str], str],
+    ) -> tuple[str | None, str]:
+        """The run goes in the shelf's ``source`` folder, the dataset in the checkout.
+
+        When the shelf has no ``source`` folder, ``<repo>/output`` is
+        registered as one. The dataset goes in
+        ``<repo>/datasets/pixlstash-<uuid>``.
+
+        Raises:
+            RuntimeError: ai-toolkit is not configured, or no shelf folder could
+                be found or registered. The message names no host path.
+        """
+        repo_path = (cfg or {}).get("repo_path")
+        if not repo_path:
+            raise RuntimeError("ai-toolkit is not configured; cannot run training.")
+        training_folder = ensure_source_folder(os.path.join(repo_path, "output"))
+        dataset_dir = os.path.join(repo_path, "datasets", f"pixlstash-{job_uuid}")
+        return training_folder, dataset_dir
+
+    @classmethod
+    def offer_refusal(cls, preset: dict, cfg: dict) -> str | None:
+        """Why the owner's checkout cannot train *preset*, or None."""
+        repo_path = (cfg or {}).get("repo_path")
+        if not repo_path:
+            return (
+                "AI-toolkit is not set up. Connect it in Settings › AI-toolkit "
+                "before training."
+            )
+        return install.not_offered_because(
+            preset, install.checkout_architectures(repo_path), cls.version(cfg)
+        )
+
+    @staticmethod
+    def status_line(handle: TrainingHandle) -> str:
+        """ai-toolkit's info line from the per-job ``Job`` table, or ""."""
+        if not os.path.exists(handle.sqlite_db_path):
+            return ""
+        return live.read_trainer_info(handle.sqlite_db_path, handle.job_id)
+
+    @staticmethod
+    def step_times(handle: TrainingHandle) -> list[tuple[int, float]]:
+        """The step times ai-toolkit logs in ``loss_log.db``; [] before it has one."""
+        if not os.path.exists(handle.loss_db_path):
+            return []
+        return live.read_step_times(handle.loss_db_path)
+
+    running_phase = staticmethod(live.running_phase)
+    preview_progress = staticmethod(live.preview_progress)
+    downloading = staticmethod(live.downloading)
+    sample_settings = staticmethod(live.sample_settings)
+    failure_summary = staticmethod(live.failure_summary)
+
+    @staticmethod
+    def is_oom(text: str) -> bool:
+        """Whether torch's or ai-toolkit's out-of-memory error is in *text*."""
+        return bool(live.OOM_RE.search(text or ""))
+
+    @staticmethod
+    def probe_overrides(steps: int, values: dict) -> dict | None:
+        """A few updates at the largest bucket, one preview and one save."""
+        process: dict = {
+            "train": {
+                "steps": steps,
+                "skip_first_sample": True,
+                "disable_sampling": False,
+            },
+            "save": {"save_every": steps},
+            "sample": {"sample_every": steps},
+        }
+        sizes = values.get("datasets[*].resolution") or []
+        if sizes:
+            # The worst bucket only, so the peak is the largest a step makes.
+            process["datasets"] = [{"resolution": [max(sizes)]}]
+        return {"config": {"process": [process]}}
+
+    @staticmethod
+    def preview_pass_overrides(step: int, checkpoint_path: str) -> dict | None:
+        """Sample the LoRA at *checkpoint_path* at *step*, without training it."""
+        process = {
+            "train": {
+                "steps": step,
+                "start_step": step,
+                "skip_first_sample": True,
+                "disable_sampling": False,
+            },
+            "network": {"pretrained_lora_path": checkpoint_path},
+        }
+        return {"config": {"process": [process]}}
 
     # ------------------------------------------------------------------
     # Public interface

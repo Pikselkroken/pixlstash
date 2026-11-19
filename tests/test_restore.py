@@ -4656,7 +4656,7 @@ def test_full_restore_neither_reinstates_nor_clears_the_ai_toolkit_python(
     report = server.vault.restore_service.restore_full(cp.id)
     assert not report.errors, f"Restore errors: {report.errors}"
 
-    # The value the training service reads (vault._training_config_provider).
-    effective = server.vault._training_config_provider()
+    # The value the training service reads (vault.training_config).
+    effective = server.vault.training_config()
     assert effective["python"] == after_snapshot, effective
     assert effective["python"] != at_snapshot

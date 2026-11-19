@@ -38,7 +38,7 @@ from pixlstash.services import training_service as training_service_module
 from pixlstash.services.training_service import TrainingService
 from pixlstash.training import measurements, presets
 from pixlstash.training.backend import TrainingProgress
-from pixlstash.training.local_ai_toolkit import LocalAiToolkit
+from pixlstash.training_plugins.ai_toolkit.adapter import AiToolkitPlugin
 from pixlstash.vault import Vault
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -245,7 +245,7 @@ def _make_service(
         request_gpu=lease.request,
         import_run=importer or _RecordingImport(),
         notify=notify,
-        config_provider=lambda: {
+        config_provider=lambda *_: {
             "repo_path": repo_dir,
             "python": sys.executable,
             "models_dir": "",
@@ -650,7 +650,7 @@ def test_a_cancel_while_the_model_loads_ends_stopped(hub, repo_dir, monkeypatch)
     ends in a signal; the run still ends ``stopped``, not ``error``."""
     monkeypatch.setenv("FAKE_RUN_LOAD_SECONDS", "15")
     monkeypatch.setattr(
-        "pixlstash.training.local_ai_toolkit._CANCEL_GRACE_SECONDS", 0.2
+        "pixlstash.training_plugins.ai_toolkit.adapter._CANCEL_GRACE_SECONDS", 0.2
     )
     lease = _StubLease()
     service = _make_service(
@@ -809,7 +809,7 @@ def test_shutdown_mid_run_leaves_the_live_job_running(hub, repo_dir, monkeypatch
         dataset_builder=_make_dataset_builder(),
     )
     assert cleanup.cancel(job["id"]) is True
-    assert _poll_until(lambda: not LocalAiToolkit._pid_alive(final.pid)), (
+    assert _poll_until(lambda: not AiToolkitPlugin._pid_alive(final.pid)), (
         f"trainer pid {final.pid} still alive after cancel"
     )
 
@@ -2097,7 +2097,7 @@ def test_memory_a_dead_trainer_kept_is_named_not_released(hub, repo_dir, monkeyp
         request_gpu=_StubLease().request,
         import_run=_RecordingImport(),
         notify=_CapturingNotify(),
-        config_provider=lambda: {},
+        config_provider=lambda *_: {},
         dataset_builder=_make_dataset_builder(),
         tenant=tenant,
     )
@@ -2129,7 +2129,7 @@ def test_a_live_run_is_adopted_at_start_up_and_reconciled_on_that_lease(hub, rep
 
     class _Backend:
         def handle_for(self, work_dir, job_id, name, pid, training_folder=None):
-            return LocalAiToolkit.handle_for(
+            return AiToolkitPlugin.handle_for(
                 work_dir, job_id, name, pid, training_folder=training_folder
             )
 
@@ -2153,7 +2153,7 @@ def test_a_live_run_is_adopted_at_start_up_and_reconciled_on_that_lease(hub, rep
         adopt_gpu=adopted.request,
         import_run=_RecordingImport(),
         notify=_CapturingNotify(),
-        config_provider=lambda: {"repo_path": repo_dir, "python": sys.executable},
+        config_provider=lambda *_: {"repo_path": repo_dir, "python": sys.executable},
         dataset_builder=_make_dataset_builder(),
         backend_factory=lambda repo_path, python: _Backend(),
         poll_interval_s=0.02,
@@ -2190,7 +2190,7 @@ def test_a_run_trained_but_not_imported_before_a_restart_is_imported(hub, repo_d
 
     class _Backend:
         def handle_for(self, work_dir, job_id, name, pid, training_folder=None):
-            return LocalAiToolkit.handle_for(
+            return AiToolkitPlugin.handle_for(
                 work_dir, job_id, name, pid, training_folder=training_folder
             )
 
@@ -2214,7 +2214,7 @@ def test_a_run_trained_but_not_imported_before_a_restart_is_imported(hub, repo_d
         request_gpu=_StubLease().request,
         import_run=importer,
         notify=_CapturingNotify(),
-        config_provider=lambda: {"repo_path": repo_dir, "python": sys.executable},
+        config_provider=lambda *_: {"repo_path": repo_dir, "python": sys.executable},
         dataset_builder=_make_dataset_builder(),
         backend_factory=lambda repo_path, python: _Backend(),
     )
@@ -2302,7 +2302,7 @@ def _spy_pass_pids(hub, monkeypatch):
     """Record, on each poll of a probe or a preview pass, the pass's pid and
     the pid the run's own row holds at that moment."""
     seen = {"probe": [], "preview": []}
-    real_progress = LocalAiToolkit.progress
+    real_progress = AiToolkitPlugin.progress
 
     def progress(self, handle):
         if handle.work_dir.endswith(os.sep + "probe"):
@@ -2316,7 +2316,7 @@ def _spy_pass_pids(hub, monkeypatch):
             seen[kind].append((handle.pid, row["pid"]))
         return real_progress(self, handle)
 
-    monkeypatch.setattr(LocalAiToolkit, "progress", progress)
+    monkeypatch.setattr(AiToolkitPlugin, "progress", progress)
     checked = seen["checked"] = []
     real_stop_orphaned = TrainingService._stop_orphaned_pass
 
@@ -2336,7 +2336,7 @@ def test_a_trainer_a_crashed_pass_left_running_is_stopped_before_a_new_pass(
     directory and launches. The orphan may be a preview pass at another step
     than the one about to run; a process that is no pass of the run survives."""
     monkeypatch.setattr(
-        "pixlstash.training.local_ai_toolkit._CANCEL_GRACE_SECONDS", 0.2
+        "pixlstash.training_plugins.ai_toolkit.adapter._CANCEL_GRACE_SECONDS", 0.2
     )
     service = _make_service(
         hub,
@@ -2360,7 +2360,7 @@ def test_a_trainer_a_crashed_pass_left_running_is_stopped_before_a_new_pass(
     pass_dir = str(tmp_path / "after" / "1000")
     os.makedirs(pass_dir)
     os.makedirs(tmp_path / "after" / "250")
-    pass_handle = LocalAiToolkit.handle_for(pass_dir, "orphaned-job", "orphaned")
+    pass_handle = AiToolkitPlugin.handle_for(pass_dir, "orphaned-job", "orphaned")
     stranger = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)", backend.run_script],
         start_new_session=True,
@@ -2548,7 +2548,7 @@ def _run_to_finished(hub, service, job_uuid, *, total):
 
 
 def _recorded_step(path):
-    return LocalAiToolkit._recorded_step(path)
+    return AiToolkitPlugin._recorded_step(path)
 
 
 def test_a_finished_run_trains_longer_from_its_final_keeping_the_optimizer(
@@ -2753,7 +2753,7 @@ def test_a_run_trained_longer_waits_behind_the_runs_queued_before_it(hub):
 
 def test_a_stamped_file_at_the_finals_step_is_set_aside_too(tmp_path):
     """ai-toolkit never writes one, but if it is there it must not be resumed."""
-    handle = LocalAiToolkit.handle_for(str(tmp_path / "work"), "abcdef12", "twice")
+    handle = AiToolkitPlugin.handle_for(str(tmp_path / "work"), "abcdef12", "twice")
     os.makedirs(handle.save_root)
     stem = os.path.basename(handle.save_root)
 
@@ -2769,8 +2769,8 @@ def test_a_stamped_file_at_the_finals_step_is_set_aside_too(tmp_path):
     save(f"{stem}.safetensors", 4)
 
     with pytest.raises(FileExistsError, match="kept twice"):
-        LocalAiToolkit.carry_on_from(handle, 4)
-    assert LocalAiToolkit.carry_on_from(handle, 2) == "take-1"
+        AiToolkitPlugin.carry_on_from(handle, 4)
+    assert AiToolkitPlugin.carry_on_from(handle, 2) == "take-1"
     assert set(os.listdir(handle.save_root)) == {
         f"{stem}_000000002.safetensors",
         "take-1",
@@ -2781,8 +2781,8 @@ def test_training_on_from_an_earlier_step_keeps_the_later_loss_with_the_take(
     tmp_path,
 ):
     """The abandoned take keeps its loss; the run's log ends at the step."""
-    backend = LocalAiToolkit(str(tmp_path), sys.executable)
-    handle = LocalAiToolkit.handle_for(str(tmp_path / "work"), "abcdef12", "loss")
+    backend = AiToolkitPlugin(str(tmp_path), sys.executable)
+    handle = AiToolkitPlugin.handle_for(str(tmp_path / "work"), "abcdef12", "loss")
     os.makedirs(handle.save_root)
     stem = os.path.basename(handle.save_root)
     for step in (2, 4):
@@ -2812,7 +2812,7 @@ def test_training_on_from_an_earlier_step_keeps_the_later_loss_with_the_take(
         )
         return [point["step"] for point in curve], max_step
 
-    assert LocalAiToolkit.carry_on_from(handle, 2) == "take-1"
+    assert AiToolkitPlugin.carry_on_from(handle, 2) == "take-1"
     assert logged(handle.loss_db_path) == ([1, 2], 2)
     kept = os.path.join(handle.save_root, "take-1", "loss_log.db")
     assert logged(kept) == ([1, 2, 3, 4], 4)
@@ -2820,7 +2820,7 @@ def test_training_on_from_an_earlier_step_keeps_the_later_loss_with_the_take(
 
 def test_a_failed_rename_of_the_final_puts_the_set_aside_back(tmp_path, monkeypatch):
     """The final's rename comes after the set-aside; failing, it undoes it."""
-    handle = LocalAiToolkit.handle_for(str(tmp_path / "work"), "abcdef12", "late")
+    handle = AiToolkitPlugin.handle_for(str(tmp_path / "work"), "abcdef12", "late")
     os.makedirs(handle.save_root)
     stem = os.path.basename(handle.save_root)
     final = os.path.join(handle.save_root, f"{stem}.safetensors")
@@ -2846,7 +2846,7 @@ def test_a_failed_rename_of_the_final_puts_the_set_aside_back(tmp_path, monkeypa
 
     monkeypatch.setattr(os, "rename", final_locked)
     with pytest.raises(PermissionError):
-        LocalAiToolkit.carry_on_from(handle, 4)
+        AiToolkitPlugin.carry_on_from(handle, 4)
     monkeypatch.setattr(os, "rename", real_rename)
 
     assert sorted(os.listdir(handle.save_root)) == before
@@ -2855,7 +2855,7 @@ def test_a_failed_rename_of_the_final_puts_the_set_aside_back(tmp_path, monkeypa
 def test_a_set_aside_that_fails_midway_leaves_the_folder_as_it_was(
     tmp_path, monkeypatch
 ):
-    handle = LocalAiToolkit.handle_for(str(tmp_path / "work"), "abcdef12", "midway")
+    handle = AiToolkitPlugin.handle_for(str(tmp_path / "work"), "abcdef12", "midway")
     os.makedirs(handle.save_root)
     stem = os.path.basename(handle.save_root)
     for name, step in (
@@ -2883,7 +2883,7 @@ def test_a_set_aside_that_fails_midway_leaves_the_folder_as_it_was(
 
     monkeypatch.setattr(os, "rename", flaky_rename)
     with pytest.raises(PermissionError):
-        LocalAiToolkit.carry_on_from(handle, 2)
+        AiToolkitPlugin.carry_on_from(handle, 2)
     monkeypatch.setattr(os, "rename", real_rename)
 
     assert sorted(os.listdir(handle.save_root)) == before

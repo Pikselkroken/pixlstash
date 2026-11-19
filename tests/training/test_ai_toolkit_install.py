@@ -11,7 +11,7 @@ import os
 import subprocess
 import sys
 
-from pixlstash.training import ai_toolkit_install as install
+from pixlstash.training_plugins.ai_toolkit import install as install
 
 
 def _checkout(root, *, toolkit: bool = True, version: str | None = None) -> str:

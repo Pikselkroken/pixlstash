@@ -49,7 +49,7 @@ from pixlstash.services.run_importer import (
     RunImporter,
 )
 from pixlstash.services.stack_detector import set_cover
-from pixlstash.utils.aitoolkit_run import read_output_root
+from pixlstash.utils.training_run_folder import read_output_root
 from pixlstash.vault import Vault
 
 

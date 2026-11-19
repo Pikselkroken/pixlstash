@@ -717,6 +717,7 @@ jobs:
           tests/training/test_preview_likeness.py
           tests/training/test_sample_prompts.py
           tests/training/test_trainer_detach.py
+          tests/training/test_training_plugins.py
           tests/training/test_training_service.py
 
   # ---------------------------------------------------------------------------

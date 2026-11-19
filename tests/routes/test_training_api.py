@@ -39,9 +39,10 @@ from pixlstash.resources.arbiter import Tenant, arbiter
 from pixlstash.routes import training as training_routes
 from pixlstash.routes.training import _redact_host_paths
 from pixlstash.training import preset_updates, presets
+from pixlstash.training_plugins.ai_toolkit import install as ai_toolkit_install
 from pixlstash.server import Server
 from pixlstash.services.training_service import TrainingService
-from pixlstash.training.local_ai_toolkit import LocalAiToolkit
+from pixlstash.training_plugins.ai_toolkit.adapter import AiToolkitPlugin
 from pixlstash.utils.service.export_utils import ExportUtils
 
 
@@ -960,7 +961,7 @@ def test_a_run_that_ended_without_a_finish_time_has_no_growing_last_phase():
             assert listed[queued_uuid]["phase"] == "checking"
             # The probe's log ends on a model download: the view says so, and
             # stops once the download is complete.
-            probe_log = LocalAiToolkit.handle_for(
+            probe_log = AiToolkitPlugin.handle_for(
                 os.path.join(server.vault.image_root, "training", queued_uuid, "probe"),
                 queued_uuid,
                 "seeded-job",
@@ -1778,7 +1779,7 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
     """The preview resolves exactly as a job would, gives the pin-free value
     a reset returns to, each value's rule, and a fit verdict per recipe; it
     queues nothing and a run that fits nowhere answers 200 with the reason."""
-    from pixlstash.training import measurements, presets
+    from pixlstash.training import measurements
 
     temp_dir, owner, server, read_token = _setup()
     try:
@@ -1868,12 +1869,12 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
         assert r.json()["steps_clamp"] == "floor"
 
         # A checkout without the model code cannot train the recipe.
-        archs = presets.checkout_architectures
-        presets.checkout_architectures = lambda repo: []
+        archs = ai_toolkit_install.checkout_architectures
+        ai_toolkit_install.checkout_architectures = lambda repo: []
         try:
             r = owner.post("/training/resolve", json=body)
         finally:
-            presets.checkout_architectures = archs
+            ai_toolkit_install.checkout_architectures = archs
         assert r.json()["presets"][0]["verdict"] == "needs_checkout"
         assert r.json()["presets"][0]["offered"] is False
 
@@ -2957,8 +2958,6 @@ def test_ai_toolkit_check_with_no_python_finds_the_checkouts_own_and_reports_fol
 ):
     """Omitted python: the checkout's .venv is used, the probe and the trial run
     through it, and the response carries the folders /status would report."""
-    from pixlstash.training import ai_toolkit_install
-
     monkeypatch.setattr(ai_toolkit_install, "run_host_process", _probe_ok_runner)
     # No checkout linked yet, so the shelf has no ai-toolkit folder: linking one
     # would put its output folder there, and runs would land in that instead.
@@ -2990,8 +2989,6 @@ def test_ai_toolkit_check_with_no_python_finds_the_checkouts_own_and_reports_fol
 
 
 def test_ai_toolkit_check_folders_match_status_for_the_same_checkout(monkeypatch):
-    from pixlstash.training import ai_toolkit_install
-
     monkeypatch.setattr(ai_toolkit_install, "run_host_process", _probe_ok_runner)
     temp_dir, owner, server, read_token = _setup()
     try:
@@ -3014,8 +3011,6 @@ def test_ai_toolkit_check_folders_match_status_for_the_same_checkout(monkeypatch
 
 
 def test_ai_toolkit_check_says_when_no_python_can_be_found(monkeypatch):
-    from pixlstash.training import ai_toolkit_install
-
     monkeypatch.setattr(ai_toolkit_install, "run_host_process", _probe_ok_runner)
     monkeypatch.setattr(ai_toolkit_install, "find_python", lambda repo: None)
     temp_dir, owner, server, read_token = _setup()
@@ -3030,8 +3025,6 @@ def test_ai_toolkit_check_says_when_no_python_can_be_found(monkeypatch):
 
 def test_ai_toolkit_check_refuses_paths_that_are_not_real(monkeypatch):
     """Each bad value is a 422 with a message and no process is started."""
-    from pixlstash.training import ai_toolkit_install
-
     started = []
 
     def runner(argv, cwd, timeout):
@@ -3061,8 +3054,6 @@ def test_ai_toolkit_check_refuses_paths_that_are_not_real(monkeypatch):
 def test_ai_toolkit_check_runs_one_at_a_time(monkeypatch):
     """#2295: a check can hold a worker thread for minutes, so a second one while
     it runs is a 409 and starts nothing; once it ends, the next one runs."""
-    from pixlstash.training import ai_toolkit_install
-
     started = []
     release = threading.Event()
 
@@ -3307,7 +3298,7 @@ def test_a_stopped_run_is_offered_its_kept_steps_and_trained_longer():
             request_gpu=None,
             import_run=None,
             notify=lambda *args: None,
-            config_provider=dict,
+            config_provider=lambda *_: {},
             dataset_builder=None,
             disable_background_workers=True,
         )

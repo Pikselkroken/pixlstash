@@ -18,7 +18,7 @@ import sys
 import psutil
 import pytest
 
-from pixlstash.training import local_ai_toolkit
+from pixlstash.training_plugins.ai_toolkit import adapter as local_ai_toolkit
 from pixlstash.training.backend import TrainingHandle
 from tests.training.test_local_ai_toolkit import (
     _THIS_DIR,
@@ -33,8 +33,8 @@ from tests.training.test_local_ai_toolkit import (
 _SUBMIT_AND_WAIT = """
 import dataclasses, json, sys, time
 from pixlstash.training.backend import TrainingSpec
-from pixlstash.training.local_ai_toolkit import LocalAiToolkit
-backend = LocalAiToolkit(*sys.argv[1:4])
+from pixlstash.training_plugins.ai_toolkit.adapter import AiToolkitPlugin
+backend = AiToolkitPlugin(*sys.argv[1:4])
 spec = TrainingSpec(**json.loads(sys.argv[4]))
 handle = backend.prepare(spec)
 backend.submit(handle, spec)
