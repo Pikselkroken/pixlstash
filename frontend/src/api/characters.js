@@ -273,14 +273,25 @@ export async function getReferencePictures(id) {
  * @param {number} threshold - the mean likeness two groups need to merge.
  * @param {number|null} [centre] - a picture of the person's: also rank every
  *   face by likeness to its face.
+ * @param {number[]} [seeds] - picked pictures: also rank every face, and
+ *   unassigned look-alikes, by likeness to the centre of their faces.
  * @returns {Promise<Object>} `{threshold, faces, reference_cluster, clusters,
- *   unclustered, centred}`; clusters carry their members most typical first;
- *   `centred` (null without `centre`) is every face, most like the centre first.
+ *   unclustered, centred, seeded, seeds_ignored}`; clusters carry their members
+ *   most typical first; `centred` (null without `centre`) is every face, most
+ *   like the centre first; `seeded` (null without `seeds`) likewise for the
+ *   seeds' centre, the seeds `pinned` and look-alikes `probable`.
  */
-export async function getFaceClusters(id, threshold, centre = null) {
+export async function getFaceClusters(id, threshold, centre = null, seeds = []) {
   return unwrap(
     apiClient.get("/face-clusters", {
-      params: { character_id: id, threshold, ...(centre != null ? { centre } : {}) },
+      params: {
+        character_id: id,
+        threshold,
+        ...(centre != null ? { centre } : {}),
+        ...(seeds.length ? { seed: seeds } : {}),
+      },
+      // `seed=1&seed=2`, as FastAPI reads a repeated query parameter.
+      paramsSerializer: { indexes: null },
     }),
   );
 }

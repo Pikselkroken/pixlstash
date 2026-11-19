@@ -23,7 +23,8 @@
         <v-icon size="16">mdi-alert-circle-outline</v-icon><span>{{ error }}</span>
       </p>
       <p v-else-if="!data" class="fc-note fc-pad">Grouping the faces…</p>
-      <p v-else-if="!clusters.length" class="fc-note fc-pad" data-testid="fc-none">
+      <!-- `rows`, not `clusters`: picks with no two faces alike still rank. -->
+      <p v-else-if="!rows.length" class="fc-note fc-pad" data-testid="fc-none">
         {{
           data.faces
             ? `No two of ${name}'s faces look alike at ${strictnessLabel}. Try Loose.`
@@ -33,29 +34,80 @@
 
       <div v-else class="fc-split">
         <div class="fc-rail">
-          <span class="fc-lbl fc-lbl--rail" :id="`${uid}-rail`">Clusters</span>
+          <span v-if="data.seeded" class="fc-lbl fc-lbl--rail" aria-hidden="true"
+            >Your cluster</span
+          >
+          <span v-else class="fc-lbl fc-lbl--rail" :id="`${uid}-rail`">Clusters</span>
           <div
             class="fc-rows"
+            ref="railEl"
             role="listbox"
             tabindex="0"
-            :aria-labelledby="`${uid}-rail`"
+            :aria-labelledby="data.seeded ? null : `${uid}-rail`"
+            :aria-label="data.seeded ? 'Your cluster and clusters' : null"
             :aria-activedescendant="`${uid}-row-${selected}`"
             aria-keyshortcuts="Z"
             data-testid="fc-rail"
-            @keydown.down.prevent="select(Math.min(selected + 1, clusters.length - 1))"
+            @keydown.down.prevent="select(Math.min(selected + 1, rows.length - 1))"
             @keydown.up.prevent="select(Math.max(selected - 1, 0))"
             @keydown="onRailKey"
           >
+            <template v-if="data.seeded">
+              <div
+                :id="`${uid}-row-0`"
+                class="fc-row"
+                role="option"
+                :aria-selected="selected === 0"
+                :aria-label="rowName(data.seeded, 0)"
+                data-testid="fc-row"
+                @click="select(0)"
+              >
+                <span class="fc-row__stack" aria-hidden="true">
+                  <img
+                    v-for="(m, k) in pins.slice(0, 4)"
+                    :key="m.picture_id"
+                    :src="pictureThumbnailUrl(m.picture_id)"
+                    :style="{ '--fc-stack': k }"
+                    alt=""
+                    @dblclick="zoomIn('field', m.picture_id)"
+                  />
+                </span>
+                <span class="fc-row__text">
+                  <span class="fc-row__name"
+                    >From your picks
+                    <span class="fc-badge fc-badge--count"
+                      ><v-icon size="12">mdi-pin</v-icon>{{ pins.length }}</span
+                    ></span
+                  >
+                  <span class="fc-row__meta"
+                    >{{ pins.length }} picked · hold together at
+                    {{ fixed(data.seeded.cohesion) }}</span
+                  >
+                  <span
+                    v-if="data.seeded.similarity_to_reference != null"
+                    class="fc-meter"
+                    aria-hidden="true"
+                    ><i :style="{ width: `${meterOf(data.seeded)}%` }"
+                  /></span>
+                </span>
+              </div>
+              <span
+                v-if="clusters.length"
+                class="fc-lbl fc-lbl--rail fc-lbl--sub"
+                aria-hidden="true"
+                >Clusters</span
+              >
+            </template>
             <div
               v-for="(c, i) in clusters"
-              :id="`${uid}-row-${i}`"
+              :id="`${uid}-row-${i + offset}`"
               :key="i"
               class="fc-row"
               role="option"
-              :aria-selected="i === selected"
-              :aria-label="rowName(c, i)"
+              :aria-selected="i + offset === selected"
+              :aria-label="rowName(c, i + offset)"
               data-testid="fc-row"
-              @click="select(i)"
+              @click="select(i + offset)"
             >
               <img
                 class="fc-row__face"
@@ -116,7 +168,7 @@
               />
             </h3>
             <h3 v-else class="fc-title">
-              Cluster {{ selected + 1 }}
+              {{ rowLabel(selected) }}
               <span v-if="current.is_reference" class="fc-badge fc-badge--ref"
                 ><v-icon size="12">mdi-check</v-icon>Reference</span
               >
@@ -124,6 +176,13 @@
             <span v-if="centred" class="fc-meta" data-testid="fc-count"
               ><b>{{ kept.length }}</b> of {{ name }}'s {{ current.size }} faces
               count</span
+            >
+            <span v-else-if="onSeeded" class="fc-meta" data-testid="fc-count"
+              ><b>{{ kept.length }}</b> of {{ current.size }} pictures count<template
+                v-if="probables.length"
+              >
+                · {{ probableKept.length }} probably {{ name }}</template
+              ></span
             >
             <span v-else class="fc-meta" data-testid="fc-count"
               ><b>{{ kept.length }}</b> of {{ current.size }} pictures count ·
@@ -135,13 +194,32 @@
                 :disabled="saving"
                 data-testid="fc-uncentre"
                 @click="uncentre"
-                >Back to Cluster {{ selected + 1 }}'s centre</AppButton
+                >Back to {{ rowLabel(selected, true) }}'s centre</AppButton
               >
               <AppButton
                 variant="primary"
                 :loading="saving"
                 :disabled="!kept.length"
                 data-testid="fc-save-centred"
+                @click="save(kept)"
+                >Make these {{ name }}'s reference</AppButton
+              >
+            </template>
+            <template v-else-if="onSeeded">
+              <AppButton
+                v-if="probables.length"
+                variant="secondary"
+                :disabled="saving || !probableKept.length"
+                data-testid="fc-add-probable"
+                @click="addProbable"
+                ><v-icon size="16">mdi-account-plus-outline</v-icon>Add
+                {{ probableKept.length }} to {{ name }}</AppButton
+              >
+              <AppButton
+                variant="primary"
+                :loading="saving"
+                :disabled="!changed || !kept.length"
+                data-testid="fc-save-seeded"
                 @click="save(kept)"
                 >Make these {{ name }}'s reference</AppButton
               >
@@ -183,6 +261,14 @@
 
           <div class="fc-body">
             <div class="fc-fieldwrap">
+              <p
+                v-if="onSeeded && !centred && data.seeds_ignored?.length"
+                class="fc-notice fc-notice--inline"
+                data-testid="fc-seeds-ignored"
+              >
+                <v-icon size="16">mdi-information-outline</v-icon
+                ><span>{{ ignoredNote }}</span>
+              </p>
               <div ref="stageEl" class="fc-stage">
               <div
                 ref="fieldEl"
@@ -191,7 +277,9 @@
                 :aria-label="
                   centred
                     ? 'Faces most like the chosen face first'
-                    : `Faces of cluster ${selected + 1}, most typical first`
+                    : onSeeded
+                      ? 'Faces of your cluster, your picks first, then most alike'
+                      : `Faces of cluster ${selected + 1 - offset}, most typical first`
                 "
                 :style="fieldStyle"
                 data-testid="fc-field"
@@ -204,6 +292,8 @@
                   class="fc-face"
                   :class="{
                     'fc-face--out': isOut(rank),
+                    'fc-face--pin': shown[rank].pinned,
+                    'fc-face--prob': shown[rank].probable,
                     'fc-face--on': rank === focusRank,
                   }"
                   :style="{
@@ -225,7 +315,16 @@
                 >
                   <img :src="pictureThumbnailUrl(f.picture_id)" alt="" loading="lazy" />
                   <span class="fc-chip fc-chip--lk">{{ fixed(shown[rank].centrality) }}</span>
-                  <span v-if="shown[rank].score" class="fc-chip fc-chip--sc"
+                  <span v-if="shown[rank].pinned" class="fc-pinmark" data-testid="fc-pin"
+                    ><v-icon size="12">mdi-pin</v-icon></span
+                  >
+                  <span
+                    v-if="shown[rank].probable"
+                    class="fc-chip fc-chip--sc fc-chip--prob"
+                    data-testid="fc-probable"
+                    >Probably</span
+                  >
+                  <span v-else-if="shown[rank].score" class="fc-chip fc-chip--sc"
                     >{{ shown[rank].score }}★</span
                   >
                 </button>
@@ -252,7 +351,15 @@
                     · {{ picked.score }}★</template
                   ><br />
                   <span class="fc-note">{{
-                    isOut(focusRank) ? "Left out at this cut." : "Counts at this cut."
+                    picked.probable
+                      ? isOut(focusRank)
+                        ? `Probably ${name}; under the cut.`
+                        : `Probably ${name}; not theirs until added.`
+                      : picked.pinned
+                        ? "Picked by you: always counts."
+                        : isOut(focusRank)
+                          ? "Left out at this cut."
+                          : "Counts at this cut."
                   }}</span>
                   <button
                     type="button"
@@ -262,7 +369,7 @@
                     Zoom (Z)
                   </button>
                   <button
-                    v-if="picked.picture_id !== centred?.picture_id"
+                    v-if="picked.picture_id !== centred?.picture_id && !picked.probable"
                     type="button"
                     class="fc-link"
                     :disabled="centring"
@@ -293,7 +400,7 @@
                       @dblclick="zoomIn('compare', current.members[0].picture_id)"
                       @wheel="zoomIn('compare', current.members[0].picture_id, $event)"
                     />
-                    <figcaption>Cluster {{ selected + 1 }}, centre</figcaption>
+                    <figcaption>{{ rowLabel(selected) }}, centre</figcaption>
                   </figure>
                 </div>
                 <span class="fc-num">{{ fixed(comparison.likeness) }}<small> alike</small></span>
@@ -308,7 +415,13 @@
 
               <div class="fc-dist">
                 <h4 class="fc-lbl">
-                  {{ centred ? "Likeness to the chosen face" : "Likeness to the centre" }}
+                  {{
+                    centred
+                      ? "Likeness to the chosen face"
+                      : onSeeded
+                        ? "Likeness to your picks' centre"
+                        : "Likeness to the centre"
+                  }}
                 </h4>
                 <div class="fc-gradwrap" :style="{ '--fc-cut': `${cutPercent}%` }">
                   <div class="fc-grad" :style="{ background: gradient }" />
@@ -334,7 +447,17 @@
                   @input="setCut(Number($event.target.value))"
                   @keydown.enter.prevent
                 />
-                <p>
+                <p v-if="onSeeded && !centred" data-testid="fc-seeded-words">
+                  <b>{{ kept.length }}</b> of {{ current.size }} faces count as
+                  {{ name }}, your {{ pins.length }}
+                  {{ pins.length === 1 ? "pick" : "picks" }} always among them.<template
+                    v-if="probables.length"
+                  >
+                    Dashed faces are not {{ name }}'s yet;
+                    {{ probableKept.length }} clear the cut.</template
+                  >
+                </p>
+                <p v-else>
                   <b>{{ kept.length }}</b> of {{ current.size }} faces count as
                   {{ name }}. Brighter where more faces sit; median
                   <b>{{ fixed(median) }}</b>. This is likeness to
@@ -371,6 +494,10 @@
             </aside>
           </div>
           <p class="fc-note fc-scale">
+            <template v-if="onSeeded && !centred"
+              >Ringed and pinned: your picks, at the centre, never cut. Dashed:
+              probably {{ name }}, not assigned yet.
+            </template>
             Size: four bands of how typical a face is. Click a face to see it
             here; double-click any face, Ctrl+wheel or Z to zoom; C or
             <i>Centre on this face</i> to rank every face against it.
@@ -394,7 +521,11 @@
       <template #aside>
         <div class="fc-zoomref">
           <span class="fc-lbl">{{
-            centred ? "The chosen face" : `Centre of Cluster ${selected + 1}`
+            centred
+              ? "The chosen face"
+              : onSeeded
+                ? "Your first pick"
+                : `Centre of ${rowLabel(selected, true)}`
           }}</span>
           <img :src="pictureThumbnailUrl(current.members[0].picture_id)" alt="" />
           <span class="fc-note">{{ faceName(0) }}</span>
@@ -411,7 +542,7 @@
       v-if="setName != null"
       open
       title="Save as set"
-      :subtitle="`${setIds.length} pictures from ${centred ? 'the centred faces' : `Cluster ${selected + 1}`}`"
+      :subtitle="`${setIds.length} pictures from ${centred ? 'the centred faces' : rowLabel(selected, true)}`"
       size="sm"
       :persistent="savingSet"
       @close="setName = null"
@@ -466,7 +597,11 @@ import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
 import Segmented from "../widgets/Segmented.vue";
 import ZoomPopout from "../widgets/ZoomPopout.vue";
-import { getFaceClusters, setReferenceCluster } from "../../api/characters";
+import {
+  addCharacterFacesByFaceId,
+  getFaceClusters,
+  setReferenceCluster,
+} from "../../api/characters";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { bulkAddPicturesToSet, createPictureSet } from "../../api/pictureSets";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
@@ -484,6 +619,8 @@ const props = defineProps({
   /** `{ id, name }` */
   character: { type: Object, default: null },
   returnFocusTo: { type: Object, default: null },
+  /** Picked picture ids: a "From your picks" row ranked round their faces. */
+  seeds: { type: Array, default: null },
 });
 
 const emit = defineEmits(["close", "changed"]);
@@ -505,6 +642,7 @@ const cuts = ref({}); // cluster index -> the slider's value
 const saving = ref(false);
 const focusRank = ref(0);
 const fieldEl = ref(null);
+const railEl = ref(null);
 const stageEl = ref(null);
 const box = ref({ width: 0, height: 0 });
 let seq = 0;
@@ -533,18 +671,36 @@ const strictnessLabel = computed(
 );
 const clusters = computed(() => data.value?.clusters || []);
 const unclustered = computed(() => data.value?.unclustered || []);
+// The seeded cluster ("From your picks", #2738) leads the rail but is no
+// cluster: `clusters` keep their numbers, the grid's Likeness filter's.
+const offset = computed(() => (data.value?.seeded ? 1 : 0));
+const rows = computed(() =>
+  data.value?.seeded ? [seededRow.value, ...clusters.value] : clusters.value,
+);
+// The picks first, so the layout puts them at the centre at the largest size.
+const seededRow = computed(() => {
+  const seeded = data.value?.seeded;
+  if (!seeded) return null;
+  const members = [
+    ...seeded.members.filter((m) => m.pinned),
+    ...seeded.members.filter((m) => !m.pinned),
+  ];
+  return { ...seeded, members };
+});
+const pins = computed(() => seededRow.value?.members.filter((m) => m.pinned) || []);
+const onSeeded = computed(() => offset.value === 1 && selected.value === 0);
 const current = computed(() =>
   centred.value
     ? { members: centred.value.members, size: centred.value.members.length, centred: true }
-    : clusters.value[selected.value] || null,
+    : rows.value[selected.value] || null,
 );
 const threshold = computed(() => STRICTNESS.find((s) => s.id === strictness.value).threshold);
 const toWhat = computed(() => (centred.value ? "to the chosen face" : "to the centre"));
 const paneName = computed(() =>
-  centred.value ? "Faces ranked against the chosen face" : `Cluster ${selected.value + 1}`,
+  centred.value ? "Faces ranked against the chosen face" : rowLabel(selected.value),
 );
 const shown = computed(() => current.value?.members.slice(0, MAX_SHOWN) || []);
-const hidden = computed(() => (current.value?.size || 0) - shown.value.length);
+const hidden = computed(() => (current.value?.members.length || 0) - shown.value.length);
 const layout = computed(() =>
   layoutCluster(
     shown.value.map((m) => ({
@@ -592,6 +748,8 @@ const axis = computed(() => {
 /** Where the slider starts: the lowest saved face of the reference cluster,
  * else every face counts. */
 function defaultCut(c) {
+  // The seeded row: the farthest pick, so it opens with every face as close.
+  if (c === seededRow.value) return Math.min(...pins.value.map((m) => m.centrality));
   const ins = c.members.filter((m) => saved.value.has(m.picture_id));
   const counted = c.is_reference && ins.length ? ins : c.members;
   return Math.min(...counted.map((m) => m.centrality));
@@ -610,19 +768,37 @@ const cutPercent = computed(
   () => ((cut.value - axis.value.min) / (axis.value.max - axis.value.min)) * 100,
 );
 
+// A pick is never cut; a probable face is cut but never kept: it is not the
+// person's yet, and the reference holds only their faces.
 function isOut(rank) {
-  return shown.value[rank].centrality < cut.value - 1e-9;
+  const m = shown.value[rank];
+  return !m.pinned && m.centrality < cut.value - 1e-9;
 }
 
 const kept = computed(() =>
   (current.value?.members || [])
-    .filter((m) => m.centrality >= cut.value - 1e-9)
+    .filter((m) => m.pinned || (!m.probable && m.centrality >= cut.value - 1e-9))
     .map((m) => m.picture_id),
 );
 // Most typical first, so the faces just under the cut lead.
 const leftOut = computed(() =>
-  (current.value?.members || []).filter((m) => m.centrality < cut.value - 1e-9),
+  (current.value?.members || []).filter(
+    (m) => !m.pinned && !m.probable && m.centrality < cut.value - 1e-9,
+  ),
 );
+const probables = computed(() =>
+  onSeeded.value && !centred.value ? current.value.members.filter((m) => m.probable) : [],
+);
+const probableKept = computed(() =>
+  probables.value.filter((m) => m.centrality >= cut.value - 1e-9),
+);
+const ignoredNote = computed(() => {
+  const n = data.value?.seeds_ignored?.length || 0;
+  const total = new Set(props.seeds || []).size;
+  return n === 1
+    ? `1 of the ${total} pictures you picked has no face of ${name.value}, so it is left out.`
+    : `${n} of the ${total} pictures you picked have no face of ${name.value}, so they are left out.`;
+});
 const changed = computed(
   () =>
     kept.value.length !== saved.value.size ||
@@ -682,8 +858,17 @@ function meterOf(c) {
   return c.is_reference ? 100 : Math.max(0, Math.round(c.similarity_to_reference * 100));
 }
 
+/** "Cluster N" by the filter's numbering, or the seeded row's name. */
+function rowLabel(i, inSentence = false) {
+  if (offset.value && i === 0) return inSentence ? "your cluster" : "Your cluster";
+  return `Cluster ${i + 1 - offset.value}`;
+}
+
 function rowName(c, i) {
-  const bits = [`Cluster ${i + 1}, ${c.size} pictures`];
+  if (offset.value && i === 0) {
+    return `Your cluster, from your ${pins.value.length} picks, ${c.size} pictures`;
+  }
+  const bits = [`${rowLabel(i)}, ${c.size} pictures`];
   if (c.is_reference) bits.push("the reference");
   if (c.from_sheets) bits.push("new, from sheets");
   return bits.join(", ");
@@ -693,7 +878,8 @@ function faceName(rank) {
   const m = shown.value[rank];
   if (!m) return "";
   const score = m.score ? ` · ${m.score}★` : "";
-  return `Face ${rank + 1} of ${current.value.size} · ${fixed(m.centrality)} ${toWhat.value}${score}`;
+  const role = m.pinned ? ", picked by you" : m.probable ? `, probably ${name.value}` : "";
+  return `Face ${rank + 1} of ${current.value.members.length} · ${fixed(m.centrality)} ${toWhat.value}${score}${role}`;
 }
 
 function select(i) {
@@ -717,8 +903,13 @@ async function centreOn(pictureId) {
   try {
     const result = await getFaceClusters(id, threshold.value, pictureId);
     if (mine !== centreSeq) return;
-    // `data` is kept: the answer's clusters are the same ones.
-    centred.value = { picture_id: pictureId, members: result.centred };
+    // `data` is kept: the answer's clusters are the same ones. Centred from
+    // the seeded row, the picks stay pinned.
+    const pinned = new Set(onSeeded.value ? pins.value.map((m) => m.picture_id) : []);
+    const members = result.centred.map((m) =>
+      pinned.has(m.picture_id) ? { ...m, pinned: true } : m,
+    );
+    centred.value = { picture_id: pictureId, members };
     centreCut.value = null;
     // Into the field only if focus was there; a side-panel button keeps it.
     if (fieldEl.value?.contains(document.activeElement)) focusFace(0);
@@ -758,7 +949,7 @@ const zoomFrom = ref("field");
 const zoomItems = computed(() => {
   switch (zoomFrom.value) {
     case "clusters":
-      return clusters.value.map((c) => c.members[0]);
+      return rows.value.map((c) => c.members[0]);
     case "unclustered":
       return unclustered.value;
     case "leftOut":
@@ -806,19 +997,33 @@ const zoomCaption = computed(() => {
     const where = at === 0 ? ", the chosen face" : at === n - 1 ? ", least alike" : "";
     return `Centred · face ${at + 1} of ${n}${where} · ${fixed(m.centrality)} to the chosen face · ${score}`;
   }
-  const i = clusters.value.findIndex((c) => c.members.includes(m));
-  const c = clusters.value[i];
+  const i = rows.value.findIndex((c) => c.members.includes(m));
+  const c = rows.value[i];
   const rank = c.members.indexOf(m);
-  const where = rank === 0 ? ", most typical" : rank === c.size - 1 ? ", least typical" : "";
-  const role = c.is_reference ? " (reference)" : "";
-  return `Cluster ${i + 1}${role} · face ${rank + 1} of ${c.size}${where} · ${fixed(m.centrality)} to the centre · ${score}`;
+  const n = c.members.length;
+  const where =
+    c === seededRow.value
+      ? ""
+      : rank === 0
+        ? ", most typical"
+        : rank === n - 1
+          ? ", least typical"
+          : "";
+  const role = c.is_reference
+    ? " (reference)"
+    : m.pinned
+      ? " · picked by you"
+      : m.probable
+        ? ` · probably ${name.value}`
+        : "";
+  return `${rowLabel(i)}${role} · face ${rank + 1} of ${n}${where} · ${fixed(m.centrality)} to the centre · ${score}`;
 });
 
 /** Z zooms the selected cluster's centre from the rail. */
 function onRailKey(event) {
   if ((event.key !== "z" && event.key !== "Z") || event.ctrlKey || event.metaKey) return;
   event.preventDefault();
-  zoomIn("clusters", clusters.value[selected.value].members[0].picture_id);
+  zoomIn("clusters", rows.value[selected.value].members[0].picture_id);
 }
 
 function faceUrl(m) {
@@ -853,7 +1058,8 @@ function onFieldKey(event) {
   } else if ((event.key === "c" || event.key === "C") && !event.ctrlKey && !event.metaKey) {
     event.preventDefault();
     const m = shown.value[focusRank.value];
-    if (m && m.picture_id !== centred.value?.picture_id) centreOn(m.picture_id);
+    // A probable face is not the person's: there is nothing of theirs to centre on.
+    if (m && !m.probable && m.picture_id !== centred.value?.picture_id) centreOn(m.picture_id);
   }
 }
 
@@ -865,15 +1071,23 @@ async function load() {
   error.value = "";
   uncentre();
   try {
-    const result = await getFaceClusters(id, threshold.value);
+    const seeds = props.seeds || [];
+    const result = seeds.length
+      ? await getFaceClusters(id, threshold.value, null, seeds)
+      : await getFaceClusters(id, threshold.value);
     if (mine !== seq) return;
     data.value = result;
     cuts.value = {};
-    selected.value = 0; // the reference cluster, when there is one, comes first
+    selected.value = 0; // the seeded row, else the reference cluster, comes first
     focusRank.value = 0;
   } catch (e) {
     if (mine !== seq) return;
-    error.value = `Couldn't group ${name.value}'s faces. ${errorDetail(e) || "Please try again."}`;
+    const detail = errorDetail(e);
+    // The route's no-face refusal; a 422 for too many seeds keeps its own reason.
+    error.value =
+      props.seeds?.length && e?.response?.status === 422 && detail.startsWith("None of these pictures")
+        ? `None of the pictures you picked has ${name.value}'s face.`
+        : `Couldn't group ${name.value}'s faces. ${detail || "Please try again."}`;
   }
 }
 
@@ -886,6 +1100,26 @@ async function save(ids) {
     await load();
   } catch (e) {
     error.value = `Couldn't save the reference. ${errorDetail(e) || "Please try again."}`;
+  } finally {
+    saving.value = false;
+  }
+}
+
+/** The probable faces above the cut become the person's, and come back as theirs. */
+async function addProbable() {
+  const faceIds = probableKept.value.map((m) => m.face_id);
+  if (!faceIds.length) return;
+  saving.value = true;
+  error.value = "";
+  try {
+    await addCharacterFacesByFaceId(props.character.id, faceIds);
+    emit("changed");
+    await load();
+    // The button left with the faces it added: focus back to the rail.
+    nextTick(() => railEl.value?.focus());
+  } catch (e) {
+    console.error("Couldn't add probable faces", props.character.id, faceIds, e);
+    error.value = `Couldn't add the faces to ${name.value}. ${errorDetail(e) || "Please try again."}`;
   } finally {
     saving.value = false;
   }
@@ -904,7 +1138,9 @@ function openSetName() {
   setError.value = "";
   setName.value = centred.value
     ? `${name.value}, like one face`
-    : `${name.value}, cluster ${selected.value + 1}`;
+    : onSeeded.value
+      ? `${name.value}, like your picks`
+      : `${name.value}, cluster ${selected.value + 1 - offset.value}`;
 }
 
 async function saveAsSet() {
@@ -1001,6 +1237,10 @@ function close() {
 .fc-lbl--rail {
   padding: 0 var(--space-5) var(--space-2);
 }
+.fc-lbl--sub {
+  display: block;
+  padding-top: var(--space-4);
+}
 .fc-note {
   margin: 0;
   font-size: var(--text-xs);
@@ -1016,6 +1256,11 @@ function close() {
   border: 1px solid rgb(var(--v-theme-border));
   background: rgb(var(--v-theme-input-background));
   font-size: var(--text-xs);
+}
+
+.fc-notice--inline {
+  align-self: stretch;
+  margin: 0;
 }
 
 /* ── The rail ─────────────────────────────────────────────────────────── */
@@ -1074,6 +1319,24 @@ function close() {
   flex: none;
   object-fit: contain;
   border-radius: var(--radius-md);
+}
+/* The seeded row's picks, a small fanned stack. */
+.fc-row__stack {
+  position: relative;
+  width: var(--space-8);
+  height: var(--space-8);
+  flex: none;
+}
+.fc-row__stack img {
+  position: absolute;
+  left: calc(var(--fc-stack) * var(--space-2));
+  top: calc(var(--fc-stack) * var(--space-1));
+  width: var(--space-7);
+  height: calc(var(--space-8) - 3 * var(--space-1));
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgb(var(--v-theme-surface));
+  cursor: zoom-in;
 }
 .fc-row__text {
   display: flex;
@@ -1136,6 +1399,10 @@ function close() {
 .fc-badge--ref {
   background: var(--active-bar);
   color: rgb(var(--v-theme-on-primary));
+}
+.fc-badge--count {
+  background: rgb(var(--v-theme-cancel-button));
+  color: rgb(var(--v-theme-cancel-button-text));
 }
 .fc-badge--new {
   color: rgb(var(--v-theme-tertiary));
@@ -1236,6 +1503,17 @@ function close() {
     var(--focus-glow);
   z-index: var(--z-raised);
 }
+/* A pick: a hue-free ring and lift, so it never reads as selection (olive),
+   focus (blue) or a person; the olive ring stays the clicked face's. */
+.fc-face--pin {
+  border: 2px solid rgb(var(--v-theme-on-surface));
+  box-shadow: var(--elevation-3);
+  z-index: var(--z-raised);
+}
+/* Probably the person, not assigned yet. */
+.fc-face--prob {
+  border: 1px dashed var(--track-ring);
+}
 .fc-face--on {
   border-color: var(--active-bar);
   box-shadow: inset 0 0 0 var(--focus-width) var(--active-bar);
@@ -1265,6 +1543,23 @@ function close() {
 .fc-chip--sc {
   right: var(--space-1);
   top: var(--space-1);
+}
+.fc-chip--prob {
+  font-weight: var(--weight-regular);
+  font-style: italic;
+}
+.fc-pinmark {
+  position: absolute;
+  left: var(--space-1);
+  top: var(--space-1);
+  display: grid;
+  place-items: center;
+  width: var(--badge-size);
+  height: var(--badge-size);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-on-surface));
+  color: rgb(var(--v-theme-surface));
+  pointer-events: none;
 }
 .fc-picked {
   display: flex;

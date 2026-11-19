@@ -439,6 +439,28 @@
               COMPARE_NOTES[compareBlockReason]
             }}</span>
           </button>
+          <!-- A face cluster seeded from the picks, in one person's view;
+               greyed with its reason otherwise. Mirrored in
+               ImageGridContextMenu.vue. -->
+          <button
+            class="ctx-item"
+            :disabled="!!seedClusterReason"
+            data-testid="start-cluster"
+            @click="
+              $emit('start-cluster');
+              $emit('close');
+            "
+          >
+            <Tooltip
+              :text="seedClusterReason || `Group ${seedPersonName}'s faces that look like these`"
+              activator="parent"
+            />
+            <v-icon class="ctx-icon">mdi-account-search-outline</v-icon>
+            Start a cluster from these…
+            <span v-if="seedClusterReason" class="ctx-meta">{{
+              SEED_NOTES[seedClusterReason]
+            }}</span>
+          </button>
         </div>
       </div>
       <div class="ctx-sep" />
@@ -528,6 +550,7 @@ import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { COMPARE_NOTES } from "../../utils/compare";
+import { SEED_NOTES } from "../../utils/seedCluster";
 import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
 import { vSubmenuFit } from "../../utils/submenuFit";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
@@ -566,6 +589,10 @@ const props = defineProps({
   rotateBlockReason: { type: String, default: null },
   // Why Compare is greyed (`compareBlockReason`), or null for two pictures.
   compareBlockReason: { type: String, default: null },
+  // Why "Start a cluster from these…" is greyed, or null in one person's view
+  // with a selection; and that person's name.
+  seedClusterReason: { type: String, default: null },
+  seedPersonName: { type: String, default: null },
 });
 
 const emit = defineEmits([
@@ -587,6 +614,7 @@ const emit = defineEmits([
   "run-workflow",
   "edit-pictures",
   "compare-pictures",
+  "start-cluster",
   "reverse-image-search",
   "segment",
   "detect-faces",

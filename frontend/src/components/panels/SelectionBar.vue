@@ -272,6 +272,8 @@
             :keep-cover-only-lock-reason="props.keepCoverOnlyLockReason"
             :rotate-block-reason="props.rotateBlockReason"
             :compare-block-reason="props.compareBlockReason"
+            :seed-cluster-reason="props.seedClusterReason"
+            :seed-person-name="props.seedPersonName"
             @close="selectionMenuOpen = false"
             @set-project="$emit('set-project', $event)"
             @add-to-character="$emit('add-to-character', $event)"
@@ -291,6 +293,7 @@
             @run-workflow="$emit('run-workflow')"
             @edit-pictures="$emit('edit-pictures')"
             @compare-pictures="$emit('compare-pictures')"
+            @start-cluster="$emit('start-cluster')"
             @reverse-image-search="$emit('reverse-image-search')"
             @segment="$emit('segment')"
             @detect-faces="$emit('detect-faces')"
@@ -393,6 +396,8 @@ const props = defineProps({
   // lives in the overflow only, never as a top-level pill button.
   rotateBlockReason: { type: String, default: null },
   compareBlockReason: { type: String, default: null },
+  seedClusterReason: { type: String, default: null },
+  seedPersonName: { type: String, default: null },
   groupingLockReason: { type: String, default: null },
   availablePlugins: { type: Array, default: () => [] },
   taggerPlugins: { type: Array, default: () => [] },
@@ -435,6 +440,7 @@ const emit = defineEmits([
   "run-workflow",
   "edit-pictures",
   "compare-pictures",
+  "start-cluster",
   "confirm-export-zip",
   "confirm-export-folder",
 ]);

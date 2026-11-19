@@ -12,6 +12,7 @@ vi.mock("vuetify/components", async () => {
 const api = vi.hoisted(() => ({
   getFaceClusters: vi.fn(),
   setReferenceCluster: vi.fn(),
+  addCharacterFacesByFaceId: vi.fn(),
 }));
 vi.mock("../../api/characters", () => api);
 vi.mock("../../api/pictures", () => ({
@@ -87,6 +88,44 @@ async function centreOn12(wrapper) {
 function mountDialog() {
   return mount(FaceClustersDialog, {
     props: { open: true, character: { id: 7, name: "Wren" } },
+    global: { stubs: { teleport: true } },
+    attachTo: document.body,
+  });
+}
+
+// #2738: seeded from pictures 1, 2, 11 and 77 (77 has no face of Wren). The
+// farthest pick is 11 (0.50); 50 and 51 are unassigned look-alikes.
+const SEEDS = [1, 2, 11, 77];
+const pin = (id, c) => ({ ...member(id, c), pinned: true, probable: false });
+const probable = (id, c, faceId) => ({ ...member(id, c), probable: true, face_id: faceId });
+function seededAnswer() {
+  const body = clusters({ reference: true });
+  body.seeded = {
+    members: [
+      pin(1, 0.9),
+      pin(2, 0.86),
+      member(3, 0.8),
+      probable(50, 0.75, 500),
+      member(12, 0.7),
+      pin(11, 0.5),
+      probable(51, 0.45, 510),
+      member(4, 0.4),
+      member(13, 0.3),
+    ],
+    size: 7,
+    cohesion: 0.62,
+    reference_share: 0.43,
+    is_reference: false,
+    similarity_to_reference: 0.7,
+    from_sheets: false,
+  };
+  body.seeds_ignored = [77];
+  return body;
+}
+
+function mountSeeded() {
+  return mount(FaceClustersDialog, {
+    props: { open: true, character: { id: 7, name: "Wren" }, seeds: SEEDS },
     global: { stubs: { teleport: true } },
     attachTo: document.body,
   });
@@ -414,5 +453,170 @@ describe("FaceClustersDialog", () => {
     expect(wrapper.find('[data-testid="fc-uncentre"]').exists()).toBe(false);
     expect(faces()).toHaveLength(4);
     wrapper.unmount();
+  });
+
+  describe("seeded from picked pictures", () => {
+    it("leads the rail with Your cluster and keeps the clusters' numbers", async () => {
+      api.getFaceClusters.mockResolvedValue(seededAnswer());
+      const wrapper = mountSeeded();
+      await flushPromises();
+      expect(api.getFaceClusters).toHaveBeenLastCalledWith(7, 0.45, null, SEEDS);
+      const rows = wrapper.findAll('[data-testid="fc-row"]');
+      expect(rows).toHaveLength(3);
+      expect(rows[0].attributes("aria-label")).toBe(
+        "Your cluster, from your 3 picks, 7 pictures",
+      );
+      expect(rows[0].attributes("aria-selected")).toBe("true");
+      expect(rows[1].attributes("aria-label")).toBe("Cluster 1, 4 pictures, the reference");
+      expect(rows[2].attributes("aria-label")).toMatch(/^Cluster 2, 3 pictures/);
+      expect(wrapper.find(".fc-title").text()).toBe("Your cluster");
+      // The picks lead the field, so the layout puts them at its centre.
+      const faces = wrapper.findAll('[data-testid="fc-face"]');
+      expect(faces.slice(0, 3).map((f) => f.classes("fc-face--pin"))).toEqual([true, true, true]);
+      expect(faces[2].attributes("aria-label")).toBe(
+        "Face 3 of 9 · 0.50 to the centre, picked by you",
+      );
+      expect(wrapper.find('[data-testid="fc-seeds-ignored"]').text()).toContain(
+        "1 of the 4 pictures you picked has no face of Wren, so it is left out.",
+      );
+      // Each pick in the rail's stack zooms itself.
+      await wrapper.findAll(".fc-row__stack img")[1].trigger("dblclick");
+      await flushPromises();
+      expect(document.querySelector(".zp-cap").textContent.trim()).toMatch(/^Your cluster · picked by you · face 2 of/);
+      // The picks lead the row, so its first face is a pick, not its centre.
+      expect(document.querySelector(".fc-zoomref .fc-lbl").textContent.trim()).toBe(
+        "Your first pick",
+      );
+      document
+        .querySelector('[data-testid="zoom-popout"]')
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await flushPromises();
+      // Choosing Cluster 1 shows the first automatic cluster, unchanged.
+      await rows[1].trigger("click");
+      expect(wrapper.find(".fc-title").text()).toContain("Cluster 1");
+      expect(wrapper.findAll('[data-testid="fc-face"]')).toHaveLength(4);
+      expect(wrapper.find('[data-testid="fc-seeds-ignored"]').exists()).toBe(false);
+      wrapper.unmount();
+    });
+
+    it("never cuts a pick, even at the slider's top", async () => {
+      api.getFaceClusters.mockResolvedValue(seededAnswer());
+      const wrapper = mountSeeded();
+      await flushPromises();
+      const count = () => wrapper.find('[data-testid="fc-count"]').text();
+      // It opens at the farthest pick: every face as close counts.
+      expect(wrapper.find('[data-testid="fc-cut"]').element.value).toBe("0.5");
+      expect(count()).toBe("5 of 7 pictures count · 1 probably Wren");
+      await wrapper.find('[data-testid="fc-cut"]').setValue("0.9");
+      for (const face of wrapper.findAll(".fc-face--pin")) {
+        expect(face.classes("fc-face--out")).toBe(false);
+      }
+      expect(wrapper.findAll(".fc-face--pin")).toHaveLength(3);
+      expect(count()).toBe("3 of 7 pictures count · 0 probably Wren");
+      expect(wrapper.find('[data-testid="fc-add-probable"]').attributes("disabled")).toBeDefined();
+      wrapper.unmount();
+    });
+
+    it("saves the picks and the person's faces above the cut, never a probable face", async () => {
+      api.getFaceClusters.mockResolvedValue(seededAnswer());
+      const wrapper = mountSeeded();
+      await flushPromises();
+      expect(wrapper.findAll('[data-testid="fc-probable"]')).toHaveLength(2);
+      await wrapper.find('[data-testid="fc-cut"]').setValue("0.4");
+      await wrapper.find('[data-testid="fc-save-seeded"]').trigger("click");
+      await flushPromises();
+      const [, ids] = api.setReferenceCluster.mock.calls[0];
+      expect([...ids].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 11, 12]);
+      wrapper.unmount();
+    });
+
+    it("adds only the probable faces above the cut, then reloads with the seeds", async () => {
+      api.getFaceClusters.mockResolvedValue(seededAnswer());
+      api.addCharacterFacesByFaceId.mockResolvedValue({});
+      const wrapper = mountSeeded();
+      await flushPromises();
+      await wrapper.find('[data-testid="fc-cut"]').setValue("0.6");
+      const add = wrapper.find('[data-testid="fc-add-probable"]');
+      expect(add.text()).toContain("Add 1 to Wren");
+      await add.trigger("click");
+      await flushPromises();
+      expect(api.addCharacterFacesByFaceId).toHaveBeenCalledWith(7, [500]);
+      expect(wrapper.emitted("changed")).toHaveLength(1);
+      expect(api.getFaceClusters).toHaveBeenCalledTimes(2);
+      expect(api.getFaceClusters).toHaveBeenLastCalledWith(7, 0.45, null, SEEDS);
+      // The button went with its faces' reload: focus is on the rail, not <body>.
+      await flushPromises();
+      expect(document.activeElement).toBe(wrapper.find('[data-testid="fc-rail"]').element);
+      wrapper.unmount();
+    });
+
+    it("keeps the picks pinned when centred, and offers no centre on a probable face", async () => {
+      api.getFaceClusters.mockImplementation(async (_id, _t, centre) => {
+        const body = seededAnswer();
+        // Against face 3, pick 11 falls far under the 0.45 cut.
+        body.centred =
+          centre == null
+            ? null
+            : [member(3, 1), member(1, 0.7), member(2, 0.6), member(12, 0.5), member(11, 0.1)];
+        return body;
+      });
+      const wrapper = mountSeeded();
+      await flushPromises();
+      const faces = () => wrapper.findAll('[data-testid="fc-face"]');
+      // Rank 4 is probable face 50: picked, it has nothing to centre on.
+      await faces()[4].trigger("click");
+      expect(faces()[4].classes("fc-face--prob")).toBe(true);
+      expect(wrapper.find('[data-testid="fc-centre"]').exists()).toBe(false);
+      await faces()[4].trigger("keydown", { key: "c" });
+      expect(api.getFaceClusters).toHaveBeenCalledTimes(1);
+      // Centre on face 3 (rank 3, after the three picks).
+      await faces()[3].trigger("click");
+      await wrapper.find('[data-testid="fc-centre"]').trigger("click");
+      await flushPromises();
+      const pick11 = faces().find((f) => f.attributes("aria-label").includes("0.10"));
+      expect(pick11.classes("fc-face--out")).toBe(false);
+      expect(pick11.classes("fc-face--pin")).toBe(true);
+      await wrapper.find('[data-testid="fc-save-centred"]').trigger("click");
+      await flushPromises();
+      const [, ids] = api.setReferenceCluster.mock.calls[0];
+      expect([...ids].sort((a, b) => a - b)).toEqual([1, 2, 3, 11, 12]);
+      wrapper.unmount();
+    });
+
+    it("shows the picks even when no two faces form a cluster", async () => {
+      const body = seededAnswer();
+      body.clusters = [];
+      api.getFaceClusters.mockResolvedValue(body);
+      const wrapper = mountSeeded();
+      await flushPromises();
+      expect(wrapper.find('[data-testid="fc-none"]').exists()).toBe(false);
+      const rows = wrapper.findAll('[data-testid="fc-row"]');
+      expect(rows).toHaveLength(1);
+      expect(wrapper.find(".fc-title").text()).toBe("Your cluster");
+      // The rail cannot step past its one row.
+      await wrapper.find('[data-testid="fc-rail"]').trigger("keydown", { key: "ArrowDown" });
+      expect(rows[0].attributes("aria-selected")).toBe("true");
+      wrapper.unmount();
+    });
+
+    it("says so when none of the picks has the person's face", async () => {
+      const refuse = (detail) =>
+        api.getFaceClusters.mockRejectedValue({ response: { status: 422, data: { detail } } });
+      refuse("None of these pictures has this person's face.");
+      let wrapper = mountSeeded();
+      await flushPromises();
+      expect(wrapper.find(".fc-notice").text()).toContain(
+        "None of the pictures you picked has Wren's face.",
+      );
+      wrapper.unmount();
+      // Any other refusal says its own reason.
+      refuse("At most 500 seeds, not 612.");
+      wrapper = mountSeeded();
+      await flushPromises();
+      expect(wrapper.find(".fc-notice").text()).toContain(
+        "Couldn't group Wren's faces. At most 500 seeds, not 612.",
+      );
+      wrapper.unmount();
+    });
   });
 });
