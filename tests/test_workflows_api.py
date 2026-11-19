@@ -148,6 +148,8 @@ import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
 from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.services.model_downloads import digest_source
+from pixlstash.services.workflow_templates import load_templates
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
@@ -25346,6 +25348,88 @@ def test_a_graph_saved_with_pixlstashs_own_checkpoint_loader_still_names_it(
             conn.execute(
                 "UPDATE model_file SET state = 'present' WHERE model_id = ?",
                 (env.checkpoint,),
+            )
+
+
+def test_a_digest_vae_nobody_has_yet_is_still_the_workflows_vae_row(with_pack):
+    """A built-in can load its VAE through the pack's digest loader before
+    anybody has downloaded the file. Its model row names the file the
+    template list links under that digest, the name the pre-flight reports it
+    missing by, so the Workflow tab can match the two and offer the download.
+
+    Wrong if the default recipe has no VAE row (the tab then reads "From the
+    checkpoint"), or its row names a file the pre-flight does not.
+    """
+    env = with_pack
+    # A ComfyUI that has the stock VAE nodes and no VAE file at all.
+    info = {
+        **json.loads(json.dumps(CHAIN_OBJECT_INFO)),
+        **PACK_OBJECT_INFO,
+        "VAELoader": {
+            "input": {"required": {"vae_name": [[], {}]}},
+            "output": ["VAE"],
+        },
+        "VAEDecode": {
+            "input": {"required": {"samples": ["LATENT", {}], "vae": ["VAE", {}]}},
+            "output": ["IMAGE"],
+        },
+    }
+    env.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url, **_: (info, None)
+    )
+    listed = next(
+        entry
+        for template in load_templates()["templates"]
+        for entry in template.get("files") or []
+        if entry.get("directory") == "vae"
+        and entry.get("sha256")
+        and digest_source(entry["sha256"])
+    )
+    digest = listed["sha256"]
+    graph = json.loads(json.dumps(CHAIN_DOCUMENT))
+    graph["9"] = {"class_type": "PixlStashVAELoader", "inputs": {"vae_sha256": digest}}
+    graph["10"] = {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["3", 0], "vae": ["9", 0]},
+    }
+    graph["4"]["inputs"]["images"] = ["10", 0]
+    hub = env.server.hub
+    manual = workflows_routes.store_manual_workflow(hub, "Digest VAE", graph, "import")
+
+    models = _detail(env.owner, manual)["card"]["default_recipe"]["models"]
+    vae = [m for m in models if m["kind"] == "vae"]
+    assert [m["filename"] for m in vae] == [digest_source(digest)["name"]], models
+    assert vae[0]["address"].endswith("/vae_name")
+    missing = [
+        model["file"]
+        for group in _preflight(env.owner, workflow_id=manual)["groups"]
+        for reason in group["reasons"]
+        if reason["code"] == "missing_models"
+        for model in reason["models"]
+    ]
+    assert vae[0]["filename"] in missing, missing
+
+    # A digest the list does not link names no file: it stays the pack's.
+    unlisted = {"9": {**graph["9"], "inputs": {"vae_sha256": "0" * 64}}}
+    assert with_stock_loaders(hub, unlisted) == unlisted
+
+    # Nor where the shelf knows that name under another digest: the run's
+    # shelf swap finds a file by name and would load that one instead.
+    loader = {"9": graph["9"]}
+    assert with_stock_loaders(hub, loader)["9"]["class_type"] == "VAELoader"
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('vae', ?, ?, 'scanned')",
+            (listed["name"].upper(), _h("another-vae-of-that-name")),
+        )
+    try:
+        assert with_stock_loaders(hub, loader) == loader
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM model WHERE sha256 = ?",
+                (_h("another-vae-of-that-name"),),
             )
 
 

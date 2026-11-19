@@ -110,6 +110,7 @@ from pixlstash.services.workflow_library_service import (
     read_variant_picture_counts,
 )
 from pixlstash.services.comfyui_ui_graph import convert_ui_graph_to_api
+from pixlstash.services.model_downloads import digest_source
 from pixlstash.services.workflow_io import api_graph, with_converted_graph
 from pixlstash.services.workflow_parameters import (
     FEATURED_NAMES,
@@ -1202,7 +1203,9 @@ def with_stock_loaders(hub: HubDatabase, graph: Optional[dict]) -> Optional[dict
     :func:`~pixlstash.services.comfyui_recipe_service.as_stock_loaders` on
     this hub's shelf: a checkpoint loader's row only where its ``shelf`` is
     this one (an id without it is not trusted, #1521), and a digest only
-    where the shelf holds one file of it; either only with a copy present. For a workflow's own graph, which
+    where the shelf holds one file of it; either only with a copy present. A
+    digest with no copy at all reads as the file the template list links
+    under it, unless the shelf holds that name under another digest. For a workflow's own graph, which
     a save from ComfyUI leaves holding them: every read of it that names
     models (the run, Save, the default recipe's rows, *Use a set…*) goes
     through here, so they name a loader alike. Anything that is not an
@@ -1228,6 +1231,12 @@ def with_stock_loaders(hub: HubDatabase, graph: Optional[dict]) -> Optional[dict
         )
         return found["filename"] if found else None
 
+    # A digest with no copy anywhere reads as the file the template list links
+    # under it, the name the pre-flight reports it missing by: left as the
+    # pack's loader it names no file, so its model row went missing and the
+    # download was offered only in the Run popup. Not where the shelf knows
+    # that name under another digest: the run's shelf swap finds a file by
+    # name, so it would load that one in its place.
     def file_of_digest(digest: str) -> Optional[str]:
         rows = hub.fetchall(
             "SELECT DISTINCT m.filename FROM model m "
@@ -1235,7 +1244,16 @@ def with_stock_loaders(hub: HubDatabase, graph: Optional[dict]) -> Optional[dict
             "WHERE m.sha256 = ? AND m.filename IS NOT NULL",
             (digest,),
         )
-        return rows[0][0] if len(rows) == 1 else None
+        if rows:
+            return rows[0][0] if len(rows) == 1 else None
+        listed = (digest_source(digest) or {}).get("name")
+        if not listed or hub.fetchone(
+            "SELECT 1 FROM model WHERE lower(filename) = ? "
+            "AND sha256 IS NOT NULL AND sha256 != ?",
+            (normalized_filename(listed), digest),
+        ):
+            return None
+        return listed
 
     stock, done = as_stock_loaders(graph, file_of_row, file_of_digest)
     if done:
