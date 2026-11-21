@@ -33,6 +33,13 @@ from pixlstash.trusted_sqlite import (
     _reject_symlinked_path,
     _validate_file,
 )
+from tests.windows_acl_vectors import (
+    EVERYONE,
+    allow,
+    install_fake_windows_security,
+    profile_default_dacl,
+    security,
+)
 
 
 def _warned(caplog, text: str) -> bool:
@@ -454,6 +461,7 @@ class TestTrustedPathSymlinkCheck:
         directory = tmp_path / "library"
         directory.mkdir(mode=0o700)
         monkeypatch.setattr(os, "name", "nt")
+        install_fake_windows_security(monkeypatch)
 
         guard = TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
         guard.close()
@@ -473,6 +481,7 @@ class TestTrustedPathSymlinkCheck:
         appdata = tmp_path / "AppData" / "Roaming" / "pixlstash-desktop"
         appdata.mkdir(parents=True, mode=0o700)
         monkeypatch.setattr(os, "name", "nt")
+        install_fake_windows_security(monkeypatch)
 
         guard = TrustedSQLiteLocation.open(
             str(appdata / "hub.db"),
@@ -823,6 +832,7 @@ class TestWindowsHasNoModeBits:
         path.touch()
         os.chmod(path, 0o666)
         monkeypatch.setattr(os, "name", "nt")
+        install_fake_windows_security(monkeypatch)
 
         _validate_file(str(path), private=True)
 
@@ -884,14 +894,13 @@ class TestHostileSidecarRefusal:
       main-file ownership checks first, and the test would keep passing with
       the sidecar loop deleted.
 
-    RESIDUE: Windows, where this attack matters most, is NOT covered here
-    and cannot be: ``_validate_file`` returns unconditionally on ``nt``
-    because ``st_mode``/``st_uid`` are synthesised there (W2), so under the
-    suite's ``nt`` simulation there is no sidecar check to exercise or to
-    break. The last test below asserts that acceptance so the gap stays
-    visible. Closing it requires the native DACL verifier (plan item 3c,
-    ctypes ``GetNamedSecurityInfoW``); tracked in the W17 accepted-risk
-    record, owner lindkvis, revisit 2026-11-08.
+    Windows: ``st_mode``/``st_uid`` are synthesised there, so the sidecar's
+    owner SID and DACL carry the verdict instead. Under the suite's ``nt``
+    simulation the ctypes reader is replaced by vectors
+    (``tests/windows_acl_vectors.py``) and the last tests below assert the
+    refusal and its positive control; the reader itself is exercised against
+    real files in ``tests/test_trusted_sqlite_windows_acl.py`` on the Windows
+    lane.
     """
 
     @staticmethod
@@ -988,21 +997,47 @@ class TestHostileSidecarRefusal:
         finally:
             first.close()
 
-    def test_windows_accepts_the_sidecar_it_cannot_judge(self, tmp_path, monkeypatch):
-        """On ``nt`` a hostile-looking sidecar is ACCEPTED, asserted rather than hidden.
+    @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
+    def test_windows_refuses_a_sidecar_another_principal_can_write(
+        self, tmp_path, monkeypatch, suffix
+    ):
+        """On ``nt`` the sidecar's DACL is judged, and an Everyone grant refuses.
 
-        ``st_mode`` there is synthesised (0o666 for any writable file) and
-        ``st_uid`` is meaningless, so ``_validate_file`` returns before either
-        check (W2). This pins the residue described in the class docstring: if
-        someone adds a real Windows sidecar check (plan item 3c), this test
-        fails and gets replaced by real coverage.
+        Only the sidecar is hostile: the directory and the main file answer
+        with the profile default, so the refusal can only come from the
+        sidecar loop, and it comes from ``open()`` - before any connect.
         """
-        sidecar = tmp_path / "hub.db-wal"
-        sidecar.write_bytes(b"hostile frames")
-        os.chmod(sidecar, 0o666)
+        path, sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o600)
         monkeypatch.setattr(os, "name", "nt")
+        install_fake_windows_security(
+            monkeypatch,
+            {
+                sidecar: security(
+                    dacl=profile_default_dacl() + (allow(EVERYONE, 0x0002),)
+                )
+            },
+        )
 
-        _validate_file(str(sidecar), private=True)
+        with pytest.raises(TrustedSQLiteLocationError) as raised:
+            TrustedSQLiteLocation.open(
+                path, private=True, trusted_root=os.path.dirname(path)
+            )
+        assert sidecar in str(raised.value)
+        assert "Everyone" in str(raised.value)
+
+    @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
+    def test_windows_opens_a_sidecar_with_the_profile_default_acl(
+        self, tmp_path, monkeypatch, suffix
+    ):
+        """The other direction: SQLite's own sidecars inherit the profile ACL."""
+        path, sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o666)
+        monkeypatch.setattr(os, "name", "nt")
+        seen = install_fake_windows_security(monkeypatch)
+
+        TrustedSQLiteLocation.open(
+            path, private=True, trusted_root=os.path.dirname(path)
+        ).close()
+        assert sidecar in seen
 
     def test_a_sidecar_that_vanishes_mid_validation_does_not_refuse_the_open(
         self, tmp_path, monkeypatch
