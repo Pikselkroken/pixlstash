@@ -1737,8 +1737,9 @@ Escape and Enter do nothing here: cancelling deletes a set.
   photos*, *Sheets to draw*, *Sheet size*, *Draw a*) are `Segmented` toggles
   side by side (*Sheet size* greys out what the chosen model does not draw
   well, `ENGINES[…].sizes`: 4K for all but MiniMax H3 and H3 Image, Small and
-  Medium for those two, and choosing one of their workflows picks 4K; a size saved with the set stands
-  where the model draws it), wrapping only on a narrow window, with one line of hints; the
+  Medium for those two, and choosing one of their workflows picks 4K; a size saved with the set, or
+  remembered as picked for that same model (`size_family`), stands where the
+  model draws it), wrapping only on a narrow window, with one line of hints; the
   description takes the height the form leaves. *Draw a* follows the
   description (`subjectFromDescription`: "man", "he", "his" against "woman",
   "she", "her") until a toggle is picked by hand, as the framing follows its
@@ -1942,7 +1943,7 @@ Focus goes back to the person's row on every close.
 A step with nothing saved, here or on a training set's build screen, starts
 from the choices last made on this machine (`CharacterSheetStep.vue`,
 `localStorage` `pixlstash:characterSheetChoices`): the mode, each mode's
-workflow, the size, the count and, per person, a LoRA other than the default.
+workflow, the size (with the model family it was picked for), the count and, per person, a LoRA other than the default.
 Only a change made after `restore` is remembered, so the mode `load` picks (a
 face drawing from its reference) never is, though a mode switch remembers the
 workflow it lands on; a remembered reference mode applies only to a person with
