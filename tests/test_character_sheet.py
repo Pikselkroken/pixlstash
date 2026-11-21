@@ -851,6 +851,33 @@ def test_on_a_seamless_sheet_the_cut_lands_in_the_background_between_people():
     assert clean
 
 
+def test_photos_drawn_touching_are_cut_on_the_seam_not_through_an_arm():
+    """MiniMax H3 draws its photos edge to edge, each on its own backdrop lit
+    top to bottom, so no line between them is even all along; a lit arm as
+    grey as the backdrop is. The cut belongs on the step between backdrops."""
+    ramp = np.linspace(186, 150, SHEET_HEIGHT)[:, None]
+    pixels = np.full((SHEET_HEIGHT, SHEET_WIDTH), 200.0)
+    pixels[:, 1200:1840] = ramp  # the first body photo's backdrop
+    pixels[:, 1840:] = ramp - 20  # the second's, a step darker
+    pixels[230:, 1700:1725] = 170  # an arm, 155 px left of the seam
+    cells, clean = sheet_cells(Image.fromarray(pixels.astype(np.uint8)))
+    # Cut down the seam's middle, 2 px of it to each side.
+    assert (cells[4][2], cells[5][0]) == (1840 - 2, 1840 + 2)
+    assert clean
+
+
+def test_a_white_gutter_wider_than_a_divider_is_cut_inside_not_on_its_edge():
+    """The edge where a photo meets white is the frame's, not a seam: the cut
+    stays inside the white, blurred edge and all, so the frame trim takes all
+    of it and no panel keeps a strip of frame."""
+    image = _photos([("x", 1150, 1230, 252), ("x", 1229, 1230, 244)])
+    cells, _clean = sheet_cells(image)
+    gray = np.asarray(image.convert("L"), dtype=np.int16)
+    for left, top, right, bottom in (cells[1], cells[4]):
+        for edge in (gray[top:bottom, left], gray[top:bottom, right - 1]):
+            assert _uneven(edge)
+
+
 def test_a_face_fences_the_cut_and_says_when_nothing_else_is_clear():
     """A dark line through a face looks like a divider; with the faces given
     it is never the cut, and with nothing else clear the sheet is not clean."""
