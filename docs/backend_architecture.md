@@ -12957,7 +12957,13 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   boxes are the ones that held their layout on 16 of 16 probe sheets; the test
   pins the mid-thigh set. Only MOSS-Image reads the layout JSON, so a Krea 2,
   Qwen-Image, FLUX.2 Klein or MiniMax H3 workflow is sent `layout: "prose"`, the summary
-  caption alone; no probe has measured how their sheets hold the grid or cut. Every panel's caption carries the whole character,
+  caption alone; no probe has measured how their sheets hold the grid or cut.
+  The prose prompt also names the eye colour among what every photo shares
+  (MiniMax H3 Image drifted brown to hazel without it), and with
+  `photo_look` (default on) drops "photorealistic", render vocabulary, and
+  ends with `PHOTO_LOOK`: the photos as a model agency's unedited digitals.
+  Every skin detail named gets exaggerated, so the skin is said once and
+  gently. The MOSS and regions layouts ignore both. Every panel's caption carries the whole character,
   build included (a different build draws a different face), and the summary
   asks for the `background` given, a plain light-grey studio by default (only
   the summary says it; no probe has measured how well each model keeps it, or

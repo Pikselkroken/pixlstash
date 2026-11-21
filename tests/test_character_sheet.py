@@ -29,6 +29,7 @@ from pixlstash.services.workflow_parameters import BLANK_PICTURE_CLASSES
 from pixlstash.services.workflow_run_service import run_seed_targets
 from pixlstash.utils.insightface_model_utils import DEFAULT_MODEL_PACK
 from pixlstash.services.character_sheet import (
+    PHOTO_LOOK,
     SHEET_HEIGHT,
     SHEET_WIDTH,
     agreement,
@@ -246,9 +247,30 @@ def test_a_reference_prompt_names_the_picture_and_keeps_every_box():
 
 def test_a_prose_prompt_is_the_summary_sentence_not_the_layout():
     layout = json.loads(sheet_prompt(description="x", reference=True))
-    prose = sheet_prompt(description="x", reference=True, layout="prose")
-    assert prose == layout["summary"]["caption"]
+    prose = sheet_prompt(
+        description="x", reference=True, layout="prose", photo_look=False
+    )
+    # The same sentence, with the eye colour among what every photo shares.
+    assert prose == layout["summary"]["caption"].replace(
+        "Identical face, hair", "Identical face, eye colour, hair"
+    )
     assert prose.startswith("Character reference sheet of one and the same woman")
+
+
+def test_the_photo_look_is_the_prose_default_and_leaves_the_layouts_alone():
+    """Ordinary unedited photographs, not renders: on by default for prose,
+    and the probed MOSS and regions layouts never see it."""
+    look = sheet_prompt(description="x", layout="prose")
+    plain = sheet_prompt(description="x", layout="prose", photo_look=False)
+    assert look.endswith(f" {PHOTO_LOOK}")
+    assert "photorealistic" not in look
+    assert PHOTO_LOOK not in plain and "photorealistic photographs" in plain
+    for layout in ("moss", "regions"):
+        assert sheet_prompt(description="x", layout=layout) == sheet_prompt(
+            description="x", layout=layout, photo_look=False
+        )
+        text = sheet_prompt(description="x", layout=layout)
+        assert "digitals" not in text and "eye colour" not in text
 
 
 def _edit_graph(latent: str) -> dict:
@@ -1273,6 +1295,12 @@ def test_prompt_route_hands_out_the_canvas(client):
         json={"description": "x", "proportions": "little_person", "layout": "prose"},
     ).json()["prompt"]
     assert "a little person with dwarfism" in little
+    assert little.endswith(character_sheet.PHOTO_LOOK)
+    plain = client.post(
+        f"{API_PREFIX}/character-sheets/prompt",
+        json={"description": "x", "layout": "prose", "photo_look": False},
+    ).json()["prompt"]
+    assert "digitals" not in plain
     giant = client.post(
         f"{API_PREFIX}/character-sheets/prompt",
         json={"description": "x", "proportions": "giant"},

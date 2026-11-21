@@ -1745,7 +1745,11 @@ Escape and Enter do nothing here: cancelling deletes a set.
   "she", "her") until a toggle is picked by hand, as the framing follows its
   suggestion. There is no Body field: the build belongs in the description,
   and a build saved while there was one has its body text joined to the
-  description when it opens. The step reads the
+  description when it opens. *Photo look* (*Natural* / *Off*, a sixth
+  `Segmented`, on by default) is sent as `photo_look` and shows, with its
+  hint, only while the step's `layout` computed is `"prose"` (every engine but
+  MOSS-Image, and every draw from a reference); the route ignores it for
+  MOSS-Image's layout and a sheet copy's regions. The step reads the
   character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
   model is listed disabled, the newest MOSS-Image one preselected, and its name
   rides in the step row as a neutral pill) and the MOSS-Image, Krea 2,
@@ -1947,7 +1951,8 @@ workflow, the size (with the model family it was picked for), the count and, per
 Only a change made after `restore` is remembered, so the mode `load` picks (a
 face drawing from its reference) never is, though a mode switch remembers the
 workflow it lands on; a remembered reference mode applies only to a person with
-a face. A saved `snapshot` stands over all of it.
+a face. The photo look is remembered too, and a saved form without one (saved
+before the toggle) reads as on. A saved `snapshot` stands over all of it.
 
 The same entry keeps, under `recent`, the last twenty values each of Top,
 Bottoms, Shoes and Background was drawn with, newest first, recorded at draw
