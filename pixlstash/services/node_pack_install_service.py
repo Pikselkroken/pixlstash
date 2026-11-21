@@ -4,7 +4,7 @@ A pre-flight that finds a workflow's nodes missing names the pack that provides
 them (:func:`~pixlstash.services.node_packs.packs_for`). This asks the saved
 ComfyUI's Manager to install that pack at its pinned version, waits for Manager
 to finish, and restarts ComfyUI only when nothing is running or queued on it
-(:func:`~pixlstash.services.comfyui_pack_service.restart_comfyui`, #2054).
+(:func:`~pixlstash.services.comfyui_pack_service.restart_comfyui`).
 
 **Manager does the work, never PixlStash.** A ComfyUI with no Manager, or one
 that refuses, gets instructions instead; nothing is copied into

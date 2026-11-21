@@ -1,4 +1,4 @@
-"""Saying that a workflow changed (v1.12 B4, workflow ids since #1623).
+"""Saying that a workflow changed.
 
 One emitter, because there are several places that change a workflow and they
 must agree about the envelope: the workflow writes (``routes/workflows.py``),
@@ -12,7 +12,7 @@ new pictures onto workflows (``MissingComfyUIExtractionFinder``).
 shows - its counts, its cover strip, its rank - is computed per request across
 the whole vault, so anything carried on the wire would be something the client
 has to re-read anyway. The event says which workflows changed and why;
-``GET /workflows`` says what they are now. The payload field is still called
+``GET /workflows`` says what they are now. The payload field is called
 ``keys``, and holds workflow ids (``auto:<core and families digest>`` or a group id).
 """
 
@@ -42,7 +42,7 @@ def announce_changed_workflows(
             the view will draw anyway.
         keys: The workflow ids that changed. May be empty - a file that
             could not be filed still changed the view. Never a card key: that
-            is internal storage (#1623).
+            is internal storage.
         reason: One of :data:`pixlstash.ws.broadcaster.WORKFLOW_CHANGE_REASONS`.
             The broadcaster degrades an unknown one rather than rejecting it,
             so this only complains.

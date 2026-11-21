@@ -8,7 +8,7 @@ measured at about its size (within ``SIZE_BAND``), each scaled up to it, times
 a very large picture does not set what a small one waits for. A run whose peak
 filled the room it had needs the smallest room it has finished in. With no such
 peak the run is unmeasured, and runs with the other heavy tenants kept off
-the card (D2). ``forget_peaks`` is the owner's reset.
+the card. ``forget_peaks`` is the owner's reset.
 
 A workflow can also run **alone** (``workflow_vram_policy``): set by the owner,
 or once its newest ``OOM_STREAK`` runs all ran out of memory when the owner's
@@ -242,7 +242,7 @@ def _need(rows: list, pixels: int | None) -> int | None:
     safety margin, divided by the margin: a peak that high
     is taken to have filled the card, since ComfyUI keeps models resident
     while there is room, so it is what the run completed in and asks for no
-    more (#2081). Nor does a need pass the ceiling itself, which leaves it
+    more. Nor does a need pass the ceiling itself, which leaves it
     waiting for ever.
 
     A peak at or past its ceiling took the memory the arbiter keeps in

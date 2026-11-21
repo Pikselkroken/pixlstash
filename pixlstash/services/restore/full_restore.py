@@ -773,8 +773,7 @@ class FullRestoreMixin:
         which the swap touches. Left alone, a session established before the
         restore keeps authenticating against a database that no longer contains
         the credential it was issued for, and a cached token keeps validating
-        for the rest of its TTL. That is fail-open, and it is the reason issue
-        #666 exists.
+        for the rest of its TTL. That is fail-open.
 
         **Where it runs, and why that is safe.** After
         ``run_control_task(_do_swap)`` has returned, so the swap has finished
@@ -858,7 +857,7 @@ class FullRestoreMixin:
         )
 
     def _clear_hub_api_tokens(self) -> None:
-        """Revoke tokens in the identity hub; tokens no longer live in a vault."""
+        """Revoke tokens in the identity hub; tokens live there, not in a vault."""
         auth_service = getattr(self._vault, "auth_service", None)
         if auth_service is None:
             return

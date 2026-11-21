@@ -1,4 +1,4 @@
-"""The third-party ComfyUI node packs PixlStash knows how to install (#2054).
+"""The third-party ComfyUI node packs PixlStash knows how to install.
 
 A pre-flight that finds a workflow's nodes missing names the pack that provides
 them, and ``POST /comfyui/node-packs/{pack_id}/install`` has ComfyUI-Manager

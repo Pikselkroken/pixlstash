@@ -447,9 +447,8 @@ def _stack_member_ids(session: Session, stack_ids) -> dict[int, list[int]]:
 
     Tested by ``tests/test_picture_set_locking.py::
     test_a_scrapheaped_locked_member_still_freezes_its_stack_against_detach``
-    (and its over-blocking twin), which is the regression this docstring
-    describes: adding ``Picture.deleted.is_(False)`` below flips all three
-    detach routes from 423 to 200.
+    (and its over-blocking twin): adding ``Picture.deleted.is_(False)`` below
+    flips all three detach routes from 423 to 200.
     """
     ids = sorted({int(sid) for sid in stack_ids if sid is not None})
     if not ids:
@@ -481,12 +480,10 @@ def locked_sets_freezing_stacks(session: Session, stack_ids) -> dict[int, list[d
 
     **Every read surface that predicts a detach must come through here.** There
     are two, ``GET /dedup/mixed-stacks`` and
-    ``GET /dedup/stacks/{stack_id}/members``, and they once disagreed: the
-    second rolled its unit-level ``stackable`` up from the live member ids it
-    already had, so a stack whose only locked-set member was scrapheaped read
-    ``true`` there, ``false`` on the row, and ``423`` from the server. Deriving
-    the answer from a member list a caller happens to hold is exactly how that
-    happens; call this instead.
+    ``GET /dedup/stacks/{stack_id}/members``. Rolling a unit-level
+    ``stackable`` up from the live member ids a caller already holds would make
+    a stack whose only locked-set member is scrapheaped read ``true`` there,
+    ``false`` on the row, and ``423`` from the server; call this instead.
 
     Args:
         session: Pre-opened DB session.
@@ -522,15 +519,15 @@ def enforce_stack_detach_not_locked(session: Session, stack_id, action: str) -> 
     The counterpart to :func:`enforce_stack_membership_not_locked`: that one
     guards a picture **joining** a stack, this one guards a picture **leaving**
     one. Both exist for the same reason, stacks are atomic for set membership,
-    but leaving is the dangerous direction and it was the unguarded one.
+    but leaving is the dangerous direction.
 
     **A locked set freezes a stack's siblings THROUGH the stack.** Every
     picture-level guard runs on the stack-expanded id list
     (:func:`_locked_sets_by_picture`), so a member that is not itself in the
     locked set is still frozen while it shares a stack with one that is. Detach
     it and the freeze is simply gone: an operation that was refused ``423`` a
-    moment ago succeeds. Two calls (unstack, then delete) therefore turned a hard
-    freeze into a soft delete, which is a lock escape rather than a missing
+    moment ago succeeds. Two calls (unstack, then delete) would therefore turn a
+    hard freeze into a soft delete, which is a lock escape rather than a missing
     guard.
 
     **The whole stack is refused, never just the frozen member.** Removing any
@@ -539,7 +536,7 @@ def enforce_stack_detach_not_locked(session: Session, stack_id, action: str) -> 
     touched stack that may safely leave. This is the same rule
     ``docs/design/keep-cover-only.md`` states ("Locked sets refuse the whole
     stack") and that :func:`~pixlstash.services.keep_cover_only_service.keep_cover_only_in_session`
-    already enforces, applied to the three routes that detach members:
+    enforces, applied to the three routes that detach members:
     ``POST /dedup/mixed-stacks/{id}/split``, ``POST /dedup/mixed-stacks/{id}/unstack``
     and ``DELETE /stacks/{id}/members``.
 

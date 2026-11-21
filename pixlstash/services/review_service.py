@@ -3,10 +3,10 @@ one scan's results, or a supplied picture list (a LIST review, see
 :func:`_fill_from_list`).
 
 A :class:`~pixlstash.db_models.review.Review` is the first-class noun of the tag
-review workflow (see ``docs/reviews/2026-07-review-sessions-redesign-draft.md``):
-created explicitly, scanned once at creation, refreshed append-only, and finally
-archived or aborted. Per-item decisions (accept/dismiss/fix-twin/swap/reopen)
-stay in :mod:`pixlstash.services.tag_suggestion_service` and are written through
+review workflow: created explicitly, scanned once at creation, refreshed
+append-only, and finally archived or aborted. Per-item decisions
+(accept/dismiss/fix-twin/swap/reopen) stay in
+:mod:`pixlstash.services.tag_suggestion_service` and are written through
 immediately - archiving/aborting a review never touches suggestion rows.
 
 Mirrors the vault-task conventions of the sibling services (all DB access via
@@ -204,7 +204,7 @@ def create_review(
     With ``picture_ids`` the review is a LIST review: no scan runs, and every
     listed picture gets a card (see :func:`_fill_from_list`). ``control_share``
     then mixes in that share of known-answer controls. Without ``picture_ids``
-    the near-neighbour scan fills the queue, as before.
+    the near-neighbour scan fills the queue.
 
     ``source`` picks what fills the queue: ``"near_neighbor"`` (label
     disagreements, the default) or ``"model"`` (the ``limit`` unreviewed

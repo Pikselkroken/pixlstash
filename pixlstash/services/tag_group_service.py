@@ -1,5 +1,5 @@
 """Tag groups: the library-wide tag-name -> group map, its undo, the default
-seeding and the Danbooru tag-file import (issue #2469).
+seeding and the Danbooru tag-file import.
 
 Every public writer function takes a pre-opened session (the ``*_in_session``
 rule, docs/backend_architecture.md section 10.1) and runs on the DB writer, so the

@@ -41,15 +41,13 @@ def in_a_live_stack():
     Scrapheap leaves one live picture still carrying a ``stack_id``, and that
     picture is not stacked in any sense the user would recognise.
 
-    The rest of the app already knew this and this predicate did not, which is the
-    bug it exists to close. ``_enrich_stack_counts`` counts live members only and
-    ``StackBadge`` hides below two, so the grid draws that survivor as a plain
-    picture while the ``stacked`` filter served it as a stack. Collapsing a stack
-    to its cover produces exactly that state every time, so what had been a rare
-    inconsistency became a guaranteed one.
+    ``_enrich_stack_counts`` counts live members only and ``StackBadge`` hides
+    below two, so the grid draws that survivor as a plain picture, and the
+    ``stacked`` filter has to agree. Collapsing a stack to its cover produces
+    exactly that state every time.
 
     One definition, used by every surface that asks the question, so the filter,
-    the count and the badge cannot drift apart again.
+    the count and the badge cannot drift apart.
 
     Returns:
         A SQLAlchemy predicate over :class:`Picture`, true when the picture is

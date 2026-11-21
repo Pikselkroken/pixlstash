@@ -570,8 +570,8 @@ class ResourceRestoreMixin:
             membership from the snapshot; :meth:`_restore_parent_rows` pops it
             and rebuilds the join rows. Without it a restored entity would come
             back with its scalar ``project_id`` set but no membership row, i.e.
-            invisible to every project-scoped read (issue #125: the join is the
-            read model).
+            invisible to every project-scoped read (the join is the read
+            model).
         """
 
         def _as_dict(obj):
@@ -686,7 +686,7 @@ class ResourceRestoreMixin:
         touched.
 
         A restored character or picture set also gets its project-membership
-        join rows rebuilt from the snapshot (issue #125). The join is the read
+        join rows rebuilt from the snapshot. The join is the read
         model, so merging the row alone would restore an entity that is
         unreachable from the project it belongs to. Only memberships whose
         project actually exists live are re-created - a project the user did not

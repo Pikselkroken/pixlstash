@@ -8,7 +8,7 @@ Both callers go through :func:`purge_scrapheap_pictures`:
 2. the scheduled auto-purge (``ScrapheapRetentionPurgeTask``), which *always*
    passes ``include_protected=False``.
 
-**The hub reach is a step inside it, not a sibling** (implementation plan §B4).
+**The hub reach is a step inside it, not a sibling.**
 ``deleted_file_log`` lives in the vault and ghosts live in the hub, so a purge
 that did not cross would leave a destroyed picture's thumbnail and prompt behind
 — a privacy defect, not a missing feature. :func:`purge_scrapheap_pictures`
@@ -830,9 +830,8 @@ def _due_candidate_rows_in_session(
 ) -> list[ScrapheapRow]:
     """Scrapheap rows whose ``deleted_at`` is at or before ``cutoff``.
 
-    The deadline lives in SQL so ``ix_picture_deleted_at`` (added by migration
-    0079, and until now used by no query) actually earns its keep, instead of
-    loading the whole scrapheap into Python every sweep.
+    The deadline lives in SQL so ``ix_picture_deleted_at`` actually earns its
+    keep, instead of loading the whole scrapheap into Python every sweep.
 
     Ordering by ``(deleted_at, id)`` rather than ``id`` is what makes the index
     usable: ordered by ``id``, SQLite instead walks ``ix_picture_deleted`` over
@@ -890,7 +889,7 @@ def _scan_due_rows_in_session(
 
     Pages are over-fetched relative to ``limit`` because protected/locked rows
     are filtered out AFTER the SQL window, so a page of exactly ``limit`` rows
-    could return fewer due ids than the previous full-table scan did.
+    could return fewer than ``limit`` due ids.
     """
     no_delete_folder_ids = fetch_no_delete_folder_ids_in_session(session)
     page = _DUE_SCAN_PAGE if limit is None else max(int(limit) * 4, _DUE_SCAN_PAGE)
@@ -944,8 +943,8 @@ def find_due_retention_picture_ids_in_session(
     than raising: this runs in a background sweep, so one frozen member must not
     abort the batch (same convention as ``reference_folder_scan_task.py``).
 
-    The deadline itself is evaluated in SQL. That is a pure performance change,
-    equivalent to the previous row-by-row :func:`compute_purge_at` filter:
+    The deadline itself is evaluated in SQL, equivalent to a row-by-row
+    :func:`compute_purge_at` filter:
 
     * ``compute_purge_at`` is ``max(deleted_at + retention_days, floor)``, so
       while ``now < floor`` NOTHING can be due - hence the early return, which
@@ -1137,17 +1136,17 @@ def plan_and_purge_in_session(
 ) -> tuple[ScrapheapPurgePlan, int, set[str], set[int]]:
     """Select, plan and destroy in ONE DB-queue submission.
 
-    The purge used to run as four separate submissions - fetch the scrapheap
-    rows, fetch the protected folder ids, look the locks up, then delete. Writes
-    are serialised on a single DB worker thread, so any write submitted between
-    those steps ran BETWEEN them: a ``POST /pictures/scrapheap/restore`` landing
-    in that window made the selected ids live again and the final delete-by-id
-    destroyed them (rows, files and a ``file_removed=True`` ledger row). The
-    locked-set lookup was worse still - it ran on the CALLER's thread via
-    ``run_immediate_read_task``, so a set locked afterwards was not seen at all.
+    Fetching the scrapheap rows, fetching the protected folder ids, looking the
+    locks up and deleting all happen here. Writes are serialised on a single DB
+    worker thread, so as separate submissions any write submitted between those
+    steps would run BETWEEN them: a ``POST /pictures/scrapheap/restore`` landing
+    in that window would make the selected ids live again and the final
+    delete-by-id destroy them (rows, files and a ``file_removed=True`` ledger
+    row). A locked-set lookup on the CALLER's thread would not see a set locked
+    afterwards at all.
 
     Running the whole decision inside one task closes the window: nothing else
-    can write while this runs. It is the structural half of the fix.
+    can write while this runs. It is the structural half of the guarantee.
     :func:`purge_rows_in_session` re-checks ``deleted`` at the point of deletion
     anyway - the half that does not depend on this scheduling - and derives the
     row, the file and the ledger from what the guarded DELETE actually removed,
@@ -1489,8 +1488,8 @@ def remove_picture_files(
 
     ``Picture.file_path`` is a database value, and this is the one unattended
     ``os.remove`` that follows it wherever it points. A path outside the
-    library's legitimate roots is therefore skipped rather than deleted
-    (#776): a wrong absolute path written by an import or a bug cannot reach
+    library's legitimate roots is therefore skipped rather than deleted:
+    a wrong absolute path written by an import or a bug cannot reach
     a delete. Skipping is the safe direction, because an undeleted file is
     reported as unconfirmed and the ledger is corrected so restore can still
     resurrect the row.

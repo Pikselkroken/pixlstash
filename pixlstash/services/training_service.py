@@ -381,7 +381,7 @@ class TrainingService:
                 (:func:`pixlstash.training.presets.caption_mode`); the
                 builder's default (tags) when None.
             quit_comfyui: The owner said ComfyUI may be quit if only that
-                makes the run fit (#2558).
+                makes the run fit.
 
         Returns:
             The persisted run, as the hub row (a dict of its columns).
@@ -2320,7 +2320,7 @@ class TrainingService:
         return manifest
 
     def _record_snapshot(self, info: dict, manifest: dict) -> bool:
-        """Freeze what the run is about to train on (#2123).
+        """Freeze what the run is about to train on.
 
         A run whose lineage cannot be recorded does not train: the LoRA it
         made would name a dataset nobody can show.

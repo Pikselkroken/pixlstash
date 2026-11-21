@@ -55,19 +55,18 @@ same residue the same-drive rename window already accepts, and never a row
 naming a file that is gone. Raising the pragma to ``FULL`` would fsync every
 tiny hub write in the product to narrow that one window, which is not the trade.
 
-**The unlink is authorised by exactly one committed row, and that is checked**
-(#1017). "Commit first" above means the ``model_file`` row actually moved from
+**The unlink is authorised by exactly one committed row, and that is checked.**
+"Commit first" above means the ``model_file`` row actually moved from
 the source key to the destination key - but SQL reports an ``UPDATE`` that
 matched nothing as success, so the commit could be a no-op and the unlink would
 run anyway, leaving the destination bytes with no row naming them. That is the
 dangling residue inverted: not a row without a file, a file without a row, and
-after the source is gone. It happened because forgetting a folder deletes its
-location rows and was not serialized against a running move. Both halves are
-closed, and only the first of them is a guarantee: :meth:`ModelMover._repoint`
+after the source is gone. Forgetting a folder deletes its location rows, so two
+guards apply, and only the first of them is a guarantee: :meth:`ModelMover._repoint`
 requires **exactly one** affected row and raises :class:`RepointLost` otherwise,
 so the caller undoes its copy or its rename and fails the file before the
-unlink; and ``DELETE /model-folders/{id}`` now takes the same
-:data:`SHELF_IO_LOCK` slot, which stops the reported interleaving from starting
+unlink; and ``DELETE /model-folders/{id}`` takes the same
+:data:`SHELF_IO_LOCK` slot, which keeps a forget from interleaving with a move
 but is a slot rather than a general exclusion - a rescan writes the same rows
 outside this lock by design, and a multi-run import is a sequence of separate
 lock-taking requests. The rowcount check is what holds in every case.
@@ -86,7 +85,7 @@ never inside one: a half-copied file with a verified digest does not exist, and
 abandoning a file mid-copy would leave exactly the partial that the ``.partial``
 suffix and the verify step are there to prevent.
 
-Containment (#776): this module both **writes** and **unlinks**, which is
+Containment: this module both **writes** and **unlinks**, which is
 precisely the class §13 "Stored path containment" says to contain. Every
 destination is resolved with ``resolve_path_within`` against the *destination*
 ``model_folder.path`` and every source against its *own* ``model_folder.path``,
@@ -175,7 +174,7 @@ class RepointLost(RuntimeError):
     mover would then unlink the source and leave the destination bytes with no
     row naming them. So :meth:`ModelMover._repoint` requires **exactly one**
     affected row and raises this otherwise; the caller undoes what it wrote and
-    fails the file (#1017).
+    fails the file.
 
     Deliberately **not** a ``sqlite3`` error: nothing is wrong with the
     database, and the two undo paths need to tell this apart from the UNIQUE
@@ -281,7 +280,7 @@ def resolve_subfolder(
     """Resolve a POSIX subpath inside a registered folder, refusing what the tree hides.
 
     Shared by a move's destination, the folder verbs' source and destination,
-    and creating a folder (#2206), so every route that names a directory inside
+    and creating a folder, so every route that names a directory inside
     a folder accepts exactly what ``GET /model-folders/{id}/dirs`` offers.
 
     The folder listing never offers a link, a junction or a dot-name, and the
@@ -450,8 +449,8 @@ def publish_no_clobber(temporary_path: str, destination_path: str) -> None:
     else's file. ``os.replace`` - and ``os.rename`` on POSIX - overwrite in
     silence, which makes the execution-time free check only as good as the gap
     that follows it, and on the copy path that gap is a whole checkpoint's copy
-    and digest. A trainer or ComfyUI writing the final name inside that gap had
-    its file replaced and the move still reported ``moved`` (#1012).
+    and digest. A trainer or ComfyUI writing the final name inside that gap
+    would have its file replaced while the move still reported ``moved``.
 
     **Claiming the name is one syscall, and it is the whole point.**
     :func:`_claim_destination` either creates *destination_path* or raises
@@ -524,12 +523,12 @@ def _claim_destination(temporary_path: str, destination_path: str) -> bool:
     a symlink standing at that name included, and it leaves the content
     reachable under both names so the caller decides when the old one goes.
 
-    Hard links are not universal, and a move that used to work must not start
-    failing because of the fix: a destination on exFAT/FAT or an SMB share has
-    no links to give, and ``fs.protected_hardlinks`` (on by default) refuses a
-    link to a file the caller neither owns nor can write - a model owned by
-    another uid, which a Docker ComfyUI or a NAS mount produces, and which
-    ``os.rename`` moved happily because it only ever needed the *directory*.
+    Hard links are not universal, and a move must not fail for want of one: a
+    destination on exFAT/FAT or an SMB share has no links to give, and
+    ``fs.protected_hardlinks`` (on by default) refuses a link to a file the
+    caller neither owns nor can write - a model owned by another uid, which a
+    Docker ComfyUI or a NAS mount produces, and which ``os.rename`` moves
+    happily because it only ever needs the *directory*.
     So the second attempt reserves the name with ``O_CREAT|O_EXCL``, which is
     equally no-clobber and equally one syscall, and replaces its own
     reservation. The residue it accepts and the link does not is a crash in
@@ -1296,7 +1295,7 @@ class ModelMover:
 
         The publication is :func:`publish_no_clobber` rather than ``os.rename``
         because a rename would silently replace a file that appeared at the
-        destination name since the check above (#1012).
+        destination name since the check above.
         """
         publish_no_clobber(move.source_path, move.destination_path)
         try:
@@ -1446,9 +1445,8 @@ class ModelMover:
         **The repointing branch requires exactly one affected row** and rolls
         back and raises :class:`RepointLost` otherwise. ``UPDATE`` reports zero
         rows as success, so without the check a source folder forgotten mid-move
-        - its location rows deleted - let the mover unlink the source and report
-        ``moved`` with nothing registering the bytes it had just written
-        (#1017).
+        - its location rows deleted - would let the mover unlink the source and
+        report ``moved`` with nothing registering the bytes it had just written.
 
         **The predicate is the source key and nothing else**, deliberately.
         ``model_file`` is ``PRIMARY KEY (model_folder_id, relpath)``, so the key

@@ -1,4 +1,4 @@
-"""The recipe of one picture, as the overlay's Recipe section shows it (#1313).
+"""The recipe of one picture, as the overlay's Recipe section shows it.
 
 Three things the picture's own ``workflow`` chunk does not say on its own:
 

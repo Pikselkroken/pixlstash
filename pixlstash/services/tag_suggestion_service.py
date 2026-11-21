@@ -121,7 +121,7 @@ def list_suggestions(
         picture_ids: Optional set of in-scope suspect picture ids; when not
             ``None`` only suggestions whose ``picture_id`` is in the set are
             returned (the suspect, never the twin). An empty set yields no rows.
-            When ``None`` the picture scope is unrestricted (today's behaviour).
+            When ``None`` the picture scope is unrestricted.
         source: Optional exact ``source`` filter (e.g. ``"near_neighbor"`` or
             ``"impossible_tag"``), so the two review tabs stay isolated.
 
@@ -422,7 +422,7 @@ def _reverse_review(session: Session, suggestion: TagSuggestion) -> None:
     forward review wrote, so reopening is fully symmetric (no orphan POS/NEG left behind).
     SKIPPED wrote nothing anywhere, so it matches no branch and just re-pends.
 
-    F9b: a PENDING/SKIPPED row that was re-parented over a prior decision
+    A PENDING/SKIPPED row that was re-parented over a prior decision
     (``include_reviewed`` reopened a decided row into a new review) carries that
     decision in ``prior_*``. Reversing such a row makes no label change here;
     instead it peels the re-parent back - restoring the row to its prior
@@ -680,7 +680,7 @@ def bulk_accept(
     ``TagSuggestion.picture_id``, never the twin): when not ``None`` only suspects
     in the set are counted or resolved, so the dry-run count and the apply both
     respect the same scope and out-of-scope suggestions are never bulk-resolved.
-    An empty set resolves nothing; ``None`` is today's unrestricted behaviour.
+    An empty set resolves nothing; ``None`` is unrestricted.
 
     ``review_id`` optionally restricts to one review session's rows
     (``TagSuggestion.review_id``), so a review's "N obvious pairs -

@@ -1,4 +1,4 @@
-"""The operation log: record metadata changes, then undo/redo them (DAM 1.2).
+"""The operation log: record metadata changes, then undo/redo them.
 
 Design in one paragraph. Instead of teaching every mutating endpoint how to
 invert itself, the log records the **metadata state of the affected pictures
@@ -9,7 +9,7 @@ endpoint undoable by wrapping its DB task (no inverse logic to write, none to
 get wrong), and produces exactly the ``{before, after}`` payload the DAM roadmap
 specifies for the audit log.
 
-Scope discipline (DAM 1.2, binding): only the **metadata** facets in
+Scope discipline (binding): only the **metadata** facets in
 :data:`FACETS` are captured and reversible - tags, the tag-prediction rows and
 their human-label ledger, caption/description, rating, picture-set / project /
 character membership, stacking, and the scrapheap soft-delete state. A facet is
@@ -25,11 +25,11 @@ snapshot of a derived value is a second source of truth waiting to drift.
 state.** That is the principle behind the file-mutating rule, and it is why
 ``FACET_ORIENTATION`` is an exception to the rule rather than a hole in it. A
 crop or a re-encode destroys information that exists nowhere but the prior file,
-so those stay ``undoable=False`` until copy-on-write versions land (Stage 2 /
-v2.1); an in-place rotate replaces one enumerated value 1-8 and copies the
-entropy-coded stream through byte for byte, so ``{"orientation": n}`` IS the
-whole prior state. A **permanent** delete (scrapheap purge, Empty Scrapheap,
-retention auto-purge) destroys the file and is deliberately *not* recorded here:
+so those stay ``undoable=False`` until copy-on-write versions land; an in-place
+rotate replaces one enumerated value 1-8 and copies the entropy-coded stream
+through byte for byte, so ``{"orientation": n}`` IS the whole prior state. A
+**permanent** delete (scrapheap purge, Empty Scrapheap, retention auto-purge)
+destroys the file and is deliberately *not* recorded here:
 there is nothing an undo could put back.
 
 Atomicity: :func:`run_recorded_metadata_task` runs capture → mutation → capture →
@@ -658,7 +658,7 @@ def record_operation_in_session(
             ``(before_delta, after_delta) -> str | None`` builder evaluated here,
             once the real extent of the change is known (see :data:`SummarySpec`).
         undoable: ``False`` records the change for audit without offering undo
-            (the DAM 1.2 rule for file-mutating operations).
+            (the rule for file-mutating operations).
         target_type: Kind of object the target ids refer to.
         empty_diff_target_ids: Normally an empty diff records nothing (a no-op
             endpoint must not consume a Ctrl+Z). Pass the affected ids here for
@@ -670,7 +670,7 @@ def record_operation_in_session(
             when the diff is non-empty.
         commit: Commit the mutation and operation row before returning. Recorded
             wrappers pass ``False`` so serialization also remains inside their
-            transaction; direct domain services retain the historical default.
+            transaction; direct domain services keep the default ``True``.
 
     Returns:
         The persisted :class:`Operation`, or ``None`` when nothing changed and
@@ -1155,7 +1155,7 @@ def delete_emptied_stacks(session: Session, stack_ids: set[int]) -> None:
     undoing a dissolve recreates the stack row, so undoing a stack *creation*
     (members restored to ``stack_id=None`` or to another stack) must delete the
     row it empties - otherwise every undone stacking leaves an orphaned empty
-    ``PictureStack`` behind (issue #643, CSO finding C3 in the dedup sign-off).
+    ``PictureStack`` behind.
     Public (no underscore) because the dedup clear-decision path applies a
     recorded stack state outside a restore and owes the same hygiene.
 
@@ -2069,8 +2069,8 @@ def _emit(
     A lifecycle move also changes the **live member count of every stack it
     touched**, and the members that did not move render that count as their
     stack badge. Those survivors carry no facet diff, so they are not even in
-    ``picture_ids``: undoing a "Keep cover only" put four copies back and left
-    the cover still drawn as a stack of one. ``lifecycle["stack_siblings"]``
+    ``picture_ids``, and without an announcement undoing a "Keep cover only"
+    would leave the cover still drawn as a stack of one. ``lifecycle["stack_siblings"]``
     names them (resolved in :func:`_stack_siblings_in_session`, which has the
     session), and they get an announcement of their own with
     ``fields=["stack_count"]``: the derived, listing-only value the SPA

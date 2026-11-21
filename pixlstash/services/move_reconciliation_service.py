@@ -1,10 +1,10 @@
-"""Reconciling moves made outside PixlStash (v1.11 Phase 5).
+"""Reconciling moves made outside PixlStash.
 
 The mirror of ``layout_move_service``: that engine moves a file when an
 assignment change makes its folder stop being true; this reads a file the
 owner already moved in their file manager and decides whether an assignment
-should change to match. See ``docs/plans/v1.11.0-existing-library.md`` §4
-Phase 5 and ``docs/backend_architecture.md`` §24.4 "The move journal".
+should change to match. See ``docs/backend_architecture.md`` §24.4 "The move
+journal".
 
 ``ReferenceFolderScanTask`` writes an :class:`ExternalMoveReview` row for
 every move it attributes to the owner (``record_pending_reviews``). Nothing
@@ -16,13 +16,13 @@ changed since the move is judged on what is true now.
 
 Applying a review only ever changes the three memberships this reconciles -
 project, set and person. **Tag is deliberately not reconciled**: the default
-layout never places by tag, Phase 4c (custom layouts) has not shipped, and a
+layout never places by tag, there are no custom layouts yet, and a
 tag-typed folder is therefore unreachable through the product today. A future
 layout that uses ``Facet.TAG`` will still classify correctly (the pure
 function does not know the applier's limits) but that one change is skipped
 and logged rather than guessed at.
-ponytail: Facet.TAG membership mutation, add when Phase 4c ships a layout
-builder that can actually select it.
+ponytail: Facet.TAG membership mutation, add when a layout builder can actually
+select it.
 """
 
 from __future__ import annotations

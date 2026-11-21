@@ -13,7 +13,7 @@ than the unpicking of an N+1: the list is one hub query, the locations for the
 whole page are one more, and the attachments for the whole page are one vault
 query. Nothing is fetched per row.
 
-**Sorting (B7) kept that promise.** A stack's size is the sum of its members and
+**Sorting keeps that promise.** A stack's size is the sum of its members and
 its date is the newest member's, and a row must never sort by a number it does
 not display - so those aggregates are two ``LEFT JOIN``s onto grouped subqueries
 inside the *same* ``SELECT`` as the rows, not a lookup per row. 1,806 rows sorted
@@ -678,7 +678,7 @@ def adapter_digest_index(hub) -> tuple[dict[str, set[str]], set[str]]:
     A name two models share maps to both, and the caller treats that as no
     match: it is the frontend's ``resolveRecipeLoras`` rule and
     ``_resolve_against_shelf``'s, so the LoRA editor, the save dialog and the
-    run all agree on what the shelf can name (#1478).
+    run all agree on what the shelf can name.
     """
     kinds = (FILE_ADAPTER, FILE_UNKNOWN)
     by_name: dict[str, set[str]] = {}
@@ -702,7 +702,7 @@ def adapter_digest_index(hub) -> tuple[dict[str, set[str]], set[str]]:
 
 
 def model_name_aliases(hub) -> dict[str, list[str]]:
-    """The other names a recipe's model filename can be loaded under (#1439).
+    """The other names a recipe's model filename can be loaded under.
 
     Keyed by a normalized basename (:func:`normalized_filename`, so **lowercase**
     - the caller has to fold its lookup the same way), valued by the names of
@@ -835,7 +835,7 @@ def families_clash(base_model: Optional[str], other_base_model: Optional[str]) -
     Only where both fold to a known family (:func:`family_of`): an unknown
     family is never a clash, because "we cannot tell" is not "they differ".
     What the clone dialog flags a LoRA with against its new checkpoint, and
-    what a run flags a pinned model with (#1620 Q3). **A flag, never a block**:
+    what a run flags a pinned model with. **A flag, never a block**:
     a base model a family table does not know about is still the owner's call.
     """
     family, other = family_of(base_model), family_of(other_base_model)
@@ -1150,10 +1150,9 @@ def record_comfyui_history(hub, history: dict) -> int:
     Idempotent: a run read twice writes nothing new, and one re-read after the
     shelf gained a file gains that file.
 
-    **Nothing calls this now.** The history was read by the pull of ComfyUI's
-    saved workflows, which #1854 removed, so the rows are what was recorded
-    until then. Kept with its reader (:func:`_history_runs`) for whatever
-    hands the history over next.
+    **Nothing calls this.** The stored rows are what earlier runs recorded;
+    it is kept with its reader (:func:`_history_runs`) for whatever hands the
+    history over next.
 
     Returns:
         How many finished runs named at least one shelf model.
@@ -1250,7 +1249,7 @@ def propose_companions(
        that fits says the file loads, not that it suits, so these carry
        ``recipes`` 0 and the caller must present them as untested.
 
-    **ComfyUI's own runs count too** (#1518): the ``comfyui_history_model``
+    **ComfyUI's own runs count too**: the ``comfyui_history_model``
     rows read off ``GET /history`` (:func:`record_comfyui_history`), so a
     checkpoint used in
     ComfyUI but in nothing PixlStash filed still has evidence. Nothing here asks
@@ -1491,7 +1490,7 @@ SET_LATEST_DEPTH = 10
 def _history_runs(hub) -> dict[str, set[int]]:
     """Return each stored ComfyUI run's model ids, keyed on its ``prompt_id``.
 
-    The one reader of ``comfyui_history_model`` (#1518). The rows were resolved
+    The one reader of ``comfyui_history_model``. The rows were resolved
     to unambiguous model ids when they were stored, so a caller
     has no doubt to add; ComfyUI itself is never contacted.
     """
@@ -1667,7 +1666,7 @@ def fetch_workflow_sets(hub, vault) -> dict:
     library in front of the reader has actually made. A recipe the hub holds
     with no kept picture here is therefore not a set, unless ComfyUI ran it.
 
-    **ComfyUI's own runs are witnesses too** (#1565): every finished run the
+    **ComfyUI's own runs are witnesses too**: every finished run the
     stored in ``comfyui_history_model`` counts one
     ``history_runs`` against the combination its models resolve to exactly,
     kept apart from ``recipes`` and ``picture_count``. A combination survives
@@ -2096,7 +2095,7 @@ def people_who_fit(
 ) -> dict:
     """The people a run of a workflow can be of, for a checkpoint of *family*.
 
-    **The one answer to "who fits this workflow"** (rule 4 of #1846), read by
+    **The one answer to "who fits this workflow"**, read by
     the Run popup's *Person* field and by the people loader ComfyUI-PixlStash
     puts on the canvas, so the two offer the same people. A person is offered
     when a LoRA attached to them is for the base model of the workflow's
@@ -2365,7 +2364,7 @@ def update_models(hub, ids: list[int], changes: dict) -> list[int]:
 
     Writing ``file_kind`` records that a person decided what the file is
     (``file_kind_decided``), whatever kind they picked, so a workflow loading
-    it as another kind is no longer offered (#1962). ``suggest_kind`` writes
+    it as another kind is not offered. ``suggest_kind`` writes
     that mark alone: ``False`` is "don't suggest", ``True`` takes it back.
     Sent beside ``file_kind`` it decides the mark, which is how an Undo puts
     back a kind and the offer together.
@@ -2726,9 +2725,8 @@ def _purge(conn, ids: list[int]) -> None:
     """Delete the given models and their child rows, on an open connection.
 
     Repairs the stacks they were in on the way out. A member's row can leave a
-    run through here - Forget and Delete both end at this function - and until
-    the shelf let a single member be selected that could not happen, so nothing
-    tidied up after it. Left alone it yields a run numbered ``0, 2, 3``, or one
+    run through here - Forget and Delete both end at this function. Left alone
+    it yields a run numbered ``0, 2, 3``, or one
     with no cover at all because the cover is what went, or a stack of one,
     which the shelf draws as a plain row while still holding a grouping nobody
     can see. :func:`~pixlstash.services.stack_detector.repair_stacks` states
@@ -2767,7 +2765,7 @@ def _purge(conn, ids: list[int]) -> None:
 def folder_removal_consequences(
     hub, vault, inside: dict[int, set[tuple[int, str]]]
 ) -> dict:
-    """What removing a directory of models breaks outside it (#2207).
+    """What removing a directory of models breaks outside it.
 
     **A model breaks something only when every present copy of it is inside the
     directory.** One with a present copy anywhere else is still on the shelf

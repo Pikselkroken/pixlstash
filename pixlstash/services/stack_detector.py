@@ -279,25 +279,20 @@ def apply_stack(
     owner has seen the dry run, never from detection.
 
     **Every gate is re-checked on the UPDATE itself, not just read first.**
-    An earlier version read the gate with a SELECT inside ``hub.transaction()``
-    and believed that was one critical section. It is not: the hub connects with
-    ``isolation_level=""``, so pysqlite opens a transaction on *DML only* - a
-    leading SELECT runs in autocommit and the INSERT below is what actually
-    begins the write. Measured, not reasoned: with two connections on one WAL
-    database, ``in_transaction`` reads ``False`` after the SELECT, and a second
-    writer that stacks a row in the gap is then silently overwritten by the
-    unguarded UPDATE. This is the same pysqlite behaviour CLAUDE.md already
-    records for ``PRAGMA defer_foreign_keys``.
+    The hub connects with ``isolation_level=""``, so pysqlite on its own opens a
+    transaction on *DML only* - a leading SELECT runs in autocommit, and a
+    second writer that stacks a row in the gap would be silently overwritten by
+    an unguarded UPDATE.
 
     So the ``stack_id IS NULL`` predicate is repeated **on the UPDATE**, and the
     row count is checked: a row that stopped being loose between the SELECT and
     its own UPDATE changes nothing and aborts the whole stack rather than being
     torn out of the stack it already has.
 
-    :meth:`~pixlstash.hub.db.HubDatabase.transaction` now issues
+    :meth:`~pixlstash.hub.db.HubDatabase.transaction` issues
     ``BEGIN IMMEDIATE``, so the leading SELECT is inside the write transaction
-    after all and the race described above can no longer be scheduled. The
-    re-check stays regardless. It keeps the invariant *local*: reading this
+    and the race described above cannot be scheduled. The re-check stays
+    regardless. It keeps the invariant *local*: reading this
     function tells you the guard holds, without also knowing what a different
     module does at ``BEGIN``, and it is the half that survives if anyone ever
     relaxes that.
@@ -511,11 +506,8 @@ def apply_stack(
 def unstack(hub: HubDatabase, stack_id: int) -> int:
     """Break a stack apart, leaving its members loose on the shelf.
 
-    The undo the shelf never had. Everything else here is one-way - a stack was
-    built by a confirmation and there was no gesture that took it back - which
-    is why the grouping dialog had to warn that nothing unstacks a group, and
-    why fusing had to be argued for so carefully. With this, both become
-    ordinary edits rather than commitments.
+    The undo for :func:`apply_stack`, which makes grouping and fusing ordinary
+    edits rather than commitments.
 
     **The files are not touched.** This clears two hub columns and deletes one
     row; nothing is moved, renamed or unlinked on disk, and the members reappear
@@ -781,13 +773,11 @@ def _cover_first_key(member: ProposedMember):
     Expanding the strip reads backwards in time through versions and then
     through each one's steps.
 
-    **This is now a strict superset of ``run_importer._cover_first``, not the
+    **This is a strict superset of ``run_importer._cover_first``, not the
     same function.** That one is ``finals + stepped`` with no version term, and
     it is deliberately left alone: it orders a single ai-toolkit run, which is
-    one version by construction, so the two agree on every input it can see. Say
-    superset rather than "the same rule" - the older wording became false the
-    moment a version term existed, and a reader checking the claim would find
-    two functions. If the importer ever ingests more than one run at a time, it
+    one version by construction, so the two agree on every input it can see. If
+    the importer ever ingests more than one run at a time, it
     has to come here rather than grow its own second answer.
     """
     major, minor = version_sort_key(member.version)

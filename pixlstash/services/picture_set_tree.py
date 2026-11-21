@@ -1,4 +1,4 @@
-"""Child sets: a picture set may sit under another set or under a person (#2124).
+"""Child sets: a picture set may sit under another set or under a person.
 
 The parent is a home, not a constraint: a child's pictures need not be in its
 parent, a parent's count is its own pictures, and deleting a parent lifts its

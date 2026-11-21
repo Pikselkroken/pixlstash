@@ -31,9 +31,8 @@ deliberately a diff/refresh, **not** a delete-and-rebuild purge, so the row's
 identity and history survive a re-scan.
 
 Suppression of previously-reviewed suspects is therefore **per-review** (the
-explicit ``include_reviewed`` toggle), not the old permanent ``reviewed_pids``
-skip. Runs synchronously - fast enough for an interactive click on a typical
-vault.
+explicit ``include_reviewed`` toggle). Runs synchronously - fast enough for an
+interactive click on a typical vault.
 
 A second candidate source, :func:`scan_boundary` (``source="model"``), queues the
 unreviewed pictures the tagger is least sure about instead of running the
@@ -242,13 +241,12 @@ def scan_tag(
             / ``p - BASE_RATE_THRESHOLD_MARGIN``, clamped to
             ``[_BASE_RATE_CLAMP_LOW, _BASE_RATE_CLAMP_HIGH]`` and then each capped
             at its own legacy default (``_LEGACY_ADD_THRESHOLD`` /
-            ``_LEGACY_REMOVE_THRESHOLD``, the old fixed 0.55/0.45 pair) so the
+            ``_LEGACY_REMOVE_THRESHOLD``, the fixed 0.55/0.45 pair) so the
             base-rate shift can only relax eligibility relative to the legacy
             pair, never tighten it (see the module-level constants' comments
-            for why, including the majority-tag regression this capping
-            fixes). Passing an explicit float bypasses the base-rate
+            for why). Passing an explicit float bypasses the base-rate
             computation entirely, for callers (tests, future CLI wiring) that
-            want the old fixed-threshold behaviour.
+            want fixed thresholds.
         min_twin_sim: scan knob (CLI default 0.85) gating eligibility on the CLIP
             twin's similarity; unaffected by the perceptual-hash twin override
             below. Not applied to the near-zero-ground-truth confidence fallback

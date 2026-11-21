@@ -336,8 +336,7 @@ def run_targets(document: dict, detected=None) -> dict[str, list[dict]]:
     exactly one positive prompt's text, followed one link upstream when a
     primitive node feeds it. Two of either is ambiguous and fills nothing, so a
     fixed style prompt beside a subject prompt is never overwritten. A UI-format
-    file fills nothing, because the run routes can only submit API format
-    (#1307).
+    file fills nothing, because the run routes can only submit API format.
 
     Args:
         document: The stored workflow.
@@ -383,7 +382,7 @@ def run_targets(document: dict, detected=None) -> dict[str, list[dict]]:
 
 
 def picture_target(document: dict, node_id: str, class_type: str) -> dict | None:
-    """Where a run puts the picture for one detected picture input (#1307).
+    """Where a run puts the picture for one detected picture input.
 
     A binding on that node wins, so a file the old dialog wrote keeps its spot;
     otherwise the loader's own image field. ``None`` when the node has neither,

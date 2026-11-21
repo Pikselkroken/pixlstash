@@ -1,4 +1,4 @@
-"""Hand-made workflow sets (#1520): shelf models the owner says work together.
+"""Hand-made workflow sets: shelf models the owner says work together.
 
 A set is a menu, not a recipe: fixed slots (any number of checkpoints, since a
 two-model workflow such as a Wan 2.2 high/low pair loads two, and of text
@@ -11,7 +11,7 @@ so it reconnects when a file with the same bytes comes back. That is also why a
 checkpoint still waiting for its hash cannot be added yet: it has no identity a
 set could hold.
 
-**A set lives on its checkpoint (#1972).** What a set holds is not only its
+**A set lives on its checkpoint.** What a set holds is not only its
 member rows: it is its *base*, every model the pictures made with one of its
 checkpoints ran with, plus the members the owner stored, minus the models the
 owner removed (``model_workflow_set_decline``). So a LoRA new pictures start
@@ -169,8 +169,8 @@ def _member_out(member: dict) -> dict:
 def attach_hand_made(hub, found: dict) -> dict:
     """Layer the owner's sets over a :func:`fetch_workflow_sets` answer.
 
-    Mutates *found* in place and returns it. Each set lives on its checkpoints
-    (#1972): its *base* is every model recipes or ComfyUI runs used with one of
+    Mutates *found* in place and returns it. Each set lives on its checkpoints:
+    its *base* is every model recipes or ComfyUI runs used with one of
     them, and what it holds is that base plus its stored members, minus the
     models the owner removed (``declined``). Every combination headed by one of
     a set's checkpoints gains that set's id in ``covered_by`` and counts toward
@@ -280,7 +280,7 @@ def _base(combinations: list[dict], stored_ids: set[int], rows) -> set[int]:
 
 
 def _live(shaped: dict, base: set[int], on_here, rows, seen: set[str]) -> None:
-    """Turn a set's stored members into what it holds (#1972), in place.
+    """Turn a set's stored members into what it holds, in place.
 
     ``members`` becomes the base plus the stored members, minus ``declined``,
     each marked with its ``origin`` (``pictures`` when the base has it,
@@ -521,7 +521,7 @@ def create_set(
     """Create a set, empty or with *members*, in one transaction; return its id.
 
     *cloned* records that the owner made it from a set from pictures; it is
-    only stored and served (#1972). *template* is the
+    only stored and served. *template* is the
     ComfyUI template it was made from (``services.workflow_templates``), which
     it then covers in the New workflow set picker. *declined* is its removed
     list, written in the same transaction, so a set put back by an undo never
@@ -565,7 +565,7 @@ def delete_set(hub, set_id: int) -> dict:
     that snapshot is the undo, and read beforehand it could miss a member added
     between the read and the delete - which the undo would then lose. It
     carries ``declined`` and ``seen`` too, since what the owner removed and
-    what they have seen are part of the set (#1972). Coverage (pictures,
+    what they have seen are part of the set. Coverage (pictures,
     covers) is not computed; an undo needs none.
     """
     with hub.transaction() as conn:
@@ -613,7 +613,7 @@ def add_members(hub, set_id: int, members: list[dict]) -> tuple[list[str], list[
     """Add *members*; one already in the set is a no-op.
 
     A model the owner had removed comes back: adding it is saying so, and a
-    removal would otherwise win over the member row (#1972).
+    removal would otherwise win over the member row.
 
     Returns ``(added, undeclined)``: the sha256s inserted, and the ones taken
     off the removed list, which an undo puts back on it.
@@ -675,7 +675,7 @@ def remove_members(hub, set_id: int, sha256s: list[str]) -> list[dict]:
 
 
 def set_declines(hub, set_id: int, sha256s: list[str]) -> list[str]:
-    """Replace the models the owner removed from this set (#1972).
+    """Replace the models the owner removed from this set.
 
     A removed model stays out of the set however often the pictures on its
     checkpoint use it. A whole-list write, so Remove, Restore, Reset to
@@ -714,7 +714,7 @@ def set_declines(hub, set_id: int, sha256s: list[str]) -> list[str]:
 def merge_sets(
     hub, library_uuid: Optional[str], set_id: int, other_ids: list[int]
 ) -> dict:
-    """Merge *other_ids* into *set_id*, in one transaction (#1972).
+    """Merge *other_ids* into *set_id*, in one transaction.
 
     Only sets on the same checkpoint merge: every set's checkpoint members
     must be the same digests (the same pair, for a two-model workflow), or the
@@ -825,7 +825,7 @@ def merge_sets(
 def mark_seen(hub, set_id: int, sha256s: list[str]) -> None:
     """Record that the owner has seen these models in this set's tray.
 
-    A model the pictures bring into a set is marked new until then (#1972).
+    A model the pictures bring into a set is marked new until then.
     Rows for a model that later leaves the base are harmless: they are only
     read against what the base holds.
     """

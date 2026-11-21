@@ -1,4 +1,4 @@
-"""Assembling a WORKFLOW's grid entry out of hub rows and vault counts (#1623).
+"""Assembling a WORKFLOW's grid entry out of hub rows and vault counts.
 
 A workflow is a group of topologies (``hub/workflow_card_reads.workflow_index``);
 its counts, covers and ghosts are every variant's, and its models are its base
@@ -8,7 +8,7 @@ card's. The figures are read per variant and folded per workflow here.
 grouped vault queries - per-variant counts, the cover window, the saved recipes
 per card, the kept pictures per variant, and the checkpoint and LoRA values
 the pictures used - and the hub reads ``card_index`` and ``workflow_index``
-make, plus F7's ghost pass (one grouped count and the five reads
+make, plus the ghost pass (one grouped count and the five reads
 ``model_ghost_names`` makes, measured together at 1.3 ms,
 :func:`_describe_ghosts`). An aggregate table would have to be invalidated by
 every rating, every import, every soft delete and every re-run of the card
@@ -568,7 +568,7 @@ def read_grid(
     caller can cache the parse per document.
 
     The two flags are the Filters panel's *Show hidden workflows* and the
-    unticked *Hide one-offs* (F7). They widen what is DRAWN; ``hidden`` and
+    unticked *Hide one-offs*. They widen what is DRAWN; ``hidden`` and
     ``one_offs`` are counted either way, so the panel can label its own
     checkboxes with the number it is letting in.
     """
@@ -894,13 +894,13 @@ def _wired_names(
 
     ``asset_names`` keys a filename by widget, never by loader, so a card
     naming one model widget on two loaders (a Wan 2.2 high/low UNET pair)
-    cannot tell from it which file sat where (#1691). Only those cards pay for
+    cannot tell from it which file sat where. Only those cards pay for
     a reduction of their first variant's document, which pairs each slot label
     with the reference wired into it, and only their repeated widgets are
     named from it: a widget on one loader holds one file, so its pairing is
     already exact. LoRA slots do not count: the card shows no filename on one.
 
-    A variant a model fix swapped a loader into (#1605) is carded under the
+    A variant a model fix swapped a loader into is carded under the
     topology it was swapped from, so it is read with the original loader put
     back, as :func:`_variant_reads` reads it, or its labels would not be the
     card's; that loader is named by the model fix's replacement. Loaders Weisfeiler-Leman cannot separate share a label and take
@@ -982,10 +982,10 @@ def _describe_slots(
 ) -> None:
     """Fill in each workflow's models and LoRA slots from its base card's slots.
 
-    The slot list is what B2 cached per topology precisely so a read does not
+    The slot list is cached per topology precisely so a read does not
     have to re-derive it. The one exception is a card naming one model widget
     on two loaders: its first variant's document is reduced to say which file
-    sat on which (:func:`_wired_names`, #1691), and no other card's is. ``names`` is :func:`read_grid`'s one
+    sat on which (:func:`_wired_names`), and no other card's is. ``names`` is :func:`read_grid`'s one
     :func:`~pixlstash.hub.workflow_card_reads.asset_names` read, the table that
     holds the readable filenames, shared with :func:`_describe_ghosts`.
 
@@ -994,7 +994,7 @@ def _describe_slots(
     the pictures put in it is ``recipe_values``.
 
     A second hub read puts the shelf's own name - and its picture, for a card
-    that has to draw itself out of its models (#1466) - beside each filename,
+    that has to draw itself out of its models - beside each filename,
     once for the whole grid rather than per card. It is a join inside one
     database and not a derivation, which is why it can be afforded on a grid
     read at all.
@@ -1102,7 +1102,7 @@ def _seedvr2_kind(class_type: str, is_base: bool) -> Optional[str]:
     """What a SeedVR2 pack loader's slot is, or ``None`` for any other loader.
 
     The pack names both its files under a bare ``model`` widget, which says
-    nothing (#1939). Its VAE is a VAE. Its DiT is an upscale model, and the
+    nothing. Its VAE is a VAE. Its DiT is an upscale model, and the
     base model of a workflow that loads no other, which is then an upscale
     workflow (``workflow_identity._samples_only_seedvr2``). ComfyUI's own
     SeedVR2 loads through ``UNETLoader`` and reads as a base model already.
@@ -1125,8 +1125,8 @@ def _fill_base_model(
 
     The slot list is cached per topology from whichever variant reached it
     first. A shelf loader filed before its id was kept, or left blank, has no
-    slot there, and the card was then called "Text to Image" with "No
-    checkpoint" while the workflow's other runs named the model all along.
+    slot there, and the card would otherwise be called "Text to Image" with "No
+    checkpoint" while the workflow's other runs name the model.
     The model named by the most variants (then by name, so two reads agree)
     joins the list, with no label: it is read by widget, not off the base
     topology.
@@ -1184,7 +1184,7 @@ def _slot_filename(
 
     A pack loader's digest (``control_net_sha256``) becomes the shelf row's
     file the same way, or a card would print 64 hex digits for every one the
-    shelf holds but has no title for (#1939). A digest the shelf does not hold
+    shelf holds but has no title for. A digest the shelf does not hold
     stays itself: unlike an id, it still names one file, and it is the only
     name the workflow gives it.
     """
@@ -1203,7 +1203,7 @@ def with_stock_loaders(hub: HubDatabase, graph: Optional[dict]) -> Optional[dict
 
     :func:`~pixlstash.services.comfyui_recipe_service.as_stock_loaders` on
     this hub's shelf: a checkpoint loader's row only where its ``shelf`` is
-    this one (an id without it is not trusted, #1521), and a digest only
+    this one (an id without it is not trusted), and a digest only
     where the shelf holds one file of it; either only with a copy present. A
     digest with no copy at all reads as the file the template list links
     under it, unless the shelf holds that name under another digest. For a workflow's own graph, which
@@ -1348,7 +1348,7 @@ def _describe_ghosts(
     figures: list[WorkflowFigures],
     names: dict[str, list[tuple]],
 ) -> None:
-    """Fill in what each workflow keeps of something deleted (F7's Ghosts filter).
+    """Fill in what each workflow keeps of something deleted (the Ghosts filter).
 
     Two kinds, counted apart because forgetting them is two different purges in
     Settings › Recovery: a **picture ghost** is the thumbnail and prompt of a
@@ -1377,7 +1377,7 @@ def _describe_ghosts(
 
     That number is also the answer to the second cost, which is the one worth
     stating: :func:`read_grid`'s other caller is ``_read_detail``, what every
-    workflow write answers with - so a rename now pays these reads too. At
+    workflow write answers with - so a rename pays these reads too. At
     1.3 ms it is not worth making conditional, and a detail card carrying
     ``ghosts: 0`` when the card does hold one would be a wrong answer on a
     route that is the only way to unhide something. **Caching the name set is
@@ -1524,7 +1524,7 @@ class DefaultModel:
 
 @dataclass(frozen=True)
 class DefaultLora:
-    """One LoRA of the default recipe (#1620 D2).
+    """One LoRA of the default recipe.
 
     In the recipe because it is in **more than half** of the sampled instances,
     at its modal strength, or because the owner put it there. ``sha256`` is the
@@ -1624,7 +1624,7 @@ def workflow_defaults(
 
     **A workflow with a graph of its own is read off that graph**: a manual
     workflow's document, and the newest version of an automatic workflow the
-    owner has saved over (#1849). Its models, LoRAs, strengths and parameters
+    owner has saved over. Its models, LoRAs, strengths and parameters
     are the graph's, since a save is how they change; only a workflow nobody
     has saved over is still a vote of its pictures. *version* reads an
     earlier version instead, which is the default a saved recipe made then
@@ -2147,7 +2147,7 @@ def _variant_reads(
     nothing outside its topology, which is the whole reason the core address
     exists.
 
-    A variant a model fix swapped a PixlStash loader into (#1605) is carded
+    A variant a model fix swapped a PixlStash loader into is carded
     under the topology it was swapped from, and is read as that graph too,
     the original loader put back, or its model would vote at an address the
     workflow's other runs do not have.

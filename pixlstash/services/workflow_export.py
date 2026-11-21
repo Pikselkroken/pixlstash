@@ -1,4 +1,4 @@
-"""What a workflow file may still say once it leaves this machine (v1.12 B8).
+"""What a workflow file may still say once it leaves this machine.
 
 **Export workflow** hands somebody else a ComfyUI file. The graph behind it was
 not authored for that: the run path resolves a card's source from the linked
@@ -8,7 +8,7 @@ runs* - they carry the prompt that was typed, the seed that was rolled, the
 character LoRA that was loaded and the name of the picture that went in.
 
 So the file that leaves is the graph minus everything that is about a run
-rather than about the workflow (implementation plan §5.7):
+rather than about the workflow:
 
 * every widget that carries prose, blanked;
 * seeds, nulled;
@@ -45,7 +45,7 @@ prompts (an ordinary hires-fix layout), and it classifies
 the second would have done it while reporting ``prompts`` in ``removed``.
 
 **A graph that will not reduce is refused rather than exported.** Nothing in
-the scrub needs the reduction any more, so this is a belt rather than the
+the scrub needs the reduction, so this is a belt rather than the
 trousers - but a graph PixlStash cannot read is one it can promise nothing
 about, and the export is a promise.
 """

@@ -1,4 +1,4 @@
-"""The tag chip size of #2139, per user.
+"""The tag chip size, per user.
 
 Stored in the hub beside the user row (hub rule: new tables, no new ``user``
 columns) and served in ``/users/me/config`` as ``tag_chip_size``. It is the

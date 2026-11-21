@@ -1,4 +1,4 @@
-"""The runs that ended, kept for the Tasks tab's Finished group (#2050).
+"""The runs that ended, kept for the Tasks tab's Finished group.
 
 How a run ended is otherwise in memory only (``comfyui_service``'s outcomes),
 so after a restart the Tasks tab could offer to save what a run changed and say

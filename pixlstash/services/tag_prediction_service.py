@@ -401,8 +401,7 @@ def reset_pictures_tags(
 ) -> list[int]:
     """Atomically delete all non-manual predictions and all tags, then restore the sentinel.
 
-    One transaction for the whole list: a bulk retag used to be one request
-    and one urgent single-picture task per picture (#1162). Ids that name no
+    One transaction for the whole list. Ids that name no
     picture are skipped rather than failing the batch on the sentinel's
     foreign key.
 
@@ -470,7 +469,7 @@ def reset_pictures_tags(
 def retag_face_crops(vault: "Vault", dry_run: bool = False) -> list[int]:
     """Re-run the quality-crop pass on every picture with a face.
 
-    For the `whole_face_crop` setting (#1662): switching it changes how a face
+    For the `whole_face_crop` setting: switching it changes how a face
     is cropped, so the library's existing crop tags were judged the old way.
     Narrower than :func:`reset_pictures_tags` on purpose: that deletes EVERY
     Tag row, and a tag added by hand outside the tagger's vocabulary has no

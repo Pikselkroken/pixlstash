@@ -42,9 +42,8 @@ def snapshot_engine(db_path: str):
 
     The single entry point for opening a snapshot file, so the busy timeout,
     the page cache and the custom SQL functions match the live vault engine
-    (§13) instead of each call site silently inheriting SQLite's defaults
-    (issue #709). It differs from the vault engine in exactly one deliberate
-    way:
+    (§13) instead of each call site silently inheriting SQLite's defaults.
+    It differs from the vault engine in exactly one deliberate way:
 
     **``wal=False``.** A snapshot must remain a *self-contained single file*.
     ``journal_mode`` is a persistent property of the database header, so an
@@ -174,8 +173,8 @@ def _snapshot_schema_revision(db_path: str) -> Optional[str]:
 def _snapshot_schema_is_current(db_path: str) -> bool:
     """Return True only if the snapshot's schema is at the migration head.
 
-    This replaces the old "does column X exist?" sniff. Probing a single
-    column cannot tell a current snapshot from an intermediate one - a file
+    A "does column X exist?" sniff is not enough: probing a single column
+    cannot tell a current snapshot from an intermediate one - a file
     can carry ``metadata_hash`` and still predate ``tags_file`` - and any ORM
     entity load against such a file selects columns that do not exist, which
     fails at query time. Comparing the stamped revision against the head is

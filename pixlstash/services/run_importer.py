@@ -35,9 +35,8 @@ when the run has a bare no-step file, or the highest step when it does not.
 
 **The samples stay behind.** A run's ``samples/`` are the trainer's working
 output, read in place by the Training runs view; importing copies the weights
-only. Earlier imports copied each checkpoint's previews into ``<stem>_samples/``
-beside it, and a move or a delete still carries or removes such a directory
-where one exists.
+only. A checkpoint may still have a ``<stem>_samples/`` directory of previews
+beside it, and a move or a delete carries or removes it where one exists.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""The kind a shelf model's workflows load it as, offered to the owner (#1962).
+"""The kind a shelf model's workflows load it as, offered to the owner.
 
 The shelf files a model from its header, its folder and its parameter count,
 and some files beat all three: a GGUF text encoder in a flat folder stays
@@ -103,7 +103,7 @@ def kind_suggestions(hub, model_ids: Iterable[int]) -> dict[int, KindSuggestion]
 
 
 def may_refile_by_name(hub, model_id: int, kind: str) -> bool:
-    """Whether a file named like a missing one may be offered as *kind* (#1962).
+    """Whether a file named like a missing one may be offered as *kind*.
 
     The weaker evidence: a loader of *kind* names a file this machine has never
     had, and *model_id*'s name reads as that file's renamed. Offered only on a

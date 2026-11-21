@@ -9,14 +9,13 @@ character or picture set still assigned to that project anchors it there (see
 leaves all projects, each picture's scalar ``Picture.project_id`` pointer falls
 back to any remaining membership.
 
-This module is the single implementation of that reconciliation. It was
-previously duplicated, verbatim in behaviour, between
+This module is the single implementation of that reconciliation:
 ``routes/characters.py::patch_character`` and
-``routes/picture_sets.py::update_picture_set``; both call sites now delegate to
+``routes/picture_sets.py::update_picture_set`` both delegate to
 :func:`reconcile_entity_project_change`.
 
 Each caller keeps three responsibilities of its own, because they differ by
-entity kind and were never part of the shared algorithm:
+entity kind and are not part of the shared algorithm:
 
 * **member-picture derivation** - characters resolve the pictures of their faces
   and expand them to whole stacks (project membership is stack-atomic for a
@@ -24,7 +23,7 @@ entity kind and were never part of the shared algorithm:
   already-resolved ``picture_ids``.
 * **the trigger** - characters reconcile only when ``project_id`` actually
   changes; picture sets also reconcile on an idempotent same-project re-assign
-  to repair historical drift. The caller decides whether to call this function.
+  to repair drift. The caller decides whether to call this function.
 * **the "did anything change" signal** - characters treat "the entity had member
   pictures" as the signal; picture sets use the precise change counts returned
   here. This function returns :class:`ProjectMembershipReconcileResult` so either
@@ -35,7 +34,7 @@ The function takes a **pre-opened** ``Session`` (the same threading discipline a
 ``vault.db`` - per the services DB-access rule (backend_architecture.md §10.1)
 the caller owns the transaction and commit.
 
-**Multi-project entities (issue #125).** A character or picture set may now belong
+**Multi-project entities.** A character or picture set may belong
 to several projects at once. This module also owns the *entity*→project write
 path: :func:`set_character_projects` / :func:`set_picture_set_projects` maintain
 the ``CharacterProjectMember`` / ``PictureSetProjectMember`` join rows **and**
@@ -43,8 +42,8 @@ re-derive the legacy scalar ``project_id`` pointer (lowest member project id, or
 ``None``). Nothing else may assign those FKs - see
 :mod:`pixlstash.db_models.entity_project` for the read-side predicates and the
 "write both, read the join" contract. The picture-side reconciliation follows in
-:func:`reconcile_entity_projects_change`, of which the original single-project
-:func:`reconcile_entity_project_change` is now a thin shim.
+:func:`reconcile_entity_projects_change`, of which the single-project
+:func:`reconcile_entity_project_change` is a thin shim.
 """
 
 from dataclasses import dataclass, field
@@ -201,8 +200,8 @@ def reconcile_entity_projects_change(
 ) -> ProjectMembershipReconcileResult:
     """Reconcile per-picture project membership for a **multi-project** entity.
 
-    The multi-project generalisation of :func:`reconcile_entity_project_change`
-    (issue #125). Instead of one old and one new project it takes the entity's
+    The multi-project generalisation of :func:`reconcile_entity_project_change`.
+    Instead of one old and one new project it takes the entity's
     **full target project set** and the set of projects it just left, so a
     character or picture set that belongs to several projects at once anchors its
     pictures in all of them.
@@ -211,7 +210,7 @@ def reconcile_entity_projects_change(
 
     1. **Add** a ``PictureProjectMember`` for every id in ``ensure_project_ids``
        that does not already have one. Passing the entity's *whole* membership set
-       (not just the newly added ids) keeps the historical idempotent-repair path:
+       (not just the newly added ids) keeps the idempotent-repair path:
        a drifted picture missing a row is healed.
     2. **Remove** the ``PictureProjectMember`` for every id in
        ``remove_project_ids`` - unless another character or picture set still in
@@ -364,9 +363,8 @@ def _require_projects_exist(session: Session, project_ids: Iterable[int]) -> Non
         project_ids: Project ids to validate.
 
     Raises:
-        HTTPException: ``404`` with ``detail="Project not found"`` - the same
-            shape the character / picture-set handlers returned before #125, so
-            the API contract is unchanged.
+        HTTPException: ``404`` with ``detail="Project not found"`` - the
+            shape the character / picture-set API contract uses.
     """
     wanted = sorted({int(pid) for pid in project_ids})
     if not wanted:

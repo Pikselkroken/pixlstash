@@ -6,7 +6,7 @@ question, answered by ``hub/workflow_card_reads.py``
 (``variants_in_workflow``), which the route asks first and hands here as
 structural hashes. Nothing in this module crosses the database boundary.
 
-**Credit is a match, not a link** (implementation plan §5.5). A recipe accounts
+**Credit is a match, not a link.** A recipe accounts
 for the stack's kept pictures whose positive prompt is the recipe's and whose
 LoRA names are the recipe's. The seed is ignored, and so are strengths: no
 picture row stores one, so strength-exact credit would be a match on a value
@@ -220,7 +220,7 @@ def rekey_in_session(session: Session, moved: dict[str, list[str]]) -> int:
     """Move every recipe of a re-keyed card onto the key it went to.
 
     **This is the migration ``db_models/saved_recipe.py`` says the change that
-    makes a re-keying reachable owes this table** (v1.12 B4). A card key is
+    makes a re-keying reachable owes this table.** A card key is
     content, so it survives a regrouping, an Unstack and a ``CORE_VERSION``
     bump - but not a model fix, which recomputes it. A recipe left on the
     old key is addressed by a key no variant carries: its workflow's tab stops
@@ -249,7 +249,7 @@ def rekey_in_session(session: Session, moved: dict[str, list[str]]) -> int:
     sibling moved, that key is in *moved* with a successor that is not itself
     while the card is still open at its own URL. The hub half of the flip
     copies the owner's attributes to the new key and leaves the old key's rows
-    where they are; moving the recipes instead emptied the tab of a live card,
+    where they are; moving the recipes instead would empty the tab of a live card,
     which is this function's own failure mode pointed the other way. It is
     reachable through one Unstack - stacked, both halves share a core hash and
     the list expands across them, so nothing shows.
@@ -272,7 +272,7 @@ def rekey_in_session(session: Session, moved: dict[str, list[str]]) -> int:
 
 def workflow_keys_in_session(session: Session) -> dict[int, str]:
     """Each recipe's card key by recipe id: internal, for the routes to judge
-    what a recipe can still be built on, never to return (#1623)."""
+    what a recipe can still be built on, never to return."""
     rows = session.exec(select(SavedRecipe.id, SavedRecipe.workflow_key)).all()
     return {recipe_id: workflow_key for recipe_id, workflow_key in rows}
 
@@ -280,7 +280,7 @@ def workflow_keys_in_session(session: Session) -> dict[int, str]:
 def counts_by_workflow_id(session: Session) -> dict[str, int]:
     """How many saved recipes each workflow holds, for the whole library.
 
-    The workflow grid's number (#1623), one ``GROUP BY`` rather than a read per
+    The workflow grid's number, one ``GROUP BY`` rather than a read per
     card. Recipes the vault conversion has not reached yet are on no workflow
     and are not counted.
     """
@@ -301,7 +301,7 @@ def credit_groups_in_session(
     workflow filter resolves them (``workflow_keys_predicate``): a live manual
     workflow's own id for its runs, an automatic one's variants less every
     live manual workflow's runs. Matching a manual workflow by its member
-    topologies instead missed its runs, whose graphs the run's repairs (a
+    topologies instead would miss its runs, whose graphs the run's repairs (a
     bypassed LoRA, a replaced Seed node) give a topology of their own.
 
     **Only pictures that have been read for ComfyUI metadata.** A NULL
@@ -675,9 +675,8 @@ def made_on_version(vault, workflow_id: str, version: int, since: datetime) -> b
 
     A picture that ran it (``Picture.run_workflow_version``), or a recipe saved
     while it was the workflow's graph: a saved recipe runs on the version that
-    was current when it was saved (rule 8 of #1846), so such a version must
-    stay. What a save from ComfyUI asks before it takes away the version it
-    supersedes (#1852).
+    was current when it was saved, so such a version must stay. What a save
+    from ComfyUI asks before it takes away the version it supersedes.
 
     ponytail: the active library only. Another library sharing this hub may
     hold a recipe saved on the version; its recipe then runs the nearest kept
@@ -712,7 +711,7 @@ def made_on_version(vault, workflow_id: str, version: int, since: datetime) -> b
 
 
 def read_recipe(vault, recipe_id: int) -> Optional[SavedRecipe]:
-    """One saved recipe by id, for a run that starts from it (B7)."""
+    """One saved recipe by id, for a run that starts from it."""
     return vault.db.run_immediate_read_task(
         lambda session: session.get(SavedRecipe, recipe_id)
     )
