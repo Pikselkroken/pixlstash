@@ -27,7 +27,11 @@
       ],
       "prompt": "Character reference sheet of a person.",
       "width": 2560,
-      "height": 1536
+      "height": 1536,
+      "images.image_1": [
+        "20",
+        0
+      ]
     },
     "class_type": "MiniMaxH3ImageConditioning"
   },
@@ -142,5 +146,14 @@
       "denoise": 1.0
     },
     "class_type": "BasicScheduler"
+  },
+  "20": {
+    "inputs": {
+      "width": 512,
+      "height": 512,
+      "batch_size": 1,
+      "color": 0
+    },
+    "class_type": "EmptyImage"
   }
 }

@@ -25,6 +25,7 @@ from pixlstash.services.workflow_identity import (
     reference_input_count,
 )
 from pixlstash.services.workflow_io import detect_workflow_io
+from pixlstash.services.workflow_parameters import BLANK_PICTURE_CLASSES
 from pixlstash.services.workflow_run_service import run_seed_targets
 from pixlstash.utils.insightface_model_utils import DEFAULT_MODEL_PACK
 from pixlstash.services.character_sheet import (
@@ -455,7 +456,7 @@ def test_the_shipped_sheet_workflows_draw_at_the_sheet_size(name, references):
     sizes = {
         (node["inputs"]["width"], node["inputs"]["height"])
         for node in graph.values()
-        if "width" in node["inputs"]
+        if "width" in node["inputs"] and node["class_type"] not in BLANK_PICTURE_CLASSES
     }
     assert sizes == {(SHEET_WIDTH, SHEET_HEIGHT)}
 
@@ -470,6 +471,7 @@ _H3_IMAGE_OUTPUTS = {
     "MiniMaxH3ImageConditioning": ["CONDITIONING", "LATENT"],
     "ConditioningZeroOut": ["CONDITIONING"],
     "EmptyLatentImage": ["LATENT"],
+    "EmptyImage": ["IMAGE"],
     "RandomNoise": ["NOISE"],
     "CFGGuider": ["GUIDER"],
     "SamplerLCM": ["SAMPLER"],
@@ -506,6 +508,25 @@ def test_the_h3_image_sheets_draw_with_lcm_and_a_run_still_reaches_them(name):
         for r in plan_lora_insertion(graph, info)["rewires"]
     }
     assert {("CFGGuider", "model"), ("BasicScheduler", "model")} <= rewired
+
+
+def test_the_h3_image_text_sheet_conditions_on_a_blank_picture_it_never_draws_from():
+    """A blank picture in image_1 puts the ``<Picture 1>`` label and vision
+    tokens ahead of the prompt, which draws H3 Image cleaner from words. With
+    no VAE on the conditioning it is not a reference latent, and PixlStash
+    must still read the workflow as text to image with no picture to fill."""
+    graph = json.loads(
+        (pathlib.Path(WORKFLOW_BUILTIN_DIR) / "Sheet-MiniMax-H3-Image.json").read_text()
+    )
+    conditioning = graph["6"]["inputs"]
+    blank = graph[conditioning["images.image_1"][0]]
+    assert blank == {
+        "inputs": {"width": 512, "height": 512, "batch_size": 1, "color": 0},
+        "class_type": "EmptyImage",
+    }
+    assert "vae" not in conditioning
+    assert reference_input_count(reduce_api_graph(graph)) == 0
+    assert detect_workflow_io(graph).picture_inputs == ()
 
 
 @pytest.mark.parametrize(
