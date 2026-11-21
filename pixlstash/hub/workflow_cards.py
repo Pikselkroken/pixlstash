@@ -41,10 +41,12 @@ from pixlstash.services.model_shelf_service import (
     recipe_asset_index,
 )
 from pixlstash.services.workflow_hash import (
+    WorkflowGraphError,
     _digest,
     asset_reference,
     is_link,
     normalized_filename,
+    structural_document,
 )
 from pixlstash.services.workflow_identity import (
     ASSET_REFERENCE_PREFIX,
@@ -275,6 +277,35 @@ def variant_families(
             )
             return sibling
     return ",".join(sorted(families))
+
+
+def run_family(hub, graph: dict) -> Optional[str]:
+    """The one base-model family a runnable *graph* loads, else ``None``.
+
+    The run's own graph, after the request's model choices are laid over it:
+    each base-model loader the core keeps, read as :func:`variant_families`
+    reads a value (the shelf's family, else the family its filename names).
+    Two families, a model of no known family or a loader naming no model is
+    ``None``: the prompt assistant (backend §25) applies to one family only.
+    """
+    families = set()
+    shelf: list = []
+    try:
+        kept = core_node_ids(
+            structural_document(graph), strip_loras=STRIP_LORAS_FOR_STACKS
+        )
+    except WorkflowGraphError as exc:
+        logger.info("Run graph has no core to read a family from: %s", exc)
+        return None
+    for node_id, node in graph.items():
+        if str(node_id) not in kept or not isinstance(node, dict):
+            continue
+        for widget, value in (node.get("inputs") or {}).items():
+            if not (base_model_kind(widget) or widget in _BASE_DIGEST_WIDGETS):
+                continue
+            name = str(value) if isinstance(value, (str, int)) and value != "" else ""
+            families.add(_family_of_name(hub, name, shelf) if name else None)
+    return next(iter(families)) if len(families) == 1 else None
 
 
 def _sibling_families(hub, core: str, structural_hash: str) -> Optional[str]:
