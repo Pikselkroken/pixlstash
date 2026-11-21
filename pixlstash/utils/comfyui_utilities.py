@@ -113,6 +113,15 @@ PRIMITIVE_STRING_CLASSES = {
 
 _MAX_FOLLOW_DEPTH = 8
 
+# A prompt enhancer: a language model loaded as a CLIP rewrites the owner's
+# words before the encoder reads them (MiniMax H3 Image's edit, Qwen-Image
+# 2.1). By class_type, the input carrying the text each node hands on.
+PROMPT_REWRITE_INPUTS = {
+    "TextGenerate": "prompt",
+    "TextGenerateV2": "prompt",
+    "JsonExtractString": "json_string",
+}
+
 # String values in widgets_values that are control tokens, not prompt text.
 _TEXT_CONTROL_VALUES = frozenset(
     {
@@ -463,6 +472,39 @@ def _resolve_text_api(value: Any, workflow: dict, depth: int = 0) -> str | None:
     return None
 
 
+def rewritten_prompt_input(workflow: dict, node_id: str, field: str) -> tuple[str, str]:
+    """Where the words a prompt enhancer rewrote into *node_id*'s *field* are.
+
+    Follows the text link back through the enhancer: its JSON extraction, the
+    ``TextGenerate`` call, and a ``StringReplace`` that puts the words into its
+    instructions (``replace``, when ``find`` is in a literal ``string``). Those
+    words are the prompt: what reaches the encoder is the model's rewrite.
+    ``(node_id, field)`` itself unless the walk passes a ``TextGenerate``.
+    """
+    at, rewritten = (str(node_id), field), False
+    for _ in range(_MAX_FOLLOW_DEPTH):
+        value = ((workflow.get(at[0]) or {}).get("inputs") or {}).get(at[1])
+        if not _is_api_ref(value):
+            break
+        source = workflow.get(str(value[0])) or {}
+        class_type = source.get("class_type")
+        inputs = source.get("inputs") or {}
+        if class_type in PROMPT_REWRITE_INPUTS:
+            rewritten = rewritten or class_type.startswith("TextGenerate")
+            at = (str(value[0]), PROMPT_REWRITE_INPUTS[class_type])
+        elif (
+            class_type == "StringReplace"
+            and rewritten
+            and isinstance(inputs.get("string"), str)
+            and inputs.get("find")
+            and inputs["find"] in inputs["string"]
+        ):
+            at = (str(value[0]), "replace")
+        else:
+            break
+    return at if rewritten else (str(node_id), field)
+
+
 def _follow_prompt_api(
     node_id: str,
     workflow: dict,
@@ -496,7 +538,11 @@ def _follow_prompt_api(
         if side == "negative" and any(name in inputs for name in NEGATIVE_FIELDS):
             fields = NEGATIVE_FIELDS
         name = next((name for name in fields if name in inputs), None)
-        return _resolve_text_api(inputs.get(name), workflow, depth + 1)
+        if name is None:
+            return None
+        at, name = rewritten_prompt_input(workflow, str(node_id), name)
+        text = (workflow[at].get("inputs") or {}).get(name)
+        return _resolve_text_api(text, workflow, depth + 1)
 
     # Follow conditioning passthrough nodes upstream, **the caller's side
     # first**: a node carrying both a generic `conditioning` and a named

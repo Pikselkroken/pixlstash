@@ -30,6 +30,7 @@ from pixlstash.hub.workflow_group_writes import (
     set_manual_api_document,
 )
 from pixlstash.services import workflow_bindings, workflow_inbox
+from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_inputs import (
     FIXED,
     PICKER,
@@ -734,7 +735,8 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
         (
             "Inpaint-MiniMax-H3-Image.json",
             [["1", "inputs", "image"]],
-            [["6", "inputs", "prompt"]],
+            # The words its prompt enhancer rewrites, not the encoder's wire.
+            [["21", "inputs", "replace"]],
         ),
         (
             "Inpaint-Qwen-Image-2.1.json",
@@ -755,7 +757,8 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
         (
             "MiniMax-H3-Image-Edit.json",
             [["1", "inputs", "image"]],
-            [["6", "inputs", "prompt"]],
+            # The words its prompt enhancer rewrites, not the encoder's wire.
+            [["21", "inputs", "replace"]],
         ),
         ("MiniMax-H3-Image-t2i.json", [], [["6", "inputs", "prompt"]]),
         ("Sheet-MiniMax-H3-Image.json", [], [["6", "inputs", "prompt"]]),
@@ -785,6 +788,18 @@ def test_built_ins_carry_no_token_and_are_filled_by_detection(name, image, capti
     targets = workflow_bindings.run_targets(document)
     paths = {role: [t["path"] for t in found] for role, found in targets.items()}
     assert paths == {"image": image, "caption": caption}
+
+
+def test_a_run_prompt_is_what_the_prompt_enhancer_rewrites():
+    """Wrong if the run cuts the enhancer out (the encoder's wire replaced by the
+    words) or the recipe reads its 38 KB instructions as the prompt."""
+    graph = _load(BUILT_IN / "MiniMax-H3-Image-Edit.json")
+    report = run_service.apply_prompts(graph, "Make the hat purple.", None)
+    assert report["unplaced"] == []
+    assert graph["6"]["inputs"]["prompt"] == ["23", 0]
+    assert graph["21"]["inputs"]["replace"] == "Make the hat purple."
+    recipe = extract_generation_info(graph)
+    assert recipe["positive_prompt"] == "Make the hat purple."
 
 
 def test_two_picture_inputs_fill_nothing_and_ui_files_are_not_filled():
