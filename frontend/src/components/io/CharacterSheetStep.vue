@@ -1069,14 +1069,16 @@ watch(engine, () => {
 // Each model its own sizes, so the size follows the chosen workflow's model
 // too: a model with a size of its own (MiniMax H3) starts there, any other
 // keeps a size it draws well. Only once restored, and a size saved with the
-// set stands over the one `load`'s first workflow would pick.
+// set, or last picked for this model, stands over the one it would start at.
 const sizesDrawnWell = computed(() => engine.value.sizes || SIZES_DRAWN_WELL);
 const sizeOptions = computed(() =>
   SIZES.map((s) => ({ ...s, disabled: !sizesDrawnWell.value.includes(s.id) })),
 );
 watch([engine, restored], ([now, done], [, wasDone]) => {
   if (!done) return;
-  const saved = !wasDone && !!(props.saved?.form?.size || remembered?.size);
+  const saved =
+    !wasDone &&
+    !!(props.saved?.form?.size || remembered?.size_family === now.family);
   const keep =
     sizesDrawnWell.value.includes(form.size) && (!now.size || saved);
   if (!keep) form.size = now.size || "large";
@@ -2332,6 +2334,7 @@ watch(
   (size) =>
     remember((all) => {
       all.size = size;
+      all.size_family = engine.value.family;
     }),
 );
 watch(
