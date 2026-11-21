@@ -10551,7 +10551,12 @@ repair is a registry entry plus its `RunGroup` field. Three ship:
   or overridden text node) is replaced by the typed prompt as a literal,
   cutting the link, unless the prompt equals one of that node's own strings:
   an untouched Run popup echoes a builder's recipe prompt, which was read from
-  its widgets, and the wire stays. `Text Multiline` drops its `#` comment lines as the node
+  its widgets, and the wire stays. Behind a prompt enhancer (a `TextGenerate`
+  whose `JsonExtractString` feeds the encoder, its words put into the
+  instructions by a `StringReplace`), the prompt is those words:
+  `comfyui_utilities.rewritten_prompt_input`, which the Run popup, the bindings'
+  `run_targets` and the recipe reader share, so a run keeps the enhancer and a
+  picture's recipe shows what was typed. `Text Multiline` drops its `#` comment lines as the node
   does; one holding anything in square brackets (a WAS token) keeps its
   refusal, as do a wired text, another input set that may override it
   (`Textbox`'s `passthrough`), and a consumer reading any output but the first.

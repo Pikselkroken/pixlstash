@@ -84,6 +84,7 @@ from pixlstash.utils.comfyui_utilities import (
     PROMPT_FIELDS,
     collect_seed_inputs,
     iter_model_fields_api,
+    rewritten_prompt_input,
 )
 from pixlstash.pixl_logging import get_logger
 
@@ -218,8 +219,12 @@ def _literal_prompt_target(
     """Where a prompt node's text is a literal string, as ``(node, field)``.
 
     The encoder's own *field*, or the text field of the one unshared,
-    unoverridden :data:`TEXT_NODE_CLASSES` node wired into it.
+    unoverridden :data:`TEXT_NODE_CLASSES` node wired into it. Behind a prompt
+    enhancer, the words it rewrites (:func:`rewritten_prompt_input`): writing
+    the encoder's field would cut the enhancer out of the run.
     """
+    if field is not None:
+        node_id, field = rewritten_prompt_input(graph, node_id, field)
     inputs = (graph.get(node_id) or {}).get("inputs") or {}
     text = inputs.get(field)
     if isinstance(text, str):
