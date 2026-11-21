@@ -69,6 +69,12 @@ class SheetPromptRequest(BaseModel):
         "for a sheet workflow made from another text-to-image one "
         "(ComfyUI-PixlStash's Layout Text Encode).",
     )
+    photo_look: bool = Field(
+        True,
+        description="With `layout: prose`, the photos read as a model agency's "
+        'unedited digitals rather than renders, and "photorealistic" is '
+        "left out. The `moss` and `regions` layouts ignore it.",
+    )
 
 
 class SheetPrompt(BaseModel):

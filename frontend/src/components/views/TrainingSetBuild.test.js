@@ -632,6 +632,13 @@ const MOSS_CARD = {
   last_used: "2026-11-09T20:00:00Z",
   models: [{ kind: "unet", base_model_family: "moss_image" }],
 };
+const KREA_CARD = {
+  id: "manual:krea",
+  name: "Krea sheet",
+  type: "txt2img",
+  last_used: "2026-11-10T20:00:00Z",
+  models: [{ kind: "checkpoint", base_model_family: "krea2" }],
+};
 
 /** Mock the Sheets step's reads: one MOSS workflow, LoRAs newest first. */
 function sheetsWorld({ description = "", loras = [] } = {}) {
@@ -893,6 +900,48 @@ describe("TrainingSetBuild: generating the pictures", () => {
       }),
     );
     wrapper.unmount();
+  });
+
+  it("offers the photo look only to a prose prompt, on unless turned off", async () => {
+    const open = async () => {
+      api.fetchCharacterSetSuggestion.mockResolvedValue(
+        suggestion({ stillsGroup: emptyGroup() }),
+      );
+      sheetsWorld({ description: "Adult woman, copper bob" });
+      gen.listWorkflowCards.mockResolvedValue({ cards: [MOSS_CARD, KREA_CARD] });
+      const wrapper = mountDialog();
+      await flushPromises();
+      return wrapper;
+    };
+    const look = (wrapper) => wrapper.find('[data-testid="cs-photo-look"]');
+    const sent = async (wrapper) => {
+      await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+      await flushPromises();
+      wrapper.unmount();
+      return gen.buildSheetPrompt.mock.lastCall[0];
+    };
+    let wrapper = await open();
+    expect(look(wrapper).find('[aria-checked="true"]').text()).toBe("Natural");
+    // MOSS-Image draws from its layout, which has no photo look to turn off.
+    const pick = async (id) => {
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === "Sheet workflow")
+        .vm.$emit("update:modelValue", id);
+      await flushPromises();
+      return look(wrapper).exists();
+    };
+    expect(await pick("manual:moss")).toBe(false);
+    expect(await pick("manual:krea")).toBe(true);
+    expect(await sent(wrapper)).toEqual(
+      expect.objectContaining({ layout: "prose", photo_look: true }),
+    );
+    wrapper = await open();
+    await look(wrapper)
+      .findAll("button")
+      .find((b) => b.text() === "Off")
+      .trigger("click");
+    expect((await sent(wrapper)).photo_look).toBe(false);
   });
 
   it("draws text sheets with a MiniMax H3 text-to-image workflow, in prose", async () => {
@@ -2826,6 +2875,54 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     expect(sent).not.toHaveProperty("body");
     await vi.advanceTimersByTimeAsync(700);
     expect(lastBuild().sheets.form).not.toHaveProperty("body");
+    wrapper.unmount();
+  });
+
+  it("keeps the photo look as remembered and as saved; an older build reads as on", async () => {
+    const open = async (building) => {
+      api.fetchCharacterSetSuggestion.mockResolvedValue(
+        suggestion({ stillsGroup: emptyGroup() }),
+      );
+      sheetsWorld({ description: "Adult woman" });
+      gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD] });
+      const wrapper = mountDialog(building);
+      await flushPromises();
+      return wrapper;
+    };
+    const chosen = (wrapper) =>
+      wrapper.find('[data-testid="cs-photo-look"] [aria-checked="true"]').text();
+    const saved = (form) => ({
+      v: 1,
+      stage: "generate",
+      stepped: true,
+      sheets: { phase: "describe", form: { description: "Adult woman", ...form } },
+    });
+    localStorage.setItem(
+      "pixlstash:characterSheetChoices",
+      JSON.stringify({ photo_look: false }),
+    );
+    let wrapper = await open(undefined);
+    expect(chosen(wrapper)).toBe("Off");
+    await wrapper
+      .findAll('[data-testid="cs-photo-look"] button')
+      .find((b) => b.text() === "Natural")
+      .trigger("click");
+    await vi.advanceTimersByTimeAsync(700);
+    expect(
+      JSON.parse(localStorage.getItem("pixlstash:characterSheetChoices")).photo_look,
+    ).toBe(true);
+    expect(lastBuild().sheets.form.photo_look).toBe(true);
+    wrapper.unmount();
+    // A saved build stands over what is remembered.
+    localStorage.setItem(
+      "pixlstash:characterSheetChoices",
+      JSON.stringify({ photo_look: false }),
+    );
+    wrapper = await open(saved({}));
+    expect(chosen(wrapper)).toBe("Natural");
+    wrapper.unmount();
+    wrapper = await open(saved({ photo_look: false }));
+    expect(chosen(wrapper)).toBe("Off");
     wrapper.unmount();
   });
 

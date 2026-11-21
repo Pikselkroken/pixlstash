@@ -190,12 +190,25 @@
                 @pick="proportionsTouched = true"
               />
             </div>
+            <div v-if="layout === 'prose'" class="cs-opt">
+              <FieldLabel>Photo look</FieldLabel>
+              <Segmented
+                v-model="form.photo_look"
+                aria-label="Photo look"
+                :options="PHOTO_LOOKS"
+                data-testid="cs-photo-look"
+              />
+            </div>
           </div>
           <span class="cs-hint" data-testid="cs-framing-hint">{{
             framingHint
           }}</span>
           <span class="cs-hint"
             >About a minute a sheet. {{ sizeHint }}</span
+          >
+          <span v-if="layout === 'prose'" class="cs-hint"
+            >Photo look asks for plain, unretouched photos rather than a
+            polished render.</span
           >
         </div>
       </template>
@@ -733,6 +746,11 @@ const PROPORTIONS = [
   { id: "little_person", label: "Little person" },
   { id: "cartoon", label: "Cartoon" },
 ];
+// A prose prompt asks for unedited camera photos unless this is off.
+const PHOTO_LOOKS = [
+  { id: true, label: "Natural" },
+  { id: false, label: "Off" },
+];
 const MOSS = "moss_image";
 // Only MOSS-Image reads the layout JSON; every other engine's sheet is the
 // prose prompt. Qwen-Image, FLUX.2 Klein and MiniMax H3 also draw from a
@@ -836,11 +854,16 @@ const form = reactive({
   count: 4,
   subject: "woman",
   proportions: "typical",
+  // An older saved form has none, and reads as on.
+  photo_look: true,
 });
 // A step with nothing saved starts from the choices last made.
 const remembered = props.saved ? null : readChoices();
 if (SIZES.some((s) => s.id === remembered?.size)) form.size = remembered.size;
 if (COUNTS.some((c) => c.id === remembered?.count)) form.count = remembered.count;
+if (typeof remembered?.photo_look === "boolean") {
+  form.photo_look = remembered.photo_look;
+}
 // Per field, the values sheets were drawn with, newest first; "" where the
 // last draw left the field empty, so an empty field stays empty.
 const recent = ref(readRecent(remembered || readChoices()));
@@ -964,6 +987,14 @@ const engine = computed(() => {
     referenceCards.value.find((c) => c.id === workflowId.value) ||
     referenceCards.value[0];
   return referenceEngine(card) || ENGINES.qwen;
+});
+/** How the prompt route lays the sheet out: "" for MOSS-Image's layout JSON,
+ * "regions" for a sheet copy, "prose" (one sentence) for every other engine
+ * and for a draw from a reference. */
+const layout = computed(() => {
+  if (fromReference.value) return "prose";
+  if (engine.value.regions) return "regions";
+  return engine.value === ENGINES.moss ? "" : "prose";
 });
 /** The rail is the reference's: its control before drawing, the picture after. */
 const railIsReference = computed(() =>
@@ -1744,11 +1775,8 @@ async function draw() {
   const count = form.count;
   const reference = fromReference.value ? referenceId.value : null;
   const inputs = workflowInputs.value;
+  const sheetLayout = layout.value;
   rememberRecent();
-  // Only MOSS-Image takes a layout: the others get the sheet in one sentence.
-  const prose = !!reference || engine.value !== ENGINES.moss;
-  // A sheet copy of another text-to-image workflow takes it as regions.
-  const regions = !reference && !!engine.value.regions;
   try {
     const description = form.description.trim();
     if (!savedDescription.value && description) {
@@ -1765,11 +1793,12 @@ async function draw() {
       size: form.size,
       subject: form.subject,
       proportions: form.proportions,
+      // The route ignores it for any layout but prose.
+      photo_look: form.photo_look,
       trigger: trigger.value,
       // From a reference, the sentence names the person in the picture.
       ...(reference ? { reference: true } : {}),
-      ...(prose ? { layout: "prose" } : {}),
-      ...(regions ? { layout: "regions" } : {}),
+      ...(sheetLayout ? { layout: sheetLayout } : {}),
     });
     const drawing = JSON.stringify([
       sheet.prompt,
@@ -2339,6 +2368,13 @@ watch(
   (count) =>
     remember((all) => {
       all.count = count;
+    }),
+);
+watch(
+  () => form.photo_look,
+  (look) =>
+    remember((all) => {
+      all.photo_look = look;
     }),
 );
 // Per person. A LoRA left at the default is forgotten, so a newer LoRA of the
