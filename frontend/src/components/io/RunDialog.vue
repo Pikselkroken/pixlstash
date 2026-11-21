@@ -374,6 +374,28 @@
               </template>
             </Tooltip>
           </p>
+          <!-- A language model rewrites this prompt before the encoder reads
+               it (`prompt.enhancer`). Per run and never remembered, like the
+               stack and the stages; off is `enhance_prompt: false`. -->
+          <template v-if="graphPrompt?.enhancer">
+            <div class="rund-f rund-check">
+              <input
+                :id="enhanceId"
+                class="rund-box"
+                type="checkbox"
+                data-testid="rund-enhance"
+                :checked="enhancePrompt"
+                :disabled="submitting"
+                :aria-describedby="`${enhanceId}-hint`"
+                @change="setEnhancePrompt($event.target.checked)"
+              />
+              <label :for="enhanceId">Enhance prompt</label>
+            </div>
+            <p :id="`${enhanceId}-hint`" class="rund-note">
+              Rewrites your prompt with a language model first. Off sends your
+              words as written and skips loading that model.
+            </p>
+          </template>
         </div>
 
         <!-- Who the run is of. A workflow run by itself carries no person's
@@ -1380,6 +1402,7 @@ const loadFailedId = useId();
 const picsLabelId = useId();
 const stackId = useId();
 const stageId = useId();
+const enhanceId = useId();
 /**
  * Bumped per read of a workflow into the form: the open, a move of the
  * picker, the read after a band save. Only the newest may write any of the
@@ -2261,6 +2284,15 @@ const addedUpscale = ref(false);
 async function setAddedUpscale(on) {
   addedUpscale.value = on;
   // The answer changes: the upscale model may be one this ComfyUI lacks.
+  await runPreflight();
+}
+
+/** The "Enhance prompt" box; off is sent as `enhance_prompt: false`. */
+const enhancePrompt = ref(true);
+
+async function setEnhancePrompt(on) {
+  enhancePrompt.value = on;
+  // Off, the enhancer's model is no longer one the run needs.
   await runPreflight();
 }
 
@@ -4232,6 +4264,10 @@ function runBody() {
   if (addedUpscale.value && addedUpscaleOffered.value) {
     body.upscale = upscale.body();
   }
+  // Only off is sent. Not gated on the box being drawn: a pre-flight that
+  // failed hides it, and the run must still go as the owner left it. On a
+  // graph with no enhancer the server ignores it.
+  if (!enhancePrompt.value) body.enhance_prompt = false;
   // The model rows, by the default recipe's loader address (#1623).
   if (runModels.value.length) body.models = runModels.value;
   if (choiceFixes.value.length) {

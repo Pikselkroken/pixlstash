@@ -368,6 +368,13 @@ _RUN_SCHEMA = {
         "workflow_id": _WORKFLOW_ID,
         "prompt": {"type": "string", "description": "Positive prompt override."},
         "negative": {"type": "string", "description": "Negative prompt override."},
+        "enhance_prompt": {
+            "type": "boolean",
+            "description": "false runs without the workflow's prompt "
+            "enhancer (a group's prompt.enhancer is true where it has one): "
+            "the prompt reaches the encoder as written and the enhancer's "
+            "model is not loaded. Omitted runs the workflow as it is.",
+        },
         "count": {"type": "integer", "description": "How many runs (default 1)."},
         "seed_mode": {"type": "string", "enum": ["new", "keep", "fixed"]},
         "seed": {"type": "integer", "description": "The seed, for seed_mode fixed."},

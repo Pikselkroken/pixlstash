@@ -1850,6 +1850,11 @@ class RunRequest(BaseModel):
 
     prompt: str | None = Field(None, max_length=MAX_PROMPT_LENGTH)
     negative: str | None = Field(None, max_length=MAX_PROMPT_LENGTH)
+    # Whether a prompt enhancer rewrites this run's prompt (a group's
+    # `prompt.enhancer` says the graph has one). False sends the prompt to the
+    # encoder as written and cuts the enhancer out of the run's copy, so its
+    # model is never loaded; null and true run the graph as it is.
+    enhance_prompt: bool | None = None
     loras: list[RunLora] = Field(default_factory=list, max_length=MAX_RUN_LORAS)
     # LoRAs this run adds in new loaders of their own, after `loras` and the
     # recipe's LoRAs are placed: nothing the graph loads is replaced, so a
@@ -2466,6 +2471,10 @@ class RunPrompt(BaseModel):
     # The graph's own positive prompt, before this request's was written. Null
     # where it is not a literal or the graph's prompt nodes disagree.
     positive_text: str | None = None
+    # True where a prompt enhancer (a `TextGenerate` language model) rewrites
+    # a prompt before its encoder reads it, whether or not this request's
+    # `enhance_prompt: false` cut it out: the Run popup's switch for it.
+    enhancer: bool = False
 
 
 class RunGroup(BaseModel):
@@ -7623,11 +7632,14 @@ def create_router(server) -> APIRouter:
                     body.count,
                 )
             group.flags = _apply_models(hub, graph, body.models, object_info, request)
-            placed = run_service.apply_prompts(graph, body.prompt, body.negative)
+            placed = run_service.apply_prompts(
+                graph, body.prompt, body.negative, body.enhance_prompt
+            )
             group.prompt = RunPrompt(
                 positive_settable=placed["positive_settable"],
                 negative_settable=placed["negative_settable"],
                 positive_text=placed["positive_text"],
+                enhancer=placed["enhancer"],
             )
             group.flags += [
                 {"code": "prompt_not_applied", "side": side}
