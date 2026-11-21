@@ -31,7 +31,7 @@ nothing. They are on the shelf for completeness - so the owner can see what is
 on their disk and what it costs - not to be curated.
 
 **The unclaimed files in the folder are not**, and that is the point of
-declaring them (#927). They go in as ``file_kind='unknown'``, which is what the
+declaring them. They go in as ``file_kind='unknown'``, which is what the
 shelf calls *Unclassified*, so a leftover like ``best.pt`` is visible, carries
 its size, and is an ordinary row the owner can rename or forget rather than one
 the shelf refuses to discuss.
@@ -69,9 +69,8 @@ def is_declared_root(owner: Optional[str], kind: Optional[str]) -> bool:
     The owner alone does not say it: the managed store
     (``managed_model_store.MANAGED_KIND``) is owned by ``pixlstash`` too, but
     holds plain files and is scanned like any folder. Read as declared, its
-    scan went to a re-declaration that refuses it, so a file deleted from it
-    stayed ``present`` on the shelf for good and a PixlStash loader was sent
-    to fetch bytes that were gone.
+    scan would go to a re-declaration that refuses it, and a file deleted from
+    it would stay ``present`` on the shelf for good.
     """
     return owner == BUILTIN_OWNER and kind != "managed"
 
@@ -415,12 +414,9 @@ def builtin_model_dir() -> str:
     server instance on the host, exactly as the hub itself does.
 
     **The one answer, and everything that reads or writes the folder asks for
-    it.** The declaration below, ``inference/engine.py`` and
-    ``tasks/image_embedding_task.py`` used to each build
-    ``user_data_dir("pixlstash")/downloaded_models`` for themselves, so they
-    agreed by convention rather than by construction and the folder could not be
-    moved: the shelf would have declared the new location while every downloader
-    kept filling the old one and re-fetching what had been moved away (#905).
+    it**, so the declaration below, ``inference/engine.py`` and
+    ``tasks/image_embedding_task.py`` agree by construction and the folder can
+    be moved.
 
     Resolution order, first hit wins:
 
@@ -548,8 +544,7 @@ def _warn_if_the_recorded_folder_looks_wrong(folder_path: str, present: int) -> 
     directory that has been deleted - or a drive that is not plugged in - has
     every start re-create the path and fetch every engine into it again, while
     the real ones sit untouched in the folder they were moved out of. That is
-    the accident this exists to make legible; it took an investigation precisely
-    because nothing anywhere said a word.
+    the accident this exists to make legible.
 
     **Two symptoms, because either one alone goes quiet.** The recorded folder
     being unreadable is what a start sees while the drive is away - but the
@@ -663,13 +658,11 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
     did not see to ``missing``; pointed here it would mark the ONNX tagger and
     both ``.pth`` scorers missing on every pass.
 
-    **The unclaimed files are declared too.** :func:`unclaimed_files` has always
-    known about the leftovers - a 339 MB ``best.pt`` on a measured machine - but
-    nothing called it, so the shelf listed the four engines and said nothing
-    about the file sitting beside them: invisible, and therefore impossible to
-    act on (#927). They go in as ``file_kind='unknown'`` with no role and no
-    capability, which is what the shelf already calls *Unclassified* and is the
-    honest reading of "present, and nothing in this build claims it".
+    **The unclaimed files are declared too** (:func:`unclaimed_files`), so a
+    leftover sitting beside the engines is visible and can be acted on. They go in as
+    ``file_kind='unknown'`` with no role and no capability, which is what the shelf
+    already calls *Unclassified* and is the honest reading of "present, and nothing in
+    this build claims it".
 
     Args:
         hub: The open hub database.

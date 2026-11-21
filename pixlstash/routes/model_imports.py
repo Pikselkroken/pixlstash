@@ -23,9 +23,9 @@ nothing is copying out of it at the time.
 path is ever taken from the caller. The join is contained: a run name that
 resolves outside its registered output root is refused rather than read.
 
-**A run's previews stay in the run.** Imports before 2026-10-30 copied them into
-``<stem>_samples/`` beside each checkpoint, and ``GET /models/{model_id}/samples``
-still reads those back off the shelf. That pair is addressed by ``model.id`` rather than by sha256, because a
+**A run's previews stay in the run.** A checkpoint may still carry an older
+import's ``<stem>_samples/`` beside it, and ``GET /models/{model_id}/samples``
+reads those back off the shelf. That pair is addressed by ``model.id`` rather than by sha256, because a
 checkpoint nobody has hashed has no sha256 to be addressed by.
 
 Authorization: every route here is `LOCAL_OWNER_ONLY`, declared in
@@ -38,7 +38,7 @@ trash removes one run folder from a registered root, which is
 both sample routes read inside a registered folder, which is the authority
 ``GET /adapters/{sha256}/file`` sits on for the same reason - bytes out of a
 registered root are a capability of their own, and "no host path crosses the
-wire" is not the argument (recorded against that route on 2026-08-11).
+wire" is not the argument.
 """
 
 from __future__ import annotations
@@ -290,8 +290,7 @@ def sample_path_within(run_dir: str, filename: str) -> str:
     other registered path, its contents are third-party tool output the owner
     merely pointed at, and both tarballs and git repositories carry symlinks. A
     directory symlink or an NTFS junction named ``samples`` does the same on
-    Windows. Found by the adversarial review of this PR and reproduced
-    end-to-end; the sibling joins were already safe (a symlinked *run* is caught
+    Windows. The sibling joins are safe (a symlinked *run* is caught
     here, a symlinked *file* inside a real ``samples/`` by the second call).
 
     Args:
@@ -625,8 +624,7 @@ def create_router(server) -> APIRouter:
         its previews. Ordered by ``(model_folder_id, relpath)``, which **is**
         ``model_file``'s primary key (``hub/schema.py``) - the table has no
         ``id`` column - so the answer is stable rather than whatever SQLite
-        hands back first. Spelled out because a reviewer read "the location
-        primary key" as ``mf.id`` and called the ordering a mismatch.
+        hands back first.
 
         Raises:
             HTTPException: 404 when no such model row exists. A model that

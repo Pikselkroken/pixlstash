@@ -30,7 +30,7 @@ def picture_referenced_by_project(
     moved is excluded from the check via ``exclude_character_id`` /
     ``exclude_set_id`` so it does not count as a reason to keep the picture.
 
-    Since issue #125 an entity may belong to several projects, so "still assigned
+    An entity may belong to several projects, so "still assigned
     to ``project_id``" is read from the ``CharacterProjectMember`` /
     ``PictureSetProjectMember`` join tables rather than the scalar primary-project
     FK. Reading the FK here would drop a picture out of a project that one of its

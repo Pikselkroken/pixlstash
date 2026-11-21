@@ -133,14 +133,14 @@ class BulkResultResponse(BaseModel):
 def _notify_changed(server, picture_ids, origin_client_id: str | None = None) -> None:
     """Emit a SINGLE CHANGED_TAGS for all distinct ids + sync each sidecar.
 
-    Collapses the previous one-event-per-picture loop into one batched event so a
-    bulk accept/reopen does not flood the grid with N refresh frames (issue #500).
+    One batched event rather than one per picture, so a
+    bulk accept/reopen does not flood the grid with N refresh frames.
     The event carries ``origin_client_id`` so the originating tab recognises its
-    own change and reconciles in place instead of raising a pill (issue #499).
+    own change and reconciles in place instead of raising a pill.
 
     This emits ``notify()`` directly (not via the background 2s coalescer in
     ``vault.py``) on purpose: the coalescer flushes CHANGED_TAGS WITHOUT an origin,
-    which would re-introduce the self-pill. Interactive tag edits stay direct, just
+    which would raise the self-pill. Interactive tag edits stay direct, just
     batched.
     """
     distinct_ids: list[int] = []

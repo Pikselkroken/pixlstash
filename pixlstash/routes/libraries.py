@@ -4,7 +4,7 @@ Routes over :class:`~pixlstash.hub.registry.LibraryRegistry`, which already
 implements every one of these verbs and raises a typed, user-facing error for
 each refusal. Nothing here re-derives a rule; it surfaces the registry's.
 
-**The routes sit at two access tiers on purpose** (multi-library plan §11 q3/q4).
+**The routes sit at two access tiers on purpose.**
 Listing is ``OWNER_ONLY``, so the Settings tab always renders for an owner.
 Everything else is ``LOCAL_OWNER_ONLY``: ``inspect`` and ``POST /libraries``
 because they take a caller-supplied host path and read or write the host
@@ -16,14 +16,11 @@ management verb on the same surface and the Settings pane gates the whole ``⋯`
 menu on ``can_manage``; putting it on a looser tier would buy nothing and give
 the pane two rules to explain.
 
-*Switching is not a confidentiality boundary* (corrected 2026-08-07). Plan §11 q4
-justified the tier as stopping a stolen token from reaching every library by
-switching. That held for the unpinned-token design it was written against; the
-library pin landed later and closes it on its own. A token stamped for a
-non-active library is refused on every data route, and minting is pinned too, so
-switching locks a thief out of what they had and gains them nothing. This is a
-single-owner convenience feature with a disruptive side effect, which is all the
-tier needs to be about.
+*Switching is not a confidentiality boundary.* The library pin closes that
+on its own. A token stamped for a non-active library is refused on every data route, and
+minting is pinned too, so switching locks a thief out of what they had and gains them
+nothing. This is a single-owner convenience feature with a disruptive side effect, which
+is all the tier needs to be about.
 
 **Host information is locality-conditioned.** A password/cookie owner on the
 machine, the LAN or Tailscale sees the folder path and exact CLI command; any
@@ -32,7 +29,7 @@ An ``ALL`` bearer token over Tailscale remains subject to the separate
 ``require_local_for_write`` middleware, whose narrower ``is_local_ip`` predicate
 does not include Tailscale CGNAT. ``GET /libraries`` and ``POST /libraries/active`` are
 library-independent: they return no library content and keep answering while a
-switch is in flight. The lifecycle routes added later are hub-only but stay
+switch is in flight. The lifecycle routes are hub-only but stay
 pinned, because none of them has to answer mid-swap.
 """
 
@@ -440,10 +437,8 @@ def create_router(server) -> APIRouter:
 
         A skipped count is a skipped *number*, not a skipped verdict: the
         pictures/empty branch asks :func:`has_media_files` instead, which stops
-        at the first picture. It used to fall through to ``empty``, which was
-        safe only while ``POST /libraries`` treated the two identically - and it
-        no longer does, because a folder of pictures is the case that gets a
-        temporary vault.
+        at the first picture. It must not fall through to ``empty``, because
+        ``POST /libraries`` gives a folder of pictures a temporary vault.
         """
         return count_media_files(folder) if wanted else (0, False)
 

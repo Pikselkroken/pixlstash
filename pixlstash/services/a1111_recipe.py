@@ -28,7 +28,7 @@ field is classified HERE, by name, into the four buckets the hash spec uses:
   of one instance, and the hash summaries that repeat what the asset widgets
   already say. A credential-named field is dropped outright, as in a graph.
 
-**A model named inside a compound value is an asset too** (#1375). ControlNet
+**A model named inside a compound value is an asset too**. ControlNet
 writes its whole setup into one field (``"Module: canny, Model: control_x
 [hash], Weight: 1"``), where the field is not named for a model and the name
 inside carries no extension, so neither rule above sees it. Its ``Model:``
@@ -36,7 +36,7 @@ sub-fields are taken out of the value into asset widgets of their own, which is
 what keeps the name out of the instance document -- forgetting a model is a row
 delete and never rewrites a stored document. Only the fields
 :data:`_COMPOUND_MODEL_FIELD_RE` names are read this way; any other compound
-keeps its name, which is the old behaviour and the safe direction --
+keeps its name, which is the safe direction --
 ``X Values`` on a checkpoint-name sweep and Tiled Diffusion's ``Upscaler`` key
 are the two that matter, the second having ControlNet's shape but values
 (``Latent``, ``None``) that are as often not files. A name holding a comma is
@@ -453,7 +453,7 @@ def _nested_model_names(value: str) -> tuple[str, list[str]]:
     files each name as an asset, so the stored document names it by reference
     like any other model and forgetting the model -- a row delete in
     ``workflow_recipe_asset``, with no stored graph rewritten -- reaches it.
-    Leaving it in the value is what made that partly untrue (#1375).
+    Left in the value, the name would survive that delete.
     """
     names: list[str] = []
 

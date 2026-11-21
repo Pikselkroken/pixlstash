@@ -5,7 +5,7 @@ overrides - and not the hub's ``workflow_recipe`` row, which new code calls a
 *variant*. The rows are vault rows because they are authored and must travel
 with a snapshot (``db_models/saved_recipe.py``).
 
-**A recipe belongs to one workflow** (#1623): ``GET /recipes?workflow_id=…``
+**A recipe belongs to one workflow**: ``GET /recipes?workflow_id=…``
 answers with that workflow's recipes, and credit counts its pictures, filed as
 the grid files them: a manual workflow's runs under its own id, an automatic
 one's through its variants (``variants_in_workflow``). The card a recipe was saved from
@@ -240,9 +240,9 @@ def _shares(recipe: dict, on_the_shelf: set[str]) -> list[str]:
 
     The LoRA line names the files, because the file itself names them and an
     owner deciding whether to send it is owed the same list it is agreeing to.
-    The last line is the guard implementation plan §5.7 asks for on **both**
-    exports: a model this machine no longer holds is one whose name may have
-    been forgotten on purpose, and a recipe carries it in plain text.
+    The last line is a guard on **both** exports: a model this machine no
+    longer holds is one whose name may have been forgotten on purpose, and a
+    recipe carries it in plain text.
     """
     shares: list[str] = []
     if recipe.get("name"):

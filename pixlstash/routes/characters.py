@@ -176,7 +176,7 @@ def _may_learn_a_project_scoped_count(visible_projects: set[int] | None) -> bool
     turned out to have hidden memberships. A per-row rule would answer for the
     genuinely unassigned character and stay silent for the one filed under an
     invisible project, and the presence of an answer would then be the oracle
-    the suppression exists to remove (issue #718).
+    the suppression exists to remove.
 
     Args:
         visible_projects: The result of :func:`visible_project_ids`: ``None``
@@ -210,9 +210,7 @@ def characters_with_reference_faces_query():
     the number of characters rather than the number of faces.
 
     Extracted so the query-plan test asserts on the statement this endpoint
-    actually issues. An earlier revision asserted a hand-written query that no
-    production code ran, which let the index look useful while the real endpoint
-    quietly used the other one.
+    actually issues.
 
     Returns:
         A SQLModel ``select`` yielding one ``character_id`` per character that
@@ -467,7 +465,7 @@ def create_router(server) -> APIRouter:
         already exists in **any** of the given projects.  Unscoped characters
         (no projects) are exempt.
 
-        Since issue #125 a character can be in several projects at once, so the
+        A character can be in several projects at once, so the
         clash check spans every project it is joining, not just its primary one.
         """
         wanted = sorted({int(pid) for pid in (project_ids or []) if pid is not None})
@@ -495,7 +493,7 @@ def create_router(server) -> APIRouter:
     def _resolve_target_project_ids(data: dict, current: list[int] | None):
         """Resolve the requested project membership set from a request payload.
 
-        Accepts the multi-project ``project_ids`` list (issue #125) and the legacy
+        Accepts the multi-project ``project_ids`` list and the legacy
         single ``project_id`` scalar, in that precedence order.
 
         Args:
@@ -615,9 +613,9 @@ def create_router(server) -> APIRouter:
     ) -> tuple[dict[int, int], dict[int, int] | None]:
         """Global and primary-project picture counts for every listed character.
 
-        Serves the sidebar's counts from the list response so it no longer
-        fires one ``GET /characters/{id}/summary`` per character on every
-        refresh (issue #651). The sidebar asks each character for the scope of
+        Serves the sidebar's counts from the list response so it need not
+        fire one ``GET /characters/{id}/summary`` per character on every
+        refresh. The sidebar asks each character for the scope of
         its OWN primary project, so both numbers are independent of the
         selected project and one cached list response serves both view modes.
 
@@ -625,16 +623,15 @@ def create_router(server) -> APIRouter:
         actually reports in ``project_id`` - the *narrowed* primary project,
         not the raw ``Character.project_id`` column, since
         :func:`narrow_project_fields` hides project ids a scoped token may not
-        learn (issue #125 / R1b). That keeps the two fields self-consistent for
+        learn. That keeps the two fields self-consistent for
         every caller and never scopes a count to a project the caller cannot
         see.
 
         A caller with no project visibility at all gets no project-scoped
         number: see :func:`_may_learn_a_project_scoped_count`. Narrowing alone
-        was not enough there, because an empty narrowed list dropped the row
+        is not enough there, because an empty narrowed list would drop the row
         into the "in no project whatsoever" bucket, whose ``NOT EXISTS``
-        predicate answers a question about projects the caller cannot see
-        (issue #718).
+        predicate answers a question about projects the caller cannot see.
 
         Cost is a constant 1-3 queries regardless of how many characters are
         listed: one global, plus at most one per distinct *narrowed* primary
@@ -715,7 +712,7 @@ def create_router(server) -> APIRouter:
         """Raise 403 if the token scope does not cover the requested character.
 
         Thin delegation to the single membership implementation in
-        ``pixlstash/authz/membership.py`` (backend refactor plan §3.7, Step 4).
+        ``pixlstash/authz/membership.py``.
         The authz gate calls the same function directly for CHARACTER_SCOPED
         routes; Step 5 removes this shim.
         """

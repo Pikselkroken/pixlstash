@@ -17,13 +17,12 @@ moved. That is the ruling, and it is the only answer that does not need its own
 crash-window argument for the undo.
 
 **Relocating a folder PixlStash owns lives here too**, at
-``POST /model-folders/{folder_id}/relocate``, despite the path - because a
-relocation *is* a move, of everything one folder holds, and it runs the same
-single job slot and the same job clients poll. Doing it any other way
-would mean a second implementation of the ordering. Three folders qualify and
-``managed_model_store.relocatable_identity`` is the one place that says which:
-the managed store, the folder PixlStash downloads its own engines into (#905,
-closing #112), and the InsightFace packs (#906).
+``POST /model-folders/{folder_id}/relocate``, despite the path - because a relocation
+*is* a move, of everything one folder holds, and it runs the same single job slot and
+the same job clients poll. Doing it any other way would mean a second implementation of
+the ordering. Three folders qualify and ``managed_model_store.relocatable_identity`` is
+the one place that says which: the managed store, the folder PixlStash downloads its own
+engines into, and the InsightFace packs.
 
 **Two of the three are a batch of files and reuse ``ModelMover`` whole. The
 InsightFace packs are not.** The shelf catalogues a *pack* - a directory - and
@@ -55,7 +54,7 @@ both is what the owner names: ``payload.path`` is the InsightFace **root**, and
 the packs land in ``<path>/models``, because that subdirectory is the library's
 own layout rather than ours to choose.
 
-**Moving or renaming a directory inside a folder lives here too** (#2206), at
+**Moving or renaming a directory inside a folder lives here too**, at
 ``POST /model-folders/{folder_id}/dirs/move``, for the same reason: it is a move,
 it takes the same slot and clients watch it on the same ``GET /model-moves``,
 where ``kind: "folder"`` tells it apart. The work is
@@ -589,8 +588,7 @@ def _move_leftovers(source: str, destination: str) -> None:
     engine file alone: the tagger's label set, its revision sidecar and WD14's
     ``selected_tags.csv`` are declared as **companions** and have no row. Leaving
     them behind would move a tagger to a folder where it does not work, and the
-    engine would then download the whole thing again - the exact failure #905 is
-    about.
+    engine would then download the whole thing again.
 
     The managed store deliberately does NOT do this: what the owner left in it is
     theirs and stays put. Here the folder is ours end to end, so everything in it

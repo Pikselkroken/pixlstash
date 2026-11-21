@@ -118,10 +118,8 @@ def hold_log_output():
     """Buffer log output while an interactive question is on screen.
 
     Start-up asks its questions after the server has been built and its
-    background workers are already running, so the answer to "did anyone see
-    the question?" used to be no: a first-run credentials prompt was written
-    between two INFO lines, and a snapshot task logged its progress onto the
-    same line as the prompt while it waited for an answer. Nothing is dropped -
+    background workers are already running, so their log lines would
+    otherwise land on top of the prompt. Nothing is dropped -
     every held record is emitted, in order, once the question has been
     answered.
 

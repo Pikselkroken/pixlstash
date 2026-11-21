@@ -1,4 +1,4 @@
-"""The arbiter's tenant probe for a local ai-toolkit trainer (#2120).
+"""The arbiter's tenant probe for a local ai-toolkit trainer.
 
 The training worker tells it which processes are the trainer while a run is
 watched, and which of them still held GPU memory after the trainer exited. The

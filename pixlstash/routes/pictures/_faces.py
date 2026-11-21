@@ -79,11 +79,10 @@ class FaceProjectionResponse(BaseModel):
 
 
 class FaceListResponse(BaseModel):
-    """``{"faces": [...]}`` - the wire shape the generic by-name reader used.
+    """``{"faces": [...]}``: a picture's faces.
 
-    Kept identical on purpose so the SPA (``api/pictures.js::listPictureFaces``)
-    and ``tests/utils.py::wait_for_faces`` need no change when #721 moved these
-    off the relationship.
+    The SPA (``api/pictures.js::listPictureFaces``) and
+    ``tests/utils.py::wait_for_faces`` read this shape.
     """
 
     model_config = ConfigDict(extra="ignore")

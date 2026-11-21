@@ -550,9 +550,7 @@ def _fetch_from_repository(name: str, ref: str, workdir: Path) -> Path:
     Matched on the plugin's **declared** name first - that is what ``plugins
     available`` prints, what it lands under once installed, what ``plugins
     list`` shows and what ``plugins remove`` takes - and on the repository's
-    directory name second, because that is a real name too and was the only one
-    accepted before. Accepting only the directory name meant the catalogue
-    advertised `moondream2` and installing it failed.
+    directory name second, because that is a real name too.
 
     Both passes look at the **whole** set before choosing, so a declared name
     always beats a directory name rather than merely beating the ones that
@@ -841,8 +839,8 @@ class DependencyChange:
 
         Falls back to ``name==version`` whenever the entry carries no usable
         ``download_info.url`` -- a missing ``download_info``, an empty one, or
-        one without a ``url``.  That fallback is the pre-#1177 behaviour and
-        therefore the vulnerable one, so it is deliberately the narrowest case:
+        one without a ``url``.  That fallback is the vulnerable
+        one, so it is deliberately the narrowest case:
         pip records a ``url`` for every entry it resolves, and an entry without
         one means the report did not say where the artefact came from, which
         leaves the package name as the only thing left to install by.
@@ -985,8 +983,7 @@ def read_requirements(requirements: Path) -> list[str]:
 
     A line ending in a backslash is joined to the next one first, because pip
     does the same: ``--index-url \\`` on its own line and the URL on the next is
-    ONE option to pip, and reading them as two showed the option without what
-    it points at (#1206 item 8).
+    ONE option to pip.
     """
     source = _CONTINUATION_RE.sub(" ", read_source(requirements).replace("\r\n", "\n"))
     return [
@@ -1066,20 +1063,17 @@ def pip_options(requirements: Path) -> list[str]:
     verbatim and lets the reader judge, rather than claiming per line what each
     one does.
 
-    ``-r``/``-c`` includes are followed, because pip honours the options in the
-    file they name exactly as if they had been written here, and showing only
-    the include line left the ``--index-url`` behind it unlisted (#1206 item
-    8).  A line from an included file is tagged with the file it came from.
-    Only files inside the plugin's own folder are followed
-    (:func:`_include_target`), each *file* is read once so a cycle terminates,
-    and a file that cannot be read contributes a line saying so rather than
-    being passed over in silence.
+    ``-r``/``-c`` includes are followed, because pip honours the options in the file
+    they name exactly as if they had been written here.  A line from an included file is
+    tagged with the file it came from. Only files inside the plugin's own folder are
+    followed (:func:`_include_target`), each *file* is read once so a cycle terminates,
+    and a file that cannot be read contributes a line saying so rather than being passed
+    over in silence.
 
     "Once" is per file, not per spelling: the read set is keyed on
     ``(st_dev, st_ino)``.  ``resolve()`` does not case-canonicalise, so on a
     case-insensitive filesystem ``-r base.txt`` and ``-r BASE.TXT`` are two
-    keys for one file, and a plugin listing the same file under many spellings
-    - or under a hardlink - had it read once per spelling (#1206 review).
+    keys for one file, and so is a hardlink to it.
     """
     root = requirements.parent.resolve()
     options: list[str] = []

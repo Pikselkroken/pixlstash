@@ -1,12 +1,10 @@
 """The other two roots PixlStash's models live in, declared so they are visible.
 
 :mod:`pixlstash.services.builtin_models` declares the folder PixlStash downloads
-its *own* engines into. It is not the only place models land on this disk, and
-the other two were invisible: InsightFace keeps face packs under
-``~/.insightface/models``, and everything fetched through ``huggingface_hub``
-goes to the HuggingFace cache. On a measured machine that is 1.8 GB and 116 GB
-respectively - 100x the built-in folder - and the shelf showed neither, so the
-owner had no way to see where their disk had gone.
+its *own* engines into. It is not the only place models land on this disk:
+InsightFace keeps face packs under ``~/.insightface/models``, and everything
+fetched through ``huggingface_hub`` goes to the HuggingFace cache. On a measured
+machine that is 1.8 GB and 116 GB respectively - 100x the built-in folder.
 
 **Declared, never scanned - for the same reason and one more.** The scanner
 yields only ``.safetensors``: InsightFace holds ONNX and would list as empty,
@@ -34,9 +32,8 @@ came from a scan, which is the thing that never happens to these folders.
 **``file_kind`` is where "we chose it" IS the claim, so it is only made for the
 repos we chose.** The HuggingFace cache is shared with every other tool on the
 machine, and ``engine`` means "PixlStash downloaded this for itself" - which is
-what every shelf verb refuses to touch. Written over the whole cache it locked
-the owner out of their own models: their checkpoint could not be renamed or
-reclassified, and the refusal told them PixlStash had downloaded it. Only
+what every shelf verb refuses to touch. Written over the whole cache it would lock
+the owner out of their own models. Only
 :data:`~pixlstash.services.model_features.OUR_REPOS` gets ``engine``; the rest
 are the owner's, and carry ``owner_curatable`` so the declaration states them
 once and then stops overwriting what the owner corrects. The InsightFace packs
@@ -395,9 +392,8 @@ def declare_huggingface_cache(hub, folder_path: str) -> Optional[int]:
 def redeclare_model_root(hub, folder_path: str) -> Optional[int]:
     """Re-read one root PixlStash declares, which is what a rescan of it means.
 
-    The scanner skips these folders, so before this the declaration ran only at
-    start-up: a repo deleted from the HuggingFace cache stayed ``present`` on
-    the shelf, through any number of rescans, until the server restarted.
+    The scanner skips these folders, so without this a repo deleted from the
+    HuggingFace cache would stay ``present`` on the shelf until a restart.
 
     Recognised by path, as the start-up declaration resolves them, because
     :func:`declare_folder` writes the same ``kind``/``owner`` for all three.

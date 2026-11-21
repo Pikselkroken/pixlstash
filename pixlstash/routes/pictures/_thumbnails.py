@@ -85,9 +85,8 @@ def register_routes(router, server):
         pixels are copied through and only the EXIF orientation tag changes, so
         the stored bitmap is now sideways relative to the file. ``apply_orientation``
         NULLs ``thumbnail_width``/``height`` to re-queue the regeneration, but
-        that runs on a background sweep - until it lands this route was handing
-        back the pre-rotate bitmap, which is why a rotate used to paint the wrong
-        way round and only correct itself on a second refresh.
+        that runs on a background sweep, and until it lands this route would hand
+        back the pre-rotate bitmap.
 
         Returns:
             Whether the thumbnail was stale (and has now been discarded).

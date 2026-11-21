@@ -13,7 +13,7 @@ destroyed by it. If this ever hard-deletes ``model`` rows, the confirmation come
 back.
 
 **Forgetting takes the machine-wide** ``SHELF_IO_LOCK`` **and 409s if it is
-held** (#1017). It is harmless to the models, but it deletes exactly the
+held**. It is harmless to the models, but it deletes exactly the
 ``model_file`` rows a running move or import is writing, and a move whose source
 row disappeared mid-flight would unlink the source with nothing left registering
 the copy it had just made.
@@ -24,7 +24,7 @@ guarantees the invariant.** A scan writes the same rows and is deliberately
 multi-run import is a sequence of separate lock-taking requests, so a forget can
 still land between two of them. What closes the hole in every case is
 ``ModelMover._repoint`` refusing a commit that does not move exactly one row.
-This half stops the *move-versus-forget* interleaving the report was about, and
+This half stops the *move-versus-forget* interleaving, and
 turns a file failed halfway through a 40-file batch into a clean 4xx before the
 batch starts.
 

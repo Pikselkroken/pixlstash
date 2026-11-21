@@ -51,15 +51,13 @@ class TaggerListResponse(BaseModel):
 class TaggerPluginDiagnosticsResponse(BaseModel):
     """Everything about plugin *installation* - a §16.3 host-path disclosure.
 
-    Deliberately its own route rather than fields on ``GET /taggers``, which
-    used to be ANY_TOKEN and handed a share-link holder the owner's home
-    directory. (That route is OWNER_ONLY now as well, for the settings it
-    carries; this one is stricter still because a host path is the §16.3
-    locality class.) Both halves disclose it. ``plugin_dirs`` says so plainly,
-    and a ``load_errors`` message is built from an exception raised by
-    third-party code at import - an ``OSError`` out of a plugin's module body
-    carries whatever absolute path it was reaching for. Sanitising that text is
-    guesswork; not serving it to a share token is not.
+    Deliberately its own route rather than fields on ``GET /taggers``, which is
+    OWNER_ONLY for the settings it carries; this one is stricter still because a host
+    path is the §16.3 locality class. Both halves disclose it. ``plugin_dirs`` says so
+    plainly, and a ``load_errors`` message is built from an exception raised by
+    third-party code at import - an ``OSError`` out of a plugin's module body carries
+    whatever absolute path it was reaching for. Sanitising that text is guesswork; not
+    serving it to a share token is not.
     """
 
     model_config = ConfigDict(extra="allow")

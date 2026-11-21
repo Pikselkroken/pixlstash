@@ -34,9 +34,6 @@ Security posture (do not weaken):
   endpoint emits broadcast events but never reads or returns per-object
   resource data, so it requires no ``enforce_picture_scope`` chokepoint:
   scoped tokens can never reach it.
-
-See ``docs/reviews/2026-06-grid-refresh-cleanup-plan.md`` §4 Phase 2 and
-§6 decision 1.
 """
 
 from __future__ import annotations

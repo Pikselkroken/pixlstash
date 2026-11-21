@@ -29,12 +29,10 @@ returns one.
 
 **Nor is a support file.** ``vae`` and ``text_encoder`` are the two kinds a
 generation graph loads *beside* a checkpoint, and they reach the same block the
-same way (``?file_kind=vae``). Before they existed the classifier had only tensor
-markers and a parameter count to go on, and neither can see a support file: a
-VAE and a CLIP sit below the checkpoint threshold and were stored as ``unknown``,
-a T5-class encoder sits above it and was stored as ``checkpoint``. So
-``/checkpoints`` was answering "what base models do I have" with a list mostly
-made of text encoders, and *"which of these can I delete"* had no answer at all.
+same way (``?file_kind=vae``). Tensor markers and a parameter count alone
+cannot see a support file: a VAE and a CLIP sit below the checkpoint threshold
+and a T5-class encoder above it, so without these kinds ``/checkpoints`` would
+list text encoders as base models.
 
 **Folding happens on the way out, not in the database.** Every row carries
 ``base_model_folded`` beside its raw ``base_model``. That is where the fold
@@ -45,8 +43,8 @@ collation would fold the one path the shelf does not use and leave the other
 four unfolded. One computed field serves all of them, costs a dict lookup per
 row, and needs no migration.
 
-**A null ``base_model`` is a bulk state, not an edge case.** Measured against 91
-real adapters, 37 % carry no title, no base model and no trigger word at all. So
+**A null ``base_model`` is a bulk state, not an edge case.** Many real adapters
+carry no title, no base model and no trigger word at all. So
 ``base_model`` is serialised as ``null`` rather than coerced to a string, is never
 a reason to drop a row from the list, and is selectable through the filter as the
 explicit sentinel ``base_model=UNASSIGNED``.
@@ -54,7 +52,7 @@ explicit sentinel ``base_model=UNASSIGNED``.
 The queries themselves live in
 :mod:`pixlstash.services.model_shelf_service`, including the hub/vault seam the
 ``character_id`` / ``set_id`` filter has to cross. Locations and attachments each
-arrive in a single whole-page query, and B7's sorting went into that same one
+arrive in a single whole-page query, and the sort columns are in that same one
 SELECT: ``member_count`` / ``total_size`` / ``newest_member_at`` for a stack and
 the newest ``file_mtime`` across a model's present copies are joined in, never
 looked up per row.
@@ -67,7 +65,7 @@ carries. Forget is ``POST /models/forget`` and is the one that destroys
 curation, so it is the one with a confirmation in front of it - and it is gated
 on the row's *state* (no ``present`` and no ``unreachable`` copy), never on how
 many rows were selected. There is **no undo** and no operation-log half for any
-of this: ruled 2026-08-09, reaffirmed 2026-08-10.
+of this.
 
 All four id-taking verbs address rows by hub ``model.id`` rather than by hash,
 because a 24 GB checkpoint is listable long before it is hashed and would
@@ -1051,11 +1049,9 @@ class WorkflowSetMember(BaseModel):
 class WorkflowSetCover(BaseModel):
     """One picture on a combination's cover strip.
 
-    **The two facts a thumbnail needs, not a URL.** Serving a path was the first
-    shape of this and it was wrong twice over: an ``<img src>`` never reaches the
-    Axios interceptor, so nothing prepends the API base and nothing appends a
-    share token, and the browser asked the PAGE origin for a route it does not
-    serve - every cover on the grid broken. The client builds the URL with
+    **The two facts a thumbnail needs, not a URL.** A served path would be wrong:
+    an ``<img src>`` never reaches the Axios interceptor, so nothing prepends the
+    API base and nothing appends a share token. The client builds the URL with
     ``pictureThumbnailUrl`` (``api/pictures.js``), which is the one place that
     path is spelled, rather than this route inventing a third copy of it beside
     ``routes/workflows.py``'s.
@@ -1227,7 +1223,7 @@ class HandMadeSetMember(BaseModel):
 
 
 class HandMadeSetEntry(HandMadeSetMember):
-    """A member of what a set holds (#1972), or a model the owner removed."""
+    """A member of what a set holds, or a model the owner removed."""
 
     recipes: int = Field(
         default=0,
@@ -1240,7 +1236,7 @@ class HandMadeSetEntry(HandMadeSetMember):
 
 
 class MergeOfferModel(BaseModel):
-    """A model a template offer would add to a hand-made set (#1999)."""
+    """A model a template offer would add to a hand-made set."""
 
     id: int = Field(description="Hub `model.id`; add it by this.")
     sha256: str = Field(description="What Keep separate records.")
@@ -1261,7 +1257,7 @@ class TemplateRef(BaseModel):
 
 
 class TemplateDownload(BaseModel):
-    """A template file the shelf lacks, offered with where to get it (#1999)."""
+    """A template file the shelf lacks, offered with where to get it."""
 
     name: str = Field(description="The file name the template loads.")
     url: str = Field(description="Its download page, as the template gives it.")
@@ -1273,11 +1269,11 @@ class TemplateDownload(BaseModel):
 
 
 class MergeOffer(BaseModel):
-    """The rest of the ComfyUI template whose head a hand-made set holds (#1999).
+    """The rest of the ComfyUI template whose head a hand-made set holds.
 
-    The pictures' offer (#1523) is gone since #1972: what the pictures ran with
-    joins the set by itself. A template's files are not in any picture, so
-    they are still offered, and Keep separate puts them on ``declined``.
+    What the pictures ran with joins the set by itself. A template's files
+    are not in any picture, so they are offered, and Keep separate puts them
+    on ``declined``.
     """
 
     source: Literal["template"] = Field(
@@ -1330,7 +1326,7 @@ class HandMadeSetHeld(HandMadeSetEntry):
 
 
 class HandMadeSet(BaseModel):
-    """A workflow set the owner put together (#1520)."""
+    """A workflow set the owner put together."""
 
     model_config = ConfigDict(extra="allow")
 

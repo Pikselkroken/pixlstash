@@ -20,7 +20,7 @@ every platform and inside Docker:
   submit (``busy``), or nothing at all (``idle``);
 * **freeing**: ``POST /free``, only on hand-off to a tenant that is not
   ComfyUI (the arbiter's reclaim ladder) or when the owner asks;
-* **quitting** (#2558): what ``/free`` cannot release, its CUDA context, goes
+* **quitting**: what ``/free`` cannot release, its CUDA context, goes
   only when the process exits. ``kept_mb`` is that floor, the least ComfyUI has
   been seen to hold, and ``quit`` ends the process on its card that listens on
   its port, only when idle and only once the owner has said yes.

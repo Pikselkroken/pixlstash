@@ -212,12 +212,10 @@ def _log_install_detection_once(level: int, message: str, *args: object) -> None
 
     :meth:`Server.detect_install_type` explains itself every time it runs, and
     it runs per request: ``GET /version`` plus every SPA document the frontend
-    fallback answers. Every one of those explanations repeated per request, and
-    every shipped channel hits one of them - the desktop shell exports
+    fallback answers. Every one of those explanations would repeat per request,
+    and every shipped channel hits one of them - the desktop shell exports
     ``PIXLSTASH_INSTALL_TYPE=electron`` on every launch, so the override line
-    was the flood on ordinary installs long before a dev machine's
-    ``PIXLSTASH_TELEMETRY_DEV`` line was the flood here. A grid of thumbnails
-    buried the log either way.
+    would flood ordinary installs. A grid of thumbnails would bury the log.
 
     The cache key is ``(level, template, *args)``, so this suppresses a repeat
     of the *same* explanation and nothing else: if the situation genuinely
@@ -359,8 +357,7 @@ class Server(
             way to keep the shelf's contents machine-independent: those roots
             are machine-global by design, so a Server on a temp config dir would
             otherwise describe whichever engines the developer's home happens to
-            hold (``test_workers_api`` caught it as ``assert 3 == 0``). Pointing
-            them at a temp directory instead is no longer an option - since #905
+            hold. Pointing them at a temp directory instead is not an option:
             the downloaders read the same accessor, so a temp directory means
             every engine is downloaded again.
         DEFAULT_MIGRATE_WORKFLOW_TOKENS: Whether start-up migrates the user
@@ -1086,8 +1083,7 @@ class Server(
         vault (``server.vault.close()``) leaks the hub's SQLite connection -
         harmless on POSIX, where an open file can still be unlinked, but fatal
         on Windows, where TemporaryDirectory cleanup then fails with a sharing
-        violation on ``hub.db``. That leak was every remaining failure in
-        backend-windows shard 2 once the earlier startup defects were fixed.
+        violation on ``hub.db``.
         """
         watcher = getattr(self, "_workflow_inbox_watcher", None)
         if watcher is not None:
@@ -1210,8 +1206,8 @@ class Server(
         tags say what someone collects and what they hide, and a library folder
         is made to be copied and handed to other people.
 
-        It also seeds the default tag groups this library is behind on (issue
-        #2469). That runs first, and on every open, startup and switch alike, so
+        It also seeds the default tag groups this library is behind on. That
+        runs first, and on every open, startup and switch alike, so
         a library never opens without its defaults. A failure there is logged
         and the library still opens.
         """
@@ -1252,8 +1248,7 @@ class Server(
         ``validate_vault_folder`` reads ``sqlite_master`` and nothing else, so a
         vault can pass registration and still be one no migration path reaches -
         a schema stamped at a baseline it predates dies here, on a table it
-        never had. Before this, that was a SQLAlchemy traceback on the desktop
-        splash screen with no way forward. Now it is the same offer an
+        never had. It gets the same offer an
         unreadable file gets: start over with an empty database, keeping the old
         one. Environmental failures (locked, full, unreadable) are re-raised
         untouched - see :func:`unusable_vault_from_open_failure` - and the
@@ -1819,8 +1814,7 @@ class Server(
     def _index_html_response(self):
         """Return the SPA document with the install type substituted in.
 
-        ``None`` when there is no built frontend, so callers fall back the same
-        way they did when this served the file straight off disk.
+        ``None`` when there is no built frontend, so callers can fall back.
 
         Cached on ``(path, install_type, mtime)`` rather than re-read per
         request: the SPA entry point is hit on every cold navigation, and the

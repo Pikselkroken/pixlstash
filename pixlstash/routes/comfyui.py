@@ -520,7 +520,7 @@ def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> list[str
     so a failed trash never loses the workflow. The file is first renamed out
     of the listing: a file Windows will not let go of fails that rename before
     any copy is made, and once the trash is done the workflow is deleted even
-    if the renamed file cannot be removed (#1989).
+    if the renamed file cannot be removed.
     """
     try:
         workflow = _load_workflow_json(path)
@@ -986,7 +986,7 @@ def slot_digests(slots: list[dict], shelf_index) -> dict:
 def people_loras_in(hub, vault, graph: dict) -> list[dict]:
     """Every LoRA slot of an API *graph* holding a LoRA attached to a person.
 
-    Rule 4 of #1846's one question, for a graph that is being stored or
+    For a graph that is being stored or
     exported: ``[{node_id, class_type, field, sha256, character_ids, lora,
     people}]``,
     ``lora`` and ``people`` being names for the sentence that says a LoRA was
@@ -1163,7 +1163,7 @@ def _describe_lora_insertion(
     object_info: dict | None,
     error: str | None,
 ) -> dict | None:
-    """Where a LoRA loader would go, for the owner to see before a run (#1376).
+    """Where a LoRA loader would go, for the owner to see before a run.
 
     Args:
         graph: The API-format graph, or ``None`` for a UI-format file.
@@ -1258,7 +1258,7 @@ def _describe_lora_chain(
 def _missing_placeholders(payload: dict, detected=None) -> list[str]:
     """What a run of *payload* cannot fill, under the names the menus know.
 
-    No file carries a token any more; the names are kept so the ComfyUI menus
+    No file carries a token; the names are kept so the ComfyUI menus
     keep choosing workflows by what the run routes accept. A role is missing
     when neither a binding nor detection gives it a target
     (``services/workflow_bindings.py``).
@@ -1283,7 +1283,7 @@ def _describe_workflow(
 
     Keyed on mtime and size so detection runs once per file version, and a file
     that stays broken is logged once rather than on every menu open. The
-    converted graph's mtime is in the key too, so converting a file (#1530)
+    converted graph's mtime is in the key too, so converting a file
     makes it runnable on the next list rather than on its next edit.
     """
     try:
@@ -1391,7 +1391,7 @@ def _stored_input_modes(server, workflow_name: str | None = None):
 def _offered_on_selection(picture_inputs: dict, stored, missing: list) -> bool:
     """Whether the selection path may offer this workflow.
 
-    It needs a Selection input, which the run route fills by mode (#1307). A
+    It needs a Selection input, which the run route fills by mode. A
     workflow whose binding sits on a loader detection does not recognise has no
     detected input, and is offered while that binding gives the selection
     somewhere to go (``missing`` names ``{{image_path}}`` when it does not).
@@ -1525,13 +1525,8 @@ def _load_embedded_api_prompt(
     *object_info*.
 
     **The rebuild lives here rather than in a handler on purpose.** Every route
-    that runs a picture's own graph comes through this function. It was written
-    that way while ``POST /comfyui/run_recipe`` still existed and could have
-    held it; #1410 has since retired that route, and the card run's
-    embedded-picture tier in ``routes/workflows.py`` is now the only caller -
-    so a rebuild written into the handler would have been deleted along with
-    it, and the offer the Recipe tab makes would have quietly stopped meaning
-    anything.
+    that runs a picture's own graph comes through this function, so the offer
+    the Recipe tab makes and the run it offers read the same graph.
 
     ``object_info`` of ``None`` is "ComfyUI was not asked", which is a refusal
     and not a licence to guess: reading a positional widget array at all needs
@@ -1778,8 +1773,7 @@ def _editor_graph_recipe_payload(workflow: dict, problems: list[str]) -> dict:
     tab fills in - the prompt, the models, the seed - and only the offer to run
     it again is withheld, with the reason named. That is the difference this
     payload exists to draw: "nothing was made in ComfyUI here" and "this is a
-    ComfyUI picture PixlStash cannot hand back to ComfyUI" are two answers, and
-    a UI-only picture used to get the first one.
+    ComfyUI picture PixlStash cannot hand back to ComfyUI" are two answers.
 
     ``settings`` and ``negative_prompt`` stay empty: both are read off the
     resolved API graph, and reading them off the editor's positional widget
@@ -1979,7 +1973,7 @@ class ComfyUIWorkflowItemResponse(BaseModel):
 
 
 class ComfyUILoraInsertionResponse(BaseModel):
-    """Where a LoRA loader would go in a graph that has none (#1376).
+    """Where a LoRA loader would go in a graph that has none.
 
     ``plan`` names the model source (and CLIP source, ``None`` for a model-only
     loader) the loader would take, and every input it would rewire; it is
@@ -2001,9 +1995,8 @@ class ComfyUIWorkflowListResponse(BaseModel):
     """List of ComfyUI workflows, by name.
 
     The directories they were discovered in are deliberately absent: they are
-    host paths under the owner's home directory and this route is ANY_TOKEN, so
-    a share-link holder was reading them. Nothing consumed them (§16.3,
-    2026-08-15 - the same sweep that moved the tagger folders).
+    host paths under the owner's home directory and this route is ANY_TOKEN
+    (§16.3).
     """
 
     model_config = ConfigDict(extra="allow")
@@ -2201,7 +2194,7 @@ class ComfyUIWorkflowImportResponse(BaseModel):
 
 
 class ComfyUIWorkflowConvertResponse(BaseModel):
-    """An editor workflow with the API graph ComfyUI converted it into (#1530)."""
+    """An editor workflow with the API graph ComfyUI converted it into."""
 
     # The manual workflow that holds the conversion now.
     name: str
@@ -2244,7 +2237,7 @@ class ComfyUITemplateFile(BaseModel):
 
 
 class ComfyUITemplate(BaseModel):
-    """One workflow template the owner's ComfyUI serves (#2000)."""
+    """One workflow template the owner's ComfyUI serves."""
 
     key: str = Field(description="`<module>/<name>`, unique in the list.")
     module: str = Field(
@@ -2415,8 +2408,8 @@ class ComfyUIRecipeInput(BaseModel):
 class ComfyUIPictureWorkflowResponse(BaseModel):
     """The displayable graph a picture carries.
 
-    Deliberately only that: what a picture was MADE with is the recipe read
-    (#1313), which reads the graph that executed and answers for A1111 pictures
+    Deliberately only that: what a picture was MADE with is the recipe read,
+    which reads the graph that executed and answers for A1111 pictures
     too. This one serves the editor's format, for Copy, Download and paste."""
 
     model_config = ConfigDict(extra="allow")
@@ -2541,7 +2534,7 @@ def _recipe_extras(server, request, pic_id: int, graph: Optional[dict]) -> dict:
 
     Which shelf row each model is, which pictures a run actually loaded, the
     seed as text and the topology the picture is filed under. Served from the
-    recipe read rather than from the workflow read (#1313): one read answers
+    recipe read rather than from the workflow read: one read answers
     "what was this made with", and a caller that wants the graph's bytes asks
     the other route for them.
 

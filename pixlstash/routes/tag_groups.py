@@ -1,4 +1,4 @@
-"""HTTP routes for tag groups: the library-wide tag-name -> group map (issue #2469).
+"""HTTP routes for tag groups: the library-wide tag-name -> group map.
 
 Every route is OWNER_ONLY in ``pixlstash/authz/registry.py``: the map is library
 vocabulary, not a per-picture fact, so narrowing it to a share token's scope is not

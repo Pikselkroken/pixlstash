@@ -4,11 +4,11 @@ One rule holds the first two together: **a picture moves only when its folder
 stops being true.** Choosing a layout reorganises nothing, because every path
 already in the library is what the assignments were read from. Drift - a folder
 that is still true but is not what the owner would pick today - is *offered*
-here and never taken automatically. That is v1.11 Phase 4b, and the automatic
+here and never taken automatically. The automatic
 half has no route at all: it is ``LayoutMoveTask``, woken by the
 assignment-change stamp in ``database.py``.
 
-``/server-config/layout/migration`` (Phase 4c) is the deliberate exception and
+``/server-config/layout/migration`` is the deliberate exception and
 is **not** that rule. Under the rule a flat path parses against nothing, can
 never be false, and never moves; the migration is the owner asking for
 something else - *make it all match, now* - so it is previewed, consented to,
@@ -165,9 +165,8 @@ class MigrationFolder(BaseModel):
 
     A row is here when anything about it is non-zero, so a folder that only
     ever holds subfolders is absent rather than listed empty. The library root
-    is a row under that same rule (`path: ""`, #1161): pictures the layout
-    cannot place stay in it, and a tree that drew every folder but that one
-    read as "nothing stayed behind".
+    is a row under that same rule (`path: ""`): pictures the layout
+    cannot place stay in it.
     """
 
     model_config = ConfigDict(
@@ -359,7 +358,7 @@ class LibraryFoldersResponse(BaseModel):
 
 
 class OpenTreeFolderRequest(BaseModel):
-    """A folder of the Media sidebar's Folders tree (#2458), as that tree listed it."""
+    """A folder of the Media sidebar's Folders tree, as that tree listed it."""
 
     path: str = Field(
         description="A `path` from GET /library/folders; anything else is 404."

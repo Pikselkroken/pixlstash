@@ -198,7 +198,7 @@ class StagingCommitResponse(BaseModel):
 
 
 class StagingOutcome(BaseModel):
-    """What the import decided for one staged file (#2512)."""
+    """What the import decided for one staged file."""
 
     key: Optional[str] = None
     """The ``key`` form field the file was streamed with, or ``None``."""

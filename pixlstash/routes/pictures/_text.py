@@ -1,4 +1,4 @@
-"""Text read out of a picture (#1197).
+"""Text read out of a picture.
 
 ``GET /pictures/{id}/text`` serves the words with their boxes, marking the ones
 a search matched. ``POST /pictures/{id}/text/read`` reads the picture again.

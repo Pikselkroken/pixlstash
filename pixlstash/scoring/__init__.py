@@ -1,6 +1,6 @@
 """Picture scoring package.
 
-Two distinct features that formerly shared ``pixlstash.picture_scoring``:
+Two distinct features:
 
 * :mod:`pixlstash.scoring.smart_score` - anchor-based smart-score heuristic.
 * :mod:`pixlstash.scoring.character_likeness` - face↔reference likeness scoring.

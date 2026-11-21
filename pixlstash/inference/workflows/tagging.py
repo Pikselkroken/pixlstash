@@ -103,7 +103,7 @@ class TaggingWorkflow:
     def full_pass_input(
         self, image: Image.Image, engine_override: str | None = None
     ) -> Image.Image | None:
-        """*image* reduced to what the full-image pass actually reads (#2745).
+        """*image* reduced to what the full-image pass actually reads.
 
         A tag task's preload holds this instead of the decoded original, which
         for a 48 MP photo is 144 MB against this one's 1 MB. Each reduction is
@@ -654,11 +654,8 @@ class TaggingWorkflow:
     def _max_concurrent_images(self) -> int:
         """Maximum image concurrency for this engine's device.
 
-        Delegates rather than deciding. This was a second ``== "cuda"`` ladder
-        with the opposite polarity to the engine's ``== "cpu"`` one, so the two
-        disagreed about every device neither of them named - the engine handed
-        a non-CUDA accelerator the 64-image GPU branch while this handed it the
-        8-image CPU one.
+        Delegates rather than deciding, so this and the engine cannot disagree
+        about a device neither of them names.
         """
         return self._engine.max_concurrent_images()
 

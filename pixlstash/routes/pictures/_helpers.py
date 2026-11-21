@@ -155,11 +155,8 @@ def _create_picture_imports(
     Returns (fingerprints, existing_map, scrapheaped_map, new_picture_map)
 
     **A scrapheaped match is skipped too, and returned separately** for the
-    caller to restore or report. This call
-    site used to ask ``Picture.find(..., pixel_shas=shas)``, whose
-    ``include_deleted`` defaults to False, so a soft-deleted picture was
-    invisible here and its file imported again as a brand-new second row. The
-    lookup now goes through :mod:`pixlstash.services.import_dedup_service`,
+    caller to restore or report. The
+    lookup goes through :mod:`pixlstash.services.import_dedup_service`,
     which sees soft-deleted rows *for this query only*, ``Picture.find``'s
     default is unchanged, so no listing, search, count or dedup query gains
     deleted rows. See that module for the full rationale and for why a

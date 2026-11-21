@@ -80,7 +80,7 @@ def create_router(server) -> APIRouter:
     def _config_payload(user, request: Request) -> dict:
         """Serialise the user's config, with the library-owned settings merged in.
 
-        The client sees one flat config object exactly as before. Behind it,
+        The client sees one flat config object. Behind it,
         ``similarity_character`` comes from the *active library* rather than from
         the user row: it is a character id in that vault, so the same number in
         another library is a different person (see
@@ -88,7 +88,7 @@ def create_router(server) -> APIRouter:
 
         The ai-toolkit checkout and its Python are host paths, which only the
         §16.3 tier that ``GET /training/ai-toolkit/status`` carries may read;
-        everyone else gets ``ai_toolkit_configured`` and nulls (#2295).
+        everyone else gets ``ai_toolkit_configured`` and nulls.
         """
         payload = serialize_user_config(user)
         payload["ai_toolkit_configured"] = bool(
@@ -669,7 +669,7 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         def _refuse_orphaning_a_link(user, value) -> None:
-            """A linked current connection keeps its address (#2194).
+            """A linked current connection keeps its address.
 
             Clearing it would drop the connection with its key still live, and
             a new address would leave the key bound to the old one. Switching

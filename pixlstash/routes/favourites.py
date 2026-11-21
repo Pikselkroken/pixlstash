@@ -1,4 +1,4 @@
-"""The owner's favourites: models, workflow cards and workflow sets (#1578).
+"""The owner's favourites: models, workflow cards and workflow sets.
 
 One mechanism for three surfaces. A favourite is a hub ``favourite`` row keyed
 by ``(kind, key)``: a model by sha256, a workflow by its card key, a set by the

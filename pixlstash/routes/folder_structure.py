@@ -1,12 +1,12 @@
-"""The folder-structure read - v1.11 Phase 2.
+"""The folder-structure read.
 
 Wire contract: ``docs/integration_architecture.md`` §20. The signals themselves
 live in ``pixlstash.services.folder_structure_service``; this module is the
 task-id-polling shell around one of them (§11's first branch: the owner
 triggered it and waits for a result).
 
-**One read at a time.** The mapping screen only ever shows one, the read is the
-expensive thing in the release, and two concurrent ones would fight over the same
+**One read at a time.** The mapping screen only ever shows one, the read is
+expensive, and two concurrent ones would fight over the same
 GPU queue for no gain. A second `POST` while one runs is a 409, not a queue.
 """
 
@@ -201,9 +201,7 @@ def _within(root: str, resolved: str) -> bool:
 
     ``resolve_path_within`` rather than a ``startswith`` on two realpaths: it is
     the shared helper, it realpaths both sides, and it compares with
-    ``os.path.commonpath`` instead of a string prefix. #1024 moved the codebase
-    onto it for exactly this class of check; a second hand-rolled containment
-    here would be the thing that review is trying to stop.
+    ``os.path.commonpath`` instead of a string prefix.
     """
     try:
         resolve_path_within(root, resolved)
@@ -602,8 +600,7 @@ def create_router(server) -> APIRouter:
         **Finishing** (stage ``finishing``) promotes, then reports the commit
         completed - in that order, and that is the point. The promotion closes
         and reopens the library, so a client told `completed` before it ran
-        would send its next request into a 503 - and the folder-mapping
-        wizard's own tests found exactly that. The import is not finished until
+        would send its next request into a 503. The import is not finished until
         the folder holds a library.
 
         **Abandoning** (stage ``discarding``, the owner aborted their first

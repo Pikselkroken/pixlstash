@@ -1,6 +1,6 @@
 """The Workflows view: the grid of workflows, one opened, and what the owner writes.
 
-**One entry per workflow** (#1623). A workflow is a group of topologies:
+**One entry per workflow**. A workflow is a group of topologies:
 ``auto:<core and families digest>`` for the automatic group, or a uuid hex for one the owner
 merged or split (``hub/workflow_card_reads.workflow_index``). Its variants are
 every recipe filed under those topologies, and checkpoint, LoRAs and values are
@@ -628,7 +628,7 @@ class WorkflowCover(BaseModel):
     **Every crop field is nullable**, because a picture keeps them NULL until
     it has been processed. A cover with no rectangle is cropped the way it is
     today, ``object-fit: cover`` anchored top centre — the fallback is a
-    requirement, not a nicety (#1465).
+    requirement, not a nicety.
 
     They are five independent columns rather than one optional block, so a
     client decides on ``square_crop_x``/``_y``: ``render_thumbnail`` writes the
@@ -741,7 +741,7 @@ class DefaultRecipeLora(BaseModel):
 
 
 class DefaultRecipePayload(BaseModel):
-    """What a workflow runs with when nobody says otherwise (#1622).
+    """What a workflow runs with when nobody says otherwise.
 
     Read off the newest instances of its 4★+ pictures (else of every picture),
     with the owner's edits (`provenance: edited`) over it. `stages` names each
@@ -759,7 +759,7 @@ class DefaultRecipePayload(BaseModel):
 
 
 class WorkflowCard(BaseModel):
-    """One workflow on the Workflows grid (#1623).
+    """One workflow on the Workflows grid.
 
     A **workflow** is a group of topologies; its variants are every recipe
     filed under them, and the checkpoint and LoRAs a picture used are its
@@ -1468,7 +1468,7 @@ class CardPictureInput(ParameterAddress):
     ``fixed`` names a picture by content (``pixel_sha``) rather than by id,
     because SQLite reuses a vault id the moment the next import lands. A
     client may pin by ``picture_id`` instead and the server stores that
-    picture's content (#1457): the grid projection a picker hands back carries
+    picture's content: the grid projection a picker hands back carries
     no ``pixel_sha``, and fetching one per pin is a round trip to learn a value
     the client never needs to hold.
     """
@@ -1562,7 +1562,7 @@ Stage = Literal["upscale", "face_detailer", "seed_variance", "intermediate_save"
 
 
 class RunUpscale(BaseModel):
-    """An upscale a run adds before each save (#1868), on a graph with none.
+    """An upscale a run adds before each save, on a graph with none.
 
     PixlStash's own: *model* (an upscaler on the shelf, by digest), then a
     Lanczos resize to *factor*; with no model, the resize alone. For this run
@@ -1585,7 +1585,7 @@ class RunUpscale(BaseModel):
 
 
 class RunLora(BaseModel):
-    """One LoRA slot a run fills, addressed the way #1377 addresses a slot.
+    """One LoRA slot a run fills, addressed by node and field.
 
     A slot is a **node and a field**, never just a node: a stacker holds
     ``lora_name_1`` and ``lora_name_2`` on one node and they are two slots. The
@@ -1615,7 +1615,7 @@ class RunAddedLora(BaseModel):
 
 
 class RunLoraSlot(BaseModel):
-    """One LoRA slot a run skips (#1478), addressed as :class:`RunLora` addresses it.
+    """One LoRA slot a run skips, addressed as :class:`RunLora` addresses it.
 
     A skip is for THIS run: the loader is bypassed on the run's own copy of the
     graph and the stored workflow keeps it. Editing the workflow for good is
@@ -1639,7 +1639,7 @@ class RunChoice(BaseModel):
 
 
 class RunModel(BaseModel):
-    """One model a run loads at one loader, over the default recipe (#1622).
+    """One model a run loads at one loader, over the default recipe.
 
     ``address`` is ``core:<label>/<widget>`` (or a base topology's
     ``<slot label>/<widget>``), the address a workflow's default recipe names
@@ -1686,7 +1686,7 @@ class RunDestination(BaseModel):
 
 
 class WorkflowChanges(BaseModel):
-    """A set of changes to a workflow (#1849), in the words a run already uses.
+    """A set of changes to a workflow, in the words a run already uses.
 
     What the Workflow tab holds unsaved, what a run changed, and what Save and
     Save as new take in their request are all this one shape, so there is one
@@ -1969,10 +1969,9 @@ class RunRequest(BaseModel):
     def _one_run_per_picture(cls, value: list[int]) -> list[int]:
         """Drop repeats, keeping first-seen order.
 
-        The retired `run_i2i` de-duplicated its `picture_ids` (`_int_list`) and
-        this route grouped whatever it was handed, so `[5, 5]` put picture 5 in
-        a group twice. It never multiplied the submissions - `count` governs
-        those - but the group REPORTED covering a picture twice, which is a
+        Without this, `[5, 5]` would put picture 5 in a group twice. That
+        never multiplies the submissions - `count` governs those - but the
+        group would REPORT covering a picture twice, which is a
         wrong answer to "what would this run", and the pre-flight and the run
         share this body.
         """
@@ -2022,7 +2021,7 @@ class RunRequest(BaseModel):
 
 
 class UpscaleRequest(BaseModel):
-    """``POST /workflows/upscale`` and its pre-flight (#1868)."""
+    """``POST /workflows/upscale`` and its pre-flight."""
 
     picture_ids: list[Annotated[int, Field(le=MAX_PICTURE_ID)]] = Field(
         min_length=1, max_length=MAX_RUN_PICTURES
@@ -2462,7 +2461,7 @@ class RunPictureInput(ParameterAddress):
 
 
 class RunPrompt(BaseModel):
-    """Where one group's graph takes a run's prompts, and what it holds (#1832)."""
+    """Where one group's graph takes a run's prompts, and what it holds."""
 
     # False where a prompt sent with the run has nowhere to go: no prompt node
     # was found, or it keeps its text in a field PixlStash does not write.
@@ -3760,7 +3759,7 @@ def _likely_same_file(wanted: str, shelf) -> SwapModel | None:
 def _misfiled_copy(
     hub, models: dict, replacing: str, kind: str, hidden
 ) -> MisfiledCopy | None:
-    """The shelf's copy of missing *replacing*, filed as the wrong kind (#1962).
+    """The shelf's copy of missing *replacing*, filed as the wrong kind.
 
     :func:`_likely_same_file` over the shelf models of *kind* and the ones
     filed as a checkpoint or Unclassified together, so a close name of the
@@ -3885,7 +3884,7 @@ def _covers(covers) -> list[WorkflowCover]:
 
     The crop rectangle rides along rather than being fetched per cover: the
     ranked query already reads this row, so the three columns cost nothing
-    beyond the bytes (#1465).
+    beyond the bytes.
     """
     strip = []
     for cover in covers:
@@ -4041,7 +4040,7 @@ def _base_model_slots(models) -> list:
 
     A Wan 2.2 graph loads two UNETs (high and low noise) and is both of them,
     so every one is named, never the first, each by the file wired into its
-    loader where the stored graph says (``_wired_names``, #1691). Empty if the
+    loader where the stored graph says (``_wired_names``). Empty if the
     graph loads no base model.
     """
     for kind in BASE_MODEL_KINDS:
@@ -4222,7 +4221,7 @@ def _model_widgets_at(
 
     Off the stored API conversion where there is one: it names every widget,
     where an editor file's bare ``widgets_values`` name only the loaders whose
-    model is the first (#1939). It is also exactly the graph a run submits.
+    model is the first. It is also exactly the graph a run submits.
     """
     document = hub.fetchone(
         "SELECT document, api_document FROM workflow_document WHERE workflow_id = ?",
@@ -4712,7 +4711,7 @@ def create_router(server) -> APIRouter:
         )
 
     def _kind_offers(hub, recipe) -> list[KindOffer]:
-        """The shelf's kind suggestions (#1962) on the default recipe's loaders."""
+        """The shelf's kind suggestions on the default recipe's loaders."""
         offers = loader_offers(
             hub,
             [
@@ -4745,7 +4744,7 @@ def create_router(server) -> APIRouter:
         Matched on the file, not the folder the graph filed it under: a fix is
         keyed the way the card key is (``normalized_filename``), and the three
         source tiers do not agree on folders. Where the loader cannot load the
-        replacement, a PixlStash loader is swapped in (#1605) and the node
+        replacement, a PixlStash loader is swapped in and the node
         added to *swapped*, which the caller records with
         :func:`_record_loader_swaps` once the graph is final. A checkpoint is
         written unlisted where, given *request* with ComfyUI on this computer,
@@ -4882,7 +4881,7 @@ def create_router(server) -> APIRouter:
         object_info: dict | None,
         swapped: dict[str, tuple[dict, dict]],
     ) -> list[dict]:
-        """Load what the rename could not through a PixlStash loader (#1605).
+        """Load what the rename could not through a PixlStash loader.
 
         A fix whose replacement ComfyUI does not list for the workflow's own
         loader (not in its model folders, or a file type that loader cannot
@@ -4934,7 +4933,7 @@ def create_router(server) -> APIRouter:
         return [m for m in missed if m["was"] in still_named]
 
     def _record_loader_swaps(card, graph: dict, swapped: dict) -> None:
-        """Card the swapped graph's pictures as the original's (#1605).
+        """Card the swapped graph's pictures as the original's.
 
         Called with the graph as it is submitted, after every other change to
         it (a PixlStash saver run as ``SaveImage``, a repair), since the
@@ -5907,7 +5906,7 @@ def create_router(server) -> APIRouter:
 
         *workflow_id* is the workflow being run, and *version* an earlier
         version of its graph to read instead of the current one: a saved
-        recipe runs on the graph it was saved from (rule 8 of #1846), however
+        recipe runs on the graph it was saved from, however
         often the workflow has been saved over since.
         """
         if card.manual:
@@ -6110,7 +6109,7 @@ def create_router(server) -> APIRouter:
 
         Through ``apply_filename_swap``, so the file is written in ComfyUI's
         spelling. A model made for another family or modality than the one it
-        replaces is flagged ``family_mismatch`` and still loaded (#1620 Q3): a
+        replaces is flagged ``family_mismatch`` and still loaded: a
         family table not knowing a base model is no reason to refuse a run. One
         ComfyUI cannot load is flagged ``model_not_applied`` and the loader
         keeps its file, which ``judge`` then checks like any other, unless the
@@ -6644,11 +6643,10 @@ def create_router(server) -> APIRouter:
     ) -> list[CardInput]:
         """The picture inputs in *graph*, with the workflow's stored setup over them.
 
-        A graph that will not reduce has nothing addressable in it. That is a
-        400 only when the request ADDRESSED an input (``_apply_addressed``'s
-        rule and wording); otherwise the graph runs exactly as it did before
-        picture inputs were filled, rather than a runnable one starting to
-        refuse over a question nobody asked.
+        A graph that will not reduce has nothing addressable in it. That is a 400 only
+        when the request ADDRESSED an input (``_apply_addressed``'s rule and wording);
+        otherwise the graph runs as it is, rather than a runnable one starting to refuse
+        over a question nobody asked.
         """
         library_uuid = _library_uuid()
         stored = (
@@ -6849,7 +6847,7 @@ def create_router(server) -> APIRouter:
         so a loader still holding such a name says what it read, and the
         oldest kept picture with that content is the one a pin would resolve
         to. A PixlStash picture loader holding one id that says it is this
-        library's read that picture (`own_picture_ids`, #1912). Nothing
+        library's read that picture (`own_picture_ids`). Nothing
         else is certain - a file the owner put in ComfyUI's input folder, an
         upload made before the picture was hashed, the ids of a picture
         loader that names no library or another one, a wired input, a picture
@@ -7215,7 +7213,7 @@ def create_router(server) -> APIRouter:
         return recipe
 
     def _under_defaults(body: RunRequest, recipe: DefaultRecipe) -> RunRequest:
-        """*body* with the default recipe filled in underneath it (#1622).
+        """*body* with the default recipe filled in underneath it.
 
         Models only: the request wins address by address. Values are written
         in a pass of their own BEFORE the request's (``_recipe_values``),
@@ -7365,7 +7363,7 @@ def create_router(server) -> APIRouter:
 
         *version* builds the workflow's graph at that version, under the
         default recipe it had then, as a saved recipe's is built on its own
-        (an opening of an earlier version, #1792).
+        (an opening of an earlier version).
         """
         hub = _hub()
         opening = opening or saving is not None
@@ -9132,8 +9130,7 @@ def create_router(server) -> APIRouter:
 
         ``_process_comfyui_outputs`` stacks what IT imports; a ComfyUI output
         folder the owner also watches can import the file first, and then
-        only the tag in its name says where it belongs. The retired run route
-        did both for the same reason.
+        only the tag in its name says where it belongs.
 
         Each save node keeps its OWN prefix under the tag, so a graph saving
         `out` and `preview` still saves two sets of files. A prefix that is
@@ -9151,7 +9148,7 @@ def create_router(server) -> APIRouter:
 
     def _tag_for_workflow(graph: dict, workflow_id: str | None) -> None:
         """Tag the save node so its outputs are filed on the manual workflow
-        that ran however they arrive (#1688), as ``_tag_for_stack`` places them.
+        that ran however they arrive, as ``_tag_for_stack`` places them.
 
         Every run first drops a tag the graph inherited (one replayed from an
         earlier run's output carries it), so an automatic run's outputs, with
@@ -9159,7 +9156,7 @@ def create_router(server) -> APIRouter:
 
         Not ``extra_pnginfo``: a run that sets it without a ``workflow`` key
         breaks custom nodes that read ``extra_pnginfo["workflow"]`` whenever it
-        is present, and that key must stay empty (#628).
+        is present, and that key must stay empty.
         """
         if workflow_id is None:
             for node in graph.values():
@@ -9569,13 +9566,11 @@ def create_router(server) -> APIRouter:
         (``SWAPPED_CLASSES``): which of the two the graph holds follows what
         the shelf and the library hold that day, and the node that opens the
         layout replaces one with the other on the canvas
-        (``open_workflow.js``). *own_nodes* is the graph before that swap,
-        which is what layouts were matched on before they were kept this way.
+        (``open_workflow.js``). *own_nodes* is the graph before that swap.
         Without a kept layout, a workflow imported from an editor file opens
         with that file (:func:`_imported_layout`). **Never an error**, as when
-        it is kept: this read answered before there were layouts, so a graph
-        or a row that will not compare opens auto-arranged, and says so in the
-        log.
+        it is kept: a graph or a row that will not compare opens
+        auto-arranged, and says so in the log.
         """
         try:
             structures = {
@@ -10094,7 +10089,7 @@ def create_router(server) -> APIRouter:
     ) -> set[str]:
         """The checkpoints and diffusion models :func:`_swap_in_shelf_loaders`
         left missing only because the running ComfyUI has a pack from before
-        a widget the loader needs: ``shelf`` for any of them (#1923), or
+        a widget the loader needs: ``shelf`` for any of them, or
         ``weight_dtype`` for a diffusion model's loader that casts. One restart
         on a current pack would load them off the shelf.
 
@@ -10455,7 +10450,7 @@ def create_router(server) -> APIRouter:
         """``GET …/graph``'s answer for a draft: its editor document, or a 409.
 
         Only a caller that says it can open one (``drafts``, the
-        ComfyUI-PixlStash node from #2000 on) gets the document: an older
+        ComfyUI-PixlStash node that knows drafts) gets the document: an older
         node, the MCP server and every other reader of an API graph get a 409
         that says what the workflow is and what finishes it.
         """
@@ -11366,7 +11361,7 @@ def create_router(server) -> APIRouter:
           GGUF loader lists safetensors too; a core one never lists GGUF.
           When ComfyUI answers, a file the loader does not list passes too
           where a run would swap a PixlStash loader in for it
-          (``run_service.plan_pixlstash_swap``, #1605; a checkpoint by shelf
+          (``run_service.plan_pixlstash_swap``; a checkpoint by shelf
           row, :func:`swap_in_pack_nodes`, only with ComfyUI on this
           computer), marked ``loader``.
 
@@ -12408,8 +12403,7 @@ def create_router(server) -> APIRouter:
         will read it. A loader whose pack ComfyUI lacks lists nothing, so its
         file goes in unchecked: a missing pack warns and does not refuse. A
         file ComfyUI does not list is written unchecked too where a run loads
-        it off the shelf (:func:`_loads_off_the_shelf`), as a model fix's is
-        (#2009).
+        it off the shelf (:func:`_loads_off_the_shelf`), as a model fix's is.
 
         Returns:
             ``(loaders, swapped, unswapped)``: :func:`plan_loader_rewrites`'s
@@ -12664,7 +12658,7 @@ def create_router(server) -> APIRouter:
 
         The set names the batch of runs it was made with (``RAN_BY``, the
         first of *prompts* of the workflow), so the Tasks tab's Finished row
-        of that batch is the one that offers it (#2050).
+        of that batch is the one that offers it.
         """
         hub = _hub()
         if asked.workflow_id is None:
@@ -13903,7 +13897,7 @@ def create_router(server) -> APIRouter:
         """``(document, structure)`` to keep as *workflow_id*'s layout, or
         ``None`` (logged) when *editor* may not be kept.
 
-        **Nothing a workflow may not hold stays in it** (rule 4 of #1846), by
+        **Nothing a workflow may not hold stays in it**, by
         value, since an editor document names its widgets by position only:
 
         * a person's LoRA by digest is blanked wherever the document holds
@@ -14049,7 +14043,7 @@ def create_router(server) -> APIRouter:
         the hub write to skip an already-used version; the result is checked
         again in the hub transaction immediately before deletion. If either
         read fails, keep the version: losing one a recipe runs on changes
-        what that recipe makes (rule 8 of #1846).
+        what that recipe makes.
         """
         if not opening or version is None or source != workflow_versions.FROM_COMFYUI:
             return None
@@ -14455,7 +14449,7 @@ def create_router(server) -> APIRouter:
     def _finish_draft(
         request: Request, workflow, payload, source: str, object_info
     ) -> WorkflowGraphSaved:
-        """Store ComfyUI's graph of a draft as its next version (#2000).
+        """Store ComfyUI's graph of a draft as its next version.
 
         A draft has no graph of its own, so nothing here compares with one:
         no base model can be dropped (rule 2 is about a workflow that ran),

@@ -358,7 +358,7 @@ def create_router(server) -> APIRouter:
         return server.vault.training_room()
 
     def _comfyui_need(resolution: dict, room: dict, preset: dict, choices: dict):
-        """What the run needs of a local ComfyUI beyond unloading (#2558).
+        """What the run needs of a local ComfyUI beyond unloading.
 
         ``room["vram_mb"]`` counts all ComfyUI holds as room; only quitting
         releases its ``kept_mb``. None when the run fits beside what ComfyUI
@@ -760,7 +760,7 @@ def create_router(server) -> APIRouter:
         )
 
     class SnapshotResponse(BaseModel):
-        """What a run trained on, frozen when its dataset was built (#2123)."""
+        """What a run trained on, frozen when its dataset was built."""
 
         id: int = Field(..., description="Primary key of the snapshot.")
         job_id: int = Field(..., description="The run it was taken for.")
@@ -808,7 +808,7 @@ def create_router(server) -> APIRouter:
         )
 
     class LiveJobResponse(BaseModel):
-        """Everything the Training runs view draws for one run (#2118)."""
+        """Everything the Training runs view draws for one run."""
 
         model_config = ConfigDict(extra="allow")
 
@@ -1446,7 +1446,7 @@ def create_router(server) -> APIRouter:
         return models
 
     def _checking_uuids() -> set[str]:
-        """The runs whose granted lease the worker shows as checking (#2120)."""
+        """The runs whose granted lease the worker shows as checking."""
         try:
             leases = arbiter().snapshot()["leases"]
         except Exception as exc:
@@ -1602,7 +1602,7 @@ def create_router(server) -> APIRouter:
         return handle, on_disk
 
     def _likeness(job: dict, work_dir: str, rows: list, columns: list) -> dict | None:
-        """How much each preview looks like the run's character (#2522).
+        """How much each preview looks like the run's character.
 
         Scores the cells of *rows* in place. None for a run with no character,
         or whose character is gone.

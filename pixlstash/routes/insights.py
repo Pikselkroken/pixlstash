@@ -1,4 +1,4 @@
-"""HTTP route for the "About your library" screen (v1.11 Phase 6).
+"""HTTP route for the "About your library" screen.
 
 One GET, no writes anywhere on this surface. The findings and the reasoning
 behind each of them live in

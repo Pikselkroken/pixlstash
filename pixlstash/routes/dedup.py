@@ -2,7 +2,7 @@
 
 Two surfaces live here, and every route is owner-only.
 
-**The v1.9 Duplicates queue** (:mod:`pixlstash.services.dedup_tier_service` and
+**The Duplicates queue** (:mod:`pixlstash.services.dedup_tier_service` and
 :mod:`pixlstash.services.dedup_verdict_service`):
 
 * ``GET  /dedup/policy``            - tier defaults + bounds; the client renders
@@ -19,8 +19,7 @@ Two surfaces live here, and every route is owner-only.
 * ``POST /dedup/scan``              - queue a scoped scan; returns immediately.
 * ``POST /dedup/verdicts/stack``    - stack a group behind a chosen cover.
 * ``POST /dedup/verdicts/keep-separate`` - remember that a group is not
-  duplicates; undoable through the operation log (owner override, 2026-07-30)
-  and reopenable from the Stacks view.
+  duplicates; undoable through the operation log and reopenable from the Stacks view.
 * ``POST /dedup/verdicts/batch``       - apply one multi-group UI gesture in one
   transaction and one contiguous undo unit.
 * ``POST /dedup/verdicts/reopen``   - return a decided group to the queue.
@@ -28,13 +27,13 @@ Two surfaces live here, and every route is owner-only.
   operation-log batch id so N stacks reverse with one undo.
 
 **The vault-wide sweep dry run** (:mod:`pixlstash.services.dedup_sweep_service`),
-unchanged and still non-destructive:
+non-destructive:
 
 * ``GET  /dedup/sweep/policy``  - the default confidence policy plus its bounds.
 * ``POST /dedup/sweep/dry-run`` - the vault-wide plan behind "N groups
   auto-collapse, M need review".
 
-**Nothing in v1.9 deletes a picture.** A verdict is either a stack (additive, and
+**Nothing here deletes a picture.** A verdict is either a stack (additive, and
 a stack is a grouping row plus a cover pointer) or a note that the group is not
 duplicates. There is no destructive route on this surface.
 
@@ -1940,7 +1939,7 @@ def create_router(server) -> APIRouter:
 
         Thin alias for the shared
         :func:`~pixlstash.utils.request_origin.require_client_batch_id` so the
-        call sites in this module read the same as they did; the rule itself has
+        call sites in this module keep a short local name; the rule itself has
         exactly one implementation.
         """
         return require_client_batch_id(value)

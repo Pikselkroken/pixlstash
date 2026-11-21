@@ -1,8 +1,7 @@
 """Smart-score computation: anchor-based heuristic combining image embedding,
 CLIP anchors, an objective quality probe, and a calibrated anomaly penalty.
 
-Split out of the former ``pixlstash.picture_scoring`` module (Backend Refactor
-Phase 2 §4.6). Character-likeness scoring lives in the sibling
+Character-likeness scoring lives in the sibling
 :mod:`pixlstash.scoring.character_likeness`. Import the public names from
 :mod:`pixlstash.scoring`.
 """
@@ -162,14 +161,12 @@ def fetch_anomaly_confidences(
 
     A **model** prediction is charged only when the defect is actually visible in the
     picture's tag list; it must have a matching :class:`Tag` row. Confidence clearing
-    the tagger's acceptance threshold used to stand in for that, but the proxy is not
-    sound: :class:`~pixlstash.tasks.tag_prediction_backfill_task.TagPredictionBackfillTask`
+    the tagger's acceptance threshold is not enough on its own:
+    :class:`~pixlstash.tasks.tag_prediction_backfill_task.TagPredictionBackfillTask`
     writes predictions against a picture's *existing* tag set and deliberately never
-    writes a ``Tag`` row, so a high-confidence backfilled prediction penalised a picture
-    for a defect the user could not see anywhere in the UI. Both conditions are now
-    required. Human decisions remain exempt in both directions: a human POS counts even
-    with no ``Tag`` row (a human said the defect is there), and a human NEG suppresses
-    even while the tag is still applied.
+    writes a ``Tag`` row. Both conditions are required. Human decisions remain exempt in
+    both directions: a human POS counts even with no ``Tag`` row (a human said the
+    defect is there), and a human NEG suppresses even while the tag is still applied.
 
     Note the tag check is applied *unconditionally*, independent of *apply_thresholds*.
     :func:`~pixlstash.utils.service.smart_score_invalidation.anomaly_state_signature`
@@ -340,9 +337,7 @@ def resolve_penalised_tag_weights(auth_service) -> dict:
 
     PixlStash is single-user, so "the owner" is the single row in ``user``. **That row
     lives in the hub, never in a vault** (``tests/test_identity_storage_guardrail.py``),
-    so it is resolved through the auth service rather than the scoring session: querying
-    the open vault session found no user row on every call, logged a warning per batch,
-    and scored with the shipped seed while the owner's edited table sat in the hub.
+    so it is resolved through the auth service rather than the scoring session.
 
     The user's table *replaces* the shipped defaults rather than merging with them - that
     is the contract of

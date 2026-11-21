@@ -445,7 +445,7 @@ def register_routes(router, server):
     def get_picture_workflows(request: Request):
         """The workflows behind the pictures this token can see, with counts.
 
-        The read-only token's answer to "what workflows do I have" (#1616):
+        The read-only token's answer to "what workflows do I have":
         the owner-only ``/workflows`` routes also disclose card names, notes,
         model fixes and covers no picture carries, so this groups only the
         pictures in scope, by the ``workflow_id`` ``get_recipe`` reports for

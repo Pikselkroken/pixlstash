@@ -1,4 +1,4 @@
-"""Files onto the shelf (shelf plan F6, ``Add file``) and off it again (#933).
+"""Files onto the shelf (``Add file``) and off it again.
 
 ``POST /model-files`` is the way in and ``POST /model-files/delete`` is the way
 out. They are one module because they are one authority - a file in a registered
@@ -765,7 +765,7 @@ def _same_file(one: str, other: str) -> bool:
 
 
 def _plan_merge(hub, keep: list[KeepModelCopy]) -> tuple[dict[int, dict], list[dict]]:
-    """Split the requested keepers into copies-to-remove and refusals (#1439).
+    """Split the requested keepers into copies-to-remove and refusals.
 
     **The caller names the copy that stays, never the ones that go.** That is
     what makes "keep one" structural rather than arithmetic: a request cannot

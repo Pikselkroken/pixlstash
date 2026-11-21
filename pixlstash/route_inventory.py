@@ -1,18 +1,17 @@
 """Route inventory: the ground-truth enumeration of mounted API endpoints.
 
 This module is the single, reusable source of truth for "which endpoints does
-the built app actually expose". Phase 1 of the backend refactor (the
-``authz/`` registry + gate startup assertion) and the CI guardrail in
+the built app actually expose". The ``authz/`` registry's gate startup
+assertion and the CI guardrail in
 ``tests/test_architecture_guardrails.py`` both consume this enumeration so the
 coverage matrix is arithmetic, not judgement - see
-``docs/backend_architecture.md`` §16.2 and the backend refactor plan §3.4.
+``docs/backend_architecture.md`` §16.2.
 
 It is deliberately dependency-free (no ``authz`` import, no ``Server`` import):
 it takes an already-built ASGI app and reflects over its routes.
 
-**Why this is not a flat ``app.routes`` walk.** The refactor plan §3.4 assumed
-``include_router`` flattens routes into ``app.routes``. Under the installed
-FastAPI (0.138.x) that is *false*: ``include_router`` leaves a lazy
+**Why this is not a flat ``app.routes`` walk.** ``include_router`` does not
+flatten routes into ``app.routes``: it leaves a lazy
 ``_IncludedRouter`` placeholder in ``app.routes`` and resolves the real routes
 on demand. A naive ``isinstance(route, starlette.routing.Route)`` walk therefore
 finds only the ~14 app-level routes and silently misses every router-module
@@ -29,7 +28,7 @@ chokepoint (plan §6). Keeping them out of the HTTP endpoint set prevents a fals
 sense of coverage. Note: an *included* WS route's effective path is not resolved
 by ``iter_route_contexts`` (it returns ``""``); we fall back to the route's own
 declared path, so the effective prefix may be missing for included WS routes.
-This is acceptable because WS routes are acknowledged, not gated, in Phase 1.
+This is acceptable because WS routes are acknowledged, not gated.
 """
 
 from collections.abc import Iterator
@@ -123,8 +122,7 @@ def iter_api_route_contexts(app) -> Iterator[RouteContext]:
     effective path on the vast majority of routes and would fail *open*). Both
     this and :func:`iter_api_endpoints` share the SAME walk and filtering, so the
     gate's identity map and the CI coverage matrix can never disagree about which
-    endpoints exist. See ``docs/backend_architecture.md`` §16.2 and the backend
-    refactor plan §3.3 / §3.4.
+    endpoints exist. See ``docs/backend_architecture.md`` §16.2.
 
     One tuple is produced per (method, path) pair - a route serving both GET and
     POST yields two contexts sharing the same route object. Auto-added
@@ -172,14 +170,12 @@ def flatten_dependant_fields(dependant, field_name: str) -> list:
     exactly like one the handler declares itself, which is the whole point: a
     filter hidden behind ``Depends`` is still a filter the gate must refuse.
 
-    This is the same traversal FastAPI performs internally, kept here rather than
-    borrowed because the helper that used to expose it
-    (``fastapi.dependencies.utils.get_flat_dependant``) was removed in 0.141 -
-    see :data:`_DEPENDANT_FIELDS`. Repeats are skipped by dependant identity, so
-    a dependency shared by several sub-dependencies is walked once and a
-    pathological tree cannot blow up; every caller reduces to a set of names, so
-    the weaker identity-based dedupe (FastAPI keyed on the callable) is not
-    observable in the result.
+    This is the same traversal FastAPI performs internally, kept here because FastAPI
+    does not expose it - see :data:`_DEPENDANT_FIELDS`. Repeats are skipped by dependant
+    identity, so a dependency shared by several sub-dependencies is walked once and a
+    pathological tree cannot blow up; every caller reduces to a set of names, so the
+    weaker identity-based dedupe (FastAPI keyed on the callable) is not observable in
+    the result.
 
     Raises ``RuntimeError`` if the installed FastAPI's ``Dependant`` no longer
     carries the fields this walks - see :data:`_DEPENDANT_FIELDS` for why that is

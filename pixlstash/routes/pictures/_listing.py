@@ -267,10 +267,8 @@ class PictureCountResponse(BaseModel):
 class PictureListFilters:
     """Shared query-param filters for the picture listing endpoints.
 
-    These were previously parsed directly out of ``request.query_params`` and so
-    were invisible in the OpenAPI schema. Declaring them here as a ``Depends``
-    dependency surfaces them in the generated docs (and validates the typed
-    ones) without changing behaviour: the handlers still read the raw values
+    Declaring them as a ``Depends`` dependency surfaces them in the generated
+    docs (and validates the typed ones); the handlers still read the raw values
     from ``request.query_params``.
     """
 
@@ -596,14 +594,13 @@ def select_pictures_for_listing(
 ):
     """List pictures for a request.
 
-    When `stream_state` is a dict, the function operates in streaming mode:
-    it over-fetches by one row at the SQL layer and records the pre-post-filter
-    row count in `stream_state["sql_count"]`. This lets the caller decide
-    completion (`done = sql_count <= limit`) without relying on the post-filter
-    row count, which the historical implementation incorrectly conflated with
-    end-of-stream. CHARACTER_LIKENESS now uses a registered SQLite scalar
-    function (character_face_likeness) so sorting and pagination happen fully
-    at the SQL layer, meaning the standard over-fetch probe applies.
+    When `stream_state` is a dict, the function operates in streaming mode: it
+    over-fetches by one row at the SQL layer and records the pre-post-filter row count
+    in `stream_state["sql_count"]`. This lets the caller decide completion (`done =
+    sql_count <= limit`) without relying on the post-filter row count, which does not
+    signal end-of-stream. CHARACTER_LIKENESS uses a registered SQLite scalar function
+    (character_face_likeness) so sorting and pagination happen fully at the SQL layer,
+    meaning the standard over-fetch probe applies.
     """
     effective_limit = limit + 1 if stream_state is not None else limit
 

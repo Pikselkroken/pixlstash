@@ -705,7 +705,7 @@ class ResourceArbiter:
         ``{kept_mb, held_mb, can_quit, busy, jobs}``, or None when no ComfyUI is
         read on that card or it would keep nothing. ``vram_mb`` of
         :meth:`training_room` counts all of ComfyUI's memory as room; only
-        quitting releases ``kept_mb`` of it (#2558).
+        quitting releases ``kept_mb`` of it.
         """
         state = self._probe_state.get(Tenant.COMFYUI) or {}
         held = state.get("usage")
@@ -1373,7 +1373,7 @@ class ResourceArbiter:
         2. ComfyUI frees, only if nothing at all is queued on it and the lease
            asking is not ComfyUI's own (its cache already counts for it).
         3. ComfyUI quits, only if the owner said yes for this lease, it is
-           idle and all it holds is what the lease is short (#2558).
+           idle and all it holds is what the lease is short.
         4. Otherwise the lease waits.
 
         Returns True when a rung ran, so the caller re-reads the cards.

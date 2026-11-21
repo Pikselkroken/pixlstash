@@ -1,8 +1,8 @@
 """HTTP routes for the moves-made-outside-PixlStash reconciliation queue.
 
-v1.11 Phase 5 (``docs/plans/v1.11.0-existing-library.md`` §4). The queue itself
-and its classification live in ``pixlstash.services.move_reconciliation_service``;
-this module is the schema and the owner-only gate.
+The queue itself and its classification live in
+``pixlstash.services.move_reconciliation_service``; this module is the schema and the
+owner-only gate.
 """
 
 from fastapi import APIRouter, Body, Request

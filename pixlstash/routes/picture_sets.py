@@ -256,7 +256,7 @@ def create_router(server) -> APIRouter:
         exists in **any** of the given projects.  Unscoped sets (no projects) are
         exempt - they have no uniqueness requirement.
 
-        Since issue #125 a set can be in several projects at once, so the clash
+        A set can be in several projects at once, so the clash
         check spans every project it is joining, not just its primary one.
         """
         wanted = sorted({int(pid) for pid in (project_ids or []) if pid is not None})
@@ -284,7 +284,7 @@ def create_router(server) -> APIRouter:
     def _resolve_target_project_ids(payload: dict, current: list[int] | None):
         """Resolve the requested project membership set from a request payload.
 
-        Accepts the multi-project ``project_ids`` list (issue #125) and the legacy
+        Accepts the multi-project ``project_ids`` list and the legacy
         single ``project_id`` scalar, in that precedence order.
 
         Args:
@@ -432,10 +432,9 @@ def create_router(server) -> APIRouter:
     def _hidden_tag_condition(hidden_tags: list[str]):
         """SQL predicate: the correlated ``Picture`` carries no hidden tag.
 
-        The in-SQL counterpart of ``_filter_hidden_picture_ids``, for query
-        paths that must not read a picture id list into Python first (issue
-        #651). Same matching rule: a picture is hidden when it has ANY tag whose
-        lowercased value is in ``hidden_tags``.
+        The in-SQL counterpart of ``_filter_hidden_picture_ids``, for query paths that
+        must not read a picture id list into Python first. Same matching rule: a picture
+        is hidden when it has ANY tag whose lowercased value is in ``hidden_tags``.
 
         Args:
             hidden_tags: Tag names to hide, matched case-insensitively.
@@ -492,7 +491,7 @@ def create_router(server) -> APIRouter:
         """Raise 403 if the token scope does not cover the requested picture set.
 
         Thin delegation to the single membership implementation in
-        ``pixlstash/authz/membership.py`` (backend refactor plan §3.7, Step 4).
+        ``pixlstash/authz/membership.py``.
         The authz gate calls the same function directly for SET_SCOPED routes;
         Step 5 removes this shim.
         """
@@ -915,19 +914,17 @@ def create_router(server) -> APIRouter:
         return palette[start % len(palette)]
 
     def _auto_assign_icon_color(session, project_ids):
-        """Return the (icon, color) a new set defaults to (#457).
+        """Return the (icon, color) a new set defaults to.
 
         Rotates on from the newest set that carries a palette icon/colour, so
-        consecutive sets differ. Taking the first *unused* entry instead handed
-        out ``mdi-camera``/red again for every set created in a fresh project,
-        and again whenever an earlier default had been replaced by hand.
+        consecutive sets differ, including in a fresh project.
 
         Args:
             session: A pre-opened session.
             project_ids: The projects the new set is joining. Siblings - whose
                 icons and colours are skipped so they stay distinguishable in
                 one list - are the sets sharing any of them; with no projects,
-                every set is a sibling (the pre-#125 unscoped behaviour).
+                every set is a sibling.
         """
         wanted = sorted({int(pid) for pid in (project_ids or []) if pid is not None})
         siblings = session.exec(
