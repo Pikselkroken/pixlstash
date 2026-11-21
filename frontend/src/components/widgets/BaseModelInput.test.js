@@ -19,6 +19,12 @@ vi.mock("../../api/modelShelf", () => ({
   listBaseModelCompletions: (...args) => listBaseModelCompletions(...args),
 }));
 
+// An entry's (x) draws a glyph; this suite mounts without Vuetify.
+vi.mock("vuetify/components", async () => {
+  const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
+  return vuetifyComponentStubs();
+});
+
 import BaseModelInput from "./BaseModelInput.vue";
 
 // Every mount is remembered and unmounted after the test. The menu teleports
@@ -231,5 +237,164 @@ describe("the base-model completion list", () => {
 
     await input.trigger("keydown", { key: "Escape" });
     expect(wrapper.emitted("cancel")).toHaveLength(1);
+  });
+});
+
+// Photo look's rows: the full list on focus, a remembered entry forgotten by
+// its (x) or by Delete on its highlight, and Clear all as the list's last row.
+// What would be wrong: Delete eating a character of the text, or Tab writing
+// the first preset over the field the owner is only passing through.
+describe("a field that opens on focus, with removable entries", () => {
+  const OPTIONS = [
+    { value: "Phone snapshot", detail: "Taken on a phone.", section: "Presets" },
+    { value: "Old Pentax", section: "Your entries", removable: true },
+    { value: "Webcam", section: "Your entries", removable: true },
+  ];
+
+  async function lookField(value = "Phone snapshot") {
+    const wrapper = make({
+      props: {
+        modelValue: value,
+        options: OPTIONS,
+        openOnFocus: true,
+        footAction: "Clear all your entries",
+        "onUpdate:modelValue": (next) => wrapper.setProps({ modelValue: next }),
+      },
+      attachTo: document.body,
+    });
+    await wrapper.find("input").trigger("focus");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  }
+
+  it("shows everything on focus, though the field already holds a preset", async () => {
+    await lookField();
+    // The stubbed glyph's name is its text here; Vuetify draws it as a class.
+    expect(menuItems().map((t) => t.replace(" mdi-close", ""))).toEqual([
+      "Phone snapshot Taken on a phone.",
+      "Old Pentax",
+      "Webcam",
+      "Clear all your entries",
+    ]);
+    const sections = [...document.querySelectorAll(".bmi-section")].map((el) =>
+      el.textContent.trim(),
+    );
+    expect(sections).toEqual(["Presets", "Your entries"]);
+  });
+
+  it("an entry's (x) removes it without picking it", async () => {
+    const wrapper = await lookField();
+    const removes = document.querySelectorAll(".bmi-remove");
+    // Only the entries carry one, hidden from assistive tech.
+    expect(removes).toHaveLength(2);
+    expect(removes[0].getAttribute("aria-hidden")).toBe("true");
+    removes[1].dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(wrapper.emitted("remove")).toEqual([["Webcam"]]);
+    expect(wrapper.emitted("pick")).toBeUndefined();
+  });
+
+  it("Delete removes the highlighted entry, and only once an arrow highlighted it", async () => {
+    const wrapper = await lookField();
+    const input = wrapper.find("input");
+    await input.trigger("keydown", { key: "Delete" });
+    expect(wrapper.emitted("remove")).toBeUndefined();
+    await input.trigger("keydown", { key: "ArrowDown" });
+    // A preset is not removable: Delete edits the text as usual.
+    await input.trigger("keydown", { key: "Delete" });
+    expect(wrapper.emitted("remove")).toBeUndefined();
+    await input.trigger("keydown", { key: "ArrowDown" });
+    await input.trigger("keydown", { key: "Delete" });
+    expect(wrapper.emitted("remove")).toEqual([["Old Pentax"]]);
+  });
+
+  it("Clear all is the last row in the arrow order, and Enter on it clears", async () => {
+    const wrapper = await lookField();
+    const input = wrapper.find("input");
+    for (let n = 0; n < 5; n += 1) {
+      await input.trigger("keydown", { key: "ArrowDown" });
+    }
+    await input.trigger("keydown", { key: "Enter" });
+    expect(wrapper.emitted("foot-action")).toHaveLength(1);
+    expect(wrapper.emitted("update:modelValue")).toBeUndefined();
+  });
+
+  it("Tab leaves the field as it is, and a click on an option picks it", async () => {
+    const wrapper = await lookField();
+    await wrapper.find("input").trigger("keydown", { key: "Tab" });
+    expect(wrapper.emitted("update:modelValue")).toBeUndefined();
+    await wrapper.find("input").trigger("focus");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    document
+      .querySelectorAll(".bmi-item")[1]
+      .dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(wrapper.emitted("pick")).toEqual([["Old Pentax"]]);
+  });
+
+  it("filters on the sentence as well as the name once something is typed", async () => {
+    const wrapper = await lookField("");
+    await wrapper.find("input").setValue("phone.");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(menuItems()).toEqual(["Phone snapshot Taken on a phone."]);
+  });
+});
+
+// Typing is not only a filter: what the owner typed is offered first, as its
+// own option, and Enter takes it. What would be wrong: Enter taking the first
+// preset over the typed words, or a Use row offered for a preset's own name.
+describe("a field that offers the typed text as its own option", () => {
+  const OPTIONS = [
+    { value: "Phone snapshot", detail: "Taken on a phone.", section: "Presets" },
+    { value: "Old Pentax", section: "Your entries", removable: true },
+  ];
+
+  async function typed(text) {
+    const wrapper = make({
+      props: {
+        modelValue: "",
+        options: OPTIONS,
+        openOnFocus: true,
+        ownText: true,
+        "onUpdate:modelValue": (next) => wrapper.setProps({ modelValue: next }),
+      },
+      attachTo: document.body,
+    });
+    const input = wrapper.find("input");
+    await input.trigger("focus");
+    await input.setValue(text);
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  }
+  const active = (wrapper) =>
+    document.getElementById(wrapper.find("input").attributes("aria-activedescendant"));
+
+  it("puts Use \"...\" first and highlighted, named for the typed text", async () => {
+    const wrapper = await typed("snap");
+    const rows = [...document.querySelectorAll(".bmi-item")];
+    expect(rows[0].getAttribute("aria-label")).toBe("Use your own: snap");
+    expect(rows[0].getAttribute("role")).toBe("option");
+    expect(rows[1].textContent).toContain("Phone snapshot");
+    expect(active(wrapper)).toBe(rows[0]);
+  });
+
+  it("Enter takes the typed text, not the first preset", async () => {
+    const wrapper = await typed("snap");
+    await wrapper.find("input").trigger("keydown", { key: "Enter" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.emitted("update:modelValue").at(-1)).toEqual(["snap"]);
+    expect(wrapper.emitted("confirm")).toHaveLength(1);
+  });
+
+  it("typed text equal to an option highlights it and offers no Use row", async () => {
+    const wrapper = await typed("phone SNAPSHOT");
+    const rows = [...document.querySelectorAll(".bmi-item")];
+    expect(rows.some((row) => row.classList.contains("bmi-use"))).toBe(false);
+    expect(active(wrapper)).toBe(rows[0]);
+    expect(rows[0].textContent).toContain("Phone snapshot");
+    await wrapper.find("input").trigger("keydown", { key: "Enter" });
+    expect(wrapper.emitted("update:modelValue").at(-1)).toEqual(["Phone snapshot"]);
   });
 });
