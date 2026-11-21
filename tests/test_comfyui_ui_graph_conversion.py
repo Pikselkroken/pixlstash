@@ -5,13 +5,6 @@ it refuses"**. A near-miss here is the worst outcome available: the graph runs,
 ComfyUI accepts it, and it makes a different picture than the one the reader
 asked to make again. So every refusal case below is a case where a plausible
 guess exists and is deliberately not made.
-
-Measured separately, before #2043, against the 15 editor/API workflow pairs
-shipped by comfyui-multigpu: 8 converted, 8 byte-identical to the API half, 0
-wrong, 7 refused. The refusals are node packs the machine did not have installed, the
-deprecated ``PrimitiveNode`` (resolved since #2043), and two classes whose
-widget arrays this does not account for - each named in the report rather than
-papered over.
 """
 
 from copy import deepcopy
@@ -181,8 +174,7 @@ class TestItConvertsExactly:
         node, which the file says IS fed and the rebuild cannot reproduce; that
         one is refused by name. ComfyUI rejects this graph with a per-node
         error naming the socket, which is a better message than any this could
-        invent. An earlier name for this test said "optional", which the
-        fixture never was.
+        invent.
         """
         prompt, _ = convert_ui_graph_to_api(simple_editor_graph, OBJECT_INFO)
         assert "clip" not in prompt["6"]["inputs"]
@@ -296,7 +288,7 @@ class TestItConvertsExactly:
 
         Two MODEL inputs and the sampler reads the SECOND output: ComfyUI
         passes the second input through. "The first connected input of the
-        right type" wires the other model and reports an exact rebuild (#1440).
+        right type" wires the other model and reports an exact rebuild.
         """
         graph = _graph(
             [
@@ -377,8 +369,8 @@ class TestItConvertsExactly:
 
         `LTXVEmptyLatentAudio` declares `frame_rate` as `"FLOAT,INT"`, which is
         no widget type, and the editor draws a FLOAT box for it all the same.
-        Read as a socket, `frame_rate` took no slot and every LTX-2 template
-        was refused with three values for two inputs.
+        Read as a socket, `frame_rate` would take no slot and every LTX-2
+        template would be refused with three values for two inputs.
         """
         object_info = {
             "LTXVEmptyLatentAudio": {
@@ -488,9 +480,8 @@ class TestItConvertsExactly:
     def test_an_optional_widget_takes_its_slot_after_every_required_one(self):
         """Required first, optional second - the order `/object_info` gives.
 
-        The fixtures' only optional input was a link, so nothing exercised an
-        optional WIDGET holding a position; getting that order wrong shifts a
-        node exactly as a miscounted extra widget does.
+        Getting the order of an optional WIDGET wrong shifts a node exactly as
+        a miscounted extra widget does.
         """
         object_info = dict(OBJECT_INFO)
         object_info["WithAnOptionalWidget"] = {
@@ -1510,7 +1501,7 @@ def _expression():
 class TestEveryWireIsSent:
     def test_a_socket_the_class_grows_is_sent_under_its_own_name(self):
         """A video's length is `seconds * fps` in a Math Expression; dropping
-        the wire left ComfyUI refusing the run over a missing `a`."""
+        the wire would leave ComfyUI refusing the run over a missing `a`."""
         graph = _graph([_expression(), _seconds()], [[1, 2, 0, 1, 0, "FLOAT"]])
         prompt, problems = convert_ui_graph_to_api(graph, WIRED_OBJECT_INFO)
         assert problems == []

@@ -1,4 +1,4 @@
-"""Route-level tests for the recipe consent controls (R3, CWE-829).
+"""Route-level tests for the recipe consent controls (CWE-829).
 
 The graph a recipe replays is **file metadata**: whoever made the image authored
 it, and PixlStash's premise is importing images from elsewhere. Replaying it
@@ -12,13 +12,12 @@ because a control that only exists in the dialog is not a control:
    instance, which is what turns "an embedded workflow" into "someone else's
    embedded workflow".
 
-The third is the refusal on the run itself. It used to be ``POST
-/comfyui/run_recipe``, which #1410 retired; ``POST /workflows/run`` carries it
-now, and ``tests/test_workflows_api.py`` asserts it in both directions -- the
+The third is the refusal on the run itself. ``POST /workflows/run`` carries it,
+and ``tests/test_workflows_api.py`` asserts it in both directions -- the
 refusal must fire without ``allow_unchecked`` AND the run must still succeed
 with it, since over-blocking is its own regression.
 
-The B5 classes at the foot of the file cover the same endpoint's *extended*
+The classes at the foot of the file cover the same endpoint's *extended*
 read - the negative prompt, the sampler settings, the LoRA strengths, the
 workflow, and the A1111 branch - plus the picture-list filter that resolves
 a workflow to the variants that made its pictures.
@@ -280,7 +279,7 @@ class TestRecipeReportsSourceOrigin:
 
 def test_generate_variants_judges_each_pixlstash_node_on_its_own(env, monkeypatch):
     """A saver and the digest loaders do not stop a variant; the picture
-    loader does (#1521), because it would not read this picture."""
+    loader does, because it would not read this picture."""
     server, client, _pic_id = env
     _comfyui_reachable(monkeypatch)
     graph = json.loads(json.dumps(RECIPE_GRAPH))
@@ -459,14 +458,12 @@ def _shelf_model_id(server) -> int:
 def _topology_hash(server, pic_id: int) -> str:
     """The topology the scan filed for *pic_id*, waited for.
 
-    Polled rather than read once, and read BEFORE the request that is asserted
-    against it. The extraction pass stamps this column in the background, so a
-    single read taken after the response compares two different moments: the
-    route honestly answered `null` for a picture not yet filed, and the column
-    was written while the assertion was being set up. That passed or failed on
-    how busy the machine was - it went red only when `tests/test_migrations.py`
-    ran first and slowed the scan down. `_variant_of` below waits for the same
-    pass for the same reason.
+    Polled rather than read once, and read BEFORE the request that is asserted against
+    it. The extraction pass stamps this column in the background, so a single read taken
+    after the response would compare two different moments: the route honestly answers
+    `null` for a picture not yet filed, and the column can be written while the
+    assertion is being set up. `_variant_of` below waits for the same pass for the same
+    reason.
     """
     for _ in range(120):
         pics = server.vault.db.run_immediate_read_task(
@@ -659,7 +656,7 @@ class TestRecipeReadsTheWholeRecipe:
         self, env, monkeypatch
     ):
         """Automatic by its core, and a manual placement wins; the card key
-        is internal and never on the wire (#1623)."""
+        is internal and never on the wire."""
         server, client, pic_id = env
         _comfyui_unreachable(monkeypatch)
         structural = _card_picture(server, pic_id, "key-alpha", CORE_OTHER)
@@ -738,7 +735,7 @@ class TestPictureListWorkflowFilters:
         assert {alpha, beta, pic_id} <= self._ids(client, "")
 
     def test_several_workflows_list_any_of_their_pictures(self, env):
-        """`workflow` is repeatable and OR'd (#1797), like `comfyui_model`."""
+        """`workflow` is repeatable and OR'd, like `comfyui_model`."""
         server, client, pic_id = env
         alpha, beta = self._two_carded_pictures(server, client, CORE_OTHER)
         shared = auto_workflow_id(CORE_SHARED, "")
@@ -802,7 +799,7 @@ class TestPictureListWorkflowFilters:
                 )
 
     def test_a_workflow_combines_with_the_model_filter(self, env):
-        """Filtering a workflow's pictures by a recipe value (#1623): the two
+        """Filtering a workflow's pictures by a recipe value: the two
         narrow each other, as every pair of filters on this route does.
 
         The env picture loads the same checkpoint but is in another workflow,
@@ -835,7 +832,7 @@ class TestPictureListWorkflowFilters:
         )
 
     def test_the_resolved_parameter_name_is_not_reachable_from_the_query(self, env):
-        """`Picture.find` declares it now, so a client must not be able to send it.
+        """`Picture.find` declares it, so a client must not be able to send it.
 
         Unpopped it reaches `PredicateFilter` as a bare string and 500s on its
         `List[str]`. It could never widen anything - it only adds an IN - but a
@@ -866,7 +863,7 @@ class TestPictureListWorkflowFilters:
 
 
 class TestTheReadOnlyWorkflowListing:
-    """`GET /pictures/workflows` (#1616): the workflows behind what a token sees.
+    """`GET /pictures/workflows`: the workflows behind what a token sees.
 
     Both directions on one token pair: a set-scoped READ token gets only its
     set's workflow and count, and the unscoped READ token, which the Connect
@@ -1482,7 +1479,7 @@ class TestAnEditorGraphIsRecognised:
     def test_a_rebuild_that_cannot_be_exact_still_reports_the_recipe(
         self, editor_env, monkeypatch
     ):
-        """The distinction the whole change turns on.
+        """The distinction this read turns on.
 
         "Nothing here was made in ComfyUI" and "this is a ComfyUI picture
         PixlStash cannot hand back to ComfyUI" are two different answers, and
@@ -1579,8 +1576,8 @@ class TestAnEditorGraphIsRecognised:
 def test_cached_readers_arriving_together_fetch_the_map_once(monkeypatch):
     """Selecting a workflow asks several routes at once, on a cold cache too.
 
-    Each used to read the map for itself; now the first reads it and the rest
-    wait for its answer, which is the one object the cache holds.
+    The first reads the map and the rest wait for its answer, which is the one object
+    the cache holds.
     """
     fetches = []
 
@@ -1627,8 +1624,8 @@ class TestTheOpenLinkNamesTheWorkflowOnScreen:
     It has to name the graph the tab is SHOWING. The stored
     `picture.workflow_topology_hash` does not: the extraction pass writes it
     from the API `prompt` chunk or from A1111 infotext, and an editor-graph
-    picture answered from neither - so Open sent the reader to a workflow they
-    were never shown, or was not offered at all.
+    picture has neither - so following it would send the reader to a workflow
+    they were never shown, or offer no Open at all.
     """
 
     def test_it_is_the_rebuilt_graph_s_own_topology(self, editor_env, monkeypatch):
@@ -1661,7 +1658,7 @@ class TestTheOpenLinkNamesTheWorkflowOnScreen:
     def test_it_is_never_the_topology_of_the_a1111_text_beside_it(
         self, editor_env, monkeypatch
     ):
-        """The case that made Open open nothing.
+        """Open follows the editor graph, not the A1111 text beside it.
 
         This file carries BOTH an editor graph and A1111 infotext. The
         extraction pass files the A1111 reduction, so the picture's stored

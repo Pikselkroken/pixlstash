@@ -1,7 +1,7 @@
 """Batch face assignment by picture_ids: best-face selection heuristics.
 
-Covers the bootstrap heuristic for a character with no reference faces yet
-(issue #645): single-face pictures in the batch are assigned first and then
+Covers the bootstrap heuristic for a character with no reference faces yet:
+single-face pictures in the batch are assigned first and then
 serve as the comparison set for the multi-face pictures, so group shots pick
 the same identity instead of simply the largest face.
 
@@ -466,7 +466,7 @@ def test_new_character_all_multi_face_keeps_largest_face_fallback():
 
 
 def test_existing_reference_faces_still_drive_selection():
-    """A character that already has reference faces keeps the pre-existing
+    """A character that already has reference faces keeps the reference-driven
     behaviour: the multi-face picture assigns the face most like the
     references, even when it is not the largest."""
     with tempfile.TemporaryDirectory() as temp_dir:

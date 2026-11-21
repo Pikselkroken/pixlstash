@@ -32,9 +32,7 @@ name             hex                         popcount vs ``_H_ZERO``
 ``_H_NEAR``      ``0000000000000001``        1   (edge at every threshold)
 ``_H_MID``       ``00000000000003ff``        10  (edge at 0.65 only)
 ``_H_ALMOST``    ``000000000000007f``        7   (ONE bit outside the 0.90 cut,
-                                             so 89% similar and stranded: the
-                                             case the page used to describe as
-                                             matching nothing)
+                                             so 89% similar and stranded)
 ``_H_FAR``       ``ffffffff00000000``        32  (edge at no threshold)
 ``_H_OTHER``     ``00000000ffffffff``        32  (edge at no threshold, and
                                              64 from ``_H_FAR``, so the two
@@ -689,12 +687,12 @@ def test_a_member_without_a_hash_reports_no_edge_without_being_a_stranger():
 
 
 def test_a_stranded_member_reports_the_real_similarity_it_just_missed():
-    """The reported bug, at the boundary: 7 bits out of 64 where the cut is 6.
+    """At the boundary: 7 bits out of 64 where the cut is 6.
 
     ``strongest_edge`` is ``None`` here by construction, and that is correct: it
-    is the best edge that SURVIVES at this threshold and none does. What was
-    wrong was making it the only number, so the page printed an en dash and
-    said the picture matched nothing about a member 89% like its neighbour.
+    is the best edge that SURVIVES at this threshold and none does. It must not
+    be the only number, or the page would say a member 89% like its neighbour
+    matched nothing.
     ``nearest_edge`` is the unconditional answer and must be there.
     """
     temp_dir, client, server, _stacks, _token = _env()
@@ -749,13 +747,13 @@ def test_strangers_that_differ_are_named_as_a_range():
 
 
 def test_a_strangers_similarity_survives_the_cached_edge_lists_floor():
-    """The other half of the bug: distances the edge cache never stored.
+    """Distances the edge cache never stored.
 
     The cached edge list is pruned at ``MAX_CACHED_HAMMING`` (22 bits), which is
     right for edges and wrong for closeness: a member whose nearest sibling is
-    32 bits away has a real answer, 50%, and the prune used to throw it away
-    before anything could show it. Read through a **warm** cache, because that
-    is the path where the number went missing.
+    32 bits away has a real answer, 50%, and the prune must not throw it away
+    before anything can show it. Read through a **warm** cache, because that
+    is the path that reads the pruned list.
     """
     temp_dir, client, server, stacks, _token = _env()
     try:
@@ -791,13 +789,11 @@ def test_a_strangers_similarity_survives_the_cached_edge_lists_floor():
 
 
 def test_every_cached_row_carries_a_closest_sibling_for_every_member():
-    """The writer can never produce the empty column the page used to show.
+    """The writer can never produce an empty closest-sibling column.
 
-    Cache validity is now presence: database triggers drop a stack's derived row
-    whenever an input moves, so a present row is trusted without rereading a
-    hash, and `0093_invalidate_stackcohesion_inputs` starts cold so no row
-    written before this column existed survives the upgrade. What that leaves to
-    check here is the other half: every row the writer produces covers every
+    Cache validity is presence: database triggers drop a stack's derived row whenever an
+    input moves, so a present row is trusted without rereading a hash. What that leaves
+    to check here is the other half: every row the writer produces covers every
     comparable member, or a trusted row would serve a gap.
     """
     temp_dir, _client, server, stacks, _token = _env()
@@ -885,12 +881,11 @@ def test_a_member_with_nothing_hashed_to_compare_against_reports_no_figure():
 def test_the_stranded_decision_is_unchanged_at_every_threshold():
     """The regression that would matter most, checked against an oracle.
 
-    This change is about what the page KNOWS and SAYS, never about where the cut
-    is. So the components, the stranded set and the weakest edge are checked at
-    every threshold against a brute-force fold that shares no code with the
-    service: no union-find, no numpy, no cached edge list, no pruning constant.
-    If the new unconditional number ever leaked into the decision, this is what
-    catches it.
+    The unconditional number is about what the page KNOWS and SAYS, never about where
+    the cut is. So the components, the stranded set and the weakest edge are checked at
+    every threshold against a brute-force fold that shares no code with the service: no
+    union-find, no numpy, no cached edge list, no pruning constant. If the unconditional
+    number ever leaked into the decision, this is what catches it.
 
     The same sweep pins the two-field invariant: the unconditional number is
     never *worse* than the thresholded one, and is exactly equal whenever the
@@ -1268,17 +1263,15 @@ def test_split_honours_an_explicit_picture_id_list(monkeypatch):
 def test_split_accepts_any_live_member_the_user_marked():
     """The user's marks are the input; the engine's marks are only the default.
 
-    This deliberately reverses security-review finding F7 (2026-08-01), which
-    had required an explicit ``picture_ids`` to be a subset of the stranded set
-    at ``threshold``. The Mixed stacks page now lets the user mark which members
-    are strangers, starting from the engine's marks and adjusting them, so a
-    bound that refuses any mark the engine did not make refuses the feature.
-    F7 was rated LOW on the grounds that this is not a privilege boundary (the
-    route is ``OWNER_ONLY`` and ``DELETE /stacks/{id}/members`` already gives
-    the same principal an unrestricted remove), so nothing is granted here that
-    the caller could not already do.
+    An explicit ``picture_ids`` need not be a subset of the stranded set at
+    ``threshold``: the Mixed stacks page lets the user mark which members are
+    strangers, starting from the engine's marks and adjusting them. This is not
+    a privilege boundary (the route is ``OWNER_ONLY`` and
+    ``DELETE /stacks/{id}/members`` already gives the same principal an
+    unrestricted remove), so nothing is granted here that the caller could not
+    already do.
 
-    Both cases F7 named are asserted to work, and asserted to actually move the
+    Both cases are asserted to work, and asserted to actually move the
     picture rather than merely answer 200.
     """
     temp_dir, client, server, stacks, _token = _env()
@@ -1318,7 +1311,7 @@ def test_split_accepts_any_live_member_the_user_marked():
 
 
 def test_split_refuses_an_id_that_is_not_a_live_member_of_this_stack():
-    """The bound that replaced F7: live membership of the stack in the path.
+    """The bound: live membership of the stack in the path.
 
     Weaker than the stranded-subset rule and stronger than nothing. Three
     refusals, each writing nothing:
@@ -1793,8 +1786,8 @@ def test_a_scrapheaped_frozen_member_freezes_the_row_and_the_actions_alike():
     Filter ``deleted`` in that helper and every assertion below flips.
 
     * ``GET /dedup/mixed-stacks`` says `stackable: false`;
-    * ``GET /dedup/stacks/{id}/members`` says the same, which it did NOT until
-      it stopped rolling the unit answer up from its live member ids;
+    * ``GET /dedup/stacks/{id}/members`` says the same, rather than rolling the
+      unit answer up from its live member ids;
     * split and unstack both answer 423.
 
     The live siblings are deliberately still unfrozen at the picture level: a

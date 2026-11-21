@@ -4,9 +4,8 @@ The frontend cannot ask for it in time. Its version check runs from a child
 component's ``onMounted`` -- Vue mounts children before parents -- so it fires
 before ``App.vue`` has even started ``GET /version``, and
 ``checkForUpdatesNow`` stamps its 24h throttle before the request. Whatever the
-document says at load is therefore what gets reported for the day. Assuming
-"pip" filed every restarted Docker and desktop install under ``pip``; see
-``pixlstash-metrics/CLAUDE.md`` for the bucket swap that exposed it.
+document says at load is therefore what gets reported for the day; assuming
+"pip" would file every restarted Docker and desktop install under ``pip``.
 """
 
 from __future__ import annotations

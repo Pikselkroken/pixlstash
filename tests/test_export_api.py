@@ -222,9 +222,9 @@ def test_windows_really_loses_a_device_named_member_and_keeps_the_rewrite(
 
 
 def test_unique_export_stem_never_hands_out_a_name_twice():
-    """One picture must never be written over another (#1177 item 1).
+    """One picture must never be written over another.
 
-    The third case is the bug: a per-stem counter alone turns the second
+    The third case is the trap: a per-stem counter alone turns the second
     ``photo`` into ``photo_2``, which is the name of a picture that already
     exists in the library. In a folder export that is one file silently
     replacing another; in a ZIP it is a duplicate member. The case-folded pair
@@ -420,8 +420,8 @@ def test_pictures_export_folder_rejects_non_empty_destination():
 
 
 def test_pictures_export_folder_rejects_a_destination_inside_the_library():
-    """An empty new subfolder of the library passes every other check (#1177
-    item 2): it exists, it is writable, it is not on the system blocklist and it
+    """An empty new subfolder of the library passes every other check: it
+    exists, it is writable, it is not on the system blocklist and it
     is empty. It is also read back by the library that just wrote it, so the
     export returns as a fresh set of pictures. The refusal is the only thing
     standing between "Export to folder" and duplicating the library into
@@ -459,7 +459,7 @@ def test_pictures_export_folder_rejects_a_destination_inside_the_library():
 
 
 def test_pictures_export_folder_rejects_a_destination_inside_another_library():
-    """#1206 item 1: the blocklist knew only the library holding the lease.
+    """The blocklist covers every registered library, not only the active one.
 
     A library's folder *is* its image_root, so an export written into a second
     registered library comes back as a fresh set of pictures the moment that
@@ -504,13 +504,12 @@ def test_pictures_export_folder_rejects_a_destination_inside_another_library():
 
 
 def test_pictures_export_folder_refuses_when_the_reference_folders_are_unreadable():
-    """#1177 item 59: an unknown blocklist must refuse, not permit.
+    """An unknown blocklist must refuse, not permit.
 
-    The roots the check above compares against were previously reported as an
-    empty tuple when the folder table could not be read, which is exactly what
-    "no reference folders are configured" looks like - so a read failure turned
-    the destination check off silently, and an export into a reference folder
-    was accepted.
+    Reporting the roots the check above compares against as an empty tuple when
+    the folder table cannot be read would look exactly like "no reference
+    folders are configured" - so a read failure would turn the destination
+    check off silently.
     """
     from unittest import mock
 
@@ -552,10 +551,10 @@ def test_pictures_export_folder_refuses_when_the_reference_folders_are_unreadabl
 
 
 def test_pictures_export_folder_refuses_when_the_watch_folders_are_unreadable():
-    """The import-folder half of item 59, found in its adversarial review.
+    """The import-folder half: unreadable watch folders refuse too.
 
-    `get_import_folder_paths` logged at DEBUG and returned `[]`, which is what
-    "no watch folders are configured" looks like - so a read failure turned off
+    Returning `[]` from `get_import_folder_paths` on a read failure would look
+    like "no watch folders are configured" - so a read failure would turn off
     the worst refusal in this route. A watch folder imports whatever appears in
     it, and one carrying `delete_after_import` then removes the file it has
     just imported, so an export into one destroys its own output.
@@ -610,8 +609,7 @@ def test_pictures_export_folder_rejects_a_destination_in_a_watched_folder():
     duplicate check does not catch it - and a folder carrying
     ``delete_after_import`` then removes the file it just imported
     (``pixlstash/tasks/watch_folder_import_task.py``), so the export destroys
-    its own output. Found by the adversarial review of #1177 item 2, which had
-    covered ``image_root`` and the reference folders but not this sibling.
+    its own output.
     """
     temp_dir, client, server = _setup()
     try:

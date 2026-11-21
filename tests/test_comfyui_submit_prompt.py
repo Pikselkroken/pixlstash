@@ -1,4 +1,4 @@
-"""Payload tests for ``_submit_comfyui_prompt`` (issue #628).
+"""Payload tests for ``_submit_comfyui_prompt``.
 
 The POST /prompt payload must NOT carry ``extra_data.extra_pnginfo.workflow``:
 that PNG chunk is where the ComfyUI frontend stores the *UI* node graph, and

@@ -1,6 +1,6 @@
-"""§16.3 host-capability access design (principal ruling 2026-07-21).
+"""§16.3 host-capability access design.
 
-Covers the three-lens (CSO/Principal/CEO) decided design landing before Step 5:
+Covers:
 
 * ``LOCAL_OWNER_ONLY`` (the filesystem/folder routes, the library switch, and the
   host-path disclosures; the tier-split test's own name carries the count, and
@@ -18,8 +18,7 @@ Covers the three-lens (CSO/Principal/CEO) decided design landing before Step 5:
 
 Both-directional per CLAUDE.md / §16.1: every deny is paired with an in-scope
 allow so over-blocking is caught as its own regression. These tests set
-``enforcing`` explicitly rather than relying on the shipped default, which was
-``False`` when this file was written and is ``True`` today - one test
+``enforcing`` explicitly rather than relying on the shipped default - one test
 deliberately turns it **off**, to prove the middleware's
 ``READ_BLOCKED_GET_PATHS`` still refuses a share token if the documented
 one-line rollback is ever taken.
@@ -185,405 +184,11 @@ def test_loopback_owner_only_is_justification_required():
 
 
 def test_host_capability_tier_split_is_49_local_7_loopback():
-    """The loopback tier is the 5 file-manager spawns, the process restart and
-    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 56
-    routes carry a locality tier = 49 local + 7 loopback.
-
-    History, so a future change to this number arrives with its reason: 16 = 13 +
-    3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
-    ``server-config/open``; 18 = 13 + 5 when the e2e test hook was declared; 19 =
-    14 + 5 from 2026-08-01, when ``POST /libraries/active`` joined the local tier.
-    That one is **not** a filesystem route and does not take a host path: it
-    is local-only because switching library is the pivot that would otherwise let
-    one stolen owner token reach every registered library, and because it resets
-    every connected client (plan §11 q4). 23 = 18 + 5 from 2026-08-09, when the
-    model shelf's four ``model-folders`` mutators joined the local tier (shelf
-    plan B5): three take a caller-supplied host path and the fourth walks one,
-    which is the reference-folder class exactly. The shelf's *read* routes stay
-    ``owner_only`` - they surface host paths but take none.
-
-    26 = 21 + 5 from later the same day, when the shelf's **move** block (B7)
-    joined it: ``POST``, ``GET`` and ``DELETE /model-moves``. The POST is
-    settled by precedent - it writes files into one registered folder and
-    unlinks them from another, which is strictly more than
-    ``reference-folders/{id}/move-pictures``, already on this tier. The GET is
-    the deliberate one: it is not a shelf read but the *control surface* of a
-    host-filesystem operation - how a move is watched, beside the DELETE that
-    stops one - so the tier that alone may start a move is the tier that may
-    observe and steer it. **Not** a secrecy claim about the relpaths: a remote
-    owner is 200 on ``GET /adapters``, which serves ``locations[].folder_path``
-    and ``locations[].relpath`` for every copy (the earlier wording here said
-    otherwise and was corrected in the B7 sign-off). The DELETE is the POST's
-    authority from the other end.
-
-    28 = 23 + 5 later still, when the shelf's **ai-toolkit import** block joined
-    it: ``GET /model-folders/{folder_id}/runs`` and ``POST /model-imports``.
-    The listing walks a registered output root, which is the folder scan's authority;
-    the import writes into one registered folder and may unlink from the output
-    root, which is ``POST /model-moves``' authority. Neither takes a host path -
-    the import names a registered folder id and a run *name* - so they are on
-    this tier for what they do, not for what they accept.
-
-    29 = 24 + 5 with ``POST /model-folders/{folder_id}/relocate``, which moves
-    every file the managed model store holds to a caller-supplied host path and
-    unlinks the originals. It is the ``reference-folders/{folder_id}/relocate``
-    class carrying ``POST /model-moves``' file movement, so it is the one route
-    in the shelf that is on this tier for **both** reasons at once.
-
-    30 = 25 + 5 with ``GET /model-folders/{folder_id}/runs/{run_name}/samples/
-    {filename}``, which serves one preview image out of a registered output root
-    so a step can be judged before it is imported: it reads inside a registered
-    host root and writes nothing, which is the folder scan's authority class.
-
-    31 = 26 + 5 with ``POST /model-files``, the shelf's ``Add file`` (plan F6).
-    It is the second route on this tier for **both** reasons at once, and the
-    first shelf route that takes a host path in its *body*: it copies one loose
-    file from anywhere on the machine into a registered folder and registers it.
-    The path cannot be avoided - the file is by definition somewhere nobody
-    registered - so the containment is on the write and the read is bounded
-    instead (one regular ``.safetensors``, refused outright if it already lies
-    inside a registered folder). It never unlinks: the source is the owner's own
-    file.
-
-    32 = 27 + 5 with ``GET /taggers/plugin-diagnostics`` (#326). It is the
-    first route on this tier for **disclosure alone**: it takes no path, walks
-    nothing and writes nothing. It returns two things and both name paths on
-    the host - the folder the tagger registry scans, which is under the owner's
-    home directory, and the import failures of the plugins in it, whose message
-    is ``str(exc)`` from third-party code and so carries whatever path that code
-    was reaching for. Both were fields on ``GET /taggers``, which was ANY_TOKEN,
-    so every share-link holder was reading them. Splitting them out costs a
-    remote owner nothing real: acting on either means editing a file in that
-    folder and restarting. (``GET /taggers`` itself went ``any_token`` ->
-    ``owner_only`` in the same change, which is not a locality tier and so does
-    not move this arithmetic.)
-
-    33 = 28 + 5 with ``GET /adapters/{sha256}/file``, which streams one
-    registered adapter's bytes so a generator on another machine can use what
-    this one catalogues - the locations the detail route serves are *this*
-    host's paths and mean nothing over there. It is the **first shelf read off
-    the ``owner_only`` tier**, and the line that kept the others on it says why:
-    they "surface host paths but take none". This one takes none either, but it
-    does not surface a path - it returns the raw bytes of a file inside a
-    registered model folder, which is the ``.../runs/{run_name}/samples/
-    {filename}`` authority class exactly: reads inside a registered host root,
-    writes nothing, and is a new capability rather than a narrower view of the
-    metadata route beside it. Loopback/LAN/Tailscale is the deployment the route
-    exists for, so the tier costs it nothing; a genuinely remote generator needs
-    ``allow_remote_host_ops``, which is the safe direction to fail in.
-
-    34 = 29 + 5 with ``POST /model-files/delete``, the shelf's delete verb
-    (#933). It is the **unlink half of ``POST /model-moves`` standing alone**:
-    it removes the owner's model files - to the OS trash by default, permanently
-    on request - and then drops their hub rows. It takes no host path, and the
-    same containment the mover uses for its source decides every path it
-    touches; what puts it here is the destruction itself, which is the strongest
-    thing the shelf does to a disk and is not made weaker by the ids being ours
-    rather than the caller's.
-
-    35 = 29 + 6 with ``POST /models/{model_id}/open-location``, the shelf's
-    ``Open in file manager`` (#933) and the **first addition to the loopback
-    tier since the e2e test hook**. It is the same host-GUI spawn as the three
-    file-manager routes before it - ``server/restart``, the fourth member, drives
-    the host shell without spawning a GUI - reached through the shared
-    ``pixlstash/utils/host_open.py`` rather than inline, so it needs no new
-    argument for the tier: the authority is the host's own shell. It is here for
-    the *spawn* and not for an input - there is no body, the id is a hub
-    ``model.id``, and the path is the scanner's own folder joined to its relpath
-    and contained, exactly as ``GET /adapters/{sha256}/file`` contains the same
-    join. The local count is unchanged.
-
-    37 = 31 + 6 with the two ``GET /models/{model_id}/samples`` routes, which
-    read a training run's previews back off the shelf after the import copied
-    them into ``<stem>_samples/`` beside the checkpoint. The byte route is
-    ``GET /adapters/{sha256}/file`` again - raw bytes out of a registered model
-    folder - and the listing walks one directory inside that folder, reporting
-    names of files PixlStash never registered, which is the folder scan's authority
-    narrowed to a directory. **The plan for that change asked for
-    ``owner_only``**, on the grounds that both are addressed by a ``model.id``
-    with no host path crossing the wire; that is the argument the
-    ``/adapters/{sha256}/file`` entry above records as *not* the argument, since
-    the tier follows the authority exercised rather than what the route accepts.
-    The listing is kept beside the byte route rather than one tier below it, so
-    a caller who may not fetch a preview is not handed a list of them. The
-    loopback count is unchanged: both are reads, and neither spawns anything.
-
-    41 = 35 + 6 with the four v1.11 library-lifecycle routes, and they land on
-    this tier for three different reasons rather than one. ``GET
-    /libraries/inspect`` and ``POST /libraries`` are the plain path-authority
-    case: both take a caller-supplied host path through the same
-    ``validate_reference_folder_path`` chokepoint as the folder picker, the
-    first walking it to say what the folder is and the second writing a vault
-    into it and restricting it to the owner. Neither creates a directory -
-    ``POST /filesystem/folders``, already on this tier, is what the picker's
-    ``New folder`` uses - so the authority stays bounded to the one folder the
-    owner named. ``DELETE /libraries/{library_uuid}`` is the ``POST
-    /libraries/active`` argument again and **not** the path one: it takes a
-    registry uuid, removes no file, and is here because every share link
-    pointing at that library stops working, which is authority over other
-    principals' state. ``PATCH /libraries/{library_uuid}`` is the weakest of the
-    four and is here by consistency rather than capability - it writes one hub
-    column and renames nothing on disk - because the Settings pane gates its
-    whole management menu on one ``can_manage`` locality answer, and splitting
-    the rename onto a looser tier would give that pane two rules to explain
-    while buying a remote owner nothing they could act on. The loopback count is
-    unchanged: none of the four spawns anything.
-
-    43 = 37 + 6 with the two ``/server-config/views`` routes, PixlStash Views
-    (v1.11 Phase 7) - **withdrawn, and the pair went with it**, so this entry is
-    history: it is the tier as it stood in 2026-08, not as it stands now, and
-    the running total it names is two above the one the paragraphs below carry
-    forward. Both were ``LOCAL_OWNER_ONLY``: the PATCH took a host path and
-    wrote a tree of links into it, the GET was its control surface and sat on
-    ``READ_BLOCKED_GET_PATHS`` beside ``GET /server-config/layout``. Neither was
-    the *subject* of any assertion in this file - the behavioural §16.3 tests
-    below drive ``GET /filesystem/browse`` and ``POST
-    /pictures/{id}/open-location``, and the belt membership is derived from
-    ``ROUTE_POLICIES`` rather than written down - so removing them costs this
-    suite two counted routes and no coverage.
-
-    46 = 40 + 6 with the folder-structure read's three routes (v1.11 Phase 2):
-    ``POST``, ``GET .../status`` and ``DELETE /folder-structure/read``. The POST
-    is ``GET /filesystem/browse``'s class and then some - it takes a
-    caller-supplied host path, walks it *recursively* and decodes pictures out
-    of it, where browse lists one directory - so it must not be a second,
-    weaker way to ask what is on the disk. It is the ``GET /libraries/inspect``
-    lesson above applied one route later, and then once more: the blocklist runs
-    after ``realpath`` (validating the string the caller sent lets a symlink hand
-    ``/etc`` to a route that walks it) **and again on every directory the walk
-    descends into**, because a root-only check is a check on one string - ``/``
-    names no restricted directory and contains all of them. Measured: 391 of 400
-    folders came out of ``/etc``, ``/proc`` and ``/root`` before that second
-    check, and 0 after. The GET is the deliberate
-    one, for the reason ``GET /model-moves`` is on this tier: what it carries
-    *is* the answer, a map of the owner's folder names, tree shape and picture
-    counts, so polling cannot be a lower bar than starting. The DELETE is the
-    POST's authority from the other end. None of the three writes anything -
-    no row is created, no file is moved - which is why the tier follows the
-    disclosure and the path, not a destructive verb. The loopback count is
-    unchanged: nothing here spawns anything.
-
-    48 = 46 + 2 with the folder-structure commit's two routes (v1.11 Phase 3):
-    ``POST`` and ``GET .../commit/status``. The POST takes no fresh host path -
-    it addresses a settled read by ``task_id`` - but it is the write that
-    follows the read's own tier: it registers the read's root as a reference
-    folder and creates the accepted projects/people/sets/tags from it, which is
-    ``POST /reference-folders``' authority reached through a different door. The
-    GET is the read status route's own argument again: what it carries is the
-    commit's result, the same host-path-derived map the read already gates at
-    this tier, so polling the write must not be a lower bar than polling the
-    read was. Neither spawns anything, so the loopback count is unchanged.
-
-    50 = 44 + 6 with the layout pair (v1.11 Phase 4b): ``GET`` and
-    ``PATCH /server-config/layout``. Neither takes a host path at all - the root
-    is the library's own - and the PATCH moves nothing, because the release's
-    rule is that every path already in the library is true the moment it is
-    written. What puts them here is the authority the PATCH *hands out*: from
-    then on a background task renames the owner's files into the folder names it
-    chose, so the tier that may decide that is the tier that holds it, and the
-    GET is its control surface by the ``GET /model-moves`` argument. The GET is
-    also on ``READ_BLOCKED_GET_PATHS``, so an ``AUTHZ_GATE_ENFORCING = False``
-    rollback does not hand the shape of the owner's folder tree to share tokens.
-    The move itself is NOT here: ``POST /pictures/layout/move-to-match`` is
-    ``picture_scoped``, on the ``POST /pictures/rotate`` line, because the
-    caller supplies pictures and never a path. The loopback count is unchanged:
-    neither route spawns anything.
-
-    51 = 44 + 7 with ``POST /pictures/export/folder`` (#291), export-to-folder:
-    a local owner already has the destination mounted, so the ZIP-and-download
-    round trip in ``POST /pictures/export`` is pure overhead, and this route
-    writes the exported pictures straight into a caller-named destination
-    instead. It takes a caller-supplied host path exactly like the filesystem
-    picker's routes, which alone would be ``LOCAL_OWNER_ONLY`` - but once every
-    picture is written it opens the destination in the host file manager
-    through the shared ``pixlstash/utils/host_open.py``, the same spawn as
-    ``pictures/{id}/open-location`` and the shelf's `Open in file manager`, and
-    that is the stricter tier the write-then-open pair as a whole is on. The
-    local count is unchanged: nothing else here moved.
-
-    52 = 45 + 7 with ``DELETE /folder-structure/commit`` (``bd1ff8f7``), which
-    is ``DELETE /folder-structure/read`` one route later: it stops the owner's
-    in-flight commit - abort, or "organise later" - which is authority over
-    another principal's operation and belongs on the tier that starts it. **It
-    landed without this number being moved**, so the assertion below was red on
-    ``develop`` until the entry after this one; recorded here rather than
-    quietly folded in, because a counter that gets corrected without saying so
-    is a counter nobody trusts next time.
-
-    54 = 47 + 7 with the migration pair (v1.11 Phase 4c): ``GET`` and ``POST
-    /server-config/layout/migration``, moving an existing library onto the
-    layout the pair above chose. The POST is the strongest host-filesystem
-    thing any route in this library does - it renames *every* picture in the
-    library's own root - and it is above ``POST /pictures/layout/move-to-match``
-    for the reason that route is ``picture_scoped``: there the caller names the
-    pictures, so the scope check is the check that matters; here the caller
-    names none and the scope is the whole library, so there is nothing for a
-    per-object gate to bound and the tier has to carry it instead. It takes no
-    host path - the root is the library's own, every destination is rendered
-    from a layout only this tier could have set - and the Phase 4b planner's
-    refusals still stand under it (a source outside the root, a symlink, a
-    destination that would escape). The GET is the control-surface argument
-    again, and this time for a second reason as well: what it returns is a
-    count of the owner's files, sample paths and where a mount point sits
-    inside their library, which is ``GET /folder-structure/read/status``'s
-    disclosure class. It is on ``READ_BLOCKED_GET_PATHS`` beside ``GET
-    /server-config/layout`` for the same rollback reason. The loopback count is
-    unchanged: neither route spawns anything.
-
-    54 = 47 + 7 with the library root's caption-file sync pair: ``GET`` and
-    ``PATCH /server-config/captions``, the root's copy of the four fields
-    ``PATCH /reference-folders/{folder_id}`` already carries on this tier.
-    The PATCH decides whether, and under what filename, a file is written
-    beside every picture in the library root; the GET is its control surface,
-    the ``GET /server-config/layout`` argument. Neither takes a host path and
-    neither spawns anything, so the loopback count is unchanged.
-
-    56 = 49 + 7 with the first-import pair: ``POST /libraries/{library_uuid}/
-    promote`` renames the import's temporary database onto ``vault.db`` and
-    ``POST /libraries/{library_uuid}/discard`` deletes it and the folders
-    PixlStash made. Each writes inside a host folder (``POST /libraries``'
-    class) and closes and reopens the active vault (``POST /libraries/active``'
-    class). Both take a registry uuid, never a path, and refuse any library not
-    on its first import. Neither spawns anything.
-
-    57 = 50 + 7 with ``POST /model-files/merge`` (#1439), the per-copy delete:
-    it keeps the copy the body names and removes every other ``present`` copy of
-    that model. That is ``POST /model-files/delete``'s unlink narrowed to the
-    copies the caller did *not* name, so it is on that route's tier for that
-    route's reason - the destruction itself - and fewer bytes is not a weaker
-    authority. It takes no host path (a ``model.id`` and a ``(folder_id,
-    relpath)`` the scanner wrote), contains every path with the same
-    ``_contained_path``, and deletes no hub row at all: the removed copies keep
-    their ``model_file`` rows at ``state = 'removed'``. It also reads the owner's
-    configured ComfyUI for its advertised model list, which is the outbound read
-    the run pre-flight already makes on the same credential. Nothing spawns, so
-    the loopback count is unchanged.
-
-    56 = 49 + 7 when ``POST /libraries/{library_uuid}/promote`` was removed: its
-    only caller, "Start an empty library here", left the first-import wizard
-    because nobody wants an empty library in a folder full of pictures (an empty
-    folder gets ``vault.db`` from ``POST /libraries`` directly). A finished
-    import still promotes its vault, from the commit, not through a route.
-
-    57 = 49 + 8 with ``POST /comfyui/pack/install``: it writes code (the
-    ComfyUI-PixlStash nodes) into a ComfyUI ``custom_nodes`` folder on this
-    machine and restarts ComfyUI, the host-shell class, so loopback only.
-
-    59 = 51 + 8 with ``POST`` and ``DELETE /comfyui/link`` retargeted from
-    ``OWNER_ONLY`` (#1810): linking has this server push a full-access token to
-    whatever answers at the saved ComfyUI address on its own network, and
-    saving that address is allowed remotely, so a remote owner could aim it.
-
-    60 = 52 + 8 with ``PUT /users/me/token/{token_id}/libraries`` (#1787): it
-    lets a token reach libraries it was not minted in, which is the owner's
-    decision on the local network and not one a remote session may take (a
-    token may not either, which the handler sees to).
-
-    61 = 53 + 8 with ``POST /pictures/move-to-library``. It is on this tier for
-    ``POST /libraries/active``'s reason, not the path-authority one: it opens a
-    library that is not the active one with write authority, runs its pending
-    migrations and holds the switch lock while it copies, and its refusals name
-    that library's host folder, which ``GET /libraries`` redacts for a remote
-    owner. It takes a registry uuid and no path.
-
-    62 = 54 + 8 with ``POST /model-downloads``: it writes a downloaded model
-    into the registered download folder and registers it, ``POST
-    /model-files``' file-writing class with the bytes off the network. It
-    takes no path and no URL (the link is looked up by file name in the
-    committed template list), and nothing spawns. Its cancel writes nothing
-    but its own partial file and is ``owner_only``.
-    64 = 56 + 8 with ``GET /compute/gpus`` and ``PATCH /compute/gpu``: the first
-    names this host's GPUs and what runs on them, the second changes which one
-    the server runs on at its next start.
-    65 = 57 + 8 with ``POST /model-folders/pick-up`` (#1985): it walks every
-    folder the background scan walks and registers the files it finds by the names a
-    workflow reports missing, which is the folder scan's authority narrowed to those
-    files. It takes filenames, not a host path.
-    66 = 57 + 9 with ``POST /comfyui/node-packs/{pack_id}/install`` (#2054): it
-    has ComfyUI-Manager install third-party code (a pack from
-    ``node_packs.KNOWN_PACKS`` at its pinned version) into the saved ComfyUI and
-    restarts it, the host-shell class, so loopback only.
-    69 = 66 + 3 with in-app LoRA training: ``POST /training/jobs`` starts the
-    owner's configured trainer on this machine, and ``POST
-    /training/jobs/{job_id}/cancel`` and ``DELETE /training/jobs/{job_id}`` stop
-    it and remove its host work folder. A finished run's LoRA is a model-shelf
-    row now, so the ``/loras`` routes that once removed and disclosed its file
-    are gone with the ``TrainedLora`` table.
-    72 = 69 + 3 with the ai-toolkit install: ``GET /training/ai-toolkit/discover``
-    and ``GET /training/ai-toolkit/status`` disclose the checkout's host paths,
-    and ``POST /training/ai-toolkit/check`` starts the checkout's Python.
-    64 = 63 + 1 with ``PUT /training/ai-toolkit/config``, which stores the checkout
-    and its Python (the trainer's argv[0]) out of ``PATCH /users/me/config``, so the
-    gate, not the PATCH handler, carries the locality rule (review F2).
-    65 = 64 + 1 with ``GET /model-folders/{folder_id}/dirs``, which lists one
-    directory level inside a registered folder and names subdirectories PixlStash
-    never registered: ``models/{model_id}/samples``' authority, so the tier, not
-    the ``owner_only`` the shelf's reads carry.
-    66 = 65 + 1 with ``GET /model-folders/comfyui-reads``, which returns the
-    subdirectories of registered folders the host ComfyUI loads from, names
-    PixlStash never registered: the authority of ``/dirs``.
-    74 = 65 + 9 when ``POST /model-folders/{folder_id}/rescan`` was removed: a
-    registered folder is scanned in the background (``ModelFolderScanFinder``),
-    so no route walks one on request. The routes that cited its authority walk
-    what that scan walks.
-    67 = 65 + 2 with the folder verbs: ``POST /model-folders/{folder_id}/dirs``
-    makes a directory inside a registered folder and ``POST
-    /model-folders/{folder_id}/dirs/move`` moves or renames one, repointing the
-    rows under it, which is ``POST /model-moves``' authority.
-    80 = 71 + 9 with ``PATCH`` and ``DELETE /comfyui/connections/{connection_id}``
-    and ``POST`` and ``DELETE /comfyui/connections/{connection_id}/link``
-    (#2194): each connection keeps its own link key, so these link, unlink,
-    move and remove one connection, revoking its key and writing into that
-    ComfyUI's settings on this server's network, as ``POST`` and ``DELETE
-    /comfyui/link`` do. Renaming rides on the PATCH, so it is local too.
-    72 = 71 + 1 with ``POST /model-folders/{folder_id}/dirs/remove``, which
-    trashes or deletes a directory inside a registered folder:
-    ``POST /model-files/delete``' authority over a subtree.
-    81 = 70 + 11 with ``POST /training/ai-toolkit/check`` and ``PUT
-    /training/ai-toolkit/config`` moved to the loopback tier (#2295): the first
-    runs the Python it is given at once and the second makes it argv[0] of every
-    later trainer, which is at least ``POST /server/restart``'s authority.
-    82 = 70 + 12 with ``POST /test-hooks/reference-folders/{folder_id}/rescan``
-    (#2325), the second e2e hook: it marks a reference folder due for a rescan,
-    as the filesystem watcher does, and is loopback for ``ws-event``'s reasons.
-    83 = 70 + 13 with ``POST /test-hooks/file-pictures`` (#2315), the third: it
-    files pictures on a workflow, as a run's import does, for the same reasons.
-    84 = 70 + 14 with ``POST /model-folders/{folder_id}/open``, the folder
-    tree's ``Open in file manager``: the host-GUI spawn of
-    ``models/{model_id}/open-location`` for a directory.
-    85 = 70 + 15 with ``POST /pictures/share-copies`` (#2417): it writes picture
-    copies into a staging folder on the host and answers with their absolute
-    host paths, which only a process on that machine can open. It is
-    ``export/folder``'s write without the caller-named destination and without
-    the spawn, on that route's tier because the paths it hands back are useless
-    and owner data anywhere but loopback.
-    87 = 70 + 17 with ``GET`` and ``POST /open-with``: the GET
-    lists the applications installed on the host, the POST writes an edit copy
-    to the host disk and spawns one of those applications on it, which is
-    ``open-location``'s authority.
-    88 = 71 + 17 with ``POST /model-folders/{folder_id}/rename``, which renames a
-    registered folder on the host within its parent: the ``dirs/move`` rename
-    applied to the registered root.
-    89 = 71 + 18 with ``POST /library/folders/open`` (#2448), the Folders
-    tree's ``Open in File Manager``: the host-GUI spawn of
-    ``pictures/{id}/open-location`` for a folder rendered from ids.
-    90 = 72 + 18 with ``POST /model-files/delete/undo``, which moves the files
-    a trash delete removed back into their registered folders: the delete's
-    authority from the other end.
-    91 = 73 + 18 with ``DELETE /model-folders/{folder_id}/runs/{run_name}``,
-    which moves one ai-toolkit run folder to the host trash: ``POST
-    /model-files/delete``' authority over a run.
-    92 = 74 + 18 with ``POST /training/jobs/{job_id}/quit-comfyui`` (#2558),
-    the owner's yes to PixlStash terminating the local ComfyUI process for a
-    queued run: ``POST /training/jobs/{job_id}/cancel``'s host-process signal,
-    aimed at ComfyUI's pid. Nothing spawns, so the loopback count is unchanged.
-    93 = 75 + 18 with ``POST /training/jobs/{job_id}/train-longer``: it renames
-    and moves checkpoints inside a run's host folder and queues the trainer to
-    run on it again, ``POST /training/jobs``' class. It takes no path. Its
-    ``GET`` reads the run's checkpoint headers and returns no path, so it is
-    ``owner_only``.
-
-    Arithmetic, not judgement."""
+    """The loopback tier is the host-shell red-line set (host-GUI spawns, the
+    process restarts, the e2e test hooks and the code installs); the
+    filesystem/folder routes stay LOCAL_OWNER_ONLY. The counts asserted below
+    are arithmetic, not judgement: a change to either arrives with its reason.
+    """
     loopback = {
         key
         for key, rp in ROUTE_POLICIES.items()
@@ -719,7 +324,8 @@ def test_local_owner_only_remote_public_allowed_with_flag_on():
 
 
 def test_the_layout_migration_routes_answer_a_local_owner_end_to_end():
-    """The in-scope 200 half of the Phase 4c declaration, over a real server.
+    """The in-scope 200 half of the layout-migration declaration, over a real
+    server.
 
     Reuses this module's own owner environment rather than standing up another:
     what is being proved is the route contract - the preview moves nothing, the
@@ -817,21 +423,19 @@ def test_the_layout_migration_is_refused_to_a_remote_owner():
 
 
 def test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path():
-    """Both directions on the #326 split, plus the reason it exists.
+    """Both directions on the tagger diagnostics split, plus the reason it exists.
 
     The plugin folder and the load-failure messages are host-path disclosures,
     so a remote owner is refused them (flag off) and a share-scoped token is
     refused them from anywhere; a loopback owner still gets them, because
     over-blocking is its own regression.
 
-    The negatives assert on the **path string**, not on a field name: an
-    earlier version of this test checked that ``plugin_dirs`` was absent from
-    ``GET /taggers``, which the ``load_error`` row beside it satisfied while
-    still carrying the folder. Grepping the serialised body for the owner's
-    home directory is the assertion that cannot be satisfied by moving the leak
-    to another key - or to another directory.
+    The negatives assert on the **path string**, not on a field name:
+    grepping the serialised body for the owner's home directory is the
+    assertion that cannot be satisfied by moving the leak to another key - or
+    to another directory.
 
-    ``GET /taggers`` is now owner-only and gets the stronger check of the two:
+    ``GET /taggers`` is owner-only and gets the stronger check of the two:
     a share token may not read it at all.
     """
     with _owner_env() as env:
@@ -950,22 +554,18 @@ def test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path
 def test_owner_only_path_disclosing_gets_survive_the_documented_gate_rollback():
     """The second belt: ``READ_BLOCKED_GET_PATHS``, with the gate switched off.
 
-    ``AUTHZ_GATE_ENFORCING = False`` is a documented one-line rollback, and
-    ``GET /filesystem/browse`` is on both belts precisely so taking it does not
-    re-open a filesystem disclosure. The two tagger routes are GETs on the same
-    tier, so they need the same pair - a fact the #326 review reproduced by
-    reading the owner's home directory out of the diagnostics route with the
-    gate off. The owner (no token, session cookie) is unaffected either way.
+    ``AUTHZ_GATE_ENFORCING = False`` is a documented one-line rollback, and ``GET
+    /filesystem/browse`` is on both belts precisely so taking it does not re-open a
+    filesystem disclosure. The two tagger routes are GETs on the same tier, so they need
+    the same pair. The owner (no token, session cookie) is unaffected either way.
 
-    ``GET /insights`` and ``GET /moves/pending`` are here for the same reason
-    and were the #1177 item 11 finding: both are plain ``OWNER_ONLY`` rather
-    than locality-tier, both serve absolute host paths (the folder behind every
-    insight finding; ``old_path``/``new_path`` for every externally-moved file),
-    and the belt derivation that would have caught them only looked at the
-    locality tier. The owner assertions below are not decoration - the READ
-    middleware runs ahead of routing, so a renamed or dead path 403s a share
-    token exactly like a real refusal, and the owner's 200 is what proves the
-    negative was measured against a live route.
+    ``GET /insights`` and ``GET /moves/pending`` are here for the same reason: both are
+    plain ``OWNER_ONLY`` rather than locality-tier, and both serve absolute host paths
+    (the folder behind every insight finding; ``old_path``/``new_path`` for every
+    externally-moved file). The owner assertions below are not decoration - the READ
+    middleware runs ahead of routing, so a renamed or dead path 403s a share token
+    exactly like a real refusal, and the owner's 200 is what proves the negative was
+    measured against a live route.
     """
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
@@ -1023,36 +623,24 @@ def test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt():
     one names two paths; this one asserts the *rule*, so the next such GET fails
     the build rather than waiting for a review to notice it.
 
-    **The rule covers the whole owner class, not just the locality tier
-    (#1177 item 11).** It used to stop at ``LOCAL_OWNER_ONLY`` /
-    ``LOOPBACK_OWNER_ONLY``, on the reading that those are the routes exercising
-    host authority - and that is true of what they *do*, but the belt is about
-    what a share token may *see* under the rollback. ``GET /insights`` returns
-    the absolute path of the folder behind every finding and
-    ``GET /moves/pending`` returns ``old_path``/``new_path`` for every file the
-    owner moved outside PixlStash; both are ``OWNER_ONLY``, both were off the
-    belt, and this derivation - the one thing that would have caught it - did
-    not look at them. Widening it also removes the judgement call: an entry is
-    owed by *tier*, not by someone grading the payload.
+    **The rule covers the whole owner class, not just the locality tier**,
+    because the belt is about what a share token may *see* under the rollback:
+    ``GET /insights`` and ``GET /moves/pending`` are ``OWNER_ONLY`` and serve
+    absolute host paths. An entry is owed by *tier*, not by someone grading the
+    payload.
 
-    The templated ones cannot be expressed in an exact-match frozenset at all.
-    They used to be pinned here as a known gap; ``READ_BLOCKED_GET_PREFIXES``
-    closed it (#1293), so every templated owner-class GET must now sit under a
-    prefix. A new one under a path share tokens also use (``/pictures/{id}/…``)
-    cannot take a prefix; that is a real hole under the rollback, and this is
-    where it is decided rather than discovered.
+    The templated ones cannot be expressed in an exact-match frozenset at all, so every
+    templated owner-class GET must sit under a ``READ_BLOCKED_GET_PREFIXES`` prefix. A
+    new one under a path share tokens also use (``/pictures/{id}/…``) cannot take a
+    prefix; that is a real hole under the rollback, and this is where it is decided
+    rather than discovered.
 
-    **``GET /adapters/{sha256}/file`` joined that set on 2026-08-15, and it is
-    the sharpest member of it.** The other two serve a run listing and a preview
-    image; this one streams model weights. So under the documented
-    ``AUTHZ_GATE_ENFORCING = False`` rollback a share token would not read a
-    directory - it would download every adapter on the shelf. It is on the list
-    rather than closed here because closing it means prefix matching in a belt
-    every route passes through, which is its own change with its own review, and
-    a bespoke ``startswith`` for one route is the kind of special case that rots.
-    The gate refuses it today and
+    **``GET /adapters/{sha256}/file`` is the sharpest member of that set**: it
+    streams model weights, so under the documented
+    ``AUTHZ_GATE_ENFORCING = False`` rollback a share token would download
+    every adapter on the shelf. The gate refuses it and
     ``tests/test_model_shelf_api.py::test_no_share_token_can_download_a_model_file``
-    proves that by mutation; this note is about the rollback, not about today.
+    proves that by mutation; this note is about the rollback.
     """
     owner_class = (
         AccessPolicy.OWNER_ONLY,
@@ -1125,7 +713,7 @@ def test_loopback_owner_only_rfc1918_403_even_with_flag_on():
 
 
 def test_choosing_the_trainers_python_is_loopback_only():
-    """#2295: ``/training/ai-toolkit/check`` runs the Python it is given and
+    """``/training/ai-toolkit/check`` runs the Python it is given and
     ``PUT /training/ai-toolkit/config`` makes it the trainer's argv[0], so a LAN
     or Tailscale owner is refused both even with ``allow_remote_host_ops``,
     while a loopback owner reaches the handler (its 422 for a path that is not
@@ -1152,7 +740,7 @@ def test_choosing_the_trainers_python_is_loopback_only():
 
 
 def test_config_names_the_ai_toolkit_paths_only_to_a_local_owner(tmp_path):
-    """#2295: ``GET /users/me/config`` is owner-only, so a remote owner reads it
+    """``GET /users/me/config`` is owner-only, so a remote owner reads it
     too; the checkout and its Python are host paths, so they read as null there
     with ``ai_toolkit_configured`` still saying an install is saved. A loopback
     or LAN owner reads them, as ``/training/ai-toolkit/status`` gives them."""
@@ -1392,7 +980,7 @@ _SHARE_COPIES = f"{API}/pictures/share-copies"  # #2417
 
 
 def test_share_copies_is_loopback_only_even_with_the_flag_on():
-    """#2417: share copies hand back absolute host paths, so only a loopback
+    """Share copies hand back absolute host paths, so only a loopback
     owner passes the gate; RFC1918, Tailscale and public stay 403 with
     ``allow_remote_host_ops`` on. The positive half names an id no vault holds,
     so the handler answers 200 with it skipped and copies nothing."""
@@ -1481,8 +1069,8 @@ _SHELF_OPEN = f"{API}/models/999999/open-location"  # the #933 red-line route
 
 
 def test_the_shelf_open_location_is_on_the_red_line_too():
-    """#933: the model shelf's `Open in file manager` spawns the same host GUI
-    process as its four predecessors, so it gets the same carve-out proof -
+    """The model shelf's `Open in file manager` spawns the same host GUI
+    process as the other file-manager routes, so it gets the same carve-out proof -
     RFC1918, Tailscale and public all 403 EVEN with ``allow_remote_host_ops``
     on, and a loopback owner passes the gate.
 
@@ -1515,7 +1103,7 @@ def test_open_location_resolves_a_library_picture_against_the_library(
 ):
     """A library picture stores its path relative to the library, so the
     folder opened is the library's own sub-folder, not one relative to the
-    server's working directory (which answered 404 for every such picture).
+    server's working directory.
     The spawn is stubbed so no file manager opens on the machine running this."""
     opened = []
     with _owner_env() as env:
@@ -1555,10 +1143,9 @@ _CONFIG_OPEN = f"{API}/server-config/open"
 
 
 def test_server_config_open_loopback_owner_only_carve_out():
-    """CSO Condition 1: ``POST /server-config/open`` spawns the host file browser
-    via the byte-identical ``_open_in_os`` mechanism as the other 3 red-line
-    routes, but shipped ``owner_only`` with NO locality check. It is reclassified
-    LOOPBACK_OWNER_ONLY. Same carve-out proof: loopback allowed; RFC1918 /
+    """``POST /server-config/open`` spawns the host file browser via the
+    byte-identical ``_open_in_os`` mechanism as the other red-line routes, so it
+    is LOOPBACK_OWNER_ONLY. Same carve-out proof: loopback allowed; RFC1918 /
     Tailscale / public 403 EVEN with ``allow_remote_host_ops=True``.
 
     The loopback-allow path reaches the handler, which would spawn a real file
@@ -1947,7 +1534,7 @@ def test_training_host_routes_admit_a_remote_owner_with_the_flag_on():
 def test_ai_toolkit_install_routes_refuse_a_remote_owner_and_admit_lan():
     """discover and status disclose host paths, so they are LOCAL_OWNER_ONLY: a
     remote owner is 403'd naming the flag, and the LAN owner reaches the handler.
-    check and PUT config moved to the loopback tier (#2295) and are covered by
+    check and PUT config are on the loopback tier and are covered by
     test_choosing_the_trainers_python_is_loopback_only."""
     cases = (
         ("get", f"{API}/training/ai-toolkit/discover"),
@@ -1979,7 +1566,7 @@ def test_ai_toolkit_discover_admits_a_remote_owner_with_the_flag_on():
 
 def test_ai_toolkit_config_is_saved_only_from_this_computer(tmp_path):
     """PUT /training/ai-toolkit/config stores the checkout and the Python that is
-    argv[0] of the trainer, so it is LOOPBACK_OWNER_ONLY (#2295): a remote or LAN
+    argv[0] of the trainer, so it is LOOPBACK_OWNER_ONLY: a remote or LAN
     owner is refused, even to disconnect and even with allow_remote_host_ops,
     and the loopback owner saves the checkout's Python and reads it back. PATCH
     /users/me/config does not write these keys: 422 from any address."""

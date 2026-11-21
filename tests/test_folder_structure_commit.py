@@ -1,9 +1,9 @@
-"""The v1.11 Phase 3 folder-structure commit.
+"""The folder-structure commit.
 
-One module-scoped ``Server`` covers the whole flow: run a real Phase 2 read
+One module-scoped ``Server`` covers the whole flow: run a real folder-structure read
 over a tiny real folder tree, accept a mapping over it, commit, and check what
 came out the other side - a reference folder indexed in place, the accepted
-projects/people/sets/tags, every picture linked, and **the release's headline,
+projects/people/sets/tags, every picture linked, and **the headline guarantee,
 asserted rather than eyeballed: not one file on disk moved, was renamed, or
 changed a byte.**
 """
@@ -119,7 +119,7 @@ def test_every_route_this_file_names_is_a_real_route(owner_env):
 
 
 def test_committing_moves_renames_and_copies_zero_files(owner_env):
-    """The release's headline. Real folders, real files, hashed before and after."""
+    """The headline guarantee. Real folders, real files, hashed before and after."""
     owner = owner_env["owner"]
     root = os.path.join(owner_env["tmp"], "zero-move-library")
     _make_tree(
@@ -429,7 +429,7 @@ def test_an_unknown_commit_status_task_id_is_a_404(owner_env):
 
 
 def test_local_import_mode_imports_as_managed_pictures_and_assigns(owner_env):
-    """`mode="local_import"`: the "Add a library" bugfix. Pictures already
+    """`mode="local_import"`: the "Add a library" path. Pictures already
     inside the library's own `image_root` become ordinary MANAGED pictures -
     no reference folder - with the same entity-assignment semantics as
     `mode="reference"`."""
@@ -600,10 +600,9 @@ def test_local_import_wakes_the_planner_as_each_chunk_lands(
     """Workers must start on the first indexed chunk, not on the commit's end.
 
     The planner sweeps only on a wake or when its backoff expires, and an idle
-    library has it parked at `MAX_INTERVAL_S`. The chunk inserts alone never
-    woke it, so every finder sat out the whole indexing stage and the AI work
-    began on the end-of-commit notify - measured: first task submitted the
-    same second the commit reported `done`, for imports up to ten seconds long.
+    library has it parked at `MAX_INTERVAL_S`. The chunk inserts alone would not
+    wake it, so every finder would sit out the whole indexing stage until the
+    end-of-commit notify.
     """
     from pixlstash.services import folder_structure_commit_service as commit_service
 
@@ -630,7 +629,7 @@ def test_local_import_skips_dot_folders(owner_env):
     """A vault's own caches (`.ref_thumbs/`, `.pixlstash` sidecars) can sit
     right inside `image_root`, which `local_import`'s root commonly IS. A
     `.webp` thumbnail in one of those is a supported extension - without the
-    same dot-folder prune the Phase 2 read already does, local_import would
+    same dot-folder prune the read already does, local_import would
     walk straight into it and import PixlStash's own cache files as if they
     were the owner's pictures."""
     server = owner_env["server"]
@@ -661,8 +660,7 @@ def test_local_import_skips_dot_folders(owner_env):
 
 def test_local_import_skips_the_librarys_own_folders(owner_env):
     """`tmp/` holds the set and face thumbnail caches; `snapshots/` the vault
-    copies. Neither is the owner's pictures. A real import of a library root
-    indexed 24 cache thumbnails as pictures before this."""
+    copies. Neither is the owner's pictures."""
     owner, server = owner_env["owner"], owner_env["server"]
     root = server.vault.image_root
     _make_tree(
@@ -735,11 +733,10 @@ def test_local_import_mode_refuses_a_root_outside_image_root(owner_env):
 
 
 def test_reference_mode_refuses_the_librarys_own_folder(owner_env):
-    """The mirror of the test above: the library's own storage is indexed in
-    place and never registered as a reference folder. The wizard used to
-    default to mode="reference", and pointed at image_root it registered the
-    whole library as one reference folder - with absolute paths on every row
-    and "remove" on that folder deleting all of them. Refused at the route."""
+    """The mirror of the test above: the library's own storage is indexed in place and
+    never registered as a reference folder. Pointed at image_root, mode="reference"
+    would register the whole library as one reference folder - with absolute paths on
+    every row and "remove" on that folder deleting all of them. Refused at the route."""
     server = owner_env["server"]
     owner = owner_env["owner"]
     root = os.path.join(server.vault.image_root, "own-folder-as-reference")
@@ -882,9 +879,9 @@ def test_a_folder_tag_survives_the_tagger_reaching_the_picture(owner_env):
 def test_a_person_lands_on_faces_extracted_before_the_mapping(owner_env):
     """Workers start while the import is still indexing, so a picture's faces
     routinely exist BEFORE the mapping assigns its folder to a person. The
-    deferred `pending_character_id` was only ever resolved by the face task's
-    own completion hook, which had already run; the mapping must resolve it
-    itself for those pictures - and leave a not-yet-extracted picture pending
+    face task's own completion hook, which resolves the deferred
+    `pending_character_id`, has already run for those; the mapping must resolve
+    it itself for those pictures - and leave a not-yet-extracted picture pending
     rather than let the resolver discard it as "no faces found"."""
     from pixlstash.db_models.character import Character
     from pixlstash.db_models.face import Face
@@ -1206,11 +1203,7 @@ def test_a_pending_commit_is_finished_by_the_next_start_up(tmp_path):
 
 
 def test_a_start_up_with_background_workers_off_does_not_resume(tmp_path):
-    """A read-only deployment finishes nobody's import (#2352).
-
-    The guard used to read a ``Vault`` attribute that did not exist, so it
-    never fired and this server resumed the commit like any other.
-    """
+    """A read-only deployment finishes nobody's import."""
     from pixlstash.services import folder_structure_commit_service as svc
 
     cfg = str(tmp_path / "server-config.json")
@@ -1250,9 +1243,10 @@ def test_a_start_up_with_background_workers_off_does_not_resume(tmp_path):
 def test_a_taken_project_name_does_not_wedge_the_commit(owner_env):
     """`Project.name` is unique case-insensitively across the library. Marking a
     folder as a project and choosing "start a new one" while that name is taken
-    raised IntegrityError, which is neither CommitError nor CommitStopped - so
-    the route left the durable record *pending*, every start-up resumed it,
-    re-walked and re-hashed the whole root, and failed identically for ever.
+    would raise IntegrityError, which is neither CommitError nor CommitStopped -
+    so the route would leave the durable record *pending*, and every start-up
+    would resume it, re-walk and re-hash the whole root, and fail identically
+    for ever.
 
     The owner asked for a new one, so they get a new one under a free name.
     """
@@ -1299,8 +1293,8 @@ def test_a_taken_project_name_does_not_wedge_the_commit(owner_env):
 def test_committing_the_same_folder_twice_is_idempotent(owner_env):
     """A resumed or re-run commit re-links pictures that already carry their
     assignments. PictureProjectMember and PictureSetMember have composite
-    primary keys and Tag a (picture_id, tag) unique constraint, so the second
-    pass raised IntegrityError and wedged the record pending."""
+    primary keys and Tag a (picture_id, tag) unique constraint, so a naive
+    second pass would raise IntegrityError and wedge the record pending."""
     from pixlstash.db_models.picture import Picture
     from pixlstash.db_models.tag import Tag
     from pixlstash.services.folder_structure_commit_service import (
@@ -1335,12 +1329,12 @@ def test_committing_the_same_folder_twice_is_idempotent(owner_env):
 
 
 def test_the_commit_holds_a_library_lease_for_its_whole_run(owner_env, monkeypatch):
-    """The commit thread re-reads `server.vault` at every step and used to hold
-    no lease, so `LibraryGenerationCoordinator.begin_switch` saw zero readers
-    and let a switch through mid run. A commit against library A that survived
-    one created A's projects, people, sets and tags inside B, linked B's rows to
-    them, and wrote A's durable record into B - so B resumed A's commit at the
-    next start-up. The window is INDEX_TIMEOUT_S: thirty minutes.
+    """The commit thread re-reads `server.vault` at every step, so without a
+    lease `LibraryGenerationCoordinator.begin_switch` would see zero readers and
+    let a switch through mid run. A commit against library A that survived one
+    would create A's projects, people, sets and tags inside B, link B's rows to
+    them, and write A's durable record into B - so B would resume A's commit at
+    the next start-up.
 
     A lease held for the thread's life makes `begin_switch` wait and then fail
     instead of proceeding, which is the honest answer: the library is busy.
@@ -1483,11 +1477,10 @@ def _forget_reference_folder(server, folder_id: int) -> None:
 
 
 def test_a_commit_interrupted_after_its_scan_finished_is_still_resumable(owner_env):
-    """#1177 item 17. A reference-mode commit killed between "the scan is done"
-    and "the mapping is applied" used to wedge for ever: the resume called
-    `register_reference_folder` again, found its own row with `last_scanned`
-    set, and refused it as if it belonged to somebody else - so the record
-    stayed `pending` and every start-up failed the same way.
+    """A reference-mode commit killed between "the scan is done" and "the
+    mapping is applied" must resume: the resume calls
+    `register_reference_folder` again and finds its own row with `last_scanned`
+    set, which it must not refuse as if it belonged to somebody else.
 
     The rule that separates the two: only a record that got past
     ``registering`` owns the row at its root. Both directions asserted, because
@@ -1535,11 +1528,10 @@ def test_a_commit_interrupted_after_its_scan_finished_is_still_resumable(owner_e
 
 
 def test_a_newer_accepted_mapping_supersedes_the_older_pending_one(owner_env):
-    """#1177 item 18. A failed commit leaves its record pending on purpose and
-    clears the in-memory slot, so the owner can accept a second mapping over
-    the same library. Both rows were then pending: the newest was resumed
-    first, and the start-up after that resumed the older one and re-applied a
-    mapping the owner had already replaced.
+    """A failed commit leaves its record pending on purpose and clears the
+    in-memory slot, so the owner can accept a second mapping over the same
+    library. Both rows are then pending, and resuming the older one would
+    re-apply a mapping the owner had already replaced.
     """
     from pixlstash.services import folder_structure_commit_service as svc
 
@@ -1580,12 +1572,11 @@ def test_a_newer_accepted_mapping_supersedes_the_older_pending_one(owner_env):
 
 
 def test_a_reference_commit_refuses_a_root_that_swallows_another(owner_env):
-    """#1177 item 19. `register_reference_folder` ran no conflict check at all,
-    so a reference-mode commit accepted a root that CONTAINS `image_root` (the
+    """A reference-mode commit refuses a root that CONTAINS `image_root` (the
     route only refuses one equal to or inside it) or that contains, or sits
-    inside, another registered folder - two scan tasks each believing they own
-    the same files. Both entry points share
-    `validate_reference_folder_conflicts` now.
+    inside, another registered folder - two scan tasks would each believe they
+    own the same files. Both entry points share
+    `validate_reference_folder_conflicts`.
     """
     from pixlstash.services import folder_structure_commit_service as svc
 
@@ -1620,11 +1611,10 @@ def test_a_reference_commit_refuses_a_root_that_swallows_another(owner_env):
 
 def test_a_reference_commit_refuses_a_symlink_to_a_registered_root(owner_env):
     """The conflict check is a string comparison, and two names for one
-    directory do not compare equal. The "add a reference folder" route stores
-    rows resolved and the commit path stored them merely normalised, so a
-    symlink pointing at a registered root matched no row, was accepted as a
-    free path, and left two scan tasks indexing the same files. Both sides are
-    resolved before they are compared now, and the row this path writes is
+    directory do not compare equal: a symlink pointing at a registered root
+    would match no row, be accepted as a free path, and leave two scan tasks
+    indexing the same files. Both sides are resolved before they are compared,
+    and the row this path writes is
     stored resolved like the route's.
     """
     from pixlstash.services import folder_structure_commit_service as svc
@@ -1659,11 +1649,10 @@ def test_a_reference_commit_refuses_a_symlink_to_a_registered_root(owner_env):
 
 
 def test_the_read_and_the_reference_scan_agree_about_dot_folders(owner_env):
-    """#1177 item 20. The Phase 2 read prunes dot-folders; the reference scan
-    that indexes the very same root did not, so the two passes over one tree
-    disagreed about what was in it - the read's count excluded a vault's own
-    cache and the scan indexed every file in it as a picture, which the
-    mapping then filed.
+    """The read prunes dot-folders, and so does the reference scan that indexes
+    the very same root, or the two passes over one tree would disagree about
+    what is in it - the scan would index a vault's own cache as pictures, which
+    the mapping would then file.
     """
     from sqlmodel import select
 
@@ -1703,10 +1692,9 @@ def test_the_read_and_the_reference_scan_agree_about_dot_folders(owner_env):
 
 
 def test_linking_a_large_import_costs_a_bounded_number_of_statements(owner_env):
-    """#1177 items 21 and 55. Nothing pinned this step's cost, and it was one
-    indexed SELECT per (picture, tag) plus unchunked IN lists over the whole
-    import. Counted rather than timed: a statement count is the thing that
-    actually changed, and it does not depend on the machine.
+    """Linking must not cost one indexed SELECT per (picture, tag) plus
+    unchunked IN lists over the whole import. Counted rather than timed: a
+    statement count does not depend on the machine.
 
     The two sizes are the assertion. An absolute bound would pass a
     per-picture implementation on a small enough tree; twenty times the

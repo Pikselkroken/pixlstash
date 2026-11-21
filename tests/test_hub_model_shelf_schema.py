@@ -1,4 +1,4 @@
-"""The model shelf's hub tables (v1.10.0).
+"""The model shelf's hub tables.
 
 These live in the hub rather than in a vault because what they record is a fact
 about the machine: a folder of LoRAs is on this disk. Re-registering the same
@@ -8,13 +8,11 @@ folder in every library would be absurd. The only vault-side table is
 Two rules under test throughout:
 
 1. **Applying the schema twice is a no-op, and a hub that already exists picks
-   the tables up on its next open.** That is what lets these land by amending v2
-   instead of inventing a v3.
+   the tables up on its next open.** That is what lets these amend v2 instead
+   of inventing a v3.
 2. **``model`` is what a file is; ``model_file`` is where a copy of it sits.**
    One content table and one location table, for adapters and checkpoints
-   alike (integration plan §3). A checkpoint therefore tombstones exactly the
-   way an adapter does, which the superseded inline ``checkpoint.local_path``
-   could not do.
+   alike. A checkpoint therefore tombstones exactly the way an adapter does.
 """
 
 import json
@@ -191,7 +189,7 @@ class TestFreshHub:
 
 
 class TestComfyuiLinkKeysAreNarrowed:
-    """#1811: a link key minted before the ComfyUI scope was a full-access
+    """A link key minted before the ComfyUI scope existed is a full-access
     token. The next open narrows it, and nothing else."""
 
     def test_only_a_full_access_token_bound_to_an_address_is_narrowed(self, hub):
@@ -617,13 +615,12 @@ class TestUnknownIsFirstClass:
 
 
 class TestBlankRecipeAssetBackfill:
-    """Clearing the asset rows that name no model (#1416).
+    """Clearing the asset rows that name no model.
 
-    A shelf loader's widget is blank until Browse is clicked, and the PixlStash
-    CLIP loader's second encoder is blank on every SD and SDXL graph. Those
-    blanks used to be filed as topology assets, and the rows they left cannot
-    be reached by "forget model names not on the shelf": an empty value is not
-    a digest, so it is never a model ghost.
+    A shelf loader's widget is blank until Browse is clicked, and the PixlStash CLIP
+    loader's second encoder is blank on every SD and SDXL graph. Rows a hub holds for
+    those blanks as topology assets cannot be reached by "forget model names not on the
+    shelf": an empty value is not a digest, so it is never a model ghost.
     """
 
     def _asset(self, hub, widget, name):
@@ -1359,7 +1356,7 @@ class TestTombstone:
 
 
 class TestHandMadeWorkflowSets:
-    """#1520: the owner's own sets, keyed by sha256 so a member outlives its row."""
+    """The owner's own sets, keyed by sha256 so a member outlives its row."""
 
     def _set(self, hub):
         return int(
@@ -1430,7 +1427,7 @@ class TestHandMadeWorkflowSets:
             )
 
     def test_a_set_holds_two_checkpoints_on_a_hub_that_had_the_one_rule(self, hub):
-        """#1690: a two-model workflow's pair. An earlier build's hub carries
+        """A two-model workflow's pair. An earlier build's hub carries
         the unique index that held a set to one checkpoint; reopening drops it."""
         apply_migrations(hub)
         hub.execute(
@@ -1484,8 +1481,8 @@ class TestHandMadeWorkflowSets:
 
 
 def test_a_card_move_table_without_its_target_is_replaced(hub):
-    """#1689: the move table first existed without ``new_workflow_id``; a hub
-    that opened that shape gets the current one on its next open."""
+    """A hub whose move table lacks ``new_workflow_id`` gets the current shape
+    on its next open."""
     apply_migrations(hub)
     hub.execute("DROP TABLE workflow_card_move")
     hub.execute(

@@ -1,31 +1,28 @@
 """Guardrails for the sharded CI backend gate.
 
-What these protect is a completeness property, not a performance one. CI named
-individual test files in ``.github/workflows/ci.yml``, and the result was that
-59 of the 99 files in ``tests/`` - including authz-gate, host-capability and
-fail-closed suites - ran only in a non-blocking release-prep sweep. Nothing
-failed when a new test file was added without touching the workflow, so nothing
-stopped the drift, and PR #588 added a test that would have landed ungated.
+What these protect is a completeness property, not a performance one. CI names
+individual test files in ``.github/workflows/ci.yml``, so a new test file added
+without touching the workflow would run only in a non-blocking release-prep
+sweep, with nothing failing.
 
-The gate is still an allowlist for now (the deferred files are not yet green),
-so the drift is stopped a different way: ``tests/`` must be exactly the gated
-set plus the explicitly deferred set. A new test file belongs to neither until
+The gate is an allowlist, so the drift is stopped this way: ``tests/`` must be exactly
+the gated set plus the explicitly deferred set. A new test file belongs to neither until
 someone says which, and that is a failure:
 
 * ``test_every_test_file_is_classified`` fails if a file under ``tests/`` is
   neither gated in ci.yml nor listed in ``DEFERRED_FROM_GATE``. This is the
-  forcing function that replaces "remember to edit the workflow".
+  forcing function for "remember to edit the workflow".
 * ``test_security_suites_cannot_be_quietly_deferred`` fails if any file in
   ``MUST_BLOCK_ON_EVERY_PR`` leaves the gate. Deferral is a legitimate tool for
-  a suite that is not green yet, but it is also how a broken authz assertion
-  survived five days unnoticed, so the security suites are not eligible for it.
+  a suite that is not green yet, but it lets a failure go unnoticed, so the
+  security suites are not eligible for it.
 * ``test_shard_counts_match_the_matrix`` fails if a matrix is resized without
   updating the ``i/N`` divisor, which would silently drop a slice.
 * ``test_shards_partition_the_collected_suite`` proves the sharding itself is a
   partition - every collected test in exactly one shard - by actually running
   pytest's collection, not by re-implementing the arithmetic.
 
-``--ci-shard`` no longer deals by position: it places tests
+``--ci-shard`` places tests
 longest-processing-time-first from the committed
 ``tests/ci_test_durations.json`` so the gate's shards finish together rather
 than merely holding the same number of tests. That turns a data file into an
@@ -475,12 +472,10 @@ def test_electron_apple_signing_requires_validated_release_tag():
 def test_model_cache_saves_every_path_it_restores():
     """A path only the restore step lists is warmed on every run and never kept.
 
-    The Windows ``downloaded_models`` directory was in the restore list and
-    absent from the save list, so ``warm_models_windows`` downloaded the WD14
-    and PixlStash taggers and saved an entry without them. That entry then went
-    on hitting its primary key, so the save step (`hit != 'true'`) never ran
-    again and could never repair it - every Windows shard re-fetched the
-    taggers, which is the HuggingFace stampede the warm job exists to prevent.
+    An entry saved without that path goes on hitting its primary key, so the
+    save step (`hit != 'true'`) never runs again to repair it, and every shard
+    re-fetches the missing models - the HuggingFace stampede the warm job exists
+    to prevent.
     """
     action = yaml.safe_load(
         (REPO_ROOT / ".github" / "actions" / "model-cache" / "action.yml").read_text(
@@ -550,7 +545,7 @@ def _warn_or_fail_on_map_coverage(gated: set[str], recorded_files: set[str]) -> 
     Split out of the balance test so both branches can be exercised directly.
     The failing branch is otherwise unreachable from a green tree - the map is
     normally near-complete - and an unexercised fail branch is a guardrail on
-    paper, which is the specific way this repo has been bitten before.
+    paper.
 
     Args:
         gated: Every ``tests/...py`` path the Linux gate runs.
@@ -605,7 +600,7 @@ def test_every_test_file_is_classified(workflow):
     """Every file under ``tests/`` is either gated or explicitly deferred.
 
     This is the forcing function. The gate is an allowlist, so on its own it
-    would drift exactly as before - a new test file simply would not appear in
+    would drift - a new test file simply would not appear in
     CI and nothing would say so. Requiring ``tests/`` to equal GATED + DEFERRED
     turns "I forgot" into a red test, and makes deferring a file a decision
     someone has to write down.
@@ -651,9 +646,8 @@ def test_security_suites_cannot_be_quietly_deferred(workflow):
 
     ``test_every_test_file_is_classified`` above accepts *either* answer for
     any file: gated, or deferred with a reason. For the behavioural authz and
-    fail-closed suites only one answer is acceptable, because deferral is the
-    exact mechanism that hid a broken authz assertion for five days - the
-    suites ran only in ``backend_release_sweep``, which is
+    fail-closed suites only one answer is acceptable, because a deferred suite
+    runs only in ``backend_release_sweep``, which is
     ``continue-on-error: true`` and only triggers during release prep.
 
     Three ways to lose the property, all of them failures here: drop the file
@@ -725,11 +719,8 @@ def test_release_critical_suites_cannot_remain_informational(workflow):
 def test_e2e_fixture_check_fails_closed(workflow):
     """The e2e job cannot go green by skipping Playwright.
 
-    The `build` aggregate that used to carry the other half of this test (that
-    the stable check required e2e at all) was removed in #796: there is no
-    branch protection consuming it, so there is no stable check to require.
-    What still matters is that this job reports red rather than green when the
-    committed fixture is missing.
+    This job reports red rather than green when the committed fixture is
+    missing.
     """
     e2e = workflow["jobs"]["e2e"]
     fixture_steps = [
@@ -813,7 +804,7 @@ _DRAFT_SKIP = (
 
 
 def test_draft_prs_skip_the_heavy_gate_and_run_it_when_ready(workflow):
-    """Draft PRs run the cheap jobs; marking one ready runs the gate (#2035).
+    """Draft PRs run the cheap jobs; marking one ready runs the gate.
 
     Without ``ready_for_review`` in the trigger types, ``gh pr ready`` starts
     nothing and the gate never runs on a PR that was opened as a draft. Each
@@ -1182,9 +1173,9 @@ def test_time_balanced_assignment_is_a_total_partition(count, total, coverage):
 
 
 def test_no_recorded_durations_reproduces_the_round_robin_deal():
-    """An empty map must be byte-for-byte the behaviour it replaced.
+    """An empty map must reproduce the round-robin deal byte for byte.
 
-    "Degrades to today's behaviour" has to be exact, not approximate: it is the
+    "Degrades to round-robin" has to be exact, not approximate: it is the
     fallback every other failure path funnels into, so if it were subtly
     different the safety argument for all of them would be untested.
     """
@@ -1343,10 +1334,9 @@ def test_recorded_durations_actually_balance_the_gate(workflow):
     it should: no assignment can balance that, and the fix is the test.
 
     The node list comes from the gate's own file list, never from the map's
-    keys. Grading the map on the tests it happens to contain is a tautology: it
-    reported 1.000 while 28 of 119 gated files were absent, and every test in
-    those files was being placed by round-robin fallback rather than by the
-    balance this claims to prove. So the coverage of the gate is reported every
+    keys. Grading the map on the tests it happens to contain is a tautology:
+    every test in a file it lacks is placed by round-robin fallback rather than
+    by the balance this claims to prove. So the coverage of the gate is reported every
     run and asserted against ``MINIMUM_GATE_COVERAGE`` - a handful of freshly
     added files is a refresh chore and warns, a map that has stopped describing
     the gate fails.
@@ -1381,11 +1371,9 @@ def test_negligible_tests_do_not_all_land_on_one_shard():
 
     A greedy "cheapest shard wins" loop never changes which shard is cheapest
     when the item it just placed cost 0.0, so every test that rounds to zero
-    goes to the same runner. Measured on the real map before the per-test floor
-    was added: 648 tests on shard 6 against ~153 on each of the others. Total
-    recorded load was perfectly level and the deal was still a valid partition,
-    so nothing else in this file noticed - a *balanced* wrong answer is the
-    hardest kind to see.
+    goes to the same runner. Total recorded load can be perfectly level and the
+    deal still a valid partition, so nothing else in this file would notice - a
+    *balanced* wrong answer is the hardest kind to see.
     """
     nodeids = _synthetic_nodeids(800)
     durations = {
@@ -1466,7 +1454,7 @@ def test_test_time_budget_fires_on_over_budget_input(tmp_path, monkeypatch):
     ``record-test-durations.yml``, which is the workflow that fixes it.
 
     The step summary is redirected: under Actions the real one belongs to the
-    shard running this test, and the synthetic breaches below landed on its
+    shard running this test, and the synthetic breaches below would land on its
     run page as a genuine "shard exceeded its budget" report.
     """
     summary = tmp_path / "step-summary.md"
@@ -1529,16 +1517,15 @@ def test_test_time_budget_fires_on_over_budget_input(tmp_path, monkeypatch):
 def test_test_time_budget_annotates_without_failing_the_run(tmp_path):
     """End to end: a passing shard over its ceiling still exits zero, loudly.
 
-    The stub test above proves the arithmetic; this proves the wiring, which is
-    where the previous guardrails in this repo failed. It runs the real hook,
-    against the real terminal reporter's stats, in a real pytest process, and
-    the only synthetic part is the shard count: ``1/100000000`` puts the
-    ceiling at 0.12 ms, which any real test exceeds.
+    The stub test above proves the arithmetic; this proves the wiring. It runs the real
+    hook, against the real terminal reporter's stats, in a real pytest process, and the
+    only synthetic part is the shard count: ``1/100000000`` puts the ceiling at 0.12 ms,
+    which any real test exceeds.
 
     The exit code stays 0 on purpose. ``record-test-durations.yml`` refuses any
     source run whose conclusion is not ``success``, and refreshing that map is
-    the standard remedy for a slow gate, so failing the shard for slowness took
-    away the fix. ``1 passed`` is asserted as well, because a renamed target
+    the standard remedy for a slow gate, so failing the shard for slowness would
+    take away the fix. ``1 passed`` is asserted as well, because a renamed target
     would make pytest exit non-zero for "no tests ran" and the annotation would
     then be missing for the wrong reason.
     """
@@ -1576,10 +1563,9 @@ def test_test_time_budget_annotates_without_failing_the_run(tmp_path):
 def test_duration_parser_reads_the_ids_pytest_actually_prints():
     """The recorder must not quietly skip tests whose ids are awkward.
 
-    Requiring the nodeid to be a single non-space token dropped 19 real tests
-    from an otherwise complete map - every one of them a parametrised id
-    containing spaces. Nothing failed: the map simply had a hole, and the tests
-    in it were balanced as if brand new, forever. The GitHub log prefix is
+    A parametrised id can contain spaces; skipping it would leave a silent hole
+    in the map, and the tests in it would be balanced as if brand new, forever.
+    The GitHub log prefix is
     covered here too, since ``gh run view --log`` is the intended refresh path.
     """
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -1775,7 +1761,7 @@ def test_the_coverage_floor_fails_only_below_the_minimum(recorded, passes):
 
 
 def test_an_untimed_file_warns_by_name_rather_than_failing():
-    """The whole point of the ruling: a stale map warns, it does not go red.
+    """A stale map warns, it does not go red.
 
     Named, because a warning that does not say which file is unactionable.
     """
@@ -1820,10 +1806,10 @@ def test_release_tag_check_compares_normalised_versions(
 ):
     """A dev tag's separator must not decide whether a release builds.
 
-    ``v1.12.0-dev.1`` and ``v1.12.0-dev.2`` both failed the Windows installer
-    and Electron builds because the workflows compared the tag with the
-    pyproject version as raw strings, while the format check above it accepted
-    either separator. The two spellings are the same PEP 440 version.
+    The format check accepts either separator, so comparing a tag such as
+    ``v1.12.0-dev.1`` with the pyproject version as raw strings would fail the
+    Windows installer and Electron builds. The two spellings are the same PEP
+    440 version.
     """
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
     try:

@@ -5,9 +5,8 @@ without a ``help=``, or a verb added without a ``description=``, is a hole that
 nothing else in this repository notices. These tests walk both entry points'
 parsers and fail on the hole rather than waiting for a user to find it.
 
-They also fail on the opposite mistake, which #960 turned up: ``--retag-and-embed``
-was parsed and documented for its whole life and never read by anything, so the
-help promised work the server does not do.
+They also fail on the opposite mistake: a parameter parsed and documented but
+never read by anything, so the help promises work the server does not do.
 """
 
 from __future__ import annotations
@@ -60,8 +59,7 @@ def test_the_walk_reaches_every_command():
 def test_entry_points_are_named_as_they_are_installed():
     """The usage line has to name a command the reader can actually type.
 
-    ``pixlstash-server`` used to report itself as ``app.py``, which is neither
-    the console script nor the ``python -m`` form. Read from pyproject.toml
+    Read from pyproject.toml
     rather than restated, so renaming a console script and not its parser is
     the failure it should be.
     """

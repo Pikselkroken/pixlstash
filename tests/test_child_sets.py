@@ -1,4 +1,4 @@
-"""Child sets (#2124): a picture set under another set or under a person.
+"""Child sets: a picture set under another set or under a person.
 
 One server for the module: every test makes its own sets and people and
 asserts on their ids, so what earlier tests left behind does not matter.

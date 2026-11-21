@@ -261,9 +261,8 @@ def test_a_half_loaded_pair_refuses_every_search(clip_loads, sbert_loads, caplog
 
 @pytest.mark.parametrize("with_cpu_copies", [False, True], ids=["cuda-cpu", "metal"])
 def test_query_encodes_take_turns(with_cpu_copies):
-    """Query encodes used to run inside the database task, so the single DB
-    writer serialised them. Moving them out put concurrent searches on one
-    shared service, which reads its model and tokenizer without a lock."""
+    """Query encodes run outside the database task, so concurrent searches
+    share one service, which reads its model and tokenizer without a lock."""
     engine = _engine(with_cpu_copies=with_cpu_copies)
     sbert = (
         engine.query_encoders._sbert_service

@@ -13,14 +13,6 @@ This runs in AUDIT MODE with a closed allowlist of deliberate best-effort swallo
 line (the fix) removes a site from it, and the stale-entry check forbids leaving a
 fixed site parked here. A NEW silent broad swallow fails immediately.
 
-The allowlist was seeded across two stages of the B1 triage sweep
-(docs/reviews/backend-except-triage-plan.md):
-- Stage 1 covered ``tasks/`` and ``services/`` (17 broad swallows; 15 logged, the
-  2 genuine best-effort survivors remain below).
-- Stage 2 extended the scan to ``core`` (everything else in ``pixlstash/``): 29
-  broad swallows, 12 logged and 17 kept as deliberate best-effort survivors (14
-  distinct call sites; ``_coerce_metadata_value`` holds 4 sites under one key).
-
 Scope covers all of ``pixlstash/`` EXCEPT three trees:
 - ``authz/`` - security-sensitive; its swallows are reviewed under the separate
   authz sign-off process, not this ratchet.

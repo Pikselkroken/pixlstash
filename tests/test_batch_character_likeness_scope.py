@@ -5,7 +5,7 @@ the `character_likeness` score). Per CLAUDE.md §16.1 it must enforce object sco
 before returning any resource-derived data, exactly like its single-id sibling
 ``GET /pictures/{id}/character_likeness`` (which calls ``enforce_picture_scope``).
 
-The fix filters the client-supplied ``picture_ids`` through
+The handler filters the client-supplied ``picture_ids`` through
 ``fetch_scope_allowed_picture_ids`` before any DB read: ids outside a scoped
 token's grant are dropped from the work set and fall through to the deny path,
 so they are indistinguishable from a missing/deleted id (no existence or score

@@ -1,4 +1,4 @@
-"""Tests for the embedded API-format ``prompt`` chunk reader (Remix v1.9).
+"""Tests for the embedded API-format ``prompt`` chunk reader.
 
 The distinction under test is the whole point of recipe mode: ComfyUI embeds a
 UI ``workflow`` chunk (not submittable) and an API ``prompt`` chunk (the graph

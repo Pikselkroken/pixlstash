@@ -177,8 +177,8 @@ class TestHubFileSecurity:
     def test_the_hub_opens_on_a_platform_without_fchmod(self, tmp_path, monkeypatch):
         """Windows has no ``os.fchmod``, and every backend test opens a hub.
 
-        The unguarded call made `AttributeError: module 'os' has no attribute
-        'fchmod'` the failure of every test in both Windows CI shards. Linux is
+        An unguarded call would make `AttributeError: module 'os' has no
+        attribute 'fchmod'` the failure of every test on Windows. Linux is
         the only place this can be caught before Windows CI runs, so the
         platform difference is simulated rather than waited for.
         """
@@ -212,17 +212,14 @@ class TestHubFileSecurity:
     def test_simultaneous_first_open_never_observes_a_creation_race(self, tmp_path):
         """Every concurrent opener must succeed, on every attempt.
 
-        Four openers AND repeated trials. Both matter, and the second was the
-        one that had been missing: the original two-thread single-trial version
-        passed 20/20 while the defect was live, and so did a four-thread single
-        trial. The window is only hit ~22% of the time, so a test that runs one
+        Four openers AND repeated trials. The window is only hit ~22% of the
+        time, so a test that runs one
         trial is a coin flip, not a regression test. Twenty trials makes a live
         defect essentially certain to surface.
 
-        The defect: verify_after_open compared the parent directory's
-        mtime/ctime to a snapshot, and SQLite creating our own -wal/-shm moves
-        both, so a second opener was refused as though the namespace had been
-        tampered with.
+        The hazard: SQLite creating our own -wal/-shm moves the parent
+        directory's mtime/ctime, so comparing them to a snapshot would refuse a
+        second opener as though the namespace had been tampered with.
         """
         openers = 4
         trials = 20
@@ -284,8 +281,8 @@ class TestHubFileSecurity:
     ):
         """The logged race branch must fall through to validation, not accept.
 
-        A loose-mode file that won the race is exactly what the old silent
-        ``pass`` could have hidden; ``_validate_file`` must still see it.
+        A loose-mode file that won the race is exactly what a silent ``pass``
+        would hide; ``_validate_file`` must still see it.
         """
         path = tmp_path / "hub.db"
         os.close(os.open(path, os.O_RDWR | os.O_CREAT, 0o644))
@@ -324,19 +321,16 @@ class TestHubFileSecurity:
     ):
         """Swap-away-and-back by the SAME uid is out of scope, on purpose.
 
-        This replaces a test that asserted the swap WAS caught. It was caught,
-        by comparing the parent directory's mtime/ctime, and that comparison
-        also refused ~22% of concurrent opens because SQLite creating our own
-        -wal/-shm is indistinguishable from tampering when you watch a
-        directory's timestamps. The trade was withdrawn (2026-08-07, human
-        decision after principal review) because the attacker it stopped is one
-        the threat model excludes: these files are mode 600 owned by this uid,
+        Catching it means comparing the parent directory's mtime/ctime, and that
+        comparison also refuses ~22% of concurrent opens because SQLite creating
+        our own -wal/-shm is indistinguishable from tampering when you watch a
+        directory's timestamps. The attacker it would stop is one the threat
+        model excludes: these files are mode 600 owned by this uid,
         so a same-uid process can already read and rewrite them directly, with
         no race to win. See the module docstring of pixlstash/trusted_sqlite.py.
 
-        The test is kept, inverted, so the boundary is asserted rather than
-        merely written down: if someone reintroduces the timestamp comparison,
-        this fails and points at the reasoning.
+        The boundary is asserted rather than merely written down: if someone
+        reintroduces the timestamp comparison, this fails and points at the reasoning.
         """
         path = str(tmp_path / "hub.db")
         decoy = str(tmp_path / "decoy.db")
@@ -377,13 +371,11 @@ class TestHubFileSecurity:
     def test_a_directory_that_turns_writable_after_open_is_reported(
         self, tmp_path, caplog
     ):
-        """The property that replaced the timestamp snapshot, asserted directly.
+        """verify_after_open re-runs the ownership/permission check, asserted.
 
-        verify_after_open now re-runs the ownership/permission check instead of
-        comparing timestamps. That is strictly more than the old comparison
-        managed: a chmod between open and verify used to be caught only
-        incidentally, through the ctime it happened to bump. Here it is the
-        thing being tested.
+        A chmod between open and verify is caught by that check itself, not
+        incidentally through a ctime it happens to bump. Here it is the thing
+        being tested.
         """
         directory = tmp_path / "hub"
         directory.mkdir(mode=0o700)
@@ -406,11 +398,11 @@ class TestHubFileSecurity:
 class TestTrustedPathSymlinkCheck:
     """What "the caller's path goes through a symlink" is allowed to mean.
 
-    The check used to be ``os.path.abspath(p) != os.path.realpath(p)``. On
-    POSIX those differ only where a symlink was resolved, so it read correctly
-    here - and wrongly on Windows, where ``realpath`` also expands 8.3 short
-    names. ``C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\...`` was rejected as
-    "contains a symlink", taking down every Windows test that opens a hub.
+    ``os.path.abspath(p) != os.path.realpath(p)`` is not that check. On POSIX
+    those differ only where a symlink was resolved, but on Windows ``realpath``
+    also expands 8.3 short names, so
+    ``C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\...`` would be rejected as
+    "contains a symlink".
 
     Both directions, because the refusal is a security control: a genuinely
     symlinked path must still be refused, and a path that merely canonicalises
@@ -446,10 +438,10 @@ class TestTrustedPathSymlinkCheck:
     ):
         """The vault's own call shape: not a credential store, so not gated.
 
-        ``vault.py`` opens with ``private=False`` and no ``trusted_root``.
-        Under the old blanket refusal that raised for *every* path on Windows,
-        so no Windows install could open its library (W4). Pin the fix: a
-        non-private open works anywhere the namespace checks allow.
+        ``vault.py`` opens with ``private=False`` and no ``trusted_root``. A
+        blanket refusal would raise for *every* path on Windows, so no Windows
+        install could open its library. A non-private open works anywhere the
+        namespace checks allow.
         """
         directory = tmp_path / "library"
         directory.mkdir(mode=0o700)
@@ -461,12 +453,12 @@ class TestTrustedPathSymlinkCheck:
     def test_a_windows_hub_at_an_electron_style_path_opens_with_its_own_root(
         self, tmp_path, monkeypatch
     ):
-        """The W6/W7/W18 outage regression.
+        """A desktop-style Windows hub opens with its own trusted root.
 
         The desktop shell derives the hub path from ``--server-config`` under
         ``%APPDATA%\\pixlstash-desktop`` - never inside
-        ``user_config_dir("pixlstash")`` - so the old DACL predicate refused
-        every desktop install and the server could not start on Windows. A
+        ``user_config_dir("pixlstash")`` - so a predicate tied to that
+        directory would refuse every desktop install. A
         private open with ``trusted_root`` set to the hub's own parent must
         succeed regardless of where that parent is.
         """
@@ -483,10 +475,10 @@ class TestTrustedPathSymlinkCheck:
         guard.close()
 
     def test_a_private_open_without_a_trusted_root_cannot_be_forgotten(self, tmp_path):
-        """W15: forgetting the argument fails the first test run, loudly.
+        """Forgetting the argument fails the first test run, loudly.
 
-        Every one of W4-W7 was a caller silently opting out of a keyword. The
-        mandatory ``trusted_root`` turns that omission into an immediate
+        The mandatory ``trusted_root`` turns a caller silently opting out of a
+        keyword into an immediate
         ``TypeError`` instead of a production refusal months later.
         """
         with pytest.raises(TypeError, match="trusted_root"):
@@ -516,14 +508,13 @@ class TestTrustedPathSymlinkCheck:
             )
 
     def test_a_windows_junction_is_refused_like_a_symlink(self, tmp_path, monkeypatch):
-        """The regression an independent review caught in this very check.
+        """A junction is refused like a symlink.
 
-        ``os.path.islink`` is False for a directory junction, so swapping the
-        old ``abspath != realpath`` comparison for an islink walk quietly
-        stopped refusing them. That is the wrong way round: a symlink on
-        Windows needs ``SeCreateSymbolicLinkPrivilege``, a junction needs only
-        write access to the directory, so the check was refusing the redirect
-        an attacker cannot make and accepting the one they can.
+        ``os.path.islink`` is False for a directory junction, so an islink walk
+        alone would stop refusing them. That is the wrong way round: a symlink
+        on Windows needs ``SeCreateSymbolicLinkPrivilege``, a junction needs
+        only write access to the directory, so the check would refuse the
+        redirect an attacker cannot make and accept the one they can.
 
         No junction can exist on Linux, so the reparse tag is simulated. A real
         ``mklink /J`` test belongs on the Windows lane; this at least fails on
@@ -566,8 +557,8 @@ class TestTrustedPathSymlinkCheck:
     def test_the_verdict_never_consults_realpath(self, tmp_path, monkeypatch):
         """No 8.3 name exists on Linux, so assert the cause, not the symptom.
 
-        What made the old check wrong on Windows is that it asked ``realpath``
-        a question realpath does not answer: "did this path cross a symlink?"
+        On Windows ``realpath`` cannot answer "did this path cross a
+        symlink?", because it also expands short names.
         Nothing on POSIX can produce a short name to reproduce that with, so
         this pins the property instead - the decision does not depend on the
         canonical spelling at all. ``realpath`` is made to explode; a path with
@@ -587,10 +578,10 @@ class TestTrustedPathSymlinkCheck:
 class TestGroupWritableDirectories:
     """Group-write is an exposure only when the group has another member.
 
-    The blanket ``mode & 0o022`` test exited the server 1 at startup on a stock
-    Linux box: Debian/Ubuntu give every account a same-named group of its own
-    and default to umask 002, so every directory PixlStash created before it
-    started passing 0700 is 0775 - group-writable by a group of exactly one.
+    A blanket ``mode & 0o022`` test would refuse to start on a stock Linux box:
+    Debian/Ubuntu give every account a same-named group of its own and default
+    to umask 002, so a directory created there is 0775 - group-writable by a
+    group of exactly one.
 
     ``grp``/``pwd`` are patched rather than read, in both directions, because
     the real answer depends on the machine - a developer box's group is named
@@ -809,8 +800,7 @@ class TestWindowsHasNoModeBits:
     Windows synthesises ``st_mode`` from the read-only attribute alone, so an
     ordinary file reads 0o666 and no chmod can make it 0o600. Asserting the
     mode there refuses *every* hub, including one this process created moments
-    earlier - which is how both Windows shards failed with "SQLite credential
-    file ... must be mode 600" on a freshly created file.
+    earlier.
 
     Both directions, because these are credential-file checks: they must go on
     holding on POSIX, where the bits are real.
@@ -853,13 +843,12 @@ class TestWindowsHasNoModeBits:
 
 
 class TestHostileSidecarRefusal:
-    """W8: a pre-positioned ``-wal``/``-shm``/``-journal`` must be refused.
+    """A pre-positioned ``-wal``/``-shm``/``-journal`` must be refused.
 
     One tolerance, pinned by ``test_a_sidecar_that_vanishes_mid_validation…``:
     a sidecar that disappears between the existence probe and its ``lstat`` is
     a concurrent opener's transient journal, not an attack, and must not
-    refuse the open (it failed 1-in-20 four-opener races in CI before the
-    tolerance existed). A hostile sidecar that still exists is refused
+    refuse the open. A hostile sidecar that still exists is refused
     exactly as the rest of this class asserts.
 
     An attacker with directory write never touches ``hub.db``: they write
@@ -870,7 +859,7 @@ class TestHostileSidecarRefusal:
     sidecar loop in :meth:`TrustedSQLiteLocation.open`, which runs
     ``_validate_file`` on every existing sidecar.
 
-    Two traps these tests are built to avoid, per the signed plan:
+    Two traps these tests are built to avoid:
 
     * The refusal must come from ``TrustedSQLiteLocation.open()``, BEFORE any
       ``sqlite3.connect``: ``HubDatabase`` calls ``verify_after_open()`` only
@@ -886,12 +875,11 @@ class TestHostileSidecarRefusal:
 
     RESIDUE: Windows, where this attack matters most, is NOT covered here
     and cannot be: ``_validate_file`` returns unconditionally on ``nt``
-    because ``st_mode``/``st_uid`` are synthesised there (W2), so under the
+    because ``st_mode``/``st_uid`` are synthesised there, so under the
     suite's ``nt`` simulation there is no sidecar check to exercise or to
     break. The last test below asserts that acceptance so the gap stays
-    visible. Closing it requires the native DACL verifier (plan item 3c,
-    ctypes ``GetNamedSecurityInfoW``); tracked in the W17 accepted-risk
-    record, owner lindkvis, revisit 2026-11-08.
+    visible. Closing it requires a native DACL verifier (ctypes
+    ``GetNamedSecurityInfoW``).
     """
 
     @staticmethod
@@ -993,8 +981,8 @@ class TestHostileSidecarRefusal:
 
         ``st_mode`` there is synthesised (0o666 for any writable file) and
         ``st_uid`` is meaningless, so ``_validate_file`` returns before either
-        check (W2). This pins the residue described in the class docstring: if
-        someone adds a real Windows sidecar check (plan item 3c), this test
+        check. This pins the residue described in the class docstring: if
+        someone adds a real Windows sidecar check, this test
         fails and gets replaced by real coverage.
         """
         sidecar = tmp_path / "hub.db-wal"
@@ -1007,13 +995,13 @@ class TestHostileSidecarRefusal:
     def test_a_sidecar_that_vanishes_mid_validation_does_not_refuse_the_open(
         self, tmp_path, monkeypatch
     ):
-        """The 1-in-20 CI race, made deterministic.
+        """A sidecar vanishing mid-validation, made deterministic.
 
         A concurrent opener's SQLite creates and deletes a transient
-        ``-journal`` during first migration. When it vanished between the
+        ``-journal`` during first migration. If it vanishes between the
         ``lexists`` probe and ``_validate_file``'s ``lstat``, the resulting
-        FileNotFoundError was wrapped as "Could not inspect" and the healthy
-        opener was refused - concurrency mistaken for tampering, the same
+        FileNotFoundError must not refuse the healthy opener - that would be
+        concurrency mistaken for tampering, the same
         class the creation-race test pins. Simulated here by making the probe
         claim the journal exists when it does not.
         """
@@ -1227,10 +1215,11 @@ def test_transaction_is_already_open_before_its_first_write(hub_path):
 
     ``with self._conn`` commits on exit but never begins, and the connection is
     opened ``isolation_level=""``, which defers ``BEGIN`` to the first *DML*
-    statement. So a block that read before it wrote ran its read in autocommit
-    and only became a transaction at the write. Callers that gate a write on a
-    preceding ``SELECT`` -- ``forget_models``, ``apply_stack`` -- documented a
-    critical section they did not have.
+    statement. So without an explicit ``BEGIN`` a block that reads before it
+    writes would run its read in autocommit and only become a transaction at
+    the write, and callers that gate a write on a preceding ``SELECT`` --
+    ``forget_models``, ``apply_stack`` -- would not have the critical section
+    they document.
 
     **This proves the transaction is OPEN, and deliberately not that it is
     ``IMMEDIATE``.** ``in_transaction`` is equally true of a plain deferred
@@ -1258,9 +1247,9 @@ def test_another_process_cannot_write_between_a_gate_read_and_its_write(hub_path
 
     ``self._lock`` is a ``threading`` lock, and the module docstring is explicit
     that the server and the ``pixlstash.libraries`` CLI open this file at the
-    same moment. In WAL an autocommit read takes no lock whatsoever, so the
-    second connection here could previously acquire the write lock *while the
-    first was between its gate read and its DELETE* -- which is the race in
+    same moment. In WAL an autocommit read takes no lock whatsoever, so without
+    the transaction the second connection here could acquire the write lock
+    *while the first was between its gate read and its DELETE* -- which is the race in
     exactly the shape a separate process runs it.
 
     The second connection asks for the write lock directly rather than writing a
@@ -1290,7 +1279,7 @@ def test_transaction_survives_an_already_open_transaction(hub_path):
     ``test_hub_registry.py`` do exactly that.
 
     The guard skips only the ``BEGIN``. ``with self._conn`` still owns the
-    commit, so the write below lands just as it did before the fix.
+    commit, so the write below still lands.
     """
     hub = HubDatabase(hub_path)
     try:
@@ -1320,13 +1309,13 @@ def test_transaction_survives_an_already_open_transaction(hub_path):
 class TestHubUnderASymlinkedAncestor:
     """A symlinked config directory must not stop the server starting.
 
-    v1.10.0 introduced both the hub and ``trusted_sqlite``'s guard. The guard
-    refuses a *caller-supplied* path that crosses a symlink, and the hub's path
-    - unlike a library's, which ``registry.resolve_path`` has always canonicalised
-    at attach - was handed over exactly as derived from the config directory.
-    A stow/chezmoi-managed ``~/.config``, a ``$HOME`` symlinked onto another
-    disk, or a macOS path crossing ``/var`` -> ``/private/var`` therefore
-    bricked startup with no route back, since ``startup_permissions`` mirrors
+    ``trusted_sqlite``'s guard refuses a *caller-supplied* path that crosses a
+    symlink, and the hub's path - unlike a library's, which
+    ``registry.resolve_path`` canonicalises at attach - is derived from the
+    config directory. Without following ancestor links, a stow/chezmoi-managed
+    ``~/.config``, a ``$HOME`` symlinked onto another disk, or a macOS path
+    crossing ``/var`` -> ``/private/var`` would brick startup with no route
+    back, since ``startup_permissions`` mirrors
     the guard over ``realpath`` and cannot see a redirect that exists only
     before resolution.
 
@@ -1431,7 +1420,7 @@ class TestCanonicalHubPath:
         """The Windows carve-out that keeps ``_reject_symlinked_path`` intact.
 
         On ``nt`` resolving the ancestors would defeat the redirect refusal, one
-        of the only controls left there (W19, ``docs/backend_architecture.md``
+        of the only controls left there (``docs/backend_architecture.md``
         section 13). A real symlink is made on this POSIX gate, ``os.name`` is
         forced to ``nt``, and the ancestor must come back *unresolved* - the
         symlink still present - so the leaf-and-ancestor walk in

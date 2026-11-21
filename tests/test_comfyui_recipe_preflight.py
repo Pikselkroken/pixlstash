@@ -1,4 +1,4 @@
-"""Tests for the recipe pre-flight against ComfyUI's /object_info (Remix v1.9).
+"""Tests for the recipe pre-flight against ComfyUI's /object_info.
 
 The governing property is honesty in both directions: a check we cannot make is
 reported as *unchecked*, never as passing and never as missing, because a
@@ -183,8 +183,8 @@ class TestPreflightDoesNotGuess:
     def test_an_empty_list_from_a_core_loader_means_nothing_is_installed(self, spec):
         """ComfyUI reads its own loaders' folders on every object_info.
 
-        An empty checkpoints folder once let a missing checkpoint pass the
-        pre-flight with no warning anywhere.
+        So an empty checkpoints folder reports a missing checkpoint rather
+        than letting it pass the pre-flight.
         """
         info = {"CheckpointLoaderSimple": {"input": {"required": {"ckpt_name": spec}}}}
         graph = {
@@ -251,7 +251,7 @@ class TestUncheckedPreflight:
 
 
 class TestCollectNodeClasses:
-    """The consent disclosure (R3): what the owner is actually approving.
+    """The consent disclosure: what the owner is actually approving.
 
     A node *count* is not an answer to "what will this run"; the class list is.
     """
@@ -593,7 +593,7 @@ class TestApplySeeds:
 
 
 class TestDetectLoraTargets:
-    """#1310: a slot is found by its field name, whatever class carries it."""
+    """A slot is found by its field name, whatever class carries it."""
 
     def test_every_core_lora_loader_spelling_is_a_slot(self):
         graph = {
@@ -778,7 +778,7 @@ class TestRecipeExtras:
         assert (settings["width"], settings["height"]) == (1024, 1024)
 
     def test_with_no_empty_latent_the_size_is_the_node_s_that_names_one(self):
-        """Image-to-video: the node sizes its own latent, from a selector (#1833)."""
+        """Image-to-video: the node sizes its own latent, from a selector."""
         graph = {
             "49": {
                 "class_type": "ResolutionSelector",
@@ -877,7 +877,7 @@ class TestRecipeExtras:
 
 
 class TestApplyAdapter:
-    """#1310: each slot written the way its own loader reads it, or refused."""
+    """Each slot written the way its own loader reads it, or refused."""
 
     INFO = {
         "LoraLoader": {
@@ -970,7 +970,7 @@ class TestApplyAdapter:
         assert apply_adapter(graph, None, self.ADAPTER, {}) == 0
 
     def test_a_stored_graph_takes_the_shelf_name_unless_the_slot_has_it(self):
-        """No `object_info` is an extract (#2350): written by name, unresolved."""
+        """No `object_info` is an extract: written by name, unresolved."""
         graph = self._graph()
         assert apply_adapter(graph, detect_lora_targets(graph), self.ADAPTER, None) == 2
         assert graph["1"]["inputs"]["lora_name"] == "subject-v2.safetensors"
@@ -995,7 +995,7 @@ def _loader_spec(outputs, lora_names, clip=True):
 
 
 class TestLoraInsertion:
-    """#1376: a loader spliced in after the model source, typed by object_info."""
+    """A loader spliced in after the model source, typed by object_info."""
 
     ADAPTER = {"sha256": "b" * 64, "filenames": ["subject-v2.safetensors"]}
     INFO = {
@@ -1351,7 +1351,7 @@ class TestLoraInsertion:
         """A loader always goes in the MODEL path, whatever else loads a LoRA.
 
         It applies alongside that node, never instead of it, so there is no
-        reason to refuse; #1376 used to, and nearly nothing could take one.
+        reason to refuse.
         """
         graph = self._checkpoint_graph()
         graph["5"] = loader
@@ -1378,8 +1378,8 @@ class TestLoraInsertion:
         """The sampler says its seed is an INT, so that link is no model.
 
         The single MODEL path from the checkpoint to the sampler is still there
-        to follow; refusing here was "cannot tell where a LoRA would go" over a
-        number.
+        to follow; refusing here would be "cannot tell where a LoRA would go"
+        over a number.
         """
         graph = self._checkpoint_graph()
         graph["20"] = {"class_type": "Seed (rgthree)", "inputs": {"seed": 42}}
@@ -1530,7 +1530,7 @@ class TestLoraInsertion:
 
 
 class TestBypassNode:
-    """#1463: a loader taken back out again, which is the insertion's inverse."""
+    """A loader taken back out again, which is the insertion's inverse."""
 
     INFO = {
         "CheckpointLoaderSimple": {"output": ["MODEL", "CLIP", "VAE"]},
@@ -1597,7 +1597,7 @@ class TestBypassNode:
 
 
 class TestLoraChain:
-    """#1478: the loaders between the model and the sampler, read and rewired whole.
+    """The loaders between the model and the sampler, read and rewired whole.
 
     Every link here is typed by ``object_info``. The sampler reads its model
     on ``model1`` and ``model2`` and the text encoders on ``conditioner``, so
@@ -1933,7 +1933,7 @@ class TestLoraChain:
         assert read_lora_chain(self._graph(), self.INFO)["lanes"] == []
 
     def test_the_recipe_says_which_loras_feed_which_pass(self):
-        """What get_recipe tells a reader about a two-pass graph (#1579)."""
+        """What get_recipe tells a reader about a two-pass graph."""
         chain = _describe_lora_chain(self._two_pass(), self.INFO, None)
         assert chain["branches"] is True
         assert chain["refusal"] is None
@@ -2591,7 +2591,7 @@ class TestAdvertisedModelNames:
 
 
 class TestModelSwap:
-    """Resolve a model reference at submit, verified against ComfyUI (#1439).
+    """Resolve a model reference at submit, verified against ComfyUI.
 
     The graph names a copy that was removed to keep one of several; another copy
     of the *same bytes* is still on the shelf under another name. The swap points
@@ -2658,12 +2658,12 @@ class TestModelSwap:
         )
 
     def test_a_mixed_case_filename_resolves(self):
-        """**The case that made the whole feature a no-op.**
+        """**A capital letter in the name must not make the lookup miss.**
 
-        `model_name_aliases` keys its map with `normalized_filename`, which
-        LOWERCASES; a lookup that merely unified separators found nothing for any
-        name with a capital in it, which is most real model filenames. The
-        candidates are the shelf's own spelling, because ComfyUI compares exactly.
+        `model_name_aliases` keys its map with `normalized_filename`, which LOWERCASES,
+        so a lookup that merely unified separators would find nothing for any name with
+        a capital in it, which is most real model filenames. The candidates are the
+        shelf's own spelling, because ComfyUI compares exactly.
         """
         graph = {
             "4": {
@@ -2941,7 +2941,7 @@ class TestFilenameSwap:
         assert [(s["node_id"], s["field"]) for s in swapped] == [("4", "ckpt_name")]
 
     def test_a_text_encoder_fix_leaves_a_vision_encoder_of_that_name(self):
-        """#1596: the run rewrite asks the loader's class, not just the field."""
+        """The run rewrite asks the loader's class, not just the field."""
         graph = self._graph()
         graph["7"] = {
             "class_type": "CLIPVisionLoader",
@@ -3107,7 +3107,7 @@ class TestFilenameSwap:
 
 
 class TestWrappedLoaders:
-    """ComfyUI-MultiGPU wrappers and the GGUF CLIP loader are checked (#1440).
+    """ComfyUI-MultiGPU wrappers and the GGUF CLIP loader are checked.
 
     A hand-written slice of ``object_info`` in the shape a live install
     advertises: each wrapper keeps the field names of the loader it wraps and

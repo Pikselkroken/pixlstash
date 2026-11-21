@@ -1,9 +1,8 @@
-"""SQLite connection settings on the vault engine (issue #651, tier 1).
+"""SQLite connection settings on the vault engine.
 
 These assert the settings on a *real* connection handed out by
-``VaultDatabase._engine``, not that some function was called. Every test here
-fails against the pre-fix code, which built the engine with no ``connect_args``
-(sqlite3's 5 s busy timeout) and set no ``cache_size`` (SQLite's 2 MiB default).
+``VaultDatabase._engine``, not that some function was called. Without them the
+engine would get sqlite3's 5 s busy timeout and SQLite's 2 MiB page cache.
 
 See docs/backend_architecture.md §13.
 """
@@ -230,8 +229,8 @@ def test_custom_sql_functions_are_registered_on_every_variant(tmp_path, kwargs):
 
 
 def test_vault_opens_and_migrates_in_a_folder_with_uri_characters(tmp_path):
-    """A raw path was cut at ``?``: the vault was created beside the folder,
-    under a truncated name, and the real file was left without Alembic."""
+    """A raw path would be cut at ``?``: the vault would be created beside the
+    folder, under a truncated name, and the real file left without Alembic."""
     folder = tmp_path / URI_HOSTILE_FOLDER
     folder.mkdir()
     db = VaultDatabase(str(folder / "vault.db"))

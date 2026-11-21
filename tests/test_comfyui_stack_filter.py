@@ -228,7 +228,7 @@ def test_stack_is_shown_when_only_a_non_cover_member_matches(session):
 
     The cover was not made with the filtered model but a member was, so the
     stack still earns exactly one tile: its leader.  Over-blocking here is its
-    own regression, and was the bug the stack-member branch was added to fix.
+    own regression.
     """
     stack = _new_stack(session)
     cover = _add_picture(session, stack_id=stack, stack_position=0, models=["other"])
@@ -343,8 +343,8 @@ def test_two_checkpoints_mean_either(session):
 
 
 def test_no_character_path_applies_the_checkpoint_and_lora_filters(session):
-    """ "No character" lists through `find_unassigned`, which used to ignore
-    both filters, so adding it to a checkpoint filter widened the grid."""
+    """ "No character" lists through `find_unassigned`, which must apply
+    both filters, or adding it to a checkpoint filter would widen the grid."""
     both = _add_picture(session, models=["flux"], loras=["detail"])
     _add_picture(session, models=["flux"], loras=["other"])
     _add_picture(session, models=["sdxl"])

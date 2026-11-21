@@ -476,13 +476,11 @@ def test_reopening_returns_the_group_and_keeps_the_history(server):
 
 
 def test_reopening_a_stack_verdict_dissolves_the_verdicts_stack(server):
-    """Owner override, 2026-07-30: "Clear decision" must return the group.
+    """ "Clear decision" must return the group.
 
-    The old pin here asserted the opposite (reopen left the stack standing,
-    "unstacking is the Stacks view's own action"), which is exactly what made
-    a cleared group vanish forever: the queue's live filter requires two stack
-    units. See the dedicated clear-decision section at the end of this file
-    for the full behaviour matrix.
+    Reopen dissolves the verdict's stack, because the queue's live filter requires two
+    stack units. See the dedicated clear-decision section at the end of this file for
+    the full behaviour matrix.
     """
     ids = _seed(
         server,
@@ -772,7 +770,7 @@ def test_the_snapshot_covers_stack_siblings_the_group_never_named(server):
     reparented. An undo that snapshotted only the group's own members would
     leave 3 stranded in A with B gone.
 
-    Verified non-vacuous: with the snapshot narrowed back to ``included``, this
+    Verified non-vacuous: with the snapshot narrowed to ``included``, this
     test fails on the sibling assertion.
     """
     ids = _seed(
@@ -857,7 +855,7 @@ def test_undoing_any_member_of_the_batch_reverts_the_whole_run(server):
 
 
 def test_keep_separate_records_exactly_one_operation(server):
-    """Keep-separate is op-logged since 2026-07-30 (owner override of #644 CSO).
+    """Keep-separate is op-logged.
 
     It changes no picture facet, so the row goes through the empty-diff path:
     empty before/after payloads, the member ids as targets, and the batch id
@@ -1033,15 +1031,13 @@ def _seed_three_exact_groups(server):
 
 
 def test_a_locked_group_is_never_planned_into_a_bulk_run(server):
-    """The run no longer plans work it would only refuse.
+    """The run does not plan work it would only refuse.
 
-    Was the CSO's B2 fixture, when a locked group reached the loop and 423'd out
-    of it. Since the queue withholds a group with fewer than two stackable
-    members (owner call, 2026-07-30), auto-stack applies the same filter and the
-    group never enters the run at all. The B2 invariant itself - an
-    ``HTTPException`` mid-run must not abort - is pinned directly by
-    :func:`test_an_http_exception_mid_run_does_not_abort_the_bulk_run`, which does
-    not depend on a lock to raise one.
+    The queue withholds a group with fewer than two stackable members, and auto-stack
+    applies the same filter, so the group never enters the run at all. The invariant
+    that an ``HTTPException`` mid-run must not abort is pinned directly by
+    :func:`test_an_http_exception_mid_run_does_not_abort_the_bulk_run`, which does not
+    depend on a lock to raise one.
     """
     ids = _seed_three_exact_groups(server)
     _lock_picture_in_a_set(server, ids[2])  # a member of the middle group
@@ -1065,13 +1061,13 @@ def test_a_locked_group_is_never_planned_into_a_bulk_run(server):
 
 
 def test_an_http_exception_mid_run_does_not_abort_the_bulk_run(server, monkeypatch):
-    """Regression for the CSO's B2, pinned on the mechanism rather than a lock.
+    """A refusal mid-run does not abort, pinned on the mechanism not a lock.
 
-    The locked-set guards raise ``HTTPException(423)``, not
-    ``DedupVerdictError``. Catching only the latter meant a refusal in the middle
-    of a bulk run propagated out **after** earlier groups had already committed:
-    a partially applied bulk mutation whose server-minted batch id the caller
-    never received, i.e. work that happened with no undo handle in the response.
+    The locked-set guards raise ``HTTPException(423)``, not ``DedupVerdictError``.
+    Catching only the latter would let a refusal in the middle of a bulk run propagate
+    out **after** earlier groups had already committed: a partially applied bulk
+    mutation whose server-minted batch id the caller would never receive, i.e. work that
+    happened with no undo handle in the response.
 
     The refusal is injected here so the test keeps pinning that ``except`` clause
     however the lock filters change upstream.
@@ -1160,7 +1156,7 @@ def test_a_stack_verdict_records_the_actor_and_origin(server):
 
     §21 is explicit that actor / source / origin_client_id come from the request,
     in the handler, and are passed down - the contextvar is dead on the DB worker
-    thread. Before this, every dedup operation recorded `actor=None,
+    thread. Otherwise every dedup operation would record `actor=None,
     source="external"`, degrading the audit trail for the most far-reaching
     mutation on the surface.
     """
@@ -1214,13 +1210,12 @@ def test_bulk_auto_stack_attributes_every_row_in_the_batch(server):
 
 
 def test_undo_restores_a_scrapheaped_stack_siblings_position(server):
-    """Regression for the CSO's C1 - pins ``include_deleted=True``.
+    """Pins ``include_deleted=True`` on the undo snapshot.
 
     ``normalize_stack_positions`` renumbers **every** member of an affected
     stack, soft-deleted ones included (§21.1). If the undo snapshot expanded the
     stack without ``include_deleted=True``, the scrapheaped sibling's renumbered
-    position would be an unrecorded change that undo could not reverse - and the
-    whole suite stayed green without it.
+    position would be an unrecorded change that undo could not reverse.
     """
     ids = _seed(
         server,
@@ -1336,7 +1331,7 @@ def test_a_locked_co_member_of_a_folded_stack_is_refused(server):
     are covered solely by ``enforce_stack_membership_not_locked`` running first
     and expanding through ``expand_picture_ids_to_stacks``. That ordering is
     load-bearing: move the lock check after the fold and a locked picture gets
-    silently reparented. Pins the CSO's B6b probe.
+    silently reparented.
     """
     from fastapi import HTTPException
 
@@ -1648,9 +1643,7 @@ def test_the_queue_marks_a_locked_member_as_unstackable(server):
 def test_a_wholly_frozen_group_is_withheld_from_the_queue(server):
     """No stackable decision is left in it, so the queue does not offer it.
 
-    Superseded the earlier "listed but every member marked" expectation when the
-    owner asked for the group to be withheld outright (2026-07-30). The group row
-    survives, so unlocking the set brings it straight back.
+    The group row survives, so unlocking the set brings it straight back.
     """
     ids = _seed(
         server,
@@ -1836,13 +1829,12 @@ def _open_signatures(server) -> list[str]:
 
 
 def test_clearing_a_stacked_decision_returns_the_group_to_the_queue(server):
-    """The user-reported bug (owner, 2026-07-30): clear must return the group.
+    """Clear must return the group to the queue.
 
-    Reopen used to stamp the verdict and unresolve the group but leave the
-    pictures stacked, and the live-groups filter requires the members to span
-    two stack units - so the cleared group vanished from Decided AND never
-    reappeared in the queue. Clearing a stacked decision must dissolve the
-    stack the verdict created.
+    The live-groups filter requires the members to span two stack units, so a clear that
+    left the pictures stacked would drop the group from Decided without it ever
+    reappearing in the queue. Clearing a stacked decision must dissolve the stack the
+    verdict created.
     """
     ids = _seed(
         server,
@@ -1916,7 +1908,7 @@ def test_clearing_a_stacked_decision_restores_a_folded_stack(server):
 
 
 def test_clearing_a_keep_separate_returns_the_group(server):
-    """The keep-separate clear touches no pictures and already worked; pin it."""
+    """The keep-separate clear touches no pictures; pin it."""
     ids = _seed(
         server,
         [
@@ -2407,7 +2399,7 @@ def _preselected_cover(server, signature: str) -> int:
 
 
 def test_auto_stack_never_plans_a_fully_collapsed_group(server):
-    """D1 negative: a group whose live members already share ONE stack.
+    """Negative: a group whose live members already share ONE stack.
 
     It poses no decision, so the queue hides it, and the run must not plan it
     either. Verified non-vacuous: restoring `stackable_groups_filter` on the
@@ -2447,7 +2439,7 @@ def test_auto_stack_never_plans_a_fully_collapsed_group(server):
 
 
 def test_auto_stack_still_plans_a_genuinely_unstacked_group(server):
-    """D1 positive: over-filtering would be its own regression.
+    """Positive: over-filtering would be its own regression.
 
     One collapsed group and one loose group in the same run: exactly the loose
     one is planned.
@@ -2478,10 +2470,10 @@ def test_auto_stack_still_plans_a_genuinely_unstacked_group(server):
 
 
 def test_auto_stack_still_plans_a_group_that_folds_a_stack_in(server):
-    """D1 positive, the sharper case: a stack plus a loner still poses a decision.
+    """Positive, the sharper case: a stack plus a loner still poses a decision.
 
     Two units, so `_live_groups_filter` keeps it and the run must still act,
-    the filter tightening must not swallow the groups where a fold WOULD happen.
+    the filter must not swallow the groups where a fold WOULD happen.
     """
     ids = _seed(
         server,
@@ -2535,10 +2527,10 @@ def test_bulk_wrapper_emits_aggregated_ids_and_keeps_them_out_of_response():
 
 
 def test_a_folded_stacks_leader_is_an_acceptable_cover(server):
-    """B2: the deck's face is the leader, and the group names only one member.
+    """The deck's face is the leader, and the group names only one member.
 
-    Requiring the cover to be a group member forced the MATCHED member to be
-    promoted instead, silently re-covering a stack the user had already curated.
+    Requiring the cover to be a group member would force the MATCHED member to
+    be promoted instead, silently re-covering a stack the user had already curated.
     """
     ids = _seed(
         server,
@@ -2574,12 +2566,12 @@ def test_a_folded_stacks_leader_is_an_acceptable_cover(server):
 
 
 def test_choosing_the_deck_as_cover_leaves_its_leader_where_it_was(server):
-    """B2, stated as the invariant the queue promises: nothing gets re-covered.
+    """Stated as the invariant the queue promises: nothing gets re-covered.
 
     Scoped to **position 0**, which is the whole of the cover contract: a
     growing stack always renumbers its non-leaders through
     ``normalize_stack_positions``, so asserting a fixed position for anything
-    below the leader would pin that ordering rule rather than this fix.
+    below the leader would pin that ordering rule rather than this contract.
     """
     ids = _seed(
         server,
@@ -2610,7 +2602,7 @@ def test_choosing_the_deck_as_cover_leaves_its_leader_where_it_was(server):
 
 
 def test_a_leader_of_an_untouched_stack_is_still_rejected_as_cover(server):
-    """B2 negative: relaxed to the resulting stack, not to anything at all.
+    """Negative: any member of the resulting stack, not anything at all.
 
     The sharper sibling of `test_a_cover_outside_the_group_is_rejected`: the
     offered cover IS a stack leader, just not of a stack this group folds in.
@@ -2644,7 +2636,7 @@ def test_a_leader_of_an_untouched_stack_is_still_rejected_as_cover(server):
 
 
 def test_an_excluded_members_stack_leader_is_not_a_legal_cover(server):
-    """B2 negative: exclusions shrink the legal cover set with the fold."""
+    """Negative: exclusions shrink the legal cover set with the fold."""
     ids = _seed(
         server,
         [
@@ -2680,7 +2672,7 @@ def _stack_operation_summary(server) -> str:
 
 
 def test_the_receipt_counts_the_folded_stacks_members_too(server):
-    """B4: `len(included)` under-reported every verdict that folded a stack in."""
+    """The receipt counts a folded stack's members, not just `len(included)`."""
     ids = _seed(
         server,
         [
@@ -2706,7 +2698,7 @@ def test_the_receipt_counts_the_folded_stacks_members_too(server):
 
 
 def test_the_receipt_counts_a_plain_group_exactly(server):
-    """B4 negative: no stack folded in, so nothing is inflated."""
+    """Negative: no stack folded in, so nothing is inflated."""
     _seed(
         server,
         [
@@ -2727,7 +2719,7 @@ def test_the_receipt_counts_a_plain_group_exactly(server):
 
 
 def test_the_dry_run_counts_the_pictures_a_fold_would_move(server):
-    """B4: the consent dialog promised fewer pictures than the run would touch."""
+    """The consent dialog promises no fewer pictures than the run touches."""
     ids = _seed(
         server,
         [
@@ -2750,7 +2742,7 @@ def test_the_dry_run_counts_the_pictures_a_fold_would_move(server):
 
 
 def test_the_dry_run_does_not_inflate_a_group_with_no_stack(server):
-    """B4 negative: loose groups still count exactly their own members."""
+    """Negative: loose groups still count exactly their own members."""
     _seed_two_exact_groups(server)
     _scan(server)
     report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, True, None)
@@ -2760,10 +2752,10 @@ def test_the_dry_run_does_not_inflate_a_group_with_no_stack(server):
 
 
 def test_the_dry_run_counts_a_shared_stack_once(server):
-    """B4, the other direction: honest also means not over-counting.
+    """The other direction: honest also means not over-counting.
 
     Two exact groups each name a member of the SAME stack, so both would fold
-    it in. Summing per group promised its members twice.
+    it in. Summing per group would promise its members twice.
     """
     ids = _seed(
         server,
@@ -2803,12 +2795,11 @@ def _force_variable_limit(server, limit=999):
 
 
 def test_the_dry_run_survives_the_sqlite_variable_ceiling(server):
-    """Regression for #751: the preview aggregates over the WHOLE candidate set.
+    """The preview aggregates over the WHOLE candidate set.
 
-    The reporter had 30,140 exact groups. Every id set in the summary was bound
-    one parameter per id, so the group query, the picture query and the tag query
-    each blew the ceiling and the consent dialog reported "the preview could not
-    be read". Both scopes here are over 999: 1001 groups and 2002 pictures.
+    An id set bound one parameter per id would blow the ceiling in the group, picture
+    and tag queries on a large library, and the consent dialog would report "the preview
+    could not be read". Both scopes here are over 999: 1001 groups and 2002 pictures.
     """
     specs = []
     for index in range(1001):
@@ -2832,11 +2823,10 @@ def test_the_dry_run_survives_the_sqlite_variable_ceiling(server):
 
 
 def test_the_dry_run_does_not_occupy_the_writer_queue(server):
-    """Regression for #751, second half: a read-only preview blocked every write.
+    """A read-only preview must not block writes.
 
-    ``bulk_auto_stack`` sent the dry run to the serialised writer thread, so a
-    slow preview held it and each stack verdict queued behind it until the run
-    finished, so the queue answered "Could not stack that group" the whole time.
+    On the serialised writer thread a slow preview would hold it, and each
+    stack verdict would queue behind it until the run finished.
     The preview writes nothing, so it must not take the writer at all.
     """
     _seed(

@@ -11,7 +11,7 @@ Covers, per tier and per rule:
 * **tier 3 (embedding)** - reuses the shipped likeness edge table;
 * **the tier policy** - exact is always on, each looser tier requires the tier
   above it, and the 0.65 floor is a hard error rather than a silent clamp;
-* **cover selection** - the 2026-07-30 lexicographic ranking: smart score in
+* **cover selection** - the lexicographic ranking: smart score in
   quarter-star buckets (unknown ranks neutral, never zero), then pixel count,
   then sharpness, then stars/tags/RAW/bytes, ties to the oldest capture;
 * **evidence** - matching pills and evidence-against pills, both directions;
@@ -195,8 +195,7 @@ def test_group_size_bounds_are_validated():
 
 def test_smart_score_dominates_every_size_advantage():
     """Tier 1 beats tier 2: a 40 MP blurry scan must not outrank a sharp
-    original the scorer rated higher - the exact failure of the old weighted
-    sum, where pixels alone could buy the cover."""
+    original the scorer rated higher - pixels alone must not buy the cover."""
     sharp_original = _member(id=1, width=4000, height=3000, smart_score=4.5)
     blurry_scan = _member(
         id=2, width=8000, height=5000, smart_score=2.0, tag_count=9, score=5
@@ -366,7 +365,7 @@ def test_candidate_evidence_explains_the_preselection_both_ways():
 
 
 def test_candidate_evidence_explains_the_smart_score_and_sharpness_tiers():
-    """The pills must explain the NEW ranking, in its priority order."""
+    """The pills must explain the ranking, in its priority order."""
     best = _member(id=1, smart_score=4.3, sharpness=0.4)
     mid = _member(id=2, smart_score=4.26, sharpness=0.1)
     worse = _member(id=3, smart_score=3.1)
@@ -937,8 +936,8 @@ def _soft_delete(server, picture_id):
 def test_a_group_thinned_below_two_leaves_the_queue_at_once(server):
     """Not "on the next verdict or scan": immediately, with no prune in between.
 
-    The owner's report: scrapheap one of a pair and the queue kept the row,
-    drawn as a lone picture beside an empty slot.
+    Scrapheaping one of a pair must not leave the row in the queue, drawn as a
+    lone picture beside an empty slot.
     """
     ids = _seed(
         server,
@@ -1111,8 +1110,8 @@ def test_a_decks_depth_in_the_queue_follows_a_scrapheaped_stack_member(server):
 
 
 def test_a_deck_whose_leader_is_scrapheaped_reports_the_next_live_leader(server):
-    """The face has to move: a deck drawn from a scrapheaped leader is the
-    404-thumbnail the queue's empty placeholder was made of."""
+    """The face has to move: a deck drawn from a scrapheaped leader would be a
+    404 thumbnail."""
     ids = _seed(
         server,
         [
@@ -1454,15 +1453,14 @@ def test_scan_progress_for_an_unscanned_scope_is_idle_not_an_error(server):
 
 
 def test_two_groups_sharing_a_digest_but_not_a_size_stay_distinct(server):
-    """Regression for the CSO's E1: the signature needs the ``size_bytes`` co-key.
+    """The signature needs the ``size_bytes`` co-key.
 
     ``pixel_sha`` is a *sampled* digest above 128 KiB, which is exactly why tier 1
-    detects on ``(pixel_sha, size_bytes)``. Identity that dropped the size made
-    two distinct exact groups collapse onto one signature, and all three
-    consequences were silent: one group vanished from the queue via the
-    upsert-on-signature, a keep-separate on the survivor resolved both file sets,
-    and a stack verdict's write target depended on scan order rather than on what
-    the user saw.
+    detects on ``(pixel_sha, size_bytes)``. Identity that dropped the size would
+    collapse two distinct exact groups onto one signature, silently: one group
+    would vanish from the queue via the upsert-on-signature, a keep-separate on
+    the survivor would resolve both file sets, and a stack verdict's write target
+    would depend on scan order rather than on what the user saw.
     """
     ids = _seed(
         server,
@@ -1496,7 +1494,7 @@ def test_two_groups_sharing_a_digest_but_not_a_size_stay_distinct(server):
 
 
 def test_a_verdict_on_one_group_does_not_resolve_its_same_digest_twin(server):
-    """The second half of E1: consent must not leak across file sets."""
+    """The other half: consent must not leak across file sets."""
     _seed(
         server,
         [
@@ -1549,11 +1547,11 @@ def _group_row(server, signature):
 
 
 def test_a_near_scan_does_not_downgrade_an_exact_group(server):
-    """QA blocker 2, the two-scan repro.
+    """Two scans: an exact group survives the near scan that follows it.
 
     A byte-identical pair is also perceptually identical, so every near-enabled
-    scan rediscovers it as a ``near`` group with the same signature. The upsert
-    wrote ``row.tier`` unconditionally, so the pair was demoted to ``near`` - and
+    scan rediscovers it as a ``near`` group with the same signature. An upsert
+    that wrote ``row.tier`` unconditionally would demote the pair to ``near`` - and
     a ``near`` group is invisible in the exact-only default queue *and*
     ineligible for ``POST /dedup/auto-stack``, which only ever acts on ``exact``.
     """
@@ -1707,7 +1705,7 @@ def test_the_cursor_resumes_a_tied_confidence_run_without_gap_or_repeat(server):
 
 
 def test_a_folder_scope_that_normalises_to_empty_is_refused():
-    """CSO W2: these all rstripped to "" and became a LIKE pattern of "%"."""
+    """These all rstrip to "" and would become a LIKE pattern of "%"."""
     for bad in ("/", "\\", "///", "\\\\", "/\\/"):
         with pytest.raises(ValueError):
             DedupScope(scope_type=ScopeType.FOLDER, scope_id=bad)
@@ -1777,9 +1775,9 @@ def _only_group(server):
 
 
 def test_a_group_naming_one_member_of_a_four_stack_reports_the_stacks_depth(server):
-    """The measured majority case: 36 of 116 stack-touching groups name ONE
-    member of a stack. The deck must still stand for the whole stack, or the
-    row draws a 4-deep stack as one picture and then silently moves four."""
+    """The common case: a group names ONE member of a stack. The deck must still stand
+    for the whole stack, or the row draws a 4-deep stack as one picture and then
+    silently moves four."""
     ids = _seed(
         server,
         [

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the configurable Florence-2 checkpoint (issue #512).
+"""Tests for the configurable Florence-2 checkpoint.
 
 These tests never load a model: they exercise the variant plumbing only -
 the service's variant switch, the VRAM figure the gate charges, the plugin

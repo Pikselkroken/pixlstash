@@ -1,4 +1,4 @@
-"""What the Civitai by-hash lookup sends, and how it reads each answer (#1517).
+"""What the Civitai by-hash lookup sends, and how it reads each answer.
 
 ``requests.get`` is replaced in every test, so nothing here reaches the network.
 """

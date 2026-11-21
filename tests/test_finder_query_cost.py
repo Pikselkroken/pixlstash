@@ -1,17 +1,17 @@
-"""The hot idle finder probes cost O(matching rows), not O(library) (issue #651).
+"""The hot idle finder probes cost O(matching rows), not O(library).
 
 The WorkPlanner sweeps every registered finder on a short interval, so a finder's
 candidate query runs continuously even on a fully-processed library where it
-matches nothing. Two of them were the dominant background read:
+matches nothing. Two of them are covered here:
 
-* ``MissingThumbnailFinder._fetch_missing`` selected the FULL ``Picture`` ORM
-  entity - including ``image_embedding``, ``text_embedding`` and
-  ``likeness_parameters``, three LargeBinary columns - plus every ``Face`` column
+* ``MissingThumbnailFinder._fetch_missing``, where selecting the FULL ``Picture``
+  ORM entity would load ``image_embedding``, ``text_embedding`` and
+  ``likeness_parameters`` (three LargeBinary columns) plus every ``Face`` column
   including ``features``, for every candidate row.
-* ``SmartScoreTask.find_pictures_missing_smart_score`` did the same, and nothing
-  downstream reads anything but ``pic.id``.
+* ``SmartScoreTask.find_pictures_missing_smart_score``, where nothing downstream
+  reads anything but ``pic.id``.
 
-and both were served by ``ix_picture_deleted``, i.e. SQLite walked every
+Served by ``ix_picture_deleted``, either would have SQLite walk every
 non-deleted row to prove there was no work.
 
 Three properties are asserted here, one per failure mode:
@@ -75,8 +75,7 @@ class _StatementRecorder:
 
     Deliberately NOT a count of all statements on the engine: the listener fires
     for every thread and the vault runs its own bookkeeping queries, so a raw
-    total measures unrelated work (see ``tests/test_picture_sets_query_cost.py``,
-    which failed for exactly that reason before it filtered).
+    total measures unrelated work.
     """
 
     def __init__(self, engine, needle: str):
@@ -176,7 +175,7 @@ def _explain(vault, statement: str, parameters) -> list[str]:
 def test_thumbnail_probe_is_served_by_its_partial_index(tmp_path):
     """``thumbnail_width IS NULL`` resolves through ``ix_picture_thumbnail_missing``.
 
-    Before the index, this was ``SEARCH picture USING INDEX ix_picture_deleted``:
+    Without the index this is ``SEARCH picture USING INDEX ix_picture_deleted``:
     every non-deleted row visited, several times a second, to find nothing.
     """
     with Vault(image_root=str(tmp_path)) as vault:
@@ -203,8 +202,8 @@ def test_smart_score_probe_is_served_by_its_partial_index(tmp_path):
     NOT through the plain ``ix_picture_smart_score`` that the column's
     ``index=True`` creates. That index can serve ``smart_score IS NULL``, but the
     planner only picks it once ``sqlite_stat1`` exists, and nothing in PixlStash
-    runs ``ANALYZE`` - so on a real vault the probe fell back to
-    ``ix_picture_deleted`` and walked the whole library.
+    runs ``ANALYZE`` - so on a real vault the probe would fall back to
+    ``ix_picture_deleted`` and walk the whole library.
     """
     with Vault(image_root=str(tmp_path)) as vault:
         _seed(vault, tmp_path, count=12, with_faces=False, done=10)
@@ -226,20 +225,18 @@ def test_smart_score_probe_is_served_by_its_partial_index(tmp_path):
 def test_character_features_rollup_is_served_by_its_partial_index(tmp_path):
     """ "Which characters have an embedded face?" reads only the embedded faces.
 
-    Asserted on the GROUPED shape on purpose, not on a per-character
-    ``character_id = ?`` probe. ``ix_face_character_features`` and
-    ``ix_face_character_id`` cost the same for an equality lookup when there is no
-    ``sqlite_stat1`` (nothing here runs ``ANALYZE``), and SQLite breaks that tie by
-    index-creation order - which ``metadata.create_all()`` iterates from a set, so
-    it differs between processes. An earlier revision of this test asserted the
-    equality shape and failed roughly every other run for exactly that reason.
-    The one-pass shape is chosen unconditionally, and is what ``GET /characters``
-    asks. See ``Face.__table_args__``.
+    Asserted on the GROUPED shape on purpose, not on a per-character ``character_id =
+    ?`` probe. ``ix_face_character_features`` and ``ix_face_character_id`` cost the same
+    for an equality lookup when there is no ``sqlite_stat1`` (nothing here runs
+    ``ANALYZE``), and SQLite breaks that tie by index-creation order - which
+    ``metadata.create_all()`` iterates from a set, so it differs between processes. The
+    one-pass shape is chosen unconditionally, and is what ``GET /characters`` asks. See
+    ``Face.__table_args__``.
 
     Asserted against the statement the endpoint actually issues, compiled from
-    ``characters_with_reference_faces_query`` rather than hand-written here. An
-    earlier revision hand-wrote a similar query, which passed while the real
-    endpoint used the OTHER index: the index looked justified and was not.
+    ``characters_with_reference_faces_query`` rather than hand-written here: a
+    hand-written similar query can pass while the real endpoint uses the OTHER
+    index.
     """
     from pixlstash.routes.characters import characters_with_reference_faces_query
 
@@ -260,15 +257,14 @@ def test_likeness_stack_leader_sibling_lookup_uses_the_stack_index(tmp_path):
     The sibling row is narrowed by ``stack_id`` and by ``deleted``. Written as
     two equality terms, ``ix_picture_stack_id`` and ``ix_picture_deleted`` tie
     (no ``sqlite_stat1``) and creation order decides. When ``ix_picture_deleted``
-    won, each face row walked every live picture: one CHARACTER_LIKENESS page
-    cost 6.5 s on a 12k-picture library against 0.13 s. The clause now writes
-    the deleted test as ``deleted IS NOT 1``, which no index can serve, so the
+    wins, each face row walks every live picture. The clause writes the deleted
+    test as ``deleted IS NOT 1``, which no index can serve, so the
     only candidates left are the stack_id indexes and the plan cannot flip.
 
-    ``metadata.create_all()`` builds the indexes in set order, so a single
-    fresh database is a coin flip and would pass half the time without the
-    fix. The two competing indexes are therefore rebuilt in BOTH orders and
-    the plan asserted after each.
+    ``metadata.create_all()`` builds the indexes in set order, so a single fresh
+    database is a coin flip and would pass half the time without the ``IS NOT 1`` form.
+    The two competing indexes are therefore rebuilt in BOTH orders and the plan asserted
+    after each.
     """
     from sqlmodel import select
 
@@ -342,7 +338,7 @@ def test_smart_score_probe_reads_only_the_id(tmp_path):
     """The smart-score probe selects ``picture.id`` and nothing else.
 
     ``SmartScoreTask`` re-fetches every scorer input by id inside its own read
-    transaction, so loading them here was pure waste.
+    transaction, so loading them here would be pure waste.
     """
     with Vault(image_root=str(tmp_path)) as vault:
         _seed(vault, tmp_path, count=4, with_faces=False)
@@ -436,11 +432,11 @@ class _StubEngine:
 
 
 def test_the_face_finder_can_fill_every_slot_it_says_it_has(tmp_path):
-    """`max_inflight_tasks() == 3` was a promise one batch of candidates broke.
+    """`max_inflight_tasks() == 3` is a promise one batch of candidates cannot keep.
 
     A picture keeps matching ``~faces.any()`` until its task finishes, so with a
-    candidate window of exactly one batch the second sweep re-read the same
-    hundred rows, found all of them claimed, and returned None - which the
+    candidate window of exactly one batch the second sweep would re-read the same
+    hundred rows, find all of them claimed, and return None - which the
     planner answers with a backoff that grows 1.8x a time. Two idle slots and a
     lengthening sleep, on a library with thousands of pictures left to do.
     """
@@ -474,10 +470,10 @@ def test_the_face_finder_can_fill_every_slot_it_says_it_has(tmp_path):
 
 
 def test_undecodable_pictures_cannot_wedge_the_face_finder(tmp_path):
-    """A window's worth of suppressed rows used to be a permanent stall.
+    """A window's worth of suppressed rows must not be a permanent stall.
 
     They are filtered *after* the query by ``_filter_and_claim``, so a run of
-    them long enough to fill the candidate window handed back a list that
+    them long enough to fill the candidate window could hand back a list that
     claimed nothing - every sweep, forever, with real work sitting behind them.
     """
     from pixlstash.tasks.missing_face_extraction_finder import (
@@ -548,9 +544,9 @@ def test_keeping_models_in_memory_survives_the_finder_running_dry(tmp_path):
 
 
 def test_a_tag_drain_leaves_wd14_to_the_idle_sweep(tmp_path):
-    """The drain used to tear the WD14 session down; with per-row dependencies
-    a finder drains many times per pass, so the session now outlives the drain
-    and only the idle sweep frees it - and only when models are not kept."""
+    """With per-row dependencies a finder drains many times per pass, so the WD14
+    session outlives the drain and only the idle sweep frees it - and only when models
+    are not kept."""
     from pixlstash.tasks.missing_tag_finder import MissingTagFinder
 
     unloads = []
@@ -600,7 +596,7 @@ def _add_rows(vault, rows) -> None:
 
 def test_image_embedding_needs_nothing_upstream(tmp_path):
     """CLIP reads only the file: a picture with no faces and tags still pending
-    is embedded now, not after those stages drain (the old ``depends_on``).
+    is embedded now, not after those stages drain.
     """
     from pixlstash.db_models import Tag
     from pixlstash.db_models.tag import make_tag_sentinel
@@ -658,8 +654,8 @@ def _image_embedding_plan(vault, aesthetic_disabled: bool) -> list[str]:
 def test_image_embedding_probe_is_served_by_its_partial_indexes(tmp_path):
     """Both OR arms resolve through their own partial index (MULTI-INDEX OR).
 
-    Before 0112 the ``length(image_embedding) = 0`` arm forced ``SCAN picture``
-    on every planner sweep.
+    Without its index the ``length(image_embedding) = 0`` arm would force
+    ``SCAN picture`` on every planner sweep.
     """
     with Vault(image_root=str(tmp_path)) as vault:
         _seed(vault, tmp_path, count=3, with_faces=False, done=2)
@@ -681,8 +677,8 @@ _TAG_PROBE = "picture.id in (select tag.picture_id"
 def test_tag_probe_is_served_by_the_tag_index(tmp_path):
     """The pending-sentinel range drives the probe through ``ix_tag_tag``.
 
-    The old ``tags.any(tag LIKE '\\_\\_tag%' ESCAPE '\\')`` could not use an index
-    (SQLite's LIKE optimisation is off with ESCAPE), so it was ``SCAN picture``.
+    A ``tags.any(tag LIKE '\\_\\_tag%' ESCAPE '\\')`` could not use an index
+    (SQLite's LIKE optimisation is off with ESCAPE), so it would be ``SCAN picture``.
     """
     from pixlstash.db_models import Tag
     from pixlstash.db_models.tag import make_tag_sentinel

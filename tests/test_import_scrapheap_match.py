@@ -1,12 +1,12 @@
 """Import must SEE the Scrapheap, and restore a match rather than re-import it.
 
-``Picture.find`` defaults ``include_deleted=False``, and the one-shot import
-called it that way, so a scrapheaped picture was invisible to import dedup:
-re-importing a file whose picture sits in the Scrapheap created a brand-new
-second row while the original was still there. A bulk "Keep cover only" cleanup
-puts hundreds of pictures in the Scrapheap in one gesture, all of them copies of
-files the user still has on disk, so the next import would silently undo the
-cleanup and roughly double the bytes.
+``Picture.find`` defaults ``include_deleted=False``, so an import calling it that
+way would not see a scrapheaped picture: re-importing a file whose picture sits
+in the Scrapheap would create a brand-new second row while the original was
+still there. A bulk "Keep cover only" cleanup puts hundreds of pictures in the
+Scrapheap in one gesture, all of them copies of files the user still has on
+disk, so the next import would silently undo the cleanup and roughly double the
+bytes.
 
 These tests pin both directions:
 
@@ -198,7 +198,7 @@ def test_staging_reimport_of_scrapheaped_picture_creates_no_second_row(owner_ser
 
 
 def test_one_shot_reimport_of_scrapheaped_picture_creates_no_second_row(owner_server):
-    """One-shot ``POST /pictures/import``: the path that carried the bug."""
+    """One-shot ``POST /pictures/import``: the same match on the other path."""
     srv, client = owner_server
     data = _png_bytes(color=(44, 55, 66))
 
@@ -379,7 +379,7 @@ def test_purged_and_ledgered_file_imports_as_new_and_is_not_resurrected(owner_se
 
 
 def test_live_row_wins_over_a_scrapheaped_row_with_the_same_hash(owner_server):
-    """Both rows can exist (the old bug made them). A live match is a duplicate."""
+    """Both rows can exist (legacy data). A live match is a duplicate."""
     srv, client = owner_server
     data = _png_bytes(color=(15, 240, 90))
 

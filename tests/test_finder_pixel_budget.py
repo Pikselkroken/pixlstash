@@ -1,4 +1,4 @@
-"""Image-task batches are cut by decoded size as well as by count (#2750)."""
+"""Image-task batches are cut by decoded size as well as by count."""
 
 from types import SimpleNamespace
 

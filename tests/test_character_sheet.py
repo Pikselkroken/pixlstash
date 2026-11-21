@@ -128,7 +128,7 @@ def test_the_mid_thigh_boxes_are_the_probed_ones():
 @pytest.mark.parametrize("framing", ["waist_up", "mid_thigh", "knees_up", "full_body"])
 def test_other_proportions_give_the_head_more_of_the_body_photo(framing):
     """A little person or a cartoon is drawn with a bigger head and shorter
-    legs than an adult (#1079): the boxes say so as well as the words, and a
+    legs than an adult: the boxes say so as well as the words, and a
     typical figure keeps the probed boxes."""
 
     def shares(proportions):
@@ -222,7 +222,7 @@ def test_no_build_given_says_none_and_a_given_one_reaches_the_torso(framing):
 
 
 def test_a_reference_prompt_names_the_picture_and_keeps_every_box():
-    """#2679: the picture sets the face, so each photo names it; the layout
+    """The picture sets the face, so each photo names it; the layout
     the cut relies on does not move."""
     plain = json.loads(sheet_prompt(description="Auburn hair", body="slim"))
     drawn = json.loads(
@@ -399,7 +399,7 @@ def test_converting_to_a_sheet_workflow_gives_the_canvas_a_size_of_its_own(laten
 def test_a_qwen_image_2_1_edit_takes_the_canvas_side_of_its_switch():
     """Qwen-Image 2.1's template switches between the picture's own latent
     and an empty canvas, and saves through ``SaveImageAdvanced``, which
-    PixlStash collects nothing from (#2700)."""
+    PixlStash collects nothing from."""
     graph = {
         "1": {"class_type": "LoadImage", "inputs": {"image": "a.png"}},
         "2": {
@@ -443,7 +443,7 @@ def test_a_qwen_image_2_1_edit_takes_the_canvas_side_of_its_switch():
 
 def test_a_klein_edit_sized_from_its_picture_sizes_its_scheduler_too():
     """FLUX.2 Klein's edit template sizes its canvas and its scheduler from
-    the picture: both take the sheet's size (#2700)."""
+    the picture: both take the sheet's size."""
     graph = _klein_graph()
     graph["7"] = {"class_type": "GetImageSize", "inputs": {"image": ["1", 0]}}
     graph["5"]["inputs"].update(width=["7", 0], height=["7", 1])
@@ -474,7 +474,7 @@ def test_a_klein_edit_sized_from_its_picture_sizes_its_scheduler_too():
 )
 def test_the_shipped_sheet_workflows_draw_at_the_sheet_size(name, references):
     """The step lists a workflow from a reference only with a reference input,
-    and draws only one with a size to set: every size is the sheet's (#2700)."""
+    and draws only one with a size to set: every size is the sheet's."""
     graph = json.loads((pathlib.Path(WORKFLOW_BUILTIN_DIR) / name).read_text())
     assert reference_input_count(reduce_api_graph(graph)) == references
     sizes = {
@@ -522,7 +522,7 @@ def test_the_h3_image_sheets_and_t2i_draw_with_lcm_and_a_run_still_reaches_them(
 ):
     """euler at 6 steps draws H3 Image faces crunchy; SamplerLCM with its
     noise easing from 1.1 to 0.9 draws them clean, for a sheet and for a plain
-    text to image alike. A run must still find the seed (now RandomNoise's)
+    text to image alike. A run must still find the seed (RandomNoise's)
     and splice a LoRA into both readers of the model."""
     graph = json.loads((pathlib.Path(WORKFLOW_BUILTIN_DIR) / name).read_text())
     by_class = {node["class_type"]: node["inputs"] for node in graph.values()}

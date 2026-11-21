@@ -1,4 +1,4 @@
-"""API tests for the v1.9 tiered duplicate queue.
+"""API tests for the tiered duplicate queue.
 
 Every route is declared ``OWNER_ONLY`` in ``pixlstash/authz/registry.py`` and
 enforced by the central authz gate, so these assert **both directions** per the
@@ -569,8 +569,8 @@ def test_a_group_already_stacked_together_stops_posing_a_decision():
     """Members stacked BY HAND leave the queue and the counts at once.
 
     The grid's own stack actions never touch dedupgroup, so an exact pair the
-    user stacked from the grid stayed "unresolved" and was re-offered forever
-    (the owner's #670/#1746 report). A group where a stack would still fold
+    user stacked from the grid must not stay "unresolved" and be re-offered
+    forever. A group where a stack would still fold
     something in - a stack plus a loner - keeps counting.
     """
     temp_dir, client, server, ids, _token, _set_id = _env()
@@ -657,12 +657,11 @@ def test_the_decided_page_lists_the_verdict_and_clears_via_reopen():
 def test_the_decided_page_orders_by_recent_activity_first():
     """The Decided flip puts the most recently active decision on top.
 
-    It used to reuse the queue's `(confidence DESC, id ASC)` ordering, which is
-    meaningless for a review list (every exact group ties at 1.0, so the list
-    came out in group-id order regardless of when anything was decided - the
-    user's "very weird" report, 2026-07-30). Both directions are asserted: the
-    Initially that is `decided_at` across both verdict kinds; a later stack
-    change has its own explicit regression below. The OPEN queue keeps its
+    The queue's `(confidence DESC, id ASC)` ordering is meaningless for a
+    review list: every exact group ties at 1.0, so the list would come out in
+    group-id order regardless of when anything was decided. Activity is
+    `decided_at` across both verdict kinds; a later stack change has its own
+    explicit test below. The OPEN queue keeps its
     confidence ordering.
     """
     temp_dir, client, server, _ids, _token, _set_id = _env()
@@ -845,7 +844,7 @@ def test_redo_restamps_the_decision_so_it_returns_to_the_top():
 
     Non-vacuous by construction: the undone verdict's stamp is backdated an
     hour below its sibling's, so a redo that restored the old stamp would sort
-    it UNDER the sibling - only the 2026-07-30 re-stamp puts it on top, which
+    it UNDER the sibling - only the re-stamp puts it on top, which
     is where the user who just pressed redo looks for it.
     """
     temp_dir, client, server, _ids, _token, _set_id = _env()
@@ -1104,14 +1103,13 @@ def test_auto_stack_applies_under_one_batch_id():
 
 
 def test_a_non_numeric_scope_id_is_a_400_on_every_route():
-    """Regression for the CSO's D4.
+    """A non-numeric scope id is refused at the boundary, before any write.
 
     ``picture_predicate()`` calls ``int(scope_id)`` for project / set / character.
-    Leaving that unvalidated turned a bad request into an unhandled 500 on three
-    read routes, and `POST /dedup/scan` returned 200 while **persisting** the
-    unparseable scope - a self-inflicted poison row that made every later
-    `GET /dedup/groups` for that scope 500 too. Validation now happens at the
-    boundary, before any write.
+    Left unvalidated, a bad request would be an unhandled 500 on three read
+    routes, and `POST /dedup/scan` would **persist** the unparseable scope - a
+    poison row that makes every later `GET /dedup/groups` for that scope 500
+    too.
     """
     temp_dir, client, server, _ids, _token, _set_id = _env()
     try:
@@ -1219,13 +1217,11 @@ def test_the_auto_stack_dry_run_carries_the_consent_aggregates():
 
 
 def test_a_partially_blocked_auto_stack_returns_its_batch_id():
-    """R2 at the HTTP boundary, restated for the withholding filter.
+    """A partially blocked auto-stack still returns its undo handle.
 
-    The original fixture reached the run with a locked group in it and asserted
-    the 423 was reported rather than raised. Since a group with fewer than two
-    stackable members is withheld from the queue, the counts AND the auto-stack
-    plan (owner call, 2026-07-30), that group no longer enters the run: the right
-    HTTP-boundary assertion is now that the run applies the decidable group,
+    A group with fewer than two stackable members is withheld from the queue,
+    the counts AND the auto-stack plan, so a locked group never enters the run:
+    the HTTP-boundary assertion is that the run applies the decidable group,
     reports no failure, and still hands back its undo handle. The
     "an HTTPException mid-run does not abort" invariant itself is pinned at the
     service level by
@@ -1329,14 +1325,12 @@ def _verdict_row(server, signature):
 
 
 def test_undo_returns_the_stacked_group_to_the_queue():
-    """QA blocker 1, single verdict.
+    """Undoing a single stack verdict returns the group to the queue.
 
-    Undo restored every picture facet but left the ``DedupVerdict`` decided and
-    the ``DedupGroup`` resolved, so the group never came back to the queue, was
-    not counted, and survived a rescan (the signature still carried a live
-    verdict). The only way back was a ``POST /dedup/verdicts/reopen`` no user
-    could discover. The post-restore hook now reopens both rows inside the undo's
-    own transaction.
+    Restoring the picture facets alone would leave the ``DedupVerdict`` decided
+    and the ``DedupGroup`` resolved, so the group would never come back to the
+    queue, would not be counted, and would survive a rescan. The post-restore
+    hook reopens both rows inside the undo's own transaction.
     """
     temp_dir, client, server, ids, _token, _set_id = _env()
     try:
@@ -1376,12 +1370,7 @@ def test_undo_returns_the_stacked_group_to_the_queue():
 
 
 def test_batch_undo_after_auto_stack_returns_every_group():
-    """QA blocker 1, QA's exact repro: bulk auto-stack then batch undo.
-
-    Every duplicate vanished from the queue permanently - one undo click, and the
-    whole vault's worth of duplicate decisions was unrecoverable without
-    hand-reopening each signature.
-    """
+    """Bulk auto-stack then batch undo returns every group to the queue."""
     temp_dir, client, server, _ids, _token, _set_id = _env()
     try:
         _add_exact_groups(server, count=3)
@@ -1411,10 +1400,10 @@ def test_batch_undo_after_auto_stack_returns_every_group():
 def test_an_undo_does_not_reopen_a_group_it_never_touched():
     """The hook is scoped to the undone batch, not to every decided group.
 
-    The two verdicts here share no gesture id, so each sits in its own
-    server-minted batch: undoing the newest (the stack) reverses only the stack.
-    The keep-separate stands - not because it is irreversible (it has been
-    undoable since 2026-07-30), but because its own operation was not undone.
+    The two verdicts here share no gesture id, so each sits in its own server-minted
+    batch: undoing the newest (the stack) reverses only the stack. The keep-separate
+    stands - not because it is irreversible, but because its own operation was not
+    undone.
     """
     temp_dir, client, server, _ids, _token, _set_id = _env()
     try:
@@ -1442,7 +1431,7 @@ def test_an_undo_does_not_reopen_a_group_it_never_touched():
 
 
 def test_undo_returns_a_kept_separate_group_to_the_queue():
-    """Keep-separate is undoable since the owner's 2026-07-30 override of #644.
+    """Keep-separate is undoable.
 
     Both directions at the HTTP boundary: the response carries the operation's
     ``batch_id`` (the undo handle, mirroring the stack response), undo returns
@@ -1494,12 +1483,9 @@ def test_undo_returns_a_kept_separate_group_to_the_queue():
 def test_an_undo_of_a_shared_gesture_reverses_both_verdict_kinds():
     """One gesture id across a stack and a keep-separate is ONE undo unit.
 
-    Until 2026-07-30 the keep-separate half recorded no operation and the stack
-    hook deliberately left it standing (CSO R5: nothing may be reversed
-    *silently*). The owner's override makes keep-separate record its own
-    operation, so the shared batch now reverses both halves - each through its
-    own operation, explicitly listed in the undo response, which is what R5
-    actually demanded. Redo re-applies both.
+    Keep-separate records its own operation, so the shared batch reverses both
+    halves - each through its own operation, explicitly listed in the undo
+    response, because nothing may be reversed *silently*. Redo re-applies both.
     """
     temp_dir, client, server, _ids, _token, _set_id = _env()
     try:
@@ -1550,13 +1536,12 @@ def test_an_undo_of_a_shared_gesture_reverses_both_verdict_kinds():
 def test_a_duplicate_signature_is_refused_as_a_bad_request_not_a_crash():
     """The batch's own validator must reach the caller as a 422.
 
-    ``VerdictBatchRequestModel.unique_signatures`` raises a bare ``ValueError``,
-    which pydantic hands to the app's ``RequestValidationError`` handler with the
-    exception OBJECT in the error's ``ctx``. Serialising that raw is a
-    ``TypeError`` INSIDE the handler, so a 422 came back as a 500 with no detail
-    — a live bug against a shipped release, not a hypothetical. The handler
-    encodes first (``server.py``); this is the assertion that says why, on the
-    endpoint that has the validator.
+    ``VerdictBatchRequestModel.unique_signatures`` raises a bare ``ValueError``, which
+    pydantic hands to the app's ``RequestValidationError`` handler with the exception
+    OBJECT in the error's ``ctx``. Serialising that raw is a ``TypeError`` INSIDE the
+    handler, so a 422 would come back as a 500 with no detail. The handler encodes first
+    (``server.py``); this is the assertion that says why, on the endpoint that has the
+    validator.
     """
     temp_dir, client, server, _ids, _token, _set_id = _env()
     try:
@@ -1720,11 +1705,10 @@ def test_two_clients_cannot_interleave_inside_an_atomic_verdict_gesture(
 
 
 def test_clear_decision_returns_the_stacked_group_to_the_queue():
-    """The owner-reported 2026-07-30 bug, at the HTTP boundary.
+    """Clearing a stacked decision returns the group, at the HTTP boundary.
 
-    "Clear decision" left the Decided page but never returned the group to the
-    open queue: reopen only cleared the verdict memory while the pictures kept
-    sharing one stack, and the queue's live filter requires two stack units.
+    Clearing only the verdict memory would leave the pictures sharing one
+    stack, and the queue's live filter requires two stack units.
     Clearing a stacked verdict must dissolve its stack, return the group to
     the listing AND the badge count, and hand back an undo handle; undoing the
     clear restacks and re-decides, redo clears again.
@@ -1793,8 +1777,8 @@ def test_clear_decision_returns_the_stacked_group_to_the_queue():
 def test_verdicts_announce_pictures_changed_on_the_ws_envelope():
     """Both verdict kinds emit the standard refresh signal; so do undo and redo.
 
-    Verdicts used to emit nothing, so a second tab's grid, queue and counts had
-    no signal to refresh on. Both paths now raise the same
+    A second tab's grid, queue and counts need a signal to refresh on, so both
+    paths raise the same
     ``pictures_changed``-family event every other mutation raises, with the
     caller's ``origin_client_id`` carried in the event data (§15) - and the
     op-log restore announces the keep-separate's targets on undo/redo even
@@ -1870,7 +1854,7 @@ def test_verdicts_announce_pictures_changed_on_the_ws_envelope():
 
 
 def test_a_verdict_between_pages_makes_offset_skip_and_the_cursor_not():
-    """QA 3: a decided page-1 row shifts every later row's offset by one.
+    """A decided page-1 row shifts every later row's offset by one.
 
     Both halves are asserted: offset paging demonstrably loses a group (so the
     test cannot pass vacuously), and the cursor delivers it.
@@ -1980,7 +1964,7 @@ def test_a_malformed_cursor_is_a_400_not_a_silent_restart():
 
 
 def test_a_server_shaped_batch_id_from_a_client_is_rejected():
-    """CSO M1: a verbatim body batch_id let a client impersonate a server batch."""
+    """A verbatim body batch_id would let a client impersonate a server batch."""
     temp_dir, client, server, _ids, _token, _set_id = _env()
     try:
         signature = _signature(client)
@@ -2026,7 +2010,7 @@ def test_a_server_minted_batch_id_is_namespaced():
 
 
 def test_a_folder_scope_that_normalises_to_nothing_is_rejected():
-    """CSO W2: "/" rstripped to "" and became a LIKE of "%" - silently global."""
+    """ "/" rstrips to "" and would become a LIKE of "%" - silently global."""
     temp_dir, client, server, _ids, _token, _set_id = _env()
     try:
         for bad in ("/", "\\", "///", "\\\\", "/\\/"):
@@ -2130,7 +2114,7 @@ def test_a_group_with_no_stacked_member_carries_an_empty_stacks_block():
 
 
 def test_the_owner_expands_a_deck_and_a_scoped_token_cannot():
-    """Both directions on the new route: the owner gets the stack's members,
+    """Both directions on the route: the owner gets the stack's members,
     a resource-scoped READ token gets 403 on the same URL.
 
     Over-blocking would be its own regression, so the positive half asserts a

@@ -63,10 +63,9 @@ def make_vault_folder(root, name="library", *, with_credentials=False):
 def make_legacy_vault_folder(root, name="legacy"):
     """A vault from before PixlStash adopted Alembic: no ``alembic_version``.
 
-    This is the ``0001_baseline`` table set as a December-2025 install left it.
-    ``VaultDatabase`` opens exactly this by stamping the baseline and upgrading,
-    so the registry has to let it through - refusing it is what exited the
-    backend during first-run setup instead.
+    This is the ``0001_baseline`` table set. ``VaultDatabase`` opens exactly
+    this by stamping the baseline and upgrading, so the registry has to let it
+    through - refusing it would exit the backend during first-run setup.
     """
     folder = os.path.join(str(root), name)
     os.makedirs(folder, exist_ok=True)
@@ -365,11 +364,11 @@ class TestAttachAndList:
     def test_create_makes_every_missing_component_private_under_a_group_umask(
         self, registry, tmp_path
     ):
-        """W21 at the registry's own makedirs: intermediates too, not the leaf.
+        """The registry's own makedirs: intermediates too, not the leaf.
 
         ``pixlstash libraries create <deep new path>`` on stock Ubuntu (umask
-        002) left the intermediate at 0775 and yielded a library the guarded
-        open refused.
+        002) would otherwise leave the intermediate at 0775 and yield a library
+        the guarded open refuses.
         """
         old_umask = os.umask(0o002)
         try:
@@ -726,8 +725,8 @@ class TestRelocate:
         assert _token_rows(hub, library.uuid) == 1
 
     def test_relocate_into_a_folder_with_uri_characters(self, registry, tmp_path):
-        """``?`` and ``#`` cut a raw ``file:`` URI short, so the vault check
-        opened a stray file beside the folder and refused a real vault (#2210)."""
+        """``?`` and ``#`` cut a raw ``file:`` URI short, so a vault check on
+        one would open a stray file beside the folder and refuse a real vault."""
         library = registry.attach(make_vault_folder(tmp_path, "plain"))
         moved_to = os.path.join(str(tmp_path), URI_HOSTILE_FOLDER)
         shutil.move(library.path, moved_to)

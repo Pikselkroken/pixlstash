@@ -312,11 +312,11 @@ class TestFreshInstall:
     def test_a_deep_fresh_image_root_is_private_at_every_created_component(
         self, tmp_path
     ):
-        """W21: ``makedirs(mode=)`` reaches only the leaf since Python 3.7.
+        """``makedirs(mode=)`` reaches only the leaf since Python 3.7.
 
-        A two-level-deep new image_root under umask 002 used to leave the
-        intermediate at 0775, and ``_validate_namespace`` then refused the
-        namespace the app itself had just created. Every created component
+        A two-level-deep new image_root under umask 002 would otherwise leave
+        the intermediate at 0775, and ``_validate_namespace`` would then refuse
+        the namespace the app itself had just created. Every created component
         must be 0700 and the guarded open must accept the result.
         """
         old_umask = os.umask(0o002)
@@ -337,11 +337,10 @@ class TestFreshInstall:
     def test_bootstrap_keeps_an_existing_image_roots_mode(self, tmp_path):
         """The same creation-only rule, at the registration that runs first.
 
-        `Vault.__init__` has left an existing image_root alone for releases
-        (see the test above); `_register_first_library` runs before it and was
-        still chmodding the folder 0700, so pointing a first run at a picture
-        folder the owner already had took read access to it away from the rest
-        of their machine.
+        `Vault.__init__` leaves an existing image_root alone (see the test
+        above); `_register_first_library` runs before it and must too, or
+        pointing a first run at a picture folder the owner already had would
+        take read access to it away from the rest of their machine.
         """
         image_root = tmp_path / "my-pictures"
         image_root.mkdir()
@@ -356,8 +355,8 @@ class TestFreshInstall:
         """A name collision is not a reason to refuse to bring a library back.
 
         `_register_first_library` passes its own hardcoded label, so the hub
-        deciding it is taken is a nuisance the owner cannot even see, and used
-        to be a server that would not boot.
+        deciding it is taken is a nuisance the owner cannot even see, not a
+        reason for the server not to boot.
         """
         hub_path = str(tmp_path / "hub.db")
         occupied = make_vault(str(tmp_path / "occupied"))
@@ -382,17 +381,15 @@ class TestFreshInstall:
     def test_a_loose_existing_ancestor_is_kept_and_still_reported(
         self, tmp_path, caplog
     ):
-        """Creation only: the fix never chmods a directory the owner already had.
+        """Creation only: start-up never chmods a directory the owner already had.
 
         The loose ancestor keeps its mode (owner's folder, owner's business),
         and the guarded open goes on warning about the namespace, asserted here
-        so the fix cannot drift into repairing directories it did not create.
+        so start-up cannot drift into repairing directories it did not create.
 
-        World-writable, not the 0775 this asserted originally: group-write alone
-        is no longer an exposure when the group is the owner's own one-member
-        group, which is exactly what a developer box and a GitHub runner both
-        have, so 0775 stopped being refused and this asserted the opposite of
-        the behaviour it names.
+        World-writable rather than 0775: group-write alone is not an exposure
+        when the group is the owner's own one-member group, which is exactly
+        what a developer box and a GitHub runner both have.
         """
         os.chmod(tmp_path, 0o700)
         loose = tmp_path / "loose"
@@ -697,7 +694,7 @@ class TestInteractiveLegacyPreparation:
         result.hub.close()
 
     def test_omitting_the_prompt_keeps_the_prior_default_behaviour(self, paths):
-        """No callback at all must behave exactly like before this feature."""
+        """No callback at all keeps the non-interactive default behaviour."""
         hub_path, library_folder = paths
 
         result = bootstrap_hub(library_folder, hub_path)
@@ -895,7 +892,7 @@ class TestCrashSafeOrdering:
         The desktop build keeps its hub in a different config directory from
         the terminal build. Whichever registers the folder while it is still
         unstamped records no fingerprint, and if the other one stamps it first
-        the loser used to fail every later startup with no way back.
+        the loser must not fail every later startup with no way back.
         """
         hub_path, library_folder = paths
         foreign_uuid = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -1942,13 +1939,10 @@ class TestPortableIdentityScrub:
     def test_every_fsynced_fd_is_opened_with_write_access(self, tmp_path, monkeypatch):
         """Windows refuses to fsync a read-only handle (EBADF).
 
-        CommitFileBuffers requires write access, so an ``O_RDONLY`` fd that is
-        later fsynced works on Linux and fails on Windows - which is how the
-        read-only opens in this module took down every test in backend-windows
-        shard 2, through ``finalize_library_connection`` on every registered
-        vault open. Linux cannot reproduce the EBADF, but it can assert the
-        invariant that prevents it: any fd this module fsyncs must have been
-        opened with write access. (Directory fds are exempt; those helpers
+        CommitFileBuffers requires write access, so an ``O_RDONLY`` fd that is later
+        fsynced works on Linux and fails on Windows. Linux cannot reproduce the EBADF,
+        but it can assert the invariant that prevents it: any fd this module fsyncs must
+        have been opened with write access. (Directory fds are exempt; those helpers
         already return early on ``nt``.)
         """
         from pixlstash.services import portable_identity
@@ -2126,9 +2120,9 @@ class TestPortableIdentityScrub:
     ):
         """Each archive records its own completion, so a restart skips it.
 
-        Without this the whole loop was all-or-nothing: interrupting it (which
-        is what a user does when a silent multi-minute startup looks like a
-        hang) discarded every finished archive, so a large snapshot history
+        Without this the whole loop would be all-or-nothing: interrupting it
+        (which is what a user does when a silent multi-minute startup looks like
+        a hang) would discard every finished archive, so a large snapshot history
         could never get through the migration.
         """
         import pixlstash.services.portable_identity as portable
@@ -2239,9 +2233,8 @@ class TestPortableIdentityScrub:
 def make_unopenable_vault(folder):
     """A ``vault.db`` that is present and is not a database we can open.
 
-    The shape that ended a first run on a traceback: the file exists, so
-    ``register_pending`` is not used, and it does not validate, so ``attach``
-    refuses. Bytes rather than SQLite, because "unopenable" has to cover a
+    The file exists, so ``register_pending`` is not used, and it does not validate, so
+    ``attach`` refuses. Bytes rather than SQLite, because "unopenable" has to cover a
     truncated or foreign file and not only an old schema.
     """
     os.makedirs(folder, exist_ok=True)
@@ -2335,7 +2328,7 @@ class TestAVaultThatWillNotOpen:
         assert os.listdir(folder) == ["vault.db"]
 
     def test_a_pre_alembic_vault_is_opened_rather_than_recreated(self, tmp_path):
-        """The regression itself: this vault upgrades, so it must never be offered
+        """This vault upgrades, so it must never be offered
         the recovery that abandons it."""
         folder = str(tmp_path / "library")
         vault = make_pre_alembic_vault(folder)
@@ -2365,7 +2358,7 @@ class TestAVaultThisMachineCannotRead:
     `validate_vault_folder` reports "not a PixlStash vault" and "this account
     cannot read the file" as the same `NotAVaultError`, so a vault left mode
     0000 by a bad restore - or held by another process, or on a full disk -
-    used to be offered the one recovery that renames it away.
+    must not be offered the one recovery that renames it away.
     """
 
     @staticmethod

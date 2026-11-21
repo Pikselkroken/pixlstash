@@ -200,15 +200,13 @@ def test_get_characters_invalid_project_id_returns_400():
 
 
 def test_character_scoped_token_may_not_filter_by_project():
-    """Issue #708 F3 - this test previously pinned the vulnerability.
+    """A character-scoped token may not filter ``/characters`` by project.
 
-    It used to assert that a character-scoped token filtering
-    ``/characters?project_id=<id>`` got its character back, and that the same
-    request with ``UNASSIGNED`` did not. Comparing those two answers *is* the
-    disclosure: it tells a token that is 403'd on ``GET /projects/{id}`` that the
-    project exists and that its character is filed under it. Both requests are
-    now refused by the authz gate (``enforce_project_filter_scope``), which is
-    the behaviour this test pins instead. The unfiltered listing, which is what
+    Comparing the answers to ``/characters?project_id=<id>`` and the same
+    request with ``UNASSIGNED`` would tell a token that is 403'd on
+    ``GET /projects/{id}`` that the project exists and that its character is
+    filed under it, so both requests are refused by the authz gate
+    (``enforce_project_filter_scope``). The unfiltered listing, which is what
     the share UI actually issues, must keep working - over-blocking would be its
     own regression.
     """
@@ -392,10 +390,8 @@ def test_moving_character_keeps_pictures_shared_with_another_character_in_old_pr
 
 def test_batch_character_membership_returns_assignments():
     """POST /characters/membership must return a 200 with the picture's character
-    assignment. Regression: the handler built character_assignments with integer
-    keys while CharacterMembershipResponse declares dict[str, list[int]]; pydantic
-    v2 rejected the int keys, the response 500'd, and the AddToCharacter menu
-    received no membership data (every character shown unchecked)."""
+    assignment, keyed by string as CharacterMembershipResponse declares
+    (dict[str, list[int]]), so the AddToCharacter menu receives membership data."""
     temp_dir, client, server = _setup()
     try:
         pic_id = _import_one_picture(client)
@@ -596,8 +592,9 @@ def test_pinning_a_thumbnail_does_not_invalidate_derived_picture_fields():
 
     Renaming a person nulls the description and text embedding of every picture
     they appear in, because their name is baked into both. Choosing which
-    existing crop to show is not that, and letting it share the flag deleted
-    hand-written descriptions and queued a library-wide re-derive on one click.
+    existing crop to show is not that, and letting it share the flag would
+    delete hand-written descriptions and queue a library-wide re-derive on one
+    click.
     """
     temp_dir, client, server = _setup()
     try:

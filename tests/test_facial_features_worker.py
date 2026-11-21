@@ -253,7 +253,7 @@ def _write_video(path, frames, size=(64, 48)):
 
 
 def _seek_frames_like_before(path):
-    """The frame selection the batch loop used to do inline, seek by seek."""
+    """The reference frame selection, done seek by seek."""
     cap = cv2.VideoCapture(path)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frames = []

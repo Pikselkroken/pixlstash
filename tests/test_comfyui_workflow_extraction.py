@@ -82,7 +82,7 @@ def test_loaded_model_widgets_agrees_with_the_csv_and_keeps_the_widget(
 
     `extract_generation_info` folds checkpoints and UNETs into one `models`
     list; a workflow card built out of these has to tell a `checkpoint` slot
-    from a `unet` one (#1466), so this reader keeps the widget. The names must
+    from a `unet` one, so this reader keeps the widget. The names must
     not drift from the ones already pinned in `expected_results.csv`, which is
     what the two halves of this assertion hold together.
     """
@@ -111,11 +111,11 @@ def test_every_widget_recovery_can_emit_has_a_slot_kind() -> None:
 
     ``_describe_slots`` falls through to the widget's own name (``slot_kind``),
     and ``kind`` is not internal: ``cardAccessibleName`` renders it, so a
-    widget missing from that map is read out loud - "model_path Krea 2" (#1483).
+    widget missing from that map is read out loud - "model_path Krea 2".
 
     This is the class, not the corpus. The parametrised test above can only
     see widgets the sample workflows happen to contain, and none of them
-    carries a Diffusers or PhotoMaker loader, so five widgets went unmapped
+    carries a Diffusers or PhotoMaker loader, so a widget could go unmapped
     with every sample green. The two sets here have different sources - the
     pre-flight map plus ``CHECKPOINT_WIDGETS`` on one side, the kind map on
     the other - so this is an agreement between them and not a restatement of
@@ -205,7 +205,7 @@ def test_loaded_model_widgets_says_nothing_rather_than_guessing() -> None:
 
 def test_loaded_model_widgets_leaves_out_a_loader_wired_into_nothing() -> None:
     """A leftover second checkpoint loader never runs, so a card read off the
-    graph named it in place of the model the sampler uses."""
+    graph must not name it in place of the model the sampler uses."""
     api = {
         "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "live.safetensors"}},
         "2": {"class_type": "UNETLoader", "inputs": {"unet_name": "left.safetensors"}},
@@ -268,7 +268,7 @@ def test_loaded_model_widgets_reads_a_numeric_shelf_id() -> None:
 
 def test_loaded_model_widgets_reads_the_pack_loaders_digests() -> None:
     """The pack's ControlNet and upscale loaders name their file by digest
-    (#1939), in both serialisations, under the digest widget."""
+    in both serialisations, under the digest widget."""
     cn, up = "a" * 64, "b" * 64
     api = {
         "1": {
@@ -313,7 +313,7 @@ def test_loaded_model_widgets_reads_the_pack_loaders_digests() -> None:
 
 def test_a_one_widget_loader_is_read_from_a_bare_array() -> None:
     """Core ControlNet, upscale and style loaders have one widget, the model
-    (#1939), so an editor file that declares no inputs still names it."""
+    so an editor file that declares no inputs still names it."""
     nodes = [
         ("ControlNetLoader", ["canny.safetensors"]),
         ("DiffControlNetLoader", ["depth.safetensors"]),
@@ -341,8 +341,8 @@ def test_a_subgraph_loader_reads_the_file_its_instance_names() -> None:
     ComfyUI's Krea 2 templates keep their loaders in a subgraph whose inner
     ``UNETLoader`` still holds the file the template shipped with, wired to a
     subgraph input; the instance's own ``widgets_values`` holds the file that
-    runs. Read off the definition, the card named a file the shelf did not
-    have, and the people loader said the base model was not known.
+    runs. Read off the definition, the card would name a file the shelf does
+    not have.
     """
     definition_id = "b0e5ca93-2731-42b9-8e0a-d28ea851ff81"
     unet = {"name": "unet_name", "widget": {"name": "unet_name"}, "link": 1}
@@ -448,9 +448,9 @@ _UI_GRAPH = {
 
 
 class TestFindComfyWorkflowPromptFallback:
-    """Display fallback to the PNG ``prompt`` chunk (issue #628).
+    """Display fallback to the PNG ``prompt`` chunk.
 
-    PixlStash-generated PNGs no longer carry a ``workflow`` chunk, so the
+    PixlStash-generated PNGs carry no ``workflow`` chunk, so the
     ``prompt`` chunk ComfyUI writes is the only displayable graph left. It
     must be picked up, but only at lower priority than any real ``workflow``
     candidate, and never when the ``prompt`` value is plain text.
@@ -545,7 +545,7 @@ def test_the_seed_is_carried_as_text_so_a_64_bit_one_survives_javascript():
 
 def test_a_loader_wired_into_nothing_is_not_credited():
     """A left-over UNET and LoRA no output reads never ran, so the picture was
-    not made with them: crediting them showed a LoRA on a look that never
+    not made with them: crediting them would show a LoRA on a look that never
     loaded one."""
     graph = {
         "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "live.safetensors"}},
@@ -697,7 +697,7 @@ def test_the_prompt_is_the_one_that_ran_not_the_editors_longest_string():
 
 def test_a_prompt_wired_from_a_builder_is_the_builders_own_text():
     """The executed graph of a builder-fed encoder holds a link, not a literal:
-    the builder's text is all the file says, and the Recipe tab showed nothing."""
+    the builder's text is all the file says."""
     executed = json.loads(json.dumps(_EXECUTED))
     executed["6"]["inputs"]["text"] = ["9", 0]
     executed["9"] = {
@@ -730,8 +730,7 @@ def test_a_prompt_wired_from_a_builder_is_the_builders_own_text():
 
 
 def test_the_models_and_seed_come_from_the_executed_graph_too():
-    """The same defect, and the reason the fix is not scoped to the prompt: the
-    editor's view surrenders these entirely."""
+    """Not only the prompt: the editor's view surrenders these entirely."""
     info = extract_comfy_workflow_info(_BOTH_CHUNKS)
     assert info["models"] == ["realvisXL_v5.safetensors"]
     assert info["seed"] == 777

@@ -1,4 +1,4 @@
-"""Step 4 of the centralised-authz refactor: the gate goes ENFORCING for the
+"""The authz gate ENFORCING for the
 object-scoped policy classes (``*_SCOPED`` single-id, ``body_ids`` batch, and
 ``SCOPED_LIST``).
 
@@ -6,15 +6,14 @@ Every assertion is both-directional per CLAUDE.md / §16.1: an out-of-scope
 resource-scoped token is 403'd (or a list is emptied/denied) AND an in-scope
 principal still reaches the route - over-blocking is its own regression.
 
-Toggle mechanism (principal ruling 2026-07-21): the shipped constant
-``AUTHZ_GATE_ENFORCING`` stays ``False``; Step-4 enforcement is proven here by
-constructing / flipping the gate to ``enforcing=True``.
+Toggle mechanism: enforcement is proven here by constructing / flipping the
+gate to ``enforcing=True`` rather than relying on the shipped constant.
 
 Two layers:
 
 * **Gate-contract decoys** - a decoy app + the gate as a router dependency, with
   ``token_scope`` injected by a tiny scope-setter dependency. This proves the
-  gate's Step-4 contract in isolation (no auth middleware), which is the ONLY way
+  gate's object-scope contract in isolation (no auth middleware), which is the ONLY way
   to exercise the *latent* routes whose scoped tokens the auth middleware blocks
   today: the ``body_ids`` batch routes, a single/optional scalar body id, and
   the ``tag_suggestions`` ``id_resolver`` routes (§N4). It also proves the
@@ -23,7 +22,7 @@ Two layers:
 * **Real-server integration** - a live ``Server`` with real pictures / set /
   character / project and real resource-scoped tokens, proving the gate enforces
   on routes a scoped token actually reaches (picture / set / character / project
-  single-id), plus the ``project_id=UNASSIGNED`` historical-leak regression and
+  single-id), plus the ``project_id=UNASSIGNED`` aggregate-leak vector and
   the ``SCOPED_LIST`` scope-aware pass-through (stream vs list, /stacks/{id}/pictures).
 """
 
@@ -160,7 +159,7 @@ def test_picture_scoped_single_both_directions():
 
 def test_owner_and_unscoped_read_short_circuit():
     """Owner (no token_scope) and an unscoped-READ token (resource_type None) both
-    pass every object-scoped class untouched - exactly as today's ladders do."""
+    pass every object-scoped class untouched."""
     registry = {
         ("GET", "/api/v1/step4-decoy/pic/{id}"): RoutePolicy(
             AccessPolicy.PICTURE_SCOPED, id_param="id"
@@ -220,10 +219,7 @@ def test_body_ids_single_optional_scalar():
     """§N6: a ``body_ids`` field may be a single, optional scalar - the gate
     tolerates absent (no-op) and checks a present one.
 
-    No declared route uses this shape since #1410 retired ``run_t2i``, which is
-    the reason it is exercised on a decoy: the gate's handling has to keep
-    working for the next declaration that needs it, and nothing else would
-    catch it going away.
+    No declared route uses this shape, so it is exercised on a decoy.
     """
     registry = {
         ("POST", "/api/v1/step4-decoy/t2i"): RoutePolicy(
@@ -403,7 +399,7 @@ def test_non_integer_scoped_id_fails_closed():
     """A ``project_id=UNASSIGNED`` aggregate id on a numeric ``*_SCOPED`` route (not
     resolved_inline) cannot be parsed to an id; the gate fails it closed for a
     resource-scoped token - matching ``get_project_summary``'s own UNASSIGNED 403
-    (the historical aggregate-leak class)."""
+    (the aggregate-leak class)."""
     registry = {
         ("GET", "/api/v1/step4-decoy/proj/{project_id}/summary"): RoutePolicy(
             AccessPolicy.PROJECT_SCOPED, id_param="project_id"
@@ -424,11 +420,9 @@ def test_non_integer_scoped_id_fails_closed():
 def test_anti_vacuity_guard_recognises_the_spa_catch_all():
     """Pin the guard that keeps this file honest (``tests/authz_guard.py``).
 
-    ``/stacks/{id}/stack`` is the URL this suite asserted 200 against for five
-    days. It is not a route; the SPA catch-all answered it, so the assertion was
-    vacuous while its docstring claimed to cover ``/stacks/{id}/pictures`` - a
-    historical whole-library BOLA vector. Assert the discrimination directly, with
-    no server, so the guard cannot itself rot unnoticed.
+    ``/stacks/{id}/stack`` is not a route; the SPA catch-all answers it with
+    200. Assert the discrimination directly, with no server, so the guard cannot
+    itself rot unnoticed.
     """
     app = FastAPI()
 
@@ -447,8 +441,8 @@ def test_anti_vacuity_guard_recognises_the_spa_catch_all():
 
 
 def test_shipped_default_is_enforcing():
-    """Step 6 flipped the rollback constant: the gate ships ENFORCING. Report-only
-    remains the one-line rollback (flip back to False)."""
+    """The gate ships ENFORCING. Report-only is the one-line rollback (flip the
+    constant to False)."""
     assert AUTHZ_GATE_ENFORCING is True
 
 
@@ -626,7 +620,7 @@ def test_integration_picture_scoped_via_set_token(env):
 
 
 def test_integration_picture_layout_read_is_picture_scoped(env):
-    """v1.11 Phase 4b. ``GET /pictures/{id}/layout`` is PICTURE_SCOPED.
+    """``GET /pictures/{id}/layout`` is PICTURE_SCOPED.
 
     Both directions on a real membership query, and the positive one is not
     decoration: over-blocking is its own regression, and the route answering
@@ -644,9 +638,9 @@ def test_integration_picture_layout_read_is_picture_scoped(env):
 
 
 def test_integration_move_to_match_refuses_a_mixed_batch_whole(env):
-    """v1.11 Phase 4b. ``POST /pictures/layout/move-to-match`` is PICTURE_SCOPED
+    """``POST /pictures/layout/move-to-match`` is PICTURE_SCOPED
     over ``body_ids``, so one out-of-scope id refuses the request and moves
-    nothing - the ``POST /pictures/rotate`` contract (#950).
+    nothing - the ``POST /pictures/rotate`` contract.
 
     A READ token is refused by the middleware before the gate (POST is not in
     ``READ_SAFE_POST_PATHS``), which is what makes "write-enabled" the operative
@@ -717,7 +711,7 @@ def test_integration_character_scoped_route_both_directions(env):
 def test_integration_project_summary_unassigned_regression(env):
     """PROJECT_SCOPED /projects/{project_id}/summary: the project token reaches its
     own project's summary, but the aggregate ``UNASSIGNED`` id is denied - the
-    historical aggregate-leak class, now failed closed at the gate."""
+    aggregate-leak class, failed closed at the gate."""
     anon, tok = env["anon"], env["tokens"]["proj"]
     with _enforcing(env["server"]):
         r = anon.get(f"{API}/projects/{env['proj_id']}/summary", headers=_bearer(tok))
@@ -727,16 +721,14 @@ def test_integration_project_summary_unassigned_regression(env):
 
 
 def test_integration_scoped_list_pass_through_not_overblocked(env, stacked_env):
-    """The SCOPED_LIST historical-leak vectors (list, stream, ?character_id=
+    """The SCOPED_LIST leak vectors (list, stream, ?character_id=
     UNASSIGNED, /stacks/{id}/pictures, /pictures/{id}/stack) stay reachable by a
     resource-scoped token when the gate is enforcing - scope_aware pass-through
-    must not over-block; the inline filter (unchanged) remains the enforcement.
+    must not over-block; the inline filter remains the enforcement.
 
-    Previously this asserted 200 against ``/stacks/{pic_id}/stack``, which is not a
-    route: the SPA catch-all answered it with 200 and the assertion was vacuous.
-    The two real stack routes are used now, and every path is checked against the
-    mounted route table before it is requested, so a rename fails loudly here
-    instead of dissolving into a fallback 200.
+    Every path is checked against the mounted route table before it is
+    requested, so a rename fails loudly here instead of dissolving into the SPA
+    catch-all's fallback 200.
     """
     anon, tok = env["anon"], stacked_env["pic_token"]
     paths = (
@@ -760,8 +752,8 @@ def test_integration_scoped_list_pass_through_not_overblocked(env, stacked_env):
 def test_integration_stack_pictures_does_not_leak_out_of_scope_members(
     env, stacked_env
 ):
-    """``GET /stacks/{id}/pictures`` - one of the three historical whole-library
-    BOLA leaks - filters stack members down to the caller's grant.
+    """``GET /stacks/{id}/pictures`` - a whole-library
+    BOLA vector - filters stack members down to the caller's grant.
 
     Both directions. The stack holds A (granted to the picture token) and B (not):
     the scoped caller reaches the stack but must see A only, while the owner must

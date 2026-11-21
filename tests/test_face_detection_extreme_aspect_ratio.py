@@ -1,4 +1,4 @@
-"""Regression test: InsightFace crashes on images with extreme aspect ratios.
+"""InsightFace must not crash on images with extreme aspect ratios.
 
 RetinaFace's detect() computes:
     new_width = int(det_size / aspect_ratio)
@@ -8,7 +8,6 @@ cv2.resize raises an assertion failure:
 
 This test calls FaceExtractionTask.detect_faces_in_images() directly so it
 exercises the real InsightFace pipeline without a database or Picture objects.
-It should FAIL on the unfixed code and PASS after the fix is applied.
 """
 
 import numpy as np

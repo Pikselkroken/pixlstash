@@ -1,6 +1,6 @@
 """Unit tests for the desktop-runtime build script's download integrity check.
 
-These cover the SHA256 verification added to ``fetch_standalone_python`` so a
+These cover the SHA256 verification in ``fetch_standalone_python`` so a
 truncated / redirect-HTML / tampered CPython tarball is rejected (and never
 cached as valid) instead of failing confusingly later at ``tarfile.open``. No
 network is touched: the download and the published-checksum fetch are stubbed.

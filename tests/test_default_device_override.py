@@ -67,9 +67,8 @@ class TestDefaultDeviceOverride:
     ):
         """An unknown device value must not be written through (and is logged).
 
-        Previously ``PIXLSTASH_DEFAULT_DEVICE=banana`` was written straight into
-        the config and silently fell back to CPU with no explanation. It must be
-        validated against the known set, warned about, and ignored - leaving the
+        A value such as ``PIXLSTASH_DEFAULT_DEVICE=banana`` must be validated
+        against the known set, warned about, and ignored - leaving the
         configured value in place.
         """
         path = tmp_path / "server-config.json"
@@ -88,8 +87,8 @@ class TestDefaultDeviceOverride:
         ), "Invalid override should be logged with a warning"
 
     def test_the_override_never_reaches_the_file(self, tmp_path, monkeypatch):
-        """One boot under the CPU-only runtime used to write "cpu" into the
-        shared config, and every later launch without the variable read it as
+        """Writing "cpu" into the shared config from one boot under the CPU-only
+        runtime would make every later launch without the variable read it as
         the owner's choice: CPU inference on a CUDA machine."""
         path = tmp_path / "server-config.json"
         _write_config(path, default_device="auto")

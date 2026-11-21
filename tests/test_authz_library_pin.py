@@ -1,7 +1,7 @@
 """The library pin: a token authenticates only while its library is active.
 
-A token belongs to exactly one library (multi-library plan §4) unless the owner
-set it to cover them all (#1787, ``TestATokenThatCoversEveryLibrary``). Without the
+A token belongs to exactly one library unless the owner
+set it to cover them all (``TestATokenThatCoversEveryLibrary``). Without the
 pin, switching library would silently change what an existing token grants: a
 share link would start serving somebody else's pictures, and an automation
 holding an ALL token would write into a library the owner never pointed it at.
@@ -314,9 +314,8 @@ class TestTheTokenList:
     ):
         """The list is read from the hub and the names from the library.
 
-        Looking the name up in the hub, which has no sets, answered 500 for
-        the whole list as soon as one share link existed. And a link for a
-        library that is not open gets no name: its id is another set here.
+        The hub has no sets, so a name is never looked up there. A link for
+        a library that is not open gets no name: its id is another set here.
         """
         owner = _owner_client(server)
         made = owner.post(f"{API}/picture_sets", json={"name": "Pinned set"})
@@ -397,7 +396,7 @@ def _cover(client, token_id: int, all_libraries: bool, **kwargs):
 
 
 class TestATokenThatCoversEveryLibrary:
-    """The owner's opt-out from the pin (#1787), and who may take it.
+    """The owner's opt-out from the pin, and who may take it.
 
     Every refusal here sits beside the same request succeeding, so a negative
     cannot pass because the credential or the route was simply missing.
@@ -629,7 +628,7 @@ class TestATokenThatCoversEveryLibrary:
     def test_a_comfyui_link_key_can_be_widened_and_stays_a_comfyui_key(
         self, server, other_library
     ):
-        """#1811: the link key reaches only what the nodes call, so the owner
+        """The link key reaches only what the nodes call, so the owner
         may let it follow the open library. Widening changes which library,
         never which routes."""
         owner = _owner_client(server)

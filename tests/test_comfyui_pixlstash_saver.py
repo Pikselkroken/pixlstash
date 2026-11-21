@@ -5,7 +5,7 @@ uploads straight into the vault over the API and reports the picture ids it
 created in its history entry, alongside ``type: "temp"`` previews of images
 that are, by then, already imported.
 
-Treating it as "no save node" made Generate Variants refuse the whole class of
+Treating it as "no save node" would make Generate Variants refuse the whole class of
 workflows built around the node pack. Treating its previews as ordinary outputs
 would re-download and re-import pictures the node had just imported, which
 dedups to nothing and so loses the stack placement, the source lineage and the
@@ -67,7 +67,7 @@ OPEN = {
 
 
 class TestNodePolicy:
-    """Each ComfyUI-PixlStash class has its own answer (#1521), both ways."""
+    """Each ComfyUI-PixlStash class has its own answer, both ways."""
 
     def test_digest_loaders_searches_and_gates_run_everywhere(self):
         for cls in (

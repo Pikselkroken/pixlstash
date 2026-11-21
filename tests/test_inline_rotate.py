@@ -1,4 +1,4 @@
-"""In-place rotate: the EXIF-orientation facet and its undo (#950, §21.5).
+"""In-place rotate: the EXIF-orientation facet and its undo (§21.5).
 
 ``POST /pictures/rotate`` turns a photo by rewriting one EXIF field and copying
 every pixel byte through. What makes it undoable - where a crop or a re-encode is
@@ -567,10 +567,9 @@ def test_the_batch_thumbnail_endpoint_serves_a_version_carrying_the_orientation(
     ``DetachedInstanceError`` for every picture in the batch. ``getattr(pic, …,
     None)`` does not soften it: SQLAlchemy raises that, not ``AttributeError``.
 
-    This shipped broken and was caught by hand, because the sibling test below
-    calls ``thumbnail_cache_version`` inside a DB task on a session-bound row - it
-    exercises the formula and never the endpoint that has to produce it. Assert
-    on the response.
+    The sibling test below calls ``thumbnail_cache_version`` inside a DB task on
+    a session-bound row - it exercises the formula and never the endpoint that
+    has to produce it - so this one asserts on the response.
     """
     picture_id = _upload(client)
 
@@ -649,8 +648,8 @@ def test_a_rotate_before_the_thumbnail_is_processed_changes_the_url(client, serv
     The rotate NULLs ``thumbnail_width`` / ``thumbnail_height`` until the
     sweep regenerates the bitmap, so the version falls back to ``"0"``. With the
     orientation dropped there, a picture not yet processed, or a second turn
-    inside that window, kept the same URL and the grid painted the old bitmap
-    (#2324's rotate spec, which runs with the sweep off, caught it).
+    inside that window, would keep the same URL and the grid would paint the old
+    bitmap.
     """
     picture_id = _upload(client)
 
@@ -677,12 +676,10 @@ def test_the_thumbnail_route_regenerates_a_turned_bitmap_on_the_next_request(
 
     ``apply_orientation`` NULLs the dimensions to re-queue ``ThumbnailGenerationTask``
     and leaves the ``_thumb.webp`` on disk. Until that sweep lands, ``GET
-    /pictures/thumbnails/{id}.webp`` used to hand the pre-rotate bitmap back -
-    its source-newer-than-thumbnail check ran only for reference-folder
-    pictures - and the grid painted the photo the wrong way round, correcting
-    itself later when the sweep announced. This module has that sweep detached
-    (``_REGENERATION_FINDERS``), so a bitmap that comes back turned can only
-    have been rebuilt by the route.
+    /pictures/thumbnails/{id}.webp`` must not hand the pre-rotate bitmap back, or the
+    grid paints the photo the wrong way round until the sweep announces. This module has
+    that sweep detached (``_REGENERATION_FINDERS``), so a bitmap that comes back turned
+    can only have been rebuilt by the route.
 
     The 64x48 source thumbnails to a landscape bitmap; a quarter turn makes it
     portrait, which is the cheapest thing to assert on the response bytes.
@@ -709,19 +706,17 @@ def test_the_thumbnail_route_regenerates_a_turned_bitmap_on_the_next_request(
 
 
 def test_a_rotated_png_is_SERVED_turned_because_no_browser_turns_it(client, server):
-    """The bug that made the whole feature look broken on a ComfyUI library.
+    """A rotated PNG is served turned, because no browser turns it.
 
     An in-place rotate writes the EXIF tag and leaves the pixels, which is only
-    correct where the renderer applies the tag. Measured 2026-08-18 by writing a
-    tag with `write_orientation` and reading `naturalWidth`/`naturalHeight`
-    back: Chromium 148 and Firefox 150 both apply it for JPEG and both IGNORE it
-    for PNG, exactly as they ignore WebP's. So a rotated PNG showed a turned
-    thumbnail beside an unturned full view - and around five-sixths of a ComfyUI
-    library is PNG.
+    correct where the renderer applies the tag. Chromium and Firefox both apply
+    it for JPEG and both IGNORE it for PNG, exactly as they ignore WebP's, so an
+    untransposed PNG would show a turned thumbnail beside an unturned full view
+    - and most of a ComfyUI library is PNG.
 
-    The fix is in the media route, so the assertion has to be on the RESPONSE
-    BYTES rather than on the file or the column: those are both correct either
-    way, which is precisely why nothing caught this. A landscape source served
+    The transpose is in the media route, so the assertion has to be on the
+    RESPONSE BYTES rather than on the file or the column: those are both
+    correct either way. A landscape source served
     portrait is the whole claim.
 
     JPEG is the control in the sibling test below: it must keep streaming
@@ -773,7 +768,7 @@ def test_a_served_rotated_png_keeps_its_comfyui_provenance(client, server):
 
     `workflow` / `prompt` are how this library recovers a picture's graph, and
     "Save image as" in the lightbox hands the user exactly these bytes. Losing
-    them would be a worse bug than the unturned view this branch fixes.
+    them would be worse than an unturned view.
     """
     _counter[0] += 1
     image = Image.new("RGB", (64, 48), color=(11, 22, 33))
@@ -828,7 +823,7 @@ def test_the_grid_projection_carries_the_orientation(client, server):
 
 
 def test_a_listing_asked_for_size_and_models_returns_them(client, server):
-    """The stats rail reads several pictures' size and models this way (#2161).
+    """The stats rail reads several pictures' size and models this way.
 
     ``GridPicture`` drops every key it does not declare, so a projection that
     names a column the model lacks comes back without it and the rail's Total
@@ -932,12 +927,10 @@ def _forge_write_token(server, set_id):
     gate is being asked to decide. Forged rather than minted for the same reason
     ``tests/test_snapshots_auth.py`` forges: the row is the thing under test.
 
-    **The write-ness is now declared rather than accidental (issue #962).** The
-    middleware used to refuse a non-GET only when ``scope == "READ"``, so this
-    forged ``"WRITE"`` reached the route by skipping a comparison rather than by
-    satisfying one. It now keys on ``auth.WRITE_ENABLED_SCOPES``, which names
-    ``"WRITE"`` for exactly this shape; an unrecognised scope is refused. So
-    this row still writes, and it does so because something says it may.
+    **The write-ness is declared rather than accidental.** The middleware keys
+    on ``auth.WRITE_ENABLED_SCOPES``, which names ``"WRITE"`` for exactly this
+    shape; an unrecognised scope is refused. So this row writes because
+    something says it may.
     """
     token_value = secrets.token_urlsafe(32)
 

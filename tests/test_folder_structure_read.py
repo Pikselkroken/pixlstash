@@ -1,4 +1,4 @@
-"""The v1.11 Phase 2 folder-structure read.
+"""The folder-structure read.
 
 Two halves, deliberately split by cost. The signal tests run the service
 directly over a temporary folder tree with a stubbed detector - no ``Server``,
@@ -227,7 +227,7 @@ def test_the_count_is_what_the_import_will_actually_index():
 
     The read may only *sample* images - a video frame is not what the face pass
     is built on - but the commit indexes every supported media file, so a
-    holiday folder of clips used to finish with more pictures in the library
+    holiday folder of clips must not finish with more pictures in the library
     than the dialog had said were there.
     """
     with _tree({"": [], "Trip": ["a.jpg", "b.jpg", "clip.mp4"]}) as root:
@@ -238,11 +238,11 @@ def test_the_count_is_what_the_import_will_actually_index():
 
 
 def test_our_own_thumbnails_are_not_counted_or_sampled():
-    """Re-reading an already-indexed folder used to grow its own total.
+    """Re-reading an already-indexed folder does not grow its own total.
 
     Managed thumbnails sit beside the original as `<name>_thumb.webp`, and
-    `.webp` is a supported extension, so every import made the next read of the
-    same folder report a larger library than the one before it.
+    `.webp` is a supported extension, so counting them would make every import
+    grow the next read of the same folder.
     """
     with _tree(
         {"": [], "Trip": ["a.jpg", "a_thumb.webp", "b.jpg", "b_thumb.webp"]}
@@ -450,10 +450,8 @@ def test_a_folder_of_different_people_proposes_nothing():
 
 
 def test_a_dated_folder_is_never_read_as_a_person():
-    """One day of one holiday is mostly one person. It is still a date.
-
-    Reported from a real library: `2009`/`2010` were mapped as Sets and the
-    `2006-09-08` level below them came back proposed as People.
+    """One day of one holiday is mostly one person. It is still a date: a
+    `2006-09-08` level below `2009`/`2010` Sets must not be proposed as People.
     """
     with _tree({"": [], "2006-09-08": [f"{i:03d}.jpg" for i in range(40)]}) as root:
         result = FolderStructureRead(
@@ -494,11 +492,11 @@ def test_no_more_than_the_sample_is_ever_decoded():
 
 
 def test_several_folders_share_one_trip_through_the_detector():
-    """One call per folder is what made the read take an hour and a half.
+    """One call per folder would make the read take an hour and a half.
 
     ``detect_faces`` blocks until the task runner reaches it, and URGENT only
     jumps the queue - it does not stop the batch already running - so a
-    one-folder call paid a whole background batch's latency, 153 times over.
+    one-folder call pays a whole background batch's latency, once per folder.
     """
     batches = []
 
@@ -520,7 +518,7 @@ def test_an_unreadable_picture_does_not_cost_its_batch_mates_their_faces():
     ``_load_sample`` returns ``None`` for a file it cannot open, and the other
     end of the call skips those positions rather than raising - so a corrupt
     picture costs its own slot and nothing else. Sharing one call across
-    folders has to keep that per-position, which is what a review doubted.
+    folders has to keep that per-position.
     """
     # The contract itself: no app is touched, because nothing is detectable.
     assert FaceExtractionTask.detect_faces_in_images(None, [None, None]) == [[], []]
@@ -883,7 +881,7 @@ def test_the_read_holds_the_planner_per_batch_and_releases_it(owner_env, monkeyp
 
 
 def test_the_read_writes_nothing(owner_env):
-    """The release's headline, asserted rather than eyeballed."""
+    """The headline guarantee, asserted rather than eyeballed."""
     owner = owner_env["owner"]
     root = os.path.join(owner_env["tmp"], "untouched")
     _make_tree(root, {"": [], "a": ["x.jpg", "x.txt"], "b": ["y.jpg"]})
@@ -1240,12 +1238,10 @@ def test_the_level_vote_share_is_sixty_percent_and_not_a_rounded_half():
 def test_the_identity_threshold_is_where_it_says_it_is():
     """Absolute cosines, not ``SAME_IDENTITY_COSINE ± 0.05``.
 
-    A fixture built from the constant slides with it: the first version of this
-    test passed at ``SAME_IDENTITY_COSINE = 0.05`` while its docstring claimed it
-    would go red, because both sides of the comparison moved together. These
-    numbers are fixed, so moving the constant off 0.45 turns one of them red -
-    which is the whole point of pinning the value that decides whether a real
-    folder reads as a Person."""
+    A fixture built from the constant slides with it, because both sides of the
+    comparison move together. These numbers are fixed, so moving the constant off 0.45
+    turns one of them red - which is the whole point of pinning the value that decides
+    whether a real folder reads as a Person."""
     assert SAME_IDENTITY_COSINE == 0.45, (
         "the vectors below are chosen against 0.45; re-pick them deliberately"
     )
@@ -1258,8 +1254,8 @@ def test_the_identity_threshold_is_where_it_says_it_is():
 
 
 def test_a_face_near_many_different_people_is_not_one_person():
-    """#1988: the medoid alone used to decide membership, so one average face
-    within the threshold of sixteen strangers read as "one face, 17 of 20"."""
+    """The medoid alone must not decide membership, or one average face
+    within the threshold of sixteen strangers reads as "one face, 17 of 20"."""
     # Each stranger is 0.6 along the hub and 0.8 along its own axis: cosine
     # 0.60 to the hub, 0.36 to every other stranger - either side of 0.45.
     hub = _unit(0)
@@ -1274,9 +1270,9 @@ def test_a_face_near_many_different_people_is_not_one_person():
 
 
 def test_a_face_bridging_two_look_alike_groups_does_not_merge_them():
-    """Review on #1994: two groups of nine, 0.36 apart, both 0.60 from one
-    bridging face. Each member matches 10 of the 19, which cleared a
-    "more than half" coherence rule and read as "one face, 19 of 20"."""
+    """Two groups of nine, 0.36 apart, both 0.60 from one bridging face.
+    Each member matches 10 of the 19, which would clear a "more than half"
+    coherence rule and read as "one face, 19 of 20"."""
     bridge = _unit(0)
     left = [0.6 * bridge + 0.8 * _unit(1)] * 9
     right = [0.6 * bridge + 0.8 * _unit(2)] * 9
@@ -1394,8 +1390,7 @@ def test_the_blocklist_is_re_run_below_the_root_not_only_on_it(monkeypatch):
 
     `/` names no restricted directory and contains every one of them, so a
     root-only check walks `/etc`, `/proc` and `/root` and decodes any
-    image-extensioned file it finds there. Measured before this guard: 391 of
-    400 folders came from blocklisted subtrees."""
+    image-extensioned file it finds there."""
     monkeypatch.setattr("pixlstash.services.folder_structure_service.MAX_FOLDERS", 400)
     result = FolderStructureRead("/").run()
 
@@ -1416,10 +1411,10 @@ def test_the_blocklist_is_re_run_below_the_root_not_only_on_it(monkeypatch):
 def test_a_cancelled_read_still_counts_the_pictures_it_found():
     """The counts are summed in _build_result, not at the end of the walk.
 
-    A cancel raises from inside the walk loop, so summing there left every row
-    at picture_count 0 beside a real direct_picture_count - a partial map saying
-    the library is empty, on the one path whose justification is that the
-    partial map is showable."""
+    A cancel raises from inside the walk loop, so summing there would leave every row at
+    picture_count 0 beside a real direct_picture_count - a partial map saying the
+    library is empty, on the one path whose justification is that the partial map is
+    showable."""
     box = {}
 
     def stop_after_two(stage, processed, total):
@@ -1448,8 +1443,8 @@ def test_hidden_folders_are_counted_rather_than_dropped_in_silence():
 
 
 def test_the_read_speaks_the_layout_s_facet_vocabulary():
-    """Phase 2 proposes what a level is; Phase 4's layout is built out of the
-    same words. If they drift, the mapping screen offers a `kind` the layout
+    """The read proposes what a level is; the library layout is built out of
+    the same words. If they drift, the mapping screen offers a `kind` the layout
     cannot place, and nothing else would notice until a picture failed to move.
 
     `folder` is the one extra and is deliberately not a Facet: "just a folder"
@@ -1497,12 +1492,12 @@ def test_the_two_name_normalisers_disagree_on_purpose():
 
 
 def test_a_share_threshold_is_a_floor_and_never_rounds_down_to_below_itself():
-    """Review comment on #1110, and the same defect the level vote had.
+    """A share threshold is a floor, for faces as for the level vote.
 
     `round(0.7 * 6) == 4`, so a float rule spelled `round(share * whole)` lets
     4 of 6 - 66.7% - clear a seventy-percent threshold. `round(0.6 * 4) == 2`
     lets a 50% plurality clear a sixty-percent one. Both go through
-    `_clears_share` now, so this pins the property for whichever threshold is
+    `_clears_share`, so this pins the property for whichever threshold is
     written next."""
     assert _clears_share(4, 6, 70) is False, "4 of 6 is 66.7%, not 70%"
     assert _clears_share(5, 6, 70) is True
@@ -1515,7 +1510,7 @@ def test_a_share_threshold_is_a_floor_and_never_rounds_down_to_below_itself():
 
 
 def test_a_six_picture_folder_needs_five_faces_not_four():
-    """The rounding bug end to end, on the smallest sample that exhibits it."""
+    """The rounding trap end to end, on the smallest sample that exhibits it."""
     spec = {"": [], "mira": [f"{i:03d}.jpg" for i in range(6)]}
     with _tree(spec) as root:
         four = FolderStructureRead(
@@ -1533,8 +1528,8 @@ def test_a_six_picture_folder_needs_five_faces_not_four():
 
 
 def test_a_read_rooted_at_a_filesystem_root_still_has_a_name(monkeypatch):
-    """Review comment on #1110: `os.path.basename("/")` is the empty string, so
-    the root row reached the mapping screen with no name to refer to it by."""
+    """`os.path.basename("/")` is the empty string, so the root row needs a
+    name of its own to reach the mapping screen with."""
     monkeypatch.setattr("pixlstash.services.folder_structure_service.MAX_FOLDERS", 3)
     result = FolderStructureRead("/").run()
     assert result["root"]["name"] == "/"

@@ -7,10 +7,8 @@ moment the second one is hashed. Two rules under test throughout:
 
 1. that meeting is a **merge**, decided in the finder's own task, and never an
    exception thrown out of a background worker;
-2. the merge keeps **both locations**. One content row, two ``model_file`` rows.
-   With the path stored inline there was nowhere to put the second one, so it
-   was forgotten, re-registered by the next scan, re-hashed, and dropped again,
-   once per scan cycle, at 24 GB a time.
+2. the merge keeps **both locations**. One content row, two ``model_file`` rows,
+   so the second is not re-registered and re-hashed by every scan cycle.
 """
 
 import hashlib
@@ -115,11 +113,7 @@ class TestHashing:
 
 class TestCollisionIsAMerge:
     def test_two_paths_one_file_becomes_one_row_with_two_locations(self, hub, tmp_path):
-        """The reason ``model_file`` exists.
-
-        This fails outright against the pre-reshape shape, where the surviving
-        row had one ``local_path`` column and the second path was simply gone.
-        """
+        """The reason ``model_file`` exists: both paths survive the merge."""
         first = write_model(tmp_path / "one" / "sdxl.safetensors")
         second = write_model(tmp_path / "two" / "sdxl.safetensors")
         first_id = register(hub, first)
@@ -229,7 +223,7 @@ class TestCollisionIsAMerge:
     def test_the_merge_carries_comfyui_run_evidence_to_the_survivor(
         self, hub, tmp_path
     ):
-        """#1518: runs recorded against either row are runs of the same bytes."""
+        """Runs recorded against either row are runs of the same bytes."""
         first = write_model(tmp_path / "one" / "a.safetensors")
         second = write_model(tmp_path / "two" / "b.safetensors")
         first_id = register(hub, first)
@@ -433,7 +427,7 @@ class TestFinder:
         """A declared root is described by an index, not walked, so its
         `relpath` is whatever the index calls one entry - for the HuggingFace
         cache that is `models--org--name`, a DIRECTORY. Those rows are the
-        owner's to reclassify now (`builtin_caches`), so one corrected to
+        owner's to reclassify (`builtin_caches`), so one corrected to
         `checkpoint` would match on `file_kind` and send the worker to open a
         directory, fail, and defer it on every start."""
         cache = tmp_path / "hf"
@@ -479,8 +473,8 @@ class TestFinder:
 
     def test_nothing_waits_on_a_row_that_is_never_hashed(self, hub, tmp_path):
         """A row this finder leaves out for good has `sha256` NULL for good.
-        Reading that as "still hashing" had the Models rail offer every cached
-        HuggingFace repo with a permanently disabled Add, and kept recipe
+        Reading that as "still hashing" would have the Models rail offer every
+        cached HuggingFace repo with a permanently disabled Add, and keep recipe
         digests from ever being judged."""
         cache = tmp_path / "hf"
         (cache / "models--Wan-AI--Wan2.1-T2V-14B").mkdir(parents=True)
@@ -738,11 +732,9 @@ class TestProgress:
     """What the task manager is fed while this worker is running.
 
     Hashing 57 GB is genuinely minutes of disk-bound work, so the row is
-    legitimately active for a long time. It looked stuck rather than busy
-    because it reported no progress at all: the snapshot fell through to the
-    generic branch, which advertised the *picture library's* total and a
-    hardcoded zero remaining. "N / N, nothing left" on a row that says running
-    is the report a healthy long task must never produce.
+    legitimately active for a long time and must report its own progress, not
+    the *picture library's* total. "N / N, nothing left" on a row that says
+    running is the report a healthy long task must never produce.
     """
 
     def test_it_counts_the_shelf_and_not_the_picture_library(self, hub, tmp_path):

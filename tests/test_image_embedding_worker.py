@@ -17,9 +17,9 @@ PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
 def test_empty_embedding_blob_is_work_again_after_the_0112_reset(tmp_path):
     """A failed picture is stored as NULL and re-selected by ``fetch_work``.
 
-    The empty-blob marker older releases wrote is no longer matched (the
-    ``length()`` arm defeated the probe's partial index); migration 0112 resets
-    those rows to NULL once, after which they are ordinary missing work.
+    An empty-blob marker is not matched (a ``length()`` arm would defeat the
+    probe's partial index); migration 0112 resets such legacy rows to NULL
+    once, after which they are ordinary missing work.
     """
     # Copy real images so MissingFilePurgeTask doesn't delete these records
     shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "missing.jpg")
@@ -184,8 +184,8 @@ class _RecordingWorkflow:
 def test_the_preload_pool_does_the_cpu_work_and_keeps_batch_order(tmp_path):
     """Decode, dhash and CLIP preprocessing happen off the GPU worker.
 
-    On the worker they were 4 s of a 4.2 s batch of 128; the forward pass is
-    a tenth of a second. The pool must also keep the batch's order, or a
+    On the worker they would dominate a batch whose forward pass is a tenth
+    of a second. The pool must also keep the batch's order, or a
     hash lands on the wrong picture.
     """
     from PIL import Image as PILImage
@@ -219,12 +219,12 @@ def test_the_preload_pool_does_the_cpu_work_and_keeps_batch_order(tmp_path):
 
 @pytest.mark.parametrize("clip_loaded", [False, True])
 def test_the_embedding_preload_keeps_only_what_clip_reads(tmp_path, clip_loaded):
-    """No decoded original survives the preload (#2748), and the tensor CLIP
+    """No decoded original survives the preload, and the tensor CLIP
     is given is bit-identical to the one the original produces, whether or
     not CLIP was loaded when the preload ran (the first batches after start-up).
 
-    Holding the originals beside their tensors kept 6.6 GB for a batch of
-    64 large photos, three batches preloading at once. An image CLIP would
+    Holding the originals beside their tensors would keep gigabytes for a
+    batch of large photos, three batches preloading at once. An image CLIP would
     enlarge is held as it is, never upscaled.
     """
     from types import SimpleNamespace
@@ -287,7 +287,7 @@ def test_the_embedding_preload_keeps_only_what_clip_reads(tmp_path, clip_loaded)
 
 
 def test_an_animated_gif_preloads_three_frames_and_a_still_gif_one(tmp_path):
-    """An animated GIF is averaged over the frames a video is (#1487)."""
+    """An animated GIF is averaged over the frames a video is."""
     from PIL import Image as PILImage
 
     frames = [PILImage.new("RGB", (32, 24), c) for c in ("red", "green", "blue")]
