@@ -250,7 +250,7 @@ class DescriptionWorkflow:
         When Florence is already resident in GPU memory only the per-image
         activation scratch is charged, avoiding a false-positive VRAM gate
         stall on warm runs. The cold-start charge follows the *configured*
-        checkpoint (``base`` ~900 MB, ``large-ft`` ~2.6 GB, issue #512) - a
+        checkpoint (``base`` ~900 MB, ``large-ft`` ~2.6 GB) - a
         constant pinned to base would under-count and spill on large-ft.
 
         Args:
@@ -305,7 +305,7 @@ class DescriptionWorkflow:
         - so the fallback is kept for both: the host cannot invent a figure for
         a model it knows nothing about, and for the CPU-only reading the error
         is a harmless over-charge. ``TaggerPlugin.estimated_vram_mb`` tells
-        authors to charge for a cold start rather than rely on this (#967).
+        authors to charge for a cold start rather than rely on this.
         """
         from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 

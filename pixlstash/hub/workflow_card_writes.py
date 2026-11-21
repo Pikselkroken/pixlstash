@@ -1,4 +1,4 @@
-"""The card writes that remain after the cut-over (#1623): a model fix.
+"""The card writes that remain after the cut-over: a model fix.
 
 :mod:`pixlstash.hub.workflow_cards` derives a card from a stored document and
 :mod:`pixlstash.hub.workflow_card_reads` reads the rows back. The owner's
@@ -123,7 +123,7 @@ def set_model_fix(
 def _topology_documents(hub: HubDatabase, topology_hash: str) -> dict[str, dict]:
     """Every stored document of one topology, by variant, that parses.
 
-    A variant carded under this topology through a swapped-in loader (#1605)
+    A variant carded under this topology through a swapped-in loader
     is one of them, its document read with the original loader put back.
     """
     documents = {}
@@ -159,7 +159,7 @@ def record_loader_swaps(
 ) -> None:
     """Remember that graphs of this topology are another's with loaders swapped.
 
-    What a run that swapped a PixlStash loader in for a workflow's own (#1605)
+    What a run that swapped a PixlStash loader in for a workflow's own
     writes, so the pictures it makes are carded as the original graph's
     (``workflow_cards.record_identity``). A fact about two graphs, not about a
     fix: it is kept when the fix is undone, and those pictures then card as the
@@ -342,7 +342,7 @@ def _rekey_variants(
 def _carry_card_moves(
     conn: sqlite3.Connection, contributors: dict[str, set[str]]
 ) -> None:
-    """Put a family pass's move rows (#1689) on the keys recipes move to.
+    """Put a family pass's move rows on the keys recipes move to.
 
     A move row is matched against the key a saved recipe stores, and
     ``saved_recipe_service.rekey_in_session`` moves the recipes of EVERY old
@@ -448,8 +448,7 @@ def _renumber_stacks(conn: sqlite3.Connection) -> None:
     same statement has already updated, so the second row is counted against
     the first row's NEW position: two members land on one position and
     ``effective_stack_keys``' ``ORDER BY position, workflow_key`` then hands
-    the cover to whichever digest sorts first. That is the bug this function
-    exists to prevent, arrived at from the other direction.
+    the cover to whichever digest sorts first.
     """
     rows = conn.execute(
         "SELECT stack_id, workflow_key, position FROM workflow_stack_member "

@@ -1,31 +1,24 @@
 """Object-membership checks for the centralised authorization gate.
 
-Phase 1 Step 4 of the backend authorization refactor (backend refactor plan
-§3.5 / §3.7). This module is the **single home** for the per-object scope
-membership ladder - the ``token_scope`` branching that decides whether a scoped
-share token may reach a specific picture / picture-set / character / project.
-Before this module the same ladder was copy-pasted in five places
-(``routes/pictures/_helpers.py::enforce_picture_scope`` plus the inline
-``_require_scope_allows_{picture_set,character,project}`` closures in
-``routes/picture_sets.py`` / ``routes/characters.py`` / ``routes/projects.py``);
-plan §1 goal 2 collapses that into one implementation with one test surface.
+This module is the **single home** for the per-object scope membership ladder -
+the ``token_scope`` branching that decides whether a scoped share token may reach
+a specific picture / picture-set / character / project: one implementation with
+one test surface.
 
 **Ownership / call sites.**
 
 * The authz gate (:mod:`pixlstash.authz.gate`) calls these to enforce
   ``PICTURE_SCOPED`` / ``SET_SCOPED`` / ``CHARACTER_SCOPED`` / ``PROJECT_SCOPED``
   routes (and the ``body_ids`` batch routes) once the gate is enforcing.
-* ``routes/pictures/_helpers.py::enforce_picture_scope`` is now a thin re-export
+* ``routes/pictures/_helpers.py::enforce_picture_scope`` is a thin re-export
   of :func:`enforce_picture_scope` here, so its ~20 inline call sites (comfyui,
   tags, tag_predictions, _anomaly, _thumbnails, _crud, ...) keep importing the
   same symbol unchanged.
 * The three inline ``_require_scope_allows_*`` closures delegate to
   :func:`enforce_set_scope` / :func:`enforce_character_scope` /
-  :func:`enforce_project_scope` here, so there is exactly one implementation from
-  the moment this module exists (principal ruling 2026-07-21, D3). Step 5 deletes
-  the now-trivial shims.
+  :func:`enforce_project_scope` here, so there is exactly one implementation.
 
-**Semantics (unchanged from the code these functions replace).** An owner /
+**Semantics.** An owner /
 unscoped token (``token_scope is None``) always passes immediately - the checks
 never narrow the owner. A resource-scoped token passes only when the requested
 object is inside its grant, and an unrecognised ``resource_type`` fails closed
@@ -157,9 +150,9 @@ def enforce_set_scope(server, request: Request, set_id: int) -> None:
     a set that belongs to its project; every other scoped ``resource_type`` is
     refused. An owner / unscoped token (``scope is None``) passes.
 
-    Since issue #125 a set may belong to several projects, so the project branch
+    A set may belong to several projects, so the project branch
     tests the ``PictureSetProjectMember`` join rather than the scalar
-    ``PictureSet.project_id`` (which now names only the *primary* project and
+    ``PictureSet.project_id`` (which names only the *primary* project and
     would under-grant a legitimately shared set).
     """
     scope = getattr(request.state, "token_scope", None)
@@ -210,9 +203,9 @@ def enforce_character_scope(server, request: Request, character_id: int) -> None
     reaches a character that belongs to its project; every other scoped
     ``resource_type`` is refused. An owner / unscoped token passes.
 
-    Since issue #125 a character may belong to several projects, so the project
+    A character may belong to several projects, so the project
     branch tests the ``CharacterProjectMember`` join rather than the scalar
-    ``Character.project_id`` (which now names only the *primary* project and would
+    ``Character.project_id`` (which names only the *primary* project and would
     under-grant a legitimately shared character).
     """
     scope = getattr(request.state, "token_scope", None)
@@ -304,16 +297,16 @@ def enforce_project_path_scope(
     :func:`enforce_project_filter_scope` (which reads ``request.query_params``)
     cannot see it. Each one resolves that segment to a row *before* any scope
     check runs, and its ordinary error branches then answer from the project
-    space the token is not allowed to probe (#708 condition 2)::
+    space the token is not allowed to probe::
 
         GET /projects/Alpha/picture_sets/SharedSet        -> 200
         GET /projects/Gamma/picture_sets/SharedSet        -> 404 "Picture set not found"
         GET /projects/DoesNotExist/picture_sets/SharedSet -> 404 "Project not found"
 
-    Three distinguishable answers told a picture_set-scoped token which projects
-    exist and which of them hold its set - the exact disclosure
+    Three distinguishable answers would tell a picture_set-scoped token which
+    projects exist and which of them hold its set - the exact disclosure
     ``visible_project_ids`` exists to prevent, arriving through a path segment
-    instead of a query parameter. ``GET /projects/{id_or_name}`` had the same
+    instead of a query parameter. ``GET /projects/{id_or_name}`` has the same
     shape one rung up (403 for an existing project, 404 for a missing one, by
     numeric id *and* by name).
 
@@ -322,7 +315,7 @@ def enforce_project_path_scope(
     token that may not see the project gets one indistinguishable 403 in all
     three cases. An owner / unscoped token (``visible_project_ids`` returns
     ``None``) is not restricted and the caller's own 404 branch still runs, so
-    the owner-facing behaviour of these routes is unchanged.
+    the owner-facing behaviour of these routes is unaffected.
 
     **Residual: the refusal is uniform in content, not in time (accepted risk).**
     "Indistinguishable" above means status, body and headers - it does *not* mean
@@ -331,23 +324,21 @@ def enforce_project_path_scope(
     segment with ``session.get(Project, int(v))`` and, when that returns nothing,
     fall through to a second name-based ``SELECT``. So a numeric segment naming a
     project that exists costs one query and one naming no project costs two,
-    before both arrive at the same 403. Reproduced with a ``picture_set``-scoped
-    token, 400 interleaved request pairs, status and body identical in every
-    pair: the missing-project median ran +141 µs (+6.5 %) and +210 µs (+9.6 %)
-    over two runs here, and +416 µs (+19.8 %) in the second #708 review's
-    800-sample run. The magnitude is machine- and load-dependent; the *direction*
-    is structural and reproduces.
+    before both arrive at the same 403. With a ``picture_set``-scoped token the
+    missing-project median runs a few hundred µs (roughly 6-20 %) slower, status
+    and body identical. The magnitude is machine- and load-dependent; the
+    *direction* is structural and reproduces.
 
     This is **not** equalised, deliberately: making the lookup constant-time is a
     runtime change to a hot read path, and the channel is worth far less than the
-    content oracle it replaced. Reading it needs many samples per bit against a
+    content oracle it closes. Reading it needs many samples per bit against a
     local, single-user server, and what it leaks is one bit - "is there a project
     with this id" - not the membership fact. A project that exists and holds the
     caller's resource and one that exists and does not cost the same single
     query, so the ``P1``/``P3`` distinction that motivated this function is not
     recoverable through the timing channel.
 
-    - **Owner:** backend (``senior-backend-developer``), tracked on issue #708.
+    - **Owner:** backend (``senior-backend-developer``).
     - **Revisit trigger - any of:** (a) a resource-scoped share token becomes
       reachable by someone other than the owner (multi-user, or a hosted demo
       handing out scoped tokens), which turns a local timing channel into a remote
@@ -416,13 +407,13 @@ def enforce_project_filter_scope(server, request: Request) -> None:
 
     ``visible_project_ids`` decides which project ids a token may *learn about*:
     its own for a ``project`` token, none at all for a ``character`` /
-    ``picture_set`` / ``picture`` token (issue #125 / R1b). Narrowing the ids in
+    ``picture_set`` / ``picture`` token. Narrowing the ids in
     the *response* is only half the rule - a ``project_id`` **filter** turns any
     list, count, or summary route into a membership oracle for the same hidden
     facts: ``GET /picture_sets?project_id=7`` returning a row tells a set-scoped
     token that project 7 exists and that its set is filed under it, which
-    ``GET /projects/7`` (403) deliberately refuses to say (issue #708 F2/F3 and
-    their siblings on ``/pictures``, ``/pictures/count``, ``/pictures/stream``,
+    ``GET /projects/7`` (403) deliberately refuses to say (the same holds for
+    ``/pictures``, ``/pictures/count``, ``/pictures/stream``,
     ``/pictures/stats``, ``/picture_sets/{id}`` and ``/characters/{id}/summary``).
 
     So the gate answers the filter the same way it answers the payload: a

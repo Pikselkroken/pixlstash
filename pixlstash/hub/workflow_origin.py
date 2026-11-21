@@ -1,4 +1,4 @@
-"""Where a stored workflow came from, by origin and path (#1440).
+"""Where a stored workflow came from, by origin and path.
 
 Every way a workflow arrives that must not arrive twice records a row here,
 and deduplicates on this table alone (:func:`stored_as`, :func:`stored_at`),
@@ -8,21 +8,20 @@ never on a folder:
 * a user-folder file data step 7 made a manual workflow (``FILE_ORIGIN``),
   keyed by its file name;
 * a built-in made a manual workflow (``BUILTIN_ORIGIN``), keyed by file name;
-* a ComfyUI template made a manual workflow (``TEMPLATE_ORIGIN``, #2000),
+* a ComfyUI template made a manual workflow (``TEMPLATE_ORIGIN``),
   keyed by the template and a nonce, so it dedupes nothing: it is what marks
   the workflow a *draft* while it has no API graph.
 
 ``workflow_name`` names the manual workflow (``manual:<uuid>``) a document is
 stored as.
 
-**Rows under a ComfyUI address are left over from the pull** of ComfyUI's
-saved workflows, which is gone (#1854). Nothing writes one or follows one to a
-file any more. They still say that a content is already stored as a live
-workflow, so an inbox drop of the same content matches it. Deleting the
-workflow marks them ``dismissed`` rather than removing them
-(``workflow_group_writes.delete_manual_workflow``), which every reader here
-passes over and which keeps an older build sharing the hub, one that still
-pulls, from bringing the workflow back.
+**Rows under a ComfyUI address are legacy rows** from a pull of ComfyUI's saved
+workflows. Nothing writes one or follows one to a file. They still say that a content is
+already stored as a live workflow, so an inbox drop of the same content matches it.
+Deleting the workflow marks them ``dismissed`` rather than removing them
+(``workflow_group_writes.delete_manual_workflow``), which every reader here passes over
+and which keeps an older build sharing the hub, one that still pulls, from bringing the
+workflow back.
 
 **Callers hold ``workflow_inbox.INBOX_LOCK``** around a check and the write it
 decides.

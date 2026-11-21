@@ -83,8 +83,8 @@ def invoked_as() -> str:
     Settings panel). Everywhere else the console script is exactly right.
 
     The Windows desktop declares nothing, because the command that works there
-    is *this very interpreter* and so can be derived rather than announced
-    (issue #1058). Deriving it through the same helper the Settings panel uses
+    is *this very interpreter* and so can be derived rather than announced.
+    Deriving it through the same helper the Settings panel uses
     keeps the two from drifting: what the panel prints is what the CLI then
     calls itself.
     """

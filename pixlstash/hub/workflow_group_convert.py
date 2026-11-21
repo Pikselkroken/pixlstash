@@ -1,4 +1,4 @@
-"""Convert the owner's card state onto workflows (#1623, the cut-over).
+"""Convert the owner's card state onto workflows (the cut-over).
 
 Cards (``workflow_key``) carried the owner's names, notes, defaults, pins,
 picture inputs and stacks; a **workflow** (``workflow_id``, a group of
@@ -140,7 +140,7 @@ def _cards_as_filed(hub) -> list[Card]:
     """The cards as data steps 5 and 6 were written against: files included.
 
     Until manual workflows (data step 7) a workflow FILE with no recipe was a
-    card of its own (#1466, ``auto:<topology hash>``), and these steps carry
+    card of its own (``auto:<topology hash>``), and these steps carry
     the owner's state onto that id; step 7 then carries it on to the file's
     manual workflow. Frozen here, so a hub upgraded from before step 5 still
     converts what its owner typed on such a card. No manual card: none
@@ -151,7 +151,7 @@ def _cards_as_filed(hub) -> list[Card]:
 
 
 def _file_only_cards(hub, keyed: set[str]) -> list[Card]:
-    """The cards whose whole content is a stored workflow file (#1466).
+    """The cards whose whole content is a stored workflow file.
 
     The key is derived (``topology_only_key``) rather than read, since a
     stored ``workflow_file.workflow_key`` can be stale. NOT EXISTS rather
@@ -442,7 +442,7 @@ def adopt_workflow_files(conn: sqlite3.Connection, folder: str) -> int:
     are left as they are; the stored document is tagged with its new id, as
     ``create_manual_workflow`` tags one.
 
-    A file that was a card of its own (#1466, no variant) had its owner state
+    A file that was a card of its own (no variant) had its owner state
     carried to ``auto:<topology hash>`` by steps 5 and 6; it is carried on
     here, so nothing its owner typed is lost. A file that will not read is
     logged and skipped: it could not run either.
@@ -765,7 +765,7 @@ def _keep_saved_over(
 ) -> None:
     """Keep *variants* in the saved-over automatic workflow *workflow_id*.
 
-    Rule 5 of #1846 (#1849): an automatic workflow the owner saved over is
+    An automatic workflow the owner saved over is
     never retired. Where a new core rule or a re-identified family computes
     another id for a variant it holds, the variant is not moved: this row
     says it stays (``workflow_cards.variant_workflow_id`` reads it ahead of
@@ -950,7 +950,7 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
 def rederive_cores_from(conn: sqlite3.Connection, rule: str) -> int:
     """Put every topology cached under retired core rule *rule* on the live one.
 
-    Hub data step 10 (*rule* ``"v2"``, #1719), step 13 (``"v3"``) and step 15
+    Hub data step 10 (*rule* ``"v2"``), step 13 (``"v3"``) and step 15
     (``"v4"``),
     :func:`rederive_cores`'s move one rule on. Each rule strips more than the
     one before, so workflows mostly **merge**: each variant's old id
@@ -1846,7 +1846,7 @@ def _log_dropped_promotions(hub) -> None:
     """Name every LoRA promotion, which the default recipe has no place for.
 
     A promotion keyed one LoRA file into a card; with LoRAs recipe values now,
-    the rule "a LoRA in most of the best pictures is a default" (#1620 D2)
+    the rule "a LoRA in most of the best pictures is a default"
     takes its place. The rows stay in the hub; this says which they were.
     """
     for topology_hash, slot_label, asset in hub.fetchall(
@@ -1935,7 +1935,7 @@ def _auto_id(hub, card: Card, topology_core: Optional[str]) -> Optional[str]:
     A topology cached under the current rule gives the current id (core and
     the card's base-model families). One that is not (a hub upgrading through
     steps 5 and 6) gives the v1 id, ``auto:<v1 core>``, which data step 8 then
-    moves with every other v1 id. A file-only card (#1466: a workflow file
+    moves with every other v1 id. A file-only card (a workflow file
     with no recipe) is its own workflow, ``auto:<topology hash>``, unless
     another card of its topology has a core hash.
     """
@@ -1967,7 +1967,7 @@ def card_document(hub, card: Card) -> Optional[tuple[str, dict]]:
     """``(structural_hash, document)`` of the card's first variant that reduces.
 
     Read as the card's own topology: a graph a model fix swapped a loader into
-    (#1605) gets its original loader back, as ``record_identity`` reads it.
+    gets its original loader back, as ``record_identity`` reads it.
     """
     documents = variant_documents(hub, card.variants)
     for structural_hash in sorted(documents):

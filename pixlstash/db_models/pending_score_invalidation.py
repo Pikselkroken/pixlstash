@@ -6,10 +6,8 @@ which point :class:`~pixlstash.tasks.missing_smart_score_finder.MissingSmartScor
 recomputes them. NULL is the *only* signal that a recompute is owed, so if it is
 never written, nothing anywhere knows.
 
-That used to be safe: the setting and the pictures shared one database, so the
-setting write and the NULLing committed together or not at all. Since the
-hub/vault split the setting lives in the hub and the pictures in the vault, and
-SQLite has no transaction spanning two databases. Without something durable in
+The setting lives in the hub and the pictures in the vault, and SQLite has no
+transaction spanning two databases. Without something durable in
 between, a crash after the setting commits and before the NULLing runs leaves
 scores computed under the old weights, with nothing left to notice: a stale
 score is a plausible number, so nothing errors and the grid simply sorts wrong,

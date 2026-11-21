@@ -1,13 +1,12 @@
 """The centralised authorization gate - one router-level dependency.
 
-Phase 1 of the backend authorization refactor (``docs/backend_architecture.md``
-§16.2, backend refactor plan §3.3 / §3.4 / §3.5 step 1). :class:`AuthzGate` is
+See ``docs/backend_architecture.md`` §16.2. :class:`AuthzGate` is
 attached once to every ``include_router`` call in ``pixlstash/server.py`` and runs
 after authentication (the auth middleware has already populated
 ``request.state``). It looks up the policy for the matched route and, on a miss,
 denies by default.
 
-**Route-identity keying (CSO-required).** The gate keys its policy map by the
+**Route-identity keying.** The gate keys its policy map by the
 persistent ``original_route`` object captured from
 :func:`pixlstash.route_inventory.iter_api_route_contexts` - the *same* walk the CI
 coverage matrix uses - NOT by ``request.scope["route"].path``. That request-time
@@ -19,29 +18,18 @@ object the enumeration yielded (verified: dependency-time identity matches
 enumeration identity), so ``id(route)`` is a stable, correct key. A request-time
 route object not present in the map resolves to **deny**, never allow.
 
-**Enforcing shipped state (``AUTHZ_GATE_ENFORCING = True``; Step 6 flipped
-2026-07-21).** The gate is the sole object-authorization chokepoint: an undeclared
-route is denied at runtime, the startup enumeration fails closed on the backlog,
-and the redundant inline handler checks were removed in Step 5. The single boolean
-is the per-release rollback switch of plan §6 - a code constant, not runtime
-config - held ``False`` through Steps 3-5 (report-only) and flipped fail-closed at
-Step 6 under the adversarial sign-off; set it back to ``False`` to revert both
+**Enforcing (``AUTHZ_GATE_ENFORCING = True``).** The gate is the sole
+object-authorization chokepoint: an undeclared route is denied at runtime and the
+startup enumeration fails closed on the backlog. The single boolean is the rollback
+switch - a code constant, not runtime config; set it to ``False`` to revert both
 object-enforcement and unknown-route fail-closed in one line.
 
-**Step-3 owner-class enforcement (behind the flag; principal ruling 2026-07-21).**
-The enforcement *code* for the non-id-resolution classes lands now:
-``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY`` / ``LOOPBACK_OWNER_ONLY`` delegate to the
-existing ``AuthService`` helpers (``require_unscoped_owner`` + ``real_client_ip``
-with the scoped ``is_local_or_tailscale_ip`` / strict ``is_loopback_ip``
-predicates), and a
+**Owner-class enforcement.** ``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY`` /
+``LOOPBACK_OWNER_ONLY`` delegate to the existing ``AuthService`` helpers
+(``require_unscoped_owner`` + ``real_client_ip`` with the scoped
+``is_local_or_tailscale_ip`` / strict ``is_loopback_ip`` predicates), and a
 startup ``PUBLIC``-consistency check reconciles ``PUBLIC`` declarations against
-the middleware's ``AUTH_EXCLUDED_*``. Per-policy-class staging is carried by
-*which branches are implemented* - there is deliberately no second toggle. It is
-proven now by ``AuthzGate(enforcing=True)`` tests; the id-resolving classes
-(``*_SCOPED`` / ``SCOPED_LIST`` / ``body_ids`` batch) stay pass-through until
-Step 4. Because the shipped default stays report-only, none of this changes
-runtime behaviour until the Step-6 flip - no window is weaker *or* stronger than
-today (the inline checks still run).
+the middleware's ``AUTH_EXCLUDED_*``. There is deliberately no second toggle.
 """
 
 from __future__ import annotations
@@ -195,11 +183,11 @@ class AuthzGate:
                 or the registry declares no owner-class route (e.g. the PUBLIC-only
                 decoy tests); an enforcing gate with owner-class routes but no
                 ``auth`` is a boot failure (a skipped owner check is the
-                BOLA-by-omission class this refactor exists to kill).
+                BOLA-by-omission class the gate exists to prevent).
             server: The application ``Server`` (holds ``vault.db``). Required to
                 enforce an object-scoped policy (``*_SCOPED`` with a resolvable id
                 / ``body_ids`` batch), whose membership check reads the database
-                via ``server.vault.db.run_immediate_read_task`` (Step 4). May be
+                via ``server.vault.db.run_immediate_read_task``. May be
                 ``None`` when the gate is report-only or declares no DB-scoped
                 route (e.g. owner/list/PUBLIC-only decoy tests); an enforcing gate
                 with a DB-scoped route but no ``server`` is a boot failure - the
@@ -282,8 +270,7 @@ class AuthzGate:
 
         Report-only vs. enforcing: an *undeclared route* (or a *dead declaration*)
         is logged as a backlog when ``enforcing`` is False, and aborts boot when
-        ``enforcing`` is True. Step 1 ships report-only, so all 207 routes log as
-        backlog and boot proceeds.
+        ``enforcing`` is True.
         """
         undeclared, dead = self.resolve_routes(app)
         authoring_problems = validate_policy_declarations(self._registry)
@@ -397,7 +384,7 @@ class AuthzGate:
 
     async def __call__(self, conn: HTTPConnection) -> None:
         """Router-level dependency: deny-by-default on an undeclared route, plus
-        owner-class enforcement (Step 3).
+        owner-class enforcement.
 
         **WebSocket short-circuit (this gate is HTTP-only by design).** The gate is
         mounted router-wide (``dependencies=[Depends(self.authz)]`` on every
@@ -408,7 +395,7 @@ class AuthzGate:
         ``# WS routes: see authn/websocket.py`` sentinel). The parameter is typed
         ``HTTPConnection`` (not ``Request``) because FastAPI fills an
         ``HTTPConnection`` param for BOTH http and websocket scopes, whereas a
-        ``Request`` param is left unset on a WS handshake - which crashed the
+        ``Request`` param is left unset on a WS handshake - which would crash the
         dependency (``TypeError: missing 'request'``) *before* the handler's own
         auth could run. A non-``Request`` connection is a WebSocket: return
         immediately so the gate resolves harmlessly and enforces nothing on it.
@@ -424,7 +411,7 @@ class AuthzGate:
         (``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY``, plus ``PUBLIC`` / ``ANY_TOKEN`` which
         need no per-object check) is applied synchronously; the object-scoped
         classes (``*_SCOPED`` single / ``body_ids`` batch / ``SCOPED_LIST``) run the
-        Step-4 membership enforcement, which reads the DB on a threadpool worker.
+        membership enforcement, which reads the DB on a threadpool worker.
         When report-only, every declared route passes untouched (the inline checks
         are the sole enforcement).
         """
@@ -468,10 +455,10 @@ class AuthzGate:
         authenticated non-excluded paths). ``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY``
         delegate to the existing ``AuthService`` helpers so the ``token_scope``
         ladder lives in exactly one place. The object-scoped classes are handled
-        by :meth:`_enforce_scoped_policy` (Step 4).
+        by :meth:`_enforce_scoped_policy`.
 
         **The library checks run first, then the project-filter check, for every
-        declared route and every policy class (issue #708).** The project filter
+        declared route and every policy class.** The project filter
         is deliberately policy-independent: a ``project_id`` filter is a question
         about the *project space*, not about the object the route is named after,
         so which ``AccessPolicy`` the route carries says nothing about whether the
@@ -523,7 +510,7 @@ class AuthzGate:
         await self._enforce_scoped_policy(request, route_policy)
 
     def _admit_comfyui_scope(self, request: Request) -> None:
-        """Hold a ComfyUI-scope token to the routes its scope admits (#1811).
+        """Hold a ComfyUI-scope token to the routes its scope admits.
 
         The scope is the owner's access on ``auth.COMFYUI_SCOPE_ROUTES`` and
         nothing anywhere else, so this is the one place the token stops being
@@ -555,11 +542,11 @@ class AuthzGate:
     async def _enforce_scoped_policy(
         self, request: Request, route_policy: RoutePolicy
     ) -> None:
-        """Enforce an object-scoped policy (Step 4) once the gate is enforcing.
+        """Enforce an object-scoped policy once the gate is enforcing.
 
         The check engages only a **resource-scoped** token (:func:`_is_resource_scoped`);
         an owner or unscoped-READ token has unrestricted object access and passes
-        immediately - no body read, no DB - exactly as today's inline ladders do.
+        immediately - no body read, no DB - exactly as the inline ladders do.
 
         * ``SCOPED_LIST`` - no single id to check. An audited ``scope_aware`` list
           filters its own results (its inline ``fetch_scope_allowed_*`` remains the
@@ -619,7 +606,7 @@ class AuthzGate:
         """Extract the id(s) from a JSON body field for a ``body_ids`` batch route.
 
         Handles a list (checked element by element), a single scalar (§N6; no
-        route declares that shape since #1410 retired ``run_t2i``), and an
+        route currently declares that shape), and an
         absent/``None`` value (no-op).
         Reading the body here is safe: Starlette caches it on ``request._body`` so
         the handler's own ``Body(...)`` parse re-reads the cache.
@@ -740,7 +727,7 @@ class AuthzGate:
         the feature; a token says "programmatic access to *this* library".
 
         The one token that is not refused is one the owner set to cover every
-        library (#1787, ``auth.token_covers_library``): an agent's token that
+        library (``auth.token_covers_library``): an agent's token that
         is meant to follow the switch, as a session does.
 
         Fails closed in both directions that matter: a token with no stamp at all
@@ -834,8 +821,8 @@ class AuthzGate:
 
         Locality uses ``AuthService.real_client_ip`` (trusted-proxy aware) +
         :func:`is_local_or_tailscale_ip` - the scoped predicate that counts a
-        Tailscale-over-IPv4 owner (CGNAT ``100.64.0.0/10``) as local, fixing the
-        false-deny without widening the shared ``is_local_ip`` (and its unrelated
+        Tailscale-over-IPv4 owner (CGNAT ``100.64.0.0/10``) as local, without
+        widening the shared ``is_local_ip`` (and its unrelated
         LAN callers). A genuinely remote owner is admitted ONLY when the dedicated
         ``allow_remote_host_ops`` flag is set; otherwise the 403 names that flag so
         the operator knows the exact setting that enables it. Assumes

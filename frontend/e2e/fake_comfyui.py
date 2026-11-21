@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A fake ComfyUI for the Playwright e2e backend (#2360).
+"""A fake ComfyUI for the Playwright e2e backend.
 
 Playwright's second ``webServer`` runs this script, and the e2e backend's
 ComfyUI address points at it (``e2e_comfyui_url``). It answers the routes

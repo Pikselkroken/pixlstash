@@ -1,4 +1,4 @@
-"""Persistent state for the tiered duplicate detection queue (v1.9).
+"""Persistent state for the tiered duplicate detection queue.
 
 Three concerns, three tables:
 

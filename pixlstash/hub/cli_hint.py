@@ -77,9 +77,8 @@ def _ps_quote(path: str) -> str:
 def desktop_windows_command(hub_path: str | None) -> str | None:
     """Return the bundled-runtime invocation, or None if this is not one.
 
-    **This is what makes the desktop CLI usable on Windows at all** (issue
-    #1058). The obvious command to print is the app's own launcher, and it is
-    what this module used to be handed in ``PIXLSTASH_CLI_COMMAND`` - but
+    **This is what makes the desktop CLI usable on Windows at all.** The
+    obvious command to print is the app's own launcher, but
     ``PixlStash.exe`` is linked for the Windows GUI subsystem, so no shell waits
     for it: the prompt returns immediately and the CLI's output then lands on
     top of it, leaving the cursor mid-line. The bundled ``python.exe`` is a
@@ -88,7 +87,7 @@ def desktop_windows_command(hub_path: str | None) -> str | None:
     exactly what the app itself spawns (``runCli`` in ``electron/src/main.ts``),
     so this is the invocation that is already known to work.
 
-    The AppImage reasoning that put the launcher here does not apply on Windows:
+    The AppImage reasoning for printing the launcher does not apply on Windows:
     there is no squashfs remounting at a fresh path every launch, so the
     interpreter path is durable.
 

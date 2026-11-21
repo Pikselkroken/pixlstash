@@ -2,8 +2,8 @@
 
 Defines the closed :class:`AccessPolicy` vocabulary and the :class:`RoutePolicy`
 declaration record that the authz registry (:mod:`pixlstash.authz.registry`) maps
-each mounted route to. This is Phase 1 of the backend authorization refactor - see
-``docs/backend_architecture.md`` §16.2 and the backend refactor plan §3.1 / §3.2.
+each mounted route to. See ``docs/backend_architecture.md`` §16.2 and the backend
+refactor plan §3.1 / §3.2.
 
 The enum is deliberately **closed**: adding an access level is a deliberate edit
 here plus its tests, which is exactly the friction that keeps the authorization
@@ -120,9 +120,9 @@ class RoutePolicy:
             template is a boot failure, not a silent no-op.
         body_ids: For a batch route, the JSON body field holding the id(s) the
             gate must check. A list is checked element by element; a single scalar
-            is checked as one id; ``None`` / absent is a no-op. No route declares
-            the scalar shape since #1410 retired ``run_t2i``; the gate keeps it
-            for the next one that needs it.
+            is checked as one id; ``None`` / absent is a no-op. No route currently
+            declares the scalar shape; the gate keeps it for the next one that
+            needs it.
         justification: Mandatory for the policies in
             :data:`JUSTIFICATION_REQUIRED`, and for ``resolved_inline`` routes; a
             written reason the route is public, grants local-owner filesystem
@@ -130,21 +130,20 @@ class RoutePolicy:
         resolved_inline: ``True`` marks a ``*_SCOPED`` route whose object id is
             **name-derived** (e.g. ``/projects/{project_name}/...``) and therefore
             cannot be resolved to a numeric id at the gate without duplicating the
-            handler's own name→id lookup - the exact divergence this refactor
-            exists to kill (matrix §N3; principal ruling 2026-07-21 D2). The gate
+            handler's own name→id lookup - the exact divergence the gate
+            exists to prevent (matrix §N3). The gate
             does **not** object-check these; the handler's inline
             ``_require_scope_allows_*`` check remains the live enforcement and must
-            not be removed in Step 5 until a shared name→id resolver exists. This
+            not be removed until a shared name→id resolver exists. This
             is a typed, validator-checked exemption - not a comment.
         scope_aware: Only valid on :attr:`AccessPolicy.SCOPED_LIST`. ``True`` marks
             a list/search route that has been **audited** to filter its own result
             set for a resource-scoped token (the 39 current list routes all do).
             A ``SCOPED_LIST`` route left ``scope_aware=False`` (the safe-by-omission
             default) is failed **closed** by the gate for a resource-scoped token -
-            a new, unaudited list route leaks nothing (matrix §3.6; principal
-            ruling 2026-07-21 D4). The gate cannot synthesise a correct empty
-            envelope for an arbitrary list shape, so "leak nothing" is a 403, not
-            an empty body.
+            a new, unaudited list route leaks nothing (matrix §3.6). The gate
+            cannot synthesise a correct empty envelope for an arbitrary list
+            shape, so "leak nothing" is a 403, not an empty body.
         library_independent: ``True`` exempts the route from the library pin -
             the rule that a token only authenticates while the library it was
             minted for is the active one (multi-library plan §4). **The default,
@@ -157,7 +156,7 @@ class RoutePolicy:
             could mint while B is active would hand itself a B-stamped token and
             reopen the pivot the pin exists to close. It is also why the one
             route that widens a token past its library
-            (``PUT /users/me/token/{token_id}/libraries``, #1787) is pinned
+            (``PUT /users/me/token/{token_id}/libraries``) is pinned
             and local-owner-only: the pin is lifted by the owner's own
             session on the local network, never by a token (which
             ``AuthService._refuse_token_credential`` refuses outright).

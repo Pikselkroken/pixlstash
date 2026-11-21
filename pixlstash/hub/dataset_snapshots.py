@@ -1,4 +1,4 @@
-"""Reads and writes for ``dataset_snapshot`` and its items (#2123).
+"""Reads and writes for ``dataset_snapshot`` and its items.
 
 A snapshot freezes what one training run was given: each picture's file in the
 dataset, the sha256 of those bytes and the caption as written. It is taken when

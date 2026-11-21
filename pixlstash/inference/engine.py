@@ -203,7 +203,7 @@ class InferenceEngine:
 
     @property
     def florence_model_variant(self) -> str:
-        """The configured Florence-2 checkpoint key (issue #512).
+        """The configured Florence-2 checkpoint key.
 
         One setting drives both captioning and object detection because they
         share a single :class:`~pixlstash.tagger_plugins.florence2.Florence2Service`.
@@ -410,9 +410,8 @@ class InferenceEngine:
 
         One encode at a time, on every host: the query encodes run on request
         threads and share these service instances, which read their model and
-        tokenizer without a lock once loaded. They used to take turns on the
-        single database writer thread; this lock is that serialisation, without
-        holding the writer.
+        tokenizer without a lock once loaded. This lock serialises them without
+        holding the single database writer thread.
 
         Raises:
             CpuQueryEncodersNotReadyError: The CPU copies failed to load, or to
@@ -440,13 +439,9 @@ class InferenceEngine:
     def max_concurrent_images(self) -> int:
         """Return the maximum number of images to process concurrently.
 
-        Named per device rather than "cpu or else", which is how it was written
-        and which is a live hazard the moment a third device exists: ``"mps"``
-        is not ``"cpu"``, so it inherited the 64-image CUDA branch - a batch the
-        memory model puts at roughly 10.8 GB. The sibling decision in
-        ``inference/workflows/tagging.py`` was written with the opposite
-        polarity ("cuda or else"), so the two disagreed about every device
-        neither of them named.
+        Named per device rather than "cpu or else", because ``"mps"`` is not
+        ``"cpu"`` and would otherwise inherit the 64-image CUDA branch - a batch
+        the memory model puts at roughly 10.8 GB.
         """
         return _MAX_CONCURRENT_BY_DEVICE.get(
             normalise_device(self.device), _MAX_CONCURRENT_CPU

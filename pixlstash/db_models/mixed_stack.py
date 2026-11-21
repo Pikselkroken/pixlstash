@@ -1,4 +1,4 @@
-"""Mixed stacks: the cohesion cache and the ``Keep`` dismissal (v1.9, D5/B5).
+"""Mixed stacks: the cohesion cache and the ``Keep`` dismissal (D5/B5).
 
 A **mixed stack** is a live stack whose members do not form one connected
 cluster at the queue's similarity threshold, measured with the same 64-bit dHash
@@ -81,7 +81,7 @@ class StackCohesion(SQLModel, table=True):
             pruned at. A pair further apart than that floor cannot be an edge at
             any admissible threshold, which is why dropping it from
             :attr:`edges` loses nothing; but it is still the honest answer to
-            "how close does this member get?", and pruning it is what made a
+            "how close does this member get?", and pruning it would make a
             stranded member's closeness unreportable. One row per member, so the
             storage is O(n) beside an O(n^2) edge list.
         computed_at: When the edges were last derived. Diagnostics only, the

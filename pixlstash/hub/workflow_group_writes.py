@@ -1,4 +1,4 @@
-"""What the owner writes about a WORKFLOW (#1623).
+"""What the owner writes about a WORKFLOW.
 
 The workflow-level twin of :mod:`pixlstash.hub.workflow_card_writes`: the
 owner's name, notes and hidden flag, the edits to a workflow's default recipe,
@@ -460,9 +460,8 @@ def create_manual_workflow(
     Args:
         origin: How it arrived (``import``, ``inbox``, ``builtin``,
             ``duplicate``, ``fixed``, ``clone``, ``chain``, ``recipe``); the
-            table's CHECK refuses anything else. ``pull`` is allowed and no
-            longer written: rows the removed pull of ComfyUI's saved
-            workflows made keep it.
+            table's CHECK refuses anything else. ``pull`` is allowed for
+            legacy rows that carry it, and never written.
         from_workflow_id: The workflow (or, for ``recipe``, the recipe's
             workflow) it was made from, and *from_name* what that was called.
         api_document: The API graph an editor *document* converted into.
@@ -643,8 +642,8 @@ def delete_manual_workflow(hub: HubDatabase, workflow_id: str) -> None:
     """Forget one manual workflow's rows, in one transaction.
 
     Its inbox, file and template origin rows go, so handing the same content
-    over again stores it again. A built-in's row, and one the removed pull of
-    ComfyUI's saved workflows left (#1854), is marked **dismissed** instead:
+    over again stores it again. A built-in's row, and a legacy ``pull`` row of
+    ComfyUI's saved workflows, is marked **dismissed** instead:
     a removed built-in stays off the Workflows page (start-up lists only one
     never listed, ``list_builtin_workflows``), and an older build sharing the
     hub, which still pulls, does not bring a pulled workflow back. Then its document, name, defaults, pins and

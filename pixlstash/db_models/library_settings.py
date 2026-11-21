@@ -9,10 +9,9 @@ sharing this value feel wrong? Then it lives here. Would two *users* sharing it
 feel wrong? Then it lives in the hub. Most view preferences fail the first test
 and pass the second, which is why this table is deliberately small.
 
-Decided 2026-08-02, after enumerating the candidates: only
-``similarity_character`` moves. Hidden tags, the tag filter and the penalised-tag
-weights are the user's own working preferences and stay in the hub even though
-they name library vocabulary; the owner is the same person in every library and
+Only ``similarity_character`` lives here. Hidden tags, the tag filter and the
+penalised-tag weights are the user's own working preferences and stay in the hub even
+though they name library vocabulary; the owner is the same person in every library and
 wants the same defects penalised.
 """
 

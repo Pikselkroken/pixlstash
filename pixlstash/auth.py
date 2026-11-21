@@ -519,9 +519,9 @@ def is_local_or_tailscale_ip(ip: str) -> bool:
     (:mod:`pixlstash.authz.gate`). It deliberately does **not** replace the shared
     :func:`is_local_ip`, which also backs ``_require_local_for_write``, the
     middleware ALL-token remote block, and the HTTPS-skip carve-out - widening
-    those to Tailscale is an unrelated remote-login risk decision the §16.3 debate
-    refused to couple. This predicate widens only the host-ops locality check so a
-    Tailscale-over-IPv4 owner is no longer falsely denied.
+    those to Tailscale is a separate remote-login risk decision. This predicate
+    widens only the host-ops locality check so a Tailscale-over-IPv4 owner is
+    not falsely denied.
     """
     return is_local_ip(ip) or is_tailscale_ip(ip)
 
@@ -566,10 +566,10 @@ def token_may_cover_every_library(token: UserToken) -> bool:
 
     Two kinds never are. A share link names a resource, and its ids mean a
     different set, character or project in the next library. A source-bound
-    token (``bound_address`` set) with full access is a ComfyUI link key from
-    before #1811: anything on that machine can use it, so it is not widened.
-    The link key since then carries :data:`COMFYUI_SCOPE`, reaches only what
-    the nodes call, and may be.
+    token (``bound_address`` set) with full access is a legacy ComfyUI link
+    key: anything on that machine can use it, so it is not widened. The
+    current link key carries :data:`COMFYUI_SCOPE`, reaches only what the
+    nodes call, and may be.
 
     The single spelling of that rule: what may be set, what is honoured, what
     the refusal tells the caller and what the token list reports all ask it.
@@ -582,7 +582,7 @@ def token_may_cover_every_library(token: UserToken) -> bool:
 def token_follows_active_library(token: UserToken) -> bool:
     """Return True when the owner has set *token* to cover every library.
 
-    The opt-out from the library pin (#1787). Honoured only on a token that
+    The opt-out from the library pin. Honoured only on a token that
     :func:`token_may_cover_every_library`: a row of any other kind carrying
     the flag (which :meth:`AuthService.set_token_libraries` never writes)
     stays pinned. Fails closed: anything but an explicit ``True`` is "pinned".
@@ -625,8 +625,7 @@ def is_token_expired(token: UserToken, now: Optional[datetime] = None) -> bool:
     UTC time; ``expires_at`` reads back as aware UTC.
 
     The comparison is inclusive: a token whose ``expires_at`` is exactly *now*
-    has expired. The two checks this replaced disagreed on that boundary, and
-    the stricter reading is the one that matches the field's meaning.
+    has expired, which matches the field's meaning.
     """
     if token.expires_at is None:
         return False
@@ -969,7 +968,7 @@ class AuthService:
         The link is made on ``UserToken.public_id`` rather than on the integer
         primary key, because the key has to stay meaningful for as long as the
         session does and a deleted row's integer id is handed to the next token
-        created (issue #666).
+        created.
         """
         with self._session_lock:
             self.active_session_ids[session_id] = user_id
@@ -1117,8 +1116,7 @@ class AuthService:
         for a snapshot taken from this same vault - present and pointing at a
         token row whose other columns have since changed. Never-reused ids stop
         an id from silently naming a *different* token; they cannot make
-        in-memory state that outlived a whole-file swap correct. Both halves of
-        issue #666 are needed.
+        in-memory state that outlived a whole-file swap correct.
 
         Clearing itself touches only in-memory dictionaries. The two database
         reads that follow it (``ensure_user`` and, when the desktop shell is
@@ -1176,8 +1174,8 @@ class AuthService:
         ``LOCAL_OWNER_ONLY`` host-capability routes (default ``False``).
 
         Dedicated flag for the host-ops locality gate. It is deliberately NOT
-        ``require_local_for_write`` (the §16.3 debate refused to couple
-        remote-login and remote-host-ops risk): enabling remote logins must not
+        ``require_local_for_write`` (remote-login and remote-host-ops risk
+        are kept separate): enabling remote logins must not
         implicitly hand a remote caller the server's host-filesystem authority.
         It never loosens the ``LOOPBACK_OWNER_ONLY`` red-line routes.
         """
@@ -1280,10 +1278,9 @@ class AuthService:
         """Return the (single) owner user row, or None if the account row is absent.
 
         Runs on the **read** path (``run_immediate_read_task``), not the
-        serialised writer queue. ``DBPriority.IMMEDIATE`` only reordered the
-        queue; the writer still finished the in-flight task's session first, so
-        every authenticated request paid the tail of whatever background batch
-        was committing (issue #651). See ``docs/backend_architecture.md`` §16.
+        serialised writer queue, so an authenticated request never waits for a
+        background batch on the writer to commit. See
+        ``docs/backend_architecture.md`` §16.
         """
         return self._db.run_immediate_read_task(
             lambda session: session.exec(select(User)).first()
@@ -1590,7 +1587,7 @@ class AuthService:
         on every request (bcrypt is intentionally slow ~200 ms).
 
         Revocation safety: the DB candidate fetch is the authority and runs on
-        the read path (issue #651), so it always observes an already-committed
+        the read path, so it always observes an already-committed
         revocation - every removal path commits *before* calling
         :meth:`_flush_token_cache`, and under WAL a read that starts after that
         commit sees it. The one ordering that would slip through is a lookup
@@ -1696,8 +1693,8 @@ class AuthService:
         authentication or authorization path reads it**, and it carries neither
         revocation nor expiry state - those live in the row's existence and in
         ``expires_at``, both of which are re-read from the database on every
-        cache miss. So it is deliberately fire-and-forget: the request no longer
-        waits for the serialised writer queue to reach it (issue #651). The cost
+        cache miss. So it is deliberately fire-and-forget: the request does not
+        wait for the serialised writer queue to reach it. The cost
         is bounded freshness on the timestamp, and a failed write is logged
         rather than swallowed.
 
@@ -2472,8 +2469,8 @@ class AuthService:
         """Set whether a token covers every library or only the active one.
 
         ``all_libraries=True`` lifts the library pin: the token works in
-        whichever library is open, so an agent's token survives a switch
-        (#1787). ``False`` pins it again, to the library that is active now,
+        whichever library is open, so an agent's token survives a switch.
+        ``False`` pins it again, to the library that is active now,
         which is the one the owner is looking at when they say "only this
         library".
 

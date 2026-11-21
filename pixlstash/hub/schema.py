@@ -2669,16 +2669,14 @@ def read_schema_version(conn: sqlite3.Connection) -> int:
 
 
 def _drop_blank_recipe_assets(conn: sqlite3.Connection) -> int:
-    """Delete the asset rows that name no model at all (#1416).
+    """Delete the asset rows that name no model at all.
 
-    A shelf loader's widget is blank until its Browse button is clicked, and
-    the PixlStash CLIP loader's second encoder is blank on every SD and SDXL
-    graph. ``workflow_hash`` used to keep that blank as a topology asset, so
-    each one filed a ``workflow_recipe_asset`` row with an empty
-    ``normalized_filename``. It now keeps only a digest, but the rows already
-    written are unreachable: ``_model_ghost_names`` routes a ``*_sha256``
-    widget to the digest branch, where an empty value is not a digest and so is
-    never a ghost, so "forget model names not on the shelf" cannot clear them.
+    A shelf loader's widget is blank until its Browse button is clicked, and the
+    PixlStash CLIP loader's second encoder is blank on every SD and SDXL graph. A hub
+    can hold ``workflow_recipe_asset`` rows filed for that blank, with an empty
+    ``normalized_filename``, and they are unreachable: ``_model_ghost_names`` routes a
+    ``*_sha256`` widget to the digest branch, where an empty value is not a digest and
+    so is never a ghost, so "forget model names not on the shelf" cannot clear them.
 
     Deleting one loses nothing -- an empty name identifies nobody and resolves
     to no shelf row -- and no hash moves and no stored document is rewritten,
@@ -2750,7 +2748,7 @@ def _backfill_base_model_canonical(conn: sqlite3.Connection) -> int:
 def _reidentify_filename_guesses(conn: sqlite3.Connection) -> int:
     """Re-read a filename identification the token-run matcher answers differently.
 
-    A filename now matches across tokens (#1959): ``qwen_image_edit_2511`` is
+    A filename matches across tokens: ``qwen_image_edit_2511`` is
     Qwen-Image-Edit, not the ``qwen`` it starts with. A row identified from a
     filename keeps that answer for good, the scanner replacing only a source it
     outranks, so the new answer is written here. Only where the row's own

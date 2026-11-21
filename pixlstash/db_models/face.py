@@ -125,13 +125,11 @@ class Face(SQLModel, table=True):
         """Return the face fields that may be served over the API.
 
         This is an allowlist, not a dump: it is the projection behind
-        ``GET /pictures/{id}/faces`` and ``GET /characters/{id}/faces``, which
-        replaced serving the ``faces`` relationship through the generic by-name
-        readers (issue #721). Two columns are deliberately **omitted**:
+        ``GET /pictures/{id}/faces`` and ``GET /characters/{id}/faces``. Two
+        columns are deliberately **omitted**:
 
-        * ``features`` - the ArcFace embedding. It is biometric data, and the
-          generic reader used to hand it out base64-encoded to any token that
-          could reach the picture. Nothing on the wire has ever read it: the
+        * ``features`` - the ArcFace embedding. It is biometric data, and
+          nothing on the wire reads it: the
           SPA's face-box overlay uses ``frame_index``, ``bbox`` and
           ``character_id`` only.
         * ``model_pack`` - names the InsightFace pack that produced the
@@ -143,9 +141,7 @@ class Face(SQLModel, table=True):
           least-disclosure rule; add it back only with a named consumer.
 
         ``bbox`` is taken from the property, which parses the ``bbox_`` text
-        column. That reproduces exactly what ``safe_model_dict`` did for the
-        trailing-underscore field on the old path, so the wire value is
-        unchanged.
+        column.
 
         Returns:
             A JSON-safe dict with ``id``, ``picture_id``, ``character_id``,

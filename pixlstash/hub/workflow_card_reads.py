@@ -1,4 +1,4 @@
-"""What the hub answers about cards and the workflows they make (B3, #1623).
+"""What the hub answers about cards and the workflows they make (B3).
 
 :mod:`pixlstash.hub.workflow_cards` derives a card and writes its rows; this
 module reads them back and groups them into WORKFLOWS (``workflow_index``),
@@ -420,8 +420,8 @@ def manual_workflow_ids(hub: HubDatabase) -> list[str]:
 def run_filed_workflow_ids(hub: HubDatabase) -> list[str]:
     """Every workflow whose own runs file on it, sorted.
 
-    Each live manual workflow, and each automatic one the owner saved over
-    (rule 5 of #1846): what it runs is the graph they saved, which need not
+    Each live manual workflow, and each automatic one the owner saved over:
+    what it runs is the graph they saved, which need not
     reduce to any variant the workflow holds (a checkpoint replaced by one of
     another family computes another workflow's id), so its runs are filed by
     ``picture.run_workflow_id`` as a manual workflow's are. What the vault's
@@ -445,7 +445,7 @@ def is_run_filed_workflow(hub: HubDatabase, workflow_id: str) -> bool:
 
 
 def adopted_file_variants(hub: HubDatabase) -> set[str]:
-    """Every variant whose files were ALL made live manual workflows (#1720).
+    """Every variant whose files were ALL made live manual workflows.
 
     Hub data step 7 leaves the ``workflow_file`` rows it adopts in place, so
     such a variant still reads as an automatic workflow beside the manual one
@@ -690,7 +690,7 @@ def asset_names(
     that needs the loader matches by reference instead: the stored document
     carries each file as ``asset_reference(filename)`` in the node it was wired
     into. The grid does so only for a card with a model widget on two loaders
-    (``workflow_card_service._wired_names``, #1691), since reducing every
+    (``workflow_card_service._wired_names``), since reducing every
     card's document would roughly double its cost. Nothing pairs a *recipe*
     LoRA to its slot: the card summarises every variant's recipe LoRAs as one
     list.
@@ -900,9 +900,9 @@ class Workflow:
     """One workflow as the hub knows it, before any picture has been counted.
 
     ``base_topology`` is the graph a run starts from and an export writes: a
-    topology with kept pictures in this library before one without (#1738),
+    topology with kept pictures in this library before one without,
     then the most stage groups, then the most LoRA loaders, then the most kept
-    pictures (#1620 D3). Automatic, with no owner control. Picture counts
+    pictures. Automatic, with no owner control. Picture counts
     belong to the vault, so the base is per library, and without them both
     picture keys are skipped and the topology hash decides, which keeps a
     hub-only answer stable.

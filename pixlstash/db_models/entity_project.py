@@ -1,11 +1,10 @@
 """Many-to-many membership links between projects and the entities they scope.
 
-Issue #125 makes a character or a picture set reachable from **several** projects
-at once. The change is deliberately *additive*: the scalar
-``Character.project_id`` / ``PictureSet.project_id`` foreign keys stay exactly as
-they were and keep pointing at the entity's **primary** project (the lowest member
-project id, or ``NULL`` when the entity belongs to no project), while these two
-join tables carry the full membership set.
+A character or a picture set can be reachable from **several** projects at
+once. The scalar ``Character.project_id`` / ``PictureSet.project_id`` foreign
+keys point at the entity's **primary** project (the lowest member project id, or
+``NULL`` when the entity belongs to no project), while these two join tables
+carry the full membership set.
 
 **The contract is "write both, read the join".** Every write path goes through
 :mod:`pixlstash.services.project_membership_service`
@@ -13,9 +12,8 @@ join tables carry the full membership set.
 rows *and* re-derives the scalar pointer in one place. Every *read* that asks
 "is this entity in project P?" must use the predicates below rather than comparing
 the scalar column, because the scalar only ever names one of possibly many
-projects. Comparing the FK is now a bug: it silently hides an entity's secondary
-projects, and - in the authorization helpers - under-grants (or, once the FK is
-eventually dropped post-1.12, breaks outright).
+projects. Comparing the FK is a bug: it silently hides an entity's secondary
+projects, and - in the authorization helpers - under-grants.
 
 The FK removal is explicitly out of scope here; a later cleanup release retires it
 once no reader depends on it.
@@ -97,7 +95,7 @@ def character_in_project(project_id: int):
     """SQL predicate: the correlated ``Character`` row belongs to ``project_id``.
 
     Use in any query whose FROM already contains ``Character`` (directly or via a
-    join). Replaces the pre-#125 ``Character.project_id == project_id``, which now
+    join). Use instead of ``Character.project_id == project_id``, which
     only matches the character's *primary* project.
 
     Args:
@@ -117,7 +115,7 @@ def character_in_project(project_id: int):
 def character_in_no_project():
     """SQL predicate: the correlated ``Character`` row belongs to no project.
 
-    Replaces ``Character.project_id.is_(None)``.
+    Use instead of ``Character.project_id.is_(None)``.
 
     Returns:
         A correlated ``NOT EXISTS`` boolean expression.

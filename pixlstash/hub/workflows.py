@@ -3,9 +3,9 @@
 Thin by design. Everything interesting about a workflow's identity happens in
 :mod:`pixlstash.services.workflow_hash`; this module only puts the answer
 somewhere it outlives the pictures it came from, which is the whole point of
-the library plan (§2: today the executable graph lives in exactly one place,
-the image file, so every cleanup feature destroys workflow knowledge as a side
-effect of reclaiming space).
+the library plan (§2: otherwise the executable graph lives in exactly one
+place, the image file, so every cleanup feature destroys workflow knowledge as a
+side effect of reclaiming space).
 
 Writes are **idempotent and content-addressed**. The same graph seen in a
 thousand images inserts three rows once and then does nothing, which is what
@@ -289,8 +289,7 @@ def assets_for_recipe(hub: HubDatabase, structural_hash: str) -> list[sqlite3.Ro
     a delete here, and the stored document keeps working with its references
     unresolved.
 
-    **No production caller** - it had none before #1410 either, so this is not
-    that retirement's doing - but ``tests/test_workflow_library.py`` exercises
+    **No production caller**, but ``tests/test_workflow_library.py`` exercises
     it directly, so it is covered behaviour rather than dead code. Delete the
     test with it if it goes.
     """
@@ -311,7 +310,7 @@ def forget_asset_names(hub: HubDatabase, normalized_filename: str) -> int:
 
     **This reaches what the hub recorded, and nothing on disk.** A card whose
     whole content is a stored workflow FILE reads its model names out of that
-    file every time it is drawn (#1466), so a name forgotten here is still
+    file every time it is drawn, so a name forgotten here is still
     readable there -- as it is in the file itself, which the owner put in
     their own folder. Forgetting is about what PixlStash wrote down about
     other people's pictures, not about deleting the owner's own workflow.
@@ -607,12 +606,11 @@ def recipes_missing_a_model(hub: HubDatabase, structural_hashes: list[str]) -> s
     picture*, and an unjudgeable name answers "we do not know", which on a
     destructive action has to fail toward keeping the picture.
 
-    ``.gguf`` moved from the first list to the second when the scan started
-    catalogueing it, and the move is safe on both screens: a GGUF the shelf
-    holds stops counting as missing here, because the model really is there;
-    one it does not hold is a ghost like any other unscanned file, which is
-    the state a ``.safetensors`` in an unregistered folder has always been in,
-    with the same remedy — scan the folder.
+    ``.gguf`` is catalogued by the scan, which is safe on both screens: a
+    GGUF the shelf holds does not count as missing here, because the model
+    really is there; one it does not hold is a ghost like any other unscanned
+    file, as a ``.safetensors`` in an unregistered folder is, with the same
+    remedy — scan the folder.
 
     One blind spot stays, and it is the ghost screen's: ``_model_ghost_names``
     suspends digest judgement entirely while any shelf model still has a NULL
@@ -660,9 +658,9 @@ def assets_for_topology_recipes(
     """Every recipe's asset names under one topology, keyed by recipe.
 
     One query, not one per recipe. The row this whole shape exists for holds
-    159 variants, and calling :func:`assets_for_recipe` in a loop over it is the
-    161-query expand that :func:`assets_by_topology` was written to avoid on the
-    list beside it.
+    159 variants, and calling :func:`assets_for_recipe` in a loop over it is a
+    161-query expand, which :func:`assets_by_topology` avoids on the list
+    beside it.
     """
     rows = hub.fetchall(
         "SELECT a.structural_hash, a.widget_name, a.normalized_filename "
@@ -869,7 +867,7 @@ def picture_ghosts_by_variant(hub: HubDatabase, library_uuid: str) -> dict[str, 
     """The same ghosts counted per VARIANT, for the Workflows grid's filter.
 
     A card is a set of variants inside a topology, and a topology can carry
-    several cards - so counting per topology, as the retired shelf's row did,
+    several cards - so counting per topology
     would tell every card of that topology it keeps a ghost its neighbour
     holds. The ghost row already names the structural hash, so summing a card's
     own variants attributes each ghost to exactly one card, at the same one

@@ -4,7 +4,7 @@
 layout engine moves a file; the reference-folder scan walks the same tree a few
 minutes later, sees the file at a new path, and - correctly, for a move the
 owner made in their file manager - reads it as intent. Without a record saying
-*that one was ours*, v1.11 Phase 5 reconciles our own write back into an
+*that one was ours*, move reconciliation turns our own write back into an
 assignment change, which makes the folder untrue again, which moves the file
 again. The two flip each other forever, and every flip is a real file on a real
 disk.

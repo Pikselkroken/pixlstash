@@ -29,8 +29,8 @@ class DeletedFileLog(SQLModel, table=True):
             but the file was deliberately kept on disk (a protected reference-folder
             picture, ``allow_delete_file=False``): the row exists only to stop the
             scanner auto re-importing that path, and restore must NOT treat it as a
-            permanent deletion. Existing rows predate this distinction and default
-            to ``True`` so the never-resurrect guarantee is preserved for them.
+            permanent deletion. Defaults to ``True`` so the never-resurrect
+            guarantee holds for any row that does not say otherwise.
     """
 
     __tablename__ = "deleted_file_log"

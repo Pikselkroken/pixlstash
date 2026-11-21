@@ -1,12 +1,10 @@
 """The queue of file moves PixlStash did not make itself, waiting to be reconciled.
 
-v1.11 Phase 5 (``docs/plans/v1.11.0-existing-library.md`` §4), the mirror of
-Phase 4b's move engine: PixlStash moves a file when an assignment change makes
-its folder stop being true; when the *owner* moves a file, PixlStash
-reconsiders the assignment instead. ``ReferenceFolderScanTask`` writes one row
-here per picture it found moved that the move journal (``PictureMove``) did not
-claim as PixlStash's own - see ``docs/backend_architecture.md`` §24.4, "The move
-journal, and why it is Phase 4b's job".
+The mirror of the layout move engine: PixlStash moves a file when an assignment
+change makes its folder stop being true; when the *owner* moves a file,
+PixlStash reconsiders the assignment instead. ``ReferenceFolderScanTask`` writes
+one row here per picture it found moved that the move journal (``PictureMove``)
+did not claim as PixlStash's own - see ``docs/backend_architecture.md`` §24.4.
 
 Nothing here is applied automatically. A row is the raw fact only; every read
 in ``move_reconciliation_service`` classifies it live against the picture's

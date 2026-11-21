@@ -268,11 +268,9 @@ def _after_flush_hash_updater(session, flush_context) -> None:
     """Recompute and persist metadata_hash for dirty pictures in the same txn.
 
     Runs on the single writer thread INSIDE the write transaction, so its cost
-    is held against the SQLite write lock: the old shape issued five SELECTs
-    plus one UPDATE per dirty picture, which turned a 64-picture tag batch into
-    ~384 extra statements before the lock could be released (#651). It is now a
-    constant number of statements per flush - the batched hash read plus one
-    executemany UPDATE.
+    is held against the SQLite write lock, so it issues a constant number of
+    statements per flush - the batched hash read plus one executemany UPDATE -
+    rather than a fixed number per dirty picture.
 
     Uses Core SQL UPDATE so the change is committed with the same transaction
     without triggering a second ORM flush cycle.
@@ -313,7 +311,7 @@ def _after_flush_hash_updater(session, flush_context) -> None:
 def _before_flush_layout_tracker(session, flush_context, instances) -> None:
     """Record picture IDs whose project / set / person assignments changed.
 
-    The v1.11 layout engine's trigger (``services/layout_move_service.py``), and
+    The layout engine's trigger (``services/layout_move_service.py``), and
     it is here rather than at the mutation sites because there are far too many
     of those to keep in step: a picture gains a project through the import
     route, the CRUD route, the membership service, a plugin, the ComfyUI
@@ -380,7 +378,7 @@ def _library_has_layout(session) -> bool:
     """Whether any root in this library has a layout, cached per session.
 
     The gate that keeps the stamp free for every library that has not chosen a
-    layout - which, on the day this ships, is all of them. One small indexed
+    layout. One small indexed
     read per task that touched an assignment, not per flush and not per row.
     """
     cached = session.info.get("_library_has_layout")
@@ -476,7 +474,7 @@ def _after_flush_smart_score_reset(session, flush_context) -> None:
 def _attach_session_hooks(session: Session) -> None:
     """Attach per-session before_flush / after_flush event listeners.
 
-    Three pairs: the metadata-hash hooks, the v1.11 layout tracker, and the
+    Three pairs: the metadata-hash hooks, the layout tracker, and the
     face-box tracker. The writer thread runs every task inside a session with
     these listeners, so any picture mutation (or tag/face mutation that affects
     a picture) refreshes the ``metadata_hash`` column in the same transaction,
@@ -939,7 +937,7 @@ def create_configured_engine(
     **This is the only supported way to build a SQLite engine in PixlStash.**
     The busy timeout (``connect_args``) and the PRAGMAs (the ``connect``
     listener) are one configuration in two halves; a bare ``create_engine``
-    call gets neither, and that drift has been a real bug twice (#651, #709).
+    call gets neither.
     Anything other than the defaults is a deliberate deviation and must be
     justified where it is requested.
 

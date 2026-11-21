@@ -127,11 +127,9 @@ class VramBudget:
         """Set the device-memory budget in gigabytes.
 
         No-ops (sets unlimited) on the CPU, which has no device memory to run
-        out of. Every accelerator gets a budget - this used to read
-        ``!= "cuda"``, so on Apple Silicon the budget was discarded, every
-        ``limited_batch_cap`` answered 10,000, and batch sizing fell back to a
-        hardcoded constant on the one memory model where a constant is least
-        defensible.
+        out of. Every accelerator gets a budget, Apple Silicon included, so
+        ``limited_batch_cap`` sizes batches there instead of a hardcoded
+        constant.
 
         On unified memory an *unconfigured* budget is not the same as no
         budget. Left alone, torch's MPS allocator will hand out up to 1.7x
@@ -211,8 +209,7 @@ class VramBudget:
         """CUDAExecutionProvider options for one ONNX Runtime session.
 
         ORT's default arena doubles on every growth (``kNextPowerOfTwo``) and
-        never shrinks, which is where the "20+ GB" arenas came from and why
-        the finders used to tear sessions down on every drain.
+        never shrinks, so an arena can reach 20+ GB.
         ``kSameAsRequested`` grows by what was asked for, and ``HEURISTIC``
         skips the EXHAUSTIVE cudnn search that cost seconds per reload for an
         input size that never changes. The limit is ``share`` of the budget
@@ -261,8 +258,7 @@ class VramBudget:
         ``limited_batch_cap`` is calibrated for; the resulting batch is then
         costed against the **arena** pair, because ``gpu_mem_limit`` governs
         only the CUDA EP's allocator. Sizing with one and capping with the
-        other is the whole point - and using the process pair for both is what
-        made this overshoot.
+        other is the whole point.
 
         The batch is clamped to :data:`MAX_CONCURRENT_GPU_IMAGES`, the most
         the workflow ever runs at once, so a large budget does not inflate the

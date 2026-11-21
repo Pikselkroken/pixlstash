@@ -1,4 +1,4 @@
-"""Cards: which workflow a stored variant belongs to (v1.12 B2).
+"""Cards: which workflow a stored variant belongs to (B2).
 
 :mod:`pixlstash.hub.workflows` files a graph's identity; this module derives the
 **card** from what is already filed and stores it.
@@ -135,7 +135,7 @@ def auto_workflow_id(core: str, families: str) -> str:
 def variant_workflow_id(kept: Optional[str], core: str, families: str) -> str:
     """The automatic workflow a variant is in: the one keeping it, else the rule's.
 
-    The one place this precedence lives (rule 5 of #1846, #1849). *kept* is
+    The one place this precedence lives. *kept* is
     the variant's ``workflow_kept_variant`` row, if it has one: an automatic
     workflow the owner saved over is never retired, so a variant it held when
     a new core rule or a re-identified family would have moved it stays in
@@ -191,7 +191,7 @@ def variant_families(
     known agrees on one set, that set holds every family this variant's own
     loaders did resolve, and none of them loads a model of unknown family. A shelf loader filed before its id was kept,
     or left blank, is the same graph as its siblings with the value
-    missing, and a workflow of its own named "Text to Image" was the cost
+    missing, and a workflow of its own named "Text to Image" would be the cost
     of reading it as a family nobody else has.
 
     ponytail: the sibling set is read when the variant is derived, so the
@@ -591,7 +591,7 @@ def revive_workflows(conn: sqlite3.Connection, structural_hashes: list[str]) -> 
 
 
 def loader_swaps_of(fetchall, swapped_topology_hash: str) -> list[LoaderSwap]:
-    """The loader swaps recorded for graphs of this topology (#1605).
+    """The loader swaps recorded for graphs of this topology.
 
     *fetchall* is ``hub.fetchall`` or a connection's equivalent, so the read
     can sit inside a caller's transaction.

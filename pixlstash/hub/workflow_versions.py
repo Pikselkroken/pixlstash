@@ -12,7 +12,7 @@ made with; the card's current graph is its highest version.
 
 **``workflow_document`` holds a copy of the highest version** (``document`` and
 ``api_document``), written in the same transaction as the version row. Every
-reader of a manual workflow's graph reads that row, as it always did, and an
+reader of a manual workflow's graph reads that row, and an
 older build sharing the hub still reads the current graph. Only this module
 writes a later version, so the copy cannot drift from it.
 
@@ -170,8 +170,8 @@ def append_version(
     joined with a comma), ``run`` for a save of what a run changed,
     ``comfyui`` and ``mcp`` for a whole graph saved over the workflow,
     ``revert:<n>`` for going back to version *n*, ``chain`` for a LoRA
-    chain edit, and :data:`FROM_RELEASE` for a built-in a release changed. (``pull`` on a stored row is a ComfyUI file the removed pull
-    read.)
+    chain edit, and :data:`FROM_RELEASE` for a built-in a release changed.
+    (``pull`` on a stored row is a legacy pull of a ComfyUI file.)
 
     *api_document* is the stored conversion of *document*, kept when an
     earlier version is made current again; a new graph has none.
@@ -493,13 +493,12 @@ def version_at(hub: HubDatabase, workflow_id: str, when: datetime) -> Optional[i
     """The version of *workflow_id* that was current at *when*, or ``None``
     when that is the version it has now (or it has none).
 
-    What a saved recipe runs on: the graph it was saved from (rule 8 of
-    #1846). The newest kept version stored at or before *when*; a workflow
-    saved over for the first time since then answers its oldest kept version,
-    which for an automatic one is the graph read off its pictures. A version
-    since pruned (a workflow keeps version 1 and the newest 49 of each kind,
-    and the saves of one opening in ComfyUI as one) answers the nearest kept
-    one before it. A naive *when* is read as UTC.
+    What a saved recipe runs on: the graph it was saved from. The newest kept version
+    stored at or before *when*; a workflow saved over for the first time since then
+    answers its oldest kept version, which for an automatic one is the graph read off
+    its pictures. A version since pruned (a workflow keeps version 1 and the newest 49
+    of each kind, and the saves of one opening in ComfyUI as one) answers the nearest
+    kept one before it. A naive *when* is read as UTC.
     """
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
@@ -533,7 +532,7 @@ def version_at(hub: HubDatabase, workflow_id: str, when: datetime) -> Optional[i
 
 def saved_over_ids(hub: HubDatabase) -> set[str]:
     """Every automatic workflow the owner has saved over: an ``auto:`` id with
-    a version. Such a workflow keeps its id (rule 5 of #1846) and its runs
+    a version. Such a workflow keeps its id and its runs
     file on it, as a manual workflow's do."""
     return {
         row[0]

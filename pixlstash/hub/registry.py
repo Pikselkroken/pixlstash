@@ -446,7 +446,7 @@ def _fingerprints_match(recorded: Optional[str], observed: Optional[str]) -> boo
 
     Both absent means neither the row nor the folder carries a fingerprint (a
     library from before this existed), and path is the only evidence available,
-    so the previous behaviour stands. One absent and one present means the
+    so a path match is enough. One absent and one present means the
     folder changed in a way we cannot vouch for, and a mismatch is decisive.
     """
     if recorded is None and observed is None:
@@ -566,15 +566,14 @@ class LibraryRegistry:
 
         ``library.uuid`` and ``library.path`` carry unique indexes; ``name`` does
         not, so the ``sqlite3.IntegrityError`` that :meth:`rename` and
-        :meth:`_register` catch can never fire for a name and both documented
-        their ``LibraryExistsError`` for one anyway. Two libraries sharing a name
+        :meth:`_register` catch can never fire for a name. Two libraries sharing a name
         is not cosmetic: :meth:`get` refuses a name that matches more than one
         row, so every CLI verb that takes a name stops working for both of them
         the moment the second is registered.
 
         Checked here rather than at each caller so the GUI and the CLI refuse
-        alike, and left as a check rather than a new unique index because a hub
-        written before this could already hold a duplicate, and a migration that
+        alike, and left as a check rather than a new unique index because an
+        existing hub could already hold a duplicate, and a migration that
         cannot build its index fails a startup instead of a rename.
 
         Args:
@@ -622,7 +621,7 @@ class LibraryRegistry:
 
     def refuse_overlapping_watch_or_reference_folder(self, folder: str) -> None:
         """Refuse *folder* when it equals, sits inside or contains a watch or
-        reference folder of any registered library, detached included (#1223).
+        reference folder of any registered library, detached included.
 
         A watch folder imports everything below it and a reference folder scans
         it, so a library there would have its pictures imported, or deleted
@@ -848,10 +847,7 @@ class LibraryRegistry:
         migration state. The owner recheck, optional registry insertion, and
         operation insertion are one serialization point across CLI and server
         processes, because :meth:`~pixlstash.hub.db.HubDatabase.transaction`
-        opens with ``BEGIN IMMEDIATE``. This method used to issue that itself,
-        which was correct and is now redundant: the guarantee moved into
-        ``transaction()`` so that every caller gets it rather than the three
-        that remembered to ask.
+        opens with ``BEGIN IMMEDIATE``.
         """
         cleaned = name.strip() or os.path.basename(resolved_path)
         fingerprint = read_vault_uuid(resolved_path)

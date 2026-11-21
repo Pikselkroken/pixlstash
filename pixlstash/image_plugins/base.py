@@ -134,10 +134,10 @@ class ImagePlugin(ABC):
         parameter is omitted). Optional keys: ``description`` (str, help text).
 
         **A dropdown is ``"string"`` plus an ``enum`` list**, optionally with an
-        ``enumLabels`` map from value to display text. This docstring used to
-        describe a ``"select"`` type with an ``"options"`` key; no such branch
-        exists in ``PluginParametersUI.vue``, so a field declared that way
-        renders as a free-text input. Every built-in uses ``string`` + ``enum``.
+        ``enumLabels`` map from value to display text. There is no
+        ``"select"`` type with an ``"options"`` key: no such branch exists in
+        ``PluginParametersUI.vue``, so a field declared that way renders as a
+        free-text input. Every built-in uses ``string`` + ``enum``.
         (Tagger plugins are a different schema and *do* have a real ``select``.)
 
         Returns:
@@ -187,14 +187,11 @@ class ImagePlugin(ABC):
     ) -> Callable[[list[int]], list[int]] | None:
         """Return a function that maps a bbox from source to output image space.
 
-        **Currently unused. Overriding it has no effect.** Its only caller was
-        the face-copy step in ``service.py``, which copied a source picture's
-        face rows onto plugin outputs. That was removed: outputs now get
+        **Currently unused. Overriding it has no effect.** Plugin outputs get
         ``source_picture_id`` and nothing else, so ``MissingFaceExtractionFinder``
         detects their real faces and ``SourceFaceLikenessTask`` inherits a
-        character only where the faces actually match. Copying a box through a
-        transform assumed the output still contains the face, and a wrong
-        assumption there wrote boxes that captured nothing.
+        character only where the faces actually match; no face box is copied
+        through a transform.
 
         Kept because the contract is still the right one if bbox mapping is ever
         needed again (a crop preview, say), and because plugins outside this repo

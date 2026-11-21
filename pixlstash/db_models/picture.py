@@ -1667,34 +1667,24 @@ class Picture(SQLModel, table=True):
         ``stack_position == 0`` member. That is right only for an unnarrowed
         grid: any predicate that can hide that member - a project, an id list, a
         folder, a face facet - drops the whole stack from a grid whose own
-        pictures are right there. The owner reported it as a set showing 5 tiles
-        for its 6 members and no stack at all (#670/#1746).
+        pictures are right there.
 
         The rule is one sentence: **represent each stack by its best-ranked
         member that is itself in scope.** This is the single implementation of
-        it. Before this there were three - the id-list branch here, the
-        project branch here, and a fourth written for `find_unassigned` - and
-        only the first had been made fast.
+        it.
 
         **The shape is the measured one, not the obvious one.** Comparing each
         candidate row against an aliased sibling re-evaluates the scope for
-        every member of every stack: on a 19,822-picture vault a 6,641-id set
-        view spent 102 ms on the COUNT(*) every grid load runs (4.6 ms for the
-        unscoped fast path), and seconds once most rows in scope were stacked.
-        Ranking is the same operation for every member of a stack, so it belongs
-        in one pass: the derived table below resolves it once, SQLite
-        materialises it and probes through an automatic index, and the same set
-        view costs 9.7 ms for an identical id set. Do not "simplify" this back
-        into a correlated sibling EXISTS.
+        every member of every stack, roughly ten times the cost on a large set
+        view and seconds once most rows in scope are stacked. Ranking is the
+        same operation for every member of a stack, so it belongs in one pass:
+        the derived table below resolves it once, and SQLite materialises it
+        and probes through an automatic index. Do not "simplify" this back into
+        a correlated sibling EXISTS.
 
-        Re-measured when the folder and face scopes were added, on a
-        20,000-picture vault with half its rows stacked across two folders:
-        unscoped fast path **2.0 ms**, folder-scoped through this filter
-        **9.1 ms**, folder-scoped on the unassigned view **13.8 ms**. The
-        previous behaviour for a folder scope was the 2.0 ms fast path and it
-        was wrong - it dropped every stack whose cover sat in another folder -
-        so the ~7 ms is the price of the grid agreeing with itself, not a
-        regression against a correct baseline.
+        A folder scope through this filter costs a few ms over the unscoped fast
+        path (about 9 ms against 2 ms on a 20,000-picture vault); that is the
+        price of the grid agreeing with itself.
 
         Args:
             scope_predicates: The narrowing clauses, against ``Picture`` itself.
@@ -1774,7 +1764,7 @@ class Picture(SQLModel, table=True):
         so all pictures in that stack are excluded from unassigned queries.
 
         When assignment project scope is provided, assignment is evaluated only
-        against characters/sets in that same project scope. Since issue #125 a
+        against characters/sets in that same project scope. A
         character or set may belong to several projects, so the scope predicates
         read the membership join tables rather than the primary-project FK.
         """
