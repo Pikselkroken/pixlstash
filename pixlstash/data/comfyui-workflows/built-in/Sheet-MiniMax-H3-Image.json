@@ -53,30 +53,28 @@
   },
   "9": {
     "inputs": {
-      "model": [
-        "3",
+      "noise": [
+        "12",
         0
       ],
-      "positive": [
-        "6",
+      "guider": [
+        "13",
         0
       ],
-      "negative": [
-        "7",
+      "sampler": [
+        "14",
+        0
+      ],
+      "sigmas": [
+        "15",
         0
       ],
       "latent_image": [
         "8",
         0
-      ],
-      "seed": 1,
-      "steps": 6,
-      "cfg": 1.0,
-      "sampler_name": "euler",
-      "scheduler": "simple",
-      "denoise": 1.0
+      ]
     },
-    "class_type": "KSampler"
+    "class_type": "SamplerCustomAdvanced"
   },
   "10": {
     "inputs": {
@@ -100,5 +98,49 @@
       "filename_prefix": "Sheet-MiniMaxH3Image"
     },
     "class_type": "SaveImage"
+  },
+  "12": {
+    "inputs": {
+      "noise_seed": 1
+    },
+    "class_type": "RandomNoise"
+  },
+  "13": {
+    "inputs": {
+      "model": [
+        "3",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "cfg": 1.0
+    },
+    "class_type": "CFGGuider"
+  },
+  "14": {
+    "inputs": {
+      "s_noise": 1.1,
+      "s_noise_end": 0.9,
+      "noise_clip_std": 0.0
+    },
+    "class_type": "SamplerLCM"
+  },
+  "15": {
+    "inputs": {
+      "model": [
+        "3",
+        0
+      ],
+      "scheduler": "simple",
+      "steps": 6,
+      "denoise": 1.0
+    },
+    "class_type": "BasicScheduler"
   }
 }

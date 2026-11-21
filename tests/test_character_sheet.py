@@ -17,6 +17,7 @@ from pixlstash.server import Server
 from pixlstash.event_types import EventType
 from pixlstash.routes.comfyui import WORKFLOW_BUILTIN_DIR
 from pixlstash.services import character_sheet, comfyui_service, scrapheap_service
+from pixlstash.services.comfyui_recipe_service import plan_lora_insertion
 from pixlstash.services.workflow_hash import reduce_api_graph
 from pixlstash.services.workflow_identity import (
     SHEET_LAYOUT_ENCODER,
@@ -24,6 +25,7 @@ from pixlstash.services.workflow_identity import (
     reference_input_count,
 )
 from pixlstash.services.workflow_io import detect_workflow_io
+from pixlstash.services.workflow_run_service import run_seed_targets
 from pixlstash.utils.insightface_model_utils import DEFAULT_MODEL_PACK
 from pixlstash.services.character_sheet import (
     SHEET_HEIGHT,
@@ -456,6 +458,54 @@ def test_the_shipped_sheet_workflows_draw_at_the_sheet_size(name, references):
         if "width" in node["inputs"]
     }
     assert sizes == {(SHEET_WIDTH, SHEET_HEIGHT)}
+
+
+# The outputs of every class the H3 Image sheets use, as ComfyUI declares them:
+# what the LoRA splice types its links by.
+_H3_IMAGE_OUTPUTS = {
+    "LoadImage": ["IMAGE", "MASK"],
+    "UNETLoader": ["MODEL"],
+    "PixlStashCLIPLoader": ["CLIP"],
+    "PixlStashVAELoader": ["VAE"],
+    "MiniMaxH3ImageConditioning": ["CONDITIONING", "LATENT"],
+    "ConditioningZeroOut": ["CONDITIONING"],
+    "EmptyLatentImage": ["LATENT"],
+    "RandomNoise": ["NOISE"],
+    "CFGGuider": ["GUIDER"],
+    "SamplerLCM": ["SAMPLER"],
+    "BasicScheduler": ["SIGMAS"],
+    "SamplerCustomAdvanced": ["LATENT", "LATENT"],
+    "VAEDecode": ["IMAGE"],
+    "SaveImage": [],
+}
+
+
+@pytest.mark.parametrize(
+    "name", ["Sheet-MiniMax-H3-Image.json", "Sheet-MiniMax-H3-Image-Reference.json"]
+)
+def test_the_h3_image_sheets_draw_with_lcm_and_a_run_still_reaches_them(name):
+    """euler at 6 steps draws H3 Image faces crunchy; SamplerLCM with its
+    noise easing from 1.1 to 0.9 draws them clean. A run must still find the
+    seed (now RandomNoise's) and splice a LoRA into both readers of the model."""
+    graph = json.loads((pathlib.Path(WORKFLOW_BUILTIN_DIR) / name).read_text())
+    by_class = {node["class_type"]: node["inputs"] for node in graph.values()}
+    assert by_class["SamplerLCM"] == {
+        "s_noise": 1.1,
+        "s_noise_end": 0.9,
+        "noise_clip_std": 0.0,
+    }
+    assert "KSampler" not in by_class
+    assert by_class["CFGGuider"]["cfg"] == 1.0
+    assert by_class["BasicScheduler"]["steps"] == 6
+    assert [(t["class_type"], t["field"]) for t in run_seed_targets(graph, None)] == [
+        ("RandomNoise", "noise_seed")
+    ]
+    info = {cls: {"output": out} for cls, out in _H3_IMAGE_OUTPUTS.items()}
+    rewired = {
+        (r["class_type"], r["field"])
+        for r in plan_lora_insertion(graph, info)["rewires"]
+    }
+    assert {("CFGGuider", "model"), ("BasicScheduler", "model")} <= rewired
 
 
 @pytest.mark.parametrize(
