@@ -6149,6 +6149,31 @@ def test_built_ins_are_listed_once_and_a_removed_one_stays_off(
     assert relisted == []
 
 
+def test_a_blank_picture_size_is_not_a_size_the_sheet_step_sets(
+    workflow_env, tmp_path, monkeypatch
+):
+    """The H3 Image text sheet hands its conditioning a 512×512 blank picture.
+    The sheet step sets every width and height default to the sheet's size, so
+    wrong if the blank's 512 is offered: it would be drawn at 5280×3168."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    builtin = comfyui_module.WORKFLOW_BUILTIN_DIR
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", builtin)],
+    )
+    owner = workflow_env.owner
+    r = owner.post(f"{API}/comfyui/workflows/Sheet-MiniMax-H3-Image.json/card")
+    assert r.status_code == 200, r.text
+    sizes = {
+        (row["input_name"], row["value"])
+        for row in _detail(owner, r.json()["workflow_id"])["card"]["defaults"]
+        if row["input_name"] in ("width", "height")
+    }
+    # The canvas and the conditioning, both the sheet's size.
+    assert sizes == {("width", 2560), ("height", 1536)}
+
+
 def test_an_unreadable_built_in_is_skipped_and_the_rest_still_listed(
     workflow_env, tmp_path, monkeypatch
 ):

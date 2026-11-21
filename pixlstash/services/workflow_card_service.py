@@ -113,6 +113,7 @@ from pixlstash.services.comfyui_ui_graph import convert_ui_graph_to_api
 from pixlstash.services.model_downloads import digest_source
 from pixlstash.services.workflow_io import api_graph, with_converted_graph
 from pixlstash.services.workflow_parameters import (
+    BLANK_PICTURE_CLASSES,
     FEATURED_NAMES,
     FEATURED_ORDER,
     linked_size,
@@ -1752,6 +1753,8 @@ def workflow_defaults(
                     resolved = linked_size(document, value)
                     if resolved is not None:
                         value = resolved
+                elif node.get("class_type") in BLANK_PICTURE_CLASSES:
+                    continue
                 # The scalar check also rejects a wired input (a link list).
                 if name in FEATURED_NAMES and isinstance(
                     value, (bool, int, float, str)
