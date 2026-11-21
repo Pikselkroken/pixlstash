@@ -6,9 +6,9 @@ never sees it. Without an explicit check in the route, a link minted for library
 A and opened while library B is active would serve **B's** picture carrying the
 same numeric id: a recipient sees content from a library they were never shown.
 
-Found by adversarial review 2026-08-02, on the one route the gate does not cover.
-The check is tested here at the function it lives in rather than through HTTP,
-so a routing change cannot quietly turn the assertion into a tautology.
+This is the one route the gate does not cover. The check is tested here at the function
+it lives in rather than through HTTP, so a routing change cannot quietly turn the
+assertion into a tautology.
 """
 
 from types import SimpleNamespace

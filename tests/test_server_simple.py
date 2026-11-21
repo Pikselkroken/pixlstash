@@ -1,11 +1,10 @@
 """Server REST endpoint tests that do **not** exercise async workers.
 
-These tests previously each created their own ``Server`` instance inside a
-``tempfile.TemporaryDirectory``, paying ~2-3 s of startup overhead per test.
-The tests in this module are pure REST checks (no image upload through the
-worker pipeline, no `wait_for_faces`/`get_worker_future`/etc.), so it is safe
-to share a single ``Server`` for the whole module and just wipe the domain
-tables / image-root contents between tests.
+A ``Server`` costs ~2-3 s of startup overhead. The tests in this module are pure REST
+checks (no image upload through the worker pipeline, no
+`wait_for_faces`/`get_worker_future`/etc.), so it is safe to share a single ``Server``
+for the whole module and just wipe the domain tables / image-root contents between
+tests.
 
 Worker-heavy tests still live in :mod:`tests.test_server`.
 """
@@ -544,14 +543,9 @@ def _seed_scrapheap_mixed(server, client, tmp_path):
 
     Each picture gets its OWN directory. ``_make_reference_folder_picture``
     creates a fresh ``ReferenceFolder`` row per call, so pointing two calls at
-    one directory registered that directory TWICE - a state the API rejects with
-    409, and one that made the background reference-folder scanner treat each
-    folder's file as an unindexed file of the other and re-import it. The
-    re-imported row then recycled the rowid SQLite had just freed by purging,
-    so the post-purge assertions intermittently read a different picture. That
-    is the root cause of this module's historical scrapheap flake; keeping the
-    directories disjoint fixes it at the source rather than by suppressing the
-    scanner.
+    one directory would register that directory TWICE - a state the API rejects
+    with 409, and one that makes the background reference-folder scanner
+    re-import each folder's file into the rowid SQLite just freed by purging.
 
     Returns (protected_ids, protected_paths, unprotected_id, unprotected_path).
     """
@@ -788,17 +782,16 @@ def test_missing_file_purge_upgrades_kept_flag_to_removed(server, tmp_path):
 def test_scrapheap_delete_forever_upgrades_stale_kept_flag(server, tmp_path):
     """The scrapheap delete-forever writer upgrades a stale kept row.
 
-    A legacy file_removed=False ledger row (a removed-but-kept picture recorded
-    before the rev-4 delete-forever behaviour change, or a missing-file-kept
-    state) that is later hit by an explicit delete-forever of the SAME path must
-    have its existing row UPGRADED to file_removed=True instead of a duplicate
-    being inserted - still exactly one row. (Under rev-4 the scrapheap writer
-    itself only ever writes True, so the False row is seeded to represent a
-    pre-existing kept entry.)
+    A legacy file_removed=False ledger row (a removed-but-kept picture, or a
+    missing-file-kept state) that is later hit by an explicit delete-forever of
+    the SAME path must have its existing row UPGRADED to file_removed=True
+    instead of a duplicate being inserted - still exactly one row. (The
+    scrapheap writer itself only ever writes True, so the False row is seeded
+    to represent a pre-existing kept entry.)
 
     **The picture is a reference-folder original, and that is load-bearing
     rather than incidental.** An absolute ``Picture.file_path`` means a
-    reference-folder picture in this product, and since #776 ``remove_picture_files``
+    reference-folder picture in this product, and ``remove_picture_files``
     refuses to unlink a stored path that resolves OUTSIDE the library roots —
     ``image_root`` plus ``Vault.reference_folder_roots()``. A picture invented at
     a bare ``tmp_path`` therefore has its removal refused, its ledger row
@@ -848,8 +841,8 @@ def test_scrapheap_delete_forever_upgrades_stale_kept_flag(server, tmp_path):
 def test_scrapheap_count_matches_grid(server):
     """The scrapheap badge count must equal the scrapheap grid length.
 
-    Regression for the '72 deleted, empty grid' bug: count_scrapheap and
-    Picture.find(only_deleted=True) must apply the same filters and agree.
+    count_scrapheap and Picture.find(only_deleted=True) must apply the same filters and
+    agree.
     """
     server.vault.import_default_data()
     client = TestClient(server.api)

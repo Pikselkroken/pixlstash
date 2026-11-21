@@ -270,7 +270,7 @@ def test_run_host_process_returns_output_and_reports_a_timeout(tmp_path):
 def test_run_host_process_hides_the_backends_python_path_and_secrets(
     tmp_path, monkeypatch
 ):
-    """The desktop GPU overlay must not shadow the checkout's own torch (#2288)."""
+    """The desktop GPU overlay must not shadow the checkout's own torch."""
     monkeypatch.setenv("PYTHONPATH", str(tmp_path / "overlay"))
     monkeypatch.setenv("PIXLSTASH_DESKTOP_SESSION", "test-session")
     monkeypatch.setenv("CUDA_HOME", "/opt/cuda")

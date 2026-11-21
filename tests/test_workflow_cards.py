@@ -1,4 +1,4 @@
-"""The hub's workflow cards: the tables, the filing hook and the backfill (B2).
+"""The hub's workflow cards: the tables, the filing hook and the backfill.
 
 The graph fixture is the one the identity rules were written against
 (``tests/test_workflow_identity.py``), so a card asserted here and a key
@@ -264,7 +264,7 @@ def test_a_forgotten_model_name_leaves_no_readable_copy(hub):
 def test_a_slot_whose_name_was_forgotten_is_not_guessed_at(hub):
     """A hub upgraded to this build after a name was already forgotten.
 
-    Pre-B2 there are no card rows and no marks at all, which is what the deletes
+    An older hub has no card rows and no marks at all, which is what the deletes
     below stand for; the recipe and its document are what the older build left.
     The positive control is
     :func:`test_a_speed_lora_forks_the_card`, where the same filename IS
@@ -336,7 +336,7 @@ def test_the_backfill_keys_what_was_filed_before_it_and_runs_twice_the_same(hub)
 
 
 def test_a_superseded_key_rule_re_queues_the_variants_it_keyed(hub):
-    """The bump is this PR's answer to a data-version counter, so it is tested.
+    """The key-version bump is the data-version counter, so it is tested.
 
     Stamping an old ``key_version`` on the rows is what a bumped
     ``WORKFLOW_KEY_VERSION`` looks like to every query here: the finder has to
@@ -457,7 +457,7 @@ def test_a_topology_cached_before_the_specials_column_is_re_derived(hub):
 
 
 def test_a_topology_cached_before_the_traits_column_is_re_derived(hub, monkeypatch):
-    """#1722's column fills the way `specials` did: re-queued on NULL, written
+    """The traits column fills the way `specials` does: re-queued on NULL, written
     by the same UPDATE, without re-running the refinement or moving the row's
     stack key."""
     record_api_graph(hub, _graph())
@@ -487,7 +487,7 @@ def test_a_topology_cached_before_the_traits_column_is_re_derived(hub, monkeypat
 
 
 def test_data_step_20_re_reads_a_seedvr2_topology(tmp_path, monkeypatch):
-    """A SeedVR2 graph cached before it was an upscale (#1939) is re-read by
+    """A SeedVR2 graph cached before it was an upscale is re-read by
     the specials pass, type included, and a graph without it is left alone."""
     hub = HubDatabase(str(tmp_path / "hub.db"))
     seedvr2 = record_api_graph(hub, _seedvr2())
@@ -793,12 +793,10 @@ def test_a_file_never_forks_a_card_a_variant_already_holds(hub):
 
 
 def test_a_workflow_file_past_the_cap_is_refused_by_the_loader(tmp_path, monkeypatch):
-    """The size cap lives on the loader, so every caller gets it (#1483).
+    """The size cap lives on the loader, so every caller gets it.
 
-    It guarded one of ten `_load_workflow_json` call sites when it was added -
-    the grid's per-card read - while the sibling that reads the same watched
-    folder on every workflow-list and menu open had none. Asserted on the
-    loader rather than on a route so it holds for all ten.
+    Asserted on the loader rather than on a route so it holds for all ten
+    `_load_workflow_json` call sites.
 
     The cap is monkeypatched rather than written to: a real 32 MB file would
     be a 32 MB write on every run of this suite for one branch.
@@ -885,7 +883,7 @@ def test_a_replaced_model_keeps_the_card_and_its_pictures(hub):
 
 @pytest.mark.parametrize("winner_moved", [True, False])
 def test_a_merge_carries_a_family_move_only_when_every_card_moved(hub, winner_moved):
-    """#1689: a model fix moves every merged card's recipes onto the new key.
+    """A model fix moves every merged card's recipes onto the new key.
 
     Both cards moved out of the workflow: the merged key holds the move, with
     its target. Only the losing one moved: a recipe from the card that stayed
@@ -1034,7 +1032,7 @@ def _with_vae(ckpt, vae):
 
 
 def test_a_replaced_vae_keeps_the_card_and_leaves_a_checkpoint_of_that_name(hub):
-    """#1596: a missing VAE fixed as #1587 fixes a checkpoint, in its own slot.
+    """A missing VAE is fixed as a checkpoint is, in its own slot.
 
     The sibling card loads the missing file as its CHECKPOINT: a VAE fix must
     neither name that slot nor flag that card's pictures.
@@ -1079,7 +1077,7 @@ def test_a_replaced_vae_keeps_the_card_and_leaves_a_checkpoint_of_that_name(hub)
 
 
 def test_a_swapped_in_pixlstash_loader_keeps_the_card(hub):
-    """#1605: a fix run through a PixlStash loader files on the original card.
+    """A fix run through a PixlStash loader files on the original card.
 
     The swapped node changes the topology, and with it every slot label: the
     speed LoRA's structural slot included, which is in the key. The recorded
@@ -1156,7 +1154,7 @@ def test_a_swapped_in_pixlstash_loader_keeps_the_card(hub):
 
 
 def test_an_unswap_matches_exactly_the_files_the_swap_recorded():
-    """#1605: a second encoder, or a second original, keys the graph as itself."""
+    """A second encoder, or a second original, keys the graph as itself."""
     x, z = "11" * 32, "22" * 32
 
     def with_clip(node):
@@ -1297,7 +1295,7 @@ def test_a_vision_encoder_of_a_replaced_text_encoders_name_is_not_flagged(hub):
 
 
 def test_a_hub_made_before_the_slot_kind_reads_its_fixes_as_checkpoints(tmp_path):
-    """A development hub that ran #1587: its fixes were all checkpoints."""
+    """A hub made before the slot kind: its fixes are all checkpoints."""
     path = str(tmp_path / "older.db")
     database = HubDatabase(path)
     with database.transaction() as conn:
@@ -1504,7 +1502,7 @@ def test_one_workflow_spans_the_topologies_its_core_hash_groups(hub):
 
 
 def test_the_base_is_a_topology_this_library_has_pictures_of(hub):
-    """#1738: a pictured topology beats stages and LoRAs nobody here ran."""
+    """A pictured topology beats stages and LoRAs nobody here ran."""
     runs = _four_runs(hub)
     plain = runs[3]
     (entry,) = workflow_index(hub, {plain.structural_hash: 2})
@@ -1571,7 +1569,7 @@ def test_a_latent_sized_by_a_resolution_selector_offers_its_size(
     """The wired width and height read as what the selector works out to.
 
     On an empty latent, or with none in the graph on the image-to-video node
-    that sizes its own (#1833).
+    that sizes its own.
     """
     graph = _graph()
     graph["4"]["class_type"] = sized
@@ -1590,8 +1588,8 @@ def test_a_latent_sized_by_a_resolution_selector_offers_its_size(
 
 
 def test_a_shelf_loader_s_default_model_names_the_file_its_id_names(hub, monkeypatch):
-    """`filename` stays the id a run writes back; `shelf_filename` is the file
-    (#1721), and an id the shelf lost says so rather than being a number."""
+    """`filename` stays the id a run writes back; `shelf_filename` is the
+    file, and an id the shelf lost says so rather than being a number."""
     model_id = _shelf_model(hub, "flux-2-klein-9b.safetensors", "Flux.2", "f" * 64)
     graph = _graph()
     graph["1"] = _node("PixlStashCheckpointLoader", checkpoint_id=str(model_id))
@@ -1853,9 +1851,9 @@ def _dead_branch() -> dict:
 def test_a_manual_default_recipe_leaves_out_a_lora_wired_into_nothing(hub, monkeypatch):
     """A dead loader never runs, so the default recipe must not list its LoRA.
 
-    A clone onto another model kept the old model's leftover branch (a second
-    loader and its LoRA, read by nothing); the LoRA chain ignored it while the
-    default recipe listed it, so Edit LoRAs could not remove what was shown.
+    A clone onto another model can keep the old model's leftover branch (a
+    second loader and its LoRA, read by nothing); the LoRA chain ignores it, so a
+    default recipe listing it would show what Edit LoRAs cannot remove.
     """
     graph = _graph(loras=("x.safetensors",), extra=_dead_branch())
     manual = create_manual_workflow(hub, "Leftover", graph, "clone")
@@ -1905,7 +1903,7 @@ def test_most_runs_without_a_lora_decide_none(hub, monkeypatch):
 
 
 def test_a_swapped_run_votes_for_its_original_loader_s_file(hub, monkeypatch):
-    """#1605 meets #1622: a run through a PixlStash loader is read unswapped."""
+    """A run through a PixlStash loader is read unswapped."""
     missing, now = "test-vae-fp8.safetensors", "test-vae-bf16.safetensors"
 
     def with_vae(vae_node, steps=20):
@@ -2036,10 +2034,10 @@ def test_a_workflow_of_two_checkpoints_combines_only_with_the_same_family_set(hu
 
 
 def test_two_loaders_of_one_widget_are_named_by_their_wiring(hub):
-    """Each checkpoint loader names the file wired into it (#1691).
+    """Each checkpoint loader names the file wired into it.
 
     ``asset_names`` keys by widget, so pairing its sorted filenames to slots
-    named both orderings of the same two files identically. The refine
+    would name both orderings of the same two files identically. The refine
     loader's label is found in the stored document by the reference it holds,
     so a pairing that swapped the two would fail here too.
     """
@@ -2075,7 +2073,7 @@ def test_two_loaders_of_one_widget_are_named_by_their_wiring(hub):
 
 
 def test_a_swapped_in_loader_of_a_repeated_widget_is_named_by_its_fix(hub):
-    """#1605 + #1691: the loader a fix swapped is named by the replacement.
+    """The loader a fix swapped is named by the replacement.
 
     The swapped-in loader filed only the digest it took, so the restored
     loader's reference resolves through the fix, never to the other loader.
@@ -2260,7 +2258,7 @@ def _shelf_loader_graph(model_id, preview: bool = False) -> dict:
 
 
 def test_a_shelf_loader_naming_no_model_joins_its_core_s_one_family(hub):
-    """A blank (or pre-#1416, nulled) shelf id is the same graph with the
+    """A blank (or legacy nulled) shelf id is the same graph with the
     value missing: it joins the workflow its siblings are in, whichever is
     filed first, and never one of two."""
     flux = _shelf_model(hub, "Flux1-Dev-FP8.safetensors", "FLUX.1 dev", "e" * 64)
@@ -2442,7 +2440,7 @@ def _family_pass(finder):
 
 
 def test_a_family_pass_that_retires_ids_tells_the_clients_where_they_went(hub):
-    """`workflows_changed`, reason `regrouped`, with `renamed` {old: new} (#1696)."""
+    """`workflows_changed`, reason `regrouped`, with `renamed` {old: new}."""
     from pixlstash.event_types import EventType
 
     events = []
@@ -2485,7 +2483,7 @@ def test_a_start_with_an_unchanged_shelf_runs_no_family_pass(hub):
 
 
 def test_a_default_on_a_node_the_core_does_not_have_is_left_out(hub, monkeypatch):
-    """A split heir is copied its old workflow's whole label map (#1696), so a
+    """A split heir is copied its old workflow's whole label map, so a
     `core:` default can name a node its own core pruned: never shown or run,
     even with no sampled picture to read the core labels off."""
     keys = _file_run(hub)
@@ -2520,7 +2518,7 @@ def test_a_default_on_a_node_the_core_does_not_have_is_left_out(hub, monkeypatch
 
 
 def test_an_orphan_loader_the_core_pruned_adds_no_family(hub):
-    """Families are read off the core, not the whole document (#1696)."""
+    """Families are read off the core, not the whole document."""
     keys = record_api_graph(
         hub,
         _graph(
@@ -2576,7 +2574,7 @@ def test_stage_details_name_each_kind_and_the_model_only_where_one_loads():
 
 
 def test_the_seedvr2_packs_loaders_are_an_upscaler_and_its_vae(hub):
-    """The pack names both files under a bare `model` widget (#1939): its DiT
+    """The pack names both files under a bare `model` widget: its DiT
     is an upscale model beside a base model, and the base model alone."""
 
     def kinds(slots):
@@ -2614,7 +2612,7 @@ def test_the_seedvr2_packs_loaders_are_an_upscaler_and_its_vae(hub):
 
 def test_a_recovered_lora_the_shelf_does_not_hold_is_drawn_as_an_adapter(hub):
     """A manual card's LoRA is read off its document by widget; with no shelf
-    row its tile comes from the filename, and wears the LoRA tab (#1990)."""
+    row its tile comes from the filename, and wears the LoRA tab."""
     card = SimpleNamespace(slots=[], variants=[], workflow_key="w", topology_hash="w")
     figure = SimpleNamespace(card=card, models=[], loras=[])
     recovered = {

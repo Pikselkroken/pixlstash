@@ -1,4 +1,4 @@
-"""Saved recipes (v1.12 B6, #1623): the routes, the workflow they list, and credit.
+"""Saved recipes: the routes, the workflow they list, and credit.
 
 Environment sharing
 -------------------
@@ -1248,9 +1248,7 @@ def test_the_export_stays_closed_with_the_gate_rolled_back(recipe_env):
     Every other recipe route is a write, which the READ-token middleware
     refuses on the verb whatever the gate is doing. This one is a **GET**, and
     it returns the owner's prompt verbatim — so it is the first route in this
-    module that needs the second belt, ``auth.READ_BLOCKED_GET_PREFIXES``, and
-    the gated ``test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt``
-    is what noticed the prefix was missing.
+    module that needs the second belt, ``auth.READ_BLOCKED_GET_PREFIXES``.
     """
     saved = _save(recipe_env.owner, WF_AB, loras=_ada())
     path = f"{API}/recipes/{saved['id']}/export"
@@ -1354,9 +1352,9 @@ def _used(client, *workflow_ids: str) -> list[dict]:
 def test_used_looks_are_the_stacks_own_pictures_and_no_outsiders(recipe_env):
     """A library that has saved nothing still has looks to show.
 
-    This is the whole point of the route: the Recipes tab was empty for every
-    workflow on a full library, because "recipe" meant only what somebody had
-    pressed Save on.
+    This is the whole point of the route: without it the Recipes tab would be
+    empty for every workflow on a full library, because "recipe" would mean
+    only what somebody had pressed Save on.
     """
     looks = _used(recipe_env.owner, WF_AB)
 
@@ -1470,10 +1468,9 @@ def test_a_look_names_a_cover_picture_to_read_its_strengths_back_from(recipe_env
 
 def test_a_manual_workflows_runs_are_its_looks_whatever_their_graph(recipe_env):
     """A run's repairs (a dropped Seed node, a bypassed LoRA) give its output a
-    topology the manual workflow does not hold, so matching by topology left
-    the run out of the tab while the card counted it. Filing is by
-    ``run_workflow_id``, and exclusive: the automatic workflow whose variant
-    the output landed on no longer shows it."""
+    topology the manual workflow does not hold, so filing is by
+    ``run_workflow_id``, not topology, and exclusive: the automatic workflow
+    whose variant the output landed on does not show it."""
     manual = create_manual_workflow(
         recipe_env.server.hub, "Mine", {"1": {"class_type": "X"}}, "import"
     )

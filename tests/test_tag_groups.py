@@ -1,4 +1,4 @@
-"""Tests for tag groups: the library-wide tag-name -> group map (issue #2469).
+"""Tests for tag groups: the library-wide tag-name -> group map.
 
 Covers:
 
@@ -20,7 +20,7 @@ Covers:
    skips, new groups, refusal of DTDs, bad types and oversize, and undo/redo of the
    exact groups and provenance.
 7. **Provenance** - a user move turns a default filing into a user one, and undo
-   turns it back; an undo written by the older bare-group payload still restores.
+   turns it back; an undo written as a legacy bare-group payload still restores.
 
 Every test that needs a defaults file writes its own small one and points
 ``tag_group_service.DEFAULT_TAGS_FILE`` at it, so no test depends on the real file.

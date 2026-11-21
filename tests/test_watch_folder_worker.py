@@ -341,10 +341,9 @@ def test_watch_folder_retries_after_transient_hash_failure(monkeypatch):
 
     Regression test (platform-independent): the finder marks a candidate as
     "seen" at discovery time. If hashing then fails once and the file carries a
-    copy-preserved old mtime, the old code left it in the seen-set forever, so it
-    could never become a candidate again. The fix has the task report the failed
-    path back to the finder, which forgets it and re-discovers it on the next
-    scan. We simulate the transient failure by making
+    copy-preserved old mtime, it must not stay in the seen-set forever: the task
+    reports the failed path back to the finder, which forgets it and
+    re-discovers it on the next scan. We simulate the transient failure by making
     ``ImageUtils.calculate_hash_from_file_path`` raise once for the target file,
     then succeed, and assert the file is eventually imported.
     """
@@ -441,20 +440,17 @@ def test_watch_folder_waits_for_a_file_to_finish_being_written():
     Regression test: the finder scans every 50ms, so it can see a file that is
     still being copied into the watch folder. ``pixel_sha`` is a digest of the
     raw file bytes, so hashing a half-written file yields a hash that does not
-    describe the finished file. The duplicate check therefore missed it and the
-    settled file was imported a *second* time, leaving one truncated picture
-    plus a duplicate. This reproduced as an intermittent CI failure in
-    ``test_watch_folder_imports_copied_files_with_old_mtime_after_initial_scan``
-    (3 pictures for 2 files).
+    describe the finished file. The duplicate check would therefore miss it and
+    the settled file would be imported a *second* time, leaving one truncated
+    picture plus a duplicate.
 
     The file is left incomplete *before* the folder is registered, so the very
     first scan sees it unfinished, and a background thread keeps bumping its
     mtime until the test is ready to finish the copy. That churn is what makes
     this deterministic: the finder sees a stat signature that never repeats, so
-    it cannot claim the file however often it scans. An earlier version left the
-    file short but *static* and relied on writing the last bytes before the next
-    scan, a race a contended runner loses (it failed on a Windows shard with 2
-    pictures).
+    it cannot claim the file however often it scans. Leaving the file short but
+    *static* and writing the last bytes before the next scan would be a race a
+    contended runner loses.
 
     The file is short by only its last few bytes, which keeps it decodable.
     That is precisely the case the duplicate check cannot catch, because a
@@ -648,14 +644,13 @@ def test_claim_if_settled_requires_a_wall_clock_quiet_window():
 
 
 def test_watch_folder_listing_refuses_rather_than_reporting_none():
-    """#1177 item 59's import-folder sibling, from the review of #1201.
+    """A failed read of the watch folders is a 503, not an empty list.
 
-    `get_import_folder_paths` used to answer a failed read with `[]`, which is
-    exactly what "no watch folders are configured" looks like. In the export
-    route that turned a destination check off silently; here it is a plainer
-    lie - the owner is told they watch nothing, which is how someone re-adds a
-    folder they already have or concludes their folders were lost. It now
-    raises, and this route turns that into a 503 rather than an unhandled 500.
+    `[]` is exactly what "no watch folders are configured" looks like: the
+    owner would be told they watch nothing, which is how someone re-adds a
+    folder they already have or concludes their folders were lost.
+    `get_import_folder_paths` raises, and this route turns that into a 503
+    rather than an unhandled 500.
     """
     from unittest import mock
 

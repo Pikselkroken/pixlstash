@@ -924,7 +924,7 @@ class _WaitingLease(_StubLease):
 def test_the_owners_yes_to_quitting_comfyui_reaches_the_lease_and_a_quit_is_kept(
     hub, repo_dir
 ):
-    """#2558: a run queued with quit allowed tells its lease, and a lease the
+    """A run queued with quit allowed tells its lease, and a lease the
     arbiter quit ComfyUI for leaves `quit` on the row for the after-run notice.
     A run queued without it never allows the quit."""
     asked = _StubLease(grant=False)
@@ -1827,7 +1827,7 @@ def test_running_out_of_memory_steps_to_more_offloading(
 
 
 def test_previews_that_do_not_fit_step_to_the_next_profile(hub, repo_dir, watched):
-    """#2411: measured after the run was queued, q8's previews do not fit
+    """Measured after the run was queued, q8's previews do not fit
     beside training. The next profile is probed before they are put off, and
     the run draws its previews while training on it."""
     service = _make_service(
@@ -1858,7 +1858,7 @@ def test_previews_that_do_not_fit_step_to_the_next_profile(hub, repo_dir, watche
 def test_a_failed_check_of_the_next_profile_keeps_the_one_that_trains(
     hub, repo_dir, watched, monkeypatch, measured_before_queueing
 ):
-    """#2411: q8 trains but its previews do not fit; the RAM guard stops the
+    """Q8 trains but its previews do not fit; the RAM guard stops the
     check of q8_cached. The run trains on q8 with its previews put off
     instead of failing, also when q8 was measured before the run was queued
     and so was passed over for q8_cached there."""

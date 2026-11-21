@@ -1,4 +1,4 @@
-"""ComfyUI templates against the shelf: the New workflow set picker (#2001)."""
+"""ComfyUI templates against the shelf: the New workflow set picker."""
 
 from datetime import datetime, timedelta, timezone
 

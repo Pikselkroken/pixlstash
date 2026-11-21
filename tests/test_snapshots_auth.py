@@ -7,8 +7,7 @@ Snapshot routes are owner-only, and two independent layers must hold:
 * The auth middleware fail-closed-rejects a forged ``ALL``+``resource_type``
   token *before* the route runs. ``create_token`` refuses to mint that shape,
   but a malicious / legacy / snapshot-restored row could still carry it, and it
-  would otherwise leave ``token_scope is None`` and read as a full owner - the
-  F1/F3 footgun.
+  would otherwise leave ``token_scope is None`` and read as a full owner.
 
 A regression in either layer would pass every other test in the suite while
 silently exposing the whole vault to share tokens - this file is the dedicated
@@ -77,13 +76,13 @@ def _make_read_token(client):
 def _inject_picture_scoped_all_token(server, picture_id: int) -> str:
     """Forge an ``ALL``+``resource_type`` token by writing it straight to the DB.
 
-    This is the malicious case, deliberately. ``create_token`` now *refuses* to
+    This is the malicious case, deliberately. ``create_token`` *refuses* to
     mint this shape (returns 400 - see ``test_read_token_security`` and
     ``auth.create_token``), so we cannot get one through the API. But the ban at
     the mint is not the only line of defense we care about: a token row carrying
     ``scope="ALL"`` + a ``resource_type`` could still arrive via a hand-crafted
     insert by an attacker with DB access, a token minted before the ban shipped,
-    or a snapshot restore of an old row. Such a token is the F1/F3 footgun - the
+    or a snapshot restore of an old row. Such a token is a footgun - the
     middleware only builds ``request.state.token_scope`` for non-``ALL`` scopes,
     so it would leave ``token_scope is None`` and be treated as a *full owner*
     while wearing a "restricted" label.

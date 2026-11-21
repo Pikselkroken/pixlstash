@@ -165,11 +165,11 @@ def _stopped(planner):
 def test_finder_removed_mid_cycle_does_not_kill_the_loop():
     """The finder list may shrink while ``_run_finders_once`` is walking it.
 
-    Module fixtures detach backfill finders from a live planner. The loop used
-    to capture ``len(self._task_finders)`` and then index the live list, so a
-    removal in between raised ``IndexError`` inside the planner thread, which
-    died with no report - and every later import answered "Face worker is not
-    running", naming a condition that was not the problem.
+    Module fixtures detach backfill finders from a live planner. Capturing
+    ``len(self._task_finders)`` and then indexing the live list would let a
+    removal in between raise ``IndexError`` inside the planner thread, which
+    would die with no report - and every later import would answer "Face worker
+    is not running", naming a condition that was not the problem.
     """
     victim = _IdleFinder("Victim")
     planner = WorkPlanner(task_runner=_NullRunner(), task_finders=[])
@@ -236,8 +236,8 @@ def test_a_raising_finder_does_not_silently_kill_the_planner(caplog):
     Three finders, not one: a single-finder planner cannot see the real damage.
     ``_finder_order_idx`` advances only on a successful submit or in the
     ``not submitted_any`` tail, so catching the exception around the whole cycle
-    parked the order index on the raiser and every finder behind it stopped
-    being swept for the life of the process, while ``is_running()`` went on
+    would park the order index on the raiser and every finder behind it would
+    stop being swept for the life of the process, while ``is_running()`` went on
     answering True.
     """
     swept = []
@@ -280,10 +280,10 @@ def test_restart_after_a_slow_stop_leaves_the_planner_alive():
     """``start()`` must not hand back a planner that is about to go dead.
 
     ``stop()`` joins with a bounded timeout and only logs when the thread
-    outlives it. ``start()`` used to return early on ``is_alive()`` *before*
-    clearing ``_stop``, so the survivor exited a moment later and left the
-    planner permanently dead with ``is_running()`` having answered True at the
-    instant it was asserted.
+    outlives it. Returning early on ``is_alive()`` *before* clearing ``_stop``
+    would let the survivor exit a moment later and leave the planner
+    permanently dead with ``is_running()`` having answered True at the instant
+    it was asserted.
     """
     slow = _IdleFinder("Slow", find_delay_s=1.0)
     planner = WorkPlanner(task_runner=_NullRunner(), task_finders=[slow])
@@ -354,9 +354,9 @@ def test_detach_finders_prunes_every_structure_and_marks_exhausted():
 def test_a_dependent_finder_unblocks_when_its_blocker_is_detached():
     """The outcome the exhausted-marking promises, not just the flag being written.
 
-    ``detach_finders`` used to pop the TaskType to name mapping before writing
-    ``_finder_exhausted[name]``, so ``depends_on()`` resolution fell through to
-    its ``str(task_type)`` default, never found the flag, and blocked the
+    If ``detach_finders`` popped the TaskType to name mapping before writing
+    ``_finder_exhausted[name]``, ``depends_on()`` resolution would fall through
+    to its ``str(task_type)`` default, never find the flag, and block the
     dependent finder for ever.
     """
 
@@ -403,8 +403,8 @@ def test_the_drain_fires_when_the_last_task_finishes_before_the_finder_runs_dry(
 
     ``exhausted`` is set only when ``find_task()`` returns None, which is after
     the in-flight count reaches zero whenever the last task completes quickly.
-    The completion edge then computed ``all_done`` as ``(0 == 0) and False`` and
-    the drain was missed entirely, so the tagger's CUDA arena stayed held.
+    A completion edge computing ``all_done`` as ``(0 == 0) and False`` would
+    miss the drain entirely, leaving the tagger's CUDA arena held.
     """
     runner = _FastCompleteRunner()
     finder = _OneShotFinder()
@@ -464,11 +464,11 @@ def test_a_release_the_drain_returns_is_queued_not_run_on_the_planner():
 def test_the_drain_is_skipped_when_a_new_task_lands_while_the_claims_release():
     """Releasing the claims is what lets the loop thread take the next task.
 
-    ``all_done`` was computed at the top of ``on_task_complete``, the lock was
-    dropped, the finder released its claims, and only then was
-    ``on_all_tasks_complete()`` called. For MissingTagFinder that is a GPU
-    session teardown, and it landed on the task the loop thread had taken in
-    between.
+    Computing ``all_done`` at the top of ``on_task_complete``, dropping the
+    lock, releasing the claims and only then calling
+    ``on_all_tasks_complete()`` would let the loop thread take a task in
+    between. For MissingTagFinder that is a GPU session teardown, landing on
+    that task.
     """
     runner = _FastCompleteRunner()
     finder = _TwoSlotOneTaskFinder()
@@ -528,12 +528,11 @@ class _ClaimingFinder(BaseTaskFinder):
 def test_a_task_cancelled_off_the_queue_releases_its_claims():
     """A cancelled task must give back its slot and its picture ids.
 
-    ``cancel_pending_tasks()`` used to drain the queues without firing the
-    completion callbacks, which are the only path that discards claims and
-    decrements the in-flight count. One full restore therefore pinned the
-    tagger finder at max in-flight for the life of the process, starved every
-    finder that ``depends_on()`` it, and left the claimed pictures permanently
-    unselectable.
+    ``cancel_pending_tasks()`` must fire the completion callbacks, which are
+    the only path that discards claims and decrements the in-flight count.
+    Without them one full restore would pin the tagger finder at max in-flight
+    for the life of the process, starve every finder that ``depends_on()`` it,
+    and leave the claimed pictures permanently unselectable.
     """
     runner = TaskRunner(name="cancel-claims-test", num_workers=1)
     finder = _ClaimingFinder([1, 2, 3])
@@ -651,7 +650,7 @@ class _VaultWorkerProbe:
 
 
 def test_is_worker_running_answers_per_worker_type():
-    """It used to ignore its argument, so a detached finder read as healthy."""
+    """It reads its argument, so a detached finder does not read as healthy."""
     planner = WorkPlanner(
         task_runner=_NullRunner(),
         task_finders={
@@ -770,9 +769,9 @@ def test_snapshot_identity_finder_stops_asking_once_drained(tmp_path):
 def test_snapshot_identity_finder_stops_reissuing_a_failing_archive(tmp_path):
     """One unscrubbable archive must not become a spin loop.
 
-    Observed on real data: a snapshot row whose archive was gone from disk
-    failed instantly, stayed NULL so it would be retried, and was handed straight
-    back to the planner, producing hundreds of failing tasks a minute. The row
+    A snapshot row whose archive is gone from disk fails instantly and stays
+    NULL so it will be retried; handed straight back to the planner, it would
+    produce hundreds of failing tasks a minute. The row
     must stay NULL (the work is not silently forgotten) while the finder moves
     on to the archives it can still make progress on.
     """

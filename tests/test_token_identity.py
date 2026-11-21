@@ -1,4 +1,4 @@
-"""Token identity across deletion and across a database restore (issue #666).
+"""Token identity across deletion and across a database restore.
 
 Two related properties, both about a token id being used as a reference from
 somewhere that can outlive the row it names.

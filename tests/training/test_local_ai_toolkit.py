@@ -273,7 +273,7 @@ print(json.dumps(dataclasses.asdict(handle)), flush=True)
 
 
 def test_a_run_outlives_the_backend_and_its_closed_streams(tmp_path, monkeypatch):
-    """The trainer's prints never reach the backend's streams (#2289).
+    """The trainer's prints never reach the backend's streams.
 
     Handed them, its first print after the app closes the pipes raises
     BrokenPipeError and the run dies mid-way.
@@ -358,9 +358,9 @@ def _job_status(handle) -> str:
 
 
 def test_cancel_never_signals_a_pid_that_is_not_the_trainer(tmp_path):
-    """A pid persisted across a restart may now belong to another process.
+    """A pid persisted across a restart may belong to another process.
 
-    Review F3: the number is read from the database, and after pid reuse cancel
+    The number is read from the database, and after pid reuse cancel
     must not kill that unrelated process group. The sleeper below is that
     process: its cmdline names neither the run script nor the job's config. It
     must survive, and the job is marked stopped.
@@ -411,7 +411,7 @@ def test_trainer_identity_is_read_through_psutil_not_proc(tmp_path, monkeypatch)
     """Identity comes from psutil's cmdline, so it works off Linux too.
 
     The fake process has no /proc entry behind it, which is how macOS and
-    Windows look to the old /proc read: the check must still answer from the
+    Windows look to a /proc read: the check must still answer from the
     cmdline. A process that names another run, or that cannot be read, is not
     verified.
     """
@@ -662,7 +662,7 @@ def test_the_trainer_writes_the_allocator_peak_a_poll_would_miss(tmp_path):
 def test_the_trainer_does_not_inherit_the_backends_python_path_or_secrets(
     tmp_path, monkeypatch
 ):
-    """ai-toolkit's Python must import its own torch, not the overlay's (#2288)."""
+    """ai-toolkit's Python must import its own torch, not the overlay's."""
     monkeypatch.setenv("PYTHONPATH", str(tmp_path / "overlay"))
     monkeypatch.setenv("PYTHONHOME", str(tmp_path / "home"))
     monkeypatch.setenv("PIXLSTASH_DESKTOP_SESSION", "test-session")
@@ -876,8 +876,8 @@ def test_malicious_name_run_completes_and_handle_round_trips(tmp_path):
 def test_pid_alive_never_signals_the_probed_process(monkeypatch):
     """The liveness probe reads process state; it must never send a signal.
 
-    On Windows ``os.kill`` calls TerminateProcess, so the old probe killed the
-    trainer it was checking. A live pid answers True with no signal sent.
+    On Windows ``os.kill`` calls TerminateProcess, so a probe using it would
+    kill the trainer it was checking. A live pid answers True with no signal sent.
     """
 
     def no_signals(pid, sig):

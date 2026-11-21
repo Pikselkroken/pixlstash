@@ -1,8 +1,8 @@
-"""Regression tests for issue #448: startup crash under a non-UTF-8 console.
+"""Regression tests for a startup crash under a non-UTF-8 console.
 
 On Windows the standard streams default to the legacy ANSI codepage
-(``cp1252``), which cannot encode the box-drawing glyphs in the startup banner.
-That raised ``UnicodeEncodeError`` and took the whole backend down at startup.
+(``cp1252``), which cannot encode the box-drawing glyphs in the startup banner,
+so ``UnicodeEncodeError`` would take the whole backend down at startup.
 ``_force_utf8_streams`` must reconfigure the streams so the banner (and any
 other non-ASCII output) prints cleanly.
 """
@@ -26,7 +26,7 @@ def _cp1252_stream():
 
 
 def test_banner_crashes_on_cp1252_stream(monkeypatch):
-    """Without the fix, the banner cannot encode under cp1252 (the bug)."""
+    """Without ``_force_utf8_streams``, the banner cannot encode under cp1252."""
     monkeypatch.setattr("sys.stdout", _cp1252_stream())
     with pytest.raises(UnicodeEncodeError):
         Server._print_banner("1.6.0", _BANNER_ROWS)

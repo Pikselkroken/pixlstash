@@ -425,7 +425,7 @@ def test_delete_anomaly_prediction_invalidates():
     ``POST /pictures/{id}/tag_predictions/delete`` bulk-removes the model's predictions so
     the background tagger treats the picture as never seen. Dropping an anomaly-vocabulary
     prediction removes its penalty input, so the stored ``smart_score`` must be NULLed for
-    recompute - the confirmed invalidation gap this fix closes.
+    recompute.
     """
     temp_dir, client, server = _setup()
     try:
@@ -669,11 +669,11 @@ def test_human_negative_suppresses_even_above_threshold():
 
 
 def test_unapplied_model_prediction_is_not_scored():
-    """The backfill regression: a confident prediction with no ``Tag`` row costs nothing.
+    """A confident prediction with no ``Tag`` row costs nothing.
 
     ``TagPredictionBackfillTask`` writes predictions against a picture's existing tag set
     and never writes a ``Tag`` row, so this state is reachable for any picture tagged by
-    a different engine; it penalised ~12k pictures for defects invisible in the UI.
+    a different engine, and a penalty there is for a defect invisible in the UI.
     """
     temp_dir, client, server = _setup()
     try:
@@ -744,11 +744,11 @@ def test_tagger_rewrite_adding_anomaly_tag_invalidates_cached_score():
     """A re-tag that applies an anomaly tag must clear the cached score.
 
     ``_add_tags_bulk`` commits its ``Tag`` write in its own DB task, *before*
-    ``_write_predictions_from_tags`` takes its anomaly snapshot. Now that an applied tag
+    ``_write_predictions_from_tags`` takes its anomaly snapshot. Because an applied tag
     is a scorer input, the write has to guard its own mutation or the score change goes
     unobserved. Without the ``invalidate_on_anomaly_change`` wrapper in ``_add_tags_bulk``
-    this test fails. (The tagger only adds tags - it never deletes one it did not write,
-    #1357 - so adding is the direction that can move the score.)
+    this test fails. (The tagger only adds tags - it never deletes one it did not write
+    - so adding is the direction that can move the score.)
     """
     temp_dir, client, server = _setup()
     try:
@@ -1117,10 +1117,9 @@ def test_background_task_scores_and_honours_the_users_penalised_tags():
 def test_on_demand_fetch_resolves_the_users_penalised_tags_from_the_hub():
     """The sort path's scorer config carries the owner's table, not the shipped seed.
 
-    Identity lives in the hub, so resolving it from the scoring session - which is a
-    *vault* session - found no user row on every call and quietly scored with
-    ``DEFAULT_SMART_SCORE_PENALIZED_TAGS`` while the owner's edited table sat in the hub
-    (one ``No user row found`` warning per batch was the only symptom).
+    Identity lives in the hub, not in the scoring session (a *vault* session), so the
+    owner's edited table is read from the hub rather than falling back to
+    ``DEFAULT_SMART_SCORE_PENALIZED_TAGS``.
     """
     temp_dir, client, server = _setup()
     try:
@@ -1266,7 +1265,7 @@ def _capture_smart_score_events(server):
 
 
 def test_interactive_edit_refreshes_card_without_waiting_for_backfill_drain():
-    """The headline fix: an edit mid-backfill refreshes THAT card immediately, stamped."""
+    """An edit mid-backfill refreshes THAT card immediately, stamped."""
     temp_dir, client, server = _setup()
     try:
         edited = _upload_picture(client, "Bad1.png")

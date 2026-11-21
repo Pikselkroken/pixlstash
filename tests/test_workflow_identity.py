@@ -1,4 +1,4 @@
-"""Workflow cards and automatic stacks derived from stored graphs (v1.12 B1).
+"""Workflow cards and automatic stacks derived from stored graphs.
 
 Every stacking case in the user plan §2 is a pair: two workflows, and whether
 they share a card (``workflow_key``) and a stack (``core_hash``).
@@ -321,12 +321,12 @@ def _core_label(graph: dict, node_id: str) -> str:
     ids=["detailer", "one-lora", "three-loras", "all-of-it"],
 )
 def test_core_labels_agree_across_the_members_of_one_workflow(variant):
-    """The core address (#1622): one label per node across every member.
+    """The core address: one label per node across every member.
 
     A slot label changes the moment a node is added anywhere, so it cannot
     address "the sampler" across a workflow's topologies; the label on the
     stripped core graph can. Asserted against a one-LoRA member as well as the
-    plain graph, because 1 vs 3 LoRA loaders is the case the issue names.
+    plain graph, because 1 vs 3 LoRA loaders is the motivating case.
     """
     one_lora, member = _graph(loras=("a.safetensors",)), _graph(**variant)
     assert core_hash(_doc(one_lora)) == core_hash(_doc(member))
@@ -533,7 +533,7 @@ def test_a_graph_with_no_sampler_keeps_what_it_does_as_its_core():
 
 
 def test_the_sink_rule_keeps_named_outputs_and_savers_but_not_conditioning():
-    """Anchored (#1696): `ConditioningCombine` is not a sink, but a node named
+    """Anchored: `ConditioningCombine` is not a sink, but a node named
     as an output or a saver still is, so its workflow keeps its last node."""
     for sink in ("SaveImage", "ImageSaver", "ImageOutput", "VHS_VideoCombine"):
         assert _SINK_CLASS_RE.search(sink), sink
@@ -542,7 +542,7 @@ def test_the_sink_rule_keeps_named_outputs_and_savers_but_not_conditioning():
 
 
 def test_sampler_less_filter_workflows_keep_their_filter_as_their_core():
-    """Without a sampler the filter is the workflow (#1696): a sharpen and a
+    """Without a sampler the filter is the workflow: a sharpen and a
     blur over an input picture are two workflows, never one."""
 
     def filtered(cls: str) -> dict:
@@ -978,7 +978,7 @@ def test_core_v5_is_a_function_of_the_v4_core():
 
 
 def test_the_intermediate_save_stage_is_the_same_with_loras_kept_or_stripped():
-    """Review of #1822: the stage is read with LoRA loaders stripped whatever
+    """The stage is read with LoRA loaders stripped whatever
     the grouping does with them. A loader is neither a sink nor a sampler, so
     the saves the core drops are the same either way."""
     graph = _graph(
@@ -1019,7 +1019,7 @@ def test_a_real_step_added_does_not_stack():
 
 
 def test_special_groups_says_what_one_graph_has():
-    """The post-processing one card has, which its generated name needs (#1454).
+    """The post-processing one card has, which its generated name needs.
 
     The empty tuple is a real answer and not a failure to look: a plain txt2img
     graph genuinely carries no post-processing, which is what lets a name claim
@@ -1058,7 +1058,7 @@ def _second_pass(latent, *, model=("1", 0)) -> dict:
 
 
 def test_traits_say_what_the_core_does_that_the_type_cannot():
-    """One graph per kind #1722 found told apart only by "(2)"..."(14)".
+    """One graph per kind otherwise told apart only by "(2)"..."(14)".
 
     Every graph here is txt2img with no stage, so its generated name is the
     same; the trait is the only thing that can say how they differ.
@@ -1482,13 +1482,12 @@ def test_the_second_text_encoder_of_a_pair_is_a_model_not_a_parameter():
 
 
 def test_a_graph_with_no_shelf_loader_keeps_the_keys_it_had():
-    """The keys of a graph on ComfyUI's own loader, measured before #1416.
+    """The pinned keys of a graph on ComfyUI's own loader.
 
-    A pin rather than a comparison: there is nothing to compare against once
-    the rule has changed. It guards the blast radius -- the new rules are two
-    widget NAMES, so this graph, which carries neither, must key exactly as it
-    did. It cannot fail for a change confined to those names, and is not
-    claimed to: the tests below are what hold the new rules up.
+    A pin rather than a comparison. It guards the blast radius -- the shelf
+    loader rules are two widget NAMES, so this graph, which carries neither,
+    must key exactly as pinned. It cannot fail for a change confined to those
+    names, and is not claimed to: the tests below are what hold those rules up.
     """
     graph = _graph()
     assert (
@@ -1536,7 +1535,7 @@ def test_an_unpicked_shelf_widget_names_no_model():
 
 
 def _digest_of_empty() -> str:
-    """The reference a blank widget used to be filed as."""
+    """The legacy reference a blank widget was filed as."""
     return hashlib.sha256(b"").hexdigest()
 
 

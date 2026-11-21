@@ -197,13 +197,11 @@ def test_lifespan_reports_remote_access_active_with_password(monkeypatch, caplog
 
 
 def test_lifespan_warns_remote_access_inactive_without_password(monkeypatch, caplog):
-    """Regression: without an owner password the external listener is refused, so
-    the ready log must NOT claim remote access is enabled - it warns instead.
+    """Without an owner password the external listener is refused, so the
+    ready log must NOT claim remote access is enabled - it warns instead.
 
-    This is the dishonest-log bug: the listener was refused for lack of a
-    password (see test_external_listener_refused_without_owner_password) yet the
-    startup log previously printed "Remote access enabled", which read as working
-    while the host was unreachable from the LAN.
+    See test_external_listener_refused_without_owner_password; "Remote access
+    enabled" would read as working while the host is unreachable from the LAN.
     """
     import logging
 

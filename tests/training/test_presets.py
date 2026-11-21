@@ -73,7 +73,7 @@ def test_only_h3_recipes_caption_in_prose_and_the_rest_in_tags():
 def test_h3_keeps_its_pre_quantised_formats_and_its_distillation_handling():
     """H3 ships int8 ConvRot and nvfp4 weights; any other qtype re-quantises
     them on load. It is guidance-distilled, so both recipes train with
-    ai-toolkit's v3 adapter, which needs no contrastive guidance (#2295), and
+    ai-toolkit's v3 adapter, which needs no contrastive guidance, and
     sound is a choice only for clips."""
     for pid in ("minimax-h3-image", "minimax-h3-motion"):
         preset = presets.get_preset(pid)
@@ -158,7 +158,7 @@ def test_moss_is_offered_only_by_a_checkout_with_its_model_code(tmp_path):
 
 
 def test_moss_needs_the_ai_toolkit_that_trains_its_base_model():
-    """#2295: moss_image arrived in 0.13.27, but the Base checkpoint and the
+    """Moss_image arrived in 0.13.27, but the Base checkpoint and the
     fresh-cache tokenizer fix in 0.13.28, so the folder alone is not enough."""
     moss = presets.get_preset("moss-image-base")
     archs = ["moss_image"]
@@ -575,7 +575,7 @@ def test_without_measurements_nothing_is_probed():
 
 
 def test_a_profile_whose_previews_fit_is_picked_over_deferring_them():
-    """#2411: q8 trains in 16 GB but its previews do not; q8_cached is tried
+    """Q8 trains in 16 GB but its previews do not; q8_cached is tried
     for previews while training before they are put off."""
     big_previews = _measurement(12_000, previews_mb=16_000)
     out = _resolve(vram_mb=_16GB, lookup=_lookup({"q8": big_previews}))
@@ -665,7 +665,7 @@ def _choice(**kwargs):
 
 
 def test_the_previews_question_prices_each_route():
-    """#2415: previews while training cost q8's speed; smaller previews or
+    """Previews while training cost q8's speed; smaller previews or
     previews after training keep it."""
     out = _choice(lookup=_sized_lookup({"q8": _FAST, "q8_cached": _SLOW}))
     assert out["selected"] == "while" and out["full_size"] == [1024, 1024]
@@ -750,7 +750,7 @@ def test_a_forced_profile_is_resolved_alone():
 
 
 def test_a_recipe_cannot_keep_enough_checkpoints_to_fill_the_disk():
-    """#2295: an unsigned update could set save_every=1 with a huge keep count;
+    """An unsigned update could set save_every=1 with a huge keep count;
     the keep count is what bounds the disk, so it has a small ceiling."""
     check_tunable = presets.check_tunable
     check_tunable("save.max_step_saves_to_keep", 24)

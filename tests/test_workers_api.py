@@ -113,10 +113,10 @@ def test_checkpoint_hash_does_not_report_the_picture_library_as_its_progress(
 ):
     """The Checkpoint Hash row must not borrow the library's numbers.
 
-    It used to fall through to the generic `planner_managed` branch, which set
-    `missing = 0` and left `total` at the picture count. Reading tens of
-    gigabytes off disk then rendered as "N / N, 0 remaining, 0/s" on a row that
-    still said running, so a healthy long task read as a stuck one.
+    The generic `planner_managed` branch sets `missing = 0` and leaves `total`
+    at the picture count, so reading tens of gigabytes off disk would render as
+    "N / N, 0 remaining, 0/s" on a row that still says running, and a healthy
+    long task would read as a stuck one.
 
     The picture count is forced to a sentinel rather than importing pictures:
     an empty library makes the two branches indistinguishable, which is exactly
@@ -157,7 +157,7 @@ def test_version_endpoint_returns_200():
 
 def test_vram_falls_back_to_torch_when_nvml_reports_no_process_figure(monkeypatch):
     """Windows (WDDM) NVML lists the process but its ``usedGpuMemory`` is not
-    available, which rendered "0 / 31.8 GB" during CUDA inference (#1162). With
+    available, which would render "0 / 31.8 GB" during CUDA inference. With
     no per-process figure the monitor must leave the reading to torch."""
     entry = types.SimpleNamespace(pid=os.getpid(), usedGpuMemory=None)
     handle = object()

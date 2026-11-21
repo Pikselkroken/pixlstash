@@ -1,15 +1,14 @@
 """Workflow identity: the two hash tiers, subgraph inlining, and the hub store.
 
 The fixtures here are the contract from
-``pixlstash-hash-field-classification.md``, and two groups of them exist
-because a rule shipped without them was found broken by measurement:
+``pixlstash-hash-field-classification.md``, and two groups of them guard
+rules that are easy to get wrong:
 
-* **§Node identity's six invariants.** The superseded canonicalization
-  relabelled nodes by topological sort and tie-broke on ``(class_type, input
-  signature)`` - which does not break the tie two twin ``CLIPTextEncode`` nodes
-  produce, so the "canonical" id fell through to JSON serialisation order. 12
-  of 40 real workflows changed their structural hash when only the key order
-  moved. :func:`test_reshuffled_key_order_keys_the_same` is that case.
+* **§Node identity's six invariants.** Relabelling nodes by topological sort
+  and tie-breaking on ``(class_type, input signature)`` does not break the tie
+  two twin ``CLIPTextEncode`` nodes produce, so a "canonical" id falls through
+  to JSON serialisation order and the structural hash changes when only the
+  key order moves. :func:`test_reshuffled_key_order_keys_the_same` is that case.
 * **§Subgraphs' five.** The API format is already flat, so the structural hash
   needs nothing; the UI format is not, and 20% of the owner's images use
   subgraphs. :func:`test_ui_keys_differ_without_inlining` asserts the two keys
@@ -350,7 +349,7 @@ def test_every_node_id_replaced_keys_the_same():
 
 
 def test_reshuffled_key_order_keys_the_same():
-    """The fixture whose absence let the superseded rule ship broken."""
+    """Reordering a document's keys leaves its structural key unchanged."""
     graph = api_graph(TXT2IMG)
     reshuffled = dict(reversed(list(graph.items())))
     for node in reshuffled.values():
@@ -406,10 +405,10 @@ def test_rewiring_forks_the_key_with_the_nodes_left_alone():
 
     Every other fork fixture forks by removing a node or changing a widget, so
     all of them would still pass with the edges deleted from the key entirely -
-    at which point topology degenerates into the class multiset the library
-    plan retired. This one holds the node multiset and every widget constant
-    and moves one connection: VAEDecode takes the raw latent instead of the
-    sampled one, which is a different workflow made of the same parts.
+    at which point topology degenerates into a class multiset. This one holds the node
+    multiset and every widget constant and moves one connection: VAEDecode takes the raw
+    latent instead of the sampled one, which is a different workflow made of the same
+    parts.
     """
     rewired = api_graph(TXT2IMG)
     rewired["6"]["inputs"]["samples"] = ["4", 0]
@@ -650,8 +649,8 @@ def _latent_source(workflow):
 def test_a_bypassed_node_is_spliced_out_as_comfyui_does():
     """ComfyUI hands the consumer what fed the bypassed node, so the key must too.
 
-    #1440: a bypassed ShowText between a captioner and a text encoder dropped
-    the edge on the editor side only, and one workflow keyed two ways.
+    A bypassed ShowText between a captioner and a text encoder must not drop
+    the edge on the editor side only, or one workflow keys two ways.
     """
     workflow = _latent_through([("samples", "LATENT")], [("LATENT", "LATENT")])
     assert _latent_source(workflow) == ("4", 0)
@@ -900,7 +899,7 @@ def test_a_subgraph_nesting_bomb_is_refused_before_it_is_expanded():
 
     Inlining multiplies rather than adds, so a document nesting 20 levels deep
     - a fraction of the 256-hop depth guard, which therefore never fires -
-    expands to 3,670,014 nodes. Measured before the ceiling existed: 15 s and
+    expands to 3,670,014 nodes. Expanding it costs ~15 s and
     1.1 GB of resident node table for a few kilobytes of JSON, quadrupling per
     level after that. This has to be refused, and refused cheaply, so the test
     asserts on the clock as well as on the exception: a run that raises after
@@ -1071,8 +1070,8 @@ def test_reopening_a_hub_is_a_no_op(tmp_path):
 
 
 def test_the_stricter_picture_input_check_is_rebuilt_with_its_rows(tmp_path):
-    """An unreleased branch forbade a kept picture on a non-Fixed input; a hub
-    that created that shape must accept one after its next open, rows intact."""
+    """A hub whose table forbids a kept picture on a non-Fixed input must
+    accept one after its next open, rows intact."""
     path = str(tmp_path / "hub.db")
     HubDatabase(path).close()
     conn = sqlite3.connect(path)
@@ -1201,7 +1200,7 @@ def test_the_stored_row_records_which_rule_keyed_it(hub):
 
 
 def test_the_stored_document_holds_neither_prompt_nor_model_name(hub):
-    """Library plan §5, and the half of it the first draft of this file missed.
+    """Library plan §5, including the half that is not the prompt.
 
     Prompt-free was never the whole guarantee: bucket TA survives the nulling
     by design, and TA is model filenames, which on a real shelf name people. So
@@ -1278,11 +1277,11 @@ def test_an_asset_row_is_written_per_distinct_file(hub):
 def test_an_existing_v2_hub_gains_the_tables_on_its_next_open(tmp_path):
     """The compatibility path `_apply_v2` is re-run for, exercised directly.
 
-    These tables were amended into schema v2 rather than shipped as a v3, which
-    only works because `apply_migrations` re-runs `_apply_v2` for a hub already
-    at 2. A hub created by this build has them from its first open, so nothing
-    else in this file touches that path - and a regression that stopped
-    creating them for an existing hub would leave the whole suite green.
+    These tables are part of schema v2, which only works for a hub already at
+    2 because `apply_migrations` re-runs `_apply_v2` for it. A hub created by this build
+    has them from its first open, so nothing else in this file touches that path - and a
+    regression that stopped creating them for an existing hub would leave the whole
+    suite green.
     """
     path = str(tmp_path / "hub.db")
     first = HubDatabase(path)
@@ -2374,9 +2373,9 @@ def test_an_unwritable_hub_stands_the_workflow_scan_down(store):
 
     Left unmarked and still matched, these pictures would be re-opened,
     re-decoded and re-parsed on every planning sweep for as long as the hub
-    stayed broken. The finder narrows back to its pre-B3 predicate instead,
-    which the ComfyUI half has already satisfied, so the sweep drains and goes
-    quiet exactly as it did before this task learned to hash.
+    stayed broken. The finder narrows back to its ComfyUI-only predicate
+    instead, which the ComfyUI half has already satisfied, so the sweep drains
+    and goes quiet.
     """
     name = write_png(Path(store.image_root), "standdown.png", api=api_graph(TXT2IMG))
     picture_id = add_picture(store, name)
@@ -2402,7 +2401,7 @@ def test_a_revisit_never_rewrites_what_the_first_extraction_stored(store):
     """The upgrade path's data-loss case, and it is not hypothetical.
 
     Widening the predicate to `workflow_hash_version IS NULL` re-queues every
-    picture a pre-B3 run already extracted. Re-reading the file to rewrite its
+    picture an earlier extraction already stored. Re-reading the file to rewrite its
     ComfyUI columns is not a no-op: a file that has since moved, or been
     stripped of its metadata, would replace real stored models and LoRAs with
     the "[]" sentinel. The extraction happened once; the revisit adds keys and
@@ -2442,7 +2441,7 @@ def test_a_library_extracted_before_b3_is_re_queued_for_its_workflow(store):
 
 
 def test_hub_rows_outlive_the_pictures_they_came_from(store):
-    """The point of the whole feature, and the reason B3 exists at all.
+    """The point of the whole feature, and the reason the hub store exists.
 
     Without this, dehydrating a stack would delete the graph its own rehydrate
     promise depends on. The rows are content-addressed with no foreign key into
@@ -3173,8 +3172,8 @@ def test_a_grouped_file_does_not_hide_the_declared_layouts_of_a_cold_checkpoint(
 ):
     """A set grouping only one encoder with a checkpoint nothing has run with:
     the grouped file leads, once, and the declared fallback still answers for
-    the rest. Keying the fallback on "the list is empty" let the grouped entry
-    switch it off (#1520 rebased onto #1514)."""
+    the rest. Keying the fallback on "the list is empty" would let the grouped
+    entry switch it off."""
     ids = companions_shelf.ids
     hub = companions_shelf.hub
     set_base_model(hub, ids["lonely"], "SDXL 1.0")
@@ -3200,7 +3199,7 @@ def test_evidence_that_only_repeats_a_grouped_file_still_leaves_the_declared_fal
 ):
     """A ComfyUI run proves the checkpoint with the ONE encoder its set already
     groups. That step tells the other encoder row nothing new, so the declared
-    layouts still answer for it rather than the row going empty (#1520 review)."""
+    layouts still answer for it rather than the row going empty."""
     ids = companions_shelf.ids
     hub = companions_shelf.hub
     set_base_model(hub, ids["lonely"], "SDXL 1.0")
@@ -3231,7 +3230,7 @@ def test_evidence_that_only_repeats_a_grouped_file_still_leaves_the_declared_fal
 def test_deleting_a_set_returns_exactly_what_it_deleted(companions_shelf):
     """The snapshot is the undo, so it is read on the transaction that deletes:
     every member row that went, by hash, slot and label, and nothing left
-    behind in the tables (#1520 review)."""
+    behind in the tables."""
     hub, ids = grouped_shelf(companions_shelf)
     set_id = create_set(
         hub,
@@ -3484,7 +3483,7 @@ def test_a_hand_made_set_proposes_its_members_ahead_of_the_evidence(
 
 
 def test_a_model_removed_from_a_set_is_not_proposed_as_grouped(companions_shelf):
-    """#1972: a removal wins over the member row, so Clone with new models does
+    """A removal wins over the member row, so Clone with new models does
     not offer a VAE the owner took out of the set as one of its own."""
     hub, ids = grouped_shelf(companions_shelf)
     set_id = create_set(
@@ -3533,7 +3532,7 @@ def test_a_grouped_encoder_pair_of_two_layouts_is_prepicked_each(
 ):
     """A Flux set holds one clip_l and one t5_xxl: one file per row, so both are
     pre-picked. Counting per kind would refuse both and hand the rows to
-    weaker, ungrouped evidence (#1520 review)."""
+    weaker, ungrouped evidence."""
     hub, ids = grouped_shelf(companions_shelf)
     clip = shelf_file(hub, "Clip_L.safetensors", "text_encoder")
     t5 = shelf_file(hub, "T5_XXL.safetensors", "text_encoder")
@@ -3678,7 +3677,7 @@ def write_thumbnail(store, file_name, payload):
 
 
 def test_the_default_position_is_covered_only():
-    """Settled with the owner 2026-08-23, and the whole cascade hangs off it."""
+    """The default position is covered-only, and the whole cascade hangs off it."""
     assert read_ghost_retention({}) == GHOST_RETENTION_COVERED
     assert DEFAULT_GHOST_RETENTION == GHOST_RETENTION_COVERED
 
@@ -3703,7 +3702,7 @@ def test_a_purge_destroys_the_picture_and_leaves_the_recipe_standing(store):
 
     Ordinary deletion is already covered by
     ``test_hub_rows_outlive_the_pictures_they_came_from``; this is the harder
-    case, because the purge is the one path that now reaches into the hub at
+    case, because the purge is the one path that reaches into the hub at
     all. A step that destroyed the recipe would take dehydration's rehydrate
     promise with it.
     """
@@ -3968,7 +3967,7 @@ def test_a_vault_with_no_hub_purges_without_reaching_for_one(store):
 
 
 def test_the_missing_file_purge_cascades_too(store):
-    """A path that removes a picture row for good without writing ghosts (§B4).
+    """A path that removes a picture row for good without writing ghosts.
 
     ``MissingFilePurgeTask`` never writes a ghost — the file it purges is
     already gone from disk, so there is no thumbnail to keep — but it can
@@ -4282,9 +4281,9 @@ def test_the_write_rechecks_cover_at_the_last_moment(store):
 
 
 def test_the_ghost_reads_survive_the_bound_parameter_ceiling(store):
-    """Emptying a whole scrapheap must not abort inside the purge (§B4).
+    """Emptying a whole scrapheap must not abort inside the purge.
 
-    Both new reads run INSIDE ``plan_and_purge_in_session`` — the candidate read
+    Both reads run INSIDE ``plan_and_purge_in_session`` — the candidate read
     before the DELETE, the coverage read after it — so an ``OperationalError``
     from either takes the whole purge down and destroys nothing. The list they
     are handed is the entire purge plan, which for "delete forever, everything"
@@ -4399,9 +4398,10 @@ def test_the_store_itself_refuses_a_ghost_with_no_thumbnail(store):
 
 
 def test_every_kind_of_hard_delete_queues_the_cascade(store):
-    """The trigger, not the caller, is what the cascade depends on (#1293).
+    """The trigger, not the caller, is what the cascade depends on.
 
-    Four paths forgot it when each had to remember. So both statement shapes the
+    A cascade each delete path has to remember is one a path forgets. So both
+    statement shapes the
     code base deletes pictures with, an ORM ``session.delete`` and a core
     ``DELETE``, are driven here with no ghost code anywhere near them.
     """
@@ -4721,7 +4721,7 @@ def test_a_seed_int_would_refuse_is_no_seed():
     two, and a digit run past CPython's 4,300-character integer-string limit.
     The field is documented as text-or-None-if-not-an-integer, and
     `GET /comfyui/pictures/{id}/recipe` converts it, so a crafted `parameters`
-    chunk was a 500 for anyone holding a share token for that picture.
+    chunk would be a 500 for anyone holding a share token for that picture.
     """
     for seed in ("\u00b2", "1" * 4301):
         assert seed.isdigit(), "the fixture must clear the old guard"
@@ -4738,8 +4738,8 @@ def test_a_seed_int_would_refuse_is_no_seed():
 def test_the_fields_regex_is_linear_in_the_line():
     """An unbounded key run before the literal `:` is quadratic.
 
-    This parser gained a request-path caller in v1.12 B5, so the cost of a
-    crafted line stopped being a background pass's problem. `xSteps:` clears
+    This parser has a request-path caller, so the cost of a crafted line is
+    not only a background pass's problem. `xSteps:` clears
     the cheap substring guard while yielding no `Steps` field, so the whole
     line is handed to the regex. Quadratic, 4x per doubling, this pair differs by ~16x;
     linear, they differ by ~4x. Absolute times are host-specific, so the
@@ -4864,12 +4864,12 @@ def test_a_shredded_compound_value_never_replaces_the_checkpoint():
 
 
 def test_a_model_named_inside_a_compound_value_is_an_asset():
-    """A quoted ControlNet value hides a model name from both asset rules (#1375).
+    """A quoted ControlNet value hides a model name from both asset rules.
 
     The field is not named for a model and the name inside carries no
-    extension, so the name used to be stored verbatim in the instance
+    extension, so unread the name would be stored verbatim in the instance
     document, where forgetting the model -- a row delete in
-    `workflow_recipe_asset`, with no stored graph rewritten -- never reached
+    `workflow_recipe_asset`, with no stored graph rewritten -- never reaches
     it.
     """
     fields = (
@@ -4910,7 +4910,7 @@ def test_a_second_model_in_one_value_gets_its_own_row():
 
 
 def test_a_field_that_is_not_a_known_compound_keeps_its_value_whole():
-    """Only ControlNet's fields are read this way, and for a reason (#1375).
+    """Only ControlNet's fields are read this way, and for a reason.
 
     A1111 writes prose into fields this module has no list of: the X/Y/Z plot
     script puts prompt fragments in `X Values`, sd-dynamic-prompts puts the raw
@@ -5590,7 +5590,7 @@ def test_the_member_order_is_the_whole_ranking_not_only_its_head(store, set_shel
 
 
 def test_nothing_that_keys_a_workflow_reads_the_advisory_model_names():
-    """Recovered model names never enter a hash or a card key (#1440 plan §3.4)."""
+    """Recovered model names never enter a hash or a card key."""
     for module in (workflow_hash, workflow_identity, hub_workflows, workflow_cards):
         source = Path(module.__file__).read_text("utf-8")
         assert "loaded_model_widgets" not in source, module.__name__

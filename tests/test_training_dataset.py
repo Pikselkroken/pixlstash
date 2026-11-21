@@ -264,7 +264,7 @@ def test_build_training_dataset_skips_videos(env):
 
 
 def test_build_training_dataset_converts_what_ai_toolkit_would_skip(env):
-    """#2290: ai-toolkit lists only jpg/jpeg/png/webp and trains alpha as black.
+    """Ai-toolkit lists only jpg/jpeg/png/webp and trains alpha as black.
 
     Every other still is written as an RGB PNG, alpha is flattened onto grey,
     a picture the trainer already reads is copied byte for byte, and one that

@@ -1,5 +1,5 @@
-"""Detection of a workflow's inputs and outputs (#1302), import as-is (#1303),
-and the watched workflows folder (#1304)."""
+"""Detection of a workflow's inputs and outputs, import as-is,
+and the watched workflows folder."""
 
 import copy
 import importlib.util
@@ -280,7 +280,7 @@ def _i2v_graph() -> dict:
 
 
 def test_a_node_taking_clip_and_no_conditioning_is_the_prompt_node():
-    """Whatever its class is called (#1832)."""
+    """Whatever its class is called."""
     found = detect_workflow_io(_i2v_graph())
     assert (found.positive_prompts, found.ambiguities) == (("3",), ())
     assert run_targets(_i2v_graph())["caption"] == [
@@ -389,20 +389,19 @@ def _request(client_id=None):
 
     ``OriginClientMiddleware`` puts the originating tab's ``X-Client-Id`` on
     ``request.state``, and the import route threads it into the
-    ``CHANGED_WORKFLOWS`` event so that tab can recognise its own change
-    (v1.12 B4). Calling the endpoint as a function skips the middleware, so
+    ``CHANGED_WORKFLOWS`` event so that tab can recognise its own change.
+    Calling the endpoint as a function skips the middleware, so
     the state it would have set is supplied here.
     """
     return SimpleNamespace(state=SimpleNamespace(origin_client_id=client_id))
 
 
 def _fill_run_inputs(workflow, image, caption):
-    """What the retired run routes did with a graph's bindings (#1410).
+    """Fill a graph's run inputs from its bindings.
 
-    ``routes/comfyui._fill_run_inputs`` was deleted with ``run_i2i``/``run_t2i``;
-    the behaviour under test here was always ``workflow_bindings``', so this is
-    the two calls it wrapped and nothing else. A binding that does not resolve
-    raises ``BindingError`` rather than the route's 400.
+    The behaviour under test is ``workflow_bindings``', so this is its two
+    calls and nothing else. A binding that does not resolve raises
+    ``BindingError`` rather than a route's 400.
     """
     instance = copy.deepcopy(workflow)
     workflow_bindings.fill(
@@ -1569,7 +1568,7 @@ def _stored(user_dir, name="flow"):
 def test_a_stored_workflow_windows_holds_is_refused_before_any_trash_copy(
     import_route, monkeypatch
 ):
-    """A held file fails the rename aside, so a retry trashes just one copy (#1989)."""
+    """A held file fails the rename aside, so a retry trashes just one copy."""
     call, user_dir, _built_in, _hub = import_route
     _stored(user_dir)
     held = str(user_dir / "flow.json")
@@ -1713,7 +1712,7 @@ def test_the_watcher_imports_a_file_put_in_the_inbox(import_route, monkeypatch):
 def _two_input_graph(bound: str | None = "81") -> dict:
     """Flux2BasicEdit's shape: two inputs, both titled Load Image.
 
-    *bound* is the input the old import dialog put its token on, stored the way
+    *bound* is the input a legacy import dialog put its token on, stored the way
     the migration leaves it: a binding, and a neutral value in its place.
     """
     graph = _t2i_graph()
@@ -1871,17 +1870,15 @@ _HINTS_WITH_A_FLAT_BODY = {
 def test_an_editor_hint_on_the_envelope_does_not_make_the_graph_an_editor_graph(
     import_route,
 ):
-    """A guard on this change, not a fix of an older one.
+    """An editor hint on the envelope is not read as the graph's format.
 
-    **`develop` gets this document right already**, by unwrapping `prompt`
-    before it looks at `nodes`; what it could not survive is the naive
-    conversion, where `is_api_format` is asked about the envelope, says
+    The document is read by unwrapping `prompt` before looking at `nodes`. A
+    naive reading, where `is_api_format` is asked about the envelope, says
     "editor format" on the hint and sends a file with no node list to the UI
-    reducer, which raises - stored, and filed under no topology at all. So
-    this passes before the change and after it, and fails only for the
-    version of it that sniffs the wrong object. Nothing this repository writes
-    puts a hint on an envelope; `check_comfy_workflow` validates what is
-    *inside* one, which is why such a file imports at all.
+    reducer, which raises - stored, and filed under no topology at all. This
+    fails only for a version that sniffs the wrong object. Nothing this repository
+    writes puts a hint on an envelope; `check_comfy_workflow` validates what is *inside*
+    one, which is why such a file imports at all.
     """
     call, _user_dir, _built_in, _hub = import_route
     envelope = _hinted_envelope()
@@ -1900,17 +1897,15 @@ def test_an_editor_hint_on_the_envelope_does_not_make_the_graph_an_editor_graph(
 
 
 def test_a_file_that_carries_both_graphs_is_read_as_the_one_it_can_run(import_route):
-    """The reachable document the readers used to disagree about (#1482).
+    """A reachable document the readers must agree about.
 
     `check_comfy_workflow` validates the node list and never looks at
-    `prompt`, so an editor file carrying a prompt chunk imports. On `develop`
-    the node list won every question: it was filed under the editor graph's
-    topology, `run_targets` filled nothing because "a UI-format file fills
-    nothing", and a title came off the editor's own node ids - while the
-    executable graph sat in the file unread. One sniff makes the wrapped
-    prompt the answer to all three, which is the graph this file can actually
-    run. **Two of the moved sites are pinned here and nowhere else**: revert
-    `run_targets` or `_raw_node` and one of these fails.
+    `prompt`, so an editor file carrying a prompt chunk imports. One sniff
+    makes the wrapped prompt the answer for the topology it is filed under,
+    what `run_targets` fills and where the title comes from, which is the
+    graph this file can actually run. **Two of the sniff sites are pinned here
+    and nowhere else**: revert `run_targets` or `_raw_node` and one of these
+    fails.
     """
     call, _user_dir, _built_in, hub = import_route
     prompt = _t2i_graph()
@@ -1945,11 +1940,11 @@ def test_the_hints_decide_the_format_for_every_reader_of_a_picture():
     """One sniff for the readers a picture's own metadata reaches.
 
     `is_comfy_workflow` accepts this document on its hints, so it is offered to
-    the extractors with nothing having validated it. They used to look at
-    `nodes` alone, call it the API format and walk it; `is_api_format` calls it
-    the editor format. **Reading it as one is a deliberate narrowing**: the
-    models it would have yielded are the ones a document nothing wrote would
-    have yielded, and `tests/comfyui_workflows/expected_results.csv` holds the
+    the extractors with nothing having validated it. Looking at `nodes` alone
+    would call it the API format and walk it; `is_api_format` calls it the
+    editor format. **Reading it as one is a deliberate narrowing**: the models
+    the other reading would yield are the ones a document nothing wrote would
+    yield, and `tests/comfyui_workflows/expected_results.csv` holds the
     real files to the letter either way.
     """
     assert is_comfy_workflow(_HINTS_WITH_A_FLAT_BODY) is True
@@ -1989,7 +1984,7 @@ def _card_input(label: str, mode: str = PICKER, pixel_sha=None) -> CardInput:
 
 
 def test_a_selection_routed_on_one_card_does_not_move_another_cards():
-    """`routed` is asked of the card's own addresses (#1457 review, L8).
+    """`routed` is asked of the card's own addresses.
 
     A request spanning several cards names inputs of one of them; another
     card's stored Selection must not yield to an address it does not have.

@@ -271,7 +271,7 @@ def _workflow(monkeypatch, plugin, active="stub_tagger", tagger_version=43):
 
 
 def test_plugin_confidences_reach_the_caller(monkeypatch):
-    """The workflow used to reduce results to bare tags and drop every score."""
+    """The workflow keeps each tag's score rather than reducing to bare tags."""
     workflow = _workflow(monkeypatch, _StubTagger())
     scores = {}
 

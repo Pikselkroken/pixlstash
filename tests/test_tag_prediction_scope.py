@@ -1,14 +1,12 @@
 """Object-scope (BOLA / CWE-639) tests for tag-PREDICTION mutation handlers.
 
-Issue #504: the five mutating tag-prediction handlers (confirm, reject, delete,
+The five mutating tag-prediction handlers (confirm, reject, delete,
 reset_tags, reset_description) must never let a resource-scoped share token
 confirm, reject, delete, or reset tag predictions / descriptions on pictures
 outside its grant.
 
-**Post-refactor enforcement (backend refactor plan Steps 4-6).** The inline
-``enforce_picture_scope`` calls these handlers used were removed in Step 5; object
-authorization now lives in the centralised authz gate. Two facts make these routes
-safe, both asserted / referenced here:
+**Enforcement.** Object authorization lives in the centralised authz gate. Two
+facts make these routes safe, both asserted / referenced here:
 
 * **Live guard (asserted end-to-end below).** Every resource-scoped share token is
   a READ token, and these POST routes are NOT in ``READ_SAFE_POST_PATHS``, so the
@@ -250,9 +248,9 @@ def _detach_finders(server, task_types):
 
 
 def test_bulk_reset_description_scope_and_count(env):
-    """The multi-picture reset (#1162): a scoped token is refused, the owner's
+    """The multi-picture reset: a scoped token is refused, the owner's
     one call marks every picture with the sentinel, and the task manager counts
-    those sentinels as remaining work - it used to count NULL only, so a
+    those sentinels as remaining work - counting NULL only would make a
     regeneration read "N / N" from start to finish."""
     server, client, anon, picture_ids, scoped = env
     # The finder would caption the sentinels straight away; the assertion is
@@ -316,7 +314,7 @@ def test_bulk_reset_tags_scope(env):
 
 
 def test_face_crop_retag_redoes_only_face_pictures_crop_tags(env):
-    """POST /taggers/face-crop-retag (#1662): owner only, and narrower than
+    """POST /taggers/face-crop-retag: owner only, and narrower than
     reset_tags - on a picture with a frame-0 face it drops only the crop-owned
     tags and non-human predictions, keeps hand-added tags and human labels,
     and queues the picture; a picture without a face is left alone."""

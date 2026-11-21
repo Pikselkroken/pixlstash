@@ -274,12 +274,12 @@ def test_the_wd14_arena_holds_the_batch_measured_against_the_arena_model(budget_
 def test_where_the_configured_share_decides_and_where_the_floor_takes_over(
     budget_mb, share_wins
 ):
-    """Pin the actual crossover, not the two budgets that flatter the fix.
+    """Pin the actual crossover, not the two budgets that flatter the floor.
 
     ``ORT_ARENA_SHARE`` must stay a knob the code honours *somewhere*: flooring
     the cap with WD14's process VRAM (900 + 220·n) instead of its arena cost -
-    roughly twice the figure - made the floor beat the share at every budget
-    from 0.5 GB to 32 GB, and 0.40 applied nowhere. It applies at the shipped
+    roughly twice the figure - would make the floor beat the share at every
+    budget from 0.5 GB to 32 GB, so 0.40 would apply nowhere. It applies at the shipped
     default and at large budgets.
 
     It does NOT apply across 3-16 GB, and that is deliberate rather than
@@ -320,7 +320,7 @@ def test_the_batch_sizer_is_untouched_by_the_arena_work():
 
     ``limited_batch_cap`` is calibrated against process VRAM and feeds the
     scheduler's admission model; costing the arena is a separate question, and
-    conflating them again is exactly the regression to catch.
+    conflating them is exactly the regression to catch.
     """
     for budget_mb in (2048, 4096, 8192):
         workflow = _build_workflow_for_budget_tests(

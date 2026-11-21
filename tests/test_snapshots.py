@@ -434,11 +434,10 @@ def test_gfs_retention_does_not_prune_manual(server):
 
 
 def test_create_snapshot_keeps_regenerable_picture_columns(server):
-    """Snapshots must now CARRY the expensive regenerable Picture blobs
-    (CLIP image/text embeddings) and derived scores. They used to be
-    stripped to save disk, but that forced a full GPU re-embedding pass on
-    every restore; the whole archive is zstd-compressed instead, so keeping
-    them is affordable and a restore comes back fully populated.
+    """Snapshots must CARRY the expensive regenerable Picture blobs
+    (CLIP image/text embeddings) and derived scores, so a restore comes back
+    fully populated without a GPU re-embedding pass; the whole archive is
+    zstd-compressed, so keeping them is affordable.
 
     Set the columns on a live picture, take a snapshot, then decompress the
     archive and verify those columns survived alongside user-editable fields.

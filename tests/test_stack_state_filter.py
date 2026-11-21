@@ -1,14 +1,13 @@
 """End-to-end tests for the grid's ``stack_state`` filter.
 
 The unit tests in ``test_predicate_filter.py`` pin the compiled predicate. These
-pin the thing that was actually broken: the *wiring*.
+pin the *wiring*.
 
-The frontend has sent ``stack_state=stacked|unstacked|unresolved`` since
-``9b6aabc0`` (the Dedup → Stacks release), but no Python code read it. The
-parameter reached ``Picture.find`` as an ad-hoc kwarg, where the
-``if hasattr(cls, attr)`` fallthrough for unknown search kwargs dropped it
-silently: no 4xx, no log line, no console error. The user clicked a segment,
-the grid dutifully refetched, and returned exactly the same pictures.
+The frontend sends ``stack_state=stacked|unstacked|unresolved``. An unread
+parameter reaches ``Picture.find`` as an ad-hoc kwarg, where the
+``if hasattr(cls, attr)`` fallthrough for unknown search kwargs drops it
+silently: no 4xx, no log line, no console error, and the grid refetches exactly
+the same pictures.
 
 That failure mode is invisible to a predicate unit test, so these drive the real
 routes and assert both directions: the filter narrows to the right set, and the
@@ -209,10 +208,9 @@ def test_a_stack_whose_only_sibling_is_scrapheaped_is_not_stacked():
 
     It still carries a ``stack_id``, deliberately, so a restore can put its
     sibling back. But one live picture is not a stack, and every other surface
-    already agreed: ``_enrich_stack_counts`` counts live members only and
+    agrees: ``_enrich_stack_counts`` counts live members only and
     ``StackBadge`` hides below two, so the grid draws that picture plain. The
-    filter used to key on the column alone and serve it under ``stacked``, which
-    is what the owner hit after collapsing a stack to its cover.
+    filter must not key on the column alone and serve it under ``stacked``.
     """
     tmp, client, server = _setup_server()
     try:
@@ -279,7 +277,7 @@ def test_stack_state_absent_returns_everything():
     """The other direction: over-filtering is its own regression.
 
     "All" is spelled as the absence of the parameter, so the unfiltered listing
-    must be untouched by this change.
+    must be untouched by the filter.
     """
     tmp, client, server = _setup_server()
     try:

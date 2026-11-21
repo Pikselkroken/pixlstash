@@ -196,7 +196,7 @@ def test_backfill_pins_to_the_pixlstash_tagger_even_when_a_plugin_is_active(tmp_
 
 @pytest.mark.parametrize("scored", [True, False])
 def test_backfill_drops_pictures_retagged_since_it_read_them(tmp_path, scored):
-    """A retag mid-backfill must not get rows from the old pass (#1367).
+    """A retag mid-backfill must not get rows from the old pass.
 
     Scored: a plugin retag leaves only the sentinel, and the stale scores would
     become REJECTED built-in rows. Unscored (decode failure): a sidecar import

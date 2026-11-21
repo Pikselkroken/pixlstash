@@ -290,7 +290,7 @@ def test_a_cached_description_is_not_handed_to_a_workflow_reusing_the_id(folders
 
 
 def test_a_hub_made_before_content_hash_gains_the_column(tmp_path):
-    """A development hub that ran an earlier commit of the pull (#1440)."""
+    """A hub made before the content-hash column gains it on open."""
     path = str(tmp_path / "older.db")
     database = HubDatabase(path)
     with database.transaction() as conn:
@@ -309,7 +309,7 @@ def test_a_hub_made_before_content_hash_gains_the_column(tmp_path):
 
 
 def test_the_inbox_matches_a_card_the_pull_made_until_it_is_deleted(folders, hub):
-    """#1854: the pull of ComfyUI's saved workflows is gone and its origin rows
+    """Origin rows from the removed pull of ComfyUI's saved workflows
     stay. One still says its content is stored, so the same file dropped in
     the watched folder is not stored twice. Deleting the card dismisses the
     row (an older build sharing the hub must not pull the card back), and a

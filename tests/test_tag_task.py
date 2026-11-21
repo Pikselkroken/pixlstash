@@ -82,9 +82,9 @@ def test_add_tags_bulk_skips_missing_picture_ids(tmp_path):
 def test_add_tags_bulk_honours_human_labels(tmp_path):
     """The tagger must not drop a human-confirmed tag nor re-apply a rejected one.
 
-    Regression for the Lightbox re-tag bug: a manually-confirmed 'watermark'
-    (POS, outside the model vocabulary) vanished after a regenerate because the
-    fresh tagger pass rewrote the Tag table from model output alone.
+    A manually-confirmed 'watermark' (POS, outside the model vocabulary) must
+    survive a regenerate, so the fresh tagger pass cannot rewrite the Tag table
+    from model output alone.
     """
     engine = _make_engine(tmp_path)
 
@@ -209,7 +209,7 @@ def test_a_transient_load_error_is_never_marked(tmp_path, monkeypatch):
 
 
 def test_a_mislabelled_video_is_loaded_not_suppressed(tmp_path, monkeypatch):
-    """A real video named `.png` is decodable by every other pipeline (#750 B3).
+    """A real video named `.png` is decodable by every other pipeline.
 
     The tag path must not be stricter than the pipelines its mark suppresses, so
     a PIL failure falls back to the shared loader before concluding anything.
@@ -473,8 +473,7 @@ def test_a_malformed_bbox_costs_only_its_own_picture(tmp_path):
 def test_a_bbox_whose_json_is_corrupt_is_survived(tmp_path):
     """Malformed bbox *JSON* raises on attribute access, before any indexing.
 
-    This one was unguarded even before the PR: the valid_faces comprehension sat
-    outside the old try, so json.loads blew up the whole pass.
+    json.loads failing on one face must not blow up the whole pass.
     """
 
     class _CorruptBboxFace:
@@ -615,7 +614,7 @@ def _face_crop_box(tmp_path, name, size, bbox, target=512, face_scale=1.4):
 
 
 def test_a_face_bigger_than_the_target_is_cropped_whole(tmp_path):
-    """#1648: a 400px face used to get a 320px window cut out of its middle."""
+    """A 400px face is cropped whole, not a 320px window cut from its middle."""
     x1, y1, x2, y2 = _face_crop_box(
         tmp_path, "big-face.png", (1200, 1000), [400, 300, 700, 700], target=320
     )
@@ -689,7 +688,7 @@ def test_the_tagging_pass_honours_the_whole_face_crop_setting(
 ):
     """A 50px face: 1.4 x 50 = 70 with the setting on, the 32px target off.
 
-    The crop reaches the tagger at the target size either way (#2745), so the
+    The crop reaches the tagger at the target size either way, so the
     window is read from what it covers: a strip only the 70px one reaches.
     """
     from PIL import Image as PILImage
@@ -879,10 +878,10 @@ def test_a_face_too_small_to_judge_loses_face_tags_when_its_crop_finds_nothing(
 @pytest.mark.parametrize("plugin", ["pixlstash_tagger", "wd14", "acme_tagger"])
 def test_the_preload_keeps_only_what_the_taggers_read(tmp_path, plugin):
     """No decoded original survives the preload, and every tagger input is
-    bit-identical to the one the preloaded original used to produce.
+    bit-identical to the one a preloaded original would produce.
 
-    Holding the originals for the whole batch, three batches at once, is what
-    filled 30 GB on a photo library.
+    Holding the originals for the whole batch, three batches at once, can fill
+    30 GB on a photo library.
     """
     import numpy as np
     import torch

@@ -3,29 +3,26 @@
 ``stack_leaders_only`` renders one tile per stack. On the unscoped grid the
 leader is simply ``stack_position == 0``. When the caller passes an explicit id
 filter, a picture set, a share token's scope, a split, the global position-0
-leader may not be inside that filter, and requiring it rendered NEITHER picture:
-a set holding only a non-cover stack member showed five tiles for its six
-members and no stack at all (#670 / #1746). The id-scoped branch therefore
-represents each stack by its lowest-positioned member INSIDE the id filter.
+leader may not be inside that filter, and requiring it would render NEITHER
+picture: a set holding only a non-cover stack member would show five tiles for
+its six members and no stack at all. The id-scoped branch therefore represents
+each stack by its lowest-positioned member INSIDE the id filter.
 
-That rule was first implemented as a correlated ``EXISTS`` over an aliased
-picture which re-tested the entire id list once per candidate row. Measured on a
-19,822-picture vault, a 6,641-id set view cost 102 ms against 4.6 ms for the
-unscoped fast path, and seconds once every row in scope was stacked. Each stack
-is now ranked ONCE by ``ROW_NUMBER() OVER (PARTITION BY stack_id)`` in a derived
-table, and every candidate row probes that one-row-per-stack result: 9.7 ms for
-the same set view, same ids returned.
+Each stack is ranked ONCE by ``ROW_NUMBER() OVER (PARTITION BY stack_id)`` in a
+derived table, and every candidate row probes that one-row-per-stack result,
+rather than a correlated ``EXISTS`` re-testing the entire id list once per
+candidate row.
 
-These tests pin both halves of that change:
+These tests pin both halves:
 
-* ``_legacy_scoped_leader_ids`` reproduces the correlated formulation verbatim
-  and is used as an oracle: the id sets must be identical, not merely the same
+* ``_legacy_scoped_leader_ids`` reproduces the correlated formulation and is
+  used as an oracle: the id sets must be identical, not merely the same
   size, across every scenario (stack wholly inside the scope, wholly outside it,
   straddling it, unstacked rows, NULL ``stack_position``, deleted members, and
   all three lifecycle modes: live, ``include_deleted``, ``only_deleted``).
 * ``test_id_scoped_leader_count_is_single_pass`` fails if the per-row shape ever
-  comes back: it counts an 8,000-id scope that is half stacked, which the old
-  formulation cannot do inside the budget.
+  comes back: it counts an 8,000-id scope that is half stacked, which the
+  correlated formulation cannot do inside the budget.
 """
 
 from __future__ import annotations
@@ -139,11 +136,10 @@ def _legacy_scoped_leader_ids(
     only_deleted: bool = False,
     include_deleted: bool = False,
 ) -> set[int]:
-    """The pre-optimization correlated-EXISTS formulation, kept as an oracle.
+    """The correlated-EXISTS formulation, kept as an oracle.
 
-    This is the exact condition that shipped for #670 / #1746, transcribed
-    unchanged. It is intentionally NOT shared with the production code: its only
-    job is to answer "what did the slow query return?" so the fast query can be
+    It is intentionally NOT shared with the production code: its only
+    job is to answer "what does the slow query return?" so the fast query can be
     proved identical rather than merely plausible.
 
     ``only_deleted`` / ``include_deleted`` mirror the same ``Picture.find``
@@ -224,7 +220,7 @@ def test_stack_fully_outside_the_scope_contributes_nothing(session):
 
 
 def test_straddling_stack_is_represented_by_its_best_in_scope_member(session):
-    """The #670 / #1746 case: the cover is outside the id filter.
+    """The cover is outside the id filter.
 
     Exactly one tile must still stand for the stack, and it must be the
     lowest-positioned member that IS in the filter: not nothing, and not one
@@ -294,7 +290,7 @@ def test_deleted_members_never_represent_a_stack(session):
 def test_trash_view_scope_matches_the_legacy_query(session):
     """``only_deleted`` + an id scope (a scoped trash view) is the one case
     where the ranking set can be empty for a stack: every candidate is deleted
-    and the ranking set holds only live rows. Whatever the legacy query did
+    and the ranking set holds only live rows. Whatever the legacy query does
     there, the single-pass query must still do."""
     stack = _new_stack(session)
     dead_cover = _add_picture(session, stack_id=stack, stack_position=0, deleted=True)
@@ -403,7 +399,7 @@ def test_id_scoped_leader_count_is_single_pass(session):
 
     ``/pictures/count`` runs this exact shape (COUNT(*), no LIMIT) on every grid
     load of a picture set, a share-token scope, or a split. If the leader rank is
-    ever resolved per candidate row again, this blows the budget by orders of
+    ever resolved per candidate row, this blows the budget by orders of
     magnitude rather than by a few percent.
     """
     ids = _seed_bulk(session, picture_count=8000, stacked_fraction=0.5, members=2)

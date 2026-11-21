@@ -1,4 +1,4 @@
-"""What this machine measured a training setup to need (#2120)."""
+"""What this machine measured a training setup to need."""
 
 from __future__ import annotations
 
@@ -199,7 +199,7 @@ def test_needs_put_previews_apart_with_a_margin():
 
 
 def test_the_margin_never_lifts_a_peak_that_fits_the_room_past_it():
-    """#2081's rule for ComfyUI, for training: a peak the run completed in on
+    """The ComfyUI margin rule, for training: a peak the run completed in on
     this card is never asked for with more than the room holds."""
     assert measurements.with_margin(10_000, room=20_000) == 11_000
     # Between room / 1.1 and room / 1.21 the margin is cut to room / 1.1.

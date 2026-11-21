@@ -1,8 +1,8 @@
-"""Thumbnails live in ``image_root/.pixlstash-thumbnails/`` (#1164).
+"""Thumbnails live in ``image_root/.pixlstash-thumbnails/``.
 
-Before this a managed picture's thumbnail sat beside it as ``<stem>_thumb.webp``
-and a reference-folder picture's under ``.ref_thumbs/``. Both are still found,
-moved home on first read, and deleted with their picture.
+Legacy locations - ``<stem>_thumb.webp`` beside a managed picture and
+``.ref_thumbs/`` for a reference-folder picture - are still found, moved home
+on first read, and deleted with their picture.
 """
 
 import os

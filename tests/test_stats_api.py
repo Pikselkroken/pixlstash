@@ -172,10 +172,10 @@ def test_unscored_histogram_bucket_matches_what_the_unscored_filter_returns():
     """The Unscored bar and ``unscored=1`` must agree, score 0 included.
 
     Clicking the current star again writes a literal 0 via ``POST
-    /pictures/apply-scores``, and nothing normalises it back to NULL. The
-    histogram used to read only the NULL group, so a score-0 picture fell into no
-    bucket at all: the bars did not sum to the library and the sidebar count
-    disagreed with the grid on the very first click.
+    /pictures/apply-scores``, and nothing normalises it back to NULL. A
+    histogram reading only the NULL group would put a score-0 picture in no
+    bucket at all: the bars would not sum to the library and the sidebar count
+    would disagree with the grid on the very first click.
     """
     temp_dir, client, server = _setup()
     clear_stats_cache()

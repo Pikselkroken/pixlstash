@@ -1,7 +1,6 @@
 """Tests for the tag health board: signal aggregates on a small fixture vault,
 the rebuild endpoint's background/progress reporting, no-model-signal rows,
-and staleness detection / auto-rebuild (Spec B,
-docs/reviews/tag-review-board-redesign-ux-spec.md §4).
+and staleness detection / auto-rebuild.
 """
 
 import gc
@@ -394,9 +393,8 @@ def test_tag_health_scoped_restricts_signals_and_tag_list():
 
 def test_tag_health_scoped_mismatch_excludes_out_of_scope_pairs():
     """Scoped mismatch counts only stored likeness pairs whose BOTH endpoints are
-    in scope. Regression guard for pushing the scope into the pairs query: a pair
-    with one endpoint outside the set must not be counted, and the result must
-    match the pre-refactor Python-filtered behaviour (vault-wide sees both pairs).
+    in scope: a pair with one endpoint outside the set must not be counted
+    (vault-wide sees both pairs).
     """
     temp_dir, client, server = _setup()
     try:
@@ -447,12 +445,11 @@ def test_tag_health_scoped_mismatch_excludes_out_of_scope_pairs():
 
 def test_tag_health_scoped_survives_large_scope():
     """A scope of ~1500 pictures must compute without tripping SQLite's
-    bound-parameter ceiling. Regression guard for the scale refactor: with the
-    variable limit pinned to the historical 999 floor, the pre-refactor
-    ``.in_(picture_ids)`` in ``compute_tag_health_rows._scoped`` and
-    ``_mismatch_counts`` (tag + likeness-pairs queries) would raise
-    ``OperationalError: too many SQL variables``; the temp-table scope path
-    keeps them alive and result-identical.
+    bound-parameter ceiling. With the variable limit pinned to the historical
+    999 floor, a plain ``.in_(picture_ids)`` in
+    ``compute_tag_health_rows._scoped`` and ``_mismatch_counts`` (tag +
+    likeness-pairs queries) would raise ``OperationalError: too many SQL
+    variables``; the temp-table scope path keeps them alive and result-identical.
     """
     from pixlstash.services.tag_health_service import _mismatch_counts
 
@@ -519,10 +516,10 @@ def test_tag_health_scoped_has_model_true_for_older_version_in_scope():
     tagged by an EARLIER run than the vault's newest prediction must still report
     the tag as in the current tagger's vocabulary (has_model=true).
 
-    Regression guard for the scoped false-negative: pre-fix, has_model was
-    derived from the count of current-version predictions *within the scope*, so
-    zero in-scope current-version rows forced has_model=false on every row (the
-    UI then showed "not in the tagger's vocabulary" for every tag).
+    Deriving has_model from the count of current-version predictions *within
+    the scope* would let zero in-scope current-version rows force
+    has_model=false on every row (the UI would show "not in the tagger's
+    vocabulary" for every tag).
     """
     temp_dir, client, server = _setup()
     try:
@@ -583,11 +580,11 @@ def test_tag_health_set_scoped_board_reports_vocabulary_both_ways():
     generation ever predicted anywhere is still out-of-vocabulary
     (has_model=false).
 
-    This is the end-to-end guard for the reported bug - applying a picture-set
-    filter in the review overlay reported "not in the tagger's vocabulary" for
-    every row, because has_model was a *scope-restricted* current-version count.
-    The negative direction is asserted in the same response so a fix that simply
-    reports has_model=true everywhere cannot pass.
+    This is the end-to-end guard: a picture-set filter in the review overlay
+    must not report "not in the tagger's vocabulary" for every row, as a
+    *scope-restricted* current-version count would. The negative direction is asserted
+    in the same response so a fix that simply reports has_model=true everywhere cannot
+    pass.
     """
     temp_dir, client, server = _setup()
     try:
@@ -658,7 +655,7 @@ def test_tag_health_has_model_false_for_out_of_vocabulary_tags():
     """has_model=false when a tag is absent from the current vocabulary: it has
     only older-version predictions anywhere in the vault, or no predictions at
     all. Confirms the vault-wide vocabulary query does not simply report
-    has_model=true for every tag (the other direction of the scoped fix)."""
+    has_model=true for every tag (the other direction of the scoped check)."""
     temp_dir, client, server = _setup()
     try:
         p_current = _upload_named(client)  # "current_tag", CURRENT-gen prediction
@@ -796,8 +793,8 @@ def test_tag_health_est_wrong_missing_pinned_to_current_model_version():
 def test_tag_health_est_missing_excludes_human_rejected_pictures():
     """est_missing must count only *un-reviewed* untagged pictures. A picture a
     human already REJECTED (NEG) keeps the tagger's original high confidence and
-    stays untagged, so before the fix it was double-counted: once (wrongly) as
-    est_missing and again (correctly) as a model_dispute. It must now be excluded
+    stays untagged, so it could be double-counted: once (wrongly) as
+    est_missing and again (correctly) as a model_dispute. It must be excluded
     from est_missing and appear only in model_disputes."""
     from pixlstash.utils.quality.anomaly_penalty import DEFAULT_TAG_PRECISION
     from pixlstash.utils.service.label_ledger import NEG, record_human_label
@@ -856,8 +853,8 @@ def test_tag_health_est_missing_excludes_human_rejected_pictures():
 def test_tag_health_est_wrong_excludes_human_confirmed_pictures():
     """est_wrong must count only *un-reviewed* tagged pictures. A picture a human
     already CONFIRMED (POS) keeps its Tag row, so a low-confidence prediction on it
-    was double-counted before the fix: once (wrongly) as est_wrong and again
-    (correctly) as a model_dispute. It must now be excluded from est_wrong and
+    could be double-counted: once (wrongly) as est_wrong and again
+    (correctly) as a model_dispute. It must be excluded from est_wrong and
     appear only in model_disputes."""
     from pixlstash.utils.quality.anomaly_penalty import DEFAULT_TAG_PRECISION
     from pixlstash.utils.service.label_ledger import POS, record_human_label
@@ -1719,7 +1716,7 @@ def test_tag_health_stale_true_after_new_tagger_run():
 
 def test_tag_health_stale_true_after_reviewed_suggestion():
     """A reviewed TagSuggestion alone (no new picture, no new TaggerRun) must
-    flip stale - this is Spec B's added signal, beyond what
+    flip stale - this is the board's added signal, beyond what
     review_service._latest_vault_change already covers, because every
     accept/dismiss/swap changes a tag's est_wrong/est_missing/mismatch/
     overturn_rate without necessarily touching Picture or TaggerRun."""

@@ -1,7 +1,6 @@
 """Worker-heavy REST tests: upload, stacking, sets, projects, search.
 
-These tests each used to build their own ``Server`` inside a
-``tempfile.TemporaryDirectory``. Booting a Server (migrations, vault start-up,
+Booting a Server (migrations, vault start-up,
 route registration) plus minting credentials costs ~1.8 s per test and buys
 nothing here: no test in this module asserts anything about server construction
 or authentication. The module therefore shares one ``server`` and one logged-in
@@ -252,11 +251,10 @@ def server():
 def client(server):
     """One logged-in client for the whole module.
 
-    The first login also *sets* the password, exactly as it did per test
-    before. Both the hash on set and the hash on verify are deliberately slow
-    (~0.15 s each), so the session is established once and reused; the identity
-    tables are excluded from ``clean_library`` to keep it valid. The session is
-    re-proven before every test - see ``clean_library``.
+    The first login also *sets* the password. Both the hash on set and the hash on
+    verify are deliberately slow (~0.15 s each), so the session is established once and
+    reused; the identity tables are excluded from ``clean_library`` to keep it valid.
+    The session is re-proven before every test - see ``clean_library``.
     """
     api_client = TestClient(server.api)
     response = api_client.post(
@@ -305,14 +303,14 @@ def _reset_pipeline_bookkeeping(vault) -> None:
 def clean_library(request, server, client):
     """Empty the shared library before each test, then prove it is empty.
 
-    Restores what a fresh ``Server`` used to give each test:
+    Restores what a fresh ``Server`` gives a test:
 
     * the work planner and task runner are stopped, so no background task from
       the previous test is alive while the next one runs. That is not just
       tidiness: emptying ``picture`` makes SQLite reuse ids from 1, so a
       surviving face-extraction or quality task writes its result onto a
       *different* picture that happens to hold the id it captured. Stopping is
-      exactly what ``Server.__exit__`` used to do between tests here;
+      exactly what ``Server.__exit__`` does;
     * every library table is emptied;
     * every file under ``image_root`` except the SQLite database is deleted, so
       disk state matches the database;
@@ -732,7 +730,7 @@ def test_unassigned_excludes_stack_when_any_member_is_in_set(client):
 
 
 def test_unassigned_by_splits_no_character_from_no_set(server, client):
-    """``unassigned_by`` narrows UNASSIGNED to one half (#1488): ``character``
+    """``unassigned_by`` narrows UNASSIGNED to one half: ``character``
     ignores sets, ``set`` ignores named faces, and leaving it out keeps both.
     ``stack_mate`` has no named face but is stacked with ``named``, so the
     stack rule excludes it from the character half only. (Sets need no such
@@ -1333,13 +1331,12 @@ def test_all_picture_query_respects_project_filter(client):
 
 
 def test_unassigned_project_filter_with_id_returns_matching_picture(client):
-    """Regression: `?id=<pic>&project_id=UNASSIGNED` must return the matching
+    """`?id=<pic>&project_id=UNASSIGNED` must return the matching
     unassigned picture, not an empty list.
 
     The `id` filter arrives as a string query param while the UNASSIGNED branch
     builds an int id list from `select(Picture.id)`; intersecting the two
-    without normalising types silently yielded an empty set (`{'5'} & {5}`), so
-    the endpoint returned nothing instead of the picture."""
+    without normalising types yields an empty set (`{'5'} & {5}`)."""
     unassigned_import = upload_pictures_and_wait(
         client,
         [("file", ("id-unassigned.png", random_images[14], "image/png"))],

@@ -1,9 +1,9 @@
 """GPU out-of-memory handling: retry the batch, say so, change nothing.
 
 The failure this pins is a user plugin whose model load OOMs because something
-else (a ComfyUI run, a second model) is holding the card. That used to lose the
-whole batch on the first try - and, for descriptions, clear the caption of every
-picture in it. See ``BaseTask.run`` and ``DescriptionTask``.
+else (a ComfyUI run, a second model) is holding the card. Without a retry that
+loses the whole batch on the first try - and, for descriptions, clears the
+caption of every picture in it. See ``BaseTask.run`` and ``DescriptionTask``.
 
 No ``Server`` here on purpose: every piece under test is reachable with plain
 fakes, and standing an environment up would cost ~1.35 s per test for nothing.
@@ -71,7 +71,7 @@ def test_is_vram_oom_ignores_an_out_of_memory_that_is_not_the_gpus():
 
 def test_is_vram_oom_recognises_onnx_runtimes_full_arena():
     """ORT says neither "out of memory" nor a device word; this is the message
-    a full card produced on 2026-08-27 with an LLM holding the VRAM."""
+    a full card produces with an LLM holding the VRAM."""
     assert is_vram_oom(
         RuntimeError(
             "[ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned while "
@@ -397,7 +397,7 @@ class _FakeNvml:
 
 
 def test_the_notice_names_the_other_process_on_the_card(monkeypatch):
-    """ "Another program is probably holding the card" was a guess; name it."""
+    """The notice names the process holding the card rather than guessing."""
     names = {566190: "lms", 566191: "Xorg"}
     fake = Ledger(_FakeNvml([(os.getpid(), 4338), (566191, 210), (566190, 18432)]))
     monkeypatch.setattr(ledger_module, "_process_name", names.__getitem__)

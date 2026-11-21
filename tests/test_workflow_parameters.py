@@ -113,7 +113,7 @@ def _video_graph(latent_input="latent_image"):
 
 
 def test_with_no_empty_latent_the_size_is_the_node_s_that_hands_out_the_latent():
-    """An image-to-video node sizes the latent it hands out (#1833)."""
+    """An image-to-video node sizes the latent it hands out."""
     assert wp.size_inputs(_video_graph()) == {("7", "width"), ("7", "height")}
 
 

@@ -1,4 +1,4 @@
-"""The trainer outlives the backend being killed with its process tree (#2382).
+"""The trainer outlives the backend being killed with its process tree.
 
 The desktop app stops the backend with ``taskkill /T /F``, which ends every
 process whose parent-pid chain leads back to it. On Windows the trainer is

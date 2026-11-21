@@ -435,7 +435,7 @@ def test_bulk_accept_resolves_when_signals_agree():
 def test_bulk_accept_dry_run_counts_without_writing():
     """dry_run returns the would-resolve count but mutates nothing.
 
-    Regression guard for the read-path dispatch: because the dry_run branch
+    Guards the read-path dispatch: because the dry_run branch
     performs no writes it is dispatched via run_immediate_read_task, so it must
     return the correct count AND leave every suggestion PENDING and every tag in
     place. A count that changed, or any write leaking through, would break both
@@ -478,9 +478,9 @@ def test_bulk_accept_dry_run_counts_without_writing():
 def test_bulk_accept_skips_when_tagger_contradicts_neighbour():
     """remove + tagger says BOTH have it → the two signals disagree, so bulk leaves it.
 
-    This is the case the old confidence-only path got wrong: it placed the pair in the
-    "both" corner and *added* the tag to the twin - for a suggestion that asked to
-    *remove* it. The blend now requires the tagger to land in the neighbour's corner.
+    A confidence-only path would place the pair in the "both" corner and *add* the
+    tag to the twin - for a suggestion that asked to *remove* it. The blend requires
+    the tagger to land in the neighbour's corner.
     """
     temp_dir, client, server = _setup()
     try:
@@ -723,11 +723,10 @@ def test_scan_tag_rejects_low_similarity_perceptual_override():
 
 
 def test_scan_tag_confidence_fallback_for_new_tag():
-    """Fix 1 regression: the exact reported bug. A brand-new tag with zero
-    ``Tag`` rows produced ZERO suspects (not just few) because the kNN vote's
-    ``has_concept`` mask is all-False, making pos_frac identically 0.0 for
-    every picture vault-wide - add_threshold could never be met no matter how
-    confident the model is. Below MIN_GROUND_TRUTH_FOR_VOTE ground-truth
+    """A brand-new tag with zero ``Tag`` rows still yields suspects. The kNN
+    vote's ``has_concept`` mask is all-False for it, making pos_frac identically
+    0.0 for every picture vault-wide - add_threshold could never be met no
+    matter how confident the model is. Below MIN_GROUND_TRUTH_FOR_VOTE ground-truth
     positives, scan_tag must fall back to TagPrediction confidence directly.
     """
     from pixlstash.services import tag_scan_service
@@ -826,9 +825,9 @@ def test_scan_tag_confidence_fallback_excludes_human_rejected():
     NEG (``label_state="NEG"``) but keeps the tagger's high confidence and adds no
     ``Tag`` row and no ``TagSuggestion`` row - so ``scan_tag._write``'s
     suggestion-level dedup can't suppress it. Only the ``label_state == "UNKNOWN"``
-    filter (mirroring est_missing) does: pre-fix, the rejected picture was
-    re-surfaced as a PENDING "add" suspect; it must now be excluded, while an
-    un-reviewed confident picture is still proposed.
+    filter (mirroring est_missing) does: the rejected picture must not be
+    re-surfaced as a PENDING "add" suspect, while an un-reviewed confident
+    picture is still proposed.
     """
     from pixlstash.services import tag_scan_service
     from pixlstash.utils.service.label_ledger import NEG, record_human_label
@@ -875,21 +874,19 @@ def test_scan_tag_confidence_fallback_excludes_human_rejected():
 
 
 def test_scan_tag_base_rate_default_thresholds_vs_explicit_override():
-    """Fix 2 regression: a minority-base-rate tag (p=0.25, well above the
-    Fix-1 floor of 5 ground-truth positives) at whose true prevalence the old
-    fixed 0.55/0.45 pair structurally favours 'remove' over 'add' (a
-    threshold centered on 50% is systematically wrong for a 25% base rate).
+    """A minority-base-rate tag (p=0.25, well above the floor of 5
+    ground-truth positives) at whose true prevalence the legacy fixed
+    0.55/0.45 pair structurally favours 'remove' over 'add' (a threshold
+    centered on 50% is systematically wrong for a 25% base rate).
 
     Twenty pictures, hand-constructed embeddings with exactly known pairwise
-    cosine similarities (verified against the real kernel before being
-    transcribed here - see the PR notes): one probe picture (``u``) whose
-    kNN-vote positive fraction is 0.4722 - below the OLD fixed add_threshold
-    (0.55) so the old code could never flag it, but above the NEW base-rate
-    default (p + 0.15 = 0.40) so it should. A second picture (``t1``) is
-    tagged with pos_frac 0.259 - above the NEW default remove_threshold
-    (p - 0.15 = 0.10, so NOT flagged) but below the OLD fixed 0.45 (so an
-    explicit legacy-threshold caller WOULD flag it) - exercising acceptance
-    criterion (c): explicit overrides bypass the base-rate computation.
+    cosine similarities: one probe picture (``u``) whose kNN-vote positive
+    fraction is 0.4722 - below the legacy fixed add_threshold (0.55) but above
+    the base-rate default (p + 0.15 = 0.40), so it is flagged. A second picture
+    (``t1``) is tagged with pos_frac 0.259 - above the default
+    remove_threshold (p - 0.15 = 0.10, so NOT flagged) but below the legacy
+    fixed 0.45 (so an explicit legacy-threshold caller WOULD flag it) -
+    explicit overrides bypass the base-rate computation.
     """
     import io
 
@@ -997,24 +994,19 @@ def test_scan_tag_base_rate_default_thresholds_vs_explicit_override():
 
 
 def test_scan_tag_base_rate_default_thresholds_majority_tag_regression():
-    """Fix 2 majority-tag regression: the naive symmetric ``p ± margin`` formula
-    shifts *every* tag uniformly by its own base rate, which helps minority
-    tags (the population Fix 2 targeted) but actively hurts a majority tag -
-    it raises add_threshold *above* the legacy fixed 0.55, making add
-    *stricter* than before for no reason (majority tags were never the
-    population this fix was meant to help).
+    """Majority tag: the naive symmetric ``p ± margin`` formula shifts
+    *every* tag uniformly by its own base rate, which helps minority tags but
+    hurts a majority tag - it raises add_threshold *above* the legacy fixed
+    0.55, making add *stricter* for no reason.
 
-    Twenty pictures, base rate p=12/20=0.6 (mirrors the real-vault
-    reproduction: tag "man" at p=68/111=0.6126). One probe picture (``u``)
+    Twenty pictures, base rate p=12/20=0.6. One probe picture (``u``)
     has kNN-vote positive fraction 0.6498 and a twin (``p1``) at cosine
     similarity 0.9535 - clearing both the twin-similarity gate (>=0.85) and
-    the legacy fixed add_threshold (0.55, so the legacy code catches it) -
-    but BELOW the *uncapped* base-rate default (p + 0.15 = 0.75), so the
-    regressed formula misses it entirely (verified against the real kernel
-    directly before being transcribed here - see the PR notes). The
-    corrected default caps add_threshold at the legacy 0.55 ceiling (never
-    stricter than the legacy default), so it catches ``u`` again, matching
-    the legacy behaviour.
+    the legacy fixed add_threshold (0.55) - but BELOW the *uncapped*
+    base-rate default (p + 0.15 = 0.75), so the uncapped formula misses it
+    entirely. The default caps add_threshold at the legacy 0.55 ceiling (never
+    stricter than the legacy default), so it catches ``u``, matching the
+    legacy behaviour.
     """
     import io
 
@@ -1665,13 +1657,12 @@ def _force_variable_limit(server, limit=999):
 
 def test_scan_tag_survives_large_picture_ids_scope():
     """A ~1500-picture explicit scope must scan without tripping SQLite's
-    bound-parameter ceiling. Regression guard for the scale refactor: with the
-    variable limit pinned to the historical 999 floor, the pre-refactor
-    ``.in_(picture_ids)`` in ``_load`` (site 3) and ``_load_confidence_fallback``
-    (site 4) would raise ``OperationalError: too many SQL variables``. The
-    temp-table scope path keeps both alive and result-identical: three
-    confidently-predicted, zero-ground-truth pictures still surface as ``add``
-    suspects via the confidence fallback.
+    bound-parameter ceiling. With the variable limit pinned to the historical
+    999 floor, a plain ``.in_(picture_ids)`` in ``_load`` and
+    ``_load_confidence_fallback`` would raise ``OperationalError: too many SQL
+    variables``. The temp-table scope path keeps both alive and result-identical: three
+    confidently-predicted, zero-ground-truth pictures still surface as ``add`` suspects
+    via the confidence fallback.
     """
     from pixlstash.services import tag_scan_service
 
@@ -1746,9 +1737,9 @@ def test_scan_tag_survives_large_picture_ids_scope():
 
 
 def test_legacy_scan_refreshes_stale_pending_in_place():
-    """F2(i): a legacy re-scan (review_id=None) must REFRESH the stored evidence
+    """A legacy re-scan (review_id=None) must REFRESH the stored evidence
     on an existing PENDING row in place - same row id, fresh evidence, no delete
-    and no duplicate. This is the no-purge replacement for the old rebuild."""
+    and no duplicate."""
     from pixlstash.services import tag_scan_service
 
     temp_dir, client, server = _setup()
@@ -1817,7 +1808,7 @@ def test_legacy_scan_refreshes_stale_pending_in_place():
 
 
 def test_accept_refuses_when_a_manual_fix_contradicts_the_suggestion():
-    """F2(ii): a human recorded the opposite label after the suggestion was
+    """A human recorded the opposite label after the suggestion was
     raised (a manual fix). Accepting the stale suggestion would reverse it, so
     accept must refuse (loudly) and leave both the label and the row untouched."""
     import pytest

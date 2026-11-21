@@ -1,4 +1,4 @@
-"""The smart score's resolution term reads the main face, not the file (#2570).
+"""The smart score's resolution term reads the main face, not the file.
 
 A face crop and the picture it was cut from share the face's pixels, so they must
 get the same resolution credit; a change to a picture's face boxes must clear its

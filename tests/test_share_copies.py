@@ -1,4 +1,4 @@
-"""Share-ready copies (#2417): generation data stripped by default, pixels kept."""
+"""Share-ready copies: generation data stripped by default, pixels kept."""
 
 import datetime
 import functools

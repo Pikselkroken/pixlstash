@@ -1,8 +1,8 @@
-"""The cut-over's state conversion (#1623): cards onto workflows.
+"""The cut-over's state conversion: cards onto workflows.
 
 Two halves. The hub step (``hub/workflow_group_convert.py``, data version 5)
-is asserted row by row on a hub holding every kind of card state the issue
-names, and run twice. The vault half (``MissingSavedRecipeWorkflowFinder``)
+is asserted row by row on a hub holding every kind of card state there is,
+and run twice. The vault half (``MissingSavedRecipeWorkflowFinder``)
 is asserted end to end: a recipe saved on a checkpoint-B card still runs on B.
 """
 
@@ -145,7 +145,7 @@ def _convert(hub) -> None:
 
 @pytest.fixture
 def world(tmp_path):
-    """A hub with every kind of card state the issue's table names.
+    """A hub with every kind of card state the conversion handles.
 
     Core C (txt2img): the speed-LoRA cover S (named, noted, position 0 of an
     ordered automatic stack), A1 and B1 on one topology with only B1 unstacked
@@ -416,7 +416,7 @@ def test_an_unnamed_cover_takes_the_next_name_it_holds(world):
 
 
 def test_a_file_only_card_keeps_what_the_owner_typed(tmp_path):
-    """A workflow file with no recipe (#1466) is its own workflow, and converts.
+    """A workflow file with no recipe is its own workflow, and converts.
 
     It has no core hash and no stored graph, so it is ``auto:<topology hash>``
     as ``workflow_index`` files it; its name, notes, hidden flag and successor
@@ -494,8 +494,8 @@ def _step_7_world(tmp_path):
     """A hub as data step 6 left it, and the user folder its file rows name.
 
     ``api.json`` is a file of a card its pictures made; ``editor.json`` a
-    file-only card (#1466) whose owner state steps 5 and 6 carried to
-    ``auto:<topology>``, converted by ComfyUI (#1530); ``pulled.json`` one a
+    file-only card whose owner state steps 5 and 6 carried to
+    ``auto:<topology>``, converted by ComfyUI; ``pulled.json`` one a
     pull wrote; ``gone.json`` a row whose file is no longer there.
     """
     hub = HubDatabase(str(tmp_path / "hub.db"))
@@ -1232,7 +1232,7 @@ def _core_version(hub, keys) -> str:
 def test_a_topology_whose_move_raises_is_rolled_back_and_the_rest_move(
     step_8, monkeypatch, caplog
 ):
-    """#1696: a non-sqlite error must not escape step 8 and refuse the hub."""
+    """A non-sqlite error must not escape step 8 and refuse the hub."""
     w = step_8
     real = convert.variant_families
 
@@ -1257,7 +1257,7 @@ def test_a_topology_whose_move_raises_is_rolled_back_and_the_rest_move(
 
 
 def test_a_v1_topology_that_will_not_reduce_is_tried_once(step_8):
-    """#1696: left on the v1 stamp, `_has_old_cores` re-ran step 8 forever."""
+    """Left on the v1 stamp, `_has_old_cores` must not re-run step 8 forever."""
     w = step_8
     with w.hub.transaction() as conn:
         conn.execute(
@@ -1455,7 +1455,7 @@ def test_step_10_composes_a_v1_recipes_map_onto_v3(step_10):
 
 
 def test_step_10_a_card_split_by_family_follows_each_old_workflow(step_10):
-    """Copilot on #1728: a card's successor row went to its last variant's heir."""
+    """A card's successor row follows each old workflow, not the last heir."""
     w = step_10
     runs = [
         record_api_graph(
@@ -1864,7 +1864,7 @@ def test_the_hub_open_runs_step_15_and_reads_the_stages_again(step_15):
 
 
 def test_carrying_one_workflow_twice_onto_an_heir_writes_its_notes_once(tmp_path):
-    """#1696: a repeated carry (`keep=True`) appended the same notes again."""
+    """A repeated carry (`keep=True`) does not append the same notes again."""
     hub = HubDatabase(str(tmp_path / "hub.db"))
     try:
         with hub.transaction() as conn:
@@ -2260,7 +2260,7 @@ def test_a_recipe_on_a_file_only_card_follows_its_file_into_step_7(
 ):
     """Nothing the owner saved changes where it lists across the upgrade.
 
-    A recipe on a file-only card (#1466) named `auto:<topology hash>` once
+    A recipe on a file-only card named `auto:<topology hash>` once
     step 5 converted it, or still names only the card; step 7 makes the file a
     manual workflow and retires that id, and the conversion re-files both
     recipes there: they list on the manual workflow and run its document.
@@ -2425,7 +2425,7 @@ def test_a_recipe_on_a_v1_workflow_is_refiled_onto_v2_with_its_addresses(run_env
 
 
 def test_a_refiled_recipe_keeps_a_stage_address_on_this_librarys_base(run_env):
-    """#1738: the conversion reads the base this library runs, not the hub's.
+    """The conversion reads the base this library runs, not the hub's.
 
     The twin with a LoRA loader is the base without counts; it
     has no picture here, so with them the orphan-encoder graph is. Only on
@@ -2745,7 +2745,7 @@ def _identify(hub, filename, sha):
 
 
 def test_a_recipe_follows_its_card_out_of_a_workflow_that_lives_on(run_env):
-    """#1689: a family pass that leaves some variants unknown keeps the old
+    """A family pass that leaves some variants unknown keeps the old
     workflow; a recipe on the card that moved follows it, and a recipe on the
     card that stayed is left where it is."""
     server = run_env.server
@@ -2822,7 +2822,7 @@ def test_a_recipe_follows_its_card_out_of_a_workflow_that_lives_on(run_env):
 def test_a_moved_recipe_goes_where_the_move_says_not_where_a_variant_is(
     run_env,
 ):
-    """#1689: a card's variants may sit in several workflows, so the
+    """A card's variants may sit in several workflows, so the
     conversion re-files on the recorded target, never on its first variant's
     workflow (which here is the very workflow the recipe names)."""
     server = run_env.server
@@ -2873,7 +2873,7 @@ def test_a_moved_recipe_goes_where_the_move_says_not_where_a_variant_is(
 
 
 def test_a_stale_key_version_variant_does_not_keep_a_workflow_alive(run_env):
-    """#1689: a variant row on an old key version is no variant the index
+    """A variant row on an old key version is no variant the index
     lists, so the family pass retires the workflow it alone was left in."""
     server = run_env.server
     hub = server.hub
@@ -3012,7 +3012,7 @@ def test_an_adopted_file_with_no_pictures_lists_once_as_its_manual_workflow(
     run_env, tmp_path
 ):
     """Step 7 leaves an adopted file's rows, so its card still reads as an
-    automatic workflow (#1720). With no picture that is the manual workflow's
+    automatic workflow. With no picture that is the manual workflow's
     twin and the grid leaves it out; with pictures it is a real automatic
     workflow beside the manual one, and both list."""
     server = run_env.server

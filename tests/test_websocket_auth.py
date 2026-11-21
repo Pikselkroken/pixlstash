@@ -421,8 +421,8 @@ def test_authenticate_websocket_rejects_token_for_inactive_library(
 def test_authenticate_websocket_accepts_a_token_that_covers_every_library(
     server, owner_client
 ):
-    """The handshake reads the same pin as HTTP, so it honours the same opt-out
-    (#1787). The refusal above is this test's control: same token shape, same
+    """The handshake reads the same pin as HTTP, so it honours the same
+    opt-out. The refusal above is this test's control: same token shape, same
     inactive library, without the owner having widened it."""
     minted = owner_client.post(
         f"{API}/users/me/token", json={"description": "covers all", "scope": "READ"}
@@ -630,8 +630,7 @@ def test_authz_gate_noops_on_websocket_scope():
     FastAPI also attaches it to ``@router.websocket`` routes in those routers.
     WS routes are out of the HTTP gate by design (their chokepoint is
     ``authenticate_websocket``). The gate must therefore resolve harmlessly and
-    enforce nothing on a WS scope: it must not crash the handshake (the old
-    ``request: Request`` param did - ``TypeError: missing 'request'``) and, even
+    enforce nothing on a WS scope: it must not crash the handshake and, even
     when ENFORCING against an empty registry (which 403s any *HTTP* route as an
     undeclared miss), a WS connection must return ``None`` before that lookup.
     """
@@ -691,7 +690,7 @@ def test_a_workflow_change_goes_out_as_its_own_frame(server):
 
 def test_a_regrouped_workflow_change_carries_where_each_retired_id_went(server):
     """`renamed` is `{old id: new id}`, strings only, and `{}` for every reason
-    that did not set it, so a client can read it unconditionally (#1696)."""
+    that did not set it, so a client can read it unconditionally."""
     payload = _broadcast_capture(
         server,
         EventType.CHANGED_WORKFLOWS,

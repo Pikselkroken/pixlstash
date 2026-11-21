@@ -1,14 +1,11 @@
-"""Sidebar counts come from the list endpoints, at constant query cost (#651).
+"""Sidebar counts come from the list endpoints, at constant query cost.
 
-The sidebar used to fire one ``GET /characters/{id}/summary`` per character AND
-one ``GET /projects/{id}/summary`` per project on every refresh, each request
-carrying a single integer. ``GET /characters?include_counts=true`` and
-``GET /projects?include_counts=true`` now serve those numbers inline, in a
-constant number of grouped queries, so the fan-out can be deleted.
+``GET /characters?include_counts=true`` and ``GET /projects?include_counts=true``
+serve the per-character and per-project counts inline, in a constant number of
+grouped queries.
 
-A performance fix must not quietly change behaviour (CLAUDE.md), and here the
-behaviour IS a number, so the tests below pin the inline counts against the
-per-id summary endpoints they replace - including the cases where a naive
+The behaviour IS a number, so the tests below pin the inline counts against the
+per-id ``/summary`` endpoints - including the cases where a naive
 implementation drifts:
 
 * a picture in **several** projects (a per-project count must not be a share of
@@ -22,7 +19,7 @@ implementation drifts:
 Scope is pinned in both directions, because over-blocking is its own regression:
 a character-scoped token still sees its own row *with* a global count that
 matches the summary it is already granted (and no project-scoped number, which
-it may ask for nowhere, issue #718), a picture_set-scoped token still gets
+it may ask for nowhere), a picture_set-scoped token still gets
 ``[]``, and a project-scoped token still gets a real number counted over its own
 project, consistent with the list it already gets.
 """
@@ -202,9 +199,8 @@ def env():
       unassigned, one soft-deleted, and one carrying two faces of the same
       character.
 
-    ``shared`` deliberately has a DIFFERENT count in P1 (2) and P2 (3). An
-    earlier fixture gave it 2 in both, and a P2-scoped token was then served
-    P1's number without any assertion noticing.
+    ``shared`` deliberately has a DIFFERENT count in P1 (2) and P2 (3), so a
+    P2-scoped token served P1's number fails an assertion.
     """
     tmp, client, server = _setup_server()
     try:
@@ -263,7 +259,7 @@ def _summary_count(client, character_id, project_id=None, headers=None):
 
 
 def test_character_counts_equal_the_per_id_summary(env):
-    """Every listed row, both scopes, against the endpoint it replaces."""
+    """Every listed row, both scopes, against the per-id summary endpoint."""
     client = env["client"]
     resp = client.get(f"{API}/characters", params={"include_counts": "true"})
     assert resp.status_code == 200, resp.text
@@ -352,8 +348,8 @@ def test_counts_are_absent_unless_requested(env):
 def test_character_count_queries_do_not_grow_with_the_number_of_characters(env):
     """The fan-out itself: the same query count for 3 characters and 11.
 
-    The replaced shape was one HTTP request *and* one COUNT query per
-    character, so this number tracked the character count exactly.
+    A per-character fan-out is one HTTP request *and* one COUNT query per
+    character, so this number would track the character count exactly.
     """
     client, server = env["client"], env["server"]
     with _GroupedCountQueryCounter(
@@ -423,20 +419,14 @@ def test_character_scoped_token_sees_only_its_own_row_with_a_matching_count(env)
     working.
 
     ``project_image_count`` is ``null``, and the rule is the complement of the
-    one above: a character-scoped token may learn no project id at all (issue
-    #125 / R1b), so it may name no project scope on that summary endpoint, so
-    there is no project-scoped number it could have obtained there and none is
-    served here (issue #718).
+    one above: a character-scoped token may learn no project id at all, so it
+    may name no project scope on that summary endpoint, so there is no
+    project-scoped number it could have obtained there and none is served here.
 
-    **Both halves of that complement are asserted, on purpose.** Suppressing
-    here is only sound while the summary endpoint really does refuse the same
-    question, so the 403 is pinned below beside the ``None``. An adversarial
-    review of #718 caught this test asserting only its own half: on the base it
-    ran against, ``enforce_project_filter_scope`` had not landed yet and that
-    summary call still answered ``1``, so the "complement" argument in
-    ``_may_learn_a_project_scoped_count`` was false and nothing here said so.
-    Keep the pair. If a future change relaxes the filter gate, this test is
-    where the two endpoints stop agreeing.
+    **Both halves of that complement are asserted, on purpose.** Suppressing here is
+    only sound while the summary endpoint really does refuse the same question, so the
+    403 is pinned below beside the ``None``. Keep the pair. If a future change relaxes
+    the filter gate, this test is where the two endpoints stop agreeing.
 
     """
     client, server = env["client"], env["server"]
@@ -490,8 +480,8 @@ def test_character_scoped_token_learns_nothing_about_invisible_projects(env):
     served count would say "no project you cannot see holds this character".
 
     It must also be impossible to recover the hidden number by arithmetic:
-    ``image_count - project_image_count`` was previously the count of the
-    token's own pictures held by projects invisible to it (issue #718).
+    ``image_count - project_image_count`` would otherwise be the count of the
+    token's own pictures held by projects invisible to it.
     """
     client, server = env["client"], env["server"]
     anon = TestClient(server.api)
@@ -519,8 +509,8 @@ def test_owner_still_gets_every_project_count_including_the_unassigned_one(env):
 
     The owner's ``visible_project_ids`` is ``None`` (no restriction), so the
     suppression must not fire, including for ``LonerChar``, whose count comes
-    from the genuine "in no project at all" bucket that the fix leaves intact
-    for callers entitled to it.
+    from the genuine "in no project at all" bucket, intact for callers entitled
+    to it.
     """
     client = env["client"]
     rows = client.get(f"{API}/characters", params={"include_counts": "true"}).json()

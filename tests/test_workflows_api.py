@@ -1,4 +1,4 @@
-"""The Workflows view's read API (implementation plan §F1/§F2), both authz directions.
+"""The Workflows view's read API, both authz directions.
 
 Environment sharing
 -------------------
@@ -478,12 +478,12 @@ _ASSET_NAMES = {asset_reference(filename): filename for _, _, filename in _SEED_
 
 
 def _slots_of(structural_hash: str) -> list:
-    """The model slots of one seeded document, by the rule B1 owns."""
+    """The model slots of one seeded document, by the identity rule."""
     return slots(_DOCUMENTS[structural_hash])
 
 
 def _slot_list(structural_hash: str) -> list[dict]:
-    """``workflow_topology_core.slots`` exactly as the B2 backfill writes it."""
+    """``workflow_topology_core.slots`` exactly as the card backfill writes it."""
     return [
         {
             "label": slot.label,
@@ -975,10 +975,8 @@ def fresh_library(workflow_env):
 def _titles(hub, names):
     """``model_marks`` narrowed to the title.
 
-    Was ``model_titles`` in the service until #1483: a public function with no
-    production caller, kept alive by these tests alone. The narrowing it did
-    is one line and belongs to the one caller that wants it - here - while the
-    rule itself stays stated once, in ``model_marks``.
+    The narrowing is one line and belongs to the one caller that wants it - here - while
+    the rule itself stays stated once, in ``model_marks``.
     """
     return {
         name: mark.title for name, mark in model_marks(hub, names).items() if mark.title
@@ -1000,7 +998,7 @@ def test_every_workflow_route_is_declared_owner_only(key):
     between the two tuples. A read is owner-only over a disclosure judgement:
     the counts are read across every non-deleted picture in the vault, so a
     scoped token holding them would learn the size of the whole library one
-    workflow at a time. A write (#1623) is owner-only because it is the owner
+    workflow at a time. A write is owner-only because it is the owner
     rearranging their own library and no scope could describe it.
     """
     assert key in ROUTE_POLICIES, f"{key} has no ROUTE_POLICIES entry"
@@ -1105,8 +1103,8 @@ _TEMPLATED_PATHS = (
 
 def test_the_templated_reads_stay_closed_with_the_gate_rolled_back(workflow_env):
     """``AUTHZ_GATE_ENFORCING = False`` is a documented rollback, and the belt
-    that survives it used to match literal paths only, so these three answered
-    a share token. ``READ_BLOCKED_GET_PREFIXES`` is what refuses them now."""
+    that survives it must match these templated paths, not literal paths only:
+    ``READ_BLOCKED_GET_PREFIXES`` is what refuses them."""
     server = workflow_env.server
     unscoped = bearer_client(
         server, mint_read_token(workflow_env.owner, "rollback unscoped")
@@ -1174,7 +1172,7 @@ def _ghost_shas(server) -> set[str]:
 
 
 def test_nothing_starts_or_reports_a_pull_of_comfyuis_saved_workflows(workflow_env):
-    """#1854: PixlStash does not read ComfyUI's saved workflows by itself, so
+    """PixlStash does not read ComfyUI's saved workflows by itself, so
     no route starts a pull or reports one, and none is declared."""
     app = workflow_env.server.api
     path = f"{API}/comfyui/workflows/pull"
@@ -1260,7 +1258,7 @@ def test_the_ghost_routes_are_the_owners_alone(workflow_env, monkeypatch):
 
 
 def test_removing_a_reference_folder_cascades_its_uncovered_ghosts(workflow_env):
-    """The reported repro: a folder removal left an uncovered ghost behind.
+    """A folder removal must not leave an uncovered ghost behind.
 
     Two ghosts, two instance hashes. The folder held the only picture carrying
     one of them and one of two carrying the other, so exactly one ghost loses
@@ -1426,7 +1424,7 @@ def lora_workflow(tmp_path, monkeypatch, workflow_env):
 
 @pytest.fixture
 def loaderless_workflow(tmp_path, lora_workflow):
-    """A checkpoint workflow with no LoRA loader, and a ComfyUI that types it (#1376)."""
+    """A checkpoint workflow with no LoRA loader, and a ComfyUI that types it."""
     graph = {
         "1": {"class_type": "LoadImage", "inputs": {"image": "{{image_path}}"}},
         "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "x"}},
@@ -1801,7 +1799,7 @@ _RENDER_BOX = "http://192.0.2.20:8188/"
 
 @pytest.fixture
 def saved_address(workflow_env, monkeypatch):
-    """An owner with one ``comfyui_url`` and no list, as before #2167.
+    """An owner with one legacy ``comfyui_url`` and no list.
 
     Restored to no address and no list after, so a connection a test added is
     not made current by another test's clear.
@@ -2273,7 +2271,7 @@ def test_saving_a_comfyui_address_registers_folders_only_where_host_ops_are_allo
 
 
 def test_the_link_routes_are_owner_only(workflow_env):
-    """The read is owner-only and the link and unlink local-owner-only (#1810),
+    """The read is owner-only and the link and unlink local-owner-only,
     and a share token is refused on each verb while the owner reaches the
     read. The refused token is proven live first."""
     path = f"{API}/comfyui/link"
@@ -2303,10 +2301,9 @@ def test_the_link_routes_are_owner_only(workflow_env):
 def test_a_link_reads_none_of_comfyuis_saved_workflows(
     workflow_env, comfy_at, monkeypatch
 ):
-    """#1854: while it links, a Link asks ComfyUI for its link steps and nothing
-    else, and makes no workflow. A read queued for later would not show here:
-    the pull that used to follow a Link was a queued task, and what keeps that
-    out is that nothing is left to queue."""
+    """While it links, a Link asks ComfyUI for its link steps and nothing
+    else, and makes no workflow. A read queued for later would not show here;
+    what keeps one out is that nothing queues it."""
     fake = comfy_at("http://127.0.0.1:18188/")
     asked: list[str] = []
 
@@ -2411,7 +2408,7 @@ def _from(server, token: str, address: str) -> TestClient:
 def test_a_remote_owner_cannot_link_or_unlink_and_a_local_one_can(
     workflow_env, comfy_at, forwarded_for, monkeypatch
 ):
-    """``POST`` and ``DELETE /comfyui/link`` are local-owner-only (#1810): a
+    """``POST`` and ``DELETE /comfyui/link`` are local-owner-only: a
     remote owner session is refused both, with nothing minted, while the same
     session from this computer links and unlinks. The read stays open."""
     server = workflow_env.server
@@ -2888,7 +2885,7 @@ def linked_comfyui(workflow_env, comfy_at):
 def test_the_link_key_is_let_through_to_every_route_the_nodes_call(
     workflow_env, linked_comfyui
 ):
-    """In-scope direction (#1811): the key reaches the handler of every route
+    """In-scope direction: the key reaches the handler of every route
     in ``COMFYUI_SCOPE_ROUTES``, owner-only and local-owner-only ones
     included. The table is the whole list, so an admitted route with no
     request here fails."""
@@ -2903,7 +2900,7 @@ def test_the_link_key_is_let_through_to_every_route_the_nodes_call(
 def test_the_link_key_is_refused_everything_the_nodes_do_not_call(
     workflow_env, linked_comfyui
 ):
-    """Out-of-scope direction (#1811): deletes, edits, settings, tokens, host
+    """Out-of-scope direction: deletes, edits, settings, tokens, host
     operations and a route that merely has an admitted route's shape are all
     refused, while the owner is let through to the same request."""
     for method, template, path, body in _COMFYUI_SCOPE_REFUSED:
@@ -3920,7 +3917,7 @@ def test_the_config_patch_cannot_orphan_a_linked_key(workflow_env, comfy_at):
 
 
 def test_start_up_moves_the_single_record_onto_its_connection(workflow_env, comfy_at):
-    """A record from before #2194 lands under the connection with its address,
+    """A legacy single record lands under the connection with its address,
     or one made for it; a record whose connection is gone has its key deleted."""
     server = workflow_env.server
     config = server._server_config
@@ -4609,7 +4606,7 @@ def _picture_ids_by_path(server) -> dict[str, int]:
 def _cover_urls(card) -> list[str]:
     """The strip's URLs alone, which is what the ordering tests are about.
 
-    A cover is an object since #1465 -- the URL plus the crop rectangle a
+    A cover is an object -- the URL plus the crop rectangle a
     client frames it by -- and the crop has its own test below.
     """
     return [cover["url"] for cover in card["covers"]]
@@ -4620,9 +4617,8 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
 
     `utils/workflowCard.js` is shipped and `frontend_architecture.md` promises
     it needs no mapping layer, so a renamed field here is a broken screen
-    rather than a caller to update. One entry per workflow (#1623): the stack,
-    the per-slot mark and the recipe-LoRA pile are gone, and a client reading
-    one of them would be reading something no longer true.
+    rather than a caller to update. One entry per workflow: no stack, no
+    per-slot mark and no recipe-LoRA pile.
     """
     card = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     assert _CONTRACT_FIELDS <= set(card), _CONTRACT_FIELDS - set(card)
@@ -4756,10 +4752,10 @@ def test_a_card_is_never_nameless(workflow_env):
     extension; then a description built from what the card loads; and only a
     card with none of those gets the stand-in.
 
-    **The built one exists because the stand-in used to be the common case.**
-    A name is written only on an explicit rename and most cards come from
-    pictures rather than a dropped file, so a whole grid read "Untitled
-    workflow" and the one identifying row identified nothing.
+    **The built one exists because the stand-in would otherwise be the common
+    case.** A name is written only on an explicit rename and most cards come
+    from pictures rather than a dropped file, so a whole grid would read
+    "Untitled workflow" and the one identifying row would identify nothing.
     """
     cards = _by_key(_cards(workflow_env.owner))
     # BUSY has no name and no file, so it is named for what it loads - and by
@@ -4960,8 +4956,8 @@ def test_a_card_never_calls_one_model_two_different_things(workflow_env):
     The generated name is built from the SHELF's name for the base model, so a
     payload carrying only the filename would have the card read `Krea 2: Text
     to Image` over a chip reading `realvisxl.safetensors` - one model described
-    twice, on one card, and spoken that way to a screen reader. That is exactly
-    the pair that drifted in #1416, which is why the shelf's name is SERVED on
+    twice, on one card, and spoken that way to a screen reader. That pair
+    drifts easily, which is why the shelf's name is SERVED on
     the slot rather than left for a client to look up.
     """
     card = _by_key(_cards(workflow_env.owner))[BUSY_WF]
@@ -5015,7 +5011,7 @@ def test_a_card_names_itself_without_the_precision(workflow_env):
 
 
 def test_a_shelf_loader_slot_is_named_by_its_file_not_its_id(workflow_env):
-    """A `checkpoint_id` holds a shelf row id, never a name (#1721).
+    """A `checkpoint_id` holds a shelf row id, never a name.
 
     The slot serves the shelf file's derived name beside the shelf title, and
     an id the shelf no longer holds says so rather than reading as a model
@@ -5244,7 +5240,7 @@ def test_generated_names_that_collide_are_numbered():
 
 
 def test_colliding_generated_names_say_how_they_differ_before_numbering():
-    """#1722: a generated name that collides says what its core does that the
+    """A generated name that collides says what its core does that the
     others do not, and only what still collides is numbered.
 
     A trait every colliding workflow shares tells none of them apart and is
@@ -5441,8 +5437,8 @@ def _give_the_shelf_model_a_picture(server) -> None:
 def test_an_editor_format_file_is_a_card_of_its_own(
     workflow_env, tmp_path, monkeypatch
 ):
-    """#1466, now a manual workflow: an imported editor document is on the
-    grid as a workflow of its own, with no topology and no recipe."""
+    """An imported editor document is on the grid as a manual workflow of
+    its own, with no topology and no recipe."""
     key = _file_a_workflow(
         workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
     )
@@ -5461,7 +5457,7 @@ def test_an_editor_format_file_is_a_card_of_its_own(
 def test_an_editor_format_cards_models_are_read_off_its_own_file(
     workflow_env, tmp_path, monkeypatch
 ):
-    """The models of a card that has no recipe to read them from (#1466).
+    """The models of a card that has no recipe to read them from.
 
     Recovered from the file's own widget values, each resolved against the
     model shelf. The two names are chosen to run both sides of that: the UNET
@@ -5680,7 +5676,7 @@ def _api_document(hub, workflow_id):
 def test_a_converted_editor_file_runs_from_the_graph_stored_beside_it(
     workflow_env, converting
 ):
-    """#1530: ComfyUI's conversion makes an imported editor workflow runnable."""
+    """ComfyUI's conversion makes an imported editor workflow runnable."""
     owner = workflow_env.owner
     assert owner.get(f"{API}/workflows/{converting.manual}/graph").status_code == 409
 
@@ -5915,7 +5911,7 @@ def test_pixlstashs_conversion_never_overwrites_one_the_node_stored_meanwhile(
 def test_a_conversion_never_lands_on_the_version_after_the_one_it_converted(
     workflow_env, tmp_path, monkeypatch
 ):
-    """V6: a save that makes a new version between the read and the store
+    """A save that makes a new version between the read and the store
     never gets the old graph: the read starts again on the new version, and
     that one's own conversion is what is stored and returned."""
     hub = workflow_env.server.hub
@@ -5969,8 +5965,8 @@ def test_a_card_that_will_not_convert_says_why_in_its_409(workflow_env, converti
 
 
 def _card_the_pull_made(server, name: str, document: dict, path: str) -> str:
-    """A workflow as the removed pull of ComfyUI's saved workflows stored it
-    (#1854): origin ``pull``, with its origin row under the ComfyUI address."""
+    """A workflow as the removed pull of ComfyUI's saved workflows stored it:
+    origin ``pull``, with its origin row under the ComfyUI address."""
     origin = comfyui_module._comfyui_url(server.auth.user)
     return comfyui_module.store_manual_workflow(
         server.hub,
@@ -5984,7 +5980,7 @@ def _card_the_pull_made(server, name: str, document: dict, path: str) -> str:
 def test_a_card_the_pull_made_that_will_not_convert_is_a_409_like_any_other(
     workflow_env, tmp_path, monkeypatch
 ):
-    """#1854: Open no longer hands ComfyUI the file the card was pulled from,
+    """Open does not hand ComfyUI the file the card was pulled from,
     so an editor document PixlStash cannot convert answers 409 with the reason."""
     _isolate_workflow_folders(tmp_path, monkeypatch)
     key = _card_the_pull_made(
@@ -6010,7 +6006,7 @@ def test_a_card_the_pull_made_that_will_not_convert_is_a_409_like_any_other(
 def test_a_conversion_attaches_to_the_current_version_of_a_pulled_card(
     workflow_env, tmp_path, monkeypatch
 ):
-    """*Convert for PixlStash* on a card the pull made (#1854): it finds the
+    """*Convert for PixlStash* on a card the pull made: it finds the
     card by its document, so a card saved over is found by version 2's content
     and that version is converted, not version 1."""
     _isolate_workflow_folders(tmp_path, monkeypatch)
@@ -6346,7 +6342,7 @@ def _builtin_edit_graph(steps: int) -> dict:
 def test_a_card_the_pull_made_is_an_ordinary_workflow_no_file_feeds(
     workflow_env, tmp_path, monkeypatch
 ):
-    """#1854: a card the pull made before it was removed opens, plans a run
+    """A card the removed pull made opens, plans a run
     and exports from the graph PixlStash stored. Open names no ComfyUI file,
     nothing reads one, and deleting the card dismisses its origin row, so an
     older build sharing the hub does not pull it back."""
@@ -6473,7 +6469,7 @@ def test_two_imports_of_one_graph_are_two_workflows(
 def test_a_loader_this_build_does_not_know_leaves_the_row_silent(
     workflow_env, tmp_path, monkeypatch
 ):
-    """No list of loader classes is every loader there is (#1466 review).
+    """No list of loader classes is every loader there is.
 
     The recovery finds a LoRA it knows and misses the base model beside it, so
     `models` is empty while `loras` is not. The row must still decline to say
@@ -6529,7 +6525,7 @@ def test_a_card_with_a_recipe_never_reads_its_models_off_the_file(
 def test_a_file_that_says_nothing_about_its_models_leaves_them_unread(
     workflow_env, tmp_path, monkeypatch
 ):
-    """A template-style export, whose loaders were never filled in (#1466).
+    """A template-style export, whose loaders were never filled in.
 
     The card still exists - that is the whole point - and its models are
     EMPTY, which a client reads beside `variant_count: 0` as "nobody has read
@@ -6557,7 +6553,7 @@ def test_a_file_that_says_nothing_about_its_models_leaves_them_unread(
 def test_an_imported_wan_video_workflow_is_a_video_workflow(
     workflow_env, tmp_path, monkeypatch
 ):
-    """A manual workflow's type is read off its own graph (#1696), as an
+    """A manual workflow's type is read off its own graph, as an
     automatic card's is off its topology: a Wan 2.2 video import says Video."""
     wan = json.loads(
         (
@@ -6588,7 +6584,7 @@ def test_a_manual_workflow_whose_links_are_malformed_has_no_type():
 
 def test_a_manual_graph_whose_type_read_fails_is_a_card_with_no_type(monkeypatch):
     """A graph that reduces but trips the type read is logged and typeless, not
-    an exception out of the grid read (#1729 review)."""
+    an exception out of the grid read."""
 
     def explode(nodes):
         raise TypeError("degenerate graph")
@@ -6599,8 +6595,7 @@ def test_a_manual_graph_whose_type_read_fails_is_a_card_with_no_type(monkeypatch
 
 
 def test_a_manual_graph_whose_core_strip_fails_keeps_its_type(monkeypatch):
-    """The two reads are apart: a failed trait read leaves the type standing
-    (#1729 review)."""
+    """The two reads are apart: a failed trait read leaves the type standing."""
 
     def explode(nodes, **kwargs):
         raise WorkflowGraphError("nothing survives the strip")
@@ -6619,7 +6614,7 @@ def test_a_manual_graph_whose_core_strip_fails_keeps_its_type(monkeypatch):
 def test_a_manual_workflows_base_models_read_as_an_automatic_cards_do(
     workflow_env, tmp_path, monkeypatch
 ):
-    """Sorted on the lowercased name and a case variant read once (#1696), so a
+    """Sorted on the lowercased name and a case variant read once, so a
     Wan pair is "High + Low" on both kinds of card, never "Low + High"."""
     graph = {
         "1": {
@@ -6649,8 +6644,8 @@ def test_a_manual_workflows_base_models_read_as_an_automatic_cards_do(
 def test_the_pack_loaders_digests_reach_the_card_as_their_kind(
     workflow_env, tmp_path, monkeypatch
 ):
-    """The pack's ControlNet and upscale loaders name their file by digest
-    (#1939): the card serves each as its kind, named by the shelf row the
+    """The pack's ControlNet and upscale loaders name their file by digest:
+    the card serves each as its kind, named by the shelf row the
     digest resolves to, and a digest the shelf lacks as itself."""
     unknown = _h("an-upscaler-nobody-scanned")
     graph = {
@@ -6899,12 +6894,11 @@ def test_the_cover_strip_is_the_cards_best_three_across_its_variants(workflow_en
 def test_a_cover_names_the_picture_it_draws(workflow_env):
     """Every cover carries `picture_id`, and it is the one in its own URL.
 
-    The Workflows grid opens the picture a cover draws (#1455), and the only
+    The Workflows grid opens the picture a cover draws, and the only
     other way to that id is to parse it back out of the thumbnail path - which
     is a path shape, not an interface.
 
-    **It is a field ON the cover, not a `cover_ids` list beside `covers`**,
-    which is what it was until #1465 gave each cover an object of its own. Two
+    **It is a field ON the cover, not a `cover_ids` list beside `covers`**. Two
     lists paired by position are two lists that can come apart, and a strip
     that dropped an entry without its id would open picture 2 from the tile
     showing picture 3. One object cannot do that - so what is left to assert
@@ -6923,7 +6917,7 @@ def test_a_cover_names_the_picture_it_draws(workflow_env):
 
 
 def test_a_cover_carries_the_stored_crop_rectangle_or_nothing(workflow_env):
-    """The face-weighted rectangle travels with the cover, per picture (#1465).
+    """The face-weighted rectangle travels with the cover, per picture.
 
     Both halves in one test, because the fallback is the half that decides
     whether this is a regression: a cover whose rectangle has not been computed
@@ -7027,7 +7021,7 @@ def test_a_one_off_is_counted_and_an_imported_file_takes_it_out_of_the_count(
 def test_the_filters_panel_can_ask_for_the_one_offs_and_for_the_hidden(
     workflow_env,
 ):
-    """F7's two checkboxes, and the counts that label them.
+    """The grid's two checkboxes, and the counts that label them.
 
     Both counts are taken over the same set whatever the flags say, so the
     panel can go on writing "Hide one-offs (1)" while it is showing that one:
@@ -7152,7 +7146,7 @@ def test_a_card_counts_the_recipes_saved_on_it(workflow_env):
 
     ⓘ always draws the "Saved recipes" row, so a hardcoded zero does not read
     as "not implemented yet" -- it reads as "you have saved none", which is a
-    different and wrong statement once B6's table exists.
+    different and wrong statement once recipes can be saved.
     """
     assert _by_key(_cards(workflow_env.owner))[BUSY_WF]["saved_recipe_count"] == 0
     _save_recipe(workflow_env.server, BUSY_WF)
@@ -7164,7 +7158,7 @@ def test_a_card_counts_the_recipes_saved_on_it(workflow_env):
 
 
 def test_a_saved_recipe_takes_a_card_out_of_the_one_off_count(workflow_env):
-    """The fourth clause of the one-off rule, which B6's table made reachable.
+    """The fourth clause of the one-off rule, reachable once a recipe is saved.
 
     BINNED has no kept picture, no rating and no file, so the grid folds it
     into a count. Saving a look on it is the plainest statement that somebody
@@ -7190,10 +7184,10 @@ def _share_busy_core(server, topology=FORGOTTEN_TOPOLOGY) -> None:
 def test_topologies_sharing_a_core_hash_are_one_workflow(workflow_env):
     """One entry for the group, with every figure summed over its topologies.
 
-    FORGOTTEN joins BUSY's core hash, so the grid has one entry where it had
-    two: its pictures, ratings, variants and covers are both cards', and its
-    base topology is FORGOTTEN's, which has two LoRA loaders to BUSY's one
-    (#1620 D3). Its models are therefore the base card's.
+    FORGOTTEN joins BUSY's core hash, so the grid has one entry where it had two: its
+    pictures, ratings, variants and covers are both cards', and its base topology is
+    FORGOTTEN's, which has two LoRA loaders to BUSY's one. Its models are therefore the
+    base card's.
     """
     owner = workflow_env.owner
     _share_busy_core(workflow_env.server)
@@ -7227,7 +7221,7 @@ def _defaults(owner, workflow_id) -> dict:
 
 
 def _core(structural_hash: str, node_id: str) -> str:
-    """One node's core address label (#1622), as the default recipe names it."""
+    """One node's core address label, as the default recipe names it."""
     return (
         CORE_ADDRESS_PREFIX
         + core_node_labels(_DOCUMENTS[structural_hash], strip_loras=True)[node_id]
@@ -7413,7 +7407,7 @@ def test_a_manual_runs_pictures_count_on_it_and_fall_back_when_it_goes(
 
 def test_an_unknown_workflow_is_a_404_and_a_malformed_id_a_422(workflow_env):
     """Both read routes: an empty 200 would read as "this workflow has nothing"
-    rather than "this machine has no such workflow". A card key is no longer
+    rather than "this machine has no such workflow". A card key is not
     an id at all, so it is malformed rather than unknown.
     """
     unknown = AUTO_STACK_PREFIX + _h("nosuchcore")
@@ -7534,7 +7528,7 @@ _FLIP_PICTURES = (
 
 
 def _flip_slot_label(structural_hash: str) -> str:
-    """The LoRA slot both flip variants share, by B1's own rule."""
+    """The LoRA slot both flip variants share, by the identity rule."""
     return next(
         slot.label for slot in slots(_FLIP_DOCUMENTS[structural_hash]) if slot.is_lora
     )
@@ -7983,7 +7977,7 @@ def _write_enable(server, token: str) -> str:
 def test_every_workflow_route_refuses_a_scoped_grant_at_the_gate_and_answers_the_owner(
     workflow_env, tmp_path, monkeypatch
 ):
-    """Both directions on every route of the module, measured at the gate (#1623).
+    """Both directions on every route of the module, measured at the gate.
 
     The GET belts are emptied and the grant is write-enabled, so a 403 here is
     the gate's OWNER_ONLY declaration and nothing in front of it; the owner
@@ -8571,7 +8565,7 @@ _BO_DIGEST = _h("character-bo-digest")
 
 
 def test_a_lora_from_the_pile_goes_into_the_default_recipe_and_back(workflow_env):
-    """*Add to default* (#1653): one LoRA of the pile in, then the edit dropped.
+    """*Add to default*: one LoRA of the pile in, then the edit dropped.
 
     The route takes the pile's `asset:` reference (a hash of the NAME), stores
     the shelf's digest, and the detail names the LoRA by that same asset, so a
@@ -9143,11 +9137,11 @@ def test_a_missing_replacement_is_replaced_from_the_original_whatever_the_shelf(
 
 
 def test_every_write_says_which_workflows_to_look_at_again(workflow_env):
-    """`CHANGED_WORKFLOWS` on each write, naming WORKFLOW ids (#1623).
+    """`CHANGED_WORKFLOWS` on each write, naming WORKFLOW ids.
 
     A "look again" signal, so what is asserted is that it is raised at all,
     that it names the workflow the gesture was about - never a card key, which
-    a client can no longer address - and where it came from.
+    a client cannot address - and where it came from.
     """
     owner, server = workflow_env.owner, workflow_env.server
     seen, stop = _events(server)
@@ -9191,10 +9185,10 @@ def test_an_unknown_workflow_cannot_be_written_to(workflow_env):
 
 
 def test_the_card_routes_the_cut_over_removed_are_gone(workflow_env):
-    """#1623: the mark flip, the stacks and the promotion have no route left.
+    """The mark flip, the stacks and the promotion have no route.
 
     Each answers as a path nothing serves - never a 200 that writes a card
-    table no reader looks at any more.
+    table no reader looks at.
     """
     owner = workflow_env.owner
     stack_id = BUSY_WF
@@ -9226,8 +9220,8 @@ def test_naming_one_parameter_twice_is_refused_rather_than_a_500(workflow_env):
     """Both whole-set writes, both keyed on `(slot_label, input_name)`.
 
     The sibling constraint on the same table (a `fixed` input with no picture)
-    is pre-validated; this one reached the database as an uncaught
-    IntegrityError, which is a 500 for what is a bad request.
+    is pre-validated; this one must be too, rather than reaching the database
+    as an uncaught IntegrityError, which is a 500 for what is a bad request.
     """
     owner = workflow_env.owner
     assert (
@@ -9896,7 +9890,7 @@ def test_outputs_comfyui_dropped_at_validation_reach_the_import(runnable):
 
 
 def test_a_manual_workflow_opens_and_exports_the_document_run_submits(runnable):
-    """One graph per workflow (#1682): for a manual one, its stored document."""
+    """One graph per workflow: for a manual one, its stored document."""
     document = json.loads(json.dumps(RUN_DOCUMENT))
     document["3"]["inputs"].update({"steps": 13, "cfg": 1.5})
     document["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
@@ -9982,7 +9976,7 @@ def test_extracting_a_recipe_stores_its_run_graph_with_comfyui_down(
 
 
 def test_extracting_a_recipe_with_a_lora_needs_no_comfyui(runnable, monkeypatch):
-    """The recipe's LoRA goes into the filename slot by its shelf name (#2350):
+    """The recipe's LoRA goes into the filename slot by its shelf name:
     nothing is run, so ComfyUI is not asked which file it lists."""
 
     def no_comfyui(url):
@@ -10155,7 +10149,7 @@ def _seed_unpictured_richer_topology(server) -> None:
 
 
 def test_the_base_is_a_graph_this_library_has_pictures_of(runnable, monkeypatch):
-    """#1738: more LoRA slots never make an unpictured graph the base.
+    """More LoRA slots never make an unpictured graph the base.
 
     Hub-only, the richer graph is still the base (the conversions read that);
     with this library's counts the pictured graph is, so the workflow runs off
@@ -10254,7 +10248,7 @@ def test_a_run_sets_the_latent_size_a_resolution_selector_drives(
     Wrong if the latent still reads the selector (the run makes the selector's
     size, not the one asked for), or if the height wire went too: only width
     was asked for. The same on an image-to-video node when the graph has no
-    empty latent (#1833).
+    empty latent.
     """
     embedded = json.loads(json.dumps(RUN_DOCUMENT))
     embedded["49"] = {
@@ -10382,10 +10376,10 @@ def test_several_pictures_with_no_target_group_by_their_recipe(runnable):
 
 
 def test_a_picture_selected_twice_is_run_once(runnable):
-    """The de-duplication `_int_list` did for the retired `run_i2i` (#1410).
+    """A picture selected twice is grouped and run once.
 
     A selection can hand the same id in twice, and grouping whatever arrives
-    put it in the group twice - never a second submission, because `count`
+    would put it in the group twice - never a second submission, because `count`
     governs those, but a group REPORTING it covers a picture twice is a wrong
     answer to "what would this run". Asserted on the pre-flight and the run
     together, since `RunRequest` is one body for both.
@@ -10581,9 +10575,8 @@ def test_the_run_reads_object_info_itself_rather_than_a_cached_map(runnable):
 
     The recipe READ may serve a map up to a minute old - that is what makes
     stepping the filmstrip affordable - and a run that reused it could submit
-    a graph against node definitions that have since changed. Ported here from
-    the recipe route's own file when #1410 retired `POST /comfyui/run_recipe`;
-    the property belongs to whichever route runs things.
+    a graph against node definitions that have since changed. The property
+    belongs to whichever route runs things.
     """
     asked = []
 
@@ -10976,7 +10969,7 @@ def _seed_merged_checkpoint(server, *, keeper: str) -> int:
 
 
 def test_a_run_loads_the_copy_that_is_left_and_says_it_did(runnable, merged_checkpoint):
-    """The submit half of "merge duplicates, resolve at use" (#1439).
+    """The submit half of "merge duplicates, resolve at use".
 
     The graph names the copy a merge removed; the same bytes are still on the
     shelf under another name, and this ComfyUI advertises THAT one. So the run
@@ -11059,7 +11052,7 @@ def test_a_run_loads_the_model_the_owner_replaced_the_missing_one_with(runnable)
 
 
 def test_a_vae_fix_never_rewrites_a_checkpoint_of_the_same_name(runnable):
-    """#1596: a fix is its slot kind's; the run rewrite asks each field's kind."""
+    """A fix is its slot kind's; the run rewrite asks each field's kind."""
     label = next(
         slot.label for slot in slots(RUN_DOCUMENT) if slot.widget == "ckpt_name"
     )
@@ -11134,7 +11127,7 @@ def _unshelve(conn, digests):
 def test_a_fix_the_loader_cannot_load_runs_through_a_pixlstash_loader(
     runnable, monkeypatch
 ):
-    """#1605: ComfyUI does not list the replacement, so our node loads it.
+    """ComfyUI does not list the replacement, so our node loads it.
 
     The rename cannot work (the VAE is on the shelf, not in ComfyUI's folders),
     so the run swaps the loader node for ``PixlStashVAELoader`` with the
@@ -11360,7 +11353,7 @@ def test_a_rename_on_a_loader_swapped_afterwards_is_still_reported(
 
 
 def test_a_pixlstash_loader_stands_in_only_where_it_does_what_the_original_did():
-    """#1605's refusals, pure: the swapped node must be the original's equal."""
+    """The swap's refusals, pure: the swapped node must be the original's equal."""
     digests = {"test-l.safetensors": "11" * 32, "test-t5.safetensors": "22" * 32}
     info = {
         "PixlStashCLIPLoader": {"input": {"required": {"type": [["flux", "sd3"], {}]}}}
@@ -11520,7 +11513,7 @@ def test_an_uninspectable_comfyui_runs_only_on_the_owners_acknowledgement(runnab
 
 
 def test_only_the_literal_true_is_consent(runnable):
-    """R3b, carried over from the route #1410 retired: consent is JSON `true`.
+    """Consent is JSON `true`.
 
     The string `"false"` is truthy in Python, and `"true"` / `1` / `"yes"` /
     `"on"` are the sibling spellings a lenient cast would also let through -
@@ -11592,7 +11585,7 @@ def _pack_refusals(payload) -> dict[str, str]:
 
 
 def test_a_pack_checkpoint_loader_is_refused_outside_a_stored_file(runnable):
-    """It names a shelf row id, which is per-hub (#1521).
+    """It names a shelf row id, which is per-hub.
 
     The card here runs from its stored INSTANCE, which a picture of any hub
     may have written; the same loader from a stored file is allowed in
@@ -11627,8 +11620,8 @@ def test_a_pack_checkpoint_loader_is_refused_outside_a_stored_file(runnable):
 def test_a_shelf_loader_graph_names_its_file_not_its_id(runnable):
     """A card with no base-model name falls back to the graph a run submits.
 
-    A PixlStash loader there holds a shelf row id, so the Workflow tab read
-    `77` as the checkpoint's name; it gets the file that row names, and says
+    A PixlStash loader there holds a shelf row id, which the Workflow tab must
+    not read as the checkpoint's name (`77`); it gets the file that row names, and says
     so when the shelf no longer holds it.
     """
     hub = runnable.server.hub
@@ -11864,7 +11857,7 @@ def test_a_pack_picture_loader_nothing_feeds_does_not_run(pack):
 
 
 def test_a_pack_picture_loader_runs_on_ids_that_say_they_are_this_librarys(pack):
-    """What Open in ComfyUI and the node's picker write (#1912): the ids, and
+    """What Open in ComfyUI and the node's picker write: the ids, and
     the library they are of. Read back, such a loader runs on them unfed.
 
     Wrong if it runs on another library's ids, on a picture this library no
@@ -11915,7 +11908,7 @@ def test_a_replay_reads_the_original_off_a_picture_loader_of_this_library(
 
 
 def test_a_pack_checkpoint_loader_runs_on_an_id_of_this_shelf(runnable):
-    """From any source, where the id says it is this shelf's (#1912): what
+    """From any source, where the id says it is this shelf's: what
     Open in ComfyUI puts in, read back out of the picture queued there."""
     info = json.loads(json.dumps(RUN_OBJECT_INFO))
     info["PixlStashCheckpointLoader"] = {"input": {"required": {}}}
@@ -12019,7 +12012,7 @@ def test_a_lora_addressed_to_a_slot_the_graph_does_not_have_is_refused(runnable)
 
 
 def test_a_lora_is_placed_in_its_own_slot_with_its_own_strengths(runnable):
-    """One slot is a node AND a field (#1377), and the strengths are this run's."""
+    """One slot is a node AND a field, and the strengths are this run's."""
     r = runnable.owner.post(
         f"{API}/workflows/run",
         json={
@@ -12247,7 +12240,7 @@ def test_a_pin_by_picture_id_is_stored_as_its_content(i2i):
 
 
 def test_a_pin_stored_by_core_address_fills_the_run_graphs_own_input(i2i):
-    """The conversion writes picture inputs by CORE address (#1623).
+    """The conversion writes picture inputs by CORE address.
 
     Every topology of a workflow shares its core labels, and the run graph
     reads slot labels, so a `core:` row has to be put on the graph's own
@@ -12301,9 +12294,9 @@ def test_a_pin_naming_a_picture_this_library_does_not_keep_is_refused(i2i):
 
 
 def test_a_pin_whose_picture_has_gone_is_an_empty_slot_that_refuses(i2i):
-    """Decision 7: an empty slot saying so, and `picture_input_unfilled`.
+    """An empty slot saying so, and `picture_input_unfilled`.
 
-    Not `fixed_input_deleted`, which is retired: the popup now offers the fix.
+    Not `fixed_input_deleted`: the popup offers the fix.
     """
     i2i.graph = _i2i_graph(references=1)
     reference = _label_of(i2i.graph, "6")
@@ -12340,7 +12333,7 @@ def test_a_dead_pin_is_empty_even_when_the_graphs_own_file_is_live(i2i):
 
     Otherwise the run quietly uses the file the graph was written with, and the
     dead pin also keeps the selection from filling the other input, so neither
-    input reads what the owner chose (#1501 review).
+    input reads what the owner chose.
     """
     i2i.graph = _i2i_graph(references=1)
     reference = _label_of(i2i.graph, "6")
@@ -12369,7 +12362,7 @@ def test_a_dead_pin_is_empty_even_when_the_graphs_own_file_is_live(i2i):
 
 def test_a_loader_no_output_reads_is_not_an_input(i2i, monkeypatch):
     """ComfyUI runs only what an output reads, so a loader outside that is
-    neither offered the selection nor refused as unfilled (#1765 review)."""
+    neither offered the selection nor refused as unfilled."""
     info = json.loads(json.dumps(I2I_OBJECT_INFO))
     info.setdefault("SaveImage", {})["output_node"] = True
     info["ImageInvert"] = {"input": {"required": {"image": ["IMAGE"]}}}
@@ -12674,7 +12667,7 @@ def test_a_replay_of_several_pictures_still_runs_over_each(i2i, monkeypatch):
 def test_a_pinned_reference_leaves_one_input_for_the_selection(i2i):
     """Two inputs, one pinned: one is unresolved, so the selection fills it.
 
-    The regression the whole-card counting rule exists for. Read per input -
+    The case the whole-card counting rule exists for. Read per input -
     "is this the only picture input?" - it refuses this, the ordinary shape of
     a reference-to-image workflow.
     """
@@ -12800,8 +12793,7 @@ def test_the_request_beats_the_pin_and_names_the_picture_it_sends(i2i):
 def test_an_open_input_whose_file_is_on_this_comfyui_still_runs(i2i):
     """The positive control: a mask kept in ComfyUI's input folder is not a gap.
 
-    `judge` never read image widgets, so this card ran before #1457. Refusing
-    it now would be a regression dressed as a feature.
+    Refusing it would be a regression dressed as a feature.
     """
     i2i.graph = _i2i_graph(references=1)
     subject = _label_of(i2i.graph, "5")
@@ -13254,7 +13246,7 @@ def test_a_graph_that_saves_a_video_runs_and_its_saver_is_tagged(
 @pytest.mark.parametrize("stack", [False, True])
 def test_an_automatic_run_drops_a_workflow_tag_its_graph_inherited(i2i, stack):
     """A graph replayed from a manual run's output keeps that run's tagged
-    prefix; a watch folder would file this run's outputs on it (#1688)."""
+    prefix; a watch folder would file this run's outputs on it."""
     i2i.graph["4"]["inputs"]["filename_prefix"] = f"out__wf_{'c' * 32}"
     picture = _add_picture(i2i.server, i2i.tmp_path, "w.png")
     r = i2i.owner.post(
@@ -13319,7 +13311,7 @@ def test_an_id_no_sqlite_row_could_hold_is_a_422_not_a_500(i2i):
 
 
 def test_a_file_whose_bindings_opted_out_of_its_picture_is_not_filled(i2i):
-    """`pixlstash_bindings: []` is a file the old dialog stored taking no picture.
+    """`pixlstash_bindings: []` is a file a legacy dialog stored taking no picture.
 
     Detection must not opt that input back in, so the selection is not fed to
     it and nothing is uploaded: the file runs as it was authored.
@@ -13349,7 +13341,7 @@ def test_a_file_whose_bindings_opted_out_of_its_picture_is_not_filled(i2i):
 def test_a_ui_format_file_is_not_a_runnable_source(runnable, monkeypatch):
     """A card whose only source is a UI export that will not rebuild says which
     format it is in. The node is one this ComfyUI lacks: a known node with no
-    widget values now rebuilds from its defaults, as ComfyUI loads it."""
+    widget values rebuilds from its defaults, as ComfyUI loads it."""
     monkeypatch.setattr(
         workflows_routes,
         "_resolve_workflow_path",
@@ -13433,8 +13425,7 @@ def test_count_produces_that_many_submissions(runnable):
 
 
 def test_a_new_run_is_not_stacked_with_the_picture_it_came_from(runnable):
-    """The default is unstacked, which is where this differs from the retired
-    per-picture replay route (#1410)."""
+    """The default is unstacked."""
     stacked: list = []
     runnable.monkeypatch.setattr(
         workflows_routes,
@@ -13511,7 +13502,7 @@ def _core_address(node_id: str, input_name: str) -> str:
 
 
 def test_a_workflow_run_applies_its_default_recipe_on_the_server(runnable):
-    """The request sends no values, and the default recipe still lands (#1622).
+    """The request sends no values, and the default recipe still lands.
 
     The owner's edit to the default recipe is the one value nothing else could
     have put there: the card's stored instance says 24 steps, and a card run
@@ -13673,7 +13664,7 @@ _OTHER_FAMILY_CHECKPOINT = "test-flux-dev.safetensors"
 
 
 def test_a_pinned_checkpoint_of_another_family_is_flagged_and_still_runs(runnable):
-    """Flagged, never blocked (#1620 Q3), and the pinned file is what loads."""
+    """Flagged, never blocked, and the pinned file is what loads."""
     info = json.loads(json.dumps(RUN_OBJECT_INFO))
     info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].append(
         _OTHER_FAMILY_CHECKPOINT
@@ -14083,7 +14074,7 @@ def _without_lora(names=()):
 
 
 def test_a_missing_lora_is_bypassed_and_the_run_still_happens(runnable):
-    """#1463: a LoRA is optional, so its loader leaves the chain.
+    """A LoRA is optional, so its loader leaves the chain.
 
     The card's graph names `add_detail.safetensors` and this ComfyUI does not
     have it. Refusing would be the answer for a checkpoint; here the run goes
@@ -14116,10 +14107,10 @@ def test_a_missing_lora_is_bypassed_and_the_run_still_happens(runnable):
 
 
 def test_a_missing_checkpoint_still_refuses_and_nothing_is_bypassed(runnable):
-    """The distinction #1463 turns on, asserted from the other side.
+    """The LoRA/checkpoint distinction, asserted from the other side.
 
     Installing a checkpoint is a trip away from the keyboard and the graph
-    cannot run without one, so it blocks exactly as it did - and a run that
+    cannot run without one, so it blocks - and a run that
     quietly bypassed a checkpoint loader would produce nothing at all.
     """
     info = _without_lora(["something-else.safetensors"])
@@ -14184,10 +14175,10 @@ def test_a_lora_the_request_asked_for_is_a_refusal_and_not_a_bypass(runnable):
 
 
 def test_a_missing_lora_no_longer_holds_back_the_rest_of_a_mixed_batch(runnable):
-    """The reported symptom: one absent LoRA refused a whole selection.
+    """One absent LoRA must not refuse a whole selection.
 
     Both cards run the same graph, so both carry the absent LoRA; what is
-    being measured is that `blocks_batch` no longer zeroes the request.
+    being measured is that `blocks_batch` does not zero the request.
     """
     second = _seed_second_runnable_card(runnable.server)
     runnable.monkeypatch.setattr(
@@ -14461,7 +14452,7 @@ def _embed(monkeypatch, graph):
 
 
 def test_a_missing_seed_node_is_replaced_and_the_run_still_happens(runnable):
-    """#1463 case B: rgthree's Seed is not here, and the run needs no pack.
+    """Rgthree's Seed is not here, and the run needs no pack.
 
     The node only hands a number to the sampler's seed, which the run's own
     seed pass writes. Said before the run, exactly as a bypassed LoRA is.
@@ -14789,7 +14780,7 @@ def _encoder_graph(class_type: str, **texts) -> dict:
 
 
 def test_the_run_prompt_lands_in_the_field_the_encoder_keeps_it_in():
-    """`text` alone left every `prompt` encoder with the workflow's own (#1832)."""
+    """`text` alone would leave every `prompt` encoder with the workflow's own."""
     graph = _encoder_graph("TextEncodeQwenImageEdit", prompt="the saved prompt")
     assert prompt_text_target(graph, "2", "typed") == ("2", "prompt")
     report = run_service.apply_prompts(graph, "typed", None)
@@ -14990,7 +14981,7 @@ def test_a_saved_recipes_lora_never_lands_in_a_loader_wired_into_nothing(runnabl
 
 
 def test_a_saved_recipes_pinned_model_is_loaded(runnable):
-    """``saved_recipe.models`` reaches the run as typed models (#1622)."""
+    """``saved_recipe.models`` reaches the run as typed models."""
     info = json.loads(json.dumps(RUN_OBJECT_INFO))
     info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].append(
         _OTHER_FAMILY_CHECKPOINT
@@ -15136,7 +15127,7 @@ def test_a_failure_part_way_through_still_reports_what_was_queued(runnable):
 
 
 def test_a_queued_run_is_followed_and_its_ending_can_be_read(runnable):
-    """``GET /workflows/runs/{prompt_id}`` (#1839): what MCP's run_workflow
+    """``GET /workflows/runs/{prompt_id}``: what MCP's run_workflow
     answers with. Known from the moment the run is queued, and the poller is
     told which workflow ran so a failure is shown on it."""
     following: list[dict] = []
@@ -15763,7 +15754,7 @@ def test_a_run_takes_its_need_from_runs_of_about_its_size(held):
 
 
 def test_a_peak_that_filled_the_card_asks_for_what_the_card_can_grant(held):
-    """#2081: the margin never lifts a need past ceiling / margin, a need
+    """The margin never lifts a need past ceiling / margin, a need
     never passes the ceiling, and a larger peak never needs less."""
     hub = held.runnable.server.hub
     total = 24576
@@ -16073,7 +16064,7 @@ def test_a_run_out_of_memory_fails_once_and_runs_alone_after_a_streak(
 
 
 def test_a_run_in_flight_is_reported_with_the_workers_until_it_ends(runnable):
-    """``GET /workers/progress`` carries the runs in flight (#1862), which is
+    """``GET /workers/progress`` carries the runs in flight, which is
     what puts a run's row in the Tasks tab of every tab and view: queued from
     the moment ComfyUI takes it, running once ComfyUI speaks of it, and gone
     as soon as its ending is recorded. Each is submitted under the backend's
@@ -16148,7 +16139,7 @@ def test_a_run_in_flight_is_reported_with_the_workers_until_it_ends(runnable):
 
 
 def test_a_run_that_keeps_its_own_pictures_seed_is_called_a_clone(runnable):
-    """What the Tasks tab calls a run nobody named (#1862): Make more and MCP
+    """What the Tasks tab calls a run nobody named: Make more and MCP
     send no label, so the server says which runs are a picture again."""
     embedded = json.loads(json.dumps(RUN_DOCUMENT))
     embedded["3"]["inputs"]["seed"] = 4242
@@ -16220,11 +16211,10 @@ def test_a_runs_ending_stays_closed_with_the_gate_rolled_back(workflow_env):
 
 
 def test_the_body_takes_an_inputs_field_and_the_schema_says_so(runnable):
-    """`inputs` is a real field now (#1457), in the model and in OpenAPI.
+    """`inputs` is a real field, in the model and in OpenAPI.
 
-    It replaces a test asserting the opposite, written while nothing filled a
-    picture input: a field accepted and ignored would have been a run that
-    never read the picture it was sent.
+    A field accepted and ignored would be a run that never reads the picture
+    it was sent.
     """
     assert "inputs" in RunRequest.model_fields
     schema = runnable.server.api.openapi()["components"]["schemas"]["RunRequest"]
@@ -16602,7 +16592,7 @@ def test_the_runnable_graph_is_the_run_unscrubbed(exportable):
 
 
 def test_the_runnable_graph_is_the_graph_run_submits(runnable):
-    """Open in ComfyUI opens what Run runs, default recipe and all (#1623).
+    """Open in ComfyUI opens what Run runs, default recipe and all.
 
     The default recipe's steps are the value only Run's plan puts there. The
     seed is left out: Run rolls a new one per submission.
@@ -16694,7 +16684,7 @@ def test_the_runnable_graph_blanks_a_credential_widget(exportable):
 
 
 def test_the_runnable_graph_loads_the_copy_run_would(runnable, merged_checkpoint):
-    """Resolved against this ComfyUI like Run… is, so a merged copy loads (#1439)."""
+    """Resolved against this ComfyUI like Run… is, so a merged copy loads."""
     merged_checkpoint(keeper="kept.safetensors")
     info = json.loads(json.dumps(RUN_OBJECT_INFO))
     info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [
@@ -16815,7 +16805,7 @@ def _full_i2i_graph() -> dict:
 
 
 def test_converting_to_inpainting_stores_a_new_workflow_beside_the_original(i2i):
-    """#2446: a new manual workflow; the original's graph and version stand."""
+    """A new manual workflow; the original's graph and version stand."""
     i2i.graph = _full_i2i_graph()
     owner = i2i.owner
     graph_before = owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
@@ -16852,7 +16842,7 @@ def test_converting_an_inpaint_workflow_is_refused_with_its_reason(i2i):
 
 
 def test_a_sheet_copy_draws_on_its_own_canvas_and_says_it_takes_a_reference(i2i):
-    """#2679: the copy's sampler starts empty at a literal size, the card says
+    """The copy's sampler starts empty at a literal size, the card says
     one reference input, and the original stands."""
     graph = _full_i2i_graph()
     graph["8"] = {
@@ -17427,7 +17417,7 @@ def test_a_video_workflow_takes_only_sets_that_start_where_it_does(cloneable):
 
 
 def test_a_set_plan_is_read_off_the_graph_with_the_owners_replacements(cloneable):
-    """#1850 W5: the Workflow tab finds a row in the plan by the file it shows.
+    """The Workflow tab finds a row in the plan by the file it shows.
 
     A row whose model the owner replaced shows the replacement, so the plan
     has to name the graph as a run submits it. Wrong if `swaps` is still keyed
@@ -17575,7 +17565,7 @@ def test_a_set_plan_says_which_sets_will_not_load_and_why(cloneable):
 def test_a_set_whose_checkpoint_only_the_shelf_has_clones_to_load_it_there(
     cloneable,
 ):
-    """#2009: a set checkpoint ComfyUI does not list is still cloned onto when
+    """A set checkpoint ComfyUI does not list is still cloned onto when
     a run would load it off the shelf, through the pack's checkpoint loader.
 
     Wrong if the plan says "ComfyUI does not list" with that loader in
@@ -17646,7 +17636,7 @@ def test_a_gguf_set_on_a_whole_checkpoint_loader_names_the_loader_it_needs(
 
 
 def test_a_two_model_graph_takes_each_set_checkpoint_by_name(cloneable):
-    """#1690: a Wan 2.2 high/low graph cloned onto a set holding a pair swaps
+    """A Wan 2.2 high/low graph cloned onto a set holding a pair swaps
     each expert for its own, whatever order the set lists them in; a set
     holding one expert replaces that one and leaves the other, and a graph
     loading one expert takes the set's matching one."""
@@ -17818,7 +17808,7 @@ def test_a_set_vae_of_another_layout_replaces_the_graphs_only_one(cloneable):
 
 
 def test_two_files_of_a_kind_are_kept_then_paired_by_name_then_as_picked(cloneable):
-    """#1831: a graph loading a video and an audio VAE, and two text encoders
+    """A graph loading a video and an audio VAE, and two text encoders
     of one layout. A set holding the very VAEs changes neither, whatever order
     it lists them in; other files pair by name, never in order; and the
     owner's own pairing wins over both."""
@@ -18421,7 +18411,7 @@ def _with_support_loaders(graph: dict) -> dict:
 
 
 def test_the_replacements_go_with_the_checkpoint_and_load_in_the_loader(cloneable):
-    """#1596: Replace with… offers what works together AND what the loader lists.
+    """Replace with… offers what works together AND what the loader lists.
 
     Evidence first (the checkpoint's workflow sets and co-occurrence, here
     stubbed), then each loader's own list: a core loader never lists GGUF, a
@@ -18579,7 +18569,7 @@ def test_the_replacements_go_with_the_checkpoint_and_load_in_the_loader(cloneabl
 def test_a_replacement_the_loader_cannot_load_is_offered_through_our_loader(
     cloneable,
 ):
-    """#1605: what the loader does not list is offered through a PixlStash one.
+    """What the loader does not list is offered through a PixlStash one.
 
     Only a file the shelf has a digest for, never a GGUF (our loaders read
     through core ComfyUI), and only with ComfyUI-PixlStash installed: without
@@ -18749,7 +18739,7 @@ def test_the_missing_file_under_another_name_is_offered_first_as_likely(cloneabl
 
 
 def test_the_missing_file_filed_as_another_kind_is_offered_for_refiling(cloneable):
-    """#1962 after #1966: the shelf's renamed copy of the missing T5 is filed
+    """The shelf's renamed copy of the missing T5 is filed
     Unclassified (a GGUF, a T5 of another width), so the text-encoder offer
     cannot see it. `refile` names it; once filed as a text encoder it is the
     `likely` replacement.
@@ -20124,7 +20114,7 @@ def _graph_loads_a_shelf_lora_comfyui_lacks(runnable, with_pixlstash=True):
 
     The shelf row is renamed to the file the graph's loader names, so the
     shelf can name that slot's digest; ComfyUI's LoraLoader lists only the
-    other file, so without a swap the #1463 bypass would take the loader out.
+    other file, so without a swap the missing-LoRA bypass would take it out.
     """
     with runnable.server.hub.transaction() as conn:
         conn.execute(
@@ -20524,8 +20514,8 @@ def _two_pass_chain(chained):
 def test_a_fork_is_read_as_a_trunk_and_one_lane_per_pass(chained):
     """#2 is the trunk; #3 gets #5 on its own lane, #7 an empty one.
 
-    Wrong if `editable` is false (a fork used to stop the chain at #2 and
-    leave #5 to ComfyUI), or a lane is missing its sampler.
+    Wrong if `editable` is false (a fork stopping the chain at #2 and
+    leaving #5 to ComfyUI), or a lane is missing its sampler.
     """
     _two_pass_chain(chained)
     r = chained.owner.get(f"{API}/workflows/{RUN_WF}/lora-chain")
@@ -21506,9 +21496,9 @@ def test_a_stacker_slot_whose_neighbour_is_live_is_not_skipped():
 def test_a_skip_is_not_undone_by_the_saved_recipes_loras(chained):
     """The recipe LoRA a skipped loader held does not move on to the next one.
 
-    Placed after the skip, `other` (on the shelf, and in skipped node 2) fell
-    through to the positional fill and replaced node 5's LoRA, which the owner
-    had not named, while the notice still said node 2 was skipped.
+    Placed after the skip, `other` (on the shelf, and in skipped node 2) must
+    not fall through to the positional fill and replace node 5's LoRA, which
+    the owner had not named, while the notice still said node 2 was skipped.
     """
     r = chained.owner.post(
         f"{API}/recipes",
@@ -21658,10 +21648,9 @@ def _sdxl_graph() -> dict:
 def test_the_sdxl_encoders_own_prompt_widgets_are_blanked():
     """`text_g` / `text_l`, which no run-time binding names.
 
-    The bug this replaces reported `"prompts"` in `removed` — because the
-    plain negative encoder beside it WAS blanked — while writing the positive
-    prompt into the file. A scrub that says it removed the prompt and did not
-    is worse than one that never claimed to.
+    Blanking only the plain negative encoder beside it would report
+    `"prompts"` in `removed` while writing the positive prompt into the file. A scrub
+    that says it removed the prompt and did not is worse than one that never claimed to.
     """
     exported, removed = scrub_for_export(_sdxl_graph())
     assert exported["2"]["inputs"]["text_g"] == ""
@@ -21710,7 +21699,7 @@ def test_a_lora_named_by_digest_is_a_lora_slot_too():
     `unvouched` says nothing about it — the owner HAS that LoRA, so the shelf
     vouches for the digest — and a digest identifies a model on a public
     registry as surely as a filename does. Only the slot rule can take it out,
-    and it only can if it knows both spellings (#1416's lesson).
+    and it only can if it knows both spellings.
     """
     digest = "a" * 64
     graph = _sdxl_graph()
@@ -21726,7 +21715,7 @@ def test_a_lora_named_by_digest_is_a_lora_slot_too():
 
 def test_whose_a_row_id_is_does_not_leave_with_the_file():
     """The two pack loaders that name a row by id say whose the id is, with
-    the library's uuid or the shelf's (#1912). That is for this PixlStash to
+    the library's uuid or the shelf's. That is for this PixlStash to
     read back; in a file given away it names the owner's own.
 
     Wrong if either survives, in any shape, or if a widget of that name on
@@ -22130,7 +22119,7 @@ def test_the_unsaved_graph_opens_only_when_asked_for(saving):
 
 
 def test_two_sets_that_are_too_many_together_fail_no_read_and_are_refused(saving):
-    """Each fits the limit and together they do not: that was a 500, on the
+    """Each fits the limit and together they do not: never a 500, on the
     read of a workflow's changes as on Save."""
     many = workflows_routes.MAX_RUN_LORAS
     _put_changes(
@@ -22729,7 +22718,7 @@ def test_going_back_answers_the_new_copy_first_and_the_version_left_under_it(sav
 
 
 def test_an_earlier_version_duplicates_and_opens_without_going_back(saving):
-    """Duplicate and Open in ComfyUI on one version (#1792): that version's
+    """Duplicate and Open in ComfyUI on one version: that version's
     graph, and the workflow left on the version it has.
 
     Wrong if the copy or the opening holds the current graph (no loader 5),
@@ -22957,7 +22946,7 @@ def test_a_recipe_on_an_automatic_workflow_keeps_its_graph_through_a_save(voted)
 
 
 def test_an_automatic_workflows_earlier_version_duplicates_and_opens(voted):
-    """#1792 where version 1 is the graph read off the pictures.
+    """The same, where version 1 is the graph read off the pictures.
 
     And a version whose stored graph will not read is a 404, never the
     pictures' graph under that version's number: the fallback a run takes
@@ -23087,7 +23076,7 @@ def test_a_run_keeps_what_it_changed_until_the_next_run_or_a_save(saving):
 
 
 def test_a_finished_run_is_listed_and_carries_the_offer_to_save_it(saving):
-    """The Tasks tab's Finished group (#2050): a batch is listed once every
+    """The Tasks tab's Finished group: a batch is listed once every
     run of it has ended, with what it made, and the batch the workflow's run
     set was made with is the one that offers it. Its dismiss drops that set
     too, so every tab and a reload agree; Clear keeps it.
@@ -23297,7 +23286,7 @@ def _defaults_written(env, workflow_id) -> dict:
 
 
 def test_saving_what_a_run_changed_stores_what_the_run_used(sampled):
-    """#1850 R2: Steps=30 waits, the run put Steps back to 20 and set CFG=5.
+    """Steps=30 waits, the run put Steps back to 20 and set CFG=5.
 
     The Run popup sends every parameter it shows, so the run names Steps at
     the workflow's own value and `ran` is CFG alone. Saved from the Tasks tab
@@ -23868,7 +23857,7 @@ def test_the_preflight_names_a_missing_replacement_and_never_its_original(replac
 
 def test_a_text_encoders_replacement_is_not_a_vision_loaders(chained):
     """What a run changed is compared through the owner's replacements, and a
-    text encoder's replacement is for text-encoder loaders only (#1875).
+    text encoder's replacement is for text-encoder loaders only.
 
     A vision loader's `clip_name` is an image encoder. Here it names a file
     called what the replaced text encoder is called, so a run that loads a
@@ -23962,7 +23951,7 @@ def test_a_text_encoders_replacement_is_not_a_vision_loaders(chained):
 
 
 def test_a_model_pick_wins_over_an_earlier_replacement_at_its_loader(replaced):
-    """A `models` change at a loader that holds a model fix (#1850 W5).
+    """A `models` change at a loader that holds a model fix.
 
     The fix is by file: wherever the workflow names the original, the
     replacement loads. So a pick of another file is not the original and is
@@ -24440,7 +24429,7 @@ def id_loaders(with_pack):
 
 def test_a_graph_opens_on_the_picture_and_the_checkpoint_pixlstash_holds(id_loaders):
     """Load Image and Load Checkpoint become the pack's loaders, each on the
-    row PixlStash holds and each saying whose the id is (#1912).
+    row PixlStash holds and each saying whose the id is.
 
     Wrong if an id goes in without that: read back out of a picture queued
     there, it would be one PixlStash does not trust, and the run refused.
@@ -25205,7 +25194,7 @@ def test_a_run_loads_a_vae_comfyui_lacks_off_the_shelf(with_pack):
 
 def test_a_pack_from_before_the_shelf_widget_says_restart_comfyui(id_loaders):
     """A shelf checkpoint ComfyUI lacks, on a running pack whose loader has no
-    `shelf` widget (#1923): the pre-flight says the pack is out of date, not
+    `shelf` widget: the pre-flight says the pack is out of date, not
     that the model is missing. Wrong if it stays in `missing_models`, or if a
     remote ComfyUI, a pack with no loader or a file the shelf does not hold
     reads as `pack_outdated` too."""
@@ -25659,7 +25648,7 @@ def test_a_layout_is_kept_across_the_nodes_open_puts_in(with_pack):
     """A layout is of a graph whichever of a pair each node is: the stock
     node, or the one Open in ComfyUI puts in its place. Which it is follows
     the shelf and the library on the day, and a layout dropped each time that
-    changed would rarely be there (#1912).
+    changed would rarely be there.
 
     Wrong if a layout saved with the workflow's own nodes opens auto-arranged
     with ComfyUI-PixlStash nodes, or the other way round.
@@ -25726,7 +25715,7 @@ def test_an_untouched_save_is_known_by_the_numbers_a_canvas_writes(with_pack):
     The pack's loader put in for a model-only one gets a CLIP strength the
     workflow never had, from ComfyUI's own default: `1.0`, back as `1`.
 
-    Seen on a real canvas (#1912). Wrong if that Ctrl+S stores a version.
+    Seen on a real canvas. Wrong if that Ctrl+S stores a version.
     """
     env = with_pack
     manual = _model_only(env)
@@ -25834,7 +25823,7 @@ def test_a_parameter_changed_in_a_saved_graph_is_the_workflows_from_then_on(savi
 
 def test_a_saved_graph_leaves_the_workflow_its_prompt_and_seed(saving):
     """ComfyUI re-rolls the seed on every queue, so a habitual Ctrl+S would
-    otherwise be a version each time; and a prompt is a run's (#1846)."""
+    otherwise be a version each time; and a prompt is a run's."""
     graph = json.loads(json.dumps(CHAIN_DOCUMENT))
     graph["3"]["inputs"]["seed"] = 987654
     graph["6"]["inputs"]["text"] = "a dog"
@@ -26387,7 +26376,7 @@ def test_a_graph_whose_persons_lora_cannot_be_taken_out_is_not_stored(a_persons_
 
 
 def test_a_strength_goes_to_its_own_row_of_the_multi_adapter_loader(chained):
-    """A second row's strength was written to the first row's widget."""
+    """A second row's strength goes to its own row's widget, not the first's."""
     with chained.server.hub.transaction() as conn:
         conn.execute("DELETE FROM model WHERE sha256 = ?", (STYLE_DIGEST,))
         conn.execute(
@@ -26475,8 +26464,8 @@ def test_a_row_with_no_strength_of_its_own_does_not_take_the_removed_rows():
 
 
 def test_each_row_of_the_multi_adapter_loader_is_a_slot_with_its_own_strengths():
-    """`adapter_sha256_2` read the first row's strengths before #1849, and was
-    no slot at all, so a picture made with the node misread."""
+    """`adapter_sha256_2` is a slot with its own strengths, not the first
+    row's, so a picture made with the node reads right."""
     graph = _with_people_loader(("a" * 64, 0.8), ("b" * 64, 0.4))
     rows = {
         target["field"]: (target["value"], target["strengths"])
@@ -27147,7 +27136,7 @@ def test_a_vault_failure_while_keeping_a_layout_never_fails_the_save(saving):
 
 
 def test_a_layout_that_will_not_compare_never_fails_the_open(saving):
-    """`GET …/graph` answered before there were layouts: a graph that cannot
+    """`GET …/graph` answers without a layout too: a graph that cannot
     be matched to the kept layout opens without it, never a 500.
 
     Wrong if the read answers an error, or hands the layout back unmatched.

@@ -500,7 +500,7 @@ def test_a_lease_granted_during_the_wait_unloads_nothing(runner, monkeypatch):
 def test_the_idle_sweep_unloads_on_the_gpu_worker_once(runner):
     """Reached from a request thread and the event loop: it queues, never flushes.
 
-    Two progress polls at once used to sweep twice; the second one here enters
+    Two progress polls at once must sweep only once; the second one here enters
     while the first is still reading the snapshot.
     """
     unloaded = []

@@ -148,7 +148,7 @@ def test_a_decimal_version_sorts_above_its_major(hub, tmp_path):
 
 
 def test_versions_and_steps_order_versions_first(hub, tmp_path):
-    """Inside a version the old rule is unchanged; between versions it loses.
+    """Inside a version steps decide; between versions the version wins.
 
     Step 4000 of v1 is a later moment in time than the bare final of v2, and the
     cover is still v2: what a person means by "the LoRA" is the newest version,
@@ -280,9 +280,8 @@ def test_two_files_sharing_a_name_with_no_step_are_not_a_run(hub, tmp_path):
 def test_two_quant_variants_of_one_adapter_are_not_a_run(hub, tmp_path):
     """The refusal the quant strip has to keep intact.
 
-    Both files now strip to the subject `Foxglove`, so they land in one group
-    where before the strip they were two subjects. The group is still REFUSED,
-    and by the rule that was already there: neither carries a step, and they
+    Both files strip to the subject `Foxglove`, so they land in one group. The
+    group is still REFUSED, by the no-difference rule: neither carries a step, and they
     carry the same (absent) version, so there is no difference the name can
     account for. An fp8 export of a LoRA is not a second training run.
     """
@@ -294,13 +293,12 @@ def test_two_quant_variants_of_one_adapter_are_not_a_run(hub, tmp_path):
 
 
 def test_a_step_and_a_quant_export_of_one_subject_do_group(hub, tmp_path):
-    """The one case the quant strip changes, pinned because it was a choice.
+    """The one case the quant strip groups, pinned because it was a choice.
 
-    `Foxglove_step500` and `Foxglove_fp8` used to be two subjects and are now
-    one, and the step member satisfies the "a difference the name can account
-    for" rule on its own - so the pair is proposed. Accepted deliberately: an
-    fp8 export of a run is arguably a member of it, and the owner is being
-    asked rather than told.
+    `Foxglove_step500` and `Foxglove_fp8` are one subject, and the step member satisfies
+    the "a difference the name can account for" rule on its own - so the pair is
+    proposed. Accepted deliberately: an fp8 export of a run is arguably a member of it,
+    and the owner is being asked rather than told.
     """
     folder = _folder(hub, str(tmp_path / "loras"))
     _adapter(hub, folder, "Foxglove_step00000500.safetensors")
@@ -437,11 +435,11 @@ def test_applying_orders_the_cover_first_whatever_order_it_was_given(hub, tmp_pa
 
 
 def test_applying_covers_a_version_stack_with_its_newest_version(hub, tmp_path):
-    """The other half of the ask: pick the cover from name and version alone.
+    """Pick the cover from name and version alone.
 
-    No member here carries a step, so the old rule had nothing to sort on and
-    the cover fell out of whatever order the ids happened to arrive in. The ids
-    are handed over oldest-first precisely so that order cannot be what passes.
+    No member here carries a step, so the version is the only thing to sort on.
+    The ids are handed over oldest-first precisely so that arrival order cannot
+    be what passes.
     """
     folder = _folder(hub, str(tmp_path / "loras"))
     first = _adapter(hub, folder, "Foxglove.safetensors")
@@ -522,14 +520,9 @@ def test_a_row_that_stops_being_loose_between_the_gate_and_the_update_aborts(
 ):
     """The gate is re-checked on the UPDATE itself, not merely read first.
 
-    **This test used to drive a SECOND CONNECTION into the gap**, because the
-    gap was reachable: the hub connects ``isolation_level=""``, so pysqlite
-    opened a transaction on DML only and the gate SELECT ran in autocommit,
-    taking no lock. `HubDatabase.transaction` now opens with ``BEGIN
-    IMMEDIATE``, so that connection is refused the write lock instead of
-    slipping in, and the old version of this test failed with "database is
-    locked" rather than proving anything. The cross-process half is asserted
-    directly now, in
+    `HubDatabase.transaction` opens with ``BEGIN IMMEDIATE``, so a second
+    connection is refused the write lock rather than slipping into the gap. The
+    cross-process half is asserted in
     `test_hub_engine.py::test_another_process_cannot_write_between_a_gate_read_and_its_write`.
 
     So the interleaved write goes through `hub.connection` instead, which is the
@@ -538,10 +531,9 @@ def test_a_row_that_stops_being_loose_between_the_gate_and_the_update_aborts(
     is loose when the gate reads it and is not loose by the time its own UPDATE
     runs, whatever moved it.
 
-    **The write is forced INTO the gap rather than run before it.** A first
-    attempt committed before calling `apply_stack`, which the gate SELECT simply
-    excluded: it exercised the SELECT, left the UPDATE guard untested, and
-    stayed green with that guard deleted. `_step_of` is called by the cover sort,
+    **The write is forced INTO the gap rather than run before it.** A write
+    committed before calling `apply_stack` is simply excluded by the gate SELECT
+    and leaves the UPDATE guard untested. `_step_of` is called by the cover sort,
     which runs after the SELECT and before the first UPDATE, so patching it is
     what puts the write exactly where the guard has to catch it.
     """
@@ -591,13 +583,12 @@ def test_a_row_that_stops_being_loose_between_the_gate_and_the_update_aborts(
 
 
 def test_applying_refuses_models_that_are_not_all_in_one_folder(hub, tmp_path):
-    """ "Grouped per folder, never shelf-wide" is the module's invariant, and it
-    used to hold only in `propose_stacks`.
+    """ "Grouped per folder, never shelf-wide" is the module's invariant, and
+    `apply_stack` holds it as well as `propose_stacks`.
 
-    `apply_stack` checked that each model had SOME present copy, not that they
-    shared a folder, so the route could build a stack whose members sit on two
-    drives - the run that never existed, which is exactly what the per-folder
-    rule exists to prevent. Reported by the review of #882.
+    Each model having SOME present copy is not enough: without a shared folder
+    the route could build a stack whose members sit on two drives - the run that
+    never existed, which is exactly what the per-folder rule exists to prevent.
     """
     first = _folder(hub, str(tmp_path / "disk-a"))
     second = _folder(hub, str(tmp_path / "disk-b"))
@@ -913,13 +904,13 @@ def test_a_fused_stack_can_be_unstacked_back_to_loose_files(hub, tmp_path):
 
 
 def test_fusing_cannot_walk_past_the_member_ceiling(hub, tmp_path):
-    """Reported in review of #999, and reproduced before it was fixed.
+    """Fusing cannot widen a stack past the member ceiling.
 
     The route counts the ids it was SENT. Fusing then widens that set to every
     member of every stack absorbed, so two stacks of 150 arrive as two ids and
-    would have left as a 300-member stack - measured at 300 against a ceiling of
-    200. A limit the widening step can walk past is not a limit, so the count is
-    repeated by the function that does the widening.
+    would leave as a 300-member stack against a ceiling of 200. A limit the widening
+    step can walk past is not a limit, so the count is repeated by the function that
+    does the widening.
     """
     folder = _folder(hub, str(tmp_path / "loras"))
     half = MAX_MEMBERS_PER_STACK // 2 + 10

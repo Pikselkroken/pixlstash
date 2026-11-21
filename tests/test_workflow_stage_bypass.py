@@ -1,4 +1,4 @@
-"""Switching an upscale or FaceDetailer stage off for one run (#1621).
+"""Switching an upscale or FaceDetailer stage off for one run.
 
 ``tests/comfyui_object_info_stages.json`` is a real ComfyUI's ``object_info``
 (core, Impact Pack, UltimateSDUpscale) for the classes below, trimmed to what

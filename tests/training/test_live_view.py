@@ -1,4 +1,4 @@
-"""The live view's reading of a run (#2118): phases, columns, cells and speed."""
+"""The live view's reading of a run: phases, columns, cells and speed."""
 
 import sqlite3
 

@@ -315,7 +315,7 @@ def test_tau_b_is_suppressed_below_the_minimum_pair_count():
 
 
 def test_matrix_ignores_the_score_filter_it_sets_itself():
-    """The regression this widget lives or dies on.
+    """The property this widget lives or dies on.
 
     Clicking a cell sets min_score/max_score (+ smart_score_bucket). If the
     matrix honoured those, it would collapse to the clicked cell and no other

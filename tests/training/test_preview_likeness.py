@@ -1,4 +1,4 @@
-"""Likeness of a training run's previews to its character (#2522)."""
+"""Likeness of a training run's previews to its character."""
 
 import os
 import time

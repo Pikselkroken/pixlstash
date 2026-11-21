@@ -175,11 +175,10 @@ def test_offers_the_writable_ancestor_the_guard_warns_about(
 ):
     """The repair offer must cover every directory ``TrustedSQLiteLocation`` walks.
 
-    The desktop shape that exposed the gap: the Electron config dir and the
-    library root are both private, but the library sits inside a shared folder
-    left at 0777 by an older release. The guard warns on that ancestor, so an
-    offer that only inspects leaf paths reports "nothing to fix" for a startup
-    that will keep warning.
+    The desktop shape: the Electron config dir and the library root are both
+    private, but the library sits inside a shared folder left at 0777. The guard warns
+    on that ancestor, so an offer that only inspects leaf paths reports "nothing to fix"
+    for a startup that will keep warning.
     """
 
     desktop_config = tmp_path / "pixlstash-desktop"
@@ -220,14 +219,12 @@ def test_a_server_starts_with_its_config_under_a_symlinked_directory(tmp_path):
     """The macOS ``/var`` -> ``/private/var`` case, reproduced on any POSIX box.
 
     That failure is not macOS-specific: it is simply a symlinked ancestor, and
-    every ancestor of the config path is one the caller did not construct. The
-    guard used to refuse it outright, so `pixlstash-server --server-config
-    <path under a symlinked dir>` exited 1 before serving anything, which is
-    what `scripts/smoke_install.py` had to work around on its macOS runner.
+    every ancestor of the config path is one the caller did not construct, so
+    `pixlstash-server --server-config <path under a symlinked dir>` must start.
 
     Asserting a *successful start* rather than a guard call, because the hub is
     only one of the databases opened on that path and the point is that the
-    whole startup chain now agrees on one spelling.
+    whole startup chain agrees on one spelling.
     """
     from pixlstash.server import Server
 

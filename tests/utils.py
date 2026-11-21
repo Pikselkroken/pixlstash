@@ -33,10 +33,9 @@ def wipe_tables(session, models):
         server.vault.db.run_task(wipe_tables, [Snapshot, Tag, Picture])
 
     ``PRAGMA foreign_keys`` is a no-op while a transaction is pending, so the
-    restoring ``ON`` must come *after* the commit. Issued before it (the shape
-    every ``clean_db`` fixture used to have) it is silently ignored and the
-    connection goes back to the pool with foreign keys off, for whichever test
-    picks it up next - see issue #712. The restore runs in a ``finally`` so a
+    restoring ``ON`` must come *after* the commit. Issued before it, it is
+    silently ignored and the connection goes back to the pool with foreign keys
+    off, for whichever test picks it up next. The restore runs in a ``finally`` so a
     delete that raises mid-wipe cannot leak enforcement off either, and it
     raises rather than asserts because the whole point of the check is that a
     no-opped pragma is silent (``python -O`` would drop an ``assert``).
@@ -71,8 +70,7 @@ def delete_characters(session, character_ids=None):
     """Remove characters, nulling the faces that reference them first.
 
     ``face.character_id`` is a plain FK with no ``ON DELETE`` action, so
-    deleting the character row on its own raises ``IntegrityError``; it only
-    ever worked in tests while FK enforcement was leaking off (#712). The live
+    deleting the character row on its own raises ``IntegrityError``. The live
     route nulls those faces for the same reason
     (``routes/characters.py::clear_character_and_nullify_faces``).
     ``CharacterProjectMember`` rows cascade on their own.
@@ -100,12 +98,12 @@ def delete_projects(session, project_ids):
 
     Pictures, picture sets and characters carry a plain ``project_id`` FK, so
     it has to be nulled before the project row can go; only the membership
-    tables cascade. See :func:`delete_characters` and #712.
+    tables cascade. See :func:`delete_characters`.
 
     This is only the FK-relevant part of ``DELETE /projects/{id}``. The route
     additionally re-derives each entity's primary ``project_id`` from the
-    memberships that survive, since an entity may belong to several projects
-    (#125); this helper nulls unconditionally, which is the same thing only
+    memberships that survive, since an entity may belong to several
+    projects; this helper nulls unconditionally, which is the same thing only
     when every project the entity belongs to is being deleted. That holds for
     its callers here, which delete the entity's sole project.
     """
@@ -149,20 +147,19 @@ def poll_until_zero(
 def wait_for_import_task(client, task_id, timeout_s=30, poll_interval=0.1):
     """Poll ``GET /pictures/import/status`` until the task settles.
 
-    **30s, not 10s, and the number follows from what is actually being waited
-    on.** The import runs on a detached executor thread, but the write inside it
-    goes through ``vault.db.run_task``, which queues onto the *single* DB worker.
-    So this bounds "the DB queue drained far enough to run my write", not "the
-    import worked - and in a test that imports twenty-one pictures in a loop,
-    each iteration queues behind the tagging and embedding writes of the ones
-    before it. At 10s that was a wall-clock race the loaded Windows shards lost
-    (`test_server.py::test_semantic_search`, run 31481874866): a timeout there
-    said nothing about the import and everything about how busy the queue was.
-    30s matches ``wait_for_faces``, which waits on the same kind of queued work.
+    **30s, and the number follows from what is actually being waited on.** The import
+    runs on a detached executor thread, but the write inside it goes through
+    ``vault.db.run_task``, which queues onto the *single* DB worker. So this bounds "the
+    DB queue drained far enough to run my write", not "the import worked - and in a test
+    that imports twenty-one pictures in a loop, each iteration queues behind the tagging
+    and embedding writes of the ones before it. A shorter bound is a wall-clock race
+    loaded Windows shards lose: a timeout there says nothing about the import and
+    everything about how busy the queue is. 30s matches ``wait_for_faces``, which waits
+    on the same kind of queued work.
 
-    A genuinely hung import now takes 30s to report instead of 10s, which is why
-    the message below carries the last status and the elapsed time: a hang and a
-    slow queue must not read the same.
+    A genuinely hung import takes 30s to report, which is why the message below carries
+    the last status and the elapsed time: a hang and a slow queue must not read the
+    same.
     """
     start = time.time()
     status = None
@@ -195,9 +192,7 @@ def upload_pictures_and_wait(
     """Upload and wait for the import to settle.
 
     The default tracks :func:`wait_for_import_task`'s deliberately - this is the
-    wrapper almost every caller actually uses (including the loop in
-    `test_semantic_search` that flaked), so leaving it at 10 would have kept the
-    old bound in place everywhere while looking fixed.
+    wrapper almost every caller actually uses.
     """
     kwargs = {"files": files}
     if form_data:
@@ -213,7 +208,7 @@ def wait_for_faces(client, picture_id, timeout_s=30, poll_interval=0.5):
     """Poll GET /pictures/{picture_id}/faces until at least one face appears or timeout.
 
     Returns the list of faces (may be empty if no faces were detected in time).
-    Face extraction is now asynchronous so callers must poll rather than relying
+    Face extraction is asynchronous so callers must poll rather than relying
     on the import task completion.
     """
     start = time.time()
@@ -332,8 +327,8 @@ def quiesce_background_work(server, timeout_s=60.0):
     edits the planner's finder structures under its own lock. Work already
     queued is cancelled and work already running is waited out, since it would
     otherwise write into the first test's freshly seeded library. Waiting the
-    pipeline out per test instead measured slower than per-test servers
-    (PR #814), which is why it is switched off once per module.
+    pipeline out per test is slower, which is why it is switched off once per
+    module.
 
     Args:
         server: The shared ``Server``.

@@ -1,18 +1,15 @@
 """Generated thumbnails must revalidate, not go stale under a stable URL.
 
-The sidebar used to bust the character-thumbnail cache with a fresh
-``?cb=<now>`` on every refresh, which guaranteed freshness by re-downloading
-every thumbnail on every sidebar refresh - expensive against a route whose
-picture lookup is already slow (issue #651). Dropping the buster made the URL
-stable, which is only safe if the response says how it may be reused.
+The sidebar's character-thumbnail URL carries no cache buster, which is only
+safe if the response says how it may be reused.
 
 Starlette's ``FileResponse`` sets an ``ETag`` but answers no conditional request
 (verified against starlette 1.3.1: its only conditional logic is ``If-Range``),
-and these routes sent no ``Cache-Control`` at all - so browsers fell back to
-*heuristic* caching and a regenerated thumbnail could stay stale for an
-unbounded window with no revalidation.
+and without a ``Cache-Control`` browsers fall back to *heuristic* caching, so a
+regenerated thumbnail could stay stale for an unbounded window with no
+revalidation.
 
-These tests pin both halves of the fix: the header is present, and a conditional
+These tests pin both halves: the header is present, and a conditional
 request is actually answered with a 304 rather than the whole PNG again.
 """
 

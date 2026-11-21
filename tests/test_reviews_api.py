@@ -67,19 +67,9 @@ def _disable_conflicting_backfill(server):
     value over the synthetic one - the pair stops being a pair, or the suspect
     loses the very tag the review is about, and the scan finds nothing.
 
-    The per-test servers this module used to build hid the race. A vault that
-    had just come up had nothing to backfill and no models loaded, so the sweep
-    was still in a long backoff and never reached the picture before the test
-    ended. A shared server always has the previous test's work to chew on, stays
-    on a short interval with everything warm, and lands inside the test instead:
-    two or three failures per run, never the same ones, and never the same
-    reason twice.
-
     Only these finders go, and the planner keeps running: the import endpoint
     refuses outright while the face worker is down and every fixture here
-    imports pictures. Waiting the pipeline out instead
-    (``tests.utils.wait_likeness_settled``, or a narrower poll on the columns)
-    was tried and measured slower than the per-test servers this replaces.
+    imports pictures.
 
     Returns the names of the finders it removed, so ``reset_library`` can
     re-check before every test that they are still gone.
@@ -1483,7 +1473,7 @@ def test_scoped_token_cannot_read_review_detail(client, server, token):
 def test_scoped_token_cannot_read_review_suggestions(
     client, server, token, monkeypatch
 ):
-    """The one new data-egress path in the locked-sets work.
+    """Review suggestions are a data-egress path a scoped token must not read.
 
     The owner side additionally asserts the cards still carry ``locked_sets``,
     so the 403 above cannot be "fixed" by quietly emptying the payload.
