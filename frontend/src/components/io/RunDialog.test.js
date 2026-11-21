@@ -6215,6 +6215,54 @@ describe("a LoRA row's ×, for the keyboard", () => {
   });
 });
 
+// "Enhance prompt": shown only where a language model rewrites the prompt, on
+// by default, and off is `enhance_prompt: false` on every request of the run.
+describe("the prompt enhancer", () => {
+  const box = (wrapper) => wrapper.find('[data-testid="rund-enhance"]');
+  const answer = (enhancer) => ({
+    ok: true,
+    runs: 1,
+    groups: [{ prompt: { positive_settable: true, enhancer } }],
+  });
+
+  it("is not offered where no enhancer rewrites the prompt", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(false));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(box(wrapper).exists()).toBe(false);
+  });
+
+  it("is offered, on, and sends what it always did", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(box(wrapper).element.checked).toBe(true);
+    expect(wrapper.text()).toContain("Enhance prompt");
+    await wrapper.vm.submit();
+    await flushPromises();
+    for (const [body] of [
+      ...preflightWorkflowRun.mock.calls,
+      ...runWorkflowCard.mock.calls,
+    ]) {
+      expect(body).not.toHaveProperty("enhance_prompt");
+    }
+  });
+
+  it("off, sends enhance_prompt: false on the pre-flight it asks and the run", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    preflightWorkflowRun.mockClear();
+    await box(wrapper).setValue(false);
+    await flushPromises();
+    // Asked again, so a model only the enhancer needed stops blocking.
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(preflightWorkflowRun.mock.calls[0][0].enhance_prompt).toBe(false);
+    // Still drawn: the server reports the enhancer whether or not it was cut.
+    expect(box(wrapper).element.checked).toBe(false);
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].enhance_prompt).toBe(false);
+  });
+});
+
 // The footer's Open in ComfyUI: this run, in the owner's ComfyUI, where a save
 // makes a NEW workflow. What can silently go wrong: the workflow opens without
 // the form's changes (the body is not the run's), or the tab is opened after
@@ -6299,6 +6347,20 @@ describe("Open in ComfyUI", () => {
     expect(tab.location.replace).toHaveBeenCalledTimes(1);
     expect(tab.location.replace).toHaveBeenCalledWith(LINK);
     expect(tab.close).not.toHaveBeenCalled();
+  });
+
+  it("opens without the prompt enhancer when the run is set without it", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 1,
+      groups: [{ prompt: { positive_settable: true, enhancer: true } }],
+    });
+    const wrapper = await mountRun(fromCard);
+    await wrapper.find('[data-testid="rund-enhance"]').setValue(false);
+    await flushPromises();
+    await openButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(openWorkflowRun.mock.calls[0][0].enhance_prompt).toBe(false);
   });
 
   it("is refused, and says why, when ComfyUI's nodes open no run", async () => {
