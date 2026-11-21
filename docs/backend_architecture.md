@@ -12996,9 +12996,13 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   line that is at most `MAX_GUTTER` (64 px at 2560) wide and lighter or darker
   than both sides (a gutter, trimmed to its edges plus 2 px of seam; a band
   that only climbs from one level to the next is the seam between a photo and
-  its frame); else the grid line moved into the nearest wider or step-less
-  band, background the photos share, nothing trimmed; else the most uniform
-  line, *unsure*. A line within `FACE_FENCE` (0.2) of a stored face box's
+  its frame); else the middle of the nearest *seam*, a step of over
+  `UNIFORM_LEVELS` across the line along `UNIFORM_SHARE` of it with neither
+  side white (MiniMax H3 draws its photos touching, each on its own backdrop
+  lit top to bottom, so no line between them is uniform, while a lit arm as
+  grey as the backdrop is), 2 px of seam trimmed each side; else the grid
+  line moved into the nearest wider or step-less band, background the photos
+  share, nothing trimmed; else the most uniform line, *unsure*. A line within `FACE_FENCE` (0.2) of a stored face box's
   shorter side from its centre is never a candidate (stored boxes are widened
   and rounded up, so only the centre is the face's). The sheet `cuts_cleanly`
   when no cut is unsure, no background cut is pressed against its window's
