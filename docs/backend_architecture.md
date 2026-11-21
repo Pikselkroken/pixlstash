@@ -4752,9 +4752,9 @@ Snapshot `.sqlite` files are opened through `services/restore/schema_upgrade.sna
 #### Trusted SQLite locations, and the accepted Windows residue (W17)
 
 Every credential-bearing SQLite open goes through `trusted_sqlite.py`, whose
-module docstring is the design record: which actor each check is for, why the
-earlier DACL refusal was removed (it stopped the server starting on Windows,
-W6/W7/W18), and what a `private=True` open verifies instead.
+module docstring is the design record: which actor each check is for, what a
+`private=True` open verifies, and how the Windows owner/DACL check mirrors the
+POSIX owner/mode checks.
 
 **Accepted risk W20 — mode bits warn, they no longer refuse.** Until #1152
 (commit `a26f765`, 2026-09-04) a group- or world-writable directory on the path
@@ -4859,7 +4859,7 @@ answer cannot see, both stated rather than fixed:
   `/etc/group` disagrees with the host answers about a different group than the
   one that can write. An id that does not resolve at all fails closed.
 
-Both share W17's owner and revisit date below, and both would be closed by the
+Both share W17's revisit line below, and both would be closed by the
 same thing: an answer about the *filesystem's* principals rather than this
 process's name service.
 
@@ -4868,23 +4868,75 @@ already group-writable — a tightened install performs none. A lookup that fail
 is reported as shared, so the worst case is a warning the directory did not
 need, never a weaker check.
 
-**Accepted risk W17.** Python exposes neither owner SID nor directory DACL
-portably, so the POSIX `mode & 0o022` test — "another principal cannot write
-this directory" — has no Windows implementation. On Windows a library on a
-network share, removable media, or a deliberately loosened folder is therefore
-not protected against another local principal substituting `vault.db` or
-pre-positioning a sidecar before startup. What still runs there: redirect
-rejection (symlink **and** junction), the regular-file requirement on the target
-and every sidecar, and the `(st_dev, st_ino)` identity match across the open.
-The vault is authorization-bearing (`authz/membership.py` answers scope
-questions out of it), so this is not reads-only; the blast radius is stated in
-full in the module docstring.
+**Windows owner and DACL check (closes most of W17).** On `nt` the guard reads
+each object's owner SID and DACL natively (ctypes against advapi32/kernel32:
+`GetNamedSecurityInfoW`, `GetAclInformation`/`GetAce`, the process token's user
+SID) and reaches the verdict POSIX reaches from `st_uid` and the mode bits. The
+decision is the pure `classify_windows_acl`, tested on the Linux gate with
+synthetic ACLs; the reader is tested against real files on the `backend_windows`
+lane (`tests/test_trusted_sqlite_windows_acl.py`).
 
-Owner: lindkvis. Revisit 2026-11-08, together with the native ACL verifier
-(`win32security.GetNamedSecurityInfo`, or ctypes against advapi32) that is the
-route back to tightening this. Recorded here rather than in a review document
-because `docs/reviews/` is gitignored: an accepted risk nobody else can read is
-not a record.
+| Object | Refused when | Warned when |
+|---|---|---|
+| any directory on the walk, the file, every sidecar | the owner is not the current user, `SYSTEM`, `BUILTIN\Administrators` or `NT SERVICE\TrustedInstaller` | — |
+| the directory holding the database | another principal holds `FILE_ADD_FILE`, `FILE_ADD_SUBDIRECTORY`, `FILE_DELETE_CHILD`, `DELETE`, `WRITE_DAC`, `WRITE_OWNER`, `GENERIC_WRITE` or `GENERIC_ALL` | — |
+| an ancestor | another principal holds `FILE_DELETE_CHILD`, `DELETE`, `WRITE_DAC`, `WRITE_OWNER` or `GENERIC_ALL` (add-only rights are the sticky bit: `C:\` grants Authenticated Users `FILE_ADD_SUBDIRECTORY` on itself) | — |
+| the file and every sidecar | another principal holds `FILE_WRITE_DATA`, `FILE_APPEND_DATA`, `DELETE`, `WRITE_DAC`, `WRITE_OWNER`, `GENERIC_WRITE` or `GENERIC_ALL` | a credential file (`private=True`) another principal can read |
+| a volume with no readable ACL | — | always (see residue) |
+
+"Another principal" is every SID but the four above, including groups the user
+is in (`Users`, `Authenticated Users`, `Everyone`): other accounts are in them
+too. Inherit-only ACEs are skipped; `CREATOR OWNER`/`CREATOR GROUP` grant nothing
+on the object and `OWNER RIGHTS` resolves to the already-verified owner. The
+default ACLs of `%APPDATA%`, `%LOCALAPPDATA%` and the profile folders grant only
+the user, `SYSTEM` and `Administrators`, so a desktop install passes silently.
+Every refusal runs inside `TrustedSQLiteLocation.open`, before any
+`sqlite3.connect`, and names the path, who can write it and the `icacls` command
+that removes the access.
+
+Writability refuses on Windows where the POSIX mode bits only warn (W20). That
+is the mirror, not a departure: W20 is accepted because the mode bit is a proxy
+that was wrong where no second principal existed, and it names an observed
+second principal as the condition under which the check is a refusal. An ACE is
+that observation.
+
+*What this costs.* A library in a folder other accounts can write no longer
+opens. The common case is a secondary NTFS drive: a folder created on `D:\`
+inherits Authenticated Users *Modify*, so `D:\Photos` as a library root is
+refused at startup (the server exits 1, as for any `TrustedSQLiteLocationError`)
+and by `POST /libraries`, with the `icacls` fix in the message. The library
+folder, not the hub, is affected; the hub under `%APPDATA%` keeps opening.
+
+**Accepted risk W17 (residue).** What the Windows check does not cover:
+
+- **Volumes that cannot answer.** FAT32/exFAT carry no ACLs (no
+  `FILE_PERSISTENT_ACLS`), and some SMB servers fail `GetNamedSecurityInfoW` or
+  return a descriptor with no owner. `_accept_unverifiable_windows_acl` logs a
+  WARNING naming the path, the API and the error code (once per process per
+  path) and the open proceeds with only redirect rejection, the regular-file
+  requirement and the `(st_dev, st_ino)` identity match - the pre-check
+  behaviour. That function is the single switch: making it raise refuses those
+  volumes. `ERROR_ACCESS_DENIED` is deliberately not in this class and refuses:
+  the owner always holds `READ_CONTROL`, so an unreadable descriptor belongs to
+  somebody else. Whether it should is an open product decision (removable media and
+  network shares are the cases the multi-library plan names as this lane's real
+  concerns, and refusing them stops every library on a USB stick opening).
+- **Conservative readings that can over-refuse**, never under-refuse: a deny ACE
+  never cancels an allow, callback and object allow ACEs count unconditionally,
+  an ACE type the reader does not know is a stranger with full control, a NULL
+  DACL is Everyone with full control, and a logon-session SID (`S-1-5-5-x-y`)
+  is another principal.
+- **Moment of open only**, exactly as on POSIX: tampering after the guard
+  returns is excluded by the directory ACL the check established, not observed.
+- **Administrators are trusted**, as root is on POSIX: an elevated process can
+  always write.
+
+The vault is authorization-bearing (`authz/membership.py` answers scope
+questions out of it), so on an unverifiable volume this is not reads-only; the
+blast radius is stated in full in the module docstring. Revisit when the
+unverifiable-volume decision is taken, and immediately if multi-user work
+starts. Recorded here rather than in a review document because `docs/reviews/`
+is gitignored: an accepted risk nobody else can read is not a record.
 
 **Accepted risk W19 — the hub path is resolved, not refused.** The guard refuses
 a *caller-supplied* path that reaches its target through a symlink. A library's
@@ -4920,9 +4972,10 @@ dominates the payoff — write access inside the owner's own config directory,
 which also holds `autostart/` and `systemd/user/`, is code execution as the
 owner by a shorter route than swapping a hub.
 
-Windows keeps `_reject_symlinked_path` intact, including junctions: there
-`_require_owned_directory` returns early, so the redirect refusal is one of only
-three controls that actually run and removing it would be a straight downgrade.
+Windows keeps `_reject_symlinked_path` intact, including junctions: on a volume
+that keeps no ACLs the owner/DACL check cannot run, so the redirect refusal is
+one of only three controls that run there and removing it would be a straight
+downgrade.
 
 Owner: lindkvis. Revisit with W17. The wider change this was carved out of —
 retiring the POSIX ancestor refusal outright, canonicalising the vault
