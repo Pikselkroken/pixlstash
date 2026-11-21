@@ -2863,6 +2863,45 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     expect(await open("small")).toBe("4K");
   });
 
+  it("starts an H3 workflow at 4K over a size remembered from another model", async () => {
+    const H3 = {
+      id: "manual:h3-t2i",
+      name: "MiniMax H3: Text to Image",
+      type: "txt2img",
+      last_used: "2026-11-12T20:00:00Z",
+      models: [{ kind: "unet", base_model_family: "minimax_h3" }],
+    };
+    // Large, last chosen for a MOSS-Image sheet.
+    localStorage.setItem(
+      "pixlstash:characterSheetChoices",
+      JSON.stringify({ size: "large" }),
+    );
+    const open = async () => {
+      api.fetchCharacterSetSuggestion.mockResolvedValue(
+        suggestion({ stillsGroup: emptyGroup() }),
+      );
+      sheetsWorld({ description: "Adult woman" });
+      gen.listWorkflowCards.mockResolvedValue({ cards: [MOSS_CARD, H3] });
+      const wrapper = mountDialog();
+      await flushPromises();
+      return wrapper;
+    };
+    const chosen = (wrapper) =>
+      wrapper.find('[data-testid="cs-size"] [aria-checked="true"]').text();
+    let wrapper = await open();
+    expect(chosen(wrapper)).toBe("4K");
+    // Large picked for H3 itself is kept next time.
+    const large = wrapper
+      .findAll('[data-testid="cs-size"] button')
+      .find((b) => b.text() === "Large");
+    await large.trigger("click");
+    await flushPromises();
+    wrapper.unmount();
+    wrapper = await open();
+    expect(chosen(wrapper)).toBe("Large");
+    wrapper.unmount();
+  });
+
   it("keeps following a run still drawing when the build is opened again", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
