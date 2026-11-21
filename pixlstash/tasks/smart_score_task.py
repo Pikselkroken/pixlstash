@@ -273,8 +273,8 @@ class SmartScoreTask(BaseTask):
         transaction and write ``smart_score`` only for pictures whose signature is
         unchanged since :meth:`_fetch_score_data` captured *before*. A picture whose
         signature moved is **skipped and left NULL** on purpose - the finder re-picks it
-        and it rescores from fresh inputs. Writing the old value here would recreate the
-        bug.
+        and it rescores from fresh inputs. Writing the old value here would resurrect
+        the invalidated row.
 
         Args:
             session: Active DB session.

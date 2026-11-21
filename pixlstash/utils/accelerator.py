@@ -1,10 +1,8 @@
 """One answer to "what is this machine's accelerator, and how do I use it".
 
-Every device decision in PixlStash routes through this module. Before it, the
-answer was spelled ``torch.cuda.is_available()`` in seventeen places, which made
-"has a GPU" and "has CUDA" the same sentence - so an Apple Silicon machine, whose
-GPU is real and roughly twenty times faster than its CPU at tagging, was told it
-had no GPU at all.
+Every device decision in PixlStash routes through this module, so "has a GPU"
+and "has CUDA" are never the same question: an Apple Silicon machine's GPU is
+real and roughly twenty times faster than its CPU at tagging.
 
 The rule this module exists to enforce: **no code path may infer "CPU" from "not
 CUDA"**. CUDA is one accelerator. MPS is another. A third will be a change to
@@ -274,8 +272,8 @@ def resolve_device(
 def is_accelerated(device) -> bool:
     """Return whether *device* is an accelerator rather than the CPU.
 
-    The predicate the codebase used to spell ``device == "cuda"``, which is the
-    exact expression that made every non-CUDA GPU invisible.
+    Use it rather than ``device == "cuda"``, which makes every non-CUDA GPU
+    invisible.
 
     Args:
         device: Device string or ``torch.device``.
@@ -289,17 +287,12 @@ def is_accelerated(device) -> bool:
 def supports_fp16(device) -> bool:
     """Return whether half precision is worth using on *device*.
 
-    CUDA: long-standing behaviour, unchanged. MPS: adopted on measurement, not
-    on principle. Over 3 fresh processes per dtype in alternating order, batch
-    8, fp16 ran at 208 ms/image against fp32's 266 (**1.28x**) and held 1319 MB
-    of device memory against 2347 MB (**-44 %**, byte-identical across every
-    replicate). Accuracy was checked on raw scores rather than on thresholded
-    tags, because confidences are stored and feed the anomaly penalty: over 291
-    (image, label) pairs the largest fp16-vs-fp32 difference was 0.0019 and not
-    one label moved as much as 0.01, so the thresholded tags are identical too.
-    Both halves matter, but on a unified-memory machine the **headroom** is the
-    one that decides whether the batch a machine can afford is the batch that
-    OOMs it. CPU stays fp32; half precision there is slower, not faster.
+    CUDA: yes. MPS: yes, because fp16 runs about 1.28x faster there and holds
+    about 44 % less device memory, while its raw confidences stay within 0.002
+    of fp32's, so the thresholded tags are identical. Both halves matter, but on
+    a unified-memory machine the **headroom** is the one that decides whether
+    the batch a machine can afford is the batch that OOMs it. CPU stays fp32;
+    half precision there is slower, not faster.
 
     Args:
         device: Device string or ``torch.device``.
@@ -500,10 +493,9 @@ def device_display_name(device) -> str:
 def is_device_error(error: BaseException, device=None) -> bool:
     """Return whether *error* came from the accelerator rather than the model.
 
-    The check the CUDA paths spelled inline as ``"CUDA error" in str(exc)``,
-    which on MPS matches nothing: its failures say "MPS backend", so an inline
-    CUDA-worded check reads a genuine device failure as a model bug and gives
-    up instead of retrying on the CPU.
+    An inline ``"CUDA error" in str(exc)`` check matches nothing on MPS: its
+    failures say "MPS backend", so a CUDA-worded check reads a genuine device
+    failure as a model bug and gives up instead of retrying on the CPU.
 
     Args:
         error: The exception to classify.

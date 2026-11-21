@@ -186,7 +186,7 @@ class FaceModelRefreshTask(BaseTask):
 
         Decoupling load from inference lets the caller batch the (expensive)
         recognition pass across every frame in the picture batch in a single
-        ONNX call, instead of one call per image as before.
+        ONNX call, instead of one call per image.
         """
         file_path = str(
             ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)

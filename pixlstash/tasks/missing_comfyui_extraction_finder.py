@@ -16,11 +16,11 @@ class MissingComfyUIExtractionFinder(SimpleMissingFinder):
     With a hub attached the predicate widens to the workflow scan, and it widens
     by *replacing* rather than by adding an ``OR``: ``workflow_hash_version`` is
     written by the same task and in the same batch as ``comfyui_models``, and it
-    is a newer column, so every picture the old predicate matches is already
-    matched by the new one. That keeps the idle probe a single indexed ``IS
+    is a newer column, so every picture the hub-less predicate matches is
+    already matched by the widened one. That keeps the idle probe a single indexed ``IS
     NULL`` term (``ix_picture_workflow_unscanned``) instead of a union of two.
 
-    Without a hub the old predicate stands, so a vault opened by the CLI or by a
+    Without a hub the hub-less predicate stands, so a vault opened by the CLI or by a
     test does not spin on a scan it cannot perform -- and a hub that turns out
     to be unwritable puts this finder back into exactly that state rather than
     re-offering the same pictures forever (``stand_down``).
@@ -87,14 +87,13 @@ class MissingComfyUIExtractionFinder(SimpleMissingFinder):
             announce_to_vault(self._vault, workflow_ids, "pictures")
 
     def stand_down(self) -> None:
-        """Narrow back to the pre-B3 predicate after an unwritable hub.
+        """Narrow back to the hub-less predicate after an unwritable hub.
 
         Called by the task on the first hub write it cannot complete. The
         alternative -- leaving those pictures unmarked and matching them again
         next cycle -- makes this finder re-open and re-parse every image in the
         library on every planning cycle for as long as the hub stays broken.
-        Falling back drains the old predicate and goes quiet, which is what the
-        finder did before it learned to hash.
+        Falling back drains the hub-less predicate and goes quiet.
         """
         if not self._scanning_workflows:
             return

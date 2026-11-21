@@ -879,7 +879,7 @@ def resolve(
 
 
 def preview_choice(preset: dict, *, pins: dict | None = None, **choices) -> dict | None:
-    """The Train dialog's Previews question (#2415), or None when there is none.
+    """The Train dialog's Previews question, or None when there is none.
 
     It exists when the fastest profile that trains was measured with previews
     that do not fit, so :func:`resolve` moved to a slower one to draw them

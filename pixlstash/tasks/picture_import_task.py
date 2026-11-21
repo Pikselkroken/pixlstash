@@ -53,9 +53,7 @@ class PictureImportTask(BaseTask):
     inside this batch), **scrapheaped** (content matches a soft-deleted picture:
     not imported again, the picture is restored instead), failed, cancelled and
     they sum
-    to the staged total. A scrapheaped match used to be reported as an ordinary
-    duplicate, which told the user nothing about why their file did not appear.
-    See :mod:`pixlstash.services.import_dedup_service`.
+    to the staged total. See :mod:`pixlstash.services.import_dedup_service`.
 
     Live progress is exposed via ``_total_count`` / ``_processed_count`` and read
     by ``Vault._build_worker_progress_snapshot`` so the import surfaces as a task
@@ -76,7 +74,7 @@ class PictureImportTask(BaseTask):
             WebSocket events), or ``None`` for an external caller.
         outcomes: Per-file outcomes in the order they were decided, read live
             by the staging status route so the grid can mark each arriving
-            tile (#2512). Append-only while the task runs.
+            tile. Append-only while the task runs.
     """
 
     def __init__(
@@ -157,7 +155,7 @@ class PictureImportTask(BaseTask):
     def _record_outcome(
         self, entry: dict, outcome: str, picture_id: Optional[int] = None
     ) -> None:
-        """Note one staged file's outcome for the live status (#2512).
+        """Note one staged file's outcome for the live status.
 
         Args:
             entry: The staged entry; its ``client_key`` names the file to the

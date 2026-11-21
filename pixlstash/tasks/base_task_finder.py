@@ -46,8 +46,7 @@ class BaseTaskFinder(ABC, metaclass=TaskFinderRegistry):
         ``time.monotonic()``'s reference point is undefined (on Linux it is
         seconds since BOOT), so 0.0 is an absolute instant, and on a host that
         booted less than the interval ago ``now - 0.0`` reads as "checked
-        moments ago" and silently suppresses the first run - which is how it
-        surfaced, on a CI runner with under 15 minutes of uptime.
+        moments ago" and silently suppresses the first run.
         """
         now = time.monotonic()
         if self._last_check_at is not None and now - self._last_check_at < interval_s:
@@ -71,9 +70,9 @@ class BaseTaskFinder(ABC, metaclass=TaskFinderRegistry):
                 ``width * height``. The batch stops before the picture that
                 would pass it, but always takes its first picture, so an
                 oversized one still runs, alone. A picture with no recorded
-                dimensions counts as ``UNKNOWN_PICTURE_PIXELS`` (#2750).
+                dimensions counts as ``UNKNOWN_PICTURE_PIXELS``.
 
-        Pictures whose image file cannot be decoded (issue #585) are excluded
+        Pictures whose image file cannot be decoded are excluded
         here, at the one point every batch finder claims through, so a corrupt
         image is skipped uniformly instead of being re-selected on every sweep.
         Suppression is looked up by picture id against the registry's own stored

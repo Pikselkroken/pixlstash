@@ -1,8 +1,7 @@
 """Which of a workflow's settings are featured, and which is a picture batch.
 
-What survives of the #1306 parameter form: the featured setting names a
-workflow card lists (``workflow_card_service``) and the rule for the
-``batch_size`` a run pins to 1 (``workflow_run_service``).
+The featured setting names a workflow card lists (``workflow_card_service``) and
+the rule for the ``batch_size`` a run pins to 1 (``workflow_run_service``).
 """
 
 from __future__ import annotations
@@ -95,7 +94,7 @@ def size_inputs(graph: dict) -> set[tuple[str, str]]:
 
     An empty latent's ``width`` / ``height`` when the graph has one: the one
     place a size can be set whatever drives it, so a run that wants another
-    size writes it there. A graph with none (#1833) is sized on the node that
+    size writes it there. A graph with none is sized on the node that
     hands out the latent it sizes, as ``WanImageToVideo`` does: one whose
     output is wired into an input named for a latent (``latent_image``). With
     no such node either, the input names alone decide.

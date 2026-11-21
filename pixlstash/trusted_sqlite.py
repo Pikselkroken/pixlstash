@@ -10,9 +10,7 @@ canonical path, and compare identities before doing decisive work.
 non-regular files are refused outright. A loose mode (group/world-writable
 directory or file, a credential file wider than 0600) is logged as a WARNING
 with the ``chmod`` that fixes it, and the open goes ahead. Refusing on mode
-alone took the app down twice for nobody's benefit (a 0775 directory under a
-stock Ubuntu umask, then a 0755 library made by the Docker entrypoint), and a
-loose mode on the owner's own files has never been an observed attack.
+alone would take the app down for nobody's benefit.
 
 **What these checks actually cover: the moment of open, not "the database".**
 ``TrustedSQLiteLocation.open`` validates the main file and any pre-existing
@@ -47,43 +45,35 @@ its real concerns as removable media, network shares and replaced symlinks, all
 of which change ``st_dev``/``st_ino`` and are caught here.
 
 State the actor before adding a check. A control justified by an actor outside
-the threat model reads as free protection and is not: the parent-directory
-timestamp comparison bought same-uid swap detection nobody needed and refused
-roughly a fifth of concurrent opens, because SQLite creating our own WAL is
-indistinguishable from tampering when you are watching a directory's mtime.
+the threat model reads as free protection and is not: a parent-directory
+timestamp comparison would refuse concurrent opens, because SQLite creating our
+own WAL is indistinguishable from tampering when you are watching a directory's
+mtime.
 
-The same rule cuts the other way, and cost a startup: ``mode & 0o022`` is a
-*proxy* for "another principal can write here", and for the group bit the proxy
-is wrong wherever the group is the owner's own. Debian and Ubuntu give every
-account a group of its own and default to umask 002, so a directory this app
-created before it started passing 0700 is 0775 with a one-member group - no
-other principal at all, and the blanket test refused it and exited 1 with no way
-back except a manual ``chmod``. ``_is_private_group`` names the actor instead of
-the bit: group-write is not even warned about when the group is the owner's
-own, same-named, and has no other member, on a directory this user owns.
-World-write and root-owned group-writable ancestors warn, and the two limits of
-the group answer - supplementary members only, and NSS resolved in this process
-- are recorded as accepted risk beside W17 in ``docs/backend_architecture.md``
-§13.
+The same rule cuts the other way: ``mode & 0o022`` is a *proxy* for "another
+principal can write here", and for the group bit the proxy is wrong wherever the
+group is the owner's own. Debian and Ubuntu give every account a group of its
+own and default to umask 002, so a directory created without an explicit 0700 is
+0775 with a one-member group - no other principal at all. ``_is_private_group``
+names the actor instead of the bit: group-write is not even warned about when
+the group is the owner's own, same-named, and has no other member, on a
+directory this user owns. World-write and root-owned group-writable ancestors
+warn, and the two limits of the group answer - supplementary members only, and
+NSS resolved in this process - are recorded as accepted risk beside W17 in
+``docs/backend_architecture.md`` §13.
 
 **Windows, and what this cannot check.** Python exposes neither owner SID nor
 directory DACL portably, so the "another principal cannot write this directory"
-test - POSIX's ``mode & 0o022`` - has no Windows implementation. An earlier
-revision substituted a blanket refusal of any ``private=True`` open outside
-``user_config_dir("pixlstash")``. That predicate was false for every desktop
-install - the Electron shell derives the hub path from its own config under
-``%APPDATA%\\pixlstash-desktop`` while ``user_config_dir`` resolves under
-``%LOCALAPPDATA%`` - so the server never started on Windows (W6/W7/W18). The
-DACL refusal is gone.
+test - POSIX's ``mode & 0o022`` - has no Windows implementation.
 
-A ``private=True`` open now requires a mandatory, no-default ``trusted_root``:
-the parent directory the caller derived the hub path from. The only check is
+A ``private=True`` open requires a mandatory, no-default ``trusted_root``: the
+parent directory the caller derived the hub path from. The only check is
 containment - the canonical file must be inside that root. In correct code the
-containment is tautologically true; the parameter exists so that *forgetting*
-it fails at the first test run instead of silently opting out in production
-(the root cause of W4-W7). It does not second-guess where the owner put the
-hub: the hub is trusted at the root its own configuration placed it, with no
-DACL verification until the native verifier (3c) exists.
+containment is tautologically true; the parameter exists so that *forgetting* it
+fails at the first test run instead of silently opting out in production. It
+does not second-guess where the owner put the hub: the hub is trusted at the
+root its own configuration placed it, with no DACL verification until the native
+verifier (3c) exists.
 
 *Accepted risk, for the vault.* On Windows a library on a network share,
 removable media, or a folder someone deliberately loosened is not protected
@@ -92,8 +82,7 @@ sidecar **before** startup. Default ACLs already exclude other standard users
 from a user profile, and those three cases are the ones named above as this
 lane's real concerns.
 
-**Blast radius, stated accurately** (an independent review corrected an earlier
-version of this note that claimed it was reads only):
+**Blast radius:**
 
 * The vault is **authorization-bearing**. ``authz/membership.py`` answers
   "is this picture in that project?" out of the vault, so a substituted vault
@@ -123,7 +112,7 @@ an existence check rather than a trust check:
 Revisit when a native ACL verifier exists (``win32security.GetNamedSecurityInfo``
 or ctypes against advapi32), which is the route back to tightening this.
 
-Accepted-risk record (W17): owner lindkvis, revisit 2026-11-08, together with
+Accepted-risk record (W17), to revisit together with
 the native ACL verifier (3c) that would close the Windows residue. Recorded in
 ``docs/backend_architecture.md`` §13 ("Trusted SQLite locations, and the
 accepted Windows residue") - not in ``docs/reviews/``, which is gitignored, so
@@ -226,11 +215,9 @@ def _is_private_group(uid: int, gid: int) -> bool:
     ``mode & 0o020`` is only an exposure when somebody else is in the group, and
     on Debian, Ubuntu and every other distro that runs ``useradd -U`` nobody
     else is: each account gets a group of its own, named after it, and the
-    default umask is 002. Every directory created before this code started
-    passing 0700 explicitly is therefore 0775 with a group of exactly one
-    member, which the blanket bit test read as "another account could replace
-    the database" and refused - taking the server down at startup, for good, on
-    a stock Linux install with a library from an earlier release.
+    default umask is 002. A directory created without an explicit 0700
+    is therefore 0775 with a group of exactly one member, which a blanket bit
+    test would read as "another account could replace the database".
 
     Deliberately narrow, and deliberately not ``pwd.getpwall()``:
 
@@ -259,7 +246,7 @@ def _is_private_group(uid: int, gid: int) -> bool:
 
     Any lookup failure returns False, so the caller refuses rather than trusts
     an answer it did not get. ``OverflowError`` is in that list because the two
-    modules disagree about the same input: measured on CPython 3.12,
+    modules disagree about the same input: on CPython 3.12,
     ``grp.getgrgid(-2)`` raises ``OverflowError`` while ``pwd.getpwuid(-2)``
     raises ``KeyError``. A ``st_gid`` from the kernel is a ``gid_t`` and cannot
     be out of range, so this is unreachable from the caller - but a fail-closed
@@ -327,19 +314,18 @@ def _reject_symlinked_path(path: str) -> None:
     comparison holds on POSIX, where ``realpath`` differs from ``abspath`` only
     where a symlink was resolved, but it is wrong on Windows: ``realpath`` also
     expands 8.3 short names and normalises case, so ``C:\\Users\\RUNNER~1\\...``
-    - the form ``%TEMP%`` takes on a GitHub runner - was reported as "contains a
-    symlink" when it contains none. That misdiagnosis took down every Windows
-    test that opens a hub.
+    - the form ``%TEMP%`` takes on a GitHub runner - would be reported as "contains
+    a symlink" when it contains none.
 
     Testing each component is the property that was actually meant, and it
     names the offending component instead of leaving the caller to infer it.
     A component that does not exist yet is not a symlink; ``create=True`` opens
     rely on that.
 
-    The old comparison did catch one thing a bare ``islink`` walk does not: a
-    Windows **junction**, which ``realpath`` resolves and ``islink`` reports as
-    False. Dropping that would have been a straight downgrade, since a junction
-    is the redirect an unprivileged account can create - see ``_is_redirect``.
+    The ``realpath`` comparison does catch one thing a bare ``islink`` walk does
+    not: a Windows **junction**, which ``realpath`` resolves and ``islink``
+    reports as False. Junctions are therefore checked too, since a junction is
+    the redirect an unprivileged account can create - see ``_is_redirect``.
     """
     current = path
     while True:
@@ -416,11 +402,10 @@ def _validate_sidecars(canonical: str, *, private: bool) -> None:
     A sidecar that VANISHES between the existence probe and the ``lstat`` is
     tolerated: a concurrent opener's SQLite creates and deletes a transient
     ``-journal`` during first migration (before WAL is set), and refusing that
-    made 1-in-20 four-opener races fail with "Could not inspect ... -journal:
-    No such file or directory" - the same concurrent-open-mistaken-for-tampering
-    class the creation-race test exists to catch. A vanished file has no
-    attributes to be hostile with; a hostile sidecar that still exists is
-    refused exactly as before.
+    would fail concurrent opens with "Could not inspect ... -journal: No such
+    file or directory" - the same concurrent-open-mistaken-for-tampering class
+    the creation-race test exists to catch. A vanished file has no attributes
+    to be hostile with; a hostile sidecar that still exists is refused.
     """
     for suffix in _SIDECAR_SUFFIXES:
         sidecar = canonical + suffix

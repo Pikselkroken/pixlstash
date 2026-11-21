@@ -1,4 +1,4 @@
-"""What this machine measured a training setup to need (#2120).
+"""What this machine measured a training setup to need.
 
 A recipe's hardware profiles start as research seeds. Once a setup has run
 here, its measured peaks and speed replace them for admission and the time
@@ -146,7 +146,7 @@ def with_margin(mb: int | None, room: int | None = None) -> int | None:
 
     With *room*, the margin never lifts a peak that fits the room past
     ``room / NEED_MARGIN``, nor below the peak itself, as for a learned ComfyUI
-    need (#2081): the setup completed in that peak on this card, so asking 10%
+    need: the setup completed in that peak on this card, so asking 10%
     more would refuse what just ran. A peak above the room keeps its margin.
     """
     if mb is None:

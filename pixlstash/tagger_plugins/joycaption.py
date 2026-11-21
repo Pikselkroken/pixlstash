@@ -57,7 +57,7 @@ class JoyCaptionService:
         _model_device: Device the model is resident on.
         _load_lock: Serialises loading against unloading. Freeing CUDA state
             while a load is still allocating into it is memory-unsafe: it
-            crashed the process (SIGSEGV in isolation, SIGABRT with
+            crashes the process (SIGSEGV in isolation, SIGABRT with
             "terminate called without an active exception" during server
             shutdown). ``ModelLifecycleManager.aggressive_unload`` calls
             ``unload`` from the idle and shutdown paths, which know nothing
@@ -507,9 +507,8 @@ def _precision_help() -> str:
     supported on macOS arm64. They run through device-agnostic PyTorch ops
     rather than tuned Metal kernels, which upstream flags as possibly lacking
     performance optimisation, and only the 8-bit *optimizers* are unimplemented
-    - a training feature this plugin never uses. An earlier version of this text
-    claimed bitsandbytes had no Metal backend at all and that NF4/INT8 would not
-    load; that was wrong, and the constraint that actually bites is memory.
+    - a training feature this plugin never uses. The constraint that actually bites
+    is memory.
     """
     base = (
         "Quantisation precision. NF4/INT8 use bitsandbytes and require less "
@@ -849,7 +848,7 @@ class JoyCaptionPlugin(TaggerPlugin):
         A model that is *not yet resident* is charged in full, because the host
         asks this before it loads and only on a CUDA engine: returning 0 for a
         cold start would bill nothing for the 8 GB that is about to be
-        allocated, which is the OOM the budget exists to prevent (#967). Only a
+        allocated, which is the OOM the budget exists to prevent. Only a
         model already sitting on the CPU costs nothing.
 
         Args:

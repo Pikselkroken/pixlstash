@@ -119,9 +119,8 @@ class ImageEmbeddingTask(BaseTask):
         the decode, the perceptual hash (a LANCZOS resample of the full
         frame), the reduction to CLIP's first resize, and CLIP's own
         preprocessing when the model is already loaded.
-        Measured on the GPU worker instead, those were 4 s of a 4.2 s batch of
-        128 - the forward pass itself is a tenth of a second - and the single
-        GPU worker sat on CPU work while every other stage waited for it.
+        The forward pass is a small fraction of the batch, so on the single
+        GPU worker this would leave every other stage waiting on CPU work.
         """
 
         def _one(item):
@@ -255,7 +254,7 @@ class ImageEmbeddingTask(BaseTask):
     ) -> int:
         """Count pictures needing image embedding or aesthetic score work.
 
-        *suppressed_ids* - pictures whose file cannot be decoded (issue #585) -
+        *suppressed_ids* - pictures whose file cannot be decoded -
         are excluded so progress does not stall at a non-zero "remaining" that can
         never drain.
         """
@@ -290,7 +289,7 @@ class ImageEmbeddingTask(BaseTask):
     ):
         """Fetch pictures needing image embedding or aesthetic score work.
 
-        *suppressed_ids* - undecodable pictures (issue #585) - are excluded from
+        *suppressed_ids* - undecodable pictures - are excluded from
         the candidate window so a handful of corrupt files cannot crowd out real
         work and stall the finder.
         """
@@ -329,7 +328,7 @@ class ImageEmbeddingTask(BaseTask):
         return [(pid, None, score, None) for pid in pids]
 
     def _mark_decode_failures(self, pids: set[int], batch_files: dict) -> None:
-        """Suppress pictures that genuinely could not be decoded (issue #585).
+        """Suppress pictures that genuinely could not be decoded.
 
         Only the pids whose image failed to open/decode are passed here - never a
         transient inference failure (CLIP/GPU OOM), which must keep retrying. A

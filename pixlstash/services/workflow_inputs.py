@@ -13,7 +13,7 @@ in the hub (``workflow_key_picture_input`` for a card), never written into it.
 
 A card addresses an input by ``(slot_label, input_name)`` and detection speaks
 node ids; :func:`card_input_modes` is the bridge, and :func:`resolve_fills` is
-the one place the order a run fills them in is written down (#1457).
+the one place the order a run fills them in is written down.
 """
 
 from __future__ import annotations

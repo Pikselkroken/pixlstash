@@ -1,4 +1,4 @@
-"""Finder for training previews whose faces nobody has looked for yet (#2522)."""
+"""Finder for training previews whose faces nobody has looked for yet."""
 
 from __future__ import annotations
 

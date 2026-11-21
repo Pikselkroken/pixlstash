@@ -173,7 +173,7 @@ class TagPredictionBackfillTask(BaseTask):
         attempted_picture_ids: list,
         model_version: str,
     ) -> int:
-        """``_backfill_predictions`` minus pictures retagged since the read (#1367).
+        """``_backfill_predictions`` minus pictures retagged since the read.
 
         Their scores were taken against the replaced tags, and a retag by a
         plugin tagger never deletes built-in rows, so they would outlive it.

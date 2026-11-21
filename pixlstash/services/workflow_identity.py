@@ -487,7 +487,7 @@ def workflow_key(
 
 @dataclass(frozen=True)
 class LoaderSwap:
-    """A PixlStash loader a model fix put in place of the workflow's own (#1605).
+    """A PixlStash loader a model fix put in place of the workflow's own.
 
     Swapping the node changes the topology, so a picture made with the swapped
     graph would file on a card of its own. This is what reads it back as the
@@ -953,7 +953,7 @@ def core_hash(document: dict, *, strip_loras: bool = True) -> str:
 def core_node_labels(document: dict, *, strip_loras: bool = True) -> dict[str, str]:
     """Each surviving node's label on the core graph: ``{node_id: label}``.
 
-    The **core address** (#1622). A slot label is refined over the whole
+    The **core address**. A slot label is refined over the whole
     topology, so it means nothing outside one topology, and a workflow spans
     several. Every topology of one automatic workflow shares a
     :func:`core_hash`, so their stripped graphs are isomorphic and these
@@ -1475,7 +1475,7 @@ def _starts_empty(node_id: str, nodes: dict[str, ReducedNode]) -> bool:
 
 
 def _samples_only_seedvr2(nodes: dict[str, ReducedNode]) -> bool:
-    """Whether SeedVR2 is the only model this graph samples with (#1939).
+    """Whether SeedVR2 is the only model this graph samples with.
 
     It is when the graph runs SeedVR2 and every node taking a ``positive``
     conditioning takes it from a SeedVR2 node, as ComfyUI's own template's

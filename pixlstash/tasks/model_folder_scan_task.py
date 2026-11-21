@@ -2,10 +2,7 @@
 
 Nobody asks for a scan. ``ModelFolderScanFinder`` hands one out whenever a
 folder's files change and on a slow timer besides, and ``POST /model-folders``
-queues the first one straight away (:func:`claim_scan`). It used to be a bare
-``threading.Thread``, which nothing observed: no progress on a 57 GB folder, no
-way to tell a crash from a slow read, and a daemon thread alive at interpreter
-shutdown (#856).
+queues the first one straight away (:func:`claim_scan`).
 
 Two things the task system supplies for free:
 

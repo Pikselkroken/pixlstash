@@ -36,7 +36,7 @@ logger = get_logger(__name__)
 class ComfyUIExtractionTask(BaseTask):
     """Backfill task: read ComfyUI workflow metadata from existing picture files and store in DB.
 
-    Runs once per picture on first startup after the 0005 migration.  Any picture
+    Runs once per picture.  Any picture
     where new ComfyUI data is found has its text_embedding cleared so that the
     TextEmbeddingTask will regenerate it with the full workflow context.
 
@@ -498,10 +498,9 @@ class ComfyUIExtractionTask(BaseTask):
 
         A hub that cannot be written is not a per-picture problem, and leaving
         the pictures unmarked would otherwise make the finder re-open, re-decode
-        and re-parse every image in the library on every planning cycle, forever
-        -- reproduced against a read-only hub. So the first failure tells the
-        finder to fall back to its pre-B3 predicate, which drains and goes quiet
-        exactly as it did before this task learned to hash. One log line, not
+        and re-parse every image in the library on every planning cycle, forever.
+        So the first failure tells the finder to fall back to its hub-less
+        predicate, which drains and goes quiet. One log line, not
         one per picture per cycle. A restart is what tries again, because a
         restart is what proves the hub is writable.
         """

@@ -649,11 +649,8 @@ class FaceExtractionTask(BaseTask):
         ``inv_scale`` maps a reduced-frame coordinate back to source pixels and
         is one number per clip because every frame shares the clip's size.
         Frame 0 plus every ``max(1, frame_count // 3)``-th frame after it, read
-        by seeking. Sequential decode was measured against this on real HEVC
-        clips: ~25 % faster on clips under ~100 frames, but linear in clip
-        length (12 s for a 14k-frame clip against 0.17 s seeking), and it
-        returns different pixels on HEVC than the seek does. Seeking keeps the
-        frames the detector has always received.
+        by seeking: sequential decode is linear in clip length and returns
+        different pixels on HEVC than the seek does.
         """
         cap = cv2.VideoCapture(file_path)
         try:

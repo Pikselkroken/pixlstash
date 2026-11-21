@@ -18,7 +18,7 @@ WORKFLOW_TAG_PREFIX = "wf_"
 def build_stack_filename_prefix(base_prefix: str, stack_id: int, source_id: int) -> str:
     """Tag a save node's filename so the watch-folder importer can place its output.
 
-    ``POST /workflows/run`` writes it on a stacked run's save nodes (#1457); its reader,
+    ``POST /workflows/run`` writes it on a stacked run's save nodes; its reader,
     :func:`parse_stack_tags_from_filename`, is on the import path.
     """
     parts = []
@@ -33,9 +33,9 @@ def build_workflow_filename_prefix(base_prefix: str, workflow_id: str) -> str:
     """Tag a save node's filename with the workflow whose run saves it.
 
     ``POST /workflows/run`` writes it on the save nodes of a workflow whose
-    runs file on it (a manual one, or an automatic one saved over, #1849) so a
+    runs file on it (a manual one, or an automatic one saved over) so a
     watch folder that imports the output before the run's own poll still files
-    it on that workflow (#1688); its reader is
+    it on that workflow; its reader is
     :func:`parse_workflow_tag_from_filename`. Only the id's hex rides along:
     32 digits name a manual workflow, 64 an automatic one.
     """

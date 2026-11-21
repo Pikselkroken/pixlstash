@@ -1,4 +1,4 @@
-"""Task that finds and embeds the faces in one training run's new previews (#2522).
+"""Task that finds and embeds the faces in one training run's new previews.
 
 Handed out by :class:`~pixlstash.tasks.training_preview_faces_finder.TrainingPreviewFacesFinder`;
 the scoring against the character is done by the live view, from what this

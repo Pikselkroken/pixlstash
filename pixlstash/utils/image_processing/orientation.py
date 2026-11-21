@@ -21,12 +21,12 @@ how this library recovers ComfyUI provenance
 (:mod:`pixlstash.utils.comfyui_utilities`). Surgery cannot lose them because it
 never parses them.
 
-**Formats: JPEG and PNG, and only ONE of them is turned by the browser.**
-An in-place rotate is only correct if *every* renderer agrees with it, and two
-of them are outside this codebase: the backend transposes on decode, while the
-browser paints the full-size original itself. Re-measured on 2026-08-18, by
-writing a tag with the functions below and reading back ``naturalWidth`` /
-``naturalHeight`` in each engine:
+**Formats: JPEG and PNG, and only ONE of them is turned by the browser.** An
+in-place rotate is only correct if *every* renderer agrees with it, and two of
+them are outside this codebase: the backend transposes on decode, while the
+browser paints the full-size original itself. Measured by writing a tag with the
+functions below and reading back ``naturalWidth`` / ``naturalHeight`` in each
+engine:
 
 ===========  ==================  =============  =============  ==========
 Format       Writer              Backend        Chromium 148   Firefox 150
@@ -36,24 +36,20 @@ PNG          ``eXIf`` chunk      honours        **ignores**    **ignores**
 WebP         ``piexif.insert``   honours        **ignores**    **ignores**
 ===========  ==================  =============  =============  ==========
 
-**The PNG row said "honours" on both engines until 2026-08-18, and it was
-wrong.** Nothing checked it, so a rotated PNG shipped showing a turned thumbnail
-beside an unturned full view - and a ComfyUI library is around five-sixths PNG,
-so that was most of the feature. PNG is kept here anyway, because the answer is
-not to stop turning PNGs but to stop asking the browser to: the media route
-(``routes/pictures/_serving.py``) serves any format outside its
-``BROWSER_ORIENTED_FORMATS`` already transposed, disk-cached beside the original
-and invalidated by the source's own mtime. The write below stays a metadata
-splice, so the rotate stays instant, lossless and undoable.
+PNG is kept here anyway, because the answer is not to stop turning PNGs but to
+stop asking the browser to: the media route (``routes/pictures/_serving.py``)
+serves any format outside its ``BROWSER_ORIENTED_FORMATS`` already transposed,
+disk-cached beside the original and invalidated by the source's own mtime. The
+write below stays a metadata splice, so the rotate stays instant, lossless and
+undoable.
 
-WebP is still excluded, and for a different reason than it used to be. The
-write works perfectly - piexif 1.1.3 handles WebP despite its docstring - and
-the serving path above would render it correctly too. It is excluded because
-nothing has re-measured whether Pillow round-trips a WebP faithfully enough to
-be worth it, and because six pictures in this library are WebP. **Re-run the
-measurement rather than the reasoning before moving any row of that table.**
-TIFF is out for the ordinary reason - its orientation lives in its own IFD and
-nothing here writes that.
+WebP is excluded. The write works perfectly - piexif 1.1.3 handles WebP despite
+its docstring - and the serving path above would render it correctly too. It is
+excluded because nothing has re-measured whether Pillow round-trips a WebP
+faithfully enough to be worth it, and because six pictures in this library are
+WebP. **Re-run the measurement rather than the reasoning before moving any row
+of that table.** TIFF is out for the ordinary reason - its orientation lives in
+its own IFD and nothing here writes that.
 
 Anything not listed falls back to producing a rotated *copy*.
 :func:`supports_in_place_rotation` is the one place that answers "can this file
@@ -316,9 +312,9 @@ def _carry_file_identity(
 
     ``os.replace`` keeps the *replacement's* metadata, and ``mkstemp`` creates a
     0600 file owned by the server process - so without this a rotate would
-    quietly tighten the photo's permissions, drop its extended attributes (Finder
-    tags, `user.*` labels) and, on a multi-user vault, change who owns it. This
-    change's whole premise is that a rotate preserves everything but one
+    quietly tighten the photo's permissions, drop its extended attributes
+    (Finder tags, `user.*` labels) and, on a multi-user vault, change who owns
+    it. A rotate's whole premise is that it preserves everything but one
     enumerated value, and file metadata is part of "everything".
 
     **mtime is deliberately NOT preserved.** ``copystat`` carries it, and we undo

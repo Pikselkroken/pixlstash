@@ -1,4 +1,4 @@
-"""Put saved recipes on the workflow their card became (#1623, the cut-over).
+"""Put saved recipes on the workflow their card became.
 
 A saved recipe is a vault row naming a card (``workflow_key``) and holding
 overrides addressed ``<slot label>/<input>`` on that card's topology. After the

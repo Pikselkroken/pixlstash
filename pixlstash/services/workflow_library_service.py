@@ -188,7 +188,7 @@ def read_recipe_activity(
 def read_variant_picture_counts(vault) -> dict[str, int]:
     """``{structural_hash: kept pictures}``, vault-wide.
 
-    What a model fix's card re-key decides its merge winner on (v1.12 B4), and
+    What a model fix's card re-key decides its merge winner on, and
     what picks a workflow's base topology: the re-key is a hub write, the counts belong to whichever vault is attached, and the two
     are joined by the hub on the variants it is re-keying.
     """
@@ -260,7 +260,7 @@ class CoverCandidate:
 
     The three ``square_crop_*`` fields are the stored face-weighted rectangle
     within that bitmap (``FaceUtils.square_crop_rect``), so a client can crop a
-    cover around the face rather than to a blind top anchor (#1465). They are
+    cover around the face rather than to a blind top anchor. They are
     NULL while a picture is still being processed, which is the client's cue to
     fall back to the shipped ``object-fit: cover`` framing.
     """
@@ -616,7 +616,7 @@ def read_picture_variant(vault, picture_id: int) -> Optional[str]:
 
 
 def oldest_kept_by_pixel_sha(session: Session, pixel_shas: list[str]) -> dict[str, int]:
-    """``{pixel_sha: picture_id}``: the picture a pinned input resolves to (#1457).
+    """``{pixel_sha: picture_id}``: the picture a pinned input resolves to.
 
     **The OLDEST kept copy, deliberately**: a pin must feed a run the same
     picture every time, and the oldest id is the one importing a duplicate of
@@ -716,7 +716,7 @@ def library_ids_present(
 ) -> dict[str, dict[int, str]]:
     """``{kind: {id: name}}`` for the ids in *named* this library has (kinds
     ``project``, ``set``, ``character``): what a ComfyUI-PixlStash loader's
-    frozen ``"<name> #<id>"`` is checked against before a run (#1521)."""
+    frozen ``"<name> #<id>"`` is checked against before a run."""
     present: dict[str, dict[int, str]] = {}
     for kind, ids in named.items():
         table = _LIBRARY_TABLES[kind]

@@ -1,7 +1,7 @@
 """Finder that queues scan tasks for reference folders and the library root.
 
 The library's own picture root is scanned by the same task under the folder id
-``None``: since v1.11 a layout turns the root into a human-readable folder tree
+``None``: a layout turns the root into a human-readable folder tree
 the owner reorganises by hand, and a rename nobody follows is a row the purge
 sweep deletes an hour later, tags and all. The root has no ``ReferenceFolder``
 row, so its schedule lives on this finder rather than in a column.

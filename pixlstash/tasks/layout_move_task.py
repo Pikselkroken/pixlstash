@@ -1,6 +1,6 @@
 """Move the pictures whose folder has stopped being true.
 
-v1.11 Phase 4b. The background half of the move engine: the flush hook in
+The background half of the move engine: the flush hook in
 ``database.py`` stamps a picture when its project / set / person membership
 changes, this task asks - once the debounce has passed - whether the folder it
 is sitting in still describes it, and moves only the ones where the answer is

@@ -1,4 +1,4 @@
-"""What a workflow card can be run from, and why it cannot (v1.12 B7).
+"""What a workflow card can be run from, and why it cannot.
 
 Two questions, kept apart because they fail differently:
 
@@ -261,8 +261,8 @@ def prompt_text_target(
     The encoder's own text field (:func:`workflow_io.prompt_field` over
     *fields*) when it holds a string; otherwise, when that
     input is a link from output 0 of a :data:`TEXT_NODE_CLASSES` node, that
-    node's text field. Without the hop a prompt typed into the Run popup was
-    skipped, and a missing text node's repair then inlined the stored prompt.
+    node's text field. Without the hop a prompt typed into the Run popup would
+    be skipped.
     A text node feeding more than one input is not a target: writing the
     positive prompt and then the negative into it would leave both negative.
     Nor is one with another input overriding its text (Textbox's
@@ -335,8 +335,8 @@ def apply_prompts(
         anywhere to put that side's prompt. ``positive_text``: the positive
         prompt the graph held before this call, ``None`` where it holds none
         as a literal or its prompt nodes disagree. ``unplaced``: the sides a
-        prompt was given for and had nowhere to go - said, never dropped
-        (#1832). ``enhancer``: whether a prompt enhancer rewrote a prompt in
+        prompt was given for and had nowhere to go - said, never dropped.
+        ``enhancer``: whether a prompt enhancer rewrote a prompt in
         the graph as it came in, cut or not.
     """
     report = {
@@ -735,7 +735,7 @@ def judge(
     broken.
 
     ``library_ids``, ``picture_loader``, ``from_file`` and ``shelf_uuid`` are
-    what the ComfyUI-PixlStash node policy needs to know about this run (#1521, see
+    what the ComfyUI-PixlStash node policy needs to know about this run (see
     :func:`~pixlstash.services.comfyui_service.pixlstash_node_refusals`); the
     defaults refuse.
 
@@ -996,7 +996,7 @@ def with_pixlstash_refusals(reasons: list[Reason], nodes: list[dict]) -> list[Re
 def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
     """Take every LoRA loader whose file this ComfyUI lacks out of *graph*.
 
-    **A LoRA is optional and a checkpoint is not** (#1463). Installing a
+    **A LoRA is optional and a checkpoint is not**. Installing a
     checkpoint is a trip away from the keyboard, so refusing the run and
     keeping the whole batch back is the kind answer; a LoRA the graph can
     simply run without is not worth refusing over, and the owner's answer to
@@ -1161,8 +1161,8 @@ def pin_batch_size(graph: dict, object_info: Optional[dict] = None) -> list[str]
     """Set every picture batch (:func:`is_picture_batch`) to a literal 1.
 
     The Run popup's count is how many pictures a run makes: one submission
-    each, each with its own seed. A graph saved with ``batch_size: 4`` made
-    four per submission, so a count of 1 came back as four pictures.
+    each, each with its own seed. A graph saved with ``batch_size: 4`` makes
+    four per submission, so a count of 1 would come back as four pictures.
 
     **A wired value is replaced too**: a primitive (or a size picker's batch
     output) setting the batch would otherwise multiply the count just the same.
@@ -1209,11 +1209,10 @@ def replace_missing_seed_nodes(graph: dict, object_info: dict) -> list[dict]:
     """Drop every custom seed node this ComfyUI lacks, inlining its value.
 
     A graph naming rgthree's ``Seed (rgthree)`` on an install without rgthree is
-    ``missing_nodes``, and the owner's only route was installing the pack. The
-    node does something PixlStash already does (#1463): it hands a number to a
-    sampler's ``seed`` / ``noise_seed``, and the run's seed pass writes that
-    widget itself. So the link from the node becomes a literal and the node
-    leaves the graph.
+    ``missing_nodes``, yet the node does something PixlStash already does: it
+    hands a number to a sampler's ``seed`` / ``noise_seed``, and the run's seed
+    pass writes that widget itself. So the link from the node becomes a literal
+    and the node leaves the graph.
 
     **The seed pass overwriting the literal is what makes this safe**, so it is
     checked rather than assumed, and checked on the FINAL graph: a later
@@ -1442,7 +1441,7 @@ def replace_missing_text_nodes(graph: dict, object_info: dict) -> list[dict]:
 
 @dataclass(frozen=True)
 class Repair:
-    """One refusal PixlStash can answer by changing the graph (#1463).
+    """One refusal PixlStash can answer by changing the graph.
 
     ``code`` is the reason it answers, ``report`` the ``RunGroup`` field that
     names what it changed, and ``apply`` the change itself: it mutates the graph
@@ -1647,7 +1646,7 @@ def skip_requested_loras(
 ) -> tuple[list[dict], list[Reason], set[tuple[str, str]]]:
     """Skip the LoRA slots the owner asked this run to do without.
 
-    The owner's explicit "run without this LoRA" from the Run popup (#1478).
+    The owner's explicit "run without this LoRA" from the Run popup.
     A skip, never a removal: *graph* is the run's own copy, and the stored
     workflow keeps its loader - editing the workflow is the LoRA chain
     editor's job.
@@ -1781,7 +1780,7 @@ def take_out_person_loras(
 ) -> tuple[list[dict], list[dict]]:
     """Take the LoRA slots holding a person's LoRA out of a graph being STORED.
 
-    A person's LoRA is never part of a workflow (rule 4 of #1846), so a graph
+    A person's LoRA is never part of a workflow, so a graph
     saved over one goes without it. Unlike :func:`skip_requested_loras`,
     which is one run's choice and may leave a loader in, this is a write: a
     slot that cannot be taken out is refused, never stored.
@@ -1893,7 +1892,7 @@ def take_out_person_loras(
 def take_out_empty_adapter_loaders(graph: dict) -> list[str]:
     """Take every multi-adapter loader holding no adapter out of *graph*, in place.
 
-    The loader PixlStash puts on ComfyUI's canvas for picking people (#1852)
+    The loader PixlStash puts on ComfyUI's canvas for picking people
     arrives in a graph saved back with nobody picked, or with its people's
     rows just emptied (:func:`take_out_person_loras`). With every row empty it
     passes MODEL and CLIP straight through, so its readers are wired to what
@@ -1976,7 +1975,7 @@ def graph_structure(graph: dict, classes: Optional[dict[str, str]] = None) -> st
     Each node's id and class and every connection it reads. Two graphs with
     one structure differ only in widget values, so an editor document laid
     out for one fits the other once those values are written over it; that is
-    what decides whether a ComfyUI layout may open (#1852).
+    what decides whether a ComfyUI layout may open.
 
     *classes* names classes to read as another, so two graphs that differ
     only in which of a pair a node is have one structure.
@@ -2061,7 +2060,7 @@ def has_upscale(graph: dict) -> bool:
 
 
 def add_upscale(graph: dict, factor: float, model: Optional[str]) -> list[str]:
-    """Upscale every picture *graph* saves by *factor*, in place (#1868).
+    """Upscale every picture *graph* saves by *factor*, in place.
 
     Each save's ``images`` goes through *model* (``UpscaleModelLoader`` and
     ``ImageUpscaleWithModel``), then a Lanczos resize to *factor*; with no
@@ -2119,7 +2118,7 @@ def add_upscale(graph: dict, factor: float, model: Optional[str]) -> list[str]:
 def skip_requested_stages(
     graph: dict, stages: list[str], object_info: Optional[dict]
 ) -> list[Reason]:
-    """Switch the optional stages the owner asked this run to go without (#1621).
+    """Switch the optional stages the owner asked this run to go without.
 
     Each goes through :func:`bypass_stage` on the run's own copy. One that
     cannot be switched off is a :data:`STAGE_NOT_SKIPPABLE` reason, which
@@ -2273,16 +2272,12 @@ def place_recipe_loras(
     recipe_loras: list[dict],
     slot_digests: dict[tuple[str, str], Optional[str]],
 ) -> tuple[list[tuple[dict, dict]], list[dict]]:
-    """Which LoRA slot of the graph each of a saved recipe's LoRAs goes into (#1478).
+    """Which LoRA slot of the graph each of a saved recipe's LoRAs goes into.
 
     A saved LoRA names a file and a digest but no slot, so it is matched to one:
     **digest first** (the slot already loads the same bytes), **then basename**
     (the slot names a file of the same name, case-folded), then **any slot
-    still free, in graph order** - the positional fill the run always did, so a
-    recipe that ran before still runs the same. It replaces a positional
-    ``zip``, which put a recipe stored in the other order onto the wrong
-    loaders and dropped a third LoRA on a two-loader graph without a word, while
-    the credit matcher had matched all three by name.
+    still free, in graph order**.
 
     A LoRA with nowhere to go is **reported, never dropped**, and so is one the
     shelf cannot identify (no ``sha256``): PixlStash cannot load a file it
@@ -2456,7 +2451,7 @@ def run_inputs(graph: dict, object_info: Optional[dict]) -> dict[tuple[str, str]
     """``{(node id, input): "prompt" | "seed"}``: what a run sets in *graph*.
 
     The inputs :func:`apply_prompts` and the seed pass write. They belong to
-    the run and to recipes, never to the workflow (#1846).
+    the run and to recipes, never to the workflow.
     """
     try:
         detected = detect_workflow_io(graph)

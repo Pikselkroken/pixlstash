@@ -14,11 +14,10 @@ existing thumbnail. Each processed picture is regenerated from its source: the
 bitmap file is (re)written and every ``thumbnail_*`` / ``square_crop_*`` column is
 set. Faces (when already present) weight the square-crop rectangle.
 
-**Completion is announced.** While a picture sits at NULL it has no stored aspect
-ratio, so its card lays out wrong, and its cache token is ``"0"``. Both are fixed
-here - but a client cannot know that without being told, and this task used to
-tell no one, so the repair reached the disk and the database while the open grid
-kept showing the wrong picture until a full reload. See :meth:`_announce`.
+**Completion is announced.** While a picture sits at NULL it has no stored
+aspect ratio, so its card lays out wrong, and its cache token is ``"0"``. Both
+are fixed here - but a client cannot know that without being told, so this task
+announces it. See :meth:`_announce`.
 """
 
 import ast
@@ -171,12 +170,10 @@ class ThumbnailGenerationTask(BaseTask):
 
         Regeneration is the *completion* of a change something else started: an
         upgrade that reset these columns to NULL, a reference-folder source swap,
-        or an in-place rotate and its undo. Until this ran, those pictures had no
-        stored dimensions at all - so a card had no aspect ratio to lay out with
-        and rendered stretched, and the cache token was ``"0"``. Both are only
-        repaired by re-reading the thumbnail endpoint, which nothing prompted:
-        the whole task was silent, so the fix landed on disk and in the database
-        and the open grid went on showing the wrong picture until a full reload.
+        or an in-place rotate and its undo. Until this runs, those pictures have no
+        stored dimensions at all - so a card has no aspect ratio to lay out with
+        and renders stretched, and the cache token is ``"0"``. Both are only
+        repaired by re-reading the thumbnail endpoint, which this prompts.
 
         ``pixels`` is the field name because the picture's own bytes are what the
         client must re-read - the same marker an in-place rotate raises, handled

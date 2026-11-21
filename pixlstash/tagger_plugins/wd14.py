@@ -329,9 +329,8 @@ class WD14Service:
         ``ort.get_available_providers()`` says what the onnxruntime build
         SUPPORTS, not what can load. A provider whose shared libraries are
         missing - the CUDA one needs ``libcublasLt`` - is still listed, still
-        requested, and then silently dropped, so the old check passed while
-        every tag ran on the CPU at a fraction of the speed with nothing said
-        (#1206 item 3b, live on a development box). ``get_providers()`` is the
+        requested, and then silently dropped, so every tag would run on the CPU
+        at a fraction of the speed with nothing said. ``get_providers()`` is the
         session's own answer, so it is the only one worth asking.
         """
         if not is_accelerated(self._device) or self._ort_sess is None:

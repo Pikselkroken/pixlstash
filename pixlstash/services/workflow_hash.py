@@ -9,21 +9,16 @@ Two tiers, both computed by one function over one reduced form:
   image filenames a node names. Parameters and volatile values are nulled, so
   a recipe is prompt-free by construction and safe to keep forever.
 
-Both are ``pixlstash-hash-field-classification.md`` §Node identity's corrected
-rule, and the correction is the whole point of this module. The superseded rule
-relabelled nodes by topological sort with ``(class_type, input signature)`` as
-the tie-break, and **that tie-break does not break the ties that occur**: every
-txt2img graph holds two ``CLIPTextEncode`` nodes identical on every key, so the
-sort fell through to JSON serialisation order. Measured, 12 of 40 real
-workflows changed their structural hash when nothing but the key order moved.
-
-So no positional ids are assigned at all. Each node gets an order-invariant
-label by Weisfeiler-Leman refinement over its sorted neighbours, and the graph
-is emitted as a **sorted multiset of node descriptors** keyed on those labels.
-Genuine twins produce identical descriptors, and sorting identical things is
-invariant by construction, so the automorphism stops mattering. Node ids are
-never read, which is also why subgraphs need no special handling on the API
-side: a colon path (``75:61``) is an id, and ids do not reach the hash.
+Both follow ``pixlstash-hash-field-classification.md`` §Node identity. A
+topological sort cannot break the ties that occur (every txt2img graph holds two
+``CLIPTextEncode`` nodes identical on every key), so no positional ids are
+assigned at all. Each node gets an order-invariant label by Weisfeiler-Leman
+refinement over its sorted neighbours, and the graph is emitted as a **sorted
+multiset of node descriptors** keyed on those labels. Genuine twins produce
+identical descriptors, and sorting identical things is invariant by
+construction, so the automorphism stops mattering. Node ids are never read,
+which is also why subgraphs need no special handling on the API side: a colon
+path (``75:61``) is an id, and ids do not reach the hash.
 
 The UI format is where subgraphs *do* matter, and :func:`reduce_ui_graph`
 inlines ``definitions.subgraphs`` before keying. A subgraph instance's ``type``
@@ -279,9 +274,7 @@ def is_link(value: Any) -> bool:
     puts a bucket-P value into the topology *and* writes a dangling edge into
     the stored document. The spec calls that direction unrecoverable:
     "misclassifying a param as T shatters grouping into near-duplicate recipes
-    (destroys the feature)". Measured over the owner's three libraries, all
-    501,128 links in 28,289 API graphs carry a string node id, and every one of
-    them resolves to a node in its own graph.
+    (destroys the feature)".
     """
     return (
         isinstance(value, list)
@@ -325,10 +318,9 @@ def structural_widget_value(name: str, value: Any) -> Optional[str]:
     and a shelf id keeps an id; anything else in either names no model and is
     nulled. That covers the blank each of them holds until its Browse button
     is clicked -- the CLIP loader's second encoder is blank on every SD and
-    SDXL graph, the common case rather than the odd one -- which used to file
-    a junk ``workflow_recipe_asset`` row and write ``asset:e3b0c442...``, the
-    digest of the empty string, into a document whose whole purpose is to say
-    which model went there. It also covers prose: these two branches return
+    SDXL graph, the common case rather than the odd one -- so it never files
+    a junk ``workflow_recipe_asset`` row or writes the digest of the empty
+    string into the document. It also covers prose: these two branches return
     above the newline and 255-byte guards below, and their values are kept
     forever and shared, so a custom node putting a paragraph in a widget of
     either name must not reach them.
@@ -656,15 +648,13 @@ def document_from_reduction(nodes: dict[str, ReducedNode]) -> dict:
     Node titles go the same way: ``_meta`` is bucket V, and a title is
     something a person wrote.
 
-    **Prompt-free was never the whole of it, and the earlier wording here said
-    it was.** Bucket TA survives the nulling by design, and TA is model and
-    image filenames -- which on a real shelf name people (a character LoRA is
-    named after its subject) and state content. So this document carries an
-    :func:`asset_reference` in place of every asset value, and
-    ``workflow_recipe_asset`` is the only home of the readable name. Forgetting
-    a model name is then a row delete: **no stored graph is ever rewritten and
-    ``document_sha256`` stays valid**, which is the property the old docstring
-    claimed and did not have.
+    **Prompt-free is not the whole of it.** Bucket TA survives the nulling by
+    design, and TA is model and image filenames -- which on a real shelf name
+    people (a character LoRA is named after its subject) and state content. So
+    this document carries an :func:`asset_reference` in place of every asset
+    value, and ``workflow_recipe_asset`` is the only home of the readable name.
+    Forgetting a model name is then a row delete: **no stored graph is ever
+    rewritten and ``document_sha256`` stays valid**.
 
     The substitution is uniform, including the PixlStash loaders'
     ``*_sha256`` values, which name nobody. One rule -- *the document holds
@@ -1002,8 +992,8 @@ def _boundary_slot_map(node: dict, definition: dict) -> list[Optional[int]]:
     """Definition input slots mapped onto the instance's own input slots, by name.
 
     An instance lists only the inputs it actually wires; the definition lists
-    every one it declares. Measured on a real file: 3 against 7, in a different
-    order. Matching by position would silently cross the wires.
+    every one it declares, possibly in a different order. Matching by position
+    would silently cross the wires.
     """
     outer = _slot_index_by_name(node.get("inputs"))
     # A malformed entry emits None rather than being skipped: skipping would
@@ -1020,9 +1010,9 @@ def bypass_input_slot(node: dict, slot: int, want_type: Any) -> Optional[int]:
 
     ComfyUI's own rule, ported from the frontend's
     ``ExecutableNodeDTO._getBypassSlotIndex``, because the API graph a picture
-    carries was made by that rule and the two keys have to meet. A reducer that
-    dropped the edge instead keyed one workflow two ways (#1440: a bypassed
-    ``ShowText`` between a captioner and a text encoder).
+    carries was made by that rule and the two keys have to meet. Dropping the edge
+    instead would key one workflow two ways (a bypassed ``ShowText`` between a
+    captioner and a text encoder).
 
     In order: any-type wants the same slot number, else the first input; then
     the input at the same slot if its type fits both the output and the

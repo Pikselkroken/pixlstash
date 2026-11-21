@@ -136,7 +136,7 @@ class ClipService:
         The half of :meth:`encode_image_batch` that costs the time: ~30 ms per
         full-resolution image, against ~1 ms of GPU forward pass each. Split
         out so a task can run it in its preload threads instead of on the
-        single GPU worker, where it was 4 s of every 4.2 s batch. Returns
+        single GPU worker. Returns
         ``None`` when the model is not loaded - preloading must never be what
         loads it.
 
@@ -151,7 +151,7 @@ class ClipService:
         return [self._preprocess(img) for img in images]
 
     def reduce_for_preprocess(self, images: list) -> list:
-        """*images* put through the preprocessing's own first resize (#2748).
+        """*images* put through the preprocessing's own first resize.
 
         What a preload holds in place of the decoded original: a 24 MP photo
         becomes a 224 px-short-side image, 0.2 MB against 72 MB. The resize

@@ -111,11 +111,10 @@ class MissingFaceExtractionFinder(BaseTaskFinder):
         **Unless the owner asked us to keep models in memory.** "Reloads
         quickly" is a claim about a model that is 400 MB on disk; what actually
         happens is five ONNX sessions rebuilt against the CUDA provider with an
-        EXHAUSTIVE cudnn algo search, seconds each, and it was happening between
+        EXHAUSTIVE cudnn algo search, seconds each, and it can happen between
         batches rather than at the end of the work - every exhaustion of the
-        finder counts, and the finder used to exhaust itself constantly (see
-        `find_task`). A setting whose whole purpose is to stop that cannot be
-        overridden by the one path that reloads most often.
+        finder counts (see `find_task`). A setting whose whole purpose is to
+        stop that cannot be overridden by the one path that reloads most often.
 
         Returned as a task for the planner to queue, not run here: the release
         ends in a device-cache flush, and on Metal a flush on the planner's

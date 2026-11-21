@@ -1,4 +1,4 @@
-"""Task that reads the text in pictures (#1197)."""
+"""Task that reads the text in pictures."""
 
 from __future__ import annotations
 

@@ -1,10 +1,10 @@
 """ComfyUI workflow templates against the shelf: the New workflow set picker.
 
 The list is ComfyUI's own templates, built in CI into a committed file
-(``scripts/build_template_suggestions.py``, #1999) and never fetched at
+(``scripts/build_template_suggestions.py``) and never fetched at
 runtime. Each template names the files its loaders load. This module answers,
 per request, which of them are on the shelf, so the picker can lead with the
-templates whose files have all arrived (#2001).
+templates whose files have all arrived.
 
 **Matching is by filename**, the template carries no hashes: a file is on the
 shelf when a model row with a ``present`` copy answers to it by its stored
@@ -18,14 +18,14 @@ once. A template with no head is a row of its own.
 
 **Covered** is ``model_workflow_sets._lacks``: a set holding every on-shelf
 file of the template, a namesake counting as the file. A set holds what the
-pictures on its checkpoint ran with as well as its own rows (#1972), so the
+pictures on its checkpoint ran with as well as its own rows, so the
 pictures can make a set cover a template. A set made from the template covers
 it whatever it holds since.
 
 **A set holding a head on the shelf is offered the rest of its template**
-(#1999 §3) as the set's ``offer`` (:func:`attach_template_offers`): the files
+as the set's ``offer`` (:func:`attach_template_offers`): the files
 of the closest template whose head the set holds and that it does not already
-hold (from its pictures or its own rows, #1972), the ones on the shelf to add
+hold (from its pictures or its own rows), the ones on the shelf to add
 and the rest with their download page. Keep separate is the set's ``declines``
 list, its removed list, a file off the shelf kept out by
 :func:`file_decline_key`.
@@ -322,7 +322,7 @@ def attach_template_offers(hub, hand_made: list[dict]) -> None:
     most used. A file the set holds, kept out (``declined``), still hashing or
     an engine is not offered; nothing left, no offer, and the next template is
     not tried: Stop asking on the closest means stop. What the set holds
-    includes what its pictures ran with (#1972), so those files are never
+    includes what its pictures ran with, so those files are never
     offered.
 
     Args:

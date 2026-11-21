@@ -241,7 +241,7 @@ class Florence2Service:
         """Return the active variant's model footprint in MB.
 
         The VRAM gate charges this before a batch runs, so it has to track the
-        selected checkpoint rather than staying pinned to base (issue #512).
+        selected checkpoint rather than staying pinned to base.
         """
         return self._base_vram_mb
 
@@ -305,10 +305,8 @@ class Florence2Service:
     def unload(self) -> None:
         """Release the model and processor, waiting for any in-flight load.
 
-        The plugin used to clear ``_model``/``_processor`` from outside, which
-        could land in the middle of :meth:`_init`. Freeing device memory the
-        loader is still writing into crashes the process, so the drop belongs
-        here, under the same lock the load takes.
+        Freeing device memory the loader is still writing into crashes the
+        process, so the drop belongs here, under the same lock the load takes.
         """
         with self._load_lock:
             self._model = None

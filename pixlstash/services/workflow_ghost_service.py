@@ -34,9 +34,9 @@ re-evaluated, and the ones that have lost their cover are destroyed.
 
 **The vault queues that, not the callers.** Picture rows are hard-deleted by
 the scrapheap purge, the missing-file sweeps, reference-folder removal and scan,
-and restore cleanup, through ORM and core deletes alike. A cascade each of them
-had to remember is how four of them forgot, so a trigger does it instead
-(migration ``0117``): a row deleted, or re-hashed away from its instance hash,
+and restore cleanup, through ORM and core deletes alike. A trigger does the
+cascade so that no caller has to remember it (migration ``0117``): a row
+deleted, or re-hashed away from its instance hash,
 leaves that hash in ``pending_ghost_cascade``, and :func:`drain_ghost_cascade`
 (run by ``GhostCascadeFinder``) settles it against the hub. The queue is in the
 vault, so a crash between the delete and the hub write delays the cascade
@@ -215,7 +215,7 @@ def apply_ghost_retention(server, retention: str) -> None:
     for this process; the caller decides what a failed persist means.
 
     The position is validated here as well as at the PATCH that already
-    validates it: this is now a shared write chokepoint for a consent setting,
+    validates it: this is a shared write chokepoint for a consent setting,
     and one that is safe by construction beats two callers that happen to be.
 
     Raises:
@@ -319,7 +319,7 @@ def _thumbnail_bytes(image_root: str, file_path: Optional[str]) -> Optional[byte
 
     ``None`` means the caller writes no ghost at all — see :func:`_prepare_ghosts`.
     ``find_thumbnail`` rather than ``get_thumbnail_path``, so a bitmap still at a
-    pre-#1164 location is found too.
+    legacy location is found too.
     """
     thumb_path = ImageUtils.find_thumbnail(image_root, file_path)
     if not thumb_path:

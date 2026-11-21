@@ -1,4 +1,4 @@
-"""Finder for pictures owing a layout check (v1.11 Phase 4b)."""
+"""Finder for pictures owing a layout check."""
 
 import time
 

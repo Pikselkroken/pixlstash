@@ -16,7 +16,7 @@ verdict; the old row stays where it was and is never shown for the new set.
 recipe's picture counts, and a set's evidence is the sum over the recipes whose
 resolved models include all of its members, so the cost is one query per
 request whatever the number of sets or members. The recipes are the same
-``workflow_structural_hash`` co-occurrence the Workflow sets grid reads (#1438):
+``workflow_structural_hash`` co-occurrence the Workflow sets grid reads:
 a picture a manual workflow's run made still carries its variant's hash, so it
 counts here too.
 """

@@ -18,12 +18,10 @@ class MissingSnapshotIdentityScrubFinder(BaseTaskFinder):
     snapshot copied it. Snapshots created since are stamped at creation, because
     ``SnapshotService`` scrubs the scratch database before compressing it.
 
-    This work used to run inline during startup, ahead of the listening socket.
-    On a real snapshot history that is minutes of dead air (22 archives / 5.7 GB
-    measured at 5 min 47 s) with no port open and no output, which reads as a
-    hang and invites the interrupt that makes it restart. It moved here because
-    the live vault is scrubbed synchronously and every restore path scrubs what
-    it materializes, so serving does not depend on the archives being done.
+    It runs in the background rather than ahead of the listening socket, because
+    a long snapshot history takes minutes to scrub. Serving does not depend on
+    the archives being done: the live vault is scrubbed synchronously and every
+    restore path scrubs what it materializes.
 
     One archive in flight at a time: each is a decompress, scrub, recompress and
     verify cycle, and this is background cleanup that must never compete with
@@ -72,8 +70,7 @@ class MissingSnapshotIdentityScrubFinder(BaseTaskFinder):
 
         A failed archive stays ``identity_scrubbed_at IS NULL`` on purpose, so
         the work is not silently forgotten. Without this the planner would pick
-        the same row again immediately and spin: a single unscrubbable archive
-        produced hundreds of failing tasks per minute in testing. Skipping it
+        the same row again immediately and spin. Skipping it
         for the rest of the process keeps the remaining archives draining, and a
         restart retries it once more.
 

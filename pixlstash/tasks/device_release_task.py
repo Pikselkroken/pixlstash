@@ -4,8 +4,7 @@ Unloading ends in ``empty_device_cache()``, which on Metal is
 ``torch.mps.empty_cache()``: run on any other thread while the worker runs a
 model, it frees graphs the worker is using and kills the process (cause 3 in
 ``docs/apple-metal-thread-safety.md``). The idle sweep, making room for another
-tenant and the face finder's end-of-work release used to run it on a request
-thread, the event loop, the arbiter's thread or the planner's. Queued here, it
+tenant and the face finder's end-of-work release queue it here instead, so it
 runs on the single GPU worker, between tasks, like everything else that touches
 the device.
 

@@ -751,11 +751,10 @@ class TaskRunner:
 
         The completion callbacks are the only path that gives a task's resources
         back: ``BaseTaskFinder.on_task_complete`` discards its claimed picture
-        ids and ``WorkPlanner.on_task_complete`` frees its in-flight slot. They
-        used to fire only from the worker's ``finally``, so a task cancelled off
-        the queue kept both for the life of the process - the finder then sat at
-        max in-flight for ever, every finder that ``depends_on()`` it starved,
-        and the claimed pictures could never be selected again.
+        ids and ``WorkPlanner.on_task_complete`` frees its in-flight slot. A task
+        cancelled off the queue without them would keep both for the life of
+        the process, leaving the finder at max in-flight and its claimed
+        pictures unselectable.
 
         Args:
             task: The task being cancelled; it has been taken off its queue.

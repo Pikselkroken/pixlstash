@@ -3,7 +3,7 @@
 Generation data is how a picture was made: ComfyUI's ``prompt`` and
 ``workflow`` PNG text chunks, A1111's ``parameters`` chunk, and the EXIF/XMP
 comments other tools (and ComfyUI's WebP saver) put the same text into. Shared
-copies leave without it by default (#2417, owner ruling 2026-10-31).
+copies leave without it by default.
 
 **Container surgery, as in** :mod:`.orientation`: the compressed pixel data is
 copied through byte for byte and only metadata blocks are dropped, so a stripped

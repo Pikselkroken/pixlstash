@@ -105,18 +105,18 @@ class ReferenceFolderScanTask(BaseTask):
     performed before any filesystem work.  On failure the folder status is set
     to ``mount_error`` and the task exits without touching the picture table.
 
-    A followed move is attributed before it is reported: a pair the move
-    journal claims was made by PixlStash itself (v1.11 Phase 4b), and every
-    other pair was made by the owner.  ``external_moved_picture_ids`` in the
-    result is that second list, and it is what Phase 5 reconciles.  Without the
-    split, PixlStash's own writes come back through this scan as owner intent
-    and the two flip each other for ever.
+    A followed move is attributed before it is reported: a pair the move journal
+    claims was made by PixlStash itself, and every other pair was made by the
+    owner.  ``external_moved_picture_ids`` in the result is that second list,
+    and it is what move reconciliation handles.  Without the split, PixlStash's
+    own writes come back through this scan as owner intent and the two flip each
+    other for ever.
 
     Of that list, only the moves inside a root that has a *layout* are queued
     for review (``external_moves_queued_for_review``,
     ``move_reconciliation_service.record_pending_reviews``): a root with no
     layout has no vocabulary a folder name could contradict, so there is
-    nothing for Phase 5 to reconcile even though the file still moved.
+    nothing to reconcile even though the file still moved.
 
     **The library's own picture root is scanned by this same task** with
     ``folder_id=None``. A laid-out root is a folder tree the owner reorganises
@@ -1128,8 +1128,7 @@ class ReferenceFolderScanTask(BaseTask):
         behind them can differ in tags, sets and scores - pairing them by guess
         would move one picture's work onto another picture's file, which is the
         loss this exists to prevent.  Ambiguous groups fall through to the
-        delete-and-re-add path, which is no worse than the behaviour before
-        this existed.
+        delete-and-re-add path.
 
         The confirmation stops at the size.  Import de-duplication follows a
         ``(sampled hash, size)`` candidate match with a full-byte hash of both

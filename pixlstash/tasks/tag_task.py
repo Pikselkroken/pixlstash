@@ -142,12 +142,9 @@ def taggable_picture_clauses() -> tuple:
     One definition, because two queries have to answer identically: the
     "awaiting tagging" number (:meth:`TagTask.count_missing_tags`) and the
     selection the work planner actually runs
-    (``MissingTagFinder._fetch_missing_tags``). They did not (#1206 item 3) -
-    the count applied both clauses and the selection applied neither, so the
-    number read zero while the GPU went on tagging pictures the owner had put
-    in the scrapheap. A picture restored from the scrapheap keeps its pending
-    sentinel and is picked up again on the next sweep, so nothing is lost by
-    holding it out while it is deleted.
+    (``MissingTagFinder._fetch_missing_tags``). A picture restored from the
+    scrapheap keeps its pending sentinel and is picked up again on the next
+    sweep, so nothing is lost by holding it out while it is deleted.
     """
     return (Picture.deleted.is_(False), Picture.file_path.is_not(None))
 
@@ -386,10 +383,10 @@ class TagTask(BaseTask):
         `json.loads` of a free-text column, so a row that is not ``[x1,y1,x2,y2]``
         raises `IndexError` in the `max()` key and `ValueError` in
         `expand_bbox_to_square`, and a bbox whose JSON is malformed raises on
-        attribute access alone. Inline in the caller's loop, one such row escaped
-        to the pass-level handler and cost **every remaining picture in the task**
-        its quality crop - silently, because those pictures are still written as
-        tagged, so no finder re-selects them.
+        attribute access alone. Inline in the caller's loop, one such row would
+        escape to the pass-level handler and cost **every remaining picture in
+        the task** its quality crop - silently, because those pictures are still
+        written as tagged, so no finder re-selects them.
         """
         file_path = ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
         try:
@@ -503,7 +500,7 @@ class TagTask(BaseTask):
         )
 
     def _mark_unprocessable(self, pic, file_path) -> None:
-        """Record *pic* as undecodable so the finders stop re-selecting it (#585).
+        """Record *pic* as undecodable so the finders stop re-selecting it.
 
         Mirrors `thumbnail_generation_task` / `quality_task`: the registry is
         optional on the database object, and its absence degrades to a warning
@@ -904,7 +901,7 @@ class TagTask(BaseTask):
         return updated_ids
 
     def _reset_since_capture(self, picture_ids) -> set[int]:
-        """Ids whose tags were reset after this task read them (#1361).
+        """Ids whose tags were reset after this task read them.
 
         Such a task's output belongs to the tags that were replaced: written, it
         would clear the new sentinel, and the retag's own task would then keep

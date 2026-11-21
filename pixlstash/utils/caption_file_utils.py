@@ -1,10 +1,9 @@
 """Utilities for reading, writing, and detecting sidecar caption files.
 
 A sidecar file sits next to an image and carries either comma-separated **tags**
-(training-data convention) or a free-form **description**.  Unlike the original
-single-file scheme, PixlStash now treats tags and descriptions as two
-independent sidecars, each with its own filename *suffix* applied to the image
-stem:
+(training-data convention) or a free-form **description**.  PixlStash treats tags and
+descriptions as two independent sidecars, each with its own filename *suffix*
+applied to the image stem:
 
     image.png  ->  image_tags.txt          (tags,        suffix "_tags.txt")
     image.png  ->  image_description.txt    (description, suffix "_description.txt")
@@ -229,7 +228,7 @@ def resolve_typed_sidecar(
 
 def is_recorded_sidecar_shape(image_path: str, path: str | None) -> bool:
     """Whether *path* is a sidecar a legitimate row could have recorded: exactly
-    the image stem plus a safe suffix (#776). One rule for every recorded path,
+    the image stem plus a safe suffix. One rule for every recorded path,
     read or write, so a fabricated column cannot direct a file write elsewhere.
     """
     if not path:
@@ -299,11 +298,11 @@ def writeback_path(
     the image stem plus a safe suffix, the one shape a legitimately recorded
     sidecar path can have. Anything else is ignored (logged) and the standard
     suffix-derived path is used instead, so a fabricated column cannot direct
-    a file write somewhere else (#776).
+    a file write somewhere else.
 
     Returns ``None`` when the folder's configured suffix is not a usable
-    filename fragment, so a folder configured before the rule was enforced on
-    every write path skips its write-back (logged) instead of raising through
+    filename fragment, so a folder configured with such a suffix skips its
+    write-back (logged) instead of raising through
     the caller and wedging a scan or returning a 500. Callers must handle it.
     """
     if existing_path:

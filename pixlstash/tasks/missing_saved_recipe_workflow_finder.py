@@ -1,4 +1,4 @@
-"""Finder for saved recipes that name a card and no workflow yet (#1623), or a
+"""Finder for saved recipes that name a card and no workflow yet, or a
 workflow that has since been retired (``workflow_id_successor``), or a card
 moved out of a workflow that lives on (``workflow_card_move``)."""
 

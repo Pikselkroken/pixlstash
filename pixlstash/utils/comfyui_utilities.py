@@ -673,8 +673,8 @@ def extract_generation_info(workflow: dict) -> dict:
     """Extract model names, LoRA names, and positive prompt from a workflow.
 
     Works with both serialisations, and which one this is is
-    :func:`is_api_format`'s answer rather than a second opinion taken here
-    (#1482): a document carrying the ``last_node_id`` / ``last_link_id`` hints
+    :func:`is_api_format`'s answer rather than a second opinion taken here:
+    a document carrying the ``last_node_id`` / ``last_link_id`` hints
     is the editor graph even where its body would read as a flat node map, and
     is read as one rather than walked as both.
 
@@ -1237,8 +1237,8 @@ def find_comfy_workflow(metadata: dict) -> dict | None:
       ``metadata["comfyui"]["prompt"]`` (display fallback)
 
     The ``prompt``-chunk candidates come last so a genuine UI ``workflow``
-    chunk always wins. They exist because PixlStash-generated PNGs no longer
-    embed anything in the ``workflow`` chunk (issue #628); ComfyUI's own
+    chunk always wins. They exist because PixlStash-generated PNGs embed
+    nothing in the ``workflow`` chunk; ComfyUI's own
     ``prompt`` chunk (the executed API graph) is then the only thing left to
     display. A plain-text ``prompt`` value from other tools is filtered out by
     :func:`is_comfy_workflow`.

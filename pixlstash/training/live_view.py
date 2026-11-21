@@ -1,4 +1,4 @@
-"""What the Training runs view draws for one run while it trains (#2118).
+"""What the Training runs view draws for one run while it trains.
 
 Pure functions over what a run already leaves behind: its ``training_run`` row,
 its rendered config, its run folder and the trainer's ``loss_log.db``. The route

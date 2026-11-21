@@ -2,7 +2,7 @@
 
 A checkpoint may be 24 GB. The scan registers it the instant it sees it, with
 ``sha256`` NULL, so the shelf lists it immediately; this task supplies the hash
-afterwards, which is what ``model.hashed_at`` was always for. The unit of work
+afterwards, which is what ``model.hashed_at`` is for. The unit of work
 is a whole file: a part-finished ``hashlib`` object cannot be pickled and
 ``sha256`` of the first N% has no relationship to the real digest, so
 "percentage" here means files done, never bytes within a file.
@@ -18,11 +18,9 @@ it repeatedly, since the finder would hand the same row back on the next sweep.
 
 So the collision resolves in place: the two content rows become one, keeping the
 older id and whatever either row knows, and **every location either row knew
-moves to the survivor**. That last part is what ``model_file`` is for. With the
-path stored inline on the content row there was nowhere to put the second one,
-so the merge silently forgot it, the next scan re-registered it unhashed, this
-task read all 24 GB again, and the merge dropped it again - forever, once per
-scan cycle.
+moves to the survivor**. That last part is what ``model_file`` is for: a
+forgotten path would be re-registered unhashed and read in full again on every
+scan.
 
 **A merge can also take a file out of a run.** The losing row is deleted, and
 if it was in an ``adapter_stack`` that leaves the same hole Forget and Delete
@@ -153,10 +151,9 @@ class CheckpointHashTask(BaseTask):
         blank-filling column: the pair with the stronger source wins, so a
         person's answer on the dropped row beats a guess on the survivor.
 
-        There is deliberately no filesystem call here. "Which path exists" was
-        the old way of choosing between two paths only one column could hold;
-        both are kept now, and an ``os.path.exists`` inside an open hub write
-        transaction was against the short-transactions contract anyway.
+        There is deliberately no filesystem call here: both paths are kept, and
+        an ``os.path.exists`` inside an open hub write transaction would break
+        the short-transactions contract.
         """
         columns = (
             "id, filename, display_name, base_model, trigger_words, "

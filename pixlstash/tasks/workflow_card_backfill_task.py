@@ -1,4 +1,4 @@
-"""Give the variants already in the hub the card they belong to (v1.12 B2).
+"""Give the variants already in the hub the card they belong to.
 
 **The hub alone.** Every input is a stored document, so this reads no picture,
 opens no image file and needs no library to be attached. That matters twice: a

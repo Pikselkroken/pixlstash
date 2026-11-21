@@ -1,6 +1,6 @@
 """Read what a ``.safetensors`` adapter says about itself, without loading it.
 
-The model shelf (v1.10) has to describe a file the user just dropped on it, and
+The model shelf has to describe a file the user just dropped on it, and
 the file may be 800 MB. A safetensors file starts with an 8-byte little-endian
 header length followed by that many bytes of JSON, so everything the shelf needs
 is in the first few hundred kilobytes and the tensor payload is never touched.
@@ -14,7 +14,7 @@ every parse failure degrades to "we could not tell" rather than raising into the
 import path: a file we cannot describe is still a file the user wants on the
 shelf, just one they will have to name themselves.
 
-What the wild actually looks like, measured against real files on 2026-08-07:
+What the wild actually looks like, measured against real files:
 
 * ai-toolkit output carries ``ss_base_model_version``, ``ss_output_name``,
   ``ss_tag_frequency``, plus ``software`` and ``training_info``.
@@ -686,8 +686,8 @@ def classify_model_file(
     Args:
         tensor_names: Iterable of tensor keys from the header.
         param_count: Total parameters, from :func:`count_parameters`.
-        path: Where the file lives. Optional - omitting it drops rule 2 and
-            leaves the pre-existing behaviour, which is what a caller holding
+        path: Where the file lives. Optional - omitting it drops rule 2,
+            which is what a caller holding
             only a header should get.
         header: The parsed header, for the shapes a token table is told by.
             Optional: a file with no header to read has no table either.

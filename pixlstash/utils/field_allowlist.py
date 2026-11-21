@@ -1,24 +1,25 @@
 """Deny-by-default allowlist of servable field names for the generic by-name
-field readers (issue #721).
+field readers.
 
 Two routes hand back *any* attribute of their object by name:
 ``GET /pictures/{id}/{field}`` and ``GET /characters/{id}/{field}``. Both end in
 ``safe_model_dict(getattr(obj, field))``, and ``safe_model_dict`` recurses into
 SQLModel instances, lists and ``CollectionAdapter``s, so an ORM **relationship**
 name is served as whole related rows. ``select_fields=[field]`` does not bound
-that, which is why a picture-scoped token could read ``/pictures/{id}/projects``
-(project names it is 403'd on by name), ``/pictures/{id}/picture_sets`` and
-``/pictures/{id}/characters``, and a character-scoped token could read
-``/characters/{id}/project`` and ``/characters/{id}/pictures``. The last serves
-full ``Picture`` rows off the relationship, bypassing every projection and every
-narrowing site in the codebase.
+that, so without this guard a picture-scoped token could read
+``/pictures/{id}/projects`` (project names it is 403'd on by name),
+``/pictures/{id}/picture_sets`` and ``/pictures/{id}/characters``, and a
+character-scoped token could read ``/characters/{id}/project`` and
+``/characters/{id}/pictures``. The last serves full ``Picture`` rows off the
+relationship, bypassing every projection and every narrowing site in the
+codebase.
 
 Relationships that a consumer genuinely needs get a **dedicated, projected
-route** instead of an exception here. ``faces`` was the one such case and is now
+route** instead of an exception here. ``faces`` is the one such case and is
 served by ``GET /pictures/{id}/faces`` and ``GET /characters/{id}/faces``
 (``routes/pictures/_faces.py`` and ``routes/characters.py``), which return the
 same ``{"faces": [...]}`` wire shape minus the ``features`` embedding. Both
-exception sets below are now down to the single synthetic ``thumbnail``.
+exception sets below hold only the synthetic ``thumbnail``.
 
 **What this module bounds, and what it does not.** The AuthzGate (§16.2) answers
 "may this token reach this *object*". It runs before the handler and never sees
@@ -41,14 +42,14 @@ already records as known disclosures. On ``Character`` it is
 ``reference_picture_set_id``: a character-scoped token reading
 ``GET /characters/{id}/reference_picture_set_id`` learns the id of a picture set
 it is not scoped to, while the sibling ``project_id`` on the same handler *is*
-narrowed to ``null`` (#719). ``Character`` has no ``metadata_fields()`` pin at
+narrowed to ``null``. ``Character`` has no ``metadata_fields()`` pin at
 all, so unlike ``Picture`` its column set is not guarded against a future column
 becoming servable by accident.
 
-Narrowing the column sets themselves is the residual tracked in §16.6 under
-#719; it is a separate change because ``Picture.metadata_fields()`` is also the
-default ``select_fields`` of ``Picture.find`` and feeds the scoring and export
-paths, and because pinning ``Character`` needs its own reviewed baseline.
+Narrowing the column sets themselves is the residual tracked in §16.6; it is a
+separate change because ``Picture.metadata_fields()`` is also the default
+``select_fields`` of ``Picture.find`` and feeds the scoring and export paths,
+and because pinning ``Character`` needs its own reviewed baseline.
 """
 
 from typing import Iterable

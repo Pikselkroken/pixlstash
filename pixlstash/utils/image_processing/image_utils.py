@@ -246,9 +246,9 @@ class ImageUtils:
         one - because the hash is of that string; the two forms of one file
         would hash to two names. The key is the path, so a followed move has to
         carry the bitmap (``_carry_thumbnail`` in the scan task and the move
-        engine), which it did before this folder existed too.
+        engine).
 
-        A bitmap written before 1.11.1 may still sit at one of
+        A bitmap may still sit at one of the legacy locations,
         :meth:`legacy_thumbnail_paths`; :meth:`find_thumbnail` looks there and
         brings it home. Callers that only READ should use that.
         """
@@ -267,7 +267,7 @@ class ImageUtils:
     def legacy_thumbnail_paths(
         image_root: Optional[str], file_path: Optional[str]
     ) -> list[str]:
-        """Where the thumbnail for *file_path* was written before #1164.
+        """The legacy locations a thumbnail for *file_path* may still sit at.
 
         A managed picture's sat beside it as ``<stem>_thumb.webp``; a
         reference-folder picture's sat under ``image_root/.ref_thumbs/`` with the
@@ -330,7 +330,7 @@ class ImageUtils:
         """Delete the thumbnail for *file_path* wherever it is; count removed.
 
         Both the current home and every legacy location, so deleting a picture
-        indexed before #1164 does not leave its bitmap behind in the owner's
+        with a legacy thumbnail does not leave its bitmap behind in the owner's
         folder. Failures are logged, not raised: the picture is already gone
         and a stray bitmap is the lesser problem.
         """
@@ -862,7 +862,7 @@ class ImageUtils:
         Single source of truth on purpose: the batch-thumbnail endpoint and the
         duplicate queue both hand this version to the same frontend cache, and two
         independent copies of the formula would eventually disagree and
-        reintroduce the stale-thumbnail bug this version exists to fix.
+        serve stale thumbnails.
 
         Args:
             thumbnail_width: Stored bitmap width, or ``None`` when unprocessed.
@@ -928,7 +928,7 @@ class ImageUtils:
 
         Args:
             subfolder: Relative folder under ``image_root_path`` to write into,
-                for a library whose root has a v1.11 layout. See
+                for a library whose root has a layout. See
                 :meth:`create_picture_from_bytes`.
         """
         if not os.path.exists(source_file_path):
@@ -977,7 +977,7 @@ class ImageUtils:
             reference_folder_id: When set, assigned to the Picture so that the
                 reference-folder scan recognises the record as already indexed.
             subfolder: A ``/``-separated relative folder under
-                *image_root_path* to write into - where the v1.11 layout says a
+                *image_root_path* to write into - where the layout says a
                 new picture belongs (``services/layout_move_service.render``).
                 The stored ``file_path`` stays RELATIVE, so the picture is still
                 a library picture and its thumbnail is still a sibling file;

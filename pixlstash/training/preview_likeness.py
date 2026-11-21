@@ -1,4 +1,4 @@
-"""How much each training preview looks like the run's character (#2522).
+"""How much each training preview looks like the run's character.
 
 A run's previews are files in its folder, not library pictures, so the face
 pipeline never sees them. :class:`~pixlstash.tasks.training_preview_faces_task.TrainingPreviewFacesTask`

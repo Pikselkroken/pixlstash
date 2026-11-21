@@ -1,12 +1,10 @@
 """Interactive task that runs the anomaly tagger's Grad-CAM for one picture.
 
-``GET /pictures/{id}/anomaly_region`` used to load the tagger and run Grad-CAM
-on its request thread, beside the GPU worker. On Metal that is two threads on
-the device at once, which kills the process (``docs/apple-metal-thread-safety.md``).
-On every host it also raced tag batches on the shared model: Grad-CAM casts that
-model to fp32 in place for its backward pass, so a batch running at that moment
-met fp32 weights. Running it here, on the single GPU worker, serialises it with
-everything else that touches the device or the model.
+``GET /pictures/{id}/anomaly_region`` runs Grad-CAM here, on the single GPU
+worker, rather than on its request thread, so it is serialised with everything
+else that touches the device or the model: two threads on a Metal device at once
+kill the process (``docs/apple-metal-thread-safety.md``), and Grad-CAM casts the
+shared model to fp32 in place for its backward pass.
 
 It runs at ``URGENT`` priority, so it skips background batches and waits for
 the task the worker is running plus any interactive work queued before it

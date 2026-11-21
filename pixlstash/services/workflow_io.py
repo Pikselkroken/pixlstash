@@ -85,7 +85,7 @@ def api_graph(document: dict) -> dict | None:
     and no caller's: it honours the ``last_node_id`` / ``last_link_id`` hints
     ComfyUI writes as well as the ``nodes`` / ``links`` arrays, where a check
     for ``nodes`` alone reads a truncated editor export as an API graph and
-    walks it as a flat map (#1482).
+    walks it as a flat map.
 
     The import dialog stores an embedded prompt chunk as ``{"prompt": graph}``,
     and **the envelope is not the graph**: a hint left on the outside of one
@@ -100,7 +100,7 @@ def api_graph(document: dict) -> dict | None:
 
 
 def with_converted_graph(workflow: dict, graph: dict | None) -> dict:
-    """*workflow*, or the API *graph* ComfyUI converted it into (#1530).
+    """*workflow*, or the API *graph* ComfyUI converted it into.
 
     What every reader that runs or parameterises a stored workflow goes
     through, whether the conversion sits beside a file or in a hub row, so a

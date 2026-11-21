@@ -152,13 +152,13 @@ class MissingFilePurgeTask(BaseTask):
           because an operation still in flight must not be read as a deletion.
           The journal expires after ``RETENTION_S``, so this defers rather than
           exempts;
-        * no journal row at all - a genuine deletion, purged as before.
+        * no journal row at all - a genuine deletion, purged.
 
         Returns ``(repairs, deferred_count, still_missing)``, each repair a
         ``(picture_id, landed_path, came_back_to_our_source)`` triple - the flag
         says which end of the journal row the file turned up at, which is what
-        :meth:`_repair_moved_pictures` needs to know whether Phase 5 is owed a
-        review as well as a repoint.
+        :meth:`_repair_moved_pictures` needs to know whether an
+        ``ExternalMoveReview`` is owed as well as a repoint.
         """
         by_id: dict = {pic.id: pic for pic in candidates if pic.file_path}
         if not by_id:
@@ -266,11 +266,9 @@ class MissingFilePurgeTask(BaseTask):
         and whose transaction did not, or the owner dragging the file back out
         of the folder PixlStash filed it in. The scan can: ``claim_own_moves``
         matches a pair in one direction only, so it would find the reversed pair
-        unclaimed, read it as the owner's, and queue an ``ExternalMoveReview``
-        (v1.11 Phase 5). Whichever of the two sweeps notices first used to
-        decide whether that ever happened - and once this one has repointed the
-        row, the file is where the row says it is, so the next scan sees no move
-        to follow and the reconciliation is lost for good. So it is queued here
+        unclaimed, read it as the owner's, and queue an ``ExternalMoveReview``.
+        Once this sweep has repointed the row, the file is where the row says it
+        is, so the next scan sees no move to follow. So it is queued here
         too, from the same fact and through the same recorder. A crashed undo
         queues one as well, which is the safe direction: the row is a question
         for the owner, never an applied change, and finishing the undo is what
