@@ -329,7 +329,7 @@ NEGATIVE_PROMPT = "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
 # Qwen-Image); re-probe before adding to it.
 PHOTO_LOOK = (
     "The photos look like a model agency's digitals: plain unedited camera "
-    "photos, natural colour, true-to-life skin with faint pores, little or no "
+    "photos, natural colour, true-to-life skin, little or no "
     "makeup, soft focus falloff, nothing retouched or sharpened."
 )
 
